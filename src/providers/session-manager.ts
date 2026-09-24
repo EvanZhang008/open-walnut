@@ -65,6 +65,7 @@ export interface SessionHistory {
 // ── Start Options ──
 
 export interface TransportStartOptions {
+  stopFence?: string | null
   /** Claude CLI arguments (e.g. ['-p', '--output-format', 'stream-json', ...]) */
   args: string[]
   /** Working directory for the Claude process */
@@ -78,6 +79,7 @@ export interface TransportStartOptions {
    * core/session-message-queue.ts QueuedMessage.userUuid.
    */
   uuid?: string
+  markers?: Array<{ message: string; messageId: string }>
   /** True when resuming an existing session (--resume) */
   resume?: boolean
   /** True when forking a session (--fork-session) */
@@ -179,7 +181,7 @@ export interface SessionManager {
    * `opts.uuid` — pre-assigned v4 uuid for this user line, forwarded into the
    * stream-json envelope. Absent ⇒ envelope unchanged (CLI mints its own).
    */
-  writeMessage(message: string, opts?: { uuid?: string }): Promise<boolean> | boolean
+  writeMessage(message: string, opts?: { uuid?: string; markers?: Array<{ message: string; messageId: string }>; stopFence?: string | null; onDispatch?: () => void }): Promise<boolean> | boolean
 
   /**
    * Write raw JSON to the FIFO (no stream-json wrapping).
@@ -215,11 +217,14 @@ export interface SessionManager {
    * Kill the process immediately (SIGTERM + remote kill for SSH).
    * Marks resultEmitted so no spurious events fire.
    */
-  kill(): void
+  kill(reason?: 'user' | 'maintenance' | 'idle'): void
+  stopForIdle?(): Promise<boolean>
 
   /**
-   * Interrupt: close pipe, gracefully stop, wait for flush.
-   * Two-phase: SIGINT → wait 5s → SIGTERM fallback.
+   * Process-level stop: close pipe, gracefully stop, wait for flush.
+   * Two-phase: SIGINT → wait 5s → SIGTERM fallback. The session layer aborts a
+   * turn in place with the stream-json `interrupt` control_request and only
+   * falls back to this when the CLI cannot be reached over the FIFO.
    */
   interrupt(): Promise<void>
 

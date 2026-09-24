@@ -34,9 +34,11 @@ vi.mock('../../../src/core/session-file-reader.js', async (importOriginal) => {
 });
 
 // Mock daemon-connection (used by enrichWithLiveStatus)
+const { stopRpc } = vi.hoisted(() => ({ stopRpc: vi.fn() }));
 vi.mock('../../../src/providers/daemon-connection.js', () => ({
   isDaemonConnected: () => false,
   getDaemonDisconnectedSince: () => null,
+  getConnectedDaemonConnection: () => ({ connected: true, send: stopRpc }),
 }));
 
 // Mock session-manager (used by restart to kill process)
@@ -95,11 +97,13 @@ function createApp() {
 }
 
 beforeEach(async () => {
+  stopRpc.mockReset().mockResolvedValue({ ok: true, stopped: true });
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   resetTaskManager();
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (let i = 0; i < 3; i++) {
     try {
       await fs.rm(WALNUT_HOME, { recursive: true, force: true });
@@ -449,9 +453,7 @@ describe('POST /api/sessions/:sessionId/restart', () => {
 
 // ── Test 4: Session terminate closes the CLI, no respawn ──
 //
-// terminate marks the record 'stopped' (not error), does not archive, and does not
-// call reinitialize. With no live session/manager registered (mocks return null),
-// it falls through to the record-update + status broadcast path.
+// Mark stopped only after the daemon confirms the exit; without a confirmation, keep it pending.
 
 describe('POST /api/sessions/:sessionId/terminate', () => {
   beforeEach(() => { reinitializeMock.mockClear(); settleInFlightTurnMock.mockClear(); });
@@ -461,10 +463,6 @@ describe('POST /api/sessions/:sessionId/terminate', () => {
     await createSessionRecord('term-sess-1', task.id, 'proj', '/tmp');
     await updateSessionRecord('term-sess-1', { process_status: 'running', pid: 12345 });
 
-    // A local record with a pid and no live session/manager makes terminate take the
-    // raw `process.kill(-pid, 'SIGTERM')` fallback. Intercept it: pid 12345 is a real
-    // pgid on the host, so an unmocked run would SIGTERM whatever process group owns
-    // it. Assert the route targeted the record's group instead of signalling for real.
     const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
 
     const app = createApp();
@@ -472,7 +470,8 @@ describe('POST /api/sessions/:sessionId/terminate', () => {
       .post('/api/sessions/term-sess-1/terminate')
       .send({});
 
-    expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(stopRpc).toHaveBeenCalledWith('stop', { sid: 'term-sess-1', reason: 'user', stopRequestId: expect.any(String) }, 10_000);
     killSpy.mockRestore();
 
     expect(res.status).toBe(200);
@@ -485,7 +484,26 @@ describe('POST /api/sessions/:sessionId/terminate', () => {
     const after = await getSessionByClaudeId('term-sess-1');
     expect(after!.archived).toBeFalsy();
     expect(after!.process_status).toBe('stopped');
+    expect(after!.stopRequest?.state).toBe('confirmed');
     expect(after!.pid).toBeUndefined();
+  });
+
+  it('keeps an unreachable daemon stop pending without signalling the local PID', async () => {
+    const task = await createTestTask('Pending Stop Task');
+    await createSessionRecord('term-pending', task.id, 'proj', '/tmp');
+    await updateSessionRecord('term-pending', { process_status: 'running', pid: 12348 });
+    stopRpc.mockRejectedValueOnce(new Error('host unavailable'));
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
+    try {
+      const res = await request(createApp()).post('/api/sessions/term-pending/terminate').send({});
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('pending');
+      const record = await getSessionByClaudeId('term-pending');
+      expect(record?.process_status).toBe('running');
+      expect(record?.stopRequest?.state).toBe('pending');
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(settleInFlightTurnMock).not.toHaveBeenCalled();
+    } finally { killSpy.mockRestore(); }
   });
 
   it('returns 404 for unknown session', async () => {
@@ -536,7 +554,8 @@ describe('POST /api/sessions/:sessionId/terminate', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('terminated');
-    expect(killSpy).toHaveBeenCalledWith(-12347, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(stopRpc).toHaveBeenCalledWith('stop', { sid: 'term-cron-2', reason: 'user', stopRequestId: expect.any(String) }, 10_000);
     killSpy.mockRestore();
   });
 });

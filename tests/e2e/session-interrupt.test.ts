@@ -28,11 +28,16 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-interrup
 import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
 let server: HttpServer
 let port: number
+// The DAEMON owns the spawn: without a mock daemon the real local daemon runs the
+// real `claude` (measured: one opus turn, ~$0.40 and 25s, per run of this file),
+// and setCliCommand alone never reaches it.
+let daemon: MockDaemon
 
 function wsUrl(): string { return `ws://localhost:${port}/ws` }
 
@@ -95,7 +100,9 @@ function delay(ms: number): Promise<void> { return new Promise(r => setTimeout(r
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
 
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
   await fs.mkdir(tasksDir, { recursive: true })
@@ -123,8 +130,10 @@ beforeAll(async () => {
 }, 30000)
 
 afterAll(async () => {
+  sessionRunner.setTestDaemonUrl(undefined)
   stopServer()
   await delay(500)
+  await daemon.stop()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 }, 15000)
 

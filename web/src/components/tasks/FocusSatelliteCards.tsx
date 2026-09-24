@@ -4,7 +4,7 @@
  */
 import { useState, useRef, useCallback, useEffect, memo, type CSSProperties, type ReactNode } from 'react';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
-import { taskNeedsAction } from '@/utils/session-status';
+import { resolveTaskSessionId, taskNeedsAction } from '@/utils/session-status';
 import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { useSortable } from '@dnd-kit/sortable';
@@ -14,6 +14,7 @@ import { groupSortableId } from './tier-group-sentinels';
 import { useFolderContextMenu } from './FolderContextMenu';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
+import { CronPill } from '@/components/sessions/CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import * as ICONS from '../common/Icons';
 
@@ -456,6 +457,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       >
         {task.title}
       </span>
+      <CronPill sessionId={resolveTaskSessionId(task)} />
       <TriggerPill taskId={task.id} />
       {/* ▶ — hover-revealed, immediately before the kebab, exactly as on the list
           rows. Hidden in select mode: a press there means "toggle selection", so a

@@ -27,8 +27,10 @@ vi.mock('../../src/providers/daemon-connection.js', () => ({
 }))
 
 const scheduleMock = vi.fn(() => true)
+const pendingMock = vi.fn(() => false)
 vi.mock('../../src/core/session-auto-recover.js', () => ({
   scheduleSessionAutoRecover: (...args: unknown[]) => scheduleMock(...(args as [])),
+  getSessionAutoRecover: () => ({ hasPending: pendingMock }),
 }))
 
 const applySessionPhaseMock = vi.fn(async () => undefined)
@@ -100,7 +102,8 @@ beforeEach(() => {
   _clearSnapshotRegistryForTests()
   setSnapshotModeForTests('enforce')
   probeResult = { alive: false, pid: null }
-  scheduleMock.mockClear()
+  scheduleMock.mockReset().mockReturnValue(true)
+  pendingMock.mockReset().mockReturnValue(false)
   applySessionPhaseMock.mockClear()
   taskPhase = 'IN_PROGRESS'
   taskLookupThrows = false
@@ -152,6 +155,20 @@ describe('probe-dead branch — auto-recover arming', () => {
     taskPhase = null // task row gone
     await recover(new SessionHealthMonitor(), [wedged()], fakeUpdate())
     expect(scheduleMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a staggered recovery pending across the next health tick', async () => {
+    pendingMock.mockReturnValue(true)
+    scheduleMock.mockReturnValue(false)
+    markSnapshotCovered('arm-pending', 100)
+    try {
+      await recover(new SessionHealthMonitor(), [wedged('arm-pending')], fakeUpdate())
+      expect(pendingMock).toHaveBeenCalledWith('arm-pending')
+      expect(scheduleMock).not.toHaveBeenCalled()
+      expect(applySessionPhaseMock).not.toHaveBeenCalled()
+    } finally {
+      _clearSnapshotRegistryForTests()
+    }
   })
 
   it('a task-less session is left to schedule()\'s own guards', async () => {

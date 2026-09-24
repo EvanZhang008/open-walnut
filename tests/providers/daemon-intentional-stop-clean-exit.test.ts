@@ -217,6 +217,8 @@ describe('daemon-source template: reapSession honors the intentional-stop intent
       fs,
       path,
       sessions,
+      daemonBootId: undefined,
+      readStartTime: vi.fn(() => null),
       logMsg,
       logStateTransition: vi.fn(),
       hookActions: () => [] as string[],
@@ -234,6 +236,7 @@ describe('daemon-source template: reapSession honors the intentional-stop intent
     const factory = new Function('env', [
       '"use strict";',
       'const fs = env.fs, path = env.path, sessions = env.sessions;',
+      'const daemonBootId = env.daemonBootId, readStartTime = env.readStartTime;',
       'const logMsg = env.logMsg, logStateTransition = env.logStateTransition;',
       'const hookActions = env.hookActions, stripDurableTasksForSession = env.stripDurableTasksForSession;',
       'const killProcessGroup = env.killProcessGroup, setTimeout = env.setTimeout, clearInterval = env.clearInterval;',
@@ -407,13 +410,10 @@ describe('intentional-stop intent parity across the three daemon twins', () => {
     }
   })
 
-  it('each twin stamps the intent in cmdStop, immediately before the kill', () => {
-    // The SERVER's idle reaper kills through the stop RPC (mgr.kill() →
-    // conn.send('stop')), NOT through the daemon's own scan — so without this
-    // second stamp a local session auto-stopped after 2h came back as a red
-    // "Session ended unexpectedly and no cause was recorded" (2026-09-03).
+  it('each stop RPC delegates to the process stop that stamps intent before the signal', () => {
     for (const [name, src] of [['daemon-standalone', standaloneSrc], ['daemon-source', templateSrc]] as const) {
-      const body = fnBody(src, 'cmdStop', name)
+      expect(fnBody(src, 'cmdStop', name)).toContain('stopSessionProcess(ws, id, sid)')
+      const body = fnBody(src, 'stopSessionProcess', name)
       const stampIdx = body.search(/session\.intentionalStopAt = Date\.now\(\)/)
       const killIdx = body.indexOf("killProcessGroup(pid, 'SIGINT')")
       expect(stampIdx, `${name}: cmdStop does not record the stop intent`).toBeGreaterThan(-1)

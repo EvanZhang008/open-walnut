@@ -16,7 +16,7 @@
  */
 
 import { execSync } from 'node:child_process'
-import { join as pathJoin } from 'node:path'
+import { dirname, join as pathJoin } from 'node:path'
 
 // ── Shared types ──
 
@@ -53,6 +53,10 @@ export interface RegistryEntry {
    *  mid-outage RESUMES the same 12h budget instead of granting a fresh one —
    *  otherwise a restart loop would make the budget unbounded. */
   turnRetry?: TurnRetryState | null
+  /** PID identity is scoped to one OS boot. */
+  bootId?: string
+  cliVersion?: string
+  cronMetadataOrigin?: import('./daemon-cron-metadata.js').CronMetadataOrigin
 }
 
 /**
@@ -117,6 +121,9 @@ export interface CoreSessionData {
    *  not interleave — two concurrent partial writes would splice their bytes
    *  into one corrupted line. Each send chains behind the previous one. */
   fifoWriteChain?: Promise<unknown>
+  bootId?: string
+  cliVersion?: string
+  cronMetadataOrigin?: import('./daemon-cron-metadata.js').CronMetadataOrigin
 }
 
 export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
@@ -182,6 +189,14 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
    * Absent ⇒ no hooks ⇒ core intervenes in nothing.
    */
   hookActionsFn?: (point: DaemonHookPoint, ctx: Record<string, unknown>) => string[]
+  /** Current boot id, set only by the service caller (probed asynchronously after taking the lock), so core reads it fresh each time and never caches it; absent = old behavior with no fence. */
+  bootId?: string
+}
+
+/** send-markers-v1: one turn-opening marker written as part of this delivery. */
+export interface UserMarkerInput {
+  message: string
+  messageId: string
 }
 
 /** Outcome of a cmdSend attempt — mirrors the wire envelope sent to clients. */
@@ -196,9 +211,9 @@ export type SendResult =
 
 export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
   readRegistry: () => Record<string, RegistryEntry>
-  persistRegistry: () => void
+  persistRegistry: (strict?: boolean) => void
   readStartTime: (pid: number) => string | null
-  reapSession: (sid: string, code: number, reason: string) => void
+  reapSession: (sid: string, code: number, reason: string, groupExited?: boolean) => void
   startOrphanPoll: (sid: string) => void
   reconcileRegistry: () => void
   broadcastSessionState: (sid: string, state: 'running' | 'dead', extra?: Record<string, unknown>) => void
@@ -216,11 +231,14 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
    * this user line under (harness contract: stream-json `uuid` → the transcript
    * line's uuid). Absent ⇒ the envelope carries no `uuid` key, byte-identical to
    * every payload written before this parameter existed.
+   *
+   * `markers` (send-markers-v1): written to disk after the body enters the pipe and before the final newline, so the CLI can never answer before the marker exists.
    */
   handleSendCommand: (
     sid: string | undefined,
     message: string | undefined,
     uuid?: string,
+    markers?: UserMarkerInput[],
   ) => Promise<SendResult>
   /**
    * Same as handleSendCommand but writes `raw` to the FIFO verbatim without
@@ -313,16 +331,22 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       if (
         data
         && typeof data === 'object'
+        && !Array.isArray(data)
         && data.sessions
         && typeof data.sessions === 'object'
+        && !Array.isArray(data.sessions)
+        && (!deps.bootId || data.version === 1)
       ) {
         return data.sessions as Record<string, RegistryEntry>
       }
-    } catch {}
+      if (deps.bootId) throw new Error('Invalid managed daemon registry')
+    } catch (error) {
+      if (deps.bootId && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
     return {}
   }
 
-  function persistRegistry(): void {
+  function persistRegistry(strict = !!deps.bootId): void {
     const out: Record<string, RegistryEntry> = {}
     for (const [sid, s] of sessions) {
       if (s.state !== 'running' || !s.pid) continue
@@ -340,19 +364,27 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         pendingCtrl: s.pendingCtrl ?? undefined,
         // Carry the retry streak across daemon restarts (budget continuity).
         turnRetry: s.turnRetry ?? undefined,
+        bootId: s.bootId ?? undefined,
+        cliVersion: s.cliVersion ?? undefined,
+        cronMetadataOrigin: s.cronMetadataOrigin,
       }
     }
     const body = JSON.stringify({ version: 1, sessions: out })
     const tmp = registryFile + '.tmp'
     try {
-      fs.writeFileSync(tmp, body)
+      fs.writeFileSync(tmp, body, { mode: 0o600 })
       try {
         const fd = fs.openSync(tmp, 'r+')
         try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
-      } catch {}
+      } catch (error) { if (strict) throw error }
       fs.renameSync(tmp, registryFile)
+      if (strict) {
+        const directory = fs.openSync(dirname(registryFile), 'r')
+        try { fs.fsyncSync(directory) } finally { fs.closeSync(directory) }
+      }
     } catch (err) {
       logger('warn', 'registry persist failed', { error: (err as Error).message })
+      if (strict) throw err
     }
   }
 
@@ -380,10 +412,13 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    * isolated in try/catch so an unlink race or missing file cannot wedge the
    * rest of cleanup (persist + broadcast must still run).
    */
-  function reapSession(sid: string, code: number, reason: string): void {
+  function reapSession(sid: string, code: number, reason: string, groupExited = false): void {
     const session = sessions.get(sid)
     if (!session) return
     if (session.state === 'dead') return  // idempotent guard
+
+    // The pid is not ours: only record state and notify; never touch the pipe / cron of a CLI that may still be alive, and never send a group signal.
+    const unownedReap = /not-ours|pid-recycled|previous-boot|identity-unknown/.test(reason)
 
     // Detect "clean turn completion": claude -p writes a final {"type":"result",
     // "stop_reason":"end_turn"} line then exits 0. Every death path here
@@ -457,15 +492,16 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // Unlink FIFO — prevents future writers from thinking the session is alive.
     // kernel buffers on a readerless FIFO silently swallow writes; deleting the
     // path means next open(O_WRONLY|O_NONBLOCK) returns ENXIO instead.
-    try { fs.unlinkSync(session.pipePath) } catch {}
+    if (!unownedReap) { try { fs.unlinkSync(session.pipePath) } catch {} }
 
     // ── Hook point session.reap (see the Daemon hooks block below): no
     // adoptable durable crons. A durable task whose creator just died is the
     // 2026-08-09 incident in waiting: the next lock holder in this directory
     // would execute it as a bare user message. Strip our own rows (never a
     // live sibling's) — the only enforcement point the model cannot decline.
-    if (session.cwd && deps.hookActionsFn?.('session.reap', { sid, cwd: session.cwd })
-      ?.includes('strip-own-rows')) {
+    if (!unownedReap && session.cwd
+      && deps.hookActionsFn?.('session.reap', { sid, cwd: session.cwd })
+        ?.includes('strip-own-rows')) {
       try {
         const tasksPath = pathJoin(session.cwd, '.claude', 'scheduled_tasks.json')
         let raw: string | null = null
@@ -487,11 +523,32 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     }
 
     // Kill any residual process group members (MCP servers outliving claude).
-    if (session.pid) {
-      try { killProcessGroupFn(session.pid, 'SIGTERM') } catch {}
+    // Re-verify identity before every signal: SIGKILL waits 2s, and by then the sid may have been replaced and the pid recycled.
+    const groupPid = session.pid ?? 0
+    const groupStartTime = session.startTime
+    const groupBootId = session.bootId
+    const maySignalGroup = (): boolean => {
+      if (unownedReap || groupExited) return false
+      if (!Number.isSafeInteger(groupPid) || groupPid <= 1) return false
+      if (sessions.get(sid) !== session) return false
+      const currentBoot = deps.bootId
+      if (currentBoot) {
+        // Supervised mode: both the boot and the start identity must be proven; if either is missing, send no signal.
+        if (!groupBootId || groupBootId !== currentBoot) return false
+        if (!groupStartTime) return false
+        return readStartTimeFn(groupPid) === groupStartTime
+      }
+      if (groupStartTime) {
+        const current = readStartTimeFn(groupPid)
+        if (current && current !== groupStartTime) return false
+      }
+      return true
+    }
+    if (maySignalGroup()) {
+      try { killProcessGroupFn(groupPid, 'SIGTERM') } catch {}
       setTimeoutFn(() => {
-        if (session.pid) {
-          try { killProcessGroupFn(session.pid, 'SIGKILL') } catch {}
+        if (maySignalGroup()) {
+          try { killProcessGroupFn(groupPid, 'SIGKILL') } catch {}
         }
       }, 2000)
     }
@@ -616,7 +673,17 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       // Materialize session record first so reapSession has something to act
       // on. Adapter's factory fills in its own extra fields (watchers, ...).
       const session = createAdoptedSession(sid, entry)
+      if (entry.bootId && session.bootId == null) session.bootId = entry.bootId
       sessions.set(sid, session)
+
+      // Boot fence (supervised mode only): a pid from another boot may belong to someone else, so refuse before probing.
+      const currentBoot = deps.bootId
+      if (currentBoot) {
+        if (!entry.bootId || entry.bootId !== currentBoot) {
+          reapSession(sid, -1, entry.bootId ? 'reconcile-previous-boot' : 'reconcile-identity-unknown')
+          continue
+        }
+      }
 
       // Is the pid alive and ours?
       try {
@@ -627,18 +694,29 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
           reapSession(sid, -1, 'reconcile-not-ours')
           continue
         }
-        // ESRCH or other — dead.
+        if (errCode !== 'ESRCH') {
+          // An unknown errno must not be taken as death.
+          reapSession(sid, -1, 'reconcile-identity-unknown')
+          continue
+        }
         reapSession(sid, -1, 'reconcile-dead')
         continue
       }
 
-      // Alive and ours — verify start_time to catch pid recycling.
+      // Alive and ours: verify start_time to catch pid recycling; in supervised mode the identity must be proven before adoption.
       if (entry.startTime) {
         const current = readStartTimeFn(pid)
         if (current && current !== entry.startTime) {
           reapSession(sid, -1, 'reconcile-pid-recycled')
           continue
         }
+        if (currentBoot && !current) {
+          reapSession(sid, -1, 'reconcile-identity-unknown')
+          continue
+        }
+      } else if (currentBoot) {
+        reapSession(sid, -1, 'reconcile-identity-unknown')
+        continue
       }
 
       // Genuine orphan — adopt and kick off 1s tight poll.
@@ -679,8 +757,12 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     sid: string | undefined,
     message: string | undefined,
     uuid?: string,
+    markers?: UserMarkerInput[],
   ): Promise<SendResult> {
     if (!sid || !message) return { error: 'send: missing sid or message' }
+    const normalized = normalizeMarkers(markers)
+    if ('error' in normalized) return { error: normalized.error }
+    const pending = normalized.markers
 
     const session = sessions.get(sid)
     if (!session) return { ok: false, reason: 'not_found' }
@@ -710,7 +792,11 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         ...(uuid ? { uuid } : {}),
       })
       const buf = Buffer.from(payload + '\n')
-      const result = await chainFifoWrite(sid, session, buf)
+      // Newline fence: the markers sit between the body and the final newline.
+      const beforeNewline = pending.length > 0
+        ? () => { for (const m of pending) appendUserMarkerLine(sid, session, m.message, m.messageId, true) }
+        : undefined
+      const result = await chainFifoWrite(sid, session, buf, beforeNewline)
       if (result === 'ok') {
         // TTFT anchor: the tailer logs send→first-line / send→first-text
         // latencies against this (CLI-side half of the text-latency attribution).
@@ -807,6 +893,44 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     }
   }
 
+  /** The single marker write point, shared by the appendUserMarker RPC and the send fence; an fs failure throws so the send fails. */
+  function appendUserMarkerLine(
+    sid: string,
+    session: S,
+    message: string,
+    messageId: string,
+    ordered = false,
+  ): number {
+    // walnutDelivery:'ordered' = written inside the delivery; lines written after delivery (old RPC) lack it and may already have been overtaken by the reply.
+    const line = JSON.stringify({
+      type: 'user',
+      subtype: 'walnut-injected',
+      message: { role: 'user', content: message },
+      walnutMessageId: messageId,
+      ...(ordered ? { walnutDelivery: 'ordered' } : {}),
+      timestamp: new Date(clock()).toISOString(),
+    }) + '\n'
+    fs.appendFileSync(session.jsonlPath, line)
+    const size = fs.statSync(session.jsonlPath).size
+    // Wait for the tailer to read the marker's real v before pushing; an optimistic snapshot at an old v would be rejected and swallow the next turn-open signal.
+    return size
+  }
+
+  /** Validate markers before writing the first FIFO byte: a bad entry only reports an error and never leaves a half delivery. */
+  function normalizeMarkers(markers: unknown): { markers: UserMarkerInput[] } | { error: string } {
+    if (markers === undefined || markers === null) return { markers: [] }
+    if (!Array.isArray(markers)) return { error: 'send: markers must be an array' }
+    const out: UserMarkerInput[] = []
+    for (const entry of markers) {
+      if (!entry || typeof entry !== 'object') return { error: 'send: invalid marker entry' }
+      const { message, messageId } = entry as { message?: unknown; messageId?: unknown }
+      if (typeof message !== 'string' || !message) return { error: 'send: marker missing message' }
+      if (typeof messageId !== 'string' || !messageId) return { error: 'send: marker missing messageId' }
+      out.push({ message, messageId })
+    }
+    return { markers: out }
+  }
+
   /**
    * Turn-start marker append — see DaemonCore interface doc. Shape matches
    * ClaudeCodeSession.writeSyntheticUserEvent's local fallback exactly, so
@@ -823,16 +947,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     const session = sessions.get(sid)
     if (!session) return { ok: false, reason: 'not_found' }
     try {
-      const line = JSON.stringify({
-        type: 'user',
-        subtype: 'walnut-injected',
-        message: { role: 'user', content: message },
-        walnutMessageId: messageId,
-        timestamp: new Date(clock()).toISOString(),
-      }) + '\n'
-      fs.appendFileSync(session.jsonlPath, line)
-      const size = fs.statSync(session.jsonlPath).size
-      // 等 tailer 读到 marker 的真实 v 再推送，旧 v 的乐观快照会被拒绝并吞掉后续开轮信号。
+      const size = appendUserMarkerLine(sid, session, message, messageId)
       return { ok: true, size }
     } catch (err) {
       return { error: 'appendUserMarker failed: ' + (err as Error).message }
@@ -856,6 +971,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     sid: string,
     session: S,
     buf: Buffer,
+    beforeNewline?: () => void,
   ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead'> {
     // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
     // own write share ONE budget, so the strict-ack always settles inside the
@@ -866,7 +982,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       // Re-check state after waiting in the chain — a predecessor's failure
       // (or the orphan poll) may have reaped the session meanwhile.
       if (session.state === 'dead' || sessions.get(sid) !== session) return 'dead' as const
-      return writeFifoFullyAsync(session.pipePath, buf, deadline, () => session.state === 'dead')
+      return writeFifoFullyAsync(session.pipePath, buf, deadline, () => session.state === 'dead', beforeNewline)
     })
     session.fifoWriteChain = run
     const result = await run
@@ -905,6 +1021,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     buf: Buffer,
     deadline: number,
     isAbandoned?: () => boolean,
+    beforeNewline?: () => void,
   ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial'> {
     const RETRY_INTERVAL_MS = 25
     let fd: number
@@ -915,11 +1032,27 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       if (code === 'ENXIO') return 'ENXIO'
       throw err
     }
+    // Fence = the last payload byte (the newline): write the whole body, call back once, then release the newline so the full line becomes readable.
+    const barrier = beforeNewline && buf.length > 1 ? buf.length - 1 : buf.length
+    let barrierDone = barrier >= buf.length
     try {
       let offset = 0
       while (offset < buf.length) {
+        if (!barrierDone && offset >= barrier) {
+          try {
+            beforeNewline!()
+          } catch (err) {
+            // The body is already in the pipe: this is the existing 'partial' shape (the caller reaps); never truncate or rewrite the stream.
+            logger('error', 'fifo newline barrier failed', {
+              pipePath, error: (err as Error).message,
+            })
+            return 'partial'
+          }
+          barrierDone = true
+        }
+        const limit = barrierDone ? buf.length : barrier
         try {
-          const n = fs.writeSync(fd, buf, offset, buf.length - offset)
+          const n = fs.writeSync(fd, buf, offset, limit - offset)
           if (n > 0) {
             offset += n
             continue

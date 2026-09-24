@@ -2,7 +2,11 @@ import { useState, useEffect, useCallback, useRef, useMemo, Component, type Reac
 import { useLocation, useNavigate } from 'react-router-dom';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { SessionChatHistory } from './SessionChatHistory';
+import { SessionSupervisionBar, useSessionSupervision } from './SessionSupervisionBar';
+import { CronPill } from './CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
+import { CronJobsCard } from './CronJobsCard';
+import { stopSupervisedSession } from '@/stores/session-supervision-store';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
 import { OutputModePill } from './OutputModePill';
 import { useSessionPins } from '@/hooks/useSessionPins';
@@ -48,7 +52,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, terminateSession, investigateSession } from '@/api/sessions';
+import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession } from '@/api/sessions';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
 import { traceInteraction } from '@/utils/interaction-timer';
@@ -78,7 +82,7 @@ import type { SessionRecord, TaskPhase } from '@/types/session';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
-import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
+import { useResolvedSessionRecord, useSessionStatus } from '@/hooks/useSessionStatus';
 import { applySessionSettings, clearSessionSettings } from '@/stores/session-status-store';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -257,6 +261,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const enabledModes = useEnabledModes();
   const [sessionRecord, setSession] = useState<SessionRecord | null>(null);
   const session = useResolvedSessionRecord(sessionRecord);
+  const liveStatus = useSessionStatus(sessionId);
+  const pendingPermission = liveStatus?.pendingPermissionTool === undefined
+    ? session?.pendingPermission
+    : liveStatus.pendingPermissionTool === null
+      ? undefined
+      : sessionRecord?.statusRevision === liveStatus.statusRevision && sessionRecord.pendingPermission
+        ? sessionRecord.pendingPermission
+        : { toolName: liveStatus.pendingPermissionTool };
   // Every engine-shaped decision in this panel (rewind, mode surface, model
   // pane, model backfill) reads this capability view — never the engine id.
   const engineCatalog = useEngineCatalog();
@@ -531,39 +543,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       if (session && !session.model && !engineUi.isAcp) {
         fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
       }
-    }
-  });
-
-  // Keep pendingPermission live so the badge flips Running↔Waiting in real time.
-  // pendingPermission is a record field (not part of SessionStatusSnapshot), so
-  // the status store can't carry it — mirror the two permission events instead.
-  // The server also re-emits unanswered requests every 60s, so a missed initial
-  // event self-heals into the Waiting display within a minute.
-  useEvent('session:permission-request', (data) => {
-    const d = data as { sessionId?: string; requestId?: string; toolName?: string; reason?: string };
-    if (d.sessionId === sessionId && d.requestId) {
-      setSession(prev => prev ? {
-        ...prev,
-        pendingPermission: {
-          requestId: d.requestId!,
-          toolName: d.toolName,
-          reason: d.reason,
-          // Event payload carries no timestamp — "now" is right for a fresh
-          // prompt and only slightly under-counts for a 60s re-emit.
-          receivedAt: prev.pendingPermission?.requestId === d.requestId
-            ? prev.pendingPermission!.receivedAt
-            : new Date().toISOString(),
-        },
-      } : prev);
-    }
-  });
-  useEvent('session:permission-resolved', (data) => {
-    const d = data as { sessionId?: string; requestId?: string };
-    if (d.sessionId === sessionId) {
-      setSession(prev => (prev && prev.pendingPermission
-        && (!d.requestId || prev.pendingPermission.requestId === d.requestId))
-        ? { ...prev, pendingPermission: undefined }
-        : prev);
     }
   });
 
@@ -1290,28 +1269,27 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     });
   }, [notify, sessionId]);
 
-  const [terminateBusy, setTerminateBusy] = useState(false);
+  const supervisionSnapshot = useSessionSupervision(sessionId);
+  const [cronDetailOpen, setCronDetailOpen] = useState(false);
+  useEffect(() => { setCronDetailOpen(false); }, [sessionId]);
+  const terminateBusy = supervisionSnapshot.writing;
   const handleTerminate = useCallback(async () => {
     log.info('session-panel', 'terminate button clicked', { sessionId });
-    setTerminateBusy(true);
     try {
-      await terminateSession(sessionId);
+      await stopSupervisedSession(sessionId);
     } catch (err) {
-      // 409 cron_owner: this session owns recurring CLI crons — killing it
-      // silently migrates them to any other session sharing the project
-      // directory. Surface the choice instead of failing quietly.
       const status = (err as { status?: number })?.status;
       if (status === 409) {
         const proceed = await confirmDialog({
-          title: 'Session owns scheduled crons',
-          message: 'Stopping this session will NOT stop its recurring scheduled tasks — they persist in the project directory and will fire into any other session that shares it, without provenance. Terminate anyway?',
-          confirmLabel: 'Terminate anyway',
+          title: 'Stop session and automatic recovery?',
+          message: 'This stops the CLI and disables automatic recovery. Session-only crons stop with it. Directory-shared durable crons may still run in another session; stopping this session does not delete those jobs.',
+          confirmLabel: 'Stop session',
           cancelLabel: 'Keep running',
           danger: true,
         });
         if (proceed) {
           try {
-            await terminateSession(sessionId, { force: true });
+            await stopSupervisedSession(sessionId, true);
           } catch (err2) {
             log.error('session-panel', 'forced terminate API failed', {
               sessionId,
@@ -1326,7 +1304,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         });
       }
     }
-    setTerminateBusy(false);
   }, [sessionId, confirmDialog]);
 
   // Investigate — freeze an evidence bundle + open a manual incident, then copy
@@ -1953,13 +1930,20 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   {ICON_ROBOT} Embedded
                 </span>
               )}
+              {!loading && (
+                <CronPill
+                  sessionId={sessionId}
+                  expanded={cronDetailOpen}
+                  onClick={() => setCronDetailOpen((open) => !open)}
+                />
+              )}
               {!loading && <TriggerPill taskId={session?.taskId} />}
               {!loading && ps && (
                 <ProcessStatusBadge
                   processStatus={ps}
                   size="sm"
                   errorMessage={session?.errorMessage}
-                  pendingPermission={session?.pendingPermission}
+                  pendingPermission={pendingPermission}
                 />
               )}
               {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
@@ -2241,6 +2225,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               </div>
             )}
         <div className="session-panel-body" ref={bodyRef}>
+          <SessionSupervisionBar sid={sessionId} snapshot={supervisionSnapshot} onRetryStop={handleTerminate} archived={session?.archived} />
+          <CronJobsCard sid={sessionId} snapshot={supervisionSnapshot} open={cronDetailOpen} onClose={() => setCronDetailOpen(false)} archived={session?.archived} />
           <SessionChatHistory
             key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}

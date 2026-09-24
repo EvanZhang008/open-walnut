@@ -1154,6 +1154,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // this parser.
   app.use(['/api/v1/human-inbox', '/api/human-inbox'], express.json({ limit: '24mb' }))
   app.use(['/api/v1/human-inbox', '/api/human-inbox'], inboxPayloadTooLargeHandler)
+  app.use(['/api/v1/stt/draft', '/api/stt/draft'], express.json({ limit: '6mb' }))
   app.use(express.json({ limit: '15mb' }))
   // Paste spill-over (>200K chars from the web UI) — needs req.body, so must
   // mount AFTER the json parser above.
@@ -2124,6 +2125,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
   }
 
+  if (!CLOUD_MODE && !isEphemeral) {
+    const { getConfig } = await import('../core/config-manager.js')
+    const { startSessionAutoRecover } = await import('../core/session-auto-recover.js')
+    if ((await getConfig()).hooks?.overrides?.['session-auto-recover']?.enabled !== false) {
+      autoRecoverHandle = startSessionAutoRecover()
+    }
+  }
+
   // -- Reconcile zombie sessions + identify reconnectable ones --
   // Cloud mode: no daemon to reconcile against — sessions.json is read-only
   // synced state from the Mac; touching it here would mark live Mac sessions dead.
@@ -2376,9 +2385,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (autoRecoverOverride === false) {
         log.web.info('session auto-recover disabled via hooks.overrides')
       } else {
-        const { startSessionAutoRecover, scheduleSessionAutoRecover } =
-          await import('../core/session-auto-recover.js')
-        autoRecoverHandle = startSessionAutoRecover()
+        const { scheduleSessionAutoRecover } = await import('../core/session-auto-recover.js')
         // Catch-up pass: sessions the startup reconciler found dead. Their cause
         // is 'server_restart' (infra), so a Walnut restart that outlived a CLI no
         // longer needs a human to retype the last request. Each candidate still
@@ -3258,9 +3265,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:system-event') {
-      const { sessionId, variant, message, detail, progress } = eventData<'session:system-event'>(event)
+      const { sessionId, variant, message, detail, progress, uuid } = eventData<'session:system-event'>(event)
       if (sessionId) {
-        sessionStreamBuffer.appendSystem(sessionId, variant, message, detail, progress)
+        sessionStreamBuffer.appendSystem(sessionId, variant, message, detail, progress, uuid)
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:background-tasks') {
@@ -3379,8 +3386,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
       }
     } else if (event.name === 'session:permission-resolved') {
-      const { sessionId, requestId, allowed, cancelled, expired } = event.data as {
-        sessionId?: string; requestId?: string; allowed?: boolean; cancelled?: boolean; expired?: boolean;
+      const { sessionId, requestId, allowed, cancelled, expired, turnGen } = event.data as {
+        sessionId?: string; requestId?: string; allowed?: boolean; cancelled?: boolean; expired?: boolean; turnGen?: number;
       }
       if (sessionId) {
         // Update the buffered permission block status
@@ -3421,7 +3428,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
                   || (await getSessionByClaudeId(sessionId))?.taskId || undefined
                 if (phaseTaskId) {
                   const { applySessionPhase } = await import('../core/phase.js')
-                  await applySessionPhase(phaseTaskId, 'session:human-answered', 'server.ts:permission-resolved', { sessionId })
+                  await applySessionPhase(phaseTaskId, 'session:human-answered', 'server.ts:permission-resolved', { sessionId, turnGen })
                 }
               } catch (err) {
                 log.web.warn('human-answered phase pullback failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
@@ -3587,7 +3594,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // windows — every reconnect flap re-armed it and no turn ever ended
           // it (inc-1783406628291). Only session-runner knows a real turn
           // started; it emits with source 'session-runner'.
-          if (event.source !== 'daemon-reconnect') {
+          if (event.source !== 'daemon-reconnect' && event.source !== 'session-tracker') {
             sessionStreamBuffer.markStreaming(sid)
             lastMarkStreamingAt.set(sid, Date.now())
           }
@@ -3773,6 +3780,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         } catch {}
       }
 
+      if (eventData<'session:result'>(event).interrupted) return
+
       const taskRef = taskId ? await resolveTaskRef(taskId) : null
 
       // Successful task sessions are summarized by triage. Taskless successful
@@ -3817,9 +3826,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         })
       }
 
+      const resultEvent = eventData<'session:result'>(event)
+      const teamActive = resultEvent.teamActive === true || resultEvent.backgroundActive === true
+      const detachedBgActive = resultEvent.detachedBgActive === true
+      const wakeupPending = resultEvent.wakeupPending === true
+      const workContinues = teamActive || detachedBgActive || wakeupPending
+
       if (isError || !taskId) {
-        // Clear active session from task on error
-        if (taskId && sessionId) {
+        // A foreground error does not mean that background work still running has ended; the error notification is kept on its own.
+        if (taskId && sessionId && !workContinues) {
           try {
             const { clearSessionSlot, clearSession } = await import('../core/task-manager.js')
             const { task } = await clearSessionSlot(taskId, sessionId)
@@ -3838,12 +3853,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         bus.emit(EventNames.SESSION_ENDED, { sessionId, taskId }, ['web-ui'], { source: 'session-result' })
         return
       }
-
-      // Team mode OR active background workflow: intermediate results should not
-      // trigger NEED_ACTION or triage. (Reuse the `teamActive` var name to thread
-      // through the existing guards below — semantics widened to "background work live".)
-      const teamActive = (event.data as Record<string, unknown>)?.teamActive === true
-        || (event.data as Record<string, unknown>)?.backgroundActive === true
 
       try {
         // Session record update is handled by session-runner (claude-code-session.ts)
@@ -3867,8 +3876,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // NEED_ACTION (user decision 2026-08-28, inc-1787893885321). The
         // runner's followup-closure applies the final flip when the last
         // detached task drains.
-        const detachedBgActive = (event.data as Record<string, unknown>)?.detachedBgActive === true
-        if (!teamActive && !detachedBgActive) {
+        // Same rule for an armed ScheduleWakeup (user decision 2026-09-01,
+        // inc-1788284320937): the model ended its turn only to be re-invoked
+        // by the timer — the fired turn that does NOT re-arm hands back.
+        if (!workContinues) {
           try {
             const { applySessionPhase } = await import('../core/phase.js')
             // turnGen threads the emitting session's turn generation into the
@@ -3882,7 +3893,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         } else {
           log.web.info(teamActive
             ? 'team active — skipping NEED_ACTION phase transition'
-            : 'detached background work active — skipping NEED_ACTION phase transition', { sessionId, taskId })
+            : detachedBgActive
+              ? 'detached background work active — skipping NEED_ACTION phase transition'
+              : 'scheduled wakeup armed — skipping NEED_ACTION phase transition', { sessionId, taskId })
         }
 
         // Triage dispatch is now handled by SessionHookDispatcher

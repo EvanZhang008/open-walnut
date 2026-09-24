@@ -2,7 +2,8 @@
  * /api/v1 session lifecycle endpoints (Wave 1) — session-lifecycle-v1.ts on
  * the PRIMARY box. Bare express + supertest (no live CLI, so the degraded
  * paths are the ones under test): detail read, PATCH validation + persistence,
- * terminate on a dead record, retry guards, permission 404s, and the frozen
+ * terminate's three stop outcomes (host offline / retried + ACKed / reachable
+ * but silent), retry guards, permission 404s, and the frozen
  * error shape. The CLOUD relay ladder lives in
  * api-v1-session-lifecycle-cloud.test.ts.
  */
@@ -11,6 +12,31 @@ import fs from 'node:fs/promises'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-lifecycle'))
+
+/**
+ * The ONLY mocked boundary for the terminate cases: the daemon connection the
+ * stop coordinator delivers to. Everything else (session store, stop request
+ * bookkeeping, route) is the real code against the isolated WALNUT_HOME.
+ */
+interface FakeStopConn {
+  connected: boolean
+  send(command: string, args: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
+}
+const { stopConn, stopCalls } = vi.hoisted(() => ({
+  stopConn: { value: null as FakeStopConn | null },
+  stopCalls: [] as Array<{ command: string; args: Record<string, unknown> }>,
+}))
+vi.mock('../../../src/providers/daemon-connection.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getConnectedDaemonConnection: () => stopConn.value,
+}))
+
+function daemonThatAnswers(reply: Record<string, unknown>): FakeStopConn {
+  return {
+    connected: true,
+    send: async (command, args) => { stopCalls.push({ command, args }); return reply },
+  }
+}
 
 import express from 'express'
 import request from 'supertest'
@@ -31,6 +57,8 @@ function createApp() {
 
 beforeEach(async () => {
   vi.restoreAllMocks()
+  stopConn.value = null
+  stopCalls.length = 0
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
 })
@@ -211,19 +239,64 @@ describe('PATCH /api/v1/sessions/:id', () => {
   })
 })
 
+// A stop nobody confirmed is not a stop. The core keeps answering
+// { status:'pending' }, but the shipped iOS build ignores `status` and calls any
+// 200 "stopped" — so v1 must answer 503 stop_pending for the pending outcome
+// (local AND relay) and reserve 200 for a host-confirmed terminate.
 describe('POST /api/v1/sessions/:id/terminate', () => {
-  it('terminates a stopped record (no live CLI) and reports tookMs', async () => {
+  it('host offline → 503 stop_pending, and the stop stays queued on the record', async () => {
     await createSessionRecord('lc-term-1', 'task-t1', 'proj', '/tmp', {
       initialProcessStatus: 'stopped',
     })
     const res = await request(createApp()).post('/api/v1/sessions/lc-term-1/terminate').send({})
-    expect(res.status).toBe(200)
-    expect(res.body.status).toBe('terminated')
-    expect(res.body.sessionId).toBe('lc-term-1')
-    expect(typeof res.body.tookMs).toBe('number')
+    expect(res.status).toBe(503)
+    expect(res.body).toEqual({ error: { code: 'stop_pending', message: expect.any(String) } })
+    expect(res.body.error.message).toMatch(/saved/i)
+    expect(res.body.error.message).toMatch(/not confirmed/i)
+    expect(res.body.error.message).toMatch(/retry/i)
     const record = await getSessionByClaudeId('lc-term-1')
     expect(record?.process_status).toBe('stopped')
+    expect(record?.stopRequest?.state).toBe('pending')
+    expect(record?.status_reason).not.toBe('user_terminated')
+  })
+
+  it('a retry once the host is back → 200 terminated after the daemon ACK', async () => {
+    await createSessionRecord('lc-term-retry', 'task-t2', 'proj', '/tmp', {
+      initialProcessStatus: 'running',
+      pid: process.pid,
+    })
+    const first = await request(createApp()).post('/api/v1/sessions/lc-term-retry/terminate').send({})
+    expect(first.status).toBe(503)
+    expect(first.body.error.code).toBe('stop_pending')
+
+    stopConn.value = daemonThatAnswers({ ok: true, stopped: true })
+    const second = await request(createApp()).post('/api/v1/sessions/lc-term-retry/terminate').send({})
+    expect(second.status).toBe(200)
+    expect(second.body.status).toBe('terminated')
+    expect(second.body.sessionId).toBe('lc-term-retry')
+    expect(typeof second.body.tookMs).toBe('number')
+    expect(stopCalls).toEqual([{ command: 'stop', args: { sid: 'lc-term-retry', reason: 'user', stopRequestId: expect.any(String) } }])
+    const record = await getSessionByClaudeId('lc-term-retry')
+    expect(record?.stopRequest?.state).toBe('confirmed')
+    expect(record?.process_status).toBe('stopped')
     expect(record?.status_reason).toBe('user_terminated')
+  })
+
+  it('a reachable host that does not ACK the stop → 503 stop_pending (never a fake success)', async () => {
+    await createSessionRecord('lc-term-noack', 'task-t3', 'proj', '/tmp', {
+      initialProcessStatus: 'running',
+      pid: process.pid,
+    })
+    stopConn.value = daemonThatAnswers({ ok: false, error: 'daemon busy' })
+    const res = await request(createApp()).post('/api/v1/sessions/lc-term-noack/terminate').send({})
+    expect(res.status).toBe(503)
+    expect(res.body.error.code).toBe('stop_pending')
+    expect(stopCalls).toHaveLength(1)
+    const record = await getSessionByClaudeId('lc-term-noack')
+    expect(record?.stopRequest?.state).toBe('pending')
+    expect(record?.stopRequest?.error).toBe('daemon busy')
+    expect(record?.process_status).not.toBe('stopped')
+    expect(record?.status_reason).not.toBe('user_terminated')
   })
 
   it('404 for an unknown session', async () => {

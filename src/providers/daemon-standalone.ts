@@ -55,6 +55,7 @@ import {
   type RegistryEntry as CoreRegistryEntry,
   type SessionMode,
   type PendingCtrl,
+  type UserMarkerInput,
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import {
@@ -121,6 +122,23 @@ import {
   type GatewayResponse,
 } from './gateway-core.js'
 import { execFile as execFileCb } from 'node:child_process'
+import { DaemonSessionGate, createDaemonCronRuntime, persistCronHooks, processStartedAtMs, readCronCliConfig, cliOneShotTime, nextCliCronMinute, CRON_PROMPT_LIMIT } from './daemon-cron-runtime.js'
+import { createCronMetadataTracker, readCronMetadataStream } from './daemon-cron-metadata.js'
+import { readCronBootId } from './daemon-cron-host.js'
+import { spawnBehindRegistry } from './daemon-spawn-barrier.js'
+import { acquireDaemonInstanceLock, type DaemonInstanceLockOwner } from './daemon-instance-lock.js'
+import { createDaemonCommandDrain } from './daemon-command-drain.js'
+import { prepareDaemonServiceHandover, consumeDaemonServiceHandover } from './daemon-service-handover.js'
+
+const daemonCommands = createDaemonCommandDrain()
+const sessionStartGate = new DaemonSessionGate()
+const sessionStopVersions = new Map<string, number>()
+let cronRuntime: Awaited<ReturnType<typeof createDaemonCronRuntime>> | null = null
+let daemonInstanceLock: DaemonInstanceLockOwner | null = null
+let daemonBootId: string | undefined
+let requestDaemonShutdown: (() => void) | null = null
+let handoverPrepared = false
+let serviceUpdateRequested = false
 
 process.umask(0o077)
 
@@ -145,6 +163,8 @@ if (process.argv.includes('--version') && !isDaemonCliKeyword(process.argv[2])) 
 // sandbox, test, ephemeral demo — which decides CLI-reap-on-exit.
 const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
+const DAEMON_STATE_DIR = process.env.WALNUT_DAEMON_STATE_DIR
+const SERVICE_MODE = process.argv[2] === '--service'
 // Home dir used to expand `~/...` paths from the app (e.g. ~/.claude/projects/...).
 // In production this is the real HOME (daemon runs as the same user as walnut, so both
 // resolve `~` identically). WALNUT_HOME_OVERRIDE lets a test point the daemon at the same
@@ -166,6 +186,7 @@ const PROD_STREAMS_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp', 'streams')
 const LEGACY_STREAMS_DIR = process.env.WALNUT_LEGACY_STREAMS_DIR || '/tmp/open-walnut-streams'
 const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR
   || (DAEMON_DIR === PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
+
 // ── Spawn ledger ────────────────────────────────────────────────────────────
 // One empty file per CLI session ANY daemon on this host has ever started,
 // named by session id, under the HOME whose ~/.claude the spawned CLI writes
@@ -189,6 +210,7 @@ function recordSpawnLedger(sid: string): void {
 const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port')
 const PID_FILE = path.join(DAEMON_DIR, 'daemon.pid')
 const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance')
+const SERVICE_FILE = path.join(DAEMON_DIR, 'daemon.service')
 // Written by the RUNNING daemon at startup. This is the source of truth for
 // upgrade decisions: DaemonConnection.shouldUpgradeDaemon `cat`s this file
 // instead of executing the on-disk binary's --version, because the on-disk
@@ -468,6 +490,11 @@ interface SessionData {
   exitReason: string | null
   exitedAt: number | null
   parented: boolean
+  cliVersion?: string
+  bootId?: string
+  cronMetadataLoaded?: boolean
+  cronMetadataLoading?: boolean
+  cronMetadataOrigin?: import('./daemon-cron-metadata.js').CronMetadataOrigin
   startTime: string | null  // /proc/<pid>/stat start_time snapshot (Linux)
   cwd: string
   args: string[]
@@ -713,11 +740,12 @@ function killProcessGroup(pid: number, signal: NodeJS.Signals): boolean {
 
 /** Check if any process in the group is still alive. */
 function isProcessGroupAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false
   try {
     process.kill(-pid, 0)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
   }
 }
 
@@ -762,7 +790,7 @@ function sleepSync(ms: number) {
  */
 function shouldReapOnExit(): boolean {
   try {
-    return path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)
+    return !SERVICE_MODE && !handoverPrepared && path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)
   } catch {
     return false // unresolvable → treat as prod (never kill)
   }
@@ -924,6 +952,43 @@ const sessions = new Map<string, SessionData>()
 
 // ── WebSocket connections ──
 const wsClients = new Set<ServerWebSocket<WsData>>()
+let cronMetadataConfig: Awaited<ReturnType<typeof readCronCliConfig>> | null = null
+let cronMetadataReplay: Promise<void> = Promise.resolve()
+const cronMetadata = createCronMetadataTracker({
+  epoch: DAEMON_INSTANCE_ID,
+  changed: (value) => {
+    for (const client of wsClients) {
+      if (client.data?.origin !== 'bridge') sendEvent(client, 'cron-metadata', { value })
+    }
+  },
+  oneShotTime: (cron, createdAt, id) => cronMetadataConfig ? cliOneShotTime(cron, createdAt, id, cronMetadataConfig) : null,
+  nextRun: nextCliCronMinute,
+  promptLimit: CRON_PROMPT_LIMIT,
+})
+function cronProcess(session: SessionData) {
+  const epoch = streamEpochOf(session)
+  const identity = `${session.bootId ?? ''}:${session.pid}:${session.startTime}:${epoch}`
+  const origin = session.cronMetadataOrigin
+  const valid = session.startTime && epoch && origin?.identity === identity
+    && Number.isSafeInteger(origin.offset) && origin.offset >= 0 && Number.isFinite(origin.startedAt) && origin.startedAt > 0
+  const byTime = !!valid && origin!.byTime === true
+  return { identity, alive: session.state === 'running', version: session.cliVersion,
+    startedAt: valid ? origin!.startedAt : undefined,
+    // A by-time origin's offset is the adopt boundary, not a process boundary:
+    // reporting it as the start offset would make the tracker attribute by the
+    // wrong rule (and hide everything the live process wrote before the adopt).
+    startOffset: valid && !byTime ? origin!.offset : undefined,
+    attributeByTime: byTime,
+    fresh: !!valid && origin!.fresh === true }
+}
+
+function updateCronMetadata(sid: string, session: SessionData, line?: string) {
+  const process = cronProcess(session)
+  cronMetadata.configure(sid, process, cronMetadataConfig)
+  if (line) {
+    if (!session.cronMetadataLoading) cronMetadata.observe(sid, process, line)
+  } else cronMetadata.state(sid, process)
+}
 
 // ── Write-ahead Registry (Phase C) ──
 // Persists the daemon's session inventory to disk before returning spawn() to
@@ -931,7 +996,7 @@ const wsClients = new Set<ServerWebSocket<WsData>>()
 // for each entry probes kill(pid,0) to decide adopt vs reap. Implementation
 // lives in daemon-core.ts (dependency-injected, unit-testable); this file
 // only provides Bun-specific I/O bindings.
-const REGISTRY_FILE = path.join(DAEMON_DIR, 'sessions.json')
+const REGISTRY_FILE = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'sessions.json')
 type RegistryEntry = CoreRegistryEntry
 
 // ── Agent subscriptions ──
@@ -1178,13 +1243,22 @@ function rebuildFoldStateFromJsonl(jsonlPath: string): FoldRebuild {
 // Reads from the last complete-line boundary the watcher published (its in-memory
 // carry died with it, so the torn region is simply re-read) to EOF, folds every
 // COMPLETE line, and re-publishes the boundary. Bounded by the same carry cap.
+// Before the exit event clears subscribers, re-send the complete lines the watcher has not delivered yet.
 // Keep in sync with daemon-source.ts drainSessionFold.
-function drainSessionFold(session: SessionData): void {
+function drainSessionFold(session: SessionData, sid: string): void {
   const from = session.watcher ? session.watcher.offset : (session.offset || 0)
   let size = 0
   try { size = fs.statSync(session.jsonlPath).size } catch { return }
   if (size <= from) return
-  const boundary = drainFoldRange(session, from, size)
+  const boundary = drainFoldRange(session, from, size, (line, v) => {
+    for (const ws of session.subscribers) {
+      if (ws.readyState === 1) {
+        try { sendEvent(ws, 'jsonl', { sid, line, v }) } catch {}
+      } else {
+        session.subscribers.delete(ws)
+      }
+    }
+  })
   session.offset = boundary
   if (session.watcher) session.watcher.offset = boundary
 }
@@ -1192,7 +1266,8 @@ function drainSessionFold(session: SessionData): void {
 // Fold [from, to) into session.foldState, honoring the `v > foldState.v` guard
 // (bytes already folded out-of-band must not fold twice). Returns the new
 // complete-line boundary. Keep in sync with daemon-source.ts.
-function drainFoldRange(session: SessionData, from: number, to: number): number {
+// The fold may run ahead of delivery, so onLine is not bounded by foldState.v.
+function drainFoldRange(session: SessionData, from: number, to: number, onLine?: (line: string, v: number) => void): number {
   let boundary = from
   let fd: number
   try { fd = fs.openSync(session.jsonlPath, 'r') } catch { return boundary }
@@ -1215,8 +1290,11 @@ function drainFoldRange(session: SessionData, from: number, to: number): number 
         if (discardThroughNextNewline) discardThroughNextNewline = false
         else {
           const line = chunk.subarray(start, nl).toString('utf-8')
-          if (line.trim() && boundary > session.foldState.v) {
-            session.foldState = foldLine(session.foldState, line, boundary)
+          if (line.trim()) {
+            if (boundary > session.foldState.v) {
+              session.foldState = foldLine(session.foldState, line, boundary)
+            }
+            if (onLine) { try { onLine(line, boundary) } catch {} }
           }
         }
         start = nl + 1
@@ -1316,6 +1394,7 @@ function pushSnapshot(sid: string, immediate: boolean): void {
 // persists, and reconciles in pure functions; we inject the Bun-specific
 // broadcast + kill + readStartTime deps.
 const core = createDaemonCore<SessionData>({
+  get bootId() { return daemonBootId },
   fs,
   clock: () => Date.now(),
   killFn: (pid, sig) => { process.kill(pid, sig as NodeJS.Signals) },
@@ -1326,6 +1405,8 @@ const core = createDaemonCore<SessionData>({
   orphanPollIntervalMs: 1000,
   logger: logMsg,
   broadcastSessionStateFn: (payload) => {
+    const session = sessions.get(payload.sid)
+    if (session) updateCronMetadata(payload.sid, session)
     for (const client of wsClients) {
       sendEvent(client, 'session_state', payload)
     }
@@ -1340,8 +1421,8 @@ const core = createDaemonCore<SessionData>({
   },
   sessions,
   pushSnapshotFn: (sid, immediate) => pushSnapshot(sid, immediate),
-  // C18: synchronous pre-death fold drain (see drainSessionFold).
-  drainFoldFn: (session) => drainSessionFold(session),
+  // C18: synchronous pre-death fold drain + last-line fan-out (see drainSessionFold).
+  drainFoldFn: (session) => drainSessionFold(session, sessionSidOf(session)),
   // Daemon hooks: core's session.reap point consults the same pushed rules as
   // the tailer points (hookActions is hoisted; evaluated only at runtime).
   hookActionsFn: (point, ctx) => hookActions(point, ctx),
@@ -1353,7 +1434,7 @@ const core = createDaemonCore<SessionData>({
     // rebuild would have consumed the fragment's first half and the completed
     // line would never be folded whole (C3/C7).
     const adoptFold = rebuildFoldStateFromJsonl(entry.jsonlPath)
-    return {
+    const adopted = {
       proc: null,
       pipePath: entry.pipePath,
       jsonlPath: entry.jsonlPath,
@@ -1377,12 +1458,52 @@ const core = createDaemonCore<SessionData>({
       exitedAt: null,
       parented: false,
       startTime: entry.startTime,
+      bootId: entry.bootId,
+      cliVersion: entry.cliVersion,
+      cronMetadataOrigin: entry.cronMetadataOrigin,
       cwd: entry.cwd ?? '',
       args: entry.args ?? [],
       orphanPollTimer: null,
       mode: entry.mode ?? 'default',
       pendingCtrl: entry.pendingCtrl ?? null,
+      turnRetry: entry.turnRetry,
     }
+    // A session spawned before cron bookkeeping existed carries no origin, and
+    // without one EVERY cron line counted as historical (never active, so no
+    // badge) while the replay rescanned the whole stream from byte 0 — a 1GB
+    // whale stream aborted at the 10s budget and reported no jobs at all.
+    //
+    // The live process is the one piece of evidence an adopt does have: the OS
+    // knows when it started, and a cron the CLI created after that moment is
+    // held by the process that is still running. So attribute by TIME here (the
+    // recorded offset belongs to the previous daemon generation, not to the
+    // process) and only pay for the extra stream pass when the fold actually saw
+    // an armed job. Without a start time from the OS, fall back to the adopt
+    // boundary: evidence from here on, unknown before.
+    // A DERIVED origin is re-derived, never inherited: it is a guess about a
+    // process this daemon never spawned, and the previous generation's guess must
+    // not outlive the evidence behind it. Records written before the marker
+    // existed are caught by their own inconsistency: a spawn stamps its clock just
+    // BEFORE forking, so a real spawn origin's startedAt is never later than the
+    // start the OS reports (which macOS floors to the whole second, hence a small
+    // allowance). A record claiming a later start was derived after the fact.
+    const processStart = processStartedAtMs(entry.pid, entry.startTime)
+    const inherited = adopted.cronMetadataOrigin
+    if (!inherited || inherited.derived === true
+      || (processStart !== null && inherited.startedAt > processStart + 5_000)) {
+      const armed = Object.keys(adoptFold.state.cronIds ?? {}).length > 0
+      adopted.cronMetadataOrigin = {
+        identity: cronProcess(adopted as SessionData).identity,
+        offset: adoptFold.boundary,
+        startedAt: processStart ?? Date.now(),
+        fresh: false,
+        derived: true,
+        // Time attribution costs one pass over the stream, so it is only turned on
+        // for a session whose fold actually saw a job armed.
+        ...(processStart !== null && armed ? { byTime: true as const } : {}),
+      }
+    }
+    return adopted
   },
 })
 
@@ -1462,7 +1583,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
       + (err instanceof Error ? err.message : String(err)))
   }
   try {
-    const out = dispatchCommand(ws, id as number, cmd) as unknown
+    const out = daemonCommands.admit(() => dispatchCommand(ws, id as number, cmd)) as unknown
     if (out && typeof (out as Promise<unknown>).then === 'function') {
       (out as Promise<unknown>).catch(replyError)
     }
@@ -1474,15 +1595,21 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
 
 function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   switch (cmd.cmd) {
-    case 'start': return cmdStart(ws, id as number, cmd)
+    case 'start': return daemonCommands.run(() => cmdStart(ws, id as number, cmd))
     case 'attach': return cmdAttach(ws, id as number, cmd)
-    case 'send': return cmdSend(ws, id as number, cmd)
-    case 'sendRaw': return cmdSendRaw(ws, id as number, cmd)
+    case 'send': return daemonCommands.run(() => cmdSend(ws, id as number, cmd))
+    case 'sendRaw': return daemonCommands.run(() => cmdSendRaw(ws, id as number, cmd))
     case 'appendUserMarker': return cmdAppendUserMarker(ws, id as number, cmd)
-    case 'stop': return cmdStop(ws, id as number, cmd)
+    case 'stop': return daemonCommands.run(() => cmdStop(ws, id as number, cmd))
     case 'setMode': return cmdSetMode(ws, id as number, cmd)
     case 'status': return cmdStatus(ws, id as number, cmd)
+    case 'cancelPendingStart': return cmdCancelPendingStart(ws, id as number, cmd)
     case 'getState': return cmdGetState(ws, id as number, cmd)
+    case 'cron.metadata': {
+      for (const [sid, session] of sessions) updateCronMetadata(sid, session)
+      return sendOk(ws, id, { values: cronMetadata.list() })
+    }
+    case 'cron.supervision': return daemonCommands.run(() => cmdCronSupervision(ws, id, cmd))
     case 'rename': return cmdRename(ws, id as number, cmd)
     case 'read-history': return cmdReadHistory(ws, id as number, cmd)
     case 'subscribe-agent': return cmdSubscribeAgent(ws, id as number, cmd)
@@ -1528,16 +1655,16 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'bridge.configure': return cmdBridgeConfigure(ws, id as number, cmd)
     // NOT in BRIDGE_ALLOWED_COMMANDS: rule content may only arrive over the
     // trusted SSH-tunneled walnut socket, never from the public cloud bridge.
-    case 'hooks.configure': return cmdHooksConfigure(ws, id as number, cmd)
+    case 'hooks.configure': return daemonCommands.run(() => cmdHooksConfigure(ws, id as number, cmd))
     // walnut-trigger ('triggers-v1'). NOT in BRIDGE_ALLOWED_COMMANDS: a check is
     // an arbitrary shell command on this host, and a fire carries host data — the
     // whole family belongs to the trusted SSH-tunneled walnut socket only.
-    case 'triggers.configure': return cmdTriggersConfigure(ws, id as number, cmd)
+    case 'triggers.configure': return daemonCommands.run(() => cmdTriggersConfigure(ws, id as number, cmd))
     case 'triggers.test': return cmdTriggersTest(ws, id as number, cmd)
-    case 'triggers.run': return cmdTriggersRun(ws, id as number, cmd)
-    case 'triggers.ack': return cmdTriggersAck(ws, id as number, cmd)
+    case 'triggers.run': return daemonCommands.run(() => cmdTriggersRun(ws, id as number, cmd))
+    case 'triggers.ack': return daemonCommands.run(() => cmdTriggersAck(ws, id as number, cmd))
     case 'skills.sync': return cmdSkillsSync(ws, id as number, cmd)
-    case 'bridgeResume': return cmdBridgeResume(ws, id as number, cmd)
+    case 'bridgeResume': return daemonCommands.run(() => cmdBridgeResume(ws, id as number, cmd))
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
     case 'stt-result': return cmdSttResult(ws, id as number, cmd)
     case 'session.launch': return cmdLaunchRelay(ws, id as number, cmd)
@@ -1583,14 +1710,78 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       return dispatchCommand(ws, id as number, { ...cmd, cmd: route.cmd })
     }
     case 'ping': return sendOk(ws, id as number, { pong: true })
+    case 'service.handover': case 'service.update': return daemonCommands.run(() => cmdServiceHandover(ws, id, cmd))
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
-      capabilities: ADVERTISED_DAEMON_CAPABILITIES,
+      capabilities: [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1'] : [])],
+      cronSupervision: { managed: !!cronRuntime, startup: SERVICE_MODE ? 'service' : 'on-demand' },
       instanceId: DAEMON_INSTANCE_ID,
+      ...(SERVICE_MODE ? { serviceExecutable: process.execPath } : {}),
       startedAt: DAEMON_START_TS,
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
     })
     default: return sendError(ws, id as number, 'unknown command: ' + cmd.cmd)
+  }
+}
+
+async function cmdServiceHandover(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const updating = cmd.cmd === 'service.update'
+  if (updating !== SERVICE_MODE || !requestDaemonShutdown || typeof cmd.stateDir !== 'string' || cmd.instanceId !== DAEMON_INSTANCE_ID) {
+    return sendError(ws, id, 'service.handover: daemon mode or instance does not match the requested operation')
+  }
+  if (acp.workers.size || [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending].some((pending) => pending.size)) {
+    return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first')
+  }
+  if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform')
+  // Pause before the first await so the handover RPC does not count itself in the wait set.
+  const pause = daemonCommands.pause()
+  let recovery: ReturnType<NonNullable<typeof cronRuntime>['pause']> | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    recovery = updating ? cronRuntime?.pause() : undefined
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Service preparation timed out; existing work is still running, retry after it finishes')), 15_000)
+    })
+    const drained = await Promise.race([Promise.allSettled([pause.drained, recovery?.drained]), deadline])
+    const failed = drained.find((result) => result.status === 'rejected')
+    if (failed?.status === 'rejected') throw failed.reason
+  } catch (error) {
+    recovery?.resume()
+    pause.resume()
+    throw error
+  } finally { clearTimeout(timer) }
+  const location = { stateDir: cmd.stateDir, uid: os.userInfo().uid, instanceId: DAEMON_INSTANCE_ID }
+  if (updating) serviceUpdateRequested = true
+  try {
+    if (updating) await cronRuntime?.close()
+    persistRegistry(true)
+    if (!updating) await prepareDaemonServiceHandover({
+      ...location, home: HOME_DIR, platform: process.platform,
+      pid: process.pid, startTime: readStartTime(process.pid), entries: readRegistry(), registryFile: REGISTRY_FILE, hooks: daemonHooks,
+    })
+  } catch (error) {
+    if (updating) {
+      handoverPrepared = true
+      try { sendError(ws, id, String(error), { updateStarted: true, instanceId: DAEMON_INSTANCE_ID }) }
+      finally { await waitForHandoverReceipt(ws); requestDaemonShutdown() }
+      return
+    }
+    if ((error as NodeJS.ErrnoException).code === 'handover-published') {
+      handoverPrepared = true
+      requestDaemonShutdown()
+    } else pause.resume()
+    throw error
+  }
+  handoverPrepared = true
+  try { sendOk(ws, id, { prepared: true, instanceId: DAEMON_INSTANCE_ID }) }
+  finally { await waitForHandoverReceipt(ws); requestDaemonShutdown() }
+}
+
+async function waitForHandoverReceipt(ws: ServerWebSocket<WsData>): Promise<void> {
+  // Close the connection only after the dedicated client confirms receipt, so exiting cannot drop a reply that has not been sent yet.
+  const deadline = Date.now() + 1500
+  while (ws.readyState === 1 && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 10))
   }
 }
 
@@ -1613,9 +1804,9 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 
   const session = sessions.get(sid)
 
-  if (session && session.state === 'running') {
+  if (session && session.state === 'running' && cmd.autoRetry !== true) {
     // Already alive — just send the message directly.
-    return cmdSend(ws, id, { cmd: 'send', sid, message })
+    return cmdSend(ws, id, { cmd: 'send', sid, message, stopFence: cmd.stopFence })
   }
 
   // The jsonl is the proof-of-residence: without it this sid never ran here.
@@ -1682,6 +1873,8 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     message,
     resume: true,
     mode: session?.mode ?? 'default',
+    stopFence: cmd.stopFence,
+    autoRetry: cmd.autoRetry === true,
   })
 }
 
@@ -1920,7 +2113,7 @@ function cmdMessageRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   }, MESSAGE_RELAY_TIMEOUT_MS)
   messageRelayPending.set(relayId, { ws, id, timer })
   logMsg('info', 'session.message: relaying to primary server', { relayId, sid: targetSid, messageId })
-  sendEvent(target, 'message-request', { relayId, sessionId: targetSid, message, messageId })
+  sendEvent(target, 'message-request', { relayId, sessionId: targetSid, message, messageId, stopFence: cmd.stopFence ?? null })
 }
 
 function cmdMessageResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -2062,6 +2255,7 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
 
 /** One parsed NDJSON line from the agent socket → local reject or hub relay. */
 function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void) {
+  if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting'))
   const parsed = parseGatewayLine(line)
   if (!parsed.ok) return respond({ ok: false, error: parsed.error })
   const req = parsed.request
@@ -2380,7 +2574,9 @@ function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
     PATH: (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR,
   }
-  void acp.acpStart(ws, params).then((resp) => {
+  return sessionStartGate.run(params.sid, async () => {
+    if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')
+    const resp = await acp.acpStart(ws, params)
     if (resp.ok) sendOk(ws, id, resp.result ?? {})
     else safeSend(ws, JSON.stringify({ id, ok: false, error: resp.error, errorKind: resp.errorKind }))
   })
@@ -2392,7 +2588,7 @@ function cmdAcpOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
   delete (params as Record<string, unknown>).cmd
   delete (params as Record<string, unknown>).id
   delete (params as Record<string, unknown>).traceId
-  void acp.acpOp(sid, op, params as Record<string, unknown>).then((resp) => {
+  return acp.acpOp(sid, op, params as Record<string, unknown>).then((resp) => {
     if (resp.ok) sendOk(ws, id, { result: resp.result })
     else safeSend(ws, JSON.stringify({ id, ok: false, error: resp.error?.message ?? 'acp op failed', errorKind: resp.error?.kind }))
   })
@@ -2401,7 +2597,7 @@ function cmdAcpOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
 function cmdAcpStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid } = cmd as { sid?: string }
   if (!sid) return sendError(ws, id, 'acpStop: missing sid')
-  void acp.acpStop(sid).then(() => sendOk(ws, id, { stopped: true }))
+  return acp.acpStop(sid).then(() => sendOk(ws, id, { stopped: true }))
 }
 
 function cmdAcpSubscribe(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -2412,8 +2608,53 @@ function cmdAcpSubscribe(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   else safeSend(ws, JSON.stringify({ id, ok: false, error: 'no live ACP worker for ' + sid, errorKind: 'no_worker' }))
 }
 
+function cancelledStartPath(sid: string): string {
+  return path.join(DAEMON_DIR, 'cancelled-starts', Buffer.from(sid).toString('hex'))
+}
+
+async function cmdCancelPendingStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const sid = cmd.sid
+  if (typeof sid !== 'string' || !/^[A-Za-z0-9-]{1,80}$/.test(sid)) return sendError(ws, id, 'cancelPendingStart: invalid sid')
+  return sessionStartGate.run(sid, async () => {
+    if (acp.hasWorker(sid)) return sendOk(ws, id, { cancelled: false, alive: true })
+    const session = sessions.get(sid)
+    if (session?.state === 'running' && session.pid) {
+      try {
+        process.kill(session.pid, 0)
+        return sendOk(ws, id, { cancelled: false, alive: true, pid: session.pid })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+      }
+    }
+    const file = cancelledStartPath(sid)
+    await fs.promises.mkdir(path.dirname(file), { recursive: true })
+    await fs.promises.writeFile(file, '', { flag: 'a', mode: 0o600 })
+    return sendOk(ws, id, { cancelled: true, alive: false })
+  })
+}
+
 // ── Start a Claude session ──
 async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const sid = cmd.sid as string
+  if (!sid) return sendError(ws, id, 'start: missing sid')
+  const stopVersion = sessionStopVersions.get(sid) ?? 0
+  const current = () => (sessionStopVersions.get(sid) ?? 0) === stopVersion
+    && (!cronRuntime || (cronRuntime.deliveryAllowed(sid, cmd.stopFence) && (cmd.autoRetry !== true || !cronRuntime.get(sid))))
+  const result = await sessionStartGate.run(sid, () => {
+    if (!cmd.resume && fs.existsSync(cancelledStartPath(sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')
+    if (!current()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' })
+    return startSessionProcess(cmd, undefined, current)
+  })
+    .catch((error) => {
+      if (error?.code === 'SESSION_STOP_SUPERSEDED') return null
+      throw error
+    })
+  if (!result) return sendOk(ws, id, { ok: false, reason: 'session_stopped', error: 'start: a stop request superseded this start' })
+  addSubscriber(ws, sid, result.offset)
+  return sendOk(ws, id, result)
+}
+
+async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () => boolean, canStart?: () => boolean) {
   const { sid, args, cwd, message, resume, mode, uuid } = cmd as {
     sid: string; args: string[]; cwd: string; message?: string; resume?: boolean
     mode?: string
@@ -2422,20 +2663,16 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     uuid?: string
   }
   const initialUuid = typeof uuid === 'string' && uuid ? uuid : undefined
-  // `message` is OPTIONAL: an empty/absent message spawns the CLI without writing
-  // any user turn to the FIFO — the process emits `init` (+ SessionStart hook, fresh
-  // settings/skills/MCP load) then blocks on stdin, idle. This is the "restart to
-  // re-initialize, don't run a turn" path (POST /restart with an empty queue). A
-  // present message keeps the classic behavior (spawn + deliver the first turn).
-  if (!sid || !args || !cwd) {
-    return sendError(ws, id, 'start: missing required fields (sid, args, cwd)')
-  }
+  // An empty message only resumes the process without injecting a user turn; the CLI may not send init until a schedule fires.
+  if (!sid || !args || !cwd) throw new Error('start: missing required fields (sid, args, cwd)')
+  if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' })
+  if (isCurrent && !isCurrent()) throw new Error('start: supervision request was superseded')
 
   // Validate cwd exists before spawning — prevents misleading ENOENT on /bin/bash
   // when the real issue is a non-existent working directory (e.g. local Mac path
   // sent to a remote Linux host).
   if (!fs.existsSync(cwd)) {
-    return sendError(ws, id, `start: cwd does not exist on this host (${os.hostname()}): ${cwd}`)
+    throw new Error(`start: cwd does not exist on this host (${os.hostname()}): ${cwd}`)
   }
 
   // If a session with this sid already exists (e.g. adopted orphan still
@@ -2444,6 +2681,14 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   // captured pid lingers and will misfire `pid-recycled` against our new pid
   // ~1s after spawn, killing every --resume-spawned process in a loop.
   const existing = sessions.get(sid)
+  if (isCurrent && existing?.pid && existing.bootId === daemonBootId) {
+    try {
+      process.kill(existing.pid, 0)
+      if (existing.state !== 'running') throw new Error('start: an unadopted process may still own this session')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
+  }
   if (existing) {
     // Live-adopt guard: a resume-with-message against a STILL-RUNNING CLI means
     // the caller lost track of the process (walnut restart race, stale hasPipe),
@@ -2452,13 +2697,21 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     // message to the live FIFO and adopt instead — exactly what cmdSend would
     // have done had the caller known the process was alive. An explicit restart
     // (reinitialize) sends message='' and still takes the respawn path below.
-    if (resume && message && existing.state === 'running' && existing.pid) {
+    if (resume && (message || cmd.deferMessage === true || isCurrent) && existing.state === 'running' && existing.pid) {
       let oldAlive = false
-      try { process.kill(existing.pid, 0); oldAlive = true } catch {}
+      try { process.kill(existing.pid, 0); oldAlive = true } catch (error) {
+        if (isCurrent && (error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+      }
       if (oldAlive) {
+        if (isCurrent && (!existing.startTime || existing.startTime !== readStartTime(existing.pid))) {
+          throw new Error('start: live process identity is unknown')
+        }
         // Live-adopt: the start's initial message is delivered through the FIFO
         // instead of a respawn, so it must carry the same pre-assigned uuid.
-        const sendResult = await core.handleSendCommand(sid, message, initialUuid)
+        // A deferred delivery is not a restart: adopt first, and the ordered send writes the body afterwards.
+        const sendResult = message
+          ? await core.handleSendCommand(sid, message, initialUuid)
+          : { ok: true } as const
         if (sendResult.ok) {
           if (mode) existing.mode = mode as SessionMode
           // Hand out a COMPLETE-line boundary, never a raw stat().size: this
@@ -2469,8 +2722,8 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
           logMsg('info', 'cmdStart: adopted live session — message delivered via FIFO, respawn skipped', {
             sid, pid: existing.pid, offset: curSize,
           })
-          addSubscriber(ws, sid, curSize)
-          return sendOk(ws, id, { pid: existing.pid, outputFile: existing.jsonlPath, offset: curSize, adopted: true })
+          ensureWatcher(sid)
+          return { pid: existing.pid, outputFile: existing.jsonlPath, offset: curSize, adopted: true }
         }
         // Delivery failed. Only fall through to respawn if handleSendCommand
         // actually reaped the session (ENXIO / precheck-dead / partial-write).
@@ -2481,13 +2734,14 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
           logMsg('warn', 'cmdStart: live-adopt delivery failed but process alive — refusing respawn', {
             sid, pid: existing.pid, reason: sendResult.reason ?? sendResult.error,
           })
-          return sendError(ws, id, `start: session ${sid} is alive but FIFO delivery failed (${sendResult.reason ?? sendResult.error}); retry send`)
+          throw new Error(`start: session ${sid} is alive but FIFO delivery failed (${sendResult.reason ?? sendResult.error}); retry send`)
         }
         logMsg('warn', 'cmdStart: live-adopt delivery failed — falling back to respawn', {
           sid, reason: sendResult.reason ?? sendResult.error,
         })
       }
     }
+    if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' })
     logMsg('warn', 'cmdStart: replacing existing session', {
       sid,
       oldPid: existing.pid,
@@ -2548,7 +2802,7 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   // Create FIFO
   try { fs.unlinkSync(pipePath) } catch {}
   try { execSync('mkfifo ' + JSON.stringify(pipePath)) } catch (err: unknown) {
-    return sendError(ws, id, 'mkfifo failed: ' + (err as Error).message)
+    throw new Error('mkfifo failed: ' + (err as Error).message)
   }
 
   // Open files. The CLI's stdout fd MUST be O_APPEND ('a'): the daemon also
@@ -2566,6 +2820,8 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     try { fs.writeFileSync(jsonlPath, '') } catch {}
   }
   const outputFd = fs.openSync(jsonlPath, 'a')
+  const cronStartOffset = fs.fstatSync(outputFd).size
+  const cronStartedAt = Date.now()
   const stderrFd = fs.openSync(stderrPath, resume ? 'a' : 'w')
 
   // Touch output file on resume so health checks see fresh mtime
@@ -2600,9 +2856,9 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   // else default '60'. Keep in sync with daemon-source.ts.
   const cliMaxRetries =
     process.env.CLAUDE_CODE_MAX_RETRIES ?? process.env.WALNUT_CLI_MAX_RETRIES ?? '60'
-  const proc = spawn(userShell, ['-c', shellCmd], {
+  const spawnOptions = {
     detached: true,
-    stdio: [pipeFd, outputFd, stderrFd],
+    stdio: [pipeFd, outputFd, stderrFd] as [number, number, number],
     cwd: cwd,
     // MCP_CONNECTION_NONBLOCKING=1 makes the CLI emit its `init` event immediately
     // instead of blocking up to 5s for MCP servers to connect (they keep connecting
@@ -2652,8 +2908,17 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
       // chain as the VITEST_* leak. Keep in sync with daemon-source.ts.
       WALNUT_DAEMON_PARENT_PID: undefined,
     },
-  })
-
+  }
+  let barrier: ReturnType<typeof spawnBehindRegistry> | null = null
+  let proc: ReturnType<typeof spawn>
+  try {
+    barrier = SERVICE_MODE ? spawnBehindRegistry(userShell, ['-c', shellCmd], spawnOptions) : null
+    proc = barrier?.process ?? spawn(userShell, ['-c', shellCmd], spawnOptions)
+  } catch (error) {
+    fs.closeSync(pipeFd); fs.closeSync(outputFd); fs.closeSync(stderrFd)
+    throw error
+  }
+  try {
   // Detect spawn failure immediately — proc.pid is undefined when posix_spawn fails.
   // This catches cwd-doesn't-exist, shell-not-found, and other synchronous spawn errors
   // BEFORE we send ok:true back to the client.
@@ -2664,11 +2929,13 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     try { fs.closeSync(outputFd) } catch {}
     try { fs.closeSync(stderrFd) } catch {}
     try { fs.unlinkSync(pipePath) } catch {}
-    try { fs.unlinkSync(jsonlPath) } catch {}
-    try { fs.unlinkSync(stderrPath) } catch {}
+    if (!resume) {
+      try { fs.unlinkSync(jsonlPath) } catch {}
+      try { fs.unlinkSync(stderrPath) } catch {}
+    }
     // Drain the async error event to prevent unhandled rejection
     proc.on('error', () => {})
-    return sendError(ws, id, `spawn failed: process could not start on ${os.hostname()} (cwd: ${cwd})`)
+    throw new Error(`spawn failed: process could not start on ${os.hostname()} (cwd: ${cwd})`)
   }
 
   // Handle late spawn errors (shouldn't happen after pid is set, but defensive)
@@ -2682,7 +2949,7 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   // O_RDWR lifetime like the send path, so the FIFO survives until the first real
   // message; closing it here (as the message path does after writing) is fine
   // because the CLI already holds its own read end.
-  if (message) {
+  if (message && !barrier) {
     const payload = JSON.stringify({
       type: 'user',
       message: { role: 'user', content: message },
@@ -2726,11 +2993,13 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     exitedAt: null,
     parented: true,
     startTime: readStartTime(pid),
+    bootId: daemonBootId,
     cwd,
     args,
     orphanPollTimer: null,
     mode: (mode as SessionMode) || 'default',
     pendingCtrl: null,
+    cronMetadataLoaded: !resume,
     spawnTs: Date.now(),     // latency instrumentation: CLI spawn → first init line
     sawInit: false,
   }
@@ -2749,17 +3018,28 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
     reapSession(sid, code ?? 1, 'proc-exit')
   })
 
+  sessionData.cronMetadataOrigin = { identity: cronProcess(sessionData).identity, offset: cronStartOffset, startedAt: cronStartedAt, fresh: !resume }
   sessions.set(sid, sessionData)
+  cronMetadata.configure(sid, cronProcess(sessionData), cronMetadataConfig)
+  cronMetadata.state(sid, cronProcess(sessionData), false, !resume)
   // Write-ahead: flush registry before returning ok to caller so a crash-after-
   // spawn doesn't orphan the CLI without daemon knowledge.
-  try { persistRegistry() } catch {}
+  try { persistRegistry() } catch (error) {
+    if (SERVICE_MODE) throw error
+  }
 
-  // Announce the new session_state=running to all connected clients, then
-  // subscribe the caller to the session-bound watcher (creating it if needed).
+  barrier?.release()
   broadcastSessionState(sid, 'running', { pid })
-  addSubscriber(ws, sid, offset)
-
-  sendOk(ws, id, { pid, outputFile: jsonlPath, offset })
+  ensureWatcher(sid)
+  if (barrier && message) {
+    const sent = await core.handleSendCommand(sid, message, initialUuid)
+    if (!sent.ok) throw new Error(`start: initial message not delivered (${sent.reason ?? sent.error})`)
+  }
+  return { pid, outputFile: jsonlPath, offset }
+  } catch (error) {
+    barrier?.abort()
+    throw error
+  }
 }
 
 // ── File watching for JSONL streaming ──
@@ -2797,8 +3077,10 @@ const CRON_CHECK_THROTTLE_MS = 30_000
 // at spawn instead of pushing; synthesize the equivalent built-in rule set at
 // boot (a later hooks.configure replaces it). WALNUT_ALLOW_DURABLE_CRON=1 wins
 // over everything (emergency off-switch).
-const HOOKS_FILE = path.join(DAEMON_DIR, 'hooks.json')
+const HOOKS_FILE = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'hooks.json')
 let daemonHooks: DaemonHooksConfig | null = null
+let persistedHooksHash: string | null | undefined = undefined
+const hooksConfigureGate = new DaemonSessionGate()
 function loadDaemonHooksAtBoot() {
   if (process.env.WALNUT_ALLOW_DURABLE_CRON === '1') return
   try {
@@ -2807,28 +3089,40 @@ function loadDaemonHooksAtBoot() {
     // left by a future daemon) falls through to the env fallback, not silence.
     if (loaded && loaded.version === 1 && Array.isArray(loaded.hooks)) {
       daemonHooks = loaded
+      persistedHooksHash = typeof loaded.hash === 'string' ? loaded.hash : undefined
       logMsg('info', 'daemon hooks loaded from disk', { hash: loaded.hash, hooks: loaded.hooks.length })
       return
     }
-  } catch {}
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') persistedHooksHash = null
+  }
   if (process.env.WALNUT_ENFORCE_SESSION_CRON === '1') {
+    persistedHooksHash = undefined
     daemonHooks = { version: 1, hash: 'env-compat', hooks: [builtinSessionOnlyCronHook()] }
     logMsg('info', 'daemon hooks synthesized from WALNUT_ENFORCE_SESSION_CRON (legacy server)')
   }
 }
-loadDaemonHooksAtBoot()
 /** Evaluate the pushed rules at one intercept point (empty when no hooks). */
 function hookActions(point: DaemonHookPoint, ctx: Record<string, unknown>): string[] {
   if (process.env.WALNUT_ALLOW_DURABLE_CRON === '1') return []
   try { return evalDaemonHookRules(daemonHooks, point, ctx) } catch { return [] }
 }
 
-function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+async function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  return hooksConfigureGate.run('hooks', () => configureDaemonHooks(ws, id, cmd))
+}
+
+async function configureDaemonHooks(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const next = cmd.config as DaemonHooksConfig | undefined
   if (!next || next.version !== 1 || !Array.isArray(next.hooks) || typeof next.hash !== 'string') {
     return sendError(ws, id, 'hooks.configure: invalid config')
   }
   const changed = !daemonHooks || next.hash !== daemonHooks.hash
+  if (SERVICE_MODE && DAEMON_STATE_DIR && (changed || persistedHooksHash !== next.hash)) {
+    persistedHooksHash = undefined
+    await persistCronHooks(DAEMON_STATE_DIR, next)
+    persistedHooksHash = next.hash
+  }
   daemonHooks = next
   // The kill switch gates EVALUATION (hookActions), not storage — accepting
   // the push keeps the daemon current for when the switch is lifted, but an
@@ -2840,8 +3134,10 @@ function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
     // Persist failure is non-fatal (rules ARE applied in memory; the next
     // connect re-pushes) but must be visible: an unwritable DAEMON_DIR means
     // enforcement silently reverts to zero-hook on the next daemon restart.
-    try { fs.writeFileSync(HOOKS_FILE, JSON.stringify(next), { mode: 0o600 }) }
-    catch (err) { logMsg('warn', 'daemon hooks persist failed (in-memory only)', { error: (err as Error).message }) }
+    if (!SERVICE_MODE) {
+      try { fs.writeFileSync(HOOKS_FILE, JSON.stringify(next), { mode: 0o600 }) }
+      catch (err) { logMsg('warn', 'daemon hooks persist failed (in-memory only)', { error: (err as Error).message }) }
+    }
     logMsg('info', 'daemon hooks configured', { hash: next.hash, hooks: next.hooks.length })
   }
   return sendOk(ws, id, { applied: true, changed, hash: next.hash })
@@ -2861,8 +3157,8 @@ function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
 // events NEVER go to a bridge client — a fire carries host data and only the
 // trusted SSH-tunneled walnut server may receive it. Keep in sync with
 // daemon-source.ts.
-const TRIGGERS_FILE = path.join(DAEMON_DIR, 'triggers.json')
-const TRIGGER_STATE_DIR = path.join(DAEMON_DIR, 'trigger-state')
+const TRIGGERS_FILE = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'triggers.json')
+const TRIGGER_STATE_DIR = path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'trigger-state')
 const TRIGGER_TICK_MS = 5_000
 // A newly armed trigger waits before its first run: configure arrives in a burst
 // at connect, and a boot-time stampede would run every check against a host that
@@ -2894,9 +3190,7 @@ const armedTriggers = new Map<string, ArmedTrigger>()
 let armedTriggersHash: string | null = null
 let triggerTickTimer: ReturnType<typeof setInterval> | null = null
 let triggerTestsRunning = 0
-// Configure calls are serialized: a connect-time push racing a routine
-// mutation's push must not interleave their state-file writes.
-let triggersConfigureChain: Promise<unknown> = Promise.resolve()
+const triggersConfigureGate = new DaemonSessionGate()
 
 /** Replay cadence for unacked fires; the env override exists for tests. */
 function triggerReplayMs(): number {
@@ -3148,9 +3442,7 @@ function tickTriggers(): void {
 }
 
 function cmdTriggersConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const run = triggersConfigureChain.then(() => configureTriggers(ws, id, cmd))
-  triggersConfigureChain = run.catch(() => undefined)
-  return run
+  return triggersConfigureGate.run('triggers.configure', () => configureTriggers(ws, id, cmd))
 }
 
 async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
@@ -3299,7 +3591,7 @@ function cmdTriggersAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 // user's skill store ~/.open-walnut/skills/, where a flat SKILL.md shadows
 // category sub-skills); the engines' native skill folders (~/.claude/skills,
 // ~/.agents/skills — codex's documented user-level dir; both engines follow
-// symlinked skill folders) each get a walnut symlink at it. Guards, same
+// symlinked skill folders) each get a <name> symlink at it. Guards, same
 // spirit as the user-PATH shims: production daemon only, and never clobber a
 // path we do not own (the marker string is the ownership proof). Each engine
 // dir is linked only when that engine's home exists: ~/.agents for codex or
@@ -3414,7 +3706,7 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   // the sole file in it.
   try {
     const legacyDir = path.join(HOME_DIR, '.open-walnut', 'skills', 'walnut')
-    if (path.resolve(legacyDir) !== path.resolve(canonicalDir)) {
+    if (path.resolve(legacyDir) !== path.resolve(walnutCanonicalDir)) {
       const legacyFile = path.join(legacyDir, 'SKILL.md')
       let cur: string | null = null
       try { cur = fs.readFileSync(legacyFile, 'utf-8') } catch {}
@@ -3513,12 +3805,13 @@ const TURN_RETRY_CFG = resolveTurnRetryConfig(process.env)
  * human "continue" would take, so no delivery invariant is special-cased.
  */
 function checkTurnRetry(sid: string, session: SessionData, line: string, v: number) {
-  if (!TURN_RETRY_CFG.enabled) return
+  if (daemonCommands.stopping || !TURN_RETRY_CFG.enabled || cronRuntime?.get(sid)) return
   const { isTurnError, text } = parseTurnErrorLine(line)
 
   if (!isTurnError) {
     // Clean turn-over → the streak is over. Only persist when something changed.
     if (line.includes('"type":"result"') && session.turnRetry) {
+      cancelTurnRetry(sid, 'turn-succeeded')
       if (clearTurnRetryStreak(session.turnRetry)) {
         logMsg('info', 'turn-retry streak cleared by a successful turn', { sid })
         persistRegistry()
@@ -3563,9 +3856,9 @@ function checkTurnRetry(sid: string, session: SessionData, line: string, v: numb
   const attempt = decision.attempt
   session.turnRetryTimer = setTimeout(() => {
     session.turnRetryTimer = null
-    try { fireTurnRetry(sid, attempt, text) } catch (err) {
+    void fireTurnRetry(sid, attempt, text).catch((err) => {
       logMsg('error', 'turn-retry fire threw', { sid, error: (err as Error).message })
-    }
+    })
   }, decision.delayMs)
 }
 
@@ -3576,32 +3869,27 @@ function checkTurnRetry(sid: string, session: SessionData, line: string, v: numb
  * 10-minute backoff the entry can be reaped and REPLACED (a new CLI for the
  * same sid), and nudging a stale object would write to a dead FIFO.
  */
-function fireTurnRetry(sid: string, attempt: number, errorText: string | null) {
+async function fireTurnRetry(sid: string, attempt: number, errorText: string | null) {
+  if (cronRuntime?.get(sid)) return
   const session = sessions.get(sid)
   if (!session) {
     logMsg('info', 'turn-retry aborted — session gone', { sid, attempt })
     return
   }
-  const message = turnRetryMessage(attempt, errorText)
-
-  // Live CLI → plain FIFO write, exactly like a user message.
-  if (session.state === 'running' && session.pid) {
-    let alive = true
-    try { process.kill(session.pid, 0) } catch { alive = false }
-    if (alive) {
-      const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: message } })
-      const ok = writeFifoRaw(session.pipePath, payload)
-      logMsg(ok ? 'info' : 'error', 'turn-retry ' + (ok ? 'injected via FIFO' : 'FIFO write FAILED'), { sid, attempt })
-      if (ok) return
-      // FIFO gone but the process looked alive — fall through to the respawn path.
-    }
+  if (daemonCommands.stopping) return
+  if (daemonCommands.closed) {
+    if (session.turnRetryTimer) clearTimeout(session.turnRetryTimer)
+    session.turnRetryTimer = setTimeout(() => {
+      session.turnRetryTimer = null
+      if (sessions.get(sid) !== session) return
+      void fireTurnRetry(sid, attempt, errorText).catch((err) => {
+        logMsg('error', 'turn-retry fire threw', { sid, error: (err as Error).message })
+      })
+    }, 1000)
+    return
   }
-
-  // Dead CLI → cold resume. bridgeResume rebuilds argv from the registry record
-  // (patched to --resume this sid), which is the same path the Mac uses when it
-  // finds a session dead, so mode/model/permission flags are preserved.
-  logMsg('info', 'turn-retry resuming dead session', { sid, attempt })
-  cmdBridgeResume(RETRY_WS_SINK, 0, { cmd: 'bridgeResume', sid, message })
+  const message = turnRetryMessage(attempt, errorText)
+  await daemonCommands.run(() => cmdBridgeResume(RETRY_WS_SINK, 0, { cmd: 'bridgeResume', sid, message, autoRetry: true }))
 }
 
 /**
@@ -3728,6 +4016,40 @@ function ensureWatcher(sid: string) {
   if (!session) return
   if (session.watcher) return // already running
   if (session.state !== 'running') return
+  if (!session.cronMetadataLoaded && (session.cronMetadataOrigin || Object.keys(session.foldState.cronIds).length > 0)) {
+    session.cronMetadataLoaded = true
+    session.cronMetadataLoading = true
+    const process = cronProcess(session)
+    cronMetadata.configure(sid, process, cronMetadataConfig)
+    cronMetadata.replay(sid, process, true)
+    cronMetadataReplay = cronMetadataReplay.then(async () => {
+      if (sessions.get(sid) !== session) return
+      let start = process.attributeByTime ? 0 : process.startOffset ?? 0
+      cronMetadata.state(sid, process, Object.keys(session.foldState.cronIds).length > 0, process.fresh)
+      // A by-time adopt reads the whole stream once (measured 4.1s for a 1GB
+      // stream, 2.0M lines, on the host that owns the biggest one), so it gets a
+      // budget that fits the file instead of the per-turn one a spawn needs.
+      const signal = AbortSignal.timeout(process.attributeByTime ? 120_000 : 10_000)
+      for (;;) {
+        const end = session.watcher?.offset ?? session.offset
+        await readCronMetadataStream(session.jsonlPath, start, end, signal, (line, offset) => {
+          if (sessions.get(sid) === session) cronMetadata.observe(sid, process, line, true, offset)
+        }, {
+          processBoundary: start === process.startOffset,
+          expectedEpoch: streamEpochOf(session) ?? undefined,
+          onGap: () => { if (sessions.get(sid) === session) cronMetadata.replay(sid, process, true, true) },
+          pendingIds: () => cronMetadata.pendingIds(sid),
+        })
+        if (sessions.get(sid) !== session) return
+        start = end
+        if (start === (session.watcher?.offset ?? session.offset)) break
+      }
+      cronMetadata.replay(sid, cronProcess(session), false)
+    }).catch((error) => {
+      logMsg('warn', 'cron metadata replay failed', { sid, error: String(error) })
+      if (sessions.get(sid) === session) cronMetadata.replay(sid, cronProcess(session), false, true)
+    }).finally(() => { if (sessions.get(sid) === session) session.cronMetadataLoading = false })
+  }
 
   let offset = session.offset || 0
   const stderrPath = session.jsonlPath + '.err'
@@ -3837,7 +4159,8 @@ function ensureWatcher(sid: string) {
         carryLen = tail.length
         carryStartV = lineEnd
       }
-      if (carryLen > TAILER_CARRY_MAX) {
+      const cronMetadataGap = carryLen > TAILER_CARRY_MAX
+      if (cronMetadataGap) {
         // A single line larger than the cap can't be assembled. Drop it and
         // realign on the next newline; `carryStartV` stays absolute so every
         // later line keeps its true `v`.
@@ -3860,10 +4183,19 @@ function ensureWatcher(sid: string) {
         // watcher 恢复可能重读同一范围，按完整行的真实 v 去重。
         if (v > s.foldState.v) s.foldState = foldLine(s.foldState, line, v)
 
+        updateCronMetadata(sid, s, line)
+
         // ── Latency instrumentation: time from CLI spawn → first init line ──
         // Pure CLI cold-start (incl. MCP connect) as the daemon sees it, directly
         // comparable to running `claude` by hand. Logged once per session.
         if (!s.sawInit && line.includes('"type":"system"') && line.includes('"init"')) {
+          try {
+            const init = JSON.parse(line)
+            if (init.type === 'system' && init.subtype === 'init' && typeof init.claude_code_version === 'string') {
+              s.cliVersion = init.claude_code_version
+              if (SERVICE_MODE) persistRegistry()
+            }
+          } catch {}
           s.sawInit = true
           logMsg('info', 'first init line from CLI', {
             sid, spawnToInitMs: s.spawnTs ? Date.now() - s.spawnTs : null,
@@ -4037,6 +4369,7 @@ function ensureWatcher(sid: string) {
         }
         if (!sawResult && line.includes('"type":"result"')) sawResult = true
       }
+      if (cronMetadataGap) cronMetadata.replay(sid, cronProcess(s), !!s.cronMetadataLoading, true)
       // ── C1: after each tailer batch, push the snapshot if it changed (this
       // also covers pendingCtrl set/clear — both happen inside this loop).
       pushSnapshot(sid, false)
@@ -4306,16 +4639,26 @@ function cmdAttach(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 // Logic lives in daemon-core.handleSendCommand (strict-ack). This wrapper
 // only maps the SendResult envelope onto the WS reply format.
 async function cmdSend(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const sid = cmd.sid as string
+  if (!sid) return sendError(ws, id, 'send: missing sid')
+  const stopVersion = sessionStopVersions.get(sid) ?? 0
+  return sessionStartGate.run(sid, () => {
+    if ((sessionStopVersions.get(sid) ?? 0) !== stopVersion || (cronRuntime && !cronRuntime.deliveryAllowed(sid, cmd.stopFence))) {
+      return sendOk(ws, id, { ok: false, reason: 'session_stopped' })
+    }
+    return sendSessionMessage(ws, id, cmd)
+  })
+}
+
+async function sendSessionMessage(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   // `uuid` (optional): the pre-assigned v4 uuid the client wants the CLI to
   // persist this user line under. Older clients never send it and the envelope is
   // then unchanged. Keep in sync with daemon-source.ts.
   const { sid, message, uuid } = cmd as { sid: string; message: string; uuid?: string }
-  // A real send means someone (the user, a task hook, the Mac) is driving this
-  // session now — drop any pending auto-retry so we never inject behind them.
-  // The retry's own delivery does NOT come through here (it writes the FIFO
-  // directly / goes via cmdBridgeResume), so this can't cancel itself.
+  // markers (send-markers-v1): the daemon writes them between the body and the newline; core validates them.
+  const markers = (cmd as { markers?: UserMarkerInput[] }).markers
   cancelTurnRetry(sid, 'superseded-by-send')
-  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined)
+  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined, markers)
   if ('error' in result) return sendError(ws, id, result.error)
   sendOk(ws, id, result as unknown as Record<string, unknown>)
 }
@@ -4361,12 +4704,45 @@ function cmdSetMode(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string,
 }
 
 // ── Stop session ──
-function cmdStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+// A refused stop request must not cancel a start that is already queued.
+async function cmdStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid } = cmd as { sid: string }
   if (!sid) return sendError(ws, id, 'stop: missing sid')
+  if (cmd.stopRequestId !== undefined && (typeof cmd.stopRequestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cmd.stopRequestId))) {
+    return sendError(ws, id, 'stop: invalid stopRequestId')
+  }
+  if (cmd.reason !== undefined && !['user', 'maintenance', 'idle'].includes(cmd.reason as string)) {
+    return sendError(ws, id, 'stop: invalid reason')
+  }
+  // Supervision may be re-enabled while queued, so an idle reap must re-check inside the gate.
+  if (cmd.reason === 'idle') {
+    return sessionStartGate.run(sid, async () => {
+      const supervised = cronRuntime?.get(sid)
+      if (supervised?.enabled && supervised.state !== 'inactive') {
+        return sendOk(ws, id, { stopped: false, reason: 'cron_supervised' })
+      }
+      sessionStopVersions.set(sid, (sessionStopVersions.get(sid) ?? 0) + 1)
+      return stopSessionProcess(ws, id, sid)
+    })
+  }
+  // Invalidate any in-flight recovery first, then wait on persistence and the process gate; do not wait for the recovery to finish before recording the stop.
+  sessionStopVersions.set(sid, (sessionStopVersions.get(sid) ?? 0) + 1)
+  if (cronRuntime && cmd.reason !== 'maintenance') await cronRuntime.disable(sid, cmd.stopRequestId as string | undefined)
+  return sessionStartGate.run(sid, () => stopSessionProcess(ws, id, sid))
+}
 
+function stopSessionProcess(ws: ServerWebSocket<WsData>, id: number, sid: string) {
   const session = sessions.get(sid)
   if (!session || !session.pid) {
+    const saved = cronRuntime?.get(sid)?.process
+    if (saved && saved.bootId === daemonBootId) {
+      try {
+        process.kill(saved.pid, 0)
+        return sendError(ws, id, 'stop: saved process is still alive but not adopted; stop confirmation is pending')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return sendError(ws, id, 'stop: saved process liveness is unknown')
+      }
+    }
     logMsg('info', 'cmdStop: session not in registry (nothing to kill)', {
       sid, hasSession: !!session, hasPid: !!session?.pid,
     })
@@ -4374,6 +4750,22 @@ function cmdStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, un
   }
 
   const pid = session.pid
+  if (!Number.isSafeInteger(pid) || pid <= 1) return sendError(ws, id, 'stop: invalid process identity')
+  if (SERVICE_MODE && session.bootId && session.bootId !== daemonBootId) {
+    return sendOk(ws, id, { stopped: true, noop: true, reason: 'previous_boot' })
+  }
+  try { process.kill(pid, 0) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return sendError(ws, id, 'stop: process liveness is unknown; refusing to signal')
+    if (isProcessGroupAlive(pid)) return sendError(ws, id, 'stop: process group still exists without its original leader; stop confirmation is pending')
+    reapSession(sid, 0, 'stop-confirmed', true)
+    try { persistRegistry() } catch (failure) { return sendError(ws, id, `stop: registry persistence failed: ${String(failure)}`) }
+    return sendOk(ws, id, { stopped: true, noop: true, reason: 'already_exited' })
+  }
+  const originalStartTime = session.startTime
+  const sameProcess = () => sessions.get(sid) === session && pid > 1
+    && (!SERVICE_MODE || session.bootId === daemonBootId)
+    && !!originalStartTime && readStartTime(pid) === originalStartTime
+  if (!sameProcess()) return sendError(ws, id, 'stop: process identity is unknown; refusing to signal')
   logMsg('info', 'cmdStop: stopping session (process group kill)', { sid, pid })
 
   // Nobody sends `stop` by accident, so record the intent BEFORE the first
@@ -4393,33 +4785,35 @@ function cmdStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, un
   cancelTurnRetry(sid, 'session-stopped')
   if (session.turnRetry) clearTurnRetryStreak(session.turnRetry)
 
-  // 3-phase process group kill: SIGINT → SIGTERM → SIGKILL
-  // kill(-pid) targets the entire process group (Claude + MCP servers)
-  try {
-    killProcessGroup(pid, 'SIGINT')
+  return new Promise<void>((resolve) => {
+    const reply = (error?: string) => {
+      if (error) sendError(ws, id, error)
+      else sendOk(ws, id, { stopped: true })
+      resolve()
+    }
+    try { killProcessGroup(pid, 'SIGINT') } catch (error) {
+      reply(`stop: ${(error as Error).message}`)
+      return
+    }
     let checks = 0
     const checkExit = () => {
       if (!isProcessGroupAlive(pid)) {
-        sendOk(ws, id, { stopped: true })
-        return
+        if (sessions.get(sid) === session) {
+          reapSession(sid, 0, 'stop-confirmed', true)
+          try { persistRegistry() } catch (error) { return reply(`stop: registry persistence failed: ${String(error)}`) }
+        }
+        return reply()
       }
+      if (!sameProcess()) return reply('stop: process identity changed; no further signals sent')
       checks++
-      if (checks >= 25) { // 5s elapsed
-        killProcessGroup(pid, 'SIGTERM')
-        setTimeout(() => {
-          if (isProcessGroupAlive(pid)) {
-            killProcessGroup(pid, 'SIGKILL')
-          }
-          sendOk(ws, id, { stopped: true, forced: true })
-        }, 2000)
-        return
+      if (checks === 25) {
+        try { killProcessGroup(pid, 'SIGTERM') } catch (error) { return reply(`stop: ${String(error)}`) }
       }
+      if (checks >= 35) return reply('stop: process did not exit after SIGTERM; automatic recovery remains disabled')
       setTimeout(checkExit, 200)
     }
     setTimeout(checkExit, 200)
-  } catch {
-    sendOk(ws, id, { stopped: true })
-  }
+  })
 }
 
 // ── Status ──
@@ -4472,10 +4866,33 @@ function cmdStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 // Walnut still has 'running', Walnut adopts the daemon's truth and completes the withheld turn —
 // no liveness guessing. If the session is unknown but its jsonl exists, rebuild from disk so a
 // post-restart PULL still returns truth. Keep in sync with daemon-source.ts (CLAUDE.md).
+function cronSupervisionStatus(sid: string) {
+  const record = cronRuntime?.get(sid)
+  if (!record) return null
+  return {
+    enabled: record.enabled, state: record.state, reason: record.reason,
+    generation: record.generation, retryAt: record.retryAt, updatedAt: record.updatedAt,
+  }
+}
+
+async function cmdCronSupervision(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (!cronRuntime) return sendError(ws, id, 'cron supervision requires a managed daemon service')
+  const sid = cmd.sid
+  if (typeof sid !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid)) return sendError(ws, id, 'cron.supervision: invalid sid')
+  if (cmd.enabled !== undefined) {
+    if (typeof cmd.enabled !== 'boolean') return sendError(ws, id, 'cron.supervision: enabled must be boolean')
+    if (!cronRuntime.deliveryAllowed(sid, cmd.stopFence)) return sendError(ws, id, 'cron.supervision: request superseded by a stop')
+    if (cmd.enabled) await cronRuntime.enable(sid, cmd.stopFence)
+    else await cronRuntime.disable(sid)
+  }
+  return sendOk(ws, id, { cronSupervision: cronSupervisionStatus(sid) })
+}
+
 function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid } = cmd as { sid: string }
   if (!sid) return sendError(ws, id, 'getState: missing sid')
 
+  const cronSupervision = cronSupervisionStatus(sid)
   const session = sessions.get(sid)
   if (session) {
     return sendOk(ws, id, {
@@ -4483,6 +4900,7 @@ function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
       alive: session.state === 'running',
       state: session.state,
       taskState: session.taskState,
+      cronSupervision,
       // The reaper's OWN keep-alive verdict, with its source — so what a
       // debugger sees here is exactly what the kill path will use.
       protection: deriveSessionProtection(session, sid, Date.now()),
@@ -4490,10 +4908,10 @@ function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
       snapshot: assembleSessionSnapshot(session),
     })
   }
-  if (cmd.memoryOnly === true) return sendOk(ws, id, { snapshotAvailable: false })
+  if (cmd.memoryOnly === true) return sendOk(ws, id, { snapshotAvailable: false, cronSupervision })
   // Unknown in memory — rebuild from the durable jsonl if it exists (post-restart PULL).
   const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
-  if (!fs.existsSync(jsonlPath)) return sendOk(ws, id, { exists: false })
+  if (!fs.existsSync(jsonlPath)) return sendOk(ws, id, { exists: false, cronSupervision })
   const taskState = rebuildTaskStateFromJsonl(jsonlPath, Date.now())
   // C1: disk-rebuild snapshot. No live process backs this sid (it would be in
   // the map) → dead, no pendingCtrl, unknown pid/exitCode. The epoch is stamped
@@ -4512,7 +4930,7 @@ function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
     exitCode: null,
     streamEpoch: diskEpoch,
   })
-  return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState, snapshot })
+  return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState, snapshot, cronSupervision })
 }
 
 // ── Rename session files ──
@@ -4567,6 +4985,9 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 
     sessions.delete(oldSid)
     sessions.set(newSid, session)
+    session.cronMetadataLoaded = cronMetadata.rename(oldSid, newSid, cronProcess(session))
+    session.cronMetadataLoading = false
+    persistRegistry()
     // Agent gateway: the CLI's WALNUT_SESSION_ID env still carries the OLD sid
     // (env is frozen at spawn). Record the alias so resolveCallerSid can chase
     // the chain to the current sid. Keep in sync with daemon-source.ts.
@@ -6150,9 +6571,9 @@ function sendOk(ws: ServerWebSocket<WsData>, id: number | null, data: Record<str
   safeSend(ws, JSON.stringify({ id, ok: true, ...data }))
 }
 
-function sendError(ws: ServerWebSocket<WsData>, id: number | null, error: string) {
+function sendError(ws: ServerWebSocket<WsData>, id: number | null, error: string, data?: Record<string, unknown>) {
   logMsg('error', 'command error', { id, error })
-  safeSend(ws, JSON.stringify({ id, ok: false, error }))
+  safeSend(ws, JSON.stringify({ ...data, id, ok: false, error }))
 }
 
 function sendEvent(ws: ServerWebSocket<WsData>, ev: string, data: Record<string, unknown>) {
@@ -6262,7 +6683,11 @@ function deriveSessionProtection(session: SessionData, sid: string, now: number)
   // durable crons; the fold goes blind on stream wipe/rebuild, on --resume
   // respawn (history replay re-arms the CLI scheduler with NO new CronCreate
   // line — lab 2026-08-10 P4b), and on adopted foreign tasks).
-  if (Object.keys(session.foldState.cronIds).length > 0) {
+  const supervised = cronRuntime?.get(sid)
+  if (supervised?.enabled && supervised.state !== 'inactive') {
+    return { source: 'cron', killMs: Number.MAX_SAFE_INTEGER, detail: 'supervision:' + supervised.state }
+  }
+  if (supervised?.state !== 'inactive' && Object.keys(session.foldState.cronIds).length > 0) {
     return { source: 'cron', killMs: SESSION_CRON_IDLE_KILL_MS, detail: 'fold' }
   }
   if (session.cwd) {
@@ -6310,6 +6735,7 @@ function deriveSessionProtection(session: SessionData, sid: string, now: number)
 }
 
 function scanIdleSessions() {
+  if (daemonCommands.closed) return
   const now = Date.now()
 
   // Embedded code-server rides the same 60s scan: 2h untouched → reap.
@@ -6322,7 +6748,7 @@ function scanIdleSessions() {
     // 1. Process already dead? Clean up process group (MCP residuals) and skip
     if (session.exitCode !== null) {
       // Ensure any MCP children are also dead
-      if (isProcessGroupAlive(pid)) {
+      if (!SERVICE_MODE && isProcessGroupAlive(pid)) {
         logMsg('info', 'idle scan: cleaning dead session process group', { sid, pid })
         killProcessGroup(pid, 'SIGKILL')
       }
@@ -6435,6 +6861,7 @@ function cleanupOrphanedProcessGroups() {
         continue
       }
 
+      if (SERVICE_MODE) continue
       try {
         const pgidPath = path.join(STREAMS_DIR, f)
         const pid = parseInt(fs.readFileSync(pgidPath, 'utf-8').trim(), 10)
@@ -6504,6 +6931,7 @@ function cleanupOrphanedProcessGroups() {
 
 // ── Cleanup ──
 function cleanup() {
+  void cronRuntime?.close().catch((error) => logMsg('error', 'cron supervision shutdown failed', { error: String(error) }))
   // Stop the trigger clock first: no new check may start while we are dying.
   if (triggerTickTimer) {
     try { clearInterval(triggerTickTimer) } catch {}
@@ -6575,6 +7003,7 @@ function cleanup() {
     try { fs.unlinkSync(PORT_FILE) } catch {}
     try { fs.unlinkSync(PID_FILE) } catch {}
     try { fs.unlinkSync(INSTANCE_ID_FILE) } catch {}
+    try { fs.unlinkSync(SERVICE_FILE) } catch {}
     try { fs.unlinkSync(VERSION_FILE) } catch {}
     // Agent gateway artifacts — a zombie must never delete its successor's
     // live socket/shim, hence inside the ownsFiles guard. Keep in sync with
@@ -6929,26 +7358,51 @@ if (action === '--status') {
   process.exit(0)
 }
 
-if (action === '--start') {
-  // Check if already running
-  try {
-    const existingPid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10)
-    process.kill(existingPid, 0)
-    const existingPort = fs.readFileSync(PORT_FILE, 'utf-8').trim()
-    console.log(existingPort) // Already running — return port
-    process.exit(0)
-  } catch {
-    // Not running, continue to start. `logMsg` below will use THIS process's
-    // DAEMON_INSTANCE_ID; any leftover instance file from a crashed predecessor
-    // gets overwritten at the end of startup.
+if (action === '--start' || SERVICE_MODE) {
+  if (SERVICE_MODE && (!DAEMON_STATE_DIR || !path.isAbsolute(DAEMON_STATE_DIR))) {
+    throw new Error('--service requires an absolute WALNUT_DAEMON_STATE_DIR')
   }
-
-  ensureOwnerOnlyStorage()
-
+  fs.mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 })
+  const lock = await acquireDaemonInstanceLock({
+    runtimeDir: DAEMON_DIR, uid: os.userInfo().uid, pid: process.pid, instanceId: DAEMON_INSTANCE_ID,
+  })
+  if (lock.kind === 'existing') {
+    if (SERVICE_MODE || lock.owner.wsPort === null) throw new Error('An existing daemon owns this runtime directory; service handover is required')
+    console.log(lock.owner.wsPort)
+    process.exit(0)
+  }
+  daemonInstanceLock = lock
+  if (SERVICE_MODE) {
+    fs.mkdirSync(DAEMON_STATE_DIR!, { recursive: true, mode: 0o700 })
+    daemonBootId = await readCronBootId(process.platform, AbortSignal.timeout(5000))
+    if (!daemonBootId) throw new Error('Host boot identity is unavailable')
+  }
+  // Old versions have no kernel lock, so the handover must still yield to them; winning the new lock alone is not enough to start.
+  let legacyPid: number | null = null
+  try { legacyPid = Number(fs.readFileSync(PID_FILE, 'utf8').trim()) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  if (legacyPid && legacyPid > 1 && legacyPid !== process.pid) {
+    let alive = true
+    try { process.kill(legacyPid, 0) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') alive = false
+      else throw error
+    }
+    if (alive) {
+      if (SERVICE_MODE) throw new Error('A legacy daemon is running; service handover is required')
+      console.log(fs.readFileSync(PORT_FILE, 'utf8').trim())
+      process.exit(0)
+    }
+  }
+  if (SERVICE_MODE) {
+    await consumeDaemonServiceHandover({ stateDir: DAEMON_STATE_DIR!, uid: os.userInfo().uid, platform: process.platform as 'linux' | 'darwin' })
+  }
+  loadDaemonHooksAtBoot()
   // Armed triggers survive a daemon restart on their own: the next
   // triggers.configure replaces the set, but until it arrives the checks keep
   // polling (the server may be the thing that is down).
   loadTriggersAtBoot()
+  ensureOwnerOnlyStorage()
 
   // Move dead-session stream files from the legacy /tmp location into the
   // reboot-surviving HOME dir. MUST run before reconcileRegistry: adopted
@@ -6962,9 +7416,11 @@ if (action === '--start') {
   // any entries whose pids are gone or recycled. Runs BEFORE the legacy
   // cleanup sweep so the registry's "known good" pids aren't misclassified
   // as orphan process groups to kill.
+  try { cronMetadataConfig = await readCronCliConfig(HOME_DIR, process.env, AbortSignal.timeout(5000)) } catch {}
   logMsg('info', 'startup: reconcile begin', { registryFile: REGISTRY_FILE, streamsDir: STREAMS_DIR })
   try { reconcileRegistry() } catch (err) {
     logMsg('error', 'reconcileRegistry failed', { error: (err as Error).message })
+    if (SERVICE_MODE) throw err
   }
   logMsg('info', 'startup: reconcile done', {
     adoptedFromRegistry: sessions.size,
@@ -6983,10 +7439,35 @@ if (action === '--start') {
   // already handled everything in sessions.json; this picks up .pgid files
   // that were never registered (e.g. half-spawned sessions from E13 window).
   cleanupOrphanedProcessGroups()
+  for (const [sid] of sessions) ensureWatcher(sid)
   logMsg('info', 'startup: complete — sessions ready', {
     totalSessions: sessions.size,
     sids: [...sessions.keys()],
   })
+
+  if (SERVICE_MODE) {
+    cronRuntime = await createDaemonCronRuntime({
+      stateDir: DAEMON_STATE_DIR!, home: HOME_DIR, platform: process.platform, env: process.env,
+      gate: sessionStartGate,
+      sessions: () => [...sessions].map(([sid, session]) => ({
+        sid, pid: session.pid, startTime: session.startTime, bootId: session.bootId, cwd: session.cwd, args: session.args,
+        mode: session.mode, cliVersion: session.cliVersion,
+        cronCandidate: Object.keys(session.foldState.cronIds).length > 0,
+      })),
+      hooksHash: () => persistedHooksHash,
+      start: async (sid, launch, isCurrent) => {
+        const result = await startSessionProcess({ sid, args: launch.args, cwd: launch.cwd, mode: launch.mode, resume: true }, isCurrent)
+        return { pid: result.pid, startTime: sessions.get(sid)?.startTime ?? null }
+      },
+      changed: (record) => {
+        for (const ws of wsClients) sendEvent(ws, 'cron-supervision', {
+          sid: record.sid, enabled: record.enabled, state: record.state,
+          reason: record.reason, generation: record.generation, retryAt: record.retryAt,
+        })
+      },
+      error: (error) => logMsg('error', 'cron supervision observation failed', { error: String(error) }),
+    })
+  }
 
   // Start Bun.serve() with built-in WebSocket support
   const server = Bun.serve<WsData>({
@@ -7033,6 +7514,7 @@ if (action === '--start') {
   writeWalnutShim()
 
   const port = server.port
+  daemonInstanceLock?.publish(port)
   fs.writeFileSync(PORT_FILE, String(port))
   fs.writeFileSync(PID_FILE, String(process.pid))
   fs.writeFileSync(VERSION_FILE, DAEMON_VERSION)
@@ -7040,6 +7522,8 @@ if (action === '--start') {
   // comparing the on-disk value against what `hello` returns. Stable for the
   // lifetime of this daemon; removed on graceful cleanup().
   fs.writeFileSync(INSTANCE_ID_FILE, DAEMON_INSTANCE_ID)
+  if (SERVICE_MODE) fs.writeFileSync(SERVICE_FILE, DAEMON_INSTANCE_ID)
+  else { try { fs.unlinkSync(SERVICE_FILE) } catch {} }
   console.log(port) // Print port for parent to capture
   logMsg('info', 'daemon started', {
     port,
@@ -7054,14 +7538,19 @@ if (action === '--start') {
       : false,
   })
 
+  void cronRuntime?.tick().catch((error) => logMsg('error', 'cron supervision startup failed', { error: String(error) }))
+
   // Start session idle scanner (every 60s)
   setInterval(scanIdleSessions, SESSION_SCAN_INTERVAL_MS)
 
+  // A cron job's next run passing is not a CLI line; republish on the clock.
+  setInterval(() => cronMetadata.refresh(), SESSION_SCAN_INTERVAL_MS)
 
   // walnut-trigger clock. Tracked (unlike the timers above) because cleanup()
   // must stop it: a tick that starts a check while the daemon is exiting would
   // outlive the process as an orphaned process group.
   triggerTickTimer = setInterval(tickTriggers, TRIGGER_TICK_MS)
+
   // Dead-stream retention: hourly sweep of >7d-idle files for sids with no
   // live session/process. First pass shortly after startup (not immediately —
   // let reconcile finish adopting before judging liveness by the map).
@@ -7111,7 +7600,7 @@ if (action === '--start') {
     // daemons once starved the whole machine (2026-07-23). Production daemons
     // never get the var (parentWatchdogEnv in local-daemon.ts), so surviving
     // server restarts is unaffected. Keep in sync with daemon-source.ts.
-    if (WATCHDOG_PARENT_PID) {
+    if (WATCHDOG_PARENT_PID && !SERVICE_MODE) {
       let parentAlive = true
       try { process.kill(WATCHDOG_PARENT_PID, 0) } catch { parentAlive = false }
       if (!parentAlive) {
@@ -7125,8 +7614,22 @@ if (action === '--start') {
   }, HEARTBEAT_INTERVAL_MS)
 
   // Handle signals
-  process.on('SIGTERM', () => { cleanup(); process.exit(0) })
-  process.on('SIGINT', () => { cleanup(); process.exit(0) })
+  let shutdown: Promise<void> | null = null
+  const stopDaemon = () => {
+    shutdown ??= (async () => {
+      const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime?.close()])
+      const failed = drained.find((result) => result.status === 'rejected')
+      if (failed?.status === 'rejected') logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) })
+      persistRegistry()
+      cleanup()
+      server.stop(true)
+      await daemonInstanceLock?.release()
+      process.exit(failed || serviceUpdateRequested ? 1 : 0)
+    })().catch((error) => { logMsg('error', 'daemon shutdown failed', { error: String(error) }); process.exit(1) })
+  }
+  requestDaemonShutdown = stopDaemon
+  process.on('SIGTERM', stopDaemon)
+  process.on('SIGINT', stopDaemon)
 
   // Detach from terminal (close stdin so SSH doesn't hold)
   if (process.stdin.isTTY === false) {
@@ -7134,6 +7637,6 @@ if (action === '--start') {
     process.stdin.on('end', () => {}) // Don't exit on stdin close
   }
 } else {
-  console.error('Usage: bun daemon-standalone.ts --start | --stop | --status | --version | walnut <args...>')
+  console.error('Usage: bun daemon-standalone.ts --start | --service | --stop | --status | --version | walnut <args...>')
   process.exit(1)
 }

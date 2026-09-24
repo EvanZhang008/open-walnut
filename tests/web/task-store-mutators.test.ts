@@ -50,7 +50,10 @@ vi.mock('../../web/node_modules/react', () => ({
   startTransition: (fn: () => void) => fn(),
 }))
 
-vi.mock('@/hooks/useWebSocket', () => ({ useEvent: () => {} }))
+const eventHandlers = new Map<string, (data: unknown) => void>()
+vi.mock('@/hooks/useWebSocket', () => ({
+  useEvent: (name: string, handler: (data: unknown) => void) => eventHandlers.set(name, handler),
+}))
 
 const api = {
   fetchTasks: vi.fn(async () => [] as Task[]),
@@ -94,6 +97,7 @@ function task(over: Partial<Task> = {}): Task {
 
 /** Invoke the real hook over a seeded task list. Returns its mutators. */
 function mount(tasks: Task[]) {
+  eventHandlers.clear()
   stateSlots.length = 0
   stateSlots[0] = tasks
   stateIdx = 0
@@ -116,6 +120,40 @@ beforeEach(() => {
   api.deleteTask.mockResolvedValue(undefined)
   api.setPluginFieldValue.mockResolvedValue(undefined)
   api.updateTask.mockResolvedValue(task())
+})
+
+describe('task phase event ownership', () => {
+  it.each(['session_id', 'plan_session_id', 'exec_session_id'] as const)(
+    'a session hint cannot replace the committed phase through %s', (slot) => {
+      mount([task({ [slot]: 'session-1', phase: 'NEED_ACTION', status: 'in_progress', unread: true })])
+      eventHandlers.get('session:status-changed')?.({
+        sessionId: 'session-1', phase: 'IN_PROGRESS', process_status: 'running',
+      })
+      expect(rows()[0]).toMatchObject({ phase: 'NEED_ACTION', unread: true })
+      eventHandlers.get('task:updated')?.({
+        task: task({ [slot]: 'session-1', phase: 'IN_PROGRESS', status: 'in_progress', unread: false }),
+      })
+      expect(rows()[0]).toMatchObject({ phase: 'IN_PROGRESS', unread: false })
+    },
+  )
+
+  it('marking a task read cannot swallow a concurrent committed phase change', () => {
+    const store = mount([task({ phase: 'IN_PROGRESS', status: 'in_progress', unread: true })])
+    store.update('task-1', { unread: false })
+    eventHandlers.get('task:updated')?.({
+      task: task({ phase: 'NEED_ACTION', status: 'in_progress', unread: true }),
+    })
+    expect(rows()[0]).toMatchObject({ phase: 'NEED_ACTION', unread: true })
+  })
+
+  it('a delayed phase hint cannot reopen a completed task', () => {
+    mount([task({ session_id: 'session-1', phase: 'COMPLETE', status: 'done' })])
+    eventHandlers.get('session:status-changed')?.({
+      sessionId: 'session-1', phase: 'IN_PROGRESS',
+      status: { sessionId: 'session-1', processStatus: 'running' },
+    })
+    expect(rows()[0]).toMatchObject({ phase: 'COMPLETE', status: 'done' })
+  })
 })
 
 describe('applyTagInstructions', () => {

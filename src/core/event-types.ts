@@ -224,6 +224,7 @@ export interface SessionResultEvent {
   isError?: boolean;
   /** True only for a terminal upstream retry-exhaustion signature. */
   retryExhausted?: boolean;
+  interrupted?: boolean;
   /** CLI's cumulative cost for the current process (running total, restarts at 0
    *  on each --resume). For DISPLAY only — do NOT bill this; it would re-charge the
    *  whole running total every turn (the 13× session-cost inflation bug). */
@@ -241,6 +242,8 @@ export interface SessionResultEvent {
   /** True when a dynamic-workflow / background subagent set is still in flight — this
    *  result is intermediate, not turn-over. Consumers skip NEED_ACTION/triage. */
   backgroundActive?: boolean;
+  detachedBgActive?: boolean;
+  wakeupPending?: boolean;
   /** Turn generation of the emitting session at emit time (ClaudeCodeSession._turnGen).
    *  A late consumer compares it against the live instance's CURRENT gen: if the live
    *  gen is higher, a NEWER turn already started and this result must not drive phase
@@ -419,6 +422,7 @@ export interface SessionPermissionResolvedEvent {
   sessionId: string;
   requestId: string;
   allowed: boolean;
+  turnGen?: number;
   /** The CLI withdrew the request (control_cancel_request), or a daemon
    *  reconcile found it stale. Emitters have always sent this; the type didn't
    *  say so, which is how the server's stamp path came to ignore it. */
@@ -438,6 +442,11 @@ export interface SessionSystemEventPayload {
    *  outcome that follows replaces it in place instead of stacking a second row
    *  (`src/core/stream/compaction-notice.ts`). Only compaction uses it today. */
   progress?: boolean;
+  /** The CLI line's own uuid, when this notice announces a real JSONL event
+   *  (compact_boundary). The history parser writes the same uuid as the row's
+   *  msgId, so the browser can absorb the streamed notice against its persisted
+   *  twin by exact id rather than guessing from content. */
+  uuid?: string;
 }
 
 /**

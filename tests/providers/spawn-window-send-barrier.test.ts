@@ -39,7 +39,7 @@ vi.mock('../../src/providers/session-manager.js', () => ({
       calls.push('start:resolved');
       return { pid: 4242, outputFile: '/tmp/spawn-barrier.jsonl', fileSize: 0 };
     },
-    writeMessage: async () => { calls.push('writeMessage'); return true; },
+    writeMessage: async (_message: string, opts?: { onDispatch?: () => void }) => { opts?.onDispatch?.(); calls.push('writeMessage'); return true; },
     writeRaw: async () => true,
     writeSyntheticUserEvent: () => {},
     renameForSession: () => {},
@@ -66,8 +66,9 @@ vi.mock('../../src/utils/cwd-check.js', () => ({
   checkCwdExists: async () => ({ ok: true }),
 }));
 
-import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js';
+import { ClaudeCodeSession, sessionRunner } from '../../src/providers/claude-code-session.js';
 import * as tracker from '../../src/core/session-tracker.js';
+import type { SessionRecord } from '../../src/core/types.js';
 
 beforeEach(() => {
   calls.length = 0;
@@ -75,6 +76,20 @@ beforeEach(() => {
 });
 
 describe('spawn window — awaitSpawn() barrier', () => {
+  it.each(['awaiting_spawn', 'spawn_outcome_unknown'] as const)('does not cold-resume a seeded %s record', async (reason) => {
+    const read = vi.spyOn(tracker, 'getSessionByClaudeId').mockResolvedValue({
+      claudeSessionId: 'seeded', taskId: 'task-seeded', process_status: 'idle', status_reason: reason,
+    } as SessionRecord);
+    const attach = vi.spyOn(sessionRunner as any, 'maybeAttachAcpSession');
+    try {
+      await (sessionRunner as any).processNext('seeded');
+      expect(attach).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    } finally {
+      read.mockRestore();
+      attach.mockRestore();
+    }
+  });
   it('a send during the spawn window waits instead of stopping the booting CLI', async () => {
     const session = new ClaudeCodeSession('task-spawn-window', 'Proj', 'claude');
     const preassignedSessionId = '11111111-2222-4333-8444-555555555555';

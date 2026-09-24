@@ -22,6 +22,7 @@
  */
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -29,6 +30,7 @@ import { createHash } from 'node:crypto'
 import { WebSocket } from 'ws'
 import { log } from '../logging/index.js'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
+import { DAEMON_SERVICE_PLIST_NAME, DAEMON_SERVICE_UNIT_NAME } from './daemon-service-config.js'
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js'
 import {
   DAEMON_OWNER_FILE,
@@ -40,6 +42,8 @@ import {
   type DaemonOwnerStamp,
 } from './daemon-ownership.js'
 import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
+import { resolveSessionHostLaunch } from './session-host.js'
+import { classifySessionHostStart } from './session-host-core.js'
 
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
@@ -94,6 +98,89 @@ export function parentWatchdogEnv(daemonDir: string): { WALNUT_DAEMON_PARENT_PID
   return { WALNUT_DAEMON_PARENT_PID: String(process.pid) }
 }
 
+// ── OS-service takeover (shared with DaemonConnection) ──
+//
+// Once the daemon runs under launchd/systemd, the OS manager owns its lifecycle:
+// starting, restarting after a crash, and (via `walnut daemon install`) which
+// artifact it executes. Walnut must then keep its hands off — an on-demand
+// `nohup`/spawn while a service is installed squats the runtime dir, after which
+// EVERY managed start refuses with "service handover is required" (the daemon's
+// own instance lock), so launchd retries that failure forever (KeepAlive +
+// ThrottleInterval 5) and systemd gives up after StartLimitBurst — either way
+// cron supervision is gone. Killing the managed process is the same bug from the
+// other side: the manager restarts it right back, racing our replacement.
+//
+// Two deliberate rules encoded below:
+//   1. A SURVIVING CONFIG counts, not "is the service enabled/active". A
+//      disabled unit still belongs to the OS manager, and Walnut must never
+//      enable, disable, or edit it to make its own life easier.
+//   2. "Could not tell" is NOT "not installed". A permission/IO failure reading
+//      a config path resolves to managed, because the cost of guessing wrong is
+//      an unmanaged second daemon (or a killed managed one), while the cost of
+//      being conservative is one clear error telling the user which service
+//      command to run.
+
+/** Persistent service configs an install may have left on THIS platform. */
+export function daemonServiceConfigPaths(
+  platform: string = process.platform,
+  home: string = os.homedir(),
+): string[] {
+  if (platform === 'darwin') {
+    return [path.join(home, 'Library', 'LaunchAgents', DAEMON_SERVICE_PLIST_NAME)]
+  }
+  if (platform === 'linux') {
+    return [
+      path.join(home, '.config', 'systemd', 'user', DAEMON_SERVICE_UNIT_NAME),
+      path.join('/etc', 'systemd', 'system', DAEMON_SERVICE_UNIT_NAME),
+    ]
+  }
+  return []
+}
+
+export type ServiceProbeState = 'present' | 'absent' | 'unknown'
+export interface ServiceTakeoverProbe { path: string; state: ServiceProbeState }
+export interface ServiceTakeover {
+  /** OS manager owns this daemon → no unmanaged spawn, stop, or redeploy. */
+  managed: boolean
+  /** Configs/markers positively seen. */
+  present: string[]
+  /** Paths we could not classify — counted as managed, never as absent. */
+  unknown: string[]
+}
+
+export function classifyServiceTakeover(probes: ServiceTakeoverProbe[]): ServiceTakeover {
+  const present = probes.filter((p) => p.state === 'present').map((p) => p.path)
+  const unknown = probes.filter((p) => p.state === 'unknown').map((p) => p.path)
+  return { managed: present.length > 0 || unknown.length > 0, present, unknown }
+}
+
+/** Classify one config path without ever reporting a failure as "absent". */
+export function classifyServiceConfigError(err: unknown): ServiceProbeState {
+  const code = (err as NodeJS.ErrnoException | null)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unknown'
+}
+
+export function serviceTakeoverInstruction(): string {
+  return 'Use the service instead: `walnut daemon status`, `walnut daemon restart --yes`, '
+    + 'or `walnut daemon update --yes --executable <daemon binary>` to move it to a new build. '
+    + 'Automatic updates preserve enabled and stopped choices and never start an unmanaged replacement.'
+}
+
+export function serviceTakeoverEvidence(takeover: ServiceTakeover): string {
+  const parts: string[] = []
+  if (takeover.present.length) parts.push(`service config present: ${takeover.present.join(', ')}`)
+  if (takeover.unknown.length) parts.push(`service state unverifiable: ${takeover.unknown.join(', ')}`)
+  return parts.join('; ') || 'no evidence'
+}
+
+export function localServiceTakeoverMessage(action: 'spawn' | 'stop', takeover: ServiceTakeover): string {
+  const what = action === 'spawn'
+    ? 'refusing to start a second, unmanaged local daemon'
+    : 'refusing to stop the OS-managed local daemon'
+  return `local session daemon is owned by an OS service manager (${serviceTakeoverEvidence(takeover)}) — `
+    + `${what}. ${serviceTakeoverInstruction()}`
+}
+
 // ESM-safe __dirname equivalent
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -109,8 +196,15 @@ export class LocalDaemon {
   private _port: number | null = null
   private _wsUrl: string | null = null
   private _spawnedPid: number | null = null
+  /** PID of the Walnut Sessions host supervising the daemon, when one is in use.
+   *  Kept SEPARATE from the daemon's pid: the host is the process macOS attributes
+   *  file access to, and the daemon is the process everything else talks to. */
+  private _sessionHostPid: number | null = null
+  /** Bundle whose identity the running daemon inherited, for reporting. */
+  private _sessionHostApp: string | null = null
   private _instanceId: string | null = null
   private _ensureInFlight: Promise<number> | null = null
+  private _lastManagedUpdate: { expected: string; at: number } | null = null
   /** claude CLI resolvable in the env handed to the daemon we spawned (owner stamp). */
   private _spawnClaudeCli: string | null = null
   /** Last ownership verdict logged, so an audit that holds for the whole process
@@ -135,8 +229,15 @@ export class LocalDaemon {
 
   get port(): number | null { return this._port }
   get wsUrl(): string | null { return this._wsUrl }
-  /** PID of the daemon process we spawned, or pid from daemon.pid file as fallback. Null if unknown. */
+  /** PID of the DAEMON, never of the session host above it: under the host the
+   *  process we spawn is the supervisor, and the daemon writes its own pid file.
+   *  Null if unknown. */
   get pid(): number | null { return this._spawnedPid ?? this.readPidFile() }
+  /** The macOS bundle a daemon THIS instance spawned is attributed to. Null means
+   *  "plain node/bun identity, or an adopted daemon whose identity we did not
+   *  choose" — deliberately not a claim that no separation exists. */
+  get sessionHostApp(): string | null { return this._sessionHostApp }
+  get sessionHostPid(): number | null { return this._sessionHostPid }
   /** Daemon instance ID (from hello or on-disk). Null if daemon hasn't been contacted. */
   get instanceId(): string | null { return this._instanceId ?? this.readInstanceIdFile() }
 
@@ -171,10 +272,29 @@ export class LocalDaemon {
     const expectedVersion = this.readBinaryVersion(binaryPath)
 
     // 1. Check if daemon is already running
-    const existingPort = this.readPortFile()
+    let existingPort = this.readPortFile()
     if (existingPort) {
-      const helloResult = await this.ping(existingPort)
+      let helloResult = await this.ping(existingPort)
       if (helloResult.alive) {
+        if (helloResult.capabilities?.includes('cron-supervision-v1')) {
+          if (expectedVersion && helloResult.version !== expectedVersion) {
+            const updatedPort = await this.updateManagedDaemon(binaryPath, expectedVersion)
+            if (updatedPort !== null) {
+              existingPort = updatedPort
+              helloResult = await this.ping(updatedPort)
+              if (!helloResult.alive || helloResult.version !== expectedVersion) throw new Error('Updated managed daemon did not answer with the expected version')
+            } else {
+              log.session.error('Managed local daemon version differs; automatic update was deferred; use walnut daemon install --yes --executable <daemon binary>', {
+                running: helloResult.version, expected: expectedVersion,
+              })
+            }
+          }
+          this._port = existingPort
+          this._wsUrl = `ws://localhost:${existingPort}`
+          this._instanceId = helloResult.instanceId ?? this.readInstanceIdFile()
+          this.auditOwnerOnAdopt(this._instanceId)
+          return existingPort
+        }
         // 2. Check version — auto-restart if stale
         if (expectedVersion && helloResult.version && helloResult.version !== expectedVersion) {
           // Upgrade-vs-live-work guard: restarting the daemon closes every ACP
@@ -225,7 +345,12 @@ export class LocalDaemon {
       }
     }
 
-    // 3. Spawn fresh daemon
+    // 3. Spawn fresh daemon — but never behind an OS service manager's back.
+    // Reached whenever the managed daemon is momentarily absent (login not yet
+    // done, launchd restarting it, a crash between KeepAlive retries); spawning
+    // here would squat the runtime dir and turn a 5-second gap into a permanent
+    // handover refusal loop. spawnDaemon() re-checks at its own entry.
+    this.assertNoServiceTakeover('spawn')
     const port = await this.spawnDaemon(binaryPath)
     this._port = port
     this._wsUrl = `ws://localhost:${port}`
@@ -246,6 +371,24 @@ export class LocalDaemon {
     return this._wsUrl
   }
 
+  private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null> {
+    if (path.resolve(this.daemonDir) !== PROD_DAEMON_DIR || binaryPath.endsWith('.cjs')) return null
+    const takeover = this.detectServiceTakeover()
+    const configs = daemonServiceConfigPaths()
+    if (takeover.unknown.length || !configs[0] || !takeover.present.includes(configs[0])
+      || configs.slice(1).some((config) => takeover.present.includes(config))) return null
+    if (this._lastManagedUpdate?.expected === expected && Date.now() - this._lastManagedUpdate.at < 600_000) return null
+    this._lastManagedUpdate = { expected, at: Date.now() }
+    const { runDaemonServiceCommand } = await import('./daemon-service-cli.js')
+    const result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', 'user', '--executable', binaryPath])
+    if (result.code !== 0) throw new Error(`Managed daemon update failed; no unmanaged replacement was started: ${result.stdout || result.stderr}`)
+    const reply = JSON.parse(result.stdout) as { ok?: boolean }
+    if (reply.ok !== true) throw new Error('Managed daemon update was not confirmed')
+    const port = this.readPortFile()
+    if (!port) throw new Error('Managed daemon update returned without a runtime port')
+    return port
+  }
+
   private readPortFile(): number | null {
     try {
       const content = fs.readFileSync(this.portFile, 'utf-8').trim()
@@ -259,8 +402,8 @@ export class LocalDaemon {
   private readPidFile(): number | null {
     try {
       const content = fs.readFileSync(this.pidFile, 'utf-8').trim()
-      const pid = parseInt(content, 10)
-      return pid > 0 ? pid : null
+      const pid = Number(content)
+      return Number.isSafeInteger(pid) && pid > 1 ? pid : null
     } catch {
       return null
     }
@@ -378,12 +521,52 @@ export class LocalDaemon {
     }
   }
 
+  /**
+   * Does an OS service manager own the daemon for THIS runtime dir?
+   *
+   * Scope matters: the installer hardcodes the production runtime dir
+   * (/tmp/open-walnut), so an isolated dir (tests, sandbox, ephemeral demo) is
+   * never governed by a persistent config — only by a `daemon.service` marker
+   * inside its own dir, which exists exactly when a `--service` daemon claimed
+   * it. Without that scoping, one installed LaunchAgent would make every test
+   * server on the machine refuse to spawn its own throwaway daemon.
+   */
+  private detectServiceTakeover(): ServiceTakeover {
+    const files = [path.join(this.daemonDir, 'daemon.service')]
+    if (path.resolve(this.daemonDir) === PROD_DAEMON_DIR) files.push(...daemonServiceConfigPaths())
+    return classifyServiceTakeover(files.map((file) => ({ path: file, state: this.probeServiceConfig(file) })))
+  }
+
+  private probeServiceConfig(file: string): ServiceProbeState {
+    try {
+      fs.lstatSync(file)
+      return 'present'
+    } catch (err) {
+      return classifyServiceConfigError(err)
+    }
+  }
+
+  /**
+   * Refuse an unmanaged lifecycle action while the OS owns this daemon.
+   * Throwing (rather than degrading quietly) is the point: the user gets one
+   * line naming the evidence and the exact service command to run.
+   */
+  private assertNoServiceTakeover(action: 'spawn' | 'stop'): void {
+    const takeover = this.detectServiceTakeover()
+    if (!takeover.managed) return
+    const message = localServiceTakeoverMessage(action, takeover)
+    log.session.error('local daemon lifecycle action refused — OS service manages this daemon', {
+      action, daemonDir: this.daemonDir, present: takeover.present, unknown: takeover.unknown,
+    })
+    throw new Error(message)
+  }
+
   private isPidAlive(pid: number): boolean {
     try {
       process.kill(pid, 0)
       return true
-    } catch {
-      return false
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== 'ESRCH'
     }
   }
 
@@ -434,27 +617,36 @@ export class LocalDaemon {
   }
 
   private async stopDaemon(): Promise<void> {
+    // A SIGTERM/SIGKILL here is the manager's job, not ours: launchd/systemd
+    // would restart the process right back and race whatever we start next.
+    this.assertNoServiceTakeover('stop')
     const pid = this.readPidFile()
     if (!pid) return
-    try { process.kill(pid, 'SIGTERM') } catch { return }
+    try { process.kill(pid, 'SIGTERM') } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    }
 
-    // Wait for shutdown (up to 5s)
-    for (let i = 0; i < 50; i++) {
+    // Wait for accepted FIFO writes and the stop request to reach disk; on timeout, do not force kill and do not remove a run marker that is still valid.
+    for (let i = 0; i < 300; i++) {
       if (!this.isPidAlive(pid)) break
       await new Promise((r) => setTimeout(r, 100))
     }
-    // Force kill if still alive
     if (this.isPidAlive(pid)) {
-      try { process.kill(pid, 'SIGKILL') } catch {}
+      throw new Error('Local daemon shutdown is still pending; no replacement was started')
     }
     try { fs.unlinkSync(this.portFile) } catch {}
     try { fs.unlinkSync(this.pidFile) } catch {}
     try { fs.unlinkSync(this.instanceIdFile) } catch {}
     this._spawnedPid = null
+    this._sessionHostPid = null
+    this._sessionHostApp = null
     this._instanceId = null
   }
 
   private async spawnDaemon(binaryPath: string): Promise<number> {
+    // Entry guard (defense in depth — ensureRunningInner checks too): every
+    // unmanaged daemon process this class creates comes through here.
+    this.assertNoServiceTakeover('spawn')
     fs.mkdirSync(this.daemonDir, { recursive: true })
 
     log.session.info('spawning local daemon', { binary: binaryPath })
@@ -541,6 +733,40 @@ export class LocalDaemon {
     const [cmd, args] = isSourceScript
       ? [process.execPath, [binaryPath, '--start']]
       : [binaryPath, ['--start']]
+
+    // macOS execution identity. Without this the daemon inherits OUR responsible
+    // process — the node running this server — so every file the CLI and its tools
+    // read is attributed to a shared node build: the dialog says "node", the grant
+    // dies with the next node upgrade, and it is shared with every other node
+    // program on the machine. Launched through Walnut.app it is attributed to
+    // Walnut, the app the user already grants to (src/providers/session-host.ts).
+    // Note this is only needed because the server was started from a TERMINAL; a
+    // server the Mac app started is already attributed to Walnut.
+    //
+    // Degrades on purpose: local sessions are the product, so anything wrong here
+    // (no Walnut.app, an app too old to know the flag, not macOS) spawns the daemon
+    // directly and says so, rather than taking local sessions down for an identity
+    // upgrade.
+    const host = await resolveSessionHostLaunch({
+      program: cmd,
+      args,
+      daemonDir: this.daemonDir,
+      prodDaemonDir: PROD_DAEMON_DIR,
+    }).catch((error: unknown): { available: false; reason: 'unsupported_app'; detail: string } => ({
+      // Belt to the braces of the degradation rule: NOTHING about the identity
+      // layer may turn into a thrown error that leaves the machine without local
+      // sessions.
+      available: false,
+      reason: 'unsupported_app',
+      detail: error instanceof Error ? error.message : String(error),
+    }))
+    if (!host.available && host.reason === 'unsupported_app') {
+      log.session.error('the Walnut app could not supervise the daemon; it will run under the plain node/bun identity', {
+        reason: host.reason,
+        detail: host.detail,
+      })
+    }
+    const [spawnCmd, spawnArgs] = host.available ? [host.argv[0]!, host.argv.slice(1)] : [cmd, args]
     // stderr → daemon-stderr.log (append, rotated). The daemon died silently
     // ≥7 times over 2026-08-11..13 with stdio:'ignore' discarding the only
     // evidence a runtime-level crash (Bun OOM/native abort) ever leaves — the
@@ -548,7 +774,7 @@ export class LocalDaemon {
     // entirely; this file is the last-resort black box. An inherited FILE fd
     // (not a pipe) keeps the detached daemon independent of our lifetime.
     const stderrFd = this.openStderrLog()
-    const proc = spawn(cmd, args, {
+    const proc = spawn(spawnCmd, spawnArgs, {
       detached: true,
       stdio: ['ignore', 'ignore', stderrFd ?? 'ignore'],
       // Pass our daemonDir to the spawned binary so it writes its port/pid/streams
@@ -559,7 +785,13 @@ export class LocalDaemon {
     })
     // The child holds its own dup of the fd; release ours immediately.
     if (stderrFd !== null) { try { fs.closeSync(stderrFd) } catch { /* already closed */ } }
-    this._spawnedPid = proc.pid ?? null
+    // Under the host, `proc` is the SUPERVISOR, not the daemon. Recording its pid
+    // as the daemon's would make every later liveness check, owner stamp and stop
+    // path aim at the wrong process, so it is kept apart and the daemon's own pid
+    // file (written a moment later, next to the port file) stays the answer.
+    this._sessionHostPid = host.available ? proc.pid ?? null : null
+    this._sessionHostApp = host.available ? host.app : null
+    this._spawnedPid = host.available ? null : proc.pid ?? null
     proc.unref()
 
     // Capture async spawn errors (ENOENT, EACCES) so they surface as rejection
@@ -569,11 +801,62 @@ export class LocalDaemon {
     proc.on('error', (err) => { spawnError = err })
 
     // Wait for port file (daemon writes it on startup)
-    const port = await this.waitForPortFile(10000)
+    let port = await this.waitForPortFile(10000)
     if (spawnError) {
       throw new Error(`Local daemon spawn failed: ${(spawnError as Error).message}`)
     }
+    // The host refused, or died before its daemon came up. An identity upgrade
+    // must never be able to leave the machine with no local sessions, so fall
+    // back to the direct spawn once and say exactly what happened. The decision
+    // (and the reason a retry is safe in exactly one case) lives in
+    // classifySessionHostStart, where a fixture can pin all eight combinations:
+    // this path is unreachable from a test on purpose, since the host never
+    // engages for an isolated daemon dir.
+    const hostPid = this._sessionHostPid
+    const startVerdict = classifySessionHostStart({
+      portFileSeen: port !== null,
+      hostUsed: host.available,
+      hostAlive: hostPid !== null && this.isPidAlive(hostPid),
+    })
+    if (startVerdict.verdict !== 'started' && host.available) {
+      log.session.error('the daemon did not start under the Walnut Sessions host', {
+        host: host.app,
+        hostPid,
+        reason: startVerdict.reason,
+        stderrLog: path.join(this.daemonDir, 'daemon-stderr.log'),
+        retryingDirectly: startVerdict.verdict === 'retry_directly',
+      })
+    }
+    if (startVerdict.verdict === 'retry_directly') {
+      this._sessionHostPid = null
+      this._sessionHostApp = null
+      const retryFd = this.openStderrLog()
+      const retry = spawn(cmd, args, {
+        detached: true,
+        stdio: ['ignore', 'ignore', retryFd ?? 'ignore'],
+        env,
+      })
+      if (retryFd !== null) { try { fs.closeSync(retryFd) } catch { /* already closed */ } }
+      this._spawnedPid = retry.pid ?? null
+      retry.unref()
+      retry.on('error', (err) => { spawnError = err })
+      port = await this.waitForPortFile(10000)
+      if (spawnError) {
+        throw new Error(`Local daemon spawn failed: ${(spawnError as Error).message}`)
+      }
+    }
     if (!port) {
+      if (startVerdict.reason === 'host_still_running') {
+        // Deliberately NOT retried: see classifySessionHostStart. Name the host
+        // so the operator knows which process to look at, and point at the log
+        // that holds the daemon's own last words.
+        throw new Error(
+          'Local daemon failed to start — port file not created within 10s, and the Walnut Sessions '
+          + `host (pid ${hostPid}) is still running, so a second spawn could race a daemon that is `
+          + `about to come up. Check ${path.join(this.daemonDir, 'daemon-stderr.log')}, or set `
+          + 'WALNUT_SESSION_HOST=0 to start the daemon without the identity host.',
+        )
+      }
       throw new Error('Local daemon failed to start — port file not created within 10s')
     }
 
@@ -654,7 +937,7 @@ export class LocalDaemon {
     // advertises the matching capability only when the load succeeds.
     // Best-effort per file: an absent bundle (published npm package) just means
     // the server keeps its own fallback for that feature.
-    for (const sidecarFile of ['changes-core.cjs', 'path-resolve-core.cjs', 'transcript-rewind-core.cjs', 'trigger-check-core.cjs']) {
+    for (const sidecarFile of ['changes-core.cjs', 'path-resolve-core.cjs', 'transcript-rewind-core.cjs', 'trigger-check-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs']) {
       try {
         const sidecarSrc = path.join(DAEMON_BINARIES_DIR, sidecarFile)
         const sidecarDst = path.join(this.daemonDir, sidecarFile)

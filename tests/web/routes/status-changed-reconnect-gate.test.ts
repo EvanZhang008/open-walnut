@@ -60,11 +60,11 @@ describe('session:status-changed running — source gating', () => {
     anyBuffer.buffers.clear()
   })
 
-  it("daemon-reconnect 'running' does NOT set the streaming flag (the incident)", async () => {
-    const sid = 'sid-reconnect-noop'
+  it.each(['daemon-reconnect', 'session-tracker'])("%s 'running' does NOT set the streaming flag", async (source) => {
+    const sid = `sid-${source}-noop`
     await createSessionRecord(sid, `task-${sid}`, 'proj')
 
-    await emitStatus(sid, 'running', 'daemon-reconnect')
+    await emitStatus(sid, 'running', source)
     expect(streamingSet().has(sid)).toBe(false)
     expect(sessionStreamBuffer.getSnapshot(sid).isStreaming).toBe(false)
   })

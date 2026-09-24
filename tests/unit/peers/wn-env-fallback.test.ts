@@ -43,6 +43,7 @@ import {
   type CapabilityRouterDeps,
 } from '../../../src/core/peers/capability-router.js';
 import { PeerThrottle, PEER_SEND_MAX_PER_WINDOW } from '../../../src/core/peers/peer-throttle.js';
+import { getDaemonSource } from '../../../src/providers/daemon-source.js';
 
 const UID = 501;
 const TRUSTED: WalnutSocketInfo = { isSocket: true, uid: UID, mode: 0o600 };
@@ -254,25 +255,8 @@ describe('daemon twin parity for the external caller', () => {
 // ── the node twin, actually run: a piped reply must arrive whole ──
 
 describe('node daemon twin: wn output through a pipe', () => {
-  const ROOT = path.resolve(__dirname, '../../..');
-
-  /** Materialize the deployed twin: the template carries no interpolations, so
-   *  evaluating it yields the exact bytes a source deploy ships. Placeholders are
-   *  stubbed (the fold functions are irrelevant to the wn path). */
   function materializeNodeTwin(target: string): void {
-    const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8');
-    const start = src.indexOf('const DAEMON_SOURCE = `');
-    expect(start).toBeGreaterThan(-1);
-    const body = src.slice(src.indexOf('`', start) + 1, src.lastIndexOf('`'));
-    // eslint-disable-next-line no-eval
-    let out = eval('`' + body + '`') as string;
-    out = out
-      .replace('__DAEMON_CAPABILITIES__', JSON.stringify(['test']))
-      .replace('__DAEMON_VERSION__', 'test-version');
-    for (const ph of ['__FOLD_LINE__', '__INITIAL_FOLD_STATE__', '__ASSEMBLE_SNAPSHOT__', '__SNAPSHOT_DIFFERS__']) {
-      out = out.replace(ph, 'function () {}');
-    }
-    fs.writeFileSync(target, out);
+    fs.writeFileSync(target, getDaemonSource());
   }
 
   it('delivers a >64KB --json reply complete and parseable (not cut at the pipe buffer)', async () => {

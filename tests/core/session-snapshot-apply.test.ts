@@ -51,15 +51,13 @@ import {
   _resetSessionTrackerForTesting,
 } from '../../src/core/session-tracker.js'
 import { addTask, updateTaskRaw, getTask } from '../../src/core/task-manager.js'
+import { enqueueMessage, getQueue, resetCache as resetQueueCache } from '../../src/core/session-message-queue.js'
+import * as taskManager from '../../src/core/task-manager.js'
 import * as sessionTracker from '../../src/core/session-tracker.js'
 import { closeDb } from '../../src/core/session-db.js'
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { log } from '../../src/logging/index.js'
 import { WALNUT_HOME, SESSION_QUEUE_FILE } from '../../src/constants.js'
-import { enqueueMessage, getQueue, resetCache as resetQueueCache } from '../../src/core/session-message-queue.js'
-import * as taskManager from '../../src/core/task-manager.js'
-import { sessionResultPhase } from '../../src/core/phase.js'
-const HANDBACK_PHASE = sessionResultPhase('IN_PROGRESS')!
 
 // ── snapshot factory ──
 function snap(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
@@ -1443,6 +1441,70 @@ describe('applySnapshot — turn-start phase pullback', () => {
     await expectPhaseEventually(taskId, 'IN_PROGRESS')
   })
 
+  it.each([
+    { cliState: 'running' as const, turnActive: true },
+    { cliState: 'idle' as const, turnActive: false, detachedBgCount: 1 },
+  ])('repairs a late handback from the same running snapshot: %j', async (work) => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'pullback-same-snapshot'
+    const taskId = await seedLinkedTask('IN_PROGRESS')
+    await seedSessionWithTask(sid, taskId)
+    const snapshot = snap({ v: 300, ...work })
+    await applySnapshot(sid, snapshot, 'daemon-push')
+    await expectPhaseEventually(taskId, 'IN_PROGRESS')
+
+    await updateTaskRaw(taskId, { phase: 'NEED_ACTION' })
+    const before = await getSessionByClaudeId(sid)
+    const res = await applySnapshot(sid, snapshot, 'pull-30s')
+    expect(res).toMatchObject({ outcome: 'noop', projected: 'running' })
+    await expectPhaseEventually(taskId, 'IN_PROGRESS')
+    expect((await getSessionByClaudeId(sid))?.consumedOffset).toBe(before?.consumedOffset)
+  })
+
+  it('a newer settled snapshot cancels a running pullback already waiting for the task write', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'pullback-write-race'
+    const taskId = await seedLinkedTask('NEED_ACTION')
+    await seedSessionWithTask(sid, taskId, { process_status: 'running' })
+    const write = taskManager.updateTaskRaw
+    vi.spyOn(taskManager, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
+      await applySnapshot(sid, snap({
+        v: 600, cliState: 'idle', turnActive: false,
+        lastResult: { isError: false, endOffset: 580 },
+      }), 'test-newer')
+      return write(...args)
+    })
+    await applySnapshot(sid, snap({ v: 300 }), 'test-older')
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+  })
+
+  it('a rejected equal-v running claim does not pull back a settled task', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'pullback-rejected-equal-v'
+    const taskId = await seedLinkedTask('NEED_ACTION')
+    await seedSessionWithTask(sid, taskId, { consumedOffset: 300 })
+
+    const res = await applySnapshot(sid, snap({ v: 300 }), 'pull-30s')
+    expect(res).toMatchObject({ outcome: 'skipped', reason: 'predicate-false' })
+    await expectPhaseStays(taskId, 'NEED_ACTION')
+  })
+
+  it.each(['NEED_ACTION', 'COMPLETE'])('same-v permission and terminal guards preserve %s', async (phase) => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'pullback-same-v-guard'
+    const taskId = await seedLinkedTask(phase)
+    await seedSessionWithTask(sid, taskId, {
+      process_status: 'running', consumedOffset: 300,
+      ...(phase === 'NEED_ACTION' ? {
+        pendingPermission: { requestId: 'req-pause', toolName: 'Bash', receivedAt: new Date().toISOString() },
+      } : {}),
+    })
+    expect(await applySnapshot(sid, snap({ v: 300 }), 'pull-30s'))
+      .toMatchObject({ outcome: 'noop', projected: 'running' })
+    await expectPhaseStays(taskId, phase)
+  })
+
   it("permission pause ('waiting' + pendingPermission) keeps the awaiting-human red row", async () => {
     setSnapshotModeForTests('enforce')
     const sid = 'pullback-waiting'
@@ -1488,6 +1550,182 @@ describe('applySnapshot — turn-start phase pullback', () => {
     const res = await applySnapshot(sid, snap({ v: 300, cliState: 'running', turnActive: true }), 'daemon-push')
     expect(res.outcome).toBe('shadow')
     await expectPhaseStays(taskId, 'NEED_ACTION')
+  })
+})
+
+describe('applySnapshot settled task handback', () => {
+  const settled = () => snap({
+    v: 600, cliState: 'idle', turnActive: false,
+    lastResult: { isError: false, endOffset: 580 }, streamEpoch: 'handback-epoch',
+  })
+  async function seed(status: 'running' | 'idle' = 'running') {
+    setSnapshotModeForTests('enforce')
+    const { task } = await addTask({ title: 'Snapshot-only completion' })
+    await updateTaskRaw(task.id, { phase: 'IN_PROGRESS', updated_at: '2026-01-01T00:00:00Z' })
+    const sid = `handback-${task.id}`
+    await createSessionRecord(sid, task.id, 'proj', '/tmp/snap-apply', { pid: 4242 })
+    await updateSessionRecord(sid, {
+      process_status: status, streamEpoch: 'handback-epoch',
+      ...(status === 'idle' ? { consumedOffset: 600, status_reason: 'snapshot_projection', status_changed_by: 'snapshot' } : {}),
+    })
+    return { taskId: task.id, sid }
+  }
+
+  it('hands back a clean turn recovered only by snapshot pull', async () => {
+    const { taskId, sid } = await seed()
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+  })
+
+  it('repairs an already-applied idle snapshot without another status edge', async () => {
+    const { taskId, sid } = await seed('idle')
+    expect(await applySnapshot(sid, settled(), 'pull-30s')).toMatchObject({ outcome: 'noop' })
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+  })
+
+  it('leaves a later human phase choice alone on repeated idle pulls', async () => {
+    const { taskId, sid } = await seed()
+    await applySnapshot(sid, settled(), 'pull-30s')
+    await updateTaskRaw(taskId, { phase: 'IN_PROGRESS', updated_at: '2099-01-01T00:00:00Z' })
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it.each(['COMPLETE', 'TODO'] as const)('preserves an explicit %s task', async (phase) => {
+    const { taskId, sid } = await seed()
+    await updateTaskRaw(taskId, { phase })
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe(phase)
+  })
+
+  it.each([
+    { lastResult: null },
+    { detachedBgCount: 1 },
+    { gatingBgCount: 1 },
+    { teamActive: true },
+    { wakeupAt: Date.now() + 3_600_000 },
+    { cliState: 'waiting' as const, pendingPermission: { requestId: 'decision' } },
+  ])('does not infer completion from incomplete or active evidence: %j', async (work) => {
+    const { taskId, sid } = await seed()
+    await applySnapshot(sid, { ...settled(), ...work }, 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('does not hand back while a sibling session is running', async () => {
+    const { taskId, sid } = await seed()
+    await createSessionRecord('handback-sibling', taskId, 'proj', '/tmp/snap-apply', { pid: 4243 })
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('preserves a human choice when later control bytes advance an idle watermark', async () => {
+    const { taskId, sid } = await seed()
+    await applySnapshot(sid, settled(), 'pull-30s')
+    const endedAt = Date.now()
+    await updateTaskRaw(taskId, { phase: 'IN_PROGRESS', updated_at: new Date(endedAt + 1000).toISOString() })
+    vi.spyOn(Date, 'now').mockReturnValue(endedAt + 2000)
+    await updateSessionRecord(sid, { last_status_change: new Date(endedAt + 2000).toISOString(), consumedOffset: 650 })
+    await applySnapshot(sid, { ...settled(), v: 650 }, 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it.each(['pending', 'confirmed'] as const)('preserves a %s stop request', async (state) => {
+    const { taskId, sid } = await seed()
+    await updateSessionRecord(sid, { stopRequest: { id: 'stop-intent', requestedAt: new Date().toISOString(), state } })
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it.each([false, true])('reads undelivered input even when another process wrote it: %s', async (externalWrite) => {
+    const { taskId, sid } = await seed()
+    if (externalWrite) {
+      await getQueue(sid)
+      await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify({ version: 1, queues: {
+        [sid]: [{ id: 'external-input', sessionId: sid, status: 'pending', message: 'Continue' }],
+      } }))
+    } else await enqueueMessage(sid, 'Continue with another task')
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('keeps the task unread marker unchanged on a duplicate after reading', async () => {
+    const { taskId, sid } = await seed()
+    await applySnapshot(sid, settled(), 'pull-30s')
+    await updateTaskRaw(taskId, { unread: false })
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect(await getTask(taskId)).toMatchObject({ phase: 'NEED_ACTION', unread: false })
+  })
+
+  it('preserves a legacy task edited after its idle transition', async () => {
+    const { taskId, sid } = await seed('idle')
+    await updateTaskRaw(taskId, { phase_changed_at: null as never, updated_at: '2099-01-01T00:00:00Z' })
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('defers a handback on unreadable queue data and retries the same snapshot', async () => {
+    const { taskId, sid } = await seed()
+    await fsp.writeFile(SESSION_QUEUE_FILE, 'not-json')
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+    await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify({ version: 1, queues: {} }))
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+  })
+
+  it('does not let a later note edit hide a missing handback', async () => {
+    const { taskId, sid } = await seed('idle')
+    await updateTaskRaw(taskId, { note: 'New summary', updated_at: '2099-01-01T00:00:00Z' })
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+  })
+
+  it('does not treat a same-phase sync echo as another phase choice', async () => {
+    const { taskId, sid } = await seed('idle')
+    const { applyPhase } = await import('../../src/core/phase.js')
+    const task = await getTask(taskId)
+    const before = task.phase_changed_at
+    applyPhase(task, 'IN_PROGRESS')
+    expect(task.phase_changed_at).toBe(before)
+    await updateTaskRaw(taskId, { phase: task.phase, note: 'Synced summary', updated_at: '2099-01-01T00:00:00Z' })
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+  })
+
+  it('gives consecutive phase choices distinct identities in the same millisecond', async () => {
+    const { taskId } = await seed()
+    vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000)
+    await updateTaskRaw(taskId, { phase: 'TODO' })
+    const first = (await getTask(taskId)).phase_changed_at
+    await updateTaskRaw(taskId, { phase: 'IN_PROGRESS' })
+    const second = (await getTask(taskId)).phase_changed_at
+    expect(Date.parse(second!)).toBeGreaterThan(Date.parse(first!))
+  })
+
+  it('checks a human edit again inside the task write lock', async () => {
+    const { taskId, sid } = await seed()
+    const write = taskManager.updateTaskRaw
+    vi.spyOn(taskManager, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
+      await write(taskId, { phase: 'TODO' })
+      await write(taskId, { phase: 'IN_PROGRESS' })
+      return write(...args)
+    })
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('checks a new turn again inside the task write lock', async () => {
+    const { taskId, sid } = await seed()
+    liveSessionId = sid
+    const write = taskManager.updateTaskRaw
+    vi.spyOn(taskManager, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
+      liveSession.turnGen++
+      liveSession.processStatus = 'running'
+      return write(...args)
+    })
+    await applySnapshot(sid, settled(), 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
   })
 })
 
@@ -1644,6 +1882,218 @@ describe('projectProcessStatus — detached background work', () => {
   })
 })
 
+// ── wakeupAt projection (user decision 2026-09-01, inc-1788284320937): a
+// session that ended its turn ONLY to be re-invoked by its own ScheduleWakeup
+// timer is still on the job. Clock-driven: the same bytes project 'running'
+// while armed and 'idle' once the fire time (plus grace) passed. ──
+describe('projectProcessStatus — armed ScheduleWakeup', () => {
+  const NOW = 1_800_000_000_000
+  const settled = { isError: false, numTurns: 1, endOffset: 90 }
+
+  it('idle cliState + future wakeupAt → running', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'idle', turnActive: false, wakeupAt: NOW + 600_000, lastResult: settled,
+    }), NOW)).toBe('running')
+  })
+
+  it('an expired wakeup projects idle — time alone disarms it', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'idle', turnActive: false, wakeupAt: NOW - 3_600_000, lastResult: settled,
+    }), NOW)).toBe('idle')
+  })
+
+  it('armed wakeup outranks a trailing error result (the loop continues)', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'idle', turnActive: false, wakeupAt: NOW + 600_000,
+      lastResult: { isError: true, endOffset: 90 },
+    }), NOW)).toBe('running')
+  })
+
+  it('an EXPIRED wakeup lets the error surface', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'idle', turnActive: false, wakeupAt: NOW - 3_600_000,
+      lastResult: { isError: true, endOffset: 90 },
+    }), NOW)).toBe('error')
+  })
+
+  it('dead still wins over an armed wakeup (the CLI cannot be woken)', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'dead', turnActive: false, exitCode: 0,
+      wakeupAt: NOW + 600_000, lastResult: settled,
+    }), NOW)).toBe('stopped')
+  })
+
+  it('absent / null field (pre-field daemon) keeps the old idle projection', () => {
+    expect(projectProcessStatus(snap({
+      cliState: 'idle', turnActive: false, lastResult: settled,
+    }), NOW)).toBe('idle')
+    expect(projectProcessStatus(snap({
+      cliState: 'idle', turnActive: false, wakeupAt: null, lastResult: settled,
+    }), NOW)).toBe('idle')
+  })
+
+  it('enforce apply: an armed-wakeup snapshot converges an idle record to running AND pulls the phase back', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'wakeup-running'
+    const { task } = await addTask({ title: 'watch loop', project: 'p' })
+    await updateTaskRaw(task.id, { phase: 'NEED_ACTION' as never })
+    await createSessionRecord(sid, task.id, 'proj', '/tmp/snap-apply', { pid: process.pid })
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+
+    const res = await applySnapshot(sid, snap({
+      v: 400, cliState: 'idle', turnActive: false,
+      wakeupAt: Date.now() + 600_000,
+      lastResult: { isError: false, numTurns: 1, endOffset: 380 },
+    }), 'daemon-push')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'running' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+    const deadline = Date.now() + 3000
+    while (Date.now() < deadline) {
+      if ((await getTask(task.id)).phase === 'IN_PROGRESS') break
+      await new Promise((r) => setTimeout(r, 25))
+    }
+    expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+  })
+
+  // The equal-v tiebreaker normally refuses a stream-derived projection at an
+  // unchanged watermark ("same v = same evidence"). A wakeup snapshot is
+  // CLOCK-driven, so that rule would wedge the record at 'running' forever
+  // once the timer stopped firing — the clockDriven exception is what lets the
+  // expiry land with zero new bytes.
+  it('an expired wakeup converges running → idle at an UNCHANGED v', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'wakeup-expiry-same-v'
+    await createSessionRecord(sid, '', 'proj', '/tmp/snap-apply', { pid: process.pid })
+
+    const armed = snap({
+      v: 500, cliState: 'idle', turnActive: false,
+      wakeupAt: Date.now() + 300_000,
+      lastResult: { isError: false, numTurns: 1, endOffset: 480 },
+    })
+    expect(await applySnapshot(sid, armed, 'daemon-push'))
+      .toMatchObject({ outcome: 'applied', projected: 'running' })
+    // Settled snapshot adopts the watermark, so consumedOffset === v === 500.
+    expect((await getSessionByClaudeId(sid))?.consumedOffset).toBe(500)
+
+    // Same bytes, same v — only the clock moved past the (never-renewed) fire time.
+    const now = Date.now() + 3_600_000
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    expect(await applySnapshot(sid, armed, 'pull-30s'))
+      .toMatchObject({ outcome: 'applied', projected: 'idle' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
+  })
+
+  it.each(['stopped', 'error'] as const)('a wakeup cannot revive %s from the same stream version', async (terminal) => {
+    setSnapshotModeForTests('enforce')
+    const sid = `wakeup-death-${terminal}`
+    await seedSession(sid, { consumedOffset: 100 })
+    const pull = snap({
+      v: 500, cliState: 'idle', turnActive: false,
+      wakeupAt: Date.now() + 300_000,
+      lastResult: { isError: false, endOffset: 480 },
+    })
+    await applySnapshot(sid, { ...pull, cliState: 'dead', exitCode: terminal === 'error' ? 1 : 0 }, 'daemon-push')
+    const before = await getSessionByClaudeId(sid)
+    for (const now of [Date.now(), Date.now() + 3_600_000]) {
+      vi.spyOn(Date, 'now').mockReturnValue(now)
+      expect(await applySnapshot(sid, pull, 'pull-30s')).toMatchObject({ outcome: 'skipped' })
+      expect(await getSessionByClaudeId(sid)).toEqual(before)
+    }
+  })
+
+  it('a NON-wakeup snapshot still hits the equal-v tiebreaker (no regression)', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'no-wakeup-same-v'
+    await createSessionRecord(sid, '', 'proj', '/tmp/snap-apply', { pid: process.pid })
+    const settledSnap = snap({
+      v: 500, cliState: 'idle', turnActive: false,
+      lastResult: { isError: false, numTurns: 1, endOffset: 480 },
+    })
+    expect(await applySnapshot(sid, settledSnap, 'daemon-push'))
+      .toMatchObject({ outcome: 'applied', projected: 'idle' })
+    // A same-v 'running' claim carries no new bytes → refused by the predicate.
+    const sameVRunning = { ...settledSnap, cliState: 'running' as const, turnActive: true, lastResult: null }
+    expect(await applySnapshot(sid, sameVRunning, 'pull-30s'))
+      .toMatchObject({ outcome: 'skipped', reason: 'predicate-false' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
+  })
+})
+
+describe('terminal snapshot task handback', () => {
+  it('a same-version death supersedes a running snapshot waiting to write the phase', async () => {
+    setSnapshotModeForTests('enforce')
+    const { task } = await addTask({ title: 'same-version death during pullback' })
+    await updateTaskRaw(task.id, { phase: 'NEED_ACTION' })
+    const sid = 'same-version-death-race'
+    await seedSession(sid, { taskId: task.id, process_status: 'idle' })
+    liveSessionId = sid
+    const write = taskManager.updateTaskRaw
+    const spy = vi.spyOn(taskManager, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
+      await applySnapshot(sid, snap({ v: 900, cliState: 'dead', turnActive: false, exitCode: 0 }), 'daemon-push')
+      liveRunnerSync.mockClear()
+      return write(...args)
+    })
+    await applySnapshot(sid, snap({ v: 900 }), 'pull-30s')
+    expect(spy).toHaveBeenCalledOnce()
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('stopped')
+    expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
+    expect(liveRunnerSync).not.toHaveBeenCalled()
+  })
+
+  it('does not hand back or overwrite the runner after a new turn starts before the task write', async () => {
+    setSnapshotModeForTests('enforce')
+    const { task } = await addTask({ title: 'new turn races terminal handback' })
+    await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' })
+    const sid = 'handback-new-turn'
+    await seedSession(sid, { taskId: task.id, process_status: 'running' })
+    liveSessionId = sid
+    const write = taskManager.updateTaskRaw
+    const spy = vi.spyOn(taskManager, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
+      liveSession.turnGen++
+      liveSession.processStatus = 'running'
+      liveRunnerSync.mockClear()
+      return write(...args)
+    })
+    await applySnapshot(sid, snap({ v: 900, cliState: 'dead', turnActive: false, exitCode: 0 }), 'daemon-push')
+    expect(spy).toHaveBeenCalledOnce()
+    expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+    expect(liveRunnerSync).not.toHaveBeenCalled()
+  })
+
+  it('does not clear a permission raised before the running phase write', async () => {
+    setSnapshotModeForTests('enforce')
+    const { task } = await addTask({ title: 'permission races running snapshot' })
+    await updateTaskRaw(task.id, { phase: 'NEED_ACTION' })
+    const sid = 'pullback-permission-race'
+    await seedSession(sid, { taskId: task.id, process_status: 'running' })
+    liveSessionId = sid
+    const write = taskManager.updateTaskRaw
+    const spy = vi.spyOn(taskManager, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
+      liveSession.hasPendingPermission = true
+      return write(...args)
+    })
+    await applySnapshot(sid, snap({ v: 900 }), 'pull-30s')
+    expect(spy).toHaveBeenCalledOnce()
+    expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
+  })
+
+  it.each(['watermark', 'epoch'])('keeps human TODO on a metadata-only %s update', async (kind) => {
+    setSnapshotModeForTests('enforce')
+    const { task } = await addTask({ title: 'parked after session ended' })
+    const sid = `metadata-only-${kind}`
+    await seedSession(sid, {
+      taskId: task.id, process_status: 'stopped', status_changed_by: 'snapshot',
+      consumedOffset: kind === 'epoch' ? 85000000 : 100,
+    })
+    expect(await applySnapshot(sid, snap({
+      v: 900, cliState: 'dead', turnActive: false, exitCode: 0,
+      streamEpoch: 'new-stream', lastResult: { isError: false, endOffset: 880 },
+    }), 'pull-30s')).toMatchObject({ outcome: 'applied', projected: 'stopped' })
+    expect((await getSessionByClaudeId(sid))?.consumedOffset).toBe(900)
+    expect((await getTask(task.id)).phase).toBe('TODO')
+  })
+})
+
 // ── Disproven unreachability diagnosis (this session's incident) ──────────────
 // A remote host's tunnel dropped, the health monitor recorded
 // ('health-monitor','remote_unreachable') + "Connection lost — unable to reach
@@ -1767,181 +2217,5 @@ describe('applySnapshot — a disproven unreachability claim is dropped', () => 
       .toMatchObject({ outcome: 'applied', projected: 'error' })
 
     expect((await getSessionByClaudeId(sid))?.errorMessage).toBe('Error getting AWS credentials')
-  })
-})
-
-describe('applySnapshot settled task handback', () => {
-  const settled = () => snap({
-    v: 600, cliState: 'idle', turnActive: false,
-    lastResult: { isError: false, endOffset: 580 }, streamEpoch: 'handback-epoch',
-  })
-  async function seed(status: 'running' | 'idle' = 'running') {
-    setSnapshotModeForTests('enforce')
-    const { task } = await addTask({ title: 'Snapshot-only completion' })
-    await updateTaskRaw(task.id, { phase: 'IN_PROGRESS', updated_at: '2026-01-01T00:00:00Z' })
-    const sid = `handback-${task.id}`
-    await createSessionRecord(sid, task.id, 'proj', '/tmp/snap-apply', { pid: 4242 })
-    await updateSessionRecord(sid, {
-      process_status: status, streamEpoch: 'handback-epoch',
-      ...(status === 'idle' ? { consumedOffset: 600, status_reason: 'snapshot_projection', status_changed_by: 'snapshot' } : {}),
-    })
-    return { taskId: task.id, sid }
-  }
-
-  it('hands back a clean turn recovered only by snapshot pull', async () => {
-    const { taskId, sid } = await seed()
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
-    expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
-  })
-
-  it('repairs an already-applied idle snapshot without another status edge', async () => {
-    const { taskId, sid } = await seed('idle')
-    expect(await applySnapshot(sid, settled(), 'pull-30s')).toMatchObject({ outcome: 'noop' })
-    expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
-  })
-
-  it('leaves a later human phase choice alone on repeated idle pulls', async () => {
-    const { taskId, sid } = await seed()
-    await applySnapshot(sid, settled(), 'pull-30s')
-    await updateTaskRaw(taskId, { phase: 'IN_PROGRESS', updated_at: '2099-01-01T00:00:00Z' })
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
-  })
-
-  it.each(['COMPLETE', 'TODO'] as const)('preserves an explicit %s task', async (phase) => {
-    const { taskId, sid } = await seed()
-    await updateTaskRaw(taskId, { phase })
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe(phase)
-  })
-
-  it.each([
-    { lastResult: null },
-    { detachedBgCount: 1 },
-    { gatingBgCount: 1 },
-    { teamActive: true },
-    { wakeupAt: Date.now() + 3_600_000 },
-    { cliState: 'waiting' as const, pendingPermission: { requestId: 'decision' } },
-  ])('does not infer completion from incomplete or active evidence: %j', async (work) => {
-    const { taskId, sid } = await seed()
-    await applySnapshot(sid, { ...settled(), ...work }, 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
-  })
-
-  it('does not hand back while a sibling session is running', async () => {
-    const { taskId, sid } = await seed()
-    await createSessionRecord('handback-sibling', taskId, 'proj', '/tmp/snap-apply', { pid: 4243 })
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
-  })
-
-  it('preserves a human choice when later control bytes advance an idle watermark', async () => {
-    const { taskId, sid } = await seed()
-    await applySnapshot(sid, settled(), 'pull-30s')
-    const endedAt = Date.now()
-    await updateTaskRaw(taskId, { phase: 'IN_PROGRESS', updated_at: new Date(endedAt + 1000).toISOString() })
-    vi.spyOn(Date, 'now').mockReturnValue(endedAt + 2000)
-    await updateSessionRecord(sid, { last_status_change: new Date(endedAt + 2000).toISOString(), consumedOffset: 650 })
-    await applySnapshot(sid, { ...settled(), v: 650 }, 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
-  })
-
-  it.each(['pending', 'confirmed'] as const)('preserves a %s stop request', async (state) => {
-    const { taskId, sid } = await seed()
-    await updateSessionRecord(sid, { stopRequest: { id: 'stop-intent', requestedAt: new Date().toISOString(), state } })
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
-  })
-
-  it.each([false, true])('reads undelivered input even when another process wrote it: %s', async (externalWrite) => {
-    const { taskId, sid } = await seed()
-    if (externalWrite) {
-      await getQueue(sid)
-      await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify({ version: 1, queues: {
-        [sid]: [{ id: 'external-input', sessionId: sid, status: 'pending', message: 'Continue' }],
-      } }))
-    } else await enqueueMessage(sid, 'Continue with another task')
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
-  })
-
-  it('keeps the task unread marker unchanged on a duplicate after reading', async () => {
-    const { taskId, sid } = await seed()
-    await applySnapshot(sid, settled(), 'pull-30s')
-    await updateTaskRaw(taskId, { unread: false })
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect(await getTask(taskId)).toMatchObject({ phase: HANDBACK_PHASE, unread: false })
-  })
-
-  it('preserves a legacy task edited after its idle transition', async () => {
-    const { taskId, sid } = await seed('idle')
-    await updateTaskRaw(taskId, { phase_changed_at: null as never, updated_at: '2099-01-01T00:00:00Z' })
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
-  })
-
-  it('defers a handback on unreadable queue data and retries the same snapshot', async () => {
-    const { taskId, sid } = await seed()
-    await fsp.writeFile(SESSION_QUEUE_FILE, 'not-json')
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
-    await fsp.writeFile(SESSION_QUEUE_FILE, JSON.stringify({ version: 1, queues: {} }))
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
-  })
-
-  it('does not let a later note edit hide a missing handback', async () => {
-    const { taskId, sid } = await seed('idle')
-    await updateTaskRaw(taskId, { note: 'New summary', updated_at: '2099-01-01T00:00:00Z' })
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
-  })
-
-  it('does not treat a same-phase sync echo as another phase choice', async () => {
-    const { taskId, sid } = await seed('idle')
-    const { applyPhase } = await import('../../src/core/phase.js')
-    const task = await getTask(taskId)
-    const before = task.phase_changed_at
-    applyPhase(task, 'IN_PROGRESS')
-    expect(task.phase_changed_at).toBe(before)
-    await updateTaskRaw(taskId, { phase: task.phase, note: 'Synced summary', updated_at: '2099-01-01T00:00:00Z' })
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
-  })
-
-  it('gives consecutive phase choices distinct identities in the same millisecond', async () => {
-    const { taskId } = await seed()
-    vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000)
-    await updateTaskRaw(taskId, { phase: 'TODO' })
-    const first = (await getTask(taskId)).phase_changed_at
-    await updateTaskRaw(taskId, { phase: 'IN_PROGRESS' })
-    const second = (await getTask(taskId)).phase_changed_at
-    expect(Date.parse(second!)).toBeGreaterThan(Date.parse(first!))
-  })
-
-  it('checks a human edit again inside the task write lock', async () => {
-    const { taskId, sid } = await seed()
-    const write = taskManager.updateTaskRaw
-    vi.spyOn(taskManager, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
-      await write(taskId, { phase: 'TODO' })
-      await write(taskId, { phase: 'IN_PROGRESS' })
-      return write(...args)
-    })
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
-  })
-
-  it('checks a new turn again inside the task write lock', async () => {
-    const { taskId, sid } = await seed()
-    liveSessionId = sid
-    const write = taskManager.updateTaskRaw
-    vi.spyOn(taskManager, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
-      liveSession.turnGen++
-      liveSession.processStatus = 'running'
-      return write(...args)
-    })
-    await applySnapshot(sid, settled(), 'pull-30s')
-    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
   })
 })

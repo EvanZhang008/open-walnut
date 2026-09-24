@@ -1,0 +1,194 @@
+.session-supervision {
+  flex: 0 0 auto;
+  min-width: 0;
+  margin: 4px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.session-supervision-heading,
+.session-supervision-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.session-supervision-heading { justify-content: space-between; }
+.session-supervision-heading strong { color: var(--fg); font-weight: 500; }
+.session-supervision p { margin: 4px 0; }
+.session-supervision [role="alert"] { color: var(--error); }
+.session-supervision-toggle { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.session-supervision-toggle input { accent-color: var(--accent); margin: 0; }
+.session-supervision-footer { color: var(--fg-muted); }
+.session-supervision-footer button {
+  font: inherit;
+  color: var(--accent);
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.session-supervision-footer button:disabled { opacity: 0.5; cursor: default; }
+.session-supervision[data-state="blocked"],
+.session-supervision[data-state="stop-pending"] { border-color: var(--warning); }
+
+.session-cron-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+button.session-cron-pill {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button.session-cron-pill[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The job card the header pill opens. Same footprint as the recovery bar so
+   the two stack cleanly when a forced recovery state shows above it. */
+.session-cron-detail {
+  /* Bounded so a 32-job card leaves the chat and composer room; the body scrolls. */
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: min(60vh, 480px);
+  min-width: 0;
+  margin: 4px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.session-cron-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.session-cron-detail-heading strong { color: var(--fg); font-weight: 500; }
+.session-cron-detail-close {
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--fg-muted);
+  border: 0;
+  background: transparent;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.session-cron-detail-close:hover { color: var(--fg); }
+
+.session-cron-detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.session-cron-jobs {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.session-cron-job + .session-cron-job { border-top: 1px solid var(--border); padding-top: 8px; }
+
+.session-cron-job-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+.session-cron-job-heading strong { color: var(--fg); font-weight: 600; font-size: 12px; }
+.session-cron-job-heading code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.session-cron-job-next { color: var(--fg); margin-top: 1px; }
+.session-cron-job-facts { color: var(--fg-muted); margin-top: 1px; }
+
+.session-cron-prompt { margin-top: 4px; }
+.session-cron-prompt-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+.session-cron-prompt-label { color: var(--accent); flex: 0 0 auto; }
+.session-cron-prompt-toggle[aria-expanded="true"] .session-cron-prompt-label::after { content: ' (hide)'; color: var(--fg-muted); }
+.session-cron-prompt-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+.session-cron-prompt-text {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  max-height: 260px;
+  overflow: auto;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg);
+}
+.session-cron-prompt-note { margin: 2px 0 0; color: var(--fg-muted); }
+
+.session-cron-recovery {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  color: var(--fg-muted);
+}
+.session-cron-recovery-state { color: var(--fg-secondary); }
+

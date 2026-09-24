@@ -41,7 +41,8 @@
   "files": [
     "bin",
     "dist",
-    "!dist/daemon-binaries/daemon-*",
+    "!dist/daemon-binaries/daemon-linux-*",
+    "!dist/daemon-binaries/daemon-darwin-*",
     "!dist/**/*.map",
     "!dist/**/*.gz",
     "patches",

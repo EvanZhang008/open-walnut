@@ -1,5 +1,10 @@
-import { SESSION_ENGINE_IDS, VALID_SESSION_MODE_IDS } from '@open-walnut/core';
-import type { SessionEffort, SessionOutputMode, Task } from '@open-walnut/core';
+import type {
+  SessionCronMetadata,
+  SessionEffort,
+  SessionOutputMode,
+  Task,
+} from '@open-walnut/core';
+import { SESSION_ENGINE_IDS, VALID_SESSION_MODE_IDS, normalizeSessionCronJobs } from '@open-walnut/core';
 import type {
   ProcessStatus,
   SessionEngine,
@@ -52,6 +57,14 @@ export type SessionStatusApplyResult =
   | 'rejected-invalid'
   | 'rejected-legacy'
   | 'rejected-stale';
+
+export type SessionCronApplyResult =
+  | 'accepted'
+  | 'duplicate'
+  | 'rejected-invalid'
+  | 'rejected-stale'
+  | 'rejected-retired-epoch'
+  | 'rejected-unauthorized-epoch';
 
 type UnknownRecord = Record<string, unknown>;
 type LegacyStatusPatch = Partial<Omit<
@@ -161,6 +174,14 @@ function isSessionProvider(value: unknown): value is SessionProvider {
   return value === 'cli' || value === 'sdk' || value === 'embedded';
 }
 
+/**
+ * Membership in the ONE engine registry (core/types.ts), same rule as
+ * isSessionMode above — and deliberately a STATIC import, never the async
+ * /api/engines catalog: this validator runs on every WS status snapshot BEFORE
+ * React renders, and a snapshot carrying an engine the list doesn't know is
+ * REJECTED whole (normalizeVersionedStatus). Gating it on a fetch would mean
+ * every snapshot for a newly added engine gets dropped until the catalog lands.
+ */
 const KNOWN_ENGINE_IDS: ReadonlySet<string> = new Set(SESSION_ENGINE_IDS);
 
 function isSessionEngine(value: unknown): value is SessionEngine {
@@ -295,6 +316,50 @@ function legacyPatchFromRecord(value: UnknownRecord): LegacyStatusPatch {
   return patch;
 }
 
+const MAX_SESSION_ID_LENGTH = 256;
+const MAX_CRON_EPOCH_LENGTH = 256;
+const MAX_RETIRED_CRON_EPOCHS = 32;
+const CRON_PRESENCES: ReadonlySet<string> = new Set(['active', 'inactive', 'unknown']);
+const CRON_SOURCES: ReadonlySet<string> = new Set(['cron', 'wakeup']);
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function normalizeCronMetadata(value: unknown): SessionCronMetadata | null {
+  if (!isRecord(value)) return null;
+  if (!isProviderSessionId(value.sessionId) || value.sessionId.length > MAX_SESSION_ID_LENGTH) return null;
+  if (typeof value.epoch !== 'string'
+    || value.epoch.length === 0
+    || value.epoch.length > MAX_CRON_EPOCH_LENGTH) return null;
+  if (!Number.isSafeInteger(value.revision) || (value.revision as number) < 1) return null;
+  if (typeof value.presence !== 'string' || !CRON_PRESENCES.has(value.presence)) return null;
+  if (value.source !== null && !(typeof value.source === 'string' && CRON_SOURCES.has(value.source))) return null;
+  if (typeof value.known !== 'boolean' || typeof value.stale !== 'boolean') return null;
+  if (!isFiniteNumber(value.observedAt)) return null;
+  if (value.validUntil !== null && !isFiniteNumber(value.validUntil)) return null;
+  // Malformed job details are dropped on their own; presence stays authoritative.
+  const jobs = normalizeSessionCronJobs(value.jobs);
+  if (jobs === null) {
+    log.warn('session-cron', 'dropped malformed cron job details', {
+      sessionId: value.sessionId, revision: value.revision,
+    });
+  }
+
+  return {
+    sessionId: value.sessionId,
+    epoch: value.epoch,
+    revision: value.revision as number,
+    presence: value.presence as SessionCronMetadata['presence'],
+    source: value.source as SessionCronMetadata['source'],
+    known: value.known,
+    stale: value.stale,
+    observedAt: value.observedAt,
+    validUntil: value.validUntil as number | null,
+    ...(jobs ? { jobs } : {}),
+  };
+}
+
 function defaultLegacyStatus(sessionId: string): LegacySessionStatusSnapshot {
   return {
     sessionId,
@@ -328,6 +393,14 @@ export class SessionStatusStore {
   }>();
   private listeners = new Set<() => void>();
   private epoch = 0;
+  private crons = new Map<string, SessionCronMetadata>();
+  private cronStale = new Set<string>();
+  private cronViews = new Map<string, { base: SessionCronMetadata; value: SessionCronMetadata }>();
+  private cronListeners = new Set<() => void>();
+  private cronEpoch: string | null = null;
+  private cronEpochIntakeOpen = false;
+  private cronRequestGeneration = 0;
+  private retiredCronEpochs = new Set<string>();
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -335,6 +408,123 @@ export class SessionStatusStore {
   };
 
   getEpoch = (): number => this.epoch;
+
+  subscribeCron = (listener: () => void): (() => void) => {
+    this.cronListeners.add(listener);
+    return () => this.cronListeners.delete(listener);
+  };
+
+  getCron = (sessionId: string | null | undefined): SessionCronMetadata | null => {
+    const resolved = this.resolveSessionId(sessionId);
+    if (!resolved) return null;
+    const base = this.crons.get(resolved) ?? null;
+    if (!base || base.stale || !this.cronStale.has(resolved)) return base;
+    let view = this.cronViews.get(resolved);
+    if (!view || view.base !== base) {
+      view = { base, value: { ...base, stale: true } };
+      this.cronViews.set(resolved, view);
+    }
+    return view.value;
+  };
+
+  getCronSessionIds = (): string[] => [...this.crons.keys()];
+  getCronRequestGeneration = (): number => this.cronRequestGeneration;
+
+  applyCron(input: unknown, source: SessionStatusSource = 'ws'): SessionCronApplyResult {
+    const metadata = normalizeCronMetadata(input);
+    if (!metadata) {
+      log.warn('session-cron', 'rejected invalid cron metadata', {
+        sessionId: isRecord(input) && typeof input.sessionId === 'string' ? input.sessionId : null,
+        revision: isRecord(input) ? input.revision : null,
+        source,
+      });
+      return 'rejected-invalid';
+    }
+    if (this.retiredCronEpochs.has(metadata.epoch)) {
+      log.warn('session-cron', 'rejected retired epoch', {
+        sessionId: metadata.sessionId,
+        epoch: metadata.epoch,
+        revision: metadata.revision,
+        source,
+      });
+      return 'rejected-retired-epoch';
+    }
+    // Gate the id before epoch adoption: adoption retires the previous epoch and
+    // marks every held session stale, so a message that ends up rejected must
+    // not get to do that on its way out.
+    const canonicalId = this.resolveSessionId(metadata.sessionId) ?? metadata.sessionId;
+    if (canonicalId !== metadata.sessionId) return 'rejected-stale';
+    if (this.cronEpoch === null) {
+      this.cronEpoch = metadata.epoch;
+      this.cronEpochIntakeOpen = false;
+    } else if (metadata.epoch !== this.cronEpoch) {
+      if (!this.cronEpochIntakeOpen) {
+        log.warn('session-cron', 'rejected unauthorized epoch change', {
+          sessionId: metadata.sessionId,
+          epoch: metadata.epoch,
+          currentEpoch: this.cronEpoch,
+          revision: metadata.revision,
+          source,
+        });
+        return 'rejected-unauthorized-epoch';
+      }
+      this.adoptCronEpoch(metadata.epoch, source);
+    }
+
+    const normalized = metadata;
+    const current = this.crons.get(canonicalId);
+    if (current && current.epoch === normalized.epoch) {
+      if (normalized.revision < current.revision) {
+        log.warn('session-cron', 'rejected stale cron revision', {
+          sessionId: canonicalId,
+          epoch: normalized.epoch,
+          revision: normalized.revision,
+          currentRevision: current.revision,
+          source,
+        });
+        return 'rejected-stale';
+      }
+      if (normalized.revision === current.revision) {
+        if (this.clearCronStale(canonicalId)) this.emitCron();
+        return 'duplicate';
+      }
+    }
+
+    this.crons.set(canonicalId, normalized);
+    this.cronViews.delete(canonicalId);
+    this.cronStale.delete(canonicalId);
+    log.info('session-cron', 'metadata accepted', {
+      sessionId: canonicalId,
+      epoch: normalized.epoch,
+      revision: normalized.revision,
+      presence: normalized.presence,
+      known: normalized.known,
+      stale: normalized.stale,
+      source,
+    });
+    this.emitCron();
+    return 'accepted';
+  }
+
+  markCronStale(sessionId?: string | null): void {
+    if (sessionId !== undefined) {
+      const canonical = this.resolveSessionId(sessionId);
+      if (!canonical) return;
+      if (!this.addCronStale(canonical)) return;
+      this.emitCron();
+      return;
+    }
+    let changed = false;
+    for (const id of this.crons.keys()) {
+      if (this.addCronStale(id)) changed = true;
+    }
+    if (changed) this.emitCron();
+  }
+
+  resetCronEpochIntake(): void {
+    this.cronEpochIntakeOpen = true;
+    this.cronRequestGeneration++;
+  }
 
   resolveSessionId(sessionId: string | null | undefined): string | null {
     if (!isProviderSessionId(sessionId)) return null;
@@ -628,8 +818,51 @@ export class SessionStatusStore {
     this.aliases.clear();
     this.settings.clear();
     this.mergedStatuses.clear();
+    this.crons.clear();
+    this.cronStale.clear();
+    this.cronViews.clear();
+    this.retiredCronEpochs.clear();
+    this.cronEpoch = null;
+    this.cronEpochIntakeOpen = false;
+    this.cronRequestGeneration++;
     this.epoch++;
     this.emit();
+    this.emitCron();
+  }
+
+  private adoptCronEpoch(epoch: string, source: SessionStatusSource): void {
+    const previous = this.cronEpoch;
+    if (previous !== null) {
+      this.retiredCronEpochs.add(previous);
+      while (this.retiredCronEpochs.size > MAX_RETIRED_CRON_EPOCHS) {
+        const oldest: string | undefined = this.retiredCronEpochs.values().next().value;
+        if (oldest === undefined) break;
+        this.retiredCronEpochs.delete(oldest);
+      }
+    }
+    this.cronEpoch = epoch;
+    this.cronEpochIntakeOpen = false;
+    for (const id of this.crons.keys()) this.addCronStale(id);
+    log.info('session-cron', 'epoch adopted', {
+      epoch,
+      previousEpoch: previous,
+      sessions: this.crons.size,
+      source,
+    });
+  }
+
+  private addCronStale(canonical: string): boolean {
+    const base = this.crons.get(canonical);
+    if (!base || base.stale || this.cronStale.has(canonical)) return false;
+    this.cronStale.add(canonical);
+    this.cronViews.delete(canonical);
+    return true;
+  }
+
+  private clearCronStale(canonical: string): boolean {
+    if (!this.cronStale.delete(canonical)) return false;
+    this.cronViews.delete(canonical);
+    return true;
   }
 
   /** Silent (no emit) settings-key removal — callers own the notification. */
@@ -714,6 +947,7 @@ export class SessionStatusStore {
       this.settings.set(nextCanonical, previousSettings);
     }
     this.settings.delete(previousCanonical);
+    const cronChanged = this.moveCronToAliasTarget(previousCanonical, nextCanonical);
     this.epoch++;
     log.info('session-status', 'provider session alias promoted', {
       sessionId: nextCanonical,
@@ -722,6 +956,25 @@ export class SessionStatusStore {
       source,
     });
     this.emit();
+    if (cronChanged) this.emitCron();
+  }
+
+  private moveCronToAliasTarget(previousCanonical: string, nextCanonical: string): boolean {
+    const previousCron = this.crons.get(previousCanonical);
+    const removed = this.crons.delete(previousCanonical);
+    this.cronViews.delete(previousCanonical);
+    this.cronStale.delete(previousCanonical);
+    if (!previousCron) return removed;
+    if (this.crons.has(nextCanonical)) return true;
+    this.crons.set(nextCanonical, {
+      ...previousCron,
+      sessionId: nextCanonical,
+      presence: 'unknown',
+      stale: true,
+    });
+    this.cronViews.delete(nextCanonical);
+    this.cronStale.delete(nextCanonical);
+    return true;
   }
 
   private acceptTransition(
@@ -758,6 +1011,10 @@ export class SessionStatusStore {
 
   private emit(): void {
     for (const listener of this.listeners) listener();
+  }
+
+  private emitCron(): void {
+    for (const listener of this.cronListeners) listener();
   }
 }
 

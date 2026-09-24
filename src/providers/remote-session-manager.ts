@@ -25,6 +25,7 @@ import {
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import { isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
+import { isSessionStopSuperseded, SessionStopSupersededError } from '../core/sessions/session-stop.js'
 import {
   findImagePaths,
   findLocalImagePaths,
@@ -185,6 +186,12 @@ export class RemoteSessionManager implements SessionManager {
     if (offset > this._lastSeenV) this._lastSeenV = offset
   }
 
+  private async dispatch<T>(sid: string, fence: string | null | undefined, send: () => Promise<T>): Promise<T> {
+    if (fence === undefined) return send()
+    const { sessionStops } = await import('../core/sessions/session-stop.js')
+    return sessionStops.dispatch(sid, fence, send)
+  }
+
   // ── Startup ──
 
   async start(opts: TransportStartOptions): Promise<TransportStartResult> {
@@ -206,14 +213,16 @@ export class RemoteSessionManager implements SessionManager {
     }
 
     // Upload local images to remote host and rewrite paths before sending
-    const preparedMessage = await this.prepareOutbound(opts.message)
+    const sendAfterStart = Boolean(opts.markers?.length && this.conn!.hasCapability('send-markers-v1'))
+    const preparedMessage = sendAfterStart ? '' : await this.prepareOutbound(opts.message)
     this._lastPreparedOutbound = preparedMessage
-
     const startPayload = {
       sid: this.tmpId,
+      ...(this.conn!.hasCapability('cron-supervision-v1') ? { stopFence: opts.stopFence ?? null } : {}),
       args: ['claude', ...opts.args],
       cwd: opts.cwd,
       message: preparedMessage,
+      ...(sendAfterStart ? { deferMessage: true } : {}),
       resume: opts.resume ?? false,
       mode: opts.mode,
       // Pre-assigned user-line uuid for the INITIAL message (cold --resume with a
@@ -224,7 +233,7 @@ export class RemoteSessionManager implements SessionManager {
 
     let result: Record<string, unknown>
     try {
-      result = await this.conn!.send('start', startPayload)
+      result = await this.dispatch(this.tmpId, opts.stopFence, () => this.conn!.send('start', startPayload))
     } catch (err) {
       // Stale/dead connection — reconnect and retry with idempotent probe
       if (isDaemonConnError(err)) {
@@ -232,13 +241,14 @@ export class RemoteSessionManager implements SessionManager {
           host: this.hostKey, sid: this.tmpId,
           error: err instanceof Error ? err.message : String(err),
         })
-        result = await this.retryStartAfterReconnect(startPayload)
+        result = await this.retryStartAfterReconnect(startPayload, opts.stopFence)
       } else {
         throw err
       }
     }
 
     if (!result.ok) {
+      if (result.reason === 'session_stopped') throw new SessionStopSupersededError('Session start was superseded by a stop request')
       throw new Error(`Daemon start failed on host "${this.hostKey}": ${result.error}`)
     }
 
@@ -257,6 +267,14 @@ export class RemoteSessionManager implements SessionManager {
     // (0 for fresh, statSync size for resume) — a valid cursor.
     const fileSize = (result.offset as number) ?? 0
     this.adoptCursor(fileSize)
+
+    if (sendAfterStart) {
+      if (!await this.writeMessage(opts.message, { uuid: opts.uuid, markers: opts.markers, stopFence: opts.stopFence })) {
+        throw new Error('Session started, but the queued message was not delivered')
+      }
+    } else {
+      for (const marker of opts.markers ?? []) this.writeSyntheticUserEvent(marker.message, marker.messageId)
+    }
 
     log.session.info('RemoteSessionManager: session started', {
       // DUP-DEBUG
@@ -282,6 +300,7 @@ export class RemoteSessionManager implements SessionManager {
    */
   private async retryStartAfterReconnect(
     startPayload: Record<string, unknown>,
+    stopFence?: string | null,
   ): Promise<Record<string, unknown>> {
     // Clear local reference — do NOT disconnect() the shared pool connection.
     // disconnect() sets _destroyed=true which permanently kills auto-reconnect.
@@ -321,7 +340,7 @@ export class RemoteSessionManager implements SessionManager {
     log.session.info('RemoteSessionManager: retrying start after reconnect', {
       host: this.hostKey, sid,
     })
-    return this.conn!.send('start', startPayload)
+    return this.dispatch(sid, stopFence, () => this.conn!.send('start', startPayload))
   }
 
   // ── Attach ──
@@ -480,7 +499,7 @@ export class RemoteSessionManager implements SessionManager {
 
   // ── Messaging ──
 
-  async writeMessage(message: string, opts?: { uuid?: string }): Promise<boolean> {
+  async writeMessage(message: string, opts?: { uuid?: string; markers?: Array<{ message: string; messageId: string }>; stopFence?: string | null; onDispatch?: () => void }): Promise<boolean> {
     // Strict ack: we await the daemon's `cmdSend` reply and return false on any
     // failure (FIFO write ENXIO/EAGAIN, session not found, transport error).
     // Caller (SessionRunner.processNext) takes the false and falls through to
@@ -500,8 +519,19 @@ export class RemoteSessionManager implements SessionManager {
       this._lastPreparedOutbound = prepared
       // `uuid` is spread, never passed as an explicit undefined: an old daemon
       // sees exactly the payload it always saw when no uuid was assigned.
-      const result = await conn.send('send', { sid, message: prepared, ...(opts?.uuid ? { uuid: opts.uuid } : {}) })
+      const orderedMarkers = conn.hasCapability('send-markers-v1')
+      const result = await this.dispatch(sid, opts?.stopFence, () => {
+        opts?.onDispatch?.()
+        return conn.send('send', {
+          sid, message: prepared, ...(opts?.uuid ? { uuid: opts.uuid } : {}),
+          ...(conn.hasCapability('cron-supervision-v1') ? { stopFence: opts?.stopFence ?? null } : {}),
+          ...(orderedMarkers && opts?.markers?.length ? { markers: opts.markers } : {}),
+        })
+      })
       if (result.ok) {
+        if (!orderedMarkers) {
+          for (const marker of opts?.markers ?? []) this.writeSyntheticUserEvent(marker.message, marker.messageId)
+        }
         // Bump lastEventAt on successful delivery. Without this, the
         // SessionHealthMonitor idle-timeout check (default 30 min) uses a
         // stale last-JSONL-event timestamp and can kill a session that was
@@ -515,6 +545,7 @@ export class RemoteSessionManager implements SessionManager {
       }
 
       const reason = String(result.reason || result.error || '')
+      if (reason === 'session_stopped') throw new SessionStopSupersededError('Session delivery was superseded by a stop request')
       // `session_dead` means daemon reaped the remote CLI — this is terminal
       // for the current process and the next send will need to spawn a new
       // one. Trigger the same _onExit flow used for ENXIO/not-found so the
@@ -553,6 +584,7 @@ export class RemoteSessionManager implements SessionManager {
       }
       return false
     } catch (err) {
+      if (isSessionStopSuperseded(err)) throw err
       log.session.warn('RemoteSessionManager: send error', {
         host: this.hostKey, error: err instanceof Error ? err.message : String(err),
       })
@@ -640,18 +672,19 @@ export class RemoteSessionManager implements SessionManager {
 
   // ── Process Control ──
 
-  async stop(): Promise<void> {
+  async stop(reason: 'user' | 'maintenance' | 'idle' = 'maintenance'): Promise<void> {
     if (!this.conn?.connected || !this._sid) {
       log.session.info('RemoteSessionManager.stop: skipped', {
         host: this.hostKey, sid: this._sid,
         connConnected: !!this.conn?.connected, hasSid: !!this._sid,
       })
-      return
+      throw new Error(`DaemonConnection not connected to ${this.hostKey}; stop was not confirmed`)
     }
 
     log.session.info('RemoteSessionManager.stop: sending stop cmd to daemon', { host: this.hostKey, sid: this._sid })
     try {
-      const result = await this.conn.send('stop', { sid: this._sid })
+      const result = await this.conn.send('stop', { sid: this._sid, reason }, 10_000)
+      if (result.ok !== true || result.stopped !== true) throw new Error(result.error ?? 'Daemon did not confirm the stop')
       log.session.info('RemoteSessionManager.stop: daemon acked', {
         host: this.hostKey, sid: this._sid, result,
       })
@@ -660,10 +693,11 @@ export class RemoteSessionManager implements SessionManager {
         host: this.hostKey, sid: this._sid,
         error: err instanceof Error ? err.message : String(err),
       })
+      throw err
     }
   }
 
-  kill(): void {
+  kill(reason: 'user' | 'maintenance' | 'idle' = 'maintenance'): void {
     if (!this.conn?.connected || !this._sid) {
       log.session.info('RemoteSessionManager.kill: skipped', {
         host: this.hostKey, sid: this._sid,
@@ -676,7 +710,7 @@ export class RemoteSessionManager implements SessionManager {
       host: this.hostKey, sid: this._sid,
     })
     // Fire-and-forget — but log the outcome so we can tell if daemon actually received it
-    this.conn.send('stop', { sid: this._sid })
+    this.conn.send('stop', { sid: this._sid, reason })
       .then(result => log.session.info('RemoteSessionManager.kill: daemon acked', {
         host: this.hostKey, sid: this._sid, result,
       }))
@@ -687,9 +721,19 @@ export class RemoteSessionManager implements SessionManager {
     this._hasPipe = false
   }
 
+  async stopForIdle(): Promise<boolean> {
+    if (!this.conn?.connected || !this._sid) return false
+    try {
+      const result = await this.conn.send('stop', { sid: this._sid, reason: 'idle' }, 10_000)
+      if (result.ok !== true || result.stopped !== true) return false
+      this._hasPipe = false
+      return true
+    } catch { return false }
+  }
+
   async interrupt(): Promise<void> {
+    await this.stop('maintenance')
     this._hasPipe = false
-    await this.stop()
   }
 
   async isAlive(): Promise<boolean> {

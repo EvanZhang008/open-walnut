@@ -12,8 +12,14 @@
 import { describe, it, expect } from 'vitest';
 import { classifyDeliveryFailure, isPermanentDeliveryFailure, isDaemonCommandOutcomeUnknown } from '../../src/providers/delivery-failure.js';
 import { CwdMissingError } from '../../src/providers/cwd-check.js';
+import { SessionStopSupersededError } from '../../src/core/sessions/session-stop.js';
 
 describe('classifyDeliveryFailure — permanent', () => {
+  it('parks a superseded send rather than resuming it on reconnect', () => {
+    expect(classifyDeliveryFailure(new SessionStopSupersededError('Session stopped')))
+      .toEqual({ kind: 'permanent', code: 'session_stopped', reason: 'Session stopped' });
+    expect(classifyDeliveryFailure(new Error('Session stopped')).kind).toBe('transient');
+  });
   it('recognizes the cwd pre-flight error BY CLASS (no string matching needed)', () => {
     const verdict = classifyDeliveryFailure(new CwdMissingError('Working directory no longer exists: /tmp/gone'));
     expect(verdict.kind).toBe('permanent');

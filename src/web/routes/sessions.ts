@@ -215,7 +215,7 @@ sessionsRouter.post('/working-dirs/recompile', async (_req: Request, res: Respon
 
 // POST /api/sessions/import-external — run the external-session import NOW.
 // The importer already runs on a 10-minute tick; this is the "don't make me
-// wait" button (and what E2E drives). Coalesces with an in-flight tick.
+// wait" button (and what E2E drives). Serialized with background ticks.
 sessionsRouter.post('/import-external', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { importExternalSessions, DEFAULT_EXTERNAL_SCAN_WINDOW_MS } =
@@ -875,7 +875,8 @@ sessionsRouter.get('/status', async (req: Request, res: Response, next: NextFunc
       res.status(400).json({ error: 'ids supports at most 100 provider session IDs' })
       return
     }
-    res.json({ statuses: await getSessionStatusSnapshots(uniqueIds) })
+    const { sessionCronMetadata } = await import('../../core/sessions/session-cron-metadata.js')
+    res.json({ statuses: await getSessionStatusSnapshots(uniqueIds), cron: sessionCronMetadata.list(uniqueIds) })
   } catch (err) {
     next(err)
   }
@@ -1000,7 +1001,8 @@ sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: Next
     // shared helper uses the live provider when attached, then falls back to
     // the durable record during the restart attach window.
     const pendingPermissions = await getSessionPendingPermissions(enriched)
-    res.json({ session: enriched, pendingPermissions })
+    const { sessionCronMetadata } = await import('../../core/sessions/session-cron-metadata.js')
+    res.json({ session: enriched, pendingPermissions, cron: sessionCronMetadata.get(sessionId) })
   } catch (err) {
     next(err)
   }
@@ -2599,15 +2601,27 @@ sessionsRouter.post('/:sessionId/restart', async (req: Request, res: Response, n
   }
 })
 
-// POST /api/sessions/:sessionId/terminate — close the CLI process, full stop.
-//
-// Unlike restart (which respawns), this just kills the running `claude -p` and
-// marks the session 'stopped'. No respawn, no queue drain, no error banner — the
-// intentional kill is suppressed the same way restart suppresses it (via the
-// live session's interrupt(), which sets resultEmitted so the daemon's reap is
-// not surfaced as "exited with code -1"). Pending messages are left in the queue.
-// Logic lives in core/sessions/session-lifecycle.ts (shared with /api/v1 + relay),
-// including the cron-owner guard (409 unless force) — see terminateSession.
+sessionsRouter.get('/:sessionId/supervision', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { readSessionSupervision } = await import('../../core/sessions/session-supervision.js')
+    res.json(await readSessionSupervision(String(req.params.sessionId)))
+  } catch (error) {
+    if (error instanceof SessionControlError) { res.status(error.statusCode).json({ error: error.message }); return }
+    next(error)
+  }
+})
+
+sessionsRouter.put('/:sessionId/supervision', async (req: Request, res: Response, next: NextFunction) => {
+  if (typeof req.body?.enabled !== 'boolean') { res.status(400).json({ error: 'enabled must be boolean' }); return }
+  try {
+    const { readSessionSupervision } = await import('../../core/sessions/session-supervision.js')
+    res.json(await readSessionSupervision(String(req.params.sessionId), req.body.enabled))
+  } catch (error) {
+    if (error instanceof SessionControlError) { res.status(error.statusCode).json({ error: error.message }); return }
+    next(error)
+  }
+})
+
 sessionsRouter.post('/:sessionId/terminate', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = req.params.sessionId as string
   const startedAt = Date.now()

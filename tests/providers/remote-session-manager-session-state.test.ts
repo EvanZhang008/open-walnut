@@ -52,6 +52,20 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     await daemon.stop()
   })
 
+  it('separates maintenance, user stop and refused idle cleanup', async () => {
+    const conn = (mgr as unknown as { conn: { send: (...args: unknown[]) => Promise<unknown> } }).conn
+    const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true, stopped: true })
+    try {
+      await mgr.stop()
+      expect(send.mock.calls[0]).toEqual(['stop', { sid: 'sid-test', reason: 'maintenance' }, 10_000])
+      send.mockResolvedValueOnce({ ok: true, stopped: false, reason: 'cron_supervised' })
+      expect(await mgr.stopForIdle()).toBe(false)
+      expect(mgr.hasPipe).toBe(true)
+      await mgr.interrupt()
+      expect(send.mock.calls[2]).toEqual(['stop', { sid: 'sid-test', reason: 'user' }, 10_000])
+    } finally { send.mockRestore() }
+  })
+
   // M1 — session_state=dead flips _hasPipe=false and calls _onExit(exitCode)
   it('M1: session_state=dead calls _onExit(exitCode) and clears hasPipe', async () => {
     expect(mgr.hasPipe).toBe(true)
@@ -154,6 +168,87 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(ok).toBe(false)
     expect(onExit).toHaveBeenCalledWith(137)
+  })
+
+  it.each([true, false])('sends markers once using daemon capability=%s', async (supportsMarkers) => {
+    const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
+    const capability = vi.spyOn(conn, 'hasCapability').mockReturnValue(supportsMarkers)
+    const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true })
+    const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('prepared text')
+    const markers = [{ message: 'original text', messageId: 'qm-marker' }]
+    try {
+      expect(await mgr.writeMessage('original text', { markers })).toBe(true)
+      expect(send.mock.calls).toEqual(supportsMarkers ? [
+        ['send', { sid: 'sid-test', message: 'prepared text', markers }],
+      ] : [
+        ['send', { sid: 'sid-test', message: 'prepared text' }],
+        ['appendUserMarker', { sid: 'sid-test', message: 'original text', messageId: 'qm-marker' }],
+      ])
+    } finally {
+      capability.mockRestore()
+      send.mockRestore()
+      prepare.mockRestore()
+    }
+  })
+
+  it.each([true, false])('resume marker delivery uses the ordered send path when supported=%s', async (supportsMarkers) => {
+    const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
+    const capability = vi.spyOn(conn, 'hasCapability').mockReturnValue(supportsMarkers)
+    const connect = vi.spyOn(mgr as unknown as { ensureConnected(): Promise<unknown> }, 'ensureConnected').mockResolvedValue(conn)
+    const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true, pid: 4242, offset: 100 })
+    const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('prepared resume')
+    const markers = [{ message: 'resume text', messageId: 'qm-resume' }]
+    try {
+      await mgr.start({ args: [], cwd: '/tmp', message: 'resume text', resume: true, markers, onOutput, onExit })
+      expect(send.mock.calls.map(([command]) => command)).toEqual(supportsMarkers ? ['start', 'send'] : ['start', 'appendUserMarker'])
+      expect(send.mock.calls[0][1]).toMatchObject({ message: supportsMarkers ? '' : 'prepared resume', resume: true })
+      if (supportsMarkers) {
+        expect(send.mock.calls[0][1]).toMatchObject({ deferMessage: true })
+        expect(send.mock.calls[1][1]).toMatchObject({ message: 'prepared resume', markers })
+      } else expect(send.mock.calls[0][1]).not.toHaveProperty('deferMessage')
+      expect(prepare).toHaveBeenCalledTimes(1)
+      expect(mgr.lastPreparedOutbound).toBe('prepared resume')
+    } finally {
+      connect.mockRestore()
+      capability.mockRestore()
+      send.mockRestore()
+      prepare.mockRestore()
+    }
+  })
+
+  it('rejects resume success when its first message was not delivered', async () => {
+    const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
+    const capability = vi.spyOn(conn, 'hasCapability').mockReturnValue(true)
+    const connect = vi.spyOn(mgr as unknown as { ensureConnected(): Promise<unknown> }, 'ensureConnected').mockResolvedValue(conn)
+    const send = vi.spyOn(conn, 'send').mockResolvedValueOnce({ ok: true, pid: 4242, offset: 100 })
+      .mockResolvedValueOnce({ ok: false, reason: 'rejected' })
+    const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('resume text')
+    try {
+      await expect(mgr.start({ args: [], cwd: '/tmp', message: 'resume text', resume: true,
+        markers: [{ message: 'resume text', messageId: 'qm-failed' }], onOutput, onExit,
+      })).rejects.toThrow('queued message was not delivered')
+      expect(send.mock.calls.map(([command]) => command)).toEqual(['start', 'send'])
+    } finally {
+      connect.mockRestore()
+      capability.mockRestore()
+      send.mockRestore()
+      prepare.mockRestore()
+    }
+  })
+
+  it('does not append a marker after a refused legacy send', async () => {
+    const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
+    const capability = vi.spyOn(conn, 'hasCapability').mockReturnValue(false)
+    const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: false, reason: 'rejected' })
+    const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('text')
+    try {
+      expect(await mgr.writeMessage('text', { markers: [{ message: 'text', messageId: 'qm-failed' }] })).toBe(false)
+      expect(send.mock.calls).toEqual([['send', { sid: 'sid-test', message: 'text' }]])
+    } finally {
+      capability.mockRestore()
+      send.mockRestore()
+      prepare.mockRestore()
+    }
   })
 
   // ── L1 versioned events: skip by `v` (covers duplicate + out-of-order in one comparison) ──

@@ -118,6 +118,55 @@ describe('handleMessageRequest', () => {
     expect((await getQueue(SID)).length).toBe(0)
   })
 
+  it.each(['pending', 'confirmed'])('does not acknowledge an old ledger replay after a %s stop', async (state) => {
+    getSessionMock.mockResolvedValue({ taskId: 'task-9' })
+    const { conn, sent } = makeConn()
+    const mid = `qm-mobile-stopped-ledger-${state}`
+    await fire(conn, { relayId: 1, sessionId: SID, message: 'cancelled', messageId: mid })
+    const { parkMessages } = await import('../../src/core/session-message-queue.js')
+    await parkMessages(await getQueue(SID), 'Stopped by user', true)
+    getSessionMock.mockResolvedValue({ taskId: 'task-9', stopRequest: { id: 'latest-stop', state } })
+    await fire(conn, { relayId: 2, sessionId: SID, message: 'cancelled', messageId: mid, stopFence: null })
+    expect(sent[1].params).toMatchObject({ errorKind: 'session_stopped' })
+    expect(sent[1].params.result).toBeUndefined()
+    expect(await getQueue(SID)).toEqual([expect.objectContaining({ id: mid, status: 'parked' })])
+  })
+
+  it.each([undefined, null, 'older-stop'])('refuses an old relayed fence %s after a confirmed stop', async (stopFence) => {
+    getSessionMock.mockResolvedValue({ taskId: 'task-9', stopRequest: { id: 'latest-stop', state: 'confirmed' } })
+    const { conn, sent } = makeConn()
+    await fire(conn, { relayId: 20, sessionId: SID, message: 'old', messageId: `qm-old-${String(stopFence)}`, stopFence })
+    expect(sent[0].params.errorKind).toBe('session_stopped')
+    expect(await getQueue(SID)).toEqual([])
+    expect(updateSessionMock).not.toHaveBeenCalled()
+  })
+
+  it('accepts new input under the confirmed fence without clearing the stop', async () => {
+    const stopRequest = { id: 'latest-stop', state: 'confirmed' }
+    getSessionMock.mockResolvedValue({ taskId: 'task-9', stopRequest })
+    const { conn, sent } = makeConn()
+    await fire(conn, { relayId: 21, sessionId: SID, message: 'new', messageId: 'qm-after-stop', stopFence: stopRequest.id })
+    expect(sent[0].params.result).toEqual({ messageId: 'qm-after-stop' })
+    expect((await getQueue(SID))[0].stopFence).toBe(stopRequest.id)
+    expect(updateSessionMock.mock.calls.every((call) => !('stopRequest' in (call[1] as object)))).toBe(true)
+  })
+
+  it('retains the captured fence when a stop arrives during enqueue', async () => {
+    getSessionMock.mockResolvedValue({ taskId: 'task-9', stopRequest: { id: 'stop-after-capture', state: 'confirmed' } })
+    const { conn, sent } = makeConn()
+    await fire(conn, { relayId: 25, sessionId: SID, message: 'was in flight', messageId: 'qm-in-flight-stop', stopFence: null })
+    expect(sent[0].params.errorKind).toBe('session_stopped')
+    expect(await getQueue(SID)).toEqual([])
+  })
+
+  it('pending stop refuses a matching fence as well', async () => {
+    getSessionMock.mockResolvedValue({ stopRequest: { id: 'latest-stop', state: 'pending' } })
+    const { conn, sent } = makeConn()
+    await fire(conn, { relayId: 22, sessionId: SID, message: 'wait', messageId: 'qm-pending-stop', stopFence: 'latest-stop' })
+    expect(sent[0].params.errorKind).toBe('session_stopped')
+    expect(await getQueue(SID)).toEqual([])
+  })
+
   it('unknown session answers errorKind not_found', async () => {
     getSessionMock.mockResolvedValue(null)
     const { conn, sent } = makeConn()

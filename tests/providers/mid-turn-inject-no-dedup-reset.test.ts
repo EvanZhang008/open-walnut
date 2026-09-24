@@ -28,7 +28,7 @@ import type { BusEvent } from '../../src/core/event-bus.js';
 // Minimal transport double: FIFO write always succeeds, everything else inert.
 function mockTransport() {
   return {
-    writeMessage: () => true,
+    writeMessage: (_message: string, opts?: { onDispatch?: () => void }) => { opts?.onDispatch?.(); return true; },
     writeRaw: () => true,
     writeSyntheticUserEvent: () => {},
     deletePipe: () => {},
@@ -107,6 +107,19 @@ describe('mid-turn injection does not reset stream dedup', () => {
     expect(ok).toBe(true);
     expect(s._lastEmittedText.size).toBe(0); // reset happened
     expect(s._processStatus).toBe('running');
+  });
+
+  it('a refused dispatch restores idle state and the previous dedup maps', async () => {
+    const session = makeRunningSession();
+    const s = session as unknown as { _processStatus: string; _lastEmittedText: Map<string, string>; _transport: ReturnType<typeof mockTransport> };
+    s._processStatus = 'idle';
+    s._lastEmittedText.set('previous', 'kept');
+    const before = s._lastEmittedText;
+    s._transport.writeMessage = (_message, opts) => { opts?.onDispatch?.(); return false; };
+    expect(await session.writeMessage('not delivered')).toBe(false);
+    expect(s._processStatus).toBe('idle');
+    expect(s._lastEmittedText).toBe(before);
+    expect(s._lastEmittedText.get('previous')).toBe('kept');
   });
 
   it('mid-turn injection twice in a row still dedups the final assistant line', async () => {

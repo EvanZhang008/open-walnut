@@ -11,8 +11,10 @@
  *
  * The mock CLI exits per turn (it can't hold the control loop), so what these
  * tests can prove is: route/RPC validation, cliModel persistence, and that the
- * NEXT turn's cold resume carries --model <new> (echoed as [model:…]). The live
- * apply_flag_settings delivery itself is proven by real-binary probes.
+ * NEXT turn's cold resume carries --model <new> (echoed as [model:…]). The one
+ * exception is the interrupt case below: a turn stop keeps the process alive, so
+ * there the mock honours the live apply_flag_settings control_request (as the
+ * real CLI does) and the next turn on the SAME process echoes the new model.
  *
  * What's real: Express server, WebSocket, event bus, session-tracker, task-manager.
  * What's mocked: constants.js (temp dir), Claude CLI (mock-claude.mjs), daemon.
@@ -219,7 +221,10 @@ describe('Session model switch: E2E', () => {
   it('immediate model switch (interrupt) — model: haiku with slow session', async () => {
     const ws = await connectWs()
 
-    // Start a SLOW session (3s delay gives window for interrupt).
+    // Start a SLOW session (3s delay gives window for interrupt). The interrupt
+    // aborts the TURN (stream-json interrupt control_request), not the process:
+    // the live apply_flag_settings{model} lands on that same process and the
+    // replacement turn answers under haiku — no kill, no --resume respawn.
     // session:started doesn't carry sessionId, so we wait for session:status-changed
     // which has both taskId and sessionId (set after init event is received).
     const statusPromise = waitForWsEvent(
@@ -265,7 +270,7 @@ describe('Session model switch: E2E', () => {
     const result = await resultPromise
     const resultText = (result.data as { result?: string }).result ?? ''
 
-    // Must have [model:haiku] — proves --model haiku was used on resume
+    // Must have [model:haiku] — the live switch took effect on the surviving process
     expect(resultText).toContain('[model:haiku]')
     expect(resultText).toContain('interrupt and switch model')
 

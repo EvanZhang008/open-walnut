@@ -30,6 +30,7 @@ vi.mock('../../src/providers/daemon-connection.js', () => ({
 import {
   createSessionRecord,
   listSessions,
+  listPendingSessionStops,
   listNonTerminalSessions,
   getSessionByClaudeId,
   getSessionsForTask,
@@ -75,6 +76,20 @@ afterEach(async () => {
       await new Promise(r => setTimeout(r, 50));
     }
   }
+});
+
+describe('pending session stop requests', () => {
+  it('queries durable pending requests by host without excluding archived rows', async () => {
+    for (const [sid, host, state] of [['stop-local', undefined, 'pending'], ['stop-remote', 'worker', 'pending'], ['stop-done', 'worker', 'confirmed']] as const) {
+      await createSessionRecord(sid, 'task-stop', 'demo', '/tmp', { host, initialProcessStatus: 'stopped' });
+      await updateSessionRecord(sid, { archived: true, stopRequest: { id: sid, requestedAt: new Date().toISOString(), state } });
+    }
+    expect((await listPendingSessionStops('__local__')).map((r) => r.claudeSessionId)).toEqual(['stop-local']);
+    expect((await listPendingSessionStops('worker')).map((r) => r.claudeSessionId)).toEqual(['stop-remote']);
+    closeDb();
+    _resetSessionTrackerForTesting();
+    expect((await listPendingSessionStops('worker'))[0]?.stopRequest?.state).toBe('pending');
+  });
 });
 
 describe('emitSessionStatusChanged', () => {

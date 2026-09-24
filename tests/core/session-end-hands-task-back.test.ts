@@ -5,6 +5,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-handback'))
 
+import { reconcileSessions } from '../../src/core/session-reconciler.js'
 import { handBackTaskOnSessionEnd, sessionResultPhase } from '../../src/core/phase.js'
 import {
   createSessionRecord,
@@ -306,5 +307,57 @@ describe('ACP reconnect hands the task back', () => {
       const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js')
       expect((await getSessionByClaudeId('sid-acp'))?.process_status).toBe('running')
     }
+  })
+})
+
+describe('startup reconciler hands the task back', () => {
+  it('a zombie session killed by the server restart turns its TODO task red', async () => {
+    const taskId = await seedTask('was mid-turn when the server died')
+    // 'interactive' + non-terminal + no pid → the reconciler's dead-zombie path.
+    await createSessionRecord('zombie-1', taskId, 'proj')
+    await updateSessionRecord('zombie-1', { process_status: 'running', type: 'interactive' } as never)
+
+    const result = await reconcileSessions()
+    expect(result.reconciled).toBeGreaterThan(0)
+
+    // Both halves of the fix: the record AND the phase.
+    const task = await getTask(taskId)
+    expect(task.phase).toBe(HANDBACK_PHASE)
+  })
+
+  it('keeps interrupted work recoverable until the scheduler sends the resume', async () => {
+    const taskId = await seedTask('resume after restart')
+    await updateTask(taskId, { phase: 'IN_PROGRESS' })
+    await createSessionRecord('zombie-recover', taskId, 'proj')
+    await updateSessionRecord('zombie-recover', { process_status: 'running', type: 'interactive' })
+    let fire!: () => void
+    const send = vi.fn(async () => ({}))
+    const recovery = startSessionAutoRecover({
+      enabled: true, delayMs: 20000, staggerMs: 0,
+      maxAttempts: 3, maxPerHost: 10, windowMs: 3600000,
+    }, { setTimer: (fn) => { fire = fn; return 1 as never }, clearTimer: () => {}, send, recoveryOwner: async () => 'server' })
+    try {
+      const result = await reconcileSessions()
+      expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+      const rec = result.dead.find((s) => s.claudeSessionId === 'zombie-recover')!
+      expect(recovery.instance.schedule(rec, 'server_restart')).toBe(true)
+      fire()
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce())
+      expect(send).toHaveBeenCalledWith('zombie-recover', expect.stringContaining('[Walnut auto-recover]'), {
+        source: 'auto-recover', taskId,
+      })
+    } finally {
+      recovery.stop()
+    }
+  })
+
+  it('does not touch a task the human already completed', async () => {
+    const taskId = await seedTask('finished, session never cleaned up')
+    await updateTask(taskId, { phase: 'COMPLETE' })
+    await createSessionRecord('zombie-2', taskId, 'proj')
+    await updateSessionRecord('zombie-2', { process_status: 'running', type: 'interactive' } as never)
+
+    await reconcileSessions()
+    expect((await getTask(taskId)).phase).toBe('COMPLETE')
   })
 })

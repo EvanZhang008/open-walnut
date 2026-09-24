@@ -21,6 +21,9 @@ import {
   foldLine,
   foldLines,
   assembleSnapshot,
+  snapshotDiffers,
+  isWakeupArmed,
+  WAKEUP_FIRE_GRACE_MS,
   type FoldState,
 } from '../../src/providers/daemon-fold.js'
 import { foldSessionTail } from '../../src/core/session-reconcile.js'
@@ -87,6 +90,15 @@ function bgTasksChanged(taskIds: string[]): string {
   return JSON.stringify({
     type: 'system', subtype: 'background_tasks_changed', session_id: SID,
     tasks: taskIds.map((id) => ({ task_id: id, status: 'running' })),
+  })
+}
+function wakeupResult(scheduledFor: number): string {
+  // Real shape (clouddev 2026-09-01): the ScheduleWakeup tool_result user line
+  // carries tool_use_result.scheduledFor (epoch ms) at the TOP level.
+  return JSON.stringify({
+    type: 'user', session_id: SID,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_wake', content: 'Next wakeup scheduled' }] },
+    tool_use_result: { scheduledFor, clampedDelaySeconds: 600, wasClamped: false },
   })
 }
 function teamCreate(): string {
@@ -251,6 +263,48 @@ describe('foldLine — result and state transitions', () => {
       notificationOriginResult(), stateEvent('idle'),          // followup closes
     ])
     expect(s.turnActive).toBe(false)
+  })
+
+  it('a drained notification followup closes without a companion idle', () => {
+    const lines = [
+      userEvent(), taskStarted('reader'), resultEvent(), stateEvent('idle'),
+      taskDone('reader'), stateEvent('running'), initEvent(), notificationOriginResult(),
+    ]
+    const s = fold(lines)
+    expect(s.trailingIdle).toBe(false)
+    expect(s.turnActive).toBe(false)
+    expect(foldSessionTail(lines.join('\n')).turnEnded).toBe(true)
+  })
+
+  it.each([
+    [taskStarted('still-working')],
+    [teamCreate()],
+    [userEvent('new user turn')],
+  ])('a followup cannot close ongoing work or a fresh user turn: %j', (...pending) => {
+    const lines = [userEvent(), resultEvent(), stateEvent('idle'), ...pending, stateEvent('running'), notificationOriginResult()]
+    expect(fold(lines).turnActive).toBe(true)
+    expect(foldSessionTail(lines.join('\n')).turnEnded).toBe(false)
+  })
+
+  it('a notification before any user result does not manufacture completion', () => {
+    const lines = [userEvent(), notificationOriginResult()]
+    expect(fold(lines).turnActive).toBe(true)
+    expect(foldSessionTail(lines.join('\n')).turnEnded).toBe(false)
+  })
+
+  it('a normal result after a closed followup still needs its own idle', () => {
+    const lines = [userEvent(), resultEvent(), stateEvent('idle'), stateEvent('running'), notificationOriginResult(), stateEvent('running'), resultEvent()]
+    expect(fold(lines).turnActive).toBe(true)
+    expect(foldSessionTail(lines.join('\n')).turnEnded).toBe(false)
+  })
+
+  it('a closed followup leaves unrelated detached work visible and running', () => {
+    const s = fold([
+      userEvent(), resultEvent(), stateEvent('idle'), taskStarted('detached'),
+      taskUpdated('detached', { is_backgrounded: true }), stateEvent('running'), notificationOriginResult(),
+    ])
+    expect(s.turnActive).toBe(false)
+    expect(assembleSnapshot({ foldState: s, dead: false, pid: 123, exitCode: null, pendingCtrl: null }).detachedBgCount).toBe(1)
   })
 
   it('a fresh result resets trailingIdle (its own companion idle must still arrive)', () => {
@@ -1009,6 +1063,7 @@ describe('property — batch foldLines matches foldSessionTail verdict (3000 see
       else if (roll < 0.83) lines.push(teamDelete())
       else if (roll < 0.86) lines.push(notificationOriginResult())
       else if (roll < 0.92) lines.push(taskProgress(tid))
+      else if (roll < 0.95) lines.push(wakeupResult(1_700_000_000_000 + Math.floor(rand() * 1e9)))
       else lines.push(JSON.stringify({ type: 'stream_event', session_id: SID, event: { i } }))
     }
     return { lines, anchorCount }
@@ -1042,6 +1097,14 @@ describe('property — batch foldLines matches foldSessionTail verdict (3000 see
       // Gating count + team flag must match.
       expect(snap.gatingBgCount, label).toBe(tail.gatingBgCount)
       expect(snap.teamActive, label).toBe(tail.teamActive)
+      // Wakeup arming must match. CAVEAT: the reference's window starts at the
+      // last real user anchor while foldLine deliberately does NOT reset
+      // wakeupAt on anchors (it spans turns like cronIds) — so compare only
+      // when the reference saw one; a pre-anchor arm is legitimately invisible
+      // to the tail fold.
+      if (tail.wakeupAt !== undefined) {
+        expect(snap.wakeupAt, label).toBe(tail.wakeupAt)
+      }
     }
     // Guard against a silently-degenerate generator: if the re-anchor branch
     // stops firing, this suite quietly falls back to the old single-anchor
@@ -1100,27 +1163,23 @@ describe('assembleSnapshot — detachedBgCount', () => {
     expect(detached(s)).toBe(1)
   })
 
-  it('a real user anchor resets detached tasks (window reset), progress re-adds', () => {
-    const s = fold([
-      userEvent('turn 1'),
-      taskStarted('bg1'),
-      taskUpdated('bg1', { is_backgrounded: true }),
-      userEvent('turn 2'),
-    ])
-    expect(detached(s)).toBe(0)
-    // The live command re-enters via its next task_progress (self-heal), but a
-    // bare progress line has no is_backgrounded knowledge — it re-enters as
-    // GATING until a task_updated patch re-marks it (safe direction: over-gate).
-    const healed = fold([
-      userEvent('turn 1'),
-      taskStarted('bg1'),
-      taskUpdated('bg1', { is_backgrounded: true }),
-      userEvent('turn 2'),
-      taskProgress('bg1'),
-      taskUpdated('bg1', { is_backgrounded: true }),
-    ])
-    expect(detached(healed)).toBe(1)
-    expect(gating(healed)).toBe(0)
+  it('detached work survives a second completed turn until its terminal event', () => {
+    const lines = [
+      userEvent('turn 1'), taskStarted('bg1'),
+      taskUpdated('bg1', { is_backgrounded: true }), bgTasksChanged(['bg1']),
+      resultEvent(), stateEvent('idle'),
+      userEvent('turn 2'), resultEvent(), stateEvent('idle'),
+    ]
+    const s = fold(lines)
+    expect(detached(s)).toBe(1)
+    expect(gating(s)).toBe(0)
+    expect(s.turnActive).toBe(false)
+    expect(detached(fold([...lines, taskProgress('bg1')]))).toBe(1)
+    expect(gating(fold([...lines, taskProgress('bg1')]))).toBe(0)
+    expect(detached(fold([...lines, taskDone('bg1', 'completed')]))).toBe(0)
+    expect(detached(fold([...lines, bgTasksChanged([])]))).toBe(0)
+    expect(foldSessionTail(lines.join('\n')).detachedBgCount).toBe(1)
+    expect(foldSessionTail([...lines, taskDone('bg1')].join('\n')).detachedBgCount).toBe(0)
   })
 
   it('endedPerLevel excludes a detached task from the count', () => {
@@ -1165,5 +1224,94 @@ describe('foldLine — is_backgrounded arrives TOP-LEVEL on task_started (local_
     ])
     expect(detached(s)).toBe(1)
     expect(gating(s)).toBe(0)
+  })
+})
+
+// ── wakeupAt (ScheduleWakeup; user decision 2026-09-01, inc-1788284320937: a
+// self-managed watch loop that ends its turn only to be re-invoked by the timer
+// is still WORKING, so the projection maps an armed wakeup to 'running') ──
+
+function snapOf(s: FoldState): ReturnType<typeof assembleSnapshot> {
+  return assembleSnapshot({ foldState: s, pendingCtrl: null, dead: false, pid: 1, exitCode: null })
+}
+
+describe('foldLine — ScheduleWakeup arming', () => {
+  const FUTURE = 1_900_000_000_000
+
+  it('a tool_result carrying tool_use_result.scheduledFor arms wakeupAt', () => {
+    const s = fold([userEvent('start the watch'), wakeupResult(FUTURE), resultEvent(), stateEvent('idle')])
+    expect(s.wakeupAt).toBe(FUTURE)
+    expect(snapOf(s).wakeupAt).toBe(FUTURE)
+  })
+
+  it('no wakeup line leaves wakeupAt null on the snapshot (old behavior)', () => {
+    const s = fold([userEvent(), resultEvent(), stateEvent('idle')])
+    expect(s.wakeupAt).toBe(0)
+    expect(snapOf(s).wakeupAt).toBeNull()
+  })
+
+  it('the latest schedule overwrites an earlier one (single pending slot)', () => {
+    const s = fold([userEvent(), wakeupResult(FUTURE), resultEvent(), stateEvent('idle'),
+      walnutInjectedEvent('tick'), wakeupResult(FUTURE + 900_000), resultEvent(), stateEvent('idle')])
+    expect(s.wakeupAt).toBe(FUTURE + 900_000)
+  })
+
+  it('survives a real user anchor — the timer spans turns like cronIds', () => {
+    const s = fold([userEvent(), wakeupResult(FUTURE), resultEvent(), stateEvent('idle'),
+      userEvent('new question')])
+    expect(s.wakeupAt).toBe(FUTURE)
+  })
+
+  it('does NOT gate turn settle — the turn is genuinely over between ticks', () => {
+    const s = fold([userEvent(), wakeupResult(FUTURE), resultEvent(), stateEvent('idle')])
+    const snap = snapOf(s)
+    expect(snap.turnActive).toBe(false)
+    expect(snap.cliState).toBe('idle') // projection (not the fold) maps armed → running
+  })
+
+  it('ignores a malformed / zero / non-numeric scheduledFor', () => {
+    const bad = JSON.stringify({
+      type: 'user', session_id: SID,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_w', content: 'x' }] },
+      tool_use_result: { scheduledFor: 'soon' },
+    })
+    const zero = JSON.stringify({
+      type: 'user', session_id: SID,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_w', content: 'x' }] },
+      tool_use_result: { scheduledFor: 0 },
+    })
+    expect(fold([userEvent(), bad, zero]).wakeupAt).toBe(0)
+  })
+
+  it('snapshotDiffers reports a wakeupAt change (so the daemon pushes it)', () => {
+    const a = snapOf(fold([userEvent(), resultEvent(), stateEvent('idle')]))
+    const b = snapOf(fold([userEvent(), wakeupResult(FUTURE), resultEvent(), stateEvent('idle')]))
+    // Same v would otherwise be needed; compare the field contribution directly.
+    expect(snapshotDiffers({ ...a, v: 1 }, { ...b, v: 1 })).toBe(true)
+    expect(snapshotDiffers({ ...b, v: 1 }, { ...b, v: 2 })).toBe(false)
+  })
+})
+
+describe('isWakeupArmed', () => {
+  const NOW = 1_800_000_000_000
+
+  it('armed while the fire time is in the future', () => {
+    expect(isWakeupArmed(NOW + 60_000, NOW)).toBe(true)
+  })
+
+  it('still armed inside the post-fire grace (woken turn bytes can lag)', () => {
+    expect(isWakeupArmed(NOW - 1_000, NOW)).toBe(true)
+    expect(isWakeupArmed(NOW - (WAKEUP_FIRE_GRACE_MS - 1), NOW)).toBe(true)
+  })
+
+  it('disarmed once the grace elapsed — an un-renewed wakeup expires by time alone', () => {
+    expect(isWakeupArmed(NOW - WAKEUP_FIRE_GRACE_MS, NOW)).toBe(false)
+    expect(isWakeupArmed(NOW - 3_600_000, NOW)).toBe(false)
+  })
+
+  it('absent / null / zero reads as disarmed (pre-field daemon = old behavior)', () => {
+    expect(isWakeupArmed(undefined, NOW)).toBe(false)
+    expect(isWakeupArmed(null, NOW)).toBe(false)
+    expect(isWakeupArmed(0, NOW)).toBe(false)
   })
 })

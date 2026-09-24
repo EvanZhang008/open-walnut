@@ -360,7 +360,7 @@ export class MockDaemon {
     if (resume) {
       try { startOffset = fs.statSync(jsonlPath).size } catch { startOffset = 0 }
     }
-    const outputFd = fs.openSync(jsonlPath, resume ? 'a' : 'w')
+    const outputFd = fs.openSync(jsonlPath, 'a')
     const stderrFd = fs.openSync(jsonlPath + '.err', resume ? 'a' : 'w')
 
     // Build CLI args (mimic real daemon)
@@ -517,6 +517,25 @@ export class MockDaemon {
     if (this._deadSessions.has(sid)) {
       return this.sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: this._deadSessions.get(sid)! })
     }
+    // The real daemon's send and sendRaw share one FIFO writer, so an injected
+    // pipe fault must hit a control envelope exactly like a user message. Same
+    // one-shot semantics as cmdSend; ENXIO reaps the session there too.
+    const fault = this._sendFaults.get(sid)
+    if (fault) {
+      this._sendFaults.delete(sid)
+      switch (fault) {
+        case 'not_found':
+          return this.sendOk(ws, id, { ok: false, reason: 'not_found' })
+        case 'session_dead':
+          return this.sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: -1 })
+        case 'ENXIO':
+          this._deadSessions.set(sid, -1)
+          this.broadcastSessionState(sid, 'dead', { exitCode: -1, reason: 'sendraw-enxio' })
+          return this.sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: -1 })
+        case 'EAGAIN':
+          return this.sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true })
+      }
+    }
     const session = this.sessions.get(sid)
     if (!session) return this.sendOk(ws, id, { ok: false, reason: 'not_found' })
     try {
@@ -580,8 +599,16 @@ export class MockDaemon {
     const sid = cmd.sid as string
     const session = this.sessions.get(sid)
 
+    // Real daemon reply shape (daemon-standalone cmdStop): a stop is CONFIRMED
+    // with `stopped:true`; a session already gone is a confirmed no-op, not a
+    // bare `{}` — RemoteSessionManager.stop() treats anything without
+    // `stopped:true` as "the daemon did not confirm", which then fails the
+    // gracefulStop half of every cold --resume in a mock-daemon test.
     if (!session || !session.proc) {
-      return this.sendOk(ws, id, {})
+      return this.sendOk(ws, id, { stopped: true, noop: true, reason: session ? 'already_exited' : 'not_in_registry' })
+    }
+    if (session.exitCode !== null) {
+      return this.sendOk(ws, id, { stopped: true, noop: true, reason: 'already_exited' })
     }
 
     try { session.proc.kill('SIGINT') } catch { /* already dead */ }
@@ -593,7 +620,7 @@ export class MockDaemon {
       }
     }, 2000)
 
-    this.sendOk(ws, id, {})
+    this.sendOk(ws, id, { stopped: true })
   }
 
   private cmdStatus(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
@@ -720,12 +747,11 @@ export class MockDaemon {
       const buf = Buffer.alloc(stat.size - session.offset)
       fs.readSync(fd, buf, 0, buf.length, session.offset)
       fs.closeSync(fd)
-      session.offset = stat.size
-
-      const text = buf.toString('utf-8')
-      for (const line of text.split('\n')) {
+      const completeEnd = buf.lastIndexOf(0x0a) + 1
+      for (const line of buf.subarray(0, completeEnd).toString('utf-8').split('\n').slice(0, -1)) {
+        session.offset += Buffer.byteLength(line, 'utf-8') + 1
         if (line.trim()) {
-          this.sendEvent(ws, 'jsonl', { sid, line })
+          this.sendEvent(ws, 'jsonl', { sid, line, v: session.offset })
         }
       }
     } catch { /* file not ready yet */ }

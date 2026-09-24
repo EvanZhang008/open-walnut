@@ -49,6 +49,16 @@ export interface SessionSnapshot {
    *  block in daemon-core.ts — Walnut now denies durable creates). The disk
    *  side is a separate signal the fold cannot see: hasDiskCronInterest. */
   cronActive: boolean
+  /** Epoch-ms fire time of the last CONFIRMED ScheduleWakeup (the harness's
+   *  "Next wakeup scheduled for …" tool_result carries tool_use_result
+   *  .scheduledFor). While this is in the future the model is deliberately
+   *  mid-job — it ended its turn only to be re-invoked by the timer — so the
+   *  projection maps an armed wakeup to 'running' (user decision 2026-09-01,
+   *  inc-1788284320937: a self-managed 15-min watch loop showed Idle between
+   *  ticks). Never cleared: the fire itself writes new stream bytes (a fresh
+   *  fold), and an un-renewed past value simply reads as disarmed — time is
+   *  the clearing mechanism. Optional so snapshots from pre-field daemons
+   *  keep the old behavior. */
   wakeupAt?: number | null
   lastResult: { isError: boolean; numTurns?: number; endOffset: number } | null
   pid: number | null
@@ -77,6 +87,8 @@ export interface FoldState {
    *  sessions (same blindness class as inc-1783644415695). */
   sawAnchor: boolean
   lastResult: SessionSnapshot['lastResult']
+  sawNormalResult: boolean
+  followupResult: boolean
   /** session_state_changed{idle} seen after lastResult with no running since. */
   trailingIdle: boolean
   bgTasks: Record<string, { terminal: boolean; isBackgrounded: boolean; endedPerLevel?: boolean; toolUseId?: string }>
@@ -102,6 +114,13 @@ export interface FoldState {
   /** CronCreate tool_use ids awaiting their tool_result (error results must
    *  not arm cronIds — a validation-rejected create schedules nothing). */
   pendingCronCreates: Record<string, 1>
+  /** Latest confirmed ScheduleWakeup fire time (epoch ms; 0 = none). Matched
+   *  UNPAIRED on the tool_result shape (`tool_use_result.scheduledFor` is
+   *  unique to ScheduleWakeup) so a rebuilt/windowed fold that lost the
+   *  tool_use line still arms it. Like cronIds, deliberately NOT reset by a
+   *  real user anchor — the timer spans turns by design; a later schedule
+   *  overwrites (the harness keeps a single pending wakeup slot). */
+  wakeupAt: number
 }
 
 export function initialFoldState(baseV?: number): FoldState {
@@ -110,12 +129,15 @@ export function initialFoldState(baseV?: number): FoldState {
     turnActive: false,
     sawAnchor: false,
     lastResult: null,
+    sawNormalResult: false,
+    followupResult: false,
     trailingIdle: false,
     bgTasks: {},
     seenInLevel: {},
     teamActive: false,
     cronIds: {},
     pendingCronCreates: {},
+    wakeupAt: 0,
   }
 }
 
@@ -165,12 +187,15 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     turnActive: state.turnActive,
     sawAnchor: state.sawAnchor,
     lastResult: state.lastResult,
+    sawNormalResult: state.sawNormalResult,
+    followupResult: state.followupResult,
     trailingIdle: state.trailingIdle,
     bgTasks: state.bgTasks,
     seenInLevel: state.seenInLevel,
     teamActive: state.teamActive,
     cronIds: state.cronIds,
     pendingCronCreates: state.pendingCronCreates,
+    wakeupAt: state.wakeupAt,
   }
 
   let parsed: { [k: string]: unknown }
@@ -246,35 +271,32 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
         }
       }
     }
+    // ScheduleWakeup confirmation: the harness's tool_result rides a user line
+    // with a top-level `tool_use_result.scheduledFor` (epoch ms) — unique to
+    // this tool, so no tool_use pairing is needed (and a windowed rebuild that
+    // lost the tool_use line still arms). Latest schedule wins.
+    {
+      const tur = parsed.tool_use_result as { scheduledFor?: unknown } | undefined
+      if (tur && typeof tur.scheduledFor === 'number' && tur.scheduledFor > 0) {
+        next.wakeupAt = tur.scheduledFor
+      }
+    }
     if (isRealUserLine(parsed)) {
       // Turn anchor: a new turn began — a prior result can no longer be the
       // current turn's verdict.
       next.sawAnchor = true
       next.lastResult = null
+      next.sawNormalResult = false
+      next.followupResult = false
       next.trailingIdle = false
-      // ── WINDOW RESET (contract §2 "Anchor resets the bg/team universe") ──
-      // A REAL user line also resets the background-task map, the level
-      // universe, and teamActive. Rationale: the reference foldSessionTail's
-      // window STARTS at the last real user line, so pre-anchor bg/team state
-      // is invisible to it by design; retaining it forward made the daemon
-      // strictly MORE gated than the reference, and a bg task that never got
-      // a terminal bookend AND was never listed by a background_tasks_changed
-      // payload could never be healed (the level-reconcile universe guard
-      // refuses to absent-mark a never-listed id — deliberately, because a
-      // sync subagent is legitimately absent from every level payload). That
-      // combination wedged turnActive=true for EVERY FUTURE TURN of the
-      // session (executed repro: an orphan task_started in turn 3 kept turn
-      // 4's clean result+idle from settling).
-      // Safety of the reset: a genuinely-running cross-turn bg task re-enters
-      // the fold on its next task_progress / task_updated /
-      // background_tasks_changed line (the CLI emits progress for live tasks),
-      // so gating self-heals within one event — whereas the wedge never healed.
-      // Only a real user line resets: NOT init (auto-continuation of the same
-      // work) and NOT state:running (mid-turn re-activation), both of which
-      // are anchor-EQUIVALENT for sawAnchor but do not open a new user turn.
-      // cronIds is deliberately NOT reset — cron jobs span turns by design.
+      // Detached work survives across turns; only clear the old turn's gating state, so a lost terminal event cannot lock later turns.
       next.bgTasks = {}
       next.seenInLevel = {}
+      for (const [id, task] of Object.entries(state.bgTasks)) {
+        if (!task.isBackgrounded || task.terminal || task.endedPerLevel) continue
+        next.bgTasks[id] = task
+        if (state.seenInLevel[id]) next.seenInLevel[id] = 1
+      }
       next.teamActive = false
     }
     // tool_result echoes / subagent inline lines: v-only.
@@ -290,6 +312,7 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
       // result — it cannot be the current turn's verdict (inc-1783644415695).
       next.sawAnchor = true
       next.lastResult = null
+      next.followupResult = false
       next.trailingIdle = false
     } else if (subtype === 'session_state_changed') {
       const s = parsed.state as string | undefined
@@ -301,6 +324,7 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
         // are naturally superseded by the final result.
         next.sawAnchor = true
         next.lastResult = null
+        next.followupResult = false
         next.trailingIdle = false
       }
       // requires_action is NOT folded here — pendingCtrl is intercepted
@@ -386,30 +410,17 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
       }
     }
   } else if (type === 'result') {
-    // EVERY result — including origin:task-notification — is a turn verdict
-    // HERE. The CLI's notification FOLLOWUP turn (bg task completes while
-    // idle → CLI autonomously runs init + state:running + summary) opens an
-    // anchor in this fold like any other turn, and its closing result carries
-    // origin:task-notification. The previous exclusion ("bg-summary
-    // bookkeeping, never turn-over" — mirroring the walnut-side handlers,
-    // where it protects task-phase transitions) made the fold ASYMMETRIC:
-    // anchor accepted, verdict refused → lastResult stayed null → the trailing
-    // idle could never settle → turnActive=true forever. Under enforce the
-    // snapshot is the sole status writer, so the record wedged at 'running'
-    // for a CLI that was provably idle (incident b07ee156, 2026-08-14).
-    // Safety: counting it here cannot end a LIVE turn prematurely — settle
-    // still requires a trailing idle with zero gating work, and any subsequent
-    // running/init resets lastResult. Walnut's live/phase handlers keep their
-    // own task-notification exclusion; this fold only decides cliState.
-    // endOffset rides the daemon `v` coordinate for the positional replay
-    // veto downstream.
+    const notification = (parsed.origin as { kind?: string } | undefined)?.kind === 'task-notification'
+    // An automatic summary may have no idle; the main user turn's result evidence persists across init/running, and only new user input resets it.
+    next.followupResult = notification && next.sawNormalResult
+    if (!notification) next.sawNormalResult = true
     const numTurns = parsed.num_turns
     next.lastResult = {
       isError: parsed.is_error === true,
       ...(typeof numTurns === 'number' ? { numTurns } : {}),
       endOffset: lineEndV,
     }
-    next.trailingIdle = false // this result's own companion idle must still arrive
+    next.trailingIdle = false
   } else if (type === 'assistant') {
     const msg = parsed.message as { content?: unknown } | undefined
     const blocks = msg ? msg.content : undefined
@@ -449,7 +460,7 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
   // end-of-batch verdict for every prefix of the stream. An error result is
   // terminal WITHOUT a companion idle (the CLI can bail before emitting one).
   const settled = !!(next.lastResult && (next.lastResult.isError
-    || (next.trailingIdle && gatingCount(next.bgTasks) === 0 && !next.teamActive)))
+    || ((next.trailingIdle || next.followupResult) && gatingCount(next.bgTasks) === 0 && !next.teamActive)))
   next.turnActive = next.sawAnchor && !settled
   return next
 }
@@ -493,6 +504,7 @@ export function assembleSnapshot(input: {
     detachedBgCount: detached,
     teamActive: s.teamActive,
     cronActive: Object.keys(s.cronIds).length > 0,
+    wakeupAt: s.wakeupAt > 0 ? s.wakeupAt : null,
     lastResult: s.lastResult ? { ...s.lastResult } : null,
     pid: input.pid,
     exitCode: input.exitCode,
@@ -515,6 +527,7 @@ export function snapshotDiffers(a: SessionSnapshot, b: SessionSnapshot): boolean
     || (a.detachedBgCount ?? 0) !== (b.detachedBgCount ?? 0)
     || a.teamActive !== b.teamActive
     || a.cronActive !== b.cronActive
+    || (a.wakeupAt ?? null) !== (b.wakeupAt ?? null)
     || a.pid !== b.pid || a.exitCode !== b.exitCode
     || (a.streamEpoch ?? null) !== (b.streamEpoch ?? null)) return true
   const ap = a.pendingPermission, bp = b.pendingPermission
@@ -524,6 +537,24 @@ export function snapshotDiffers(a: SessionSnapshot, b: SessionSnapshot): boolean
   if (!!ar !== !!br) return true
   if (ar && br && (ar.isError !== br.isError || ar.numTurns !== br.numTurns || ar.endOffset !== br.endOffset)) return true
   return false
+}
+
+/** Grace past the scheduled fire time before an armed wakeup reads as
+ *  disarmed: the harness fires on schedule but the first stream bytes of the
+ *  woken turn can lag by seconds under load, and a pull-tick landing in that
+ *  gap must not flap the status to idle. */
+export const WAKEUP_FIRE_GRACE_MS = 60_000
+
+/**
+ * SERVER-SIDE helper (like foldLines, NOT injected into the daemon twins —
+ * the daemon only carries the field): true while a confirmed ScheduleWakeup
+ * is still pending, i.e. the model deliberately ended its turn to be
+ * re-invoked by the timer. Time is the only clearing mechanism — see
+ * SessionSnapshot.wakeupAt.
+ */
+export function isWakeupArmed(wakeupAt: number | null | undefined, nowMs?: number): boolean {
+  if (typeof wakeupAt !== 'number' || wakeupAt <= 0) return false
+  return wakeupAt + WAKEUP_FIRE_GRACE_MS > (nowMs ?? Date.now())
 }
 
 /**
@@ -553,11 +584,4 @@ export function foldLines(content: string, baseV?: number): FoldState {
     state = foldLine(state, line, v)
   }
   return state
-}
-
-export const WAKEUP_FIRE_GRACE_MS = 60_000
-
-export function isWakeupArmed(wakeupAt: number | null | undefined, nowMs?: number): boolean {
-  if (typeof wakeupAt !== 'number' || wakeupAt <= 0) return false
-  return wakeupAt + WAKEUP_FIRE_GRACE_MS > (nowMs ?? Date.now())
 }

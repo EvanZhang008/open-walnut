@@ -150,6 +150,7 @@ export interface ProjectedSession {
   /** '' = the primary box itself; otherwise the remote host alias. */
   host: string
   process_status: string
+  stopRequest?: SessionRecord['stopRequest']
   model?: string
   mode?: string
   started_at: string
@@ -206,6 +207,7 @@ export function projectSession(
     ...(groupLabel ? { group_label: groupLabel } : {}),
     host: s.host ?? '',
     process_status: s.process_status,
+    ...(s.stopRequest ? { stopRequest: s.stopRequest } : {}),
     ...(s.model ? { model: s.model } : {}),
     ...(s.mode ? { mode: s.mode } : {}),
     started_at: s.startedAt,

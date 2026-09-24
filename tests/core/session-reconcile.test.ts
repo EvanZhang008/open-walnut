@@ -108,6 +108,16 @@ function taskDone(sid: string, taskId: string): string {
     type: 'system', subtype: 'task_notification', session_id: sid, task_id: taskId, status: 'completed',
   })
 }
+/** ScheduleWakeup confirmation: the harness's tool_result user line carries
+ *  tool_use_result.scheduledFor (epoch ms) at the TOP level — real shape
+ *  captured on clouddev 2026-09-01 (inc-1788284320937). */
+function wakeupResult(sid: string, scheduledFor: number): string {
+  return JSON.stringify({
+    type: 'user', session_id: sid,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_wake', content: 'Next wakeup scheduled' }] },
+    tool_use_result: { scheduledFor, clampedDelaySeconds: 900, wasClamped: false },
+  })
+}
 function teamCreate(sid: string): string {
   return JSON.stringify({
     type: 'assistant', session_id: sid,
@@ -283,6 +293,15 @@ describe('foldSessionTail — turn-end evidence semantics', () => {
     expect(fold.turnEnded).toBe(true)
   })
 
+  it('a post-watermark notification followup closes without idle, but a new user turn resets the evidence', () => {
+    const followup = [stateEvent(sid, 'running'), notificationOriginResult(sid)]
+    const completed = foldSessionTail(followup.join('\n'), 100, { syntheticAnchor: true })
+    expect(completed.trailingIdle).toBe(false)
+    expect(completed.turnEnded).toBe(true)
+    const fresh = foldSessionTail([userEvent(sid), ...followup].join('\n'), 100, { syntheticAnchor: true })
+    expect(fresh.turnEnded).toBe(false)
+  })
+
   it('TeamCreate without TeamDelete blocks the verdict', () => {
     const fold = foldSessionTail([
       userEvent(sid), teamCreate(sid), resultEvent(sid), stateEvent(sid, 'idle'),
@@ -397,6 +416,44 @@ describe('reconcileProcessStatus — convergence (incidents B/D shape)', () => {
     ])
     const drained = await reconcileProcessStatus(record, { isAlive: true })
     expect(drained).toEqual({ converged: true, from: 'running', to: 'idle' })
+  })
+
+  // Same rule, third leg (inc-1788284320937, 2026-09-01): a session that ended
+  // its turn only to be re-invoked by its own ScheduleWakeup timer is still on
+  // the job, so its 'running' record is truthful. Clock-driven — once the fire
+  // time (plus grace) passes with no new schedule, the debt is real again.
+  it('an armed ScheduleWakeup BLOCKS convergence; an expired one does not', async () => {
+    const sid = 'conv-wakeup'
+    const armedLines = [
+      initEvent(sid), userEvent(sid),
+      wakeupResult(sid, Date.now() + 900_000),
+      resultEvent(sid), stateEvent(sid, 'idle'),
+    ]
+    await writeStream(sid, armedLines)
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    expect(await reconcileProcessStatus(record, { isAlive: true }))
+      .toEqual({ converged: false, reason: 'wakeup-armed' })
+
+    // Same stream shape, but the scheduled fire time is long past and was never
+    // renewed — the loop is genuinely over and the stuck record is real debt.
+    await writeStream(sid, [
+      initEvent(sid), userEvent(sid),
+      wakeupResult(sid, Date.now() - 3_600_000),
+      resultEvent(sid), stateEvent(sid, 'idle'),
+    ])
+    expect(await reconcileProcessStatus(record, { isAlive: true }))
+      .toEqual({ converged: true, from: 'running', to: 'idle' })
+  })
+
+  it('foldSessionTail extracts wakeupAt from the tool_result line', async () => {
+    const at = Date.now() + 600_000
+    const content = [
+      initEvent('s'), userEvent('s'), wakeupResult('s', at), resultEvent('s'), stateEvent('s', 'idle'),
+    ].join('\n') + '\n'
+    const fold = foldSessionTail(content, 0)
+    expect(fold.wakeupAt).toBe(at)
+    expect(fold.turnEnded).toBe(true) // the wakeup does NOT gate turn settle
   })
 
   it('emits session:status-changed with the converged status', async () => {
@@ -613,6 +670,34 @@ describe('reconcileProcessStatus — task phase sync (incident C shape)', () => 
   // (WAIT removed 2026-08-18 — the "already past IN_PROGRESS" fixture phase was
   // WAIT; COMPLETE is now the phase past NEED_ACTION, and the gate is still
   // "only sync when the task is exactly IN_PROGRESS".)
+  it('does not report convergence when the source resumes before the phase write', async () => {
+    const { addTask, updateTaskRaw, getTask } = await import('../../src/core/task-manager.js')
+    const taskManager = await import('../../src/core/task-manager.js')
+    const { sessionRunner } = await import('../../src/providers/claude-code-session.js')
+    const { task } = await addTask({ title: 'phase debt superseded by send' })
+    await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' })
+    const sid = 'phase-debt-resumed'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    await createSessionRecord(sid, task.id, 'proj', CWD)
+    const record = await updateSessionRecord(sid, { process_status: 'idle' })
+    const live = { turnGen: 1, processStatus: 'idle' }
+    const lookup = vi.spyOn(sessionRunner, 'findSessionByClaudeId').mockImplementation((id) => id === sid ? live as never : undefined)
+    const spy = vi.spyOn(taskManager, 'updateTaskRaw').mockImplementationOnce(async (...args) => {
+      live.turnGen++
+      live.processStatus = 'running'
+      return updateTaskRaw(...args)
+    })
+    try {
+      expect(await reconcileProcessStatus(record, { isAlive: true })).toMatchObject({ converged: false })
+      expect(spy).toHaveBeenCalledOnce()
+      expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+      expect(live.processStatus).toBe('running')
+    } finally {
+      spy.mockRestore()
+      lookup.mockRestore()
+    }
+  })
+
   it('never regresses a task already past IN_PROGRESS', async () => {
     const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
     const task = await addTaskFull({

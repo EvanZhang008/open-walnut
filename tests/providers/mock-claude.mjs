@@ -17,7 +17,28 @@
  * Supports --resume <session-id> flag (session ID as value of --resume).
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+
 const args = process.argv.slice(2);
+let transcriptParent = null;
+
+function persistMockTurn(sessionId, prompt, answer) {
+  const root = process.env.MOCK_CLAUDE_TRANSCRIPT_DIR;
+  if (!root) return;
+  const cwd = process.cwd();
+  const dir = path.join(root, cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(dir, { recursive: true });
+  const userId = randomUUID();
+  const assistantId = randomUUID();
+  const shared = { sessionId, cwd, timestamp: new Date().toISOString(), isSidechain: false };
+  fs.appendFileSync(path.join(dir, `${sessionId}.jsonl`), [
+    { ...shared, type: 'user', uuid: userId, parentUuid: transcriptParent, message: { role: 'user', content: prompt } },
+    { ...shared, type: 'assistant', uuid: assistantId, parentUuid: userId, message: { ...answer.message, id: assistantId } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+  transcriptParent = assistantId;
+}
 
 // Parse flags
 let sessionId = null;
@@ -76,6 +97,10 @@ let pendingUserResolve = null;
 // dispatcher and drives the next turn on the SAME live process.
 let onUserLine = null;
 let onControlResponse = null;
+// Abort hook for a mode whose turn is in flight (snapshot-long-turn). The stdin
+// listener ACKs every `interrupt` control_request like the real CLI does; only a
+// mode that registered this hook then emits the aborted-turn sequence.
+let onInterrupt = null;
 
 // When --input-format stream-json is used, read the message from stdin (FIFO pipe).
 // The real CLI reads JSON lines like: {"type":"user","message":{"role":"user","content":"..."}}
@@ -104,16 +129,23 @@ if (inputFormat === 'stream-json') {
     }, 500);
   });
 
+  // Lines that rode in with the first user message (a control_request written
+  // right after the send) must reach the persistent listener below — the real
+  // CLI never drops a line, and dropping one here made an early stop go unACKed.
+  const leftoverLines = [];
+  let adoptedFirstMessage = false;
   if (stdinData.trim()) {
     for (const line of stdinData.trim().split('\n')) {
       try {
         const parsed = JSON.parse(line);
-        if (parsed.message?.content) {
+        if (!adoptedFirstMessage && parsed.message?.content) {
+          adoptedFirstMessage = true;
           message = typeof parsed.message.content === 'string'
             ? parsed.message.content
             : JSON.stringify(parsed.message.content);
-          break;
+          continue;
         }
+        leftoverLines.push(line);
       } catch { /* skip non-JSON lines */ }
     }
   }
@@ -127,11 +159,7 @@ if (inputFormat === 'stream-json') {
   //     the real CLI spawned with an empty first message idles on stdin and
   //     adopts the first FIFO user message as its turn.
   process.stdin.resume();
-  // stdin is a FIFO opened O_NONBLOCK: writers opening/closing between turns
-  // can surface as `read EAGAIN` stream errors. Without a handler that's an
-  // uncaught 'error' event → process crash → every later control write gets
-  // ENXIO (no FIFO reader). Swallow and keep listening, like the real CLI.
-  process.stdin.on('error', () => { try { process.stdin.resume(); } catch { /* ignore */ } });
+  process.stdin.on('error', () => {});
   let ctlBuf = '';
   process.stdin.on('data', (chunk) => {
     ctlBuf += chunk;
@@ -139,9 +167,38 @@ if (inputFormat === 'stream-json') {
     while ((nl = ctlBuf.indexOf('\n')) !== -1) {
       const line = ctlBuf.slice(0, nl);
       ctlBuf = ctlBuf.slice(nl + 1);
+      handleStdinLine(line);
+    }
+  });
+  // Replay what the first read swallowed, once the mode dispatcher below has had
+  // a tick to register its hooks (same ordering a late FIFO write would get).
+  if (leftoverLines.length > 0) setTimeout(() => { for (const line of leftoverLines) handleStdinLine(line); }, 0);
+  function handleStdinLine(line) {
+    {
       try {
         const parsed = JSON.parse(line);
-        if (parsed.type === 'control_request' && parsed.request?.subtype === 'side_question') {
+        if (parsed.type === 'control_request' && parsed.request?.subtype === 'interrupt') {
+          // CLI 2.1.258 (live probe): the ACK is immediate and unconditional —
+          // an idle CLI answers it too and emits nothing else. Only a mode with a
+          // turn in flight (onInterrupt registered) then plays the abort sequence.
+          process.stdout.write(JSON.stringify({
+            type: 'control_response',
+            response: { subtype: 'success', request_id: parsed.request_id, response: { still_queued: [] } },
+          }) + '\n');
+          if (onInterrupt) { const abort = onInterrupt; onInterrupt = null; abort(); }
+        } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'apply_flag_settings') {
+          // Live model/effort switch (real CLI, verified 2.1.170): a blind success
+          // ACK, and the NEXT turn on this same process answers under the new
+          // value. Mirrored here so a switch no longer needs a kill + `--resume
+          // --model` respawn to become visible in the result's [model:…] tag.
+          const settings = parsed.request.settings ?? {};
+          if (typeof settings.model === 'string') modelFlag = settings.model;
+          if (typeof settings.effortLevel === 'string') effortFlag = settings.effortLevel;
+          process.stdout.write(JSON.stringify({
+            type: 'control_response',
+            response: { subtype: 'success', request_id: parsed.request_id, response: {} },
+          }) + '\n');
+        } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'side_question') {
           // side_question is auto-title's PRIMARY channel (main-model prompt we
           // author). Mirror the real CLI's 3-level nesting: response.response.response.
           // Deterministic title: "Side title: " + first five words of the user's
@@ -186,7 +243,7 @@ if (inputFormat === 'stream-json') {
         }
       } catch { /* not JSON — ignore */ }
     }
-  });
+  }
 }
 
 const outputSessionId = sessionId || 'mock-session-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -317,6 +374,18 @@ if (outputFormat === 'stream-json') {
       emitRemainingEvents();
     };
   }
+  // The aborted-turn tail of CLI 2.1.258 (live probe 2026-09-11), emitted AFTER
+  // the stdin listener's ACK: the CLI-inserted user line, an is_error result with
+  // only an [ede_diagnostic] error and no text, then idle. The process then arms
+  // the next FIFO user line as a new turn — it never exits on an interrupt.
+  function emitAbortedTurnTail() {
+    const sid = outputSessionId;
+    const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+    emit({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] }, session_id: sid, parent_tool_use_id: null });
+    emit({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 300, duration_api_ms: 250, num_turns: 2, stop_reason: null, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 10, output_tokens: 0 }, errors: ['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null'] });
+    emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+    armSnapshotNextTurn();
+  }
 
   // Emit remaining events (optionally delayed for "slow:N" messages)
   function emitRemainingEvents() {
@@ -433,10 +502,13 @@ if (outputFormat === 'stream-json') {
     //         behaves and it keeps an E2E to one CLI process for several turns.
     if (effectiveMessage === 'snapshot-clean-turn' || effectiveMessage.startsWith('snapshot-clean-turn:')) {
       const text = effectiveMessage.includes(':')
-        ? effectiveMessage.split(':').slice(1).join(':')
+        ? effectiveMessage.split('\n\n[Rich output mode enabled')[0].split(':').slice(1).join(':')
         : 'Clean turn done; process stays alive.';
       const sid = outputSessionId;
-      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      const emit = (line) => {
+        if (line.type === 'assistant') persistMockTurn(sid, effectiveMessage, line);
+        process.stdout.write(JSON.stringify(line) + '\n');
+      };
       const body = () => {
         emit({ type: 'assistant', message: { id: 'msg_snap_clean_' + (++snapshotTurnSeq), type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }, session_id: sid });
         emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
@@ -458,6 +530,63 @@ if (outputFormat === 'stream-json') {
       const THINK_MS = Number(process.env.MOCK_SNAPSHOT_TURN_DELAY_MS ?? 300);
       if (THINK_MS > 0) setTimeout(body, THINK_MS);
       else body();
+      // Do NOT exit: stream-json FIFO mode stays alive between turns.
+      return;
+    }
+
+    // 2a.-0.9. "snapshot-long-turn[:<ms>[:text[:sticky]]]" — a turn that keeps RUNNING for
+    //          <ms> (default 60s) unless an `interrupt` control_request arrives,
+    //          then STAYS ALIVE for the next FIFO turn either way. With the `text`
+    //          suffix it first streams one partial sentence (stop-while-streaming);
+    //          without it nothing has streamed yet when the stop lands — the shape
+    //          Walnut must not mistake for a failed turn.
+    //
+    //          The abort sequence is CLI 2.1.258 verbatim (live probe 2026-09-11,
+    //          after the ACK the stdin listener already sent):
+    //            user "[Request interrupted by user]"
+    //            result{subtype:'error_during_execution', is_error:true, stop_reason:null,
+    //                   errors:['[ede_diagnostic] …'], output_tokens:0, no result text}
+    //            session_state_changed{idle}
+    //          The natural end (no interrupt) is a plain success result + idle.
+    if (effectiveMessage === 'snapshot-long-turn' || effectiveMessage.startsWith('snapshot-long-turn:')) {
+      // Only the first line carries the mode; a queued send appends Walnut's
+      // rich-output trailer after a blank line.
+      const parts = effectiveMessage.split('\n')[0].split(':');
+      const holdMs = Number(parts[1]) || 60000;
+      const streamsText = parts[2] === 'text' || parts[2] === 'dense';
+      const partialText = parts[2] === 'dense'
+        ? Array.from({ length: 80 }, (_, i) => `Section ${i + 1}: ${'The current turn retains its context and pending work. '.repeat(8)}`).join('\n\n')
+        : 'Starting a long answer that will be cut short';
+      // `:sticky` — the CLI ACKs the interrupt but the turn does not end (a tool
+      // ignoring its abort signal). Pins the repeat-Stop escalation.
+      const sticky = parts[3] === 'sticky';
+      const abortDelay = Number(parts[3]) || 0;
+      const sid = outputSessionId;
+      const seq = ++snapshotTurnSeq;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
+      if (streamsText) {
+        const msgId = `msg_long_${seq}`;
+        const wrap = (ev) => ({ type: 'stream_event', event: ev, session_id: sid, parent_tool_use_id: null });
+        emit(wrap({ type: 'message_start', message: { id: msgId, role: 'assistant', content: [], model: 'mock-model', usage: { input_tokens: 10, output_tokens: 0 } } }));
+        emit(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+        emit(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: partialText } }));
+      }
+      const natural = setTimeout(() => {
+        onInterrupt = null;
+        const text = `Long turn ${seq} ran to completion.`;
+        emit({ type: 'assistant', message: { id: `msg_long_done_${seq}`, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }, session_id: sid });
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: holdMs, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn();
+      }, holdMs);
+      if (!sticky) {
+        onInterrupt = () => {
+          clearTimeout(natural);
+          if (abortDelay) setTimeout(emitAbortedTurnTail, abortDelay);
+          else emitAbortedTurnTail();
+        };
+      }
       // Do NOT exit: stream-json FIFO mode stays alive between turns.
       return;
     }
@@ -1167,9 +1296,28 @@ if (outputFormat === 'stream-json') {
     //        the backgrounded task held a finished turn "Running" for the task's full
     //        lifetime (a 16-min backgrounded grep in production). Unlike workflow-test,
     //        this scenario deliberately NEVER drains 'bg-detached'.
-    if (effectiveMessage === 'backgrounded-test') {
+    if (effectiveMessage === 'backgrounded-test' || effectiveMessage === 'backgrounded-error-test') {
       function emitBg(line) { process.stdout.write(JSON.stringify(line) + '\n'); }
       const sid = outputSessionId;
+      const isError = effectiveMessage === 'backgrounded-error-test';
+      let backgroundCost = 0.002;
+      if (isError) {
+        onUserLine = (message) => {
+          const stillRunning = message.startsWith('check background status');
+          const reply = stillRunning ? 'Status checked; background command is still running.' : 'Background check finished; followup received.';
+          if (!stillRunning) emitBg({ type: 'system', subtype: 'task_notification', session_id: sid, task_id: 'bg-detached', status: 'completed' });
+          emitBg({ type: 'assistant', session_id: sid, message: {
+            id: stillRunning ? 'msg_bg_status' : 'msg_bg_followup', type: 'message', role: 'assistant', model: 'mock-model',
+            content: [{ type: 'text', text: reply }],
+            stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 10 },
+          } });
+          emitBg({ type: 'result', subtype: 'success', session_id: sid, is_error: false,
+            result: reply, num_turns: 1,
+            total_cost_usd: (backgroundCost += 0.002), usage: { input_tokens: 20, output_tokens: 10 },
+          });
+          emitBg({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        };
+      }
 
       emitBg({
         type: 'assistant',
@@ -1192,7 +1340,7 @@ if (outputFormat === 'stream-json') {
       }, 150);
       setTimeout(() => {
         // The turn's real result — must complete despite the live backgrounded task.
-        emitBg({ type: 'result', subtype: 'success', is_error: false, duration_ms: 200, num_turns: 1, result: 'Command backgrounded; moving on', session_id: sid, total_cost_usd: 0.002, usage: { input_tokens: 100, output_tokens: 20 } });
+        emitBg({ type: 'result', subtype: isError ? 'error_during_execution' : 'success', is_error: isError, duration_ms: 200, num_turns: 1, result: isError ? 'Foreground check failed; background check is still running' : 'Command backgrounded; moving on', session_id: sid, total_cost_usd: 0.002, usage: { input_tokens: 100, output_tokens: 20 } });
       }, 300);
       setTimeout(() => {
         emitBg({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
@@ -1349,7 +1497,10 @@ if (outputFormat === 'stream-json') {
     // For mode-change messages, ensure remaining events fire AFTER the mode-change system event
     const effectiveDelay = modeChangeMatch ? Math.max(slowDelayMs, 200) : slowDelayMs;
     if (effectiveDelay > 0) {
-      setTimeout(emitRemainingEvents, effectiveDelay);
+      // A slow turn is a turn in flight: an `interrupt` control_request aborts
+      // it (real CLI) instead of letting the delayed result land later.
+      const pending = setTimeout(() => { onInterrupt = null; emitRemainingEvents(); }, effectiveDelay);
+      onInterrupt = () => { clearTimeout(pending); emitAbortedTurnTail(); };
     } else {
       emitRemainingEvents();
     }

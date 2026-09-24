@@ -28,7 +28,10 @@ const required = [
   'dist/integrations/walnut-time/dist/web.mjs',
   'dist/daemon-binaries/acp-worker.js',
   'dist/daemon-binaries/pi-acp.js',
-  'dist/daemon-binaries/pi-acp.LICENSE', // plain JS bundle (kept; daemon-* binaries excluded)
+  'dist/daemon-binaries/pi-acp.LICENSE',
+  'dist/daemon-binaries/daemon-cron-runtime.cjs',
+  'dist/daemon-binaries/daemon-instance-lock.cjs',
+  'dist/daemon-binaries/daemon-service-cli.cjs',
   'patches',
   'scripts/postinstall.mjs',
 ];
@@ -54,14 +57,19 @@ const packJson = execFileSync('npm', ['pack', '--dry-run', '--json'], { cwd: roo
 const [pack] = JSON.parse(packJson);
 const files = pack.files.map((f) => f.path);
 
-const mustInclude = ['dist/cli.js', 'dist/web/static/index.html', 'scripts/postinstall.mjs',
-  'dist/daemon-binaries/pi-acp.js', 'dist/daemon-binaries/pi-acp.LICENSE'];
+const mustInclude = [
+  'dist/cli.js', 'dist/web/static/index.html', 'scripts/postinstall.mjs',
+  'dist/daemon-binaries/pi-acp.js', 'dist/daemon-binaries/pi-acp.LICENSE',
+  'dist/daemon-binaries/daemon-cron-runtime.cjs',
+  'dist/daemon-binaries/daemon-instance-lock.cjs',
+  'dist/daemon-binaries/daemon-service-cli.cjs',
+];
 const notPacked = mustInclude.filter((f) => !files.includes(f));
 if (notPacked.length) {
   console.error('check-publish: files allowlist excludes required artifacts:\n' + notPacked.map((m) => `  - ${m}`).join('\n'));
   process.exit(1);
 }
-const leaked = files.filter((f) => /^dist\/daemon-binaries\/daemon-/.test(f) || f.endsWith('.map') || f.endsWith('.gz'));
+const leaked = files.filter((f) => /^dist\/daemon-binaries\/daemon-(linux|darwin)-/.test(f) || f.endsWith('.map') || f.endsWith('.gz'));
 if (leaked.length) {
   console.error('check-publish: tarball leaks excluded artifacts:\n' + leaked.slice(0, 10).map((m) => `  - ${m}`).join('\n'));
   process.exit(1);

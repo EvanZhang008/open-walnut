@@ -3,12 +3,14 @@ import fs from 'node:fs/promises';
 import type { Server as HttpServer } from 'node:http';
 import { WebSocket } from 'ws';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { removeTempTree } from '../helpers/temp-home.js';
 
 vi.mock('../../src/constants.js', () =>
   createMockConstants('walnut-session-status-pipeline'));
 
 import { WALNUT_HOME } from '../../src/constants.js';
-import { createSessionRecord } from '../../src/core/session-tracker.js';
+import { createSessionRecord, updateSessionRecord, updateSessionRecordConditionally } from '../../src/core/session-tracker.js';
+import { sessionStreamBuffer } from '../../src/web/session-stream-buffer.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import {
   SessionStatusStore,
@@ -42,10 +44,10 @@ function waitForStatusEvent(
   sessionId: string,
 ): Promise<WsEventFrame> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('Timed out waiting for session status event')),
-      5_000,
-    );
+    const timer = setTimeout(() => {
+      ws.off('message', handler);
+      reject(new Error('Timed out waiting for session status event'));
+    }, 5_000);
     const handler = (raw: WebSocket.RawData) => {
       const frame = JSON.parse(raw.toString()) as WsEventFrame;
       if (frame.type !== 'event'
@@ -62,7 +64,7 @@ function waitForStatusEvent(
 }
 
 beforeAll(async () => {
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  await removeTempTree(WALNUT_HOME);
   await fs.mkdir(WALNUT_HOME, { recursive: true });
   server = await startServer({ port: 0, dev: true });
   const address = server.address();
@@ -71,10 +73,43 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await stopServer();
-  await fs.rm(WALNUT_HOME, { recursive: true, force: true });
+  await removeTempTree(WALNUT_HOME);
 });
 
 describe('versioned session status server-to-store pipeline', () => {
+  it.each(['regular', 'conditional'])('pushes %s permission changes without REST hydration or a phantom turn', async (path) => {
+    const sessionId = `permission-status-${path}`;
+    await createSessionRecord(sessionId, 'permission-status-task', 'Walnut', undefined, {
+      initialProcessStatus: 'running',
+    });
+    const ws = await connectWs();
+    const store = new SessionStatusStore();
+    let previousRevision = 0;
+    try {
+      for (const [index, tool] of ['Bash', null, 'Bash', 'AskUserQuestion', null].entries()) {
+        const event = waitForStatusEvent(ws, sessionId);
+        const patch = {
+          pendingPermission: tool ? { requestId: `request-${index}`, toolName: tool, receivedAt: new Date().toISOString() } : undefined,
+        };
+        if (path === 'conditional') {
+          await updateSessionRecordConditionally(sessionId, patch, () => true);
+        } else {
+          await updateSessionRecord(sessionId, patch);
+        }
+        const frame = await event;
+        expect(store.ingestStatusEvent(frame.data)).toBe('accepted');
+        const snapshot = store.getStatus(sessionId)!;
+        expect(snapshot.process_status).toBe('running');
+        expect(snapshot.pendingPermissionTool).toBe(tool);
+        expect(sessionStreamBuffer.getSnapshot(sessionId).isStreaming).toBe(false);
+        expect(snapshot.statusRevision).toBeGreaterThan(previousRevision);
+        previousRevision = snapshot.statusRevision!;
+      }
+    } finally {
+      ws.close();
+    }
+  });
+
   it('serializes one exact snapshot and rejects delayed REST state', async () => {
     const sessionId = 'status-pipeline-session';
     await createSessionRecord(

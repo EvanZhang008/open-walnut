@@ -540,6 +540,18 @@ export function resolveModelSwitchValue(raw: string): string | null {
 export interface Task {
   id: string;
   title: string;
+  /** @internal Derived 3-state projection of `phase` — NOT a second source of
+   *  truth and NOT part of any API surface (2026-09-01: dropped from every tool
+   *  and REST response; `phase` is the one field callers read and write).
+   *
+   *  It survives as a persisted column only because the SQLite layer indexes and
+   *  filters on it and the plugin/remote sync protocols still speak it. Every
+   *  write goes through `applyPhase()`, which derives it from `phase` — never
+   *  assign it directly.
+   *
+   *  It is lossy by construction: IN_PROGRESS and NEED_ACTION both collapse to
+   *  'in_progress', erasing exactly the distinction that matters most ("running"
+   *  vs "waiting on the human"). That is why no reader should use it. */
   status: TaskStatus;
   priority: TaskPriority;
   /** The task's single grouping layer. Optional — '' or absent means Inbox.
@@ -552,9 +564,26 @@ export interface Task {
   session_ids: string[];
   /** Single session slot — replaces plan_session_id + exec_session_id. */
   session_id?: string;
+  /** The last launch Walnut itself asked for. NOT a substitute for the session's process state. */
+  last_start?: {
+    id: string;
+    at: string;
+    state: 'starting' | 'started' | 'failed' | 'unconfirmed';
+    runtime_id?: string;
+    host?: string;
+    engine?: SessionEngine;
+    session_id?: string;
+    error?: string;
+  };
+  session_history_count?: number;
+  session_status_unavailable?: boolean;
   /** Enrichment-only (not stored): live status of the linked session. */
   session_status?: {
+    startedAt?: string;
     process_status: ProcessStatus;
+    status_reason?: StatusReason;
+    pid?: number;
+    errorMessage?: string;
     activity?: string;
     mode?: SessionMode;
     provider?: SessionProvider;
@@ -1686,6 +1715,87 @@ export type StatusChangedBy =
   | 'system'
   /** C2 snapshot projection (docs/plan/session-snapshot-source-of-truth.md §5). */
   | 'snapshot';
+
+/** One live CLI cron job as the CLI reported it (CronCreate result / CronList
+ *  row). Every field except `id` may be unknown when the job was only seen in
+ *  a list the daemon could not pair with its creation. */
+export interface SessionCronJob {
+  id: string;
+  /** Raw five-field expression, as passed to CronCreate. */
+  cron: string | null;
+  /** The CLI's own wording, e.g. "Every day at 9:23 AM". */
+  schedule: string | null;
+  /** Bounded to SESSION_CRON_PROMPT_LIMIT characters; see `promptTruncated`. */
+  prompt: string | null;
+  promptTruncated: boolean;
+  recurring: boolean;
+  durable: boolean;
+  /** When the daemon watched the create succeed; null for jobs it only listed. */
+  createdAt: number | null;
+  /** Next scheduled minute by the CLI's local-calendar rule, or null when the
+   *  expression could not be evaluated on the host. */
+  nextRunAt: number | null;
+  /** When the CLI will drop the job on its own (recurring auto-expiry or a
+   *  one-shot's run time); null when it has no known end. */
+  expiresAt: number | null;
+}
+
+export const SESSION_CRON_PROMPT_LIMIT = 2000;
+export const SESSION_CRON_JOB_LIMIT = 32;
+
+/**
+ * Shape-checks a daemon-reported job list for the server store and the browser
+ * store alike. `undefined` in → `undefined` out (a daemon that predates job
+ * reporting); anything malformed → `null`, so the caller can keep the
+ * presence fields and drop only the details.
+ */
+export function normalizeSessionCronJobs(raw: unknown): SessionCronJob[] | null | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length > SESSION_CRON_JOB_LIMIT) return null;
+  const jobs: SessionCronJob[] = [];
+  const ids = new Set<string>();
+  // Empty text is "not reported", the same thing the daemon sends as null.
+  const optionalText = (value: unknown, limit: number): string | null | false =>
+    value === null || value === '' ? null : typeof value === 'string' && value.length <= limit ? value : false;
+  const optionalTime = (value: unknown): number | null | false =>
+    value === null ? null : typeof value === 'number' && Number.isFinite(value) ? value : false;
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+    const job = entry as Record<string, unknown>;
+    if (typeof job.id !== 'string' || !job.id || job.id.length > 64 || ids.has(job.id)) return null;
+    const cron = optionalText(job.cron, 128);
+    const schedule = optionalText(job.schedule, 200);
+    const prompt = optionalText(job.prompt, SESSION_CRON_PROMPT_LIMIT);
+    const createdAt = optionalTime(job.createdAt);
+    const nextRunAt = optionalTime(job.nextRunAt);
+    const expiresAt = optionalTime(job.expiresAt);
+    if (cron === false || schedule === false || prompt === false
+      || createdAt === false || nextRunAt === false || expiresAt === false
+      || typeof job.promptTruncated !== 'boolean'
+      || typeof job.recurring !== 'boolean' || typeof job.durable !== 'boolean') return null;
+    ids.add(job.id);
+    jobs.push({
+      id: job.id, cron, schedule, prompt, promptTruncated: job.promptTruncated,
+      recurring: job.recurring, durable: job.durable, createdAt, nextRunAt, expiresAt,
+    });
+  }
+  return jobs;
+}
+
+export interface SessionCronMetadata {
+  sessionId: string;
+  epoch: string;
+  revision: number;
+  presence: 'active' | 'inactive' | 'unknown';
+  source: 'cron' | 'wakeup' | null;
+  known: boolean;
+  stale: boolean;
+  observedAt: number;
+  validUntil: number | null;
+  /** The jobs behind `presence: 'active'`. Absent when the host daemon predates
+   *  job reporting; empty when nothing is active. */
+  jobs?: SessionCronJob[];
+}
 
 export interface StatusTransition {
   timestamp: string;

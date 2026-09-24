@@ -1,5 +1,5 @@
-import { apiGet, apiPatch, apiPost, ApiError } from './client';
-import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry, SessionEngine } from '@open-walnut/core';
+import { apiGet, apiPatch, apiPost, apiPut, ApiError } from './client';
+import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry, SessionEngine, SessionCronMetadata } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
@@ -90,13 +90,17 @@ export async function hydrateSessionStatuses(sessionIds: Iterable<string>): Prom
     .filter((sessionId) => sessionId && !isPlaceholderColumnId(sessionId));
   for (let index = 0; index < uniqueIds.length; index += STATUS_HYDRATION_BATCH_SIZE) {
     const ids = uniqueIds.slice(index, index + STATUS_HYDRATION_BATCH_SIZE);
+    const cronGeneration = sessionStatusStore.getCronRequestGeneration();
     try {
-      const res = await apiGet<{ statuses: Record<string, unknown> }>(
+      const res = await apiGet<{ statuses: Record<string, unknown>; cron?: Record<string, SessionCronMetadata> }>(
         '/api/sessions/status',
         { ids: ids.join(',') },
       );
       for (const snapshot of Object.values(res.statuses ?? {})) {
         sessionStatusStore.applyVersioned(snapshot, 'rest:session-list');
+      }
+      if (cronGeneration === sessionStatusStore.getCronRequestGeneration()) {
+        for (const metadata of Object.values(res.cron ?? {})) sessionStatusStore.applyCron(metadata, 'rest:session-list');
       }
     } catch (error) {
       // Mixed-version servers may not expose the hydration endpoint yet. The
@@ -385,8 +389,10 @@ export async function fetchSessionsForTask(taskId: string): Promise<SessionRecor
  * "Untitled session" panels (inc-1784686852150 / inc-1784752220440).
  */
 export async function fetchSession(sessionId: string): Promise<SessionRecord | null> {
+  const cronGeneration = sessionStatusStore.getCronRequestGeneration();
   try {
-    const res = await apiGet<{ session: SessionRecord }>(`/api/sessions/${sessionId}`);
+    const res = await apiGet<{ session: SessionRecord; cron?: SessionCronMetadata | null }>(`/api/sessions/${sessionId}`);
+    if (res.cron && cronGeneration === sessionStatusStore.getCronRequestGeneration()) sessionStatusStore.applyCron(res.cron, 'rest:session');
     seedSessionStatus(res.session, 'rest:session');
     seedSessionTitle(res.session);
     return res.session;
@@ -1021,12 +1027,31 @@ export async function restartSession(sessionId: string): Promise<
   return apiPost(`/api/sessions/${sessionId}/restart`, {});
 }
 
-/** Terminate a session — closes the CLI process (no respawn) and marks it stopped.
- *  A session that owns recurring CLI crons is refused with 409 `cron_owner`
- *  unless `force` — the crons would silently migrate to another session in the
- *  same project directory (directory-scoped scheduler lock). */
+export interface SessionSupervision {
+  available: boolean;
+  startup: 'boot' | 'login' | 'on-demand' | 'service' | 'unavailable';
+  stopRequest: SessionRecord['stopRequest'] | null;
+  supervision: {
+    enabled: boolean;
+    state: 'watching' | 'restarting' | 'checking' | 'disabled' | 'inactive' | 'blocked';
+    reason: string | null;
+    generation: number;
+    retryAt: number | null;
+    updatedAt: number;
+  } | null;
+}
+
+export function fetchSessionSupervision(sessionId: string): Promise<SessionSupervision> {
+  return apiGet(`/api/sessions/${encodeURIComponent(sessionId)}/supervision`, undefined, { timeoutMs: 8000 });
+}
+
+export function setSessionSupervision(sessionId: string, enabled: boolean): Promise<SessionSupervision> {
+  return apiPut(`/api/sessions/${encodeURIComponent(sessionId)}/supervision`, { enabled });
+}
+
+// The stop intent reaches disk first; return terminated only after the host confirms.
 export async function terminateSession(sessionId: string, opts?: { force?: boolean }): Promise<
-  { status: 'terminated'; sessionId: string }
+  { status: 'terminated' | 'pending'; sessionId: string }
 > {
   return apiPost(`/api/sessions/${sessionId}/terminate`, { force: opts?.force === true });
 }

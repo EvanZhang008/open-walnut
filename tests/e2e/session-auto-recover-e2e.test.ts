@@ -4,8 +4,8 @@
  *
  * What's real: the Express server boot, the startup session reconciler, the
  * auto-recover watcher, the event bus, session-tracker persistence, task-manager
- * phase lookup, and the send that triggers the resume.
- * What's mocked: constants.js (temp dir) only.
+ * phase lookup, and the startup scheduling order.
+ * Isolated data dir; the process liveness check, recovery ownership, and final send are replaced, and starting a real CLI is forbidden.
  *
  * The shape under test is the one that used to be a dead end: the process is
  * gone, the cause is infrastructure (here 'server_restart' — the Walnut server
@@ -20,11 +20,13 @@ import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-auto-recover-e2e'))
+vi.mock('../../src/utils/session-liveness.js', () => ({ isSessionProcessAlive: async () => false }))
 
 import { WALNUT_HOME, SESSIONS_FILE, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import type { BusEvent } from '../../src/core/event-bus.js'
+import * as autoRecover from '../../src/core/session-auto-recover.js'
 
 const DEAD_SESSION = 'auto-recover-dead-001'
 const DEAD_SESSION_DONE = 'auto-recover-done-002'
@@ -71,9 +73,6 @@ function deadSession(sid: string, taskId: string): Record<string, unknown> {
     engine: 'claude',
     process_status: 'running',
     mode: 'bypass',
-    // PID 2 is init-adjacent on macOS/Linux and never a live `claude` process;
-    // the liveness check resolves it as dead without us having to kill anything.
-    pid: 2,
     cwd: '/tmp',
     startedAt: now,
     lastActiveAt: now,
@@ -109,15 +108,22 @@ beforeAll(async () => {
     if (d.sessionId) sends.push({ sessionId: d.sessionId, source: event.source ?? '' })
   }, { global: true, interest: ['session:send', 'session:message-queued'] })
 
+  const start = autoRecover.startSessionAutoRecover
+  vi.spyOn(autoRecover, 'startSessionAutoRecover').mockImplementation((config) => start(config, {
+    recoveryOwner: async () => 'server',
+    send: async (sessionId, _message, opts) => { sends.push({ sessionId, source: opts.source }) },
+  }))
   server = await startServer({ port: 0, dev: true })
 
-  // Let the boot-time catch-up timers fire and the async fire() chain settle.
-  await new Promise((r) => setTimeout(r, 2_000))
+  await vi.waitFor(() => {
+    expect(sends.some((s) => s.sessionId === DEAD_SESSION && s.source === 'auto-recover')).toBe(true)
+  }, { timeout: 10000 })
 }, 120_000)
 
 afterAll(async () => {
   bus.unsubscribe('auto-recover-e2e-probe')
   try { await stopServer() } catch { /* already down */ }
+  vi.restoreAllMocks()
   for (const [k, v] of Object.entries(envBackup)) {
     if (v === undefined) delete process.env[k]
     else process.env[k] = v

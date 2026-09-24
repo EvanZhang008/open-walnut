@@ -64,6 +64,7 @@ export interface QueuedMessage {
    * `batch.findLast(c => c.uuid)`); see providers/batch-uuid.ts.
    */
   userUuid?: string;
+  stopFence?: string;
 }
 
 interface QueueStore {
@@ -211,10 +212,16 @@ export async function loadQueue(): Promise<void> {
 export async function enqueueMessage(
   sessionId: string,
   message: string,
-  opts?: { id?: string; userUuid?: string },
+  opts?: { id?: string; userUuid?: string; stopFence?: string | null },
 ): Promise<QueuedMessage> {
+  const { sessionStops, SessionStopSupersededError } = await import('./sessions/session-stop.js');
+  const stopFence = await sessionStops.fence(sessionId);
+  if (opts?.stopFence !== undefined && opts.stopFence !== stopFence) {
+    throw new SessionStopSupersededError('Message predates the latest stop; send a new message to continue');
+  }
   const msg: QueuedMessage = {
     id: opts?.id ?? generateId(),
+    ...(stopFence ? { stopFence } : {}),
     sessionId,
     message,
     status: 'pending',
@@ -273,11 +280,13 @@ export async function sendMessageToSession(
     enqueueMessage?: string;
     messageId?: string;
     userUuid?: string;
+    stopFence?: string | null;
   },
 ): Promise<QueuedMessage> {
   const { bus, EventNames } = await import('./event-bus.js');
   const msg = await enqueueMessage(sessionId, opts?.enqueueMessage ?? message, {
     id: opts?.messageId,
+    ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
     ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
   });
   const source = opts?.source ?? 'unknown';
@@ -319,16 +328,24 @@ export async function sendMessageToSession(
  * Returns the messages that were marked (the batch to send to Claude).
  * Returns empty array if no pending messages.
  */
-export async function markProcessing(sessionId: string): Promise<QueuedMessage[]> {
+export async function markProcessing(sessionId: string, stopFence?: string | null): Promise<QueuedMessage[]> {
   const pending = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return [];
+    if (stopFence !== undefined) {
+      for (const message of queue) {
+        if (message.status !== 'pending' || (message.stopFence ?? null) === stopFence) continue;
+        message.status = 'parked';
+        message.parkedAt = new Date().toISOString();
+        message.parkedReason = 'Session stopped by user; retry explicitly to send';
+      }
+    }
     const batch = queue.filter((m) => m.status === 'pending');
     for (const m of batch) {
       m.status = 'processing';
     }
     return batch;
-  });
+  }, stopFence !== undefined);
   if (pending.length === 0) return [];
   log.session.info('messages batched for delivery', { sessionId, count: pending.length });
   return pending;
@@ -502,7 +519,7 @@ function logParked(rows: QueuedMessage[], reason: string): void {
  * Note revertToPending only un-sticks rows whose stored status is 'processing',
  * so a later transient revert can never resurrect a parked row.
  */
-export async function parkMessages(messages: QueuedMessage[], reason: string): Promise<number> {
+export async function parkMessages(messages: QueuedMessage[], reason: string, strict = false): Promise<number> {
   if (messages.length === 0) return 0;
   const parkedAt = new Date().toISOString();
   const parked = await mutateStore((s) => {
@@ -522,7 +539,7 @@ export async function parkMessages(messages: QueuedMessage[], reason: string): P
       done.push(row);
     }
     return done;
-  });
+  }, strict);
   logParked(parked, reason);
   return parked.length;
 }
@@ -577,9 +594,13 @@ export async function parkStalePending(maxAgeMs = MAX_PENDING_AGE_MS): Promise<Q
  * makes the row eligible again.
  */
 export async function unparkMessage(sessionId: string, messageId: string): Promise<boolean> {
+  const { sessionStops } = await import('./sessions/session-stop.js');
+  const stopFence = await sessionStops.fence(sessionId);
   const ok = await mutateStore((s) => {
     const msg = s.queues[sessionId]?.find((m) => m.id === messageId);
     if (!msg || msg.status !== 'parked') return false;
+    if (stopFence) msg.stopFence = stopFence;
+    else delete msg.stopFence;
     msg.status = 'pending';
     delete msg.parkedAt;
     delete msg.parkedReason;

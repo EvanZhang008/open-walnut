@@ -58,6 +58,8 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { withFileLock } from '../utils/file-lock.js';
 import { CLOUD_MODE, SEND_QUEUE_DIR } from '../constants.js';
 import { writeJsonFile } from '../utils/fs.js';
 import { log } from '../logging/index.js';
@@ -71,6 +73,34 @@ export interface QueuedSessionSend {
   message: string;
   /** Client-stable `qm-*` id — the exactly-once anchor end to end. */
   messageId: string;
+  stopFence?: string | null;
+}
+
+export async function bindSessionSendFence(sessionId: string, messageId: string, candidate: string | null): Promise<string | null> {
+  const key = createHash('sha256').update(JSON.stringify([sessionId, messageId])).digest('hex');
+  const target = path.join(SEND_QUEUE_DIR, 'fences', `${key}.json`);
+  return withFileLock(target, async () => {
+    try {
+      const saved = JSON.parse(await fsp.readFile(target, 'utf8'));
+      if (saved.sessionId !== sessionId || saved.messageId !== messageId
+        || (saved.stopFence !== null && typeof saved.stopFence !== 'string')) throw new Error('Invalid send stop fence');
+      return saved.stopFence as string | null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    try {
+      const file = await fsp.open(temporary, 'wx', 0o600);
+      try {
+        await file.writeFile(JSON.stringify({ sessionId, messageId, stopFence: candidate }) + '\n');
+        await file.sync();
+      } finally { await file.close(); }
+      await fsp.rename(temporary, target);
+    } finally { await fsp.rm(temporary, { force: true }); }
+    const directory = await fsp.open(path.dirname(target), 'r');
+    try { await directory.sync(); } finally { await directory.close(); }
+    return candidate;
+  });
 }
 
 const FLUSH_INTERVAL_MS = 60_000;
@@ -100,11 +130,11 @@ function mintOpId(): string {
  * falls back to the honest 503 — never a 202 for something we did not store).
  */
 export async function enqueueSessionSend(
-  sessionId: string, host: string, message: string, messageId: string,
+  sessionId: string, host: string, message: string, messageId: string, stopFence: string | null = null,
 ): Promise<string | null> {
   if (!CLOUD_MODE) return null;
   const op: QueuedSessionSend = {
-    opId: mintOpId(), at: new Date().toISOString(), sessionId, host, message, messageId,
+    opId: mintOpId(), at: new Date().toISOString(), sessionId, host, message, messageId, stopFence,
   };
   try {
     await writeJsonFile(path.join(SEND_QUEUE_DIR, `${op.opId}.json`), op);
@@ -202,7 +232,7 @@ export async function flushSendQueue(): Promise<number> {
       let reply: Record<string, unknown>;
       try {
         reply = await bridgeRequest(op.host, 'session.message', {
-          sessionId: op.sessionId, message: op.message, messageId: op.messageId,
+          sessionId: op.sessionId, message: op.message, messageId: op.messageId, stopFence: op.stopFence ?? null,
         }, RELAY_RPC_TIMEOUT_MS);
       } catch (err) {
         if (err instanceof BridgeOfflineError) break; // still down — the rest would fail identically

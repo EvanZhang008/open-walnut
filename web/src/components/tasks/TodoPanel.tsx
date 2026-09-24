@@ -46,6 +46,7 @@ import {
   type TierSeparator,
 } from './tier-separators';
 import { TaskStartButton } from './TaskStartButton';
+import { CronPill } from '@/components/sessions/CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
@@ -1175,6 +1176,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           >
             {task.title}
           </span>
+          <CronPill sessionId={resolveTaskSessionId(task)} />
           <TriggerPill taskId={task.id} />
           <ImportedPill task={task} />
           {/* Info pills + kebab — same line as title, no second row */}

@@ -32,16 +32,26 @@ import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL } from '../constants.js'
 import { buildRemotePreamble } from './session-io.js'
-import { buildDaemonStartCmd } from './daemon-start-cmd.js'
+import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
+import { updateRemoteDaemonService } from './daemon-service-update.js'
 import { daemonGzCachePath } from './daemon-gz-cache.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
 import type { SshTarget } from './session-io.js'
-import { localDaemon } from './local-daemon.js'
+import {
+  localDaemon,
+  classifyServiceTakeover,
+  daemonServiceConfigPaths,
+  serviceTakeoverEvidence,
+  serviceTakeoverInstruction,
+  type ServiceProbeState,
+  type ServiceTakeover,
+} from './local-daemon.js'
 // Leaf module (zero runtime imports) — safe to import statically from a provider.
 import { isRecoverableSessionError, isRescuableStoppedRecord } from '../core/session-error-kind.js'
 // Also a leaf (types.js only) — capability lookup, no session-layer cycle.
 import { isAcpEngine } from '../core/agents/engine-registry.js'
 import type { SessionRecord } from '../core/types.js'
+import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
 
 const execFileAsync = promisify(execFileCb)
 
@@ -132,6 +142,90 @@ function rememberMobileEnqueue(messageId: string): void {
   }
 }
 
+// ── OS-service takeover on a remote host ──
+
+/**
+ * The remote host runs its daemon as an OS service, and right now that daemon
+ * is not usable — so walnut refuses the unmanaged alternative (nohup deploy, or
+ * killing the managed process to redeploy) instead of silently doing it.
+ *
+ * `kind` lets callers recognize it without string matching; the message names
+ * the evidence and the exact `walnut daemon …` command to run on that host.
+ */
+export class DaemonServiceNotReadyError extends Error {
+  readonly kind = 'service-not-ready'
+  readonly hostKey: string
+  readonly present: string[]
+  readonly unknown: string[]
+
+  constructor(hostKey: string, what: string, takeover: ServiceTakeover) {
+    super(
+      `remote host '${hostKey}' runs the walnut session daemon as an OS service `
+      + `(${serviceTakeoverEvidence(takeover)}) — ${what}. Run on that host: ${serviceTakeoverInstruction()}`,
+    )
+    this.name = 'DaemonServiceNotReadyError'
+    this.hostKey = hostKey
+    this.present = takeover.present
+    this.unknown = takeover.unknown
+  }
+}
+
+/** Marker files the probe below classifies, in the order it reports them. */
+export function remoteServiceProbePaths(runtimeDir = '/tmp/open-walnut'): string[] {
+  // Both platforms' config paths are probed: the remote could be a Mac, and one
+  // extra `[ -e ]` per path is far cheaper than a wrong "not installed".
+  return [
+    path.posix.join(runtimeDir, 'daemon.service'),
+    ...daemonServiceConfigPaths('linux', '$HOME'),
+    ...daemonServiceConfigPaths('darwin', '$HOME'),
+  ]
+}
+
+const REMOTE_SERVICE_PROBE_SENTINEL = 'walnut-service-probe-done'
+
+/**
+ * One shell command that classifies every path as present / absent / unknown.
+ *
+ * `[ -e ]` cannot distinguish "missing" from "parent dir I may not read", so an
+ * unreadable parent is reported as `unknown` explicitly, and the trailing
+ * sentinel proves the command ran to completion at all (a truncated reply from a
+ * dead ControlMaster must not read as a row of absences).
+ */
+export function buildRemoteServiceProbeCmd(paths: string[]): string {
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
+  const tests = paths.map((p) => {
+    const q = p.startsWith('$HOME/') ? `"$HOME"/${quote(p.slice(6))}` : quote(p)
+    const present = quote(`present ${p}`)
+    const absent = quote(`absent ${p}`)
+    const unknown = quote(`unknown ${p}`)
+    return `if [ -e ${q} ] || [ -L ${q} ]; then printf '%s\\n' ${present}; `
+      + `else P=${q}; while [ ! -d "$P" ] && [ "$P" != / ]; do P=$(dirname "$P"); done; `
+      + `if [ -r "$P" ] && [ -x "$P" ]; then printf '%s\\n' ${absent}; `
+      + `else printf '%s\\n' ${unknown}; fi; fi`
+  })
+  return `${tests.join('; ')}; echo ${REMOTE_SERVICE_PROBE_SENTINEL}`
+}
+
+/**
+ * Parse the probe output. A path the reply never mentions is `unknown`, not
+ * absent — same rule as the sentinel: silence is never evidence of absence.
+ */
+export function parseRemoteServiceProbe(output: string, paths: string[]): ServiceTakeover {
+  const seen = new Map<string, ServiceProbeState>()
+  let complete = false
+  for (const line of output.split('\n').map((l) => l.trim()).filter(Boolean)) {
+    if (line === REMOTE_SERVICE_PROBE_SENTINEL) { complete = true; continue }
+    const match = /^(present|absent|unknown) (.+)$/.exec(line)
+    if (match) seen.set(match[2], match[1] as ServiceProbeState)
+  }
+  return classifyServiceTakeover(paths.map((p) => ({
+    path: p,
+    state: complete ? (seen.get(p) ?? 'unknown') : 'unknown',
+  })))
+}
+
+class DaemonShutdownPendingError extends Error {}
+
 /**
  * Where a connect() attempt currently is. A first connect to a fresh host can
  * run well over a minute (bun download on the remote, source upload, daemon
@@ -202,6 +296,8 @@ export class DaemonConnection {
    * ('snapshot-v1') on a per-host basis.
    */
   private _capabilities: string[] | null = null
+  private _daemonStartup = 'on-demand'
+  private cronMetadataToken: object | null = null
   /** Cloud-bridge liveness from the last bridge.configure reply (null = unknown / disabled). */
   private _lastBridgeConnected: boolean | null = null
   private _lastBridgeCheckedAt: number | null = null
@@ -387,6 +483,7 @@ export class DaemonConnection {
   /** False until a `hello` handshake has SUCCEEDED on this connection. All
    *  connect paths attempt it, so false = the daemon answered no hello. */
   get capabilitiesKnown(): boolean { return this._capabilities !== null }
+  get daemonStartup(): string { return this._daemonStartup }
   /** 'snapshot-v1' shorthand — the C2 intake gate (contract §5). */
   get supportsSnapshots(): boolean { return this.hasCapability('snapshot-v1') }
   get daemonInstanceId(): string | null { return this._daemonInstanceId }
@@ -481,8 +578,20 @@ export class DaemonConnection {
         }
       } catch {}
     }
-    // Host (re)connected — let SessionRunner redeliver stranded pending messages.
-    if (changed && value) notifyHostConnected(this.hostKey)
+    if (changed) {
+      if (value && this.hasCapability('cron-metadata-v1') && this._daemonInstanceId) {
+        const token = this.cronMetadataToken = {}
+        sessionCronMetadata.connect(this.hostKey, token, this._daemonInstanceId)
+        void this.send('cron.metadata', {}, 5000).then((reply) => {
+          if (!this._connected || this.cronMetadataToken !== token || !Array.isArray(reply.values)) return
+          for (const metadata of reply.values) sessionCronMetadata.apply(this.hostKey, token, metadata)
+        }).catch(() => {})
+      } else if (this.cronMetadataToken) {
+        sessionCronMetadata.disconnect(this.hostKey, this.cronMetadataToken)
+        this.cronMetadataToken = null
+      }
+    }
+    if (changed && value) notifyHostConnected(this.hostKey, this)
     // Push the cloud-bridge config on every (re)connect. Single choke point:
     // connect(), reconnect() and forceRedeployAndReconnect() all land here.
     // Fire-and-forget — bridge provisioning must never block or fail a connect.
@@ -652,6 +761,8 @@ export class DaemonConnection {
         if (!payload || payload.hash === this.lastSkillSyncHash) return
         const reply = await this.send('skills.sync', {
           hash: payload.hash,
+          // `skill` rides along for a daemon that predates the multi-skill
+          // payload: it reads that field alone and still gets `walnut`.
           skill: payload.skill,
           skills: payload.skills,
         })
@@ -925,7 +1036,14 @@ export class DaemonConnection {
         // Tear down tunnel + WS, stop remote daemon, redeploy, reconnect.
         // forceRedeployAndReconnect handles its own setConnected(true) on
         // success; on failure it throws, caught by the outer try/catch.
-        await this.forceRedeployAndReconnect()
+        // An OS-managed daemon is refused there BEFORE any teardown, so this
+        // attempt's transport is still up and has to be closed here.
+        try {
+          await this.forceRedeployAndReconnect()
+        } catch (err) {
+          if (err instanceof DaemonServiceNotReadyError) this.closeTransport()
+          throw err
+        }
       } else {
         this.setConnected(true)
       }
@@ -1158,13 +1276,19 @@ export class DaemonConnection {
     const sessionId = (event as unknown as { sessionId?: unknown }).sessionId
     const message = (event as unknown as { message?: unknown }).message
     const messageId = (event as unknown as { messageId?: unknown }).messageId
+    const stopFence = (event as unknown as { stopFence?: unknown }).stopFence ?? null
     if (typeof relayId !== 'number') return
     let reply: Record<string, unknown>
     try {
       if (typeof sessionId !== 'string' || typeof message !== 'string' || message === ''
-        || typeof messageId !== 'string' || messageId === '') {
+        || typeof messageId !== 'string' || messageId === ''
+        || (stopFence !== null && typeof stopFence !== 'string')) {
         reply = { relayId, error: 'invalid message relay payload', errorKind: 'bad_request' }
       } else if (recentMobileEnqueues.has(messageId)) {
+        const { sessionStops, SessionStopSupersededError } = await import('../core/sessions/session-stop.js')
+        if (await sessionStops.fence(sessionId) !== stopFence) {
+          throw new SessionStopSupersededError('Message predates the latest stop; send a new message to continue')
+        }
         // Post-delivery idempotency: the queue-level dedupe only sees rows
         // still IN the queue. A phone retry after a lost ack, arriving after
         // the message was delivered and drained, would re-enqueue a duplicate
@@ -1191,6 +1315,7 @@ export class DaemonConnection {
             source: 'mobile',
             taskId: record.taskId,
             messageId,
+            stopFence,
             ...(outputMode.changed ? { enqueueMessage: outputMode.enqueueText } : {}),
           })
           await outputMode.commit()
@@ -1204,7 +1329,8 @@ export class DaemonConnection {
     } catch (err) {
       const message2 = err instanceof Error ? err.message : String(err)
       log.session.warn('DaemonConnection: message relay failed', { host: this.hostKey, relayId, message: message2 })
-      reply = { relayId, error: message2, errorKind: 'internal' }
+      const { isSessionStopSuperseded } = await import('../core/sessions/session-stop.js')
+      reply = { relayId, error: message2, errorKind: isSessionStopSuperseded(err) ? 'session_stopped' : 'internal' }
     }
     try {
       await this.send('message-result', reply)
@@ -1621,13 +1747,46 @@ export class DaemonConnection {
   // ── Private: Daemon management ──
 
   /**
+   * Is this host's daemon owned by an OS service manager (launchd / systemd)?
+   *
+   * Answers from SURVIVING CONFIG, not from "is it enabled/active": a disabled
+   * unit still belongs to the manager, and walnut must never enable or edit it.
+   * Any failure to tell (SSH down, unreadable dir, truncated reply) resolves to
+   * managed — see the rule block in local-daemon.ts. One SSH round trip.
+   */
+  private async detectServiceTakeover(): Promise<ServiceTakeover> {
+    const paths = remoteServiceProbePaths()
+    let output = ''
+    try {
+      output = await this.sshExec(buildRemoteServiceProbeCmd(paths), 5_000)
+    } catch (err) {
+      log.session.warn('DaemonConnection: OS-service probe failed — treating the daemon as service-managed', {
+        host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+      })
+      return classifyServiceTakeover(paths.map((p) => ({ path: p, state: 'unknown' as ServiceProbeState })))
+    }
+    return parseRemoteServiceProbe(output, paths)
+  }
+
+  /**
    * Check if daemon is already running on the remote host.
-   * Returns the port number if running, null otherwise.
+   * Returns the port number if running, null otherwise — or throws
+   * DaemonServiceNotReadyError when an OS service owns a daemon that is not
+   * answering (never null, which would license an unmanaged nohup start).
    *
    * Tries the binary first, then falls back to the old node-based daemon
    * (in case a previous source-deploy daemon is still running).
    */
   private async checkDaemonRunning(opts: { strict?: boolean } = {}): Promise<number | null> {
+    // Record OS takeover BEFORE any decision: a service-managed daemon may be
+    // reused as-is (never upgraded/killed from here), and its momentary absence
+    // must NOT fall through to deploy + nohup — that squats the runtime dir and
+    // wedges every future managed start behind "service handover is required".
+    // Ephemeral servers already refuse every destructive path, so skip the probe.
+    const service = this.isReadOnlyRemote
+      ? { managed: false, present: [], unknown: [] } as ServiceTakeover
+      : await this.detectServiceTakeover()
+
     // Shell uses `|| true` so sshExec only rejects on real SSH failures (dead
     // ControlMaster, tunnel, network). A missing daemon just returns empty stdout.
     // Without this, a dead ControlMaster is indistinguishable from a dead daemon
@@ -1639,16 +1798,18 @@ export class DaemonConnection {
       if (result) {
         const status = JSON.parse(result)
         if (status.running && status.port) {
-          if (await this.shouldUpgradeDaemon(remotePath)) {
-            return null
+          if (await this.shouldUpgradeDaemon(remotePath, service)) {
+            return service.managed ? this.checkDaemonRunning(opts) : null
           }
           log.session.info('DaemonConnection: daemon already running (binary)', {
             host: this.hostKey, port: status.port, pid: status.pid,
+            serviceManaged: service.managed || undefined,
           })
           return status.port
         }
       }
     } catch (err) {
+      if (err instanceof DaemonShutdownPendingError || err instanceof DaemonServiceNotReadyError) throw err
       binarySshErr = err
     }
 
@@ -1675,17 +1836,32 @@ export class DaemonConnection {
           // binary). Without this, hosts where the binary probe fails would
           // keep an old source daemon alive forever.
           const remotePath = await this.getRemoteDaemonPath()
-          if (await this.shouldUpgradeDaemon(remotePath)) {
-            return null
+          if (await this.shouldUpgradeDaemon(remotePath, service)) {
+            return service.managed ? this.checkDaemonRunning(opts) : null
           }
           log.session.info('DaemonConnection: daemon already running (source/bun)', {
             host: this.hostKey, port: status.port, pid: status.pid,
+            serviceManaged: service.managed || undefined,
           })
           return status.port
         }
       }
     } catch (err) {
+      if (err instanceof DaemonShutdownPendingError || err instanceof DaemonServiceNotReadyError) throw err
       fileSshErr = err
+    }
+
+    // No live daemon AND the OS owns it → this is a service problem, and the
+    // only honest answer is to say so. Returning null here is what let a 5s
+    // launchd/systemd gap turn into a permanent unmanaged squatter, so the throw
+    // deliberately precedes BOTH the "genuinely absent → deploy" return and the
+    // non-strict "SSH failed → treat as absent" return: neither may swallow it.
+    if (service.managed) {
+      throw new DaemonServiceNotReadyError(
+        this.hostKey,
+        'no daemon is answering and walnut will not start an unmanaged one alongside the service',
+        service,
+      )
     }
 
     // Both probes reached SSH but got back empty → daemon genuinely absent.
@@ -1715,7 +1891,7 @@ export class DaemonConnection {
    * and 30s later found the same stale binary again (infinite kill loop,
    * surfaced as ECONNRESET on every in-flight session).
    */
-  private async shouldUpgradeDaemon(remotePath: string): Promise<boolean> {
+  private async shouldUpgradeDaemon(remotePath: string, service?: ServiceTakeover): Promise<boolean> {
     // Ephemeral attach-only: never upgrade (which would --stop the production
     // daemon). Version skew between the ephemeral's binary and production's is
     // expected and must not trigger a restart of the shared singleton.
@@ -1723,10 +1899,27 @@ export class DaemonConnection {
     try {
       const expected = this.getExpectedDaemonVersion()
       if (!expected) return false
+      const takeover = service ?? await this.detectServiceTakeover()
 
       const remoteVersion = (await this.sshExec(
         'cat /tmp/open-walnut/daemon.version 2>/dev/null || true', 5_000,
       )).trim()
+
+      if (takeover.managed) {
+        if (remoteVersion !== expected) {
+          if (await this.updateManagedDaemon(takeover, expected)) return true
+          log.session.error(
+            'DaemonConnection: managed daemon update was deferred; use `walnut daemon install --yes --executable <daemon binary>` on that host.',
+            {
+              host: this.hostKey,
+              expected,
+              remoteVersion: remoteVersion || '(missing)',
+              serviceEvidence: serviceTakeoverEvidence(takeover),
+            },
+          )
+        }
+        return false
+      }
 
       if (remoteVersion === expected) {
         this._lastUpgradeAttempt = null
@@ -1778,22 +1971,44 @@ export class DaemonConnection {
       log.session.info('DaemonConnection: daemon version mismatch — stopping for upgrade', {
         host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
       })
+      await this.stopUnmanagedDaemon()
       this._lastUpgradeAttempt = { expected, at: Date.now() }
-      // Stop both runtimes: binary --stop kills via pid file; the explicit
-      // pid-file kill covers hosts where the binary was never deployed.
-      try { await this.sshExec(`${remotePath} --stop 2>/dev/null || true`, 5_000) } catch {}
-      try {
-        await this.sshExec(
-          'PID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null); ' +
-          '[ -n "$PID" ] && kill "$PID" 2>/dev/null; ' +
-          'rm -f /tmp/open-walnut/daemon.pid /tmp/open-walnut/daemon.port /tmp/open-walnut/daemon.version; true',
-          5_000,
-        )
-      } catch {}
       return true
-    } catch {
+    } catch (error) {
+      if (error instanceof DaemonShutdownPendingError || error instanceof DaemonServiceNotReadyError) throw error
       // Version check failed — don't block, just reuse existing daemon
       return false
+    }
+  }
+
+  private async updateManagedDaemon(takeover: ServiceTakeover, expected: string): Promise<boolean> {
+    if (this.isReadOnlyRemote || takeover.unknown.length
+      || !takeover.present.includes('$HOME/.config/systemd/user/open-walnut-daemon.service')
+      || takeover.present.includes('/etc/systemd/system/open-walnut-daemon.service')) return false
+    if (this._lastUpgradeAttempt?.expected === expected
+      && Date.now() - this._lastUpgradeAttempt.at < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS) return false
+    const binary = await this.getLocalBinaryPath()
+    if (!binary) return false
+    this._lastUpgradeAttempt = { expected, at: Date.now() }
+    try {
+      await updateRemoteDaemonService(binary, expected, {
+        run: (command, timeout) => this.sshExec(command, timeout),
+        chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
+      })
+    } catch (error) {
+      throw new DaemonServiceNotReadyError(this.hostKey, `managed update did not complete: ${String(error)}`, takeover)
+    }
+    return true
+  }
+
+  private async stopUnmanagedDaemon(): Promise<void> {
+    const takeover = await this.detectServiceTakeover()
+    if (takeover.managed) throw new DaemonServiceNotReadyError(this.hostKey, 'refusing an unmanaged stop', takeover)
+    try {
+      const output = await this.sshExec(buildDaemonStopCmd(), 45_000)
+      if (!output.split('\n').includes('walnut-daemon-stop-confirmed')) throw new Error('missing shutdown confirmation')
+    } catch (error) {
+      throw new DaemonShutdownPendingError(`Daemon shutdown was not confirmed; no replacement was started: ${String(error)}`)
     }
   }
 
@@ -1861,6 +2076,8 @@ export class DaemonConnection {
       }
       const caps = Array.isArray(res.capabilities) ? res.capabilities as string[] : []
       this._capabilities = caps
+      const startup = (res.cronSupervision as { startup?: unknown } | undefined)?.startup
+      this._daemonStartup = typeof startup === 'string' && ['boot', 'login', 'on-demand', 'service'].includes(startup) ? startup : 'on-demand'
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))
       if (missing.length > 0) {
         log.session.warn('DaemonConnection: daemon missing capabilities', {
@@ -1928,6 +2145,23 @@ export class DaemonConnection {
         `ephemeral server: refusing forceRedeployAndReconnect on '${this.hostKey}' (attach-only)`,
       )
     }
+
+    // OS-service backstop, BEFORE the WS/tunnel teardown below: capability drift
+    // is not a licence to kill a managed process. The `--stop` + `kill $(cat
+    // daemon.pid)` further down would be undone by launchd/systemd restarting it
+    // right back, racing our own nohup daemon for the runtime dir's instance
+    // lock. Refusing early also keeps the CURRENT connection intact (a drifted
+    // daemon that still answers is strictly better than a dark host), so the
+    // caller surfaces one actionable error instead of a half-torn connection.
+    const takeover = await this.detectServiceTakeover()
+    if (takeover.managed) {
+      throw new DaemonServiceNotReadyError(
+        this.hostKey,
+        'its capabilities do not match this server and walnut will not stop or replace a service-managed daemon',
+        takeover,
+      )
+    }
+
     log.session.info('DaemonConnection: forcing redeploy due to capability drift', {
       host: this.hostKey,
     })
@@ -1945,26 +2179,7 @@ export class DaemonConnection {
     this.localPort = null
 
     try {
-      // Stop BOTH the binary daemon AND the source daemon — a previous connect
-      // may have fallen back to source deploy (corp SSH proxy kills large
-      // binary transfers), leaving a node daemon running. On a fresh binary
-      // deploy the port-binding and pid-file would clash if we don't also kill
-      // the source daemon first.
-      try {
-        const remotePath = await this.getRemoteDaemonPath()
-        await this.sshExec(`${remotePath} --stop 2>/dev/null || true`, 5_000)
-      } catch {}
-      // Runtime-agnostic stop for source/bun daemons — kill by pid file.
-      // Avoids needing to know whether the running daemon was launched under
-      // node or bun (the --stop subcommand is symmetric in source).
-      try {
-        await this.sshExec(
-          'PID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null); ' +
-          '[ -n "$PID" ] && kill "$PID" 2>/dev/null; ' +
-          'rm -f /tmp/open-walnut/daemon.pid /tmp/open-walnut/daemon.port; true',
-          5_000,
-        )
-      } catch {}
+      await this.stopUnmanagedDaemon()
 
       // Redeploy + start + tunnel + reconnect
       await this.deployDaemon()
@@ -2344,7 +2559,7 @@ export class DaemonConnection {
       // Best-effort per file — a missing sidecar (npm-package install without
       // dist/daemon-binaries) just means that host keeps the server-side
       // fallback (changes) or reports no external sessions (external-scan).
-      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'trigger-check-core.cjs']) {
+      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs']) {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
           const scArgs = [...this.baseSshArgs, this.sshHostString, `cat > /tmp/open-walnut/${sidecarFile}`]
@@ -2743,6 +2958,10 @@ export class DaemonConnection {
     // Unsolicited event (has 'ev' field)
     if ('ev' in msg) {
       const event = msg as unknown as DaemonEvent
+      if (event.ev === 'cron-metadata') {
+        if (this._connected && this.cronMetadataToken) sessionCronMetadata.apply(this.hostKey, this.cronMetadataToken, event.value)
+        return
+      }
       // STT relay (cloud voice input): the daemon forwards phone audio from
       // its bridge here because this box has the transcription engine. Handled
       // internally — session-level eventHandlers never see it.
@@ -2946,8 +3165,20 @@ export class DaemonConnection {
     return this.bulkWs?.readyState === WebSocket.OPEN
   }
 
-  /** Tear down the bulk channel (socket + pending redial). Safe to call
-   *  repeatedly; called from every main-connection teardown path. */
+  private closeTransport(): void {
+    this.closeBulkChannel()
+    if (this.ws) {
+      try { this.ws.close() } catch {}
+      this.ws = null
+    }
+    if (this.tunnel) {
+      try { this.tunnel.kill('SIGTERM') } catch {}
+      this.tunnel = null
+    }
+    this.localPort = null
+    this.setConnected(false)
+  }
+
   private closeBulkChannel(): void {
     this.bulkDialSeq++ // invalidate any in-flight dial/close callbacks
     if (this.bulkRedialTimer) {
@@ -3150,7 +3381,14 @@ export class DaemonConnection {
       log.session.warn('DaemonConnection: reconnect hello failed — forcing redeploy', {
         host: this.hostKey,
       })
-      await this.forceRedeployAndReconnect()
+      // Same contract as connect(): a service-managed daemon is refused before
+      // any teardown, so close this attempt's transport instead of leaking it.
+      try {
+        await this.forceRedeployAndReconnect()
+      } catch (err) {
+        if (err instanceof DaemonServiceNotReadyError) this.closeTransport()
+        throw err
+      }
       // forceRedeploy handles setConnected(true). recoverDisconnectedSessions
       // still needs to run even on forced-redeploy path.
       this.recoverDisconnectedSessions().catch(() => {})
@@ -3687,7 +3925,7 @@ export function setOnDaemonStatusChange(cb: () => void | Promise<void>): void {
 
 // ── Pool-level reconnect callback (event-driven message redelivery) ──
 
-let onHostConnected: ((hostKey: string) => void) | null = null
+let onHostConnected: ((hostKey: string, connection: DaemonConnection) => void | Promise<void>) | null = null
 
 /**
  * Register a callback fired when a host's daemon connection transitions to
@@ -3700,7 +3938,7 @@ let onHostConnected: ((hostKey: string) => void) | null = null
  * redelivery hook would strand pending messages on reconnect, reintroducing
  * the 2026-06-10 message-loss bug.
  */
-export function setOnDaemonHostConnected(cb: (hostKey: string) => void): void {
+export function setOnDaemonHostConnected(cb: (hostKey: string, connection: DaemonConnection) => void | Promise<void>): void {
   onHostConnected = cb
 }
 
@@ -3753,7 +3991,7 @@ function notifyDaemonPhaseChange(hostKey: string): void {
 }
 
 /** Internal: invoked by DaemonConnection.setConnected(true) transitions. */
-function notifyHostConnected(hostKey: string): void {
+function notifyHostConnected(hostKey: string, connection: DaemonConnection): void {
   // The host is provably reachable — drop any stale failure-cache entry NOW.
   // setConnected(true) fires inside connect(), BEFORE getDaemonConnection's
   // .then() clears the cache; without this, an immediate redelivery would
@@ -3768,7 +4006,10 @@ function notifyHostConnected(hostKey: string): void {
     } catch { /* observers must never break connect */ }
   }
   if (!onHostConnected) return
-  try { onHostConnected(hostKey) } catch { /* redelivery must never break connect */ }
+  try {
+    const result = onHostConnected(hostKey, connection)
+    if (result instanceof Promise) result.catch(() => {})
+  } catch { /* redelivery must never break connect */ }
 }
 
 // ── Connection Pool ──

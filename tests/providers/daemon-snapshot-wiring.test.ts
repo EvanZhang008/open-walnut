@@ -1090,12 +1090,23 @@ describe('C1 snapshot push plumbing (template source, stubbed deps)', () => {
 // integration check below can't control the 100ms poll boundary). The standalone
 // twin's identical body is locked by the parity suite's normalized byte compare.
 describe('C18 pre-death fold drain (template source, real files, stubbed deps)', () => {
+  interface FakeWs { readyState: number; id: string }
+  interface SentFrame { ws: FakeWs; ev: string; data: { sid: string; line: string; v: number } }
   interface DrainApi {
-    drainSessionFold: (session: Record<string, unknown>) => void
-    drainFoldRange: (session: Record<string, unknown>, from: number, to: number) => number
+    drainSessionFold: (session: Record<string, unknown>, sid: string) => void
+    drainFoldRange: (
+      session: Record<string, unknown>, from: number, to: number,
+      onLine?: (line: string, v: number) => void,
+    ) => number
   }
 
-  function loadDrain(): { api: DrainApi; logs: Array<{ level: string; msg: string }> } {
+  const openWs = (id = 'ws-1'): FakeWs => ({ readyState: 1, id })
+
+  function loadDrain(failSocketId?: string): {
+    api: DrainApi
+    logs: Array<{ level: string; msg: string }>
+    sent: SentFrame[]
+  } {
     const src = fs.readFileSync(new URL('../../src/providers/daemon-source.ts', import.meta.url), 'utf-8')
     const start = src.indexOf('function drainSessionFold')
     const end = src.indexOf('function assembleSessionSnapshot')
@@ -1108,14 +1119,22 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
 
     const logs: Array<{ level: string; msg: string }> = []
     const logMsg = (level: string, msg: string) => { logs.push({ level, msg }) }
+    // The drain's fan-out is the whole point of the sid argument: record every
+    // frame instead of touching a socket.
+    const sent: SentFrame[] = []
+    const sendEvent = (ws: FakeWs, ev: string, data: SentFrame['data']) => {
+      if (ws.id === failSocketId) throw new Error('socket closed during send')
+      sent.push({ ws, ev, data })
+    }
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const factory = new Function(
-      'fs', 'logMsg', 'foldLine', 'FOLD_REBUILD_CHUNK', 'TAILER_CARRY_MAX',
+      'fs', 'logMsg', 'foldLine', 'FOLD_REBUILD_CHUNK', 'TAILER_CARRY_MAX', 'sendEvent',
       `${block}\nreturn { drainSessionFold, drainFoldRange };`,
     ) as (
       f: typeof fs, l: typeof logMsg, fl: typeof foldLine, chunk: number, cap: number,
+      se: typeof sendEvent,
     ) => DrainApi
-    return { api: factory(fs, logMsg, foldLine, 1024 * 1024, 32 * 1024 * 1024), logs }
+    return { api: factory(fs, logMsg, foldLine, 1024 * 1024, 32 * 1024 * 1024, sendEvent), logs, sent }
   }
 
   it('folds the result + idle the CLI wrote just before exiting (frozen-fold repro)', async () => {
@@ -1132,6 +1151,7 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
         jsonlPath,
         offset: anchorEnd,
         watcher: { offset: anchorEnd },
+        subscribers: new Set<FakeWs>([openWs()]),
         foldState: foldLine(initialFoldState(0), anchor, anchorEnd),
       }
       expect((session.foldState as ReturnType<typeof initialFoldState>).turnActive).toBe(true)
@@ -1141,7 +1161,7 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
       const size = fs.statSync(jsonlPath).size
 
       const { api } = loadDrain()
-      api.drainSessionFold(session)
+      api.drainSessionFold(session, 'sid-drain')
 
       const folded = session.foldState as ReturnType<typeof initialFoldState>
       expect(folded.turnActive,
@@ -1154,7 +1174,7 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
 
       // Idempotent: a second drain is a no-op (nothing new on disk).
       const before = JSON.parse(JSON.stringify(folded))
-      api.drainSessionFold(session)
+      api.drainSessionFold(session, 'sid-drain')
       expect(session.foldState).toEqual(before)
     } finally {
       await fsp.rm(tmp, { recursive: true, force: true })
@@ -1170,6 +1190,7 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
       const anchorEnd = fs.statSync(jsonlPath).size
       const session: Record<string, unknown> = {
         jsonlPath, offset: anchorEnd, watcher: { offset: anchorEnd },
+        subscribers: new Set<FakeWs>([openWs()]),
         foldState: foldLine(initialFoldState(0), anchor, anchorEnd),
       }
       // A complete result, then HALF an idle line (the CLI died mid-write).
@@ -1178,8 +1199,12 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
       fs.appendFileSync(jsonlPath, result + '\n' + idle.slice(0, 12))
       const resultEnd = anchorEnd + Buffer.byteLength(result, 'utf8') + 1
 
-      const { api } = loadDrain()
-      api.drainSessionFold(session)
+      const { api, sent } = loadDrain()
+      api.drainSessionFold(session, 'sid-torn')
+
+      // The torn half-line must NOT be delivered either — a client that sees it
+      // would render a truncated JSON line it can never repair.
+      expect(sent.map((f) => f.data.line), 'the torn fragment was fanned out').toEqual([result])
 
       const folded = session.foldState as ReturnType<typeof initialFoldState>
       expect(folded.lastResult, 'the complete result must fold').toMatchObject({ isError: false })
@@ -1190,7 +1215,10 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
 
       // When the idle completes, folding resumes from the boundary and settles.
       fs.appendFileSync(jsonlPath, idle.slice(12) + '\n')
-      api.drainSessionFold(session)
+      api.drainSessionFold(session, 'sid-torn')
+      expect(sent.map((f) => f.data.line),
+        'the completed idle must be delivered exactly once, and the result not re-sent')
+        .toEqual([result, idle])
       expect((session.foldState as ReturnType<typeof initialFoldState>).turnActive,
         'the completed idle line was lost behind the boundary').toBe(false)
       expect((session.foldState as ReturnType<typeof initialFoldState>).v).toBe(fs.statSync(jsonlPath).size)
@@ -1212,15 +1240,138 @@ describe('C18 pre-death fold drain (template source, real files, stubbed deps)',
       let st = foldLine(initialFoldState(0), anchor, Buffer.byteLength(anchor, 'utf8') + 1)
       st = foldLine(st, bgStart, size)
       const session: Record<string, unknown> = {
-        jsonlPath, offset: 0, watcher: { offset: 0 }, foldState: st,
+        jsonlPath, offset: 0, watcher: { offset: 0 },
+        subscribers: new Set<FakeWs>([openWs()]),
+        foldState: st,
       }
       const snapshotBefore = JSON.parse(JSON.stringify(st))
-      const { api } = loadDrain()
-      api.drainSessionFold(session)
+      const { api, sent } = loadDrain()
+      api.drainSessionFold(session, 'sid-guard')
       expect(session.foldState).toEqual(snapshotBefore)
+      expect((session.watcher as { offset: number }).offset).toBe(size)
+      // …but DELIVERY is a separate ledger: the watcher had published offset 0, so
+      // those bytes were never fanned out. Gating the fan-out on the fold guard
+      // (the pre-fix shape) silently swallows the session's last lines.
+      expect(sent.map((f) => f.data.line),
+        'the fold guard suppressed delivery of bytes the subscriber never got').toEqual([anchor, bgStart])
+      expect(sent.map((f) => f.data.v)).toEqual([Buffer.byteLength(anchor, 'utf8') + 1, size])
+    } finally {
+      await fsp.rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  // ── The delivery half of C18: reapSession clears session.subscribers right
+  // after the exit event and the watcher poll returns early on a non-running
+  // session, so a line the drain folds but never fans out is lost from the LIVE
+  // UI (it only reappears on a later re-attach replay of the intact file).
+  it('fans the drained lines out in file order with true byte v (UTF-8 safe)', async () => {
+    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-drain-fanout-'))
+    try {
+      const jsonlPath = path.join(tmp, 'drain.jsonl')
+      const anchor = userLine('turn that ends at exit')
+      fs.writeFileSync(jsonlPath, anchor + '\n')
+      const anchorEnd = fs.statSync(jsonlPath).size
+
+      const ws = openWs()
+      const session: Record<string, unknown> = {
+        jsonlPath, offset: anchorEnd, watcher: { offset: anchorEnd },
+        subscribers: new Set<FakeWs>([ws]),
+        foldState: foldLine(initialFoldState(0), anchor, anchorEnd),
+      }
+
+      // Multi-byte text on purpose: v is a BYTE offset. A char-length stamp here
+      // desyncs every later client watermark against the daemon's own offsets.
+      const assistant = jline({
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: '\u5b8c\u6210\u4e86\uff0c\u6700\u540e\u4e00\u6761\u56de\u590d' }] }, // CJK text: "Done, the last reply"
+      })
+      const result = resultLine()
+      const idle = stateLine('idle')
+      // Blank lines between the real ones: never delivered, but they DO advance v.
+      fs.appendFileSync(jsonlPath, assistant + '\n\n' + result + '\n' + idle + '\n')
+      const size = fs.statSync(jsonlPath).size
+      expect(size, 'the fixture must actually be multi-byte')
+        .toBeGreaterThan(anchorEnd + assistant.length + result.length + idle.length + 4)
+
+      const { api, sent } = loadDrain()
+      api.drainSessionFold(session, 'sid-fan')
+
+      expect(sent.every((f) => f.ev === 'jsonl' && f.data.sid === 'sid-fan' && f.ws === ws)).toBe(true)
+      expect(sent.map((f) => f.data.line),
+        'the last assistant/result/idle must reach the live subscriber, in file order')
+        .toEqual([assistant, result, idle])
+
+      const vAssistant = anchorEnd + Buffer.byteLength(assistant, 'utf8') + 1
+      const vBlank = vAssistant + 1
+      const vResult = vBlank + Buffer.byteLength(result, 'utf8') + 1
+      expect(sent.map((f) => f.data.v), 'v must be the true byte boundary of each line')
+        .toEqual([vAssistant, vResult, size])
+      expect(sent[sent.length - 1].data.v, 'the last v must equal the file size').toBe(size)
+
+      // Re-draining sends nothing: the boundary was re-published.
+      api.drainSessionFold(session, 'sid-fan')
+      expect(sent.length, 'a repeat drain re-sent lines the client already has').toBe(3)
+
+      // A closed socket is dropped from the set instead of being written to.
+      fs.appendFileSync(jsonlPath, resultLine() + '\n')
+      ws.readyState = 3
+      api.drainSessionFold(session, 'sid-fan')
+      expect(sent.length).toBe(3)
+      expect((session.subscribers as Set<FakeWs>).size, 'closed subscriber not removed').toBe(0)
+      // The fold still advanced — delivery failure must not stall the drain.
+      expect((session.foldState as ReturnType<typeof initialFoldState>).v).toBe(fs.statSync(jsonlPath).size)
+    } finally {
+      await fsp.rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('never lets a throwing socket abort the drain (per-line guard)', async () => {
+    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-drain-throw-'))
+    try {
+      const jsonlPath = path.join(tmp, 'drain.jsonl')
+      const anchor = userLine('anchor')
+      fs.writeFileSync(jsonlPath, anchor + '\n')
+      const anchorEnd = fs.statSync(jsonlPath).size
+      const session: Record<string, unknown> = {
+        jsonlPath, offset: anchorEnd, watcher: { offset: anchorEnd },
+        subscribers: new Set<FakeWs>([openWs('broken'), openWs('healthy')]),
+        foldState: foldLine(initialFoldState(0), anchor, anchorEnd),
+      }
+      fs.appendFileSync(jsonlPath, resultLine() + '\n' + stateLine('idle') + '\n')
+      const size = fs.statSync(jsonlPath).size
+
+      const { api, sent } = loadDrain('broken')
+      expect(() => api.drainSessionFold(session, 'sid-throw')).not.toThrow()
+      expect(sent.map((frame) => [frame.ws.id, frame.data.line])).toEqual([
+        ['healthy', resultLine()], ['healthy', stateLine('idle')],
+      ])
+      expect((session.foldState as ReturnType<typeof initialFoldState>).turnActive).toBe(false)
+      expect((session.foldState as ReturnType<typeof initialFoldState>).v).toBe(size)
       expect((session.watcher as { offset: number }).offset).toBe(size)
     } finally {
       await fsp.rm(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('drainFoldRange fires its callback for every complete line in a range', () => {
+    // Direct unit on the callback contract the drain depends on: complete,
+    // non-blank lines only, with the range's own byte boundaries.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-drain-range-'))
+    try {
+      const jsonlPath = path.join(tmp, 'drain.jsonl')
+      const a = userLine('a')
+      const b = resultLine()
+      fs.writeFileSync(jsonlPath, a + '\n' + b + '\n' + stateLine('idle').slice(0, 8))
+      const session: Record<string, unknown> = { jsonlPath, foldState: initialFoldState(0) }
+      const seen: Array<[string, number]> = []
+      const { api } = loadDrain()
+      const to = fs.statSync(jsonlPath).size
+      const boundary = api.drainFoldRange(session, 0, to, (line, v) => { seen.push([line, v]) })
+      const vA = Buffer.byteLength(a, 'utf8') + 1
+      expect(seen).toEqual([[a, vA], [b, vA + Buffer.byteLength(b, 'utf8') + 1]])
+      expect(boundary).toBe(vA + Buffer.byteLength(b, 'utf8') + 1)
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
     }
   })
 })

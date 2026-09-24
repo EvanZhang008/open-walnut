@@ -33,6 +33,45 @@ function shq(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+export function buildDaemonStopCmd(dir = '/tmp/open-walnut'): string {
+  const pidFile = shq(`${dir}/daemon.pid`)
+  return [
+    `if [ ! -e ${pidFile} ]; then printf '%s\\n' walnut-daemon-stop-confirmed; exit 0; fi`,
+    `PID=$(cat ${pidFile}) || exit 1`,
+    'case "$PID" in ""|*[!0-9]*) exit 1;; esac',
+    '[ "$PID" -gt 1 ] || exit 1',
+    'export LC_ALL=C',
+    'ERROR_FILE=$(mktemp) || exit 1',
+    'trap \'rm -f "$ERROR_FILE"\' EXIT',
+    'read_identity() { value=$(ps -p "$PID" -o lstart= 2>"$ERROR_FILE"); code=$?; [ ! -s "$ERROR_FILE" ] || return 2; printf \'%s\\n\' "$value"; return "$code"; }',
+    'IDENTITY=$(read_identity); STATUS=$?',
+    'if [ "$STATUS" -eq 1 ] && [ -z "$IDENTITY" ]; then printf \'%s\\n\' walnut-daemon-stop-confirmed; exit 0; fi',
+    '[ "$STATUS" -eq 0 ] && [ -n "$IDENTITY" ] || exit 1',
+    'COMMAND=$(ps -p "$PID" -o command= 2>"$ERROR_FILE") || exit 1',
+    '[ ! -s "$ERROR_FILE" ] || exit 1',
+    `case "$COMMAND" in ${['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-darwin-x64'].map((name) => shq(`${dir}/${name} --start`)).join('|')}|*${shq(` ${dir}/daemon.cjs --start`)}) ;; *) exit 1;; esac`,
+    'CURRENT=$(read_identity); STATUS=$?',
+    'if [ "$STATUS" -eq 1 ] && [ -z "$CURRENT" ]; then printf \'%s\\n\' walnut-daemon-stop-confirmed; exit 0; fi',
+    '[ "$STATUS" -eq 0 ] && [ "$CURRENT" = "$IDENTITY" ] || exit 1',
+    'if ! kill -TERM "$PID"; then',
+    '  CURRENT=$(read_identity); STATUS=$?',
+    '  if [ "$STATUS" -eq 1 ] && [ -z "$CURRENT" ]; then printf \'%s\\n\' walnut-daemon-stop-confirmed; exit 0; fi',
+    '  exit 1',
+    'fi',
+    'i=0',
+    'while [ "$i" -lt 30 ]; do',
+    '  CURRENT=$(read_identity); STATUS=$?',
+    '  if { [ "$STATUS" -eq 1 ] && [ -z "$CURRENT" ]; } || { [ "$STATUS" -eq 0 ] && [ -n "$CURRENT" ] && [ "$CURRENT" != "$IDENTITY" ]; }; then',
+    '    printf \'%s\\n\' walnut-daemon-stop-confirmed; exit 0',
+    '  fi',
+    '  [ "$STATUS" -eq 0 ] && [ -n "$CURRENT" ] || exit 1',
+    '  i=$((i+1)); sleep 1',
+    'done',
+    'printf \'%s\\n\' \'Daemon shutdown is still pending; no replacement was started\' >&2',
+    'exit 1',
+  ].join('\n')
+}
+
 export function buildDaemonStartCmd(opts: DaemonStartCmdOpts): string {
   const dir = opts.dir ?? '/tmp/open-walnut'
   const entries = Object.entries(opts.env ?? {})

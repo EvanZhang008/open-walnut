@@ -24,6 +24,7 @@ describe('L1.2 daemon-registry: write-ahead + atomic rename', () => {
   })
 
   afterEach(async () => {
+    vi.restoreAllMocks()
     await ctx.cleanup()
   })
 
@@ -126,6 +127,16 @@ describe('L1.2 daemon-registry: write-ahead + atomic rename', () => {
     expect(entry.pid).toBe(4000)
     expect(entry.startTime).toBe('99999')
     expect(entry.parented).toBe(false)
+  })
+
+  it('keeps the original process stream boundary across registry writes', () => {
+    const core = createDaemonCore(ctx.deps)
+    const origin = { identity: 'boot:4000:99999:stream', offset: 150, startedAt: 1000 }
+    ctx.sessions.set('origin', makeTestSession({ pid: 4000, cronMetadataOrigin: origin }))
+    core.persistRegistry()
+    expect(core.readRegistry().origin.cronMetadataOrigin).toEqual(origin)
+    core.persistRegistry()
+    expect(core.readRegistry().origin.cronMetadataOrigin).toEqual(origin)
   })
 
   // G8 — envelope format

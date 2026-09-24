@@ -33,11 +33,14 @@
  * 503: a 404 would tell the phone to forget a session that exists.
  */
 
+import type { SessionRecord } from '../types.js';
+
 export interface CloudSessionHost {
   /** Bridge host alias. '__local__' = the primary box's own daemon. */
   host: string;
   cwd?: string;
   model?: string;
+  stopRequest?: SessionRecord['stopRequest'];
 }
 
 /**
@@ -83,7 +86,7 @@ export async function resolveCloudSessionHost(sessionId: string): Promise<CloudS
   const { readSessionProjection } = await import('../session-projection.js');
   const row = (await readSessionProjection())?.sessions.find((s) => s.id === sessionId);
   if (row) {
-    return { host: hostAlias(row.host), cwd: row.cwd, model: row.model };
+    return { host: hostAlias(row.host), cwd: row.cwd, model: row.model, stopRequest: row.stopRequest };
   }
 
   const { getLaunchSeed } = await import('./launch-seed.js');
@@ -97,7 +100,7 @@ export async function resolveCloudSessionHost(sessionId: string): Promise<CloudS
  * Ask the primary for the record. Reuses the existing `session.control`
  * `detail` relay (never a second bridge protocol) — its reply is
  * getSessionDetail's `{ session, pendingPermissions }`, and the record carries
- * host/cwd/model exactly like a projection row.
+ * host/cwd/model/stopRequest exactly like a projection row.
  */
 async function askPrimary(sessionId: string): Promise<CloudSessionHost | null> {
   const { callPrimaryControl } = await import('../../web/routes/v1-control-relay.js');
@@ -113,6 +116,9 @@ async function askPrimary(sessionId: string): Promise<CloudSessionHost | null> {
       host: hostAlias(s.host),
       ...(typeof s.cwd === 'string' && s.cwd ? { cwd: s.cwd } : {}),
       ...(typeof s.model === 'string' && s.model ? { model: s.model } : {}),
+      ...(s.stopRequest && typeof s.stopRequest === 'object'
+        ? { stopRequest: s.stopRequest as SessionRecord['stopRequest'] }
+        : {}),
     };
   }
   // Only the primary can say "no such session". Everything else — no bridge, a

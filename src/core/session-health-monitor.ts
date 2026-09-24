@@ -997,18 +997,24 @@ export class SessionHealthMonitor {
       // Mark BEFORE any signal: an unmarked kill reaches the session's liveness
       // monitor as an unexplained death and used to be reported as "session init
       // failed" (red toast quoting stale spawn-time stderr, 2026-08-10).
+      let undoTeardown: (() => void) | undefined
       try {
         const { sessionRunner: r } = await import('../providers/claude-code-session.js')
-        r.markExpectedTeardown(session.claudeSessionId, 'idle_timeout')
+        undoTeardown = r.markExpectedTeardown(session.claudeSessionId, 'idle_timeout')
       } catch { /* runner unavailable — the kill is still correct */ }
 
       // Graceful kill via session manager if available (handles both local + remote),
       // otherwise fall back to local PID signals.
       if (mgr) {
-        mgr.kill()
+        if (mgr.stopForIdle) {
+          let stopped = false
+          try { stopped = await mgr.stopForIdle() }
+          finally { if (!stopped) undoTeardown?.() }
+          if (!stopped) continue
+        } else mgr.kill('idle')
       } else {
         const pid = session.pid
-        if (pid == null) continue  // No PID — can't signal; skip to next session
+        if (pid == null) { undoTeardown?.(); continue }
         // Kill entire process group (-pid) to also clean up MCP child processes.
         // safeKillProcessGroup refuses pid ≤ 1 — a corrupted pid here would
         // otherwise broadcast the kill to the whole user session (2026-08-09).
@@ -1772,9 +1778,10 @@ export class SessionHealthMonitor {
               // phase to NEED_ACTION would contradict each other, and fire()
               // requires the phase to still be IN_PROGRESS. So only advance the
               // phase when no recovery was armed.
-              const { scheduleSessionAutoRecover } = await import('./session-auto-recover.js')
+              const { scheduleSessionAutoRecover, getSessionAutoRecover } = await import('./session-auto-recover.js')
               const armed = await this.autoRecoverCanFire(s)
-                && scheduleSessionAutoRecover(s, s.status_reason ?? 'daemon_reported_exit')
+                && (getSessionAutoRecover()?.hasPending(s.claudeSessionId)
+                  || scheduleSessionAutoRecover(s, s.status_reason ?? 'daemon_reported_exit'))
               if (armed) continue
 
               // Phase sync: remote process died during connection loss — result may

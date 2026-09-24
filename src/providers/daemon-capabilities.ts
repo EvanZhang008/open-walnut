@@ -254,8 +254,10 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   ...REQUIRED_DAEMON_CAPABILITIES,
   'snapshot-v1',
   'snapshot-memory-v1',
+  'cron-metadata-v1',
   'image.save',
   'session.launch',
+  'cancel-pending-start-v1',
   'session.control',
   'mobile-event',
   'agent-gateway',
@@ -296,6 +298,8 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // an old daemon answers unknown-command, and AcpSession.steer() degrades to
   // the queue-until-turn-end path (pre-steering behavior).
   'acpSteer',
+  // 'send-markers-v1': send accepts markers and writes them after the body enters the pipe but before the newline; an old daemon ignores the field and keeps using the appendUserMarker RPC after delivery.
+  'send-markers-v1',
   // 'agent-commands-v1' — unified agent.* command family (engine-routed aliases
   // over the legacy start/send/... and acp* families). Optional: without it the
   // server keeps speaking the legacy families directly.

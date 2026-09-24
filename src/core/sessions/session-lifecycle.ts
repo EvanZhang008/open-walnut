@@ -493,6 +493,11 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
     throw new SessionControlError('Stop session before archiving', 400);
   }
 
+  if (archived === true && !isAcpEngine(existingRecord.engine)) {
+    const { sessionStops } = await import('./session-stop.js');
+    await sessionStops.request(sessionId);
+  }
+
   const updates: Partial<SessionRecord> = {};
   if (title !== undefined) updates.title = title as string;
   if (activity !== undefined) updates.activity = activity as string;
@@ -542,7 +547,7 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
 
 // ── Terminate ────────────────────────────────────────────────────────────────
 
-export interface TerminateResult { status: 'terminated'; sessionId: string; tookMs?: number }
+export interface TerminateResult { status: 'terminated' | 'pending'; sessionId: string; tookMs?: number }
 
 /**
  * Close the CLI process, full stop. No respawn, no queue drain, no error
@@ -561,17 +566,13 @@ export async function terminateSession(
 
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
 
-  // Cron-owner guard: the CLI's scheduler lock is DIRECTORY-scoped, so killing
-  // a session that owns recurring crons doesn't stop them — they migrate to
-  // whichever session in the same cwd next holds the lock, and fire there as
-  // bare prompts with no provenance (incident 2026-08-09). Require an explicit
-  // force for that footgun instead of doing it silently.
+  // A durable cron is shared by the whole directory, so it is not deleted when the process terminates.
   if (!opts.force && sessionRunner.isCronArmed?.(sessionId)) {
     log.session.warn('session terminate: refused — session owns scheduled crons (pass force to override)', { sessionId });
     throw new SessionControlError(
-      'This session owns recurring scheduled tasks (crons). Stopping it will NOT stop them — '
-        + 'they persist in the project directory and will fire into any other session sharing that '
-        + 'directory, without provenance. Delete the crons first, or force-terminate.',
+      'Stopping this session also disables automatic recovery. Session-only crons stop with the CLI. '
+        + 'Directory-shared durable crons are not deleted and may still run in another session. '
+        + 'Confirm the stop, or delete those jobs first.',
       409,
       { code: 'cron_owner' },
     );
@@ -587,6 +588,23 @@ export async function terminateSession(
       status_reason: 'user_stopped', status_changed_by: 'user',
     }).catch(() => {});
     return { status: 'terminated', sessionId, tookMs: Date.now() - startedAt };
+  }
+  if (!isAcpEngine(record.engine)) {
+    const { sessionStops } = await import('./session-stop.js');
+    const live = sessionRunner.findSessionByClaudeId(sessionId);
+    const undoTeardown = live?.markExpectedTeardown('user_terminated');
+    let confirmed = false;
+    try {
+      const request = await sessionStops.request(sessionId);
+      confirmed = request.state === 'confirmed';
+      if (confirmed) {
+        live?.detach();
+        sessionRunner.settleInFlightTurn(sessionId);
+      }
+      return { status: confirmed ? 'terminated' : 'pending', sessionId, tookMs: Date.now() - startedAt };
+    } finally {
+      if (!confirmed) undoTeardown?.();
+    }
   }
   const live = sessionRunner.findSessionByClaudeId(sessionId);
   if (live) {
@@ -644,6 +662,7 @@ export async function restartSession(sessionId: string): Promise<RestartResult> 
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('Session not found', 404);
   if (record.archived) throw new SessionControlError('Cannot restart an archived session', 400);
+  if (record.stopRequest?.state === 'pending') throw new SessionControlError('Stop is awaiting host confirmation; retry after it is confirmed', 409);
 
   // Revert any in-flight 'processing' messages back to 'pending' — if the old
   // CLI was mid-send when we respawn, those messages must survive and re-deliver.

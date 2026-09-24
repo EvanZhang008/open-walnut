@@ -163,6 +163,8 @@ export function initPushNotifications(): void {
 
         case EventNames.SESSION_RESULT: {
           const data = eventData<typeof EventNames.SESSION_RESULT>(event)
+          // The user stopped this turn from the composer — they are looking at it.
+          if (data.interrupted) break
           const sessionId = data.sessionId
           const lane = await laneIdsFor(sessionId)
           if (lane) {

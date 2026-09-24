@@ -190,6 +190,19 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
         { source: 'reconciler', urgency: 'urgent' },
       )
 
+      // Hand the task back: the server died mid-turn, so the result that would
+      // have flipped the phase is gone forever. Edge-triggered — we are inside
+      // the branch where the conditional update actually moved the record to
+      // 'stopped' (inc-1788328994907: session pill "Stopped", task row still
+      // grey TODO). See handBackTaskOnSessionEnd for the full asymmetry note.
+      if (session.taskId) {
+        const { handBackTaskOnSessionEnd } = await import('./phase.js')
+        const { getSessionsForTaskSync } = await import('./session-tracker.js')
+        await handBackTaskOnSessionEnd(session.taskId, session.claudeSessionId, 'session-reconciler', {
+          shouldApply: () => getSessionsForTaskSync(session.taskId!).find((s) => s.claudeSessionId === session.claudeSessionId)?.statusRevision === updated.statusRevision,
+        })
+      }
+
       log.session.info('session reconciler: marked zombie session stopped', {
         sessionId: session.claudeSessionId,
         taskId: session.taskId || '(none)',

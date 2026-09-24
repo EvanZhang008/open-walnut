@@ -16,7 +16,7 @@
  *      detached task forever, hasActiveBackgroundWork() withheld the result AND
  *      the idle, and the session sat "Running" for the task's full lifetime
  *      (a 16-min backgrounded grep in production).
- *   2. The persisted session record converges to idle/stopped — NOT stuck running.
+ *   2. While background work is unfinished the session stays Running, but the turn result is not blocked.
  *   3. The UI background-tasks snapshot still lists the detached task (only the
  *      turn-over gating excludes it — the panel keeps showing it).
  */
@@ -148,7 +148,7 @@ afterAll(async () => {
 })
 
 describe('Backgrounded task E2E: turn completes despite non-terminal is_backgrounded task', () => {
-  it('result arrives, record converges to idle/stopped, snapshot keeps the detached task', async () => {
+  it('result arrives while the session and detached task remain running', async () => {
     const ws = await connectWs()
 
     // Start collecting BEFORE the send so we catch every frame in order.
@@ -180,18 +180,20 @@ describe('Backgrounded task E2E: turn completes despite non-terminal is_backgrou
     // Exactly one completion for the turn (the trailing idle must not double-fire).
     expect(resultCollector.events.length).toBe(1)
 
-    // (b) The persisted session record converges to idle/stopped — NOT stuck
-    // 'running'. Poll briefly: the SESSION_RESULT handler persists asynchronously.
-    let recordStatus: string | undefined
-    for (let i = 0; i < 20; i++) {
-      const res = await fetch(`http://localhost:${port}/api/sessions`)
+    await vi.waitFor(async () => {
+      const res = await fetch(`http://localhost:${port}/api/sessions/${rd.sessionId}`)
       expect(res.status).toBe(200)
-      const { sessions } = await res.json() as { sessions: Array<{ claudeSessionId: string; process_status: string }> }
-      recordStatus = sessions.find(s => s.claudeSessionId === rd.sessionId)?.process_status
-      if (recordStatus === 'idle' || recordStatus === 'stopped') break
-      await delay(150)
-    }
-    expect(['idle', 'stopped']).toContain(recordStatus)
+      const { session } = await res.json() as {
+        session: { process_status: string; consumedOffset?: number }
+      }
+      expect(session.process_status).toBe('running')
+      expect(session.consumedOffset).toBeGreaterThan(0)
+    }, { timeout: 5000 })
+    const taskResponse = await fetch(`http://localhost:${port}/api/tasks/bg-task-001`)
+    expect(taskResponse.status).toBe(200)
+    const { task } = await taskResponse.json() as { task: { phase: string; session_id?: string } }
+    expect(task.phase).toBe('IN_PROGRESS')
+    expect(task.session_id).toBe(rd.sessionId)
 
     // (c) The UI snapshot still lists the detached task (non-terminal), while the
     // turn-over gate (inFlight) already excludes it: last snapshot has inFlight 0

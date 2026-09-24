@@ -237,6 +237,76 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(coreSrc).toMatch(/\.\.\.\(uuid \? \{ uuid \} : \{\}\)/)
   })
 
+  it.each(['ok', 'EAGAIN', 'ENXIO', 'partial', 'dead'])('source initial-message helper honors the strict %s outcome', async (outcome) => {
+    const source = (await import('../../src/providers/daemon-source.js')).getDaemonSource()
+    const start = source.indexOf('async function handleSendCommand(')
+    const end = source.indexOf('\n}', start) + 2
+    expect(start).toBeGreaterThan(-1)
+    const session = { pid: 4242, state: 'running', exitCode: null, ttftSendTs: null as number | null }
+    const reap = vi.fn()
+    const fifo = vi.fn(async (_sid: string, _session: unknown, _buf: Buffer) => outcome)
+    const run = new Function('sessions', 'process', 'normalizeMarkers', 'reapSession', 'chainFifoWrite', 'Buffer',
+      source.slice(start, end) + '\nreturn handleSendCommand')(
+      new Map([['sid', session]]), { kill: vi.fn() }, () => ({ list: [] }), reap, fifo, Buffer,
+    )
+    const result = await run('sid', 'message', 'user-uuid')
+    expect(result.ok).toBe(outcome === 'ok')
+    if (outcome === 'EAGAIN') expect(result).toEqual({ ok: false, reason: 'EAGAIN', retriable: true })
+    expect(reap.mock.calls).toEqual(outcome === 'ENXIO' ? [['sid', -1, 'send-enxio']]
+      : outcome === 'partial' ? [['sid', -1, 'send-partial-write']] : [])
+    expect(session.ttftSendTs !== null).toBe(outcome === 'ok')
+    expect(JSON.parse(fifo.mock.calls[0][2].toString())).toMatchObject({ uuid: 'user-uuid', message: { content: 'message' } })
+    expect(templateSrc).toContain('const sent = await handleSendCommand(sid, message, initialUuid)')
+  })
+
+  it('both send paths put ordered markers behind the FIFO newline barrier', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toContain('normalizeMarkers(')
+      expect(src).toContain('buf.length - 1 : buf.length')
+      expect(src).toContain('const limit = barrierDone ? buf.length : barrier')
+      expect(src).toContain('fs.writeSync(fd, buf, offset, limit - offset)')
+      expect(src).toContain('appendUserMarkerLine(sid, session, m.message, m.messageId, true)')
+      expect(src).toMatch(/walnutDelivery(?::| =)\s*'ordered'/)
+      expect(src).toContain('chainFifoWrite(sid, session, buf, beforeNewline)')
+    }
+    expect(standaloneSrc).toMatch(/core\.handleSendCommand\(sid, message, [^\n]*, markers\)/)
+  })
+
+  it.each(['standalone', 'template'])('deferred resume adopts a live process without writing or signalling: %s', async (twin) => {
+    const source = twin === 'standalone'
+      ? readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts')) : templateSrc
+    const start = source.indexOf('async function cmdStart(')
+    const cutoff = source.indexOf("    logMsg('warn', 'cmdStart: replacing existing session'", start)
+    expect(start).toBeGreaterThan(-1)
+    expect(cutoff).toBeGreaterThan(start)
+    const prefix = source.slice(start, cutoff) + '\n} throw new Error("replace path reached");\n}'
+    const js = ts.transpileModule(prefix, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+    const existing = { state: 'running', pid: 4242, watcher: { offset: 100 }, jsonlPath: '/fixture/stream.jsonl', mode: 'default' }
+    const sessions = new Map([['sid', existing]])
+    const kill = vi.fn()
+    const send = vi.fn(async () => ({ ok: true }))
+    const fifo = vi.fn(async () => 'ok')
+    const addSubscriber = vi.fn()
+    const sendOk = vi.fn((_ws, _id, result) => result)
+    const sendError = vi.fn((_ws, _id, error) => { throw new Error(error) })
+    const run = new Function('sessions', 'process', 'fs', 'core', 'chainFifoWrite', 'addSubscriber', 'sendOk', 'sendError', 'logMsg', 'Buffer', 'sessionStartGate', 'sessionStopVersions', 'cronRuntime', 'ensureWatcher', 'handleSendCommand',
+      js + '\nreturn cmdStart')(
+      sessions, { kill }, { existsSync: () => true }, { handleSendCommand: send }, fifo,
+      addSubscriber, sendOk, sendError, () => {}, Buffer,
+      { run: (_sid: string, work: () => Promise<unknown>) => work() }, new Map(), null, () => {}, send,
+    )
+    const command = { sid: 'sid', args: ['fixture-cli'], cwd: '/fixture', resume: true, message: '' }
+    const result = await run({}, 1, { ...command, deferMessage: true })
+    expect(result).toEqual({ pid: 4242, outputFile: existing.jsonlPath, offset: 100, adopted: true })
+    expect(kill.mock.calls).toEqual([[4242, 0]])
+    expect(send).not.toHaveBeenCalled()
+    expect(fifo).not.toHaveBeenCalled()
+    expect(existing.state).toBe('running')
+    expect(addSubscriber).toHaveBeenCalledOnce()
+    await expect(run({}, 2, command)).rejects.toThrow('replace path reached')
+  })
+
   it("both spawn the CLI's stdout fd in append mode (marker-clobber defense)", () => {
     const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
     for (const src of [standaloneSrc, templateSrc]) {
@@ -720,7 +790,10 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       // Serialized daemon-wide: concurrent walks over thousands of transcript
       // files would be the same starvation shape changes-v1 guards against.
       expect(src).toMatch(/externalScanInflight/)
+      expect(src).toMatch(/cmd\.excludedCwds/)
+      expect(src).toMatch(/knownSessionIds[^\n]*excludedCwds/)
     }
+    expect(templateSrc).toContain("externalScanCore.isExcludedExternalCwd) caps.push('external-scan-filter-v1')")
     // Static caps exclude it; the template adds it only when the sidecar loads.
     const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
     expect(templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart)))
@@ -1069,7 +1142,7 @@ describe('L1/L2 daemon-standalone vs daemon-source parity (versioned events + ta
       `${code}; return cmdGetState`)(sessions, sendOk, vi.fn(), () => null,
       () => snapshot, () => ({}), new Proxy({}, { get: () => diskRead }),
       new Proxy({}, { get: () => diskRead }), '/unused')
-    expect(handler({}, 1, { sid: 'cold', memoryOnly: true })).toMatchObject({ snapshotAvailable: false })
+    expect(handler({}, 1, { sid: 'cold', memoryOnly: true })).toEqual({ snapshotAvailable: false, cronSupervision: null })
     expect(diskRead).not.toHaveBeenCalled()
     sessions.set('known', { state: 'dead', taskState: {} })
     expect(handler({}, 2, { sid: 'known', memoryOnly: true })).toMatchObject({ exists: true, alive: false, snapshot })
@@ -1230,8 +1303,9 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
   it('both cap the carry at 32MB and log on overflow (tailer AND both rebuild paths)', () => {
     for (const src of [standaloneSrc, templateSrc]) {
       expect(src).toMatch(/TAILER_CARRY_MAX = 32 \* 1024 \* 1024/)
-      // Live tailer (carryLen since C26).
-      expect(src).toMatch(/if \(carryLen > TAILER_CARRY_MAX\)/)
+      // Live tailer (carryLen since C26). The overflow verdict is named because
+      // the cron metadata tracker reads it too (a dropped line is an inventory gap).
+      expect(src).toMatch(/const cronMetadataGap = carryLen > TAILER_CARRY_MAX;?\s*\n\s*if \(cronMetadataGap\)/)
       expect(src).toMatch(/tailer carry overflow — dropping oversized partial line/)
       // C13: the rebuilds + the death drain reuse the SAME cap. Without it, a
       // single >32MB line (which the live tailer deliberately drops) got
@@ -1262,7 +1336,8 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       // Anchor inside ensureWatcher — rebuildTaskStateFromJsonl also greps "task_.
       const start = src.search(/function ensureWatcher/)
       expect(start).toBeGreaterThan(-1)
-      const body = src.slice(start, start + 12_000)
+      const nextFunction = src.indexOf('\nfunction ', start + 1)
+      const body = src.slice(start, nextFunction === -1 ? undefined : nextFunction)
       const foldIdx = body.search(/s\.foldState\s*=\s*foldLine\(s\.foldState,\s*line,\s*v\)/)
       const taskIdx = body.indexOf("line.includes('\"task_')")
       expect(foldIdx).toBeGreaterThan(-1)
@@ -1401,7 +1476,11 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       // signature/locals, `as const`, non-null/`!` and generic angle brackets.
       .replace(/\(session: SessionData\): (?:SessionSnapshot|void)/, '(session)')
       .replace(/\(jsonlPath: string\): FoldRebuild/, '(jsonlPath)')
-      .replace(/\(session: SessionData, from: number, to: number\): number/, '(session, from, to)')
+      .replace(/\(session: SessionData, sid: string\): void/, '(session, sid)')
+      .replace(
+        /\(session: SessionData, from: number, to: number, onLine\?: \(line: string, v: number\) => void\): number/,
+        '(session, from, to, onLine)',
+      )
       .replace(/let (\w+): number\b/g, 'let $1')
       .replace(/let (\w+): Buffer\b/g, 'let $1')
       .replace(/;/g, '')
@@ -1434,6 +1513,21 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
   it('both drainSessionFold + drainFoldRange bodies are byte-identical (normalized)', () => {
     for (const re of [/function drainSessionFold\(/, /function drainFoldRange\(/]) {
       expect(normalizeBody(standaloneSrc, re)).toBe(normalizeBody(templateSrc, re))
+    }
+    for (const [name, src] of [['standalone', standaloneSrc], ['template', templateSrc]] as const) {
+      // The drain must FAN OUT what it folds. The watcher poll returns early on a
+      // non-running session and reapSession clears session.subscribers right
+      // after, so this is the last chance for the live UI to see the final
+      // assistant/result/idle lines.
+      expect(normalizeBody(src, /function drainSessionFold\(/),
+        `${name}: drainSessionFold no longer fans the drained lines out`)
+        .toContain("sendEvent(ws, 'jsonl', { sid, line, v })")
+      // …and the callback fires independently of the v-monotone FOLD guard: the
+      // fold can lead delivery (optimistic overlay / out-of-band fold), and those
+      // bytes were still never sent.
+      expect(normalizeBody(src, /function drainFoldRange\(/),
+        `${name}: the drain callback is gated on the fold guard again`)
+        .toContain('if (onLine) { try { onLine(line, boundary) } catch {} }')
     }
   })
 
@@ -1487,7 +1581,11 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     // completed line is never folded whole → the snapshot wedges. Every
     // materialization site must take `offset` from the SAME rebuild's boundary.
     for (const [name, src] of [['standalone', standaloneSrc], ['template', templateSrc]] as const) {
-      const boundarySeeds = (src.match(/offset:\s*\w+(?:Fold|ered)\.boundary/g) ?? []).length
+      // The synthesized cron origin RECORDS the same boundary (it is a cron
+      // bookkeeping record, not a watcher seed), so drop that literal before
+      // counting the materialization sites.
+      const withoutCronOrigin = src.replace(/cronMetadataOrigin = \{[\s\S]*?\n\s*\}/g, '')
+      const boundarySeeds = (withoutCronOrigin.match(/offset:\s*\w+(?:Fold|ered)\.boundary/g) ?? []).length
       expect(boundarySeeds, `${name}: all 3 adopt/attach sites must seed offset from the fold boundary`).toBe(3)
       // cmdStart's resume branch takes it from the resume rebuild.
       expect(src).toMatch(/resumeFold = rebuildFoldStateFromJsonl\(jsonlPath\)/)
@@ -1556,13 +1654,15 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     expect(coreDrainIdx, 'the drain must run BEFORE the death snapshot is assembled').toBeLessThan(corePushIdx)
 
     const tmplReap = templateSrc.slice(templateSrc.search(/function reapSession/))
-    const tmplDrainIdx = tmplReap.indexOf('drainSessionFold(session)')
+    const tmplDrainIdx = tmplReap.indexOf('drainSessionFold(session, sid)')
     const tmplPushIdx = tmplReap.indexOf('pushSnapshot(sid, true)')
     expect(tmplDrainIdx, 'template reapSession does not drain the fold').toBeGreaterThan(-1)
     expect(tmplDrainIdx).toBeLessThan(tmplPushIdx)
 
-    // Standalone injects the same drain into core.
-    expect(standaloneSrc).toMatch(/drainFoldFn:\s*\(session\)\s*=>\s*drainSessionFold\(session\)/)
+    // Standalone injects the same drain into core, resolving the sid the core
+    // hook doesn't hand it (the drain fans the drained lines out under that sid).
+    expect(standaloneSrc)
+      .toMatch(/drainFoldFn:\s*\(session\)\s*=>\s*drainSessionFold\(session,\s*sessionSidOf\(session\)\)/)
   })
 
   it('both drainSessionFold implementations start at the published boundary and re-publish it', () => {
@@ -1636,7 +1736,7 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     // Both twins answer hello with the ADVERTISED list (template via the
     // placeholder-seeded runtime list — daemonCapabilities() wraps
     // __DAEMON_CAPABILITIES__ to add sidecar-gated caps).
-    expect(standaloneSrc).toMatch(/capabilities:\s*ADVERTISED_DAEMON_CAPABILITIES/)
+    expect(standaloneSrc).toMatch(/capabilities:\s*\[\.\.\.ADVERTISED_DAEMON_CAPABILITIES,\s*'service-handover-v1',\s*\.\.\.\(cronRuntime\s*\?\s*\['cron-supervision-v1',\s*'service-update-v1'\]\s*:\s*\[\]\)/)
     expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
     expect(templateSrc).toMatch(/__DAEMON_CAPABILITIES__\.slice\(\)/)
     // getDaemonSource substitutes the ADVERTISED list into that placeholder,
@@ -2058,7 +2158,7 @@ describe('durable-cron invariant daemon-standalone vs daemon-source parity', () 
       // The kill switch guards BOTH boot load and every evaluation.
       expect(src).toMatch(/process\.env\.WALNUT_ALLOW_DURABLE_CRON === '1'/)
       // hooks.configure persists to hooks.json and is NOT bridge-reachable.
-      expect(src).toMatch(/case 'hooks\.configure': return cmdHooksConfigure\(ws, id/)
+      expect(src).toMatch(/case 'hooks\.configure': return daemonCommands\.run\([^\n]*cmdHooksConfigure\(ws, id/)
       expect(src).toMatch(/hooks\.configure: invalid config/)
       const bridgeSetStart = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(')
       const bridgeSetEnd = src.indexOf('])', bridgeSetStart)
@@ -2381,13 +2481,16 @@ describe('turn-error auto-retry daemon-core vs daemon-source parity', () => {
     }
   })
 
-  it('both prefer a live FIFO write and fall back to a --resume respawn', () => {
+  it('both keep turn retry behind the regular stop-aware delivery path', () => {
     for (const src of [standaloneSrc, templateSrc]) {
       const body = fnBody(src, 'fireTurnRetry')
-      const fifo = body.indexOf('writeFifoRaw(session.pipePath, payload)')
-      const resume = body.indexOf('cmdBridgeResume(RETRY_WS_SINK')
-      expect(fifo, 'no FIFO delivery path').toBeGreaterThan(-1)
-      expect(resume, 'no resume fallback').toBeGreaterThan(fifo)
+      expect(body).toContain('cmdBridgeResume(RETRY_WS_SINK')
+      expect(body).not.toContain('writeFifoRaw(')
+      expect(body).toContain('cronRuntime')
+      const bridge = fnBody(src, 'cmdBridgeResume')
+      expect(bridge).toContain('cmdSend(')
+      expect(bridge).toContain('cmdStart(')
+      expect(bridge).toContain('cmd.stopFence')
     }
   })
 })

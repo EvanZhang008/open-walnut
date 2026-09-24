@@ -83,7 +83,7 @@ interface MockTransport {
   imageCache: Map<string, string>
   lastEventAt: number
   tailOffset: number
-  writeMessage: (message: string) => Promise<boolean>
+  writeMessage: (message: string, opts?: { onDispatch?: () => void }) => Promise<boolean>
 }
 
 function makeFifoAliveSession(taskId: string): { session: ClaudeCodeSession; transport: MockTransport } {
@@ -92,7 +92,10 @@ function makeFifoAliveSession(taskId: string): { session: ClaudeCodeSession; tra
     isRemote: true, hasPipe: true, processName: 'claude', pid: null,
     outputFile: null, host: null, fileSize: 0,
     imageCache: new Map(), lastEventAt: 0, tailOffset: 0,
-    writeMessage: async () => true,
+    writeMessage: async (_message, opts) => {
+      opts?.onDispatch?.()
+      return true
+    },
   }
   ;(session as unknown as { _transport: unknown })._transport = transport
   ;(session as unknown as { _active: boolean })._active = true

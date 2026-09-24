@@ -37,6 +37,7 @@ vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
 }))
 
 const SID = 'cloud-send-sid-1'
+let stopRequest: { id: string; state: string } | undefined
 vi.mock('../../../src/core/session-projection.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../../src/core/session-projection.js')>()
   return {
@@ -47,7 +48,7 @@ vi.mock('../../../src/core/session-projection.js', async (importOriginal) => {
       sessions: [{
         id: SID, host: 'devbox', process_status: 'running',
         started_at: new Date().toISOString(), last_active_at: new Date().toISOString(),
-        message_count: 1, cwd: '/home/user/repo', model: 'opus',
+        message_count: 1, cwd: '/home/user/repo', model: 'opus', stopRequest,
       }],
     }),
   }
@@ -69,6 +70,7 @@ beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   bridgeRequestMock.mockReset()
+  stopRequest = undefined
 })
 
 afterEach(async () => {
@@ -97,6 +99,51 @@ describe('durable relay path', () => {
     expect((params as Record<string, unknown>).message).toBe('hello from phone')
     expect((params as Record<string, unknown>).messageId).toBe(res.body.messageId)
     expect(timeout).toBe(50_000)
+  })
+
+  it('keeps the first fence for a retried id and gives only new input the new fence', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true })
+    const app = createApp()
+    expect((await request(app).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'old', messageId: 'qm-before-stop' })).status).toBe(202)
+    stopRequest = { id: 'stop-1', state: 'confirmed' }
+    expect((await request(app).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'old', messageId: 'qm-before-stop' })).status).toBe(202)
+    expect((await request(app).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'new', messageId: 'qm-after-stop' })).status).toBe(202)
+    const sends = bridgeRequestMock.mock.calls.filter((call) => call[1] === 'session.message')
+    expect(sends.map((call) => call[2].stopFence)).toEqual([null, null, 'stop-1'])
+  })
+
+  it('concurrent callers bind the same message id only once', async () => {
+    const { bindSessionSendFence } = await import('../../../src/core/send-queue.js')
+    const values = await Promise.all(Array.from({ length: 12 }, (_, index) => bindSessionSendFence(SID, 'qm-racing-fences', `stop-${index}`)))
+    expect(new Set(values).size).toBe(1)
+    expect(await bindSessionSendFence(SID, 'qm-racing-fences', 'newest-stop')).toBe(values[0])
+  })
+
+  it('banks the original fence and does not refresh it while draining', async () => {
+    bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('devbox'))
+    expect((await request(createApp()).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'old', messageId: 'qm-banked-stop' })).status).toBe(202)
+    stopRequest = { id: 'stop-2', state: 'confirmed' }
+    bridgeRequestMock.mockResolvedValue({ ok: false, errorKind: 'session_stopped', error: 'Message predates the latest stop' })
+    const { flushSendQueue, queuedSessionSendCount } = await import('../../../src/core/send-queue.js')
+    expect(await flushSendQueue()).toBe(1)
+    expect(bridgeRequestMock.mock.calls.at(-1)?.[2].stopFence).toBeNull()
+    expect(await queuedSessionSendCount()).toBe(0)
+  })
+
+  it('does not relay or bank new input while a stop is pending', async () => {
+    stopRequest = { id: 'stop-3', state: 'pending' }
+    const res = await request(createApp()).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'wait' })
+    expect(res.status).toBe(409)
+    expect(res.body.error.code).toBe('stop_pending')
+    expect(bridgeRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('maps a stale-fence rejection to a domain error without fallback', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: false, errorKind: 'session_stopped', error: 'Message predates the latest stop' })
+    const res = await request(createApp()).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'old' })
+    expect(res.status).toBe(409)
+    expect(res.body.error.code).toBe('session_stopped')
+    expect(callsByCmd()).toEqual(['session.message'])
   })
 
   it('a client-supplied messageId (phone retry) rides through unchanged', async () => {
@@ -186,6 +233,15 @@ describe('direct fallback (old daemon / primary down)', () => {
       }
     }
   }
+
+  it.each([true, false])('direct fallback retains the original fence (alive=%s)', async (alive) => {
+    stopRequest = { id: 'confirmed-stop', state: 'confirmed' }
+    bridgeRequestMock.mockImplementation(fallbackImpl(true, alive))
+    const response = await request(createApp()).post(`/api/v1/sessions/${SID}/messages`).send({ text: 'new', messageId: `qm-fallback-${alive}` })
+    expect(response.status).toBe(202)
+    const delivered = bridgeRequestMock.mock.calls.find((call) => call[1] === (alive ? 'send' : 'bridgeResume'))
+    expect(delivered?.[2].stopFence).toBe('confirmed-stop')
+  })
 
   it('falls back on unknown-command and delivers BEFORE writing the marker (live path)', async () => {
     bridgeRequestMock.mockImplementation(fallbackImpl(true))

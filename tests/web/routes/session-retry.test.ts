@@ -46,7 +46,7 @@ vi.mock('../../../src/core/session-message-queue.js', () => ({
 // bug into a passing test.
 vi.mock('../../../src/core/event-bus.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/core/event-bus.js')>();
-  return { ...actual, bus: { emit: vi.fn() } };
+  return { ...actual, bus: { emit: vi.fn(), subscribe: vi.fn() } };
 });
 
 // Mock session-liveness so PID checks don't actually probe the OS

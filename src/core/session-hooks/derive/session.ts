@@ -204,6 +204,12 @@ export function deriveSessionHookPoints(
         });
         break;
       }
+      // The user stopped the turn: nothing finished and nothing failed, so neither
+      // onTurnComplete (triage/summary) nor onTurnError has anything to react to.
+      if (data.interrupted) {
+        log.session.info('SESSION_RESULT skipped — turn interrupted by user', { sessionId });
+        break;
+      }
 
       const isError = data.isError as boolean | undefined;
       const state = getOrCreateSessionState(states, sessionId);

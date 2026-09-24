@@ -58,6 +58,7 @@ import { createSessionManager, registerSessionManager, unregisterSessionManager 
 import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
+import { isWakeupArmed } from './daemon-fold.js'
 import { classifyDeliveryFailure, isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
@@ -594,6 +595,8 @@ function resumeProfileOpts(
 
 const MAX_FULL_TEXT = 100 * 1024 // 100KB cap on accumulated text
 const LIVENESS_INTERVAL_MS = 3000
+const INTERRUPT_ACK_TIMEOUT_MS = 5_000
+const INTERRUPT_SETTLE_TIMEOUT_MS = 3_000
 
 /**
  * `system` subtypes that are BOOKKEEPING, not content: nothing a reader could act
@@ -673,6 +676,9 @@ export class ClaudeCodeSession {
   /** Per-turn flag: reset on writeMessage()/send(), prevents duplicate JSONL result
    *  events within a single turn (e.g., tailer emits result, then PID-death handler fires). */
   private _turnResultEmitted = false
+  private _interruptRequested = false
+  private _interruptSettle: (() => void) | undefined
+  private _interruptPromise: Promise<void> | undefined
   /** Monotonic counter of OBSERVED TURN-START EDGES. Stamped onto every SESSION_RESULT
    *  so a LATE consumer can tell "this result is still the current turn" from "a newer
    *  turn has already started" (incident ed347bde, 2026-08-05: the result's ~800ms-late
@@ -725,6 +731,37 @@ export class ClaudeCodeSession {
    *  (monotonic) so it survives restarts; seeded from the record on attach.
    *  -1 = no watermark (old daemon / never seen a v). */
   private _consumedOffset = -1
+
+  private cancelPendingPermission(requestId: string): void {
+    this._resolvedPermissionRequestIds.add(requestId)
+    const pending = this._pendingPermissionRequests.get(requestId)
+    this._pendingPermissionRequests.delete(requestId)
+    this._clearPermissionReEmitTimer(requestId)
+    const sessionId = this.claudeSessionId
+    if (!sessionId) return
+    log.session.info('pending permission cancelled', { sessionId, requestId, toolName: pending?.request.tool_name })
+    bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
+      sessionId, taskId: this.taskId, requestId,
+      toolName: pending?.request.tool_name, allowed: false, cancelled: true,
+    }, ['*'], { source: 'session-runner' })
+    import('../core/session-tracker.js').then(async ({ getSessionByClaudeId, updateSessionRecord }) => {
+      const record = await getSessionByClaudeId(sessionId)
+      if (record?.pendingPermission?.requestId === requestId) {
+        await updateSessionRecord(sessionId, { pendingPermission: undefined })
+      }
+    }).catch(() => {})
+  }
+
+  private consumeInterruptRequest(): boolean {
+    if (!this._interruptRequested) return false
+    this._interruptRequested = false
+    for (const requestId of this._pendingPermissionRequests.keys()) {
+      this.cancelPendingPermission(requestId)
+    }
+    this._interruptSettle?.()
+    this._interruptSettle = undefined
+    return true
+  }
 
   /** Stamp this turn's first thinking/text/tool emit time (once per turn, main
    *  lane only). INFO log on each first — so a live `walnut-logs.sh session
@@ -941,6 +978,16 @@ export class ClaudeCodeSession {
    *  missed; dis-arm stays with the live CronDelete handler only. */
   setCronArmedFromSnapshot(): void { this._cronArmed = true }
 
+  /** Fire time (epoch ms) of the latest confirmed ScheduleWakeup — the harness
+   *  will re-invoke the CLI then, so while this is in the future the session is
+   *  deliberately mid-job even though the turn ended (user decision 2026-09-01,
+   *  inc-1788284320937: a self-managed 15-min watch loop showed Idle + a red
+   *  handed-back row between ticks). Never cleared: the fire opens a normal
+   *  turn, a re-schedule overwrites, and an un-renewed past value reads as
+   *  disarmed — time is the clearing mechanism (mirrors daemon-fold.wakeupAt). */
+  private _wakeupAt = 0
+  private _wakeupArmed(): boolean { return isWakeupArmed(this._wakeupAt) }
+
   // ── Background task / dynamic-workflow tracking ──
   // A dynamic-workflow turn (or any background subagent) fans out N tasks that
   // outlive the agent's text turn. The CLI emits a `result` as soon as the main
@@ -990,7 +1037,7 @@ export class ClaudeCodeSession {
    *  instead of rewriting an error to success. Cleared on spawn, on a new turn's
    *  writeMessage (the user moving on outranks the hold — upstream's hand-off contract),
    *  and on interrupt/process-death teardown. */
-  private _deferredOutcome: { isError: boolean; resultText?: string; totalCost?: number; duration?: number } | undefined
+  private _deferredOutcome: { isError: boolean; interrupted?: boolean; resultText?: string; totalCost?: number; duration?: number } | undefined
   /** Workflow name from the most recent task_started with task_type==='local_workflow'. */
   private _workflowName: string | undefined
   /** The workflow script Claude generated (task_started.prompt) + its description —
@@ -1128,7 +1175,7 @@ export class ClaudeCodeSession {
    *  `sidHint` covers the init edge, which runs BEFORE `claudeSessionId` is (re)assigned
    *  from the init line. */
   private _onTurnStartEdge(
-    source: 'init-after-result' | 'state-running',
+    source: 'init-after-result' | 'state-running' | 'user-message',
     persist: boolean,
     sidHint?: string,
   ): void {
@@ -1170,9 +1217,10 @@ export class ClaudeCodeSession {
     // when the phase is already IN_PROGRESS.
     if (!this.taskId) return
     const turnStartTaskId = this.taskId
+    const turnGen = this._turnGen
     import('../core/phase.js').then(({ applySessionPhase }) =>
       applySessionPhase(turnStartTaskId, 'session:turn-start', `session-runner:${source}`, {
-        sessionId: sid,
+        sessionId: sid, turnGen,
       }),
     ).catch((err) => {
       log.session.warn('turn-start phase pullback failed', {
@@ -1194,14 +1242,19 @@ export class ClaudeCodeSession {
   private _completeTurnOnIdle(): void {
     const sid = this.claudeSessionId
     if (!sid) return
+    const interrupted = this.consumeInterruptRequest()
     const outcome = this._deferredOutcome
     this._deferredOutcome = undefined
     // Detached (run_in_background) commands may outlive the gating drain — the
     // session stays 'running' for them (user decision 2026-08-28); the
-    // followup-closure branch settles to idle when the last one drains.
+    // followup-closure branch settles to idle when the last one drains. An
+    // armed ScheduleWakeup is the same shape (2026-09-01): the timer will
+    // re-invoke the CLI, so the session is still on the job.
     const detachedBgActive = this._detachedBgCount() > 0
-    this._activity = detachedBgActive ? 'Background command running' : undefined
-    this._processStatus = detachedBgActive ? 'running' : 'idle'
+    const wakeupPending = this._wakeupArmed()
+    this._activity = detachedBgActive ? 'Background command running'
+      : wakeupPending ? 'Waiting for scheduled wakeup' : undefined
+    this._processStatus = detachedBgActive || wakeupPending ? 'running' : 'idle'
     this._turnResultEmitted = true
     // Idle is the CLI's authoritative turn-over signal, and this lane completes a
     // turn whose `result` was withheld — nothing here will run the result case's
@@ -1212,10 +1265,11 @@ export class ClaudeCodeSession {
     // advance the watermark to it so a replay of this whole turn (result + idle)
     // is positionally suppressed after a restart.
     this._advanceConsumedOffset()
-    this.emitStatusChanged(detachedBgActive ? 'IN_PROGRESS' : 'NEED_ACTION', outcome?.isError ? (outcome.resultText ?? '').slice(0, 500) || undefined : undefined)
+    this.emitStatusChanged(detachedBgActive || wakeupPending ? 'IN_PROGRESS' : 'NEED_ACTION', outcome?.isError ? (outcome.resultText ?? '').slice(0, 500) || undefined : undefined)
     bus.emit(EventNames.SESSION_RESULT, {
       sessionId: sid, taskId: this.taskId,
       ...(detachedBgActive ? { detachedBgActive: true } : {}),
+      ...(wakeupPending ? { wakeupPending: true } : {}),
       // Turn generation at emit time — lets a LATE consumer detect that a newer
       // turn has since started (stale-result gate, core/phase.ts).
       turnGen: this._turnGen,
@@ -1225,7 +1279,7 @@ export class ClaudeCodeSession {
       // the signal; fullText would be pre-error prose.
       result: outcome?.isError ? (outcome.resultText ?? this.fullText) : this.fullText,
       isError: outcome?.isError ?? false,
-      ...(outcome?.totalCost !== undefined ? {
+      ...(interrupted || outcome?.interrupted ? { interrupted: true } : {}),      ...(outcome?.totalCost !== undefined ? {
         totalCost: outcome.totalCost,
         costDelta: this.billableCostDelta(outcome.totalCost),
       } : {}),
@@ -1851,6 +1905,8 @@ export class ClaudeCodeSession {
        * batch carries one (pickBatchUuid). Absent ⇒ envelope unchanged.
        */
       uuid?: string
+      markers?: Array<{ message: string; messageId: string }>
+      stopFence?: string | null
     },
   ): void {
     const args = ['-p', '--output-format', 'stream-json', '--verbose']
@@ -2144,6 +2200,8 @@ export class ClaudeCodeSession {
     // when the spawn will definitely fail (ENOENT). Soft-fails on remote errors
     // to avoid blocking on flaky connectivity.
     const startSpawn = async (): Promise<{ pid: number | null; outputFile: string; fileSize: number }> => {
+      const { sessionStops } = await import('../core/sessions/session-stop.js')
+      const stopFence = opts?.stopFence !== undefined ? opts.stopFence : await sessionStops.fence(tmpId)
       const cwdCheck = await checkCwdExists(resolvedCwd, host, sshTarget)
       if (!cwdCheck.ok) {
         const errMsg = cwdCheck.error ?? 'Working directory not available'
@@ -2156,10 +2214,12 @@ export class ClaudeCodeSession {
       }
       return transport.start({
       args,
+      stopFence,
       cwd: resolvedCwd,
       message,
       // Spread, so an absent uuid never reaches the daemon as an explicit key.
       ...(opts?.uuid ? { uuid: opts.uuid } : {}),
+      ...(opts?.markers ? { markers: opts.markers } : {}),
       resume: isResume,
       fork: forkSession,
       spillFile,
@@ -2213,6 +2273,7 @@ export class ClaudeCodeSession {
     // Publish the spawn barrier BEFORE awaiting it, so a send arriving during the
     // spawn window waits for the transport instead of respawning over it. Settles
     // on both success and failure (a failed spawn must not wedge delivery forever).
+    const consumedBeforeSpawn = this._consumedOffset
     const spawnPromise = startSpawn()
     this._spawnSettled = spawnPromise.then(() => {}, () => {})
       .finally(() => { this._spawnSettled = null })
@@ -2230,7 +2291,7 @@ export class ClaudeCodeSession {
       // offset ~0 — inc-1786428350008). Keeping it would positionally
       // suppress this session's next real result. In-memory only; the durable
       // record heals via the attach/reconcile epoch paths.
-      if (this._consumedOffset > result.fileSize) {
+      if (this._consumedOffset === consumedBeforeSpawn && this._consumedOffset > result.fileSize) {
         log.session.warn('spawn: consumedOffset exceeds stream file size — dead-incarnation watermark, resetting', {
           taskId: this.taskId, sessionId: this.claudeSessionId ?? undefined,
           staleConsumedOffset: this._consumedOffset, fileSize: result.fileSize, resume: isResume,
@@ -2269,7 +2330,6 @@ export class ClaudeCodeSession {
           updateSessionRecord(resumeSessionId, {
             outputFile: this._outputFile ?? undefined,
             pid: this.pid ?? undefined,
-            process_status: 'running',
           }).catch(() => {}),
         ).catch(() => {})
       }
@@ -3009,11 +3069,12 @@ export class ClaudeCodeSession {
    * `opts.uuid` — pre-assigned v4 uuid for this user line (the batch's, picked by
    * pickBatchUuid). Optional; absent leaves the envelope exactly as it was.
    */
-  async writeMessage(message: string, opts?: { uuid?: string }): Promise<boolean> {
+  async writeMessage(message: string, opts?: { uuid?: string; markers?: Array<{ message: string; messageId: string }>; stopFence?: string | null }): Promise<boolean> {
+    if (this._interruptPromise) await this._interruptPromise
     if (!this._transport) return false
-    const ok = await this._transport.writeMessage(message, opts)
-    if (!ok) return false
-    // Fresh-turn reset ONLY on idle→running (a new turn actually starts).
+    const { sessionStops } = await import('../core/sessions/session-stop.js')
+    const stopFence = opts?.stopFence !== undefined ? opts.stopFence : await sessionStops.fence(this.claudeSessionId!)
+    // Open the turn first: the CLI may emit its result before the send ack returns.
     //
     // A MID-TURN injection (injectMidTurn → writeMessage while _processStatus is
     // already 'running') must NOT reset stream-dedup state: the current assistant
@@ -3024,8 +3085,30 @@ export class ClaudeCodeSession {
     // three injections at :07/:24/:35 each duplicated the assistant message that
     // completed seconds later). Keys are per-msgId (unique across turns), so
     // keeping them until the next idle→running reset is harmless.
-    const isMidTurnInjection = this._processStatus === 'running'
-    if (!isMidTurnInjection) {
+    const transport = this._transport
+    let undoDispatch: (() => void) | undefined
+    const onDispatch = () => {
+      const isMidTurnInjection = this._processStatus === 'running'
+        && (!this._turnResultEmitted || this._teamActive)
+      if (isMidTurnInjection) return
+      const before = {
+        _processStatus: this._processStatus, _activity: this._activity,
+        resultEmitted: this.resultEmitted, _turnResultEmitted: this._turnResultEmitted,
+        _expectedTeardown: this._expectedTeardown, _turnGen: this._turnGen,
+        _deferredOutcome: this._deferredOutcome, _turnStartOffset: this._turnStartOffset,
+        _interruptRequested: this._interruptRequested,
+        _askUserIntercepted: this._askUserIntercepted, _sawApiTimeoutThisTurn: this._sawApiTimeoutThisTurn,
+        _toolInputFilePaths: this._toolInputFilePaths, _emittedStreamKeys: this._emittedStreamKeys,
+        _lastEmittedText: this._lastEmittedText, _currentStreamMsgId: this._currentStreamMsgId,
+        _warnedUnknownTypes: this._warnedUnknownTypes, _turnStartTs: this._turnStartTs,
+        _firstThinkingTs: this._firstThinkingTs, _firstTextTs: this._firstTextTs, _firstToolTs: this._firstToolTs,
+      }
+      const eventAt = this._lastJsonlEventTs
+      const offset = transport.fileSize
+      undoDispatch = () => {
+        if (this._transport === transport && this._turnGen === before._turnGen + 1
+          && this._lastJsonlEventTs === eventAt && transport.fileSize === offset) Object.assign(this, before)
+      }
       this._processStatus = 'running'  // Back to running from idle
       this._activity = undefined
       this.resultEmitted = false
@@ -3051,20 +3134,30 @@ export class ClaudeCodeSession {
       // died — either way the outcome is spent). Mid-turn injections skip this
       // block, so an ACTIVE hold (status 'running') is never cleared here.
       this._deferredOutcome = undefined
+      // A stop whose turn had already ended never gets a result to consume it;
+      // the new turn must start with no interrupt on the books.
+      this._interruptRequested = false
       this._turnStartOffset = this._transport?.fileSize ?? 0  // Track where this turn's data begins
       this._askUserIntercepted = false
       this._sawApiTimeoutThisTurn = false
-      this._toolInputFilePaths.clear()  // Fresh turn — clear stale cached tool input paths
-      this._emittedStreamKeys.clear()   // Fresh turn — allow new events through dedup
-      this._lastEmittedText.clear()     // Fresh turn — reset progressive delta tracking
-      this._currentStreamMsgId = null   // Fresh turn — stream_event message tracking
-      this._warnedUnknownTypes.clear()  // Fresh turn — reset unknown-event warn set
+      this._toolInputFilePaths = new Map()
+      this._emittedStreamKeys = new Set()
+      this._lastEmittedText = new Map()
+      this._currentStreamMsgId = null
+      this._warnedUnknownTypes = new Set()
       // TTFT anchor: this FIFO write is the earliest turn-start evidence.
       this._turnStartTs = Date.now()
       this._firstThinkingTs = undefined
       this._firstTextTs = undefined
       this._firstToolTs = undefined
     }
+    let ok: boolean
+    try { ok = await transport.writeMessage(message, { ...opts, stopFence, onDispatch }) }
+    catch (error) { undoDispatch?.(); throw error }
+    if (!ok) { undoDispatch?.(); return false }
+    log.session.info('message sent to session via FIFO', { taskId: this.taskId, sessionId: this.claudeSessionId, messageLength: message.length })
+    // If a fast reply already settled the turn, a late send ack must not reopen it.
+    if (this._turnResultEmitted) return true
     this.emitStatusChanged('IN_PROGRESS')
     // Persist running state to session tracker so API consumers (frontend tree, etc.)
     // see the updated status immediately — not just WebSocket subscribers.
@@ -3079,9 +3172,6 @@ export class ClaudeCodeSession {
     if (this.claudeSessionId) {
       import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
         updateSessionRecord(this.claudeSessionId!, {
-          process_status: 'running',
-          activity: undefined,
-          last_status_change: new Date().toISOString(),
           ...(this.pid != null ? { pid: this.pid } : {}),
           ...(this._host ? { host: this._host } : {}),
           // Persist outputFile on every FIFO write, not just the resume path.
@@ -3096,7 +3186,6 @@ export class ClaudeCodeSession {
         }).catch(() => {})
       }).catch(() => {})
     }
-    log.session.info('message sent to session via FIFO', { taskId: this.taskId, sessionId: this.claudeSessionId, messageLength: message.length })
     this.startStallDiagTimer('fifo-write')
     return true
   }
@@ -3172,20 +3261,59 @@ export class ClaudeCodeSession {
     log.session.info('gracefulStop: complete', { taskId: this.taskId })
   }
 
-  /**
-   * Interrupt the running session: close stdin pipe, gracefully stop the process,
-   * and wait for it to exit so session state is flushed to disk.
-   *
-   * Two-phase shutdown:
-   *   1. SIGINT (like Ctrl+C) — Claude Code handles this gracefully and saves session state
-   *   2. SIGTERM (fallback) — if SIGINT doesn't kill within 5s
-   *
-   * Waits for the process to actually exit before returning, so --resume
-   * can find the saved session. Without this wait, the new --resume process
-   * races against the dying process's disk flush and fails with
-   * "No conversation found with session ID".
-   */
-  async interrupt(): Promise<void> {
+  interrupt(): Promise<void> {
+    if (this._interruptPromise) return this._interruptPromise
+    const pending = this.interruptTurnInPlace().then(async (keptAlive) => {
+      if (!keptAlive) await this.hardInterrupt()
+    }).finally(() => {
+      this._interruptRequested = false
+      this._interruptSettle = undefined
+      this._interruptPromise = undefined
+    })
+    this._interruptPromise = pending
+    return pending
+  }
+
+  private async interruptTurnInPlace(): Promise<boolean> {
+    if (!this._transport?.hasPipe) return false
+    if (this._processStatus !== 'running' || this._turnResultEmitted) return true
+    const settled = new Promise<boolean>((resolve) => { this._interruptSettle = () => resolve(true) })
+    this._interruptRequested = true
+    log.session.info('interrupt: sending interrupt control_request', {
+      sessionId: this.claudeSessionId, taskId: this.taskId, pid: this.pid,
+    })
+    try {
+      await this.readControlPayloadWithRequest(
+        `int-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+        { subtype: 'interrupt' }, INTERRUPT_ACK_TIMEOUT_MS, true)
+    } catch (err) {
+      if (!this._interruptRequested) return true
+      log.session.warn('interrupt: control request failed, stopping process', {
+        sessionId: this.claudeSessionId, taskId: this.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return false
+    }
+    // An ACK is not a turn boundary: a late result must never settle the replacement turn.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const consumed = await Promise.race([
+      settled,
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), INTERRUPT_SETTLE_TIMEOUT_MS) }),
+    ])
+    if (timer) clearTimeout(timer)
+    if (!consumed) {
+      log.session.warn('interrupt: turn did not settle, stopping process', {
+        sessionId: this.claudeSessionId, taskId: this.taskId, pid: this.pid,
+      })
+      return false
+    }
+    log.session.info('interrupt: turn aborted in place, process kept alive', {
+      sessionId: this.claudeSessionId, taskId: this.taskId, pid: this.pid,
+    })
+    return true
+  }
+
+  private async hardInterrupt(): Promise<void> {
     log.session.info('session interrupted', { taskId: this.taskId, pid: this.pid })
     this.resultEmitted = true
     this._deferredOutcome = undefined // #870: a cancelled hold never settles later
@@ -3208,9 +3336,15 @@ export class ClaudeCodeSession {
    * via resultEmitted — must call this FIRST, so the liveness monitor logs the exit
    * as expected instead of raising an error notification.
    */
-  markExpectedTeardown(reason: string): void {
+  markExpectedTeardown(reason: string): () => void {
+    const previous = this._expectedTeardown
+    const transport = this._transport
+    const turnGen = this._turnGen
     this._expectedTeardown = true
     log.session.debug('session teardown expected', { taskId: this.taskId, sessionId: this.claudeSessionId ?? undefined, reason })
+    return () => {
+      if (this._transport === transport && this._turnGen === turnGen) this._expectedTeardown = previous
+    }
   }
 
   /** Record-side lane changes (side-thread consume/promote) must reach the live
@@ -3807,6 +3941,12 @@ export class ClaudeCodeSession {
     const isWalnutInjected = event.type === 'user' && (event as unknown as Record<string, unknown>).subtype === 'walnut-injected'
     if (!isWalnutInjected) {
       this._lastClaudeOutputTs = Date.now()
+    } else if ((event as unknown as { walnutDelivery?: string }).walnutDelivery === 'ordered'
+      && this._turnResultEmitted && !this.resultEmitted && !this._teamActive && this._isReplayedByOffset() !== true) {
+      // The old turn may have just ended while the delivery was queued; the ordered marker re-establishes the new turn boundary.
+      this._turnResultEmitted = false
+      this._deferredOutcome = undefined
+      this._onTurnStartEdge('user-message', true)
     }
 
     try {
@@ -4150,6 +4290,14 @@ export class ClaudeCodeSession {
                 detail: compactedDetail({
                   trigger: meta?.trigger, preTokens: meta?.pre_tokens, postTokens: meta?.post_tokens,
                 }),
+                // The boundary's own uuid travels with the notice so the browser
+                // can absorb it against the history row the parser builds from
+                // the SAME line (it writes this uuid as the row's msgId). Without
+                // it the notice had no id evidence and depended on the pure-UI
+                // sweep, which compaction defeats by rewriting the very history
+                // the sweep needs to match — the live row and its persisted twin
+                // both stayed on screen (2026-09-21).
+                ...(typeof sys.uuid === 'string' && sys.uuid ? { uuid: sys.uuid } : {}),
               }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
             }
             // Post-compact authoritative usage pull (ACP Phase 2): the badge's
@@ -5061,6 +5209,19 @@ export class ClaudeCodeSession {
           }
           break
         }
+        // ScheduleWakeup confirmation: `tool_use_result.scheduledFor` (epoch ms,
+        // unique to that tool — no tool_use pairing needed) rides the tool_result
+        // user line. Latest schedule wins; expiry is time-based (_wakeupArmed).
+        {
+          const wakeupTur = (msg as unknown as { tool_use_result?: { scheduledFor?: unknown } }).tool_use_result
+          if (wakeupTur && typeof wakeupTur.scheduledFor === 'number' && wakeupTur.scheduledFor > 0) {
+            this._wakeupAt = wakeupTur.scheduledFor
+            log.session.info('ScheduleWakeup armed — session stays running until fire', {
+              sessionId: this.claudeSessionId, taskId: this.taskId,
+              wakeupAt: new Date(wakeupTur.scheduledFor).toISOString(),
+            })
+          }
+        }
         const userParentToolUseId = msg.parent_tool_use_id ?? undefined
         for (const block of msg.message.content) {
           if (block.type === 'tool_result') {
@@ -5185,13 +5346,16 @@ export class ClaudeCodeSession {
             this._idleDebt = Math.min(this._idleDebt + 1, 4)
           } else if (this._turnResultEmitted && this._runningBgCount() === 0
             && this._processStatus === 'running') {
-            if (this._detachedBgCount() > 0) {
-              // OTHER detached commands still working — this followup closed one
-              // of several. The session stays 'running' (user decision
-              // 2026-08-28); the LAST task's followup takes the branch below.
-              log.session.info('followup result — other detached background tasks still running', {
+            if (this._detachedBgCount() > 0 || this._wakeupArmed()) {
+              // OTHER detached commands still working — or a ScheduleWakeup is
+              // armed (the model re-armed its timer during this followup). The
+              // session stays 'running' (user decisions 2026-08-28 /
+              // 2026-09-01); the LAST closer (final drain, or a fired turn
+              // that does not re-arm) takes the branch below.
+              log.session.info('followup result — detached background work or armed wakeup still pending', {
                 sessionId: this.claudeSessionId, taskId: this.taskId,
                 detachedBgTasks: this._detachedBgCount(),
+                wakeupArmed: this._wakeupArmed(),
               })
             } else {
               // Followup-cycle CLOSURE for an already-settled turn. When the hold
@@ -5218,9 +5382,10 @@ export class ClaudeCodeSession {
               if (this.taskId) {
                 const followupTaskId = this.taskId
                 const followupSid = this.claudeSessionId ?? undefined
+                const turnGen = this._turnGen
                 import('../core/phase.js').then(({ applySessionPhase }) =>
                   applySessionPhase(followupTaskId, 'session:result', 'session-runner:followup-closure', {
-                    sessionId: followupSid, turnGen: this._turnGen,
+                    sessionId: followupSid, turnGen,
                   }),
                 ).catch((err) => {
                   log.session.warn('followup-closure phase flip failed', {
@@ -5311,8 +5476,11 @@ export class ClaudeCodeSession {
           // completes WITH it. Pre-fix, the drain lane (_completeTurnOnIdle) hardcoded
           // isError:false — a turn whose own result was an ERROR, withheld because a
           // subagent was live, completed as a success and the failure vanished.
+          // A user stop is never an error, whatever the CLI's is_error says.
+          const stoppedByUser = this.consumeInterruptRequest()
           this._deferredOutcome = {
-            isError: result.is_error === true,
+            isError: result.is_error === true && !stoppedByUser,
+            ...(stoppedByUser ? { interrupted: true } : {}),
             resultText: typeof result.result === 'string' && result.result ? result.result : undefined,
             totalCost: result.total_cost_usd,
             duration: result.duration_ms,
@@ -5389,10 +5557,14 @@ export class ClaudeCodeSession {
           && this.fullText.trim().length > 0
           && resultErrors !== undefined
           && resultErrors.every(e => e.startsWith('[ede_diagnostic]'))
-        const effectiveIsError = result.is_error && !isSoftEdeError
+        // A turn Walnut itself aborted (interrupt control_request) ends in the same
+        // is_error shape with NO text when the stop landed before the first token —
+        // the soft-ede check above can't see it. The user stopped it; not an error.
+        const userInterrupted = this.consumeInterruptRequest()
+        const effectiveIsError = result.is_error && !isSoftEdeError && !userInterrupted
 
         let conversationLost = false
-        if (result.is_error && resultErrors?.length && !isSoftEdeError) {
+        if (effectiveIsError && resultErrors?.length) {
           let errorMsg = resultErrors.join('; ')
           // Add cwd hint — Claude CLI uses cwd to resolve session storage path,
           // so a renamed/moved project directory causes "No conversation found"
@@ -5431,6 +5603,7 @@ export class ClaudeCodeSession {
           isError: result.is_error,
           effectiveIsError,
           ...(isSoftEdeError ? { softEdeDowngrade: true } : {}),
+          ...(userInterrupted ? { interrupted: true } : {}),
           hasFifo: this._transport?.hasPipe ?? false,
           ...(resultErrors?.length ? { errors: resultErrors } : {}),
         })
@@ -5471,6 +5644,13 @@ export class ClaudeCodeSession {
             // the last detached task drains.
             this._processStatus = 'running'
             this._activity = 'Background command running'
+          } else if (this._wakeupArmed()) {
+            // Armed ScheduleWakeup: the model ended this turn only to be
+            // re-invoked by the timer — still on the job (user decision
+            // 2026-09-01, inc-1788284320937). The fired turn's own lifecycle
+            // (or time-based expiry via the snapshot lane) settles it later.
+            this._processStatus = 'running'
+            this._activity = 'Waiting for scheduled wakeup'
           } else {
             this._processStatus = 'idle'  // Turn done, process alive, waiting for next writeMessage()
             this._activity = undefined
@@ -5640,6 +5820,7 @@ export class ClaudeCodeSession {
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
             teamActive: true,
+            ...(userInterrupted ? { interrupted: true } : {}),
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
 
           // Schedule team-idle check: periodically checks if subagent JSONL files
@@ -5651,9 +5832,12 @@ export class ClaudeCodeSession {
           // but the task must not flip NEED_ACTION and the status hint stays
           // IN_PROGRESS — server.ts skips the phase flip on this flag, and the
           // followup-closure branch hands back when the last detached task drains.
+          // An armed ScheduleWakeup is the same shape (2026-09-01): the fired
+          // turn's own final result (no re-arm → wakeup expired) hands back.
           const detachedBgActive = this._detachedBgCount() > 0
-          this.emitStatusChanged(detachedBgActive ? 'IN_PROGRESS' : 'NEED_ACTION')
-          log.session.info('session result emitted', { sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0, detachedBgActive })
+          const wakeupPending = this._wakeupArmed()
+          this.emitStatusChanged(detachedBgActive || wakeupPending ? 'IN_PROGRESS' : 'NEED_ACTION')
+          log.session.info('session result emitted', { sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0, detachedBgActive, wakeupPending })
           // retryExhausted: terminal upstream retry-exhaustion signature. Text match
           // (shared with session-auto-continue — keep ONE signature list) covers the
           // CLI's timeout result texts; the api_timeout debug marker covers turns
@@ -5675,7 +5859,9 @@ export class ClaudeCodeSession {
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
             retryExhausted,
+            ...(userInterrupted ? { interrupted: true } : {}),
             ...(detachedBgActive ? { detachedBgActive: true } : {}),
+            ...(wakeupPending ? { wakeupPending: true } : {}),
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
           // Turn-end read-back of the CLI's true settings (effort + model, fire-and-
           // forget). Same rationale as _completeTurnOnIdle: keep the badge in sync with
@@ -5930,38 +6116,7 @@ export class ClaudeCodeSession {
         const cc = event as unknown as { type: 'control_cancel_request'; request_id?: string }
         const requestId = cc.request_id
         if (!requestId) break
-        // Poison the id first: a daemon replay of the ORIGINAL control_request
-        // after this cancel must not resurrect the prompt.
-        this._resolvedPermissionRequestIds.add(requestId)
-        const pending = this._pendingPermissionRequests.get(requestId)
-        this._pendingPermissionRequests.delete(requestId)
-        this._clearPermissionReEmitTimer(requestId)
-        log.session.info('control_cancel_request — CLI withdrew pending permission request', {
-          sessionId: this.claudeSessionId,
-          taskId: this.taskId,
-          requestId,
-          toolName: pending?.request.tool_name,
-          wasPending: !!pending,
-        })
-        if (this.claudeSessionId) {
-          // Settle the UI card (renders as dismissed/denied) and stop the Waiting badge.
-          bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
-            sessionId: this.claudeSessionId,
-            taskId: this.taskId,
-            requestId,
-            toolName: pending?.request.tool_name,
-            allowed: false,
-            cancelled: true,
-          }, ['*'], { source: 'session-runner' })
-          // Clear the persisted Layer-2 copy — but only if it belongs to THIS
-          // request; a newer pending permission must not be wiped by an old cancel.
-          import('../core/session-tracker.js').then(async ({ getSessionByClaudeId, updateSessionRecord }) => {
-            const record = await getSessionByClaudeId(this.claudeSessionId!)
-            if (record?.pendingPermission?.requestId === requestId) {
-              await updateSessionRecord(this.claudeSessionId!, { pendingPermission: undefined })
-            }
-          }).catch(() => {})
-        }
+        this.cancelPendingPermission(requestId)
         break
       }
 
@@ -7177,6 +7332,7 @@ export class ClaudeCodeSession {
         requestId,
         toolName: pending.request.tool_name,
         allowed: allow,
+        turnGen: this._turnGen,
       }, ['*'], { source: 'session-runner' })
     }
 
@@ -7360,6 +7516,7 @@ export class SessionRunner {
    *  event before acpAbortTurn has killed the worker process group; queue drain
    *  must wait for the operation's completion, not merely that terminal frame. */
   private acpAbortInProgress = new Set<string>()
+  private nativeInterrupts = new Map<string, Promise<void>>()
   /** Prompt acceptance and its queue cleanup are separate async operations.
    *  A very fast ACP turn can emit its terminal fact between them; terminal
    *  drain waits on this barrier so the next oldest item cannot be stranded
@@ -7609,8 +7766,8 @@ export class SessionRunner {
     // loop) — messages wait quietly in the disk queue until the host is back,
     // the user hits Retry, or the user sends another message.
     import('./daemon-connection.js').then(({ setOnDaemonHostConnected }) => {
-      setOnDaemonHostConnected((hostKey) => {
-        this.redeliverPendingForHost(hostKey).catch((err) => {
+      setOnDaemonHostConnected((hostKey, connection) => {
+        this.redeliverPendingForHost(hostKey, connection).catch((err) => {
           log.session.warn('reconnect redelivery failed', { hostKey, error: err instanceof Error ? err.message : String(err) })
         })
       })
@@ -7676,11 +7833,7 @@ export class SessionRunner {
           break
 
         case EventNames.SESSION_INTERRUPT: {
-          // Bare turn-stop (composer stop button): interrupt the running CLI
-          // WITHOUT queuing a message. Reuses handleSend's interrupt prelude
-          // (session.interrupt() + batch cleanup) but never calls processNext —
-          // there is nothing to deliver, and the queue (if any) stays put until
-          // the user actually sends.
+          // Bare Stop does not drain messages queued before the interruption.
           const { sessionId } = eventData<'session:interrupt'>(event)
           if (!sessionId) break
           log.session.info('bare interrupt requested', { sessionId })
@@ -7697,22 +7850,7 @@ export class SessionRunner {
             catch (err) { log.session.warn('bare interrupt: sdk interrupt failed', { sessionId, error: err instanceof Error ? err.message : String(err) }) }
             break
           }
-          for (const [, session] of this.sessions) {
-            if (session.sessionId === sessionId) {
-              await session.interrupt()
-              break
-            }
-          }
-          if (this.activeProcessing.has(sessionId)) {
-            const oldBatchCount = this.batchCounts.get(sessionId) ?? 1
-            const oldBatchIds = this.batchMessageIds.get(sessionId)
-            this.clearActiveProcessing(sessionId, { kind: 'stopped' })
-            bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
-              sessionId,
-              count: oldBatchCount,
-              ...(oldBatchIds && oldBatchIds.length > 0 ? { messageIds: oldBatchIds } : {}),
-            }, ['main-ai'], { source: 'session-runner' })
-          }
+          await this.interruptNativeSession(sessionId)
         }
           break
 
@@ -7752,30 +7890,34 @@ export class SessionRunner {
             // result means idle, never stopped (stopped would also wrongly
             // clear the task's session slot below).
             const acpSession = cliSession ? undefined : this.findAcpSession(sessionId)
-            const status = isError ? 'error' : (acpSession ? 'idle' : (cliSession?.processStatus ?? 'stopped'))
+            const result = event.name === EventNames.SESSION_RESULT ? eventData<'session:result'>(event) : undefined
+            const workContinues = result?.teamActive === true || result?.backgroundActive === true
+              || result?.detachedBgActive === true || result?.wakeupPending === true
+            const liveStatus = acpSession ? 'idle' : (cliSession?.processStatus ?? 'stopped')
+            const status = isError && !(workContinues && liveStatus === 'running') ? 'error' : liveStatus
 
-            import('../core/session-tracker.js').then(({ updateSessionRecord, getSessionByClaudeId }) => {
+            import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
               updateSessionRecord(sessionId, {
                 process_status: status,
-                errorMessage: isError ? errorMessage : undefined,
-                activity: undefined,
+                errorMessage: status === 'error' ? errorMessage : undefined,
+                activity: status === 'running' ? cliSession?.activity : undefined,
                 last_status_change: new Date().toISOString(),
-                status_reason: isError ? 'api_error' : (status === 'idle' ? 'turn_completed' : 'normal_completion'),
+                status_reason: status === 'error' ? 'api_error'
+                  : result?.interrupted ? 'turn_interrupted'
+                  : (status === 'idle' ? 'turn_completed' : 'normal_completion'),
                 status_changed_by: 'session-runner',
-              }).then(() => {
-                // Clear task session slot only when truly stopped/error
-                if (status === 'stopped' || status === 'error') {
-                  getSessionByClaudeId(sessionId).then(rec => {
-                    if (rec?.taskId) {
-                      import('../core/task-manager.js').then(({ clearSessionSlot }) => {
-                        clearSessionSlot(rec.taskId!, sessionId).catch(() => {})
-                      }).catch(() => {})
-                    }
+              }).then(rec => {
+                // The snapshot may reject a stale status write, so clear the link based only on the status that was finally saved.
+                if ((rec.process_status === 'stopped' || rec.process_status === 'error') && rec.taskId) {
+                  import('../core/task-manager.js').then(({ clearSessionSlot }) => {
+                    clearSessionSlot(rec.taskId!, sessionId).catch(() => {})
                   }).catch(() => {})
                 }
               }).catch(() => {})
             }).catch(() => {})
           }
+
+          if (this.nativeInterrupts.has(sessionId)) break
 
           // Clear activeProcessing — try direct match first, then the rename fixup.
           // Session ID can change when --resume fails and Claude creates a new
@@ -7890,7 +8032,9 @@ export class SessionRunner {
           // has finished terminating the worker process group. The terminal
           // cancelled fact can arrive before acpAbortTurn resolves.
           if (!this.acpAbortInProgress.has(sessionId)
-            && !this.acpAbortInProgress.has(resolvedSessionId)) {
+            && !this.acpAbortInProgress.has(resolvedSessionId)
+            && !this.nativeInterrupts.has(sessionId)
+            && !this.nativeInterrupts.has(resolvedSessionId)) {
             const deliverySettlement = this.acpDeliverySettlements.get(sessionId)
               ?? this.acpDeliverySettlements.get(resolvedSessionId)
             if (deliverySettlement) await deliverySettlement
@@ -7901,7 +8045,7 @@ export class SessionRunner {
               })
             })
           } else {
-            log.session.info('acp: terminal event observed during abort — replacement remains queued', {
+            log.session.info('terminal event observed during interrupt, replacement remains queued', {
               sessionId,
             })
           }
@@ -7973,6 +8117,7 @@ export class SessionRunner {
     for (const timer of this.activeProcessingTimers.values()) clearTimeout(timer)
     this.activeProcessingTimers.clear()
     this.acpAbortInProgress.clear()
+    this.nativeInterrupts.clear()
     this.acpDeliverySettlements.clear()
     this.sdkSessionMap.clear()
     if (this.sdkClient) {
@@ -8021,6 +8166,7 @@ export class SessionRunner {
     for (const timer of this.activeProcessingTimers.values()) clearTimeout(timer)
     this.activeProcessingTimers.clear()
     this.acpAbortInProgress.clear()
+    this.nativeInterrupts.clear()
     this.acpDeliverySettlements.clear()
     this.sdkSessionMap.clear()
     if (this.sdkClient) {
@@ -8252,8 +8398,8 @@ export class SessionRunner {
    * red "session init failed" error notification. Safe no-op when the session
    * isn't in memory (already reaped, or another server owns it).
    */
-  markExpectedTeardown(claudeSessionId: string, reason: string): void {
-    this.findSessionByClaudeId(claudeSessionId)?.markExpectedTeardown(reason)
+  markExpectedTeardown(claudeSessionId: string, reason: string): (() => void) | undefined {
+    return this.findSessionByClaudeId(claudeSessionId)?.markExpectedTeardown(reason)
   }
 
   /**
@@ -8358,6 +8504,9 @@ export class SessionRunner {
     profile?: import('../core/types.js').SessionProfile
     /** Lane binding — exempts the session from capacity + default lists. */
     lane?: string
+    preassignedSessionId?: string
+    runtimeId?: string
+    waitForSpawn?: boolean
   }): Promise<{ claudeSessionId: string; title: string }> {
     await this.assertStartRouting(data)
     if (isAcpEngine(data.engine)) {
@@ -8389,7 +8538,7 @@ export class SessionRunner {
     const initTimeoutMs = isRemote ? 90_000 : 30_000
 
     let timer: ReturnType<typeof setTimeout>
-    const claudeSessionId = await Promise.race([
+    const claudeSessionId = data.waitForSpawn ? await sessionReady : await Promise.race([
       sessionReady,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
@@ -8410,6 +8559,9 @@ export class SessionRunner {
       host: data.host,
       totalStartMs: Date.now() - startTs,
       handleStartMs,
+    })
+    void this.processNext(claudeSessionId).catch((error) => {
+      log.session.warn('Failed to drain messages queued during task start', { sessionId: claudeSessionId, error: String(error) })
     })
     return { claudeSessionId, title }
   }
@@ -8797,6 +8949,7 @@ export class SessionRunner {
     lane?: string
     engine?: import('../core/types.js').SessionEngine
     forkedFromSessionId?: string
+    runtimeId?: string
     /** The human's own words when `message` carries a Walnut-built prefix; see
      *  SessionStartEvent.namingMessage. This engine is where an Ask's persona
      *  rides the message (ACP has no system-prompt channel), so it is the path
@@ -8836,6 +8989,7 @@ export class SessionRunner {
       ? { model: draftModelBase, ...(draftModelEffort ? { reasoning_effort: draftModelEffort } : {}) }
       : undefined
     const session = new AcpSession({
+      runtimeId: data.runtimeId,
       taskId: data.taskId,
       project: data.project ?? '',
       cwd,
@@ -9769,6 +9923,28 @@ export class SessionRunner {
     }
   }
 
+  private interruptNativeSession(sessionId: string): Promise<void> {
+    const existing = this.nativeInterrupts.get(sessionId)
+    if (existing) return existing
+    const session = this.findSessionByClaudeId(sessionId)
+    if (!session) return Promise.resolve()
+    const interruptedBatch = this.batchMessageIds.get(sessionId)
+    const pending = Promise.resolve().then(async () => {
+      await session.awaitSpawn()
+      await session.interrupt()
+      if (this.activeProcessing.has(sessionId) && this.batchMessageIds.get(sessionId) === interruptedBatch) {
+        const count = this.batchCounts.get(sessionId) ?? 1
+        const messageIds = this.batchMessageIds.get(sessionId)
+        this.clearActiveProcessing(sessionId, { kind: 'stopped' })
+        bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
+          sessionId, count, ...(messageIds?.length ? { messageIds } : {}),
+        }, ['main-ai'], { source: 'session-runner' })
+      }
+    }).finally(() => { this.nativeInterrupts.delete(sessionId) })
+    this.nativeInterrupts.set(sessionId, pending)
+    return pending
+  }
+
   private async handleSend(data: {
     sessionId: string
     message: string
@@ -9779,32 +9955,8 @@ export class SessionRunner {
   }): Promise<void> {
     const { sessionId, mode, interrupt, source } = data
 
-    if (interrupt) {
-      // Interrupt: gracefully stop the running session (SIGINT + wait for exit),
-      // then process next (which spawns --resume with saved session state)
-      for (const [, session] of this.sessions) {
-        if (session.sessionId === sessionId) {
-          await session.interrupt()
-          break
-        }
-      }
-
-      // Clean up batch tracking for the interrupted turn.
-      // No removeProcessed sweep: delivered batches were already removed eagerly
-      // at their delivery point; anything still 'processing' is an in-flight
-      // batch that must survive (sweeping it = silent message loss).
-      if (this.activeProcessing.has(sessionId)) {
-        const oldBatchCount = this.batchCounts.get(sessionId) ?? 1
-        const oldBatchIds = this.batchMessageIds.get(sessionId)
-        this.clearActiveProcessing(sessionId, { kind: 'stopped' })
-
-        bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
-          sessionId,
-          count: oldBatchCount,
-          ...(oldBatchIds && oldBatchIds.length > 0 ? { messageIds: oldBatchIds } : {}),
-        }, ['main-ai'], { source: 'session-runner' })
-      }
-    }
+    if (interrupt) await this.interruptNativeSession(sessionId)
+    else await this.nativeInterrupts.get(sessionId)
 
     // Model/mode switches no longer come through here — both are applied live at
     // the RPC/route layer (applyModel via apply_flag_settings; applyPermissionMode
@@ -9920,6 +10072,7 @@ export class SessionRunner {
    * If stdin write fails, the message stays queued for processNext after the turn completes.
    */
   private async injectMidTurn(sessionId: string): Promise<void> {
+    if (this.nativeInterrupts.has(sessionId)) await this.nativeInterrupts.get(sessionId)
     // Find the session with this Claude session ID
     let targetSession: ClaudeCodeSession | undefined
     for (const [, session] of this.sessions) {
@@ -9950,6 +10103,8 @@ export class SessionRunner {
       return this.processNext(sessionId)
     }
 
+    const { sessionStops } = await import('../core/sessions/session-stop.js')
+    const stopFence = await sessionStops.fence(sessionId)
     // The panel accepts input while the CLI is still spawning (the id is minted
     // before the process exists), so the FIFO may not be created yet. Wait for the
     // spawn rather than writing into a missing pipe and taking the respawn path.
@@ -9970,7 +10125,7 @@ export class SessionRunner {
     }
 
     // Atomically move pending messages to processing state
-    const newMsgs = await markProcessing(sessionId)
+    const newMsgs = await markProcessing(sessionId, stopFence)
     if (newMsgs.length === 0) return
 
     const combined = newMsgs.map((m) => m.message).join('\n\n')
@@ -9978,7 +10133,16 @@ export class SessionRunner {
     // findLast, so the LAST pre-assigned uuid in the batch wins (batch-uuid.ts).
     const uuid = pickBatchUuid(newMsgs)
 
-    if (await targetSession.writeMessage(combined, { uuid })) {
+    let delivered: boolean
+    try {
+      delivered = await targetSession.writeMessage(combined, {
+        uuid, stopFence, markers: newMsgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
+      })
+    } catch (error) {
+      this.settleResumeFailure(sessionId, newMsgs, error instanceof Error ? error : new Error(String(error)))
+      return
+    }
+    if (delivered) {
       // Injection succeeded — increment batch count so SESSION_BATCH_COMPLETED
       // includes these messages when the turn eventually completes
       this.batchCounts.set(sessionId, (this.batchCounts.get(sessionId) ?? 0) + newMsgs.length)
@@ -9991,13 +10155,6 @@ export class SessionRunner {
       registerEchoClaims(sessionId, newMsgs.map((m) => m.id), targetSession.lastPreparedOutbound ?? combined)
       log.session.info('handleSend: message injected mid-turn via stdin', { sessionId, count: newMsgs.length })
       this.logDeliveryLatency(sessionId, 'mid-turn', newMsgs, targetSession)
-
-      // Write synthetic user events so history has user messages for dedup.
-      // Without this, mid-turn injected messages are missing from JSONL history,
-      // causing optimistic message dedup to fail (user message appears twice).
-      for (const msg of newMsgs) {
-        if (msg.id) targetSession.writeSyntheticUserEvent(msg.message, msg.id)
-      }
 
       // Eagerly remove from disk queue — message written to FIFO, no re-delivery on crash.
       // Scoped to THIS batch's ids so a concurrent in-flight batch is never swept.
@@ -10064,16 +10221,8 @@ export class SessionRunner {
     }
   }
 
-  /**
-   * Settle a --resume spawn that the daemon CONFIRMED started (pid returned).
-   * Only now is it safe to drop the batch from the persistent queue and tell the
-   * UI it was delivered. Writes synthetic user events first so Phase-1 history has
-   * the user messages for optimistic-dedup. Called from send()'s onSpawnSettled(true).
-   */
+  // Remove the persisted queue only after both the start and the first message delivery are confirmed.
   private settleResumeSuccess(sessionId: string, session: ClaudeCodeSession, msgs: QueuedMessage[]): void {
-    for (const m of msgs) {
-      if (m.id) session.writeSyntheticUserEvent(m.message, m.id)
-    }
     // Echo-claim: --resume delivers the same combined payload via stdin — the
     // CLI echoes it as one canonical user line; bind at the next history parse.
     // start() ran prepareOutbound on the payload (image paths rewritten to the
@@ -10442,6 +10591,8 @@ export class SessionRunner {
       }
       return
     }
+    const { sessionStops } = await import('../core/sessions/session-stop.js')
+    const stopFence = await sessionStops.fence(sessionId)
 
     const { getConfig } = await import('../core/config-manager.js')
     const cfg = await getConfig()
@@ -10505,7 +10656,7 @@ export class SessionRunner {
         },
         // Re-emit the profile's spawn-time flags on the replacement CLI —
         // "Restart" must not silently strip a session's identity.
-        resumeProfileOpts(profile, lane, resumeSessionAt))
+        { ...resumeProfileOpts(profile, lane, resumeSessionAt), stopFence })
     })
   }
 
@@ -10519,7 +10670,9 @@ export class SessionRunner {
    * backstop runs first, so a permanently undeliverable message can't turn every
    * reconnect into another failed attempt plus another pair of error cards.
    */
-  private async redeliverPendingForHost(hostKey: string): Promise<void> {
+  private async redeliverPendingForHost(hostKey: string, connection?: import('../core/sessions/session-stop.js').SessionStopConnection): Promise<void> {
+    const { sessionStops } = await import('../core/sessions/session-stop.js')
+    await sessionStops.flush(hostKey, connection)
     await parkStalePending().catch(() => [])
     const pendingSessions = await getAllSessionsWithPending()
     if (pendingSessions.length === 0) return
@@ -10555,6 +10708,18 @@ export class SessionRunner {
    * @param mode - Optional permission mode override for the resumed session.
    */
   private async processNext(sessionId: string, mode?: string): Promise<void> {
+    if (this.nativeInterrupts.has(sessionId)) await this.nativeInterrupts.get(sessionId)
+    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const stopRecord = await getSessionByClaudeId(sessionId)
+    if (!stopRecord?.pid && (stopRecord?.status_reason === 'awaiting_spawn' || stopRecord?.status_reason === 'spawn_outcome_unknown')) {
+      log.session.info('processNext: waiting for initial spawn confirmation', { sessionId })
+      return
+    }
+    if (stopRecord?.stopRequest?.state === 'pending') {
+      log.session.info('processNext: waiting for user stop confirmation', { sessionId })
+      return
+    }
+    const stopFence = stopRecord?.stopRequest?.id ?? null
     if (this.nativeSessionReinitializations.has(sessionId)) {
       log.session.info('processNext: waiting for explicit session restart before delivery', { sessionId })
       try {
@@ -10574,7 +10739,7 @@ export class SessionRunner {
       return this.drainAcpQueue(acpSession, acpSession.sessionId ?? sessionId)
     }
 
-    const msgs = await markProcessing(sessionId)
+    const msgs = await markProcessing(sessionId, stopFence)
     if (msgs.length === 0) return
 
     this.setActiveProcessing(sessionId, msgs.length, msgs.map((m) => m.id))
@@ -10687,11 +10852,6 @@ export class SessionRunner {
         }
       }
 
-      // Build walnutMessageIds from the batch — one synthetic event per queued message.
-      // Each optimistic copy in the frontend has a unique queueId; we need a matching
-      // walnutMessageId in the JSONL for each one so Layer 1 dedup can remove them all.
-      const walnutMessageIds = msgs.map(m => m.id).filter(Boolean)
-
       // The session panel is interactive from the instant the id is minted, which is
       // BEFORE the CLI process exists. If the user types in that window, wait for the
       // spawn to land so we deliver over its fresh FIFO. Skipping this wait meant
@@ -10725,7 +10885,9 @@ export class SessionRunner {
         // FIFO liveness detection (O_WRONLY|O_NONBLOCK → ENXIO if nobody is reading).
         // No local PID pre-flight check needed.
         fifoAttempted = true
-        if (await targetSession.writeMessage(combined, { uuid: batchUuid })) {
+        if (await targetSession.writeMessage(combined, {
+          uuid: batchUuid, stopFence, markers: msgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
+        })) {
           log.session.info('processNext: message sent via stdin (no new process)', { sessionId })
           this.logDeliveryLatency(sessionId, 'stdin', msgs, targetSession)
           // Echo-claim: bind the canonical user-echo uuid to these qm ids at the
@@ -10733,13 +10895,6 @@ export class SessionRunner {
           // The claim holds the transport's PREPARED text — the echo carries the
           // remote-rewritten image paths, not the queue text (inc-1787704938224).
           registerEchoClaims(sessionId, msgs.map((m) => m.id), targetSession.lastPreparedOutbound ?? combined)
-
-          // Write synthetic user events to streams file so Phase 1 has user messages.
-          // One event per queued message so each optimistic copy can dedup by ID.
-          for (const wmId of walnutMessageIds) {
-            const msgText = msgs.find(m => m.id === wmId)!.message
-            targetSession.writeSyntheticUserEvent(msgText, wmId)
-          }
 
           // ── Eagerly remove from disk queue ──
           // Once the message is written to the FIFO, Claude has it. Remove from the
@@ -10776,7 +10931,11 @@ export class SessionRunner {
         // This ensures Claude Code flushes session state to disk so --resume can find it.
         // Without this, send() would SIGTERM the old process immediately, which can cause
         // --resume to fail and create a new session with a different ID.
-        await targetSession.gracefulStop()
+        try { await targetSession.gracefulStop() }
+        catch (error) {
+          if (!isDaemonCommandOutcomeUnknown(error)) throw error
+          log.session.warn('processNext: stop outcome unknown; reconnect must check the existing process', { sessionId })
+        }
       }
 
       if (!targetSession) {
@@ -10840,7 +10999,11 @@ export class SessionRunner {
             },
             // Cold resume: re-emit the record's profile flags (spawn-time only),
             // plus the batch's pre-assigned user-line uuid when it has one.
-            resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, batchUuid))
+            {
+              ...resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, batchUuid),
+              stopFence,
+              markers: msgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
+            })
 
           bus.emit(EventNames.SESSION_STARTED, {
             taskId: record.taskId,
@@ -10894,7 +11057,11 @@ export class SessionRunner {
         // the batch's pre-assigned user-line uuid ONLY when no FIFO write was ever
         // attempted for it (see fifoAttempted: a repeat uuid makes the CLI skip the
         // turn if the first write did land).
-        resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, fifoAttempted ? undefined : batchUuid))
+        {
+          ...resumeProfileOpts(resolvedProfile, resolvedLane, resolvedResumeAt, fifoAttempted ? undefined : batchUuid),
+          stopFence,
+          markers: msgs.map((msg) => ({ message: msg.message, messageId: msg.id })),
+        })
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       // Clean up activeProcessing + batchCounts on any error (send() EMFILE, lookup failure, etc.)

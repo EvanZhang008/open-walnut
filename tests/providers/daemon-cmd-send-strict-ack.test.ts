@@ -13,11 +13,13 @@
  *   - FIFO write EAGAIN       → reason:'EAGAIN', retriable:true (no reap)
  *   - FIFO large payload      → loops past PIPE_BUF; full write or session_dead
  *   - successful write        → { ok:true }
+ *
+ * send-markers-v1: the marker reaches disk after the body enters the pipe and before the newline; a failure never truncates or rewrites the stream.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import {
   buildDeps,
@@ -30,16 +32,24 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
   let ctx: Awaited<ReturnType<typeof buildDeps>>
 
   beforeEach(async () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw new Error('Unexpected process signal in a FIFO test')
+    })
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {})
     ctx = await buildDeps()
   })
 
   afterEach(async () => {
-    await ctx.cleanup()
+    try {
+      await ctx.cleanup()
+    } finally {
+      vi.restoreAllMocks()
+    }
   })
 
   function makeFifo(): string {
     const p = path.join(ctx.tmpDir, `fifo-${Math.random().toString(36).slice(2)}.pipe`)
-    try { execSync(`mkfifo ${p}`) } catch (err) {
+    try { execFileSync('mkfifo', [p]) } catch (err) {
       throw new Error('mkfifo failed (needed for strict-ack FIFO tests): ' + (err as Error).message)
     }
     return p
@@ -79,7 +89,11 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
     const freshCtx = await buildDeps({ killImpl: killWithDead(new Set([200])) })
     try {
       const core = createDaemonCore(freshCtx.deps)
-      freshCtx.sessions.set('sid', makeTestSession({ pid: 200 }))
+      freshCtx.sessions.set('sid', makeTestSession({
+        pid: 200,
+        pipePath: path.join(freshCtx.tmpDir, 'precheck.pipe'),
+        jsonlPath: path.join(freshCtx.tmpDir, 'precheck.jsonl'),
+      }))
 
       const res = await core.handleSendCommand('sid', 'hello')
 
@@ -98,7 +112,9 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
     // ENOENT, but we want ENXIO (readerless FIFO). Make a real FIFO with no
     // reader.
     const fifo = makeFifo()
-    ctx.sessions.set('sid', makeTestSession({ pid: 300, pipePath: fifo }))
+    ctx.sessions.set('sid', makeTestSession({
+      pid: 300, pipePath: fifo, jsonlPath: path.join(ctx.tmpDir, 'no-reader.jsonl'),
+    }))
 
     const res = await core.handleSendCommand('sid', 'hello')
 
@@ -366,6 +382,373 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
     }
   }, 15_000)
 
+  // send-markers-v1 newline fence: wrap fs to record every write and append, then assert the order from the sequence itself, not from timing.
+  interface Traced {
+    events: string[]
+    fsProxy: typeof fs
+  }
+
+  function traceFs(opts: {
+    onNewline?: () => void
+    failAppend?: boolean
+  } = {}): Traced {
+    const events: string[] = []
+    const fsProxy = {
+      ...fs,
+      constants: fs.constants,
+      // Record only the bytes that really landed, so EAGAIN retries do not turn into phantom segments.
+      writeSync: ((fd: number, buf: Buffer, off: number, len: number) => {
+        const isNewline = buf.subarray(off, off + len).toString('utf-8') === '\n'
+        const n = fs.writeSync(fd, buf, off, len)
+        if (n > 0) {
+          events.push(isNewline ? 'newline' : 'body')
+          if (isNewline) opts.onNewline?.()
+        }
+        return n
+      }) as typeof fs.writeSync,
+      appendFileSync: ((p: string, data: string) => {
+        events.push('append')
+        if (opts.failAppend) {
+          const err = new Error('ENOSPC: no space left on device') as NodeJS.ErrnoException
+          err.code = 'ENOSPC'
+          throw err
+        }
+        return fs.appendFileSync(p, data)
+      }) as typeof fs.appendFileSync,
+    } as typeof fs
+    return { events, fsProxy }
+  }
+
+  function jsonlLines(p: string): Record<string, unknown>[] {
+    if (!fs.existsSync(p)) return []
+    return fs.readFileSync(p, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  }
+
+  function drain(readerFd: number): string {
+    const chunks: Buffer[] = []
+    for (let i = 0; i < 50; i++) {
+      const buf = Buffer.alloc(64 * 1024)
+      let n = 0
+      try { n = fs.readSync(readerFd, buf, 0, buf.length, null) } catch { break }
+      if (n <= 0) break
+      chunks.push(buf.subarray(0, n))
+    }
+    return Buffer.concat(chunks).toString('utf-8')
+  }
+
+  it('markers land between the payload body and its newline', async () => {
+    const traced = traceFs()
+    const freshCtx = await buildDeps()
+    freshCtx.deps.fs = traced.fsProxy
+    try {
+      const core = createDaemonCore(freshCtx.deps)
+      const fifo = path.join(freshCtx.tmpDir, 'barrier.pipe')
+      execFileSync('mkfifo', [fifo])
+      const jsonlPath = path.join(freshCtx.tmpDir, 'barrier.jsonl')
+      fs.writeFileSync(jsonlPath, '')
+      const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+      try {
+        freshCtx.sessions.set('sid', makeTestSession({ pid: 800, pipePath: fifo, jsonlPath }))
+        const res = await core.handleSendCommand('sid', 'ordered-send', undefined, [
+          { message: 'ordered-send', messageId: 'qm-1' },
+        ])
+        expect(res).toEqual({ ok: true })
+        expect(traced.events).toEqual(['body', 'append', 'newline'])
+
+        const lines = jsonlLines(jsonlPath)
+        expect(lines).toHaveLength(1)
+        expect(lines[0]).toMatchObject({
+          type: 'user',
+          subtype: 'walnut-injected',
+          walnutMessageId: 'qm-1',
+          walnutDelivery: 'ordered',
+        })
+        expect(JSON.parse(drain(readerFd).trim())).toMatchObject({
+          message: { role: 'user', content: 'ordered-send' },
+        })
+      } finally {
+        fs.closeSync(readerFd)
+      }
+    } finally {
+      await freshCtx.cleanup()
+    }
+  })
+
+  // The regression this fix targets: the CLI writes its reply through its own O_APPEND fd as soon as it sees a complete line, so the marker must already be ahead of it.
+  it('a reply written the instant the newline lands still comes AFTER the marker', async () => {
+    const freshCtx = await buildDeps()
+    const jsonlPath = path.join(freshCtx.tmpDir, 'reply-race.jsonl')
+    const traced = traceFs({
+      onNewline: () => {
+        fs.appendFileSync(jsonlPath, JSON.stringify({ type: 'assistant', id: 'reply' }) + '\n')
+        fs.appendFileSync(jsonlPath, JSON.stringify({ type: 'result', subtype: 'success' }) + '\n')
+      },
+    })
+    freshCtx.deps.fs = traced.fsProxy
+    try {
+      const core = createDaemonCore(freshCtx.deps)
+      const fifo = path.join(freshCtx.tmpDir, 'reply-race.pipe')
+      execFileSync('mkfifo', [fifo])
+      fs.writeFileSync(jsonlPath, '')
+      const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+      try {
+        freshCtx.sessions.set('sid', makeTestSession({ pid: 810, pipePath: fifo, jsonlPath }))
+        const res = await core.handleSendCommand('sid', 'race-send', undefined, [
+          { message: 'race-send', messageId: 'qm-race' },
+        ])
+        expect(res).toEqual({ ok: true })
+        const kinds = jsonlLines(jsonlPath).map((l) => `${l.type}${l.subtype ? ':' + l.subtype : ''}`)
+        expect(kinds).toEqual(['user:walnut-injected', 'assistant', 'result:success'])
+      } finally {
+        fs.closeSync(readerFd)
+      }
+    } finally {
+      await freshCtx.cleanup()
+    }
+  })
+
+  // One batch = one payload and N markers, and all of them must land before the newline.
+  it('every marker of a batch is appended before the newline', async () => {
+    const traced = traceFs()
+    const freshCtx = await buildDeps()
+    freshCtx.deps.fs = traced.fsProxy
+    try {
+      const core = createDaemonCore(freshCtx.deps)
+      const fifo = path.join(freshCtx.tmpDir, 'batch.pipe')
+      execFileSync('mkfifo', [fifo])
+      const jsonlPath = path.join(freshCtx.tmpDir, 'batch.jsonl')
+      fs.writeFileSync(jsonlPath, '')
+      const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+      try {
+        freshCtx.sessions.set('sid', makeTestSession({ pid: 820, pipePath: fifo, jsonlPath }))
+        const res = await core.handleSendCommand('sid', 'a\n\nb', undefined, [
+          { message: 'a', messageId: 'qm-a' },
+          { message: 'b', messageId: 'qm-b' },
+        ])
+        expect(res).toEqual({ ok: true })
+        expect(traced.events).toEqual(['body', 'append', 'append', 'newline'])
+        expect(jsonlLines(jsonlPath).map((l) => l.walnutMessageId)).toEqual(['qm-a', 'qm-b'])
+      } finally {
+        fs.closeSync(readerFd)
+      }
+    } finally {
+      await freshCtx.cleanup()
+    }
+  })
+
+  // A failed append never releases the newline: the body is already in the pipe, which is the existing 'partial' shape (reap, never truncate the stream).
+  it('a failed marker append withholds the newline and funnels to session_dead', async () => {
+    const traced = traceFs({ failAppend: true })
+    const freshCtx = await buildDeps()
+    freshCtx.deps.fs = traced.fsProxy
+    try {
+      const core = createDaemonCore(freshCtx.deps)
+      const fifo = path.join(freshCtx.tmpDir, 'append-fail.pipe')
+      execFileSync('mkfifo', [fifo])
+      const jsonlPath = path.join(freshCtx.tmpDir, 'append-fail.jsonl')
+      fs.writeFileSync(jsonlPath, '')
+      const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+      try {
+        freshCtx.sessions.set('sid', makeTestSession({ pid: 830, pipePath: fifo, jsonlPath }))
+        const res = await core.handleSendCommand('sid', 'no-marker', undefined, [
+          { message: 'no-marker', messageId: 'qm-fail' },
+        ])
+        expect(res).toMatchObject({ ok: false, reason: 'session_dead' })
+        expect(freshCtx.sessions.get('sid')!.exitReason).toBe('send-partial-write')
+        expect(traced.events).toEqual(['body', 'append'])
+        const wire = drain(readerFd)
+        expect(wire.includes('\n')).toBe(false)
+        expect(wire.includes('no-marker')).toBe(true)
+        expect(fs.readFileSync(jsonlPath, 'utf-8')).toBe('')
+      } finally {
+        fs.closeSync(readerFd)
+      }
+    } finally {
+      await freshCtx.cleanup()
+    }
+  })
+
+  it('ENXIO before any byte writes no marker at all', async () => {
+    const traced = traceFs()
+    const freshCtx = await buildDeps()
+    freshCtx.deps.fs = traced.fsProxy
+    try {
+      const core = createDaemonCore(freshCtx.deps)
+      const fifo = path.join(freshCtx.tmpDir, 'no-reader.pipe')
+      execFileSync('mkfifo', [fifo])
+      const jsonlPath = path.join(freshCtx.tmpDir, 'no-reader.jsonl')
+      fs.writeFileSync(jsonlPath, '')
+      freshCtx.sessions.set('sid', makeTestSession({ pid: 840, pipePath: fifo, jsonlPath }))
+      const res = await core.handleSendCommand('sid', 'never-delivered', undefined, [
+        { message: 'never-delivered', messageId: 'qm-enxio' },
+      ])
+      expect(res).toMatchObject({ ok: false, reason: 'ENXIO' })
+      expect(traced.events).toEqual([])
+      expect(fs.readFileSync(jsonlPath, 'utf-8')).toBe('')
+    } finally {
+      await freshCtx.cleanup()
+    }
+  })
+
+  it('EAGAIN with zero bytes accepted writes no marker and stays retriable', async () => {
+    const traced = traceFs()
+    const freshCtx = await buildDeps({ fifoWriteDeadlineMs: 300 })
+    freshCtx.deps.fs = traced.fsProxy
+    try {
+      const core = createDaemonCore(freshCtx.deps)
+      const fifo = path.join(freshCtx.tmpDir, 'stall-marker.pipe')
+      execFileSync('mkfifo', [fifo])
+      const jsonlPath = path.join(freshCtx.tmpDir, 'stall-marker.jsonl')
+      fs.writeFileSync(jsonlPath, '')
+      const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+      try {
+        freshCtx.sessions.set('sid', makeTestSession({ pid: 850, pipePath: fifo, jsonlPath }))
+        const fillFd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
+        try {
+          const filler = Buffer.alloc(64 * 1024, 0x7a)
+          for (;;) {
+            try { if (fs.writeSync(fillFd, filler, 0, filler.length) === 0) break } catch { break }
+          }
+        } finally {
+          fs.closeSync(fillFd)
+        }
+
+        const res = await core.handleSendCommand('sid', 'never-lands', undefined, [
+          { message: 'never-lands', messageId: 'qm-eagain' },
+        ])
+        expect(res).toEqual({ ok: false, reason: 'EAGAIN', retriable: true })
+        expect(freshCtx.sessions.get('sid')!.state).toBe('running')
+        expect(traced.events.includes('append')).toBe(false)
+        expect(fs.readFileSync(jsonlPath, 'utf-8')).toBe('')
+      } finally {
+        fs.closeSync(readerFd)
+      }
+    } finally {
+      await freshCtx.cleanup()
+    }
+  }, 15_000)
+
+  // Segmented writes (payload far larger than the pipe buffer + a stalled reader) plus concurrency: each marker may land only inside its own delivery.
+  it('segmented + concurrent sends keep each marker inside its own delivery', async () => {
+    const traced = traceFs()
+    const freshCtx = await buildDeps()
+    freshCtx.deps.fs = traced.fsProxy
+    try {
+      const core = createDaemonCore(freshCtx.deps)
+      const fifo = path.join(freshCtx.tmpDir, 'segmented.pipe')
+      execFileSync('mkfifo', [fifo])
+      const jsonlPath = path.join(freshCtx.tmpDir, 'segmented.jsonl')
+      fs.writeFileSync(jsonlPath, '')
+      const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+      try {
+        freshCtx.sessions.set('sid', makeTestSession({ pid: 860, pipePath: fifo, jsonlPath }))
+        const first = 'a'.repeat(128 * 1024)
+        const second = 'b'.repeat(128 * 1024)
+        const p1 = core.handleSendCommand('sid', first, undefined, [{ message: first, messageId: 'qm-1' }])
+        const p2 = core.handleSendCommand('sid', second, undefined, [{ message: second, messageId: 'qm-2' }])
+
+        const chunks: Buffer[] = []
+        await new Promise((r) => setTimeout(r, 300))
+        const pump = setInterval(() => {
+          try {
+            for (;;) {
+              const buf = Buffer.alloc(64 * 1024)
+              const n = fs.readSync(readerFd, buf, 0, buf.length, null)
+              if (n <= 0) break
+              chunks.push(buf.subarray(0, n))
+            }
+          } catch { /* EAGAIN */ }
+        }, 10)
+        try {
+          expect(await p1).toEqual({ ok: true })
+          expect(await p2).toEqual({ ok: true })
+        } finally {
+          clearInterval(pump)
+        }
+        chunks.push(Buffer.from(drain(readerFd)))
+
+        // Every delivery is body...append...newline; an append never lands in the middle of another delivery.
+        const appendPositions = traced.events
+          .map((e, i) => ({ e, i }))
+          .filter(({ e }) => e === 'append')
+          .map(({ i }) => i)
+        expect(appendPositions).toHaveLength(2)
+        for (const at of appendPositions) {
+          expect(traced.events[at - 1]).toBe('body')
+          expect(traced.events[at + 1]).toBe('newline')
+        }
+        expect(traced.events.filter((e) => e === 'newline')).toHaveLength(2)
+        expect(jsonlLines(jsonlPath).map((l) => l.walnutMessageId)).toEqual(['qm-1', 'qm-2'])
+
+        const lines = Buffer.concat(chunks).toString('utf-8').trim().split('\n')
+        expect(lines).toHaveLength(2)
+        expect(JSON.parse(lines[0]).message.content).toBe(first)
+        expect(JSON.parse(lines[1]).message.content).toBe(second)
+      } finally {
+        fs.closeSync(readerFd)
+      }
+    } finally {
+      await freshCtx.cleanup()
+    }
+  }, 20_000)
+
+  it.each([
+    { markers: 'not-an-array', label: 'non-array' },
+    { markers: [{ messageId: 'qm-1' }], label: 'missing message' },
+    { markers: [{ message: 'hi', messageId: '' }], label: 'empty messageId' },
+    { markers: [null], label: 'null entry' },
+  ])('invalid markers ($label) error out before any FIFO write', async ({ markers }) => {
+    const traced = traceFs()
+    const freshCtx = await buildDeps()
+    freshCtx.deps.fs = traced.fsProxy
+    try {
+      const core = createDaemonCore(freshCtx.deps)
+      const jsonlPath = path.join(freshCtx.tmpDir, 'invalid.jsonl')
+      fs.writeFileSync(jsonlPath, '')
+      freshCtx.sessions.set('sid', makeTestSession({
+        pid: 870,
+        pipePath: path.join(freshCtx.tmpDir, 'invalid.pipe'),
+        jsonlPath,
+      }))
+      const res = await core.handleSendCommand('sid', 'hi', undefined, markers as never)
+      expect('error' in res).toBe(true)
+      expect(traced.events).toEqual([])
+      expect(freshCtx.sessions.get('sid')!.state).toBe('running')
+      expect(fs.readFileSync(jsonlPath, 'utf-8')).toBe('')
+    } finally {
+      await freshCtx.cleanup()
+    }
+  })
+
+  it('a send without markers is byte-identical to the pre-feature payload', async () => {
+    const traced = traceFs()
+    const freshCtx = await buildDeps()
+    freshCtx.deps.fs = traced.fsProxy
+    try {
+      const core = createDaemonCore(freshCtx.deps)
+      const fifo = path.join(freshCtx.tmpDir, 'legacy.pipe')
+      execFileSync('mkfifo', [fifo])
+      const jsonlPath = path.join(freshCtx.tmpDir, 'legacy.jsonl')
+      fs.writeFileSync(jsonlPath, '')
+      const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
+      try {
+        freshCtx.sessions.set('sid', makeTestSession({ pid: 880, pipePath: fifo, jsonlPath }))
+        expect(await core.handleSendCommand('sid', 'legacy-send')).toEqual({ ok: true })
+        // body+newline go out in one write (no fence split), and the stream file is untouched.
+        expect(traced.events).toEqual(['body'])
+        expect(fs.readFileSync(jsonlPath, 'utf-8')).toBe('')
+        expect(drain(readerFd)).toBe(JSON.stringify({
+          type: 'user',
+          message: { role: 'user', content: 'legacy-send' },
+        }) + '\n')
+      } finally {
+        fs.closeSync(readerFd)
+      }
+    } finally {
+      await freshCtx.cleanup()
+    }
+  })
+
   // Deadline expiry with ZERO bytes accepted must stay retriable (EAGAIN, no
   // reap) — a CLI that boots slower than the deadline gets another chance.
   it('deadline expiry with zero bytes written returns EAGAIN and does not reap', async () => {
@@ -373,7 +756,7 @@ describe('L1.5 daemon cmdSend strict-ack', () => {
     try {
       const core = createDaemonCore(freshCtx.deps)
       const fifo = path.join(freshCtx.tmpDir, 'stall.pipe')
-      execSync(`mkfifo ${JSON.stringify(fifo)}`)
+      execFileSync('mkfifo', [fifo])
       const readerFd = fs.openSync(fifo, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK)
       try {
         freshCtx.sessions.set('sid', makeTestSession({ pid: 720, pipePath: fifo }))

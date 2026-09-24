@@ -203,7 +203,7 @@ function ensureBusSubscriber(): void {
         // replay window. daemon-reconnect's 'running' is a reconciliation
         // artifact (SSH flap), NOT a turn — treating it as one gave phones
         // phantom turn boundaries (same guard as server.ts markStreaming).
-        if (ps === 'running' && event.source !== 'daemon-reconnect') {
+        if (ps === 'running' && event.source !== 'daemon-reconnect' && event.source !== 'session-tracker') {
           emitSse(key, 'turn-start', {}, { reset: true })
         }
         emitSse(key, 'status', { processStatus: ps })
@@ -306,6 +306,10 @@ async function cloudSend(
 ): Promise<void> {
   const projected = await resolveHostOrAnswer(res, sessionId)
   if (!projected) return
+  if (projected.stopRequest?.state === 'pending') {
+    sendError(res, 409, 'stop_pending', 'Wait for the host to confirm the stop before sending a new message')
+    return
+  }
   const host = projected.host
   // Stable id: a client-supplied one (phone retry) makes the durable-queue
   // enqueue idempotent end-to-end — the relay dedupes on it, so a retry after a
@@ -313,6 +317,13 @@ async function cloudSend(
   // bank the send under the same id the phone already holds.
   const messageId = clientMessageId ?? `qm-mobile-${crypto.randomBytes(6).toString('hex')}`
   const { bridgeRequest, BridgeOfflineError } = await import('../ws/bridge-registry.js')
+  const { bindSessionSendFence } = await import('../../core/send-queue.js')
+  let stopFence: string | null
+  try { stopFence = await bindSessionSendFence(sessionId, messageId, projected.stopRequest?.id ?? null) }
+  catch {
+    sendError(res, 503, 'send_state_unavailable', 'Could not save the message stop boundary; retry after storage is available')
+    return
+  }
   try {
     // Images first: if any save fails the send is aborted with a precise error
     // (never a text-only turn that silently dropped the pictures). Augmented
@@ -329,7 +340,7 @@ async function cloudSend(
     // reconnect redelivery drains anything a daemon death stranded. 50s so
     // the daemon's own 45s relay timeout surfaces its precise error first.
     const relayPromise = bridgeRequest(host, 'session.message', {
-      sessionId, message: text, messageId,
+      sessionId, message: text, messageId, stopFence,
     }, 50_000).catch((err: unknown) => {
       if (err instanceof BridgeOfflineError) throw err
       // Transport-level failure mid-relay (bridge WS died, request timer):
@@ -357,7 +368,7 @@ async function cloudSend(
       new Promise<'deadline'>((r) => setTimeout(() => r('deadline'), SEND_ANSWER_DEADLINE_MS).unref?.()),
     ])
     if (raced === 'deadline') {
-      const banked = await bankSend(sessionId, host, text, messageId, images.length)
+      const banked = await bankSend(sessionId, host, text, messageId, images.length, stopFence)
       if (banked) {
         log.web.info('mobile session send banked at the answer deadline (relay still pending)', {
           sessionId, host, messageId, deadlineMs: SEND_ANSWER_DEADLINE_MS,
@@ -387,6 +398,10 @@ async function cloudSend(
       return
     }
     const relayErr = String(relayed.error ?? 'unknown')
+    if (relayed.errorKind === 'session_stopped') {
+      sendError(res, 409, 'session_stopped', relayErr)
+      return
+    }
     if (relayed.errorKind === 'not_found') {
       sendError(res, 404, 'not_found', relayErr)
       return
@@ -409,7 +424,7 @@ async function cloudSend(
     // the primary — and this path exists precisely for when the primary is not
     // reachable. Wrapping here would re-send the full instruction on every send
     // for as long as the outage lasts. The next relayed send fixes the mode.
-    await cloudSendDirect(res, host, projected, sessionId, text, messageId)
+    await cloudSendDirect(res, host, projected, sessionId, text, messageId, stopFence)
   } catch (err) {
     if (err instanceof CloudImageError) {
       sendError(res, 400, err.code, err.message)
@@ -424,7 +439,7 @@ async function cloudSend(
       // (Wi-Fi loss → dial-timeout → redial backoff), so the ladder ran out and
       // the bubble went red on a healthy, still-streaming session. See
       // core/send-queue.ts for why a queued 202 is honest and what stays 503.
-      const banked = await bankSend(sessionId, host, text, messageId, images.length)
+      const banked = await bankSend(sessionId, host, text, messageId, images.length, stopFence)
       if (banked) {
         res.status(202).json({ messageId, queued: true })
         return
@@ -444,11 +459,11 @@ async function cloudSend(
  * write (never a 202 for something we did not store).
  */
 async function bankSend(
-  sessionId: string, host: string, text: string, messageId: string, imageCount: number,
+  sessionId: string, host: string, text: string, messageId: string, imageCount: number, stopFence: string | null,
 ): Promise<boolean> {
   if (imageCount > 0) return false
   const { enqueueSessionSend } = await import('../../core/send-queue.js')
-  const opId = await enqueueSessionSend(sessionId, host, text, messageId)
+  const opId = await enqueueSessionSend(sessionId, host, text, messageId, stopFence)
   if (!opId) return false
   log.web.info('mobile session send banked for bridge return (fast-accept)', {
     sessionId, host, messageId, opId,
@@ -490,6 +505,7 @@ async function cloudSendDirect(
   sessionId: string,
   text: string,
   messageId: string,
+  stopFence: string | null,
 ): Promise<void> {
   const { bridgeRequest } = await import('../ws/bridge-registry.js')
   // Liveness precheck — if the CLI is gone (dead record, or the record itself
@@ -519,10 +535,12 @@ async function cloudSendDirect(
   }
   if (status.exists === true && status.alive === true) {
     // Live path — FIFO write first, marker only after the confirmed write.
-    const sent = await bridgeRequest(host, 'send', { sid: sessionId, message: text })
+    const sent = await bridgeRequest(host, 'send', { sid: sessionId, message: text, stopFence })
     if (sent.ok !== true) {
       const reason = String(sent.reason ?? sent.error ?? 'unknown')
-      if (reason === 'ENXIO' || reason === 'session_dead' || reason === 'not_found') {
+      if (reason === 'session_stopped') {
+        sendError(res, 409, 'session_stopped', 'Message predates the latest stop; send a new message to continue')
+      } else if (reason === 'ENXIO' || reason === 'session_dead' || reason === 'not_found') {
         sendError(res, 409, 'session_dead', 'Session process died mid-send')
       } else {
         sendError(res, 503, 'bridge_offline', `Send failed: ${reason}`)
@@ -536,8 +554,12 @@ async function cloudSendDirect(
     // the projection; bridgeResume writes the message as the initial stdin
     // line, same as the Mac's --resume spawn path in session-runner.
     const resumed = await bridgeRequest(host, 'bridgeResume', {
-      sid: sessionId, message: text, cwd: projected.cwd, model: projected.model,
+      sid: sessionId, message: text, cwd: projected.cwd, model: projected.model, stopFence,
     }, 30_000)
+    if (resumed.reason === 'session_stopped') {
+      sendError(res, 409, 'session_stopped', 'Message predates the latest stop; send a new message to continue')
+      return
+    }
     if (!resumed.pid) {
       const reason = String(resumed.error ?? 'resume failed')
       sendError(res, 409, 'session_dead', reason)

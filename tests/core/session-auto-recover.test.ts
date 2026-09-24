@@ -112,6 +112,7 @@ function makeHarness(
     send: async (sessionId, message, opts) => { h.sends.push({ sessionId, message, opts }); return { id: 'qm-x' } },
     getSession: async () => h.record,
     getTaskPhase: async () => h.phase,
+    recoveryOwner: async () => 'server',
     noteAttempt: async (sessionId, attempts, cause) => { h.budgetWrites.push({ sessionId, attempts, cause }) },
     emitNote: (sessionId, _taskId, message) => { h.notes.push({ sessionId, message }) },
     ...depOverrides,
@@ -137,6 +138,16 @@ async function settle(h: Harness, ms = 25_000): Promise<void> {
 }
 
 // ── The happy path: the incident, recovered ──
+
+describe('daemon cron recovery ownership', () => {
+  it.each(['daemon', 'unknown'] as const)('does not send a continue message when ownership is %s', async (owner) => {
+    const h = makeHarness({}, { recoveryOwner: async () => owner })
+    h.sar.schedule(h.record!, 'remote_unreachable')
+    await settle(h)
+    expect(h.sends).toEqual([])
+    expect(h.budgetWrites).toEqual([])
+  })
+})
 
 describe('auto-recover happy path', () => {
   it('resumes a mid-turn session killed by a host reboot', async () => {
@@ -174,6 +185,11 @@ describe('auto-recover happy path', () => {
 // ── wouldAttempt: the sync verdict callers use to decide phase advancement ──
 
 describe('wouldAttempt guards', () => {
+  it('does not cold-resume a start whose process was never confirmed', () => {
+    const h = makeHarness();
+    expect(h.sar.wouldAttempt(makeSession({ status_reason: 'spawn_outcome_unknown' }))).toEqual({ ok: false, reason: 'not-infra' });
+    expect(h.sends).toEqual([]);
+  });
   it('refuses when disabled', () => {
     const h = makeHarness({ enabled: false })
     expect(h.sar.wouldAttempt(h.record!)).toEqual({ ok: false, reason: 'disabled' })

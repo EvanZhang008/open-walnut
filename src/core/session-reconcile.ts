@@ -60,7 +60,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { log } from '../logging/index.js'
-import type { SessionRecord, ProcessStatus, TaskPhase } from './types.js'
+import type { SessionRecord, ProcessStatus } from './types.js'
 
 // ── Stream-file tail fold (pure) ──
 
@@ -113,6 +113,15 @@ export interface SessionTailFold {
    *  cron idle-kill protection on attach. Does NOT gate turn settle: a /loop
    *  session goes legitimately idle between fires. */
   cronActive?: boolean
+  /** Latest confirmed ScheduleWakeup fire time in the window (epoch ms).
+   *  Matched unpaired on `tool_use_result.scheduledFor` — unique to the tool.
+   *  While in the future the session is deliberately mid-job (user decision
+   *  2026-09-01, inc-1788284320937), so the reconciler must not converge its
+   *  'running' record to idle (mirrors daemon-fold's wakeupAt and the
+   *  snapshot projection). Best-effort like cronActive: a schedule in an
+   *  earlier-than-window turn is invisible, but the arming line always sits
+   *  in the LAST completed turn, which every window shape covers. */
+  wakeupAt?: number
   /** R1 verdict: the turn provably ended. */
   turnEnded: boolean
   /** Set only when turnEnded: 'error' | 'agent_complete'. */
@@ -255,6 +264,9 @@ export function foldSessionTail(
   // absent-marked by a later snapshot (a live sync subagent is legitimately
   // absent from every level payload).
   const seenInLevel = new Set<string>()
+  // A synthetic anchor sits at the end of an already consumed turn: the main turn's result is already outside the window.
+  let sawNormalResult = opts?.syntheticAnchor === true
+  let followupResult = false
   // Pass 1: locate the turn anchor — the LAST real user line in the window.
   // Skipped in syntheticAnchor mode: the window start IS the anchor.
   let anchorIdx = -1
@@ -270,20 +282,14 @@ export function foldSessionTail(
   }
   fold.foundTurnAnchor = true
 
-  // Byte-offset cursor (daemon `v` coordinate): end position of the line being
-  // folded. Seeded over the pre-anchor prefix, advanced per line in Pass 2.
-  // split('\n') strips exactly one byte per line, so byteLength(line)+1 restores it.
-  let lineEndOffset: number | undefined
-  if (baseOffset !== undefined) {
-    lineEndOffset = baseOffset
-    for (let i = 0; i <= anchorIdx; i++) lineEndOffset += Buffer.byteLength(lines[i], 'utf8') + 1
-  }
+  let lineEndOffset = baseOffset
 
-  // Pass 2: fold everything after the anchor.
-  for (let i = anchorIdx + 1; i < lines.length; i++) {
+  // Keep detached work that spans turns inside the window first; the turn-end verdict still looks only past the last anchor.
+  for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (lineEndOffset !== undefined) lineEndOffset += Buffer.byteLength(line, 'utf8') + 1
     if (!line.trim()) continue
+    if (i <= anchorIdx && !/"type"\s*:\s*"(?:user|system)"/.test(line)) continue
     let parsed: Record<string, unknown>
     try { parsed = JSON.parse(line) as Record<string, unknown> } catch {
       // Synthetic mode: an unparseable non-empty line is a torn/mid-write line —
@@ -306,13 +312,30 @@ export function foldSessionTail(
       fold.sawTurnActivity = true
     }
 
-    // A REAL user line after a result means a NEW turn began — that result can
-    // no longer be the current turn's verdict. Unreachable in anchor mode (the
-    // anchor IS the last real user line), but load-bearing in synthetic mode
-    // where multiple turns can sit inside the post-watermark window.
-    if (type === 'user' && isRealUserLine(parsed) && fold.lastResult) {
+    if (type === 'user' && isRealUserLine(parsed)) {
       fold.lastResult = null
+      sawNormalResult = false
+      followupResult = false
       fold.trailingIdle = false
+      fold.cliState = undefined
+      fold.teamActive = false
+      for (const [id, task] of Object.entries(fold.bgTasks)) {
+        if (task.isBackgrounded && !BG_TERMINAL.has(task.status) && !task.endedPerLevel) continue
+        delete fold.bgTasks[id]
+        seenInLevel.delete(id)
+      }
+      continue
+    }
+    if (i <= anchorIdx && type !== 'system') continue
+    if (i <= anchorIdx && !['task_started', 'task_progress', 'task_updated', 'task_notification', 'background_tasks_changed'].includes(String(parsed.subtype))) continue
+
+    // ScheduleWakeup confirmation (tool_result user line): latest wins. Keep
+    // in parity with daemon-fold's wakeupAt extraction.
+    if (type === 'user') {
+      const tur = parsed.tool_use_result as { scheduledFor?: unknown } | undefined
+      if (tur && typeof tur.scheduledFor === 'number' && tur.scheduledFor > 0) {
+        fold.wakeupAt = tur.scheduledFor
+      }
     }
 
     if (type === 'system') {
@@ -329,6 +352,7 @@ export function foldSessionTail(
         // (invisible in legacy stream files without delivery markers) gets
         // judged by the PREVIOUS turn's stale result (inc-1783644415695).
         if (fold.lastResult) { fold.lastResult = null; fold.trailingIdle = false }
+        followupResult = false
       } else if (subtype === 'session_state_changed') {
         const s = parsed.state as SessionTailFold['cliState']
         fold.cliState = s
@@ -339,6 +363,7 @@ export function foldSessionTail(
           // (one per subagent) are naturally superseded by the final result.
           fold.trailingIdle = false
           fold.lastResult = null
+          followupResult = false
         }
       } else if (taskId && (subtype === 'task_started' || subtype === 'task_progress')) {
         const prev = fold.bgTasks[taskId]
@@ -392,21 +417,15 @@ export function foldSessionTail(
         }
       }
     } else if (type === 'result') {
-      // EVERY result — including origin:task-notification — is a turn verdict
-      // in this fold (mirrors daemon-fold.ts; the golden test pins the two
-      // folds to identical verdicts). The CLI's notification FOLLOWUP turn
-      // (bg task completes while idle → autonomous init + running + summary)
-      // closes with a notification-origin result; excluding it left the fold
-      // asymmetric — the followup's anchor opened the turn but its verdict was
-      // refused, wedging turnActive forever (incident b07ee156). Walnut's
-      // LIVE handler keeps its own task-notification exclusion — that one
-      // guards task-phase transitions mid-stream, not cliState.
+      const notification = (parsed.origin as { kind?: string } | undefined)?.kind === 'task-notification'
+      followupResult = notification && sawNormalResult
+      if (!notification) sawNormalResult = true
       fold.lastResult = {
         isError: parsed.is_error === true,
         numTurns: parsed.num_turns as number | undefined,
         ...(lineEndOffset !== undefined ? { endOffset: lineEndOffset } : {}),
       }
-      fold.trailingIdle = false // this result's own companion idle must still arrive
+      fold.trailingIdle = false
     } else if (type === 'assistant') {
       const blocks = (parsed.message as { content?: unknown } | undefined)?.content
       if (Array.isArray(blocks)) {
@@ -439,7 +458,7 @@ export function foldSessionTail(
       // error itself is terminal evidence.
       fold.turnEnded = true
       fold.workStatus = 'error'
-    } else if (fold.trailingIdle && fold.gatingBgCount === 0 && !fold.teamActive) {
+    } else if ((fold.trailingIdle || followupResult) && fold.gatingBgCount === 0 && !fold.teamActive) {
       fold.turnEnded = true
       fold.workStatus = 'agent_complete'
     }
@@ -697,6 +716,13 @@ export async function reconcileProcessStatus(
 ): Promise<ReconcileOutcome> {
   const sid = record.claudeSessionId
   if (record.archived) return { converged: false, reason: 'archived' }
+  const { sessionRunner } = await import('../providers/claude-code-session.js')
+  const observedLive = sessionRunner.findSessionByClaudeId(sid)
+  const observedTurn = observedLive?.turnGen
+  const sameTurn = () => {
+    const live = sessionRunner.findSessionByClaudeId(sid)
+    return live === observedLive && live?.turnGen === observedTurn
+  }
 
   if (inputs.minAgeMs && inputs.minAgeMs > 0) {
     const last = new Date(record.last_status_change ?? record.startedAt ?? 0).getTime()
@@ -736,6 +762,17 @@ export async function reconcileProcessStatus(
   // snapshot lane, which projects detachedBgCount>0 as 'running'.
   if (fold.detachedBgCount > 0) {
     return { converged: false, reason: 'detached-bg-running' }
+  }
+  // An armed ScheduleWakeup is the same shape (user decision 2026-09-01,
+  // inc-1788284320937): the model ended its turn only to be re-invoked by the
+  // timer, so the record's 'running' is truthful. Converging it here would
+  // fight the snapshot lane's clock-driven projection. An expired wakeup does
+  // not veto — that is exactly the "never fired" debt this function collects.
+  {
+    const { isWakeupArmed } = await import('../providers/daemon-fold.js')
+    if (isWakeupArmed(fold.wakeupAt)) {
+      return { converged: false, reason: 'wakeup-armed' }
+    }
   }
   if (inputs.teamActiveHint && fold.workStatus !== 'error') {
     return { converged: false, reason: 'team-active' }
@@ -784,8 +821,15 @@ export async function reconcileProcessStatus(
     } catch { alive = false }
   }
   const to: ProcessStatus = workStatus === 'error' ? 'error' : (alive ? 'idle' : 'stopped')
+  if (!sameTurn()) return { converged: false, reason: 'turn-changed-concurrently' }
+  const { getSessionByClaudeId } = await import('./session-tracker.js')
+  const currentRecord = await getSessionByClaudeId(sid)
+  if (!currentRecord || currentRecord.statusRevision !== record.statusRevision || !sameTurn()) {
+    return { converged: false, reason: 'record-changed-concurrently' }
+  }
 
   let convergedRecord = false
+  let settledRecord = currentRecord
   if (recordDebt) {
     // ── Converge the record (conditional: skip if it changed since our snapshot) ──
     const {
@@ -822,6 +866,7 @@ export async function reconcileProcessStatus(
         ...(alive ? {} : { pid: undefined }),
       },
       (current) => {
+        if (!sameTurn() || current.statusRevision !== record.statusRevision) return false
         if (current.process_status !== 'running') return false
         if (current.last_status_change && current.last_status_change > startedAtIso) return false
         return true
@@ -829,6 +874,8 @@ export async function reconcileProcessStatus(
     )
     if (!updated) return { converged: false, reason: 'record-changed-concurrently' }
     convergedRecord = true
+    settledRecord = updated
+    if (sameTurn()) observedLive?.setProcessStatusFromReconciler(to)
 
     log.session.warn('reconcileProcessStatus: converged stuck running record to authoritative state', {
       sessionId: sid,
@@ -859,38 +906,29 @@ export async function reconcileProcessStatus(
   }
 
   // ── Phase sync: deliver what the lost result would have delivered ──
-  // ONLY when the task is still IN_PROGRESS (i.e. the phase never saw the result).
-  // Later phases (NEED_ACTION / terminal) are never
-  // regressed — a stale reconcile must not re-trigger triage or notifications.
-  let phaseSynced = false
-  if (record.taskId) {
-    try {
-      const { getTask } = await import('./task-manager.js')
-      const task = await getTask(record.taskId)
-      if (task?.phase === 'IN_PROGRESS') {
-        const { applySessionPhase } = await import('./phase.js')
-        // error and clean completion both land on NEED_ACTION (WAIT removed
-        // 2026-08-18): the turn is over and the human decides what's next; the
-        // failure signal lives on the session record, not the task phase.
-        const newPhase: TaskPhase = 'NEED_ACTION'
-        const res = await applySessionPhase(record.taskId, 'reconciler', 'session-reconcile', {
-          sessionId: sid,
-          newPhase,
-        })
-        phaseSynced = res.changed
-        if (phaseSynced) {
-          log.session.warn('reconcileProcessStatus: synced stuck task phase from stream evidence', {
-            sessionId: sid, taskId: record.taskId, newPhase, workStatus,
-          })
-        }
-      }
-    } catch (err) {
-      log.session.warn('reconcileProcessStatus: phase sync failed', {
-        sessionId: sid, taskId: record.taskId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
-  }
+  // Error and clean completion both land on NEED_ACTION (WAIT removed
+  // 2026-08-18): the turn is over and the human decides what's next; the failure
+  // signal lives on the session record, not the task phase. NEED_ACTION and
+  // terminal phases are never regressed — a stale reconcile must not re-trigger
+  // triage or notifications (handBackTaskOnSessionEnd enforces both).
+  //
+  // The inner gate used to be `phase === 'IN_PROGRESS'`, which silently skipped a
+  // task sitting at TODO — the shape of inc-1788328994907 (session "Stopped",
+  // task row grey). TODO is not a reason to withhold the hand-back: the live
+  // lane's sessionResultPhase maps TODO → NEED_ACTION too.
+  //
+  // Deliberately NOT widening the function's ENTRY gate (`phaseDebt` above stays
+  // IN_PROGRESS-only). This lane is polled every 30s, so admitting "record already
+  // stopped + task at TODO" would make it LEVEL-triggered and re-redden a task the
+  // human parked back at TODO, forever. Reaching here always means an edge:
+  // either the record was 'running' and just converged (recordDebt), or the task
+  // was left at IN_PROGRESS (phaseDebt).
+  const { handBackTaskOnSessionEnd } = await import('./phase.js')
+  const { getSessionsForTaskSync } = await import('./session-tracker.js')
+  const stillCurrent = () => sameTurn() && (!record.taskId
+    || getSessionsForTaskSync(record.taskId).find((s) => s.claudeSessionId === sid)?.statusRevision === settledRecord.statusRevision)
+  const phaseSynced = await handBackTaskOnSessionEnd(record.taskId, sid, 'session-reconcile', { shouldApply: stillCurrent })
+  if (!stillCurrent()) return { converged: false, reason: 'record-changed-concurrently' }
 
   if (!convergedRecord && !phaseSynced) {
     // Phase-debt path where the phase moved on concurrently — honest no-op.

@@ -75,7 +75,7 @@ export interface ApplyOutcome {
  * Contract §5 order — dead first, waiting/turnActive map to running ('waiting'
  * stays display-layer), a trailing error result surfaces as 'error', else idle.
  */
-export function projectProcessStatus(s: SessionSnapshot): ProcessStatus {
+export function projectProcessStatus(s: SessionSnapshot, nowMs?: number): ProcessStatus {
   if (s.cliState === 'dead') {
     return s.lastResult?.isError || (s.exitCode ?? 0) !== 0 ? 'error' : 'stopped'
   }
@@ -88,6 +88,14 @@ export function projectProcessStatus(s: SessionSnapshot): ProcessStatus {
   // keeps working is still working; the error re-surfaces at drain. Absent
   // field (pre-field daemon) = 0 = old behavior.
   if ((s.detachedBgCount ?? 0) > 0) return 'running'
+  // An armed ScheduleWakeup is the same product decision, third leg
+  // (2026-09-01, inc-1788284320937: a self-managed 15-min watch loop showed
+  // Idle between ticks): the model ended its turn ONLY to be re-invoked by
+  // the timer, so the session is still on the job. Time-driven — an expired,
+  // un-renewed wakeup reads as disarmed on the next projection (the 30s pull
+  // lane re-projects even without new bytes). Same before-error placement as
+  // detached work.
+  if (isWakeupArmed(s.wakeupAt, nowMs)) return 'running'
   if (s.lastResult?.isError) return 'error' // matches reconcileProcessStatus target semantics
   return 'idle'
 }
@@ -239,6 +247,7 @@ export async function applySnapshot(
 
   const {
     getSessionByClaudeId,
+    getSessionByClaudeIdSync,
     updateSessionRecordConditionally,
     emitSessionStatusChanged,
   } = await import('./session-tracker.js')
@@ -413,6 +422,29 @@ export async function applySnapshot(
     }
   }
 
+  const reconcileRunningPhase = async (): Promise<void> => {
+    if (projected !== 'running' || snapshot.cliState === 'waiting' || snapshot.pendingPermission) return
+    const current = await getSessionByClaudeId(sessionId)
+    if (!current?.taskId || current.process_status !== 'running' || current.pendingPermission
+      || (getAppliedV(sessionId) ?? 0) > snapshot.v
+      || (current.consumedOffset ?? 0) > snapshot.v) return
+    try {
+      const { applySessionPhase } = await import('./phase.js')
+      await applySessionPhase(current.taskId, 'session:turn-start', `snapshot-apply:${source}`, {
+        sessionId,
+        shouldApply: () => sameTurn() && getAppliedV(sessionId) === snapshot.v
+          && getSessionByClaudeIdSync(sessionId)?.statusRevision === current.statusRevision
+          && !sessionRunner.findSessionByClaudeId(sessionId)?.hasPendingPermission
+          && projectProcessStatus(snapshot) === 'running',
+      })
+    } catch (err) {
+      log.session.warn('snapshot turn-start phase pullback failed', {
+        sessionId, taskId: current.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   const settledTurn = ((projected === 'idle' && snapshot.cliState === 'idle' && !snapshot.lastResult?.isError)
     || (TERMINAL.has(projected) && snapshot.cliState === 'dead'))
     && !snapshot.turnActive && !!snapshot.lastResult
@@ -463,38 +495,11 @@ export async function applySnapshot(
     }
   }
 
+  // The session state has converged, but the task may still have missed its hand-back; a later manual edit must not be overwritten by an old snapshot.
   if (duplicate) {
+    await reconcileRunningPhase()
     await reconcileSettledPhase(record)
     return { outcome: reconnectActivityCleared ? 'applied' : 'noop', projected }
-  }
-
-  // ── Turn-start phase pullback on snapshot evidence (inc-1787512825254) ──
-  // The CLI emits NO session_state_changed{running} for self-woken turns (a
-  // background task-notification dequeued from its internal queue starts a
-  // real turn with no external send), so neither event-lane turn-start edge
-  // (state-running / init-after-result) fires and the task stays on the
-  // previous turn's NEED_ACTION while the CLI is visibly working. The fold
-  // DOES see the new turn's bytes — this projection is the very evidence that
-  // paints the green Running dot, so it must pull the phase back too, or the
-  // UI ships "Running session + red handed-back row". Runs on every live
-  // running projection (not just applied writes) so a boot-adopted running
-  // record with a stale red phase also heals; applySessionPhase no-ops on
-  // IN_PROGRESS and never overwrites terminal phases. 'waiting' / pending
-  // permission are excluded: paused-on-a-prompt projects 'running' as well,
-  // but that red row is the awaiting-human feature working as designed.
-  if (projected === 'running' && snapshot.cliState !== 'waiting'
-    && !snapshot.pendingPermission && !record.pendingPermission && record.taskId) {
-    const pullbackTaskId = record.taskId
-    import('./phase.js').then(({ applySessionPhase }) =>
-      applySessionPhase(pullbackTaskId, 'session:turn-start', `snapshot-apply:${source}`, {
-        sessionId,
-      }),
-    ).catch((err) => {
-      log.session.warn('snapshot turn-start phase pullback failed', {
-        sessionId, taskId: pullbackTaskId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    })
   }
 
   // ── enforce ──
@@ -589,13 +594,15 @@ export async function applySnapshot(
     }
   }
 
+  let statusChanged = false
   const updated = await updateSessionRecordConditionally(
     sessionId,
     updates as Parameters<typeof updateSessionRecordConditionally>[1],
     (current) => {
-      if (current.archived) return false
+      if (!sameTurn() || current.archived) return false
       if (recoveringConnection && (!connectionError(current) || !canRecoverConnection?.(current)
         || (getAppliedV(sessionId) ?? 0) > snapshot.v)) return false
+      statusChanged = current.process_status !== projected
       // Re-checked UNDER the tracker's write lock — the check-then-act above
       // spans awaits, so this is the only place the decision is atomic (C5).
       const currentOffset = typeof current.consumedOffset === 'number' ? current.consumedOffset : -1
@@ -622,9 +629,14 @@ export async function applySnapshot(
       // same-v 'running' from resurrecting a dead record, and a replayed
       // settled snapshot from regressing a live one after a walnut restart).
       // Out-of-band evidence (process death / permission pause) is genuinely
-      // new at the same v and passes.
+      // new at the same v and passes. A snapshot carrying a ScheduleWakeup
+      // time is CLOCK-driven: its projection legitimately changes with zero
+      // new bytes (armed→running now, expired→idle later on the 30s pull), so
+      // it must also pass — otherwise a wakeup that never fires wedges the
+      // session. The clock can only change liveness; it cannot overturn death evidence at the same version.
+      const clockDriven = (snapshot.wakeupAt ?? 0) > 0 && !TERMINAL.has(current.process_status)
       // 连接恢复不产生新流字节，但只有读取前后的身份未变时才能推翻连接错误。
-      if (currentOffset === snapshot.v && !outOfBand && !recoveringConnection) return false
+      if (currentOffset === snapshot.v && !outOfBand && !clockDriven && !recoveringConnection) return false
 
       // (3) Something must actually change (a first-sight epoch stamp counts).
       return recoveringConnection || current.process_status !== projected
@@ -632,6 +644,7 @@ export async function applySnapshot(
         || (typeof updates.streamEpoch === 'string' && current.streamEpoch !== updates.streamEpoch)
     },
   )
+  await reconcileRunningPhase()
   if (!updated) return reconnectActivityCleared
     ? { outcome: 'applied', projected }
     : { outcome: 'skipped', reason: 'predicate-false', projected }
@@ -659,9 +672,9 @@ export async function applySnapshot(
   // mid-turn decision on the converged value (setProcessStatusFromReconciler
   // precedent — see session-health-monitor.reconcileStuckRunningSessions).
   try {
-    const { sessionRunner } = await import('../providers/claude-code-session.js')
     const liveSession = sessionRunner.findSessionByClaudeId(sessionId)
-    if (liveSession) {
+    if (liveSession && sameTurn() && getAppliedV(sessionId) === snapshot.v
+      && getSessionByClaudeIdSync(sessionId)?.statusRevision === updated.statusRevision) {
       liveSession.setProcessStatusFromReconciler(projected)
       // Epoch reset: the live CCS's in-memory _consumedOffset is the SAME dead
       // coordinate the record held — and it is what the replay guards actually
@@ -677,5 +690,13 @@ export async function applySnapshot(
   } catch { /* runner not loaded — session is attach-only */ }
 
   await reconcileSettledPhase(updated)
+  if (statusChanged && TERMINAL.has(projected) && updated.taskId) {
+    const { handBackTaskOnSessionEnd } = await import('./phase.js')
+    await handBackTaskOnSessionEnd(updated.taskId, sessionId, `snapshot-apply:${source}`, {
+      shouldApply: () => sameTurn() && getAppliedV(sessionId) === snapshot.v
+        && getSessionByClaudeIdSync(sessionId)?.statusRevision === updated.statusRevision,
+    })
+  }
+
   return { outcome: 'applied', projected }
 }

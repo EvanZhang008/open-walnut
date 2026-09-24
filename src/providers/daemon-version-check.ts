@@ -103,7 +103,28 @@ const DAEMON_SOURCE_FILES = [
   // unchanged means no host self-upgrades and the old dedup rules keep running.
   'src/providers/trigger-check-core.ts',
   'src/core/transcript-chain.ts',
+  'src/core/transcript-chain-leaf.ts',
+  'src/core/transcript-chain-prefilter.ts',
   'src/core/bash-file-ops.ts',
+  'src/providers/daemon-instance-lock.ts',
+  'src/providers/daemon-command-drain.ts',
+  'src/providers/daemon-cron-supervision.ts',
+  'src/providers/daemon-cron-store.ts',
+  'src/providers/daemon-cron-controller.ts',
+  'src/providers/daemon-cron-schedule.ts',
+  'src/providers/daemon-cron-transcript.ts',
+  'src/providers/daemon-cron-observer.ts',
+  'src/providers/daemon-cron-host.ts',
+  'src/providers/daemon-cron-runtime.ts',
+  'src/providers/daemon-cron-metadata.ts',
+  'src/providers/daemon-spawn-barrier.ts',
+  'src/providers/daemon-service-config.ts',
+  'src/providers/daemon-service-manager.ts',
+  'src/providers/daemon-service-artifact.ts',
+  'src/providers/daemon-service-cli.ts',
+  'src/providers/daemon-service-files.ts',
+  'src/providers/daemon-service-system.ts',
+  'src/providers/daemon-service-handover.ts',
 ] as const
 
 /**

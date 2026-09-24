@@ -66,6 +66,9 @@ let liveSession: { turnGen: number } | undefined
 let liveSid: string | null = null
 
 import { ClaudeCodeSession, sessionRunner } from '../../src/providers/claude-code-session.js'
+import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
+import * as sessionManagers from '../../src/providers/session-manager.js'
+import type { TransportStartOptions } from '../../src/providers/session-manager.js'
 import { applySessionPhase } from '../../src/core/phase.js'
 import { addTask, updateTaskRaw, getTask } from '../../src/core/task-manager.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
@@ -101,7 +104,7 @@ function mockTransport() {
     isRemote: true, hasPipe: true, processName: 'claude', pid: null,
     outputFile: null, host: null, fileSize: 0,
     imageCache: new Map<string, string>(), lastEventAt: 0, tailOffset: 0,
-    writeMessage: () => true, writeRaw: () => true,
+    writeMessage: (_message: string, opts?: { onDispatch?: () => void }) => { opts?.onDispatch?.(); return true }, writeRaw: () => true,
     writeSyntheticUserEvent: () => {}, deletePipe: () => {},
     renameForSession: () => {}, kill: () => {}, stop: async () => {},
   }
@@ -114,6 +117,7 @@ interface Internals {
   _consumedOffset: number
   _turnGen: number
   _turnResultEmitted: boolean
+  resultEmitted: boolean
   claudeSessionId: string | null
   turnGen: number
   processStatus: string
@@ -333,6 +337,176 @@ describe('QUEUED-SEND shape: the writeMessage delivery is itself a turn-start ed
     expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
   })
 
+  it.each(['detached', 'wakeup'] as const)('a send after a settled %s turn emits a fresh result without init', async (work) => {
+    const sid = `sess-followup-${work}`
+    const taskId = await taskInPhase('IN_PROGRESS')
+    const session = makeRunningSession(taskId, sid)
+    liveSession = session
+    liveSid = sid
+    const results: Array<Record<string, unknown>> = []
+    bus.subscribe('session-runner', (event: BusEvent) => {
+      if (event.name === EventNames.SESSION_RESULT) results.push(event.data as Record<string, unknown>)
+    })
+    if (work === 'detached') {
+      session.handleStreamLine(JSON.stringify({
+        type: 'system', subtype: 'task_started', task_id: 'bg', is_backgrounded: true,
+      }), 900)
+    } else {
+      session.handleStreamLine(JSON.stringify({
+        type: 'user', message: { role: 'user', content: [] },
+        tool_use_result: { scheduledFor: Date.now() + 60_000 },
+      }), 900)
+    }
+    session.handleStreamLine(resultLine(sid, 'first answer'), 1000)
+    session.handleStreamLine(stateLine(sid, 'idle'), 1100)
+    expect(session.processStatus).toBe('running')
+    expect(results).toHaveLength(1)
+    const firstGen = session.turnGen
+    expect(await session.writeMessage('followup')).toBe(true)
+    expect(session.turnGen).toBe(firstGen + 1)
+    expect(session._turnResultEmitted).toBe(false)
+    session.handleStreamLine(resultLine(sid, 'second answer'), 1300)
+    expect(results).toHaveLength(2)
+    expect(results[1].turnGen).toBe(firstGen + 1)
+  })
+
+  it.each(['__local__', 'test-host'])('a reply before the real transport acknowledgement is not lost or reopened: %s', async (host) => {
+    const sid = `sess-reply-before-ack-${host}`
+    const taskId = await taskInPhase('IN_PROGRESS')
+    const session = makeRunningSession(taskId, sid)
+    Object.assign(session, { pid: 424242 })
+    vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      expect(pid).toBe(424242)
+      expect(signal).toBe(0)
+      return true
+    })
+    vi.spyOn(session as unknown as ClaudeCodeSession, 'refreshAppliedSettings').mockResolvedValue(null)
+    liveSession = session
+    liveSid = sid
+    const results: Array<Record<string, unknown>> = []
+    bus.subscribe('session-runner', (event: BusEvent) => {
+      if (event.name === EventNames.SESSION_RESULT) results.push(event.data as Record<string, unknown>)
+    })
+    session.handleStreamLine(resultLine(sid, 'first answer'), 1000)
+    session.handleStreamLine(stateLine(sid, 'idle'), 1100)
+    const previousGen = session.turnGen
+    let release!: () => void
+    const acknowledgement = new Promise<void>((resolve) => { release = resolve })
+    let received!: () => void
+    const replyReceived = new Promise<void>((resolve) => { received = resolve })
+    const send = vi.fn(async () => {
+      session.handleStreamLine(resultLine(sid, 'instant second answer', 0.007), 1300)
+      session.handleStreamLine(stateLine(sid, 'idle'), 1400)
+      received()
+      await acknowledgement
+      return { ok: true }
+    })
+    const transport = new RemoteSessionManager(sid, host, null)
+    Object.assign(transport, {
+      conn: { connected: true, hasCapability: () => true, send },
+      _sid: sid, _hasPipe: true, _fileSize: 1100,
+    })
+    session._transport = transport
+    const writing = session.writeMessage('followup')
+    try {
+      await replyReceived
+      expect(results).toHaveLength(2)
+      expect(results[1].turnGen).toBe(previousGen + 1)
+      expect(session.processStatus).toBe('idle')
+      expect(session._turnResultEmitted).toBe(true)
+    } finally {
+      release()
+      await writing
+    }
+    expect(await writing).toBe(true)
+    expect(send).toHaveBeenCalledExactlyOnceWith('send', { sid, message: 'followup', stopFence: null })
+    expect(results).toHaveLength(2)
+    expect(session.processStatus).toBe('idle')
+    expect(session._turnResultEmitted).toBe(true)
+  })
+
+  it.each(['ordered', 'legacy', 'replayed'] as const)('only an unconsumed ordered marker opens the next turn: %s', async (delivery) => {
+    const sid = `sess-marker-${delivery}`
+    const taskId = await taskInPhase('IN_PROGRESS')
+    const session = makeRunningSession(taskId, sid)
+    liveSession = session
+    liveSid = sid
+    const results: Array<Record<string, unknown>> = []
+    bus.subscribe('session-runner', (event: BusEvent) => {
+      if (event.name === EventNames.SESSION_RESULT) results.push(event.data as Record<string, unknown>)
+    })
+    session.handleStreamLine(resultLine(sid), 1000)
+    session.handleStreamLine(stateLine(sid, 'idle'), 1100)
+    const gen = session.turnGen
+    session.handleStreamLine(JSON.stringify({
+      type: 'user', subtype: 'walnut-injected',
+      message: { role: 'user', content: 'followup' }, walnutMessageId: 'qm-marker',
+      ...(delivery === 'legacy' ? {} : { walnutDelivery: 'ordered' }),
+    }), delivery === 'replayed' ? 900 : 1200)
+    expect(session.turnGen).toBe(gen + (delivery === 'ordered' ? 1 : 0))
+    expect(session.processStatus).toBe(delivery === 'ordered' ? 'running' : 'idle')
+    if (delivery === 'ordered') {
+      session.handleStreamLine(resultLine(sid, 'followup answer'), 1400)
+      expect(results).toHaveLength(2)
+    }
+  })
+
+  it('an ordered marker arriving after stop cannot reopen the stopped session', async () => {
+    const sid = 'sess-marker-after-stop'
+    const taskId = await taskInPhase('NEED_ACTION')
+    const session = makeRunningSession(taskId, sid)
+    session._turnResultEmitted = true
+    session.resultEmitted = true
+    session._processStatus = 'stopped'
+    session.handleStreamLine(JSON.stringify({
+      type: 'user', subtype: 'walnut-injected', walnutDelivery: 'ordered',
+      message: { role: 'user', content: 'followup' }, walnutMessageId: 'qm-stopped',
+    }), 1200)
+    expect(session.processStatus).toBe('stopped')
+    expect(session.turnGen).toBe(0)
+    expect(session.resultEmitted).toBe(true)
+  })
+
+  it.each([false, true])('a late resume acknowledgement preserves a completed reply and its watermark: %s', async (replyBeforeAck) => {
+    const sid = `sess-resume-ack-${replyBeforeAck}`
+    const taskId = await taskInPhase('IN_PROGRESS')
+    const { createSessionRecord, getSessionByClaudeId } = await import('../../src/core/session-tracker.js')
+    await createSessionRecord(sid, taskId, 'proj', WALNUT_HOME)
+    const session = new ClaudeCodeSession(taskId, 'proj', '/bin/true')
+    const internal = session as unknown as Internals & {
+      _statusCommit: Promise<void>
+      startLivenessMonitor(): void
+      startStallDiagTimer(): void
+    }
+    internal._consumedOffset = replyBeforeAck ? 0 : 5000
+    vi.spyOn(process, 'kill').mockReturnValue(true)
+    vi.spyOn(internal, 'startLivenessMonitor').mockImplementation(() => {})
+    vi.spyOn(internal, 'startStallDiagTimer').mockImplementation(() => {})
+    const transport = {
+      ...mockTransport(),
+      start: async (opts: TransportStartOptions) => {
+        if (replyBeforeAck) {
+          opts.onOutput({ line: resultLine(sid, 'immediate resume reply'), v: 1000 })
+          opts.onOutput({ line: stateLine(sid, 'idle'), v: 1100 })
+        }
+        return { pid: 424242, outputFile: `${WALNUT_HOME}/resumed.jsonl`, fileSize: 0 }
+      },
+    }
+    vi.spyOn(sessionManagers, 'createSessionManager').mockReturnValue(transport as never)
+    try {
+      session.send('followup', WALNUT_HOME, sid)
+      await session.awaitSpawn()
+      await internal._statusCommit
+      await vi.waitFor(async () => {
+        expect((await getSessionByClaudeId(sid))?.pid).toBe(424242)
+      })
+      expect(internal._consumedOffset).toBe(replyBeforeAck ? 1000 : -1)
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe(replyBeforeAck ? 'idle' : 'running')
+    } finally {
+      sessionManagers.unregisterSessionManager(sid)
+    }
+  })
+
   it('a MID-TURN injection (writeMessage while already running) does NOT bump — it joins the SAME turn', async () => {
     const sid = 'sess-midturn-inject'
     const taskId = await taskInPhase('IN_PROGRESS')
@@ -402,6 +576,29 @@ describe('QUEUED-SEND shape: the writeMessage delivery is itself a turn-start ed
     session.handleStreamLine(stateLine(sid, 'running'), 4500) // v < watermark → replay
 
     expect(session.turnGen).toBe(0)
+    expect(session.processStatus).toBe('idle')
+    await settle()
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+  })
+})
+
+describe('followup phase ordering', () => {
+  it('a running edge followed immediately by its summary result cannot repaint the settled task', async () => {
+    const sid = 'sess-followup-same-batch'
+    const taskId = await taskInPhase('IN_PROGRESS')
+    const session = makeRunningSession(taskId, sid)
+    liveSession = session
+    liveSid = sid
+
+    session.handleStreamLine(resultLine(sid), 1000)
+    await applySessionPhase(taskId, 'session:result', 'test', { sessionId: sid, turnGen: session.turnGen })
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
+
+    session.handleStreamLine(stateLine(sid, 'running'), 1100)
+    session.handleStreamLine(JSON.stringify({
+      ...JSON.parse(resultLine(sid, 'background summary')),
+      origin: { kind: 'task-notification' },
+    }), 1200)
     expect(session.processStatus).toBe('idle')
     await settle()
     expect((await getTask(taskId)).phase).toBe('NEED_ACTION')

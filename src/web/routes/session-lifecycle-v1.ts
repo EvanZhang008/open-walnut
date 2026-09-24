@@ -8,6 +8,8 @@
  *   GET   /sessions/:id                    → { session, pendingPermissions }
  *   PATCH /sessions/:id { title? | archived? | mode? | human_note? } → { session }
  *   POST  /sessions/:id/terminate { force? } → { status:'terminated', sessionId, tookMs? }
+ *                                            503 { error:{code:'stop_pending'} } when the
+ *                                            host has not confirmed the stop yet
  *   POST  /sessions/:id/restart            → { status:'restarted', sessionId, pendingMessages }
  *   POST  /sessions/:id/retry              → { status:'reconnected'|'resumable'|'resuming'|'pending', … }
  *   POST  /sessions/:id/recheck            → { checked, reachable, alive?, processStatus, … }
@@ -30,7 +32,10 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
+import {
+  driveControlRelay, relayControlAction, sendRelayReplyError,
+  sendV1Error as sendError, v1ErrorCode,
+} from './v1-control-relay.js'
 
 export const sessionLifecycleV1Router = Router()
 
@@ -46,6 +51,16 @@ function validSid(req: Request, res: Response): string | null {
   return sessionId
 }
 
+async function sendLocalError(res: Response, next: NextFunction, err: unknown): Promise<void> {
+  const { SessionControlError } = await import('../../core/sessions/session-controls.js')
+  if (err instanceof SessionControlError) {
+    const code = typeof err.extra?.code === 'string' ? err.extra.code : v1ErrorCode(err.statusCode)
+    sendError(res, err.statusCode, code, err.message)
+    return
+  }
+  next(err)
+}
+
 /**
  * Local-path runner: call a session-lifecycle core function, translate
  * SessionControlError into the frozen v1 shape, funnel the rest to next().
@@ -56,17 +71,18 @@ async function runLocal(
   successStatus: number,
   fn: () => Promise<unknown>,
 ): Promise<void> {
-  const { SessionControlError } = await import('../../core/sessions/session-controls.js')
   try {
     res.status(successStatus).json(await fn())
   } catch (err) {
-    if (err instanceof SessionControlError) {
-      const code = typeof err.extra?.code === 'string' ? err.extra.code : v1ErrorCode(err.statusCode)
-      sendError(res, err.statusCode, code, err.message)
-      return
-    }
-    next(err)
+    await sendLocalError(res, next, err)
   }
+}
+
+// Existing clients treat every 2xx as stopped, so a pending confirmation must go through the error branch.
+function sendStopPending(res: Response): void {
+  sendError(res, 503, 'stop_pending',
+    'Stop request saved, but the session host has not confirmed it yet. '
+    + 'The session may still be running. Retry to check.')
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -247,17 +263,38 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
 // POST /api/v1/sessions/:id/terminate { force? } — kill the CLI process.
 // 409 { error:{code:'cron_owner'} } when the session owns armed crons and
 // force is not set (see terminateSession for why that kill is a footgun).
+// 503 { error:{code:'stop_pending'} } when the host has not confirmed the stop.
 sessionLifecycleV1Router.post('/sessions/:id/terminate', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = validSid(req, res)
     if (!sessionId) return
     const force = (req.body ?? {}).force === true
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'terminate', sessionId, { force }, 200)
+      const reply = await driveControlRelay(res, 'terminate', sessionId, { force })
+      if (!reply) return
+      if (reply.ok === true && reply.result && typeof reply.result === 'object') {
+        const result = reply.result as Record<string, unknown>
+        if (result.status === 'pending') {
+          sendStopPending(res)
+          return
+        }
+        res.status(200).json(result)
+        return
+      }
+      sendRelayReplyError(res, reply)
       return
     }
     const { terminateSession } = await import('../../core/sessions/session-lifecycle.js')
-    await runLocal(res, next, 200, () => terminateSession(sessionId, { force }))
+    try {
+      const result = await terminateSession(sessionId, { force })
+      if (result.status === 'pending') {
+        sendStopPending(res)
+        return
+      }
+      res.status(200).json(result)
+    } catch (err) {
+      await sendLocalError(res, next, err)
+    }
   } catch (err) {
     next(err)
   }

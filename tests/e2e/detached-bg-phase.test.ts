@@ -19,12 +19,14 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
-import { sessionResultPhase } from '../../src/core/phase.js';
 import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js';
-import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
-import { setSnapshotModeForTests, _resetSnapshotGateForTests } from '../../src/core/session-snapshot-gate.js';
+import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js';
+import { ClaudeCodeSession, sessionRunner } from '../../src/providers/claude-code-session.js';
+import { getSnapshotStatusMode, setSnapshotModeForTests, markSnapshotCovered, _resetSnapshotGateForTests } from '../../src/core/session-snapshot-gate.js';
 
 let server: HttpServer;
+const sessions = new Map<string, ClaudeCodeSession>();
+const originalSnapshotMode = getSnapshotStatusMode();
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -44,6 +46,10 @@ async function makeTaskWithSession(sid: string): Promise<string> {
   const { task } = await addTask({ title: 'bg-flip', project: 'p' });
   await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' as never, session_id: sid });
   await createSessionRecord(sid, task.id, 'p');
+  const session = new ClaudeCodeSession(task.id, 'p');
+  session.setProcessStatusFromReconciler('running');
+  sessions.set(sid, session);
+  expect((await getTask(task.id)).session_id).toBe(sid);
   return task.id;
 }
 
@@ -52,9 +58,15 @@ beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
   server = await startServer({ port: 0, dev: true });
+  setSnapshotModeForTests('off');
+  vi.spyOn(sessionRunner, 'findSessionByClaudeId').mockImplementation((sid) => sessions.get(sid));
 });
 
 afterAll(async () => {
+  vi.restoreAllMocks();
+  _resetSnapshotGateForTests();
+  setSnapshotModeForTests(originalSnapshotMode);
+  sessions.clear();
   await stopServer();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   delete process.env.WALNUT_DISABLE_SEARCH;
@@ -86,7 +98,7 @@ describe('snapshot-only handback reaches the task API', () => {
       const response = await fetch(`http://127.0.0.1:${address.port}/api/tasks/${taskId}`);
       expect(response.ok).toBe(true);
       const { task } = await response.json() as { task: { phase: string; session_status: { process_status: string } } };
-      expect(task.phase).toBe(sessionResultPhase('IN_PROGRESS'));
+      expect(task.phase).toBe('NEED_ACTION');
       expect(task.session_status.process_status).toBe('idle');
       await updateTaskRaw(taskId, { phase: 'IN_PROGRESS', updated_at: '2099-01-01T00:00:00Z' });
       await applySnapshot(sid, snapshot, 'pull-30s');
@@ -204,5 +216,128 @@ describe('detached background work gates the NEED_ACTION flip', () => {
 
     const task = await pollTask(taskId, (t) => t.phase === 'NEED_ACTION');
     expect(task.phase).toBe('NEED_ACTION');
+  });
+});
+
+/**
+ * Same gate, third leg: an armed ScheduleWakeup (user decision 2026-09-01,
+ * inc-1788284320937). The model ended its turn ONLY to be re-invoked by its own
+ * timer, so the row must not be handed back yet; the fired turn that does NOT
+ * re-arm carries no flag and flips as always.
+ */
+describe('an armed ScheduleWakeup gates the NEED_ACTION flip', () => {
+  it('result with wakeupPending → task stays IN_PROGRESS', async () => {
+    const sid = 'sess-wake-flip-1';
+    const taskId = await makeTaskWithSession(sid);
+
+    bus.emit(EventNames.SESSION_RESULT, {
+      sessionId: sid, taskId, result: 'tick done, next wakeup in 15 min',
+      isError: false, wakeupPending: true,
+    }, ['*'], { source: 'session-runner' });
+
+    await delay(1200);
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS');
+  });
+
+  it('the loop ends when a fired turn does not re-arm (control)', async () => {
+    const sid = 'sess-wake-flip-2';
+    const taskId = await makeTaskWithSession(sid);
+
+    // Two armed ticks: the row stays with the agent across both.
+    for (const text of ['tick 1', 'tick 2']) {
+      bus.emit(EventNames.SESSION_RESULT, {
+        sessionId: sid, taskId, result: text, isError: false, wakeupPending: true,
+      }, ['*'], { source: 'session-runner' });
+      await delay(600);
+      expect((await getTask(taskId)).phase).toBe('IN_PROGRESS');
+    }
+
+    // Final tick with no new schedule → hand back.
+    bus.emit(EventNames.SESSION_RESULT, {
+      sessionId: sid, taskId, result: 'target reached, loop over', isError: false,
+    }, ['*'], { source: 'session-runner' });
+    const task = await pollTask(taskId, (t) => t.phase === 'NEED_ACTION');
+    expect(task.phase).toBe('NEED_ACTION');
+  });
+
+  it.each(['teamActive', 'backgroundActive', 'detachedBgActive', 'wakeupPending'] as const)('an errored turn preserves the active slot and phase while %s', async (flag) => {
+    const sid = `sess-error-${flag}`;
+    const taskId = await makeTaskWithSession(sid);
+    let ended = false;
+    const subscriber = `test-ended-${flag}`;
+    bus.subscribe(subscriber, (event) => {
+      if (event.name === EventNames.SESSION_ENDED
+        && (event.data as { sessionId?: string }).sessionId === sid) ended = true;
+    }, { global: true, interest: [EventNames.SESSION_ENDED] });
+    try {
+      bus.emit(EventNames.SESSION_RESULT, {
+        sessionId: sid, taskId, result: 'the foreground check failed',
+        isError: true, [flag]: true,
+      }, ['*'], { source: 'session-runner' });
+      await vi.waitFor(() => expect(ended).toBe(true), { timeout: 5000 });
+      await vi.waitFor(async () => {
+        expect((await getSessionByClaudeId(sid))?.process_status).toBe('running');
+      }, { timeout: 5000 });
+      const task = await getTask(taskId);
+      expect(task.phase).toBe('IN_PROGRESS');
+      expect(task.session_id).toBe(sid);
+      expect((await getSessionByClaudeId(sid))?.errorMessage).toBeUndefined();
+
+      ended = false;
+      bus.emit(EventNames.SESSION_RESULT, {
+        sessionId: sid, taskId, result: 'no background work remains', isError: true,
+      }, ['*'], { source: 'session-runner' });
+      await vi.waitFor(() => expect(ended).toBe(true), { timeout: 5000 });
+      expect((await getTask(taskId)).phase).toBe('NEED_ACTION');
+      expect((await getTask(taskId)).session_id).toBeFalsy();
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe('error');
+    } finally {
+      bus.unsubscribe(subscriber);
+    }
+  });
+
+  it.each(['missing', 'stopped'] as const)('background flags cannot resurrect a %s live instance', async (state) => {
+    const sid = `sess-background-${state}`;
+    const taskId = await makeTaskWithSession(sid);
+    if (state === 'missing') sessions.delete(sid);
+    else sessions.get(sid)!.setProcessStatusFromReconciler('stopped');
+
+    bus.emit(EventNames.SESSION_RESULT, {
+      sessionId: sid, taskId, result: 'old background result', detachedBgActive: true,
+    }, ['*'], { source: 'session-runner' });
+    await vi.waitFor(async () => {
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe('stopped');
+      expect((await getTask(taskId)).session_id).toBeFalsy();
+    }, { timeout: 5000 });
+  });
+
+  it('a rejected terminal write cannot clear a snapshot-owned running session slot', async () => {
+    const sid = 'sess-covered-background';
+    const taskId = await makeTaskWithSession(sid);
+    await updateSessionRecord(sid, { process_status: 'running' });
+    sessions.get(sid)!.setProcessStatusFromReconciler('stopped');
+    setSnapshotModeForTests('enforce');
+    markSnapshotCovered(sid, 300);
+    let ended = false;
+    const subscriber = 'test-ended-covered-background';
+    bus.subscribe(subscriber, (event) => {
+      if (event.name === EventNames.SESSION_ENDED
+        && (event.data as { sessionId?: string }).sessionId === sid) ended = true;
+    }, { global: true, interest: [EventNames.SESSION_ENDED] });
+    try {
+      bus.emit(EventNames.SESSION_RESULT, {
+        sessionId: sid, taskId, result: 'stale foreground completion',
+        isError: false, detachedBgActive: true,
+      }, ['*'], { source: 'session-runner' });
+      await vi.waitFor(() => expect(ended).toBe(true), { timeout: 5000 });
+      await delay(200);
+      expect((await getSessionByClaudeId(sid))?.process_status).toBe('running');
+      expect((await getTask(taskId)).session_id).toBe(sid);
+      expect((await getTask(taskId)).phase).toBe('IN_PROGRESS');
+    } finally {
+      bus.unsubscribe(subscriber);
+      _resetSnapshotGateForTests();
+      setSnapshotModeForTests('off');
+    }
   });
 });

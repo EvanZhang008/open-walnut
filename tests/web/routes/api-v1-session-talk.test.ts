@@ -335,16 +335,15 @@ describe('GET /api/v1/sessions/:id/stream', () => {
     }
   })
 
-  it('daemon-reconnect running does NOT produce a turn-start (no phantom turns)', async () => {
-    // Fresh session id → fresh SSE channel (no replay from earlier tests).
-    const sid2 = 'talk-test-session-0002'
+  it.each(['daemon-reconnect', 'session-tracker'])('%s running does NOT produce a turn-start', async (source) => {
+    const sid2 = `talk-test-session-${source}`
     await createSessionRecord(sid2, 'task-talk-2', 'test-project', '/tmp', { title: 'talk test 2' })
     const sse = await connectSse(apiUrl(`/api/v1/sessions/${sid2}/stream`))
     try {
       await sse.waitFor((e) => e.event === 'snapshot')
       bus.emit(EventNames.SESSION_STATUS_CHANGED, {
         sessionId: sid2, process_status: 'running',
-      }, ['*'], { source: 'daemon-reconnect' })
+      }, ['*'], { source })
       // Status still flows (useful signal), but no turn-start reset.
       await sse.waitFor((e) => e.event === 'status' && e.data.processStatus === 'running')
       expect(sse.events.some((e) => e.event === 'turn-start')).toBe(false)

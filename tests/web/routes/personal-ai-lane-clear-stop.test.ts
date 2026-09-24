@@ -36,10 +36,14 @@ vi.mock('../../../src/web/ws/handler.js', () => ({ broadcastEvent: vi.fn() }))
 
 // terminateSession probes these three; a method the code calls but the stub omits
 // surfaces as "not a function", so keep them in sync with session-lifecycle.ts.
-const { interruptMock, settleMock, findSessionMock } = vi.hoisted(() => ({
+const { interruptMock, settleMock, findSessionMock, stopRpc } = vi.hoisted(() => ({
   interruptMock: vi.fn(async () => {}),
   settleMock: vi.fn(),
   findSessionMock: vi.fn(),
+  stopRpc: vi.fn(),
+}))
+vi.mock('../../../src/providers/daemon-connection.js', () => ({
+  getConnectedDaemonConnection: () => ({ connected: true, send: stopRpc }),
 }))
 vi.mock('../../../src/providers/claude-code-session.js', () => ({
   sessionRunner: {
@@ -107,15 +111,18 @@ beforeEach(async () => {
     if (event.name === EventNames.SESSION_INTERRUPT) interrupts.push(event.data as { sessionId?: string })
   })
 
+  stopRpc.mockReset().mockResolvedValue({ ok: true, stopped: true })
   interruptMock.mockClear()
   interruptMock.mockResolvedValue(undefined)
   settleMock.mockClear()
   findSessionMock.mockReset()
-  findSessionMock.mockReturnValue({ interrupt: interruptMock })
+  findSessionMock.mockReturnValue({ interrupt: interruptMock, markExpectedTeardown: vi.fn(() => vi.fn()), detach: vi.fn() })
 })
 
 afterEach(async () => {
   bus.clear()
+  const { closeDb } = await import('../../../src/core/session-db.js')
+  closeDb()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {})
 })
 
@@ -136,7 +143,8 @@ describe('POST /api/chat/clear retires the lane', () => {
 
     // The live CLI was stopped through the canonical terminate path (a spy — no
     // signal was sent anywhere).
-    expect(interruptMock).toHaveBeenCalledTimes(1)
+    expect(interruptMock).not.toHaveBeenCalled()
+    expect(stopRpc).toHaveBeenCalledWith('stop', { sid: LANE_SID, reason: 'user', stopRequestId: expect.any(String) }, 10_000)
     // And the lane is free: the record is archived, so getSessionByLane (which
     // excludes archived rows) reports nothing bound to this conversation.
     expect(await laneRecord(conv.id)).toBeNull()
@@ -144,6 +152,7 @@ describe('POST /api/chat/clear retires the lane', () => {
     const raw = await getSessionByClaudeId(LANE_SID)
     expect(raw?.archived).toBe(true)
     expect(raw?.archive_reason).toBe('chat_cleared')
+    expect(raw?.stopRequest?.state).toBe('confirmed')
   })
 
   it('still clears (and still archives) when stopping the CLI THROWS', async () => {
@@ -152,12 +161,14 @@ describe('POST /api/chat/clear retires the lane', () => {
     const { createConversation } = await import('../../../src/core/conversations.js')
     const conv = await createConversation('general', 'Stop throws')
     await seedLane(conv.id)
-    interruptMock.mockRejectedValueOnce(new Error('daemon is gone'))
+    stopRpc.mockRejectedValueOnce(new Error('daemon is gone'))
 
     const res = await request(createApp()).post(`/api/chat/clear?conversationId=${conv.id}`)
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
     expect(await laneRecord(conv.id)).toBeNull()
+    const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js')
+    expect((await getSessionByClaudeId(LANE_SID))?.stopRequest?.state).toBe('pending')
   })
 
   it('clears the chat history itself (unchanged behavior)', async () => {
@@ -194,7 +205,8 @@ describe('POST /api/v1/chat/clear retires the lane too', () => {
     const res = await request(createApp()).post(`/api/v1/chat/clear?conversationId=${conv.id}`)
     expect(res.status).toBe(200)
     expect(res.body.ok).toBe(true)
-    expect(interruptMock).toHaveBeenCalledTimes(1)
+    expect(interruptMock).not.toHaveBeenCalled()
+    expect(stopRpc).toHaveBeenCalledWith('stop', { sid: LANE_SID, reason: 'user', stopRequestId: expect.any(String) }, 10_000)
     expect(await laneRecord(conv.id)).toBeNull()
   })
 })

@@ -19,6 +19,8 @@
  * (session flips idle while the subagent is live).
  */
 import fs from 'node:fs/promises'
+import path from 'node:path'
+import { WebSocket } from 'ws'
 import { expect, test, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
@@ -33,10 +35,10 @@ const FOLLOWUP_SUMMARY = 'The background agent finished its verification pass.'
 const HOLD_PROMPT = `hold-turn-test:${FOLLOWUP_SUMMARY}`
 
 let fixtureRoot = ''
-
 const densityTaskIds: string[] = []
 const densityProject = `Status checks ${Date.now()}`
 
+// The tests share one set of tasks and one server; fullyParallel is forbidden because it would create the data twice and cross-edit it.
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 })
 
@@ -133,6 +135,7 @@ async function sessionIdForTask(page: Page, taskId: string): Promise<string> {
 
 async function processStatus(page: Page, sessionId: string): Promise<string> {
   const response = await page.request.get(`/api/sessions/${sessionId}`)
+  expect(response.ok()).toBe(true)
   return ((await response.json()) as { session: { process_status: string } }).session.process_status
 }
 
@@ -243,7 +246,7 @@ test('turn stays open across the early result+idle and completes with the follow
   // result handler) would flip process_status to idle here.
   // The launch text streams immediately; wait for it so we know the first
   // batch (assistant + result + idle) has been processed before judging.
-  const panel = page.locator(REAL_PANEL)
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
   await expect(panel).toBeVisible({ timeout: 20_000 })
   await expect(panel.getByText('Launching a background agent', { exact: false }).first())
     .toBeVisible({ timeout: 20_000 })
@@ -256,25 +259,109 @@ test('turn stays open across the early result+idle and completes with the follow
     .toBeVisible({ timeout: 30_000 })
   await expect.poll(() => processStatus(page, sessionId), { timeout: 20_000 })
     .toMatch(/idle|stopped/)
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/tasks/${taskId}`)
+    expect(response.ok()).toBe(true)
+    return (await response.json()).task.phase
+  }).toBe('NEED_ACTION')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/completed-with-summary.png`, fullPage: true })
 })
 
-test('a plain turn with no subagents still completes instantly (no added latency)', async ({ page }) => {
-  test.setTimeout(60_000)
-
-  // Upstream's no-regression check: turns that spawned nothing settle at their
-  // result — the hold must never tax a normal prompt.
+test('an error does not hand back a task with a live background command, and the next send still works', async ({ page }) => {
+  test.setTimeout(90_000)
+  const endedSessions = new Set<string>()
+  page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
+    try {
+      const event = JSON.parse(String(payload))
+      if (event.type === 'event' && event.name === 'session:ended') endedSessions.add(event.data.sessionId)
+    } catch {}
+  }))
   await openQuickStart(page)
-  const taskId = await sendQuickStart(page, 'plain hold-port control message')
+  const taskId = await sendQuickStart(page, 'backgrounded-error-test')
   const sessionId = await sessionIdForTask(page, taskId)
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
+  await expect(panel.getByText('Started a detached background command', { exact: false }).first()).toBeVisible()
 
-  const panel = page.locator(REAL_PANEL)
-  await expect(panel).toBeVisible({ timeout: 20_000 })
-  await expect(panel.getByText('I processed your message', { exact: false }).first())
-    .toBeVisible({ timeout: 25_000 })
-  await expect.poll(() => processStatus(page, sessionId), { timeout: 20_000 })
-    .toMatch(/idle|stopped/)
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/plain-turn-control.png`, fullPage: true })
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/sessions/${sessionId}`)
+    expect(response.ok()).toBe(true)
+    return (await response.json()).session.consumedOffset ?? 0
+  }).toBeGreaterThan(0)
+  await expect.poll(() => endedSessions.has(sessionId)).toBe(true)
+  await expect.poll(async () => {
+    const response = await page.request.get('/api/notifications')
+    expect(response.ok()).toBe(true)
+    const { feed } = await response.json()
+    return feed.some((item: { kind: string; severity: string; sessionId?: string; dedupKey: string }) =>
+      item.kind === 'operation-error' && item.severity === 'error'
+        && item.sessionId === sessionId && item.dedupKey === `error:session:${sessionId}:runtime`)
+  }).toBe(true)
+  await expect.poll(() => processStatus(page, sessionId)).toBe('running')
+  const taskResponse = await page.request.get(`/api/tasks/${taskId}`)
+  expect(taskResponse.ok()).toBe(true)
+  const { task } = await taskResponse.json()
+  expect(task.phase).toBe('IN_PROGRESS')
+  expect(task.session_id).toBe(sessionId)
+  await expect(panel.locator('.session-panel-badge[title="Running"]')).toBeVisible()
+  await selectSection(page, task.focus_tier === 'focus' ? 'Focus' : 'Satellite')
+  const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
+  await expect(card.locator('.task-circle-running')).toBeVisible()
+  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/error-with-live-background.png` })
+
+  const composer = panel.locator('.chat-input-textarea')
+  await composer.fill('check background status')
+  await composer.press('Enter')
+  await expect(panel.getByText('Status checked; background command is still running.', { exact: false }).first()).toBeVisible()
+  await expect.poll(() => processStatus(page, sessionId)).toBe('running')
+  const stillRunning = await page.request.get(`/api/tasks/${taskId}`)
+  expect(stillRunning.ok()).toBe(true)
+  expect((await stillRunning.json()).task.phase).toBe('IN_PROGRESS')
+  await expect(card.locator('.task-circle-running')).toBeVisible()
+  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/background-across-next-turn.png` })
+  const { walnutHome } = await discoverBrowserFixture(TEST_PORT)
+  if (TEST_PORT === 3456 || !/^(dist-home-|walnut-pw-)/.test(path.basename(walnutHome))) {
+    throw new Error('Live-adopt probe requires an isolated fixture')
+  }
+  const daemonPort = Number(await fs.readFile(path.join(walnutHome, 'daemon/daemon.port'), 'utf8'))
+  const beforeAdopt = await page.request.get(`/api/sessions/${sessionId}`)
+  expect(beforeAdopt.ok()).toBe(true)
+  const oldPid = (await beforeAdopt.json()).session.pid
+  const ws = new WebSocket(`ws://127.0.0.1:${daemonPort}`)
+  try {
+    const adopted = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Live-adopt probe timed out')), 10_000)
+      ws.once('error', (error) => { clearTimeout(timer); reject(error) })
+      ws.on('message', (data) => {
+        const event = JSON.parse(String(data))
+        if (event.id !== 1) return
+        clearTimeout(timer)
+        resolve(event)
+      })
+      ws.once('open', () => ws.send(JSON.stringify({
+        id: 1, cmd: 'start', sid: sessionId, args: [process.execPath, path.resolve(import.meta.dirname, '../../providers/mock-claude.mjs')],
+        cwd: `${fixtureRoot}/projects/walnut`, resume: true, message: '', deferMessage: true,
+      })))
+    })
+    expect(adopted).toMatchObject({ ok: true, adopted: true, pid: oldPid })
+  } finally {
+    ws.close()
+  }
+  await expect.poll(() => processStatus(page, sessionId)).toBe('running')
+  await composer.fill('finish the background check')
+  await composer.press('Enter')
+  await expect(panel.getByText('Background check finished; followup received.', { exact: false }).first())
+    .toBeVisible({ timeout: 30_000 })
+  await expect.poll(() => processStatus(page, sessionId)).toBe('idle')
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/tasks/${taskId}`)
+    expect(response.ok()).toBe(true)
+    return (await response.json()).task.phase
+  }).toBe('NEED_ACTION')
+  await expect(card.locator('.task-circle-running')).toHaveCount(0)
+  await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/background-drained-followup.png` })
 })
 
 test('a late session hint cannot erase a red task row, but committed task changes can', async ({ page }) => {
@@ -404,45 +491,34 @@ test('red task rows stay current across tiers, reading races, and reconnects', a
   await page.screenshot({ path: `${SCREENSHOT_DIR}/red-after-reconnect.png` })
 })
 
-test('a cold Home whose socket connects late still paints the hand-back red', async ({ page }) => {
-  test.setTimeout(90_000)
-  // Index 0: focus tier, seeded IN_PROGRESS (so not red, no dot) and untouched
-  // by every other test in this file.
-  const taskId = densityTaskIds[0]
-  let allowServer = false
-  let serverConnects = 0
-  await page.routeWebSocket(/\/ws(?:\?|$)/, (route) => {
-    if (!allowServer) {
-      route.close()
-      return
-    }
-    serverConnects++
-    route.connectToServer()
-  })
-  await openHome(page)
-  await selectSection(page, 'Focus')
-  const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
-  await expect(card).toBeVisible()
-  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+test('a plain turn with no subagents still completes instantly (no added latency)', async ({ page }) => {
+  test.setTimeout(60_000)
 
-  const handback = await page.request.patch(`/api/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })
-  expect(handback.ok()).toBe(true)
-  const persisted = await page.request.get(`/api/tasks/${taskId}`)
-  expect(persisted.ok()).toBe(true)
-  const committed = (await persisted.json()).task
-  expect(committed.phase).toBe('NEED_ACTION')
-  expect(committed.unread).toBe(true)
-  // Committed on the server, unreachable by this page: no socket carried it.
-  await page.waitForTimeout(1_000)
-  expect(serverConnects).toBe(0)
-  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/cold-open-stale-before-connect.png` })
+  // Upstream's no-regression check: turns that spawned nothing settle at their
+  // result — the hold must never tax a normal prompt.
+  await openQuickStart(page)
+  const taskId = await sendQuickStart(page, 'plain hold-port control message')
+  const sessionId = await sessionIdForTask(page, taskId)
 
-  allowServer = true
-  await expect.poll(() => serverConnects, { timeout: 45_000 }).toBeGreaterThan(0)
-  await expect(card).toHaveClass(/todo-pinned-card-needs-action/, { timeout: 20_000 })
-  await expect(card.locator('.task-unread-dot')).toBeVisible()
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/cold-open-red-after-late-connect.png` })
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
+  await expect(panel).toBeVisible({ timeout: 20_000 })
+  await expect(panel.getByText('I processed your message', { exact: false }).first())
+    .toBeVisible({ timeout: 25_000 })
+  await expect.poll(() => processStatus(page, sessionId), { timeout: 20_000 })
+    .toMatch(/idle|stopped/)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/plain-turn-control.png`, fullPage: true })
+  await expect.poll(() => processStatus(page, sessionId), { timeout: 20_000 }).toBe('stopped')
+  const composer = panel.locator('.chat-input-textarea')
+  await composer.fill('resume confirmation check')
+  await composer.press('Enter')
+  await expect(panel.getByText('I processed your message: resume confirmation check', { exact: false }).first()).toBeVisible({ timeout: 30_000 })
+  await expect.poll(() => processStatus(page, sessionId), { timeout: 20_000 }).toBe('stopped')
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/tasks/${taskId}`)
+    expect(response.ok()).toBe(true)
+    return (await response.json()).task.phase
+  }).toBe('NEED_ACTION')
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/cold-resume-completed.png` })
 })
 
 test('permission, question, and plan decisions stay red while waiting and settle after the real FIFO reply', async ({ page }) => {
@@ -488,4 +564,116 @@ test('permission, question, and plan decisions stay red while waiting and settle
     await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
   }
   await page.screenshot({ path: `${SCREENSHOT_DIR}/permission-decisions-settled.png` })
+})
+
+test('waiting follows the versioned status when session details arrive after permission events', async ({ page, context }) => {
+  test.setTimeout(90_000)
+  await page.route('**/api/sessions/quick-start', (route) => route.continue({
+    postData: JSON.stringify({ ...route.request().postDataJSON(), mode: 'default' }),
+  }))
+  await openQuickStart(page)
+  const taskId = await sendQuickStart(page, 'snapshot-clean-turn:Ready for permission checks.')
+  const sessionId = await sessionIdForTask(page, taskId)
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
+  await expect.poll(() => processStatus(page, sessionId)).toBe('idle')
+  const observer = await context.newPage()
+  const observerPanel = observer.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
+  const sessionUrl = `**/api/sessions/${sessionId}`
+  let release = () => {}
+  try {
+    for (const stage of ['request', 'resolved'] as const) {
+      const response = await page.request.get(`/api/sessions/${sessionId}`)
+      expect(response.ok()).toBe(true)
+      const snapshot = await response.json()
+      expect(Boolean(snapshot.session.pendingPermission)).toBe(stage === 'resolved')
+      await observer.route('**/api/sessions/status?*', (route) => route.fulfill({ json: { statuses: {} } }))
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      let held = 0
+      await observer.route(sessionUrl, async (route) => {
+        held++
+        await gate
+        await route.fulfill({ json: snapshot })
+      })
+      if (stage === 'request') {
+        await observer.setContent(`<a href="http://localhost:${TEST_PORT}/sessions?id=${sessionId}">Open session</a>`)
+        await observer.getByRole('link', { name: 'Open session', exact: true }).click()
+      } else {
+        await observer.reload()
+      }
+      await expect(observerPanel.getByText('Loading...', { exact: true })).toBeVisible()
+      await expect.poll(() => held).toBeGreaterThan(0)
+      if (stage === 'request') {
+        await panel.locator('.chat-input-textarea').fill('status-permission-test:Bash')
+        await panel.locator('.chat-input-textarea').press('Enter')
+        await expect(observerPanel.locator('.permission-request-card').getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
+      } else {
+        await expect(observerPanel.locator('.permission-request-card').getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
+        await panel.locator('.permission-request-card').getByRole('button', { name: 'Allow', exact: true }).click()
+        await expect(observerPanel.getByText('Bash decision received: allow', { exact: false }).first()).toBeVisible()
+        await expect.poll(() => processStatus(page, sessionId)).toBe('idle')
+      }
+      release()
+      await observer.unrouteAll({ behavior: 'wait' })
+      await expect(observerPanel.getByText('Loading...', { exact: true })).toHaveCount(0)
+      await expect(observerPanel.locator('.session-panel-badge'))
+        .toContainText(stage === 'request' ? 'Waiting' : 'Idle')
+      if (stage === 'resolved') {
+        await expect(observerPanel.locator('.permission-request-card').getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0)
+      }
+      const taskResponse = await page.request.get(`/api/tasks/${taskId}`)
+      expect(taskResponse.ok()).toBe(true)
+      const { task } = await taskResponse.json()
+      expect(task.phase).toBe('NEED_ACTION')
+      await selectSection(observer, task.focus_tier === 'focus' ? 'Focus' : 'Satellite')
+      await expect(observer.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`))
+        .toHaveClass(/todo-pinned-card-needs-action/)
+      await observer.screenshot({ path: `${SCREENSHOT_DIR}/permission-late-details-${stage}.png` })
+    }
+  } finally {
+    release()
+    await observer.unrouteAll({ behavior: 'wait' })
+    await observer.close()
+  }
+})
+
+// routeWebSocket opens the page-side connection first, so this checks that a late connection heals itself and does not assert a connection count.
+test('a cold Home whose socket connects late still paints the hand-back red', async ({ page }) => {
+  test.setTimeout(90_000)
+  // Index 0: focus tier, seeded IN_PROGRESS (so not red, no dot) and untouched
+  // by every other test in this file.
+  const taskId = densityTaskIds[0]
+  let allowServer = false
+  let serverConnects = 0
+  await page.routeWebSocket(/\/ws(?:\?|$)/, (route) => {
+    if (!allowServer) {
+      route.close()
+      return
+    }
+    serverConnects++
+    route.connectToServer()
+  })
+  await openHome(page)
+  await selectSection(page, 'Focus')
+  const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
+  await expect(card).toBeVisible()
+  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+
+  const handback = await page.request.patch(`/api/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })
+  expect(handback.ok()).toBe(true)
+  const persisted = await page.request.get(`/api/tasks/${taskId}`)
+  expect(persisted.ok()).toBe(true)
+  const committed = (await persisted.json()).task
+  expect(committed.phase).toBe('NEED_ACTION')
+  expect(committed.unread).toBe(true)
+  // Committed on the server, unreachable by this page: no socket carried it.
+  await page.waitForTimeout(1_000)
+  expect(serverConnects).toBe(0)
+  await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/cold-open-stale-before-connect.png` })
+
+  allowServer = true
+  await expect.poll(() => serverConnects, { timeout: 45_000 }).toBeGreaterThan(0)
+  await expect(card).toHaveClass(/todo-pinned-card-needs-action/, { timeout: 20_000 })
+  await expect(card.locator('.task-unread-dot')).toBeVisible()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/cold-open-red-after-late-connect.png` })
 })

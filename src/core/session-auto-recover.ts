@@ -114,6 +114,7 @@ export interface AutoRecoverDeps {
   send: (sessionId: string, message: string, opts: { source: string; taskId?: string }) => Promise<unknown>
   getSession: (sessionId: string) => Promise<SessionRecord | null>
   getTaskPhase: (taskId: string) => Promise<TaskPhase | null>
+  recoveryOwner: (record: SessionRecord) => Promise<'server' | 'daemon' | 'unknown'>
   /** Persist the attempt budget on the record (survives a server restart). */
   noteAttempt: (sessionId: string, attempts: number, cause: StatusReason | undefined) => Promise<void>
   emitNote: (sessionId: string, taskId: string | undefined, message: string) => void
@@ -142,6 +143,16 @@ function defaultDeps(): AutoRecoverDeps {
       } catch {
         return null
       }
+    },
+    recoveryOwner: async (record) => {
+      if (record.stopRequest?.state === 'pending') return 'daemon'
+      const { getConnectedDaemonConnection } = await import('../providers/daemon-connection.js')
+      const conn = getConnectedDaemonConnection(record.host ?? '__local__')
+      if (!conn || !conn.capabilitiesKnown) return 'unknown'
+      if (!conn.hasCapability('cron-supervision-v1')) return 'server'
+      const state = await conn.send('cron.supervision', { sid: record.claudeSessionId }, 5000)
+      if (!state.ok) return 'unknown'
+      return state.cronSupervision ? 'daemon' : 'server'
     },
     noteAttempt: async (sessionId, attempts, cause) => {
       const { updateSessionRecord } = await import('./session-tracker.js')
@@ -267,6 +278,7 @@ export class SessionAutoRecover {
     if (record.type && record.type !== 'interactive') return { ok: false, reason: 'not-interactive' }
     if (!record.taskId) return { ok: false, reason: 'no-task' }
     if (!isInfraSessionError(record)) return { ok: false, reason: 'not-infra' }
+    if (record.status_reason === 'spawn_outcome_unknown' && !record.pid && !record.outputFile) return { ok: false, reason: 'not-infra' }
     if (this.attemptsSpent(record) >= this.cfg.maxAttempts) return { ok: false, reason: 'session-budget' }
     if (this.firesInWindow(this.hostKeyOf(record)) >= this.cfg.maxPerHost) {
       return { ok: false, reason: 'host-budget' }
@@ -393,6 +405,12 @@ export class SessionAutoRecover {
         log.session.info('auto-recover aborted — task no longer in progress', {
           sessionId, taskId: effectiveTaskId, phase,
         })
+        return
+      }
+
+      const recoveryOwner = await this.deps.recoveryOwner(rec)
+      if (superseded() || recoveryOwner !== 'server') {
+        log.session.info('auto-recover deferred to host supervision', { sessionId, recoveryOwner })
         return
       }
 

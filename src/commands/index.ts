@@ -7,9 +7,9 @@ import { Option, type Command } from 'commander';
 export function registerCommands(program: Command): void {
   program
     .command('add <title>')
-    .description('Add a new task')
+    .description('Save a task placeholder without starting work; agents use tools call task_create')
     .option('-p, --priority <level>', 'Priority (immediate/important/backlog/none)', 'none')
-    .option('-l, --list <project>', 'Project (the only grouping layer; omit for Inbox)')
+    .option('-l, --list <project>', 'Project (omit for Inbox)')
     .option('--project <project>', 'Project (alias for --list)')
     .option('-d, --due <date>', 'Due date (YYYY-MM-DD)')
     .action(async (title: string, options: Record<string, unknown>, cmd: Command) => {
@@ -70,7 +70,7 @@ export function registerCommands(program: Command): void {
 
   program
     .command('start <task_id>')
-    .description('Start a NEW session for a task (live session → use session_send)')
+    .description('Start work on an existing task (already started: use task_send)')
     .option('--message <message>', 'First instruction for the session')
     .action(async (taskId: string, options: Record<string, unknown>, cmd: Command) => {
       const { runStart } = await import('./start.js');
@@ -281,6 +281,15 @@ export function registerCommands(program: Command): void {
     .action(async (_options: Record<string, unknown>, cmd) => {
       const { runGuide } = await import('./guide.js');
       await runGuide(cmd.optsWithGlobals());
+    });
+
+  program
+    .command('daemon [args...]')
+    .description('Manage this host daemon service (status | install | update | uninstall | restart)')
+    .allowUnknownOption(true)
+    .action(async (args: string[] | undefined) => {
+      const { runDaemonServiceArgs } = await import('../providers/daemon-service-cli.js');
+      process.exitCode = await runDaemonServiceArgs(args ?? []);
     });
 
   program

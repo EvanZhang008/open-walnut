@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { buildDaemonStartCmd } from '../../src/providers/daemon-start-cmd.js'
+import { buildDaemonStartCmd, buildDaemonStopCmd } from '../../src/providers/daemon-start-cmd.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -159,6 +159,32 @@ describe('buildDaemonStartCmd', () => {
   it('requires execPath for bun/binary runtimes', () => {
     expect(() => buildDaemonStartCmd({ runtime: 'bun', dir })).toThrow()
     expect(() => buildDaemonStartCmd({ runtime: 'binary', dir })).toThrow()
+  })
+
+  it.each(['drain', 'timeout', 'reused', 'unknown', 'warning', 'denied', 'invalid', 'foreign', 'exited-before-signal'])('stop waits for identity exit without deleting markers: %s', async (scenario) => {
+    await fsp.writeFile(path.join(dir, 'daemon.pid'), scenario === 'invalid' ? '-1' : '4242')
+    const stub = [
+      'count=0',
+      'kill() { printf \'%s\\n\' "$*" >> "$LAB_DIR/signals"; if [ "$SCENARIO" = exited-before-signal ]; then count=7; return 1; fi; [ "$SCENARIO" != denied ]; }',
+      'sleep() { count=$((count+1)); }',
+      'ps() {',
+      '  if [ "$4" = command= ]; then if [ "$SCENARIO" = foreign ]; then printf \'%s\\n\' unrelated-process; else printf \'%s\\n\' "$LAB_DIR/daemon-linux-x64 --start"; fi; return 0; fi',
+      '  if [ "$count" -ge 7 ] && [ "$SCENARIO" = exited-before-signal ]; then return 1; fi',
+      '  if [ "$SCENARIO" = unknown ]; then printf \'%s\\n\' \'permission denied\' >&2; return 1; fi',
+      '  if [ "$SCENARIO" = warning ]; then printf \'%s\\n\' warning >&2; fi',
+      '  if [ "$count" -ge 7 ] && [ "$SCENARIO" = drain ]; then return 1; fi',
+      '  if [ "$count" -ge 7 ] && [ "$SCENARIO" = reused ]; then printf \'%s\\n\' new-identity; return 0; fi',
+      '  printf \'%s\\n\' old-identity',
+      '}',
+    ].join('\n')
+    const output = await execFileAsync('/bin/sh', ['-c', `${stub}\n${buildDaemonStopCmd(dir)}`], {
+      env: { PATH: '/usr/bin:/bin', LAB_DIR: dir, SCENARIO: scenario }, timeout: 5000,
+    }).then((result) => ({ ok: true, stdout: result.stdout }), () => ({ ok: false, stdout: '' }))
+    expect(output.ok).toBe(['drain', 'reused', 'exited-before-signal'].includes(scenario))
+    if (output.ok) expect(output.stdout.trim()).toBe('walnut-daemon-stop-confirmed')
+    const signals = await fsp.readFile(path.join(dir, 'signals'), 'utf8').catch(() => '')
+    expect(signals).toBe(['unknown', 'warning', 'invalid', 'foreign'].includes(scenario) ? '' : '-TERM 4242\n')
+    expect(await fsp.readFile(path.join(dir, 'daemon.pid'), 'utf8')).toBe(scenario === 'invalid' ? '-1' : '4242')
   })
 
   it('never renders a bare VAR= directly after nohup (regression shape)', () => {

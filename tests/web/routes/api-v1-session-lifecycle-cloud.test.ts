@@ -7,8 +7,9 @@
  *
  * Covers: relay payload per action, success passthrough, the failure ladder
  * (old daemon/primary → 400 session_control_needs_upgrade, bridge down → 503
- * bridge_offline, errorKind → status), and the errorCode passthrough
- * (terminate's cron_owner surfaces the same code as the local path).
+ * bridge_offline, errorKind → status), the errorCode passthrough (terminate's
+ * cron_owner surfaces the same code as the local path), and terminate's
+ * unconfirmed stop → 503 stop_pending (same mapping as the local path).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -111,9 +112,26 @@ describe('lifecycle relay payloads on a REPLICA', () => {
     bridgeRequestMock.mockResolvedValue({ ok: true, result: { status: 'terminated', sessionId: SID } })
     const res = await request(createApp()).post(`/api/v1/sessions/${SID}/terminate`).send({ force: true })
     expect(res.status).toBe(200)
+    expect(res.body).toEqual({ status: 'terminated', sessionId: SID })
     expect(bridgeRequestMock).toHaveBeenCalledWith(
       '__local__', 'session.control',
       { action: 'terminate', sessionId: SID, params: { force: true } },
+      30_000,
+    )
+  })
+
+  // The primary can answer the relay with the pending stop outcome; the replica
+  // must map it to the SAME 503 the local path returns, because the shipped iOS
+  // build ignores `status` and calls any 200 "stopped".
+  it('POST terminate with a pending stop from the primary → 503 stop_pending', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { status: 'pending', sessionId: SID, tookMs: 12 } })
+    const res = await request(createApp()).post(`/api/v1/sessions/${SID}/terminate`).send({})
+    expect(res.status).toBe(503)
+    expect(res.body).toEqual({ error: { code: 'stop_pending', message: expect.any(String) } })
+    expect(res.body.error.message).toMatch(/retry/i)
+    expect(bridgeRequestMock).toHaveBeenCalledWith(
+      '__local__', 'session.control',
+      { action: 'terminate', sessionId: SID, params: { force: false } },
       30_000,
     )
   })

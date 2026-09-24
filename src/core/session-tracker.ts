@@ -436,6 +436,16 @@ export async function listSessions(): Promise<SessionRecord[]> {
   return store.sessions;
 }
 
+export async function listPendingSessionStops(host: string): Promise<SessionRecord[]> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) throw new Error('Session database is unavailable');
+  const rows = db.prepare(`SELECT * FROM sessions
+    WHERE json_extract(payload, '$.stopRequest.state') = 'pending'
+    AND COALESCE(host, '__local__') = ?`).all(host) as Record<string, any>[];
+  return rows.map(rowToSession);
+}
+
 /**
  * Bounded, index-backed most-recent-first read (`sessions_updated_at` index on
  * last_active_at). For request-path callers that only need a recent candidate
@@ -763,6 +773,10 @@ export async function checkSessionLimit(
  */
 export async function getSessionByClaudeId(claudeSessionId: string): Promise<SessionRecord | null> {
   await ensureSessionInit();
+  return getSessionByClaudeIdSync(claudeSessionId);
+}
+
+export function getSessionByClaudeIdSync(claudeSessionId: string): SessionRecord | null {
   const db = getDb();
   if (!db) return null;
   const row = db.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
@@ -1771,6 +1785,7 @@ export async function updateSessionRecord(
 ): Promise<SessionRecord> {
   await ensureSessionInit();
   let searchContentChanged = false;
+  let permissionChanged = false;
   const updated = await withWriteLock(async () => {
     const db = getDb();
     if (!db) {
@@ -1786,6 +1801,7 @@ export async function updateSessionRecord(
       }
       const session = rowToSession(row);
       const searchContentBefore = searchContentProjection(session);
+      const permissionBefore = canonicalStatusProjection(session).pendingPermissionTool;
 
       // No-op guard BEFORE any UPDATE SQL — critical to avoid write-lock storms
       // when the daemon replays identical init/model/pid updates.
@@ -1794,12 +1810,16 @@ export async function updateSessionRecord(
       }
 
       writeSessionRowSqlite(handle, session);
+      permissionChanged = permissionBefore !== canonicalStatusProjection(session).pendingPermissionTool;
       searchContentChanged =
         searchContentBefore !== searchContentProjection(session);
       log.session.info('session record updated', { sessionId: claudeSessionId, fields: Object.keys(updates) });
       return session;
     });
   });
+  if (permissionChanged) {
+    emitSessionStatusChanged(updated, {}, ['*'], { source: 'session-tracker', urgency: 'urgent' });
+  }
   if (searchContentChanged) {
     bus.emit(
       EventNames.SESSION_CONTENT_UPDATED,
@@ -1892,7 +1912,9 @@ export async function updateSessionRecordConditionally(
   options?: { preserveLastActiveAt?: boolean; setLastActiveAt?: string },
 ): Promise<SessionRecord | null> {
   await ensureSessionInit();
-  return withWriteLock(async () => {
+  let searchContentChanged = false;
+  let permissionChanged = false;
+  const updated = await withWriteLock(async () => {
     const db = getDb();
     if (!db) {
       throw new Error('updateSessionRecordConditionally: SQLite handle is null');
@@ -1907,17 +1929,28 @@ export async function updateSessionRecordConditionally(
 
       if (!shouldUpdate(session)) return null;
       const lastActiveAt = session.lastActiveAt;
+      const contentBefore = searchContentProjection(session);
+      const permissionBefore = canonicalStatusProjection(session).pendingPermissionTool;
 
       const applied = applyUpdateToSession(session, updates, 'clearing stale PID on terminal transition (conditional)');
       // An explicit activity time is a change of its own, even with no field patch.
       if (!applied && !options?.setLastActiveAt) return session;
       if (options?.preserveLastActiveAt) session.lastActiveAt = lastActiveAt;
       if (options?.setLastActiveAt) session.lastActiveAt = options.setLastActiveAt;
+      searchContentChanged = contentBefore !== searchContentProjection(session);
       writeSessionRowSqlite(handle, session);
+      permissionChanged = permissionBefore !== canonicalStatusProjection(session).pendingPermissionTool;
       log.session.info('session record updated (conditional)', { sessionId: claudeSessionId, fields: Object.keys(updates) });
       return session;
     });
   });
+  if (updated && permissionChanged) {
+    emitSessionStatusChanged(updated, {}, ['*'], { source: 'session-tracker', urgency: 'urgent' });
+  }
+  if (searchContentChanged) {
+    bus.emit(EventNames.SESSION_CONTENT_UPDATED, { sessionId: claudeSessionId }, ['*'], { source: 'session-tracker' });
+  }
+  return updated;
 }
 
 /**
