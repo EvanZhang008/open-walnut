@@ -112,7 +112,10 @@ curl -s -X POST ${WALNUT_SERVER_URL:-http://localhost:3456}/api/cloud-setup/star
 
 Body fields: `provider` (required), `domainMode` (required, `own-domain` or
 `sslip`), `domain` (required when `own-domain`), `region`, `instanceType`,
-`credentials` (only when step 1 said `needs: 'api-token'`), `force`.
+`credentials` (only when step 1 said `needs: 'api-token'`), `force`, and
+`bedrockRegion` (where Claude Code on the box calls Bedrock; default
+`us-west-2`, and it is not the box's `region`). The box installs Claude Code
+plus the user's default engine from Settings; there is no engine field.
 
 - **202** `{ job }` — started. Go to section 4.
 - **400** `{ error }` — bad input, or preflight refused. The most common one:

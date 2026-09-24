@@ -8,6 +8,8 @@
  * to the same REST endpoints rather than re-implementing the sequence.
  */
 
+import type { SessionEngine } from '../types.js'
+
 /**
  * Step order is the execution order. `dns` is skipped in sslip mode and
  * `await-vm` only runs on the manual path — a skipped step still occupies its
@@ -78,6 +80,19 @@ export interface CloudSetupJobState {
    * account (see DetectCredsResult.profiles).
    */
   profile?: string
+  /**
+   * Coding-agent engine the box installs (next to Claude Code, which it always
+   * gets) and seeds as its own `defaults.engine`. Captured from this machine's
+   * config at job creation, so a resume or retry provisions what the operator
+   * had chosen when they started. Optional so older job files still load;
+   * absent means claude.
+   */
+  engine?: SessionEngine
+  /**
+   * Region Claude Code on the box calls Bedrock in, through the instance role.
+   * Not the box's own region. Optional for older files; absent means us-west-2.
+   */
+  bedrockRegion?: string
   /** Provider-scoped handle for teardown (EC2 instance id, stack name, …). */
   instanceRef?: string
   /**

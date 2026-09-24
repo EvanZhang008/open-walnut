@@ -22,7 +22,14 @@ import { getCloudRemoteCredentials, gitSafeAsync, initSync, sync } from '../../i
 import { log } from '../../logging/index.js'
 import type { CloudSetupAwaitingInput, CloudSetupJobState, CloudSetupStepId } from './job-types.js'
 import { getDriver } from './providers/index.js'
-import { buildUserData, sslipHostname, SSLIP_AUTO, type UserDataFlavor } from './user-data.js'
+import {
+  buildUserData,
+  DEFAULT_BEDROCK_REGION,
+  DEFAULT_BOX_ENGINE,
+  sslipHostname,
+  SSLIP_AUTO,
+  type UserDataFlavor,
+} from './user-data.js'
 
 /** Poll intervals and budgets. Mutable so tests can shrink them. */
 export const CLOUD_SETUP_TIMINGS = {
@@ -194,8 +201,13 @@ async function generate(ctx: StepContext): Promise<StepOutcome> {
     domain: bootScriptDomain(state),
     pairingCode: state.pairingCode,
     flavor: bootScriptFlavor(state),
+    engine: state.engine,
+    bedrockRegion: state.bedrockRegion,
   })
-  ctx.log('generated the first-boot script and a fresh pairing code')
+  ctx.log(
+    'generated the first-boot script and a fresh pairing code '
+    + `(engine ${state.engine ?? DEFAULT_BOX_ENGINE} plus Claude Code, Bedrock region ${state.bedrockRegion ?? DEFAULT_BEDROCK_REGION})`,
+  )
   return {}
 }
 
@@ -223,6 +235,8 @@ async function provision(ctx: StepContext): Promise<StepOutcome> {
     domain: bootScriptDomain(state),
     pairingCode: state.pairingCode,
     flavor: bootScriptFlavor(state),
+    engine: state.engine,
+    bedrockRegion: state.bedrockRegion,
   })
   const result = await driver.createVM({
     userData,

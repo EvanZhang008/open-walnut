@@ -12,6 +12,7 @@ import {
   listReferences,
   getReference,
 } from '../../core/skill-store.js';
+import { SKILL_READ_ONLY_INSTALL } from '../../core/skill-errors.js';
 
 export function createSkillsRouter(): Router {
   const router = Router();
@@ -89,6 +90,11 @@ export function createSkillsRouter(): Router {
           res.status(403).json({ error: err.message });
           return;
         }
+        // A shipped skill on a package the server cannot write (see skill-store).
+        if (err.message.includes(SKILL_READ_ONLY_INSTALL)) {
+          res.status(409).json({ error: err.message });
+          return;
+        }
       }
       next(err);
     }
@@ -126,6 +132,11 @@ export function createSkillsRouter(): Router {
         }
         if (err.message.includes('Cannot delete')) {
           res.status(403).json({ error: err.message });
+          return;
+        }
+        // A shipped skill on a package the server cannot write (see skill-store).
+        if (err.message.includes(SKILL_READ_ONLY_INSTALL)) {
+          res.status(409).json({ error: err.message });
           return;
         }
       }

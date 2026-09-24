@@ -21,7 +21,10 @@ import path from 'node:path'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { emitSse } from '../../web/sse-channels.js'
+import { DEFAULT_ENGINE, isKnownEngine } from '../agents/engine-registry.js'
+import { getConfig } from '../config-manager.js'
 import { bus, EventNames } from '../event-bus.js'
+import type { SessionEngine } from '../types.js'
 import {
   CLOUD_SETUP_LOG_TAIL_MAX,
   CLOUD_SETUP_STEP_IDS,
@@ -35,6 +38,7 @@ import {
 } from './job-types.js'
 import { getDriver } from './providers/index.js'
 import { CloudSetupCancelled, sslipHostname, stepRunners, type StepContext } from './steps.js'
+import { DEFAULT_BEDROCK_REGION, isValidBedrockRegion } from './user-data.js'
 
 /** SSE channel key — the web wizard subscribes here. */
 export const CLOUD_SETUP_SSE_CHANNEL = 'cloud-setup'
@@ -56,6 +60,27 @@ export interface StartCloudSetupJobInput {
   profile?: string
   credentials?: string
   force?: boolean
+  /** Engine the box defaults to. Absent = this machine's configured default engine. */
+  engine?: SessionEngine
+  /** Bedrock region for Claude Code on the box. Absent = DEFAULT_BEDROCK_REGION. */
+  bedrockRegion?: string
+}
+
+/**
+ * The default engine the operator CHOSE on this machine: config
+ * `defaults.engine`, validated, else claude.
+ *
+ * Deliberately not resolveDefaultEngine(): that one also demotes an engine
+ * whose CLI is missing HERE, which is a fact about this machine. The box
+ * installs the engine itself, so what it needs is the choice.
+ */
+async function chosenDefaultEngine(): Promise<SessionEngine> {
+  try {
+    const configured = (await getConfig()).defaults?.engine
+    return isKnownEngine(configured) ? configured : DEFAULT_ENGINE
+  } catch {
+    return DEFAULT_ENGINE
+  }
 }
 
 export interface CloudSetupJobInput {
@@ -222,6 +247,14 @@ async function startJobExclusive(input: StartCloudSetupJobInput): Promise<CloudS
     credentialStore.delete(existing.id)
   }
   if (!getDriver(input.provider)) throw new Error(`Unknown provider: ${input.provider}`)
+  const bedrockRegion = input.bedrockRegion ?? DEFAULT_BEDROCK_REGION
+  if (!isValidBedrockRegion(bedrockRegion)) {
+    throw new Error(`Invalid bedrockRegion: ${JSON.stringify(bedrockRegion)} is not a region id like ${DEFAULT_BEDROCK_REGION}`)
+  }
+  if (input.engine !== undefined && !isKnownEngine(input.engine)) {
+    throw new Error(`Unknown engine: ${JSON.stringify(input.engine)}`)
+  }
+  const engine = input.engine ?? await chosenDefaultEngine()
 
   const now = new Date().toISOString()
   const state: CloudSetupJobState = {
@@ -233,6 +266,8 @@ async function startJobExclusive(input: StartCloudSetupJobInput): Promise<CloudS
     ...(input.region ? { region: input.region } : {}),
     ...(input.instanceType ? { instanceType: input.instanceType } : {}),
     ...(input.profile ? { profile: input.profile } : {}),
+    engine,
+    bedrockRegion,
     status: 'running',
     currentStep: 'preflight',
     steps: freshSteps(),
@@ -251,7 +286,7 @@ async function startJobExclusive(input: StartCloudSetupJobInput): Promise<CloudS
   }
   emitProgress(state)
   log.web.info('cloud-setup: job started', {
-    jobId: state.id, provider: state.provider, domainMode: state.domainMode,
+    jobId: state.id, provider: state.provider, domainMode: state.domainMode, engine, bedrockRegion,
   })
   void runJob(state, { force: input.force === true })
   return state

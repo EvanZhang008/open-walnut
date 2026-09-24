@@ -2,14 +2,21 @@
  * Cloud-init / user-data generator for the cloud companion's first boot.
  *
  * The script clones the repo, drops the pairing code into /etc/walnut/setup-token
- * (mode 0600, root-only dir), then hands off to scripts/cloud/setup.sh. The
- * server reads that file via WALNUT_SETUP_TOKEN_FILE and claims itself against
- * the operator's Mac — see src/core/device-auth.ts.
+ * (root 0600, in a root-owned dir), then hands off to scripts/cloud/setup.sh,
+ * which passes it to the service user's own /etc/walnut/claim/. The server
+ * reads it there via WALNUT_SETUP_TOKEN_FILE and claims itself against the
+ * operator's Mac (see src/core/device-auth.ts).
  *
  * SECURITY: every interpolated value is single-quote escaped, and the pairing
- * code appears in exactly ONE command (the printf that writes the file). It is
+ * code appears in exactly ONE command (the printf that writes it). It is
  * never passed to setup.sh, never exported, and never echoed.
+ *
+ * The engine and the Bedrock region DO ride setup.sh's argv (to
+ * scripts/cloud/ensure-harness.sh): neither is a secret, and both are checked
+ * against a closed shape here before they are quoted in.
  */
+
+import { SESSION_ENGINE_IDS, type SessionEngine } from '../types.js'
 
 /**
  * Sentinel domain meaning "derive the hostname from this VM's public IP at boot"
@@ -29,6 +36,14 @@ export function sslipHostname(ip: string): string {
 
 export const DEFAULT_REPO_URL = 'https://github.com/EvanZhang008/open-walnut.git'
 export const DEFAULT_BRANCH = 'main'
+/** The box's default engine when the job carries none (older job files). */
+export const DEFAULT_BOX_ENGINE: SessionEngine = 'claude'
+/**
+ * Region Claude Code on the box calls Bedrock in. Deliberately NOT the box's
+ * own region: model availability is best here, and the instance role's invoke
+ * grant is region-wildcarded, so the box can live anywhere.
+ */
+export const DEFAULT_BEDROCK_REGION = 'us-west-2'
 
 export type UserDataFlavor = 'al2023' | 'ubuntu'
 
@@ -40,6 +55,17 @@ export interface BuildUserDataParams {
   repoUrl?: string
   branch?: string
   flavor: UserDataFlavor
+  /** Engine the box installs and defaults to. Default DEFAULT_BOX_ENGINE. */
+  engine?: SessionEngine
+  /** Bedrock region for Claude Code on the box. Default DEFAULT_BEDROCK_REGION. */
+  bedrockRegion?: string
+}
+
+/** AWS region id shape (us-west-2, eu-central-1, us-gov-west-1). Same rule as ensure-harness.sh. */
+const BEDROCK_REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/
+
+export function isValidBedrockRegion(value: unknown): value is string {
+  return typeof value === 'string' && BEDROCK_REGION_RE.test(value)
 }
 
 /** Hostname shape we accept for `domain` (labels, dots, no scheme or path). */
@@ -53,7 +79,9 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
-function assertSafeInputs(params: BuildUserDataParams): { repoUrl: string; branch: string } {
+function assertSafeInputs(
+  params: BuildUserDataParams,
+): { repoUrl: string; branch: string; engine: SessionEngine; bedrockRegion: string } {
   const { domain, pairingCode } = params
   if (!/^[0-9a-f]{32}$/.test(pairingCode)) {
     throw new Error('Invalid pairing code: expected 32 lowercase hex chars')
@@ -69,7 +97,15 @@ function assertSafeInputs(params: BuildUserDataParams): { repoUrl: string; branc
   if (!BRANCH_RE.test(branch)) {
     throw new Error(`Invalid branch: ${JSON.stringify(branch)}`)
   }
-  return { repoUrl, branch }
+  const engine = params.engine ?? DEFAULT_BOX_ENGINE
+  if (!(SESSION_ENGINE_IDS as readonly string[]).includes(engine)) {
+    throw new Error(`Invalid engine: ${JSON.stringify(engine)} (expected one of ${SESSION_ENGINE_IDS.join(', ')})`)
+  }
+  const bedrockRegion = params.bedrockRegion ?? DEFAULT_BEDROCK_REGION
+  if (!isValidBedrockRegion(bedrockRegion)) {
+    throw new Error(`Invalid bedrockRegion: ${JSON.stringify(bedrockRegion)} is not a region id like ${DEFAULT_BEDROCK_REGION}`)
+  }
+  return { repoUrl, branch, engine, bedrockRegion }
 }
 
 /**
@@ -189,7 +225,7 @@ function sslipResolverBlock(): string {
  * provider API needs that).
  */
 export function buildUserData(params: BuildUserDataParams): string {
-  const { repoUrl, branch } = assertSafeInputs(params)
+  const { repoUrl, branch, engine, bedrockRegion } = assertSafeInputs(params)
   const { domain, pairingCode, flavor } = params
 
   const domainBlock = domain === SSLIP_AUTO
@@ -212,20 +248,32 @@ export function buildUserData(params: BuildUserDataParams): string {
     '# ── source ──',
     'rm -rf /opt/walnut',
     `git clone --branch ${shellQuote(branch)} ${shellQuote(repoUrl)} /opt/walnut`,
+    '# A fresh clone replaces a tree that was once writable by the service user,',
+    '# which is the one thing that record (see setup.sh) waits for.',
+    'rm -f /root/.walnut-code-tree-exposed',
     '',
     '# ── pairing code ──',
     '# The one place the code touches this box. printf puts it in argv for the',
     '# duration of one builtin call, which is unavoidable when writing a secret',
     '# from a script; it is never passed to setup.sh, exported, or echoed.',
-    // root-owned 0700 is deliberately TEMPORARY: setup.sh re-owns the dir to the
-    // service user, which is what lets the server traverse it AND unlink the
-    // spent token after a claim. Do not "harden" it back to root here.
-    'install -d -m 700 /etc/walnut',
-    `printf '%s' ${shellQuote(pairingCode)} > /etc/walnut/setup-token`,
-    'chmod 600 /etc/walnut/setup-token',
+    // /etc/walnut is root's (setup.sh keeps it root:walnut 0750 and hands the
+    // code to the service user's own claim/ dir). A re-run (GCP runs this on
+    // every boot) may meet a dir an older setup.sh gave to the service user, so
+    // it is taken back first, and the code goes in through a temp file renamed
+    // over the name: root never writes through a name that user could plant.
+    'if [ -L /etc/walnut ] || { [ -e /etc/walnut ] && [ ! -d /etc/walnut ]; }; then rm -f /etc/walnut; fi',
+    'mkdir -p /etc/walnut',
+    'chown -h root /etc/walnut',
+    'chmod 750 /etc/walnut',
+    'rm -rf /etc/walnut/setup-token',
+    'token_tmp="$(mktemp /etc/walnut/.setup-token.XXXXXX)"',
+    `printf '%s' ${shellQuote(pairingCode)} > "$token_tmp"`,
+    'mv -fT "$token_tmp" /etc/walnut/setup-token',
     '',
     '# ── install + start ──',
-    'bash /opt/walnut/scripts/cloud/setup.sh "$DOMAIN"',
+    '# The engine is the one the operator chose on their primary; Claude Code is',
+    '# always installed too (setup.sh -> scripts/cloud/ensure-harness.sh).',
+    `bash /opt/walnut/scripts/cloud/setup.sh "$DOMAIN" --engine ${shellQuote(engine)} --bedrock-region ${shellQuote(bedrockRegion)}`,
     '',
     'echo "walnut cloud companion: first boot finished at $(date -u +%FT%TZ)"',
     '',

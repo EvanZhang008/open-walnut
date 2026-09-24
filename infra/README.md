@@ -39,7 +39,8 @@ cannot reach a checkout of `infra/`.
 - **Data survives**: encrypted gp3 root volume with delete-on-termination disabled,
   plus daily DLM snapshots (retain 7).
 - Instance role can invoke Bedrock models (incl. cross-region inference profiles) — the
-  offline chat brain needs no stored credentials.
+  offline chat brain needs no stored credentials. Claude Code on the box signs in with
+  the same role.
 
 ## One-command deploy (manual route)
 
@@ -70,6 +71,8 @@ is gitignored on purpose (CDK caches account-specific lookups there).
 | `domain` | yes, unless `sslip=1` | — | Public HTTPS hostname, e.g. `wn.example.com`. Caddy obtains the cert for it. |
 | `sslip` | no | *(off)* | `1` = no domain of your own: the box serves itself at `<dashed-ip>.sslip.io`, derived from its public IP at boot. Makes `domain` optional; the `Domain` output then reads `sslip-auto` (the real hostname comes from `ElasticIp`). |
 | `userDataB64` | no | *(none)* | Base64 first-boot script, supplied by Walnut's one-click cloud setup. When present it fully **replaces** the built-in bootstrap lines. Deploying by hand? Leave it off. |
+| `engine` | no | `claude` | Default coding-agent engine for the box (`claude`, `codex`, `gemini`, `opencode`, `goose`, `pi`, `dsh`, `custom`). Its CLI is installed next to Claude Code, which the box always gets. Only reaches the box when set, so an existing stack's user-data (and instance) stays unchanged without it. Ignored when `userDataB64` is given (that script carries its own). |
+| `bedrockRegion` | no | `us-west-2` | Region Claude Code on the box calls Bedrock in, through the instance role. Independent of the stack's region. Like `engine`, only passed on when set, and ignored when `userDataB64` is given. |
 | `alertEmail` | no | *(none)* | Email subscribed to the alarm SNS topic. Skipped if omitted. |
 | `repoUrl` | no | `https://github.com/EvanZhang008/open-walnut.git` | Repo cloned to `/opt/walnut` on first boot. |
 | `branch` | no | `main` | Branch to clone. |
@@ -83,8 +86,10 @@ is gitignored on purpose (CDK caches account-specific lookups there).
    If using Cloudflare, set it to **DNS-only (grey cloud)** — Caddy must receive the
    ACME challenge and terminate TLS itself; the orange-cloud proxy breaks both.
 2. Wait a few minutes for first boot: user-data clones the repo and runs
-   `scripts/cloud/setup.sh` (installs node/Caddy, builds Walnut, starts services).
-   Bootstrap log: `/var/log/walnut-setup.log` on the instance.
+   `scripts/cloud/setup.sh` (installs node/Caddy, builds Walnut, installs Claude Code
+   and the default engine's CLI, starts services). Bootstrap log:
+   `/var/log/walnut-setup.log` on the instance. What the box installs to run sessions
+   itself: [the companion as an exec host](../docs/reference/cloud-sync.md#the-companion-as-an-exec-host).
 3. **Shell access** (SSM only):
    ```bash
    aws ssm start-session --target <InstanceId output> --profile <your-profile>
@@ -107,10 +112,20 @@ is gitignored on purpose (CDK caches account-specific lookups there).
 ## Updating the instance later
 
 The instance is cattle-ish: config lives in the repo (`scripts/cloud/setup.sh`), data lives
-on the retained volume + git hub. To update code, SSM in and:
+on the retained volume + git hub. `/opt/walnut` is root's and read-only to the service
+user, which runs agents. While that holds, update it over SSM:
 
 ```bash
 sudo -i
 cd /opt/walnut && git pull
-bash scripts/cloud/setup.sh <domain>    # idempotent — safe to re-run
+bash scripts/cloud/setup.sh <domain>    # safe to re-run
 ```
+
+A tree the service user could write (a box set up before that rule, for one) is never
+taken back and built on in place, and root runs nothing in it, `git pull` included. Move
+it aside and clone fresh, or run the deploy, which does that for you. `setup.sh` refuses
+such a tree. Steps: [the code tree is root's](../docs/reference/cloud-sync.md#the-companion-as-an-exec-host).
+
+Without `--engine`, a re-run keeps the box's own `defaults.engine`. To converge only
+the agent harness (Claude Code, engine CLI, Bedrock settings, cloud exec keys), run
+`bash scripts/cloud/ensure-harness.sh`, then `systemctl restart walnut`.

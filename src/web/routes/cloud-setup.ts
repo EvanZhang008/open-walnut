@@ -25,7 +25,7 @@ import {
 } from '../../core/cloud-setup/job.js'
 import type { CloudSetupDomainMode, CloudSetupProviderId } from '../../core/cloud-setup/job-types.js'
 import { getDriver, listDrivers } from '../../core/cloud-setup/providers/index.js'
-import { buildUserData, SSLIP_AUTO } from '../../core/cloud-setup/user-data.js'
+import { buildUserData, isValidBedrockRegion, SSLIP_AUTO } from '../../core/cloud-setup/user-data.js'
 import { log } from '../../logging/index.js'
 import { attachSse } from '../sse-channels.js'
 
@@ -94,6 +94,7 @@ cloudSetupRouter.post('/start', async (req, res, next) => {
       profile?: string
       credentials?: string
       force?: boolean
+      bedrockRegion?: string
     }
     if (!body.provider || !getDriver(body.provider)) {
       return badRequest(res, `Unknown or missing provider: ${body.provider ?? '(none)'}`)
@@ -110,7 +111,17 @@ cloudSetupRouter.post('/start', async (req, res, next) => {
     if (body.domainMode === 'own-domain' && !body.domain) {
       return badRequest(res, 'own-domain mode requires a domain')
     }
+    // Rides the box's boot script as an argv value, so only a region id shape.
+    if (body.bedrockRegion !== undefined && body.bedrockRegion !== null && typeof body.bedrockRegion !== 'string') {
+      return badRequest(res, 'bedrockRegion must be a string')
+    }
+    const bedrockRegion = body.bedrockRegion?.trim() || undefined
+    if (bedrockRegion && !isValidBedrockRegion(bedrockRegion)) {
+      return badRequest(res, 'bedrockRegion must be a region id such as us-west-2')
+    }
 
+    // No engine field on purpose: the job takes the operator's configured
+    // default engine, the same choice Settings shows.
     const job = await startCloudSetupJob({
       provider: body.provider as CloudSetupProviderId,
       domainMode: body.domainMode as CloudSetupDomainMode,
@@ -120,6 +131,7 @@ cloudSetupRouter.post('/start', async (req, res, next) => {
       profile,
       credentials: body.credentials,
       force: body.force === true,
+      bedrockRegion,
     })
     res.status(202).json({ job: redactCloudSetupJob(job) })
   } catch (err) {
@@ -260,7 +272,11 @@ cloudSetupRouter.get('/user-data', async (req, res, next) => {
     // Same flavor the provision step would have used, so the blob an operator
     // copies for a Hetzner box reaches for apt rather than dnf.
     const userData = buildUserData({
-      domain, pairingCode: job.pairingCode, flavor: driver.userDataFlavor ?? 'al2023',
+      domain,
+      pairingCode: job.pairingCode,
+      flavor: driver.userDataFlavor ?? 'al2023',
+      engine: job.engine,
+      bedrockRegion: job.bedrockRegion,
     })
     const instructions = driver.instructions({ userData, domain, domainMode, region: job.region, instanceType: job.instanceType })
     res.json({ userData, steps: instructions.steps, consoleUrl: instructions.consoleUrl })

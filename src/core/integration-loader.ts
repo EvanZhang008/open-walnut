@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { preparePluginModule, type PluginModuleFunctions } from './plugins/plugin-module.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
 import yaml from 'js-yaml';
@@ -618,6 +618,81 @@ async function discoverManagedPlugin(
 
 type BundleOutcome = { outfile: string; error?: undefined } | { outfile?: undefined; error: string };
 
+/**
+ * Where on-the-fly plugin bundles are written. Normally INSIDE the running package
+ * (`<root>/.plugin-cache`): Node resolves a bundle's externals ('better-sqlite3', ...)
+ * by walking up from the bundle FILE to a node_modules, and esbuild's `nodePaths` only
+ * affects build time, so the file's on-disk location matters (os.tmpdir() fails).
+ *
+ * A package this user cannot write gets a data-dir location instead, whose
+ * `node_modules` links to the package's own (one dir per package root, so two builds
+ * on one data dir never repoint each other's link). That is the cloud companion: its
+ * code tree is root-owned, so an agent running as the service user cannot plant code
+ * that root runs on the next deploy. Decided once per process, by an access check.
+ */
+let bundleLocation: { root: string; writable: boolean } | null = null;
+let packageWritableOverride: boolean | null = null;
+
+/** Tests: pretend the running package is (not) writable; null = the real check. */
+export function setPluginPackageWritableForTesting(writable: boolean | null): void {
+  packageWritableOverride = writable;
+  bundleLocation = null;
+}
+
+function dataDirBundleDir(nodeModulesRoot: string): string {
+  const key = createHash('sha256').update(path.resolve(nodeModulesRoot)).digest('hex').slice(0, 12);
+  return path.join(WALNUT_HOME, 'cache', 'plugin-bundles', key);
+}
+
+function packageRootWritable(root: string): boolean {
+  if (bundleLocation?.root === root) return bundleLocation.writable;
+  let writable: boolean;
+  if (packageWritableOverride !== null) {
+    writable = packageWritableOverride;
+  } else {
+    const legacy = path.join(root, '.plugin-cache');
+    try {
+      fs.accessSync(fs.existsSync(legacy) ? legacy : root, fs.constants.W_OK);
+      writable = true;
+    } catch {
+      writable = false;
+    }
+  }
+  bundleLocation = { root, writable };
+  if (writable) {
+    log.info('plugin bundles: writing inside the running package', { dir: path.join(root, '.plugin-cache') });
+  } else {
+    log.info('plugin bundles: the running package is read-only to this user, writing under the data dir', {
+      dir: dataDirBundleDir(root), packageRoot: root,
+    });
+  }
+  return writable;
+}
+
+export async function resolvePluginBundleDir(nodeModulesRoot: string): Promise<string> {
+  if (packageRootWritable(nodeModulesRoot)) {
+    const cacheDir = path.join(nodeModulesRoot, '.plugin-cache');
+    await fsp.mkdir(cacheDir, { recursive: true });
+    return cacheDir;
+  }
+  const dir = dataDirBundleDir(nodeModulesRoot);
+  await fsp.mkdir(dir, { recursive: true });
+  const link = path.join(dir, 'node_modules');
+  const target = path.join(nodeModulesRoot, 'node_modules');
+  const current = await fsp.readlink(link).catch(() => null);
+  if (current !== target) {
+    // Sibling link + rename: replaces a stale link atomically, and two plugins
+    // bundling at once cannot trip over each other's half-made link.
+    const tmp = `${link}.tmp-${randomUUID()}`;
+    await fsp.symlink(target, tmp, process.platform === 'win32' ? 'junction' : 'dir');
+    await fsp.rename(tmp, link).catch(async (err) => {
+      await fsp.rm(tmp, { force: true });
+      throw err;
+    });
+  }
+  return dir;
+}
+
 async function bundleExternalPlugin(
   pluginDir: string,
   entryFile: string,
@@ -627,14 +702,7 @@ async function bundleExternalPlugin(
     const pluginName = path.basename(pluginDir);
     const tree = resolvePluginSourceTree(RUNNING_PACKAGE_ROOT);
 
-    // CRITICAL: write the bundled mjs INSIDE the running package so Node's ESM
-    // resolver can walk up from the bundle file to a real node_modules when
-    // resolving externals like 'better-sqlite3' (the stage symlinks one in). If we
-    // write to os.tmpdir(), Node looks for node_modules in /private/var/folders/...
-    // and fails. esbuild's `nodePaths` option only affects build-time resolution —
-    // Node ignores it at runtime, so the file's actual on-disk location matters.
-    const cacheDir = path.join(tree.nodeModulesRoot, '.plugin-cache');
-    await fsp.mkdir(cacheDir, { recursive: true });
+    const cacheDir = await resolvePluginBundleDir(tree.nodeModulesRoot);
     const outfile = path.join(cacheDir, `${pluginName}-${randomUUID()}.mjs`);
 
     await build({

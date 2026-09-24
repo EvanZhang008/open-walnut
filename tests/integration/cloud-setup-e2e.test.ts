@@ -194,13 +194,18 @@ describe('cloud setup against a real cloud-mode Walnut', () => {
     // code, boot the box with it, then let provisioning complete.
     let releaseProvision: ((origin: string) => void) | null = null
     let createVMCalls = 0
+    let bootScript = ''
+    // The operator's chosen default engine, read by the real config manager at
+    // job creation, must reach the box's boot script (-> setup.sh -> harness).
+    await fsp.writeFile(path.join(macHome, 'config.yaml'), 'defaults:\n  engine: codex\n', 'utf-8')
     const fakeDriver = {
       id: 'aws' as const,
       label: 'Fake Cloud Box Driver',
       costHint: 'free',
       detectCreds: async () => ({ available: true, detail: 'ok', needs: 'nothing' as const }),
-      createVM: async (_params: unknown, onLog: (line: string) => void) => {
+      createVM: async (params: { userData: string }, onLog: (line: string) => void) => {
         createVMCalls++
+        bootScript = params.userData
         onLog('fake driver: waiting for the test box to come up')
         const origin = await new Promise<string>((resolve) => { releaseProvision = resolve })
         const url = new URL(origin)
@@ -234,6 +239,8 @@ describe('cloud setup against a real cloud-mode Walnut', () => {
 
     expect(done.status, `job failed: ${done.error ?? ''}\nlog:\n${done.logTail.join('\n')}`).toBe('done')
     expect(createVMCalls).toBe(1)
+    expect(done.engine).toBe('codex')
+    expect(bootScript).toContain(`setup.sh "$DOMAIN" --engine 'codex' --bedrock-region 'us-west-2'`)
 
     // ── 1. The box really claimed: its auth.json has our device ──
     const auth = JSON.parse(await fsp.readFile(path.join(box.home, 'auth.json'), 'utf-8')) as {

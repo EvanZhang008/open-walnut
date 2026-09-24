@@ -57,7 +57,7 @@ vi.mock('../../../src/integrations/git-sync.js', () => ({
   },
 }))
 
-import { WALNUT_HOME } from '../../../src/constants.js'
+import { CONFIG_FILE, WALNUT_HOME } from '../../../src/constants.js'
 import {
   CloudSetupJobExistsError,
   _resetCloudSetupJobForTesting,
@@ -959,5 +959,81 @@ describe('job lifecycle', () => {
     expect(done.logTail.join('\n')).not.toContain(code)
     // Nor the device token the box issued.
     expect(done.logTail.join('\n')).not.toContain('devtok-abc123')
+  })
+})
+
+// ── Agent harness inputs: the box gets the engine the operator chose ────────
+
+describe('engine + Bedrock region reach the boot script', () => {
+  async function setConfiguredEngine(engine: string): Promise<void> {
+    await fs.writeFile(CONFIG_FILE, `defaults:\n  engine: ${engine}\n`, 'utf-8')
+  }
+
+  it('reads the configured default engine at job creation and bakes it into user-data', async () => {
+    await setConfiguredEngine('codex')
+    const driver = useDriver(makeAutoDriver())
+    const started = await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    expect(started.engine).toBe('codex')
+    expect(started.bedrockRegion).toBe('us-west-2')
+    const done = await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+    expect(done.status).toBe('done')
+    expect(driver.createVMCalls[0].userData)
+      .toContain(`setup.sh "$DOMAIN" --engine 'codex' --bedrock-region 'us-west-2'`)
+    expect(done.logTail.join('\n')).toContain('engine codex plus Claude Code, Bedrock region us-west-2')
+    // Persisted, so a resumed or retried job provisions the same choice.
+    const onDisk = JSON.parse(await fs.readFile(jobFile(), 'utf-8')) as CloudSetupJobState
+    expect(onDisk.engine).toBe('codex')
+    expect(onDisk.bedrockRegion).toBe('us-west-2')
+  })
+
+  it('no configured engine, or one this build does not know, means claude', async () => {
+    const driver = useDriver(makeAutoDriver())
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+    expect(driver.createVMCalls[0].userData).toContain("--engine 'claude'")
+
+    await deleteCloudSetupJob()
+    await setConfiguredEngine('not-an-engine')
+    const again = await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    expect(again.engine).toBe('claude')
+  })
+
+  it('an explicit bedrockRegion rides along; a malformed one is refused before the job exists', async () => {
+    const driver = useDriver(makeAutoDriver())
+    await expect(startCloudSetupJob({
+      provider: 'aws', domainMode: 'own-domain', domain: ORIGIN, bedrockRegion: 'us-west-2; id',
+    })).rejects.toThrow(/Invalid bedrockRegion/)
+    expect(await getCloudSetupJob()).toBeNull()
+
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN, bedrockRegion: 'eu-central-1' })
+    await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+    expect(driver.createVMCalls[0].userData).toContain("--bedrock-region 'eu-central-1'")
+  })
+
+  it('a retry provisions the engine chosen at start, even after the config changed', async () => {
+    await setConfiguredEngine('codex')
+    const driver = useDriver(makeAutoDriver({ failFirst: true }))
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await waitFor((s) => s.status === 'failed', 'the first provision to fail')
+
+    await setConfiguredEngine('gemini')
+    await retryCloudSetupJob()
+    await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+    expect(driver.createVMCalls).toHaveLength(2)
+    expect(driver.createVMCalls[1].userData).toContain("--engine 'codex'")
+  })
+
+  it('a job file from before this field existed still provisions (claude, us-west-2)', async () => {
+    const driver = useDriver(makeAutoDriver({ failFirst: true }))
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    const failed = await waitForOnDisk((s) => s.status === 'failed', 'the first provision to fail')
+    _resetCloudSetupJobForTesting()
+    delete failed.engine
+    delete failed.bedrockRegion
+    await fs.writeFile(jobFile(), JSON.stringify(failed), 'utf-8')
+
+    await retryCloudSetupJob()
+    await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+    expect(driver.createVMCalls[1].userData).toContain(`--engine 'claude' --bedrock-region 'us-west-2'`)
   })
 })

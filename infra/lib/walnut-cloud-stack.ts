@@ -21,6 +21,16 @@ import * as dlm from 'aws-cdk-lib/aws-dlm'
 
 const DEFAULT_REPO_URL = 'https://github.com/EvanZhang008/open-walnut.git'
 
+/**
+ * Engines scripts/cloud/ensure-harness.sh accepts. This app is its own package
+ * and cannot import src/core/types.ts, so the list is repeated here; a test in
+ * the main suite (tests/scripts/cloud-ensure-harness.test.ts) keeps it equal to
+ * SESSION_ENGINE_IDS.
+ */
+export const HARNESS_ENGINE_IDS = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const
+/** Same shape rule as ensure-harness.sh and user-data.ts (us-west-2, eu-central-1). */
+const BEDROCK_REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/
+
 export class WalnutCloudStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props)
@@ -50,6 +60,26 @@ export class WalnutCloudStack extends cdk.Stack {
     // (e.g. this one in us-west-1) only have access to the b/c AZs. Override
     // with -c az=us-west-1c if needed.
     const az = (this.node.tryGetContext('az') as string | undefined) ?? `${this.region}b`
+    // Default engine the box installs next to Claude Code and seeds as its
+    // defaults.engine, and the region Claude Code calls Bedrock in
+    // (scripts/cloud/ensure-harness.sh; the invoke grant below is
+    // region-wildcarded, so this is independent of the stack's region). Both
+    // are checked here so a typo fails the synth instead of a boot 10 minutes
+    // in, and both reach setup.sh ONLY when set: an unchanged user-data keeps
+    // an existing stack's instance from being stopped and started on the next
+    // deploy. Unset, the box uses claude and us-west-2.
+    const engine = this.node.tryGetContext('engine') as string | undefined
+    if (engine !== undefined && !(HARNESS_ENGINE_IDS as readonly string[]).includes(engine)) {
+      throw new Error(`Unknown context "engine": ${JSON.stringify(engine)}. Expected one of: ${HARNESS_ENGINE_IDS.join(', ')}`)
+    }
+    const bedrockRegion = this.node.tryGetContext('bedrockRegion') as string | undefined
+    if (bedrockRegion !== undefined && !BEDROCK_REGION_RE.test(bedrockRegion)) {
+      throw new Error(`Invalid context "bedrockRegion": ${JSON.stringify(bedrockRegion)}. Expected a region id such as us-west-2`)
+    }
+    const harnessFlags = [
+      ...(engine !== undefined ? [`--engine ${engine}`] : []),
+      ...(bedrockRegion !== undefined ? [`--bedrock-region ${bedrockRegion}`] : []),
+    ].map((flag) => ` ${flag}`).join('')
 
     // ── Networking: dedicated minimal VPC ───────────────────────────────
     // Deliberately NOT Vpc.fromLookup — a lookup caches the account id into
@@ -98,12 +128,34 @@ export class WalnutCloudStack extends cdk.Stack {
     role.addToPolicy(new iam.PolicyStatement({
       sid: 'BedrockInvoke',
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      // This is also what Claude Code on the box signs in with (its
+      // settings.json from scripts/cloud/ensure-harness.sh sets only
+      // CLAUDE_CODE_USE_BEDROCK + AWS_REGION): no key is ever copied here.
       // Region is wildcarded on purpose: cross-region inference profiles
-      // route requests through other regions' foundation models.
+      // route requests through other regions' foundation models, and the
+      // Bedrock region (context bedrockRegion) is independent of the stack's.
       resources: [
         'arn:aws:bedrock:*::foundation-model/*',
         `arn:aws:bedrock:*:${this.account}:inference-profile/*`,
+        `arn:aws:bedrock:*:${this.account}:application-inference-profile/*`,
       ],
+    }))
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockInferenceProfilesRead',
+      // Read-only profile metadata, for a client on the box that looks an
+      // inference profile up before invoking it. GetInferenceProfile is scoped
+      // to this account's profiles; ListInferenceProfiles has no resource
+      // type, so it takes '*'.
+      actions: ['bedrock:GetInferenceProfile'],
+      resources: [
+        `arn:aws:bedrock:*:${this.account}:inference-profile/*`,
+        `arn:aws:bedrock:*:${this.account}:application-inference-profile/*`,
+      ],
+    }))
+    role.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockListInferenceProfiles',
+      actions: ['bedrock:ListInferenceProfiles'],
+      resources: ['*'],
     }))
     role.addToPolicy(new iam.PolicyStatement({
       sid: 'WalnutSecrets',
@@ -173,7 +225,8 @@ export class WalnutCloudStack extends cdk.Stack {
         'dnf install -y git',
         `git clone --branch ${branch} ${repoUrl} /opt/walnut`,
         ...(domain ? [`DOMAIN=${domain}`] : resolveHost),
-        'bash /opt/walnut/scripts/cloud/setup.sh "$DOMAIN" 2>&1 | tee /var/log/walnut-setup.log',
+        `bash /opt/walnut/scripts/cloud/setup.sh "$DOMAIN"${harnessFlags}`
+        + ' 2>&1 | tee /var/log/walnut-setup.log',
       )
     }
 

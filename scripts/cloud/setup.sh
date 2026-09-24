@@ -9,10 +9,15 @@
 #
 # Invoked by the VM's user-data (see src/core/cloud-setup/user-data.ts and
 # infra/lib/walnut-cloud-stack.ts):
-#   bash /opt/walnut/scripts/cloud/setup.sh <domain>
+#   bash /opt/walnut/scripts/cloud/setup.sh <domain> [--engine <id>] [--bedrock-region <region>]
 #
 # Run as root. Idempotent — safe to re-run (e.g. via SSM after a repo update):
 #   sudo bash /opt/walnut/scripts/cloud/setup.sh wn.example.com
+#
+# --engine / --bedrock-region go to scripts/cloud/ensure-harness.sh (step 9),
+# which installs Claude Code plus that engine's CLI and switches cloud exec on.
+# Both are optional: without --engine the box keeps its own defaults.engine
+# (claude on a fresh box); the Bedrock region defaults to us-west-2.
 #
 # What it sets up:
 #   Caddy (443/80, auto Let's Encrypt) → Walnut server (localhost:3456)
@@ -20,12 +25,15 @@
 #         /var/lib/walnut/git/walnut-data.git = bare hub repo (Mac pushes here
 #         over git smart HTTP through Caddy; post-receive materializes into
 #         the working tree)
+#   Exec: Claude Code + the default engine's CLI for the walnut user, so the
+#         box runs sessions itself through its loopback daemon (cloud exec)
 set -euo pipefail
 
 # cloud-init runs user-data with no HOME; npm/git need one.
 export HOME="${HOME:-/root}"
 
-DOMAIN="${1:?usage: setup.sh <domain>}"
+DOMAIN="${1:?usage: setup.sh <domain> [--engine <id>] [--bedrock-region <region>]}"
+shift
 
 REPO_DIR=/opt/walnut
 WALNUT_USER=walnut
@@ -33,6 +41,96 @@ WALNUT_LIB=/var/lib/walnut
 DATA_HOME="$WALNUT_LIB/.open-walnut"
 HUB_REPO="$WALNUT_LIB/git/walnut-data.git"
 CADDY_BIN=/usr/local/bin/caddy
+# Root's config for the service (step 8): root:walnut 0750, so the service user
+# can read what it is given and create nothing. Its one runtime write (the
+# spent pairing code) lives in a subdirectory of its own, CLAIM_DIR.
+ETC_WALNUT=/etc/walnut
+CLAIM_DIR="$ETC_WALNUT/claim"
+# Root-only record that the code tree was once writable by someone other than
+# root (see the check below). Only rebuilding the tree from a fresh clone
+# clears it: the first-boot script re-clones, a deploy swaps in a sibling.
+EXPOSED_MARKER=/root/.walnut-code-tree-exposed
+ROOT_USER=root
+WALNUT_GROUP=walnut
+
+# >>> code-tree exposure (tests/scripts/cloud-ensure-harness.test.ts runs this block)
+# The code tree is root's and read-only to the service user, which runs agents
+# (cloud exec). Root runs code from it below (the harness script, npm lifecycle
+# scripts, the build), and bash is reading this very file out of it, so a tree
+# that user could change is a path to root. This runs before anything else and
+# never repairs the tree: taking it back (chown) would erase the only evidence,
+# after which nothing tells that a .npmrc, node_modules or .git in it is the
+# service user's work. The finding goes into a root-only marker instead, and a
+# tree with a marker is replaced from a fresh clone, never built on in place.
+# A link in the tree is as safe as what it resolves to: one leaving the tree
+# for the service home, for something the service user controls, or for a name
+# that does not exist yet (anyone may create it) counts as a way in.
+tree_link_exposure() {
+  local tree_real home_real l t
+  tree_real="$(cd "$1" 2>/dev/null && pwd -P)" || return 0
+  home_real="$(cd "$WALNUT_LIB" 2>/dev/null && pwd -P || printf '%s' "$WALNUT_LIB")"
+  while IFS= read -r l; do
+    t="$(realpath "$l" 2>/dev/null || true)"
+    case "$t" in "$tree_real"|"$tree_real"/*) continue ;; esac
+    if [ -z "$t" ] || [ ! -e "$t" ]; then echo "$l (a link to $(readlink "$l"), which does not exist)"; return 0; fi
+    case "$t" in "$home_real"|"$home_real"/*) echo "$l (a link into $WALNUT_LIB)"; return 0 ;; esac
+    if [ -n "$(find "$t" "$(dirname "$t")" -maxdepth 0 -user "$WALNUT_USER" -print 2>/dev/null)" ]; then
+      echo "$l (a link to $t, which $WALNUT_USER controls)"; return 0
+    fi
+  done < <(find "$1" -type l -print 2>/dev/null)
+  return 0
+}
+tree_exposure() {
+  local hit
+  hit="$(find "$1" \( ! -user "$ROOT_USER" -o \( ! -type l \( -perm -020 -o -perm -002 \) \) \) -print -quit 2>/dev/null || true)"
+  if [ -n "$hit" ]; then echo "$hit"; return 0; fi
+  tree_link_exposure "$1"
+}
+# Appends one line to the marker (created 0600 in root's home when absent).
+record_exposure() {
+  (umask 077 && mkdir -p "$(dirname "$EXPOSED_MARKER")" && \
+    printf '%s %s: %s was writable by a non-root user (first: %s)\n' \
+      "$(date -u +%FT%TZ)" "$1" "$REPO_DIR" "$2" >> "$EXPOSED_MARKER")
+}
+exposed="$(tree_exposure "$REPO_DIR")"
+if [ -n "$exposed" ] && ! record_exposure setup.sh "$exposed"; then
+  echo "FATAL: $REPO_DIR can be changed by a non-root user (first: $exposed), and $EXPOSED_MARKER could not be written" >&2
+  exit 3
+fi
+if [ -e "$EXPOSED_MARKER" ]; then
+  echo "FATAL: root will not run code from $REPO_DIR: it was writable by a non-root user." >&2
+  sed 's/^/       /' "$EXPOSED_MARKER" >&2
+  echo "       Replace it from a fresh clone, then run this script from the new tree:" >&2
+  echo "         mv $REPO_DIR $REPO_DIR.exposed-\$(date +%s) && chmod 700 $REPO_DIR.exposed-*" >&2
+  echo "         git clone --branch main <repo url> $REPO_DIR && rm -f $EXPOSED_MARKER" >&2
+  echo "       Treat the service user as compromised until you have looked at the old tree." >&2
+  exit 3
+fi
+# <<< code-tree exposure
+
+# >>> harness args (tests/scripts/cloud-ensure-harness.test.ts runs this block)
+# The flags only tune step 9, so none of them may stop first boot: a value this
+# checkout does not know (a Mac on a newer release naming a newer engine, a
+# typo) is dropped with a warning and step 9 falls back to its default. Each
+# flag is checked on its own, before the long build, so a bad region cannot
+# take a good engine down with it.
+HARNESS_SCRIPT="$REPO_DIR/scripts/cloud/ensure-harness.sh"
+HARNESS_ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --engine=*|--bedrock-region=*) flag="${1%%=*}"; value="${1#*=}"; shift ;;
+    --engine|--bedrock-region)
+      if [ $# -lt 2 ]; then echo "WARNING: $1 has no value; ignored" >&2; shift; continue; fi
+      flag="$1"; value="$2"; shift 2 ;;
+    *) echo "WARNING: unknown argument '$1' ignored (usage: setup.sh <domain> [--engine <id>] [--bedrock-region <region>])" >&2; shift; continue ;;
+  esac
+  if bash "$HARNESS_SCRIPT" --validate-args "$flag" "$value" >/dev/null 2>&1; then
+    HARNESS_ARGS+=("$flag" "$value")
+  else
+    echo "WARNING: $flag '$value' is not valid for this checkout; ignored (step 9 uses its default)" >&2
+  fi
+done
+# <<< harness args
 
 # ── Platform detection (done once; every step below branches on $PKG) ────────
 if command -v dnf >/dev/null 2>&1; then
@@ -84,11 +182,21 @@ pkg_install() {
 # Run a command as the walnut user. HOME is set explicitly — runuser's
 # env-reset behavior varies across util-linux versions and a git command
 # writing to the wrong ~/.gitconfig is a miserable first-boot failure.
-as_walnut() {
-  "$RUNUSER" -u "$WALNUT_USER" -- env HOME="$WALNUT_LIB" "$@"
+# Run from an interactive root shell (sudo -i), a child holding root's terminal
+# could push keystrokes into it (TIOCSTI) or read what root types next. So it
+# gets a session of its own (setsid: no controlling terminal) and no terminal
+# fd at all: stdin is /dev/null, stdout and stderr go through pipes. as_walnut_in
+# is the one variant that passes the caller's stdin, for data fed to it.
+setsid --wait true </dev/null >/dev/null 2>&1 \
+  || { echo "FATAL: setsid --wait not available (util-linux 2.24 or newer)" >&2; exit 1; }
+# stdout and stderr each through a pipe, both drained before it returns (the
+# exit status is the command's, under pipefail).
+as_walnut_in() {
+  { setsid --wait "$RUNUSER" -u "$WALNUT_USER" -- env HOME="$WALNUT_LIB" "$@" 2>&1 1>&3 3>&- | cat >&2; } 3>&1 | cat
 }
+as_walnut() { as_walnut_in "$@" </dev/null; }
 
-echo "==> [1/9] System packages"
+echo "==> [1/10] System packages"
 if [ "$PKG" = dnf ]; then
   # gcc-c++/make/python3: insurance for native npm modules if a prebuild is missing.
   pkg_install git tar nodejs22 gcc-c++ make python3
@@ -125,7 +233,7 @@ NODE_BIN="$(command -v node)"
 GIT_BIN="$(command -v git)"
 echo "node: $NODE_BIN ($(node --version)), npm $(npm --version), git $GIT_BIN"
 
-echo "==> [2/9] Swap (a 2GB box — t4g.small, CX22 — needs headroom for vite/tsup)"
+echo "==> [2/10] Swap (a 2GB box — t4g.small, CX22 — needs headroom for vite/tsup)"
 if [ ! -f /swapfile ]; then
   # dd, not fallocate — swapon rejects fallocate'd files on some filesystems.
   dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
@@ -135,14 +243,14 @@ fi
 swapon --show | grep -q /swapfile || swapon /swapfile
 grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
-echo "==> [3/9] Bun (required by scripts/build-daemon.sh during npm run build)"
+echo "==> [3/10] Bun (required by scripts/build-daemon.sh during npm run build)"
 if ! command -v bun >/dev/null 2>&1; then
   export BUN_INSTALL=/opt/bun
   curl -fsSL https://bun.sh/install | bash
   ln -sf /opt/bun/bin/bun /usr/local/bin/bun
 fi
 
-echo "==> [4/9] Caddy (static binary — neither AL2023 nor Ubuntu ships a current caddy)"
+echo "==> [4/10] Caddy (static binary — neither AL2023 nor Ubuntu ships a current caddy)"
 if ! id -u caddy >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/caddy --create-home \
     --shell "$NOLOGIN" caddy
@@ -256,7 +364,10 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE
 WantedBy=multi-user.target
 EOF
 
-echo "==> [5/9] walnut service user"
+echo "==> [5/10] walnut service user"
+# nologin on purpose (nobody logs in as it). The session daemon still needs a
+# real $SHELL to spawn the agent CLI, which ensure-harness.sh (step 9) gives
+# walnut.service through a drop-in instead of loosening the account.
 if ! id -u "$WALNUT_USER" >/dev/null 2>&1; then
   useradd --system --home-dir "$WALNUT_LIB" --create-home \
     --shell "$NOLOGIN" "$WALNUT_USER"
@@ -265,8 +376,10 @@ as_walnut git config --global user.name "walnut"
 as_walnut git config --global user.email "walnut@localhost"
 as_walnut git config --global init.defaultBranch main
 
-echo "==> [6/9] Data layout: bare hub repo + working tree"
-install -d -o "$WALNUT_USER" -g "$WALNUT_USER" "$WALNUT_LIB/git"
+echo "==> [6/10] Data layout: bare hub repo + working tree"
+# Everything under the service home is that user's, so root never writes there
+# by path (a link it planted would redirect the write): the service user does.
+as_walnut mkdir -p "$WALNUT_LIB/git"
 if [ ! -d "$HUB_REPO" ]; then
   as_walnut git init --bare --initial-branch=main "$HUB_REPO"
 fi
@@ -319,7 +432,14 @@ systemctl enable --now walnut-hub-gc.timer
 
 # post-receive: a push from the Mac materializes into the working tree
 # near-realtime. flock serializes overlapping pushes.
-cat > "$HUB_REPO/hooks/post-receive" <<EOF
+# >>> hub hook (tests/scripts/cloud-ensure-harness.test.ts runs this block)
+# Written by the service user, which owns the hub repo: through a temp file
+# renamed over the hook, so a link standing in its place is replaced, never
+# followed, and nothing of root's is ever at stake.
+# shellcheck disable=SC2016  # $1 and $tmp are the inner shell's
+as_walnut_in bash -c 'set -e; umask 022; tmp="$(mktemp "$1.XXXXXX")"; cat > "$tmp"; chmod 755 "$tmp"
+  if [ -d "$1" ] && [ ! -L "$1" ]; then rm -rf "$1"; fi; mv -fT "$tmp" "$1"' \
+  write-hook "$HUB_REPO/hooks/post-receive" <<EOF
 #!/usr/bin/env bash
 # Auto-generated by scripts/cloud/setup.sh — pull pushed refs into the
 # working tree so the running server sees new data immediately.
@@ -337,8 +457,7 @@ else
   $RUNUSER -u "$WALNUT_USER" -- env HOME="$WALNUT_LIB" $GIT_BIN -C "$DATA_HOME" pull --ff-only origin main
 fi
 EOF
-chmod 755 "$HUB_REPO/hooks/post-receive"
-chown "$WALNUT_USER:$WALNUT_USER" "$HUB_REPO/hooks/post-receive"
+# <<< hub hook
 
 if [ ! -d "$DATA_HOME/.git" ]; then
   as_walnut git clone "$HUB_REPO" "$DATA_HOME"
@@ -352,49 +471,91 @@ if ! as_walnut git -C "$HUB_REPO" rev-parse --verify main >/dev/null 2>&1; then
   as_walnut git -C "$DATA_HOME" push -u origin main
 fi
 
-echo "==> [7/9] Build Walnut ($REPO_DIR)"
+echo "==> [7/10] Build Walnut ($REPO_DIR)"
 export PATH="/usr/local/bin:$PATH"
-# The chown below hands the repo to the walnut user; let root git commands
-# (this script's re-runs, `git pull` via SSM) keep working afterwards.
-git config --global --add safe.directory "$REPO_DIR"
+# The code tree is ROOT's; the service user only reads it (the check at the top
+# refused anything else before root ran a line from it). The server writes
+# nothing here at runtime: on a package it cannot write it keeps plugin bundles
+# and daemon caches under the data dir, and refuses (409) edits to shipped
+# skills.
+# Older versions let root run git in a service-owned tree; git's own ownership
+# guard is the right default again.
+git config --global --unset-all safe.directory "^$REPO_DIR\$" || true
 cd "$REPO_DIR"
 npm ci
 # npm ci normally installs the right prebuilt native binding, but a deploy can
 # leave a stale/foreign-platform binding behind (observed 2026-07-10: linux-arm64
 # binding missing → every SQLite consumer degraded to "null.prepare" errors).
 # Verify the binding actually loads on THIS platform; rebuild if it doesn't.
-node -e "require('better-sqlite3')" 2>/dev/null || npm rebuild better-sqlite3
+# Construct a database, not a bare require: the binding loads lazily, so only
+# this proves it (src/core/native-abi-preflight.ts). This is the only repair:
+# the server's own `npm rebuild` fallback fails on this box, because the
+# service user cannot write node_modules.
+node -e "new (require('better-sqlite3'))(':memory:').close()" 2>/dev/null || npm rebuild better-sqlite3
 npm run build
 (cd web && npx vite build)
-# Service user must be able to read everything (incl. node_modules).
-chown -R "$WALNUT_USER:$WALNUT_USER" "$REPO_DIR"
+# Readable and traversable by the service user (incl. node_modules), writable
+# only by root. ensure-harness.sh (step 9) refuses to run from anything else.
+chown -R -P root:root "$REPO_DIR"
+chmod -R a+rX,go-w "$REPO_DIR"
 
-echo "==> [8/9] walnut.service"
+echo "==> [8/10] walnut.service"
+# >>> etc-walnut (tests/scripts/cloud-ensure-harness.test.ts runs this block)
+# /etc/walnut is root's config for the service:
+#   /etc/walnut              root:walnut 0750  readable, but the service user
+#                                              can create nothing in it
+#   /etc/walnut/walnut.env   root 0600         read by systemd, as root, only
+#   /etc/walnut/setup-token  root 0600         the pairing code cloud-init
+#                                              leaves here before this runs
+#   /etc/walnut/claim/       walnut 0700       the service user's own: after a
+#                                              claim the server unlinks the
+#                                              spent code, which needs write
+#                                              on its directory
+# Root never writes by path in a directory the service user can write: files
+# here are temp files renamed into place, and the code reaches claim/ through
+# the service user itself (root only opens its own copy). Older versions gave
+# the whole dir to the service user, so first take it back; from then on no
+# name in it can be swapped under root. `mkdir -p` alone is not enough:
+# cloud-init already made the dir, and mkdir -p leaves an existing dir as it is.
+if [ -L "$ETC_WALNUT" ] || { [ -e "$ETC_WALNUT" ] && [ ! -d "$ETC_WALNUT" ]; }; then rm -f "$ETC_WALNUT"; fi
+mkdir -p "$ETC_WALNUT"
+chown -h "$ROOT_USER:$WALNUT_GROUP" "$ETC_WALNUT"
+chmod 750 "$ETC_WALNUT"
+# A name planted there before the take-back is kept only when it is a plain
+# file with one link; anything else (a link, a dir, a hard link to someone
+# else's file) is removed unread.
+plain_file() { [ -f "$1" ] && [ ! -L "$1" ] && [ -n "$(find "$1" -maxdepth 0 -links 1 -print 2>/dev/null)" ]; }
+for name in walnut.env setup-token; do
+  if { [ -e "$ETC_WALNUT/$name" ] || [ -L "$ETC_WALNUT/$name" ]; } && ! plain_file "$ETC_WALNUT/$name"; then
+    echo "    removing $ETC_WALNUT/$name: not a plain file"
+    rm -rf "${ETC_WALNUT:?}/$name"
+  fi
+done
+# stdin -> <path in $ETC_WALNUT>, root-owned, mode <mode>: renamed over the name.
+put_file() {
+  local tmp
+  tmp="$(mktemp "$ETC_WALNUT/.tmp.XXXXXX")"
+  cat > "$tmp"
+  chmod "$2" "$tmp"
+  mv -fT "$tmp" "$1"
+}
+ENV_FILE="$ETC_WALNUT/walnut.env"
+# KEY VALUE: walnut.env with KEY=VALUE in place of any earlier KEY line.
+env_set() {
+  { if [ -f "$ENV_FILE" ]; then grep -v "^$1=" "$ENV_FILE" || true; fi; printf '%s=%s\n' "$1" "$2"; } | put_file "$ENV_FILE" 600
+}
 # Secrets the companion needs at runtime (e.g. OPENAI_API_KEY for the voice
 # STT fallback) live in SSM Parameter Store under /walnut/* and materialize
-# into /etc/walnut/walnut.env here. Config.yaml is the wrong home for them:
-# it git-syncs through the data hub, and cloud-held secrets must never ride
-# a repo. Idempotent + best-effort — a missing parameter just means that
-# feature stays off.
-# The dir must be OWNED by the service user, not root:walnut 0750: after a
-# successful claim the server unlinks /etc/walnut/setup-token, and unlink needs
-# write permission on the DIRECTORY. Re-tightening this to root 0700 looks like
-# hardening but silently breaks both traversal (EACCES on the token read) and
-# that cleanup. `mkdir -p` is not enough — cloud-init already created the dir
-# as root 0700 before this script runs, and mkdir -p does not change the mode
-# of an existing dir. systemd reads EnvironmentFile= as root, so walnut.env is
-# unaffected either way.
-install -d -m 700 -o "$WALNUT_USER" -g "$WALNUT_USER" /etc/walnut
-touch /etc/walnut/walnut.env
-# Non-AWS providers (and a hand-run of this script off-instance) have no aws CLI;
-# every SSM lookup below is optional, so skip the whole block rather than eating
+# into walnut.env here. Config.yaml is the wrong home for them: it git-syncs
+# through the data hub, and cloud-held secrets must never ride a repo.
+# Idempotent and best-effort: a missing parameter just means that feature stays
+# off. Non-AWS providers (and a hand-run of this script off-instance) have no
+# aws CLI; every lookup is optional, so skip the whole block rather than eating
 # a `command not found` per parameter.
 if command -v aws >/dev/null 2>&1; then
   if OPENAI_KEY=$(aws ssm get-parameter --name /walnut/openai-api-key \
       --with-decryption --query Parameter.Value --output text 2>/dev/null); then
-    grep -q '^OPENAI_API_KEY=' /etc/walnut/walnut.env \
-      && sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$OPENAI_KEY|" /etc/walnut/walnut.env \
-      || echo "OPENAI_API_KEY=$OPENAI_KEY" >> /etc/walnut/walnut.env
+    env_set OPENAI_API_KEY "$OPENAI_KEY"
   else
     echo "    (no /walnut/openai-api-key in SSM — voice STT cloud fallback disabled)"
   fi
@@ -403,27 +564,37 @@ if command -v aws >/dev/null 2>&1; then
   # TAVILY_API_KEY when tools.web_search.api_key is absent from config.
   if TAVILY_KEY=$(aws ssm get-parameter --name /walnut/tavily-api-key \
       --with-decryption --query Parameter.Value --output text 2>/dev/null); then
-    grep -q '^TAVILY_API_KEY=' /etc/walnut/walnut.env \
-      && sed -i "s|^TAVILY_API_KEY=.*|TAVILY_API_KEY=$TAVILY_KEY|" /etc/walnut/walnut.env \
-      || echo "TAVILY_API_KEY=$TAVILY_KEY" >> /etc/walnut/walnut.env
+    env_set TAVILY_API_KEY "$TAVILY_KEY"
   else
     echo "    (no /walnut/tavily-api-key in SSM — web_search disabled on the companion)"
   fi
 else
   echo "    (no aws CLI — skipping SSM secrets)"
 fi
-chown "$WALNUT_USER:$WALNUT_USER" /etc/walnut/walnut.env
-chmod 600 /etc/walnut/walnut.env
+# Rewritten every run, so a file an older layout left to the service user is
+# root's again (its content is kept: it only ever configures that service).
+# Reading the name that is renamed over is the point: the old inode is read.
+# shellcheck disable=SC2094
+if [ -f "$ENV_FILE" ]; then put_file "$ENV_FILE" 600 < "$ENV_FILE"; else put_file "$ENV_FILE" 600 </dev/null; fi
 
+# claim/: a real directory, the service user's (made here when missing).
+if [ -L "$CLAIM_DIR" ] || { [ -e "$CLAIM_DIR" ] && [ ! -d "$CLAIM_DIR" ]; }; then rm -f "$CLAIM_DIR"; fi
+if [ ! -d "$CLAIM_DIR" ]; then mkdir -m 700 "$CLAIM_DIR"; fi
+chown -h "$WALNUT_USER:$WALNUT_GROUP" "$CLAIM_DIR"
+chmod 700 "$CLAIM_DIR"
 # Pairing code (a pre-generated setup token) if provisioning burned one in via
-# cloud-init. cloud-init writes it as root before this script runs, so the
-# service user cannot read it yet. The value itself never enters the unit file —
-# only the path — so `systemctl show walnut` cannot leak it.
-if [ -s /etc/walnut/setup-token ]; then
-  chown "$WALNUT_USER:$WALNUT_USER" /etc/walnut/setup-token
-  chmod 600 /etc/walnut/setup-token
+# cloud-init: handed to the service user, which writes its own copy, then
+# root's copy goes. The value itself never enters the unit file (only the
+# path), so `systemctl show walnut` cannot leak it.
+TOKEN_STAGE="$ETC_WALNUT/setup-token"
+if [ -s "$TOKEN_STAGE" ]; then
+  # shellcheck disable=SC2016  # $1 and $tmp are the inner shell's
+  as_walnut_in bash -c 'set -e; umask 077; tmp="$(mktemp "$1.XXXXXX")"; cat > "$tmp"; mv -fT "$tmp" "$1"' \
+    put-token "$CLAIM_DIR/setup-token" < "$TOKEN_STAGE"
+  rm -f "$TOKEN_STAGE"
   echo "    (provisioned setup token present — claim from your Walnut app)"
 fi
+# <<< etc-walnut
 
 # Port note: the server takes its port from the --port CLI flag (default 3456
 # in src/web/server.ts DEFAULT_PORT) — there is no PORT env var.
@@ -444,9 +615,9 @@ Environment=WALNUT_GIT_HUB_DIR=$WALNUT_LIB/git
 Environment=HOME=$WALNUT_LIB
 # Path, not value — the pairing code stays out of 'systemctl show'. Absent file
 # = no provisioned token, and the server mints+prints a random one as before.
-Environment=WALNUT_SETUP_TOKEN_FILE=/etc/walnut/setup-token
+Environment=WALNUT_SETUP_TOKEN_FILE=$CLAIM_DIR/setup-token
 # Optional secrets (SSM-materialized above); '-' = absent file is fine.
-EnvironmentFile=-/etc/walnut/walnut.env
+EnvironmentFile=-$ENV_FILE
 ExecStart=$NODE_BIN $REPO_DIR/dist/cli.js web --port 3456
 Restart=always
 RestartSec=5
@@ -456,7 +627,16 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
-echo "==> [9/9] Enable services + unattended security updates"
+echo "==> [9/10] Agent harness (Claude Code, default engine CLI, cloud exec)"
+# Makes the box a real exec host: see the header of ensure-harness.sh. It never
+# restarts walnut itself; the restart below picks up its drop-in and config.
+# Never fatal: a box whose agent CLI failed to install still serves as a relay,
+# and the next run of this script retries the install.
+if ! bash "$HARNESS_SCRIPT" ${HARNESS_ARGS[@]+"${HARNESS_ARGS[@]}"}; then
+  echo "WARNING: the agent harness is incomplete (see above); the companion starts as a relay only"
+fi
+
+echo "==> [10/10] Enable services + unattended security updates"
 if [ "$PKG" = dnf ]; then
   pkg_install dnf-automatic
   sed -i 's/^upgrade_type.*/upgrade_type = security/' /etc/dnf/automatic.conf

@@ -50,6 +50,11 @@
  *     became an exec host is a posture change the operator did not ask for, so
  *     it takes `cloud.exec.enabled: true` plus at least one `cwd_roots` entry.
  *     No roots configured = feature stays off, loudly (see `cloudExecStatus`).
+ *     Provisioning is where that decision is made: scripts/cloud/ensure-harness.sh
+ *     (run by setup.sh) seeds both keys, only when absent, once Claude Code is
+ *     installed on the box and has a credential (the instance role, an
+ *     operator's settings.json, or a login). An operator's own value, including
+ *     `false`, wins.
  *
  * ## Data ownership: PEER for execution, REPLICA for data, disjoint keyspace
  *

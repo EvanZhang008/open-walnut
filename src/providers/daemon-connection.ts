@@ -33,6 +33,7 @@ import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL } from '../constants.js'
 import { buildRemotePreamble } from './session-io.js'
 import { buildDaemonStartCmd } from './daemon-start-cmd.js'
+import { daemonGzCachePath } from './daemon-gz-cache.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
 import type { SshTarget } from './session-io.js'
 import { localDaemon } from './local-daemon.js'
@@ -2155,9 +2156,10 @@ export class DaemonConnection {
         // chunked path (256KB × N over individual SSH connections) which
         // survives proxy interference at the cost of being ~10x slower.
         const remotePath = await this.getRemoteDaemonPath()
-        const gzPath = localBinaryPath + '.gz'
+        const gzPath = await daemonGzCachePath(localBinaryPath)
 
-        // Compress if needed (cached alongside binary)
+        // Compress if needed (cached alongside the binary, or in the data dir
+        // when the package is read-only: daemon-gz-cache.ts)
         if (!fs.existsSync(gzPath)) {
           await new Promise<void>((resolve, reject) => {
             const out = fs.createWriteStream(gzPath)

@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR, SKILL_SETTINGS_FILE } from '../constants.js';
+import { SHIPPED_SKILL_READ_ONLY_DELETE, SHIPPED_SKILL_READ_ONLY_EDIT } from './skill-errors.js';
 import {
   discoverSkills,
   getSearchDirs,
@@ -89,6 +90,29 @@ function resolveSource(skillDir: string): SkillSource {
     if (dir.startsWith(canonical(root) + path.sep)) return 'plugin';
   }
   return 'claude';
+}
+
+// ─── shipped skills on a read-only install ─────────────────────────
+
+/**
+ * Shipped skills live in the running package (dist/data/skills). Where that is
+ * read-only to the server (the cloud companion: root owns the code tree), an
+ * edit or delete is refused with a readable 409 rather than failing on EACCES.
+ * Deliberately no override copy in the walnut skills dir: that dir git-syncs to
+ * the primary, where the copy would outrank the shipped skill and hide every
+ * later release of it. A writable install edits the shipped file in place.
+ */
+function isShipped(skillDir: string): boolean {
+  return canonical(skillDir).startsWith(canonical(BUILTIN_SKILLS_DIR) + path.sep);
+}
+
+function canWrite(p: string): boolean {
+  try {
+    fs.accessSync(p, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ─── read operations ────────────────────────────────────────────────
@@ -222,6 +246,9 @@ export async function updateSkill(dirName: string, content: string): Promise<Ski
     throw new Error('Cannot modify plugin skills');
   }
 
+  if (isShipped(entry.dir) && !canWrite(entry.file)) {
+    throw new Error(SHIPPED_SKILL_READ_ONLY_EDIT);
+  }
   await fsp.writeFile(entry.file, content);
   clearSkillsCache();
 
@@ -243,6 +270,10 @@ export async function deleteSkill(dirName: string): Promise<void> {
   // This would rm -rf inside an installed plugin's own directory.
   if (source === 'plugin') {
     throw new Error('Cannot delete plugin skills');
+  }
+
+  if (isShipped(entry.dir) && !(canWrite(entry.dir) && canWrite(path.dirname(entry.dir)))) {
+    throw new Error(SHIPPED_SKILL_READ_ONLY_DELETE);
   }
 
   await fsp.rm(entry.dir, { recursive: true, force: true });

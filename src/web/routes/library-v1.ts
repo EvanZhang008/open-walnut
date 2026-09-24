@@ -47,6 +47,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
+import { SKILL_READ_ONLY_INSTALL } from '../../core/skill-errors.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 
 export const libraryV1Router = Router()
@@ -346,7 +347,8 @@ libraryV1Router.delete('/commands/:name', async (req: Request, res: Response, ne
 /** Map skill-store message-based errors onto the frozen v1 shape. True = handled. */
 function sendSkillError(res: Response, err: unknown): boolean {
   if (!(err instanceof Error)) return false
-  if (err.message.includes('already exists')) {
+  // 'already exists', or a shipped skill on a package the server cannot write.
+  if (err.message.includes('already exists') || err.message.includes(SKILL_READ_ONLY_INSTALL)) {
     sendError(res, 409, 'conflict', err.message)
     return true
   }

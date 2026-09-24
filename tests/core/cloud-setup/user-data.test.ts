@@ -4,7 +4,7 @@
  * The script is shell-embedded operator input, so the two things under test are
  * (1) shape per flavor/domain mode and (2) that nothing unsafe can be
  * interpolated. Also asserts the pairing code appears in EXACTLY one command:
- * the printf that writes /etc/walnut/setup-token.
+ * the printf that writes the temp file renamed onto /etc/walnut/setup-token.
  */
 import { describe, it, expect } from 'vitest'
 import { execFile } from 'node:child_process'
@@ -14,11 +14,15 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import {
   buildUserData,
+  isValidBedrockRegion,
   manualUserDataSteps,
   sslipHostname,
+  DEFAULT_BEDROCK_REGION,
+  DEFAULT_BOX_ENGINE,
   DEFAULT_REPO_URL,
   SSLIP_AUTO,
 } from '../../../src/core/cloud-setup/user-data.js'
+import { SESSION_ENGINE_IDS, type SessionEngine } from '../../../src/core/types.js'
 
 const CODE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
 const execFileAsync = promisify(execFile)
@@ -32,8 +36,8 @@ describe('buildUserData shape', () => {
     expect(script.indexOf('dnf install -y git')).toBeLessThan(script.indexOf('apt-get install -y git'))
     expect(script).toContain(`git clone --branch 'main' '${DEFAULT_REPO_URL}' /opt/walnut`)
     expect(script).toContain("DOMAIN='wn.example.com'")
-    expect(script).toContain('install -d -m 700 /etc/walnut')
-    expect(script).toContain('chmod 600 /etc/walnut/setup-token')
+    expect(script).toContain('chown -h root /etc/walnut')
+    expect(script).toContain('mv -fT "$token_tmp" /etc/walnut/setup-token')
     expect(script).toContain('bash /opt/walnut/scripts/cloud/setup.sh "$DOMAIN"')
     // No sslip resolver block in own-domain mode.
     expect(script).not.toContain('sslip.io')
@@ -165,6 +169,51 @@ describe('buildUserData shape', () => {
   })
 })
 
+describe('agent harness inputs (engine + Bedrock region)', () => {
+  const setupLine = (script: string) => script.split('\n').find((l) => l.startsWith('bash /opt/walnut/scripts/cloud/setup.sh'))
+
+  it('passes claude and us-west-2 by default, as explicit setup.sh flags', () => {
+    const script = buildUserData({ domain: 'wn.example.com', pairingCode: CODE, flavor: 'al2023' })
+    expect(DEFAULT_BOX_ENGINE).toBe('claude')
+    expect(DEFAULT_BEDROCK_REGION).toBe('us-west-2')
+    expect(setupLine(script)).toBe(`bash /opt/walnut/scripts/cloud/setup.sh "$DOMAIN" --engine 'claude' --bedrock-region 'us-west-2'`)
+  })
+
+  it('carries the chosen engine and region, in every flavor and domain mode', () => {
+    for (const flavor of ['al2023', 'ubuntu'] as const) {
+      for (const domain of ['wn.example.com', SSLIP_AUTO]) {
+        const script = buildUserData({ domain, pairingCode: CODE, flavor, engine: 'codex', bedrockRegion: 'eu-central-1' })
+        expect(setupLine(script), `${flavor}/${domain}`)
+          .toBe(`bash /opt/walnut/scripts/cloud/setup.sh "$DOMAIN" --engine 'codex' --bedrock-region 'eu-central-1'`)
+      }
+    }
+  })
+
+  it('accepts every registered engine id', () => {
+    for (const engine of SESSION_ENGINE_IDS) {
+      expect(() => buildUserData({ domain: 'wn.example.com', pairingCode: CODE, flavor: 'al2023', engine })).not.toThrow()
+    }
+  })
+
+  it('rejects an unknown or shell-bearing engine', () => {
+    for (const bad of ['nope', "codex'; id; '", 'codex --dry-run', '']) {
+      expect(() => buildUserData({
+        domain: 'wn.example.com', pairingCode: CODE, flavor: 'al2023', engine: bad as SessionEngine,
+      })).toThrow(/Invalid engine/)
+    }
+  })
+
+  it('rejects a region that is not a region id', () => {
+    for (const bad of ['us-west-2; id', "us-west-2'", 'US-WEST-2', 'uswest2', 'us-west-', '']) {
+      expect(() => buildUserData({ domain: 'wn.example.com', pairingCode: CODE, flavor: 'al2023', bedrockRegion: bad }))
+        .toThrow(/Invalid bedrockRegion/)
+    }
+    for (const good of ['us-west-2', 'eu-central-1', 'ap-southeast-2', 'us-gov-west-1']) {
+      expect(isValidBedrockRegion(good), good).toBe(true)
+    }
+  })
+})
+
 describe('pairing code placement', () => {
   it('appears in exactly one line — the printf that writes the token file', () => {
     for (const flavor of ['al2023', 'ubuntu'] as const) {
@@ -172,7 +221,7 @@ describe('pairing code placement', () => {
         const script = buildUserData({ domain, pairingCode: CODE, flavor })
         const hits = script.split('\n').filter((line) => line.includes(CODE))
         expect(hits, `${flavor}/${domain}`).toHaveLength(1)
-        expect(hits[0]).toBe(`printf '%s' '${CODE}' > /etc/walnut/setup-token`)
+        expect(hits[0]).toBe(`printf '%s' '${CODE}' > "$token_tmp"`)
       }
     }
   })
@@ -260,28 +309,71 @@ describe('the generated script is valid bash', () => {
 })
 
 // The generated script and setup.sh are two halves of one handshake over
-// /etc/walnut, so the invariant is pinned here rather than in a shell test.
-describe('setup.sh takes ownership of /etc/walnut', () => {
-  const setupSh = () => fsp.readFile(
-    path.join(import.meta.dirname, '../../../scripts/cloud/setup.sh'),
-    'utf-8',
-  )
-
-  it('re-owns the dir to the service user instead of `mkdir -p`', async () => {
-    // cloud-init creates /etc/walnut as root 0700 before setup.sh runs, and
-    // `mkdir -p` does NOT change an existing dir's mode — so the service user
-    // could not traverse it and every provisioned pairing code failed with
-    // EACCES. Ownership (not root:walnut 0750) is required because the server
-    // unlinks the spent token after claiming, which needs write on the dir.
-    const script = await setupSh()
-    expect(script).toContain('install -d -m 700 -o "$WALNUT_USER" -g "$WALNUT_USER" /etc/walnut')
-    expect(script).not.toMatch(/^mkdir -p \/etc\/walnut$/m)
+// /etc/walnut. setup.sh's half is exercised for real in
+// tests/scripts/cloud-ensure-harness.test.ts; this pins the generated half.
+describe('the first-boot script and /etc/walnut', () => {
+  it('takes the dir back before writing, and writes through a temp file renamed over the name', () => {
+    // GCP re-runs the script on every boot, so it can meet a dir an older
+    // setup.sh gave to the service user, holding names that user planted.
+    const script = buildUserData({ domain: 'wn.example.com', pairingCode: CODE, flavor: 'al2023' })
+    const lines = script.split('\n')
+    const at = (needle: string) => lines.findIndex((l) => l.includes(needle))
+    const takeBack = at('chown -h root /etc/walnut')
+    const clear = at('rm -rf /etc/walnut/setup-token')
+    const write = at(`printf '%s' '${CODE}' > "$token_tmp"`)
+    const rename = at('mv -fT "$token_tmp" /etc/walnut/setup-token')
+    expect(at('then rm -f /etc/walnut; fi')).toBeGreaterThan(-1)
+    expect(takeBack).toBeGreaterThan(-1)
+    expect(takeBack).toBeLessThan(clear)
+    expect(clear).toBeLessThan(write)
+    expect(write).toBeLessThan(rename)
+    expect(at('token_tmp="$(mktemp /etc/walnut/.setup-token.XXXXXX)"')).toBeLessThan(write)
+    // Never a write, chmod or chown through the final name.
+    expect(script).not.toMatch(/> \/etc\/walnut\/setup-token/)
+    expect(script).not.toMatch(/(chmod|chown)[^\n]* \/etc\/walnut\/setup-token/)
   })
 
-  it('still restricts the token file itself to the service user', async () => {
-    const script = await setupSh()
-    expect(script).toContain('chown "$WALNUT_USER:$WALNUT_USER" /etc/walnut/setup-token')
-    expect(script).toContain('chmod 600 /etc/walnut/setup-token')
+  it('run for real against a dir an older setup.sh left to the service user: planted links are replaced, never written through', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-userdata-etc-'))
+    try {
+      const etc = path.join(dir, 'etc-walnut')
+      const victim = path.join(dir, 'victim')
+      await fsp.mkdir(etc)
+      await fsp.writeFile(victim, 'root:x:0:0\n')
+      await fsp.chmod(victim, 0o644)
+      await fsp.symlink(victim, path.join(etc, 'setup-token'))
+      const script = buildUserData({ domain: 'wn.example.com', pairingCode: CODE, flavor: 'al2023' })
+      const pairing = script.slice(script.indexOf('# ── pairing code ──'), script.indexOf('# ── install + start ──'))
+      // Not root here: point the block at the temp dir and let it chown to ourselves.
+      const body = pairing.split('/etc/walnut').join(etc).replace('chown -h root ', `chown -h ${os.userInfo().username} `)
+      const bin = path.join(dir, 'bin')
+      await fsp.mkdir(bin)
+      if (process.platform !== 'linux') {
+        // GNU `mv -T` semantics (rename, never into) for macOS.
+        await fsp.writeFile(path.join(bin, 'mv'), '#!/bin/sh\ncase "$1" in -*T*) exec "$NODE" -e \'require("fs").renameSync(process.argv[1], process.argv[2])\' "$2" "$3" ;; esac\nexec /bin/mv "$@"\n', { mode: 0o755 })
+      }
+      await execFileAsync('bash', ['-c', `set -euo pipefail\n${body}`], {
+        env: { PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, NODE: process.execPath },
+      })
+      expect(await fsp.readFile(victim, 'utf-8')).toBe('root:x:0:0\n')
+      expect((await fsp.stat(victim)).mode & 0o777).toBe(0o644)
+      const token = path.join(etc, 'setup-token')
+      expect((await fsp.lstat(token)).isFile()).toBe(true)
+      expect(await fsp.readFile(token, 'utf-8')).toBe(CODE)
+      expect((await fsp.stat(token)).mode & 0o777).toBe(0o600)
+      expect((await fsp.stat(etc)).mode & 0o777).toBe(0o750)
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('clears the code-tree exposure record only after its own fresh clone', () => {
+    const script = buildUserData({ domain: 'wn.example.com', pairingCode: CODE, flavor: 'al2023' })
+    const clone = script.indexOf('git clone --branch')
+    const clear = script.indexOf('rm -f /root/.walnut-code-tree-exposed')
+    expect(clone).toBeGreaterThan(-1)
+    expect(clear).toBeGreaterThan(clone)
+    expect(clear).toBeLessThan(script.indexOf('bash /opt/walnut/scripts/cloud/setup.sh'))
   })
 })
 

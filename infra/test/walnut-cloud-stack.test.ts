@@ -69,6 +69,8 @@ describe('user-data', () => {
       'git clone --branch main https://github.com/EvanZhang008/open-walnut.git /opt/walnut',
     )
     expect(script).toContain('DOMAIN=wn.example.com')
+    // No harness flags unless -c engine / -c bedrockRegion is set: a changed
+    // user-data stops and starts an existing stack's instance on deploy.
     expect(script).toContain(
       'bash /opt/walnut/scripts/cloud/setup.sh "$DOMAIN" 2>&1 | tee /var/log/walnut-setup.log',
     )
@@ -131,6 +133,62 @@ describe('user-data', () => {
     expect(template).toContain(b64)
     // Plaintext of the pairing code must never appear as its own string.
     expect(template).not.toContain(secret)
+  })
+})
+
+describe('agent harness context (engine, bedrockRegion)', () => {
+  it('hands -c engine / -c bedrockRegion to setup.sh on the hand-deploy path', () => {
+    const script = userDataScript(synth({ domain: 'wn.example.com', engine: 'codex', bedrockRegion: 'eu-central-1' }))
+    expect(script).toContain('setup.sh "$DOMAIN" --engine codex --bedrock-region eu-central-1 2>&1')
+    // Each one alone reaches setup.sh alone.
+    expect(userDataScript(synth({ domain: 'wn.example.com', engine: 'gemini' })))
+      .toContain('setup.sh "$DOMAIN" --engine gemini 2>&1')
+    expect(userDataScript(synth({ domain: 'wn.example.com', bedrockRegion: 'us-east-1' })))
+      .toContain('setup.sh "$DOMAIN" --bedrock-region us-east-1 2>&1')
+  })
+
+  it('rejects an unknown engine or a malformed region at synth time', () => {
+    expect(() => synth({ domain: 'wn.example.com', engine: 'nope' })).toThrow(/Unknown context "engine"/)
+    expect(() => synth({ domain: 'wn.example.com', engine: 'codex; id' })).toThrow(/Unknown context "engine"/)
+    expect(() => synth({ domain: 'wn.example.com', bedrockRegion: 'us-west-2; id' })).toThrow(/Invalid context "bedrockRegion"/)
+  })
+
+  it('leaves the provisioner path alone: its script already carries the engine', () => {
+    const b64 = Buffer.from('#!/usr/bin/env bash\necho boot\n', 'utf-8').toString('base64')
+    const script = userDataScript(synth({ domain: 'wn.example.com', userDataB64: b64, engine: 'codex' }))
+    expect(script).not.toContain('--engine')
+  })
+
+  it('keeps the Bedrock invoke grant Claude Code on the box signs in with', () => {
+    const policies = synth({ domain: 'wn.example.com' }).findResources('AWS::IAM::Policy')
+    const statements = Object.values(policies).flatMap(
+      (p) => (p.Properties.PolicyDocument.Statement as Array<Record<string, unknown>>),
+    )
+    const invoke = statements.find((s) => s.Sid === 'BedrockInvoke')
+    expect(invoke, 'BedrockInvoke statement').toBeDefined()
+    expect(invoke!.Effect).toBe('Allow')
+    expect(invoke!.Action).toEqual(['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'])
+    const resources = JSON.stringify(invoke!.Resource)
+    // Region-wildcarded: the Bedrock region is not the stack's region.
+    expect(resources).toContain('arn:aws:bedrock:*::foundation-model/*')
+    expect(resources).toContain(':inference-profile/*')
+    expect(resources).toContain(':application-inference-profile/*')
+
+    // Profile lookups are read-only: Get scoped to the account's profiles,
+    // List (which has no resource type) on '*'. Nothing else rides along.
+    const get = statements.find((s) => s.Sid === 'BedrockInferenceProfilesRead')
+    expect(get, 'BedrockInferenceProfilesRead statement').toBeDefined()
+    expect(get!.Effect).toBe('Allow')
+    expect(get!.Action).toBe('bedrock:GetInferenceProfile')
+    const getResources = JSON.stringify(get!.Resource)
+    expect(getResources).toContain(':inference-profile/*')
+    expect(getResources).toContain(':application-inference-profile/*')
+    expect(getResources).not.toContain('"*"')
+    const list = statements.find((s) => s.Sid === 'BedrockListInferenceProfiles')
+    expect(list, 'BedrockListInferenceProfiles statement').toBeDefined()
+    expect(list!.Effect).toBe('Allow')
+    expect(list!.Action).toBe('bedrock:ListInferenceProfiles')
+    expect(list!.Resource).toBe('*')
   })
 })
 

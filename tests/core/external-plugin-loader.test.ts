@@ -61,7 +61,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';
 import { IntegrationRegistry } from '../../src/core/integration-registry.js';
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getRunningPackageRoot, getUnconfiguredPlugins, getUnsupportedPlugins, setPluginCodeTimeoutForTesting } from '../../src/core/integration-loader.js';
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getRunningPackageRoot, getUnconfiguredPlugins, getUnsupportedPlugins, resolvePluginBundleDir, setPluginCodeTimeoutForTesting, setPluginPackageWritableForTesting } from '../../src/core/integration-loader.js';
 import { getConfig, updatePluginConfig } from '../../src/core/config-manager.js';
 import { createPluginRouteDispatcher } from '../../src/web/plugin-route-dispatcher.js';
 import { readPluginWebModule } from '../../src/core/plugins/plugin-web-module.js';
@@ -758,6 +758,89 @@ export function activate() {}
     const cacheDir = path.join(import.meta.dirname, '..', '..', '.plugin-cache');
     const cached = await fsp.readdir(cacheDir).catch(() => [] as string[]);
     expect(cached.filter((file) => file.startsWith('module-timeout-'))).toEqual([]);
+  });
+
+  describe('where external TypeScript bundles are written', () => {
+    const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+    const dataDirBundles = () => path.join(WALNUT_HOME, 'cache', 'plugin-bundles');
+
+    /** A plugin whose bundle only loads if the package's node_modules resolves from it. */
+    async function writeBareImportPlugin(): Promise<void> {
+      const pluginDir = path.join(tmpDir, 'plugins', 'bare-import');
+      await writeManifest(pluginDir, {
+        id: 'bare-import',
+        name: 'Bare Import',
+        apiVersion: 1,
+        engines: { walnut: '>=0.0.0' },
+        server: 'plugin.ts',
+      });
+      await writePluginTs(pluginDir, `
+import yaml from 'js-yaml';
+export function activate(walnut: any) {
+  walnut.registry.tool({
+    name: 'parse',
+    description: 'Parse YAML with a dependency of the running package',
+    async execute() { return yaml.load('a: 1'); },
+  });
+}
+`);
+    }
+
+    afterEach(() => setPluginPackageWritableForTesting(null));
+
+    it('a writable package keeps the bundles in <package>/.plugin-cache', async () => {
+      await writeBareImportPlugin();
+      const registry = new IntegrationRegistry();
+
+      await load(registry);
+
+      expect(getPluginLifecycleRecords(registry)).toContainEqual(expect.objectContaining({ id: 'bare-import', state: 'active' }));
+      expect(registry.get('bare-import')?.tools?.map((tool) => tool.name)).toEqual(['bare_import_parse']);
+      expect(await resolvePluginBundleDir(getRunningPackageRoot())).toBe(path.join(repoRoot, '.plugin-cache'));
+      expect(await fsp.readdir(dataDirBundles()).catch(() => null)).toBeNull();
+    });
+
+    it('a read-only package writes them under the data dir, and plugin deps still resolve', async () => {
+      // The cloud companion's code tree is root-owned and read-only to the server.
+      setPluginPackageWritableForTesting(false);
+      await writeBareImportPlugin();
+      const legacyCache = path.join(repoRoot, '.plugin-cache');
+      const legacyBefore = (await fsp.readdir(legacyCache).catch(() => [] as string[])).length;
+      const registry = new IntegrationRegistry();
+
+      await load(registry);
+
+      expect(getPluginLifecycleRecords(registry)).toContainEqual(expect.objectContaining({ id: 'bare-import', state: 'active' }));
+      expect(registry.get('bare-import')?.tools?.map((tool) => tool.name)).toEqual(['bare_import_parse']);
+      const dirs = await fsp.readdir(dataDirBundles());
+      expect(dirs).toHaveLength(1);
+      expect(await resolvePluginBundleDir(getRunningPackageRoot())).toBe(path.join(dataDirBundles(), dirs[0]!));
+      const link = path.join(dataDirBundles(), dirs[0]!, 'node_modules');
+      expect(await fsp.readlink(link)).toBe(path.join(getRunningPackageRoot(), 'node_modules'));
+      // The bundle itself was removed after loading; nothing new inside the package.
+      expect(await fsp.readdir(path.join(dataDirBundles(), dirs[0]!))).toEqual(['node_modules']);
+      expect((await fsp.readdir(legacyCache).catch(() => [] as string[])).length).toBe(legacyBefore);
+    });
+
+    // Root passes every access check, so a 0555 dir only reads as read-only to others.
+    it.skipIf(process.getuid?.() === 0)('decides by a real access check on the package root', async () => {
+      const writableRoot = path.join(tmpDir, 'pkg-writable');
+      const readOnlyRoot = path.join(tmpDir, 'pkg-readonly');
+      await fsp.mkdir(writableRoot, { recursive: true });
+      await fsp.mkdir(readOnlyRoot, { recursive: true });
+      await fsp.chmod(readOnlyRoot, 0o555);
+      try {
+        expect(await resolvePluginBundleDir(writableRoot)).toBe(path.join(writableRoot, '.plugin-cache'));
+        expect((await fsp.stat(path.join(writableRoot, '.plugin-cache'))).isDirectory()).toBe(true);
+
+        const dir = await resolvePluginBundleDir(readOnlyRoot);
+        expect(dir.startsWith(dataDirBundles() + path.sep)).toBe(true);
+        expect(await fsp.readlink(path.join(dir, 'node_modules'))).toBe(path.join(readOnlyRoot, 'node_modules'));
+        expect(await fsp.readdir(readOnlyRoot)).toEqual([]);
+      } finally {
+        await fsp.chmod(readOnlyRoot, 0o755);
+      }
+    });
   });
 
   it('fails a unified Plugin whose activate function exceeds the code deadline', async () => {

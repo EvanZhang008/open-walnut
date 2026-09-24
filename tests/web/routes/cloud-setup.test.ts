@@ -320,6 +320,43 @@ describe('POST /start', () => {
   })
 })
 
+describe('POST /start + GET /user-data: the box harness (engine, Bedrock region)', () => {
+  it('takes the configured default engine, and an optional bedrockRegion, onto the job', async () => {
+    await fs.writeFile(path.join(WALNUT_HOME, 'config.yaml'), 'defaults:\n  engine: gemini\n', 'utf-8')
+    const res = await request(createApp()).post('/api/cloud-setup/start')
+      .send({ provider: 'aws', domainMode: 'own-domain', domain: 'wn.example.com', bedrockRegion: 'eu-central-1' })
+    expect(res.status).toBe(202)
+    expect(res.body.job.engine).toBe('gemini')
+    expect(res.body.job.bedrockRegion).toBe('eu-central-1')
+  })
+
+  it('400s on a bedrockRegion that is not a region id (it rides the boot script argv)', async () => {
+    const res = await request(createApp()).post('/api/cloud-setup/start')
+      .send({ provider: 'aws', domainMode: 'own-domain', domain: 'wn.example.com', bedrockRegion: "us-west-2'; id; '" })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/bedrockRegion/)
+    expect(await getCloudSetupJob()).toBeNull()
+
+    // A non-string is refused too, never silently swapped for the default.
+    const typed = await request(createApp()).post('/api/cloud-setup/start')
+      .send({ provider: 'aws', domainMode: 'own-domain', domain: 'wn.example.com', bedrockRegion: ['eu-central-1'] })
+    expect(typed.status).toBe(400)
+    expect(typed.body.error).toMatch(/bedrockRegion must be a string/)
+    expect(await getCloudSetupJob()).toBeNull()
+  })
+
+  it('the manual path\'s boot script carries the same engine and region as the job', async () => {
+    await fs.writeFile(path.join(WALNUT_HOME, 'config.yaml'), 'defaults:\n  engine: codex\n', 'utf-8')
+    const app = createApp()
+    await request(app).post('/api/cloud-setup/start')
+      .send({ provider: 'manual', domainMode: 'own-domain', domain: 'wn.example.com' })
+    await currentPairingCode()
+    const res = await request(app).get('/api/cloud-setup/user-data?provider=manual')
+    expect(res.status).toBe(200)
+    expect(res.body.userData).toContain(`setup.sh "$DOMAIN" --engine 'codex' --bedrock-region 'us-west-2'`)
+  })
+})
+
 describe('GET /job', () => {
   it('404s with no job, then returns the redacted state', async () => {
     const app = createApp()
@@ -452,7 +489,9 @@ describe('GET /user-data', () => {
     // Deliberate: this blob IS what the operator pastes into the VM.
     const hits = (res.body.userData as string).split('\n').filter((l) => l.includes(code))
     expect(hits).toHaveLength(1)
-    expect(hits[0]).toContain('/etc/walnut/setup-token')
+    // Written to a temp file renamed onto the token's name (never through it).
+    expect(hits[0]).toBe(`printf '%s' '${code}' > "$token_tmp"`)
+    expect(res.body.userData).toContain('mv -fT "$token_tmp" /etc/walnut/setup-token')
     expect(res.body.userData).toContain("DOMAIN='wn.example.com'")
   })
 
