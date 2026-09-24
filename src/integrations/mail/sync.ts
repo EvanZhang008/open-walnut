@@ -51,6 +51,9 @@ export const TICK_BUDGET_MS = 20_000
 /** The inbox is polled every tick; every other container on every Nth. */
 export const NON_INBOX_EVERY = 5
 
+/** At most one re-list per account this often on the evidence of a stale-looking count. */
+export const STALE_COUNT_RELIST_MS = 5 * 60_000
+
 /** Envelopes per poll request. */
 export const PAGE_LIMIT = 50
 
@@ -107,13 +110,30 @@ interface AccountState {
    * process that starts again at 0 has simply not starved anything yet.
    */
   sweepFrom: number
+  /**
+   * Re-list this account's folders on the next chance rather than on the every-Nth rule.
+   *
+   * Set when an unread check cleared rows: the folder's own count has moved too, and waiting for the fifth
+   * tick left the sidebar reading a number the list below it no longer agreed with for ten minutes.
+   */
+  relistDue: boolean
+  /** When a check last asked for a re-list because the count looked stale. Bounds that ask; see below. */
+  staleRelistAt: number
 }
 
 function emptyState(): AccountState {
   return {
     polls: 0, failures: 0, nextAt: 0, paused: false, dirty: new Set(),
-    backfilled: false, sweepFrom: 0,
+    backfilled: false, sweepFrom: 0, relistDue: false, staleRelistAt: 0,
   }
+}
+
+/** Every folder's two counts, as one comparable string. */
+function countsOf(rows: MailboxRow[]): string {
+  return rows
+    .map((row) => `${row.mailbox_id}\u0000${row.unread ?? 0}\u0000${row.total ?? 0}`)
+    .sort()
+    .join('\u0001')
 }
 
 /**
@@ -360,6 +380,11 @@ export class MailSync {
     })
   }
 
+  /** An unread check cleared rows of this account: its folder counts are due a re-list. */
+  markRelistDue(accountId: string): void {
+    this.stateFor(accountId).relistDue = true
+  }
+
   /**
    * One tick. Also the test seam: a test drives this directly rather than waiting on a timer.
    *
@@ -499,6 +524,8 @@ export class MailSync {
       /** Containers the sweep reached whose own poll failed. */
       let failed = 0
       let lastFailure: unknown = null
+      /** The inbox answered this tick, which is what makes the unread check below worth a call. */
+      let inboxPolled = false
       for (const mailbox of containers) {
         if (Date.now() >= deadlineAt) { exhausted = false; ranOut = true; break }
         let outcome
@@ -546,6 +573,7 @@ export class MailSync {
         if (mailbox.role === ('inbox' satisfies MailboxRole)) {
           received += outcome.added
           headlines.push(...outcome.headlines)
+          inboxPolled = !outcome.missing
         } else {
           visitedRotated += 1
         }
@@ -590,6 +618,11 @@ export class MailSync {
       // into a thirty-minute backoff every ten minutes.
       if (failed > 0 && failed === visited) await this.onFailedPoll(accountId, state, lastFailure)
       else await this.onGoodPoll(accountId, state)
+      // After the news is out and the health is written: a slow provider answer must never hold back
+      // "new mail", and nothing it does can make this account's poll count as a failure.
+      if (inbox && inboxPolled && Date.now() < deadlineAt) {
+        await this.checkInboxUnread(accountId, spec, state, inbox.mailbox_id, deadlineAt)
+      }
     } catch (error) {
       // A provider that is not registered right now is not a failure of this account: its
       // plugin is reloading or off, and the loop picks the account up again when it is back.
@@ -602,6 +635,41 @@ export class MailSync {
     return { added, updated }
   }
 
+  /**
+   * The periodic half of read-elsewhere: the poll cannot carry a read flag for mail it never lists
+   * again, so the provider's own unread list is asked here, on the shared clock (see `unread-checks.ts`),
+   * and only after an inbox poll that worked (a provider that just failed is not asked a second
+   * question). A check that cleared rows moved the folder's own count too, so the folders are re-listed
+   * in the same tick and the sidebar number lands with the rows rather than five ticks later.
+   */
+  private async checkInboxUnread(
+    accountId: string,
+    spec: MailProviderSpec,
+    state: AccountState,
+    mailboxId: string,
+    deadlineAt: number,
+  ): Promise<void> {
+    try {
+      const checked = await this.deps.service.checkUnreadInBackground(accountId, mailboxId, deadlineAt - Date.now())
+      // An answer shorter than the folder's own count proves less than it could: the count may be one
+      // the poll loop has not refreshed for up to five ticks. A re-list on the next tick settles it, so
+      // the check after that can conclude. At most once per `STALE_COUNT_RELIST_MS`, because a folder
+      // whose two answers genuinely disagree would otherwise buy a re-list on every tick.
+      if (checked?.badgeStale && checked.cleared === 0 && Date.now() - state.staleRelistAt >= STALE_COUNT_RELIST_MS) {
+        state.staleRelistAt = Date.now()
+        state.relistDue = true
+      }
+      if (checked && checked.cleared > 0 && Date.now() < deadlineAt) {
+        state.relistDue = true
+        await this.refreshMailboxes(accountId, spec, state, false)
+      }
+    } catch (error) {
+      // The rows are right or unchanged; a count that stays stale one more tick is not an account failure.
+      this.deps.walnut.log.warn('mail unread check after a poll failed', {
+        accountId, mailboxId, error: reasonOf(error).slice(0, 200),
+      })
+    }
+  }
   private async refreshMailboxes(
     accountId: string,
     spec: MailProviderSpec,
@@ -609,9 +677,11 @@ export class MailSync {
     force: boolean,
   ): Promise<MailboxRow[]> {
     let rows = await this.deps.store.listMailboxes(accountId)
-    const stale = rows.length === 0 || force || state.polls % NON_INBOX_EVERY === 1
+    const stale = rows.length === 0 || force || state.relistDue || state.polls % NON_INBOX_EVERY === 1
     if (!stale) return rows
     const listed = await callProvider('a mailbox list', () => spec.listMailboxes(accountId))
+    state.relistDue = false
+    const countsBefore = countsOf(rows)
     for (const mailbox of listed) {
       await this.deps.store.upsertMailbox({
         accountId,
@@ -641,6 +711,8 @@ export class MailSync {
       }
     }
     rows = await this.deps.store.listMailboxes(accountId)
+    // Said only when a number moved: a re-list that changed nothing is most of them.
+    if (countsOf(rows) !== countsBefore) this.deps.events.mailboxCounts(accountId)
     return rows
   }
 

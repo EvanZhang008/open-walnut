@@ -394,8 +394,9 @@ export function MailAccountsPane({
    */
   const now = useNow(SYNC_TICK_MS);
   const syncLine = useMemo(() => syncLineFor({
-    selected, accounts, mailboxes, folderFetch: snapshot.folderFetch, refreshing, now,
-  }), [selected, accounts, mailboxes, snapshot.folderFetch, refreshing, now]);
+    selected, accounts, mailboxes, folderFetch: snapshot.folderFetch, unreadChecking: snapshot.unreadChecking,
+    refreshing, now,
+  }), [selected, accounts, mailboxes, snapshot.folderFetch, snapshot.unreadChecking, refreshing, now]);
 
   return (
     <aside className="mail-accounts-pane" data-testid="mail-accounts-pane" {...aim.handlers}>

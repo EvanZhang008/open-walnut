@@ -42,6 +42,7 @@ import { arrivalsAfterOpen, folderLabel, smartPairs, smartRowVisible, type Smart
 import { applyMessageTask, invalidateLetterList } from './mail-task-actions';
 import { onMailUnsubscribed } from './mail-unsubscribe-actions';
 import { keepOpenRow, readUnreadOnly, writeUnreadOnly } from './mail-unread-filter';
+import { noteUnreadChecking, settleUnreadCheck } from './mail-unread-checking';
 import {
   DRAFTS_MAILBOX,
   EMPTY_SEARCH,
@@ -419,6 +420,10 @@ function applySelection(accountId: string, mailboxId: string, source: SelectionS
     // Picking a real folder is using that identity: it is what a compose from a merged list defaults to.
     noteMailIdentity(accountId);
   }
+  // A folder picked by hand whose last poll is old gets polled now, on its own, ahead of the sweep: the
+  // inbox is polled every tick, every other folder only every fifth, so without this a click landed on a
+  // list up to ten minutes old. Only a HUMAN pick, and only a stale one (see `refreshStaleFolder`).
+  if (source === 'human') refreshStaleFolder(accountId, mailboxId);
   patch({
     selected: { accountId, mailboxId },
     // Only a HUMAN pick spends the sidebar's aim (see `picks`). The console's own picks, restored or
@@ -496,7 +501,44 @@ function smartRoleOf(selection: MailSelection): SmartRole | null {
 export function fetchSelectedFolder(auto = false): Promise<void> {
   const selection = store.state.selected;
   if (!selection) return Promise.resolve();
-  return fetchFolderPair(selection.accountId, selection.mailboxId, auto);
+  return fetchFolderPair(selection.accountId, selection.mailboxId, auto ? 'auto' : 'human');
+}
+
+/**
+ * A folder counts as stale for a click once its last poll is older than this.
+ *
+ * Longer than one poll interval (the inbox is polled every tick, so an inbox is almost never stale),
+ * shorter than the five ticks a non-inbox folder waits for its turn.
+ */
+export const STALE_FOLDER_MS = 3 * 60_000;
+
+/** The same folder is not re-polled on a click more often than this, however often it is clicked. */
+const STALE_REFETCH_MS = 2 * 60_000;
+
+/** When each folder was last polled because a click found it stale. Session memory, keyed by selection. */
+const staleFetchedAt = new Map<string, number>();
+
+onMailStoreReset(() => { staleFetchedAt.clear(); });
+
+/**
+ * Poll one folder now because a person just opened it and its last poll is old.
+ *
+ * Quiet by design: the list is already on screen from the cache, the sync line says `Checking…` while
+ * this runs, and a failure changes nothing a person can act on (the sweep will come round), so it is
+ * logged rather than shown. A folder never polled at all is not this path's business: the empty-page
+ * rule (`folderEverFetched`) owns it, with its own sentence.
+ */
+function refreshStaleFolder(accountId: string, mailboxId: string): void {
+  const selection = { accountId, mailboxId };
+  if (isSmartSelection(selection) || mailboxId === DRAFTS_MAILBOX) return;
+  const row = (store.state.mailboxes[accountId] ?? []).find((one) => one.mailboxId === mailboxId);
+  if (!row || row.lastSyncAt === undefined) return;
+  const now = Date.now();
+  if (now - row.lastSyncAt < STALE_FOLDER_MS) return;
+  const key = selectionKey(selection);
+  if (now - (staleFetchedAt.get(key) ?? 0) < STALE_REFETCH_MS) return;
+  staleFetchedAt.set(key, now);
+  void fetchFolderPair(accountId, mailboxId, 'stale');
 }
 
 /**
@@ -508,13 +550,21 @@ export function fetchSelectedFolder(auto = false): Promise<void> {
  * two requests for one folder.
  */
 export function fetchMailboxNow(accountId: string, mailboxId: string): Promise<void> {
-  return fetchFolderPair(accountId, mailboxId, false);
+  return fetchFolderPair(accountId, mailboxId, 'human');
 }
 
 /** Every smart row's reserved mailbox id, which no fetch may ever be sent. */
 const SMART_IDS = new Set<string>([SMART_INBOX, SMART_SENT, SMART_DRAFTS]);
 
-function fetchFolderPair(accountId: string, mailboxId: string, auto: boolean): Promise<void> {
+/**
+ * `human`: a person asked (a menu, a retry link), so it always runs and every outcome is shown.
+ * `auto`: an empty page of a never-polled folder asked, once per folder.
+ * `stale`: a click found the folder's last poll old; quiet about anything but success (see `refreshStaleFolder`).
+ */
+type FolderFetchMode = 'human' | 'auto' | 'stale';
+
+function fetchFolderPair(accountId: string, mailboxId: string, mode: FolderFetchMode): Promise<void> {
+  const auto = mode === 'auto';
   // The route takes a real (accountId, mailboxId). Every virtual row returns here, on the first line,
   // rather than sending a reserved id the provider would have to refuse.
   if (!accountId || !mailboxId) return Promise.resolve();
@@ -531,6 +581,13 @@ function fetchFolderPair(accountId: string, mailboxId: string, auto: boolean): P
     setFolderFetch(key, { key, state: 'fetching' });
     try {
       const answer = await fetchMailbox(accountId, mailboxId);
+      if (mode === 'stale' && !answer.fetched) {
+        // Still running (the loop finishes it and its event carries any rows) or refused: either way the
+        // cached list on screen stands, and there is nothing a person should be asked to do about it.
+        setFolderFetch(key, null);
+        if (!answer.running) log.info('mail', 'stale folder poll did not fetch', { accountId, mailboxId, reason: answer.reason });
+        return;
+      }
       if (answer.running) {
         // A 202: still going, and `sync-completed` will bring the rows. Saying "fetching" is the
         // truth, and it is also what keeps the empty-folder sentence off the screen meanwhile.
@@ -556,6 +613,11 @@ function fetchFolderPair(accountId: string, mailboxId: string, auto: boolean): P
       });
     } catch (error) {
       const failure = mailFailure(error);
+      if (mode === 'stale') {
+        setFolderFetch(key, null);
+        log.info('mail', 'stale folder poll failed', { accountId, mailboxId, error: failure.message });
+        return;
+      }
       // A replica refuses every write with the same 503, and that is not a fault: it will never answer
       // differently and there is nothing to press again. It is one of the five answers the pane has a
       // sentence for, and the read-flag path already tells it apart the same way, so a refusal here
@@ -568,7 +630,7 @@ function fetchFolderPair(accountId: string, mailboxId: string, auto: boolean): P
         ...(replica ? {} : { detail: failure.message }),
       });
     }
-  }, !auto);
+  }, mode === 'human');
 }
 
 /** One folder's entry in the map, or its removal. */
@@ -619,6 +681,16 @@ function pageQuery(selection: MailSelection, mailboxId: string | null): {
     ...(unreadOnlyFor(selection) ? { unread: true as const } : {}),
   };
 }
+
+/**
+ * The next first-page read skips the server's one-minute unread clock (`fresh=1`).
+ *
+ * A flag rather than a parameter because page reads coalesce by selection (`run`): a Refresh landing while
+ * a read is in flight queues one more pass, and that pass is the one that has to carry it.
+ */
+let freshPageWanted = false;
+
+onMailStoreReset(() => { freshPageWanted = false; });
 
 /** Neither Drafts row carries the unread filter: a draft is not unread mail. */
 function unreadFilterable(selection: MailSelection): boolean {
@@ -746,9 +818,10 @@ let quoted: { pair: string; text: string | null } | null = null;
 
 onMailStoreReset(() => { quoted = null; });
 
-export function loadMailMessages(force = false): Promise<void> {
+export function loadMailMessages(force = false, options: { fresh?: boolean } = {}): Promise<void> {
   const selection = store.state.selected;
   if (!selection) return Promise.resolve();
+  if (options.fresh) freshPageWanted = true;
   const role = smartRoleOf(selection);
   if (role) {
     const page = loadMessagePage(selection, null, force);
@@ -784,10 +857,15 @@ function loadMessagePage(selection: MailSelection, mailboxId: string | null, for
   return run(`messages:${selectionKey(selection)}`, async () => {
     patch({ listLoading: true, listError: null });
     const unread = unreadOnlyFor(selection);
+    const fresh = freshPageWanted;
+    freshPageWanted = false;
     try {
-      const page = await listMailMessages(pageQuery(selection, mailboxId));
+      const askedAt = Date.now();
+      const page = await listMailMessages({ ...pageQuery(selection, mailboxId), ...(fresh ? { fresh: true } : {}) });
       // The human may have moved to another mailbox while this was in flight.
       if (!sameSelection(selection)) return;
+      // The server is still asking the provider about these folders; the sync line says so until each ends.
+      noteUnreadChecking(page.checking, askedAt);
       const rows = page.messages ?? [];
       // Rows on screen retire the fetch note whatever it said: they are the outcome it was waiting
       // for, and a "fetching" line above a full list is the console describing its own past.
@@ -1071,6 +1149,10 @@ export function requestMailRefresh(accountId?: string): Promise<void> {
     patch({ refreshing: true, refreshNote: null });
     store.refreshNoteAccount = null;
     try {
+      // The list on screen FIRST: each folder it is made of is polled on its own, and the page is read
+      // again with its unread check forced. The sweep over everything else comes after, and the loop runs
+      // one job at a time, so it cannot overtake these.
+      await refreshPageFolders(accountId);
       const answer = await refreshMail(accountId);
       if (!answer.completed) {
         // Remembered so the sync's own event can take the note down again; a note that outlives
@@ -1089,6 +1171,32 @@ export function requestMailRefresh(accountId?: string): Promise<void> {
       patch({ refreshing: false });
     }
   });
+}
+
+/**
+ * Poll the folders the page on screen is made of, then read the page again with `fresh`.
+ *
+ * A failure here is not the refresh's failure: the full sweep that follows polls them too, and its own
+ * outcome is what the note reports.
+ */
+async function refreshPageFolders(accountId: string | undefined): Promise<void> {
+  const selection = store.state.selected;
+  if (!selection) return;
+  const role = smartRoleOf(selection);
+  const pairs = role
+    ? smartPairs(store.state.mailboxes, store.state.accounts, role)
+    : (() => {
+      const mailboxId = pageMailboxOf(selection);
+      return mailboxId ? [{ accountId: selection.accountId, mailboxId }] : [];
+    })();
+  const wanted = pairs.filter((pair) => !accountId || pair.accountId === accountId);
+  if (wanted.length === 0) return;
+  await Promise.all(wanted.map((pair) => fetchMailbox(pair.accountId, pair.mailboxId).catch((error) => {
+    log.info('mail', 'refresh could not poll a folder on screen first', {
+      accountId: pair.accountId, mailboxId: pair.mailboxId, error: mailFailure(error).message,
+    });
+  })));
+  if (sameSelection(selection)) await loadMailMessages(true, { fresh: true });
 }
 
 /**
@@ -1211,6 +1319,8 @@ export function onMailEvent(name: string, data: unknown): void {
     /** `unsubscribed` carries these two. See the branch below. */
     status?: string;
     method?: string;
+    /** `unread-reconciled`: how many cached rows the check marked read. */
+    cleared?: number;
   };
   if (name === 'providers-changed') { void loadProviders(true); return; }
 
@@ -1250,12 +1360,23 @@ export function onMailEvent(name: string, data: unknown): void {
     if (payload.status === 'done') void loadMailMessages(true);
     return;
   }
-  // Mail read somewhere else, found out late: the unread refresh a smart list starts outlives the page
-  // that started it, so the rows it cleared are still on screen. Not a sync, so no refresh note is
-  // retired and no folder list is re-read (the badges are the provider's own count and did not move).
+  // Mail read somewhere else, found out late: an unread check (the poll loop's, or one a page started and
+  // outlived) cleared rows that may still be on screen. Not a sync, so no refresh note is retired; the
+  // folder counts it moved arrive by their own `mailbox-counts` event once the loop re-lists them.
+  //
+  // It also ENDS a check a page said was running, whatever it found, which is what takes `Checking…` down.
+  // Only a check that cleared rows changed anything worth a request.
   if (name === 'unread-reconciled') {
+    settleUnreadCheck(payload.accountId, payload.mailboxId);
+    if ((payload.cleared ?? 0) <= 0) return;
     void loadAccounts(true);
     if (eventIsForPageOnScreen(payload.accountId, payload.mailboxId)) void loadMailMessages(true);
+    return;
+  }
+  // A folder's own count moved with no row changing (mail read on a phone lowers the inbox count while
+  // the poll lists nothing new), so the sidebar numbers are read again. The list itself did not move.
+  if (name === 'mailbox-counts') {
+    if (payload.accountId) void loadMailboxesFor(payload.accountId, true);
     return;
   }
   if (name === 'sync-completed' || name === 'messages-received') {

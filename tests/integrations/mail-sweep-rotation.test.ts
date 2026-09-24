@@ -77,7 +77,7 @@ function mailboxRow(mailboxId: string, role: string): Record<string, unknown> {
  */
 function harness(
   rest: string[] = REST,
-  options: { replica?: boolean; yieldInPoll?: boolean } = {},
+  options: { replica?: boolean; yieldInPoll?: boolean; unreadCheck?: () => Promise<unknown> } = {},
 ): Harness {
   let clock = Date.UTC(2026, 0, 1, 9, 0, 0);
   vi.spyOn(Date, 'now').mockImplementation(() => clock);
@@ -165,6 +165,8 @@ function harness(
       provider: () => spec,
       ingestPage: async () => ({ added: 0, updated: 0, headlines: [] }),
       prefetchBodies: async () => 0,
+      // Nothing to correct: this file grades the container order, not read state.
+      checkUnreadInBackground: options.unreadCheck ?? (async () => null),
     } as never,
     retention: {
       retain: async () => ({ messagesDeleted: 0, bodiesDropped: 0, incomplete: false }),
@@ -375,6 +377,26 @@ describe('the rotation cursor', () => {
 
       await mail.tick();
       expect(mail.announced, 'and the sweep after it is news again').toEqual([{ received: 0 }]);
+    } finally {
+      await mail.stop();
+    }
+  });
+
+  it('announces new mail before the unread check, and a check that throws is not an account failure', async () => {
+    // The check after the inbox poll asks the provider a second question, which can take seconds or
+    // fail outright. Neither may hold back "new mail" or put a healthy account into the backoff.
+    const order: string[] = [];
+    const mail = harness(['A'], {
+      unreadCheck: async () => { order.push(`check after ${mail.announced.length} announcements`); throw new Error('the helper stopped') },
+    });
+    try {
+      mail.setPollMs(0);
+      await mail.tick();
+      await mail.tick();
+      expect(mail.announced).toEqual([{ received: 0 }]);
+      expect(order.at(-1), 'the announcement went out first').toBe('check after 1 announcements');
+      expect(mail.failures).toEqual([]);
+      expect(mail.healthWrites).toEqual([]);
     } finally {
       await mail.stop();
     }

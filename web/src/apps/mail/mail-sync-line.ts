@@ -16,8 +16,8 @@
  *   (`Not checked yet`) rather than borrowing another folder's clock.
  * - AN ACCOUNT THAT STOPPED SYNCING SAYS SO. Reusing `accountsNotSyncing` rather than re-deriving it,
  *   because the merged list header already prints that same fact and two derivations drift.
- * - A FETCH IN FLIGHT OUTRANKS EVERY AGE. While the folder is being fetched the age is about to change,
- *   so the line says `Checking…` and waits.
+ * - A FETCH IN FLIGHT OUTRANKS EVERY AGE. While the folder is being fetched, or the server is still asking
+ *   the provider what is unread in it, the list is about to change, so the line says `Checking…` and waits.
  *
  * The `title` carries what one line cannot: the absolute local time, and one clause per account. The
  * per-account clauses only appear when there are two or more accounts, because with one they repeat the
@@ -73,6 +73,8 @@ export interface MailSyncLineInput {
    * also what makes the line's click visible, since clicking it starts exactly that refresh.
    */
   refreshing?: boolean;
+  /** Folders whose unread check is still running (`snapshot.unreadChecking`), keyed by `pairKey`. */
+  unreadChecking?: Record<string, number>;
   /** Reference clock (ms since epoch). The pane re-renders every 30 s and passes `Date.now()`. */
   now: number;
 }
@@ -202,7 +204,8 @@ export function syncLineFor(input: MailSyncLineInput): MailSyncLine | null {
 
   let state: MailSyncState;
   let text: string;
-  if (input.refreshing === true || fetching(input.folderFetch, watched)) {
+  const checking = watched.some((key) => input.unreadChecking?.[key] !== undefined);
+  if (input.refreshing === true || checking || fetching(input.folderFetch, watched)) {
     state = 'fetching';
     text = 'Checking…';
   } else if (lockedOut.length > 0 && lockedOut.length === scope.accounts.length) {

@@ -7,9 +7,7 @@
  * anything: when is the provider's answer complete enough that a message it did not name is read?
  */
 import { describe, expect, it } from 'vitest'
-import {
-  foldersNeedingUnreadRefresh, reconcileUnread,
-} from '../../src/integrations/mail/unread-reconcile.js'
+import { reconcileUnread } from '../../src/integrations/mail/unread-reconcile.js'
 
 const row = (messageId: string, sentAt: number) => ({ messageId, sentAt })
 
@@ -199,38 +197,5 @@ describe('reconcileUnread', () => {
     })
     expect(result.basis).toBe('capped')
     expect(result.readNow).toEqual(['stale'])
-  })
-})
-
-describe('foldersNeedingUnreadRefresh', () => {
-  const folder = (accountId: string, providerUnread: number, cachedUnread: number) => ({
-    accountId, mailboxId: 'inbox', providerUnread, cachedUnread,
-  })
-
-  it('costs nothing when every badge agrees with the cache', () => {
-    expect(foldersNeedingUnreadRefresh([folder('a', 4, 4), folder('b', 0, 0)])).toEqual([])
-  })
-
-  it('asks only the accounts that disagree', () => {
-    const chosen = foldersNeedingUnreadRefresh([folder('gmail', 0, 0), folder('work', 4, 12)])
-    expect(chosen.map((one) => one.accountId)).toEqual(['work'])
-  })
-
-  it('takes the biggest disagreement first and stops at the bound', () => {
-    const chosen = foldersNeedingUnreadRefresh(
-      [folder('a', 1, 2), folder('b', 4, 12), folder('c', 0, 5)],
-      2,
-    )
-    expect(chosen.map((one) => one.accountId)).toEqual(['b', 'c'])
-  })
-
-  it('a bound of zero asks nobody', () => {
-    expect(foldersNeedingUnreadRefresh([folder('a', 4, 12)], 0)).toEqual([])
-  })
-
-  it('a cache ahead of the badge counts as a disagreement too', () => {
-    // The cache can be the fresher of the two: a read through Walnut moves the row immediately while
-    // the badge still carries the provider's figure from the last poll.
-    expect(foldersNeedingUnreadRefresh([folder('a', 5, 3)]).map((one) => one.accountId)).toEqual(['a'])
   })
 })

@@ -109,8 +109,15 @@ async function addAccount(page: Page): Promise<void> {
   const dialog = page.getByTestId('mail-add-dialog')
   await expect(dialog).toBeVisible()
   await page.locator('[data-testid="mail-provider-option"][data-provider-id="fixture"]').click()
-  await page.getByTestId('mail-setup-address').fill('alice@example.invalid')
+  // The form focuses its first field once it mounts; filling before that lands the password in the
+  // address box (seen 2026-09-24: `alice@example.invalidok` and a disabled button). Same guard as
+  // mail-app-folder-fetch.spec.ts.
+  const address = page.getByTestId('mail-setup-address')
+  await expect(address).toBeFocused({ timeout: 15_000 })
+  await address.fill('alice@example.invalid')
   await page.getByTestId('mail-setup-token').fill('ok')
+  await expect(address).toHaveValue('alice@example.invalid')
+  await expect(page.getByTestId('mail-setup-token')).toHaveValue('ok')
   await page.getByTestId('mail-add-submit').click()
   await expect(dialog).toHaveCount(0, { timeout: 30_000 })
 }

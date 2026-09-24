@@ -36,6 +36,7 @@ import { PluginDatabaseClient } from '../../src/core/plugins/plugin-storage.js';
 import { MAIL_MIGRATIONS, mailDatabaseForTesting } from '../../src/integrations/mail/db.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { bus } from '../../src/core/event-bus.js';
+import { mailSyncForTesting } from '../../src/integrations/mail/sync.js';
 
 const FIXTURE_ID = 'mail-unread-fixture';
 const ACCOUNT_ID = 'fake:one';
@@ -87,6 +88,13 @@ interface Fixture {
   unreadCalls: Array<{ mailbox: string; limit: number }>;
   /** How long `listUnread` takes to answer. A real Outlook helper routinely takes seconds. */
   unreadDelayMs?: number;
+  /**
+   * The Outlook shape: a poll that never lists an old message again, so it cannot carry a read flag
+   * flipped on another device. Unset, the poll hands over every message with its current flags.
+   */
+  pollQuiet?: boolean;
+  /** Every poll throws this, as an unreachable server would. */
+  pollFail?: string;
 }
 
 let server: HttpServer;
@@ -117,6 +125,8 @@ async function sendJson<T>(method: string, routePath: string, body?: unknown): P
 interface Page {
   messages: Array<{ messageId: string; subject: string; flags: string[]; sentAt: number }>;
   nextBefore?: string;
+  /** Folders whose unread check outlived the page (see `unread-checks.ts`). */
+  checking?: Array<{ accountId: string; mailboxId: string }>;
 }
 
 /** One list request, with the query spelled out by the caller. */
@@ -138,7 +148,7 @@ async function rows<T extends Record<string, unknown>>(sql: string, params?: unk
  * Write the folder badge the way a poll would have, without running a poll.
  *
  * The state under test is one only the real world produces: the badge carries the PROVIDER's own count
- * (every poll refreshes it) while the cached message rows are older than that. Running a real poll to set
+ * (the loop's folder re-list refreshes it) while the cached message rows are older than that. Running a real poll to set
  * it would re-ingest every message with its current flags and correct the cache by the poll, which is the
  * very path being tested around.
  */
@@ -298,11 +308,18 @@ export function activate(walnut) {
       total: S().messages.length,
       unread: S().messages.filter((one) => !S().isSeen(one.flags)).length,
     }],
-    poll: async (accountId, request) => ({
-      messages: S().messages.map((one) => envelope(one, request.mailbox)),
-      cursor: request.mailbox + ':1:end',
-      more: false,
-    }),
+    poll: async (accountId, request) => {
+      if (S().pollFail) {
+        const error = new Error(S().pollFail);
+        error.code = 'unreachable';
+        throw error;
+      }
+      return {
+        messages: S().pollQuiet ? [] : S().messages.map((one) => envelope(one, request.mailbox)),
+        cursor: request.mailbox + ':1:end',
+        more: false,
+      };
+    },
     // Present only when the test arms it, so the cases written before 1.9.0 see the old shape.
     ...(S().unreadFromProvider ? {
       listUnread: async (accountId, mailbox, limit) => {
@@ -670,10 +687,12 @@ describe('the unread filter asks the provider first', () => {
     expect(plain.body.messages[0]!.subject).toBe('Harbour note fresh');
 
     // A LATER page pages the corrected cache; the provider is not asked again.
+    // A LATER page pages the corrected cache; the provider is not asked again. Neither is a second first
+    // page within the minute: every caller shares one clock per folder (`unread-checks.ts`).
     const paged = await listPage({ limit: 10, unread: '1' });
     expect(paged.body.nextBefore).toBeTruthy();
     await listPage({ limit: 10, unread: '1', before: paged.body.nextBefore });
-    expect(marks().unreadCalls).toHaveLength(2);
+    expect(marks().unreadCalls).toHaveLength(1);
     expect(marks().unreadCalls.every((call) => call.mailbox === 'INBOX')).toBe(true);
   });
 
@@ -889,6 +908,243 @@ describe('a late unread correction is announced', () => {
       expect(page.body.messages, 'a failed refresh leaves the cache as it was').toHaveLength(4);
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(seen).toEqual([]);
+    });
+  });
+});
+
+/**
+ * The poll loop asks by itself (2026-09-24: "make sure it is periodically checking, and efficient").
+ *
+ * Before, the provider's unread list was only ever asked from a page, so mail read on a phone stayed
+ * unread in the cache until somebody opened the list, and the list then had to wait for the answer.
+ * Now every tick asks about the inbox after a poll that worked, on the same one-minute clock a page
+ * uses, and says nothing unless it changed something. The fixture here is the Outlook shape: a poll
+ * that never lists an old message again (`pollQuiet`), so the unread check is the only thing that can
+ * carry a read flag into the cache.
+ */
+describe('the poll loop checks unread mail by itself', () => {
+  const RECONCILED = 'plugin:mail:unread-reconciled';
+  const COUNTS = 'plugin:mail:mailbox-counts';
+
+  async function arm(armed: Fixture['unreadFromProvider'], delayMs = 0): Promise<void> {
+    marks().unreadFromProvider = armed;
+    marks().unreadCalls = [];
+    marks().unreadDelayMs = delayMs;
+    // Reloading the provider is also what forgets the one-minute clock (a provider that registered
+    // again has not been asked anything), so every case starts with the clock clear.
+    const reloaded = await fetch(`http://127.0.0.1:${port}/api/plugin-runtime/${FIXTURE_ID}/reload`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(reloaded.status).toBe(200);
+  }
+
+  /** Every `unread-reconciled` and `mailbox-counts` the bus carries while `body` runs. */
+  async function recording<T>(body: (seen: Array<{ name: string; data: unknown }>) => Promise<T>): Promise<T> {
+    const seen: Array<{ name: string; data: unknown }> = [];
+    const name = `mail-tick-probe-${Math.random().toString(36).slice(2)}`;
+    bus.subscribe(name, (event) => {
+      if (event.name === RECONCILED || event.name === COUNTS) seen.push({ name: event.name, data: event.data });
+    }, { global: true });
+    try { return await body(seen); } finally { bus.unsubscribe(name); }
+  }
+
+  const named = (seen: Array<{ name: string; data: unknown }>, which: string) => seen.filter((one) => one.name === which).map((one) => one.data);
+
+  function readEverywhereBut(stillUnread: string[]): void {
+    const fixture = marks();
+    const keep = new Set(stillUnread);
+    for (const one of fixture.messages) one.flags = fixture.setSeen(one.flags, !keep.has(one.messageId));
+  }
+
+  /**
+   * Make the NEXT tick one that does not re-list the folders before it polls.
+   *
+   * The loop re-lists on every fifth tick of an account, so whether a given tick sees a fresh count
+   * depends on how many ticks came before it in this file. These cases are about what a tick does with
+   * a count that is stale, so they set the counter rather than inherit it. Test-only reach into state.
+   */
+  function nextTickIsNarrow(): void {
+    const sync = mailSyncForTesting() as unknown as {
+      states: Map<string, { polls: number; staleRelistAt: number; relistDue: boolean; nextAt: number; paused: boolean }>
+    };
+    const state = sync.states.get(ACCOUNT_ID)!;
+    state.polls = 1;
+    state.staleRelistAt = 0;
+    state.relistDue = false;
+    state.nextAt = 0;
+    state.paused = false;
+  }
+
+  async function badge(): Promise<number> {
+    return (await rows<{ unread: number }>('SELECT unread FROM mailboxes WHERE mailbox_id = ?', ['INBOX']))[0]!.unread;
+  }
+
+  async function cachedUnread(): Promise<string[]> {
+    return (await rows<{ message_id: string }>('SELECT message_id FROM messages WHERE seen = 0 ORDER BY sent_at DESC'))
+      .map((row) => row.message_id);
+  }
+
+  const tick = () => mailSyncForTesting()!.runTick({});
+
+  afterAll(() => {
+    marks().pollQuiet = false;
+    marks().pollFail = undefined;
+  });
+
+  it('clears mail read on another device on a tick, with no page read, and moves the count with it', async () => {
+    const cached = await cacheUnread(6);
+    // The phone read the four NEWEST: the two oldest are still unread on the server.
+    const stillUnread = cached.slice(4);
+    readEverywhereBut(stillUnread);
+    await setFolderBadge(cached.length);
+    marks().pollQuiet = true;
+    await arm({ messageIds: stillUnread });
+    nextTickIsNarrow();
+
+    await recording(async (seen) => {
+      await tick();
+      expect(marks().unreadCalls, 'one tick is one unread question').toHaveLength(1);
+      expect((await cachedUnread()).sort()).toEqual([...stillUnread].sort());
+      expect(named(seen, RECONCILED)).toEqual([{ accountId: ACCOUNT_ID, mailboxId: 'INBOX', cleared: 4 }]);
+      // The same tick re-listed the folders, so the sidebar number lands with the rows.
+      expect(await badge()).toBe(2);
+      expect(named(seen, COUNTS)).toEqual([{ accountId: ACCOUNT_ID }]);
+
+      // A second tick inside the minute asks nothing, and a re-list that moved no count says nothing.
+      await mailSyncForTesting()!.runTick({ force: true });
+      expect(marks().unreadCalls).toHaveLength(1);
+      expect(named(seen, COUNTS), 'an unchanged count is not news').toHaveLength(1);
+      expect(named(seen, RECONCILED)).toHaveLength(1);
+    });
+  });
+
+  it('asks for a fresh count when a stale one blocks the answer, and the next tick finishes the job', async () => {
+    const cached = await cacheUnread(6);
+    // The phone read the four OLDEST. The answer names the two newest, and with the stale count of six
+    // behind it that is only a prefix: nothing older than its tail can be concluded yet.
+    const stillUnread = cached.slice(0, 2);
+    readEverywhereBut(stillUnread);
+    await setFolderBadge(cached.length);
+    marks().pollQuiet = true;
+    await arm({ messageIds: stillUnread });
+    nextTickIsNarrow();
+
+    await recording(async (seen) => {
+      await tick();
+      expect(marks().unreadCalls).toHaveLength(1);
+      expect(await cachedUnread(), 'a prefix answer must not clear what it cannot see').toHaveLength(6);
+      expect(named(seen, RECONCILED), 'a check that changed nothing is quiet').toEqual([]);
+
+      // The next tick re-lists first (the count moves to 2), and once the minute is up the check can
+      // conclude. The minute is skipped here by forgetting the clock, which is what a reload does.
+      await arm({ messageIds: stillUnread });
+      await tick();
+      expect(await badge()).toBe(2);
+      expect((await cachedUnread()).sort()).toEqual([...stillUnread].sort());
+      expect(named(seen, RECONCILED)).toEqual([{ accountId: ACCOUNT_ID, mailboxId: 'INBOX', cleared: 4 }]);
+    });
+  });
+
+  it('costs nothing for an inbox with nothing unread on either side', async () => {
+    await cacheUnread(0);
+    readEverywhereBut([]);
+    await setFolderBadge(0);
+    marks().pollQuiet = true;
+    await arm({ messageIds: [] });
+    nextTickIsNarrow();
+    await tick();
+    await tick();
+    expect(marks().unreadCalls, 'an empty inbox must not buy a provider call').toEqual([]);
+  });
+
+  it('shares one clock between the tick and the pages, and Refresh is the one thing that skips it', async () => {
+    const cached = await cacheUnread(3);
+    readEverywhereBut(cached);
+    await setFolderBadge(3);
+    marks().pollQuiet = true;
+    await arm({ messageIds: cached });
+    nextTickIsNarrow();
+
+    await tick();
+    expect(marks().unreadCalls).toHaveLength(1);
+    // Every first page asks, filtered or not, but not inside the minute the tick just used.
+    await listPage({ limit: PAGE });
+    await listPage({ limit: PAGE, unread: '1' });
+    await getJson<Page>(`/messages?${new URLSearchParams({ scope: 'role:inbox', limit: String(PAGE) })}`);
+    expect(marks().unreadCalls, 'a page right after the tick asks nobody').toHaveLength(1);
+    // A human pressing Refresh reads the page with `fresh=1`, and that one asks.
+    await getJson<Page>(`/messages?${new URLSearchParams({ account: ACCOUNT_ID, mailbox: 'INBOX', limit: String(PAGE), fresh: '1' })}`);
+    expect(marks().unreadCalls).toHaveLength(2);
+  });
+
+  it('names a slow check on the page, lets a second reader join it, and always ends it out loud', async () => {
+    const cached = await cacheUnread(3);
+    readEverywhereBut(cached);
+    await setFolderBadge(3);
+    marks().pollQuiet = true;
+    // Slower than two page waits back to back, so the second reader still finds it running.
+    await arm({ messageIds: cached }, 4_000);
+
+    await recording(async (seen) => {
+      const startedAt = Date.now();
+      const first = await listPage({ limit: PAGE });
+      expect(Date.now() - startedAt, 'the page does not wait for a slow provider').toBeLessThan(2_400);
+      expect(first.body.checking).toEqual([{ accountId: ACCOUNT_ID, mailboxId: 'INBOX' }]);
+      // A second reader of the same folder joins the running check rather than starting one.
+      const second = await getJson<Page>(
+        `/messages?${new URLSearchParams({ scope: 'role:inbox', limit: String(PAGE) })}`,
+      );
+      expect(second.body.checking).toEqual([{ accountId: ACCOUNT_ID, mailboxId: 'INBOX' }]);
+      expect(marks().unreadCalls).toHaveLength(1);
+      // Nothing to clear, and still an end: the console is showing "Checking…" until it hears.
+      await expect.poll(() => named(seen, RECONCILED).length, { timeout: 15_000, interval: 100 }).toBe(1);
+      expect(named(seen, RECONCILED)[0]).toEqual({ accountId: ACCOUNT_ID, mailboxId: 'INBOX', cleared: 0 });
+      // A page after the end names nothing.
+      const after = await listPage({ limit: PAGE });
+      expect(after.body.checking).toBeUndefined();
+    });
+  }, 30_000);
+
+  it('a page read while the tick is still asking joins the tick\'s check and hears its end', async () => {
+    const cached = await cacheUnread(4);
+    const stillUnread = cached.slice(1);
+    readEverywhereBut(stillUnread);
+    await setFolderBadge(stillUnread.length);
+    marks().pollQuiet = true;
+    await arm({ messageIds: stillUnread }, 2_500);
+    nextTickIsNarrow();
+
+    await recording(async (seen) => {
+      const running = tick();
+      await expect.poll(() => marks().unreadCalls.length, { timeout: 10_000, interval: 50 }).toBe(1);
+      const page = await getJson<Page>(
+        `/messages?${new URLSearchParams({ scope: 'role:inbox', limit: String(PAGE) })}`,
+      );
+      expect(page.body.checking).toEqual([{ accountId: ACCOUNT_ID, mailboxId: 'INBOX' }]);
+      await running;
+      expect(marks().unreadCalls, 'the page joined; it did not ask again').toHaveLength(1);
+      expect(named(seen, RECONCILED)).toEqual([{ accountId: ACCOUNT_ID, mailboxId: 'INBOX', cleared: 1 }]);
+    });
+  }, 30_000);
+
+  it('asks nothing after an inbox poll that failed, and a failed question ends the tick normally', async () => {
+    const cached = await cacheUnread(3);
+    readEverywhereBut([]);
+    await setFolderBadge(3);
+    marks().pollQuiet = true;
+    marks().pollFail = 'the server went away';
+    await arm({ messageIds: [] });
+    nextTickIsNarrow();
+    await tick();
+    expect(marks().unreadCalls, 'a provider that just failed is not asked a second question').toEqual([]);
+
+    marks().pollFail = undefined;
+    await arm({ fail: 'the helper stopped' });
+    await recording(async (seen) => {
+      await mailSyncForTesting()!.runTick({ force: true });
+      expect(marks().unreadCalls).toHaveLength(1);
+      expect((await cachedUnread()).sort(), 'a failed question changes nothing').toEqual([...cached].sort());
+      expect(named(seen, RECONCILED), 'nobody was told it was running, so its failure is quiet').toEqual([]);
     });
   });
 });

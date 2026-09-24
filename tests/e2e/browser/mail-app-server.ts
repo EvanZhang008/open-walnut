@@ -74,6 +74,16 @@ await fs.mkdir(path.join(tmpBase, 'plugins'), { recursive: true })
  */
 const digestOff = process.env.PW_MAIL_DIGEST_OFF === '1'
 
+/**
+ * `PW_MAIL_POLL_SECONDS=<n>`: the plugin's poll interval, for a spec about what the loop does on its own
+ * (the unread check on every tick). Unset, the plugin's default applies and no spec waits on a tick.
+ */
+const pollSeconds = Number(process.env.PW_MAIL_POLL_SECONDS ?? '')
+const mailPluginConfig = {
+  ...(digestOff ? { digest_enabled: false } : {}),
+  ...(Number.isFinite(pollSeconds) && pollSeconds > 0 ? { poll_interval_seconds: pollSeconds } : {}),
+}
+
 // No live model calls from a fixture: the main agent points at the repo's mock CLI.
 const mockMainAgent = path.join(repoRoot, 'tests/providers/mock-main-agent.mjs')
 await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
@@ -86,7 +96,7 @@ await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
     triage: { debounce_minutes: 0 },
   },
   providers: { 'mail-cli': { api: 'claude-cli', claude_cli_command: mockMainAgent } },
-  ...(digestOff ? { plugins: { mail: { digest_enabled: false } } } : {}),
+  ...(Object.keys(mailPluginConfig).length > 0 ? { plugins: { mail: mailPluginConfig } } : {}),
 }, null, 2))
 
 await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({ version: 1, tasks: [] }, null, 2))

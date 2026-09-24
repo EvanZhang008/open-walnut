@@ -54,7 +54,8 @@ import type { MailUnsubscribe } from './unsubscribe.js'
  * GET    /mailboxes?account=                           -> { mailboxes: MailboxDto[] }
  * POST   /mailboxes/fetch { accountId, mailboxId }      -> { ok, fetched, added, updated, reason? }
  *        (one folder, now, for a folder the sweep has not reached) | 202 { running: true }
- * GET    /messages?account=&mailbox=&limit=&before=    -> { messages: MailMessageDto[], nextBefore? }
+ * GET    /messages?account=&mailbox=&limit=&before=&fresh=  -> { messages, nextBefore?, checking? }
+ *        (`checking`: folders whose unread check outlived the page; each settles as `unread-reconciled`)
  *        &unread=1                                        (unread only, over the whole mailbox)
  *        &scope=role:inbox|role:sent|role:drafts           (ONE list across every account holding
  *                                                          that role; refuses `account` alongside it,
@@ -363,6 +364,9 @@ export function registerMailRoutes(
           ...(unread ? { unread: true } : {}),
           ...(before ? { before } : {}),
           ...(scope ? { scope: scope.role } : {}),
+          // Exactly `'1'`, like `unread`: a human pressed Refresh, so the page's unread check skips the
+          // shared one-minute clock. Nothing else it does changes.
+          ...(firstQuery(request.query.fresh) === '1' ? { fresh: true } : {}),
         }),
       }
     } catch (error) {

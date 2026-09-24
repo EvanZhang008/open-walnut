@@ -117,7 +117,21 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const db = openMailDatabase(walnut)
   const store = new MailStore(db)
   const bodies = new MailBodyStore(walnut.storage.dataDir)
-  const service = new MailService({ store, bodies, providers, events, log: walnut.log })
+  // Late-bound like `forgetCapabilities`: the poll loop is built from the service. An unread check that
+  // cleared rows moved the folder's own count too, so the loop re-lists that account's folders next.
+  let relistDue: (accountId: string) => void = () => undefined
+  const service = new MailService({
+    store,
+    bodies,
+    providers,
+    events: {
+      unreadReconciled: (event) => {
+        events.unreadReconciled(event)
+        if (event.cleared > 0) relistDue(event.accountId)
+      },
+    },
+    log: walnut.log,
+  })
   forgetCapabilities = (accountId) => service.forgetCapabilities(accountId)
   // The write path. `letters` is the host's, and it is the ONLY way this plugin asks the human
   // for anything: a letter renders on the console and on the phone, and its answer comes back
@@ -187,6 +201,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // and this plugin already owns exactly one timer. A replica arms no tick at all, which is also how
   // the digest stays off there without a second replica check.
   sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest })
+  relistDue = (accountId) => sync.markRelistDue(accountId)
   setActiveMailSync(sync)
 
   // The letter answers. Owned by the loader through `walnut.letters`, and filtered host-side to

@@ -39,7 +39,16 @@ import {
   type StoredListUnsubscribe,
 } from './service-dto.js'
 import { unsubscribeFromBodyHtml } from './unsubscribe-link.js'
-import { foldersNeedingUnreadRefresh, reconcileUnread } from './unread-reconcile.js'
+import { reconcileUnread, type UnreadReconcileResult } from './unread-reconcile.js'
+import {
+  MAX_PAGE_CHECKS,
+  PAGE_UNREAD_WAIT_MS,
+  UnreadChecks,
+  type FolderPair,
+  type UnreadCheckCandidate,
+  type UnreadCheckResult,
+  type UnreadCheckSettled,
+} from './unread-checks.js'
 import {
   callProvider,
   encodeMessageCursor,
@@ -83,28 +92,13 @@ import type {
 const CAPABILITY_DEADLINE_MS = 2_000
 const CAPABILITY_TTL_MS = 60_000
 /**
- * How long the unread filter's first page waits for the provider's own unread list. A person is
- * looking at a spinner for this; past it the cache answers and the next filter toggle asks again.
+ * How long one provider unread list may take. A page no longer waits for it (see `unread-checks.ts`), so
+ * this is only the point past which the answer is abandoned and the check counts as failed.
  */
-const UNREAD_LIST_DEADLINE_MS = 8_000
+export const UNREAD_LIST_DEADLINE_MS = 8_000
 
-/**
- * How long a SMART list's first page waits for that correction before answering from the cache.
- *
- * Much shorter than the deadline above, and the refresh keeps running past it. A smart list is the view a
- * human keeps open, and every route shares one event loop and six browser connections: holding this page
- * for a full provider round trip starves the rest of the app for the same eight seconds.
- */
-const SCOPE_UNREAD_WAIT_MS = 1_200
-
-/**
- * How long before the same folder may be asked again from a smart list.
- *
- * A folder whose backfill is far behind (200 cached unread against a badge of 5000) disagrees with its
- * badge permanently, so without a cooldown every page load buys provider round trips that can never
- * settle the disagreement.
- */
-const SCOPE_UNREAD_COOLDOWN_MS = 60_000
+/** How many unread envelopes a background check asks for: one ordinary page. */
+const UNREAD_CHECK_LIMIT = 50
 
 /** The `sent_at` column an envelope writes: one definition, so the row and the retire check agree. */
 function sentAtOf(envelope: MailEnvelope): number {
@@ -130,8 +124,8 @@ export class MailService {
   /** Per account: the last `send` verdict and when it was learned. See `sendCapabilityOf`. */
   private readonly sendCache = new Map<string, { send: boolean; at: number }>()
 
-  /** Per folder: when a smart list last bought a provider unread call for it. See `refreshScopeUnread`. */
-  private readonly scopeUnreadAskedAt = new Map<string, number>()
+  /** Every provider unread question goes through here: one clock and one call in flight per folder. */
+  private readonly unreadChecks: UnreadChecks
 
   constructor(private readonly deps: {
     store: MailStore
@@ -139,16 +133,22 @@ export class MailService {
     providers: MailProviderRegistry
     now?: () => number
     /**
-     * Optional: told when an unread refresh marked cached rows read. Its own seam rather than the
-     * whole `MailEvents`, because this is the only thing a read path is allowed to announce.
+     * Optional: told when an unread check settles that changed rows or that a page said was running. Its
+     * own seam rather than the whole `MailEvents`, because this is the only thing a read path announces.
      */
-    events?: { unreadReconciled(event: { accountId: string; mailboxId: string; cleared: number }): void }
+    events?: { unreadReconciled(event: UnreadCheckSettled): void }
     /** Optional: an address a body offered and the base refused (debug), a body retired because its row moved (info). */
     log?: {
       debug(message: string, fields?: Record<string, unknown>): void
       info?(message: string, fields?: Record<string, unknown>): void
     }
-  }) {}
+  }) {
+    this.unreadChecks = new UnreadChecks({
+      now: () => this.now,
+      run: (accountId, mailboxId, deadlineMs) => this.runUnreadCheck(accountId, mailboxId, deadlineMs),
+      settled: (event) => this.deps.events?.unreadReconciled(event),
+    })
+  }
 
   private get now(): number {
     return (this.deps.now ?? Date.now)()
@@ -263,6 +263,8 @@ export class MailService {
   forgetCapabilities(accountId?: string): void {
     if (accountId) this.sendCache.delete(accountId)
     else this.sendCache.clear()
+    // Same edges: a provider that registered again has not been asked what is unread yet.
+    this.unreadChecks.forget(accountId)
   }
 
   /**
@@ -461,28 +463,29 @@ export class MailService {
      * combination rather than picking one.
      */
     scope?: MessageScopeRole
-  }): Promise<{ messages: MailMessageDto[]; nextBefore?: string }> {
-    // The FIRST unread page asks the provider what is unread right now and ingests it before the
-    // cache is read: a flag flipped on the phone, or a message the backfill has not reached, is
-    // otherwise missing from a list whose folder badge (provider truth, every tick) shows it.
-    // Later pages page the cache the first one just corrected. Never awaited past its deadline,
-    // and a provider that cannot answer leaves the list exactly as the cache has it.
-    //
-    // A scope page asks too, but only about the folders whose badge DISAGREES with the cache — see
-    // `refreshScopeUnread`. Skipping it entirely is what left the console's most-used unread view
-    // (All Inboxes) permanently stale.
-    if (query.unread && !query.before && query.accountId && query.mailboxId && !query.scope) {
-      await this.ingestUnreadFromProvider(query.accountId, query.mailboxId, query.limit)
-    }
-    const pairs = query.scope
-      ? (await this.deps.store.mailboxesByRole(query.scope))
-        .map((row) => ({ accountId: row.account_id, mailboxId: row.mailbox_id }))
-      : undefined
-    if (query.unread && !query.before && query.scope && pairs) {
-      await this.refreshScopeUnread(pairs, query.scope, query.limit)
+    /** A human pressed Refresh: the page's unread checks skip the shared clock (never the one-in-flight rule). */
+    fresh?: boolean
+  }): Promise<{ messages: MailMessageDto[]; nextBefore?: string; checking?: FolderPair[] }> {
+    const roleRows = query.scope ? await this.deps.store.mailboxesByRole(query.scope) : undefined
+    const pairs = roleRows?.map((row) => ({ accountId: row.account_id, mailboxId: row.mailbox_id }))
+    // The folders this page is made of, which are what its unread checks are about. Only a FIRST page
+    // asks: later pages page the cache the first one corrected.
+    const first = !query.before
+    const pagePairs: FolderPair[] = pairs
+      ?? (query.accountId && query.mailboxId ? [{ accountId: query.accountId, mailboxId: query.mailboxId }] : [])
+    if (first && pagePairs.length > 0) {
+      const badges = roleRows ? new Map(roleRows.map((row) => [folderKey(row.account_id, row.mailbox_id), row.unread])) : undefined
+      await this.checkPageUnread(pagePairs, query.limit, !!query.fresh, badges)
     }
     const rows = await this.deps.store.listMessages({ ...query, ...(pairs ? { pairs } : {}) })
     const messages = await this.decorate(rows)
+    // Named AFTER the read, so a check that has already finished is not reported as running: whatever it
+    // changed is in these rows or, if it landed after them, was announced anyway (a clear always is).
+    // From here on each named check announces its end, whatever it finds.
+    const checking = first
+      ? this.unreadChecks.runningAmong(pagePairs).map(({ accountId, mailboxId }) => ({ accountId, mailboxId }))
+      : []
+    this.unreadChecks.announce(checking)
     // `nextBefore` is only offered when the page filled: handing one back on a short page
     // makes a console ask for an empty page every time it reaches the end. It carries the
     // whole sort key, so the next page resumes exactly where this one stopped even when
@@ -502,6 +505,7 @@ export class MailService {
           }),
         }
         : {}),
+      ...(checking.length > 0 ? { checking } : {}),
     }
   }
 
@@ -779,43 +783,121 @@ export class MailService {
   // ── internals ──
 
   /**
-   * Upsert the provider's current unread set for one mailbox, bounded by a deadline a person
-   * waiting on a list can stand. A provider without `listUnread`, or one that fails or times out,
-   * changes nothing: the cache answers as it is, and the failure is logged rather than shown,
-   * because the list itself is still a truthful (if possibly stale) answer.
+   * Ask the provider what is unread in one folder, now, if the shared clock allows it.
+   *
+   * The poll loop's periodic question, and the reason mail read on another device leaves the cache
+   * without anybody opening the list: a provider whose poll never lists an old message again (the
+   * Outlook one) has no other way to carry the new read flag. Null when there is nothing to ask:
+   * no `listUnread`, a folder with nothing unread on either side, or one asked within the gap. The
+   * "nothing unread" skip is what makes the common case free: an empty inbox costs no call at all.
    */
-  private async ingestUnreadFromProvider(accountId: string, mailboxId: string, limit: number): Promise<void> {
+  async checkUnreadInBackground(
+    accountId: string, mailboxId: string, deadlineMs: number,
+  ): Promise<UnreadCheckResult | null> {
+    if (!this.canAskUnread(accountId)) return null
+    if (!this.unreadChecks.isDue(accountId, mailboxId)) return null
+    const [cachedCounts, providerUnread] = await Promise.all([
+      this.deps.store.unreadCounts([{ accountId, mailboxId }]),
+      this.deps.store.mailboxUnread(accountId, mailboxId),
+    ])
+    const cachedUnread = cachedCounts.get(folderKey(accountId, mailboxId)) ?? 0
+    if (cachedUnread === 0 && !providerUnread) return null
+    return this.unreadChecks.start(accountId, mailboxId, {
+      limit: UNREAD_CHECK_LIMIT,
+      deadlineMs: Math.max(1, Math.min(UNREAD_LIST_DEADLINE_MS, deadlineMs)),
+    })
+  }
+
+  private canAskUnread(accountId: string): boolean {
+    try {
+      return !!this.provider(accountId).listUnread
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * The unread checks a first page starts, waits a moment for, and names while they run.
+   *
+   * Every first page asks, filtered or not: an unfiltered list shows read state as plainly as the unread
+   * filter does, and "All Inboxes" is the view a person keeps open. The shared clock is what keeps that
+   * cheap, and the folders are chosen most-wrong first (`UnreadChecks.pick`). The page waits
+   * `PAGE_UNREAD_WAIT_MS`, not the provider's full deadline; what is still running then is returned so
+   * the console can say it is checking, and settles by event.
+   */
+  private async checkPageUnread(
+    pairs: FolderPair[], limit: number, force: boolean,
+    /** Folder counts the caller already read (a scope page has them from its role query). */
+    badges?: Map<string, number>,
+  ): Promise<void> {
+    const askable = pairs.filter((pair) => this.canAskUnread(pair.accountId))
+    if (askable.length === 0) return
+    const [counts, cachedCounts] = await Promise.all([
+      badges
+        ? Promise.resolve(askable.map((pair) => badges.get(folderKey(pair.accountId, pair.mailboxId))))
+        : Promise.all(askable.map((pair) => this.deps.store.mailboxUnread(pair.accountId, pair.mailboxId))),
+      this.deps.store.unreadCounts(askable),
+    ])
+    const candidates: UnreadCheckCandidate[] = askable.map((pair, at) => ({
+      ...pair,
+      providerUnread: counts[at] ?? 0,
+      cachedUnread: cachedCounts.get(folderKey(pair.accountId, pair.mailboxId)) ?? 0,
+    }))
+    const max = askable.length === 1 ? 1 : MAX_PAGE_CHECKS
+    for (const one of this.unreadChecks.pick(candidates, max, force)) {
+      this.unreadChecks.start(one.accountId, one.mailboxId, { limit, deadlineMs: UNREAD_LIST_DEADLINE_MS, force })
+    }
+    const waiting = this.unreadChecks.runningAmong(askable)
+    if (waiting.length === 0) return
+    // Checks never reject (see `UnreadChecks.start`), so letting them outlive this wait leaves nothing unhandled.
+    await Promise.race([
+      Promise.all(waiting.map((one) => one.done)),
+      new Promise<void>((resolve) => { setTimeout(resolve, PAGE_UNREAD_WAIT_MS).unref?.() }),
+    ])
+  }
+
+  /**
+   * One unread check: upsert the provider's current unread set, then mark read what it proves read.
+   *
+   * A provider that fails or times out changes nothing: the cache answers as it is, and the failure is
+   * logged rather than shown, because the list itself is still a truthful (if possibly stale) answer.
+   */
+  private async runUnreadCheck(
+    accountId: string, mailboxId: string, options: { limit: number; deadlineMs: number },
+  ): Promise<UnreadCheckResult> {
     let spec: MailProviderSpec
     try {
       spec = this.provider(accountId)
     } catch {
-      return
+      return { cleared: 0, failed: true }
     }
-    if (!spec.listUnread) return
+    if (!spec.listUnread) return { cleared: 0, failed: false }
     try {
       // Stamped BEFORE the call: everything the answer can speak about was already delivered by now, so a
       // mail that arrives while the provider is thinking is out of scope for it (see `snapshotAt`).
       const snapshotAt = this.now
       const envelopes = await callProvider(
         `the unread list of ${mailboxId}`,
-        () => spec.listUnread!(accountId, mailboxId, limit),
-        UNREAD_LIST_DEADLINE_MS,
+        () => spec.listUnread!(accountId, mailboxId, options.limit),
+        options.deadlineMs,
       )
       // Only envelopes of the mailbox asked for: a provider that answers a broader set must not
       // be able to move rows between folders through this door.
       const mine = envelopes.filter((one) => one.mailboxId === mailboxId)
       await this.ingestPage(accountId, mine)
-      await this.clearUnreadTheProviderNoLongerCounts(
-        accountId, mailboxId, mine, { limit, returned: envelopes.length, snapshotAt },
+      const plan = await this.clearUnreadTheProviderNoLongerCounts(
+        accountId, mailboxId, mine, { limit: options.limit, returned: envelopes.length, snapshotAt },
       )
+      return { cleared: plan.cleared, failed: false, ...(plan.basis === 'short-of-badge' ? { badgeStale: true } : {}) }
     } catch (error) {
       // INFO, not debug: a refresh that fails leaves mail read elsewhere showing as unread, and with
       // the line at debug nothing on disk said why (2026-09-23: a dead Outlook helper held 27 read
-      // mails on the list for minutes with no trace). Bounded by page loads, not by polls.
+      // mails on the list for minutes with no trace). Bounded by the shared clock.
       const log = this.deps.log
       const fields = { accountId, mailboxId, error: String(error).slice(0, 200) }
       if (log?.info) log.info('mail could not refresh the unread list from the provider', fields)
       else log?.debug('mail could not refresh the unread list from the provider', fields)
+      return { cleared: 0, failed: true }
     }
   }
 
@@ -833,17 +915,17 @@ export class MailService {
    * `reconcileUnread` decides what an absence proves; this only writes it down. The folder's own badge
    * rides along as the second opinion that keeps an answer of `[]` from being read as "nothing is
    * unread": a provider is allowed to answer that way for a folder it cannot list, and the Outlook one
-   * does for every mailbox except the Inbox.
+   * does for every mailbox except the Inbox. Returns how many rows it cleared, and on what basis.
    */
   private async clearUnreadTheProviderNoLongerCounts(
     accountId: string, mailboxId: string, answered: MailEnvelope[],
     window: { limit: number; returned: number; snapshotAt: number },
-  ): Promise<void> {
+  ): Promise<{ cleared: number; basis?: UnreadReconcileResult['basis'] }> {
     const [cached, providerUnread] = await Promise.all([
       this.deps.store.unreadKeys(accountId, mailboxId),
       this.deps.store.mailboxUnread(accountId, mailboxId),
     ])
-    if (cached.length === 0) return
+    if (cached.length === 0) return { cleared: 0 }
     const plan = reconcileUnread({
       answered: answered.map((one) => ({ messageId: one.messageId, sentAt: sentAtOf(one) })),
       cached: cached.map((row) => ({ messageId: row.message_id, sentAt: row.sent_at })),
@@ -852,59 +934,14 @@ export class MailService {
       snapshotAt: window.snapshotAt,
       ...(providerUnread === undefined ? {} : { providerUnread }),
     })
-    if (plan.readNow.length === 0) return
+    if (plan.readNow.length === 0) return { cleared: 0, basis: plan.basis }
     const wanted = new Set(plan.readNow)
     await this.deps.store.markMessagesSeen(cached.filter((row) => wanted.has(row.message_id)), this.now)
     this.deps.log?.info?.('mail marked read what the provider no longer counts as unread', {
       accountId, mailboxId, cleared: plan.readNow.length, cachedUnread: cached.length,
       answered: answered.length, basis: plan.basis, providerUnread,
     })
-    // The page that asked has usually been answered already (a smart list waits only
-    // `SCOPE_UNREAD_WAIT_MS`), so the console holding it has to be told the rows changed.
-    this.deps.events?.unreadReconciled({ accountId, mailboxId, cleared: plan.readNow.length })
-  }
-
-  /**
-   * The same correction for a SMART list ("All Inboxes"), which is the view a reader actually keeps open.
-   *
-   * This used to be skipped outright, so the correction never ran where it was needed: one query must
-   * not become N provider round trips. The way out is that the folder badge already carries the
-   * provider's own count, refreshed by every poll — so a folder whose badge agrees with the cache costs
-   * NOTHING, and only a disagreement buys a request. Bounded per page (`foldersNeedingUnreadRefresh`),
-   * because the first page after this shipped may find every account disagreeing, and the rest is
-   * corrected by the next page or by opening that account's own folder.
-   *
-   * Two bounds this page cannot do without. The WAIT is short (`SCOPE_UNREAD_WAIT_MS`) and the refresh
-   * keeps running after it: a provider round trip may take the full 8 second deadline, and a smart list is
-   * the view a human keeps open, so the page answers from the cache rather than holding a connection for
-   * eight seconds (the browser only has six of them). And a folder is not asked again for
-   * `SCOPE_UNREAD_COOLDOWN_MS`, because a folder whose backfill is far behind disagrees with its badge
-   * PERMANENTLY, which would otherwise buy two provider calls on every single page load.
-   */
-  private async refreshScopeUnread(
-    pairs: Array<{ accountId: string; mailboxId: string }>, role: MessageScopeRole, limit: number,
-  ): Promise<void> {
-    const [rows, cachedCounts] = await Promise.all([
-      this.deps.store.mailboxesByRole(role),
-      this.deps.store.unreadCounts(pairs),
-    ])
-    const candidates = pairs.map((pair) => ({
-      ...pair,
-      providerUnread: rows.find((row) => row.account_id === pair.accountId && row.mailbox_id === pair.mailboxId)?.unread ?? 0,
-      cachedUnread: cachedCounts.get(folderKey(pair.accountId, pair.mailboxId)) ?? 0,
-    }))
-    const asked = this.now
-    const fresh = candidates.filter((one) => {
-      const last = this.scopeUnreadAskedAt.get(folderKey(one.accountId, one.mailboxId)) ?? 0
-      return asked - last >= SCOPE_UNREAD_COOLDOWN_MS
-    })
-    const wanted = foldersNeedingUnreadRefresh(fresh)
-    if (wanted.length === 0) return
-    for (const one of wanted) this.scopeUnreadAskedAt.set(folderKey(one.accountId, one.mailboxId), asked)
-    // `ingestUnreadFromProvider` never rejects (it logs and returns), so letting these outlive the wait
-    // cannot leave an unhandled rejection behind.
-    const running = Promise.all(wanted.map((one) => this.ingestUnreadFromProvider(one.accountId, one.mailboxId, limit)))
-    await Promise.race([running, new Promise<void>((resolve) => { setTimeout(resolve, SCOPE_UNREAD_WAIT_MS).unref?.() })])
+    return { cleared: plan.readNow.length, basis: plan.basis }
   }
 
   private async requireMessage(accountId: string, messageId: string): Promise<MessageRow> {

@@ -248,6 +248,11 @@ export interface MailMessagePage {
    * a client change and a caller cannot invent a position the server never issued.
    */
   nextBefore?: string;
+  /**
+   * Folders of this page whose unread check was still running when the page was answered. Each one
+   * ends with a `plugin:mail:unread-reconciled` event, which is when the list may change.
+   */
+  checking?: Array<{ accountId: string; mailboxId: string }>;
 }
 
 export interface MailMessageRead {
@@ -376,6 +381,8 @@ export function listMailMessages(query: {
   before?: string;
   unread?: boolean;
   scope?: 'role:inbox' | 'role:sent' | 'role:drafts';
+  /** A human pressed Refresh: the server's unread check for this page skips its one-minute clock. */
+  fresh?: boolean;
 }): Promise<MailMessagePage> {
   const params: Record<string, string> = {};
   if (query.accountId) params.account = query.accountId;
@@ -384,6 +391,7 @@ export function listMailMessages(query: {
   if (query.before !== undefined) params.before = query.before;
   if (query.unread) params.unread = '1';
   if (query.scope) params.scope = query.scope;
+  if (query.fresh) params.fresh = '1';
   return apiGet(`${BASE}/messages`, params, QUIET);
 }
 

@@ -315,9 +315,9 @@ export class MailStore {
    * before it.
    */
   mailboxesByRole(role: string): Promise<Array<Pick<MailboxRow, 'account_id' | 'mailbox_id' | 'unread'>>> {
-    // `unread` rides along because it is the PROVIDER's own count, refreshed by every poll, and the
-    // smart list compares it against the cache's own unread rows to decide whether asking the provider
-    // could tell it anything (see `MailService.refreshScopeUnread`). One column, same index scan.
+    // `unread` rides along because it is the PROVIDER's own count, and the smart list compares it with
+    // the cache's own unread rows to decide which folder to ask about first (see
+    // `MailService.checkPageUnread`). One column, same index scan.
     return this.db.all<Pick<MailboxRow, 'account_id' | 'mailbox_id' | 'unread'>>(
       'SELECT account_id, mailbox_id, unread FROM mailboxes WHERE role = ? ORDER BY account_id, mailbox_id',
       [role],
@@ -662,9 +662,9 @@ export class MailStore {
   /**
    * How many unread rows the cache holds for each of these folders, as a count and not as rows.
    *
-   * The cheap half of "is this folder's cached unread set worth a provider call": compared against the
-   * folder's own `unread`, which every poll refreshes from the provider. Agreement means there is
-   * nothing to correct and no request to make.
+   * The cheap half of "which folder is most wrong": compared against the folder's own `unread`, the
+   * provider's count as of the last folder re-list. The wider the gap, the sooner a page asks about it
+   * (see `UnreadChecks.pick`).
    */
   async unreadCounts(pairs: ReadonlyArray<{ accountId: string; mailboxId: string }>): Promise<Map<string, number>> {
     const counts = new Map<string, number>()

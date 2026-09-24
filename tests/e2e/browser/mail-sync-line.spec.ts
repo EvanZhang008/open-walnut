@@ -320,5 +320,7 @@ test('clicking the line checks every account once, and a second click does not',
   // And it is clickable again once the window closes.
   await line.click()
   await expect(line).toHaveText('Checking…', { timeout: 30_000 })
-  expect(refreshes.length - before).toBe(2)
+  // Polled: a Refresh polls the folder on screen first, so its `/refresh` goes out a moment after the
+  // line already says `Checking…`.
+  await expect.poll(() => refreshes.length - before, { timeout: 30_000 }).toBe(2)
 })

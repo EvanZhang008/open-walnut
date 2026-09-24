@@ -81,7 +81,8 @@ function mailboxRows() {
       role: 'inbox',
       unread: 0,
       total: 1,
-      lastSyncAt: Date.parse('2026-09-17T09:05:00Z'),
+      // Polled a minute ago: fresh, so opening it is not a reason to poll it again (`STALE_FOLDER_MS`).
+      lastSyncAt: Date.now() - 60_000,
     },
     // No `lastSyncAt`: no poll of this container has ever completed. Its `total` is real, which is
     // what made the empty list read as lost mail.

@@ -272,6 +272,15 @@ export interface MailSnapshot {
    */
   folderFetch: Record<string, MailFolderFetch>;
   /**
+   * Folders whose unread check is still running on the server, keyed by `pairKey`, valued by when this
+   * console heard so (`mail-unread-checking.ts`).
+   *
+   * A page names these when its check outlived the page (the server waits a moment, then answers from
+   * the cache), and each one ends with `unread-reconciled`. The sync line reads it to say `Checking…`
+   * while the list on screen may still change.
+   */
+  unreadChecking: Record<string, number>;
+  /**
    * ONE sentence about a row that is not the open message, and which row it is about.
    *
    * Everything that can fail from a LIST (a read flag the provider refused, a body that would not
@@ -500,6 +509,7 @@ function initialState(): MailSnapshot {
     listError: null,
     search: EMPTY_SEARCH,
     folderFetch: {},
+    unreadChecking: {},
     rowNote: null,
     paneNote: null,
     pendingSeen: {},

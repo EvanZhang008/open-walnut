@@ -29,6 +29,7 @@ export const MAIL_EVENT = {
   digestSent: 'digest-sent',
   unsubscribed: 'unsubscribed',
   unreadReconciled: 'unread-reconciled',
+  mailboxCounts: 'mailbox-counts',
 } as const
 
 /** At most this many subject lines ride a `messages-received`. */
@@ -111,20 +112,33 @@ export interface MailUnsubscribedEvent {
 }
 
 /**
- * The provider's unread answer showed that cached rows of one folder had been read somewhere else,
- * and the cache now says so.
+ * An unread check of one folder ended (see `unread-checks.ts`).
  *
- * A console needs this because the correction usually lands AFTER the page that asked for it: a
- * smart list ("All Inboxes") answers from the cache after a short wait and lets the provider call
- * run on, so without an event the open list keeps showing mail read on a phone until some
- * unrelated refresh. Only emitted when rows were actually cleared, so the volume is bounded by
- * mail the person read elsewhere, and the re-read it causes cannot emit it again: the rows it
- * cleared are no longer cached as unread, so the next reconcile has nothing left to clear.
+ * Emitted in two cases and no others. When it CLEARED rows: mail read on another device left the
+ * cache, and an open list has to read again (the poll loop's own checks only ever speak this way, so a
+ * quiet tick says nothing). And when a page had named the check in its `checking`: that console is
+ * showing "Checking…" and is owed an end, so it goes out with `cleared: 0`, or with `failed: true` when
+ * the provider never answered. Bounded either way: by mail read elsewhere, and by pages a human opened.
+ * The re-read it causes cannot emit it again, because the shared clock does not ask the same folder
+ * twice within a minute.
  */
 export interface MailUnreadReconciledEvent {
   accountId: string
   mailboxId: string
   cleared: number
+  failed?: true
+}
+
+/**
+ * The folder list of one account was read again and a count in it moved (unread or total), or a
+ * folder came or went.
+ *
+ * Needed because a count can move with no row changing: a mail read on a phone lowers the inbox's own
+ * unread count while the poll, which never lists that old mail again, reports nothing, so
+ * `sync-completed` stays quiet and the sidebar kept the old number. Only emitted on a real change.
+ */
+export interface MailMailboxCountsEvent {
+  accountId: string
 }
 
 /** The daily digest went out. `unread` is what it counted, so a log line reads on its own. */
@@ -209,10 +223,14 @@ export class MailEvents {
     this.emit(MAIL_EVENT.unsubscribed, event)
   }
 
-  /** Only when rows were cleared. See `MailUnreadReconciledEvent`. */
+  /** The caller (`UnreadChecks`) decides when; see `MailUnreadReconciledEvent`. */
   unreadReconciled(event: MailUnreadReconciledEvent): void {
-    if (event.cleared <= 0) return
     this.emit(MAIL_EVENT.unreadReconciled, event)
+  }
+
+  /** Only on a real change; the caller compares. See `MailMailboxCountsEvent`. */
+  mailboxCounts(accountId: string): void {
+    this.emit(MAIL_EVENT.mailboxCounts, { accountId } satisfies MailMailboxCountsEvent)
   }
 
   /** At most once a day, or once per "send it now". No suppression to do. */

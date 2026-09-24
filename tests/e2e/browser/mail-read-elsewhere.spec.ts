@@ -1,13 +1,16 @@
 /**
  * Mail read on another device leaves an open All Inboxes list by itself (reported 2026-09-23: "I already
- * read these, why do they still show").
+ * read these, why do they still show"; 2026-09-24: "make sure it is periodically checking").
  *
  * The production shape, reproduced by `PW_MAIL_READ_ELSEWHERE=1`: the provider's poll never lists an old
  * message again (so it cannot carry the new read flag), the folder's own count does drop, and the
- * provider's unread list answers in seconds. The server's smart list waits only a moment for that answer,
- * then replies from the cache and lets the call run on; the correction lands AFTER the page. What is
- * graded is that the open page hears about it (`plugin:mail:unread-reconciled`) and drops the rows with no
- * further input from the person.
+ * provider's unread list answers in seconds. Two things are graded:
+ *
+ * - With the list open and NOTHING pressed, the poll loop's own unread check (every tick, on a shared
+ *   one-minute clock) takes the mail off the list. `PW_MAIL_POLL_SECONDS` makes a tick every few seconds,
+ *   so the wait is the one-minute clock, which is the production bound too.
+ * - Refresh does the list on screen first, and `Checking…` stays up for exactly as long as the provider is
+ *   still being asked, including after the refresh request itself has answered.
  *
  * No `browserName` pin, so the same cases run in WebKit (the engine the Mac app is) with
  * `PW_WEBKIT=1 --project=webkit`.
@@ -32,7 +35,9 @@ let home = ''
 test.beforeAll(async () => {
   test.setTimeout(300_000)
   await fs.mkdir(SHOT_DIR, { recursive: true })
-  const fixture = await server.start({ PW_MAIL_CTX: '1', PW_MAIL_DENSE: '', PW_MAIL_READ_ELSEWHERE: '1' })
+  const fixture = await server.start({
+    PW_MAIL_CTX: '1', PW_MAIL_DENSE: '', PW_MAIL_READ_ELSEWHERE: '1', PW_MAIL_POLL_SECONDS: '5',
+  })
   port = fixture.port
   home = fixture.home
 })
@@ -54,40 +59,69 @@ async function openAllInboxesUnread(page: Page): Promise<void> {
   await smartRow(page, 'inbox').click()
   const chip = page.getByTestId('mail-unread-filter')
   await expect(chip).toBeVisible({ timeout: 60_000 })
-  await chip.click()
+  if (!(await chip.textContent())?.includes('showing unread only')) await chip.click()
   await expect(chip).toContainText('showing unread only')
 }
 
-test('a mail read on another device leaves the open All Inboxes list with no click', async ({ page }) => {
+test('with the list open and nothing pressed, the next poll takes a mail read elsewhere off it', async ({ page }) => {
   await readOnAnotherDevice([])
   await openAllInboxesUnread(page)
   await expect(row(page, KEEPER)).toBeVisible({ timeout: 60_000 })
   await expect(row(page, LUNCH)).toBeVisible()
 
-  const pages: number[] = []
+  const presses: string[] = []
   page.on('request', (request) => {
     const url = new URL(request.url())
-    if (request.method() === 'GET' && url.pathname.endsWith('/api/plugins/mail/messages')
-      && url.searchParams.get('scope')) pages.push(Date.now())
+    if (request.method() === 'POST' && url.pathname.startsWith('/api/plugins/mail/')) presses.push(url.pathname)
   })
 
-  // Read on the phone, then the poll that learns the folder's new count. The Refresh control is the
-  // person's own way of asking for that poll, and it reads the list again as part of it.
   await readOnAnotherDevice([KEEPER])
-  const refreshedAt = Date.now()
-  await page.getByTestId('mail-refresh').click()
-
-  // The one assertion that matters: the row goes, and nothing else was pressed to make it go.
+  const readAt = Date.now()
+  // The bound is the shared clock: nothing may ask the same folder twice within a minute, so the first
+  // tick allowed to ask is at most a minute (plus one tick) after the last question.
   await expect(row(page, KEEPER), 'the mail read on the phone leaves the list by itself')
-    .toHaveCount(0, { timeout: 20_000 })
-  const goneAfterMs = Date.now() - refreshedAt
+    .toHaveCount(0, { timeout: 90_000 })
+  const goneAfterMs = Date.now() - readAt
   await expect(row(page, LUNCH), 'mail still unread on the server stays').toBeVisible()
-  console.log(`gone ${goneAfterMs}ms after Refresh; list reads since: ${pages.map((at) => at - refreshedAt).join(', ')}ms`)
-  console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'after-correction')}`)
+  expect(presses, 'nothing was pressed to make it go').toEqual([])
+  console.log(`gone ${goneAfterMs}ms after the read elsewhere, with no click`)
+  console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'no-click-correction')}`)
+})
 
-  // And it stays gone: the re-read the correction caused does not start another correction.
-  const settled = pages.length
-  await page.waitForTimeout(4_000)
-  expect(pages.length, 'the correction is not a loop of list reads').toBe(settled)
-  await expect(row(page, KEEPER)).toHaveCount(0)
+test('Refresh does the list on screen first and says Checking… until the provider has answered', async ({ page }) => {
+  await openAllInboxesUnread(page)
+  await expect(row(page, LUNCH)).toBeVisible({ timeout: 60_000 })
+
+  const seen: string[] = []
+  let refreshAnsweredAt = 0
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (!url.pathname.startsWith('/api/plugins/mail/')) return
+    if (url.pathname.endsWith('/mailboxes/fetch')) seen.push('fetch')
+    else if (url.pathname.endsWith('/refresh')) seen.push('refresh')
+    else if (url.pathname.endsWith('/messages') && url.searchParams.get('fresh') === '1') seen.push('page:fresh')
+  })
+  page.on('response', (response) => {
+    if (new URL(response.url()).pathname.endsWith('/api/plugins/mail/refresh')) refreshAnsweredAt = Date.now()
+  })
+
+  // Slower than the whole refresh, so the check is still running once the refresh has answered.
+  await readOnAnotherDevice([KEEPER, LUNCH], 6_000)
+  const line = page.getByTestId('mail-sync-line')
+  const pressedAt = Date.now()
+  await page.getByTestId('mail-refresh').click()
+  await expect(line).toHaveText('Checking…', { timeout: 5_000 })
+
+  await expect.poll(() => refreshAnsweredAt, { timeout: 20_000 }).toBeGreaterThan(0)
+  expect(seen.indexOf('fetch'), 'the folder on screen is polled first').toBe(0)
+  expect(seen.indexOf('page:fresh')).toBeLessThan(seen.indexOf('refresh'))
+  // The refresh request is done; the provider is not, and the line says so rather than a stale age.
+  if (Date.now() - pressedAt < 5_000) await expect(line).toHaveText('Checking…')
+  console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'refresh-still-checking')}`)
+
+  await expect(row(page, LUNCH), 'the answer lands and takes the read mail off').toHaveCount(0, { timeout: 20_000 })
+  await expect(line).not.toHaveText('Checking…', { timeout: 20_000 })
+  await expect(line).toContainText('Checked')
+  console.log(`settled ${Date.now() - pressedAt}ms after Refresh; requests: ${seen.join(', ')}`)
+  console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'refresh-settled')}`)
 })

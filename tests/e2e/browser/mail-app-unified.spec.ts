@@ -252,10 +252,16 @@ test.describe('the merged lists at production density', () => {
     page.on('pageerror', (error) => pageErrors.push(error.message))
     const queries: string[] = []
     const posts: string[] = []
+    /** Every folder a `/mailboxes/fetch` named, as `account/mailbox`. */
+    const fetched: string[] = []
     page.on('request', (request) => {
       const url = request.url()
       if (request.method() === 'GET' && url.includes('/api/plugins/mail/messages?')) queries.push(url)
       if (request.method() === 'POST' && url.includes('/api/plugins/mail/')) posts.push(url)
+      if (request.method() === 'POST' && url.includes('/api/plugins/mail/mailboxes/fetch')) {
+        const body = request.postDataJSON() as { accountId?: string; mailboxId?: string } | null
+        fetched.push(`${body?.accountId ?? ''}/${body?.mailboxId ?? ''}`)
+      }
     })
     const shots: string[] = []
 
@@ -440,11 +446,16 @@ test.describe('the merged lists at production density', () => {
     const unfetched = page.getByTestId('mail-smart-unfetched')
     await expect(unfetched).toContainText('Walnut has not fetched every inbox yet.', { timeout: 60_000 })
     posts.length = 0
+    fetched.length = 0
     await unfetched.getByTestId('mail-smart-refresh').click()
     await expect.poll(() => posts.filter((one) => one.includes('/mail/refresh')).length, { timeout: 30_000 })
       .toBeGreaterThan(0)
-    expect(posts.filter((one) => one.includes('/mailboxes/fetch')), 'a smart row is not a folder to fetch')
-      .toHaveLength(0)
+    // Refresh polls the inboxes the merged list is made of first (each a real folder), and never the
+    // smart row itself: that id is not a folder any provider could fetch.
+    expect(fetched.filter((one) => one.includes('__smart_') || one.endsWith('/')), 'a smart row is not a folder to fetch')
+      .toEqual([])
+    console.log(`refresh polled first: ${fetched.join(', ')}`)
+    expect(fetched.length, 'one poll per inbox on screen, before the full refresh').toBe(new Set(fetched).size)
     shots.push(await shoot(page.locator('.mail-list-pane'), 'smart-empty-unfetched'))
     await page.unroute('**/api/plugins/mail/mailboxes?*')
     await page.unroute('**/api/plugins/mail/messages?*')

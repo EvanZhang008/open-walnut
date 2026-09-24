@@ -91,7 +91,7 @@ export interface UnreadReconcileResult {
  *    either, and the answer's own length can never establish it.
  *
  * What CAN establish it is a second opinion, and the folder's own badge is one that costs nothing because
- * every poll refreshes it. So: an answer is COMPLETE only when the badge agrees with its length, and every
+ * the poll loop keeps it (a folder re-list every few ticks, and right after a check that cleared rows). So: an answer is COMPLETE only when the badge agrees with its length, and every
  * other answer is a PREFIX, judged only above its oldest entry (a newest-first page still covers everything
  * above its own tail). With no badge to check against, nothing is ever complete. The tie at the horizon is
  * left alone: two messages can share a delivery second, and one of them being the answer's last entry says
@@ -132,40 +132,4 @@ export function reconcileUnread(input: UnreadReconcileInput): UnreadReconcileRes
     basis: capped ? 'capped' : (providerUnread === undefined ? 'no-badge' : 'short-of-badge'),
     horizon,
   }
-}
-
-/** One (account, mailbox) of a smart list, with the two counts that decide whether to ask the provider. */
-export interface UnreadRefreshCandidate {
-  accountId: string
-  mailboxId: string
-  /** What the folder itself reports, refreshed by every poll. */
-  providerUnread: number
-  /** How many rows the cache holds as unread in that folder. */
-  cachedUnread: number
-}
-
-/**
- * Which folders of a smart list are worth a provider call, newest disagreement first.
- *
- * A scope page ("All Inboxes") is the view a human actually keeps open, and it used to skip the
- * unread refresh entirely so that one query could not become N provider round trips. The objection is
- * right about the cost and wrong about the conclusion, because the folder badge already carries the
- * provider's own count on every poll: when it agrees with the cache there is nothing to correct, and
- * the call can be skipped on evidence rather than on principle. So an agreeing account costs nothing,
- * and only a disagreement buys a round trip.
- *
- * Bounded anyway (`max`), because "every account disagrees" is exactly the state a first run after
- * this code ships is in, and a page a human is waiting on is not the place to fix all of them at once.
- * The remainder is corrected by the next page, or by opening that account's own folder.
- */
-export function foldersNeedingUnreadRefresh(
-  candidates: readonly UnreadRefreshCandidate[],
-  max = 2,
-): UnreadRefreshCandidate[] {
-  return candidates
-    .filter((one) => one.cachedUnread !== one.providerUnread)
-    // Biggest disagreement first: it is both the most wrong list and the one a human is most likely
-    // to be looking at, and with `max` smaller than the candidate list something has to be chosen.
-    .sort((a, b) => Math.abs(b.cachedUnread - b.providerUnread) - Math.abs(a.cachedUnread - a.providerUnread))
-    .slice(0, Math.max(0, max))
 }
