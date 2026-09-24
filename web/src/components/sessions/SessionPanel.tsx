@@ -227,6 +227,9 @@ interface SessionPanelProps {
   /** Toggle the lock state. Parent re-orders slots so locked panels sit on the right. */
   onToggleLock?: (sessionId: string) => void;
   onTaskClick?: (taskId: string) => void;
+  /** The header's Locate button: find this panel's task in the task panel. Its session is
+   *  already on screen, so unlike onTaskClick it must not open (and so reorder) any column. */
+  onLocateTask?: (taskId: string) => void;
   /** Open the task's full-screen detail modal (shared with the home task panel). */
   onOpenTaskDetail?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
@@ -241,7 +244,7 @@ interface SessionPanelProps {
   }) => void;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, headerLeading, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, headerLeading, locked, onToggleLock, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -1811,7 +1814,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               {!loading && session?.taskId && (
                 <button
                   className="task-action-btn session-panel-locate"
-                  onClick={() => onTaskClick?.(session.taskId!)}
+                  onClick={() => (onLocateTask ?? onTaskClick)?.(session.taskId!)}
                   title={taskTitle ? `Go to task: ${taskTitle}` : `Go to task ${session.taskId}`}
                   aria-label="Locate task"
                 >

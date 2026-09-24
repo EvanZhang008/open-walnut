@@ -14,6 +14,9 @@ async function boot(page: Page, baseURL: string) {
 const navigation = (page: Page) => page.locator('#home-task-navigation');
 const heading = (page: Page, id: string) => navigation(page).locator(`[data-navigation-id="${id}"]`);
 const railApp = (page: Page, id: string) => page.getByTestId(`sidebar-core-app-${id}`);
+/** The home session columns' sessions, left to right. */
+const sessionColumnOrder = (page: Page) => page.locator('.main-page-session-column').evaluateAll(cols =>
+  cols.map(col => col.querySelector('[data-session-id]')?.getAttribute('data-session-id') ?? null));
 const overflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
 const right = async (page: Page, selector: string) => page.locator(selector).first().evaluate(el => el.getBoundingClientRect().left);
 // Pinned cards these tests make leave the shared Focus tier when the test ends: left there, they push
@@ -800,8 +803,10 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   // The fixture session belongs to pw-task-store-sync; where that task sits is routed, so each case
-  // moves it (a tier, a custom tier, no tier) without touching the shared fixture's pins.
-  await page.addInitScript(() => sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: 'pw-store-sync-session', locked: false }])));
+  // moves it (a tier, a custom tier, no tier) without touching the shared fixture's pins. Its panel
+  // is the right one of two LOCKED columns, the layout where Locate used to swap them.
+  const seededColumns = ['pw-exec-bug-session', 'pw-store-sync-session'];
+  await page.addInitScript((ids) => sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify(ids.map((id) => ({ id, locked: true })))), seededColumns);
   let where = 'wait';
   const now = new Date().toISOString();
   const task = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -830,6 +835,7 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   });
   await boot(page, baseURL!);
   await expect(navigation(page).locator('[data-task-id="locate-focus"]')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => sessionColumnOrder(page)).toEqual(seededColumns);
   const showTabBar = async () => {
     await openViewMenu(page);
     await page.locator('.vd-panel [data-view-group="Task panel"]').getByRole('switch', { name: 'Show tab bar' }).click();
@@ -838,7 +844,12 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   await showTabBar();
   const bar = page.locator('.todo-section-tabs');
   const tab = (name: string) => bar.locator('[role="tab"]').filter({ has: page.locator('.todo-section-tab-label', { hasText: new RegExp(`^${name}$`) }) });
-  const locate = page.locator(`.main-page-session-column [data-session-id="pw-store-sync-session"]`).getByRole('button', { name: 'Locate task', exact: true });
+  const locateButton = page.locator(`.main-page-session-column [data-session-id="pw-store-sync-session"]`).getByRole('button', { name: 'Locate task', exact: true });
+  // Locate finds the task and nothing else: the panel it was pressed in stays where it is.
+  const locate = { click: async () => {
+    await locateButton.click();
+    expect(await sessionColumnOrder(page)).toEqual(seededColumns);
+  } };
   const card = navigation(page).locator(`.todo-pinned-section [data-task-id="${located}"]`);
   const landedOn = async (name: string) => {
     await expect(tab(name)).toHaveAttribute('aria-selected', 'true');
@@ -908,6 +919,57 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   await tab('All').click();
   await navigation(page).locator('.todo-pinned-section [data-task-id="locate-focus"] .todo-pinned-title').click();
   await expect(tab('All')).toHaveAttribute('aria-selected', 'true');
+  expect(errors).toEqual([]);
+});
+
+test('Locate never moves or opens a session column, in an unlocked column or the Ask Walnut slot', async ({ page, baseURL }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  // Unlocked this time: opening an already open session moves it to the left edge, which is what
+  // Locate used to do to its own panel. The same task is also the ask the chat slot shows.
+  const seededColumns = ['pw-exec-bug-session', 'pw-store-sync-session'];
+  await page.addInitScript((ids) => {
+    sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify(ids.map((id) => ({ id, locked: false }))));
+    sessionStorage.setItem('walnut:ask-slot:selected', 'pw-task-store-sync');
+  }, seededColumns);
+  const now = new Date().toISOString();
+  const task = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, title: `Locate ${id}`, project: 'Orchard', status: 'todo', phase: 'TODO', priority: 'none', source: 'local',
+    created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [], ...extra,
+  });
+  await page.route('**/api/tasks?*', async route => {
+    if (new URL(route.request().url()).pathname !== '/api/tasks') return route.continue();
+    await route.fulfill({ json: { tasks: [
+      task('pw-task-store-sync', { session_ids: ['pw-store-sync-session'], walnut_agent: true, pinned: true, focus_tier: 'focus' }),
+      task('locate-list'),
+    ] } });
+  });
+  await page.route('**/api/focus/tasks', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await route.fulfill({ json: { pinned_tasks: ['pw-task-store-sync'], focus_tasks: ['pw-task-store-sync'], satellite_tasks: [], backlog_tasks: [], wait_tasks: [], custom_tier_tasks: {} } });
+  });
+  await boot(page, baseURL!);
+  const card = navigation(page).locator('.todo-pinned-section [data-task-id="pw-task-store-sync"]');
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => sessionColumnOrder(page)).toEqual(seededColumns);
+
+  // The right-hand column's Locate selects the task and leaves both columns where they were.
+  await page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Locate task', exact: true }).click();
+  await expect(card).toHaveClass(/todo-pinned-card-active/);
+  expect(await sessionColumnOrder(page)).toEqual(seededColumns);
+
+  // The chat slot's Locate: its session is on screen in the slot, so no column may open for it.
+  await page.locator('.main-page-session-column [data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Close session panel', exact: true }).click();
+  await expect.poll(() => sessionColumnOrder(page)).toEqual(['pw-exec-bug-session']);
+  // Escape clears the selection, so the slot's Locate has something to find again.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Escape');
+  await expect(card).not.toHaveClass(/todo-pinned-card-active/);
+  const slotLocate = page.locator('.ask-walnut-session[data-session-id="pw-store-sync-session"]').getByRole('button', { name: 'Locate task', exact: true });
+  await expect(slotLocate).toBeVisible({ timeout: 20_000 });
+  await slotLocate.click();
+  await expect(card).toHaveClass(/todo-pinned-card-active/);
+  expect(await sessionColumnOrder(page)).toEqual(['pw-exec-bug-session']);
   expect(errors).toEqual([]);
 });
 

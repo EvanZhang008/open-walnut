@@ -12,7 +12,7 @@ export const FULLSCREEN_YIELD_EVENT = 'fullscreen:yield';
  * Drop every fullscreen sheet because the user's action opened or revealed a
  * column on the home page (the COLUMN-OPEN EXIT documented on the hook below).
  * Call it FROM the code that opens the column (MainPage's openSessionOrToast /
- * openDraftColumn), not from the button: the buttons are many (toast, letter,
+ * openDraftColumn / handleLocateTaskById, which reveals the task panel's row), not from the button: the buttons are many (toast, letter,
  * task row, dock, chat session link, chat task link, the header's "Go to task",
  * fork chip, slash command) and the columns they open are few. `reason` lands in
  * the perf log as `interaction {name: fullscreen-yield, reason}`.

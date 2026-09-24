@@ -1855,6 +1855,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
   }, [update]);
 
+  // Locate only: select + scroll the task panel, never touch the session columns. A session
+  // panel's Locate button uses this: its session is already on screen, and reopening it moved
+  // the panel to the left edge of its region.
+  const handleLocateTaskById = useCallback((taskId: string) => {
+    const task = taskMapRef.current.get(taskId);
+    if (!task) return;
+    // A locate into a hidden task panel, or under a fullscreen sheet, would select and scroll a
+    // row nobody can see.
+    setTodoVisible(true);
+    yieldFullscreen('locate-task');
+    handleFocusTask(task, { openDetail: false, fromOutside: true });
+  }, [handleFocusTask]);
+
   // Unified task-click: select + scroll + open session (if any). Never open detail panel.
   // Used by chat refs, session panels, triage — must behave identically to TodoPanel/PinnedCard clicks.
   const handleFocusTaskById = useCallback((taskId: string) => {
@@ -1862,10 +1875,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (!task) return;
     const sid = resolveTaskSessionId(task);
     if (sid) handleToggleSession(sid);
-    // A locate into a hidden task panel would select and scroll a row nobody can see.
-    setTodoVisible(true);
-    handleFocusTask(task, { openDetail: false, fromOutside: true });
-  }, [handleFocusTask, handleToggleSession]);
+    handleLocateTaskById(taskId);
+  }, [handleLocateTaskById, handleToggleSession]);
 
   const handleClearFocus = useCallback(() => {
     setFocusedTask(null);
@@ -2615,6 +2626,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           // The inspector describes the session actually on screen.
           onSelectionChange={setAskSlotSelection}
           onTaskClick={handleFocusTaskById}
+          onLocateTask={handleLocateTaskById}
           onOpenTaskDetail={handleOpenTaskDetailById}
           onSessionClick={handleSessionClick}
           onSessionReplaced={handleSessionReplaced}
@@ -2752,6 +2764,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onToggleLock={handleToggleLockSession}
                   onClose={handleCloseSession}
                   onTaskClick={handleFocusTaskById}
+                  onLocateTask={handleLocateTaskById}
                   onOpenTaskDetail={handleOpenTaskDetailById}
                   onSessionClick={handleSessionClick}
                   onSessionReplaced={handleSessionReplaced}

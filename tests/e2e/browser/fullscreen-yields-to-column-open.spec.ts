@@ -120,10 +120,10 @@ test('5. the sheet yields every time, not only the first: fullscreen → open �
 })
 
 test('6. "Go to task" in the fullscreen header drops the sheet and shows the task highlighted in the list', async ({ page }) => {
-  // The header button and a task link in the chat both route through
-  // handleFocusTaskById → openSessionOrToast. The task's session IS this panel, so
-  // no new column appears; what the gesture reveals is the todo row, which sits
-  // under the sheet just like a new column would. Decided in useFullscreen.tsx.
+  // The header button routes through handleLocateTaskById, which yields the sheet
+  // itself: the task's session IS this panel, so no column opens (or moves); what the
+  // gesture reveals is the todo row, which sits under the sheet just like a new column
+  // would. Decided in useFullscreen.tsx.
   const panel = await openSessionPanel(page)
   await enterFilesFullscreen(page, panel)
 
