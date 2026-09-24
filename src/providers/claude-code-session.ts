@@ -30,6 +30,7 @@ import crypto from 'node:crypto'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
+import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
 import { isProcessAliveAsync } from '../utils/process.js'
 import { isLocalJsonlFresh } from '../utils/session-liveness.js'
 import { SESSION_STREAMS_DIR, CLAUDE_HOME, CLOUD_MODE } from '../constants.js'
@@ -4590,6 +4591,16 @@ export class ClaudeCodeSession {
                 })
                 this._completeTurnOnIdle()
               }
+            }
+          } else if (HOOK_LIFECYCLE_SUBTYPES.has(String(sys.subtype))) {
+            // SessionStart/Setup hook start + result, on every spawn and resume
+            // (hook-notice.ts). Silent unless the user's hook failed.
+            const failed = hookFailureNotice(sys as Record<string, unknown>)
+            if (failed) {
+              bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+                sessionId: sid, taskId: this.taskId,
+                variant: 'error' as const, message: failed.message, detail: failed.detail,
+              }, ['main-ai'], { source: 'session-runner' })
             }
           } else if (sys.subtype && sys.subtype !== 'init' && sys.subtype !== 'status') {
             // ── Observability: structured status cards from the stream-json protocol ──

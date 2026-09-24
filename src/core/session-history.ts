@@ -29,6 +29,7 @@ import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from '
 import { toDisplayedUserText } from './sessions/reference-cards.js';
 import { cutEnd } from './text-cut.js';
 import { compactedHistoryText } from './stream/compaction-notice.js';
+import { hookFailureNotice } from './stream/hook-notice.js';
 import { computeRewindDeadSet, queueEnqueueKey, type SkippedRewindCut } from './transcript-chain.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
 import os from 'node:os';
@@ -1074,6 +1075,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     //   informational           e.g. "Model X restricted … using Y instead"
     //   model_refusal_fallback  safeguard retry notices
     //   scheduled_task_fire     why a turn started with no user message
+    //   hook_response           only when the user's hook FAILED (hook-notice.ts)
     // (Live streaming already surfaces compact via SESSION_SYSTEM_EVENT; history
     // reloads lost it. Noise subtypes — stop_hook_summary, turn_duration,
     // away_summary, local_command — stay hidden.)
@@ -1116,6 +1118,13 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
         // one IS an error: nothing further is coming without the user acting.
         sysText = content || undefined;
         sysVariant = 'error';
+      } else if (sub === 'hook_response') {
+        // Same rule as the live row (hook-notice.ts): only a failed hook shows.
+        const failed = hookFailureNotice(raw as unknown as Record<string, unknown>);
+        if (failed) {
+          sysText = failed.message;
+          sysVariant = 'error';
+        }
       }
       if (sysText) {
         messageMap.set(raw.uuid, {
