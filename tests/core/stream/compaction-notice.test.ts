@@ -17,7 +17,6 @@ import {
   COMPACTED_MESSAGE,
   COMPACTING_MESSAGE,
   compactedDetail,
-  compactedHistoryText,
   firstSightingOfLine,
   placeSystemRow,
   type SystemRow,
@@ -60,10 +59,14 @@ describe('compactedDetail: the numbers say what they are', () => {
     expect(compactedDetail({ preTokens: 0, postTokens: 0 })).toBeUndefined()
   })
 
-  it('history text reads like the live row (trigger outside the parens)', () => {
-    expect(compactedHistoryText({ preTokens: 444_000, postTokens: 45_000, trigger: 'auto' }))
-      .toBe('Context compacted (444K → 45K tokens) · auto')
-    expect(compactedHistoryText(undefined)).toBe('Context compacted')
+  it('a reloaded row is the SAME two pieces as the live one, not a restatement', () => {
+    // There is exactly one wording. The history parser sets text=COMPACTED_MESSAGE
+    // and systemDetail=compactedDetail(...), which is what the live row is built
+    // from too — the old separate "history text" helper produced a differently
+    // punctuated string, and both spellings ended up in one timeline (2026-09-21).
+    const meta = { preTokens: 444_000, postTokens: 45_000, trigger: 'auto' }
+    expect(COMPACTED_MESSAGE).toBe('Context compacted')
+    expect(compactedDetail(meta)).toBe('444K → 45K tokens · auto')
   })
 })
 

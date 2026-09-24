@@ -38,6 +38,7 @@ import {
   backfillToolResult,
   flushMainTextBuffer,
   appendLaneText,
+  appendSystemBlock,
   type StreamingBlock,
 } from '@/stream/stream-reducer'
 import { computeRenderFilter, buildHistoryEvidence } from '@/stream/render-filter'
@@ -152,6 +153,18 @@ function reduceEvents(frames: WsFrame[], sessionId: string): { blocks: Streaming
         blocks = backfillToolResult(blocks, String(d.toolUseId), String(d.result ?? ''), Boolean(d.isError))
         break
       }
+      case 'session:system-event': {
+        blocks = flushMainTextBuffer(blocks, textBuffer, completedLen)
+        textBuffer = ''
+        blocks = appendSystemBlock(blocks, {
+          variant: d.variant as 'compact' | 'error' | 'info',
+          message: String(d.message ?? ''),
+          detail: d.detail as string | undefined,
+          progress: d.progress as boolean | undefined,
+          uuid: d.uuid as string | undefined,
+        })
+        break
+      }
       case 'session:result': {
         blocks = flushMainTextBuffer(blocks, textBuffer, completedLen)
         textBuffer = ''
@@ -202,6 +215,24 @@ function countInUnion(
   blocks.forEach((b, i) => {
     if (hidden.has(i)) return
     if ((b.type === 'text' || b.type === 'thinking') && b.content.includes(marker)) n++
+  })
+  return n
+}
+
+/** Same, for system notices (history text + visible system blocks). */
+function countSystemInUnion(
+  marker: string,
+  messages: SessionHistoryMessage[],
+  blocks: StreamingBlock[],
+  hidden: Set<number>,
+): number {
+  let n = 0
+  for (const m of messages) {
+    if (m.role === 'system' && typeof m.text === 'string') n += m.text.split(marker).length - 1
+  }
+  blocks.forEach((b, i) => {
+    if (hidden.has(i)) return
+    if (b.type === 'system' && b.message.includes(marker)) n++
   })
   return n
 }
@@ -329,5 +360,89 @@ describe('single-timeline real pipeline — evidence contract', () => {
       await new Promise((r) => setTimeout(r, 300))
     }
     expect(absorbed).toBe(true)
+  }, 40_000)
+
+  it('B3: the compaction notice is absorbed by the real parser\'s system row — one "Context compacted", even after compaction wiped the surrounding evidence', async () => {
+    // 2026-09-21, reported with a screenshot of the same compaction twice:
+    //   Context compacted (493K → 44K tokens) · auto   ← the persisted row
+    //   Continuation summary ›
+    //   Context compacted  493K → 44K tokens · auto    ← the streamed notice
+    // A notice has no msgId/toolUseId, so it could only be swept as a "pure-UI"
+    // block, which needs every matchable block in the window to have matched.
+    // Compaction is the one event that makes that permanently impossible: it
+    // rewrites the transcript, so the blocks streamed before the boundary lose
+    // the messages they would have matched. The notice now carries the CLI
+    // boundary line's own uuid, which is exactly what the parser writes as the
+    // system row's msgId — this test proves those two really are the same key.
+    const ws = await connectWs()
+    const collected = collectUntilResult(ws)
+    const rpc = await sendWsRpc(ws, 'session:start', {
+      taskId: 'stl-task-b3', message: 'compaction-test:3', project: 'Walnut',
+    })
+    expect((rpc as Record<string, unknown>).ok).toBe(true)
+
+    const frames = await collected
+    ws.close()
+    const sid = String(frames.find((f) => f.name === 'session:result')!.data!.sessionId)
+
+    const { blocks } = reduceEvents(frames, sid)
+    // Three keep-alives plus the boundary collapsed to ONE row already (the
+    // placeholder became the outcome in place).
+    const notices = blocks.filter((b) => b.type === 'system' && b.variant === 'compact')
+    expect(notices).toHaveLength(1)
+    const noticeIdx = blocks.findIndex((b) => b.type === 'system' && b.variant === 'compact')
+    const notice = blocks[noticeIdx] as { message: string; detail?: string; uuid?: string }
+    expect(notice.message).toBe('Context compacted')
+    expect(notice.detail).toBe('444K → 49K tokens · auto')
+    // The id that makes absorption possible, straight off the CLI's line.
+    expect(notice.uuid).toBe('mock-boundary-1')
+
+    // Pre-history: the notice is the ONLY thing telling the user why the session
+    // went quiet, so it must stay visible.
+    {
+      const { hidden } = computeRenderFilter({ blocks, messages: [], watermark: 0, isStreaming: false })
+      expect(hidden.has(noticeIdx)).toBe(false)
+    }
+
+    await publishStreamsFile(sid)
+    let messages: SessionHistoryMessage[] = []
+    let hidden = new Set<number>()
+    for (let i = 0; i < 30; i++) {
+      messages = await fetchHistory(sid)
+      const r = computeRenderFilter({
+        blocks, messages, watermark: 0, isStreaming: false,
+        historyEvidence: buildHistoryEvidence(messages),
+      })
+      hidden = r.hidden
+      if (hidden.has(noticeIdx)) break
+      await new Promise((r2) => setTimeout(r2, 300))
+    }
+
+    // The parser's row: same uuid as the streamed notice, and the SAME two
+    // display pieces, so the surviving row reads identically to the live one.
+    const sysRows = messages.filter((m) => m.role === 'system' && m.systemVariant === 'compact')
+    expect(sysRows).toHaveLength(1)
+    expect(sysRows[0].msgId).toBe('mock-boundary-1')
+    expect(sysRows[0].text).toBe('Context compacted')
+    expect(sysRows[0].systemDetail).toBe('444K → 49K tokens · auto')
+
+    // THE contract: the streamed notice is hidden, so the event appears once.
+    expect(hidden.has(noticeIdx)).toBe(true)
+    expect(countSystemInUnion('Context compacted', messages, blocks, hidden)).toBe(1)
+
+    // THE REPORTED STATE. A real post-compaction transcript keeps the boundary
+    // and drops what came before it, so the pure-UI sweep can never fire again.
+    // Absorption must not depend on it: id evidence alone has to carry the row.
+    const compactedHistory = messages.filter((m) => m.role === 'system')
+    const afterCompaction = computeRenderFilter({
+      blocks, messages: compactedHistory, watermark: 0, isStreaming: false,
+      historyEvidence: buildHistoryEvidence(compactedHistory),
+    })
+    expect(afterCompaction.hidden.has(noticeIdx)).toBe(true)
+    expect(countSystemInUnion('Context compacted', compactedHistory, blocks, afterCompaction.hidden)).toBe(1)
+    // …and the orphaned model text is still KEPT, never silently dropped.
+    const textIdx = blocks.findIndex((b) => b.type === 'text' && b.content.includes('Context is nearly full'))
+    expect(textIdx).toBeGreaterThanOrEqual(0)
+    expect(afterCompaction.hidden.has(textIdx)).toBe(false)
   }, 40_000)
 })

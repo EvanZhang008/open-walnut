@@ -453,11 +453,14 @@ export interface SystemGroupMember {
 /** Map persisted system history onto the shared compact/verbose row shape. */
 export function systemGroupMemberFromHistory(message: SessionHistoryMessage): SystemGroupMember {
   const text = message.text ?? '';
-  const isVerbose = text.length > 160;
+  // A row that shipped its own detail (a compaction's numbers) is already split
+  // the way the live row is — use it verbatim so the two are indistinguishable.
+  // Only unsplit rows fall back to truncating a long single string.
+  const isVerbose = !message.systemDetail && text.length > 160;
   return {
     variant: message.systemVariant ?? 'info',
     message: isVerbose ? `${text.slice(0, 80)}…` : text,
-    detail: isVerbose ? text : undefined,
+    detail: message.systemDetail ?? (isVerbose ? text : undefined),
     time: formatTime(message.timestamp),
     key: message.msgId ?? message.walnutMessageId,
   };

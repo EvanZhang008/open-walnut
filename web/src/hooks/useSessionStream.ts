@@ -671,9 +671,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle system events (compact, error, info notifications)
   useEvent('session:system-event', (data) => {
-    const { sessionId: sid, variant, message, detail, progress } = data as {
+    const { sessionId: sid, variant, message, detail, progress, uuid } = data as {
       sessionId: string; variant: 'compact' | 'error' | 'info'; message: string;
-      detail?: string; progress?: boolean;
+      detail?: string; progress?: boolean; uuid?: string;
     };
     if (!sessionId || sid !== sessionId) return;
 
@@ -682,7 +682,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     interruptPendingText();
     flushPendingThinking();
 
-    setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail, progress }));
+    setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail, progress, uuid }));
   });
 
   // Handle permission request events (control_request from Claude Code)

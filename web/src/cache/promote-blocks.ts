@@ -26,7 +26,11 @@
  *                    divergence from truncation / '\n'-joins / path rewriting)
  *   · text/thinking→ verbatim content equality — fallback for id-less blocks
  *                    (legacy events, snapshots taken before id threading)
- * Pure-UI blocks that never appear in JSONL (permission cards, system notices)
+ *   · system       → the CLI line's uuid (a notice announcing a real JSONL line —
+ *                    compact_boundary, api_error — carries it, and the parser
+ *                    writes the same uuid as the history row's msgId). Its own
+ *                    id namespace, so a text row sharing the id can't claim it.
+ * Pure-UI blocks that never appear in JSONL (permission cards, id-less notices)
  * have no possible twin — they are collected separately, and only for turns whose
  * matchable content fully matched (so we never GC a UI block of a live turn).
  * A PENDING permission card is exempt altogether: it is an open request, not
@@ -74,6 +78,12 @@ export interface DeltaEvidence {
    *  (it is frequently redacted) — otherwise id-removal would vanish the
    *  streamed reasoning with no persisted replacement to render. */
   thinkingMsgIds: Set<string>;
+  /** msgIds of persisted SYSTEM rows. For system lines the parser writes the
+   *  CLI's own line uuid as msgId, and the emitter stamps the same uuid on the
+   *  streamed notice — so a notice absorbs on exact id like any other block.
+   *  Kept in its OWN namespace: a text/tool row carrying the same id must never
+   *  claim a notice, or one event could hide another. */
+  systemMsgIds: Set<string>;
   /** toolUseIds of Agent/Task tools whose subagent run is PROVEN over. The
    *  parser stamps bgTaskFinished from a <task-notification> line (background
    *  agents) or from a persisted tool_result on an explicit
@@ -94,6 +104,7 @@ export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidenc
   const texts = new Map<string, number>();
   const textMsgIds = new Set<string>();
   const thinkingMsgIds = new Set<string>();
+  const systemMsgIds = new Set<string>();
   const finishedBgParents = new Set<string>();
   const bump = (s: string | undefined) => {
     if (!s) return;
@@ -105,7 +116,12 @@ export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidenc
   // a twin and are kept forever ("98 completed block(s) had no delta twin").
   const walk = (msgs: SessionHistoryMessage[]) => {
     for (const m of msgs) {
-      if (m.role === 'system') continue; // UI notices — never a streamed-block twin
+      // A system row is a notice, never a twin for text/tool content — but it
+      // IS the twin of the streamed notice that announced the same CLI line.
+      if (m.role === 'system') {
+        if (m.msgId) systemMsgIds.add(m.msgId);
+        continue;
+      }
       if (m.text) bump(m.text);
       if (m.thinking) bump(m.thinking);
       if (m.msgId && m.text) textMsgIds.add(m.msgId);
@@ -120,7 +136,7 @@ export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidenc
     }
   };
   walk(delta);
-  return { toolUseIds, texts, textMsgIds, thinkingMsgIds, finishedBgParents };
+  return { toolUseIds, texts, textMsgIds, thinkingMsgIds, systemMsgIds, finishedBgParents };
 }
 
 /** ID-ONLY evidence over the FULL history (terminal-state cleanup). Content
@@ -330,6 +346,18 @@ export function computeAbsorbedIndices(
     // away, and the card vanished until the 60s re-emit re-added it
     // (2026-09-16). Only a settled card is a pure-UI GC candidate.
     if (isPendingPermissionBlock(b)) continue;
+    // A notice carrying the CLI line's uuid has REAL evidence, so it absorbs on
+    // its own id instead of waiting for the whole window to match. Compaction is
+    // why this matters: it REWRITES history, so the blocks streamed before the
+    // boundary permanently lose their twins, allMatchableMatched never goes true
+    // again, and the pure-UI path could never collect the compaction notice — it
+    // sat on screen beside its own persisted twin for the rest of the session
+    // (2026-09-21: "Context compacted" rendered twice around the summary row).
+    if (b.type === 'system' && b.uuid
+      && (ev.systemMsgIds.has(b.uuid) || full?.systemMsgIds.has(b.uuid))) {
+      absorbed.add(i);
+      continue;
+    }
     // Pure-UI block (settled permission/system): no possible twin; GC below
     // iff its whole window matched.
     pureUiIndices.push(i);

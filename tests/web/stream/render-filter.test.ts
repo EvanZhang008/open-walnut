@@ -245,3 +245,80 @@ describe('pending permission card is never absorbed (2026-09-16 AskUserQuestion 
     expect(hidden.has(4)).toBe(false);
   });
 });
+
+describe('the compaction row absorbs on its own id (2026-09-21: "Context compacted" shown twice)', () => {
+  // Reported with a screenshot of three rows where one event happened:
+  //   Context compacted (493K → 44K tokens) · auto  11:55 AM   ← history row
+  //   Continuation summary ›                                   ← the CLI's summary
+  //   Context compacted  493K → 44K tokens · auto              ← streaming row
+  //
+  // A system notice has no msgId/toolUseId, so it used to be absorbed ONLY as a
+  // "pure-UI" block, which requires every matchable block in the window to have
+  // found a twin. Compaction is precisely the event that makes that impossible:
+  // it REWRITES history, so the text blocks streamed before the boundary lose
+  // the messages they would have matched, `allMatchableMatched` goes false, and
+  // the compaction row is pinned on screen next to its own persisted twin for
+  // the rest of the session.
+  //
+  // The fix gives the row real id evidence: the CLI's `compact_boundary` line
+  // uuid, which the parser already exposes as the history row's msgId.
+  const compactBlock = (uuid?: string): StreamingBlock => ({
+    type: 'system', variant: 'compact', message: 'Context compacted',
+    detail: '493K → 44K tokens · auto', ...(uuid ? { uuid } : {}),
+  });
+  const compactRow = (uuid: string) => msg({
+    role: 'system', systemVariant: 'compact', msgId: uuid,
+    text: 'Context compacted (493K → 44K tokens) · auto',
+  });
+
+  it('hides the streaming row once its own compact_boundary uuid is in history', () => {
+    const blocks = [compactBlock('boundary-uuid-1')];
+    const hidden = computeHiddenBlocks({
+      blocks, messages: [compactRow('boundary-uuid-1')], watermark: 0, isStreaming: false,
+    });
+    expect(hidden.has(0)).toBe(true);
+  });
+
+  it('THE REPORTED STATE: absorbs even though compaction wiped the surrounding evidence', () => {
+    // Pre-boundary text that history no longer holds — the post-compaction
+    // transcript starts from the summary. This is what kept the old pure-UI GC
+    // from ever firing.
+    const blocks = [text('a long pre-compaction answer', 'msg-gone'), compactBlock('boundary-uuid-1')];
+    const messages = [compactRow('boundary-uuid-1')];
+    const hidden = computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: false });
+    expect(hidden.has(1)).toBe(true);
+    // The orphaned text block is still KEPT (append-only: never vanish content
+    // just because its twin was compacted away).
+    expect(hidden.has(0)).toBe(false);
+  });
+
+  it('does NOT hide a compaction row whose boundary has not persisted yet', () => {
+    // Mid-compaction, and the boundary line of a DIFFERENT compaction: neither
+    // may claim this row, or the live notice would disappear while it is the
+    // only thing telling the user why the session went quiet.
+    const blocks = [compactBlock('boundary-uuid-2')];
+    expect(computeHiddenBlocks({ blocks, messages: [], watermark: 0, isStreaming: true }).size).toBe(0);
+    expect(computeHiddenBlocks({
+      blocks, messages: [compactRow('boundary-uuid-1')], watermark: 0, isStreaming: false,
+    }).has(0)).toBe(false);
+  });
+
+  it('an id-less notice keeps the old pure-UI behaviour (older daemons send no uuid)', () => {
+    // Absorbed only with a fully-matched window, exactly as before.
+    const blocks = [text('answer', 'msg-1'), compactBlock()];
+    const matched = [msg({ text: 'answer', msgId: 'msg-1' })];
+    expect(computeHiddenBlocks({ blocks, messages: matched, watermark: 0, isStreaming: false }).has(1)).toBe(true);
+    expect(computeHiddenBlocks({ blocks, messages: [], watermark: 0, isStreaming: false }).has(1)).toBe(false);
+  });
+
+  it('a system uuid never claims a text or tool block, and vice versa', () => {
+    // Separate evidence namespace: a text message carrying the same id must not
+    // absorb the notice (and the reverse), or one event could hide another.
+    const blocks = [compactBlock('shared-id')];
+    const asText = [msg({ role: 'assistant', text: 'unrelated', msgId: 'shared-id' })];
+    expect(computeHiddenBlocks({ blocks, messages: asText, watermark: 0, isStreaming: false }).size).toBe(0);
+    const textBlocks = [text('unrelated', 'shared-id')];
+    const asSystem = [compactRow('shared-id')];
+    expect(computeHiddenBlocks({ blocks: textBlocks, messages: asSystem, watermark: 0, isStreaming: false }).size).toBe(0);
+  });
+});

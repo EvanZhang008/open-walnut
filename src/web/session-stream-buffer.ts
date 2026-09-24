@@ -54,6 +54,10 @@ export interface StreamingSystemBlock {
   /** Placeholder for work still running; the outcome replaces it in place.
    *  See `src/core/stream/compaction-notice.ts`. */
   progress?: boolean
+  /** The CLI line's own uuid, when this notice announces a real JSONL event.
+   *  Lets the browser absorb the notice against its persisted twin by exact id
+   *  (the parser writes the same uuid as the history row's msgId). */
+  uuid?: string
 }
 
 export interface StreamingPermissionBlock {
@@ -340,12 +344,13 @@ class SessionStreamBuffer {
     }
   }
 
-  appendSystem(sessionId: string, variant: 'compact' | 'error' | 'info', message: string, detail?: string, progress?: boolean): void {
+  appendSystem(sessionId: string, variant: 'compact' | 'error' | 'info', message: string, detail?: string, progress?: boolean, uuid?: string): void {
     const entry = this.getOrCreate(sessionId)
     this.resetIfTurnEnded(entry, sessionId)
     const row: StreamingSystemBlock = {
       type: 'system', variant, message,
       ...(detail ? { detail } : {}), ...(progress ? { progress: true } : {}),
+      ...(uuid ? { uuid } : {}),
     }
     // ONE compaction = ONE row, same rule the browser reducer applies — a snapshot
     // must not hand a reconnecting client the pile the live stream just avoided.

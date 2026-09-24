@@ -188,6 +188,9 @@ export interface SessionHistoryMessage {
   timestamp: string;
   /** For role='system': display variant (compact boundary / API error / info). */
   systemVariant?: 'compact' | 'error' | 'info';
+  /** For role='system': the row's muted second half (a compaction's numbers).
+   *  Present so a reloaded row renders identically to the live one. */
+  systemDetail?: string;
   tools?: SessionHistoryTool[];
   thinking?: string;
   model?: string;

@@ -392,11 +392,17 @@ describe('readSessionHistory', () => {
 
     const messages = await readSessionHistory('s-system', '/test');
     const sys = messages.filter(m => m.role === 'system');
-    expect(sys.map(m => [m.systemVariant, m.text])).toEqual([
-      ['compact', 'Context compacted (411K tokens) · auto'],
-      ['error', 'API error: Unable to connect to API (ECONNRESET)'],
-      ['info', 'Model "opus" is restricted. Using sonnet instead.'],
+    // The compaction row ships its headline and its numbers SEPARATELY, which is
+    // exactly how the live row is built — one wording, one code path, so a reload
+    // re-renders the same row instead of restating it differently (2026-09-21).
+    expect(sys.map(m => [m.systemVariant, m.text, m.systemDetail])).toEqual([
+      ['compact', 'Context compacted', '411K tokens · auto'],
+      ['error', 'API error: Unable to connect to API (ECONNRESET)', undefined],
+      ['info', 'Model "opus" is restricted. Using sonnet instead.', undefined],
     ]);
+    // The row's msgId is the CLI line's own uuid — the key the streamed notice
+    // absorbs against, so the same compaction is never on screen twice.
+    expect(sys[0].msgId).toBe('sys1');
     // Conversation itself is intact around them
     expect(messages[0].text).toBe('question');
     expect(messages[messages.length - 1].text).toBe('answer');

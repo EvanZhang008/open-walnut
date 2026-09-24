@@ -76,6 +76,17 @@ function count(txt: string | null, needle: string): number {
   return txt.split(needle).length - 1
 }
 
+/** The compaction row's two spans. Live and reloaded must return the SAME object:
+ *  one event, one wording, whichever twin is on screen. */
+async function rowShape(page: Page): Promise<{ text: string; detail: string }> {
+  const row = page.locator('.session-system-line--compact').first()
+  await row.waitFor({ state: 'visible', timeout: 20_000 })
+  return {
+    text: (await row.locator('.session-system-text').first().innerText()).trim(),
+    detail: (await row.locator('.session-system-detail').first().innerText()).trim(),
+  }
+}
+
 test.describe('Compaction renders as ONE row (real mock-CLI pipeline)', () => {
   test('five keep-alives collapse into one row that becomes the labelled outcome', async ({ page, request }) => {
     test.setTimeout(120_000)
@@ -128,17 +139,25 @@ test.describe('Compaction renders as ONE row (real mock-CLI pipeline)', () => {
     // One row cannot form a collapsed run, so the opaque "N system messages"
     // toggle from the report must not be there either.
     expect(await history.textContent()).not.toContain('system messages')
+    // Headline and numbers are SEPARATE spans (the numbers read as muted
+    // detail). Pinned because the reloaded row has to match this exactly.
+    const liveShape = await rowShape(page)
+    expect(liveShape).toEqual({ text: 'Context compacted', detail: '444K → 49K tokens · auto' })
     await page.screenshot({ path: '/tmp/compaction-one-row/live-one-row.png' })
 
-    // (3) A reload must still show exactly one row with its numbers. Whether the
-    // stream snapshot or the JSONL parser serves it, both run the shared rule.
+    // (3) A reload must still show exactly one row, reading IDENTICALLY. This is
+    // where the 2026-09-21 report lived: the persisted row and the streamed
+    // notice are both present now, so "one row" is only true if the notice is
+    // absorbed against its twin — and the two are only indistinguishable if the
+    // parser split the row the same way the live one is split.
     await page.reload()
     await expect(history).toContainText(POST, { timeout: 25_000 })
     await expect.poll(async () => count(await history.textContent(), 'Context compacted'), {
       timeout: 20_000,
     }).toBe(1)
-    await expect(history).toContainText('444K → 49K tokens')
+    expect(await rowShape(page)).toEqual(liveShape)
     expect(count(await history.textContent(), 'Compacting context')).toBe(0)
+    expect(await history.textContent()).not.toContain('system messages')
     await page.screenshot({ path: '/tmp/compaction-one-row/after-reload.png' })
   })
 })

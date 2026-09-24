@@ -76,12 +76,12 @@ export function compactedDetail(meta: CompactionMetadata | undefined): string | 
   return `${size}${trigger}`
 }
 
-/** History renders ONE text string per system row (there is no separate detail
- *  field), so the reloaded row must read the same as the live one. */
-export function compactedHistoryText(meta: CompactionMetadata | undefined): string {
-  const size = compactedSize(meta)
-  return `${COMPACTED_MESSAGE}${size ? ` (${size})` : ''}${triggerLabel(meta)}`
-}
+// A reloaded row is built from these SAME two pieces (COMPACTED_MESSAGE plus
+// compactedDetail, carried on the history row's own `systemDetail`). There used
+// to be a third function folding them into one parenthesised string for
+// history, which is how the same compaction came to read two different ways in
+// the same timeline — "Context compacted (493K → 44K tokens) · auto" above
+// "Context compacted  493K → 44K tokens · auto". One wording, one code path.
 
 /** How many compaction line uuids one session remembers. A long-lived session
  *  compacts dozens of times; the set only has to outlive a replayed tail. */

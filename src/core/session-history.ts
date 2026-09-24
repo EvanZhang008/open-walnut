@@ -28,7 +28,7 @@ import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workfl
 import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
 import { toDisplayedUserText } from './sessions/reference-cards.js';
 import { cutEnd } from './text-cut.js';
-import { compactedHistoryText } from './stream/compaction-notice.js';
+import { COMPACTED_MESSAGE, compactedDetail } from './stream/compaction-notice.js';
 import { hookFailureNotice } from './stream/hook-notice.js';
 import { computeRewindDeadSet, queueEnqueueKey, type SkippedRewindCut } from './transcript-chain.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
@@ -585,6 +585,11 @@ export interface SessionHistoryMessage {
    *  palette). compact = context compaction, error = API failures, info = model
    *  substitution / scheduled runs. */
   systemVariant?: 'compact' | 'error' | 'info';
+  /** For role='system': the secondary half of the row (the numbers on a
+   *  compaction). Split out so a reloaded row renders IDENTICALLY to the live
+   *  one — the same headline plus the same muted detail — instead of folding
+   *  everything into one parenthesised string. */
+  systemDetail?: string;
   tools?: SessionHistoryTool[];
   thinking?: string;
   model?: string;
@@ -907,6 +912,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     walnutMessageId?: string;
     injected?: boolean;
     systemVariant?: 'compact' | 'error' | 'info';
+    systemDetail?: string;
     contentBlocks: Array<{
       type: string;
       text?: string;
@@ -1084,6 +1090,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       const rawContent = (raw as { content?: unknown }).content;
       const content = typeof rawContent === 'string' ? rawContent : '';
       let sysText: string | undefined;
+      let sysDetail: string | undefined;
       let sysVariant: 'compact' | 'error' | 'info' = 'info';
       if (sub === 'compact_boundary') {
         // canonical JSONL uses compactMetadata/preTokens; the CLI's stream-json
@@ -1092,13 +1099,16 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
           compactMetadata?: { trigger?: string; preTokens?: number; postTokens?: number };
           compact_metadata?: { trigger?: string; pre_tokens?: number; post_tokens?: number };
         };
-        // Same text the live row settles on (compaction-notice.ts owns the wording),
-        // so a reload doesn't rename or re-explain the event.
-        sysText = compactedHistoryText({
+        // Headline + detail, exactly the two pieces the live row is built from
+        // (compaction-notice.ts owns both), so a reload re-renders the SAME row
+        // rather than a differently-punctuated restatement of it.
+        const cm = {
           trigger: r.compactMetadata?.trigger ?? r.compact_metadata?.trigger,
           preTokens: r.compactMetadata?.preTokens ?? r.compact_metadata?.pre_tokens,
           postTokens: r.compactMetadata?.postTokens ?? r.compact_metadata?.post_tokens,
-        });
+        };
+        sysText = COMPACTED_MESSAGE;
+        sysDetail = compactedDetail(cm);
         sysVariant = 'compact';
       } else if (sub === 'api_error') {
         const err = (raw as { error?: { formatted?: string; message?: string } }).error;
@@ -1123,6 +1133,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
         const failed = hookFailureNotice(raw as unknown as Record<string, unknown>);
         if (failed) {
           sysText = failed.message;
+          sysDetail = failed.detail;
           sysVariant = 'error';
         }
       }
@@ -1131,6 +1142,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
           role: 'system',
           timestamp: raw.timestamp ?? new Date().toISOString(),
           systemVariant: sysVariant,
+          ...(sysDetail ? { systemDetail: sysDetail } : {}),
           contentBlocks: [{ type: 'text' as const, text: sysText }],
         });
       }
@@ -1459,6 +1471,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       ...(msg.walnutMessageId ? { walnutMessageId: msg.walnutMessageId } : {}),
       ...(msg.injected && msg.role === 'user' ? { injected: true } : {}),
       ...(msg.systemVariant ? { systemVariant: msg.systemVariant } : {}),
+      ...(msg.systemDetail ? { systemDetail: msg.systemDetail } : {}),
     });
     resultParentIds.push(msg.parentToolUseId);
   }

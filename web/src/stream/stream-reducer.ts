@@ -76,6 +76,11 @@ export interface StreamingSystemBlock {
   /** Placeholder for work still running; the outcome replaces it in place rather
    *  than stacking a second row. See `@open-walnut/compaction-notice`. */
   progress?: boolean;
+  /** The CLI line's own uuid, when this notice announces a real JSONL event
+   *  (compact_boundary). The parser writes the same uuid as the history row's
+   *  msgId, so the notice absorbs on exact id instead of depending on the
+   *  pure-UI sweep — which compaction structurally defeats (promote-blocks.ts). */
+  uuid?: string;
 }
 
 export interface StreamingPermissionBlock {
@@ -416,11 +421,12 @@ export function backfillToolResult(
  */
 export function appendSystemBlock(
   blocks: readonly StreamingBlock[],
-  ev: { variant: 'compact' | 'error' | 'info'; message: string; detail?: string; progress?: boolean },
+  ev: { variant: 'compact' | 'error' | 'info'; message: string; detail?: string; progress?: boolean; uuid?: string },
 ): StreamingBlock[] {
   const row: StreamingSystemBlock = {
     type: 'system', variant: ev.variant, message: ev.message, detail: ev.detail,
     ...(ev.progress ? { progress: true } : {}),
+    ...(ev.uuid ? { uuid: ev.uuid } : {}),
   };
   const placement = placeSystemRow(blocks, row);
   if (placement.action === 'drop') return blocks as StreamingBlock[];
