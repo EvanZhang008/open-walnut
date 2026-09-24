@@ -414,9 +414,7 @@ export async function createForkSiblingTask(
   sourceTaskId: string,
   opts: ForkSiblingTaskOptions,
 ): Promise<{ task: Task; groupId?: string }> {
-  const {
-    getTask, addTask, updateTask, groupTasks, addToGroup, renameGroup,
-  } = await import('../task-manager.js');
+  const { getTask, addTask, updateTask } = await import('../task-manager.js');
 
   let sourceTask: Task;
   try {
@@ -477,25 +475,14 @@ export async function createForkSiblingTask(
     ...(sourceTask.walnut_agent ? { walnut_agent: true } : {}),
     ...(sourceTask.walnut_agent && sourceTask.agent_id ? { agent_id: sourceTask.agent_id } : {}),
   });
-  // Visually group the source task + fork. Reuse the source task's existing
-  // group if it already belongs to one. Best-effort: a grouping failure must
-  // not abort the fork — the fork task still exists standalone.
-  let forkGroupId: string | undefined;
-  try {
-    if (sourceTask.group_id) {
-      const r = await addToGroup(sourceTask.group_id, [newFork.id]);
-      forkGroupId = r.group_id;
-    } else {
-      // Seed label with the source title; refined to an AI group name below.
-      const r = await groupTasks([sourceTask.id, newFork.id], sourceTask.title);
-      forkGroupId = r.group_id;
-    }
-  } catch (err) {
-    log.session.warn('fork: failed to group source + fork', {
-      sourceTaskId: sourceTask.id, forkTaskId: newFork.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  // Visually group the source task + fork: the source's folder when it has
+  // one, otherwise a new folder holding both (label refined in the background).
+  // Best-effort: a grouping failure leaves the fork standalone.
+  const { joinOrCreateSiblingFolder } = await import('./caller-placement.js');
+  const placed = await joinOrCreateSiblingFolder(sourceTask, newFork.id, {
+    eventSource: opts.source, refineTitles: [sourceTask.title, newTitle],
+  });
+  const forkGroupId = placed.groupId;
 
   // Emit task:created with the FINAL persisted state, not the stale addTask()
   // reference: the grouping above mutated a store clone, so `newFork` still
@@ -542,28 +529,6 @@ export async function createForkSiblingTask(
       } catch (err) {
         log.session.warn('fork title refine failed', {
           taskId: forkId, error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    })();
-  }
-
-  // Refine the GROUP name in the background from both task titles (only when
-  // we created a fresh group — an existing group keeps its established name).
-  if (forkGroupId && !sourceTask.group_id) {
-    const gid = forkGroupId;
-    const seedTitles = [sourceTask.title, newTitle];
-    const groupSource = opts.source;
-    void (async () => {
-      try {
-        const { summarizeGroupLabel } = await import('../fork-title.js');
-        const label = await summarizeGroupLabel(seedTitles);
-        if (!label) return;
-        await renameGroup(gid, label);
-        bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: gid, label }, ['web-ui'], { source: groupSource });
-        log.session.info('fork group label refined', { groupId: gid, label });
-      } catch (err) {
-        log.session.warn('fork group label refine failed', {
-          groupId: gid, error: err instanceof Error ? err.message : String(err),
         });
       }
     })();

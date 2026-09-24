@@ -113,6 +113,24 @@ describe('task creation on a REPLICA', () => {
     expect(op.task.title).toBe('Born on the cloud box')
   })
 
+  it('a replica places nothing: no session registry to ask, and no folders to file into', async () => {
+    // A caller header on the replica is not a worker (it cannot look the session up).
+    const res = await fetch(apiUrl('/api/v1/tasks'), {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json', 'x-walnut-caller-sid': '11111111-2222-3333-4444-555555555555' },
+      body: JSON.stringify({ title: 'Asked from a session' }),
+    })
+    expect(res.status).toBe(201)
+    const body = await res.json() as { placement: Record<string, unknown> }
+    expect(body.placement.inherited_from).toBeUndefined()
+    expect(body.placement.folder_created).toBe(false)
+    // Folders are primary-only structure: an explicit one is a clear 501, not a
+    // misleading "folder not found".
+    const foldered = await postTask({ title: 'Into a folder', group_id: 'g_somewhere' })
+    expect(foldered.status).toBe(501)
+    expect((await foldered.json() as { error: { code: string } }).error.code).toBe('not_supported_cloud')
+  })
+
   it('validation still runs on a replica — 400 for a missing title', async () => {
     const res = await postTask({})
     expect(res.status).toBe(400)

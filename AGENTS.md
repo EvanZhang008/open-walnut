@@ -182,12 +182,13 @@ scripts/walnut-sandbox.sh status | stop          # health | stop+wipe
 
 ## What Is Walnut
 
-Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project → Task → Subtask` — Project is the single grouping layer; a task with no project lives in the **Inbox** (`project = ''`). Event Bus connects everything. See [ARCHITECTURE.md](./ARCHITECTURE.md).
+Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project → Folder → Task → Subtask`. A folder (`task.group_id`) is optional and belongs to exactly one project; a task with no project lives in the **Inbox** (`project = ''`). Event Bus connects everything. See [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ### Key Rules for Implementation
 
 - **Parse harness-owned data the harness's official way — never invent Walnut-side bookkeeping on top of a file Walnut doesn't own.** If the CLI/agent already defines the format's semantics (e.g. transcript JSONL is a `parentUuid` tree and the CLI chain-walks to the active leaf), port that exact logic. Offsets/fingerprints/side records reinterpreting someone else's file go stale the moment the owner writes in a way Walnut didn't initiate. Walnut-invented logic belongs only in Walnut-owned formats (stream capture, ACP journal).
 - `task_create` takes an optional `project`; an unknown name auto-creates the registry row (`task_projects`, source `'local'`). Inbox (`''`) has no registry row and can never be claimed by a sync provider
+- **Work created from inside a task lands beside it** (`src/core/sessions/caller-placement.ts`, enforced in `POST /api/v1/tasks` from the `x-walnut-caller-sid` header): the caller's project and its folder (a new one holding both when it has none), plus the caller's cwd when the caller runs on the project's default host. Explicit `project` / `group_id` win; a folder never follows work into another project; only WORKER callers are placed from (the Personal AI's asks, born `walnut_agent` or filed under an `Ask …` project, plus humans and replicas keep the old defaults). `GET /api/v1/me` says who the caller is and where it stands.
 - Phase: `TODO` → … → `NEED_ACTION` → … → `COMPLETE` (agent sets NEED_ACTION, human marks COMPLETE). A new message from a human or a peer task into a completed task's session reopens it to `IN_PROGRESS` (`session:input` with an allowlisted send source is the one path past the terminal guard, see `sendSourceReopensTerminal`); late results, hints and automated sends (auto-continue, routines, hooks) never do
 - **NEVER force-kill Claude Code processes** — bypasses on-stop hook
 - **Sessions render in TWO surfaces, both on the Homepage (`/`): the session columns

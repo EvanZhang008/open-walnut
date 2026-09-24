@@ -4951,6 +4951,60 @@ export async function groupTasks(idPrefixes: string[], label?: string): Promise<
 }
 
 /**
+ * Put `newTaskId` beside `sourceId`: into the folder the source sits in, or,
+ * when it sits in none, into a NEW folder holding both (labelled `label`).
+ *
+ * One write lock, and never a merge. groupTasks absorbs any folder a seed
+ * already belongs to; reading the source's folder first and grouping after
+ * lets a folder the user made in between be swallowed (label and nesting
+ * lost), and two concurrent creates from one folderless caller each mint a
+ * folder. Here the read and the write see the same store. A source membership
+ * pointing at a folder that no longer exists (no record, no other member)
+ * counts as no folder. Used by forks and by work filed from inside a task.
+ */
+export async function placeInFolderBeside(
+  sourceId: string,
+  newTaskId: string,
+  label: string,
+): Promise<GroupResult & { created: boolean }> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const source = store.tasks.find((t) => t.id === sourceId);
+    const born = store.tasks.find((t) => t.id === newTaskId);
+    if (!source) throw new Error(`No task found matching ID "${sourceId}"`);
+    if (!born) throw new Error(`No task found matching ID "${newTaskId}"`);
+    if (!sameProject(source.project, born.project)) {
+      throw new Error(
+        `A folder belongs to one project: "${born.title}" is in "${born.project || 'Inbox'}", not "${source.project || 'Inbox'}".`,
+      );
+    }
+    let groupId = source.group_id;
+    if (groupId && !folderRecord(store, groupId)
+        && !store.tasks.some((t) => t.id !== source.id && t.group_id === groupId)) {
+      groupId = undefined;
+    }
+    let created = false;
+    let resolvedLabel: string;
+    if (groupId) {
+      resolvedLabel = folderRecord(store, groupId)?.label ?? source.title;
+      if (!folderRecord(store, groupId)) {
+        store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel, project: source.project ?? '' } };
+      }
+    } else {
+      groupId = `g_${generateId()}`;
+      created = true;
+      resolvedLabel = label.trim() || source.title;
+      store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel, project: source.project ?? '' } };
+      source.group_id = groupId;
+    }
+    born.group_id = groupId;
+    await writeStore(store);
+    const members = store.tasks.filter((t) => t.group_id === groupId).map((t) => t.id);
+    return { group_id: groupId, label: resolvedLabel, member_ids: members, created };
+  });
+}
+
+/**
  * Add tasks to an existing folder. Every task must be in the folder's project
  * (join never changes task.project — move the task first if you want it in).
  * No-op-safe: tasks already in the folder are skipped. Donor folders the tasks

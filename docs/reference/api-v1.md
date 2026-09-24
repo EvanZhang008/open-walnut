@@ -528,9 +528,35 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   (fresh companion before its first git pull).
 - `POST /api/v1/tasks` (additive, 2026-08) body `{ "title", "project"?,
   "priority"?, "due_date"?, "start_date"?, "end_date"?, "description"?,
-  "pinned"?, "focus_tier"? }` → `201 { "task": ProjectedTask }`.
+  "pinned"?, "focus_tier"?, "group_id"?, "launch_cwd"?, "launch_host"? }` → `201 { "task": ProjectedTask,
+  "placement": { "project", "group_id"?, "group_label"?, "folder_created",
+  "inherited_from"?, "cwd"?, "warning"? } }`.
   Same creation semantics as the web quick-add: omitted/empty `project` =
   config default → Inbox; a new project name auto-creates its registry row;
+  **Caller placement (additive, 2026-09-23):** when the `x-walnut-caller-sid`
+  header names a session running a regular task (a "worker", not a Personal AI
+  ask), an omitted `project` means THAT task's project, and a task landing in
+  the caller's project joins the caller's folder, or a new folder holding both
+  when the caller has none (`folder_created: true`, announced as
+  `task:groups-changed`). The task records a cwd only for the host a later
+  start from the board would use (the project's default host), so a cwd never
+  pairs with the wrong machine: `launch_host` / `launch_cwd` say where the
+  caller is about to start it (a create-and-start client sends them); a `launch_host`
+  other than the default records nothing, a `launch_cwd` alone (absolute) is
+  recorded, and with neither the caller's own cwd is recorded when the caller
+  runs on the default host and it is not just the project's default directory.
+  Both are hints: they never change where the task is filed, and a non-worker's
+  are ignored. An explicit `project` (`""` =
+  Inbox) or `group_id` (`""` = no folder) always wins, and a folder never
+  follows work into another project. No header, an unknown id, or a Personal AI
+  ask: the old defaults, unchanged. `placement` says where the task landed,
+  because ProjectedTask carries no folder; `warning` appears when an inherited
+  folder could not be applied (the task is still created). `group_id` must be a
+  folder of the resulting project: malformed, unknown, or another project's
+  folder answers `400 bad_request`, as does a relative `launch_cwd`. On a
+  REPLICA the caller is never a worker (it has no session registry), and a
+  non-empty `group_id` answers `501 not_supported_cloud`.
+  Implementation: `src/core/sessions/caller-placement.ts`.
   `priority` one of `immediate|important|backlog|none` (default from config).
   `start_date` / `end_date` (additive, 2026-08) let a client create a task
   already scheduled on the calendar (tapping a day, dragging a time range);
@@ -688,6 +714,15 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
 
 ### Sessions (read-only)
 
+- `GET /api/v1/me` (additive, 2026-09-23) → who the `x-walnut-caller-sid`
+  caller is and where it stands: `{ "kind": "human" }` (no header),
+  `{ "kind": "external" }` (an id Walnut does not know), `{ "kind": "unknown" }`
+  (a replica, which has no session registry), `{ "kind": "untracked", "session" }`
+  (a session with no task), or `{ "kind": "ask" | "worker", "task": { id, title,
+  project, group_id?, group_label? }, "session": { id, host, cwd? } }`. `ask` is a
+  Personal AI conversation; only `worker` is placed from. Cheap by design (one
+  registry lookup and one task read, no projection export), so an agent-facing
+  list can ask it before every query.
 - `GET /api/v1/sessions?status=running|idle|stopped|error&scope=folder|project|all` →
   `{ "sessions": [ProjectedSession], "you"?: ProjectedSession, "scope": "folder|project|all", "syncedAt": "<ISO>" }`
 - `ProjectedSession`: `{ id, title?, task_id?, task_title?,

@@ -48,12 +48,27 @@ const DEFAULT_EPHEMERAL_LIMIT = 3
  */
 const SNAPSHOT_SKIP_TOP_LEVEL = new Set(['.git', '.smart-env', 'cache'])
 
+/**
+ * A server is never a session. One started from inside a Walnut session (a
+ * deploy run by an agent, `open-walnut web` typed in a session's terminal)
+ * inherits that session's identity, and the op executor falls back to
+ * WALNUT_SESSION_ID for in-process calls that name no caller (an action-card
+ * click, a routine watcher's read). Every such call would then act AS that
+ * session: its task_create filed beside the deployer's task (moving that task
+ * into a new folder), its task_list narrowed to the deployer's folder.
+ */
+export function forgetInheritedSessionIdentity(env: NodeJS.ProcessEnv = process.env): void {
+  delete env.WALNUT_SESSION_ID
+  delete env.WALNUT_AGENT_SOCKET
+}
+
 export async function runWeb(options: {
   port?: string
   dev?: boolean
   ephemeral?: boolean
   _ephemeralChild?: boolean
 }): Promise<void> {
+  forgetInheritedSessionIdentity()
   if (options._ephemeralChild) {
     return runEphemeralChild()
   }

@@ -2076,7 +2076,8 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
 apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { title, project, priority, due_date: dueDate, start_date: startDate,
-      end_date: endDate, description, pinned, focus_tier: focusTier } = (req.body ?? {}) as {
+      end_date: endDate, description, pinned, focus_tier: focusTier, group_id: groupId,
+      launch_cwd: launchCwd, launch_host: launchHost } = (req.body ?? {}) as {
       title?: unknown
       project?: unknown
       priority?: unknown
@@ -2086,6 +2087,9 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       description?: unknown
       pinned?: unknown
       focus_tier?: unknown
+      group_id?: unknown
+      launch_cwd?: unknown
+      launch_host?: unknown
     }
     if (typeof title !== 'string' || !title.trim()) {
       sendError(res, 400, 'bad_request', 'title must be a non-empty string')
@@ -2147,16 +2151,58 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       sendError(res, 400, 'bad_request', 'focus_tier must be a string ("" / null = not specified)')
       return
     }
+    // group_id (additive, 2026-09): the folder the task is born in. '' = no
+    // folder, on purpose; omitted = the calling task's folder (see below).
+    if (groupId !== undefined && !(typeof groupId === 'string' && (groupId === '' || /^[A-Za-z0-9_-]{1,64}$/.test(groupId)))) {
+      sendError(res, 400, 'bad_request', 'group_id must be a folder id (g_...) or "" for no folder')
+      return
+    }
+    // Folders are local-only structure the replica does not hold (see the
+    // /tasks/groups routes): filing into one is a primary-box write.
+    if (CLOUD_MODE && typeof groupId === 'string' && groupId) {
+      sendError(res, 501, 'not_supported_cloud', 'Folders live on the primary box only; create the task without group_id')
+      return
+    }
+    // launch_cwd / launch_host (additive, 2026-09): where the task_create op was
+    // told to START the task. Hints only, never stored as-is: they decide which
+    // cwd the task records, so a start from the board later cannot pair one
+    // machine's path with another machine (caller-placement.ts createTimeCwd).
+    if (launchCwd !== undefined && !(typeof launchCwd === 'string' && launchCwd.startsWith('/'))) {
+      sendError(res, 400, 'bad_request', 'launch_cwd must be an absolute path')
+      return
+    }
+    if (launchHost !== undefined && typeof launchHost !== 'string') {
+      sendError(res, 400, 'bad_request', 'launch_host must be a string')
+      return
+    }
 
-    const { addTask, newTaskPinDefault, ProjectSourceConflictError, InvalidFocusTierError } =
+    const { addTask, getTask, newTaskPinDefault, ProjectSourceConflictError, InvalidFocusTierError } =
       await import('../../core/task-manager.js')
     const { projectTask } = await import('../../core/task-projection.js')
+    // Work created from INSIDE a task lands beside it: the caller's project and
+    // folder (a new folder when it has none), unless the body names another
+    // place. Only a worker session is placed from; the phone, the web UI and the
+    // Personal AI send no worker caller and keep the old defaults.
+    const { resolveCallerPlacement, decidePlacement, createTimeCwd, joinOrCreateSiblingFolder } =
+      await import('../../core/sessions/caller-placement.js')
+    const rawSid = req.headers['x-walnut-caller-sid']
+    const caller = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
+      .catch(() => ({ kind: 'unknown' as const }))
+    const placementReq = {
+      ...(typeof project === 'string' ? { project } : {}),
+      ...(typeof groupId === 'string' ? { group_id: groupId } : {}),
+      ...(typeof launchCwd === 'string' ? { launch_cwd: launchCwd } : {}),
+      ...(typeof launchHost === 'string' ? { launch_host: launchHost } : {}),
+    }
+    const decision = decidePlacement(placementReq, caller)
+    const stampedCwd = await createTimeCwd(placementReq, caller, decision).catch(() => undefined)
     try {
       // asyncPush like the web create path: the client renders the task
       // immediately, so don't block the response on an external sync push.
-      const { task } = await addTask({
+      const createInput = {
         title: title.trim(),
-        ...(project !== undefined ? { project } : {}),
+        ...(decision.project !== undefined ? { project: decision.project } : {}),
+        ...(stampedCwd ? { cwd: stampedCwd } : {}),
         ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
         ...(dueDate !== undefined ? { due_date: dueDate } : {}),
         // addTask drops falsy dates, so a clear marker on CREATE is simply "no
@@ -2170,17 +2216,68 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         pinned: newTaskPinDefault(pinned),
         ...(typeof focusTier === 'string' ? { focus_tier: focusTier } : {}),
         asyncPush: true,
+      }
+      let folderWarning: string | undefined
+      let created
+      try {
+        created = (await addTask({ ...createInput, ...(decision.group_id ? { group_id: decision.group_id } : {}) })).task
+      } catch (err) {
+        // An INHERITED folder that vanished (deleted, or the caller moved) since
+        // it was read must not fail a create that never asked for a folder.
+        const inheritedFolder = placementReq.group_id === undefined && !!decision.group_id
+        if (!inheritedFolder || !(err instanceof Error && /^Folder "/.test(err.message))) throw err
+        folderWarning = err.message
+        created = (await addTask(createInput)).task
+      }
+      let task = created
+      let folderCreated = false
+      let folderLabel = decision.group_id && caller.kind === 'worker' && decision.group_id === caller.task.group_id
+        ? caller.task.group_label : undefined
+      if (decision.createFolderWithCaller && caller.kind === 'worker') {
+        const placed = await joinOrCreateSiblingFolder(caller.task, created.id, {
+          eventSource: 'api-v1', refineTitles: [caller.task.title, created.title],
+        })
+        folderCreated = placed.created
+        folderLabel = placed.label
+        folderWarning = placed.error
+        // Re-read so TASK_CREATED and the response carry the folder the grouping wrote.
+        if (placed.groupId) task = await getTask(created.id).catch(() => created)
+      }
+      if (task.group_id && !folderLabel) {
+        const { listFolderLabels } = await import('../../core/task-manager.js')
+        folderLabel = (await listFolderLabels().catch(() => new Map<string, string>())).get(task.group_id)
+      }
+      log.web.info('task created via api-v1', {
+        taskId: task.id, project: task.project, groupId: task.group_id,
+        ...(decision.inheritedFrom ? { placedBeside: decision.inheritedFrom, folderCreated } : {}),
       })
-      log.web.info('task created via api-v1', { taskId: task.id, project: task.project })
       bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'api-v1' })
       // Project-only projection, same as GET /tasks (see the note there).
-      res.status(201).json({ task: projectTask(task) })
+      // `placement` (additive) says where the task landed and why, because the
+      // projection carries no folder.
+      res.status(201).json({
+        task: projectTask(task),
+        placement: {
+          project: task.project ?? '',
+          ...(task.group_id ? { group_id: task.group_id } : {}),
+          ...(task.group_id && folderLabel ? { group_label: folderLabel } : {}),
+          folder_created: folderCreated,
+          ...(decision.inheritedFrom ? { inherited_from: decision.inheritedFrom } : {}),
+          ...(task.cwd ? { cwd: task.cwd } : {}),
+          ...(folderWarning ? { warning: `The task was created but could not be put in a folder: ${folderWarning}` } : {}),
+        },
+      })
     } catch (err) {
       if (err instanceof ProjectSourceConflictError) {
         sendError(res, 409, 'conflict', err.message)
         return
       }
       if (err instanceof InvalidFocusTierError) {
+        sendError(res, 400, 'bad_request', err.message)
+        return
+      }
+      // addTask's folder guard (unknown folder, or a folder of another project).
+      if (decision.group_id && err instanceof Error && /^Folder "/.test(err.message)) {
         sendError(res, 400, 'bad_request', err.message)
         return
       }
@@ -2385,6 +2482,26 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       }
       throw err
     }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/v1/me — who is calling, and where it stands (additive, 2026-09).
+//
+// The caller is the `x-walnut-caller-sid` header the ops executor stamps. The
+// answer is what every "near me" default keys on: `kind` says whether Walnut
+// places work from this caller (`worker`) or not (`ask` = a Personal AI
+// conversation, `human` = no session id, `external` = an id Walnut does not
+// know, `untracked` = a session with no task, `unknown` = a replica, which has
+// no session registry to ask). Cheap by design: a registry lookup and one task
+// read, no projection export, so a list can ask it before every query.
+apiV1Router.get('/me', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { resolveCallerPlacement } = await import('../../core/sessions/caller-placement.js')
+    const rawSid = req.headers['x-walnut-caller-sid']
+    const me = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
+    res.json(me)
   } catch (err) {
     next(err)
   }
