@@ -220,7 +220,7 @@ WORK_LOG: \`append: <one entry>\` — what you DID, what you FOUND (conclusions,
 NEVER delete facts: when something is superseded, update it in place and keep an "(was: …)" trace.
 
 Then these status fields (same plain-label format):
-${title ? `TITLE: The task's current title is: "${title}". Default answer: \`unchanged\` — a title should almost never change, and when it must, PREFER \`prefix:\` over \`rewrite:\`: the original name is usually good, so keep it and add to it. Three exceptions: (a) the work CHANGED DIRECTION or gained a focus the title doesn't cover → answer \`prefix: <1-3 words>\` (English Title Case, one word if it's enough). It lands in FRONT as "New Topic · <old title>"; up to two prefixes stack newest-first, a third rotates the oldest one out, and the original tail is NEVER dropped — so brevity is everything; (b) the title is VAGUE and you now know the real subject — it names only an activity or a source ("Handle Slack thread request", "Investigate the issue") because the first message was just a pointer, and this turn revealed what it's actually about → answer \`rewrite: <new title>\` naming the specific subject ("CoreDNS OOM Slack thread"), 2-6 words, no filler verbs like Handle/Process/Address. Do this the FIRST turn you know — a vague title is a bug, not something to preserve; (c) the title has grown long/stale/confusing as a whole → answer \`rewrite: <new title>\` (short, plain, still findable by someone searching for the ORIGINAL work). Never rewrite a title the human just set; when in doubt (except case b), \`unchanged\`.
+${title ? `TITLE: The task's current title is: "${title}". Default answer: \`unchanged\` — a title should almost never change, and when it must, PREFER \`topic:\` over \`rewrite:\`: the original name is usually good, so keep it and add to it. Three exceptions: (a) the work CHANGED DIRECTION or gained a focus the title doesn't cover → answer \`topic: <1-3 words>\` (English Title Case, one word if it's enough). It lands at the END as "<original title> · New Topic"; a title carries at most ONE such topic, so a newer one REPLACES the previous one, and the original head is NEVER dropped — it is the keyword people find the task by — so brevity is everything; (b) the title is VAGUE and you now know the real subject — it names only an activity or a source ("Handle Slack thread request", "Investigate the issue") because the first message was just a pointer, and this turn revealed what it's actually about → answer \`rewrite: <new title>\` naming the specific subject ("CoreDNS OOM Slack thread"), 2-6 words, no filler verbs like Handle/Process/Address. Do this the FIRST turn you know — a vague title is a bug, not something to preserve; (c) the title has grown long/stale/confusing as a whole → answer \`rewrite: <new title>\` (short, plain, still findable by someone searching for the ORIGINAL work). Never rewrite a title the human just set; when in doubt (except case b), \`unchanged\`.
 ` : ''}OVERVIEW: 1-2 short sentences — what this WHOLE session is about and where it stands overall, for a user re-opening it after a while ("Reworking the composer layout so the scrollbar ends at the last row; fix landed, waiting on review"). Always answer this; never "unchanged".
 RECAP: ONE line, as simple as possible — what just happened in your latest turn(s), for a user re-opening this session ("Fixed the timeout bug, tests green, awaiting commit approval"). Always answer this; never "unchanged".${tipLanguage}
 PHASE_SIGNAL: one of — plan-written | implement-done | reconfirmed | verify-pass | verify-fail | review-done | committed(<hash>) | conversational(user-asked-question).
@@ -536,8 +536,11 @@ const TITLE_REWRITE_MAX_LEN = 80;
  * own title as part of the one batched report (no separate cheap-model call;
  * user direction 2026-08-16). Directives:
  *   `unchanged`            → nothing (the default, by far the common case)
- *   `prefix: <1-3 words>`  → prepend in front, REPLACING any previous auto-prefix
- *                            (prependTopicToTitle — never stacks, tail untouchable)
+ *   `topic: <1-3 words>`   → append after the stable head, REPLACING any previous
+ *                            auto-topic (appendTopicToTitle — never stacks, head
+ *                            untouchable). `prefix:` is the same directive under
+ *                            the pre-2026-09-24 name, still honoured so a report
+ *                            written against the old prompt lands during a deploy.
  *   `rewrite: <new title>` → full replacement, for a title that got long/stale
  * `expectedTitle` is the title the prompt showed the session; if the task was
  * renamed while the report was in flight (human wins), the directive is stale
@@ -547,9 +550,9 @@ export async function applyTitleDirective(taskId: string, directive: string, exp
   try {
     const d = directive.trim();
     if (!d || /^unchanged\b/i.test(d)) return;
-    const m = /^(prefix|rewrite)\s*:\s*(.+)$/is.exec(d);
+    const m = /^(topic|prefix|rewrite)\s*:\s*(.+)$/is.exec(d);
     if (!m) return; // malformed → treat as unchanged (never guess)
-    const kind = m[1].toLowerCase();
+    const kind = m[1].toLowerCase() === 'rewrite' ? 'rewrite' : 'topic';
     const value = m[2].replace(/\s+/g, ' ').trim();
     if (!value) return;
 
@@ -559,11 +562,11 @@ export async function applyTitleDirective(taskId: string, directive: string, exp
     if (fresh.title !== expectedTitle) return;
 
     let next: string | null = null;
-    if (kind === 'prefix') {
-      const { prependTopicToTitle } = await import('../fork-title.js');
+    if (kind === 'topic') {
+      const { appendTopicToTitle } = await import('../fork-title.js');
       // Belt-and-braces word cap: the prompt says 1-3 words, enforce it here too.
       const label = value.split(' ').slice(0, 3).join(' ');
-      next = prependTopicToTitle(fresh.title, label); // null when already covered
+      next = appendTopicToTitle(fresh.title, label); // null when already covered
     } else {
       const rewritten = value.slice(0, TITLE_REWRITE_MAX_LEN).trim();
       if (rewritten && rewritten !== fresh.title) next = rewritten;

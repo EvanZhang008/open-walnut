@@ -196,31 +196,41 @@ export function titleCoversLabel(title: string, label: string): boolean {
   return hits >= Math.ceil(labelWords.length / 2);
 }
 
-/** Separator between the drift-prepended topic label and the original title. */
+/** Separator between a title's stable head and the drifted topic appended after it. */
 const TOPIC_SEP = ' · ';
-/** Up to TWO auto-prepended topics (3 segments total with the original tail).
- *  Newest lands in front; when full, the OLDEST prefix drops — the original
- *  tail never does (user direction 2026-08-25: the first name is usually good,
- *  keep it; drift should append, and only the middle history rotates out). */
-const MAX_TOPIC_PREFIXES = 2;
+/** The stacking era (2026-08-25 to 2026-09-24) wrote `Newer · New · original`:
+ *  a title with this many segments or more can only have come from it, and its
+ *  ORIGINAL name is the last segment, not the first. */
+const LEGACY_STACKED_MIN_SEGMENTS = 3;
 
 /**
- * Prepend a drifted topic to a title WITHOUT losing anything the human (or the
- * original auto-namer) wrote: `New Topic · original title`, then
- * `Newer Topic · New Topic · original title`. This is the additive alternative
- * to rewriting — safe on EVERY title, not just auto-fork ones, because the
- * original tail is never modified or dropped. Prefixes stack newest-first up
- * to MAX_TOPIC_PREFIXES; overflow drops the oldest prefix, keeping the tail.
+ * Append a drifted topic to a title WITHOUT losing the name people remember it
+ * by: `original title · New Topic`. A title carries at most TWO segments: the
+ * HEAD (what the human or the first auto-namer wrote, never modified or
+ * dropped) and ONE topic. A newer topic REPLACES the previous one; nothing
+ * stacks.
+ *
+ * User direction 2026-09-24 (supersedes the 2026-08-25 newest-first stacking):
+ * people find a task by its original keyword, so that keyword stays in front,
+ * where a scanning eye and a truncating column both land first; the fresh
+ * topic is context, so it rides at the end and the older context gives way.
+ *
+ * Legacy shape: a title with LEGACY_STACKED_MIN_SEGMENTS or more segments is
+ * read tail-first (the stacking era kept the original LAST) and collapses to
+ * `original · label`. A two-segment title is taken at face value (head first):
+ * a stacking-era `Topic · original` pair looks exactly like the new shape and
+ * nothing recorded which half was auto-added, so it settles into the new shape
+ * on its next drift and no sooner.
+ *
  * Returns null when the topic is already covered (no change needed) — the
  * default posture is "don't touch the title".
  */
-export function prependTopicToTitle(title: string, label: string): string | null {
+export function appendTopicToTitle(title: string, label: string): string | null {
   const trimmed = (title ?? '').trim();
   if (!label || titleCoversLabel(trimmed, label)) return null;
-  const parts = trimmed.split(TOPIC_SEP);
-  // parts = [prefix1, prefix2, ..., originalTail] — the tail is untouchable.
-  const tail = parts[parts.length - 1];
-  const prefixes = parts.slice(0, -1);
-  const nextPrefixes = [label, ...prefixes].slice(0, MAX_TOPIC_PREFIXES);
-  return [...nextPrefixes, tail].join(TOPIC_SEP);
+  // Split on a middle dot bounded by whitespace or the string edge: `a·b` inside a
+  // name stays whole, while a dangling `Head ·` or `· Head` yields no empty part.
+  const parts = trimmed.split(/(?:^|\s)·(?:\s|$)/).map((p) => p.trim()).filter(Boolean);
+  const head = parts.length >= LEGACY_STACKED_MIN_SEGMENTS ? parts[parts.length - 1] : parts[0];
+  return head ? `${head}${TOPIC_SEP}${label}` : label;
 }
