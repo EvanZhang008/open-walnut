@@ -25,9 +25,9 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
-import { bridgeOfflineMessage } from './bridge-offline-copy.js'
 import { log } from '../../logging/index.js'
 import type { SessionControlAction } from '../../core/sessions/session-controls.js'
+import { driveControlRelay } from './v1-control-relay.js'
 
 export const sessionControlV1Router = Router()
 
@@ -43,9 +43,10 @@ const SID_RE = /^[A-Za-z0-9_-]+$/
 //
 // The bridge hop always targets the PRIMARY's daemon ('__local__') regardless
 // of which host the SESSION runs on — the primary's server owns the records
-// and reaches every host's CLI exactly like a local request would.
+// and reaches every host's CLI exactly like a local request would. The hop
+// itself is the shared driveControlRelay (v1-control-relay.ts); this file keeps
+// only its own reply translation below.
 
-const PRIMARY_BRIDGE_ALIAS = '__local__'
 // Fork does task-store writes + bus emits on the primary; model/effort may
 // wait out a live CLI control_request round trip (15s apply timeout).
 const CONTROL_RELAY_TIMEOUT_MS = 30_000
@@ -61,6 +62,17 @@ function relayErrorStatus(errorKind: string): number {
 /**
  * Drive one control-relay action over the bridge and translate the reply into
  * the frozen v1 response. Never throws — every failure is a precise HTTP error.
+ *
+ * Transport is driveControlRelay, which answers every bridge failure itself
+ * (503 bridge_offline) and returns null. It rides out a fresh bridge redial
+ * hole, and that is safe even for a fork (creates a task) or a model switch
+ * (touches a live CLI), because of WHEN it waits: only after BridgeOfflineError,
+ * which bridgeRequest raises when there is no socket to write to, so the primary
+ * provably never saw the request. The send after the wait is the request's
+ * first and only delivery; no action can run twice. A failure AFTER the send (a
+ * timeout, a socket that dropped mid-request) is never retried, because the
+ * primary may already have forked or switched, and a second send could do it
+ * twice.
  */
 async function relayControlAction(
   res: Response,
@@ -69,40 +81,8 @@ async function relayControlAction(
   params: Record<string, unknown> | undefined,
   successStatus: number,
 ): Promise<void> {
-  const registry = await import('../ws/bridge-registry.js')
-  const { bridgeRequest, BridgeOfflineError } = registry
-  let reply: Record<string, unknown>
-  try {
-    reply = await bridgeRequest(
-      PRIMARY_BRIDGE_ALIAS,
-      'session.control',
-      { action, sessionId, ...(params !== undefined ? { params } : {}) },
-      CONTROL_RELAY_TIMEOUT_MS,
-    )
-  } catch (err) {
-    if (err instanceof BridgeOfflineError) {
-      // COPY ONLY. This says how long the primary has been gone; it deliberately
-      // does NOT wait and retry the way session-launch-v1.ts does. That route may
-      // re-send because BridgeOfflineError proves the primary never saw the
-      // request, so a launch cannot be duplicated. A control action carries no
-      // such guarantee in general (a fork creates a task, a model switch touches
-      // a live CLI), and which actions are idempotent needs its own argument per
-      // action. Do not "finish the job" by adding the wait here.
-      // waitedMs is 0 because no wait happened: claiming one would be a lie.
-      let lastLossAt: number | null = null
-      try {
-        // Strictly diagnostic: a registry that cannot answer means "duration
-        // unknown" and falls back to the plain wording. Never changes the HTTP
-        // outcome. (Not optional chaining: reading an undefined export of a
-        // mocked ESM module THROWS rather than yielding undefined.)
-        lastLossAt = registry.lastBridgeLossAt(PRIMARY_BRIDGE_ALIAS)
-      } catch { /* no duration to report */ }
-      sendError(res, 503, 'bridge_offline', bridgeOfflineMessage(lastLossAt, 0))
-      return
-    }
-    sendError(res, 503, 'bridge_offline', err instanceof Error ? err.message : String(err))
-    return
-  }
+  const reply = await driveControlRelay(res, action, sessionId, params, CONTROL_RELAY_TIMEOUT_MS)
+  if (!reply) return
   if (reply.ok === true && reply.result && typeof reply.result === 'object') {
     // Successful fork: seed the id→host mapping NOW (same pattern as
     // session-launch-v1.ts). The other v1 session endpoints resolve hosts
