@@ -39,7 +39,7 @@ describe('setup banner only asks for missing setup', () => {
     const html = render(health)
     expect(html).toContain('Get Walnut talking')
     expect(html).toContain('npm install -g @anthropic-ai/claude-code')
-    expect(html).toContain('Settings')
+    expect(html).toContain('Open API settings')
     expect(html).toContain('Dismiss setup banner')
   })
 })
