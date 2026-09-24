@@ -14,16 +14,20 @@ model: one POST carries a text `state` plus typed questions and returns every
 answer in a single forward pass (a choice with per-option probabilities, a
 rubric score, or a 0-1 truth value, each with calibrated confidence). No text
 generation, no JSON parsing. Measured through a gateway: ~240ms p50 and about
-$0.00002 per call ($0.042 per million input tokens; output is free).
+$0.00002 per call for a short state ($0.042 per million input tokens; output is
+free). A quick-add call that carries the whole project digest (about 4,400
+input tokens) costs about $0.00019; see the comparison below.
 
 Configuring it is optional. Without a `jev:` section every call site keeps its
 existing fast-model path, byte for byte.
 
 ## Configuration
 
-**Settings > Jev Decisions is the front door.** It stores the key, points the
-client at a first-party or gateway endpoint, turns each decision on or off
-independently, and round-trips the endpoint with a Test button. Saving a key
+**Settings > Tasks > Smart task creation is the front door.** Pick Jev under
+"Uses" and the API key, Endpoint, Jev model and Connection rows appear below
+it. That switch turns both decisions on or off together (the per-decision
+toggles below are still editable by hand), and "Test connection" round-trips
+the endpoint. Saving a key
 there writes the literal to `<walnut-home>/secrets/jev-api.key` (0600) and puts
 only a `${file:}` reference in config, so the key never enters the synced file.
 Routes: `POST /api/jev/key`, `DELETE /api/jev/key`, `POST /api/jev/test`
@@ -109,6 +113,29 @@ Rules both sites share:
   spend.
 - `agent.quick_parse` remains the opt-in gate for composer parsing; Jev makes
   the feature affordable, it does not turn it on behind your back.
+
+## Measured against Claude models
+
+53 real tasks whose project was already known, each typed as a quick-add note
+(2026-09-21). Jev ran through the production `parseQuickTask` path on
+OpenRouter. The Claude models got the production quick-parse system prompt and
+the same project digest on Bedrock. Only the project field is scored. A blank
+answer (the task stays in the Inbox) counts as neither right nor wrong; three
+notes that fit two projects equally well count as wrong for every engine.
+
+| Engine | Right | Wrong | Blank | Right when it answered | Median latency | Cost per call |
+|---|---|---|---|---|---|---|
+| Jev 1.13 (OpenRouter) | 30 | 9 | 14 | 77% | 209 ms | $0.00019 |
+| Claude Opus 5 | 33 | 12 | 8 | 73% | 4,689 ms | $0.025 |
+| Claude Sonnet 4.6 | 29 | 15 | 9 | 66% | 1,758 ms | not measured |
+| Claude Haiku 4.5 | 19 | 8 | 26 | 70% | 1,013 ms | not measured |
+
+Jev's cost is the `usage.cost` OpenRouter returned (median of 53 calls). The
+Opus cost was measured on five calls on 2026-09-23: about 4,290 input and 130
+output tokens at list price ($5 and $25 per million), with no prompt caching,
+which is how the quick-parse call runs. On this set Jev was about 20x faster
+and about 130x cheaper than Opus, made fewer wrong picks, and left more fields
+blank, which is what its confidence floor is for.
 
 ## Adding a new Jev decision
 
