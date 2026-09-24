@@ -130,6 +130,41 @@ describe('sweepRecoverableStreamFiles', () => {
     expect(fs.existsSync(kept)).toBe(true)
   })
 
+  it('backfills the spawn ledger BEFORE deleting, so the scan still sees the session as ours', async () => {
+    const ledger = path.join(streams, 'ledger') // any empty dir; created on demand
+    const old = capture('aaa.jsonl', 8 * DAY)
+    canonical('aaa.jsonl')
+
+    const deleted = await sweepRecoverableStreamFiles({
+      streamsDir: streams,
+      claudeProjectsDir: projects,
+      activeIds: new Set(),
+      spawnLedgerDir: ledger,
+      now: NOW,
+    })
+
+    expect(deleted).toEqual([old])
+    expect(fs.existsSync(path.join(ledger, 'aaa'))).toBe(true)
+  })
+
+  it('keeps the capture when the ledger write fails (a file where the ledger dir should be)', async () => {
+    const ledgerAsFile = path.join(streams, 'ledger-blocked')
+    fs.writeFileSync(ledgerAsFile, 'not a dir')
+    const old = capture('bbb.jsonl', 8 * DAY)
+    canonical('bbb.jsonl')
+
+    const deleted = await sweepRecoverableStreamFiles({
+      streamsDir: streams,
+      claudeProjectsDir: projects,
+      activeIds: new Set(),
+      spawnLedgerDir: ledgerAsFile,
+      now: NOW,
+    })
+
+    expect(deleted).toEqual([])
+    expect(fs.existsSync(old)).toBe(true)
+  })
+
   it('a custom retentionMs overrides the default window', async () => {
     const f = capture('kkk.jsonl', 2 * DAY)
     canonical('kkk.jsonl')

@@ -10,6 +10,7 @@
  */
 
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { log } from '../logging/index.js'
 import { SESSION_STREAMS_DIR, CLAUDE_HOME } from '../constants.js'
@@ -83,17 +84,21 @@ export class SessionReaper {
     // Retention for local stream captures: delete cold duplicates of canonical
     // Claude transcripts (see stream-retention.ts for the safety conditions).
     // Sessions still running or idle may stream from their capture file, so
-    // they are excluded regardless of file age.
+    // they are excluded regardless of file age. Two dirs share the leak: the
+    // daemon's prod streams dir (~/.open-walnut/tmp/streams — the 15GB pileup,
+    // PROD_STREAMS_DIR in daemon-source.ts) and the server's legacy
+    // SESSION_STREAMS_DIR (pre-daemon LocalIO captures).
     const activeIds = new Set(
       sessions
         .filter(s => s.process_status === 'running' || s.process_status === 'idle')
         .map(s => s.claudeSessionId),
     )
-    await sweepRecoverableStreamFiles({
-      streamsDir: SESSION_STREAMS_DIR,
-      claudeProjectsDir: path.join(CLAUDE_HOME, 'projects'),
-      activeIds,
-    })
+    const walnutTmp = path.join(os.homedir(), '.open-walnut', 'tmp')
+    const claudeProjectsDir = path.join(CLAUDE_HOME, 'projects')
+    const spawnLedgerDir = path.join(walnutTmp, 'spawned-sessions')
+    for (const streamsDir of [path.join(walnutTmp, 'streams'), SESSION_STREAMS_DIR]) {
+      await sweepRecoverableStreamFiles({ streamsDir, claudeProjectsDir, activeIds, spawnLedgerDir })
+    }
 
     // Find reapable sessions
     const toReap = sessions.filter(s => {

@@ -20,6 +20,12 @@
  * Everything else is kept forever: acp-*.acp.jsonl (no canonical exists),
  * embedded-* captures (owned by the SessionReaper archive path), captures whose
  * canonical was deleted (the capture IS the only copy), and non-jsonl entries.
+ *
+ * The capture's NAME is also load-bearing: walnutSpawnedIds() (external-session
+ * scan) reads the streams dir to tell Walnut's own sessions from outside ones,
+ * for sessions older than the spawn ledger (which only exists since 2026-09-23).
+ * So before unlinking, the session id is backfilled into the ledger — an empty
+ * file preserves the classification; if that write fails the capture is kept.
  */
 
 import fs from 'node:fs/promises'
@@ -35,6 +41,13 @@ export interface StreamRetentionOptions {
   claudeProjectsDir: string
   /** Claude session ids that still have a live session record. */
   activeIds: ReadonlySet<string>
+  /**
+   * Spawn-ledger dir (~/.open-walnut/tmp/spawned-sessions). When set, each
+   * session id is recorded there BEFORE its capture is unlinked, so the
+   * external-session scan keeps classifying it as walnut-spawned. A failed
+   * ledger write keeps the capture.
+   */
+  spawnLedgerDir?: string
   retentionMs?: number
   now?: number
 }
@@ -96,11 +109,19 @@ export async function sweepRecoverableStreamFiles(opts: StreamRetentionOptions):
     try {
       const st = await fs.stat(file)
       if (!st.isFile() || now - st.mtimeMs < retentionMs) continue
+      if (opts.spawnLedgerDir) {
+        // Same id guard as the daemon's recordSpawnLedger; ledger first, unlink
+        // second, so a crash in between never loses the walnut-spawned marker.
+        if (sessionId.includes('/') || sessionId.includes('.')) continue
+        await fs.mkdir(opts.spawnLedgerDir, { recursive: true })
+        await fs.writeFile(path.join(opts.spawnLedgerDir, sessionId), '')
+      }
       await fs.unlink(file)
       deleted.push(file)
       await fs.unlink(file + '.err').catch(() => { /* no error sidecar */ })
     } catch {
-      // raced with a concurrent delete or the file is pinned; next reap retries
+      // ledger write failed, raced with a concurrent delete, or the file is
+      // pinned — keep the capture; next reap retries
     }
   }
 
