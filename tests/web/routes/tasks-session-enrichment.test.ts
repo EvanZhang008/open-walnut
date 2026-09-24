@@ -86,6 +86,7 @@ describe('enrichTasksWithSessionStatus — single-slot enrichment', () => {
     const [enriched] = await enrichTasksWithSessionStatus([task])
 
     expect(enriched.session_status).toEqual({
+      startedAt: '2026-01-01T00:00:00Z',
       process_status: 'running',
       activity: 'editing files',
       mode: 'bypass',
@@ -303,14 +304,13 @@ describe('enrichTasksWithSessionStatus — slot inference', () => {
 // ════════════════════════════════════════════════════════════════════
 
 describe('enrichTasksWithSessionStatus — graceful degradation', () => {
-  it('returns tasks unmodified when the session store throws', async () => {
+  it('marks execution unavailable when the session store throws', async () => {
     listSessionsMock.mockRejectedValue(new Error('session store unreadable'))
 
     const task = makeTask({ id: 'task-1', session_id: 'live-1', session_ids: ['live-1'] })
     const [enriched] = await enrichTasksWithSessionStatus([task])
 
-    // Same object, no enrichment fields added.
-    expect(enriched).toBe(task)
+    expect(enriched).toEqual({ ...task, session_status_unavailable: true })
     expect(enriched.session_status).toBeUndefined()
   })
 

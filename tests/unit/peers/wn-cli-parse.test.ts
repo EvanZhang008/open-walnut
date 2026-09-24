@@ -35,8 +35,8 @@ describe('parseWalnutCliArgs — retired peers surface', () => {
       // The pointer is the whole value of keeping the branch — an agent that
       // learned `walnut peers send` must be told the exact new command.
       expect(res.message).toContain('peers was replaced');
-      expect(res.message).toContain('session_list');
-      expect(res.message).toContain('session_send');
+      expect(res.message).toContain('task_list');
+      expect(res.message).toContain('task_send');
     }
   });
 });
@@ -279,7 +279,7 @@ describe('formatToolsTable', () => {
 });
 
 describe('helpText', () => {
-  it('root help embeds the three verbs, wait, exit codes, and safety semantics', () => {
+  it('root help embeds the task verbs, wait, exit codes, and safety semantics', () => {
     const h = helpText('root');
     expect(h).toContain('walnut guide');
     expect(h).toContain('walnut tools list|help|call ...');
@@ -298,7 +298,9 @@ describe('helpText', () => {
 
   it('tools help has examples and the big-payload warning', () => {
     const h = helpText('tools');
-    expect(h).toContain("walnut tools call task_list '{\"status\":\"todo\"}'");
+    // `status` left every task op, so the advertised example filters by phase.
+    expect(h).toContain("walnut tools call task_list '{\"phases\":\"TODO\"}'");
+    expect(h).not.toContain('"status":"todo"');
     expect(h).toContain('walnut tools call <op> @<file>');
     expect(h).toContain('MAX_ARG_STRLEN');
   });

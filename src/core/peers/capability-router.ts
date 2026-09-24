@@ -95,10 +95,10 @@ export async function handleGatewayCapability(
     // instead of a bare unknown-capability error.
     case 'peers.list':
       return err('bad_request',
-        'peers.list was replaced — run `walnut tools call session_list \'{}\'`');
+        'peers.list was replaced — run `walnut tools call task_list \'{}\'`');
     case 'peers.send':
       return err('bad_request',
-        'peers.send was replaced — run `walnut tools call session_send \'{"to":"...","text":"..."}\'`');
+        'peers.send was replaced — run `walnut tools call task_send \'{"to":"...","text":"..."}\'`');
     default:
       return err('bad_request', `unsupported capability: ${JSON.stringify(capability)}`);
   }
@@ -123,7 +123,7 @@ async function handleToolsList(payload: Record<string, unknown>): Promise<Capabi
   const { listOps } = await import('../../ops/index.js');
   const { opParams, formatParamSignature } = await import('../../ops/op-help.js');
   const wanted = typeof payload.name === 'string' ? payload.name.trim() : '';
-  const ops = wanted ? listOps().filter((o) => o.name === wanted) : listOps();
+  const ops = wanted ? listOps({ includeDeprecated: true }).filter((o) => o.name === wanted) : listOps();
   return {
     ok: true,
     result: {
@@ -193,7 +193,7 @@ async function handleToolsCall(
   // sender, session_send fences another session's words — get the
   // daemon-resolved sid instead of guessing.
   const r = await executeOp(name, (args ?? {}) as Record<string, unknown>, { callerSid, callerHost: host });
-  if (!r.ok) return err('internal', r.message);
+  if (!r.ok) return err('internal', r.message, r.result === undefined ? undefined : { detail: r.result });
   // GatewayResponse.result must be an object — wrap non-object op results.
   const result = (typeof r.result === 'object' && r.result !== null && !Array.isArray(r.result))
     ? r.result as Record<string, unknown>

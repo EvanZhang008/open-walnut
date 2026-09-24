@@ -1,14 +1,13 @@
 /**
- * Task ops — ported byte-compatible from the original hand-written MCP tools
- * (same names, same descriptions, same result shapes), now declared once for
- * every surface (MCP / CLI / gateway).
+ * Agent-facing task ops, sharing one declaration across MCP, the CLI, and the daemon gateway.
  */
 
 import { z } from 'zod'
 import { defineOp, type HttpBinding } from './registry.js'
 import { materializeBinding } from './executor.js'
 import { taskRefTag } from '../utils/entity-refs.js'
-import { TASK_IS_INERT, REPLY_ARRIVES_HINT, dispatchHint, withOutcome } from './outcome.js'
+import { dispatchHint, withOutcome } from './outcome.js'
+import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
 import {
   BULK_GET_FIELDS,
@@ -18,7 +17,6 @@ import {
 } from '../core/task-bulk-get.js'
 
 const PRIORITY = z.enum(['immediate', 'important', 'backlog', 'none'])
-const STATUS = z.enum(['todo', 'in_progress', 'done'])
 // Derived from PHASE_ORDER, never a hardcoded copy: phase.ts is the ONE place
 // the lifecycle is declared, so adding/renaming a phase there reaches every
 // surface (MCP tool schema, CLI help, gateway) without a second edit.
@@ -71,17 +69,99 @@ const TIME_BASIS = z.enum(['created', 'updated', 'created_or_updated', 'due', 'c
  */
 const DEFAULT_TASK_LIST_LIMIT = 50
 
+/**
+ * The fields a `fields=list` row keeps, in this order. Everything else the REST
+ * route sends is dropped before the row reaches a caller.
+ *
+ * Why the projection lives HERE and not in the route: /api/tasks is shared with
+ * the web UI, which reads a much wider row (and still reads the internal
+ * `status`). Narrowing the route would mean rewriting the UI's completion checks
+ * in the same change. This seam narrows the AGENT's view only.
+ *
+ * What the route's own "slim" row actually was: 34 keys, ~1160 bytes each, so a
+ * 58-row project listing came back at 75KB and had to be hand-compressed before
+ * anything could read it. Most of that was internal bookkeeping (has_note,
+ * has_summary, has_ext, ledger_desc, pin_order on unpinned rows, _syncedAt AND
+ * _synced_at, two nested session_status objects, session_id AND exec_session_id
+ * AND session_ids).
+ *
+ * Deliberately absent:
+ *   - `status`      internal 3-state projection of `phase`, and lossy: it cannot
+ *                   say NEED_ACTION (see Task.status). `phase` is the one answer.
+ *   - `unread`      redundant with phase — readMarkerForPhase sets it on exactly
+ *                   NEED_ACTION, so it never adds information to a row that
+ *                   already carries the phase.
+ *   - `priority`    not what anyone filters or sorts a list by in practice.
+ *   - has_* flags   "there is a note" is not actionable; task_get answers it.
+ *   - session objects  liveness belongs to a session read, not a task row.
+ *
+ * Always-present keys stay present even when empty so a sorted or time-windowed
+ * result is explainable without a follow-up call; the rest are omitted when
+ * absent (an absent key is cheaper to read than a null).
+ */
+const TASK_LIST_ALWAYS = ['id', 'title', 'phase', 'project', 'updated_at'] as const
+const TASK_LIST_WHEN_SET = [
+  'due_date', 'start_date', 'completed_at', 'focus_tier', 'pin_order',
+  'parent_task_id', 'group_id', 'sprint', 'tags', 'is_blocked',
+] as const
+
+/** Project ONE REST row onto the lean agent-facing shape. */
+function leanTaskRow(row: unknown): unknown {
+  if (row === null || typeof row !== 'object' || Array.isArray(row)) return row
+  const src = row as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of TASK_LIST_ALWAYS) out[key] = key === 'project' ? (src.project ?? '') : src[key]
+  // pinned is a flag, not a value: always answer it, as a real boolean.
+  out.execution = taskView(src).execution
+  out.pinned = Boolean(src.pinned)
+  for (const key of TASK_LIST_WHEN_SET) {
+    const value = src[key]
+    if (value === undefined || value === null || value === '') continue
+    if (Array.isArray(value) && value.length === 0) continue
+    // pin_order is board bookkeeping — meaningless on an unpinned row.
+    if (key === 'pin_order' && !out.pinned) continue
+    out[key] = value
+  }
+  return out
+}
+
 // Server-root-absolute: /api/tasks is the canonical composable-query route (the
 // same engine the web UI filters ride), not the frozen /api/v1 mobile projection.
 const TASK_LIST_BINDING: HttpBinding = { method: 'GET', path: '/api/tasks' }
+
+/** GET /api/v1/me — where the calling session stands (src/core/sessions/caller-placement.ts). */
+interface CallerMe {
+  kind?: 'human' | 'external' | 'unknown' | 'untracked' | 'ask' | 'worker'
+  task?: { id?: string; title?: string; project?: string; group_id?: string; group_label?: string }
+}
+
+/** Filters that already say WHERE to look, so task_list applies no caller default. */
+// Board queries count too: tiers, pins and unread are the human's working set,
+// never a folder's. A title search (`q`) does NOT: it starts near and widens.
+const TASK_LIST_PLACEMENT_FILTERS = [
+  'project', 'projects', 'group_id', 'ids', 'working_set', 'parent_task_id', 'focus_tier', 'pinned', 'unread',
+] as const
+
+/** The line a defaulted (not asked-for) scope carries, so the ring is never mistaken for the board. */
+function scopeDefaultHint(scope: string | undefined, you: Record<string, unknown> | undefined): string {
+  const project = typeof you?.project === 'string' && you.project ? `project ${you.project}` : 'the Inbox'
+  const folder = typeof you?.group_label === 'string' && you.group_label ? `folder "${you.group_label}"` : 'your folder'
+  return scope === 'folder'
+    ? `Listed ${folder} in ${project} by default, because you called from inside a task. `
+      + 'Pass scope:"project" for your whole project or scope:"all" for the board.'
+    : `Listed ${project} by default (your task sits in no folder). Pass scope:"all" for the board.`
+}
 
 defineOp({
   name: 'task_list',
   title: 'List / query Walnut tasks',
   description:
     'Query the user\'s tasks with any combination of filters (fields AND together; comma lists OR ' +
-    'within a field). No status default (completed tasks included), but limit defaults to 50 — narrow ' +
+    'within a field). No phase default (completed tasks included), but limit defaults to 50 — narrow ' +
     'with filters or raise limit (max 200) instead of paging by hand. ' +
+    'State is `phase`: TODO | IN_PROGRESS | NEED_ACTION | COMPLETE. NEED_ACTION means the agent handed ' +
+    'the work back and is waiting on the human (turn finished, permission prompt, or an error) — it is ' +
+    'NOT done. There is no `status` field. ' +
     'Working set (the pinned board): pass working_set=true to get the WHOLE board (no default limit, ' +
     'however many pins there are) in board order, each row carrying focus_tier + pin_order — an absent ' +
     'focus_tier on a pinned row means the Satellite (default) tier. focus_tier filters match pinned rows ' +
@@ -92,12 +172,16 @@ defineOp({
     'finished work. Returns { count, total, truncated, tasks } with slim rows: count = rows returned, ' +
     'total = rows that matched before the limit, truncated = true when total > count (there ARE more ' +
     'rows — never read a truncated result as the full picture; narrow the filters or raise limit). ' +
+    'A slim row is id, title, phase, project, updated_at, pinned, plus dates/board/parent keys only ' +
+    'when set — pass fields=full for the whole record. ' +
     'working_set also returns `board`: the server\'s own pinned counts (pinned_total/active/completed ' +
     'plus per-tier total/active/completed) — check your own per-tier bucketing against it before ' +
     'reporting a board. Use task_get for full detail on one task, or task_get_bulk for many tasks with ' +
     'chosen fields.',
   input: {
-    status: STATUS.optional().describe('Legacy 3-state: todo | in_progress | done'),
+    // `status` is intentionally NOT an input here. It could not express
+    // NEED_ACTION (it folded that into in_progress), so every caller reaching for
+    // it lost the "waiting on the human" rows. Use phases= or completion=.
     completion: z.string().optional().describe('Comma list of todo | in_progress | complete (in_progress includes NEED_ACTION)'),
     phases: z.string().optional().describe(`Comma list of exact phases: ${PHASE_ORDER.join(' | ')}`),
     project: z.string().optional().describe('Project name (exact, case-insensitive); "" for the Inbox'),
@@ -129,6 +213,7 @@ defineOp({
     // would cap it before the handler could tell the two apart.
     limit: z.number().int().min(1).max(200).optional().describe(`Max rows (1-200), applied after sort. Default ${DEFAULT_TASK_LIST_LIMIT}, EXCEPT working_set=true which returns the whole board unless you pass a limit`),
     fields: z.enum(['list', 'full']).default('list').describe('list = slim rows (default); full = every field including note (heavy — combine with ids or a small limit)'),
+    scope: z.enum(['folder', 'project', 'all']).optional().describe('How far around the caller to look: folder, project, or all (the whole board). From inside a task the DEFAULT is folder (project when your task has no folder); pass all for the board. Elsewhere the default is the whole board'),
   },
   // Declared so the route-parity test and the generated docs keep pointing at
   // the real route; the handler below is what actually executes (it needs to
@@ -138,13 +223,64 @@ defineOp({
     // The board shortcut is exempt from the page-size default BY CONTRACT: a
     // partial board reads as "these are all your pinned tasks", which is a wrong
     // answer, not a small one. An explicit limit is still honored.
-    const effective: Record<string, unknown> = { ...args }
+    const { scope: askedScope, ...effective } = args
+    let scope = askedScope
+    let me: CallerMe | undefined
+    // From inside a task, "list tasks" means the work beside you: the folder
+    // ring by default. A call that already says WHERE to look (a project, a
+    // folder, ids, the board, a parent) is not second-guessed, and neither is
+    // any caller Walnut does not place work from (the Personal AI, a human).
+    if (scope === undefined && !TASK_LIST_PLACEMENT_FILTERS.some((k) => args[k] !== undefined)) {
+      me = await call('GET', '/me').then((b) => b as CallerMe, () => undefined)
+      if (me?.kind === 'worker') scope = 'folder'
+    }
+    const defaulted = askedScope === undefined && scope !== undefined
+    let appliedScope = scope
+    let you: Record<string, unknown> | undefined
+    if (scope && scope !== 'all') {
+      me ??= await call('GET', '/me') as CallerMe
+      const place = me?.task
+      if (!place?.id) throw new Error('Cannot locate the caller. Use scope=all or omit scope.')
+      // A caller in no folder has nothing narrower than its project.
+      appliedScope = scope === 'folder' && !place.group_id ? 'project' : scope
+      you = {
+        id: place.id, title: place.title, project: place.project ?? '',
+        ...(place.group_id ? { group_id: place.group_id } : {}),
+        ...(place.group_label ? { group_label: place.group_label } : {}),
+      }
+      const key = appliedScope === 'folder' ? 'group_id' : 'project'
+      const value = String(appliedScope === 'folder' ? place.group_id : (place.project ?? ''))
+      const requested = effective[key];
+      if (requested !== undefined && (key === 'project' ? String(requested).toLowerCase() !== value.toLowerCase() : requested !== value)) {
+        return { count: 0, total: 0, truncated: false, scope: appliedScope, you, tasks: [] }
+      }
+      effective[key] = value
+    }
     if (effective.limit === undefined && args.working_set !== true) {
       effective.limit = DEFAULT_TASK_LIST_LIMIT
     }
-    const { path } = materializeBinding(TASK_LIST_BINDING, effective)
-    const body = await call('GET', path) as
-      { tasks?: unknown[]; total?: unknown; board?: unknown } | undefined
+    const fetchList = async () => {
+      const { path } = materializeBinding(TASK_LIST_BINDING, effective)
+      return await call('GET', path) as { tasks?: unknown[]; total?: unknown; board?: unknown } | undefined
+    }
+    let body = await fetchList()
+    // A title search nobody scoped starts near and WIDENS on no hit (folder,
+    // then project, then the board): an agent checking "does this exist yet?"
+    // must not read an empty folder as "no, create it".
+    let widenedFrom: string | undefined
+    while (defaulted && args.q !== undefined && Array.isArray(body?.tasks) && body.tasks.length === 0
+        && (appliedScope === 'folder' || appliedScope === 'project')) {
+      widenedFrom ??= appliedScope
+      if (appliedScope === 'folder') {
+        delete effective.group_id
+        effective.project = String(you?.project ?? '')
+        appliedScope = 'project'
+      } else {
+        delete effective.project
+        appliedScope = 'all'
+      }
+      body = await fetchList()
+    }
     const tasks = body?.tasks
     // An unexpected 200 body (a proxy's HTML page, a shape change) must not
     // read as "you have 0 tasks" — pass it through so the caller sees it.
@@ -153,20 +289,29 @@ defineOp({
     // old to send it can only be reported as "no more than what you got".
     const total = typeof body?.total === 'number' ? body.total : tasks.length
     const truncated = total > tasks.length
+    // fields=full is the escape hatch and passes the route's row through intact.
+    const rows = args.fields === 'full'
+      ? tasks.map((t) => t && typeof t === 'object' && !Array.isArray(t) ? taskView(t as Record<string, unknown>) : t)
+      : tasks.map(leanTaskRow)
+    const hints = [
+      widenedFrom
+        ? `Nothing in your ${widenedFrom} matched "${String(args.q)}", so this searched ${appliedScope === 'all' ? 'the whole board' : 'your whole project'}.`
+        : defaulted ? scopeDefaultHint(appliedScope as string | undefined, you) : '',
+      truncated
+        ? `Showing ${tasks.length} of ${total} matching tasks — this result is CUT. `
+          + 'Narrow the filters or raise limit (max 200) before drawing any conclusion from it.'
+        : '',
+    ].filter(Boolean)
     return {
+      ...(scope ? { scope: appliedScope, ...(you ? { you } : {}) } : {}),
       count: tasks.length,
       total,
       truncated,
       // Board reads carry the server's own per-tier counts — check your bucketing
       // against them before reporting a board.
       ...(body?.board ? { board: body.board } : {}),
-      ...(truncated
-        ? {
-          hint: `Showing ${tasks.length} of ${total} matching tasks — this result is CUT. `
-            + 'Narrow the filters or raise limit (max 200) before drawing any conclusion from it.',
-        }
-        : {}),
-      tasks,
+      ...(hints.length ? { hint: hints.join(' ') } : {}),
+      tasks: rows,
     }
   },
   tags: { readonly: true, remote: 'allow' },
@@ -176,32 +321,28 @@ defineOp({
   name: 'task_get',
   title: 'Get one Walnut task',
   description:
-    'Full detail for one task — including description, note, summary, session_ids, and ' +
+    'Full detail for one task, including description, note, summary, execution, and ' +
     'dependency/child/parent decorations that the list view omits. The id accepts a unique prefix.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
   },
-  bind: { method: 'GET', path: '/tasks/:id' },
+  bind: { method: 'GET', path: '/api/tasks/:id' },
   // A bare phase word ("todo") reads as "queued for execution" in most agent
   // frameworks. Say the part the word hides: whether a session is attached.
   mapResult: ({ body, args }) => {
     const b = (body ?? {}) as Record<string, unknown>
-    const task = (b.task ?? b) as Record<string, unknown>
-    const phase = typeof task.phase === 'string' ? task.phase
-      : typeof task.status === 'string' ? task.status : 'unknown'
-    const attachment = sessionState(task)
+    const task = b.task as Record<string, unknown> | undefined
+    if (!task || typeof task.id !== 'string' || !task.id) throw new Error('Task response is incomplete; retry task_get.')
+    const phase = typeof task.phase === 'string' ? task.phase : 'unknown'
+    const view = taskView(task)
+    const execution = view.execution as { state: string }
     const id = taskId(task) || String(args.id ?? '')
     return withOutcome(
-      { ...b },
-      attachment === 'attached'
-        ? `Phase ${phase}, with a session attached — that session is where the work lives.`
-        : attachment === 'none'
-          ? `Phase ${phase}, and NO session is attached: nothing is working on this task. ${TASK_IS_INERT}`
-          : `Phase ${phase}. ${TASK_IS_INERT}`,
-      attachment === 'attached'
-        ? 'Read what it did with session_transcript, or add context with session_send '
-          + `'{"to":"${id}","text":"..."}'.`
-        : dispatchHint(id, attachment === 'none'),
+      { ...b, task: view },
+      `Task phase: ${phase}. Execution: ${execution.state}.`,
+      execution.state === 'not_started'
+        ? dispatchHint(id)
+        : `Read task_history or add context with task_send '{"to":"${id}","text":"..."}'.`,
     )
   },
   tags: { readonly: true, remote: 'allow' },
@@ -234,22 +375,49 @@ defineOp({
   tags: { readonly: true, remote: 'allow' },
 })
 
+/** Where POST /tasks says a new task landed (additive `placement`). */
+interface Placement {
+  project?: string
+  group_id?: string
+  group_label?: string
+  folder_created?: boolean
+  inherited_from?: string
+  warning?: string
+}
+
+/** One sentence naming where the task landed, or '' for a server too old to say. */
+function placementSentence(p: Placement | undefined): string {
+  if (!p) return ''
+  const project = p.project ? `project ${p.project}` : 'the Inbox'
+  const folder = p.group_id
+    ? `, folder "${p.group_label || p.group_id}"${p.folder_created ? ' (new, holding your task and this one)' : ''}`
+    : ''
+  const why = p.inherited_from ? ', beside your task' : ''
+  const warning = p.warning ? ` ${p.warning}.` : ''
+  return `Filed in ${project}${folder}${why}.${warning} `
+}
+
 defineOp({
   name: 'task_create',
-  title: 'Create a Walnut task',
+  title: 'Create and start a task (record_only to defer)',
   description:
-    'Add a task to the USER\'s board. Only when the user asked to record or track something, or when ' +
-    'work is blocked on a decision or action only they can take (say which in description). Follow-up ' +
-    'work you found yourself is done in your own session, never filed here. A task is an inert record: ' +
-    'creating one starts nothing. Pass start_session=true when the user wants the work to begin now ' +
-    '(one call: the task is created, then a session is started on it), or call session_start later. ' +
-    'An omitted/empty project means Inbox; an unknown project name creates its registry row. A new ' +
-    'task lands on the pinned board in the Satellite tier; pass focus_tier for another tier, or ' +
-    'pinned=false to keep it off the board (pinning is the user\'s attention, never dispatch). The ' +
-    'result carries a `ref` tag plus `outcome` / `next`.',
+    'Create a task AND START WORK by default, in one call. Use record_only=true only when the user ' +
+    'wants a placeholder or reminder and nothing should run. Only create work the user asked to ' +
+    'track or start; do your own follow-ups here. Pass message for the instruction and cwd/host ' +
+    'to override project defaults. Keep the returned task id: task_send adds context, task_history ' +
+    'reads the conversation, task_get reports execution. If starting fails the task still exists; ' +
+    'fix the cause and use task_start with that id, never create a duplicate. Placement: called from ' +
+    'inside a task, the new task lands BESIDE yours by default: same project, same folder (Walnut makes ' +
+    'one holding both when yours has none), same host and directory. Name a project to file it elsewhere ' +
+    '("" = Inbox); a folder never follows work into another project. Called from anywhere else, an ' +
+    'omitted project means the configured default project (normally the Inbox). A new project name ' +
+    'creates its registry row. The result\'s ' +
+    '`placement` says where it landed. Tasks are pinned by default in Satellite; focus_tier changes ' +
+    'their board position, not execution.',
   input: {
     title: z.string().min(1).describe('Task title (required)'),
-    project: z.string().optional().describe('Project name; omit or "" for the Inbox'),
+    project: z.string().optional().describe('Project name; "" for the Inbox. Omit to use your own task\'s project (from inside a task) or the Inbox (elsewhere)'),
+    group_id: z.string().optional().describe('Folder id (g_...) inside the target project; "" for no folder. Omit to join your own task\'s folder (a new one when it has none) when the task lands in your project'),
     priority: PRIORITY.optional().describe('immediate | important | backlog | none'),
     due_date: z.string().optional().describe('YYYY-MM-DD or a full ISO-8601 datetime'),
     description: z.string().optional().describe('Longer body text (write-only)'),
@@ -257,49 +425,68 @@ defineOp({
     // Exact ids only — this rides straight to the server, which validates
     // against the registry. Label tolerance lives in the agent tool.
     focus_tier: z.string().optional().describe('Pin tier the task is born into (implies pinned): focus | satellite | backlog | wait | a registered ct_* id. Omit for Satellite; unknown tiers are rejected, not silently downgraded'),
-    start_session: z.boolean().optional().describe('Also start a coding session on the new task (create + dispatch in one call). Default false: creating a task starts nothing'),
-    start_message: z.string().optional().describe('First instruction for that session (only with start_session; defaults to a sentence naming the task)'),
+    record_only: z.boolean().optional().describe('Explicitly save a placeholder WITHOUT starting work. Default false: create and start'),
+    ...TASK_START_INPUT,
+    start_session: z.boolean().optional().describe('Legacy spelling: false means record_only=true; true starts work (already the default)'),
+    start_message: z.string().trim().min(1).optional().describe('Legacy spelling of message; do not combine with message'),
   },
-  /**
-   * Handler, not a plain binding, because of `start_session`. The two steps are
-   * deliberately NOT one transaction: if the create succeeds and the start
-   * fails, the task EXISTS, so failing the whole call would tell the agent the
-   * opposite of the truth. The result then carries the task, `session_error`,
-   * and the retry line — an honest partial success.
-   */
   handler: async (args, call) => {
-    const { start_session: startSession, start_message: startMessage, ...fields } = args
-    const created = await call('POST', '/tasks', fields) as { task?: unknown } | undefined
+    const { record_only, start_session, start_message, message, ...rest } = args
+    if (record_only !== undefined && start_session !== undefined && record_only === start_session) {
+      throw new Error('record_only and start_session conflict. Use record_only=true to defer, or omit both to start.')
+    }
+    if (message !== undefined && start_message !== undefined) throw new Error('Use message, not both message and start_message.')
+    const recordOnly = record_only === true || start_session === false
+    const launch: Record<string, unknown> = {}
+    const fields: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(rest)) {
+      if (value !== undefined) (key in TASK_START_INPUT ? launch : fields)[key] = value
+    }
+    // Where the first start runs also decides what cwd the task records (a task
+    // stores no host), so the create hears it too, as hints it never stores raw.
+    if (typeof launch.cwd === 'string') fields.launch_cwd = launch.cwd
+    if (typeof launch.host === 'string') fields.launch_host = launch.host
+    const instruction = message ?? start_message ?? args.description
+    if (instruction) launch.message = instruction
+    if (!fields.description && instruction) fields.description = instruction
+    if (recordOnly && (message !== undefined || start_message !== undefined || Object.keys(launch).some((k) => k !== 'message'))) {
+      throw new Error('record_only does not accept execution options. Omit record_only to start work.')
+    }
+    const created = await call('POST', '/tasks', fields) as
+      { task?: Record<string, unknown>; placement?: Placement } | undefined
     const task = created?.task
     const id = taskId(task)
-    if (startSession !== true) {
+    if (!task || !id) throw new Error('Create response has no task id. Check task_list before retrying; the write may have succeeded.')
+    const placement = created?.placement
+    const view = { ...taskView(task), ...(placement?.group_id ? { group_id: placement.group_id } : {}) }
+    const extra = placement ? { placement } : {}
+    const where = placementSentence(placement)
+    if (recordOnly) {
       return withOutcome(
-        withRef(task),
-        `Task recorded. No session is working on it. ${TASK_IS_INERT}`,
-        dispatchHint(id),
+        withRef({ ...view, execution: { state: 'not_started' } }, { ...extra, execution: { state: 'not_started' } }),
+        `${where}Placeholder saved. Work was explicitly not started.`,
+        `Start it when requested: walnut tools call task_start '{"id":"${id}"}'`,
       )
     }
     try {
-      const started = await call(
-        'POST',
-        `/tasks/${encodeURIComponent(id)}/start`,
-        startMessage === undefined ? {} : { message: startMessage },
-      ) as Record<string, unknown> | undefined
-      const sessionId = typeof started?.sessionId === 'string' ? started.sessionId : ''
+      const started = await startTask(id, launch, call)
       return withOutcome(
-        withRef(task, { session: started }),
-        `Task recorded AND a session was started on it${sessionId ? ` (${sessionId})` : ''}; it is working now.`,
-        REPLY_ARRIVES_HINT,
+        withRef({ ...view, execution: started.execution }, { ...extra, ...started }),
+        `${where}${String(started.outcome)}`, String(started.next),
       )
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const error = err instanceof Error ? err.message : String(err)
       return withOutcome(
-        withRef(task, { session_error: message }),
-        `Task recorded, but the session did NOT start (${message}). The task exists; nothing is running.`,
-        `Retry the dispatch alone: walnut tools call session_start '{"task":"${id}","message":"..."}'`,
+        withRef({ ...view, execution: { state: 'unconfirmed', error } }, {
+          ...extra, execution: { state: 'unconfirmed', error }, start_error: error,
+        }),
+        `${where}Task ${id} was created, but starting work was not confirmed: ${error}`,
+        `Do not create another task. Read task_get, then retry with task_start '{"id":"${id}"}' after resolving the error.`,
       )
     }
   },
+  resultError: (result) => (result as { start_error?: string } | undefined)?.start_error,
+  timeoutMs: 40_000,
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -312,8 +499,12 @@ defineOp({
     '`tags` is a full replacement ([] clears). Pass "" to clear due_date/start_date.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
-    status: STATUS.optional().describe('Legacy status: todo | in_progress | done'),
-    phase: TASK_PHASE.optional().describe('Task lifecycle phase'),
+    // No `status` input. It was the more dangerous of the two write paths: a
+    // 3-state value cannot say NEED_ACTION, so "the agent is done, look at this"
+    // was only reachable through phase — and status:'done' silently jumped a task
+    // to COMPLETE, which is the human's call, not the agent's.
+    phase: TASK_PHASE.optional()
+      .describe('Task lifecycle phase — the one state field. NEED_ACTION = handed back to the human'),
     priority: PRIORITY.optional(),
     due_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
     start_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
@@ -340,15 +531,13 @@ defineOp({
     // assumption about this op.
     const attachment = sessionState(task)
     const outcome = `Task fields updated (${changed}). No session was started or stopped by this. `
-      + (attachment === 'attached' ? 'Its existing session keeps running.'
-        : attachment === 'none' ? `No session is attached. ${TASK_IS_INERT}`
-          : TASK_IS_INERT)
+      + 'Execution is unchanged.'
     const next = body.phase === 'NEED_ACTION'
       ? 'Marked ready for the human to look at. Nothing else is required of you.'
       : attachment === 'attached'
-        ? `Talk to its session: walnut tools call session_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`
+        ? `Talk to its session: walnut tools call task_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`
         : dispatchHint(taskId(task) || String(id), attachment === 'none')
-    return withOutcome({ ...(patched ?? {}) }, outcome, next)
+    return withOutcome({ ...(patched ?? {}), ...(task && typeof task === 'object' ? { task: taskView(task as Record<string, unknown>) } : {}) }, outcome, next)
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
@@ -368,18 +557,10 @@ defineOp({
   bind: { method: 'POST', path: '/tasks/:id/complete' },
   mapResult: ({ body }) => {
     const task = (body as { task?: unknown } | undefined)?.task
-    const attachment = sessionState(task)
     return withOutcome(
-      withRef(task, { completed: true }),
-      'Task marked complete. Completing a task does not stop anything: '
-      + (attachment === 'attached'
-        ? 'the session it owns is still alive and still costs a process.'
-        : attachment === 'none'
-          ? 'no session was attached to it.'
-          : 'any session on it keeps running until it is stopped.'),
-      attachment === 'none'
-        ? 'Nothing else is required.'
-        : 'If that work is really finished, stop the session from the Walnut UI (or leave it to the idle reaper).',
+      withRef(task && typeof task === 'object' ? taskView(task as Record<string, unknown>) : task, { completed: true }),
+      'Task marked complete. Execution is unchanged; completion does not stop running work.',
+      'No further action is required.',
     )
   },
   // remote 'allow': completing a task is ordinary, reversible work. This was

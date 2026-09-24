@@ -32,7 +32,7 @@ export function resolveApiBase(override?: string): string {
 
 export type OpOutcome =
   | { ok: true; result: unknown }
-  | { ok: false; message: string }
+  | { ok: false; message: string; result?: unknown }
 
 /** Header every op request carries when the caller's session id is known. */
 export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
@@ -224,7 +224,9 @@ async function runOp(
         if (!r.ok) throw new Error(r.message)
         return r.result
       }
-      return { ok: true, result: await op.handler(args, call) }
+      const result = await op.handler(args, call)
+      const message = op.resultError?.(result)
+      return message ? { ok: false, message, result } : { ok: true, result }
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) }
     }
@@ -238,6 +240,11 @@ async function runOp(
   }
   const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs, prov)
   if (!r.ok) return r
-  const result = op.mapResult ? op.mapResult({ body: r.result, args }) : r.result
-  return { ok: true, result }
+  try {
+    const result = op.mapResult ? op.mapResult({ body: r.result, args }) : r.result
+    const message = op.resultError?.(result)
+    return message ? { ok: false, message, result } : { ok: true, result }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+  }
 }

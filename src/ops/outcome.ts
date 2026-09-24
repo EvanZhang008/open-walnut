@@ -7,8 +7,7 @@
  * was in the MODEL of Walnut, not in the call. So the results now carry the
  * model:
  *
- *   a task is an inert record · a session is the thing that works ·
- *   pin/tier is human attention, never dispatch
+ *   task_create starts work; record_only only stores a record; pin/tier only change the board.
  *
  * Two fields, on every task_* / session_* write:
  *   outcome — one sentence naming the real consequence, including what did NOT
@@ -20,9 +19,6 @@
  * reads is worse than a clause that lands.
  */
 
-/** The one-line mental model, quoted where an agent is most likely to be wrong. */
-export const TASK_IS_INERT = 'A task is an inert record; only a session does work.'
-
 /**
  * The dispatch call, ready to run.
  *
@@ -32,10 +28,10 @@ export const TASK_IS_INERT = 'A task is an inert record; only a session does wor
  * confident wrong answer.
  */
 export function dispatchHint(taskId: string, known = true): string {
-  const call = `walnut tools call session_start '{"task":"${taskId}","message":"..."}'`
+  const call = `walnut tools call task_start '{"id":"${taskId}","message":"..."}'`
   return known
-    ? `Nothing is running yet. Dispatch: ${call}`
-    : `If no session is on it yet, dispatch: ${call}`
+    ? `Not started. Start when requested: ${call}`
+    : `To start work, use ${call}. To continue existing work, use task_send.`
 }
 
 /** How a started/messaged session reports back — the anti-polling line. */

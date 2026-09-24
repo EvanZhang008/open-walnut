@@ -1,228 +1,213 @@
-/**
- * Unit pins for session_start's expect_reply default (core/sessions/task-start.ts).
- *
- * This path had ZERO test coverage before 2026-09-01 — nothing in tests/ called
- * startSessionForTask at all — which is exactly why it needs pinning now: the
- * default flipped from opt-in to on, and the failure mode of getting it wrong is
- * silent in one direction and catastrophic in the other.
- *
- *   session caller, flag omitted  → request registered  (the point of the change)
- *   HUMAN caller, flag omitted    → NO request, NO error (the trap: a naive
- *                                   `default = true` makes every session the web
- *                                   UI or a plain CLI starts fail with 400)
- *   explicit true, human caller   → still 400 (the caller asked for a reply that
- *                                   has nowhere to land, so say so)
- *   explicit false, session caller→ opted out
- *
- * The request ledger is the REAL one against a temp WALNUT_HOME, so "was a row
- * registered" is observed on disk rather than inferred from a mock. Everything
- * the start path only needs to be *present* (task lookup, live-session probe,
- * the runner it emits to) is mocked at its module seam.
- */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-start'));
-
-const getTask = vi.fn();
-vi.mock('../../src/core/task-manager.js', () => ({
-  getTask: (...args: unknown[]) => getTask(...args),
+const mocks = vi.hoisted(() => ({
+  getTask: vi.fn(), getProjectMetadata: vi.fn(), linkSession: vi.fn(), updateTaskRaw: vi.fn(), getSessionsForTask: vi.fn(),
+  createSessionRecord: vi.fn(), updateSessionRecord: vi.fn(), resolveCaller: vi.fn(),
+  startSession: vi.fn(), notifyRequesterFallback: vi.fn(), cancelPendingStart: vi.fn(), hasCapability: vi.fn(),
 }));
-
-const getSessionsForTask = vi.fn();
+vi.mock('../../src/core/task-manager.js', () => ({ getTask: mocks.getTask, getProjectMetadata: mocks.getProjectMetadata, linkSession: mocks.linkSession, updateTaskRaw: mocks.updateTaskRaw }));
 vi.mock('../../src/core/session-tracker.js', () => ({
-  getSessionsForTask: (...args: unknown[]) => getSessionsForTask(...args),
+  getSessionsForTask: mocks.getSessionsForTask,
+  createSessionRecord: mocks.createSessionRecord,
+  updateSessionRecord: mocks.updateSessionRecord,
 }));
-
-/** task-start.ts dynamically imports resolveCaller from the send core; that is
- *  the ONE thing that decides which branch of the default we take, so it is the
- *  seam under test control. The rest of the send core is never reached here. */
-const resolveCaller = vi.fn();
-vi.mock('../../src/core/sessions/session-send-core.js', () => ({
-  resolveCaller: (...args: unknown[]) => resolveCaller(...args),
+vi.mock('../../src/core/sessions/session-send-core.js', () => ({ resolveCaller: mocks.resolveCaller }));
+vi.mock('../../src/providers/claude-code-session.js', () => ({ sessionRunner: { startSession: mocks.startSession } }));
+vi.mock('../../src/providers/daemon-connection.js', () => ({
+  getConnectedDaemonConnection: () => ({ send: mocks.cancelPendingStart, hasCapability: mocks.hasCapability }),
+  getDaemonConnection: vi.fn(),
 }));
+vi.mock('../../src/core/sessions/session-request-notify.js', () => ({ notifyRequesterFallback: mocks.notifyRequesterFallback }));
 
-import { bus, EventNames } from '../../src/core/event-bus.js';
-import { startSessionForTask } from '../../src/core/sessions/task-start.js';
-import { QuickStartError } from '../../src/core/sessions/quick-start.js';
+import { startSessionForTask, SessionExistsError, isTaskStarting } from '../../src/core/sessions/task-start.js';
 import { REQUESTS_FILE, getSessionRequest } from '../../src/core/session-requests.js';
-import type { SessionRecord } from '../../src/core/types.js';
 
-const NOW = new Date().toISOString();
-
-function sessionRec(claudeSessionId: string, overrides: Partial<SessionRecord> = {}): SessionRecord {
-  return {
-    claudeSessionId,
-    taskId: '',
-    project: '',
-    process_status: 'idle',
-    mode: 'default',
-    provider: 'cli',
-    startedAt: NOW,
-    lastActiveAt: NOW,
-    messageCount: 0,
-    ...overrides,
-  } as SessionRecord;
-}
-
-/** SESSION_START payloads the runner would have received. */
-let emitted: Array<Record<string, unknown>> = [];
-let emitSpy: ReturnType<typeof vi.spyOn>;
-
-/** The first message as the freshly started session will actually read it —
- *  this is where the reply trailer either is or isn't. */
-function firstMessage(n = 0): string {
-  return String(emitted[n]?.message ?? '');
-}
-
-async function expectStartError(p: Promise<unknown>, statusCode: number): Promise<QuickStartError> {
-  const err = await p.then(() => null, (e: unknown) => e);
-  expect(err, `expected QuickStartError(${statusCode})`).toBeInstanceOf(QuickStartError);
-  const qsErr = err as QuickStartError;
-  expect(qsErr.statusCode).toBe(statusCode);
-  return qsErr;
-}
+const params = { taskIdPrefix: 'task-1', message: 'Fix the flake.', source: 'test' };
+const task = { id: 'task-1', title: 'Fix the flake', project: 'test', cwd: '/tmp/test-project' };
 
 beforeEach(() => {
+  vi.resetAllMocks();
   fs.rmSync(REQUESTS_FILE, { force: true });
-  emitted = [];
-  getTask.mockReset();
-  getSessionsForTask.mockReset();
-  resolveCaller.mockReset();
+  mocks.getTask.mockResolvedValue(task);
+  mocks.getProjectMetadata.mockResolvedValue(undefined);
+  mocks.getSessionsForTask.mockResolvedValue([]);
+  mocks.updateSessionRecord.mockResolvedValue({});
+  mocks.updateTaskRaw.mockResolvedValue({ changed: true });
+  mocks.hasCapability.mockReturnValue(true);
+  mocks.cancelPendingStart.mockRejectedValue(new Error('Host disconnected'));
+  mocks.resolveCaller.mockResolvedValue({ kind: 'session', record: { claudeSessionId: 'asker-1' } });
+  mocks.startSession.mockImplementation(async (data) => ({ claudeSessionId: data.preassignedSessionId, title: task.title }));
+});
+afterEach(() => { vi.useRealTimers(); });
 
-  getTask.mockResolvedValue({ id: 'task-1', title: 'Fix the flake', project: 'Walnut' });
-  // No live session on the task — otherwise start refuses with 409 before it
-  // ever reaches the expect_reply block.
-  getSessionsForTask.mockResolvedValue([]);
-  // Default caller for the happy path: another tracked session.
-  resolveCaller.mockResolvedValue({
-    kind: 'session',
-    record: sessionRec('sess-asker-1', { title: 'Asker' }),
+describe('task start confirmation and reply contract', () => {
+  it('seeds the record before invoking the runner and waits for confirmation', async () => {
+    let finish!: (value: unknown) => void;
+    mocks.startSession.mockImplementation((data) => new Promise((resolve) => {
+      expect(mocks.createSessionRecord).toHaveBeenCalledWith(data.preassignedSessionId, task.id, task.project, task.cwd,
+        expect.objectContaining({ initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn' }));
+      finish = resolve;
+    }));
+    const pending = startSessionForTask(params);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    const data = mocks.startSession.mock.calls[0][0];
+    finish({ claudeSessionId: data.preassignedSessionId });
+    const result = await pending;
+    expect(result.started).toBe(true);
+    expect(result.sessionId).toBe(data.preassignedSessionId);
   });
 
-  emitSpy = vi.spyOn(bus, 'emit').mockImplementation(((name: string, data: unknown) => {
-    if (name === EventNames.SESSION_START) emitted.push(data as Record<string, unknown>);
-  }) as never);
-});
-
-afterEach(() => {
-  emitSpy.mockRestore();
-});
-
-describe('startSessionForTask — expect_reply default', () => {
-  it('DEFAULTS to registering a request when a session caller omits the flag', async () => {
-    const result = await startSessionForTask({
-      taskIdPrefix: 'task-1',
-      message: 'Fix the flake and report what changed.',
-      callerSid: 'sess-asker-1',
-      source: 'test',
-    });
-
+  it('registers a reply by default and teaches the task_send reply command', async () => {
+    const result = await startSessionForTask(params);
     expect(result.requestId).toMatch(/^rq-[a-f0-9]{12}$/);
     await expect(getSessionRequest(result.requestId!)).resolves.toMatchObject({
-      status: 'pending',
-      fromSessionId: 'sess-asker-1',
-      toTaskId: 'task-1',
+      status: 'pending', fromSessionId: 'asker-1', toTaskId: 'task-1', toSessionId: result.sessionId,
     });
-    // The trailer must ride the FIRST message, or the new session never learns
-    // how to answer — the request row alone is invisible to it. A plain first
-    // message is not an envelope, so the trailer is the whole last line.
-    expect(firstMessage()).toBe('Fix the flake and report what changed.\n'
-      + `Reply when done: walnut tools call session_send `
-      + `'{"in_reply_to":"${result.requestId}","text":"<your result summary>"}'`);
-    // The new session is told its own id up front (preassigned for claude).
-    expect(result.sessionId).toBeTruthy();
+    expect(mocks.startSession.mock.calls[0][0].message).toBe('Fix the flake.\n'
+      + `Reply when done: walnut tools call task_send '{"in_reply_to":"${result.requestId}","text":"<your result summary>"}'`);
   });
 
-  it('the DEFAULT degrades to no request for the HUMAN — it must not 400', async () => {
-    // This is the regression that a naive `default = true` would cause: every
-    // session started from the web UI or a plain terminal has a human caller,
-    // and a human has no session for a reply to land in.
-    resolveCaller.mockResolvedValue({ kind: 'human' });
-
-    const result = await startSessionForTask({
-      taskIdPrefix: 'task-1',
-      message: 'just start it',
-      source: 'test',
-    });
-
+  it.each(['human', 'external'])('does not request a reply from an untracked %s caller', async (kind) => {
+    mocks.resolveCaller.mockResolvedValue({ kind });
+    const result = await startSessionForTask(params);
     expect(result.requestId).toBeUndefined();
-    expect(firstMessage()).toBe('just start it');
-    expect(firstMessage()).not.toContain('Reply when done');
-    expect(emitted).toHaveLength(1);
+    expect(mocks.startSession.mock.calls[0][0].message).toBe(params.message);
   });
 
-  it('the DEFAULT degrades to no request for an EXTERNAL caller too', async () => {
-    resolveCaller.mockResolvedValue({ kind: 'external' });
+  it('rejects explicit reply to an untracked caller before any launch write', async () => {
+    mocks.resolveCaller.mockResolvedValue({ kind: 'human' });
+    await expect(startSessionForTask({ ...params, expectReply: true })).rejects.toMatchObject({ statusCode: 400 });
+    expect(mocks.createSessionRecord).not.toHaveBeenCalled();
+    expect(mocks.startSession).not.toHaveBeenCalled();
+  });
 
-    const result = await startSessionForTask({
-      taskIdPrefix: 'task-1', message: 'from somewhere else', source: 'test',
-    });
-
+  it('honors explicit fire-and-forget', async () => {
+    const result = await startSessionForTask({ ...params, expectReply: false });
     expect(result.requestId).toBeUndefined();
-    expect(firstMessage()).not.toContain('Reply when done');
+    expect(mocks.resolveCaller).not.toHaveBeenCalled();
   });
 
-  it('an EXPLICIT true from a non-session caller still fails loudly', async () => {
-    // Silently dropping this one would be wrong in the other direction: the
-    // caller asked to be told the outcome, so it must hear that it cannot be.
-    resolveCaller.mockResolvedValue({ kind: 'human' });
-
-    const err = await expectStartError(startSessionForTask({
-      taskIdPrefix: 'task-1', message: 'answer me', expectReply: true, source: 'test',
-    }), 400);
-    expect(err.message).toContain('expect_reply needs a session caller');
-    // Nothing was started — the refusal happens before the runner is told.
-    expect(emitted).toHaveLength(0);
-  });
-
-  it('expect_reply: false opts a session caller out of the default', async () => {
-    const result = await startSessionForTask({
-      taskIdPrefix: 'task-1',
-      message: 'fire and forget',
-      callerSid: 'sess-asker-1',
-      expectReply: false,
-      source: 'test',
-    });
-
-    expect(result.requestId).toBeUndefined();
-    expect(firstMessage()).toBe('fire and forget');
-    // resolveCaller is not even consulted — false short-circuits the block.
-    expect(resolveCaller).not.toHaveBeenCalled();
-  });
-
-  it('carries the caller-supplied reply_timeout into the registered row', async () => {
-    const result = await startSessionForTask({
-      taskIdPrefix: 'task-1',
-      message: 'slow job',
-      callerSid: 'sess-asker-1',
-      replyTimeoutSecs: 7200,
-      source: 'test',
-    });
-
+  it('preserves the reply deadline', async () => {
+    const result = await startSessionForTask({ ...params, replyTimeoutSecs: 7200 });
     const row = await getSessionRequest(result.requestId!);
-    expect(row).toBeTruthy();
-    // deadlineAt is epoch ms; createdAt is ISO. 7200s must survive the clamp
-    // (60s..24h) instead of silently falling back to the 1h default.
-    const window = row!.deadlineAt - new Date(row!.createdAt).getTime();
-    expect(window).toBeGreaterThan(7100 * 1000);
-    expect(window).toBeLessThan(7300 * 1000);
+    expect(row!.deadlineAt - Date.parse(row!.createdAt)).toBe(7_200_000);
   });
 
-  it('registers nothing when the task already has a live session (409 first)', async () => {
-    // Ordering pin: the slot rule is checked BEFORE expect_reply, so a refused
-    // start must not leave a pending row behind waiting on a session that was
-    // never created.
-    getSessionsForTask.mockResolvedValue([
-      sessionRec('sess-live-1', { taskId: 'task-1', process_status: 'running' }),
-    ]);
-
-    await expectStartError(startSessionForTask({
-      taskIdPrefix: 'task-1', message: 'second session', callerSid: 'sess-asker-1', source: 'test',
-    }), 409);
-
+  it('blocks an existing live task before creating any request', async () => {
+    mocks.getSessionsForTask.mockResolvedValue([{ claudeSessionId: 'live-1', process_status: 'idle' }]);
+    await expect(startSessionForTask(params)).rejects.toBeInstanceOf(SessionExistsError);
+    expect(mocks.createSessionRecord).not.toHaveBeenCalled();
     expect(fs.existsSync(REQUESTS_FILE)).toBe(false);
-    expect(emitted).toHaveLength(0);
+  });
+
+  it('blocks concurrent starts even before the first record exists', async () => {
+    let release!: (rows: unknown[]) => void;
+    mocks.getSessionsForTask.mockImplementationOnce(() => new Promise((r) => { release = r; }));
+    const first = startSessionForTask(params);
+    await Promise.resolve();
+    await expect(startSessionForTask(params)).rejects.toBeInstanceOf(SessionExistsError);
+    release([]);
+    await first;
+    expect(mocks.startSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a failed start record, notifies the caller, and permits same-id retry', async () => {
+    mocks.startSession.mockRejectedValueOnce(new Error('Working directory no longer exists: /tmp/missing'));
+    await expect(startSessionForTask(params)).rejects.toMatchObject({ statusCode: 502, message: expect.stringContaining('retry task_start') });
+    expect(mocks.updateSessionRecord).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      process_status: 'error', errorMessage: expect.stringContaining('/tmp/missing'),
+    }));
+    expect(mocks.notifyRequesterFallback).toHaveBeenCalledWith(expect.objectContaining({ toTaskId: task.id }), 'error');
+    await expect(startSessionForTask(params)).resolves.toMatchObject({ taskId: task.id, started: true });
+  });
+
+  it('returns starting on a bounded wait without releasing the in-flight guard', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let finish!: (value: unknown) => void;
+    mocks.startSession.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const pending = startSessionForTask({ ...params, expectReply: false });
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await pending).toMatchObject({ started: false, taskId: task.id });
+    await expect(startSessionForTask(params)).rejects.toBeInstanceOf(SessionExistsError);
+    finish({ claudeSessionId: 'eventual-1' });
+    await vi.waitFor(() => expect(isTaskStarting(task.id)).toBe(false));
+  });
+
+  it('keeps uncertain attempts blocked rather than minting a second run', async () => {
+    mocks.getTask.mockResolvedValue({ ...task, last_start: { id: 'attempt-1', state: 'unconfirmed', session_id: 'old-run' } });
+    await expect(startSessionForTask(params)).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('unconfirmed') });
+    expect(mocks.startSession).not.toHaveBeenCalled();
+    expect(mocks.createSessionRecord).not.toHaveBeenCalled();
+  });
+
+  it.each(['native', 'provider-issued'])('retries an uncertain %s start only after the host cancels it', async (kind) => {
+    mocks.getTask.mockResolvedValue({ ...task, last_start: { id: 'attempt-1', state: 'unconfirmed', runtime_id: 'runtime-old' } });
+    mocks.cancelPendingStart.mockResolvedValue({ ok: true, cancelled: true, alive: false });
+    await expect(startSessionForTask({ ...params, engine: kind === 'native' ? 'claude' : 'codex' })).resolves.toMatchObject({ started: true });
+    expect(mocks.cancelPendingStart).toHaveBeenCalledWith('cancelPendingStart', { sid: 'runtime-old' }, 5_000);
+    expect(mocks.startSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cancel or replace a process that actually started', async () => {
+    mocks.getTask.mockResolvedValue({ ...task, last_start: { id: 'attempt-1', state: 'unconfirmed', runtime_id: 'runtime-old' } });
+    mocks.cancelPendingStart.mockResolvedValue({ ok: true, cancelled: false, alive: true });
+    await expect(startSessionForTask(params)).rejects.toBeInstanceOf(SessionExistsError);
+    expect(mocks.startSession).not.toHaveBeenCalled();
+  });
+
+  it('records provider-issued failure without inventing a provider session id', async () => {
+    mocks.startSession.mockRejectedValueOnce(new Error('Adapter executable missing'));
+    await expect(startSessionForTask({ ...params, engine: 'codex' })).rejects.toMatchObject({ statusCode: 502 });
+    expect(mocks.createSessionRecord).not.toHaveBeenCalled();
+    expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ last_start: expect.objectContaining({ state: 'failed', error: 'Adapter executable missing' }) }), expect.any(Object));
+  });
+
+  it('does not create a reply request if claiming the task fails', async () => {
+    mocks.updateTaskRaw.mockRejectedValueOnce(new Error('Task store unavailable'));
+    await expect(startSessionForTask(params)).rejects.toThrow('Task store unavailable');
+    expect(fs.existsSync(REQUESTS_FILE)).toBe(false);
+    expect(mocks.startSession).not.toHaveBeenCalled();
+  });
+
+  it('does not report spawn failure when only outcome persistence fails', async () => {
+    mocks.updateTaskRaw.mockResolvedValueOnce({ changed: true }).mockRejectedValueOnce(new Error('Task store unavailable'));
+    await expect(startSessionForTask(params)).resolves.toMatchObject({ started: true });
+    expect(mocks.updateSessionRecord).not.toHaveBeenCalled();
+    expect(mocks.notifyRequesterFallback).not.toHaveBeenCalled();
+  });
+
+  it('releases the in-memory guard at the confirmation deadline and retains late success', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let finish!: (value: unknown) => void;
+    mocks.startSession.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const pending = startSessionForTask({ ...params, expectReply: false });
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(await pending).toMatchObject({ started: false });
+    expect(isTaskStarting(task.id)).toBe(false);
+    expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ last_start: expect.objectContaining({ state: 'unconfirmed' }) }), expect.any(Object));
+    finish({ claudeSessionId: 'late-session' });
+    await vi.waitFor(() => expect(mocks.updateTaskRaw).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ last_start: expect.objectContaining({ state: 'started', session_id: 'late-session' }) }), expect.any(Object)));
+  });
+
+  it('inherits host even when cwd was explicitly supplied', async () => {
+    mocks.getProjectMetadata.mockResolvedValue({ default_host: '__local__', default_cwd: '/tmp/project-default' });
+    await startSessionForTask({ ...params, cwd: '/tmp/override' });
+    expect(mocks.startSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/tmp/override', host: '' }));
+  });
+
+  it('uses the stored instruction on retry and respects explicit local host', async () => {
+    mocks.getTask.mockResolvedValue({ ...task, description: 'Preserved instruction' });
+    mocks.getProjectMetadata.mockResolvedValue({ default_host: 'not-enabled' });
+    await startSessionForTask({ ...params, message: undefined, host: '' });
+    expect(mocks.startSession).toHaveBeenCalledWith(expect.objectContaining({ host: '', message: expect.stringContaining('Preserved instruction') }));
   });
 });

@@ -263,7 +263,7 @@ const NOTE_NOTIFICATION =
  * command is the whole point, so it is the whole line.
  */
 export function buildReplyTrailer(request: SessionRequest): string {
-  return `Reply when done: walnut tools call session_send `
+  return `Reply when done: walnut tools call task_send `
     + `'{"in_reply_to":"${request.id}","text":"<your result summary>"}'`;
 }
 
@@ -317,11 +317,11 @@ export function buildRequestNotification(
     ...(target.taskId
       ? [`  walnut tools call task_get '{"id":"${target.taskId}"}'          # its task state`]
       : []),
-    ...(target.sessionId
-      ? [`  walnut tools call session_transcript '{"id":"${target.sessionId}"}'   # read what it did`]
-      : []),
-    ...(outcome !== 'awaiting_human' && target.sessionId
-      ? [`  walnut tools call session_send '{"to":"${target.sessionId.slice(0, 8)}","text":"..."}'  # follow up`]
+    ...(target.taskId
+      ? [`  walnut tools call task_history '{"id":"${target.taskId}"}'   # read what it did`]
+      : target.sessionId ? [`  walnut tools call session_transcript '{"id":"${target.sessionId}"}'   # read what it did`] : []),
+    ...(outcome !== 'awaiting_human' && (target.taskId || target.sessionId)
+      ? [`  walnut tools call task_send '{"to":"${target.taskId || target.sessionId}","text":"..."}'  # follow up`]
       : []),
   ];
   return buildWalnutMessage({

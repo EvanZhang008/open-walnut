@@ -114,11 +114,11 @@ const CATALOG_WIDTH = 100
  *
  * A half-answer suppresses skill loading: an agent that gets a usable op name
  * from `tools list` never bounces out to the skill, so it keeps a wrong picture
- * of task-vs-session (real incident, 2026-08-31). The CLI therefore has to name
- * the skill at the exact moment it half-answers.
+ * of how work is started (real incident, 2026-08-31). The CLI therefore has to
+ * name the skill at the exact moment it half-answers.
  */
 export const SKILL_POINTER =
-  'Model (task vs session) + recipes: walnut tools call skill_read \'{"dirName":"walnut"}\''
+  'Task model + recipes: walnut tools call skill_read \'{"dirName":"walnut"}\''
 
 /**
  * The operations catalog: one line per op, plus an indented `args:` line

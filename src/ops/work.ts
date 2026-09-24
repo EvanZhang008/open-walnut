@@ -1,67 +1,42 @@
 import { z } from 'zod';
-import { SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
+// Type-only: erased at compile time, so work.ts never depends on core.ts at load
+// time (the ops modules are imported in a fixed order by ./index.ts).
 import type { OpCall } from './core.js';
-import { defineOp } from './registry.js';
-import { REPLY_ARRIVES_HINT, TASK_IS_INERT, dispatchHint, withOutcome } from './outcome.js';
-
-const SESSION_MODE = z.enum(SESSION_MODE_IDS);
-const SESSION_ENGINE = z.enum(SESSION_ENGINE_IDS);
+import { defineOp, getOp } from './registry.js';
+import { startTask, TASK_START_INPUT } from './task-execution.js';
+import { REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 
 defineOp({
-  name: 'session_start',
-  title: 'Start a session for a task',
+  name: 'task_start',
+  title: 'Start an existing task',
   description:
-    'Start a NEW coding session for one existing task and send it the first message; returns the sessionId. ' +
-    'Only because the user asked for that work to start: never to hand off follow-ups you found yourself. ' +
-    'Create the task first with task_create. If the task already has a live session this returns 409 with ' +
-    'existing_session_id — talk to it with session_send instead. The new session reports back to YOUR ' +
-    'session when it finishes BY DEFAULT (Walnut also notifies you if it ends without replying); pass ' +
-    'expect_reply=false for fire-and-forget.',
+    'Start work on an existing task. New work needs only task_create, which starts by default. ' +
+    'Only start work the user asked for. If already started, use task_send with the same task id ' +
+    'to continue it; do not create a duplicate. Replies return to the caller by default. ' +
+    'An accepted start is not a completed task: read the execution field.',
   input: {
-    task: z.string().min(1).describe('Task id or unique prefix'),
-    message: z.string().optional().describe('First instruction; defaults to a sentence naming the task'),
-    cwd: z.string().optional().describe('Absolute working directory; omit to resolve from the task/project'),
-    host: z.string().optional().describe('Execution host alias; omit for the primary box'),
-    model: z.string().optional().describe('Session model id or provider model value'),
-    mode: SESSION_MODE.optional().describe('Session permission mode'),
-    engine: SESSION_ENGINE.optional().describe('Coding agent engine; default claude'),
-    expect_reply: z.boolean().optional().describe('Route the session\'s reply back to your session; enables the no-reply fallback notification. DEFAULT true when the caller is a session — pass false for fire-and-forget'),
-    reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
+    id: z.string().min(1).describe('Task id or unique prefix'),
+    ...TASK_START_INPUT,
   },
-  handler: async (args, call) => {
-    const { task, ...body } = args;
-    const started = await call('POST', `/tasks/${encodeURIComponent(String(task))}/start`, body) as
-      Record<string, unknown> | undefined;
-    const sessionId = typeof started?.sessionId === 'string' ? started.sessionId : '';
-    const requestId = typeof started?.requestId === 'string' ? started.requestId : '';
-    return withOutcome(
-      { ...(started ?? {}) },
-      `A session is now running on this task${sessionId ? ` (${sessionId})` : ''} and has your first message. `
-      + 'THIS is what does the work; the task row only records it.',
-      requestId
-        ? `You asked for a reply (${requestId}). ${REPLY_ARRIVES_HINT}`
-        : `${REPLY_ARRIVES_HINT} To add context meanwhile: walnut tools call session_send '{"to":"${sessionId || String(task)}","text":"..."}'`,
-    );
-  },
+  handler: async ({ id, ...body }, call) => startTask(String(id), body, call),
+  timeoutMs: 40_000,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
 defineOp({
-  name: 'session_send',
-  title: 'Send a message to a session',
+  name: 'task_send',
+  title: 'Send a message to a task',
   description:
-    'THE way to talk to any session (yours never — no self-send). When another session is the caller, the ' +
+    'Message another task (never your own). When another task is the caller, the ' +
     'text is delivered as a <walnut-message kind="peer-note"> envelope that carries no user authorization. ' +
     'The receiver is asked to reply BY DEFAULT, with a Walnut fallback notification if it ' +
     'finishes without replying; pass expect_reply=false when you do not want an answer. To ANSWER such a request, call this op with ' +
     'in_reply_to=rq-… (omit `to` — the answer routes to the asker automatically). ' +
-    'A task with no session yet → 409: start one with session_start.',
+    'Address the task id. A task not started yet returns 409: use task_start. ' +
+    'Legacy session ids and handles are also accepted.',
   input: {
     to: z.string().min(1).optional().describe(
-      'Who gets it: a task id or its session id. These name the SAME target: a task id routes to the '
-      + 'task\'s current session (an older session of the same task is archived), so either id reaches it. Also '
-      + 'accepted: a unique id prefix of 4+ chars, the `Title [8hex]` handle exactly as envelopes and '
-      + '`session_list` print it, or a unique case-insensitive title substring. Omit only with in_reply_to'),
+      'Task id or unique prefix. Omit only with in_reply_to. Legacy conversation ids and printed handles are accepted for compatibility.'),
     text: z.string().min(1).describe('Message text'),
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when the caller is a session — pass false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
@@ -81,13 +56,54 @@ defineOp({
       { ...b },
       delivery === 'deferred'
         ? `Message queued for ${target}: it is parked on a human permission prompt, so the text lands after the human answers. Do NOT resend.`
-        : `Message delivered to ${target}. It is a separate session doing its own work; you did not take over its turn.`,
+        : `Message queued for ${b.targetTaskId || b.taskId || target}. Accepted for delivery, not a completed reply. Do NOT resend.`,
       typeof b.requestId === 'string' && b.requestId
         ? `You asked for a reply (${b.requestId}). ${REPLY_ARRIVES_HINT}`
         : REPLY_ARRIVES_HINT,
     );
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
+defineOp({
+  ...getOp('task_start')!,
+  name: 'session_start',
+  deprecated: 'Use task_start with id instead of task.',
+  input: { task: z.string().min(1), ...TASK_START_INPUT },
+  handler: async ({ task, ...body }, call) => startTask(String(task), body, call),
+});
+
+defineOp({
+  ...getOp('task_send')!,
+  name: 'session_send',
+  deprecated: 'Use task_send with the task id.',
+});
+
+defineOp({
+  name: 'task_history',
+  title: 'Read a task conversation',
+  description: 'Read the current conversation for a task, using the same task id as task_get and task_send. '
+    + 'A placeholder returns not_started and no messages. No separate session lookup is needed.',
+  input: {
+    id: z.string().min(1).describe('Task id or unique prefix'),
+    fresh: z.boolean().optional().describe('Force a live transcript read on the primary box'),
+  },
+  handler: async ({ id, fresh }, call) => {
+    const body = await call('GET', `/tasks/${encodeURIComponent(String(id))}`) as { task?: Record<string, unknown> };
+    if (!body?.task?.id) throw new Error('Task response has no id; cannot resolve its conversation.');
+    const task = body.task;
+    const ids = task.session_ids;
+    const sid = task.session_id || task.exec_session_id || (Array.isArray(ids) ? ids.at(-1) : undefined);
+    if (!sid) {
+      if (task.last_start) throw new Error('This task has a launch attempt but no conversation yet. Read task_get for its execution result.');
+      if (!Array.isArray(ids) || ids.length) throw new Error('Task conversation state is unavailable; retry task_history.');
+      return { taskId: task.id, execution: { state: 'not_started' }, messages: [] };
+    }
+    const history = await call('GET', `/sessions/${encodeURIComponent(String(sid))}/transcript${fresh ? '?fresh=1' : ''}`) as Record<string, unknown> | undefined;
+    if (!history || !Array.isArray(history.messages)) throw new Error('Transcript response is incomplete; retry task_history.');
+    return { ...history, taskId: task.id };
+  },
+  tags: { readonly: true, remote: 'allow' },
 });
 
 defineOp({
@@ -98,7 +114,7 @@ defineOp({
     'Prefer NOT polling this — replies and fallback notifications arrive in your session automatically; ' +
     '`walnut wait rq-…` does the waiting for you when you truly cannot continue without the answer.',
   input: {
-    id: z.string().regex(/^rq-[a-f0-9]{6,}$/).describe('Request id from session_send/session_start expect_reply'),
+    id: z.string().regex(/^rq-[a-f0-9]{6,}$/).describe('Request id returned by task_create, task_start, or task_send'),
   },
   bind: { method: 'GET', path: '/requests/:id' },
   mapResult: ({ body }) => {
@@ -389,10 +405,8 @@ defineOp({
     ) as Record<string, unknown> | undefined;
     return withOutcome(
       { ...(result ?? {}) },
-      args.pinned
-        ? `Task is on the pinned board, which is human attention only: no session was started. ${TASK_IS_INERT}`
-        : 'Task left the pinned board. Nothing about its execution changed.',
-      dispatchHint(String(args.id)),
+      args.pinned ? 'Task pinned. Execution is unchanged.' : 'Task unpinned. Execution is unchanged.',
+      'No further action is required.',
     );
   },
   tags: { readonly: false, remote: 'allow' },
@@ -417,9 +431,8 @@ defineOp({
     ) as Record<string, unknown> | undefined;
     return withOutcome(
       { ...(result ?? {}) },
-      `Task moved to the ${String(args.tier)} tier of the board. A tier is human attention, not dispatch: `
-      + 'no session was started, stopped, or reprioritized.',
-      dispatchHint(String(args.id)),
+      `Task moved to the ${String(args.tier)} tier. Execution is unchanged.`,
+      'No further action is required.',
     );
   },
   tags: { readonly: false, remote: 'allow' },

@@ -32,7 +32,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-start-h
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, setProjectMetadata } from '../../src/core/task-manager.js'
-import { bus, EventNames } from '../../src/core/event-bus.js'
+import { sessionRunner } from '../../src/providers/claude-code-session.js'
+import { getSessionsForTask } from '../../src/core/session-tracker.js'
 
 let server: HttpServer
 let port = 0
@@ -68,53 +69,25 @@ describe('session_start inherits project default_host with default_cwd', () => {
       default_cwd: '/workplace/only/on/the/remote/box',
     })
 
-    const emitSpy = vi.spyOn(bus, 'emit')
-
-    const res = await fetch(api(`/api/v1/tasks/${task.id}/start`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: 'hello' }),
-    })
-    // 202: accepted — the route answers before the async spawn resolves.
-    expect(res.status).toBe(202)
-    const body = await res.json() as { taskId: string; title: string; sessionId?: string }
-    expect(body.taskId).toBe(task.id)
-    expect(body.title).toBe('remote-homed work')
-    // The claude engine mints the session id up front, so the caller can open
-    // the conversation without polling for it.
-    expect(typeof body.sessionId).toBe('string')
-    expect(body.sessionId).toMatch(/^[0-9a-f-]{36}$/)
-
-    // The request named neither cwd nor host: resolving them is the RUNNER's job
-    // now (task → parent chain → project metadata), and the route only passes the
-    // body through plus the session id it minted.
-    const startCall = emitSpy.mock.calls.find(([name, data]) =>
-      name === EventNames.SESSION_START
-      && (data as { taskId?: string }).taskId === task.id)
-    expect(startCall, 'SESSION_START never emitted').toBeDefined()
-    const startData = startCall![1] as Record<string, unknown>
-    expect(startData.preassignedSessionId).toBe(body.sessionId)
-
-    // Wait for the async spawn to fail and emit session:error for this task.
-    const deadline = Date.now() + 15_000
-    let errorText: string | undefined
-    while (Date.now() < deadline && errorText === undefined) {
-      const call = emitSpy.mock.calls.find(([name, data]) =>
-        name === EventNames.SESSION_ERROR
-        && (data as { taskId?: string }).taskId === task.id)
-      if (call) errorText = String((call[1] as { error?: unknown }).error ?? '')
-      else await new Promise((r) => setTimeout(r, 250))
+    const start = vi.spyOn(sessionRunner, 'startSession').mockRejectedValue(new Error('test-remote daemon unavailable'))
+    try {
+      const res = await fetch(api(`/api/v1/tasks/${task.id}/start`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'hello', expect_reply: false }),
+      })
+      expect(res.status).toBe(502)
+      const body = await res.json() as { error: { message: string } }
+      expect(body.error.message).toContain('test-remote daemon unavailable')
+      expect(start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        taskId: task.id, host: 'test-remote', cwd: '/workplace/only/on/the/remote/box',
+      }))
+      const records = await getSessionsForTask(task.id)
+      expect(records).toHaveLength(1)
+      expect(records[0]).toMatchObject({ host: 'test-remote', process_status: 'error', errorMessage: 'test-remote daemon unavailable' })
+    } finally {
+      start.mockRestore()
     }
-
-    expect(errorText, 'spawn failure never surfaced as session:error').toBeDefined()
-    // The failure must be the REMOTE transport (proves default_host was
-    // adopted), never the local existence check of the remote-only cwd.
-    expect(errorText).not.toContain('Working directory no longer exists')
-    expect(errorText!.toLowerCase()).toMatch(/test-remote|nonexistent-host|ssh|daemon/)
-
-    // The runner writes the adopted host back onto the same event object, so the
-    // inheritance is observable directly and not only through the error text.
-    expect(startData.host, 'project default_host was not adopted').toBe('test-remote')
   }, 30_000)
 })
 
@@ -140,7 +113,7 @@ describe('session_start refuses a second session for the same task', () => {
     expect(body.error.code).toBe('session_exists')
     expect(body.existing_session_id).toBe(liveSid)
     // The message must name the replacement call, not just refuse.
-    expect(body.error.message).toContain('session_send')
+    expect(body.error.message).toContain('task_send')
   }, 30_000)
 
   it('404 for an unknown task id', async () => {

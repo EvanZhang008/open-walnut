@@ -70,17 +70,17 @@ describe('capability routing', () => {
 });
 
 describe('retired peers capabilities', () => {
-  it('peers.list answers bad_request pointing at `walnut tools call session_list`', async () => {
+  it('peers.list answers bad_request pointing at `walnut tools call task_list`', async () => {
     const { deps } = makeDeps();
     const res = await handleGatewayCapability('peers.list', CALLER, {}, 'devbox', deps);
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error.code).toBe('bad_request');
     expect(res.error.message).toContain('peers.list was replaced');
-    expect(res.error.message).toContain('walnut tools call session_list');
+    expect(res.error.message).toContain('walnut tools call task_list');
   });
 
-  it('peers.send answers bad_request pointing at `walnut tools call session_send`', async () => {
+  it('peers.send answers bad_request pointing at `walnut tools call task_send`', async () => {
     const { deps } = makeDeps();
     const res = await handleGatewayCapability(
       'peers.send', CALLER, { target: TARGET, text: 'build is ready' }, 'devbox', deps,
@@ -89,7 +89,7 @@ describe('retired peers capabilities', () => {
     if (res.ok) return;
     expect(res.error.code).toBe('bad_request');
     expect(res.error.message).toContain('peers.send was replaced');
-    expect(res.error.message).toContain('walnut tools call session_send');
+    expect(res.error.message).toContain('walnut tools call task_send');
     // The pointer must name the fields the replacement op actually takes.
     expect(res.error.message).toContain('"to"');
     expect(res.error.message).toContain('"text"');
@@ -97,8 +97,8 @@ describe('retired peers capabilities', () => {
 
   it('the ops named in both pointers really exist in the registry', () => {
     // A pointer to an op that was itself renamed is worse than no pointer.
-    expect(getOp('session_list')).toBeDefined();
-    expect(getOp('session_send')).toBeDefined();
+    expect(getOp('task_list')).toBeDefined();
+    expect(getOp('task_send')).toBeDefined();
   });
 
   it('a retired capability is refused before any budget or execution', async () => {

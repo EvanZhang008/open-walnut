@@ -693,7 +693,10 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   `error` (`{ "error": {...}, "existing_session_id": "..." }`): talk to it with
   `POST /api/v1/messages` instead of opening a second one. `expect_reply: true`
   registers a reply request against the caller session
-  (`x-walnut-caller-sid`) and returns its `requestId`. `202` means ACCEPTED,
+  (`x-walnut-caller-sid`) and returns its `requestId`. When that caller is a
+  worker session and the task belongs to its project, has no cwd of its own and
+  the body names neither `cwd` nor `host`, the session starts on the caller's
+  host in the caller's cwd, as one pair (additive, 2026-09-23). `202` means ACCEPTED,
   not spawned (the spawn is async in session-runner), same as `POST /sessions`.
   Class C: `501 not_supported_cloud` on a REPLICA (no session-runner there);
   use `POST /api/v1/sessions`, which relays over the bridge.
@@ -749,6 +752,7 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   Personal AI conversation; only `worker` is placed from. Cheap by design (one
   registry lookup and one task read, no projection export), so an agent-facing
   list can ask it before every query.
+  The `task_list` op does exactly that to apply its default folder ring.
 - `GET /api/v1/sessions?status=running|idle|stopped|error&scope=folder|project|all` →
   `{ "sessions": [ProjectedSession], "you"?: ProjectedSession, "scope": "folder|project|all", "syncedAt": "<ISO>" }`
 - `ProjectedSession`: `{ id, title?, task_id?, task_title?,

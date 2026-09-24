@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  BULK_GET_FIELDS,
   BulkGetError,
   DEFAULT_BULK_GET_FIELDS,
   MAX_BULK_GET_IDS,
@@ -51,6 +52,27 @@ describe('resolveBulkGetFields', () => {
     // wrong answer rather than a missing one.
     expect(() => resolveBulkGetFields(['title', 'nope'])).toThrow(BulkGetError);
     expect(() => resolveBulkGetFields(['nope'])).toThrow(/Unknown field "nope"/);
+  });
+
+  it('rejects the retired `status` field and names its replacement', () => {
+    // It was valid for a long time, so the generic "unknown field" text is not
+    // enough — a caller needs to be told what to use instead, in the error.
+    expect(() => resolveBulkGetFields(['status'])).toThrow(BulkGetError);
+    expect(() => resolveBulkGetFields(['title', 'status'])).toThrow(/use "phase"/);
+    expect(() => resolveBulkGetFields(['STATUS'])).toThrow(/use "phase"/);
+    try {
+      resolveBulkGetFields(['status']);
+    } catch (err) {
+      expect((err as BulkGetError).code).toBe('retired_field');
+    }
+  });
+
+  it('does not offer `status` in the catalog or the default set', () => {
+    expect(BULK_GET_FIELDS as readonly string[]).not.toContain('status');
+    expect(DEFAULT_BULK_GET_FIELDS as readonly string[]).not.toContain('status');
+    // phase IS the state field, and it stays in the default set — dropping both
+    // would leave a triage row unable to say what state the task is in.
+    expect(DEFAULT_BULK_GET_FIELDS as readonly string[]).toContain('phase');
   });
 });
 

@@ -68,7 +68,8 @@ const DESTRUCTIVE_OPS = new Set(['task_delete', 'task_merge'])
  * shows the label, not the args. One click must not be enough for these.
  */
 const POWERFUL_OPS = new Set([
-  'session_start', 'session_send', 'memory_write', 'note_write', 'note_edit', 'note_attach',
+  'task_create', 'task_start', 'task_send', 'session_start', 'session_send',
+  'memory_write', 'note_write', 'note_edit', 'note_attach',
 ])
 
 /** Why `tool` may not run on a bare click, or null when a bare click is fine. */
@@ -194,6 +195,6 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
       return
     }
     log.web.warn('actions: invoke failed', { tool, ms, error: outcome.message })
-    res.json({ ok: false, tool, error: { code: 'op_failed', message: outcome.message } })
+    res.json({ ok: false, tool, error: { code: 'op_failed', message: outcome.message }, ...(outcome.result !== undefined ? { result: outcome.result } : {}) })
   })
 })

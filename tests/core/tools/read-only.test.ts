@@ -47,7 +47,7 @@ describe('the read-only belt is derived from the registry', () => {
     const names = readOnlyToolNames();
     expect([...READ_ONLY_TOOL_NAMES].sort()).toEqual([...names].sort());
     // The names callers actually gate on today.
-    for (const name of ['task_list', 'task_get', 'search', 'session_list']) {
+    for (const name of ['task_list', 'task_get', 'search', 'task_history']) {
       expect(names.has(name)).toBe(true);
     }
     expect(names.has('task_create')).toBe(false);

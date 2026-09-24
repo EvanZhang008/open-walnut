@@ -15,7 +15,7 @@
  * only the pre-execution policy gates. Live round-trips are covered by
  * tests/mcp/ops-registry.test.ts.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { handleGatewayCapability, type CapabilityRouterDeps } from '../../../src/core/peers/capability-router.js';
 import { PeerThrottle, PEER_SEND_MAX_PER_WINDOW } from '../../../src/core/peers/peer-throttle.js';
 
@@ -39,12 +39,13 @@ describe('gateway tools.list', () => {
     // The ops that replaced the peers capabilities must be in the catalog a
     // remote session sees — otherwise the pointer in the retired branch is a
     // dead end (tests/unit/peers/capability-router.test.ts).
-    expect(names).toContain('session_list');
-    expect(names).toContain('session_send');
-    expect(names).toContain('session_start');
+    expect(names).toContain('task_history');
+    expect(names).toContain('task_send');
+    expect(names).toContain('task_start');
+    expect(names.some((name) => name.startsWith('session_'))).toBe(false);
     expect(names).toContain('request_get');
     expect(ops.find((o) => o.name === 'request_get')?.readonly).toBe(true);
-    expect(ops.find((o) => o.name === 'session_send')?.readonly).toBe(false);
+    expect(ops.find((o) => o.name === 'task_send')?.readonly).toBe(false);
     const del = ops.find((o) => o.name === 'task_delete');
     expect(del?.remote).toBe('deny');
   });
@@ -90,6 +91,20 @@ describe('gateway tools.list', () => {
 });
 
 describe('gateway tools.call — policy gates', () => {
+  it('preserves the task id in an error when create succeeds but start fails', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ task: { id: 'task-created', title: 'Start failure' } }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'bad_request', message: 'Missing cwd' } }), { status: 400 }));
+    try {
+      const result = await handleGatewayCapability('tools.call', CALLER,
+        { name: 'task_create', args: { title: 'Start failure' } }, 'devbox', deps());
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('Expected partial write failure');
+      expect(result.error.detail).toMatchObject({ task: { id: 'task-created' }, start_error: expect.stringContaining('Missing cwd') });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally { fetcher.mockRestore(); }
+  });
+
   it('refuses a remote-denied (destructive) op with a local-CLI pointer', async () => {
     const r = await handleGatewayCapability(
       'tools.call', CALLER, { name: 'task_delete', args: { id: 'x' } }, 'devbox', deps(),

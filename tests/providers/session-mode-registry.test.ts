@@ -25,6 +25,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { getOp, opInputJsonSchema } from '../../src/ops/index.js'
 import {
   SESSION_MODES,
   SESSION_MODE_IDS,
@@ -99,10 +100,11 @@ describe('session mode registry', () => {
     // Two session tools each hardcoded their own subset (['plan','bypass'] and
     // ['bypass','accept','plan']), so a caller could not request modes the UI
     // offered. The ops that replaced them derive their enum from the registry.
-    const src = read('src/ops/work.ts')
-    expect(src).toContain("z.enum(SESSION_MODE_IDS)")
-    expect(src).not.toMatch(/enum:\s*\['plan',\s*'bypass'\]/)
-    expect(src).not.toMatch(/enum:\s*\['bypass',\s*'accept',\s*'plan'\]/)
+    for (const name of ['task_create', 'task_start', 'session_start']) {
+      const schema = opInputJsonSchema(getOp(name)!)
+      const mode = (schema.properties as Record<string, { enum: string[] }>).mode
+      expect(mode.enum, name).toEqual([...SESSION_MODE_IDS])
+    }
   })
 })
 

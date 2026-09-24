@@ -47,6 +47,8 @@ export interface OpResultContext {
 export interface WalnutOp {
   /** Snake_case tool name, e.g. 'task_get'. Stable — it is the public contract. */
   name: string
+  /** A compatibility call still runs, but the op no longer appears in the default tool catalog. */
+  deprecated?: string
   /** Short human title (MCP `title`, CLI list column). */
   title: string
   /** LLM-facing description: what it does, when to use it, result shape hints. */
@@ -69,6 +71,8 @@ export interface WalnutOp {
   ) => Promise<unknown>
   /** Reshape a successful bound result (e.g. attach the task-ref citation). */
   mapResult?: (ctx: OpResultContext) => unknown
+  /** When a write partly succeeds the result is kept, but every entry point must clearly report the op as failed. */
+  resultError?: (result: unknown) => string | undefined
   /**
    * Per-op HTTP timeout override (ms). Search ops need more than the 10s
    * default: a cold embedding model + semantic legs measured 10s+, and a
@@ -152,9 +156,9 @@ export function countOwnerOps(owner: string): number {
   return ops.ownedBy(owner).length
 }
 
-/** All ops, in declaration order. */
-export function listOps(): WalnutOp[] {
-  return ops.values()
+/** By default list only current ops; old names still run through getOp. */
+export function listOps(options: { includeDeprecated?: boolean } = {}): WalnutOp[] {
+  return ops.values().filter((op) => options.includeDeprecated || !op.deprecated)
 }
 
 /** Ops with their owner ('core', or the plugin id), in declaration order. */

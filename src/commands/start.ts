@@ -37,6 +37,7 @@ export async function runStart(
     const result = await apiPost<SessionStartResult>(
       `/api/v1/tasks/${encodeURIComponent(taskIdPrefix)}/start`,
       options.message !== undefined ? { message: options.message } : {},
+      { timeoutMs: 40_000 },
     );
     printStart(result, globals);
   } catch (err) {
@@ -46,11 +47,11 @@ export async function runStart(
 
 export function printStart(result: SessionStartResult, globals: GlobalOptions): void {
   if (globals.json) {
-    outputJson({ action: 'start', taskId: result.taskId, ...(result.sessionId ? { sessionId: result.sessionId } : {}) });
+    outputJson({ action: 'start', ...result });
   } else {
-    console.log(chalk.green('Started session for task:'), result.title);
-    if (result.sessionId) console.log(chalk.dim(`Session: ${result.sessionId}`));
-    console.log(chalk.dim('Session running via claude -p (non-blocking).'));
+    console.log(chalk.green(result.started ? 'Task started:' : 'Task start accepted; execution not yet confirmed:'), result.title);
+    console.log(chalk.dim(`Task: ${result.taskId}`));
+    console.log(chalk.dim(`Read task_get or continue with task_send using task id ${result.taskId}.`));
   }
 }
 

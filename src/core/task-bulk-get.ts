@@ -24,7 +24,7 @@ export const MAX_BULK_GET_IDS = 50;
  * whole reason `progress` exists.
  */
 export const BULK_GET_FIELDS = [
-  'title', 'status', 'phase', 'project', 'priority', 'tags',
+  'title', 'phase', 'project', 'priority', 'tags',
   'start_date', 'due_date', 'end_date', 'created_at', 'updated_at', 'completed_at',
   'pinned', 'focus_tier', 'pin_order', 'unread', 'blocked_by',
   'last_session_update', 'summary', 'note', 'progress',
@@ -45,7 +45,7 @@ export const BULK_GET_FIELD_GROUPS: Readonly<Record<string, readonly BulkGetFiel
  * this op exists to avoid right back into every reply.
  */
 export const DEFAULT_BULK_GET_FIELDS: readonly BulkGetField[] = [
-  'title', 'status', 'phase', 'project', 'priority',
+  'title', 'phase', 'project', 'priority',
   'due_date', 'updated_at', 'pinned', 'focus_tier', 'unread', 'summary',
 ];
 
@@ -81,6 +81,16 @@ export function resolveBulkGetFields(requested: readonly string[] | undefined): 
   for (const raw of requested) {
     const name = raw.trim().toLowerCase();
     if (name === '') continue;
+    // Retired 2026-09-01. Named explicitly instead of falling into the generic
+    // "unknown field" error because it was a valid field for a long time: the
+    // caller needs to be told what replaced it, not just that it is gone.
+    if (name === 'status') {
+      throw new BulkGetError(
+        'retired_field',
+        'Field "status" was removed — use "phase" (TODO | IN_PROGRESS | NEED_ACTION | COMPLETE). '
+          + 'status was a lossy 3-state projection: IN_PROGRESS and NEED_ACTION both read "in_progress".',
+      );
+    }
     const group = BULK_GET_FIELD_GROUPS[name];
     const expanded = group ?? ((BULK_GET_FIELDS as readonly string[]).includes(name) ? [name as BulkGetField] : undefined);
     if (!expanded) {

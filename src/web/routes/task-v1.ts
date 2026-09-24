@@ -265,7 +265,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         taskIdPrefix: id,
         message: str('message'),
         cwd: str('cwd'),
-        host: str('host'),
+        host: typeof b.host === 'string' ? b.host : undefined,
         model: str('model'),
         mode: str('mode'),
         engine: b.engine,

@@ -83,7 +83,7 @@ function rec(claudeSessionId: string, overrides: Partial<SessionRecord> = {}): S
 /** The in-memory session registry every mocked tracker call reads. */
 let sessions: SessionRecord[] = [];
 /** Tasks the stand-in getTask can resolve (same contract as the real one). */
-let tasks: Array<{ id: string; title: string }> = [];
+let tasks: Array<{ id: string; title: string; session_id?: string }> = [];
 
 /** Grabs the (sid, busText, opts) of the Nth sendMessageToSession call. */
 function dispatched(n = 0): { sid: string; busText: string; opts: Record<string, unknown> } {
@@ -186,13 +186,20 @@ describe('resolveSendTarget — the handle ladder', () => {
     expect(resolved.taskId).toBe('task-1234abcd');
   });
 
+  it('prefers the current task slot over activity in an older run', async () => {
+    tasks = [{ id: 'task-1234abcd', title: 'Run the migration', session_id: 'sess-current' }];
+    sessions = [rec('sess-current', { taskId: 'task-1234abcd', lastActiveAt: '2026-08-01T00:00:00Z' }),
+      rec('sess-old', { taskId: 'task-1234abcd', lastActiveAt: '2026-08-20T00:00:00Z' })];
+    expect((await resolveSendTarget('task-1234abcd')).session.claudeSessionId).toBe('sess-current');
+  });
+
   it('409s a task that exists but has no live session, naming the task', async () => {
     tasks = [{ id: 'task-1234abcd', title: 'Run the migration' }];
     sessions = [rec('sess-unrelated', { taskId: 'task-other' })];
 
     const err = await expectSendError(resolveSendTarget('task-1234abcd'), 'task_has_no_session', 409);
     expect(err.detail).toEqual({ taskId: 'task-1234abcd' });
-    expect(err.message).toContain('session_start');
+    expect(err.message).toContain('task_start');
   });
 
   it('treats an archived session as no session for a task handle', async () => {
@@ -473,7 +480,7 @@ describe('performSessionSend — expect_reply', () => {
       status: 'pending', fromSessionId: 'sess-caller-4', toSessionId: 'sess-target-1',
     });
     expect(deliveredText()).toContain(`request="${result.requestId}"`);
-    expect(deliveredText()).toContain(`Reply when done: walnut tools call session_send `
+    expect(deliveredText()).toContain(`Reply when done: walnut tools call task_send `
       + `'{"in_reply_to":"${result.requestId}","text":"<your result summary>"}'`);
   });
 
@@ -533,7 +540,7 @@ describe('performSessionSend — expect_reply', () => {
     // Walnut speaks the trailer, so it sits OUTSIDE the envelope: exactly one
     // newline after the closing tag, then exactly one line and nothing more.
     expect(text).toBe(`${parsed.raw}\n`
-      + `Reply when done: walnut tools call session_send `
+      + `Reply when done: walnut tools call task_send `
       + `'{"in_reply_to":"${result.requestId}","text":"<your result summary>"}'`);
   });
 });

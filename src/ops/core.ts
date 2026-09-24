@@ -43,7 +43,7 @@ defineOp({
   title: 'List Walnut projects',
   description:
     'Project registry rows with per-project task counts, favorite flags, and the Inbox counts. ' +
-    'Project is the only grouping layer; a task with no project lives in the Inbox.',
+    'Tasks group by project, then by folder inside a project; a task with no project lives in the Inbox.',
   input: {},
   bind: { method: 'GET', path: '/projects' },
   tags: { readonly: true, remote: 'allow' },
@@ -81,6 +81,7 @@ function nearnessRank(row: Record<string, unknown>, you: Record<string, unknown>
 
 defineOp({
   name: 'session_list',
+  deprecated: 'Use task_list; add scope to find nearby work.',
   title: 'List Walnut coding sessions',
   description:
     'The user\'s tracked AI coding sessions (id, handle, title, owning task, folder, host, ' +
@@ -158,6 +159,7 @@ defineOp({
 
 defineOp({
   name: 'session_transcript',
+  deprecated: 'Use task_history with a task id.',
   title: 'Read a session transcript',
   description:
     'Slim transcript tail of one coding session (what the user sees in the session panel). ' +

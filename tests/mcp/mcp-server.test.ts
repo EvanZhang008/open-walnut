@@ -99,6 +99,18 @@ describe('walnut mcp — tool surface', () => {
     }
   })
 
+  it('keeps legacy calls working without advertising a second work model', async () => {
+    const { client, close } = await connect()
+    try {
+      const names = (await client.listTools()).tools.map((tool) => tool.name)
+      expect(names.some((name) => name.startsWith('session_'))).toBe(false)
+      expect(names).toEqual(expect.arrayContaining(['task_create', 'task_start', 'task_send', 'task_history']))
+      const legacy = await client.callTool({ name: 'session_list', arguments: {} })
+      expect(legacy.isError).toBeFalsy()
+      expect(Array.isArray(jsonOf(legacy).sessions)).toBe(true)
+    } finally { await close() }
+  })
+
   it('--readonly registers NO write tools', async () => {
     const { client, close } = await connect({ readonly: true })
     try {
@@ -116,7 +128,7 @@ describe('walnut mcp — tool surface', () => {
     try {
       const refused = await client.callTool({
         name: 'task_create',
-        arguments: { title: 'should never exist' },
+        arguments: { record_only: true, title: 'should never exist' },
       })
       expect(refused.isError).toBe(true)
       expect(textOf(refused)).toMatch(/task_create not found/)
@@ -136,13 +148,14 @@ describe('walnut mcp — task write path', () => {
     try {
       const result = await client.callTool({
         name: 'task_create',
-        arguments: { title: 'Wire up the MCP bridge', priority: 'important' },
+        arguments: { record_only: true, title: 'Wire up the MCP bridge', priority: 'important' },
       })
       expect(result.isError).toBeFalsy()
       const payload = jsonOf(result)
       const task = payload.task as { id: string; title: string; status: string; priority: string }
       expect(task.title).toBe('Wire up the MCP bridge')
-      expect(task.status).toBe('todo')
+      expect(task).not.toHaveProperty('status')
+      expect(payload.execution).toEqual({ state: 'not_started' })
       expect(task.priority).toBe('important')
 
       // The citation mechanism: a literal, paste-able tag + an instruction.
@@ -166,7 +179,7 @@ describe('walnut mcp — task write path', () => {
     try {
       const created = jsonOf(await client.callTool({
         name: 'task_create',
-        arguments: { title: 'Prefix lookup target', description: 'body text' },
+        arguments: { record_only: true, title: 'Prefix lookup target', description: 'body text' },
       }))
       const id = (created.task as { id: string }).id
       const got = await client.callTool({ name: 'task_get', arguments: { id: id.slice(0, 8) } })
@@ -185,7 +198,7 @@ describe('walnut mcp — task write path', () => {
     try {
       const created = jsonOf(await client.callTool({
         name: 'task_create',
-        arguments: { title: 'Finish the migration' },
+        arguments: { record_only: true, title: 'Finish the migration' },
       }))
       const id = (created.task as { id: string }).id
 
@@ -196,7 +209,7 @@ describe('walnut mcp — task write path', () => {
       expect(handedBack.isError).toBeFalsy()
       const payload = jsonOf(handedBack)
       expect((payload.task as { phase: string; status: string }).phase).toBe('NEED_ACTION')
-      expect((payload.task as { phase: string; status: string }).status).toBe('in_progress')
+      expect(payload.task).not.toHaveProperty('status')
 
       const res = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${id}`)
       const detail = await res.json() as { task: { phase: string; status: string } }
@@ -218,7 +231,7 @@ describe('walnut mcp — task write path', () => {
 
       const created = jsonOf(await client.callTool({
         name: 'task_create',
-        arguments: { title: 'Complete me from MCP' },
+        arguments: { record_only: true, title: 'Complete me from MCP' },
       }))
       const id = (created.task as { id: string }).id
 
@@ -242,7 +255,7 @@ describe('walnut mcp — task write path', () => {
     try {
       const created = jsonOf(await client.callTool({
         name: 'task_create',
-        arguments: { title: 'Rename me' },
+        arguments: { record_only: true, title: 'Rename me' },
       }))
       const id = (created.task as { id: string }).id
 
@@ -268,7 +281,7 @@ describe('walnut mcp — task write path', () => {
     try {
       const created = jsonOf(await client.callTool({
         name: 'task_create',
-        arguments: { title: 'Temporary throwaway' },
+        arguments: { record_only: true, title: 'Temporary throwaway' },
       }))
       const id = (created.task as { id: string }).id
 
@@ -298,29 +311,54 @@ describe('walnut mcp — task write path', () => {
   })
 })
 
+describe('walnut mcp partial writes', () => {
+  it('reports a failed start as an MCP error while keeping the created task id', async () => {
+    const { client, close } = await connect()
+    try {
+      const response = await client.callTool({ name: 'task_create', arguments: {
+        title: 'Recoverable failed launch', cwd: `${WALNUT_HOME}/missing-launch-directory`, expect_reply: false,
+      } })
+      expect(response.isError).toBe(true)
+      const payload = jsonOf(response)
+      const id = (payload.task as { id: string }).id
+      expect(payload.start_error).toBeTruthy()
+      expect(String(payload.next)).toContain(id)
+      const saved = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${id}`)
+      expect(saved.status).toBe(200)
+      expect((await saved.json()).task.title).toBe('Recoverable failed launch')
+    } finally { await close() }
+  }, 30_000)
+})
+
 describe('walnut mcp — reads', () => {
-  it('task_list filters by status', async () => {
+  // Was 'filters by status'. `status` left the tool surface 2026-09-01, so the
+  // same behaviour is asserted through `completion` (the coarse group) and the
+  // rows now answer `phase`, not `status`.
+  it('task_list filters by completion group, and rows carry phase not status', async () => {
     const { client, close } = await connect()
     try {
       const openTask = jsonOf(await client.callTool({
         name: 'task_create',
-        arguments: { title: 'Still open work' },
+        arguments: { record_only: true, title: 'Still open work' },
       })).task as { id: string }
       const closedTask = jsonOf(await client.callTool({
         name: 'task_create',
-        arguments: { title: 'Already closed work' },
+        arguments: { record_only: true, title: 'Already closed work' },
       })).task as { id: string }
       const completed = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${closedTask.id}/complete`, { method: 'POST' })
       expect(completed.status).toBe(200)
 
-      const todo = jsonOf(await client.callTool({ name: 'task_list', arguments: { status: 'todo' } }))
-      const todoTasks = todo.tasks as Array<{ id: string; status: string }>
-      expect(todoTasks.every((t) => t.status === 'todo')).toBe(true)
+      const todo = jsonOf(await client.callTool({ name: 'task_list', arguments: { completion: 'todo' } }))
+      const todoTasks = todo.tasks as Array<{ id: string; phase: string; status?: string }>
+      expect(todoTasks.every((t) => t.phase === 'TODO')).toBe(true)
+      // The lean row must not smuggle the retired field back in.
+      expect(todoTasks.every((t) => !('status' in t))).toBe(true)
       expect(todoTasks.map((t) => t.id)).toContain(openTask.id)
       expect(todoTasks.map((t) => t.id)).not.toContain(closedTask.id)
 
-      const done = jsonOf(await client.callTool({ name: 'task_list', arguments: { status: 'done' } }))
-      const doneTasks = done.tasks as Array<{ id: string; status: string }>
+      const done = jsonOf(await client.callTool({ name: 'task_list', arguments: { completion: 'complete' } }))
+      const doneTasks = done.tasks as Array<{ id: string; phase: string }>
+      expect(doneTasks.every((t) => t.phase === 'COMPLETE')).toBe(true)
       expect(doneTasks.map((t) => t.id)).toContain(closedTask.id)
       expect(doneTasks.map((t) => t.id)).not.toContain(openTask.id)
     } finally {
@@ -333,7 +371,7 @@ describe('walnut mcp — reads', () => {
     try {
       const created = jsonOf(await client.callTool({
         name: 'task_create',
-        arguments: { title: 'Scoped to marina', project: 'marina' },
+        arguments: { record_only: true, title: 'Scoped to marina', project: 'marina' },
       })).task as { id: string; project: string }
       expect(created.project).toBe('marina')
 
@@ -352,15 +390,15 @@ describe('walnut mcp — reads', () => {
     }
   })
 
-  it('walnut_status reports the live server, and session_list answers', async () => {
+  it('walnut_status reports the live server, and task_list answers', async () => {
     const { client, close } = await connect()
     try {
       const status = jsonOf(await client.callTool({ name: 'walnut_status', arguments: {} }))
       expect(status.mode).toBe('LIVE')
       expect(typeof status.version).toBe('string')
 
-      const sessions = jsonOf(await client.callTool({ name: 'session_list', arguments: {} }))
-      expect(Array.isArray(sessions.sessions)).toBe(true)
+      const tasks = jsonOf(await client.callTool({ name: 'task_list', arguments: {} }))
+      expect(Array.isArray(tasks.tasks)).toBe(true)
     } finally {
       await close()
     }

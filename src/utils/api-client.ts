@@ -104,8 +104,8 @@ export function apiGet<T>(path: string, opts?: ApiRequestOptions): Promise<T> {
   return request<T>('GET', path, undefined, opts);
 }
 
-export function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  return request<T>('POST', path, body ?? {});
+export function apiPost<T>(path: string, body?: unknown, opts?: ApiRequestOptions): Promise<T> {
+  return request<T>('POST', path, body ?? {}, opts);
 }
 
 export function apiPatch<T>(path: string, body: unknown): Promise<T> {

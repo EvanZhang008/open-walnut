@@ -21,6 +21,7 @@ interface Seen { method: string; path: string; body: unknown }
 let seen: Seen[] = [];
 /** Stub target routes answer 200 unless a test arms a refusal. */
 let refuse: { status: number; body: unknown } | null = null;
+let startRefusal = false;
 
 function createApp() {
   const app = express();
@@ -33,11 +34,18 @@ function createApp() {
       res.status(refuse.status).json(refuse.body);
       return;
     }
-    res.json({ ok: true, echo: req.body ?? null });
+    if (req.path.endsWith('/start') && startRefusal) {
+      res.status(502).json({ error: { code: 'start_failed', message: 'Host unavailable' } });
+      return;
+    }
+    res.json(req.path === '/tasks' ? { task: { id: 't_created', title: req.body.title, session_ids: [] } }
+      : req.path.endsWith('/start') ? { taskId: req.params.id, sessionId: 's_1', started: true }
+        : { ok: true, echo: req.body ?? null });
   };
   // Only the routes the ops under test bind to.
   v1.put('/focus/tasks/:id/tier', record);
   v1.delete('/tasks/:id', record);
+  v1.post('/tasks', record);
   v1.post('/tasks/:id/complete', record);
   v1.post('/tasks/:id/start', record);   // session_start
   v1.post('/messages', record);          // session_send
@@ -59,6 +67,7 @@ function invoke(body: unknown) {
 beforeEach(() => {
   seen = [];
   refuse = null;
+  startRefusal = false;
 });
 
 describe('POST /api/v1/actions/invoke — happy path', () => {
@@ -175,6 +184,9 @@ describe('POST /api/v1/actions/invoke — code and whole-document ops need confi
   // shapes are gone: starting work is `session_start` (task handle + message) and
   // talking to a live session is `session_send` (to + text).
   const oneClickForbidden: Array<[string, Record<string, unknown>]> = [
+    ['task_create', { title: 'Run work' }],
+    ['task_start', { id: 't_1', message: 'go', mode: 'bypass' }],
+    ['task_send', { to: 't_1', text: 'go' }],
     ['session_start', { task: 't_1', message: 'go', mode: 'bypass' }],
     ['session_send', { to: 's_1', text: 'go' }],
     ['memory_write', { doc: 'global', content: 'replaced' }],
@@ -195,6 +207,16 @@ describe('POST /api/v1/actions/invoke — code and whole-document ops need confi
       expect(seen).toEqual([]);
     });
   }
+
+  it('keeps the created task id when its confirmed start fails', async () => {
+    startRefusal = true;
+    const res = await invoke({ tool: 'task_create', args: { title: 'Recover this work' }, confirmed: true });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.result.task.id).toBe('t_created');
+    expect(res.body.result.start_error).toContain('Host unavailable');
+    expect(seen.map((entry) => entry.path)).toEqual(['/tasks', '/tasks/t_created/start']);
+  });
 
   it('runs the confirmed session_start unchanged', async () => {
     const res = await invoke({

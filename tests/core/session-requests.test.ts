@@ -369,7 +369,7 @@ describe('buildReplyTrailer', () => {
     const trailer = buildReplyTrailer(request({ id: 'rq-aaaabbbbcccc' }));
 
     expect(trailer).toBe(
-      `Reply when done: walnut tools call session_send '{"in_reply_to":"rq-aaaabbbbcccc","text":"<your result summary>"}'`,
+      `Reply when done: walnut tools call task_send '{"in_reply_to":"rq-aaaabbbbcccc","text":"<your result summary>"}'`,
     );
     // A trailer with its own newlines would break the "one \n + one line" rule
     // the sender glues it on with, and the card that reads back from there.
@@ -446,8 +446,8 @@ describe('buildRequestNotification', () => {
       'Its turn ended WITHOUT an explicit reply to your request. The work may still be done — check its output.'
       + '\n\nNext:\n'
       + `  walnut tools call task_get '{"id":"task-77"}'          # its task state\n`
-      + `  walnut tools call session_transcript '{"id":"target-session-1"}'   # read what it did\n`
-      + `  walnut tools call session_send '{"to":"target-s","text":"..."}'  # follow up`,
+      + `  walnut tools call task_history '{"id":"task-77"}'   # read what it did\n`
+      + `  walnut tools call task_send '{"to":"task-77","text":"..."}'  # follow up`,
     );
   });
 
@@ -462,7 +462,7 @@ describe('buildRequestNotification', () => {
     expect(body).toContain('Do NOT send it messages while it waits');
     expect(body).toContain('delivery would auto-deny its pending prompt');
     // The follow-up send is deliberately NOT offered while a human is waiting.
-    expect(body).not.toContain('session_send');
+    expect(body).not.toContain('task_send');
   });
 
   it('names the asker deadline for timeout', () => {

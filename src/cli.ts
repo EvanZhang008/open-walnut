@@ -64,7 +64,7 @@ const GUESS_HINTS: Record<string, string> = {
   find: `walnut tools call search '{"q":"..."}'`,
   task: "walnut tools call task_list '{}'",
   list: "walnut tools call task_list '{}'",
-  session: "walnut tools call session_list '{}'",
+  session: "walnut tools call task_list '{}'",
   project: "walnut tools call project_list '{}'",
   commit: `walnut tools call search '{"q":"<sha>"}'   # resolves to the owning task + session`,
   note: `walnut tools call note_search '{"q":"..."}'`,

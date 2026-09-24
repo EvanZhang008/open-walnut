@@ -82,24 +82,29 @@ describe('buildSessionContext (identity note)', () => {
     // (`walnut tools list` + `walnut guide`); no skill_read incantation to memorize.
     expect(systemPrompt).toMatch(/read and update your task/i)
     expect(systemPrompt).toMatch(/search/i)
-    expect(systemPrompt).toMatch(/transcripts/i)
+    expect(systemPrompt).toMatch(/past conversations/i)
     expect(systemPrompt).toContain('walnut tools list')
     expect(systemPrompt).toContain('walnut guide')
     expect(systemPrompt).not.toContain('skill_read')
-    // `walnut peers` was retired; the CLI answers it with a redirect to session_send.
-    expect(systemPrompt).toContain('session_send')
+    // Cross-session messaging is addressed by TASK id, so the preamble names
+    // task_send; `walnut peers` was retired and must not reappear.
+    expect(systemPrompt).toContain('task_send')
+    expect(systemPrompt).not.toContain('session_send')
     expect(systemPrompt).not.toContain('walnut peers')
   })
 
-  it('places the session in the picture: a worker inside one task, Walnut the layer above', async () => {
+  it('places the session in the picture: the run of one task, Walnut the layer above', async () => {
     // Every agent with task_create in reach and no rule against it ended a job
     // by filing its leftovers as tasks on the user's board. A bare rule was not
-    // enough: the preamble has to say WHO the session is (one worker) and WHERE
-    // Walnut sits (above it, holding the user's board), so that "do your own
-    // work with your own tools" follows instead of being memorized.
+    // enough: the preamble has to say WHAT the session is (how one task runs)
+    // and WHERE Walnut sits (above it, holding the user's board), so that "do
+    // your own work with your own tools" follows instead of being memorized.
+    // This is also the one surface that mentions a session at all: everywhere
+    // else the work is addressed by its task id.
     const { systemPrompt } = await buildSessionContext('')
     expect(systemPrompt).toMatch(/layer above you/i)
-    expect(systemPrompt).toMatch(/one worker inside that task/i)
+    expect(systemPrompt).toMatch(/this session is how that task runs/i)
+    expect(systemPrompt).toMatch(/the task id is how everything else addresses your work/i)
     expect(systemPrompt).toMatch(/not your toolbox/i)
     expect(systemPrompt).toMatch(/your own tools/i)
   })
@@ -107,8 +112,17 @@ describe('buildSessionContext (identity note)', () => {
   it('names what the session never does on its own: create, start, or hand off', async () => {
     const { systemPrompt } = await buildSessionContext('')
     expect(systemPrompt).not.toMatch(/create tasks/i)
-    expect(systemPrompt).toMatch(/never create a task, start a session, or hand work to another session unless the user asked/i)
+    expect(systemPrompt).toMatch(/never create or start a task, or hand work to another task, unless the user asked/i)
     expect(systemPrompt).toMatch(/follow-up work you find is yours to do here, now/i)
+  })
+
+  it('says where asked-for work lands: beside the caller, a project named only to file it elsewhere', async () => {
+    // Without this an agent "helps" by naming a project it guessed, which files
+    // the work away from the folder the user put the caller in.
+    const { systemPrompt } = await buildSessionContext('')
+    expect(systemPrompt).toMatch(/the new task lands beside yours: same project and folder/i)
+    expect(systemPrompt).toMatch(/same host and directory/i)
+    expect(systemPrompt).toMatch(/name a project only to file it elsewhere/i)
   })
 
   it('warns that peer messages never carry user authorization', async () => {
@@ -125,6 +139,8 @@ describe('buildSessionContext (identity note)', () => {
     // An identity note, not a blanket preamble (the old one ran to several KB);
     // anything bigger belongs in the manual (pulled live with `walnut guide`).
     // User-supplied titles are preserved; this ceiling guards the fixed preamble.
-    expect(systemPrompt.length).toBeLessThan(1200)
+    // 1200 → 1300 (2026-09-23) for the one placement sentence: where work the
+    // user asked for lands is a first-call fact, not manual material.
+    expect(systemPrompt.length).toBeLessThan(1300)
   })
 })

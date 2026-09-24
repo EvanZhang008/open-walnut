@@ -198,6 +198,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     }
     const r = await executeOp(name, parsed)
     if (!r.ok) {
+      if (r.result !== undefined) console.log(JSON.stringify(r.result, null, 2))
       console.error(r.message)
       process.exitCode = 1
       return

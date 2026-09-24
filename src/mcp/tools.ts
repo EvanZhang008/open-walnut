@@ -13,7 +13,8 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-import { listOps, opNames, executeOp, resolveApiBase } from '../ops/index.js'
+import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { getOp, listOps, opNames, executeOp, resolveApiBase } from '../ops/index.js'
 
 export { resolveApiBase }
 
@@ -67,7 +68,16 @@ export function registerWalnutTools(
       _meta: { 'anthropic/alwaysLoad': true },
     }, async (args: Record<string, unknown>) => {
       const r = await executeOp(op.name, args ?? {}, { apiBase: base })
-      return r.ok ? ok(r.result) : fail(r.message)
+      return r.ok ? ok(r.result) : r.result !== undefined ? { ...ok(r.result), isError: true } : fail(r.message)
     })
   }
+  // The MCP catalog leaves out old names, but explicit calls from existing clients still go through the same validation and permission checks.
+  const callable = new Set(listOps({ includeDeprecated: true }).filter((op) => !options.readonly || op.tags.readonly).map((op) => op.name))
+  server.server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+    const op = getOp(params.name)
+    if (!op || !callable.has(op.name) || (options.readonly && !op.tags.readonly)) return fail(`Tool ${params.name} not found`)
+    const result = await executeOp(op.name, params.arguments ?? {}, { apiBase: base })
+    return result.ok ? ok(result.result)
+      : result.result !== undefined ? { ...ok(result.result), isError: true } : fail(result.message)
+  })
 }

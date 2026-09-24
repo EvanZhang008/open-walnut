@@ -115,13 +115,13 @@ describe('formatOpHelp', () => {
 
 describe('the catalog and the op detail point back to the skill', () => {
   // A half-answer is what suppressed skill loading: the CLI gave a usable op
-  // name, so the agent never went looking for the task-vs-session model.
+  // name, so the agent never went looking for the task model.
   it('both renderings name skill_read walnut', () => {
     const table = formatToolsTable([{ name: 'task_list', title: 'List tasks', readonly: true }])
     expect(table).toContain(SKILL_POINTER)
     expect(formatOpHelp({ name: 'task_list', params: [] })).toContain(SKILL_POINTER)
     expect(SKILL_POINTER).toContain('skill_read')
-    expect(SKILL_POINTER).toContain('task vs session')
+    expect(SKILL_POINTER).toContain('Task model')
   })
 
   it('the daemon source twin prints the same pointer', () => {

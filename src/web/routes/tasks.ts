@@ -74,7 +74,11 @@ import {
 
 /** Session info used during enrichment (includes mode for slot inference). */
 interface SessionInfo {
+  startedAt?: string
   process_status: ProcessStatus
+  status_reason?: import('../../core/types.js').StatusReason
+  pid?: number
+  errorMessage?: string
   activity?: string
   mode: SessionMode
   provider?: import('../../core/types.js').SessionProvider
@@ -122,7 +126,7 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
     log.web.warn('session enrichment skipped — failed to read session store', {
       error: err instanceof Error ? err.message : String(err),
     })
-    return tasks
+    return tasks.map((task) => ({ ...task, session_status_unavailable: true }))
   }
 
   // Build reverse map: taskId → session records that reference it.
@@ -148,7 +152,11 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
   for (const rec of allSessions) {
     if (sessionIds.has(rec.claudeSessionId)) {
       sessionMap.set(rec.claudeSessionId, {
+        startedAt: rec.startedAt,
         process_status: rec.process_status,
+        status_reason: rec.status_reason,
+        pid: rec.pid,
+        errorMessage: rec.errorMessage,
         activity: rec.activity,
         mode: rec.mode,
         provider: rec.provider,
@@ -161,7 +169,7 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
   }
 
   return tasks.map((t) => {
-    const enriched: Task = { ...t }
+    const enriched: Task = { ...t, session_ids: [...(t.session_ids ?? [])] }
 
     // Merge sessions discovered via session record's taskId but missing from task fields.
     // This heals the data inconsistency where linkSessionSlot/linkSession failed (e.g., file
@@ -221,6 +229,7 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
       }
     }
 
+    enriched.session_history_count = enriched.session_ids?.length ?? 0
     // Filter archived sessions early — all downstream logic only sees live sessions.
     if (enriched.session_ids) {
       enriched.session_ids = enriched.session_ids.filter(sid => !sessionMap.get(sid)?.archived)
@@ -230,7 +239,11 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
     const singleInfo = enriched.session_id ? sessionMap.get(enriched.session_id) : undefined
     if (singleInfo && !singleInfo.archived) {
       enriched.session_status = {
+        startedAt: singleInfo.startedAt,
         process_status: singleInfo.process_status,
+        status_reason: singleInfo.status_reason,
+        pid: singleInfo.pid,
+        errorMessage: singleInfo.errorMessage,
         activity: singleInfo.activity,
         mode: singleInfo.mode,
         provider: singleInfo.provider,

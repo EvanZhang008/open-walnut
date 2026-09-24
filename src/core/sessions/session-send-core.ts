@@ -45,7 +45,7 @@ export class SendError extends Error {
   constructor(
     public code:
       | 'bad_request' | 'unknown_target' | 'ambiguous_target' | 'task_has_no_session'
-      | 'target_archived' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
+      | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone',
     message: string,
     public statusCode = 400,
@@ -167,11 +167,11 @@ export async function resolveSendTarget(to: string): Promise<ResolvedTarget> {
 
   // Task handle: getTask is the canonical prefix matcher (throws on no match /
   // ambiguity). A miss is fine — `to` may be a session prefix or a title.
-  let taskHit: { id: string; title: string } | undefined;
+  let taskHit: { id: string; title: string; session_id?: string; exec_session_id?: string } | undefined;
   try {
     const { getTask } = await import('../task-manager.js');
     const task = await getTask(to);
-    taskHit = { id: task.id, title: task.title };
+    taskHit = { id: task.id, title: task.title, session_id: task.session_id, exec_session_id: task.exec_session_id };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('Ambiguous ID prefix')) throw new SendError('ambiguous_target', msg, 400);
@@ -195,12 +195,12 @@ export async function resolveSendTarget(to: string): Promise<ResolvedTarget> {
     const sessions = liveSessionsForTask(await getSessionsForTask(taskHit.id));
     if (sessions.length === 0) {
       throw new SendError('task_has_no_session',
-        `task "${taskHit.title}" (${shortId(taskHit.id)}) has no session — start one with session_start`,
+        `Task "${taskHit.title}" (${taskHit.id}) is not started. Use task_start with that id.`,
         409, { taskId: taskHit.id });
     }
     // Prefer the task's current slot; otherwise the most recently active row.
-    const bySlot = sessions.length === 1 ? sessions[0]
-      : [...sessions].sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))[0];
+    const bySlot = sessions.find((s) => s.claudeSessionId === (taskHit.session_id || taskHit.exec_session_id))
+      ?? [...sessions].sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))[0];
     return { session: bySlot, taskId: taskHit.id };
   }
 

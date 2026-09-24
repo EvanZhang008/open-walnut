@@ -61,7 +61,7 @@ describe('ops registry — shape contract', () => {
   it('the original 10 MCP tool names survive the registry port (public contract)', () => {
     const names = listOps().map((o) => o.name)
     for (const n of [
-      'task_list', 'task_get', 'search', 'project_list', 'session_list', 'walnut_status',
+      'task_list', 'task_get', 'search', 'project_list', 'task_history', 'walnut_status',
       'task_create', 'task_update', 'task_complete', 'task_delete',
     ]) expect(names).toContain(n)
   })
@@ -270,7 +270,7 @@ describe('ops registry — parity with the live server (P4)', () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')
     const base = `http://127.0.0.1:${addr.port}`
-    const created = await executeOp('task_create', { title: 'lifecycle probe' }, { apiBase: base })
+    const created = await executeOp('task_create', { record_only: true, title: 'lifecycle probe' }, { apiBase: base })
     expect(created.ok).toBe(true)
     const id = ((created as { result?: { task?: { id?: string } } }).result?.task?.id) ?? ''
     expect(id).toBeTruthy()
@@ -313,7 +313,7 @@ describe('ops registry — parity with the live server (P4)', () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')
     const base = `http://127.0.0.1:${addr.port}`
-    const created = await executeOp('task_create', { title: 'focus op probe' }, { apiBase: base })
+    const created = await executeOp('task_create', { record_only: true, title: 'focus op probe' }, { apiBase: base })
     expect(created.ok).toBe(true)
     const id = ((created as { result?: { task?: { id?: string } } }).result?.task?.id) ?? ''
     const prefix = id.slice(0, -1)
@@ -454,7 +454,7 @@ describe('ops registry — parity with the live server (P4)', () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')
     const base = `http://127.0.0.1:${addr.port}`
-    const created = await executeOp('task_create', { title: 'parity probe' }, { apiBase: base })
+    const created = await executeOp('task_create', { record_only: true, title: 'parity probe' }, { apiBase: base })
     expect(created.ok).toBe(true)
     const id = ((created as { result?: { task?: { id?: string } } }).result?.task?.id) ?? ''
     expect(id).toBeTruthy()
