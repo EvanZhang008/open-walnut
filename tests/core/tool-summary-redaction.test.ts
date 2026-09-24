@@ -261,13 +261,13 @@ describe('full-text read: the same masking rule at 100x the length', () => {
     // 700-character `resultPreview` never contained it and could not have masked it.
     // If the full read shipped raw text, this is the byte where a drawer would start
     // leaking credentials that no surface leaked before.
-    const exampleSecret = 'aws_secret_access_key=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY'
+    const testSecret = 'aws_secret_access_key=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY'
     const result = 'ordinary build output line\n'.repeat(120)
-      + `${exampleSecret}\n`
+      + `${testSecret}\n`
       + 'and the build continues\n'.repeat(120)
     // Past 700 (resultPreview) AND past 2000 (the widest excerpt any field carries),
     // so no preview masker has ever seen these bytes.
-    expect(result.indexOf(exampleSecret)).toBeGreaterThan(2_000)
+    expect(result.indexOf(testSecret)).toBeGreaterThan(2_000)
     const preview = toolResultPreview(result)!
     expect(preview).not.toContain('wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY')
     expect(preview.length).toBeLessThanOrEqual(701) // it never even got there
