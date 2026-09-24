@@ -145,8 +145,17 @@ export interface IndexStatus {
   degraded?: 'semantic-unavailable';
 }
 
-export async function fetchNotesTree(): Promise<NoteTreeNode[]> {
-  const res = await apiGet<{ tree: NoteTreeNode[] }>('/api/notes-v2');
+/**
+ * `priority: 'low'` is for warming a cache nobody is looking at yet (the app's
+ * idle prefetch): it waits for a free connection instead of competing with the
+ * page the user is on.
+ */
+export interface CorpusFetchOptions {
+  priority?: 'low';
+}
+
+export async function fetchNotesTree(opts?: CorpusFetchOptions): Promise<NoteTreeNode[]> {
+  const res = await apiGet<{ tree: NoteTreeNode[] }>('/api/notes-v2', undefined, opts);
   return res.tree;
 }
 
@@ -252,8 +261,8 @@ export async function fetchForwardLinks(notePath: string): Promise<ForwardLink[]
   return res.links ?? [];
 }
 
-export async function fetchNotesList(): Promise<NoteListItem[]> {
-  const res = await apiGet<{ notes: NoteListItem[] }>('/api/notes-v2/list');
+export async function fetchNotesList(opts?: CorpusFetchOptions): Promise<NoteListItem[]> {
+  const res = await apiGet<{ notes: NoteListItem[] }>('/api/notes-v2/list', undefined, opts);
   return res.notes;
 }
 
@@ -268,8 +277,8 @@ export interface TagCount {
  * Degrades gracefully to `[]` if the index/endpoint is not yet available so
  * manual typing still works (the autocomplete shows only the "Create" row).
  */
-export async function fetchTags(): Promise<TagCount[]> {
-  const res = await apiGet<{ tags: TagCount[] }>('/api/notes-v2/tags');
+export async function fetchTags(opts?: CorpusFetchOptions): Promise<TagCount[]> {
+  const res = await apiGet<{ tags: TagCount[] }>('/api/notes-v2/tags', undefined, opts);
   return res.tags ?? [];
 }
 

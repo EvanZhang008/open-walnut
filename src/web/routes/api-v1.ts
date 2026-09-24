@@ -48,9 +48,9 @@ import {
   resolveSafePath,
   toRelPath,
   getWildcardPath,
-  scanDir,
   MAX_NOTE_SIZE,
 } from './notes-v2.js'
+import { getNotesTree } from '../../core/notes-tree.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
 import { mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
 import {
@@ -3022,8 +3022,8 @@ apiV1Router.get('/notes', async (_req: Request, res: Response, next: NextFunctio
   try {
     ensureIndexBootstrap()
     await ensureNotesDir()
-    const tree = await scanDir(NOTES_DIR, '')
-    res.json({ tree })
+    const snap = await getNotesTree()
+    res.type('application/json').send(snap.json)
   } catch (err) {
     next(err)
   }

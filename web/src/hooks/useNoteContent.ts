@@ -50,6 +50,14 @@ export function useNoteContent(notePath: string | null) {
    */
   const frontmatterRef = useRef<string>('');
   /**
+   * The note's full bytes (frontmatter + body) as last loaded from or written to
+   * disk. A save whose serialized markdown equals this is a no-op: the editor's
+   * own normalization pass on open emits an update for many notes (nested lists,
+   * Notion exports), and writing those identical bytes back cost a PUT, an index
+   * reconcile, a `notes:updated` broadcast and a backlinks refetch on every open.
+   */
+  const lastWrittenRef = useRef<string | null>(null);
+  /**
    * Mirrors `pendingExternal` for use inside the WS callback / idle-flush
    * without re-subscribing. Tracks whether a deferred external change is
    * waiting so the auto-apply (on idle+clean) can fire it.
@@ -107,6 +115,7 @@ export function useNoteContent(notePath: string | null) {
           return;
         }
         contentHashRef.current = contentHash;
+        lastWrittenRef.current = c;
         dirtyRef.current = false;
         // Strip frontmatter before the editor sees it; preserve it for re-save.
         const { frontmatter, body } = splitFrontmatter(c);
@@ -256,6 +265,7 @@ export function useNoteContent(notePath: string | null) {
       }
       log.info('notes', 'Adopting a note saved in another view', { path: notePath });
       contentHashRef.current = sig.contentHash;
+      lastWrittenRef.current = sig.content;
       const { frontmatter, body } = splitFrontmatter(sig.content);
       frontmatterRef.current = frontmatter;
       setContent(body);
@@ -335,8 +345,10 @@ export function useNoteContent(notePath: string | null) {
       if (!wasMovedAway && dirtyRef.current && editorRef.current && prevPath) {
         const editor = editorRef.current;
         const md = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
-        const hash = contentHashRef.current ?? undefined;
-        saveNoteContent(prevPath, md, hash, surfaceIdRef.current).catch(() => {});
+        if (md !== lastWrittenRef.current) {
+          const hash = contentHashRef.current ?? undefined;
+          saveNoteContent(prevPath, md, hash, surfaceIdRef.current).catch(() => {});
+        }
       }
     }
 
@@ -347,6 +359,7 @@ export function useNoteContent(notePath: string | null) {
     contentHashRef.current = null;
 
     frontmatterRef.current = '';
+    lastWrittenRef.current = null;
     let cancelled = false;
     fetchNoteContent(notePath)
       .then(({ content: c, updatedAt: u, contentHash }) => {
@@ -355,6 +368,7 @@ export function useNoteContent(notePath: string | null) {
         // the stamped id never renders as a heading or gets duplicated.
         const { frontmatter, body } = splitFrontmatter(c);
         frontmatterRef.current = frontmatter;
+        lastWrittenRef.current = c;
         setContent(body);
         setUpdatedAt(u);
         contentHashRef.current = contentHash;
@@ -364,6 +378,7 @@ export function useNoteContent(notePath: string | null) {
         // 404 = new file, start empty
         if (err.status === 404) {
           frontmatterRef.current = '';
+          lastWrittenRef.current = '';
           setContent('');
           setUpdatedAt(null);
           contentHashRef.current = null;
@@ -382,6 +397,25 @@ export function useNoteContent(notePath: string | null) {
     const pathToSave = currentPathRef.current;
     if (!pathToSave || savingRef.current) return;
 
+    // Re-attach the preserved frontmatter so the saved bytes are
+    // `frontmatter + editedBody` — keeps the id stable (no re-stamp) and the
+    // round-trip byte-clean.
+    const editorMd = editor.storage.markdown.getMarkdown();
+    const md = joinFrontmatter(frontmatterRef.current, editorMd);
+    if (md === lastWrittenRef.current) {
+      // The editor re-emitted the bytes already on disk (its normalization pass
+      // on open, or an edit that was undone). Nothing to write. The editor is
+      // clean now, so a deferred external write (§6.2) can be applied, exactly as
+      // after a real save.
+      dirtyRef.current = false;
+      setSaveStatus('idle');
+      if (pendingExternalRef.current?.kind === 'external' && pendingExternalRef.current.path === pathToSave) {
+        log.info('notes', 'Applying deferred external update (editor now clean)', { path: pathToSave });
+        reloadContent(pathToSave);
+      }
+      return;
+    }
+
     savingRef.current = true;
     setSaveStatus('saving');
     // Shared "a save is mid-air for this note" flag: another surface holding the
@@ -390,11 +424,6 @@ export function useNoteContent(notePath: string | null) {
     beginDocSave(docKey);
 
     try {
-      // Re-attach the preserved frontmatter so the saved bytes are
-      // `frontmatter + editedBody` — keeps the id stable (no re-stamp) and the
-      // round-trip byte-clean.
-      const editorMd = editor.storage.markdown.getMarkdown();
-      const md = joinFrontmatter(frontmatterRef.current, editorMd);
       const hash = contentHashRef.current ?? undefined;
       // saveNoteContent announces the write on the shared doc-saved signal (and
       // registers its hash), so every other mounted view of this note converges
@@ -425,6 +454,7 @@ export function useNoteContent(notePath: string | null) {
         if (!frontmatterRef.current && result.id) {
           frontmatterRef.current = `---\nid: ${result.id}\n---\n`;
         }
+        lastWrittenRef.current = joinFrontmatter(frontmatterRef.current, editorMd);
         setSaveStatus('saved');
         dirtyRef.current = false;
         // Adopt what we just wrote as the content STATE (same as the home Notes

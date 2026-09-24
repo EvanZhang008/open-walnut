@@ -28,6 +28,16 @@ import {
 } from '../../core/parse-frontmatter.js'
 import { resolveAttachmentPath, invalidateAttachmentIndex } from './notes-attachment.js'
 import {
+  getNotesTree,
+  invalidateNotesTree,
+  resetNotesTreeCache,
+  scanTree,
+  scheduleNotesTreeWarmup,
+  isAttachmentFile,
+  ATTACHMENT_EXTS,
+  type TreeNode,
+} from '../../core/notes-tree.js'
+import {
   scheduleNotesIndexUpdate,
   reconcileNoteNow,
   normalizeTag,
@@ -121,10 +131,32 @@ export function ensureIndexBootstrap(): void {
  * in a directory being removed. Idempotent.
  */
 export function resetIndexBootstrap(): void {
+  // The tree snapshot is per-vault state too: a test that swaps the vault out
+  // from under the router must not be answered from the previous vault's tree.
+  resetNotesTreeCache()
   if (!indexBootstrapped) return
   indexBootstrapped = false
   bus.unsubscribe('notes-index-reconcile')
   stopNotesIndexer()
+}
+
+/**
+ * Warm the notes read path a little after boot, when the startup burst is over:
+ * open the structural index (backlinks / tags / list) and build the tree
+ * snapshot, so the first click on a note is served from memory instead of
+ * paying a cold index open plus a vault walk on a busy event loop. Returns a
+ * cancel function for shutdown.
+ */
+export function scheduleNotesWarmup(delayMs?: number): () => void {
+  const cancelTree = scheduleNotesTreeWarmup(delayMs)
+  const timer = setTimeout(() => {
+    try { ensureIndexBootstrap() } catch { /* the first request bootstraps instead */ }
+  }, delayMs ?? 20_000)
+  timer.unref?.()
+  return () => {
+    cancelTree()
+    clearTimeout(timer)
+  }
 }
 
 /**
@@ -199,70 +231,14 @@ export function getWildcardPath(req: Request): string | null {
 }
 
 // ─── Tree ────────────────────────────────────────────────────────────────
+// The walk, the attachment-kind rule and the cached snapshot live in
+// core/notes-tree.ts. `scanDir` stays exported for callers that want an
+// uncached walk of an arbitrary directory.
 
-// Attachment file types surfaced in the tree (Obsidian _attachment folders hold
-// these). `kind: 'attachment'` lets the FE preview them via /attachment instead of
-// loading them as markdown. Match case-insensitively (real vaults have `.PDF`).
-// Office docs are listed (not rendered): clicking opens them in the local app
-// (Word/Excel) via /reveal, or downloads through /attachment as a fallback.
-const ATTACHMENT_EXTS = new Set([
-  // heic/heif: what an iPhone camera actually writes. Excluding them meant
-  // every photo imported straight off a phone answered 400 "File type not
-  // allowed" and rendered as a broken embed.
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'pdf',
-  'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt',
-])
-
-function isAttachmentFile(name: string): boolean {
-  const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase()
-  return name.includes('.') && ATTACHMENT_EXTS.has(ext)
-}
-
-export interface TreeNode {
-  name: string
-  path: string       // relative to NOTES_DIR, forward slashes
-  type: 'file' | 'folder'
-  // 'note' = markdown (default; open in editor). 'attachment' = image/pdf
-  // (preview via /attachment, never markdown-load). Absent on folders.
-  kind?: 'note' | 'attachment'
-  children?: TreeNode[]
-}
+export { isAttachmentFile, type TreeNode }
 
 export async function scanDir(dirPath: string, relBase: string): Promise<TreeNode[]> {
-  let entries: import('fs').Dirent[]
-  try {
-    entries = await fsp.readdir(dirPath, { withFileTypes: true })
-  } catch (err: any) {
-    if (err.code === 'ENOENT') return []
-    throw err
-  }
-
-  const nodes: TreeNode[] = []
-
-  // Sort: folders first, then alphabetical
-  entries.sort((a, b) => {
-    if (a.isDirectory() && !b.isDirectory()) return -1
-    if (!a.isDirectory() && b.isDirectory()) return 1
-    return a.name.localeCompare(b.name)
-  })
-
-  for (const entry of entries) {
-    if (entry.name.startsWith('.')) continue // skip hidden files
-    if (entry.name.startsWith('~$')) continue // Office owner/lock temp files
-    const relPath = relBase ? `${relBase}/${entry.name}` : entry.name
-
-    if (entry.isDirectory()) {
-      const children = await scanDir(path.join(dirPath, entry.name), relPath)
-      nodes.push({ name: entry.name, path: relPath, type: 'folder', children })
-    } else if (entry.name.endsWith('.md')) {
-      nodes.push({ name: entry.name, path: relPath, type: 'file', kind: 'note' })
-    } else if (isAttachmentFile(entry.name)) {
-      // Attachments (images/pdf) — shown with their own icon; clicking previews.
-      nodes.push({ name: entry.name, path: relPath, type: 'file', kind: 'attachment' })
-    }
-  }
-
-  return nodes
+  return scanTree(dirPath, relBase)
 }
 
 // GET /api/notes-v2 — file tree
@@ -270,8 +246,10 @@ notesV2Router.get('/', async (_req: Request, res: Response, next: NextFunction) 
   try {
     ensureIndexBootstrap()
     await ensureNotesDir()
-    const tree = await scanDir(NOTES_DIR, '')
-    res.json({ tree })
+    // Pre-serialized snapshot: no walk and no stringify on the hot path. Express
+    // still stamps its ETag on the string, so a client that revalidates gets 304.
+    const snap = await getNotesTree()
+    res.type('application/json').send(snap.json)
   } catch (err) {
     next(err)
   }
@@ -513,6 +491,7 @@ export async function saveNoteAttachment(
   // The resolver's vault index must see the new file immediately: the editor
   // inserts the embed and fetches it in the same breath.
   invalidateAttachmentIndex()
+  invalidateNotesTree()
   log.memory.info('Note attachment saved', { notePath, path: relPath, bytes: buffer.length })
   // The tree only refetches on explicit create/delete/move or this event —
   // a new _attachment/ folder + file appeared outside that path, so without
@@ -615,7 +594,11 @@ notesV2Router.put('/content/*path', async (req: Request, res: Response, next: Ne
     // check+write run under the file lock — the agent's writeFileChecked path
     // locks too, so an agent write can't slip between our check and write.
     await fsp.mkdir(path.dirname(filePath), { recursive: true })
+    let created = false
     const conflict = await withFileLock(filePath, async () => {
+      // A new file changes the tree; an overwrite only changes bytes. Only the
+      // former drops the tree snapshot (typing must never trigger a re-walk).
+      try { await fsp.access(filePath) } catch { created = true }
       if (expectedHash) {
         try {
           const currentContent = await fsp.readFile(filePath, 'utf-8')
@@ -634,6 +617,7 @@ notesV2Router.put('/content/*path', async (req: Request, res: Response, next: Ne
       return
     }
 
+    if (created) invalidateNotesTree()
     const stat = await fsp.stat(filePath)
     const contentHash = computeContentHash(finalContent)
     const normalizedPath = notePath.replace(/\.md$/, '')
@@ -680,6 +664,7 @@ notesV2Router.delete('/content/*path', async (req: Request, res: Response, next:
       }
     } catch { /* best-effort cleanup */ }
 
+    invalidateNotesTree()
     log.memory.info('Note deleted', { path: notePath })
     // Reconcile the deletion (removes the row, marks inbound links unresolved).
     scheduleNotesIndexUpdate(relPath)
@@ -713,6 +698,7 @@ export async function deleteNoteAttachment(relPath: unknown): Promise<{ ok: true
   // Drop the resolver's index so a deleted file can't keep answering requests
   // (it would then 404 at the stat, but only after picking it over a live copy).
   invalidateAttachmentIndex()
+  invalidateNotesTree()
   log.memory.info('Attachment deleted', { path: relPath })
   return { ok: true }
 }
@@ -773,6 +759,7 @@ export async function deleteNotesFolder(folderPath: unknown): Promise<{ ok: true
   await collect(fullPath)
 
   await fsp.rm(fullPath, { recursive: true })
+  invalidateNotesTree()
 
   for (const rel of containedNotes) scheduleNotesIndexUpdate(rel)
   // Drop extracted-text rows for attachments that lived under the folder.
@@ -852,6 +839,7 @@ export async function moveNote(from: unknown, to: unknown): Promise<{ ok: true }
   // Move file
   await fsp.mkdir(path.dirname(toFile), { recursive: true })
   await fsp.rename(fromFile, toFile)
+  invalidateNotesTree()
 
   const fromRel = toRelPath(fromFile)
   const toRel = toRelPath(toFile)
@@ -1558,6 +1546,7 @@ export async function createNotesFolder(folderPath: unknown): Promise<{ ok: true
   const fullPath = resolveSafePath(folderPath)
   if (!fullPath) throw new NotesOpError('invalid path', 400)
   await fsp.mkdir(fullPath, { recursive: true })
+  invalidateNotesTree()
   return { ok: true }
 }
 

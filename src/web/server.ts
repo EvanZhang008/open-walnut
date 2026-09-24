@@ -526,6 +526,7 @@ let externalSessionImporter:
   import('../core/sessions/external-session-import.js').ExternalSessionImporterHandle | null = null
 let terminalReaperHandle: { stop: () => void } | null = null
 let notesWatcherHandle: { stop: () => void } | null = null
+let cancelNotesWarmup: (() => void) | null = null
 let searchV2WiringHandle: { stop(): Promise<void> } | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | null = null
@@ -2231,6 +2232,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const semantic = process.env.WALNUT_DISABLE_SEARCH !== '1' && !CLOUD_MODE
     notesWatcherHandle = startNotesWatcher({ semantic })
     log.memory.info('notes/memory watcher started', { semantic })
+    // Warm the notes read path (tree snapshot + structural index) a little after
+    // boot: the first click on a note then answers from memory instead of
+    // walking the vault on a busy event loop. Deferred so it stays out of the
+    // startup burst; cancelled by stopServer.
+    const { scheduleNotesWarmup } = await import('./routes/notes-v2.js')
+    cancelNotesWarmup = scheduleNotesWarmup()
   } catch (err) {
     log.memory.warn('notes/memory watcher failed to start', {
       error: err instanceof Error ? err.message : String(err),
@@ -5273,6 +5280,10 @@ export async function stopServer(): Promise<void> {
   if (notesWatcherHandle) {
     notesWatcherHandle.stop()
     notesWatcherHandle = null
+  }
+  if (cancelNotesWarmup) {
+    cancelNotesWarmup()
+    cancelNotesWarmup = null
   }
   // Detach the log-error → notification bridge (a test's next startServer()
   // reinstalls it; leaving it set would write to a torn-down store).

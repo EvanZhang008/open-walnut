@@ -24,6 +24,7 @@ import { MemoryPage } from './pages/MemoryPage';
 import { CreatePluginPage } from './pages/CreatePluginPage';
 import { PopoutRoot } from './popout/PopoutRoot';
 import { isPopoutPath } from './popout/openPopout';
+import { scheduleNotesPrefetch } from './utils/notes-prefetch';
 
 ensureCoreAppsRegistered();
 
@@ -62,6 +63,14 @@ export function App() {
   // ?view=&d=, Settings' #pane) — see utils/last-location.ts for which locations
   // are recorded.
   useEffect(() => { rememberLocation(location); }, [location]);
+
+  // Warm the Notes page's tree + autocomplete corpora once the app has settled,
+  // at low priority, so the first note the user opens is served from memory.
+  useEffect(() => {
+    if (isPopoutPath(location.pathname)) return;
+    scheduleNotesPrefetch({ pathname: location.pathname });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (isPopoutPath(location.pathname)) return <PopoutRoot />;
 

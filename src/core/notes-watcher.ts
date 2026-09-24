@@ -22,6 +22,28 @@ import {
   stopNotesIndexer,
 } from './notes-indexer.js';
 import { log } from '../logging/index.js';
+import { invalidateNotesTree } from './notes-tree.js';
+import { bus, EventNames } from './event-bus.js';
+
+/**
+ * Tell open Notes pages the vault's shape changed behind their back (a note
+ * created, deleted or moved by Obsidian, git-sync or an agent). The page's own
+ * create/delete/move already refresh; this covers everything else. One event
+ * per burst: a sync that touches a hundred files must not trigger a hundred
+ * tree fetches from every open tab.
+ */
+const TREE_CHANGED_DEBOUNCE_MS = 1000;
+let treeChangedTimer: ReturnType<typeof setTimeout> | null = null;
+let treeChangedPath = '';
+function announceTreeChanged(filename: string): void {
+  treeChangedPath = filename;
+  if (treeChangedTimer) return;
+  treeChangedTimer = setTimeout(() => {
+    treeChangedTimer = null;
+    bus.emit(EventNames.NOTES_TREE_CHANGED, { path: treeChangedPath.split(path.sep).join('/') }, ['web-ui']);
+  }, TREE_CHANGED_DEBOUNCE_MS);
+  treeChangedTimer.unref?.();
+}
 
 function notifyGitVersioning(filename: string): void {
   import('./git-versioning.js')
@@ -72,8 +94,16 @@ export function startNotesWatcher(opts?: { semantic?: boolean }): { stop: () => 
       // ONE inotify registration → the structural sidecar reconciler, which
       // ALSO drives the search index per changed file. The reconciler has its
       // own per-path coalescing queue + debounce, so we hand it the changed path.
-      watchers.push(fs.watch(NOTES_DIR, { recursive: true }, (_event, filename) => {
+      watchers.push(fs.watch(NOTES_DIR, { recursive: true }, (eventType, filename) => {
         if (!filename) return;
+        // 'rename' is how fs.watch reports an entry created, removed or renamed:
+        // the vault's SHAPE changed, so the tree snapshot is stale. 'change'
+        // (bytes rewritten) leaves the tree alone; the snapshot's own mtime check
+        // covers anything this event stream misses.
+        if (eventType === 'rename') {
+          invalidateNotesTree();
+          announceTreeChanged(filename);
+        }
         if (filename.endsWith('.md')) {
           scheduleNotesIndexUpdate(filename);
         } else {
@@ -90,6 +120,7 @@ export function startNotesWatcher(opts?: { semantic?: boolean }): { stop: () => 
   return {
     stop() {
       if (memoryTimer) { clearTimeout(memoryTimer); memoryTimer = null; }
+      if (treeChangedTimer) { clearTimeout(treeChangedTimer); treeChangedTimer = null; }
       pendingMemory.clear();
       // Stop the notes reconciler's debounce timer so no reconcile fires after
       // the watcher is torn down (ephemeral-server isolation / clean shutdown).

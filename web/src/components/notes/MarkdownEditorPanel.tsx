@@ -4,7 +4,7 @@ import { NotesEditor } from './NotesEditor';
 import { NotesFormatToolbar } from './NotesFormatToolbar';
 import { BacklinksPanel } from './BacklinksPanel';
 import { RawMarkdownView } from './RawMarkdownView';
-import { fetchNotesList, fetchTags } from '@/api/notes-v2';
+import { useNotesListCorpus, useNoteTagsCorpus } from '@/stores/notes-corpus-store';
 import type { NoteListItem, TagCount } from '@/api/notes-v2';
 import type { PendingExternalChange } from '@/hooks/useNoteContent';
 import { splitFrontmatter, joinFrontmatter } from './frontmatter';
@@ -175,9 +175,11 @@ export function MarkdownEditorPanel({
   docId,
   loadingFallback,
 }: MarkdownEditorPanelProps) {
-  // Wiki/tag corpora: caller may inject, else the shell fetches when wikilinks are on.
-  const [fetchedNotes, setFetchedNotes] = useState<NoteListItem[]>([]);
-  const [fetchedTags, setFetchedTags] = useState<TagCount[]>([]);
+  // Wiki/tag corpora: caller may inject, else the shell reads the page-lifetime
+  // store when wikilinks are on (fetched once, refreshed from server events; a
+  // note switch costs no request here).
+  const fetchedNotes = useNotesListCorpus(!!enableWikiLinks && !wikiLinkNotes);
+  const fetchedTags = useNoteTagsCorpus(!!enableWikiLinks && !tagSuggestions);
   const notesList = wikiLinkNotes ?? fetchedNotes;
   const tagList = tagSuggestions ?? fetchedTags;
 
@@ -393,16 +395,6 @@ export function MarkdownEditorPanel({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [showRawToggle, key, toggleRawMode]);
-
-  // Fetch wiki-link + tag corpora when wikilinks are on and the caller didn't inject them.
-  useEffect(() => {
-    if (!enableWikiLinks || wikiLinkNotes) return;
-    fetchNotesList().then(setFetchedNotes).catch(() => {});
-  }, [enableWikiLinks, wikiLinkNotes, key]);
-  useEffect(() => {
-    if (!enableWikiLinks || tagSuggestions) return;
-    fetchTags().then(setFetchedTags).catch(() => {});
-  }, [enableWikiLinks, tagSuggestions, key]);
 
   if (content === null) {
     return (
