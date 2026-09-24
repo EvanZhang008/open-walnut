@@ -85,10 +85,37 @@
 //                               sandboxed process on the simulator, so the one
 //                               reliable way to land a PNG at a path a human can
 //                               open is to hand it to this host process.
+//   POST /__stub/engine?mode=X → what `GET /api/v1/chat/engine` answers from now
+//                               on (ModelPillHealUITests). Reset puts it back to
+//                               `default`, the answer the mid-turn tests rely on.
+//                                 default      lane, no session, switchable:false
+//                                 unreachable  503 primary_unreachable {retry:true}
+//                                              (a replica whose bridge to the Mac
+//                                              is down, as api-v1 answers it)
+//                                 degraded     an OLD replica's own config: one
+//                                              in-process model, no catalog
+//                                              (`&model=<id>` picks which model;
+//                                              default global.anthropic.claude-opus-5)
+//                                 lane         the Mac's lane session, whose
+//                                              /sessions/:id/model-options is the
+//                                              full ten-row catalog below
+//                               The lane session's model and effort WRITES
+//                               (POST /sessions/:id/model, /effort) are answered
+//                               and recorded (with the value), so a test can prove
+//                               whether a tap wrote anything, and what.
+//   POST /__stub/write-delay?ms=N → those writes answer after N ms (a pick in
+//                               flight a test can see). Reset puts it back to 0.
+//   POST /__stub/lane?model=X&effort=Y → the lane session's CURRENT model and
+//                               effort as the Mac reports them, without a recorded
+//                               app write (`effort=none` = the session reports no
+//                               effort, the CLI default). Reset clears both.
+//   POST /__stub/drop-streams → end every open conversation SSE stream, so the
+//                               app reconnects (what a network blip does).
 
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
+import zlib from 'node:zlib'
 
 const PROBE = process.argv.includes('--probe')
 const RECORD_PATH = process.env.WALNUT_STUB_RECORD
@@ -126,6 +153,76 @@ const rings = new Map()
 let seq = 0
 let eventId = 0
 
+/** What GET /chat/engine answers (see /__stub/engine in the header). */
+let engineMode = 'default'
+const ENGINE_MODES = new Set(['default', 'unreachable', 'degraded', 'lane'])
+const LANE_SESSION_ID = 'sess-stub-lane'
+const DEGRADED_MODEL = 'global.anthropic.claude-opus-5'
+let degradedModel = DEGRADED_MODEL
+/** The lane session's model and effort, moved by the app's writes. */
+let laneModel = null
+let laneEffort = null
+/** `laneEffort` value for "the session reports no effort". */
+const NO_EFFORT = Symbol('no-effort')
+/** How long the lane session's writes take to answer, so a test can see a pick
+ *  in flight. */
+let laneWriteDelayMs = 0
+
+/** The Mac's catalog, same row shape as GET /sessions/:id/model-options
+ *  (`src/web/routes/session-control-v1.ts`), in the Mac's order. Copied from
+ *  what a real primary's CLI answered (its host model catalog, 2026-09-24),
+ *  `resolvedModel` included: alias rows (`default`, `opus`, `haiku`) only name
+ *  a real model there, and the phone's row labels derive from it. */
+const ALL_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+const FULL_CATALOG = {
+  models: [
+    ['default', 'global.anthropic.claude-opus-5-5[1m]', 'Default', ALL_LEVELS],
+    ['global.anthropic.claude-fable-5[1m]', 'global.anthropic.claude-fable-5[1m]', 'Fable', ALL_LEVELS],
+    ['global.anthropic.claude-fable-5-1[1m]', 'global.anthropic.claude-fable-5-1[1m]', 'Fable 5.1', ALL_LEVELS],
+    ['global.anthropic.claude-sonnet-5', 'global.anthropic.claude-sonnet-5', 'Sonnet', ALL_LEVELS],
+    ['opus', 'global.anthropic.claude-opus-5-5[1m]', 'Opus 5.5 (1M context)', ALL_LEVELS],
+    ['haiku', 'global.anthropic.claude-haiku-4-5-20251001-v1:0', 'Haiku', null],
+    ['gpt-6-astra', 'gpt-6-astra', 'GPT-6 Astra', ALL_LEVELS],
+    ['gpt-6-sol', 'gpt-6-sol', 'GPT-6 Sol', null],
+    ['gpt-6-luna', 'gpt-6-luna', 'GPT-6 Luna', null],
+    ['gpt-5.6-sol', 'gpt-5.6-sol', 'GPT-5.6 Sol', null],
+  ].map(([id, resolvedModel, label, levels]) => ({
+    id, label, resolvedModel,
+    // Rows the CLI reports no effort axis for carry neither field, like the real answer.
+    ...(levels ? { supportsEffort: true, supportedEffortLevels: levels } : {}),
+  })),
+  current: 'global.anthropic.claude-fable-5-1[1m]',
+  currentEffort: 'high',
+}
+
+function answerEngine(res) {
+  switch (engineMode) {
+    case 'unreachable':
+      // Exactly `relayChatToPrimary`'s answer in src/web/routes/personal-ai-v1.ts.
+      return json(res, 503, {
+        error: {
+          code: 'primary_unreachable',
+          message: 'Your primary box is unreachable, so the chat engine could not be reached yet',
+        },
+        retry: true,
+      })
+    case 'degraded':
+      // What an old replica said about ITSELF while the Mac was away.
+      return json(res, 200, {
+        engine: 'in-process', sessionId: null, model: degradedModel,
+      })
+    case 'lane':
+      return json(res, 200, {
+        engine: 'lane', sessionId: LANE_SESSION_ID, cwd: '/stub', host: '', switchable: true,
+      })
+    default:
+      // `sessionId: null` = the lane has no CLI session yet, which is the honest
+      // answer for a stub and makes the composer's model pill read-only instead of
+      // showing a retry affordance over the button under test.
+      return json(res, 200, { engine: 'lane', sessionId: null, switchable: false })
+  }
+}
+
 function nowISO() { return new Date().toISOString() }
 
 function record(entry) {
@@ -137,7 +234,9 @@ function record(entry) {
   } catch (err) {
     console.error(`could not write ${RECORD_PATH}: ${err.message}`)
   }
-  console.log(`[stub] ${row.seq} ${entry.method} ${entry.path}`
+  // The time is on the line because the record FILE is reset per test, and
+  // spacing between requests (the model pill's retry ladder) is evidence too.
+  console.log(`[stub] ${row.at} g${generation} ${row.seq} ${entry.method} ${entry.path}`
     + (entry.text === undefined ? '' : ` text=${JSON.stringify(entry.text)}`))
 }
 
@@ -238,6 +337,11 @@ function resetAll() {
   conversations = []
   history = []
   seq = 0
+  engineMode = 'default'
+  degradedModel = DEGRADED_MODEL
+  laneModel = null
+  laneEffort = null
+  laneWriteDelayMs = 0
   generation += 1
   try {
     fs.mkdirSync(path.dirname(RECORD_PATH), { recursive: true })
@@ -260,6 +364,25 @@ function readBody(req) {
 
 /** What gets recorded for a body. Deliberately NOT the raw body: an image send
  *  carries megabytes of base64 and the evidence file has to stay readable. */
+/** Echo the app's own composer-pill log lines (menu opened/closed, a tap
+ *  dropped, a switch written) to this process's console, so the ORDER of the
+ *  UIKit menu edges and the taps is on record next to the wire log. Uploads are
+ *  batched (every 45s and on foreground), so lines arrive late but carry the
+ *  app's own timestamps. */
+function printComposerLogLines(req, body) {
+  try {
+    const raw = req.headers['content-encoding'] === 'gzip' ? zlib.gunzipSync(body) : body
+    const parsed = JSON.parse(raw.toString('utf8'))
+    for (const line of parsed.lines || []) {
+      const entry = typeof line === 'string' ? JSON.parse(line) : line
+      if (/^composer (model|effort)/.test(entry.message || '')) {
+        const meta = Object.entries(entry).filter(([k]) => k.startsWith('m_')).map(([k, v]) => `${k.slice(2)}=${v}`)
+        console.log(`[stub] app-log ${entry.ts} ${entry.message} ${meta.join(' ')}`)
+      }
+    }
+  } catch { /* the log echo is evidence, not a dependency */ }
+}
+
 function summarize(raw) {
   if (!raw) return {}
   try {
@@ -269,6 +392,8 @@ function summarize(raw) {
     if (Array.isArray(body.images)) out.imageCount = body.images.length
     if (typeof body.agentId === 'string') out.agentId = body.agentId
     if (typeof body.title === 'string') out.title = body.title
+    if (typeof body.model === 'string') out.model = body.model
+    if (typeof body.effort === 'string') out.effort = body.effort
     return out
   } catch {
     return { bodyBytes: Buffer.byteLength(raw) }
@@ -310,6 +435,33 @@ const server = http.createServer(async (req, res) => {
       })
     }
     if (p === '/__stub/requests') return json(res, 200, records)
+    if (p === '/__stub/write-delay' && req.method === 'POST') {
+      laneWriteDelayMs = Math.max(0, Number(url.searchParams.get('ms') || 0))
+      console.log(`[stub] lane writes answer after ${laneWriteDelayMs}ms`)
+      return json(res, 200, { ok: true, ms: laneWriteDelayMs })
+    }
+    if (p === '/__stub/lane' && req.method === 'POST') {
+      const m = url.searchParams.get('model')
+      const e = url.searchParams.get('effort')
+      if (m) laneModel = m
+      if (e) laneEffort = e === 'none' ? NO_EFFORT : e
+      console.log(`[stub] lane current → model=${laneModel} effort=${String(e)}`)
+      return json(res, 200, { ok: true })
+    }
+    if (p === '/__stub/drop-streams' && req.method === 'POST') {
+      let dropped = 0
+      for (const list of streams.values()) for (const r of list) { r.end(); dropped += 1 }
+      console.log(`[stub] dropped ${dropped} conversation stream(s)`)
+      return json(res, 200, { ok: true, dropped })
+    }
+    if (p === '/__stub/engine' && req.method === 'POST') {
+      const mode = url.searchParams.get('mode') || ''
+      if (!ENGINE_MODES.has(mode)) return json(res, 400, { ok: false, message: `unknown mode ${mode}` })
+      engineMode = mode
+      degradedModel = url.searchParams.get('model') || DEGRADED_MODEL
+      console.log(`[stub] engine → ${mode}${mode === 'degraded' ? ` (${degradedModel})` : ''}`)
+      return json(res, 200, { ok: true, mode })
+    }
     if (p === '/__stub/diag' && req.method === 'POST') {
       // Same reasoning as the screenshot sink: the runner is sandboxed on the
       // simulator, and an accessibility-hierarchy dump is only useful if a human
@@ -417,13 +569,35 @@ const server = http.createServer(async (req, res) => {
   // Answered with the smallest valid body rather than 404 only where a 404
   // costs something (a retry loop, a visible banner). The probe run is what
   // decided this list; see the header.
-  if (p === '/api/v1/chat/engine' && req.method === 'GET') {
-    // `sessionId: null` = the lane has no CLI session yet, which is the honest
-    // answer for a stub and makes the composer's model pill read-only instead of
-    // showing a retry affordance over the button under test.
-    return json(res, 200, { engine: 'lane', sessionId: null, switchable: false })
+  if (p === '/api/v1/chat/engine' && req.method === 'GET') return answerEngine(res)
+  const modelOptionsMatch = p.match(/^\/api\/v1\/sessions\/([^/]+)\/model-options$/)
+  if (modelOptionsMatch && req.method === 'GET') {
+    if (decodeURIComponent(modelOptionsMatch[1]) !== LANE_SESSION_ID) return notFound(res, 'no such session')
+    return json(res, 200, {
+      ...FULL_CATALOG,
+      current: laneModel ?? FULL_CATALOG.current,
+      currentEffort: laneEffort === NO_EFFORT ? null : (laneEffort ?? FULL_CATALOG.currentEffort),
+    })
   }
-  if (p === '/api/v1/client-logs' && req.method === 'POST') return json(res, 200, { ok: true })
+  const sessionWriteMatch = p.match(/^\/api\/v1\/sessions\/([^/]+)\/(model|effort)$/)
+  if (sessionWriteMatch && req.method === 'POST') {
+    if (decodeURIComponent(sessionWriteMatch[1]) !== LANE_SESSION_ID) return notFound(res, 'no such session')
+    let payload = {}
+    try { payload = JSON.parse(raw || '{}') } catch { /* answered as an empty body */ }
+    if (laneWriteDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, laneWriteDelayMs))
+    if (sessionWriteMatch[2] === 'model') {
+      laneModel = String(payload.model ?? '')
+      console.log(`[stub] lane model WRITE → ${laneModel}`)
+      return json(res, 200, { model: laneModel, cliModel: null, appliedLive: true, effectiveModel: laneModel })
+    }
+    laneEffort = String(payload.effort ?? '')
+    console.log(`[stub] lane effort WRITE → ${laneEffort}`)
+    return json(res, 200, { effort: laneEffort, appliedLive: true, effectiveEffort: laneEffort })
+  }
+  if (p === '/api/v1/client-logs' && req.method === 'POST') {
+    printComposerLogLines(req, body)
+    return json(res, 200, { ok: true })
+  }
   if (p === '/api/v1/devices/self' && req.method === 'POST') return json(res, 200, { ok: true })
   if (p === '/api/v1/time/heartbeats' && req.method === 'POST') return json(res, 200, { ok: true })
   if (p === '/api/v1/human-inbox' && req.method === 'GET') {

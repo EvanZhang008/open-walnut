@@ -207,7 +207,7 @@ struct ChatTimelineEmptyState: View {
                 // centred and kept off the screen edges, or the fix trades an
                 // ellipsis for a ragged left edge against the bezel.
                 .multilineTextAlignment(.center)
-            Text("Ask anything — tasks, notes, or what happened today.")
+            Text("Ask anything: tasks, notes, or what happened today.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

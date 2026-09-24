@@ -157,7 +157,9 @@ final class ComposerModelPillPlanTests: XCTestCase {
         XCTAssertNil(p.readOnlyReason)
         XCTAssertEqual(p.currentModelID, "a", "the last known model must stay visible")
         XCTAssertEqual(p.currentEffort, "low")
-        XCTAssertTrue(p.models.isEmpty, "no list we can't honor — the menu carries the retry instead")
+        // The catalog stays (it names the model: gate r2 D3). The MENU is what
+        // offers no list: in the retry state it is the reason and a Retry.
+        XCTAssertEqual(p.models, known.models, "the last known catalog names the last known model")
         XCTAssertEqual(p.writeTarget, .none)
         XCTAssertEqual(p.statusNote, ComposerControlsModel.unreachableNote)
         XCTAssertTrue(

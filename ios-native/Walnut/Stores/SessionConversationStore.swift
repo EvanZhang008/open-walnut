@@ -72,6 +72,11 @@ final class SessionConversationStore {
     /// resumeAll from reviving a store whose screen was dismissed.
     private var viewClosed = false
 
+    /// Bumps once per successful stream connection (first connect and every
+    /// reconnect). Read only by the composer's model pill, which re-asks the
+    /// session's model catalog then. Edge-rate (per connection), never event-rate.
+    private(set) var streamConnects = 0
+
     /// Persisted transcript (completed turns), mapped to ChatMessage rows.
     private(set) var historyMessages: [ChatMessage] = []
     /// Optimistic user bubbles not yet reflected in the transcript.
@@ -765,7 +770,11 @@ final class SessionConversationStore {
             onEvent: { [weak self] event in
                 Task { @MainActor in self?.handle(event) }
             },
-            onConnectionChange: { _ in },
+            // Counted for the composer's model pill only (see `streamConnects`).
+            onConnectionChange: { [weak self] ok in
+                guard ok else { return }
+                Task { @MainActor in self?.streamConnects &+= 1 }
+            },
             onHTTPError: { [weak self] status in
                 // Older server without the stream route: abandon SSE, poll.
                 if status == 404 {

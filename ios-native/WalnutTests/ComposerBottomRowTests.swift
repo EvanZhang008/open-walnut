@@ -110,7 +110,8 @@ final class ComposerBottomRowTests: XCTestCase {
             currentModelID: "global.anthropic.claude-opus-5[1m]",
             currentEffort: "high"
         )
-        XCTAssertEqual(controls.pillLabel, "Opus 5 · High")
+        XCTAssertEqual(controls.pillLabel, "Opus 5")
+        XCTAssertEqual(controls.effortPillLabel, "High")
         XCTAssertTrue(
             ComposerBar.showsModelPill(
                 modelSource: .session(id: "sess-1"), pillLabel: controls.pillLabel

@@ -539,6 +539,9 @@ struct SessionModelOptions: Codable {
         let label: String
         let supportsEffort: Bool?
         let supportedEffortLevels: [String]?
+        /// Additive: the canonical id an alias row resolves to ("opus" →
+        /// "global.anthropic.claude-opus-5-5[1m]"). Row labels derive from it.
+        var resolvedModel: String? = nil
     }
 
     let models: [Model]

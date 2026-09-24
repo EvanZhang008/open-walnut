@@ -110,6 +110,10 @@ struct ComposerBar: View {
     /// The model string already known from the row, shown while the catalog loads
     /// and kept as the label if it never arrives.
     var fallbackModel: String? = nil
+    /// Bumps each time the owner's live stream (re)connects. A reconnect is the
+    /// moment the box can talk again after a gap, which is exactly when a model
+    /// answer fetched during that gap needs re-asking. 0 = the owner has no stream.
+    var modelRevalidateToken: Int = 0
     /// Read-only "where is this served from" for the `+` menu. Absent = the row
     /// is omitted (nothing honest to say).
     var hostProvenance: ComposerHostProvenance? = nil
@@ -436,6 +440,14 @@ struct ComposerBar: View {
         // that lands on a surface nobody is looking at can no longer move the seat at
         // all (see `ComposerSurfaceID`).
         .onChange(of: scenePhase) { _, phase in
+            // The model pill's timers stop in the background and it re-asks on the
+            // way back (see `ComposerModelRefreshPolicy`). Before the dock guards,
+            // which return early. A backgrounding disappear has no matching appear,
+            // so this view (it is still mounted: it got this call) says it is here
+            // again. Whether it is on SCREEN is the model's one rule, which also
+            // asks the dock which surface is in front (`composerOnScreen`).
+            if phase == .active { controls.setVisible(true) }
+            controls.setSceneActive(phase == .active)
             guard phase == .active, measuredHeight > 0 else { return }
             guard onScreen || dock?.isActiveComposerSurface(surface) == true else { return }
             dock?.reportComposer(key: draftKey, surface: surface, height: measuredHeight)
@@ -465,9 +477,16 @@ struct ComposerBar: View {
         }
         .onAppear {
             onScreen = true
+            controls.setSceneActive(scenePhase == .active)
+            // The pill follows the surface in front on its own: a retained tab's
+            // composer gets no disappear when the user switches tabs.
+            controls.follow(surface: surface, dock: dock)
             if let modelSource {
                 controls.attach(modelSource, fallbackModel: fallbackModel)
             }
+            // After attach, so a first appear is answered by the load attach
+            // started, and a return to a retained tab re-asks only a stale answer.
+            controls.setVisible(true)
             // An interruption (call / Siri) auto-transcribes the partial take.
             // For a quick-action take that text is still owed to the agent —
             // route it the same way a normal stop would.
@@ -501,6 +520,10 @@ struct ComposerBar: View {
             if !disabled { voice.drainPending(trigger: "composer-appear") }
             consumeVoiceQuickActionIfPending()
         }
+        .modelPillFollows(
+            controls, source: modelSource, fallbackModel: fallbackModel,
+            revalidateToken: modelRevalidateToken
+        )
         // Warm launch: the shortcut arrives while this view is already mounted,
         // so onAppear never runs again — the mailbox change is the trigger.
         .onChange(of: quickAction.pending) { _, request in
@@ -547,6 +570,12 @@ struct ComposerBar: View {
             if scenePhase == .active {
                 dock?.reportComposer(key: draftKey, height: nil)
             }
+            // NOT behind the phase guard: a composer that disappears while the app
+            // is inactive would keep believing it is on screen, and re-arm its 60s
+            // timer the moment the app is active again. A backgrounding disappear
+            // (no matching appear on the way back) is answered by the scene-phase
+            // handler above.
+            controls.setVisible(false)
             // The recorder is registered app-wide with LifecycleHub but its UI
             // lives in THIS view. Navigating away mid-recording (tab switch,
             // pop, sheet dismiss) hid the recording row while the mic stayed
@@ -847,12 +876,10 @@ struct ComposerBar: View {
     private var bottomControlRow: some View {
         HStack(spacing: 8) {
             plusButton
-            // The pill is the only flexible thing on this row: its label is
-            // `lineLimit(1)` and the three buttons carry fixed 32pt frames, so an
-            // absurdly long model name TRUNCATES rather than shoving send off the
-            // edge. (Worst real label today, "GPT-5.6 Sol · Extra High", has ~246pt
-            // of room on a 390pt phone, so truncation is the guard rail and not the
-            // everyday case.)
+            // The pills are the only flexible thing on this row: the three buttons
+            // carry fixed 32pt frames, so an absurdly long model name truncates
+            // rather than shoving send off the edge. At the accessibility sizes the
+            // pills stack and the model name wraps instead (see `ComposerModelPill`).
             if showsModelPill {
                 ComposerModelPill(controls: controls)
             }
@@ -1854,9 +1881,12 @@ struct ComposerView: View {
             // The MAIN AGENT gets a model pill too. On the lane engine its turn
             // runs inside a real CLI session, so the model is a genuine per-
             // conversation property (GET /chat/engine resolves which session);
-            // on the in-process engine the pill goes read-only and says so,
-            // because the model is then a server-config fact.
+            // on the in-process engine the pill writes the conversation's own
+            // model through `PUT /chat/model`.
             modelSource: .chat(agentID: chat.activeAgentID, conversationID: chat.activeID),
+            // A stream reconnect re-asks the engine: an answer fetched while the
+            // Mac was unreachable must not stand once it is back.
+            modelRevalidateToken: chat.streamConnects,
             // The main agent does NOT run on a selectable exec host: it runs
             // wherever the server runs. So the honest provenance is which SERVER
             // is answering (primary vs cloud companion), and whether the Mac is

@@ -34,15 +34,28 @@ final class ComposerControlsTests: XCTestCase {
         XCTAssertEqual(controls.pillLabel, "Opus 5", "the bare 'Opus' label loses the version the id knows")
     }
 
-    /// Effort joins the label only when the current model actually has an effort
-    /// axis. This is the "Opus 5 · High" shape.
-    func testPillAppendsEffortWhenTheModelSupportsIt() {
+    /// The effort pill appears only when the current model actually has an effort
+    /// axis: "Opus 5" beside "High". (Effort used to ride in the model pill's
+    /// label and menu; see `ComposerModelPill` for why it has its own pill.)
+    func testTheEffortPillShowsWhenTheModelSupportsIt() {
         let controls = ComposerControlsModel(
             models: [model("global.anthropic.claude-opus-5[1m]", "Opus", levels: ["low", "high", "max"])],
             currentModelID: "global.anthropic.claude-opus-5[1m]",
             currentEffort: "high"
         )
-        XCTAssertEqual(controls.pillLabel, "Opus 5 · High")
+        XCTAssertEqual(controls.pillLabel, "Opus 5")
+        XCTAssertEqual(controls.effortPillLabel, "High")
+        XCTAssertEqual(controls.effortMenu.sections.flatMap(\.items).map(\.title), ["Low", "High", "Max"])
+        XCTAssertEqual(controls.effortMenu.sections.flatMap(\.items).filter(\.checked).map(\.title), ["High"])
+    }
+
+    /// A model with an effort axis but no level reported yet still offers the
+    /// pill (to set one), named for what it is.
+    func testTheEffortPillWithNoReportedLevelSaysEffort() {
+        let controls = ComposerControlsModel(
+            models: [model("a", "A", levels: ["low", "high"])], currentModelID: "a", currentEffort: nil
+        )
+        XCTAssertEqual(controls.effortPillLabel, "Effort")
     }
 
     /// A model with NO effort axis must not show a stale effort, even when the
@@ -54,6 +67,7 @@ final class ComposerControlsTests: XCTestCase {
             currentEffort: "high"
         )
         XCTAssertEqual(controls.pillLabel, "Haiku")
+        XCTAssertNil(controls.effortPillLabel, "no effort axis, no effort pill (absent, not greyed)")
         XCTAssertTrue(controls.effortLevelsForCurrentModel.isEmpty)
     }
 
@@ -140,7 +154,8 @@ final class ComposerControlsTests: XCTestCase {
             models: rows, currentModelID: rows[0].id, currentEffort: "xhigh"
         )
         // The label is derived from the id, and the id is what a pick sends.
-        XCTAssertEqual(controls.pillLabel, "Fable 5 · Extra High")
+        XCTAssertEqual(controls.pillLabel, "Fable 5")
+        XCTAssertEqual(controls.effortPillLabel, "Extra High")
         XCTAssertEqual(controls.models[1].id, "global.anthropic.claude-sonnet-5",
                        "the row's id must stay the full provider id — 'sonnet' applies as a no-op")
         XCTAssertFalse(controls.models.contains { $0.id == "sonnet" },

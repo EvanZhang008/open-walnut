@@ -57,6 +57,11 @@ final class ChatStore {
     @ObservationIgnored private var trackedSends: [UUID: Task<SendAttempt, Never>] = [:]
     private var isActive = true
     weak var connection: ConnectionStore?
+    /// Bumps once per successful conversation-stream connection (first connect
+    /// and every reconnect). Observed by exactly one reader, the composer's model
+    /// pill, which re-asks the engine then: a reconnect is when a box that was
+    /// unreachable can answer again. Edge-rate (per connection), never event-rate.
+    private(set) var streamConnects = 0
 
     /// Last time ANY SSE event arrived — feeds the turn-stall reconciler.
     private var lastSSEEventAt = Date()
@@ -1439,6 +1444,7 @@ final class ChatStore {
                     // SSE churn is diagnostic only; ConnectionStore never counts
                     // it toward the REST transport failure gate.
                     self?.connection?.reportReachability(ok, source: "chat-sse")
+                    if ok { self?.streamConnects &+= 1 }
                 }
             }
         )

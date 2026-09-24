@@ -115,6 +115,7 @@ struct SessionConversationView: View {
                 // The model pill switches THIS session's model/effort live.
                 modelSource: .session(id: session.id),
                 fallbackModel: session.model,
+                modelRevalidateToken: store.streamConnects,
                 // A live session's exec host is a fact, not a choice (the CLI is
                 // already running there), so it shows as provenance in the `+`.
                 // Picking a host happens at CREATION (NewSessionChatView).
