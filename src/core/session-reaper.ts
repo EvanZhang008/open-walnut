@@ -12,9 +12,10 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { log } from '../logging/index.js'
-import { SESSION_STREAMS_DIR } from '../constants.js'
+import { SESSION_STREAMS_DIR, CLAUDE_HOME } from '../constants.js'
 import type { SessionRecord } from './types.js'
 import { isEnvironmentSession } from './session-tracker.js'
+import { sweepRecoverableStreamFiles } from './stream-retention.js'
 
 const REAP_INTERVAL_MS = 60 * 60 * 1000          // every hour
 const INITIAL_DELAY_MS = 60 * 1000               // 60s after server start
@@ -78,6 +79,21 @@ export class SessionReaper {
 
     const now = Date.now()
     const cutoff = now - DEFAULT_RETENTION_MS
+
+    // Retention for local stream captures: delete cold duplicates of canonical
+    // Claude transcripts (see stream-retention.ts for the safety conditions).
+    // Sessions still running or idle may stream from their capture file, so
+    // they are excluded regardless of file age.
+    const activeIds = new Set(
+      sessions
+        .filter(s => s.process_status === 'running' || s.process_status === 'idle')
+        .map(s => s.claudeSessionId),
+    )
+    await sweepRecoverableStreamFiles({
+      streamsDir: SESSION_STREAMS_DIR,
+      claudeProjectsDir: path.join(CLAUDE_HOME, 'projects'),
+      activeIds,
+    })
 
     // Find reapable sessions
     const toReap = sessions.filter(s => {
