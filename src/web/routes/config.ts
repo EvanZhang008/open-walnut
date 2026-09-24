@@ -3,6 +3,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
+import path from 'node:path'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE, WALNUT_INSTALL_DIR, NOTES_DIR } from '../../constants.js'
 import { bus, EventNames } from '../../core/event-bus.js'
@@ -553,6 +554,18 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       }
       if (body.defaults.priority !== undefined && !VALID_PRIORITIES.includes(body.defaults.priority)) {
         res.status(400).json({ error: `defaults.priority must be one of: ${VALID_PRIORITIES.join(', ')}` })
+        return
+      }
+    }
+
+    if (body.external_session_import !== undefined) {
+      const config = body.external_session_import
+      const rules = config?.excluded_cwds
+      if (!config || typeof config !== 'object' || Array.isArray(config)
+        || (rules !== undefined && (!rules || typeof rules !== 'object' || Array.isArray(rules)
+          || Object.values(rules).some(paths => !Array.isArray(paths) || paths.some(value =>
+            typeof value !== 'string' || !path.posix.isAbsolute(value) || path.posix.normalize(value) === '/'))))) {
+        res.status(400).json({ error: 'external_session_import.excluded_cwds must map host names to absolute non-root directories' })
         return
       }
     }

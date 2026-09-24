@@ -78,6 +78,21 @@ describe('PUT /api/config', () => {
     expect(getRes.body.config.defaults.priority).toBe('immediate');
   });
 
+  it('persists host-scoped external import exclusions', async () => {
+    const app = createApp();
+    const external_session_import = { excluded_cwds: { __local__: ['/tmp/probes'], buildbox: ['/home/dev/probes'] } };
+    expect((await request(app).put('/api/config').send({ external_session_import })).status).toBe(200);
+    const raw = yaml.load(await fs.readFile(CONFIG_FILE, 'utf8')) as any;
+    expect(raw.external_session_import).toEqual(external_session_import);
+  });
+
+  it.each([null, [], { excluded_cwds: [] }, { excluded_cwds: { __local__: '/' } },
+    { excluded_cwds: { __local__: ['/'] } }, { excluded_cwds: { __local__: ['relative/path'] } },
+    { excluded_cwds: { __local__: [42] } }])('rejects malformed import exclusions: %j', async config => {
+    const app = createApp();
+    expect((await request(app).put('/api/config').send({ external_session_import: config })).status).toBe(400);
+  });
+
   it('partial PUT preserves unmentioned config sections', async () => {
     const app = createApp();
 
