@@ -303,14 +303,14 @@ function useFrozenWhile<T>(value: T, frozen: boolean): T {
 const PHASE_ICON: Record<string, ReactNode> = {
   TODO: ICONS.ICON_PHASE_TODO,
   IN_PROGRESS: ICONS.ICON_PHASE_IN_PROGRESS,
-  AGENT_COMPLETE: ICONS.ICON_PHASE_AGENT_COMPLETE,
+  NEED_ACTION: ICONS.ICON_PHASE_NEED_ACTION,
   COMPLETE: ICONS.ICON_PHASE_COMPLETE,
 };
 
 const PHASE_LABEL: Record<string, string> = {
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
-  AGENT_COMPLETE: 'Agent Complete',
+  NEED_ACTION: 'Need Action',
   COMPLETE: 'Complete',
 };
 
@@ -2018,7 +2018,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
               style={{
                 background: parentTask.status === 'done' ? '#34c759'
                   : parentTask.phase === 'IN_PROGRESS' ? '#007aff'
-                  : parentTask.phase === 'AGENT_COMPLETE' ? 'var(--error)'
+                  : parentTask.phase === 'NEED_ACTION' ? 'var(--error)'
                   : 'var(--fg-muted)',
               }}
             />
@@ -2177,7 +2177,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
                   style={{
                     background: child.status === 'done' ? '#34c759'
                       : child.phase === 'IN_PROGRESS' ? '#007aff'
-                      : child.phase === 'AGENT_COMPLETE' ? 'var(--error)'
+                      : child.phase === 'NEED_ACTION' ? 'var(--error)'
                       : 'var(--fg-muted)',
                     opacity: child.status === 'done' ? 0.5 : 1,
                   }}
@@ -2592,7 +2592,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
   // Two red affordances (2026-08-14): the row TINT follows the phase — a task at
-  // AGENT_COMPLETE stays red until the human acts (opening it
+  // NEED_ACTION stays red until the human acts (opening it
   // is not acting). The DOT follows the stored unread marker and clears on open.
   const needsAction = taskNeedsAction(task);
   const unread = !isDone && Boolean(task.unread);

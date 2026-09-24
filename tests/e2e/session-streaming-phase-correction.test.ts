@@ -10,7 +10,7 @@
  * on text-delta to pull WAIT back to IN_PROGRESS.
  *
  * WHY THE PREMISE IS GONE: WAIT was removed on 2026-08-18 (a blocked/parked task
- * is just TODO). session:error now lands on AGENT_COMPLETE, and a newly-running
+ * is just TODO). session:error now lands on NEED_ACTION, and a newly-running
  * turn is already pulled back to IN_PROGRESS by session:turn-start — the CLI's own
  * turn-start signal, which is authoritative where a delta was only circumstantial.
  * sessionStreamingPhase() is therefore an unconditional no-op, kept parseable so a
@@ -101,18 +101,18 @@ afterAll(async () => {
 });
 
 describe('status-changed{running}: session:streaming writes no phase', () => {
-  // AGENT_COMPLETE is the interesting one: it is where session:error lands now,
+  // NEED_ACTION is the interesting one: it is where session:error lands now,
   // i.e. exactly the "stale red row while the session streams" shape the old
   // trigger was built for. Proving it stays put proves the retirement — the
   // pullback is session:turn-start's job (a real CLI turn-start signal), not a delta's.
-  it('leaves AGENT_COMPLETE alone (the old error-repaint shape)', async () => {
+  it('leaves NEED_ACTION alone (the old error-repaint shape)', async () => {
     const task = await createTask('streaming-leaves-agent-complete');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AGENT_COMPLETE' });
+    await patchTask(taskId, { phase: 'NEED_ACTION' });
 
     await emitRunning('sess-ac-1', taskId);
 
-    expect((await fetchTask(taskId)).phase).toBe('AGENT_COMPLETE');
+    expect((await fetchTask(taskId)).phase).toBe('NEED_ACTION');
   });
 
   it('leaves TODO alone (where retired WAIT rows migrated to)', async () => {
@@ -141,14 +141,14 @@ describe('status-changed{running}: session:streaming writes no phase', () => {
 // enforceStreamingPhase — that function keeps its replay guard and its 'error'
 // record self-heal — but the phase trigger it ends on is now a no-op.
 describe('text-delta alone: session:streaming writes no phase', () => {
-  it('leaves AGENT_COMPLETE alone on text-delta', async () => {
+  it('leaves NEED_ACTION alone on text-delta', async () => {
     const task = await createTask('text-delta-leaves-agent-complete');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AGENT_COMPLETE' });
+    await patchTask(taskId, { phase: 'NEED_ACTION' });
 
     await emitTextDelta('sess-delta-3', taskId);
 
-    expect((await fetchTask(taskId)).phase).toBe('AGENT_COMPLETE');
+    expect((await fetchTask(taskId)).phase).toBe('NEED_ACTION');
   });
 
   it('leaves TODO alone on text-delta', async () => {
@@ -197,12 +197,12 @@ describe('replayed vs live delta: neither raises the phase any more', () => {
   it('record idle (replay): phase stays put on text-delta', async () => {
     const task = await createTask('replay-delta-leaves-phase');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AGENT_COMPLETE' });
+    await patchTask(taskId, { phase: 'NEED_ACTION' });
     await seedSessionRecord('sess-replay-idle-1', taskId, 'idle');
 
     await emitTextDelta('sess-replay-idle-1', taskId);
 
-    expect((await fetchTask(taskId)).phase).toBe('AGENT_COMPLETE');
+    expect((await fetchTask(taskId)).phase).toBe('NEED_ACTION');
   });
 
   it('record running (live): phase ALSO stays put (the retirement)', async () => {
@@ -210,11 +210,11 @@ describe('replayed vs live delta: neither raises the phase any more', () => {
     // the assertion below is what flips if session:streaming is re-armed.
     const task = await createTask('live-delta-leaves-phase');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AGENT_COMPLETE' });
+    await patchTask(taskId, { phase: 'NEED_ACTION' });
     await seedSessionRecord('sess-live-running-1', taskId, 'running');
 
     await emitTextDelta('sess-live-running-1', taskId);
 
-    expect((await fetchTask(taskId)).phase).toBe('AGENT_COMPLETE');
+    expect((await fetchTask(taskId)).phase).toBe('NEED_ACTION');
   });
 });

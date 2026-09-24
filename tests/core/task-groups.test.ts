@@ -1064,9 +1064,9 @@ describe('group_id survives raw partial updates (regression: vanishing groups)',
     expect((await getTask(a)).group_id).toBe(g.group_id);
 
     // Mirror phase.ts: a session phase transition sets a payload-only field.
-    // (WAIT removed 2026-08-18 — the unread-setting phase is now AGENT_COMPLETE;
+    // (WAIT removed 2026-08-18 — the unread-setting phase is now NEED_ACTION;
     // what this test cares about is that ANY payload-only key rides along.)
-    await updateTaskRaw(a, { phase: 'AGENT_COMPLETE', unread: true });
+    await updateTaskRaw(a, { phase: 'NEED_ACTION', unread: true });
 
     const reloaded = await getTask(a);
     expect(reloaded.unread).toBe(true);                   // the patch applied

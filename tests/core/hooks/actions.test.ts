@@ -29,7 +29,7 @@ function taskCtx(overrides: Partial<TaskHookContext> = {}): TaskHookContext {
     taskId: task.id,
     task,
     sessionId: 'sess-9',
-    oldPhase: 'AGENT_COMPLETE',
+    oldPhase: 'NEED_ACTION',
     newPhase: 'COMPLETE',
     eventSource: 'api',
     timestamp: new Date().toISOString(),
@@ -58,7 +58,7 @@ describe('renderTemplate', () => {
   it('substitutes whitelisted keys', () => {
     const ctx = taskCtx();
     expect(renderTemplate('Task {{task.title}} → {{newPhase}} (was {{oldPhase}}) in {{sessionId}}', ctx))
-      .toBe('Task Test task → COMPLETE (was AGENT_COMPLETE) in sess-9');
+      .toBe('Task Test task → COMPLETE (was NEED_ACTION) in sess-9');
   });
 
   it('unknown keys render empty — no expression evaluation', () => {

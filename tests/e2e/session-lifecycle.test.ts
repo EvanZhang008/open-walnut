@@ -268,16 +268,16 @@ describe('Session start via WS RPC', () => {
     expect(body.task.active_session_ids ?? []).toHaveLength(0)
   })
 
-  it('session:result auto-progresses task phase to AGENT_COMPLETE', async () => {
+  it('session:result auto-progresses task phase to NEED_ACTION', async () => {
     // After a successful session completes, the task phase should auto-advance
-    // from IN_PROGRESS (set at session start) to AGENT_COMPLETE.
+    // from IN_PROGRESS (set at session start) to NEED_ACTION.
     await delay(500)
 
     const res = await fetch(apiUrl(`/api/tasks/sess-task-001`))
     expect(res.status).toBe(200)
     const body = (await res.json()) as { task: { phase?: string; status?: string } }
-    expect(body.task.phase).toBe('AGENT_COMPLETE')
-    expect(body.task.status).toBe('in_progress') // AGENT_COMPLETE maps to in_progress status
+    expect(body.task.phase).toBe('NEED_ACTION')
+    expect(body.task.status).toBe('in_progress') // NEED_ACTION maps to in_progress status
   })
 })
 

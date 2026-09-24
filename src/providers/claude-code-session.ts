@@ -676,7 +676,7 @@ export class ClaudeCodeSession {
   /** Monotonic counter of OBSERVED TURN-START EDGES. Stamped onto every SESSION_RESULT
    *  so a LATE consumer can tell "this result is still the current turn" from "a newer
    *  turn has already started" (incident ed347bde, 2026-08-05: the result's ~800ms-late
-   *  AGENT_COMPLETE flip landed AFTER the next turn's start and repainted a visibly
+   *  NEED_ACTION flip landed AFTER the next turn's start and repainted a visibly
    *  streaming session as Idle/completed for 44s).
    *
    *  Three edges bump it — the gate must not fail open on any delivery shape:
@@ -908,7 +908,7 @@ export class ClaudeCodeSession {
   planCompleted = false
   /** True when TeamCreate tool_use detected; cleared on TeamDelete, process exit,
    *  or team-idle timeout. While active, intermediate `result` events suppress
-   *  idle/AGENT_COMPLETE/triage because the lead is polling for teammate results. */
+   *  idle/NEED_ACTION/triage because the lead is polling for teammate results. */
   private _teamActive = false
   /** The team name from the most recent TeamCreate — used to check teammate liveness. */
   private _teamName: string | undefined
@@ -1037,7 +1037,7 @@ export class ClaudeCodeSession {
    *  SESSION is not idle while one runs (user decision 2026-08-28,
    *  inc-1787893885321: an idle badge over a live 40-min background STT bench):
    *  the result boundary keeps process_status 'running', and SESSION_RESULT
-   *  carries `detachedBgActive` so server.ts skips the AGENT_COMPLETE phase flip
+   *  carries `detachedBgActive` so server.ts skips the NEED_ACTION phase flip
    *  until the followup-closure drains the last one. */
   private _detachedBgCount(): number {
     let n = 0
@@ -1092,7 +1092,7 @@ export class ClaudeCodeSession {
   //   • transcript mtime is PAST-tense: a fresh mtime proves it wrote a moment ago, not that
   //     it's alive now; a stale mtime cannot distinguish "dead" from "alive but blocked on a
   //     slow 5-min tool call that produces no output". Either way it's a guess that can KILL a
-  //     live task (→ premature AGENT_COMPLETE, the mirror bug [[premature_idle_completes_running_workflow]]).
+  //     live task (→ premature NEED_ACTION, the mirror bug [[premature_idle_completes_running_workflow]]).
   //   • "CLI is idle ⟹ no subagent running" is FALSE — verified: the CLI reports idle ~20×/run
   //     while in-process subagents are still executing ([[claude_code_session_state_semantics]]).
   //   • The CLI exposes NO control_request to query task status over stdio (verified against the
@@ -1101,7 +1101,7 @@ export class ClaudeCodeSession {
   // So "is this in-process task alive now?" is simply NOT OBSERVABLE through any interface
   // Walnut can reach. The ONLY authoritative truth is process liveness:
   //   • CLI process DEAD (daemon-authoritative) ⟹ its in-process subagents are necessarily
-  //     dead too → handleProcessDeath() already completes the turn (AGENT_COMPLETE), regardless
+  //     dead too → handleProcessDeath() already completes the turn (NEED_ACTION), regardless
   //     of leftover _bgTasks state. This is the deterministic Layer-2 backstop — no guessing.
   //   • CLI process ALIVE but a terminal event was truly lost ⟹ unobservable → we do NOT guess;
   //     the session honestly shows 'running' until the daemon's 2h idle-kill / health-monitor
@@ -1162,7 +1162,7 @@ export class ClaudeCodeSession {
     // ── Turn-start phase pullback (incidents 46f42871 + 1f11596b + ed347bde) ──
     // session:input only fires at SEND time — for a queued/mid-turn send the phase was
     // already IN_PROGRESS then (no-op), after which the PREVIOUS turn's result flipped
-    // it to AGENT_COMPLETE (and triage possibly to AWAIT) with nothing pulling it back
+    // it to NEED_ACTION (and triage possibly to AWAIT) with nothing pulling it back
     // when this turn started: task showed completed/red while the CLI was visibly
     // streaming. This is the missing turn-START half of the result↔phase symmetry.
     // Runs even when _processStatus was already 'running' (a late triage can repaint
@@ -1182,7 +1182,7 @@ export class ClaudeCodeSession {
     })
   }
 
-  /** Emit the withheld turn-over (AGENT_COMPLETE + SESSION_RESULT) exactly once. Called by
+  /** Emit the withheld turn-over (NEED_ACTION + SESSION_RESULT) exactly once. Called by
    *  the idle handler when the CLI goes idle with no background work left.
    *  `_turnResultEmitted` guards against the CLI's trailing idles re-firing it.
    *
@@ -1190,7 +1190,7 @@ export class ClaudeCodeSession {
    *  #870: "the hand-off reports the recorded stop reason instead of rewriting it to
    *  end_turn"). Pre-fix this lane hardcoded isError:false, so a turn whose own result
    *  was an error — withheld because a subagent was still live — completed as a SUCCESS:
-   *  the task went AGENT_COMPLETE instead of surfacing the failure. */
+   *  the task went NEED_ACTION instead of surfacing the failure. */
   private _completeTurnOnIdle(): void {
     const sid = this.claudeSessionId
     if (!sid) return
@@ -1212,7 +1212,7 @@ export class ClaudeCodeSession {
     // advance the watermark to it so a replay of this whole turn (result + idle)
     // is positionally suppressed after a restart.
     this._advanceConsumedOffset()
-    this.emitStatusChanged(detachedBgActive ? 'IN_PROGRESS' : 'AGENT_COMPLETE', outcome?.isError ? (outcome.resultText ?? '').slice(0, 500) || undefined : undefined)
+    this.emitStatusChanged(detachedBgActive ? 'IN_PROGRESS' : 'NEED_ACTION', outcome?.isError ? (outcome.resultText ?? '').slice(0, 500) || undefined : undefined)
     bus.emit(EventNames.SESSION_RESULT, {
       sessionId: sid, taskId: this.taskId,
       ...(detachedBgActive ? { detachedBgActive: true } : {}),
@@ -1426,7 +1426,7 @@ export class ClaudeCodeSession {
       this._teamIdleTimer = null
       this._processStatus = 'idle'
       this._activity = undefined
-      this.emitStatusChanged('AGENT_COMPLETE')
+      this.emitStatusChanged('NEED_ACTION')
       bus.emit(EventNames.SESSION_RESULT, {
         sessionId: this.claudeSessionId,
         taskId: this.taskId,
@@ -2192,7 +2192,7 @@ export class ClaudeCodeSession {
             taskId: this.taskId, exitCode: code, host, fromPlanSessionId: this.fromPlanSessionId,
             stderr: initStderr.slice(0, 500) || undefined,
           })
-          this.emitStatusChanged('AGENT_COMPLETE', errMsg)
+          this.emitStatusChanged('NEED_ACTION', errMsg)
           bus.emit(EventNames.SESSION_ERROR, {
             sessionId: this.claudeSessionId ?? undefined,
             taskId: this.taskId,
@@ -2327,7 +2327,7 @@ export class ClaudeCodeSession {
         // callback's settleResumeFailure already drove the lifecycle: reverted the
         // batch to 'pending' (session stays valid, message not lost) and emitted
         // SESSION_ERROR errorKind:'delivery_failed'. We MUST NOT also flip to
-        // 'stopped' + emit AGENT_COMPLETE here: that status-changed (process_status
+        // 'stopped' + emit NEED_ACTION here: that status-changed (process_status
         // 'stopped' → ['*']) hits server.ts's markDone+clear fallback and wipes the
         // previous turn's blocks the user is viewing — the exact thing the
         // delivery_failed buffer-protection (server.ts) is meant to prevent. The
@@ -2347,7 +2347,7 @@ export class ClaudeCodeSession {
           this._processStatus = outcomeUnknown ? 'error' : 'stopped'
           this._activity = undefined
           this.emitStatusChanged(
-            'AGENT_COMPLETE',
+            'NEED_ACTION',
             outcomeUnknown ? (err instanceof Error ? err.message : String(err)).slice(0, 500) : undefined,
             outcomeUnknown
               ? { status_reason: 'spawn_outcome_unknown', status_changed_by: 'session-runner', errorKind: 'infra' }
@@ -2509,7 +2509,7 @@ export class ClaudeCodeSession {
     // wiping /tmp, a fresh same-sid spawn), the record still carries the DEAD
     // file's offset — every event in the new (smaller) file sits "below" it,
     // so the replay guard suppresses the real end-of-turn result and the task
-    // never reaches AGENT_COMPLETE. When the evidence proves the mismatch
+    // never reaches NEED_ACTION. When the evidence proves the mismatch
     // (offset beyond EOF, or file epoch differs), drop the in-memory seed and
     // durably reset the record: consumedOffset 0 paired with the new epoch is
     // the tracker's sanctioned regression (epoch-reset arbitration). Without
@@ -3040,7 +3040,7 @@ export class ClaudeCodeSession {
       // init-after-result edge (gated on that flag) never fires for this shape —
       // and the CLI may emit no session_state_changed{running} either. Without a
       // bump here the stale-result gate in core/phase.ts fails OPEN: turn A's
-      // ~800ms-late AGENT_COMPLETE flip carries eventGen == liveGen, passes the
+      // ~800ms-late NEED_ACTION flip carries eventGen == liveGen, passes the
       // strict `liveGen > eventGen` test, and repaints turn B as completed while
       // it visibly streams. Mid-turn injections deliberately skip this block —
       // they join the SAME turn and must not bump.
@@ -3368,7 +3368,7 @@ export class ClaudeCodeSession {
 
       if (hasResultInFile) {
         this._activity = undefined
-        this.emitStatusChanged('AGENT_COMPLETE')
+        this.emitStatusChanged('NEED_ACTION')
         if (this.claudeSessionId) {
           this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch((err) => {
             log.session.warn('persistSessionRecord failed (PID died, result found)', { sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err) })
@@ -3391,7 +3391,7 @@ export class ClaudeCodeSession {
         // Surface the error instead of silently treating it as success.
         const conversationLost = resultErrorMessage.includes('No conversation found')
         this._activity = undefined
-        this.emitStatusChanged('AGENT_COMPLETE', resultErrorMessage.slice(0, 500))
+        this.emitStatusChanged('NEED_ACTION', resultErrorMessage.slice(0, 500))
         log.session.error('session PID died — error result in output file', {
           taskId: this.taskId,
           sessionId: this.claudeSessionId,
@@ -3435,7 +3435,7 @@ export class ClaudeCodeSession {
 
         if (isRealError) {
           this._activity = undefined
-          this.emitStatusChanged('AGENT_COMPLETE', stderr.slice(0, 500))
+          this.emitStatusChanged('NEED_ACTION', stderr.slice(0, 500))
           bus.emit(EventNames.SESSION_ERROR, {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
@@ -3443,7 +3443,7 @@ export class ClaudeCodeSession {
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
         } else {
           this._activity = undefined
-          this.emitStatusChanged('AGENT_COMPLETE')
+          this.emitStatusChanged('NEED_ACTION')
           if (this.claudeSessionId) {
             this.persistSessionRecord(this.claudeSessionId, this._cwd ?? undefined).catch((err) => {
               log.session.warn('persistSessionRecord failed (PID died, no result)', { sessionId: this.claudeSessionId, error: err instanceof Error ? err.message : String(err) })
@@ -3522,7 +3522,7 @@ export class ClaudeCodeSession {
           log.session.warn('failed to persist expected teardown', { sessionId: sid, error: String(err) })
         })
       }
-      this.emitStatusChanged('AGENT_COMPLETE')
+      this.emitStatusChanged('NEED_ACTION')
       return
     }
 
@@ -3551,7 +3551,7 @@ export class ClaudeCodeSession {
         host: this._host,
         suppressedStderr: stderr.slice(0, 200),
       })
-      this.emitStatusChanged('AGENT_COMPLETE')
+      this.emitStatusChanged('NEED_ACTION')
       return
     }
 
@@ -3619,7 +3619,7 @@ export class ClaudeCodeSession {
     }
 
     // Emit status change with errorMessage so frontend shows the error banner
-    this.emitStatusChanged('AGENT_COMPLETE', errMsg)
+    this.emitStatusChanged('NEED_ACTION', errMsg)
 
     if (!this.resultEmitted) {
       this.resultEmitted = true
@@ -3833,7 +3833,7 @@ export class ClaudeCodeSession {
             // pullback below never fires for this shape. This init is then the only
             // CLI-side evidence a new turn began: the result handler had just set
             // _processStatus='idle' and the server's ~800ms-late SESSION_RESULT
-            // handler flips the phase to AGENT_COMPLETE, so the badge reads Idle and
+            // handler flips the phase to NEED_ACTION, so the badge reads Idle and
             // the task row reads completed/attention while the CLI is visibly
             // streaming (44s in that incident; 185 same-shape divergences that day).
             // Auto-continuation / post-compaction inits take this path too — also
@@ -4788,7 +4788,7 @@ export class ClaudeCodeSession {
             }
 
             // Team mode detection — TeamCreate/TeamDelete tool_use.
-            // While team is active, intermediate `result` events suppress idle/AGENT_COMPLETE/triage
+            // While team is active, intermediate `result` events suppress idle/NEED_ACTION/triage
             // because the lead session is polling for in-process teammate results (print.ts poll loop).
             if (block.name === 'TeamCreate') {
               this._teamActive = true
@@ -5207,9 +5207,9 @@ export class ClaudeCodeSession {
               })
               this._processStatus = 'idle'
               this._activity = undefined
-              this.emitStatusChanged('AGENT_COMPLETE')
+              this.emitStatusChanged('NEED_ACTION')
               this._idleDebt = Math.min(this._idleDebt + 1, 4)
-              // Final hand-back: the turn's own AGENT_COMPLETE flip was skipped
+              // Final hand-back: the turn's own NEED_ACTION flip was skipped
               // while detached work ran (server.ts detachedBgActive guard), and
               // this followup result is the guaranteed closer of the cycle. Flip
               // the phase directly — deliberately NOT a SESSION_RESULT re-emit,
@@ -5299,7 +5299,7 @@ export class ClaudeCodeSession {
         //      guards (see the task-notification block before them) — never a real
         //      turn-over, but it may settle or close a #870 hold.
         //  (b) the derived running-count shows live background tasks → withhold
-        //      AGENT_COMPLETE; stay running. The idle-after-drain event completes it.
+        //      NEED_ACTION; stay running. The idle-after-drain event completes it.
         if (this.hasActiveBackgroundWork()) {
           log.session.info('result while background work in flight — staying running, awaiting idle', {
             sessionId: this.claudeSessionId, taskId: this.taskId,
@@ -5383,7 +5383,7 @@ export class ClaudeCodeSession {
         // (fullText non-empty) and the only error marker is [ede_diagnostic], which fires
         // when stop_reason=tool_use + last message.type=user in print-mode stream-json.
         // This is NOT a real API failure — downgrade to a normal result so the task goes
-        // to AGENT_COMPLETE.
+        // to NEED_ACTION.
         const isSoftEdeError = result.is_error
           && !!this.fullText
           && this.fullText.trim().length > 0
@@ -5509,7 +5509,7 @@ export class ClaudeCodeSession {
           // daemon replay wave that gets suppressed by the resultEmitted guard at
           // line ~2145 never drives the stream buffer to isStreaming=false, and
           // the UI's "Streaming" badge stays stuck until the next writeMessage.
-          this.emitStatusChanged('AGENT_COMPLETE')
+          this.emitStatusChanged('NEED_ACTION')
         } else {
           // Process is exiting (SSH, interrupted, or natural exit)
           this.resultEmitted = true
@@ -5625,7 +5625,7 @@ export class ClaudeCodeSession {
         if (this._teamActive) {
           // Team subagents still working — this is an intermediate result from
           // the lead session (e.g. "Team is up. 5 reviewers working...").
-          // Suppress AGENT_COMPLETE phase and triage; keep task at IN_PROGRESS.
+          // Suppress NEED_ACTION phase and triage; keep task at IN_PROGRESS.
           log.session.info('team active — intermediate result, staying IN_PROGRESS', {
             sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0,
           })
@@ -5648,11 +5648,11 @@ export class ClaudeCodeSession {
           this._scheduleTeamIdleCheck(resultText, result.total_cost_usd, result.duration_ms)
         } else {
           // Detached bg still working: the reply is delivered (real turn-over)
-          // but the task must not flip AGENT_COMPLETE and the status hint stays
+          // but the task must not flip NEED_ACTION and the status hint stays
           // IN_PROGRESS — server.ts skips the phase flip on this flag, and the
           // followup-closure branch hands back when the last detached task drains.
           const detachedBgActive = this._detachedBgCount() > 0
-          this.emitStatusChanged(detachedBgActive ? 'IN_PROGRESS' : 'AGENT_COMPLETE')
+          this.emitStatusChanged(detachedBgActive ? 'IN_PROGRESS' : 'NEED_ACTION')
           log.session.info('session result emitted', { sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0, detachedBgActive })
           // retryExhausted: terminal upstream retry-exhaustion signature. Text match
           // (shared with session-auto-continue — keep ONE signature list) covers the

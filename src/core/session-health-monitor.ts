@@ -45,7 +45,7 @@ const HEALTH_V2 = process.env.WALNUT_HEALTH_V2 !== '0'
  * reaping forces a slow `--resume` spawn (~10s) and leaves a misleading
  * `[Request interrupted by user]` marker in the transcript (CLI SIGINT handler
  * writes it — there's no "silent shutdown" path in print mode). Users leaving
- * handed-back (AGENT_COMPLETE) sessions overnight for review hit this constantly.
+ * handed-back (NEED_ACTION) sessions overnight for review hit this constantly.
  *
  * Local sessions share the laptop's RAM/CPU, so we're stricter — but 30 min
  * was too aggressive for turns with long think time.
@@ -359,7 +359,7 @@ export class SessionHealthMonitor {
     if (ctx.overBudget()) return
     // (checkStaleAwaitingSessions was deleted with the WAIT phase, 2026-08-18.
     // It stamped `activity: "Possibly stuck — no output for N min"` on WAIT
-    // sessions; with handed-back work now living on AGENT_COMPLETE — the
+    // sessions; with handed-back work now living on NEED_ACTION — the
     // normal state of every finished session — the warning would fire on
     // everything. Genuine wedges are covered by reconcileStuckRunningSessions.)
     endPhase('staleAwaiting')
@@ -519,7 +519,7 @@ export class SessionHealthMonitor {
                 error: err instanceof Error ? err.message : String(err),
               })
             }
-            // Phase sync: process death → AGENT_COMPLETE either way (session:result
+            // Phase sync: process death → NEED_ACTION either way (session:result
             // with a result, session:error without — both land there since the
             // WAIT phase removal 2026-08-18; the error detail lives on the record)
             try {
@@ -846,7 +846,7 @@ export class SessionHealthMonitor {
       }
 
       // (The old WAIT-task exemption was deleted with the WAIT phase,
-      // 2026-08-18. It must NOT be re-pointed at AGENT_COMPLETE: that is now
+      // 2026-08-18. It must NOT be re-pointed at NEED_ACTION: that is now
       // the normal post-turn state of every finished session, so exempting it
       // would make nearly every idle CLI immortal. A reaped session resumes
       // via --resume on the next send; nothing is lost.)
@@ -964,7 +964,7 @@ export class SessionHealthMonitor {
       if (idleDurationMs < idleTimeoutMs) continue
 
       // Second-line defense: if the session record shows a recent status
-      // transition (e.g. AGENT_COMPLETE → IN_PROGRESS triggered by a
+      // transition (e.g. NEED_ACTION → IN_PROGRESS triggered by a
       // fresh user message), treat that as activity even if lastEventAt is
       // stale. Otherwise a remote session that just received a new message
       // — but whose first JSONL response hasn't arrived yet — would be
@@ -1536,7 +1536,7 @@ export class SessionHealthMonitor {
    * Can a scheduled auto-recovery actually FIRE for this record?
    *
    * fire() (session-auto-recover) hard-requires the linked task to still be
-   * IN_PROGRESS — AGENT_COMPLETE means the work was already handed back and
+   * IN_PROGRESS — NEED_ACTION means the work was already handed back and
    * resuming would talk over the human. Arming a recovery that cannot pass that
    * check is not free: the 30s tick re-armed it forever and each arming logged
    * an abort 20s later (measured running for 2+ hours on one session), while
@@ -1769,7 +1769,7 @@ export class SessionHealthMonitor {
               // (inc-1787439819342: 3.5h of nothing on fully resumable work).
               //
               // Ordering is load-bearing: arming a recovery and ALSO advancing the
-              // phase to AGENT_COMPLETE would contradict each other, and fire()
+              // phase to NEED_ACTION would contradict each other, and fire()
               // requires the phase to still be IN_PROGRESS. So only advance the
               // phase when no recovery was armed.
               const { scheduleSessionAutoRecover } = await import('./session-auto-recover.js')
@@ -1851,8 +1851,8 @@ export class SessionHealthMonitor {
     // then cold-resumes the CLI, which for a whale session takes minutes before
     // any liveness signal (manager registration / snapshot) is visible — the
     // 30s tick landing inside that window flipped a 19-second-old IN_PROGRESS
-    // back to AGENT_COMPLETE while the CLI was booting (incident 0dc8352f,
-    // 2026-08-18: "Running 但 Agent Complete"). Anything written within the
+    // back to NEED_ACTION while the CLI was booting (incident 0dc8352f,
+    // 2026-08-18: "Running but Agent Complete"). Anything written within the
     // grace window is in flight, not stuck; a genuinely stuck task ages past
     // this in one tick cycle.
     const RECONCILE_GRACE_MS = 10 * 60 * 1000
@@ -1924,10 +1924,10 @@ export class SessionHealthMonitor {
         )
         if (!allRemoteUnreachable) {
           // All primary sessions dead + stuck at IN_PROGRESS → the work was
-          // handed back whether or not a result event survived. AGENT_COMPLETE
+          // handed back whether or not a result event survived. NEED_ACTION
           // (was WAIT until that phase's removal 2026-08-18): red+unread, the
           // human decides whether it actually finished.
-          expectedPhase = 'AGENT_COMPLETE'
+          expectedPhase = 'NEED_ACTION'
         }
       }
 

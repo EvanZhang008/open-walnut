@@ -236,15 +236,15 @@ export interface SessionResultEvent {
   duration?: number;
   usage?: { input_tokens: number; output_tokens: number };
   /** True when a Claude Code team (in_process_teammate) is still active — this is an
-   *  intermediate result, not turn-over. Consumers skip AGENT_COMPLETE/triage. */
+   *  intermediate result, not turn-over. Consumers skip NEED_ACTION/triage. */
   teamActive?: boolean;
   /** True when a dynamic-workflow / background subagent set is still in flight — this
-   *  result is intermediate, not turn-over. Consumers skip AGENT_COMPLETE/triage. */
+   *  result is intermediate, not turn-over. Consumers skip NEED_ACTION/triage. */
   backgroundActive?: boolean;
   /** Turn generation of the emitting session at emit time (ClaudeCodeSession._turnGen).
    *  A late consumer compares it against the live instance's CURRENT gen: if the live
    *  gen is higher, a NEWER turn already started and this result must not drive phase
-   *  (incident ed347bde, 2026-08-05 — the ~800ms-late AGENT_COMPLETE flip repainted a
+   *  (incident ed347bde, 2026-08-05 — the ~800ms-late NEED_ACTION flip repainted a
    *  visibly streaming session as completed). Absent on non-CLI emitters → gate fails
    *  open. */
   turnGen?: number;

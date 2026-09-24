@@ -212,7 +212,7 @@ THE THREE VERBS (keep it simple)
   without the answer.
 
 WAIT
-  walnut wait <task-id>   returns when the task reaches AGENT_COMPLETE / COMPLETE
+  walnut wait <task-id>   returns when the task reaches NEED_ACTION / COMPLETE
   walnut wait <rq-id>     returns when the reply request leaves pending
   --timeout secs          default 1800, max 86400; exit 7 on timeout
 
@@ -609,7 +609,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
 // budget ran out while it was still pending.
 
 /** Task phases that end a `walnut wait <task-id>` — mirrors phase.ts. */
-const WAIT_DONE_PHASES = new Set(['AGENT_COMPLETE', 'COMPLETE'])
+const WAIT_DONE_PHASES = new Set(['NEED_ACTION', 'COMPLETE'])
 
 export function evaluateWaitResult(
   id: string,

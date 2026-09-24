@@ -1,13 +1,13 @@
 /**
  * E2E: a turn-over with a live detached (run_in_background) command must NOT
- * flip the task to AGENT_COMPLETE (user decision 2026-08-28,
+ * flip the task to NEED_ACTION (user decision 2026-08-28,
  * inc-1787893885321: "如果是 Running Background 那当然应该是一个 Running 状态"
  * — the session is still working, so the row is not handed back yet).
  *
  * Wiring under test is the server.ts session:result bus subscriber (real
  * server, real bus, real task store):
  *   session:result {detachedBgActive:true}  → phase flip SKIPPED (IN_PROGRESS stands)
- *   session:result (no flag)                → AGENT_COMPLETE as always
+ *   session:result (no flag)                → NEED_ACTION as always
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -143,7 +143,7 @@ describe('terminal handback survives the health scan age window', () => {
       const response = await fetch(`http://127.0.0.1:${address.port}/api/tasks/${task.id}`);
       expect(response.ok).toBe(true);
       const body = await response.json() as { task: { phase: string; session_status: { process_status: string } } };
-      expect(body.task.phase).toBe('AGENT_COMPLETE');
+      expect(body.task.phase).toBe('NEED_ACTION');
       expect(body.task.session_status.process_status).toBe('stopped');
       await updateTaskRaw(task.id, { phase: 'COMPLETE' });
       await (monitor as unknown as { checkSnapshotPull(s: unknown[], ctx?: unknown, pool?: unknown[]): Promise<void> })
@@ -158,7 +158,7 @@ describe('terminal handback survives the health scan age window', () => {
   });
 });
 
-describe('detached background work gates the AGENT_COMPLETE flip', () => {
+describe('detached background work gates the NEED_ACTION flip', () => {
   it('result with detachedBgActive → task stays IN_PROGRESS', async () => {
     const sid = 'sess-bg-flip-1';
     const taskId = await makeTaskWithSession(sid);
@@ -174,7 +174,7 @@ describe('detached background work gates the AGENT_COMPLETE flip', () => {
     expect(task.phase).toBe('IN_PROGRESS');
   });
 
-  it('result WITHOUT the flag flips AGENT_COMPLETE as always (control)', async () => {
+  it('result WITHOUT the flag flips NEED_ACTION as always (control)', async () => {
     const sid = 'sess-bg-flip-2';
     const taskId = await makeTaskWithSession(sid);
 
@@ -182,8 +182,8 @@ describe('detached background work gates the AGENT_COMPLETE flip', () => {
       sessionId: sid, taskId, result: 'all done', isError: false,
     }, ['*'], { source: 'session-runner' });
 
-    const task = await pollTask(taskId, (t) => t.phase === 'AGENT_COMPLETE');
-    expect(task.phase).toBe('AGENT_COMPLETE');
+    const task = await pollTask(taskId, (t) => t.phase === 'NEED_ACTION');
+    expect(task.phase).toBe('NEED_ACTION');
   });
 
   it('final hand-back still works: a later un-flagged result flips it', async () => {
@@ -202,7 +202,7 @@ describe('detached background work gates the AGENT_COMPLETE flip', () => {
       sessionId: sid, taskId, result: 'bench finished, scored', isError: false,
     }, ['*'], { source: 'session-runner' });
 
-    const task = await pollTask(taskId, (t) => t.phase === 'AGENT_COMPLETE');
-    expect(task.phase).toBe('AGENT_COMPLETE');
+    const task = await pollTask(taskId, (t) => t.phase === 'NEED_ACTION');
+    expect(task.phase).toBe('NEED_ACTION');
   });
 });

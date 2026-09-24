@@ -37,7 +37,7 @@ Use the current tool schema for exact arguments. This skill explains decisions, 
 
 ## Hand work back
 
-- Use `AGENT_COMPLETE` when your work is ready for someone to look at.
+- Use `NEED_ACTION` when your work is ready for someone to look at.
 - Use `COMPLETE` when the whole task is finished. No phase is reserved for humans.
 
 ## Where to get facts

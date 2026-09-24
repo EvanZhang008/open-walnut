@@ -14,7 +14,7 @@ enum Theme {
     static let success = Color(dynamic: UIColor(light: 0x34C759, dark: 0x30D158))
     static let warning = Color(dynamic: UIColor(light: 0xFF9F0A, dark: 0xFFD60A))
     static let danger = Color(dynamic: UIColor(light: 0xFF3B30, dark: 0xFF453A))
-    /// Whole-row wash for "this needs a human" (a task at AGENT_COMPLETE).
+    /// Whole-row wash for "this needs a human" (a task at NEED_ACTION).
     ///
     /// Deliberately the same recipe the desktop uses — `rgba(255,59,48,0.08)` in
     /// `.todo-panel-item-needs-action` — so a row that reads as urgent on the Mac

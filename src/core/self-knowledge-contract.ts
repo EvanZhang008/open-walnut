@@ -13,7 +13,7 @@ export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 2_000;
 // as TaskPhase, so a rename in types.ts breaks the build here instead of
 // silently teaching the Main Agent a phase that no longer exists.
 // (WAIT removed 2026-08-18: a blocked task is just TODO — no separate phase.)
-const READY_PHASE: TaskPhase = 'AGENT_COMPLETE';
+const READY_PHASE: TaskPhase = 'NEED_ACTION';
 const DONE_PHASE: TaskPhase = 'COMPLETE';
 
 const SELF_KNOWLEDGE_PROMPT = `## Walnut operating contract

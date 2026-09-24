@@ -4,8 +4,8 @@
  * v6 → v7 (7 phases → 5):
  *   AWAIT_HUMAN_ACTION  → WAIT            (rename; 97 live tasks on the author's
  *                                          install when this shipped)
- *   HUMAN_VERIFIED      → AGENT_COMPLETE  (deleted phase; 0 of 3525 tasks had
- *   POST_WORK_COMPLETED → AGENT_COMPLETE   ever reached either one)
+ *   HUMAN_VERIFIED      → NEED_ACTION  (deleted phase; 0 of 3525 tasks had
+ *   POST_WORK_COMPLETED → NEED_ACTION   ever reached either one)
  *
  * v7 → v8 (WAIT removed 2026-08-18 — a blocked/parked task is just TODO; the
  * Focus Bar's lowercase 'wait' PIN TIER is a different axis and still exists):
@@ -13,9 +13,9 @@
  *
  * Both branches run in ONE open, so a v6 DB's AWAIT_HUMAN_ACTION rows land on
  * TODO (via WAIT) — the assertions below pin that FINAL state, not the
- * intermediate. TODO (not AGENT_COMPLETE) is the deliberate landing: WAIT rows
+ * intermediate. TODO (not NEED_ACTION) is the deliberate landing: WAIT rows
  * were "waiting on something external", i.e. work not yet done, and sending
- * them to AGENT_COMPLETE would flag them all red+unread on upgrade.
+ * them to NEED_ACTION would flag them all red+unread on upgrade.
  *
  * Phase lives in the indexed `phase` column, and a row written by a newer client
  * can also carry `$.phase` inside the `payload` JSON. Both are rewritten, so
@@ -114,6 +114,11 @@ function buildV7Db(rows: V6Row[]): void {
   buildDbAtVersion(rows, 7);
 }
 
+/** Stamped v10 — so ONLY the v10 → v11 branch (the NEED_ACTION rename) runs. */
+function buildV10Db(rows: V6Row[]): void {
+  buildDbAtVersion(rows, 10);
+}
+
 /** Raw column value — proves the INDEXED copy moved, not just the payload. */
 function rawPhase(id: string): string {
   const row = getDb()!.prepare('SELECT phase FROM tasks WHERE id = ?').get(id) as { phase: string };
@@ -155,7 +160,7 @@ describe('task-db v6 → v8 migration: 7 phases → 5 → 4', () => {
     expect(readTask('blocked-both').unread).toBe(true);
   });
 
-  it('lands both deleted phases on AGENT_COMPLETE, not COMPLETE', () => {
+  it('lands both deleted phases on NEED_ACTION, not COMPLETE', () => {
     // Conservative direction on purpose: the row stays in the active list where
     // its owner can see it, instead of the migration silently declaring work
     // finished on their behalf.
@@ -164,15 +169,15 @@ describe('task-db v6 → v8 migration: 7 phases → 5 → 4', () => {
       { id: 'post-work', phase: 'POST_WORK_COMPLETED' },
     ]);
 
-    expect(rawPhase('verified')).toBe('AGENT_COMPLETE');
-    expect(rawPhase('post-work')).toBe('AGENT_COMPLETE');
-    expect(readTask('verified').phase).toBe('AGENT_COMPLETE');
-    expect(readTask('post-work').phase).toBe('AGENT_COMPLETE');
+    expect(rawPhase('verified')).toBe('NEED_ACTION');
+    expect(rawPhase('post-work')).toBe('NEED_ACTION');
+    expect(readTask('verified').phase).toBe('NEED_ACTION');
+    expect(readTask('post-work').phase).toBe('NEED_ACTION');
   });
 
   // (WAIT removed 2026-08-18) — the surviving set is the 4-phase lifecycle.
   it('leaves the four surviving phases untouched', () => {
-    const survivors = ['TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'COMPLETE'];
+    const survivors = ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'];
     buildV6Db(survivors.map((phase) => ({ id: `keep-${phase}`, phase })));
 
     for (const phase of survivors) expect(rawPhase(`keep-${phase}`)).toBe(phase);
@@ -230,7 +235,7 @@ describe('task-db v6 → v8 migration: 7 phases → 5 → 4', () => {
 /**
  * v7 → v8 in isolation (stamp the DB v7 so only `migrateWaitToTodo` runs).
  * WAIT removed 2026-08-18: a blocked/parked task is just a TODO. TODO is the
- * deliberate landing — AGENT_COMPLETE would flag every parked row red+unread on
+ * deliberate landing — NEED_ACTION would flag every parked row red+unread on
  * upgrade. `updated_at` and `unread` are left alone.
  */
 describe('task-db v7 → v8 migration: WAIT → TODO', () => {
@@ -274,11 +279,107 @@ describe('task-db v7 → v8 migration: WAIT → TODO', () => {
   });
 
   it('leaves every surviving phase alone and marks the DB current', () => {
-    const survivors = ['TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'COMPLETE'];
+    const survivors = ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'];
     buildV7Db([...survivors.map((phase) => ({ id: `v8-keep-${phase}`, phase })), { id: 'v8-wait', phase: 'WAIT' }]);
 
     expect(rawPhase('v8-wait')).toBe('TODO'); // forces the migration to run
     for (const phase of survivors) expect(rawPhase(`v8-keep-${phase}`)).toBe(phase);
     expect(getDb()!.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
+  });
+});
+
+/**
+ * v10 → v11: `AGENT_COMPLETE` → `NEED_ACTION` (2026-09-01). A pure rename — same
+ * slot in the lifecycle, same red row, same unread dot. The old name described
+ * the agent's side of the handoff and read as "done" to everyone; the new one
+ * says what the human has to do.
+ *
+ * Would these fail on reverted code? YES. Without the v11 branch every
+ * handed-back row keeps a phase that is no longer in VALID_PHASES, so
+ * `deriveStatusFromPhase` falls through to 'todo' and a task waiting on the
+ * human reappears as an untouched TODO — the exact failure v7 was written to
+ * prevent, one rename later.
+ */
+describe('task-db v10 → v11 migration: AGENT_COMPLETE → NEED_ACTION', () => {
+  beforeEach(async () => {
+    closeDb();
+    await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+  });
+
+  afterEach(async () => {
+    closeDb();
+    await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+  });
+
+  it('renames in the column AND the payload', () => {
+    buildV10Db([
+      { id: 'ac-col', phase: 'AGENT_COMPLETE' },
+      { id: 'ac-both', phase: 'AGENT_COMPLETE', payload: JSON.stringify({ phase: 'AGENT_COMPLETE', unread: true }) },
+    ]);
+
+    expect(rawPhase('ac-col')).toBe('NEED_ACTION');
+    expect(readTask('ac-col').phase).toBe('NEED_ACTION');
+    // Reads hydrate from the payload, so a column-only rewrite would leave every
+    // read still seeing the old name.
+    expect(rawPhase('ac-both')).toBe('NEED_ACTION');
+    expect(readTask('ac-both').phase).toBe('NEED_ACTION');
+  });
+
+  it('leaves updated_at and unread untouched', () => {
+    buildV10Db([
+      {
+        id: 'handed-back',
+        phase: 'AGENT_COMPLETE',
+        updated_at: '2026-03-04T05:06:07.000Z',
+        payload: JSON.stringify({ phase: 'AGENT_COMPLETE', unread: true }),
+      },
+    ]);
+
+    expect(rawPhase('handed-back')).toBe('NEED_ACTION');
+    // A rename is not an edit — bumping updated_at would reshuffle every
+    // updated_at-sorted list on upgrade. The unread claim is still honest.
+    expect(readTask('handed-back').updated_at).toBe('2026-03-04T05:06:07.000Z');
+    expect(readTask('handed-back').unread).toBe(true);
+  });
+
+  it('does not touch the other three phases, and marks the DB current', () => {
+    const untouched = ['TODO', 'IN_PROGRESS', 'COMPLETE'];
+    buildV10Db([
+      ...untouched.map((phase) => ({ id: `v11-keep-${phase}`, phase })),
+      { id: 'v11-ac', phase: 'AGENT_COMPLETE' },
+    ]);
+
+    expect(rawPhase('v11-ac')).toBe('NEED_ACTION'); // forces the migration to run
+    for (const phase of untouched) expect(rawPhase(`v11-keep-${phase}`)).toBe(phase);
+    expect(getDb()!.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
+  });
+
+  it('survives NULL and corrupt payloads, and is a no-op on the second open', () => {
+    buildV10Db([
+      { id: 'v11-null', phase: 'AGENT_COMPLETE', payload: null },
+      { id: 'v11-corrupt', phase: 'AGENT_COMPLETE', payload: '{not json' },
+    ]);
+
+    // The column moves either way; the json_valid() guard skips the bad blob.
+    expect(rawPhase('v11-null')).toBe('NEED_ACTION');
+    expect(rawPhase('v11-corrupt')).toBe('NEED_ACTION');
+
+    closeDb();
+    expect(rawPhase('v11-null')).toBe('NEED_ACTION');
+  });
+
+  it('repairs a row that arrives with the old name AFTER the migration ran', () => {
+    // The UPDATE only touches rows present when it runs. Others arrive later: a
+    // plugin pull echoing a stale remote body, a cloud replica seeded from an
+    // older primary, a remote daemon on the previous build. rowToTask →
+    // migratePhase is the net.
+    buildV10Db([{ id: 'v11-anchor', phase: 'TODO' }]);
+    expect(getDb()!.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
+
+    getDb()!.prepare(`INSERT INTO tasks (id, title, project, status, phase, priority, source, updated_at)
+      VALUES ('v11-late', 'late', '', 'in_progress', 'AGENT_COMPLETE', 'none', 'local', '2026-01-01T00:00:00.000Z')`).run();
+
+    expect(rawPhase('v11-late')).toBe('AGENT_COMPLETE');       // untouched on disk
+    expect(readTask('v11-late').phase).toBe('NEED_ACTION');    // repaired on read
   });
 });

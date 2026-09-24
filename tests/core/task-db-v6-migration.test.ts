@@ -73,7 +73,7 @@ function buildV5Db(rows: { id: string; payload: string | null; updated_at?: stri
   db.exec(V5_SCHEMA_SQL);
   const insert = db.prepare(
     `INSERT INTO tasks (id, title, project, status, phase, priority, source, updated_at, payload)
-     VALUES (@id, @id, '', 'todo', 'AGENT_COMPLETE', 'none', 'local', @updated_at, @payload)`,
+     VALUES (@id, @id, '', 'todo', 'NEED_ACTION', 'none', 'local', @updated_at, @payload)`,
   );
   for (const r of rows) {
     insert.run({ id: r.id, payload: r.payload, updated_at: r.updated_at ?? '2026-01-01T00:00:00.000Z' });

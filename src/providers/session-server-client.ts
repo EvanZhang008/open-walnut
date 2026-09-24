@@ -384,7 +384,7 @@ export class SessionServerClient {
       })
       emitSessionStatusChanged(
         updated,
-        { phase: processStatus === 'running' ? 'IN_PROGRESS' : 'AGENT_COMPLETE' },
+        { phase: processStatus === 'running' ? 'IN_PROGRESS' : 'NEED_ACTION' },
         ['*'],
         { source: 'session-server', urgency: 'urgent' },
       )

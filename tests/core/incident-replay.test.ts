@@ -133,7 +133,7 @@ describe('incident B (ed81e36d) — restart ate the result: stuck running must c
 })
 
 describe('incident C (10e7df54) — swallowed result: task wedged IN_PROGRESS behind a settled record', () => {
-  it('phase debt converges the task to AGENT_COMPLETE without touching the idle record', async () => {
+  it('phase debt converges the task to NEED_ACTION without touching the idle record', async () => {
     const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
     const task = await addTaskFull({
       title: 'incident-c task', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
@@ -155,7 +155,7 @@ describe('incident C (10e7df54) — swallowed result: task wedged IN_PROGRESS be
     const outcome = await reconcileProcessStatus(record, { isAlive: true })
     expect(outcome.converged).toBe(true)
     expect((outcome as { phaseSynced?: boolean }).phaseSynced).toBe(true)
-    expect((await getTask(task.id)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
     expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle') // untouched
   })
 })

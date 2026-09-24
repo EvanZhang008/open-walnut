@@ -31,7 +31,7 @@ function emitPhaseChanged(overrides: Record<string, unknown> = {}, source = 'api
   const task = makeTask({ phase: 'COMPLETE', session_id: 'sess-1' });
   bus.emit(EventNames.TASK_PHASE_CHANGED, {
     task,
-    oldPhase: 'AGENT_COMPLETE',
+    oldPhase: 'NEED_ACTION',
     newPhase: 'COMPLETE',
     source,
     sessionId: 'sess-1',
@@ -61,7 +61,7 @@ describe('HookDispatcher task domain', () => {
     expect(handler).toHaveBeenCalledTimes(1);
     const payload = handler.mock.calls[0][0];
     expect(payload.domain).toBe('task');
-    expect(payload.oldPhase).toBe('AGENT_COMPLETE');
+    expect(payload.oldPhase).toBe('NEED_ACTION');
     expect(payload.newPhase).toBe('COMPLETE');
     expect(payload.taskId).toBe('test-1234');
     expect(payload.task.title).toBe('Test task');
@@ -174,7 +174,7 @@ describe('HookDispatcher task domain', () => {
       const handler = vi.fn();
       dispatcher.init([makeHook({ handler, filter: { fromPhases: ['TODO'] } })]);
 
-      emitPhaseChanged(); // oldPhase AGENT_COMPLETE
+      emitPhaseChanged(); // oldPhase NEED_ACTION
       await tick();
 
       expect(handler).not.toHaveBeenCalled();

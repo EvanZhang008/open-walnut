@@ -5,7 +5,7 @@
  * Two-layer phase management (K8s-style push + reconcile):
  *
  * Layer 1: Push (ms-level, reliable with retry)
- *   session:result     → AGENT_COMPLETE      unconditional, EXCEPT when the event's
+ *   session:result     → NEED_ACTION      unconditional, EXCEPT when the event's
  *                        turnGen is older than the live session's current turnGen
  *                        (a newer turn already started — the late flip would
  *                        repaint a streaming session as completed)
@@ -27,11 +27,11 @@
  *                        never went idle; covers queued/mid-turn sends whose input
  *                        transition was a no-op and whose phase was then flipped by
  *                        the previous turn's result)
- *   session:error      → AGENT_COMPLETE      unconditional (the turn is over —
+ *   session:error      → NEED_ACTION      unconditional (the turn is over —
  *                        possibly badly — and the ball is back with the human;
  *                        the session's own Error badge carries the "it failed"
  *                        signal, the phase only says "handed back, look at it")
- *   session:awaiting-human → AGENT_COMPLETE  unconditional (permission request /
+ *   session:awaiting-human → NEED_ACTION  unconditional (permission request /
  *                        AskUserQuestion / plan approval: the agent is BLOCKED
  *                        on a human decision — same handed-back semantics as a
  *                        finished turn, 2026-08-18 user call: "只要是 Agent 完事
@@ -44,16 +44,16 @@
  *                        and the session is dead)
  *   session:streaming  → (retired 2026-08-18 with the WAIT phase) it existed
  *                        only to undo a stale error→WAIT repaint; error now
- *                        lands on AGENT_COMPLETE and session:turn-start already
+ *                        lands on NEED_ACTION and session:turn-start already
  *                        pulls any new turn back to IN_PROGRESS.
- *   triage-sync        → (retired 2026-08-17) was AGENT_COMPLETE → WAIT on a
+ *   triage-sync        → (retired 2026-08-17) was NEED_ACTION → WAIT on a
  *                        debounce after every normal turn — pure noise.
  *
  *   All go through applySessionPhase() — unified retry + logging + error handling.
  *
  * Layer 2: Reconciler (30s, catches rare failures)
  *   Health monitor derives expected phase from session facts.
- *   Only Rule A: all primary sessions dead + task IN_PROGRESS → AGENT_COMPLETE.
+ *   Only Rule A: all primary sessions dead + task IN_PROGRESS → NEED_ACTION.
  *   No Rule B: never infer phase from session status (could propagate stale data).
  *
  * Terminal phase: COMPLETE — the session machine never overwrites it, with the
@@ -65,10 +65,10 @@
  * something external" IS just TODO — a separate parked state confused both
  * humans and agents; the Focus Bar's 'wait' PIN TIER still exists for parking
  * and is a different axis entirely):
- *   TODO → IN_PROGRESS → AGENT_COMPLETE → COMPLETE
+ *   TODO → IN_PROGRESS → NEED_ACTION → COMPLETE
  *
  * Read/unread lifecycle (task.unread — see readMarkerForPhase):
- *   AGENT_COMPLETE                      → unread   (agent handed work back)
+ *   NEED_ACTION                      → unread   (agent handed work back)
  *   IN_PROGRESS                         → read     (new turn supersedes it)
  *   COMPLETE                            → read     (applyPhase clears it)
  *   opening the task in the UI          → read     (the actual "read" event)
@@ -84,7 +84,7 @@ import type { TaskPhase, TaskStatus, Task } from './types.js';
 export const PHASE_TO_STATUS: Record<TaskPhase, TaskStatus> = {
   TODO: 'todo',
   IN_PROGRESS: 'in_progress',
-  AGENT_COMPLETE: 'in_progress',
+  NEED_ACTION: 'in_progress',
   COMPLETE: 'done',
 };
 
@@ -101,7 +101,7 @@ export const STATUS_TO_DEFAULT_PHASE: Record<TaskStatus, TaskPhase> = {
 export const PHASE_ORDER: TaskPhase[] = [
   'TODO',
   'IN_PROGRESS',
-  'AGENT_COMPLETE',
+  'NEED_ACTION',
   'COMPLETE',
 ];
 
@@ -142,7 +142,7 @@ export function phaseFromStatus(status: TaskStatus): TaskPhase {
  * for the session machine) derive from this one function.
  *
  * UNREAD (the agent handed work back and the human hasn't looked):
- *   - AGENT_COMPLETE — the turn finished (successfully OR with an error) and
+ *   - NEED_ACTION — the turn finished (successfully OR with an error) and
  *     the ball is back with the human. Errors ride the same phase since the
  *     WAIT removal (2026-08-18); the session's own Error badge distinguishes.
  *
@@ -154,7 +154,7 @@ export function phaseFromStatus(status: TaskStatus): TaskPhase {
  * output was seen, so neither setting nor clearing is implied.
  */
 export function readMarkerForPhase(phase: TaskPhase): Partial<Task> {
-  if (phase === 'AGENT_COMPLETE') return { unread: true }
+  if (phase === 'NEED_ACTION') return { unread: true }
   if (phase === 'IN_PROGRESS' || phase === 'COMPLETE') return { unread: false }
   return {}
 }
@@ -168,7 +168,7 @@ export function readMarkerForPhase(phase: TaskPhase): Partial<Task> {
  * has its own O(1) row-patch path (applySessionPhase) that derives the marker
  * from the same readMarkerForPhase, so both agree by construction. Setting the
  * marker in only one of the two is what let a task hand-dragged to
- * AGENT_COMPLETE stay dot-less while a session-driven one lit up.
+ * NEED_ACTION stay dot-less while a session-driven one lit up.
  */
 export function applyPhase(task: Task, phase: TaskPhase): void {
   if (task.phase !== phase) {
@@ -195,40 +195,48 @@ export function applyPhase(task: Task, phase: TaskPhase): void {
 
 /**
  * Migrate legacy phase values to current ones.
- * Returns the migrated phase, or the original if no migration needed.
  *
  * WAIT was removed 2026-08-18 ("blocked/parked" is just TODO — the row stays
  * visible and actionable, and the 'wait' PIN TIER covers deliberate parking).
  * Its ancestors (AWAIT_HUMAN_ACTION, HUMAN_VERIFICATION) follow it to TODO.
  * PEER_CODE_REVIEW / RELEASE_IN_PIPELINE pointed at the deleted
- * HUMAN_VERIFIED / POST_WORK_COMPLETED, so they land on AGENT_COMPLETE.
+ * HUMAN_VERIFIED / POST_WORK_COMPLETED, so they land on NEED_ACTION.
+ *
+ * AGENT_COMPLETE was renamed NEED_ACTION 2026-09-01 (user call: the name has to
+ * say what the human must DO, not what the agent finished — "agent complete"
+ * read as "done" to both humans and agents and the ball-is-with-you meaning was
+ * lost). Pure rename, same semantics, same red+unread treatment. This line is
+ * the read-side compat for any payload still carrying the old string: rows in
+ * the local DB are rewritten by the v11 migration, but plugin sync, replayed
+ * session events, and remote daemons on an older build all still send it.
  */
 export function migratePhase(phase: string): TaskPhase | undefined {
+  if (phase === 'AGENT_COMPLETE') return 'NEED_ACTION';
   if (phase === 'INVESTIGATION') return 'TODO';
   if (phase === 'WAIT') return 'TODO';
   if (phase === 'AWAIT_HUMAN_ACTION') return 'TODO';
   if (phase === 'HUMAN_VERIFICATION') return 'TODO';
-  if (phase === 'PEER_CODE_REVIEW') return 'AGENT_COMPLETE';
-  if (phase === 'RELEASE_IN_PIPELINE') return 'AGENT_COMPLETE';
-  if (phase === 'HUMAN_VERIFIED') return 'AGENT_COMPLETE';
-  if (phase === 'POST_WORK_COMPLETED') return 'AGENT_COMPLETE';
+  if (phase === 'PEER_CODE_REVIEW') return 'NEED_ACTION';
+  if (phase === 'RELEASE_IN_PIPELINE') return 'NEED_ACTION';
+  if (phase === 'HUMAN_VERIFIED') return 'NEED_ACTION';
+  if (phase === 'POST_WORK_COMPLETED') return 'NEED_ACTION';
   if (VALID_PHASES.has(phase)) return phase as TaskPhase;
   // Unknown may mean newer data; guessing TODO corrupts it on the next whole-store write.
   return undefined;
 }
 
 // WHY unconditional: The old computeSessionCompletionPhase only advanced forward
-// (phase < AGENT_COMPLETE), which blocked self-healing — if a task drifted to
-// WAIT, the next session:result couldn't correct it back to AGENT_COMPLETE.
+// (phase < NEED_ACTION), which blocked self-healing — if a task drifted to
+// WAIT, the next session:result couldn't correct it back to NEED_ACTION.
 // Unconditional transitions ensure any event always sets the correct phase
 // regardless of current state.
 
 // ── Unconditional Session → Phase State Machine ──
 
-/** Session produced result → AGENT_COMPLETE. Unconditional. */
+/** Session produced result → NEED_ACTION. Unconditional. */
 export function sessionResultPhase(current: TaskPhase): TaskPhase | null {
-  if (TERMINAL_PHASES.has(current) || current === 'AGENT_COMPLETE') return null
-  return 'AGENT_COMPLETE'
+  if (TERMINAL_PHASES.has(current) || current === 'NEED_ACTION') return null
+  return 'NEED_ACTION'
 }
 
 /** Session received input → IN_PROGRESS. Unconditional, INCLUDING from COMPLETE.
@@ -281,11 +289,11 @@ export function sendSourceReopensTerminal(source: string | undefined): boolean {
  * all, and the init is the only evidence (incident ed347bde, 2026-08-05).
  *
  * The missing half of the result↔turn symmetry: turn-END has an authoritative
- * phase driver (session:result → AGENT_COMPLETE) but turn-START only had
+ * phase driver (session:result → NEED_ACTION) but turn-START only had
  * session:input, which fires at SEND time. Interactive chat sends the next
  * message while the previous turn is still running (queued / mid-turn inject),
  * so that input transition is a no-op (phase already IN_PROGRESS) — then the
- * PREVIOUS turn's result flips the phase to AGENT_COMPLETE (triage may push it
+ * PREVIOUS turn's result flips the phase to NEED_ACTION (triage may push it
  * on to WAIT), and when the queued message finally starts
  * running NOTHING pulls the phase back: the task shows completed/red while
  * the CLI is visibly streaming (incidents 46f42871 + 1f11596b, 2026-08-03).
@@ -298,19 +306,19 @@ export function sessionTurnStartPhase(current: TaskPhase): TaskPhase | null {
   return 'IN_PROGRESS'
 }
 
-/** Session errored → AGENT_COMPLETE. Unconditional. The turn is over (badly)
+/** Session errored → NEED_ACTION. Unconditional. The turn is over (badly)
  *  and the ball is back with the human — same handed-back semantics as a
  *  normal result. The "it failed" signal lives on the SESSION (error badge /
  *  red pill), not the task phase; a dedicated WAIT phase for this was removed
  *  2026-08-18. */
 export function sessionErrorPhase(current: TaskPhase): TaskPhase | null {
-  if (TERMINAL_PHASES.has(current) || current === 'AGENT_COMPLETE') return null
-  return 'AGENT_COMPLETE'
+  if (TERMINAL_PHASES.has(current) || current === 'NEED_ACTION') return null
+  return 'NEED_ACTION'
 }
 
 /**
  * session:streaming — RETIRED with the WAIT phase (2026-08-18). It existed
- * only to undo a stale error→WAIT repaint; error now lands on AGENT_COMPLETE
+ * only to undo a stale error→WAIT repaint; error now lands on NEED_ACTION
  * and session:turn-start already pulls any newly-running turn back to
  * IN_PROGRESS. Kept as an explicit no-op so replayed events from old servers
  * parse cleanly.
@@ -320,14 +328,14 @@ export function sessionStreamingPhase(_current: TaskPhase): TaskPhase | null {
 }
 
 /** Agent blocked on a human decision (permission / AskUserQuestion / plan
- *  approval) → AGENT_COMPLETE. Unconditional. Same handed-back semantics as a
+ *  approval) → NEED_ACTION. Unconditional. Same handed-back semantics as a
  *  finished turn: the agent cannot make progress until the human acts, so the
  *  row must go red NOW, not when the turn eventually ends (2026-08-18 user
  *  call). The session's red "Waiting" badge (pendingPermission-derived)
  *  carries the WHY; the phase only says "look at it". */
 export function sessionAwaitingHumanPhase(current: TaskPhase): TaskPhase | null {
-  if (TERMINAL_PHASES.has(current) || current === 'AGENT_COMPLETE') return null
-  return 'AGENT_COMPLETE'
+  if (TERMINAL_PHASES.has(current) || current === 'NEED_ACTION') return null
+  return 'NEED_ACTION'
 }
 
 /** Human answered the prompt (allow / deny / AskUserQuestion answer) →

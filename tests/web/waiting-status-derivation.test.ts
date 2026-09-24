@@ -59,16 +59,16 @@ describe('waitingBadgeTitle', () => {
 describe('taskNeedsAction (2026-08-14 red-tint regression)', () => {
   // The whole-row red tint used to be phase-driven; the unread rework moved it
   // onto task.unread, which clears the moment the task is OPENED — so a task
-  // still sitting at AGENT_COMPLETE went visually quiet after one glance
+  // still sitting at NEED_ACTION went visually quiet after one glance
   // ("Task 是 Agent Complete 为什么没有提醒"). taskNeedsAction pins the tint
   // back to the PHASE: it must ignore the unread marker entirely.
   const base = { id: 't1', title: 'x', status: 'in_progress', created_at: '', updated_at: '' } as never;
 
-  it('AGENT_COMPLETE needs action even when already read (the regression shape)', () => {
-    expect(taskNeedsAction({ ...(base as object), phase: 'AGENT_COMPLETE', unread: false } as never)).toBe(true);
+  it('NEED_ACTION needs action even when already read (the regression shape)', () => {
+    expect(taskNeedsAction({ ...(base as object), phase: 'NEED_ACTION', unread: false } as never)).toBe(true);
   });
 
-  // (WAIT removed 2026-08-18 — AGENT_COMPLETE is the ONE handed-back phase that
+  // (WAIT removed 2026-08-18 — NEED_ACTION is the ONE handed-back phase that
   // tints the row; a retired value must not sneak the tint back in.)
   it('a retired WAIT value no longer needs action', () => {
     expect(taskNeedsAction({ ...(base as object), phase: 'WAIT' } as never)).toBe(false);
@@ -81,6 +81,6 @@ describe('taskNeedsAction (2026-08-14 red-tint regression)', () => {
   });
 
   it('done status wins over a stale phase', () => {
-    expect(taskNeedsAction({ ...(base as object), status: 'done', phase: 'AGENT_COMPLETE' } as never)).toBe(false);
+    expect(taskNeedsAction({ ...(base as object), status: 'done', phase: 'NEED_ACTION' } as never)).toBe(false);
   });
 });

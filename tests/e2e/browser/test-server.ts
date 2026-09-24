@@ -880,7 +880,7 @@ await fs.writeFile(
         id: 'pw-task-agent-complete',
         title: 'Agent complete phase task',
         status: 'in_progress',
-        phase: 'AGENT_COMPLETE',
+        phase: 'NEED_ACTION',
         priority: 'none',
         project: 'Walnut',
         source: 'ms-todo',

@@ -12,7 +12,7 @@ export interface PluginLogger {
   child(name: string): PluginLogger
 }
 
-export type TaskPhase = 'TODO' | 'IN_PROGRESS' | 'AGENT_COMPLETE' | 'COMPLETE'
+export type TaskPhase = 'TODO' | 'IN_PROGRESS' | 'NEED_ACTION' | 'COMPLETE'
 export type TaskPriority = 'immediate' | 'important' | 'backlog' | 'none'
 
 export interface WalnutTask {

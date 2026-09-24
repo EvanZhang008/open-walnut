@@ -166,7 +166,7 @@
 }
 
 /* ── Session header needs-action tint ──
-   Same red + same rule (taskNeedsAction: AGENT_COMPLETE, not done) as the pin
+   Same red + same rule (taskNeedsAction: NEED_ACTION, not done) as the pin
    area's .todo-pinned-card-needs-action, so "the agent handed this back" reads
    identically on both surfaces. Orthogonal to the walnut amber title: the
    BACKGROUND is the state highlight, the TEXT COLOR is the origin marker.

@@ -6,11 +6,11 @@
  * Wiring under test is the server.ts bus subscriber (real server, real bus,
  * real task store):
  *   session:permission-request  → applySessionPhase('session:awaiting-human')
- *                                 → task AGENT_COMPLETE + unread (red row NOW)
+ *                                 → task NEED_ACTION + unread (red row NOW)
  *   session:permission-resolved (allowed/denied) → 'session:human-answered'
  *                                 → task IN_PROGRESS + read (agent resumes)
  *   session:permission-resolved (expired) → NO pullback (nobody decided; the
- *                                 handed-back AGENT_COMPLETE stands)
+ *                                 handed-back NEED_ACTION stands)
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -63,7 +63,7 @@ afterAll(async () => {
 });
 
 describe('permission request drives the task phase (awaiting-human)', () => {
-  it('request → AGENT_COMPLETE+unread; human answers → IN_PROGRESS+read', async () => {
+  it('request → NEED_ACTION+unread; human answers → IN_PROGRESS+read', async () => {
     const sid = 'sess-perm-flip-1';
     const taskId = await makeTaskWithSession(sid);
 
@@ -72,8 +72,8 @@ describe('permission request drives the task phase (awaiting-human)', () => {
       toolName: 'Bash', input: { command: 'rm -rf build' },
     }, ['*']);
 
-    let task = await pollTask(taskId, (t) => t.phase === 'AGENT_COMPLETE');
-    expect(task.phase).toBe('AGENT_COMPLETE');
+    let task = await pollTask(taskId, (t) => t.phase === 'NEED_ACTION');
+    expect(task.phase).toBe('NEED_ACTION');
     expect(task.unread).toBe(true);
 
     bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
@@ -92,7 +92,7 @@ describe('permission request drives the task phase (awaiting-human)', () => {
     bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
       sessionId: sid, taskId, requestId: 'req-flip-2', toolName: 'Write',
     }, ['*']);
-    await pollTask(taskId, (t) => t.phase === 'AGENT_COMPLETE');
+    await pollTask(taskId, (t) => t.phase === 'NEED_ACTION');
 
     bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
       sessionId: sid, taskId, requestId: 'req-flip-2', allowed: false,
@@ -102,14 +102,14 @@ describe('permission request drives the task phase (awaiting-human)', () => {
     expect(task.phase).toBe('IN_PROGRESS');
   });
 
-  it('EXPIRED resolution (session died, nobody decided) keeps AGENT_COMPLETE', async () => {
+  it('EXPIRED resolution (session died, nobody decided) keeps NEED_ACTION', async () => {
     const sid = 'sess-perm-flip-3';
     const taskId = await makeTaskWithSession(sid);
 
     bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
       sessionId: sid, taskId, requestId: 'req-flip-3', toolName: 'Bash',
     }, ['*']);
-    await pollTask(taskId, (t) => t.phase === 'AGENT_COMPLETE');
+    await pollTask(taskId, (t) => t.phase === 'NEED_ACTION');
 
     // The terminal-transition expiry emits allowed:false + expired:true —
     // a boolean-first consumer would mislabel this as a human deny.
@@ -119,7 +119,7 @@ describe('permission request drives the task phase (awaiting-human)', () => {
 
     await delay(600); // give a wrong pullback time to land
     const task = await getTask(taskId);
-    expect(task.phase).toBe('AGENT_COMPLETE');
+    expect(task.phase).toBe('NEED_ACTION');
     expect(task.unread).toBe(true);
   });
 
@@ -130,7 +130,7 @@ describe('permission request drives the task phase (awaiting-human)', () => {
     bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
       sessionId: sid, taskId, requestId: 'req-flip-4', toolName: 'Bash',
     }, ['*']);
-    await pollTask(taskId, (t) => t.phase === 'AGENT_COMPLETE');
+    await pollTask(taskId, (t) => t.phase === 'NEED_ACTION');
 
     bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
       sessionId: sid, taskId, requestId: 'req-flip-4', allowed: false, cancelled: true,
@@ -138,7 +138,7 @@ describe('permission request drives the task phase (awaiting-human)', () => {
 
     await delay(600);
     const task = await getTask(taskId);
-    expect(task.phase).toBe('AGENT_COMPLETE');
+    expect(task.phase).toBe('NEED_ACTION');
   });
 
   it('request without taskId in the event resolves the task via the session record', async () => {
@@ -149,7 +149,7 @@ describe('permission request drives the task phase (awaiting-human)', () => {
       sessionId: sid, requestId: 'req-flip-5', toolName: 'AskUserQuestion',
     }, ['*']);
 
-    const task = await pollTask(taskId, (t) => t.phase === 'AGENT_COMPLETE');
-    expect(task.phase).toBe('AGENT_COMPLETE');
+    const task = await pollTask(taskId, (t) => t.phase === 'NEED_ACTION');
+    expect(task.phase).toBe('NEED_ACTION');
   });
 });

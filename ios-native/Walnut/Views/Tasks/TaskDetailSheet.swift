@@ -330,10 +330,10 @@ struct TaskDetailSheet: View {
 
     // MARK: - Labels
 
-    /// Phase enum → readable Title Case (e.g. AGENT_COMPLETE → Agent Complete).
+    /// Phase enum → readable Title Case (e.g. NEED_ACTION → Need Action).
     /// nil when the phase is just the status restated (TODO+todo showed
     /// "To Do"+"Todo" side by side — dogfood R15): only a phase that says
-    /// something the status chip doesn't (AGENT_COMPLETE, or a mismatch like
+    /// something the status chip doesn't (NEED_ACTION, or a mismatch like
     /// COMPLETE while status is still open) earns a second chip.
     private var phaseChipText: String? {
         let redundant: [String: TaskStatus] = [

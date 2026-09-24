@@ -137,6 +137,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   closeDb();
   bus.unsubscribe('pin-retirement-test');
   await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
@@ -214,7 +215,7 @@ describe('isRetirablePin', () => {
   it('keeps anything unpinned, open, or exactly at the cutoff', () => {
     const old = iso(cutoff - DAY);
     expect(isRetirablePin({ pinned: false, phase: 'COMPLETE', status: 'done', completed_at: old }, cutoff)).toBe(false);
-    expect(isRetirablePin({ pinned: true, phase: 'AGENT_COMPLETE', status: 'in_progress', updated_at: old }, cutoff)).toBe(false);
+    expect(isRetirablePin({ pinned: true, phase: 'NEED_ACTION', status: 'in_progress', updated_at: old }, cutoff)).toBe(false);
     expect(isRetirablePin({ pinned: true, phase: 'COMPLETE', status: 'done', completed_at: iso(cutoff) }, cutoff)).toBe(false);
   });
 
@@ -283,7 +284,7 @@ describe('sweepPinRetirement — safety', () => {
     await seed([
       { title: 'ancient todo', phase: 'TODO', updated_at: iso(NOW - 400 * DAY), focus_tier: 'focus', pin_order: 0 },
       { title: 'ancient in progress', phase: 'IN_PROGRESS', status: 'in_progress', updated_at: iso(NOW - 400 * DAY), pin_order: 1 },
-      { title: 'ancient agent complete', phase: 'AGENT_COMPLETE', status: 'in_progress', updated_at: iso(NOW - 400 * DAY), pin_order: 2 },
+      { title: 'ancient agent complete', phase: 'NEED_ACTION', status: 'in_progress', updated_at: iso(NOW - 400 * DAY), pin_order: 2 },
     ]);
 
     const report = await sweepPinRetirement({ nowMs: NOW });
@@ -424,6 +425,7 @@ describe('sweepPinRetirement — events and projection', () => {
   it('the task projection (phone + replica view) sees the unpin', async () => {
     // 5 days old: past the 3-day pin window, still inside the projection's own
     // 14-day done-retention, so the row is present and can be asserted on.
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
     await seed([donePin('retired pin', 5 * DAY, { focus_tier: 'focus', pin_order: 3 })]);
 
     const beforeRow = (await buildTaskProjection()).tasks.find((t) => t.title === 'retired pin');

@@ -107,7 +107,7 @@ walnut wait rq-4f2a91b30c7d --timeout 900          # returns when the request le
 walnut tools call request_get '{"id":"rq-4f2a91b30c7d"}'   # single status read: pending | replied | notified | expired
 ```
 
-`walnut wait` polls client-side, defaults to a 1800 second budget, and exits 7 when the thing is still pending. Exit 7 means "not settled yet", not "failed". `walnut wait <task-id>` is the same idea for a task: it returns once the task reaches AGENT_COMPLETE or COMPLETE.
+`walnut wait` polls client-side, defaults to a 1800 second budget, and exits 7 when the thing is still pending. Exit 7 means "not settled yet", not "failed". `walnut wait <task-id>` is the same idea for a task: it returns once the task reaches NEED_ACTION or COMPLETE.
 
 The answer follows YOU, not the process that asked. Walnut resolves the destination when the reply arrives: your session if it is still live, otherwise your task's current session, otherwise the newest live session forked from yours. A reply you asked for before a fork, a restart, or an idle reap therefore still lands where you are now, and the envelope's `request` attribute tells you which of your open asks it answers.
 

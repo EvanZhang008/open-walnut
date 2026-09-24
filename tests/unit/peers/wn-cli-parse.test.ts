@@ -175,12 +175,12 @@ describe('evaluateWaitResult', () => {
     expect(unknown.summary).toEqual({ request: 'rq-abc123', status: 'unknown' });
   });
 
-  it('task ids settle at AGENT_COMPLETE / COMPLETE only', () => {
+  it('task ids settle at NEED_ACTION / COMPLETE only', () => {
     const running = evaluateWaitResult('t-abc123', { task: { id: 't-abc123', title: 'Fix it', phase: 'IN_PROGRESS' } });
     expect(running.done).toBe(false);
     expect(running.summary).toEqual({ task: 't-abc123', title: 'Fix it', phase: 'IN_PROGRESS' });
 
-    for (const phase of ['AGENT_COMPLETE', 'COMPLETE']) {
+    for (const phase of ['NEED_ACTION', 'COMPLETE']) {
       const r = evaluateWaitResult('t-abc123', { task: { id: 't-abc123', title: 'Fix it', phase } });
       expect(r.done, phase).toBe(true);
     }

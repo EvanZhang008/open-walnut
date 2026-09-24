@@ -140,11 +140,11 @@ describe('GET /api/tasks — canonical query params', () => {
   it('phases filters on the exact 7-state phase', async () => {
     const { task } = await addTask({ title: 'Mid-flight' });
     const { updateTask } = await import('../../../src/core/task-manager.js');
-    await updateTask(task.id, { phase: 'AGENT_COMPLETE' });
+    await updateTask(task.id, { phase: 'NEED_ACTION' });
     await addTask({ title: 'Fresh' });
 
-    expect(await idsFor('?phases=AGENT_COMPLETE')).toEqual([task.id]);
-    expect(await idsFor('?phases=AGENT_COMPLETE,TODO')).toHaveLength(2);
+    expect(await idsFor('?phases=NEED_ACTION')).toEqual([task.id]);
+    expect(await idsFor('?phases=NEED_ACTION,TODO')).toHaveLength(2);
   });
 
   it('projects / priorities / sources / sprints accept arrays', async () => {

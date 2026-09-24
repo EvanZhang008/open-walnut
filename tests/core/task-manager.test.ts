@@ -600,18 +600,18 @@ describe('updateTask — unread (read marker)', () => {
 
   // A phase set through updateTask (REST phase picker, agent task_update, plugin
   // sync) does NOT go through applySessionPhase, so wiring the marker only into
-  // the session machine left this path dot-less: a task dragged to AGENT_COMPLETE
+  // the session machine left this path dot-less: a task dragged to NEED_ACTION
   // by hand looked read while a session-driven one lit up. Both now derive from
   // readMarkerForPhase, so they agree by construction.
   it('derives the marker from the phase on the updateTask path too', async () => {
     const { task } = await addTask({ title: 'Manual phase task' });
 
-    const { task: handedBack } = await updateTask(task.id, { phase: 'AGENT_COMPLETE' }, { source: 'api' });
+    const { task: handedBack } = await updateTask(task.id, { phase: 'NEED_ACTION' }, { source: 'api' });
     expect(handedBack.unread).toBe(true);
 
     // The read event: opening the task clears the dot WITHOUT moving the phase.
     const { task: read } = await updateTask(task.id, { unread: false });
-    expect(read.phase).toBe('AGENT_COMPLETE');
+    expect(read.phase).toBe('NEED_ACTION');
     expect(read.unread).toBe(false);
 
     // A new turn supersedes whatever was pending.
@@ -619,8 +619,8 @@ describe('updateTask — unread (read marker)', () => {
     expect(running.unread).toBe(false);
 
     // The error path marks it too — it lands on the SAME phase now that WAIT is
-    // gone (removed 2026-08-18), so re-applying AGENT_COMPLETE re-sets the dot.
-    const { task: handedBackAgain } = await updateTask(task.id, { phase: 'AGENT_COMPLETE' }, { source: 'api' });
+    // gone (removed 2026-08-18), so re-applying NEED_ACTION re-sets the dot.
+    const { task: handedBackAgain } = await updateTask(task.id, { phase: 'NEED_ACTION' }, { source: 'api' });
     expect(handedBackAgain.unread).toBe(true);
   });
 
@@ -628,9 +628,9 @@ describe('updateTask — unread (read marker)', () => {
     const { task } = await addTask({ title: 'Explicit-wins task' });
     // "Mark it complete-ish but keep it read" — the caller said so, honor it.
     const { task: updated } = await updateTask(
-      task.id, { phase: 'AGENT_COMPLETE', unread: false }, { source: 'api' },
+      task.id, { phase: 'NEED_ACTION', unread: false }, { source: 'api' },
     );
-    expect(updated.phase).toBe('AGENT_COMPLETE');
+    expect(updated.phase).toBe('NEED_ACTION');
     expect(updated.unread).toBe(false);
   });
 });

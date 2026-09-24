@@ -91,7 +91,7 @@ beforeAll(async () => {
     tasks: [
       task(TASK_LIVE, 'IN_PROGRESS', DEAD_SESSION),
       // Work already handed back to the human — must NOT be resumed behind them.
-      task(TASK_DONE, 'AGENT_COMPLETE', DEAD_SESSION_DONE),
+      task(TASK_DONE, 'NEED_ACTION', DEAD_SESSION_DONE),
     ],
   }))
   await fs.writeFile(SESSIONS_FILE, JSON.stringify({

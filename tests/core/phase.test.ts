@@ -36,7 +36,7 @@ describe('PHASE_ORDER', () => {
   });
 
   it('is exactly the 4-phase lifecycle, in order', () => {
-    expect(PHASE_ORDER).toEqual(['TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'COMPLETE']);
+    expect(PHASE_ORDER).toEqual(['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE']);
   });
 
   it('does not include INVESTIGATION or HUMAN_VERIFICATION', () => {
@@ -80,7 +80,7 @@ describe('PHASE_TO_STATUS', () => {
   it('maps all 4 phases to correct statuses', () => {
     expect(PHASE_TO_STATUS.TODO).toBe('todo');
     expect(PHASE_TO_STATUS.IN_PROGRESS).toBe('in_progress');
-    expect(PHASE_TO_STATUS.AGENT_COMPLETE).toBe('in_progress');
+    expect(PHASE_TO_STATUS.NEED_ACTION).toBe('in_progress');
     expect(PHASE_TO_STATUS.COMPLETE).toBe('done');
     // (WAIT removed 2026-08-18) — no entry left for it.
     expect(Object.keys(PHASE_TO_STATUS)).not.toContain('WAIT');
@@ -99,6 +99,19 @@ describe('migratePhase', () => {
     expect(migratePhase('INVESTIGATION')).toBe('TODO');
   });
 
+  // The 2026-09-01 rename. Local rows are rewritten by the v11 DB migration, so
+  // this line exists for everything that is NOT the local DB: plugin sync bodies,
+  // replayed session events, and remote daemons still on an older build. Landing
+  // on NEED_ACTION (not TODO, not COMPLETE) is the whole point — it is the SAME
+  // state under a new name, so a task mid-handoff must not move.
+  it('AGENT_COMPLETE → NEED_ACTION (renamed 2026-09-01, same state)', () => {
+    expect(migratePhase('AGENT_COMPLETE')).toBe('NEED_ACTION');
+  });
+
+  it('NEED_ACTION survives migratePhase unchanged (already current)', () => {
+    expect(migratePhase('NEED_ACTION')).toBe('NEED_ACTION');
+  });
+
   // 99 real tasks carry AWAIT_HUMAN_ACTION — the rename must not drop them on the
   // floor. It used to land on WAIT; WAIT removed 2026-08-18, so it follows WAIT to TODO.
   it('AWAIT_HUMAN_ACTION → TODO (WAIT removed 2026-08-18)', () => {
@@ -110,23 +123,23 @@ describe('migratePhase', () => {
   });
 
   // The removal itself: existing WAIT rows are "waiting on something external",
-  // i.e. work NOT done — TODO, not AGENT_COMPLETE (which would flag them all
+  // i.e. work NOT done — TODO, not NEED_ACTION (which would flag them all
   // red+unread on upgrade). (WAIT removed 2026-08-18)
   it('WAIT → TODO', () => {
     expect(migratePhase('WAIT')).toBe('TODO');
   });
 
-  it('PEER_CODE_REVIEW → AGENT_COMPLETE', () => {
-    expect(migratePhase('PEER_CODE_REVIEW')).toBe('AGENT_COMPLETE');
+  it('PEER_CODE_REVIEW → NEED_ACTION', () => {
+    expect(migratePhase('PEER_CODE_REVIEW')).toBe('NEED_ACTION');
   });
 
-  it('RELEASE_IN_PIPELINE → AGENT_COMPLETE', () => {
-    expect(migratePhase('RELEASE_IN_PIPELINE')).toBe('AGENT_COMPLETE');
+  it('RELEASE_IN_PIPELINE → NEED_ACTION', () => {
+    expect(migratePhase('RELEASE_IN_PIPELINE')).toBe('NEED_ACTION');
   });
 
-  it('the deleted 7-phase values land on AGENT_COMPLETE, not TODO', () => {
-    expect(migratePhase('HUMAN_VERIFIED')).toBe('AGENT_COMPLETE');
-    expect(migratePhase('POST_WORK_COMPLETED')).toBe('AGENT_COMPLETE');
+  it('the deleted 7-phase values land on NEED_ACTION, not TODO', () => {
+    expect(migratePhase('HUMAN_VERIFIED')).toBe('NEED_ACTION');
+    expect(migratePhase('POST_WORK_COMPLETED')).toBe('NEED_ACTION');
   });
 
   it('valid phases pass through unchanged', () => {
@@ -146,13 +159,13 @@ describe('deriveStatusFromPhase', () => {
   it('derives correct status for all phases', () => {
     expect(deriveStatusFromPhase('TODO')).toBe('todo');
     expect(deriveStatusFromPhase('IN_PROGRESS')).toBe('in_progress');
-    expect(deriveStatusFromPhase('AGENT_COMPLETE')).toBe('in_progress');
+    expect(deriveStatusFromPhase('NEED_ACTION')).toBe('in_progress');
     expect(deriveStatusFromPhase('COMPLETE')).toBe('done');
   });
 });
 
 // session:streaming existed ONLY to undo a stale error→WAIT repaint. With WAIT
-// removed (2026-08-18) error lands on AGENT_COMPLETE and session:turn-start
+// removed (2026-08-18) error lands on NEED_ACTION and session:turn-start
 // already pulls a newly-running turn back to IN_PROGRESS, so this is now an
 // unconditional no-op — kept parseable so replayed events from old servers don't crash.
 describe('sessionStreamingPhase (retired with WAIT, 2026-08-18)', () => {
@@ -165,26 +178,26 @@ describe('sessionStreamingPhase (retired with WAIT, 2026-08-18)', () => {
 
 // session:error used to land on WAIT ("blocked, look at it"). WAIT removed
 // 2026-08-18: the turn is over and the ball is back with the human, which is
-// exactly AGENT_COMPLETE. The "it failed" signal lives on the SESSION's error
+// exactly NEED_ACTION. The "it failed" signal lives on the SESSION's error
 // badge, not on the task phase.
 describe('sessionErrorPhase (WAIT removed 2026-08-18)', () => {
-  it('lands on AGENT_COMPLETE, not a dedicated blocked phase', () => {
-    expect(sessionErrorPhase('TODO')).toBe('AGENT_COMPLETE');
-    expect(sessionErrorPhase('IN_PROGRESS')).toBe('AGENT_COMPLETE');
+  it('lands on NEED_ACTION, not a dedicated blocked phase', () => {
+    expect(sessionErrorPhase('TODO')).toBe('NEED_ACTION');
+    expect(sessionErrorPhase('IN_PROGRESS')).toBe('NEED_ACTION');
   });
 
-  it('is idempotent on AGENT_COMPLETE and never overwrites COMPLETE', () => {
-    expect(sessionErrorPhase('AGENT_COMPLETE')).toBeNull();
+  it('is idempotent on NEED_ACTION and never overwrites COMPLETE', () => {
+    expect(sessionErrorPhase('NEED_ACTION')).toBeNull();
     expect(sessionErrorPhase('COMPLETE')).toBeNull();
   });
 });
 
 // The unread dot used to light on WAIT (the error path) as well as
-// AGENT_COMPLETE. With both collapsed onto AGENT_COMPLETE, that phase is the
+// NEED_ACTION. With both collapsed onto NEED_ACTION, that phase is the
 // only one that sets it. (WAIT removed 2026-08-18)
 describe('readMarkerForPhase', () => {
-  it('AGENT_COMPLETE is the only phase that marks unread', () => {
-    expect(readMarkerForPhase('AGENT_COMPLETE')).toEqual({ unread: true });
+  it('NEED_ACTION is the only phase that marks unread', () => {
+    expect(readMarkerForPhase('NEED_ACTION')).toEqual({ unread: true });
     expect(readMarkerForPhase('IN_PROGRESS')).toEqual({ unread: false });
     expect(readMarkerForPhase('COMPLETE')).toEqual({ unread: false });
     expect(readMarkerForPhase('TODO')).toEqual({});
@@ -235,14 +248,14 @@ describe('sessionInputPhase (reopens COMPLETE, 2026-09-23)', () => {
 });
 
 describe('sessionTurnStartPhase (incidents 46f42871 + 1f11596b)', () => {
-  it('INCIDENT SHAPE: pulls AGENT_COMPLETE back to IN_PROGRESS when the CLI starts the queued turn', () => {
+  it('INCIDENT SHAPE: pulls NEED_ACTION back to IN_PROGRESS when the CLI starts the queued turn', () => {
     // The queued-send race: input fired while phase was already IN_PROGRESS
-    // (no-op), the previous turn's result flipped it to AGENT_COMPLETE, and the
+    // (no-op), the previous turn's result flipped it to NEED_ACTION, and the
     // task showed completed while the CLI streamed the next turn.
     // session:streaming could NOT fix this (it only ever acted on WAIT) — that
     // gap is exactly why this trigger exists, and it is why streaming could be
     // retired outright when WAIT went away (2026-08-18).
-    expect(sessionTurnStartPhase('AGENT_COMPLETE')).toBe('IN_PROGRESS');
+    expect(sessionTurnStartPhase('NEED_ACTION')).toBe('IN_PROGRESS');
   });
 
   it('is idempotent on IN_PROGRESS and starts TODO tasks', () => {

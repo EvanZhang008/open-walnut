@@ -288,10 +288,10 @@ Where `-c` is category, `-l` is project (label), and `-p` is priority.
 Tasks move through phases automatically (simplified — see [README](README.md) for the full 7-phase lifecycle):
 
 ```
-TODO → IN_PROGRESS → ... → AGENT_COMPLETE → ... → COMPLETE
+TODO → IN_PROGRESS → ... → NEED_ACTION → ... → COMPLETE
 ```
 
-When the AI finishes its work, the task moves to `AGENT_COMPLETE`. Only you mark it `COMPLETE` — the AI never closes tasks without your approval.
+When the AI finishes its work, the task moves to `NEED_ACTION`. Only you mark it `COMPLETE`. The AI never closes tasks without your approval.
 
 ### Retiring Finished Pins
 

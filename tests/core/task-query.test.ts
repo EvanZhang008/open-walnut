@@ -70,7 +70,7 @@ describe('completion semantics', () => {
     const expected: Record<TaskPhase, TaskCompletion> = {
       TODO: 'todo',
       IN_PROGRESS: 'in_progress',
-      AGENT_COMPLETE: 'in_progress',
+      NEED_ACTION: 'in_progress',
       COMPLETE: 'complete',
     };
 
@@ -81,7 +81,7 @@ describe('completion semantics', () => {
     }
     // The agent-stopped-but-still-open phase stays in in_progress, so a handed-back
     // task can't vanish from the in_progress bucket.
-    expect(COMPLETION_TO_PHASES.in_progress).toEqual(['IN_PROGRESS', 'AGENT_COMPLETE']);
+    expect(COMPLETION_TO_PHASES.in_progress).toEqual(['IN_PROGRESS', 'NEED_ACTION']);
     expect(COMPLETION_TO_PHASES.complete).toEqual(['COMPLETE']);
   });
 

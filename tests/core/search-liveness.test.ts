@@ -29,7 +29,7 @@ describe('completedLivenessPenalty', () => {
   it('is zero for anything not completed', () => {
     expect(completedLivenessPenalty({ phase: 'IN_PROGRESS', updated_at: daysAgo(400) }, NOW)).toBe(0);
     expect(completedLivenessPenalty({ phase: 'TODO' }, NOW)).toBe(0);
-    expect(completedLivenessPenalty({ phase: 'AGENT_COMPLETE', updated_at: daysAgo(90) }, NOW)).toBe(0);
+    expect(completedLivenessPenalty({ phase: 'NEED_ACTION', updated_at: daysAgo(90) }, NOW)).toBe(0);
   });
 
   it('barely touches a fresh completion and saturates on old history', () => {

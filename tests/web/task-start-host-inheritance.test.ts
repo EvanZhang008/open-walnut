@@ -8,7 +8,7 @@
  * adopted the remote default_cwd but never read default_host, so it spawned on
  * the LOCAL box with a remote-only path — the local cwd pre-flight refused
  * ("Working directory no longer exists"), the error path flipped the task to
- * AGENT_COMPLETE, and the CLI caller (already holding a success response) saw a
+ * NEED_ACTION, and the CLI caller (already holding a success response) saw a
  * task that looked finished but had no session. Host and cwd travel together.
  * The route no longer resolves either one (it passes the body through and the
  * session-runner resolves task → parent → project), so this test drives the

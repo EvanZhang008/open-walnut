@@ -18,7 +18,7 @@
  *   gatingBgCount === 0                           — backgrounded tasks excluded (incident D)
  *   !teamActive                                   — no team poll loop
  * Target: error→'error'; alive→'idle'; dead→'stopped'. Task phase: IN_PROGRESS
- * → AGENT_COMPLETE, error or not (WAIT removed 2026-08-18 — the turn is over and
+ * → NEED_ACTION, error or not (WAIT removed 2026-08-18 — the turn is over and
  * the ball is back with the human either way; the failure signal lives on the
  * session record, not the task phase); later phases never regressed.
  */
@@ -571,7 +571,7 @@ describe('reconcileProcessStatus — refusal guards (must NOT converge)', () => 
 })
 
 describe('reconcileProcessStatus — task phase sync (incident C shape)', () => {
-  it('advances a stuck IN_PROGRESS task to AGENT_COMPLETE on record convergence', async () => {
+  it('advances a stuck IN_PROGRESS task to NEED_ACTION on record convergence', async () => {
     const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
     const task = await addTaskFull({
       title: 'stuck task', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
@@ -584,7 +584,7 @@ describe('reconcileProcessStatus — task phase sync (incident C shape)', () => 
 
     const outcome = await reconcileProcessStatus(record, { isAlive: false })
     expect(outcome.converged).toBe(true)
-    expect((await getTask(task.id)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
   })
 
   it('PHASE DEBT: settled record + task stuck IN_PROGRESS → phase synced without touching the record', async () => {
@@ -605,13 +605,13 @@ describe('reconcileProcessStatus — task phase sync (incident C shape)', () => 
     const outcome = await reconcileProcessStatus(record, { isAlive: true })
     expect(outcome.converged).toBe(true)
     expect((outcome as { phaseSynced?: boolean }).phaseSynced).toBe(true)
-    expect((await getTask(task.id)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
     // Record untouched — it was already correct.
     expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
   })
 
   // (WAIT removed 2026-08-18 — the "already past IN_PROGRESS" fixture phase was
-  // WAIT; COMPLETE is now the phase past AGENT_COMPLETE, and the gate is still
+  // WAIT; COMPLETE is now the phase past NEED_ACTION, and the gate is still
   // "only sync when the task is exactly IN_PROGRESS".)
   it('never regresses a task already past IN_PROGRESS', async () => {
     const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
@@ -630,9 +630,9 @@ describe('reconcileProcessStatus — task phase sync (incident C shape)', () => 
   })
 
   // The error branch used to land on WAIT; since the removal (2026-08-18) an
-  // errored turn reconciles to the SAME AGENT_COMPLETE as a clean one — the
+  // errored turn reconciles to the SAME NEED_ACTION as a clean one — the
   // failure signal is the session record's 'error' process_status.
-  it('an errored turn also syncs the phase to AGENT_COMPLETE (no separate blocked phase)', async () => {
+  it('an errored turn also syncs the phase to NEED_ACTION (no separate blocked phase)', async () => {
     const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
     const task = await addTaskFull({
       title: 'errored turn', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
@@ -646,7 +646,7 @@ describe('reconcileProcessStatus — task phase sync (incident C shape)', () => 
     const outcome = await reconcileProcessStatus(record, { isAlive: true })
     expect(outcome.converged).toBe(true)
     expect((await getSessionByClaudeId(sid))?.process_status).toBe('error')
-    expect((await getTask(task.id)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
   })
 })
 
@@ -981,7 +981,7 @@ describe('fetchStreamTailFold — whale-turn watermark fallback (incident 57b125
 // consumedOffset measured in the LEGACY file (37.9 MB). Its respawn wrote a
 // fresh HOME file starting at offset ~0; every event in the new (6 MB) file
 // sat "below" the stale watermark, so the live path suppressed the real
-// end-of-turn result as a replay and the task never reached AGENT_COMPLETE.
+// end-of-turn result as a replay and the task never reached NEED_ACTION.
 // The positional veto in reconcileProcessStatus had the same blindness — the
 // reconciler could never heal what the live path suppressed.
 
@@ -1039,7 +1039,7 @@ describe('reconcileProcessStatus — stale watermark from a dead file incarnatio
     const outcome = await reconcileProcessStatus(record, { isAlive: false })
     expect(outcome.converged).toBe(true)
     expect((outcome as { to?: string }).to).toBe('stopped')
-    expect((await getTask(task.id)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
 
     // The record must be durably healed: new-epoch stamp + watermark now a
     // coordinate of the NEW file (tracker accepted the regression because the

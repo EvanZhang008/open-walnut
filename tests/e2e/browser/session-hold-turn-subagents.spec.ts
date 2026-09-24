@@ -6,7 +6,7 @@
  * The failure mode this pins:
  *   The CLI emits the user turn's terminal `result` — and its trailing idle —
  *   IMMEDIATELY, while the launched subagent is still running (real-CLI-verified
- *   cycle). Settling there marks the session idle/AGENT_COMPLETE, so the
+ *   cycle). Settling there marks the session idle/NEED_ACTION, so the
  *   subagent's later output and the model's promised followup summary land
  *   outside any turn and the "done" state lies.
  *
@@ -56,7 +56,7 @@ test.beforeAll(async ({ request }) => {
       expect(response.status()).toBe(201)
       const { task } = await response.json()
       densityTaskIds.push(task.id)
-      const phase = index < 6 ? 'IN_PROGRESS' : index < 11 ? 'AGENT_COMPLETE' : index < 25 ? 'COMPLETE' : 'TODO'
+      const phase = index < 6 ? 'IN_PROGRESS' : index < 11 ? 'NEED_ACTION' : index < 25 ? 'COMPLETE' : 'TODO'
       if (phase !== 'TODO') {
         const updated = await request.patch(`/api/tasks/${task.id}`, { data: { phase } })
         expect(updated.ok()).toBe(true)
@@ -68,7 +68,7 @@ test.beforeAll(async ({ request }) => {
   const { tasks, truncated } = await response.json()
   expect(truncated).toBe(false)
   expect(tasks).toHaveLength(105)
-  for (const [phase, count] of [['TODO', 80], ['AGENT_COMPLETE', 5], ['COMPLETE', 14], ['IN_PROGRESS', 6]]) {
+  for (const [phase, count] of [['TODO', 80], ['NEED_ACTION', 5], ['COMPLETE', 14], ['IN_PROGRESS', 6]]) {
     expect(tasks.filter((task: { phase: string }) => task.phase === phase)).toHaveLength(count)
   }
 })
@@ -310,8 +310,8 @@ test('a late session hint cannot erase a red task row, but committed task change
   expect(await card.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe('rgba(255, 59, 48, 0.08)')
   const persisted = await page.request.get(`/api/tasks/${taskId}`)
   expect(persisted.ok()).toBe(true)
-  expect((await persisted.json()).task.phase).toBe('AGENT_COMPLETE')
-  for (const phase of ['IN_PROGRESS', 'AGENT_COMPLETE'] as const) {
+  expect((await persisted.json()).task.phase).toBe('NEED_ACTION')
+  for (const phase of ['IN_PROGRESS', 'NEED_ACTION'] as const) {
     const updated = await page.request.patch(`/api/tasks/${taskId}`, { data: { phase } })
     expect(updated.ok()).toBe(true)
     if (phase === 'IN_PROGRESS') await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
@@ -349,7 +349,7 @@ test('red task rows stay current across tiers, reading races, and reconnects', a
   await expect.poll(() => sockets.length).toBe(1)
   for (const [tier, index] of [['Focus', 6], ['Satellite', 26], ['Wait', 71], ['Backlog', 94]] as const) {
     const id = densityTaskIds[index]
-    const update = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'AGENT_COMPLETE', unread: true } })
+    const update = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'NEED_ACTION', unread: true } })
     expect(update.ok()).toBe(true)
     await selectSection(page, tier)
     const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${id}"]`)
@@ -383,7 +383,7 @@ test('red task rows stay current across tiers, reading races, and reconnects', a
   try {
     await card.locator('.todo-pinned-title').click()
     await expect.poll(() => readStarted).toBe(true)
-    const settled = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'AGENT_COMPLETE', unread: true } })
+    const settled = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'NEED_ACTION', unread: true } })
     expect(settled.ok()).toBe(true)
     await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
   } finally {
@@ -398,7 +398,7 @@ test('red task rows stay current across tiers, reading races, and reconnects', a
   expect(offlineUpdate.ok()).toBe(true)
   await expect.poll(() => sockets.length, { timeout: 15_000 }).toBeGreaterThan(1)
   await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
-  const handback = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'AGENT_COMPLETE' } })
+  const handback = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'NEED_ACTION' } })
   expect(handback.ok()).toBe(true)
   await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/red-after-reconnect.png` })
@@ -425,12 +425,12 @@ test('a cold Home whose socket connects late still paints the hand-back red', as
   await expect(card).toBeVisible()
   await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
 
-  const handback = await page.request.patch(`/api/tasks/${taskId}`, { data: { phase: 'AGENT_COMPLETE' } })
+  const handback = await page.request.patch(`/api/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })
   expect(handback.ok()).toBe(true)
   const persisted = await page.request.get(`/api/tasks/${taskId}`)
   expect(persisted.ok()).toBe(true)
   const committed = (await persisted.json()).task
-  expect(committed.phase).toBe('AGENT_COMPLETE')
+  expect(committed.phase).toBe('NEED_ACTION')
   expect(committed.unread).toBe(true)
   // Committed on the server, unreachable by this page: no socket carried it.
   await page.waitForTimeout(1_000)

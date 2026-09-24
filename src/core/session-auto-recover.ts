@@ -28,7 +28,7 @@
  * GUARDS (each one is a real failure mode, not defensive padding):
  *   - infra ONLY (session-error-kind). An unknown cause does not qualify: this
  *     spends tokens and runs an agent with no human watching.
- *   - task must still be IN_PROGRESS. AGENT_COMPLETE means the work was already
+ *   - task must still be IN_PROGRESS. NEED_ACTION means the work was already
  *     handed back to the human; resuming would talk over them.
  *   - persisted attempt budget on the session record. An in-memory counter
  *     resets with the server, so a host in a reboot loop would respawn forever.
@@ -254,7 +254,7 @@ export class SessionAutoRecover {
    * Cheap SYNC verdict: would this record be resumed if we scheduled it?
    *
    * Callers use this to decide whether to advance the task phase instead
-   * (advancing to AGENT_COMPLETE and then resuming would contradict each other,
+   * (advancing to NEED_ACTION and then resuming would contradict each other,
    * and fire() checks the phase, so the order has to be settled up front).
    * The task-phase check itself is async and happens in fire().
    */
@@ -382,7 +382,7 @@ export class SessionAutoRecover {
         log.session.info('auto-recover aborted — no task', { sessionId })
         return
       }
-      // The work must still be in flight. AGENT_COMPLETE / COMPLETE / TODO all mean
+      // The work must still be in flight. NEED_ACTION / COMPLETE / TODO all mean
       // nobody is waiting on this session to keep going.
       const phase = await this.deps.getTaskPhase(effectiveTaskId)
       if (superseded()) {
@@ -498,7 +498,7 @@ export function getSessionAutoRecover(): SessionAutoRecover | null {
 /**
  * Convenience for the discovery sites (daemon reconnect, health monitor): arm a
  * recovery if the watcher is running. Returns true when armed, so the caller
- * knows not to advance the task phase to AGENT_COMPLETE behind it.
+ * knows not to advance the task phase to NEED_ACTION behind it.
  */
 export function scheduleSessionAutoRecover(record: SessionRecord, cause?: StatusReason): boolean {
   return instance?.schedule(record, cause) ?? false

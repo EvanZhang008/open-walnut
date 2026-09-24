@@ -180,7 +180,7 @@ describe('walnut mcp — task write path', () => {
     }
   })
 
-  it('task_update hands work back with AGENT_COMPLETE without claiming human completion', async () => {
+  it('task_update hands work back with NEED_ACTION without claiming human completion', async () => {
     const { client, close } = await connect()
     try {
       const created = jsonOf(await client.callTool({
@@ -191,16 +191,16 @@ describe('walnut mcp — task write path', () => {
 
       const handedBack = await client.callTool({
         name: 'task_update',
-        arguments: { id, phase: 'AGENT_COMPLETE' },
+        arguments: { id, phase: 'NEED_ACTION' },
       })
       expect(handedBack.isError).toBeFalsy()
       const payload = jsonOf(handedBack)
-      expect((payload.task as { phase: string; status: string }).phase).toBe('AGENT_COMPLETE')
+      expect((payload.task as { phase: string; status: string }).phase).toBe('NEED_ACTION')
       expect((payload.task as { phase: string; status: string }).status).toBe('in_progress')
 
       const res = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${id}`)
       const detail = await res.json() as { task: { phase: string; status: string } }
-      expect(detail.task.phase).toBe('AGENT_COMPLETE')
+      expect(detail.task.phase).toBe('NEED_ACTION')
       expect(detail.task.status).toBe('in_progress')
     } finally {
       await close()

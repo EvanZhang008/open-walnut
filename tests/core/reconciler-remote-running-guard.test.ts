@@ -2,7 +2,7 @@
  * Reconciler guard: a remote session whose record still says 'running' must NOT
  * flip its task to the handed-back phase just because the liveness probe failed
  * (the flip target was WAIT at incident time; WAIT was removed 2026-08-18 and
- * the reconciler now lands on AGENT_COMPLETE — the guard itself is unchanged)
+ * the reconciler now lands on NEED_ACTION — the guard itself is unchanged)
  * (incident inc-1786691991988, 2026-08-14: an SSH flap to a remote host made
  * cachedIsAlive→false; the legacy 'remote_unreachable' breadcrumb write was
  * SUPPRESSED by the snapshot gate's enforce mode, so the old guard — which only
@@ -82,13 +82,13 @@ describe('reconciler remote-running guard (inc-1786691991988)', () => {
     expect(applySessionPhaseCalls).toHaveLength(0)
   })
 
-  // (WAIT removed 2026-08-18 — the reconciler's expectedPhase is AGENT_COMPLETE.)
+  // (WAIT removed 2026-08-18 — the reconciler's expectedPhase is NEED_ACTION.)
   it('a genuinely settled remote session (stopped, no breadcrumb) still reconciles', async () => {
     await runReconcile(
       makeRemoteSession('sid-3', 'task-3', { process_status: 'stopped' } as Partial<SessionRecord>),
       makeTask('task-3', 'sid-3'),
     )
-    expect(applySessionPhaseCalls).toEqual([{ taskId: 'task-3', newPhase: 'AGENT_COMPLETE' }])
+    expect(applySessionPhaseCalls).toEqual([{ taskId: 'task-3', newPhase: 'NEED_ACTION' }])
   })
 
   it('a dead LOCAL session is never held by the guard (hard OS fact)', async () => {
@@ -96,7 +96,7 @@ describe('reconciler remote-running guard (inc-1786691991988)', () => {
       makeRemoteSession('sid-4', 'task-4', { host: undefined, process_status: 'running' } as Partial<SessionRecord>),
       makeTask('task-4', 'sid-4'),
     )
-    expect(applySessionPhaseCalls).toEqual([{ taskId: 'task-4', newPhase: 'AGENT_COMPLETE' }])
+    expect(applySessionPhaseCalls).toEqual([{ taskId: 'task-4', newPhase: 'NEED_ACTION' }])
   })
 })
 
@@ -105,7 +105,7 @@ describe('reconciler freshness grace + registry see-through (incident 0dc8352f, 
   // --resume (86s for a whale). Mid-resume the record still said 'stopped'
   // (enforce mode suppresses the legacy running write), the probe judged it
   // dead, and the reconciler flipped the 19-second-old IN_PROGRESS back to
-  // AGENT_COMPLETE → "Running 但 Agent Complete".
+  // NEED_ACTION → "Running but Agent Complete".
 
   it('INCIDENT SHAPE: a task updated seconds ago is inside the grace window — untouched', async () => {
     const fresh = new Date().toISOString()
@@ -122,7 +122,7 @@ describe('reconciler freshness grace + registry see-through (incident 0dc8352f, 
       makeRemoteSession('sid-6', 'task-6', { host: undefined, process_status: 'stopped' } as Partial<SessionRecord>),
       makeTask('task-6', 'sid-6', { updated_at: stale }),
     )
-    expect(applySessionPhaseCalls).toEqual([{ taskId: 'task-6', newPhase: 'AGENT_COMPLETE' }])
+    expect(applySessionPhaseCalls).toEqual([{ taskId: 'task-6', newPhase: 'NEED_ACTION' }])
   })
 
   it('stale stopped flag + live registered manager → counted alive, untouched', async () => {
@@ -145,7 +145,7 @@ describe('reconciler freshness grace + registry see-through (incident 0dc8352f, 
     registerSessionManager('sid-8', { isAlive: async () => false } as never)
     try {
       await runReconcile(session, makeTask('task-8', 'sid-8', { updated_at: stale }))
-      expect(applySessionPhaseCalls).toEqual([{ taskId: 'task-8', newPhase: 'AGENT_COMPLETE' }])
+      expect(applySessionPhaseCalls).toEqual([{ taskId: 'task-8', newPhase: 'NEED_ACTION' }])
     } finally {
       unregisterSessionManager('sid-8')
     }

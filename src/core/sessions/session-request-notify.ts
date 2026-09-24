@@ -4,7 +4,7 @@
  *
  * Two triggers share this one function (and the atomic settle inside it):
  *   - the session-request-watch builtin hook, on the target task's phase edge
- *     (turn end / error / awaiting-human — all land AGENT_COMPLETE);
+ *     (turn end / error / awaiting-human — all land NEED_ACTION);
  *   - the deadline sweeper (sweepSessionRequests), for targets whose edges
  *     never fired at all (edges here are HINTS: phases are flaky by design —
  *     stale-result gating, reconciler flips — the sweeper is the guarantee).

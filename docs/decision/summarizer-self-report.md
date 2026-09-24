@@ -170,7 +170,7 @@ The labeled protocol degrades field by field.
 - Repeated identical signals are deduplicated per session and task. A different
   signal resets the gate.
 - `applySessionPhase('triage-sync')` permits only
-  `AGENT_COMPLETE -> AWAIT_HUMAN_ACTION`.
+  `NEED_ACTION -> AWAIT_HUMAN_ACTION`.
 - Notifications continue to use `subagent:result` with
   `agentId: 'turn-complete-triage'`, preserving the server's `notify_mode`
   gate, UI behavior, and usage classification.

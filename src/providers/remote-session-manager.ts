@@ -378,7 +378,7 @@ export class RemoteSessionManager implements SessionManager {
     // "FIFO alive between turns" off hasPipe (claude-code-session.ts): false
     // misclassified every healthy idle FIFO session as EXITING → status
     // 'stopped' → server wiped the stream buffer instantly at each turn end
-    // (no cross-turn retention), wrong badge, AGENT_COMPLETE churn, and the
+    // (no cross-turn retention), wrong badge, NEED_ACTION churn, and the
     // 60s activeProcessing force-clear noise. Same class as Bug D
     // (injectMidTurn stale hasPipe) — this is its turn-end sibling.
     // Incident: inc-1783357192826 ("chat vanishes when the turn completes").

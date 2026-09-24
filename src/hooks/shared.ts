@@ -190,7 +190,7 @@ export function updateTaskFromSession(taskId: string, summary: SessionSummary): 
       // Phase advance.
       let newPhase = row.phase;
       if (row.phase === 'TODO' || row.phase === 'IN_PROGRESS') {
-        newPhase = 'AGENT_COMPLETE';
+        newPhase = 'NEED_ACTION';
       }
 
       // session_ids append (dedupe).

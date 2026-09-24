@@ -9,7 +9,7 @@
  * writeMessage() has already reset _turnResultEmitted for the new turn — and
  * the naive idle handler read the late companion as "the NEW turn is over",
  * completing a turn that had produced ZERO output (premature-idle family:
- * false AGENT_COMPLETE, buffer wiped, workflow interrupted).
+ * false NEED_ACTION, buffer wiped, workflow interrupted).
  *
  * THE FIX: each result-driven completion on an alive process banks one owed
  * idle (_idleDebt++); the idle handler consumes debt FIRST — a debt-consuming
@@ -151,7 +151,7 @@ describe('idle-debt: late companion idle cannot complete the next turn', () => {
     expect(session.processStatus).toBe('running')
 
     // NOW turn 1's companion idle lands — pre-debt this completed the new turn
-    // with zero output (false AGENT_COMPLETE). It must be swallowed.
+    // with zero output (false NEED_ACTION). It must be swallowed.
     feedLines(session, [makeSessionStateEvent(sid, 'idle')])
     expect(results.length).toBe(1)                    // no phantom SESSION_RESULT
     expect(session.processStatus).toBe('running')     // new turn still live

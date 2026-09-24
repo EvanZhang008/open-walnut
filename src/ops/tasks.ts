@@ -98,7 +98,7 @@ defineOp({
     'chosen fields.',
   input: {
     status: STATUS.optional().describe('Legacy 3-state: todo | in_progress | done'),
-    completion: z.string().optional().describe('Comma list of todo | in_progress | complete (in_progress includes AGENT_COMPLETE)'),
+    completion: z.string().optional().describe('Comma list of todo | in_progress | complete (in_progress includes NEED_ACTION)'),
     phases: z.string().optional().describe(`Comma list of exact phases: ${PHASE_ORDER.join(' | ')}`),
     project: z.string().optional().describe('Project name (exact, case-insensitive); "" for the Inbox'),
     projects: z.string().optional().describe('Comma list of project names'),
@@ -307,7 +307,7 @@ defineOp({
   name: 'task_update',
   title: 'Update a Walnut task',
   description:
-    'Patch any supported task fields. Use phase=AGENT_COMPLETE when work is done and ready to look at, ' +
+    'Patch any supported task fields. Use phase=NEED_ACTION when work is done and ready to look at, ' +
     'and phase=COMPLETE when it is finished; a blocked or parked task is just TODO. ' +
     '`tags` is a full replacement ([] clears). Pass "" to clear due_date/start_date.',
   input: {
@@ -343,7 +343,7 @@ defineOp({
       + (attachment === 'attached' ? 'Its existing session keeps running.'
         : attachment === 'none' ? `No session is attached. ${TASK_IS_INERT}`
           : TASK_IS_INERT)
-    const next = body.phase === 'AGENT_COMPLETE'
+    const next = body.phase === 'NEED_ACTION'
       ? 'Marked ready for the human to look at. Nothing else is required of you.'
       : attachment === 'attached'
         ? `Talk to its session: walnut tools call session_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`

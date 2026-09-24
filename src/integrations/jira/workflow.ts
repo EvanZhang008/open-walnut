@@ -10,14 +10,14 @@ import type { JiraTransition } from './types.js';
 
 // ── Phase → Jira target status name ──
 
-// AGENT_COMPLETE deliberately pushes 'In Progress', not 'In Review': the Jira
+// NEED_ACTION deliberately pushes 'In Progress', not 'In Review': the Jira
 // issue is still open work until a human closes it, and 'In Review' is a status
 // many boards don't have (resolveTransition would then fall back to the
 // 'indeterminate' category and pick an arbitrary transition).
 export const PHASE_TO_JIRA_STATUS: Record<TaskPhase, string> = {
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
-  AGENT_COMPLETE: 'In Progress',
+  NEED_ACTION: 'In Progress',
   COMPLETE: 'Done',
 };
 
@@ -31,12 +31,12 @@ export const JIRA_STATUS_TO_PHASE: Record<string, TaskPhase> = {
   'Selected for Development': 'TODO',
   'In Progress': 'IN_PROGRESS',
   'In Development': 'IN_PROGRESS',
-  // Review statuses land on AGENT_COMPLETE: the work is done and is waiting for
-  // someone to look at it, which is exactly what AGENT_COMPLETE means now that
+  // Review statuses land on NEED_ACTION: the work is done and is waiting for
+  // someone to look at it, which is exactly what NEED_ACTION means now that
   // HUMAN_VERIFIED is gone. NOT 'COMPLETE' — a Jira review transition must never
   // silently mark the Walnut work finished (only a deliberate Done/Closed does).
-  'In Review': 'AGENT_COMPLETE',
-  'Code Review': 'AGENT_COMPLETE',
+  'In Review': 'NEED_ACTION',
+  'Code Review': 'NEED_ACTION',
   'Done': 'COMPLETE',
   'Closed': 'COMPLETE',
   'Resolved': 'COMPLETE',
@@ -51,13 +51,13 @@ export const JIRA_PHASE_GROUPS: Record<string, TaskPhase[]> = {
   'Open': ['TODO'],
   'Reopened': ['TODO'],
   'Selected for Development': ['TODO'],
-  'In Progress': ['IN_PROGRESS', 'AGENT_COMPLETE'],
-  'In Development': ['IN_PROGRESS', 'AGENT_COMPLETE'],
-  // A review status preserves AGENT_COMPLETE ("agent handed the work back") —
+  'In Progress': ['IN_PROGRESS', 'NEED_ACTION'],
+  'In Development': ['IN_PROGRESS', 'NEED_ACTION'],
+  // A review status preserves NEED_ACTION ("agent handed the work back") —
   // it pushes back as 'In Progress', and a push never produces a review
   // status, so pull and push can't oscillate. (WAIT removed 2026-08-18.)
-  'In Review': ['AGENT_COMPLETE'],
-  'Code Review': ['AGENT_COMPLETE'],
+  'In Review': ['NEED_ACTION'],
+  'Code Review': ['NEED_ACTION'],
   'Done': ['COMPLETE'],
   'Closed': ['COMPLETE'],
   'Resolved': ['COMPLETE'],

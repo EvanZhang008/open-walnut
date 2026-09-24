@@ -8,7 +8,7 @@ type MSTodoStatus = 'notStarted' | 'inProgress' | 'completed';
 export const PHASE_TO_MS_STATUS: Record<TaskPhase, MSTodoStatus> = {
   TODO: 'notStarted',
   IN_PROGRESS: 'inProgress',
-  AGENT_COMPLETE: 'inProgress',
+  NEED_ACTION: 'inProgress',
   COMPLETE: 'completed',
 };
 

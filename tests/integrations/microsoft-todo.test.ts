@@ -562,8 +562,8 @@ describe('parseMsTodoBody', () => {
   // pushed it, so retired phase names outlive the local SQLite migration. Dropping
   // the header would reset the task to whatever the MS status implies.
   it('folds a legacy Phase: header through migratePhase instead of dropping it', () => {
-    expect(parseMsTodoBody('Phase: HUMAN_VERIFIED\n\nReviewed task').phase).toBe('AGENT_COMPLETE');
-    expect(parseMsTodoBody('Phase: POST_WORK_COMPLETED\n\nShipped task').phase).toBe('AGENT_COMPLETE');
+    expect(parseMsTodoBody('Phase: HUMAN_VERIFIED\n\nReviewed task').phase).toBe('NEED_ACTION');
+    expect(parseMsTodoBody('Phase: POST_WORK_COMPLETED\n\nShipped task').phase).toBe('NEED_ACTION');
   });
 
   // (WAIT removed 2026-08-18) — WAIT and its ancestors now migrate to TODO, and
@@ -615,9 +615,9 @@ describe('parseMsTodoBody', () => {
   });
 
   it('handles DependsOn with all other headers present', () => {
-    const body = 'Phase: AGENT_COMPLETE\nParent: 12345678\nAttention: true\nDependsOn: aaa11111,bbb22222,ccc33333\n\nDescription text\n\n---\n\n## Summary\nSummary text';
+    const body = 'Phase: NEED_ACTION\nParent: 12345678\nAttention: true\nDependsOn: aaa11111,bbb22222,ccc33333\n\nDescription text\n\n---\n\n## Summary\nSummary text';
     const result = parseMsTodoBody(body);
-    expect(result.phase).toBe('AGENT_COMPLETE');
+    expect(result.phase).toBe('NEED_ACTION');
     expect(result.parent_task_id).toBe('12345678');
     expect(result.unread).toBe(true);
     expect(result.depends_on).toEqual(['aaa11111', 'bbb22222', 'ccc33333']);

@@ -2,7 +2,7 @@ export type TaskStatus = 'todo' | 'in_progress' | 'done';
 export type TaskPhase =
   | 'TODO'
   | 'IN_PROGRESS'
-  | 'AGENT_COMPLETE'
+  | 'NEED_ACTION'
   | 'COMPLETE';
 export type TaskPriority = 'immediate' | 'important' | 'backlog' | 'none';
 /** Canonical list of valid priority values — use for runtime validation. */
@@ -625,7 +625,7 @@ export interface Task {
    *
    * Semantics: "the agent produced something the human has not looked at yet".
    * Set true by the phase machine whenever a session hands work back
-   * (AGENT_COMPLETE — turn finished; WAIT — errored / needs a
+   * (NEED_ACTION — turn finished; WAIT — errored / needs a
    * decision). Set false the moment the human OPENS the task — that IS the read
    * event — and on IN_PROGRESS / COMPLETE. See readMarkerForPhase in phase.ts.
    *

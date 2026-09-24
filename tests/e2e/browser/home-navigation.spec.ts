@@ -37,7 +37,7 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   const created = await page.request.post('/api/tasks', { data: { title: `Navigation needs action ${tag}`, project: `Navigation layout ${tag}`, source: 'local' } });
   expect(created.ok()).toBe(true);
   const taskId = (await created.json()).task.id;
-  expect((await page.request.patch(`/api/tasks/${taskId}`, { data: { phase: 'AGENT_COMPLETE' } })).ok()).toBe(true);
+  expect((await page.request.patch(`/api/tasks/${taskId}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true);
   // New tasks are pinned by default; this one belongs to the Projects list.
   expect((await page.request.delete(`/api/focus/tasks/${taskId}`)).ok()).toBe(true);
   // A folder in the same project, for the folder row's place on the grid (a folder needs two tasks).
@@ -472,7 +472,7 @@ test('a single tier, Recent and the Projects list draw on the same grid as All',
     expect((await page.request.put(`/api/focus/tasks/${id}/tier`, { data: { tier: 'focus' } })).ok()).toBe(true);
     ids.push(id);
   }
-  expect((await page.request.patch(`/api/tasks/${ids[0]}`, { data: { phase: 'AGENT_COMPLETE' } })).ok()).toBe(true);
+  expect((await page.request.patch(`/api/tasks/${ids[0]}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true);
   // A folder in Focus whose first member needs you: its dot steps in with it.
   const members: string[] = [];
   for (const n of [1, 2]) {
@@ -484,7 +484,7 @@ test('a single tier, Recent and the Projects list draw on the same grid as All',
     members.push(id);
   }
   expect((await page.request.post('/api/tasks/groups', { data: { task_ids: members, label: `Grid folder ${tag}` } })).ok()).toBe(true);
-  expect((await page.request.patch(`/api/tasks/${members[0]}`, { data: { phase: 'AGENT_COMPLETE' } })).ok()).toBe(true);
+  expect((await page.request.patch(`/api/tasks/${members[0]}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true);
   await boot(page, baseURL!);
   const grid = (selectors: Record<string, [string, 'box' | 'text']>) => navigation(page).evaluate((nav, selectors) => {
     const x0 = nav.getBoundingClientRect().left;

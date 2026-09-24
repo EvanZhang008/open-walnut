@@ -10,7 +10,7 @@ import type { GlobalOptions } from '../core/types.js';
 
 const POLL_INTERVAL_MS = 5_000;
 const DEFAULT_TIMEOUT_SECS = 1_800;
-const DONE_PHASES = new Set(['AGENT_COMPLETE', 'COMPLETE']);
+const DONE_PHASES = new Set(['NEED_ACTION', 'COMPLETE']);
 
 interface WaitOptions { timeout?: string }
 

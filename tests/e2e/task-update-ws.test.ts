@@ -171,7 +171,7 @@ describe('updateTask() centralized TASK_UPDATED emission', () => {
     // Set the task to a handed-back phase via REST first, so the rollback below
     // is a real transition. (WAIT removed 2026-08-18 — was 'WAIT'; PATCH would
     // now answer 400 for it, since VALID_PHASES no longer contains it.)
-    await patchTask(task.id, { phase: 'AGENT_COMPLETE' });
+    await patchTask(task.id, { phase: 'NEED_ACTION' });
 
     const ws = await connectWs();
     try {

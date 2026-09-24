@@ -135,7 +135,7 @@ describe('mapResult-based writes render outcome + next from a server body', () =
     // task being updated from inside its own live session that nothing was
     // working on it — the exact class of confident wrong answer this work is
     // about (caught live, 2026-09-01).
-    const slim = { id: 't_1', title: 'Fix it', phase: 'AGENT_COMPLETE', status: 'in_progress' }
+    const slim = { id: 't_1', title: 'Fix it', phase: 'NEED_ACTION', status: 'in_progress' }
 
     const get = listOps().find((o) => o.name === 'task_get')!
       .mapResult!({ body: { task: slim }, args: { id: 't_1' } }) as { outcome: string; next: string }
@@ -246,8 +246,8 @@ describe('task_create + start_session — create and dispatch in one call', () =
 describe('task_update on the slim PATCH projection', () => {
   it('says the phase write started and stopped nothing, and invents no attachment state', async () => {
     const op = listOps().find((o) => o.name === 'task_update')!
-    const call = (async () => ({ task: { id: 't_1', phase: 'AGENT_COMPLETE' } })) as never
-    const r = await op.handler!({ id: 't_1', phase: 'AGENT_COMPLETE' }, call) as
+    const call = (async () => ({ task: { id: 't_1', phase: 'NEED_ACTION' } })) as never
+    const r = await op.handler!({ id: 't_1', phase: 'NEED_ACTION' }, call) as
       { outcome: string; next: string }
     expect(r.outcome).toContain('No session was started or stopped by this')
     expect(r.outcome).not.toContain('No session is attached')

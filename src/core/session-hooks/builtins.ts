@@ -873,11 +873,11 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
     }
 
     // (c) Phase sync: RETIRED 2026-08-17 (inc-1786983019552). This used to push
-    // AGENT_COMPLETE → WAIT after the debounce, which repainted every normally
+    // NEED_ACTION → WAIT after the debounce, which repainted every normally
     // finished turn as "waiting on a human" minutes later — zero added signal
     // (both states are red+unread) and it diluted WAIT, now reserved for genuine
     // blockage (session:error / idle-timeout kill / all-dead reconcile). The
-    // result's own session:result → AGENT_COMPLETE flip is the terminal state.
+    // result's own session:result → NEED_ACTION flip is the terminal state.
 
     const notifyMessage = decideNotify(selfReport, dedupKey);
     if (notifyMessage) {
@@ -1799,7 +1799,7 @@ export const cwdRenameDetectorHook: SessionHookDefinition = {
 /**
  * session-request-watch — the turn-end edge of the expect_reply loop.
  *
- * When a task lands AGENT_COMPLETE (turn end, error, or awaiting-human all
+ * When a task lands NEED_ACTION (turn end, error, or awaiting-human all
  * project there) and a pending session-request targets that task/session, the
  * target finished its turn WITHOUT replying — it never will on this turn, so
  * tell the asker now instead of making it wait for the deadline sweeper.
@@ -1814,7 +1814,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
   priority: 60,
   source: 'builtin',
   enabled: true,
-  filter: { phases: ['AGENT_COMPLETE'] },
+  filter: { phases: ['NEED_ACTION'] },
   handler: async (payload) => {
     const ctx = payload as unknown as TaskHookContext;
     const sessionId = ctx.sessionId ?? ctx.task?.session_id;

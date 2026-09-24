@@ -251,7 +251,7 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     let id: String
     let title: String
     let status: String   // "todo" | "in_progress" | "done"
-    let phase: String     // "TODO" | "IN_PROGRESS" | "AGENT_COMPLETE" | …
+    let phase: String     // "TODO" | "IN_PROGRESS" | "NEED_ACTION" | …
     let priority: String  // "immediate" | "important" | "backlog" | "none"
     /// The single grouping layer. "" = Inbox (no project).
     let project: String

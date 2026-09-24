@@ -158,7 +158,7 @@ describe('Phase lifecycle E2E', () => {
     const phaseToExpectedStatus: [string, string][] = [
       ['TODO', 'todo'],
       ['IN_PROGRESS', 'in_progress'],
-      ['AGENT_COMPLETE', 'in_progress'],
+      ['NEED_ACTION', 'in_progress'],
       ['COMPLETE', 'done'],
     ];
 
@@ -176,7 +176,7 @@ describe('Phase lifecycle E2E', () => {
 
     const cycle = [
       'IN_PROGRESS',
-      'AGENT_COMPLETE',
+      'NEED_ACTION',
       'COMPLETE',
       'TODO', // back to start (full loop)
     ];
@@ -284,13 +284,13 @@ describe('Phase lifecycle E2E', () => {
       const task = await createTask('Phase test: WS event');
 
       const eventPromise = waitForWsEvent(ws, 'task:updated');
-      // (WAIT removed 2026-08-18 — AGENT_COMPLETE is the handed-back phase that
+      // (WAIT removed 2026-08-18 — NEED_ACTION is the handed-back phase that
       // also derives in_progress, so the event shape under test is unchanged.)
-      await updateTask(task.id, { phase: 'AGENT_COMPLETE' });
+      await updateTask(task.id, { phase: 'NEED_ACTION' });
 
       const event = await eventPromise;
       const eventTask = (event.data as { task: TaskResponse }).task;
-      expect(eventTask.phase).toBe('AGENT_COMPLETE');
+      expect(eventTask.phase).toBe('NEED_ACTION');
       expect(eventTask.status).toBe('in_progress');
     } finally {
       ws.close();
@@ -317,11 +317,11 @@ describe('Phase lifecycle E2E', () => {
 
     // Provide both phase and status — phase should win
     const updated = await updateTask(task.id, {
-      phase: 'AGENT_COMPLETE',
+      phase: 'NEED_ACTION',
       status: 'done', // this should be ignored, overridden by phase
     });
-    expect(updated.phase).toBe('AGENT_COMPLETE');
-    expect(updated.status).toBe('in_progress'); // derived from AGENT_COMPLETE, not 'done'
+    expect(updated.phase).toBe('NEED_ACTION');
+    expect(updated.status).toBe('in_progress'); // derived from NEED_ACTION, not 'done'
   });
 
   // Test 12: GET /api/tasks returns phase in list

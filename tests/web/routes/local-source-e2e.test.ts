@@ -148,16 +148,16 @@ describe('Local source task — full E2E lifecycle', () => {
     expect(res.body.task.status).toBe('in_progress');
   });
 
-  it('transitions IN_PROGRESS → AGENT_COMPLETE', async () => {
+  it('transitions IN_PROGRESS → NEED_ACTION', async () => {
     const res = await request(app)
       .patch(`/api/tasks/${taskId}`)
-      .send({ phase: 'AGENT_COMPLETE' });
+      .send({ phase: 'NEED_ACTION' });
 
     expect(res.status).toBe(200);
-    expect(res.body.task.phase).toBe('AGENT_COMPLETE');
+    expect(res.body.task.phase).toBe('NEED_ACTION');
   });
 
-  it('transitions AGENT_COMPLETE → COMPLETE', async () => {
+  it('transitions NEED_ACTION → COMPLETE', async () => {
     const res = await request(app)
       .patch(`/api/tasks/${taskId}`)
       .send({ phase: 'COMPLETE' });

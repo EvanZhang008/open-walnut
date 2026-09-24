@@ -22,7 +22,7 @@
  *      the daemon's projection AGREES (zero shadow divergences for that sid).
  *   2. incident ed347bde shape (Fix E live): result → bare init → streaming with
  *      no idle between. The record must go BACK to 'running' and the task phase
- *      back to IN_PROGRESS while turn 2 streams, then converge idle/AGENT_COMPLETE.
+ *      back to IN_PROGRESS while turn 2 streams, then converge idle/NEED_ACTION.
  *      REVERT-PROOF: disabling Fix E's init-edge block fails this scenario.
  *   3. enforce heal via pull: with a genuinely-idle session, corrupt the record
  *      to 'running' through a category-② pair (which the enforce gate lets
@@ -428,21 +428,21 @@ describe.runIf(HAVE_BIN)('snapshot source-of-truth — live stack (real daemon +
       expect(rpc.ok).toBe(true)
 
       // (a) First watch turn A settle all the way down: record idle AND task
-      //     AGENT_COMPLETE. This is what makes step (b) revert-proof — after
+      //     NEED_ACTION. This is what makes step (b) revert-proof — after
       //     this point a 'running' reading cannot be a leftover of the
       //     send-time write, because the send-time write has been overwritten.
       await pollUntil(async () => {
         const r = await record(sid)
         if (r?.process_status !== 'idle') return undefined
         const task = await getTask(TASK_ID)
-        return task.phase === 'AGENT_COMPLETE' ? true : undefined
-      }, 'turn A to settle fully (record=idle AND task phase=AGENT_COMPLETE)', 90_000)
+        return task.phase === 'NEED_ACTION' ? true : undefined
+      }, 'turn A to settle fully (record=idle AND task phase=NEED_ACTION)', 90_000)
 
       // (b) Fix E assertion — turn B opens on a BARE init (no {running}, no user
       //     line). The record must go BACK to 'running' and the task phase back
       //     to IN_PROGRESS purely because of that init. Without Fix E's
       //     init-after-result edge nothing writes either one: the record stays
-      //     idle and the task stays AGENT_COMPLETE for turn B's whole duration —
+      //     idle and the task stays NEED_ACTION for turn B's whole duration —
       //     exactly incident ed347bde, and exactly what this poll fails on.
       const midTurn = await pollUntil(async () => {
         const r = await record(sid)
@@ -464,9 +464,9 @@ describe.runIf(HAVE_BIN)('snapshot source-of-truth — live stack (real daemon +
 
       const finalTask = await pollUntil(async () => {
         const t = await getTask(TASK_ID)
-        return t.phase === 'AGENT_COMPLETE' ? t : undefined
-      }, 'task phase to reach AGENT_COMPLETE after turn B', 60_000)
-      expect(finalTask.phase).toBe('AGENT_COMPLETE')
+        return t.phase === 'NEED_ACTION' ? t : undefined
+      }, 'task phase to reach NEED_ACTION after turn B', 60_000)
+      expect(finalTask.phase).toBe('NEED_ACTION')
     } finally {
       ws.close()
     }

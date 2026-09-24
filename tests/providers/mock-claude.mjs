@@ -542,11 +542,11 @@ if (outputFormat === 'stream-json') {
     //         ONLY evidence the new turn began (Fix E's init-after-result edge:
     //         bump _turnGen, flip process_status to running, pull the task phase
     //         back to IN_PROGRESS). Without Fix E the record reads idle and the
-    //         task reads AGENT_COMPLETE while the CLI visibly streams.
+    //         task reads NEED_ACTION while the CLI visibly streams.
     //
     //         Emission order (deliberately NOT all in one tick):
     //           assistant → result → idle          ← turn A settles COMPLETELY
-    //           …SETTLE_MS…                        ← walnut converges: idle + AGENT_COMPLETE
+    //           …SETTLE_MS…                        ← walnut converges: idle + NEED_ACTION
     //           init → streaming deltas (heartbeat)← turn B, Fix E's ONLY signal
     //           …HOLD_MS…
     //           assistant → result → idle          ← turn B converges

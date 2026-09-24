@@ -284,7 +284,7 @@ describe('fire-time re-validation', () => {
   it('aborts when the task is no longer IN_PROGRESS — the human already took it back', async () => {
     const h = makeHarness()
     h.sar.schedule(h.record!)
-    h.phase = 'AGENT_COMPLETE'
+    h.phase = 'NEED_ACTION'
     await settle(h)
     expect(h.sends).toHaveLength(0)
     // And no budget was spent on a resume that never happened.

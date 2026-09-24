@@ -12,7 +12,7 @@ const daysAgo = (d: number) => new Date(NOW - d * 86_400_000).toISOString();
 describe('isStaleDonePin', () => {
   it('never folds live work, however old', () => {
     expect(isStaleDonePin({ id: 'a', phase: 'IN_PROGRESS', updated_at: daysAgo(400) }, NOW)).toBe(false);
-    expect(isStaleDonePin({ id: 'b', phase: 'AGENT_COMPLETE', updated_at: daysAgo(400) }, NOW)).toBe(false);
+    expect(isStaleDonePin({ id: 'b', phase: 'NEED_ACTION', updated_at: daysAgo(400) }, NOW)).toBe(false);
   });
 
   it('keeps a freshly completed pin visible and folds an old one', () => {

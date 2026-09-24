@@ -10,7 +10,7 @@
  *                session_state_changed{running} was emitted and the existing
  *                turn-start pullback (wired to the state-running branch) never fired.
  *   18:27:51.297 the server's SESSION_RESULT handler (≈800ms enrichment latency)
- *                flips the phase → AGENT_COMPLETE.
+ *                flips the phase → NEED_ACTION.
  *   ⇒ badge Idle + task row completed/attention for ~44s while the CLI streamed.
  *      185 same-shape divergences were logged that day; the snapshot shadow layer
  *      logged {projected:'running', actual:'idle'} — the projection knew the truth.
@@ -25,7 +25,7 @@
  *              (c) an `init` after this turn's result — the only signal when the CLI
  *                  picks up a queued send without ever going idle.
  *            (b) and (c) are replay-guarded.
- *   Part 2 — the late AGENT_COMPLETE flip is staleness-aware: applySessionPhase
+ *   Part 2 — the late NEED_ACTION flip is staleness-aware: applySessionPhase
  *            compares the event's turnGen against the LIVE instance's turnGen and
  *            skips a superseded result.
  *
@@ -201,7 +201,7 @@ describe('init-after-result is a turn-start edge (incident ed347bde)', () => {
     expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
 
     // 18:27:51.297 — the server's late SESSION_RESULT handler runs with the gen the
-    // event was STAMPED with. Part 2: it is stale and must not flip AGENT_COMPLETE.
+    // event was STAMPED with. Part 2: it is stale and must not flip NEED_ACTION.
     const late = await applySessionPhase(taskId, 'session:result', 'server.ts:session-result', {
       sessionId: sid, turnGen: eventGen,
     })
@@ -209,7 +209,7 @@ describe('init-after-result is a turn-start edge (incident ed347bde)', () => {
     expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
   })
 
-  it('the NEW turn\'s own result (current gen) still flips AGENT_COMPLETE normally', async () => {
+  it('the NEW turn\'s own result (current gen) still flips NEED_ACTION normally', async () => {
     const sid = 'sess-ed347bde-2'
     const taskId = await taskInPhase('IN_PROGRESS')
     const session = makeRunningSession(taskId, sid)
@@ -233,10 +233,10 @@ describe('init-after-result is a turn-start edge (incident ed347bde)', () => {
       sessionId: sid, turnGen: results[1].turnGen as number,
     })
     expect(flip.changed).toBe(true)
-    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
   })
 
-  it('NORMAL FLOW: send → result with no intervening init → AGENT_COMPLETE (no regression)', async () => {
+  it('NORMAL FLOW: send → result with no intervening init → NEED_ACTION (no regression)', async () => {
     const sid = 'sess-normal-flow'
     const taskId = await taskInPhase('IN_PROGRESS')
     const session = makeRunningSession(taskId, sid)
@@ -255,7 +255,7 @@ describe('init-after-result is a turn-start edge (incident ed347bde)', () => {
       sessionId: sid, turnGen: results[0].turnGen as number,
     })
     expect(flip.changed).toBe(true)
-    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
   })
 
   it('the FIRST init of a fresh spawn is not a turn-start edge (no gen bump)', async () => {
@@ -314,7 +314,7 @@ describe('QUEUED-SEND shape: the writeMessage delivery is itself a turn-start ed
     await settle()
     expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
 
-    // Turn A's ~800ms-late AGENT_COMPLETE flip runs with the gen it was STAMPED
+    // Turn A's ~800ms-late NEED_ACTION flip runs with the gen it was STAMPED
     // with. liveGen (G+1) > eventGen (G) → stale → skipped.
     const late = await applySessionPhase(taskId, 'session:result', 'server.ts:session-result', {
       sessionId: sid, turnGen: turnAGen,
@@ -330,7 +330,7 @@ describe('QUEUED-SEND shape: the writeMessage delivery is itself a turn-start ed
       sessionId: sid, turnGen: results[1].turnGen as number,
     })
     expect(flip.changed).toBe(true)
-    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
   })
 
   it('a MID-TURN injection (writeMessage while already running) does NOT bump — it joins the SAME turn', async () => {
@@ -354,7 +354,7 @@ describe('QUEUED-SEND shape: the writeMessage delivery is itself a turn-start ed
       sessionId: sid, turnGen: results[0].turnGen as number,
     })
     expect(flip.changed).toBe(true)
-    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
   })
 
   it('state-running is also a turn-start edge: result → {running} → late flip skipped', async () => {
@@ -391,7 +391,7 @@ describe('QUEUED-SEND shape: the writeMessage delivery is itself a turn-start ed
 
   it('a REPLAYED state-running (at/below the watermark) bumps no gen and writes no status', async () => {
     const sid = 'sess-replayed-running'
-    const taskId = await taskInPhase('AGENT_COMPLETE')
+    const taskId = await taskInPhase('NEED_ACTION')
     const session = makeRunningSession(taskId, sid)
     liveSession = session as unknown as { turnGen: number }
     liveSid = sid
@@ -404,14 +404,14 @@ describe('QUEUED-SEND shape: the writeMessage delivery is itself a turn-start ed
     expect(session.turnGen).toBe(0)
     expect(session.processStatus).toBe('idle')
     await settle()
-    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
   })
 })
 
 describe('replay guard on the init-after-result edge', () => {
   it('a REPLAYED init (at/below the consumed watermark) writes no status, bumps no gen, fires no phase call', async () => {
     const sid = 'sess-replayed-init'
-    const taskId = await taskInPhase('AGENT_COMPLETE')
+    const taskId = await taskInPhase('NEED_ACTION')
     const session = makeRunningSession(taskId, sid)
     liveSession = session as unknown as { turnGen: number }
     liveSid = sid
@@ -427,12 +427,12 @@ describe('replay guard on the init-after-result edge', () => {
     expect(session.processStatus).toBe('idle')  // status untouched — replay is the past
     await settle()
     // No session:turn-start pullback: the phase stays where the settled turn left it.
-    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+    expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
   })
 
   it('a LIVE init above the watermark still takes the edge', async () => {
     const sid = 'sess-live-init'
-    const taskId = await taskInPhase('AGENT_COMPLETE')
+    const taskId = await taskInPhase('NEED_ACTION')
     const session = makeRunningSession(taskId, sid)
     liveSession = session as unknown as { turnGen: number }
     liveSid = sid

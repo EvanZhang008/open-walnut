@@ -116,7 +116,7 @@ enum BoardRowState: Equatable {
     case running
     /// Alive but not working: it is waiting on the machine or on a human.
     case waiting
-    /// Alive/finished AND the task is in AGENT_COMPLETE — the agent handed the
+    /// Alive/finished AND the task is in NEED_ACTION — the agent handed the
     /// work back and a human owes it a look. The one state worth its own colour.
     case handedBack
     /// The CLI is gone (a normal end).
@@ -586,10 +586,10 @@ enum BoardModel {
         guard let session else {
             return newestSessionId(knownSessionIds) != nil ? .earlierSession : .none
         }
-        // AGENT_COMPLETE outranks the process state on purpose: a CLI can sit
+        // NEED_ACTION outranks the process state on purpose: a CLI can sit
         // idle for hours after handing back, and "waiting" would bury the one
         // row that needs a human.
-        if task?.phase == "AGENT_COMPLETE" { return .handedBack }
+        if task?.phase == "NEED_ACTION" { return .handedBack }
         switch session.statusKind {
         case .running: return .running
         case .idle: return .waiting
@@ -794,11 +794,11 @@ enum BoardModel {
     // MARK: - "This row wants a human" (the red row)
 
     /// The desktop's rule, verbatim (`web/src/utils/session-status.ts`
-    /// `taskNeedsAction`): phase AGENT_COMPLETE and not done. Both surfaces have to
+    /// `taskNeedsAction`): phase NEED_ACTION and not done. Both surfaces have to
     /// agree about what red means, so this is a port and not a reinterpretation.
     ///
     /// It covers more than "the agent finished": a session error drives the phase to
-    /// AGENT_COMPLETE, and so does a permission prompt or a question waiting for an
+    /// NEED_ACTION, and so does a permission prompt or a question waiting for an
     /// answer. All three are the same thing to the person scrolling — work stopped and
     /// it is your turn.
     ///
@@ -812,7 +812,7 @@ enum BoardModel {
     static func needsHuman(_ task: WalnutTask?) -> Bool {
         guard let task else { return false }
         if task.isDone || task.phase == "COMPLETE" { return false }
-        return task.phase == "AGENT_COMPLETE"
+        return task.phase == "NEED_ACTION"
     }
 
     /// Compact age ("2m", "1h", "3d") for the row's second line. A row shows

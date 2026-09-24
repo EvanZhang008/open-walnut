@@ -87,7 +87,7 @@ test('seeded IN_PROGRESS task shows filled circle icon', async ({ page }) => {
   await expect(statusBtn).toContainText('●')
 })
 
-test('seeded AGENT_COMPLETE task shows check icon', async ({ page }) => {
+test('seeded NEED_ACTION task shows check icon', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   await showAllTasks(page)
@@ -96,7 +96,7 @@ test('seeded AGENT_COMPLETE task shows check icon', async ({ page }) => {
   await expect(taskItem).toBeVisible({ timeout: 5000 })
 
   const statusBtn = taskItem.locator('.task-status-btn')
-  // The button should contain ✓ for AGENT_COMPLETE
+  // The button should contain ✓ for NEED_ACTION
   await expect(statusBtn).toContainText('✓')
 })
 
@@ -214,15 +214,15 @@ test('clicking outside phase picker closes it', async ({ page }) => {
 
 test('task detail page shows phase badge', async ({ page }) => {
   const task = await createTaskViaApi('Detail page phase test')
-  // (WAIT removed 2026-08-18 — AGENT_COMPLETE is the handed-back phase that
+  // (WAIT removed 2026-08-18 — NEED_ACTION is the handed-back phase that
   // renders the same red badge; PATCH would answer 400 for 'WAIT' now.)
-  await updateTaskPhase(task.id, 'AGENT_COMPLETE')
+  await updateTaskPhase(task.id, 'NEED_ACTION')
 
   await page.goto(`/tasks/${task.id}`)
   await page.waitForLoadState('networkidle')
 
   // The StatusBadge should show phase text
-  const badge = page.locator('.badge-phase-agent_complete')
+  const badge = page.locator('.badge-phase-need_action')
   await expect(badge).toBeVisible({ timeout: 5000 })
   await expect(badge).toContainText('Agent Complete')
 })

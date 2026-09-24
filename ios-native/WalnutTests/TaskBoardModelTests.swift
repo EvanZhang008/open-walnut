@@ -88,22 +88,22 @@ final class TaskBoardModelTests: XCTestCase {
             "no session = no state, never a fake one")
     }
 
-    /// AGENT_COMPLETE outranks the process status on purpose: a CLI can idle for
+    /// NEED_ACTION outranks the process status on purpose: a CLI can idle for
     /// hours after handing back, and "waiting" would bury the one row that owes a
     /// human a look.
     func testHandedBackOutranksTheProcessStatus() {
         for status in ["running", "idle", "stopped", "error"] {
             XCTAssertEqual(
                 BoardModel.state(
-                    task: task("t", phase: "AGENT_COMPLETE"),
+                    task: task("t", phase: "NEED_ACTION"),
                     session: session("s", taskId: "t", status: status)
                 ),
                 .handedBack,
-                "phase AGENT_COMPLETE must win over process_status=\(status)"
+                "phase NEED_ACTION must win over process_status=\(status)"
             )
         }
         // But only with a session: a phase alone is not a session state.
-        XCTAssertEqual(BoardModel.state(task: task("t", phase: "AGENT_COMPLETE"), session: nil), .none)
+        XCTAssertEqual(BoardModel.state(task: task("t", phase: "NEED_ACTION"), session: nil), .none)
     }
 
     func testEveryStateHasNonEmptyWording() {
@@ -2596,10 +2596,10 @@ final class BoardRowNeedsActionSurfaceTests: XCTestCase {
     }
 
     /// WHEN the row is red: the desktop's rule, ported (`taskNeedsAction` — phase
-    /// AGENT_COMPLETE and not done). Every other row paints NOTHING, which is what keeps
+    /// NEED_ACTION and not done). Every other row paints NOTHING, which is what keeps
     /// the board one continuous sheet.
     func testOnlyAHandedBackTaskPaintsItsRowRed() {
-        XCTAssertTrue(BoardModel.needsHuman(task("back", phase: "AGENT_COMPLETE")))
+        XCTAssertTrue(BoardModel.needsHuman(task("back", phase: "NEED_ACTION")))
         XCTAssertFalse(BoardModel.needsHuman(task("todo", phase: "TODO")))
         XCTAssertFalse(BoardModel.needsHuman(task("running", phase: "IN_PROGRESS")))
         XCTAssertFalse(
@@ -2607,7 +2607,7 @@ final class BoardRowNeedsActionSurfaceTests: XCTestCase {
             "COMPLETE is the human's own answer — it is not still asking"
         )
         XCTAssertFalse(
-            BoardModel.needsHuman(task("closed", phase: "AGENT_COMPLETE", status: "done")),
+            BoardModel.needsHuman(task("closed", phase: "NEED_ACTION", status: "done")),
             "done outranks the phase: a finished task is not waiting on anyone"
         )
         XCTAssertFalse(
@@ -2633,9 +2633,9 @@ final class BoardRowNeedsActionSurfaceTests: XCTestCase {
     /// wrong field while both halves still pass their own tests.
     func testTheListPaintsRedForExactlyTheRowsThatWantAHuman() {
         let tasks = [
-            task("wants-a-human", phase: "AGENT_COMPLETE"),
+            task("wants-a-human", phase: "NEED_ACTION"),
             task("ordinary", phase: "TODO"),
-            task("finished", phase: "AGENT_COMPLETE", status: "done"),
+            task("finished", phase: "NEED_ACTION", status: "done"),
         ]
         // Done folds by default, so the finished row is off the board until a band is
         // asked to show it. This case is about row PAINTING, and the finished row is the
@@ -2914,7 +2914,7 @@ final class BoardBandCardSurfaceTests: XCTestCase {
         // cannot be correct arithmetic nothing reaches.
         let bands = BoardModel.bands(
             tasks: [WalnutTask(
-                id: "wants-a-human", title: "a task", status: "todo", phase: "AGENT_COMPLETE",
+                id: "wants-a-human", title: "a task", status: "todo", phase: "NEED_ACTION",
                 priority: "none", project: "", dueDate: nil,
                 createdAt: "2026-08-30T00:00:00Z", updatedAt: "2026-08-30T00:00:00Z",
                 completedAt: nil, starred: nil, pinned: true, tags: nil, summary: nil
@@ -3217,7 +3217,7 @@ final class BoardSessionTapRouteTests: XCTestCase {
         )
         XCTAssertEqual(
             BoardModel.state(
-                task: task("t1", phase: "AGENT_COMPLETE"),
+                task: task("t1", phase: "NEED_ACTION"),
                 session: session("s9", taskId: "t1"), knownSessionIds: ["s9"]
             ),
             .handedBack,

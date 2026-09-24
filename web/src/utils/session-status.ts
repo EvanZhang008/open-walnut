@@ -33,7 +33,7 @@ export function resolveTaskSessionId(task: Task): string | null {
  */
 export function taskNeedsAction(task: Task): boolean {
   if (task.status === 'done' || task.phase === 'COMPLETE') return false;
-  return task.phase === 'AGENT_COMPLETE';
+  return task.phase === 'NEED_ACTION';
 }
 
 /** Color class for the task circle (the clickable To Do ↔ Complete toggle).
@@ -46,7 +46,7 @@ export function taskNeedsAction(task: Task): boolean {
  *  (done keeps its green check — that's the complete toggle, not a live state.)
  *
  *  Error and waiting are NOT circle states: a session error drives the task
- *  phase to AGENT_COMPLETE which turns the whole row red (taskNeedsAction),
+ *  phase to NEED_ACTION which turns the whole row red (taskNeedsAction),
  *  and a permission wait shows as the SessionPill's red "Waiting". The circle
  *  only answers "is anything attached / is it working right now".
  *
@@ -82,7 +82,7 @@ export const PROCESS_LABELS: Record<ProcessStatus, string> = {
 export const PHASE_LABELS: Record<TaskPhase, string> = {
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
-  AGENT_COMPLETE: 'Agent Complete',
+  NEED_ACTION: 'Need Action',
   COMPLETE: 'Complete',
 };
 
@@ -140,7 +140,7 @@ export function waitingBadgeTitle(pp: { toolName?: string; receivedAt?: string }
 export const PHASE_COLORS: Record<TaskPhase, string> = {
   TODO: '#6b7280',
   IN_PROGRESS: '#f59e0b',
-  AGENT_COMPLETE: '#3b82f6',
+  NEED_ACTION: '#3b82f6',
   COMPLETE: '#22c55e',
 };
 
@@ -148,7 +148,7 @@ export const PHASE_COLORS: Record<TaskPhase, string> = {
 
 /**
  * Phases offered in ALL phase-picker menus: just To Do and Complete.
- * The full lifecycle (IN_PROGRESS → AGENT_COMPLETE → …) still exists in the
+ * The full lifecycle (IN_PROGRESS → NEED_ACTION → …) still exists in the
  * data model and is set by agents/automation; it's only hidden from manual
  * pickers. If the task currently sits in a hidden phase, that phase is
  * included (between the two) so the active state stays visible and escapable.
@@ -188,7 +188,7 @@ export function compositePhaseColor(ps: ProcessStatus, phase: TaskPhase | undefi
 export function pillPhaseClassSuffix(phase: TaskPhase | string | undefined): string {
   switch (phase) {
     case 'IN_PROGRESS': return 'running';
-    case 'AGENT_COMPLETE': return 'agent-complete';
+    case 'NEED_ACTION': return 'agent-complete';
     case 'COMPLETE': return 'completed';
     case 'TODO': return 'agent-complete';
     default: return 'agent-complete';

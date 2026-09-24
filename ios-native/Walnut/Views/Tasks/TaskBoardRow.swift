@@ -276,7 +276,7 @@ enum BoardRowSurface {
 /// which is why a Reminders row can afford them and an inline panel cannot.
 ///
 /// A row whose task is waiting on a human paints its WHOLE BACKGROUND red — the
-/// desktop's rule for WHEN (`taskNeedsAction`: phase AGENT_COMPLETE and not done,
+/// desktop's rule for WHEN (`taskNeedsAction`: phase NEED_ACTION and not done,
 /// ported as `BoardModel.needsHuman`), the user's answer for HOW. Inside the R29 cards
 /// that means the row's own CARD CELL is tinted (and clipped by the card's corners, so
 /// red never bleeds outside the rounded shape), not a red stripe drawn over the page. The

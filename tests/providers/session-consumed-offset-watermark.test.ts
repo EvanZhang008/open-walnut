@@ -174,7 +174,7 @@ describe('consumed-offset watermark — positional replay arbitration', () => {
       }
     })
     session.handleStreamLine(makeStateEvent(sid, 'idle'), 4500) // replayed idle
-    expect(statusEvents).not.toContain('AGENT_COMPLETE')
+    expect(statusEvents).not.toContain('NEED_ACTION')
     expect(session._processStatus).toBe('running') // untouched — replay describes the past
   })
 

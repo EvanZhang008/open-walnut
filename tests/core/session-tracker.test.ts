@@ -107,7 +107,7 @@ describe('emitSessionStatusChanged', () => {
     emitSessionStatusChanged(
       committed,
       {
-        phase: 'AGENT_COMPLETE',
+        phase: 'NEED_ACTION',
         previousSessionId: 'status-event-old',
       },
       ['*'],
@@ -136,7 +136,7 @@ describe('emitSessionStatusChanged', () => {
       statusUpdatedAt: committed.statusUpdatedAt,
     };
     expect(received?.data).toEqual({
-      phase: 'AGENT_COMPLETE',
+      phase: 'NEED_ACTION',
       previousSessionId: 'status-event-old',
       fromPlanSessionId: 'plan-parent',
       forkedFromSessionId: 'fork-parent',

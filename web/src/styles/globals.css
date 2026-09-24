@@ -1286,7 +1286,7 @@ select {
 .badge-phase-investigation { background: rgba(88, 86, 214, 0.12); color: #5856D6; }
 .badge-phase-todo { background: var(--bg-tertiary); color: var(--fg-muted); }
 .badge-phase-in_progress { background: rgba(0, 122, 255, 0.12); color: var(--accent); }
-.badge-phase-agent_complete { background: rgba(255, 59, 48, 0.12); color: var(--error); }
+.badge-phase-need_action { background: rgba(255, 59, 48, 0.12); color: var(--error); }
 .badge-phase-wait { background: rgba(255, 59, 48, 0.12); color: var(--error); }
 .badge-phase-human_verification { background: rgba(255, 107, 0, 0.12); color: #FF6B00; }
 .badge-phase-peer_code_review { background: rgba(175, 82, 222, 0.12); color: #AF52DE; }
@@ -11205,7 +11205,7 @@ body.walnut-dragging {
   left: 38px;
 }
 
-/* "Needs action" — phase is AGENT_COMPLETE / WAIT. Same red
+/* "Needs action" — phase is NEED_ACTION / WAIT. Same red
    tint as the pinned/focus cards (todo-pinned-card-needs-action) so the whole task
    surface speaks one language: red row = act on me. Phase-driven, so it stays
    on until the human completes the task or a new turn starts. */

@@ -26,14 +26,14 @@ import { MoveToProjectSection, TaskActionMenuItems } from '@/components/tasks/Ta
 const PHASE_ICON: Record<string, ReactNode> = {
   TODO: '○',
   IN_PROGRESS: '◐',
-  AGENT_COMPLETE: '✓',
+  NEED_ACTION: '✓',
   COMPLETE: '✓✓',
 };
 
 const PHASE_LABEL: Record<string, string> = {
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
-  AGENT_COMPLETE: 'Agent Complete',
+  NEED_ACTION: 'Need Action',
   COMPLETE: 'Complete',
 };
 

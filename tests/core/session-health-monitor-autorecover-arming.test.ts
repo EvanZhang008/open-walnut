@@ -3,7 +3,7 @@
  *
  * fire() (session-auto-recover) hard-requires the task to still be IN_PROGRESS.
  * The probe-dead branch used to arm unconditionally on every 30s tick, so a
- * handed-back (AGENT_COMPLETE) task produced an endless arm → "auto-recover
+ * handed-back (NEED_ACTION) task produced an endless arm → "auto-recover
  * aborted — task no longer in progress" 20s later → re-arm loop (measured
  * running 2+ hours on one session), and `if (armed) continue` also skipped the
  * phase sync that IS appropriate in that state.
@@ -119,8 +119,8 @@ describe('probe-dead branch — auto-recover arming', () => {
     })
   })
 
-  it('does NOT arm when the task is handed back (AGENT_COMPLETE) — fire() could only abort', async () => {
-    taskPhase = 'AGENT_COMPLETE'
+  it('does NOT arm when the task is handed back (NEED_ACTION) — fire() could only abort', async () => {
+    taskPhase = 'NEED_ACTION'
     await recover(new SessionHealthMonitor(), [wedged()], fakeUpdate())
 
     expect(scheduleMock).not.toHaveBeenCalled()
@@ -136,7 +136,7 @@ describe('probe-dead branch — auto-recover arming', () => {
   })
 
   it('re-arming stays suppressed across repeated ticks (no 30s churn loop)', async () => {
-    taskPhase = 'AGENT_COMPLETE'
+    taskPhase = 'NEED_ACTION'
     const monitor = new SessionHealthMonitor()
     for (let i = 0; i < 4; i++) await recover(monitor, [wedged()], fakeUpdate())
     expect(scheduleMock).not.toHaveBeenCalled()
@@ -246,7 +246,7 @@ describe('probe-dead branch — no write the gate would drop', () => {
   })
 
   it('covered session with a handed-back task: no write, no arm, phase sync still runs', async () => {
-    taskPhase = 'AGENT_COMPLETE'
+    taskPhase = 'NEED_ACTION'
     const update = fakeUpdate()
     markSnapshotCovered('arm-1', 100)
 

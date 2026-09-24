@@ -77,7 +77,7 @@ export class TaskQueryError extends Error {
 export const QUERY_TASK_PHASES: readonly TaskPhase[] = [
   'TODO',
   'IN_PROGRESS',
-  'AGENT_COMPLETE',
+  'NEED_ACTION',
   'COMPLETE',
 ];
 const TASK_PRIORITIES: readonly TaskPriority[] = VALID_PRIORITIES;
@@ -107,7 +107,7 @@ const ARRAY_FIELDS = [
 /** Max rows one query may return. Mirrored in the REST 400 message + tool schema. */
 export const MAX_QUERY_LIMIT = 200;
 
-// AGENT_COMPLETE counts as in_progress ON PURPOSE: this mirrors
+// NEED_ACTION counts as in_progress ON PURPOSE: this mirrors
 // PHASE_TO_STATUS in phase.ts, where COMPLETE is the only phase that reads as
 // "done". The agent stopped but the task is still open work (a turn finished
 // and nobody has looked), so it must stay visible in the in_progress bucket
@@ -115,7 +115,7 @@ export const MAX_QUERY_LIMIT = 200;
 // just because the agent has nothing left to do.
 export const COMPLETION_TO_PHASES: Record<TaskCompletion, readonly TaskPhase[]> = {
   todo: ['TODO'],
-  in_progress: ['IN_PROGRESS', 'AGENT_COMPLETE'],
+  in_progress: ['IN_PROGRESS', 'NEED_ACTION'],
   complete: ['COMPLETE'],
 };
 

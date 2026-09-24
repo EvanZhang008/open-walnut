@@ -2,7 +2,7 @@
  * E2E tests for automatic phase rollback when sessions resume.
  *
  * When send_to_session is called and the task is in a post-completion phase
- * (AGENT_COMPLETE — WAIT was the other one until its removal 2026-08-18), the
+ * (NEED_ACTION — WAIT was the other one until its removal 2026-08-18), the
  * phase should auto-rollback to IN_PROGRESS. Since 2026-09-23 that includes
  * COMPLETE: a message to a finished task's session reopens the task (the
  * agent is working again). Only an already-running task is unaffected.
@@ -69,9 +69,9 @@ afterAll(async () => {
 describe('sessionInputPhase (replaces shouldRollbackToInProgress)', () => {
   it('returns IN_PROGRESS for post-completion phases', async () => {
     const { sessionInputPhase } = await import('../../src/core/phase.js');
-    // (WAIT removed 2026-08-18 — AGENT_COMPLETE is the only post-completion,
+    // (WAIT removed 2026-08-18 — NEED_ACTION is the only post-completion,
     // non-terminal phase left.)
-    expect(sessionInputPhase('AGENT_COMPLETE')).toBe('IN_PROGRESS');
+    expect(sessionInputPhase('NEED_ACTION')).toBe('IN_PROGRESS');
     expect(sessionInputPhase('TODO')).toBe('IN_PROGRESS');
   });
 
@@ -83,11 +83,11 @@ describe('sessionInputPhase (replaces shouldRollbackToInProgress)', () => {
 });
 
 describe('Phase rollback on send_to_session', () => {
-  it('rolls back AGENT_COMPLETE to IN_PROGRESS when session resumes', async () => {
-    // Create task + set phase to AGENT_COMPLETE
-    const task = await createTask('Rollback test - AGENT_COMPLETE');
+  it('rolls back NEED_ACTION to IN_PROGRESS when session resumes', async () => {
+    // Create task + set phase to NEED_ACTION
+    const task = await createTask('Rollback test - NEED_ACTION');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AGENT_COMPLETE' });
+    await patchTask(taskId, { phase: 'NEED_ACTION' });
 
     // Create a session record linked to this task
     const { createSessionRecord } = await import('../../src/core/session-tracker.js');
@@ -99,7 +99,7 @@ describe('Phase rollback on send_to_session', () => {
 
     const loaded = await getTask(taskId);
     expect(loaded).toBeTruthy();
-    expect(loaded!.phase).toBe('AGENT_COMPLETE');
+    expect(loaded!.phase).toBe('NEED_ACTION');
 
     const newPhase = sessionInputPhase(loaded!.phase);
     if (newPhase) {

@@ -1104,9 +1104,6 @@ export function parseMsTodoBody(body: string): { description: string; summary: s
     // VALID_PHASES check would silently DROP such a header and reset the task to
     // whatever the MS status implies, so the value goes through migratePhase —
     // the same fold the v7 SQLite migration uses, so no second list to drift.
-    // migratePhase answers 'TODO' both for a real TODO and for anything it does
-    // not recognise, and only the literal 'TODO' counts as a header; genuine junk
-    // still leaves phase undefined and falls back to phaseFromMsStatus.
     if (key === 'Phase') {
       const migrated = migratePhase(value);
       if (migrated !== 'TODO' || value === 'TODO') phase = migrated;

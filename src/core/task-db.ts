@@ -534,7 +534,7 @@ const SCHEMA_SQL = `
  * Exported so migration tests can assert "the DB ended up current" without
  * hardcoding a number that every future bump would break.
  */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 function runOneTimeMigrations(handle: DatabaseType): void {
   const current = handle.pragma('user_version', { simple: true }) as number;
@@ -625,6 +625,11 @@ function runOneTimeMigrations(handle: DatabaseType): void {
     // members) so any starting state — 8, the stray 9, or a fresh DB — lands
     // in the same place.
     migrateGroupsToFolders(handle);
+  }
+
+  if (current < 11) {
+    // v10 → v11: `AGENT_COMPLETE` → `NEED_ACTION` (phase rename only).
+    migrateAgentCompleteToNeedAction(handle);
   }
 
   handle.pragma('user_version = ' + SCHEMA_VERSION);
@@ -1247,6 +1252,45 @@ function migrateWaitToTodo(handle: DatabaseType): void {
 
   if (summary.migrated > 0) {
     log.task.info('task-db v8: WAIT phase removed — rows moved to TODO', summary);
+  }
+}
+
+// ── v11: AGENT_COMPLETE → NEED_ACTION ────────────────────────────────────────
+
+/**
+ * v10 → v11: rename `AGENT_COMPLETE` to `NEED_ACTION`. Nothing about the state
+ * changes — same position in the lifecycle, same red row, same unread dot. Only
+ * the name, because the old one described the AGENT's side of the handoff
+ * ("the agent finished") and every reader took that as "done", which is the
+ * opposite of what the state means: the work is parked until the HUMAN does
+ * something (look at it, answer a permission prompt, approve a plan, mark it
+ * COMPLETE). Naming it after the required action makes the task list readable
+ * without a legend, for humans and for agents deciding what to surface.
+ *
+ * Same dual-write shape as v7/v8: the indexed `phase` column and `$.phase` in
+ * the payload move in one transaction, because reads hydrate from the payload
+ * and a column-only rewrite would leave every read seeing the old value.
+ * `updated_at` untouched (a rename is not an edit — bumping it would reshuffle
+ * every updated_at-sorted list on upgrade). `unread` untouched: those rows are
+ * genuinely still unread and their "look at me" claim is unchanged.
+ */
+function migrateAgentCompleteToNeedAction(handle: DatabaseType): void {
+  const summary = handle.transaction(() => {
+    const column = handle
+      .prepare(`UPDATE tasks SET phase = 'NEED_ACTION' WHERE phase = 'AGENT_COMPLETE'`)
+      .run().changes;
+    const payload = handle
+      .prepare(
+        `UPDATE tasks SET payload = json_set(payload, '$.phase', 'NEED_ACTION')
+          WHERE payload IS NOT NULL AND json_valid(payload)
+            AND json_extract(payload, '$.phase') = 'AGENT_COMPLETE'`,
+      )
+      .run().changes;
+    return { migrated: Math.max(column, payload) };
+  })();
+
+  if (summary.migrated > 0) {
+    log.task.info('task-db v11: AGENT_COMPLETE renamed to NEED_ACTION', summary);
   }
 }
 

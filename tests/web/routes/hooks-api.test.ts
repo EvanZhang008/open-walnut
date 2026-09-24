@@ -55,10 +55,10 @@ beforeAll(async () => {
         action: { type: 'notify', message: '{{task.title}} finished' },
       }, {
         id: 'config-phase-message',
-        name: 'Message the session on AGENT_COMPLETE',
+        name: 'Message the session on NEED_ACTION',
         on: ['onTaskPhaseChanged'],
         action: { type: 'send_message_to_session', message: 'Task {{task.title}} needs attention' },
-        filter: { phases: ['AGENT_COMPLETE'], requiresSession: true },
+        filter: { phases: ['NEED_ACTION'], requiresSession: true },
       }],
     },
   }));
@@ -373,8 +373,8 @@ describe('GET /api/task-phase-hooks (deprecated alias)', () => {
     // contract is unchanged, only its last builtin producer disappeared.
     const hook = body.find(h => h.id === 'config-phase-message')!;
     expect(hook).toBeDefined();
-    // (WAIT removed 2026-08-18 — the fixture hook now filters on AGENT_COMPLETE.)
-    expect(hook.triggerPhase).toBe('AGENT_COMPLETE');
+    // (WAIT removed 2026-08-18 — the fixture hook now filters on NEED_ACTION.)
+    expect(hook.triggerPhase).toBe('NEED_ACTION');
     expect(hook.actionType).toBe('send_message');
     expect(hook.actionDetail).toMatch(/^Send message:/);
     expect(hook.conditions).toEqual(['Requires active session']);

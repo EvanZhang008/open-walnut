@@ -121,7 +121,7 @@ function phasePayload(over: { sessionId?: string; taskId?: string } = {}): Sessi
     taskId: over.taskId ?? 'task-77',
     sessionId: 'sessionId' in over ? over.sessionId : TARGET,
     oldPhase: 'IN_PROGRESS',
-    newPhase: 'AGENT_COMPLETE',
+    newPhase: 'NEED_ACTION',
     eventSource: 'api',
     timestamp: NOW,
     traceId: 'trace-1',

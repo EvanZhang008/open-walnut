@@ -135,7 +135,7 @@ export interface SessionViewProps {
 }
 
 export type TaskViewCompletion = 'todo' | 'in_progress' | 'complete'
-export type TaskViewPhase = 'TODO' | 'IN_PROGRESS' | 'AGENT_COMPLETE' | 'COMPLETE'
+export type TaskViewPhase = 'TODO' | 'IN_PROGRESS' | 'NEED_ACTION' | 'COMPLETE'
 export type TaskViewPriority = 'immediate' | 'important' | 'backlog' | 'none'
 export type TaskViewTimeBasis = 'created' | 'updated' | 'created_or_updated'
 

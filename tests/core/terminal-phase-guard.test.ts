@@ -91,18 +91,18 @@ describe('terminal phase guard — updateTask', () => {
     expect(after.status).toBe('in_progress');
   });
 
-  // (WAIT removed 2026-08-18 — this pinned AGENT_COMPLETE → WAIT; TODO is the
+  // (WAIT removed 2026-08-18 — this pinned NEED_ACTION → WAIT; TODO is the
   // landing WAIT rows migrated to, and is equally non-terminal, so the guard's
   // behavior is pinned the same way.)
-  it('allows agent to overwrite non-terminal phase AGENT_COMPLETE → TODO', async () => {
+  it('allows agent to overwrite non-terminal phase NEED_ACTION → TODO', async () => {
     const { task } = await addTask({ title: 'Guard test 5' });
 
-    // Set phase to AGENT_COMPLETE (non-terminal)
-    await updateTask(task.id, { phase: 'AGENT_COMPLETE' }, { source: 'api' });
+    // Set phase to NEED_ACTION (non-terminal)
+    await updateTask(task.id, { phase: 'NEED_ACTION' }, { source: 'api' });
     const before = (await listTasks()).find(t => t.id === task.id)!;
-    expect(before.phase).toBe('AGENT_COMPLETE');
+    expect(before.phase).toBe('NEED_ACTION');
 
-    // Agent changes AGENT_COMPLETE → TODO — should succeed
+    // Agent changes NEED_ACTION → TODO — should succeed
     await updateTask(task.id, { phase: 'TODO' }, { source: 'agent' });
     const after = (await listTasks()).find(t => t.id === task.id)!;
     expect(after.phase).toBe('TODO');
@@ -113,11 +113,11 @@ describe('terminal phase guard — updateTask', () => {
   // WAIT is silently IGNORED (no throw, phase untouched) rather than written.
   it('a stale WAIT write through updateTask is ignored, not applied', async () => {
     const { task } = await addTask({ title: 'Stale WAIT write' });
-    await updateTask(task.id, { phase: 'AGENT_COMPLETE' }, { source: 'api' });
+    await updateTask(task.id, { phase: 'NEED_ACTION' }, { source: 'api' });
 
     await updateTask(task.id, { phase: 'WAIT' as never }, { source: 'agent' });
     const after = (await listTasks()).find(t => t.id === task.id)!;
-    expect(after.phase).toBe('AGENT_COMPLETE');
+    expect(after.phase).toBe('NEED_ACTION');
   });
 });
 

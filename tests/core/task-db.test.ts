@@ -416,6 +416,22 @@ describe('task-db: rowToTask / taskToRow round trip', () => {
     expect((await listTasks()).find((t) => t.id === 'future')?.phase).toBe('NEED_ACTION');
   });
 
+  it.each(['NEED_ACTION', 'AGENT_COMPLETE'])('keeps %s red across an unrelated whole-store write', async (phase) => {
+    await addTask({ title: 'Existing task', project: '', source: 'local' });
+    const db = getDb()!;
+    db.prepare(`INSERT INTO tasks (id, title, phase, status, updated_at, payload)
+      VALUES (?, ?, ?, ?, ?, ?)`).run('attention', 'Needs attention', phase, 'in_progress', '2026-01-01T00:00:00Z', '{"unread":true}');
+    _resetForTesting();
+
+    await addTask({ title: 'Another task', project: '', source: 'local' });
+    expect(db.prepare('SELECT phase, status, updated_at FROM tasks WHERE id = ?').get('attention')).toEqual({
+      phase: 'NEED_ACTION', status: 'in_progress', updated_at: '2026-01-01T00:00:00Z',
+    });
+    const attention = await getTask('attention');
+    expect(attention.unread).toBe(true);
+    expect(attention.phase).toBe('NEED_ACTION');
+  });
+
   it('preserves all explicit columns + JSON array columns + ext payload', () => {
     const db = getDb()!;
     const insertCols = [...TASK_COLUMNS, 'payload'];

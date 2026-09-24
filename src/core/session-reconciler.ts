@@ -142,7 +142,7 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
     }
 
     // Session is dead — mark as stopped.
-    // Task phase progression (e.g. AGENT_COMPLETE) is handled by the task manager.
+    // Task phase progression (e.g. NEED_ACTION) is handled by the task manager.
     // Use conditional update to prevent stale-snapshot race:
     //   - If the record was updated after we started (new process spawned), skip.
     //   - If the PID changed (new process), skip.

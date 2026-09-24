@@ -3302,12 +3302,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
         sendStreamEvent(sessionId, event.name, event.data)
         // Agent blocked on a human decision → the task goes red NOW
-        // (session:awaiting-human → AGENT_COMPLETE), not when the turn ends.
+        // (session:awaiting-human → NEED_ACTION), not when the turn ends.
         // 2026-08-18 user call: permission / AskUserQuestion / plan approval
         // all mean "agent 完事要等" — same handed-back semantics as a result.
         // Auto-approved prompts never reach this branch (bypass auto-allow and
         // ACP full-access answer before the bus emit). The 60s re-emit lands
-        // here again but applySessionPhase no-ops on AGENT_COMPLETE.
+        // here again but applySessionPhase no-ops on NEED_ACTION.
         void (async () => {
           try {
             let phaseTaskId = taskId
@@ -3412,7 +3412,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // Human answered (allow/deny/AskUserQuestion) → the agent resumes; pull
           // the red row back to IN_PROGRESS. NOT for 'expired': the session died
           // with the prompt open — nobody decided, nothing resumes, and the
-          // handed-back AGENT_COMPLETE is exactly right.
+          // handed-back NEED_ACTION is exactly right.
           if (outcome === 'allowed' || outcome === 'denied') {
             void (async () => {
               try {
@@ -3840,7 +3840,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
 
       // Team mode OR active background workflow: intermediate results should not
-      // trigger AGENT_COMPLETE or triage. (Reuse the `teamActive` var name to thread
+      // trigger NEED_ACTION or triage. (Reuse the `teamActive` var name to thread
       // through the existing guards below — semantics widened to "background work live".)
       const teamActive = (event.data as Record<string, unknown>)?.teamActive === true
         || (event.data as Record<string, unknown>)?.backgroundActive === true
@@ -3856,15 +3856,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         //   1. Task phase reaches COMPLETE (user sets via PhasePicker)
         //   2. process_status transitions to 'error' (handled above in isError branch)
 
-        // Phase transition: session result → AGENT_COMPLETE.
+        // Phase transition: session result → NEED_ACTION.
         // Skip when teamActive — the lead session is still coordinating in-process
         // teammates (Claude Code team mode). Intermediate results should NOT move
-        // the task to AGENT_COMPLETE or trigger triage. The final result (after
+        // the task to NEED_ACTION or trigger triage. The final result (after
         // TeamDelete) will go through the normal path.
         // Detached (run_in_background) command still working: the reply was
         // delivered (real turn-over — triage and session:ended proceed as
         // normal below) but the agent is NOT done, so the task must not flip
-        // AGENT_COMPLETE (user decision 2026-08-28, inc-1787893885321). The
+        // NEED_ACTION (user decision 2026-08-28, inc-1787893885321). The
         // runner's followup-closure applies the final flip when the last
         // detached task drains.
         const detachedBgActive = (event.data as Record<string, unknown>)?.detachedBgActive === true
@@ -3881,8 +3881,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           }
         } else {
           log.web.info(teamActive
-            ? 'team active — skipping AGENT_COMPLETE phase transition'
-            : 'detached background work active — skipping AGENT_COMPLETE phase transition', { sessionId, taskId })
+            ? 'team active — skipping NEED_ACTION phase transition'
+            : 'detached background work active — skipping NEED_ACTION phase transition', { sessionId, taskId })
         }
 
         // Triage dispatch is now handled by SessionHookDispatcher
@@ -4140,10 +4140,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
 
         // Post-triage phase sync: RETIRED 2026-08-17 (inc-1786983019552) — it
-        // pushed AGENT_COMPLETE → WAIT after every triage, repainting normal
+        // pushed NEED_ACTION → WAIT after every triage, repainting normal
         // completions as "waiting on a human" with zero added signal. WAIT is
         // reserved for genuine blockage (session:error / idle-timeout kill /
-        // all-dead reconcile); AGENT_COMPLETE is the terminal state of a
+        // all-dead reconcile); NEED_ACTION is the terminal state of a
         // normal turn.
       } else {
         // Non-triage subagent: persist full result as notification

@@ -473,7 +473,7 @@ export async function applySnapshot(
   // background task-notification dequeued from its internal queue starts a
   // real turn with no external send), so neither event-lane turn-start edge
   // (state-running / init-after-result) fires and the task stays on the
-  // previous turn's AGENT_COMPLETE while the CLI is visibly working. The fold
+  // previous turn's NEED_ACTION while the CLI is visibly working. The fold
   // DOES see the new turn's bytes — this projection is the very evidence that
   // paints the green Running dot, so it must pull the phase back too, or the
   // UI ships "Running session + red handed-back row". Runs on every live

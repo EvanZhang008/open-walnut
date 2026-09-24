@@ -183,14 +183,14 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
 const PHASE_ICON: Record<string, ReactNode> = {
   TODO: ICONS.ICON_PHASE_TODO,
   IN_PROGRESS: ICONS.ICON_PHASE_IN_PROGRESS,
-  AGENT_COMPLETE: ICONS.ICON_PHASE_AGENT_COMPLETE,
+  NEED_ACTION: ICONS.ICON_PHASE_NEED_ACTION,
   COMPLETE: ICONS.ICON_PHASE_COMPLETE,
 };
 
 const PHASE_LABEL: Record<string, string> = {
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
-  AGENT_COMPLETE: 'Agent Complete',
+  NEED_ACTION: 'Need Action',
   COMPLETE: 'Complete',
 };
 
@@ -368,7 +368,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
   // Two red affordances, two semantics (2026-08-14 regression: the tint had been
   // moved onto `unread`, which clears on OPEN — so a task still sitting at
-  // AGENT_COMPLETE went quiet after one glance and nothing flagged it needed
+  // NEED_ACTION went quiet after one glance and nothing flagged it needed
   // action). The tint follows the PHASE (clears only when the human acts); the
   // dot follows the stored marker (clears on open).
   const needsAction = taskNeedsAction(task);

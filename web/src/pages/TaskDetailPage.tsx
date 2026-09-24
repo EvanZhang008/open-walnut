@@ -528,7 +528,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                 width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
                 background: parent.status === 'done' ? '#34c759'
                   : parent.phase === 'IN_PROGRESS' ? '#007aff'
-                  : parent.phase === 'AGENT_COMPLETE' ? 'var(--error)'
+                  : parent.phase === 'NEED_ACTION' ? 'var(--error)'
                   : 'var(--text-secondary)',
               }} />
               <span style={{ fontSize: '0.9rem' }}>{parent.title}</span>
@@ -563,7 +563,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                   width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
                   background: child.status === 'done' ? '#34c759'
                     : child.phase === 'IN_PROGRESS' ? '#007aff'
-                    : child.phase === 'AGENT_COMPLETE' ? 'var(--error)'
+                    : child.phase === 'NEED_ACTION' ? 'var(--error)'
                     : 'var(--text-secondary)',
                   opacity: child.status === 'done' ? 0.6 : 1,
                 }} />

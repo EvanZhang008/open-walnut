@@ -583,7 +583,7 @@ function runWnMinimal(argv, stdinText) {
             wsummary = { request: wnWait.id, status: wreq.status, outcome: wreq.outcome };
           } else {
             var wtask = wres.task || wres;
-            settled = wtask.phase === 'AGENT_COMPLETE' || wtask.phase === 'COMPLETE';
+            settled = wtask.phase === 'NEED_ACTION' || wtask.phase === 'COMPLETE';
             wsummary = { task: wtask.id || wnWait.id, title: wtask.title, phase: wtask.phase };
           }
           if (settled) { out(JSON.stringify(Object.assign({ done: true }, wsummary))); return exitWn(0); }

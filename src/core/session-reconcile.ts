@@ -47,7 +47,7 @@
  *   error result            → 'error'
  *   process alive (FIFO up) → 'idle'
  *   process dead            → 'stopped'
- * Task phase target: IN_PROGRESS → AGENT_COMPLETE (errors too — the failure
+ * Task phase target: IN_PROGRESS → NEED_ACTION (errors too — the failure
  * signal lives on the session record; WAIT phase removed 2026-08-18);
  * later phases are never regressed.
  *
@@ -635,7 +635,7 @@ export async function fetchStreamTailFold(
  *  spawned pre-/tmp→HOME-move carried a 37.9 MB legacy-file watermark; its
  *  respawn wrote a fresh 6 MB HOME file whose every event sat "below" the
  *  watermark, so the real end-of-turn result was suppressed as a replay and
- *  the task never reached AGENT_COMPLETE). Two independent proofs:
+ *  the task never reached NEED_ACTION). Two independent proofs:
  *    offset-beyond-file — a consumed line-end offset can never exceed the size
  *      of the append-only file it was measured in, so watermark > fileSize
  *      means "different file";
@@ -860,7 +860,7 @@ export async function reconcileProcessStatus(
 
   // ── Phase sync: deliver what the lost result would have delivered ──
   // ONLY when the task is still IN_PROGRESS (i.e. the phase never saw the result).
-  // Later phases (AGENT_COMPLETE / terminal) are never
+  // Later phases (NEED_ACTION / terminal) are never
   // regressed — a stale reconcile must not re-trigger triage or notifications.
   let phaseSynced = false
   if (record.taskId) {
@@ -869,10 +869,10 @@ export async function reconcileProcessStatus(
       const task = await getTask(record.taskId)
       if (task?.phase === 'IN_PROGRESS') {
         const { applySessionPhase } = await import('./phase.js')
-        // error and clean completion both land on AGENT_COMPLETE (WAIT removed
+        // error and clean completion both land on NEED_ACTION (WAIT removed
         // 2026-08-18): the turn is over and the human decides what's next; the
         // failure signal lives on the session record, not the task phase.
-        const newPhase: TaskPhase = 'AGENT_COMPLETE'
+        const newPhase: TaskPhase = 'NEED_ACTION'
         const res = await applySessionPhase(record.taskId, 'reconciler', 'session-reconcile', {
           sessionId: sid,
           newPhase,
