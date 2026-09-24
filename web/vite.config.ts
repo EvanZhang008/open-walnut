@@ -19,6 +19,7 @@ export default defineConfig({
       // because the browser reducer and the server-side stream buffer are twins
       // and a rule only one of them applies reappears as an artifact on reload.
       '@open-walnut/pending-markup': path.resolve(__dirname, '../src/core/stream/pending-markup.ts'),
+      '@open-walnut/service-url': path.resolve(__dirname, '../src/core/service-url.ts'),
       // Same reason, third time: "one compaction is one row" must hold in the
       // browser reducer AND in the server stream buffer, or the row count changes
       // when a reload swaps which twin produced the timeline.

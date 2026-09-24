@@ -1278,25 +1278,61 @@ export class DaemonConnection {
    * NEVER call on a shared pool connection from error-recovery paths — use
    * `this.conn = null` instead to drop the local reference safely.
    */
-  // ── Auxiliary port forwards (embedded VS Code etc.) ──
-  // Keyed by remote port. Separate from the daemon tunnel: these carry browser
+  // ── Auxiliary port forwards (embedded VS Code, service previews) ──
+  // Separate from the daemon tunnel: these carry browser
   // iframe traffic, live/die independently, and are re-dialed on demand by
   // ensurePortForward rather than by the reconnect loop.
-  private portForwards = new Map<number, { localPort: number; proc: ChildProcess }>()
+  // Keyed by `<target>:<remotePort>` — the host-side address ssh connects to.
+  // `evictable` = a service-preview forward (bounded, oldest first), never the
+  // embedded VS Code one.
+  private portForwards = new Map<string, { localPort: number; proc: ChildProcess; evictable: boolean }>()
+  // Concurrent calls for one key share a single dial (a double click or a Retry
+  // while resolving would otherwise spawn two ssh and orphan one).
+  private portForwardDials = new Map<string, Promise<number>>()
+  private static readonly MAX_EVICTABLE_FORWARDS = 12
 
   /**
-   * Ensure an SSH local forward 127.0.0.1:<local> → remote 127.0.0.1:<remotePort>
+   * Ensure an SSH local forward 127.0.0.1:<local> → remote <target>:<remotePort>
    * exists, creating it if needed. Returns the local port. Reuses a live
-   * forward for the same remote port across calls (idempotent per remote port).
+   * forward for the same target across calls (idempotent per target:port).
+   *
+   * `target` is resolved ON THE REMOTE HOST (the `-L` destination): the default
+   * 127.0.0.1 reaches a service bound to loopback or to every interface; the
+   * service-preview path passes the host's own name when the model wrote the
+   * URL with it, so a service bound to one external interface still answers.
    */
-  async ensurePortForward(remotePort: number): Promise<number> {
-    const existing = this.portForwards.get(remotePort)
+  ensurePortForward(remotePort: number, target = '127.0.0.1', opts: { evictable?: boolean } = {}): Promise<number> {
+    const key = `${target}:${remotePort}`
+    const dialing = this.portForwardDials.get(key)
+    if (dialing) return dialing
+    const dial = this.dialPortForward(key, remotePort, target, opts.evictable === true)
+      .finally(() => { if (this.portForwardDials.get(key) === dial) this.portForwardDials.delete(key) })
+    this.portForwardDials.set(key, dial)
+    return dial
+  }
+
+  /** Drop one forward (a service probe found nothing behind it). */
+  closePortForward(remotePort: number, target = '127.0.0.1'): void {
+    const key = `${target}:${remotePort}`
+    const fwd = this.portForwards.get(key)
+    if (!fwd) return
+    this.portForwards.delete(key)
+    try { fwd.proc.kill('SIGTERM') } catch {}
+  }
+
+  private async dialPortForward(key: string, remotePort: number, target: string, evictable: boolean): Promise<number> {
+    const existing = this.portForwards.get(key)
     if (existing && existing.proc.exitCode === null) {
       // Verify it still accepts connections — an ssh that lost its transport
       // can linger with exitCode null while the forward is dead.
-      if (await this.waitForTunnel(existing.localPort, 1_500)) return existing.localPort
+      if (await this.waitForTunnel(existing.localPort, 1_500)) {
+        // Refresh recency (Map order is the eviction order).
+        this.portForwards.delete(key)
+        this.portForwards.set(key, existing)
+        return existing.localPort
+      }
       try { existing.proc.kill('SIGTERM') } catch {}
-      this.portForwards.delete(remotePort)
+      this.portForwards.delete(key)
     }
 
     const { createServer } = await import('node:net')
@@ -1312,33 +1348,50 @@ export class DaemonConnection {
 
     const args = [
       ...this.baseSshArgs,
-      '-L', `${localPort}:127.0.0.1:${remotePort}`,
+      '-L', `${localPort}:${target}:${remotePort}`,
       '-N',
       '-o', 'ExitOnForwardFailure=yes',
       '-o', 'ServerAliveInterval=15',
       '-o', 'ServerAliveCountMax=3',
       this.sshHostString,
     ]
-    const proc = spawn('ssh', args, { detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    // stderr is DRAINED: without a mux master this ssh owns the listener and
+    // logs "channel N: open failed" per refused connection; an unread pipe
+    // fills, ssh blocks, and the forward freezes while its port still accepts.
+    const proc = spawn('ssh', args, { detached: true, stdio: ['ignore', 'ignore', 'pipe'] })
+    let stderrTail = ''
+    proc.stderr?.on('data', (chunk: Buffer) => { stderrTail = (stderrTail + chunk.toString()).slice(-2_000) })
     proc.unref()
     proc.on('exit', (code) => {
       log.session.warn('DaemonConnection: port forward died', {
-        host: this.hostKey, code, localPort, remotePort,
+        host: this.hostKey, code, localPort, remotePort, target, stderr: stderrTail.trim().slice(-300),
       })
-      const cur = this.portForwards.get(remotePort)
-      if (cur?.proc === proc) this.portForwards.delete(remotePort)
+      const cur = this.portForwards.get(key)
+      if (cur?.proc === proc) this.portForwards.delete(key)
     })
 
     const ready = await this.waitForTunnel(localPort, 10_000)
     if (!ready) {
       try { proc.kill('SIGTERM') } catch {}
-      throw new Error(`port forward to ${this.hostKey}:${remotePort} not accepting connections after 10s`)
+      const why = stderrTail.trim().split('\n').pop()
+      throw new Error(`port forward to ${this.hostKey} ${target}:${remotePort} not accepting connections after 10s${why ? ` (${why})` : ''}`)
     }
-    this.portForwards.set(remotePort, { localPort, proc })
+    this.portForwards.set(key, { localPort, proc, evictable })
+    if (evictable) this.evictOldPortForwards()
     log.session.info('DaemonConnection: port forward created', {
-      host: this.hostKey, localPort, remotePort,
+      host: this.hostKey, localPort, remotePort, target,
     })
     return localPort
+  }
+
+  /** Keep at most MAX_EVICTABLE_FORWARDS service forwards; the least recently used go first. */
+  private evictOldPortForwards(): void {
+    const evictable = [...this.portForwards].filter(([, f]) => f.evictable)
+    for (const [key, fwd] of evictable.slice(0, Math.max(0, evictable.length - DaemonConnection.MAX_EVICTABLE_FORWARDS))) {
+      this.portForwards.delete(key)
+      try { fwd.proc.kill('SIGTERM') } catch {}
+      log.session.info('DaemonConnection: port forward evicted', { host: this.hostKey, key })
+    }
   }
 
   disconnect(): void {

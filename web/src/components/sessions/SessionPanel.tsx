@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, memo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { SessionChatHistory } from './SessionChatHistory';
@@ -24,6 +24,8 @@ import { SessionFileExplorer } from './SessionFileExplorer';
 import { sessionScope } from '@/utils/file-view-state';
 import { SessionTerminal } from './SessionTerminal';
 import { SessionCodeView } from './SessionCodeView';
+import { SessionWebView, type WebViewRequest } from './SessionWebView';
+import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } from '@/utils/service-link';
 import { SessionDiffView } from './SessionDiffView';
 import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
 import { useSessionLetters } from '@/hooks/useSessionLetters';
@@ -987,6 +989,39 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     enterFullscreen();
   }, [enterFullscreen]);
 
+  // A host:port service the session started (a dev server, a report page) opens
+  // in the Web split view instead of a browser tab: remote ports come through an
+  // SSH forward the server sets up, so "localhost:8080 on the dev box" just works.
+  // The request carries a nonce so clicking the same link again reloads it.
+  const [webRequest, setWebRequest] = useState<WebViewRequest | null>(null);
+  const openWebView = useCallback((url: string) => {
+    traceInteraction('view-open:web-from-link', { sessionId });
+    setFileViewTarget(null);
+    setWebRequest((prev) => ({ url, nonce: (prev?.nonce ?? 0) + 1 }));
+    setActiveView('web');
+    applyOpenCollapse('web');
+    enterFullscreen();
+    log.info('session-web', 'service link opened in panel', { sessionId, url });
+  }, [enterFullscreen, applyOpenCollapse, sessionId]);
+  useEffect(() => { primeKnownServiceHosts(); }, []);
+  // Click delegation for the whole chat column: any rendered anchor (markdown
+  // autolink, model-written HTML, tool output) whose href is a service. A plain
+  // web link, a modified click (⌘/Ctrl/Shift/middle = "give me a real tab"), or a
+  // click something inside already handled keeps the browser's own behavior.
+  const handleServiceLinkClick = useCallback((e: ReactMouseEvent) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const anchor = (e.target as HTMLElement).closest?.('a[href]') as HTMLAnchorElement | null;
+    if (!anchor || anchor.hasAttribute('data-native-link')) return;
+    if (!consoleCanEmbedServices()) return;
+    const url = classifyServiceHref(anchor.getAttribute('href') ?? '', {
+      sessionHost: session?.host,
+      sessionHostname: session?.hostname,
+    });
+    if (!url) return;
+    e.preventDefault();
+    openWebView(url);
+  }, [openWebView, session?.host, session?.hostname]);
+
   // "Engine settings" row in the composer's "+" menu and the popover it opens;
   // ChatInput only renders the generic action row, this hook owns the feature.
   const engineSettingsEntry = useEngineSettingsEntry({ sessionId, session, engineUi, onOpenPath: handleFileOpen });
@@ -1049,6 +1084,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     setActiveView(null);
     setFileViewTarget(null);
     setInboxLetterId(null);
+    // A service URL belongs to the session that printed it (its host decides
+    // where the tunnel goes); an unkeyed panel must not carry it to the next.
+    setWebRequest(null);
     exitFullscreen();
   }, [sessionId, exitFullscreen]);
 
@@ -2137,6 +2175,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                     )}
                     {/* Inbox: this session's letters, reader in place. Same split
                         as its peers, so chat-left + letter-right is free. */}
+                    {activeView === 'web' && (
+                      <SessionWebView
+                        sessionId={sessionId}
+                        host={session?.host}
+                        request={webRequest}
+                        onNavigate={openWebView}
+                        barRightSlot={chatBarSlot}
+                      />
+                    )}
                     {activeView === 'inbox' && (
                       <SessionInboxPane
                         sessionId={sessionId}
@@ -2173,6 +2220,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           )}
           <div
             className="session-panel-chat-col"
+            onClick={handleServiceLinkClick}
             ref={splitOpen ? chatPanel.panelRef : undefined}
             style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
           >

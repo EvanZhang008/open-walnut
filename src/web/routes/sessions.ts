@@ -49,6 +49,8 @@ import { askProjectFor, resolveAskAgent, stampedAgentId } from '../../core/sessi
 import { ensureCwd } from '../../core/sessions/ensure-cwd.js'
 import { buildSessionVscodeUri, SessionVscodeUriError } from '../../core/session-vscode-uri.js'
 import { buildSessionVscodeEmbed, SessionVscodeEmbedError } from '../../core/session-vscode-embed.js'
+import { buildSessionServicePreview, ServicePreviewError } from '../../core/session-service-preview.js'
+import { markHandledFailure } from '../middleware/handled-failure.js'
 import {
   listSessionDirs, getSessionControls, applySessionControl, getSessionSettings,
   listSessionSideQuestions, askSessionSideQuestion, promoteSessionSideQuestion,
@@ -925,6 +927,27 @@ sessionsRouter.post('/:sessionId/vscode-embed', async (req: Request, res: Respon
   } catch (err) {
     if (err instanceof SessionVscodeEmbedError) {
       res.status(err.status).json({ error: err.message, hint: err.hint })
+      return
+    }
+    next(err)
+  }
+})
+
+// POST /api/sessions/:sessionId/service-preview — { url } a session printed
+// (a dev server on its host) → a URL this browser can iframe: the same URL for a
+// service on this machine, or the local end of an SSH forward to the session's
+// host (or to whichever configured host the URL names). Deadline-bounded; POST
+// because it can start an ssh process.
+sessionsRouter.post('/:sessionId/service-preview', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const session = await getSessionByClaudeId(String(req.params.sessionId))
+    const url = typeof req.body?.url === 'string' ? req.body.url : ''
+    res.json(await buildSessionServicePreview(session, url))
+  } catch (err) {
+    if (err instanceof ServicePreviewError) {
+      // "Nothing is answering on port 8080" is a designed answer the Web view
+      // shows in place (card + Retry), not an endpoint incident: no red card.
+      markHandledFailure(res).status(err.status).json({ error: err.message, code: err.code, hint: err.hint })
       return
     }
     next(err)

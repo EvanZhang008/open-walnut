@@ -64,6 +64,10 @@ The fix keeps marked owning its grammar. Do not move either half:
 
 Acceptance gate: `tests/web/markdown/link-to-local-path.test.ts` (the report verbatim, every declined shape, ReDoS tripwires for the fence) and `tests/e2e/browser/link-to-local-path.spec.ts` (the seeded `pw-vscode-session` turn, clicked in Chromium and WebKit, opens the file at the line with no page load).
 
+## Bare loopback addresses (`bareLoopbackUrlExtension`)
+
+Dev servers print `localhost:5173` / `0.0.0.0:8080` / `127.0.0.1:8000/x` without a scheme, and GFM only autolinks `http(s)://` and `www.`. The inline extension links those, registered on BOTH instances. It requires a port and a word start: the previous token's last char must not be one of `\w : / . @ - [`, so an ssh `-L 8080:localhost:8080` spec, `ws://localhost:1`, `user@localhost:22` stay text; `localhost:8080:host:80` is refused by a lookahead. It returns a plain `link` token, so the renderer adds nothing Walnut-specific: which links open in the session's Web view is decided at click time (see `walnut-web-frontend`, "Service links"). Tests: `tests/web/markdown/bare-loopback-url.test.ts`.
+
 ## DOMPurify policy per surface
 
 - Sanitize with `FORCE_BODY: true` on the rich path. Default `false` parses a leading `<style>` into `head` and drops it, and models naturally write style first.

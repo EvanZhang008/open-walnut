@@ -177,6 +177,22 @@ export function SessionKebabSection({
       </button>
 
       <button
+        className={`task-kebab-item${activeView === 'web' ? ' task-kebab-item-active' : ''}`}
+        aria-pressed={activeView === 'web'}
+        onClick={(e) => { e.stopPropagation(); onToggleView('web'); onAfterAction?.(); }}
+        title="Open a localhost or host:port service this session started, next to the chat"
+      >
+        <span className="task-kebab-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M3 12h18" />
+            <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z" />
+          </svg>
+        </span>
+        <span>Web preview</span>
+      </button>
+
+      <button
         className={`task-kebab-item${notesOpen ? ' task-kebab-item-active' : ''}`}
         onClick={(e) => { e.stopPropagation(); onToggleNotes(); onAfterAction?.(); }}
       >

@@ -19,6 +19,7 @@
       "@open-walnut/task-query": ["../src/core/task-query"],
       "@open-walnut/letter-frame": ["../src/core/human-inbox/letter-frame"],
       "@open-walnut/pending-markup": ["../src/core/stream/pending-markup"],
+      "@open-walnut/service-url": ["../src/core/service-url"],
       "@open-walnut/compaction-notice": ["../src/core/stream/compaction-notice"],
       "@open-walnut/search-transcript": ["../src/core/task-search-transcript"]
     }

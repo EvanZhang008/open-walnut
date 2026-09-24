@@ -14,6 +14,7 @@ export default defineConfig({
       '@open-walnut/task-query': path.resolve(import.meta.dirname, 'src/core/task-query.ts'),
       '@open-walnut/letter-frame': path.resolve(import.meta.dirname, 'src/core/human-inbox/letter-frame.ts'),
       '@open-walnut/pending-markup': path.resolve(import.meta.dirname, 'src/core/stream/pending-markup.ts'),
+      '@open-walnut/service-url': path.resolve(import.meta.dirname, 'src/core/service-url.ts'),
       '@open-walnut/compaction-notice': path.resolve(import.meta.dirname, 'src/core/stream/compaction-notice.ts'),
       '@open-walnut/search-transcript': path.resolve(import.meta.dirname, 'src/core/task-search-transcript.ts'),
     },

@@ -425,6 +425,38 @@ export async function ensureSessionVscodeEmbed(sessionId: string, opts?: { insta
   return apiPost<VscodeEmbedInfo>(`/api/sessions/${sessionId}/vscode-embed${qs}`, {}, { timeoutMs: 150_000 });
 }
 
+/** A service URL a session printed, resolved to something this browser can iframe. */
+export interface ServicePreviewInfo {
+  /** The URL as the session wrote it (normalized). */
+  requestedUrl: string;
+  /** Browser-loadable: the URL itself for a local service, the SSH tunnel end otherwise. */
+  url: string;
+  via: 'local' | 'tunnel';
+  /** Host alias serving it, `__local__` for this machine. */
+  host: string;
+  remotePort: number;
+  localPort: number;
+  /** False when the page forbids framing (X-Frame-Options / frame-ancestors). */
+  embeddable: boolean;
+  embedBlockedBy?: 'x-frame-options' | 'frame-ancestors' | 'certificate';
+  reachability: 'ok' | 'slow';
+}
+
+/**
+ * Resolve a `host:port` URL for the Web view. Remote hosts get an SSH forward
+ * (reused across calls); the server bounds the whole call at 30s.
+ */
+export async function resolveSessionServicePreview(sessionId: string, url: string, signal?: AbortSignal): Promise<ServicePreviewInfo> {
+  // 422/502/504 are designed answers (not a known host / nothing listening /
+  // host too slow) the Web view renders as a card, so they stay out of the
+  // client error audit.
+  return apiPost<ServicePreviewInfo>(`/api/sessions/${sessionId}/service-preview`, { url }, {
+    timeoutMs: 40_000,
+    quietStatuses: [400, 422, 502, 504],
+    signal,
+  });
+}
+
 /**
  * Change a session's reasoning effort. Backend delivers it live via an
  * apply_flag_settings control_request (no respawn) when the CLI is running, then

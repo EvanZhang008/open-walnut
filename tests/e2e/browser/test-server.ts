@@ -212,6 +212,28 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Service preview fixture (session-service-preview.spec.ts): its session
+        // printed the addresses of REAL http servers this fixture starts, so a
+        // click on one must load that page inside the panel's Web view.
+        id: 'pw-task-service',
+        title: 'Service preview fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-service-session'],
+        active_session_ids: [],
+        session_id: 'pw-service-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // The ✦ AI search adopted as a session (search-ask-transcript.spec.ts):
         // its transcript is the prompt Walnut sent + the bare JSON answer, the two
         // messages the transcript renderer cards. Own task + own session so the
@@ -1443,6 +1465,77 @@ await fs.writeFile(
   path.join(vscodeNestedDir, 'lazy-grammar.go'),
   'package main\n\nimport "fmt"\n\n// LAZY_GRAMMAR_MARKER\nfunc main() {\n\tfmt.Println("hello")\n}\n',
 )
+// Service preview fixture (session-service-preview.spec.ts). Three REAL http
+// servers on loopback: a page that frames fine, one that forbids framing
+// (X-Frame-Options), and a port with nothing on it yet (the spec starts a server
+// there to prove Retry recovers). The session transcript prints their addresses
+// the way a model does: scheme URLs, a bare `127.0.0.1:port/path`, an ssh -L
+// spec that must stay text, and an external link that must stay a new tab.
+const serviceFixtureRoot = path.join(tmpBase, 'projects', 'service-fixture')
+await fs.mkdir(serviceFixtureRoot, { recursive: true })
+{
+  const http = await import('node:http')
+  const listen = async (handler: Parameters<typeof http.createServer>[1]): Promise<number> => {
+    const srv = http.createServer(handler)
+    await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve))
+    srv.unref()
+    return (srv.address() as { port: number }).port
+  }
+  const page = (marker: string, extra = '') =>
+    `<!doctype html><html><body style="font-family:sans-serif"><h1>${marker}</h1>${extra}</body></html>`
+  const servicePort = await listen((req, res) => {
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    if (req.url?.startsWith('/docs')) res.end(page('SERVICE_DOCS_MARKER'))
+    else if (req.url?.startsWith('/typed')) res.end(page('SERVICE_TYPED_MARKER'))
+    else res.end(page('SERVICE_REPORT_MARKER', '<p>25 stages to 13 stages</p><a href="/docs">docs</a>'))
+  })
+  const lockedPort = await listen((_req, res) => {
+    res.setHeader('X-Frame-Options', 'DENY')
+    res.end(page('SERVICE_LOCKED_MARKER'))
+  })
+  // Bound then released: nothing listens here until the spec starts a server on it.
+  const deadPortFree = await new Promise<number>((resolve) => {
+    const srv = http.createServer()
+    srv.listen(0, '127.0.0.1', () => {
+      const port = (srv.address() as { port: number }).port
+      srv.close(() => resolve(port))
+    })
+  })
+  const encodedCwd = serviceFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-')
+  const jsonlDir = path.join(tmpBase, '.claude', 'projects', encodedCwd)
+  await fs.mkdir(jsonlDir, { recursive: true })
+  const reply = [
+    'Both pages are up:',
+    '',
+    `- Report: http://localhost:${servicePort}/report`,
+    `- API docs: 127.0.0.1:${servicePort}/docs`,
+    `- Locked page: http://localhost:${lockedPort}/`,
+    `- Not started yet: http://localhost:${deadPortFree}/`,
+    '',
+    'If the direct link fails: ssh -N -L 8080:localhost:8080 dev-box',
+    '',
+    'Background reading: https://example.com/pipelines',
+  ].join('\n')
+  await fs.writeFile(
+    path.join(jsonlDir, 'pw-service-session.jsonl'),
+    [
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'pw-service-session',
+        timestamp: new Date(sessionFixtureNow - 25_000).toISOString(),
+        message: { role: 'user', content: 'Start the report server so I can look' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'pw-service-session',
+        timestamp: new Date(sessionFixtureNow - 22_000).toISOString(),
+        message: { role: 'assistant', content: [{ type: 'text', text: reply }] },
+      }),
+      '',
+    ].join('\n'),
+  )
+}
+
 // Real Claude Code JSONL for pw-vscode-session, so its chat renders an assistant
 // message containing that absolute path — the clickable `a.file-link` the
 // file-view-history spec needs. HOME is the fixture tmpBase (set at the top), so
@@ -2091,6 +2184,19 @@ await fs.writeFile(
         messageCount: 1,
         cwd: vscodeFixtureRoot,
         title: 'Editor fixture session',
+      },
+      {
+        claudeSessionId: 'pw-service-session',
+        taskId: 'pw-task-service',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 20_000).toISOString(),
+        messageCount: 2,
+        cwd: serviceFixtureRoot,
+        title: 'Service preview fixture session',
       },
       {
         // The adopted ✦ search (search-ask-transcript.spec.ts). cwd is its own

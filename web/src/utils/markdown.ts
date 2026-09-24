@@ -1,6 +1,6 @@
 import { marked, Marked, type MarkedExtension, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
-import { trimUrlCjkTail } from './url-display';
+import { trimTrailingPunctuation, trimUrlCjkTail } from './url-display';
 // Relative import on purpose: the markdown test tier runs this file in a bare
 // node env where only marked/dompurify are aliased — `@/` may not resolve.
 // entity-label-store is dependency-free by contract.
@@ -220,6 +220,65 @@ const START_SCAN_WINDOW = 2048;
 // Slack so a match STARTING inside the window isn't cut mid-path by the slice.
 const START_SCAN_SLACK = 1024;
 const TASK_ID_TITLED_AT_START_RE = new RegExp(`^${TASK_ID_TITLED_RE.source}`);
+
+/**
+ * Bare loopback addresses become links: `localhost:8377`, `127.0.0.1:8000/x`,
+ * `0.0.0.0:5173`, `[::1]:3000`. Dev servers print them without a scheme and GFM
+ * only autolinks `http(s)://` and `www.`, so the address a session had just
+ * started stayed plain text. The result is an ordinary http:// link; the session
+ * panel decides at click time whether it opens in the Web view.
+ *
+ * A port is required (a bare "localhost" is a word), and the address must start
+ * a word: `8080:localhost:8080` (an ssh -L spec) and `ws://localhost:1` are left
+ * alone, as is `localhost:8080:host:80`. Code spans never reach inline
+ * extensions, and nothing links inside a link label (no nested anchors).
+ * Registered on BOTH Marked instances.
+ */
+const BARE_LOOPBACK_AT_START_RE = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):\d{2,5}(?!\d|:\S)(?:[/?#][^\s<>"'`]*)?/i;
+const BARE_LOOPBACK_SCAN_RE = /(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):\d/i;
+/** A char that glues the address to a longer token (scheme, ssh spec, path, word). */
+const BARE_LOOPBACK_GLUE_RE = /[\w:/.@\-[]/;
+export const bareLoopbackUrlExtension: NonNullable<MarkedExtension['extensions']>[number] = {
+  name: 'bareLoopbackUrl',
+  level: 'inline',
+  start(src: string) {
+    // Bounded window (see PERF note above).
+    const windowed = src.length > START_SCAN_WINDOW + START_SCAN_SLACK;
+    const hay = windowed ? src.slice(0, START_SCAN_WINDOW + START_SCAN_SLACK) : src;
+    if (hay.includes(':')) {
+      const idx = BARE_LOOPBACK_SCAN_RE.exec(hay)?.index;
+      if (idx !== undefined && (!windowed || idx < START_SCAN_WINDOW)) return idx;
+    }
+    return windowed ? START_SCAN_WINDOW : undefined;
+  },
+  tokenizer(src, tokens) {
+    if (this.lexer.state.inLink) return undefined;
+    const m = BARE_LOOPBACK_AT_START_RE.exec(src);
+    if (!m) return undefined;
+    const last = tokens[tokens.length - 1];
+    const prev = last ? last.raw.slice(-1) : '';
+    if (prev && BARE_LOOPBACK_GLUE_RE.test(prev)) return undefined;
+    // Trailing prose punctuation and emphasis markers (`**localhost:1/x**`)
+    // belong to the text around the address, as in marked's own backpedal.
+    let raw = trimUrlCjkTail(m[0]);
+    for (let prevRaw = ''; prevRaw !== raw;) {
+      prevRaw = raw;
+      raw = trimTrailingPunctuation(raw.replace(/[*_~'"]+$/, ''));
+    }
+    // A cut that reached back into the port leaves no address.
+    if (!/:\d{2,5}(?:[/?#]|$)/.test(raw)) return undefined;
+    return {
+      type: 'link',
+      raw,
+      href: `http://${raw}`,
+      title: null,
+      text: raw,
+      tokens: [{ type: 'text', raw, text: raw, escaped: false }],
+    };
+  },
+};
+
+marked.use({ extensions: [bareLoopbackUrlExtension] });
 
 // Image path patterns that should render as inline <img> tags:
 // 1. /api/images/<hash>.ext — uploaded images served by the app
@@ -1636,7 +1695,7 @@ noteMarked.use({
   // singleton (single source above) — this is a separate Marked instance, so it
   // needs its own registration.
   tokenizer: { ...doubleTildeDelTokenizer, ...cjkAwareUrlTokenizer },
-  extensions: [cjkStrongExtension],
+  extensions: [cjkStrongExtension, bareLoopbackUrlExtension],
   renderer: {
     html({ text }: { text: string }) {
       // Dropping a comment is not a hole in the escape below: a comment carries

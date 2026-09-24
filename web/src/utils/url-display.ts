@@ -71,7 +71,7 @@ export type TextToken =
  * bracket only counts as punctuation when it is unmatched inside the URL, so
  * `…/Foo_(bar)` keeps its paren while `(see …/a)` gives the `)` back to the text.
  */
-function trimTrailingPunctuation(url: string): string {
+export function trimTrailingPunctuation(url: string): string {
   let end = url.length;
   while (end > 0) {
     const ch = url[end - 1]!;

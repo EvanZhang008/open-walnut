@@ -25871,6 +25871,40 @@ a.file-link:hover {
 .session-code-error-body { font-size: 13px; color: var(--fg-muted); max-width: 480px; }
 .session-code-error-hint { font-size: 12px; color: var(--fg-muted); max-width: 480px; }
 
+/* Web preview (SessionWebView): the Code view's frame with an address bar. */
+.session-web-address-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-right: 8px;
+}
+.session-web-address {
+  flex: 1 1 auto;
+  min-width: 80px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-primary);
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-size: 12px;
+}
+.session-web-address:focus { outline: none; border-color: var(--accent); }
+.session-web-address-invalid,
+.session-web-address-invalid:focus { border-color: var(--danger, #d33); }
+.session-web-header .session-code-actions .session-code-btn:disabled { opacity: 0.5; cursor: default; }
+.session-web-iframe {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: none;
+  /* Pages assume a white canvas; the console theme must not show through. */
+  background: #fff;
+}
+
 /* ===== Plugin app page (/apps/:appId) ===== */
 /* Full-bleed: AppShell drops its gutter for /apps, so the iframe fills the
    content area. flex column + min-height:0 or the iframe collapses to zero. */
