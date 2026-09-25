@@ -23,6 +23,7 @@ import * as ICONS from '../common/Icons';
 import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NavigationHeading, NavigationSection, NavigationSections } from './NavigationSections';
+import { recentActivityTime, recentActivityTitle, type RecentSortMode } from './recent-activity-time';
 import type { ContextMenuItem } from '@/components/common/ContextMenu';
 import { TAB_BAR_HIDDEN_TABS_KEY, TASK_SHORTCUTS_KEY, useNavigationList, useNavigationPreference } from '@/hooks/useNavigationPreference';
 import { useSessionPanelsViewGroup } from './session-panels-view-group';
@@ -499,12 +500,8 @@ function persistTierViewModes(modes: Record<string, TierViewMode>) {
   try { localStorage.setItem(LS_TIER_VIEW_KEY, JSON.stringify(modes)); } catch { /* ignore */ }
 }
 
-/**
- * Recent tab sort mode — 'updated' (activity feed: latest of update/session/
- * completion, the historical behavior) or 'created' (pure creation time).
- * Sorting only; nothing is rewritten. 'walnut-todo-' prefix rides ui-prefs-sync.
- */
-type RecentSortMode = 'updated' | 'created';
+// Recent tab sort mode — see RecentSortMode in recent-activity-time.ts (the row's
+// time and the feed's sort share it). 'walnut-todo-' prefix rides ui-prefs-sync.
 const LS_RECENT_SORT_KEY = 'walnut-todo-recent-sort';
 
 function readRecentSortMode(): RecentSortMode {
@@ -2533,11 +2530,13 @@ interface RecentCardProps {
   onDelete?: (id: string) => void;
   /** Move this task to another project ('' = Inbox) — kebab "Project" select. */
   onMoveToProject?: (taskId: string, project: string) => void;
+  /** The feed's sort mode: the row shows the same clock the feed ranks by. */
+  timeMode: RecentSortMode;
 }
 
 // ── SortableRecentCard — draggable recent-activity card with kebab menu ──
 
-function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject }: RecentCardProps) {
+function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, timeMode }: RecentCardProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   // Static cards: done (tiers filter them out — a drag would silently vanish) and
@@ -2627,8 +2626,10 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
   // is not acting). The DOT follows the stored unread marker and clears on open.
   const needsAction = taskNeedsAction(task);
   const unread = !isDone && Boolean(task.unread);
-  // Done cards show completion time (that's what "recently completed" means here)
-  const ago = timeAgo((isDone && task.completed_at) || task.last_session_update || task.created_at);
+  // The row shows the clock the feed sorts by (latest of update / session /
+  // completion; creation in 'created' mode) — see recentActivityTime.
+  const activity = recentActivityTime(task, timeMode);
+  const ago = timeAgo(activity.at);
 
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -2705,7 +2706,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       </span>
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
-      {ago && <span className="todo-recent-ago" title={(isDone && task.completed_at) || task.last_session_update}>{ago}</span>}
+      {ago && <span className="todo-recent-ago" title={recentActivityTitle(activity)}>{ago}</span>}
       {/* One-click ▶ Start — hover-revealed, before the kebab */}
       <TaskStartButton task={task} isDone={isDone} onStartSession={onStartSession} />
       <TaskKebabMenu
@@ -3768,15 +3769,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // feeds the useRect #185 loop. Converges to live order on drop.
   const recentTasksLive = useMemo(() => {
     // 'updated': most recent of creation / any update / session activity /
-    // completion (the activity feed). 'created': pure creation time.
-    const recentTime = (t: Task) => {
-      let m = t.created_at ?? '';
-      if (recentSortMode === 'created') return m;
-      if (t.updated_at && t.updated_at > m) m = t.updated_at;
-      if (t.last_session_update && t.last_session_update > m) m = t.last_session_update;
-      if (t.completed_at && t.completed_at > m) m = t.completed_at;
-      return m;
-    };
+    // completion (the activity feed). 'created': pure creation time. The row's
+    // "3w ago" reads the same function, so what it says matches where it sits.
+    const recentTime = (t: Task) => recentActivityTime(t, recentSortMode).at;
     // Completed tasks join the feed DURING SEARCH (2026-08-26, user request —
     // a matching done task must be findable in Recent too); the everyday feed
     // keeps the "Show completed" gate (+ the completion-animation grace).
@@ -7853,6 +7848,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                         onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                         onDelete={onDelete}
+                        timeMode={recentSortMode}
                       />
                     ))}
                   </div>
