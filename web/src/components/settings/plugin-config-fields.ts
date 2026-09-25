@@ -17,6 +17,21 @@ export interface PluginFieldSchema {
   type?: string;
   default?: unknown;
   items?: { type?: string };
+  /** JSON Schema bounds for a number or integer. The input carries them and a save clamps to them. */
+  minimum?: number;
+  maximum?: number;
+  multipleOf?: number;
+}
+
+/** The `min` / `max` / `step` a numeric input gets. Absent bounds stay absent. */
+export function fieldBounds(schema: PluginFieldSchema | undefined): { min?: number; max?: number; step?: number } {
+  const kind = fieldKindFor(schema);
+  if (kind !== 'number' && kind !== 'integer') return {};
+  const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  const min = num(schema?.minimum);
+  const max = num(schema?.maximum);
+  const step = num(schema?.multipleOf) ?? (kind === 'integer' ? 1 : undefined);
+  return { ...(min !== undefined ? { min } : {}), ...(max !== undefined ? { max } : {}), ...(step !== undefined ? { step } : {}) };
 }
 
 export type PluginFieldKind = 'boolean' | 'text' | 'number' | 'integer' | 'list';
@@ -58,8 +73,18 @@ export function parseListText(text: string): string[] {
  * the final shape; only a list has a text form on screen and an array on disk.
  */
 export function valueForSave(schema: PluginFieldSchema | undefined, value: unknown): unknown {
-  if (fieldKindFor(schema) !== 'list') return value;
-  return typeof value === 'string' ? parseListText(value) : value;
+  const kind = fieldKindFor(schema);
+  if (kind === 'list') return typeof value === 'string' ? parseListText(value) : value;
+  // A declared bound is the author's rule, so a 5 typed into a min-15 field saves as 15:
+  // the same thing the plugin's own normalizer would do, done where the person can see it.
+  if ((kind === 'number' || kind === 'integer') && typeof value === 'number' && Number.isFinite(value)) {
+    const { min, max } = fieldBounds(schema);
+    let next = value;
+    if (min !== undefined && next < min) next = min;
+    if (max !== undefined && next > max) next = max;
+    return next;
+  }
+  return value;
 }
 
 /** `default: a, b` when the manifest names one, else how to type the list. */

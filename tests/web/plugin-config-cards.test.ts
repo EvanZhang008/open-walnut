@@ -20,6 +20,7 @@ import {
   listTextFor,
   parseListText,
   valueForSave,
+  fieldBounds,
   type PluginFieldSchema,
 } from '../../web/src/components/settings/plugin-config-fields'
 
@@ -104,6 +105,23 @@ describe('an integer field saves as a number', () => {
   it('passes the value through untouched — the control already produced a number', () => {
     expect(valueForSave({ type: 'integer' }, 10)).toBe(10)
     expect(valueForSave({ type: 'number' }, 2.5)).toBe(2.5)
+  })
+
+  it('clamps a number to the bounds the manifest declares, and only then', () => {
+    // A stand-up reminder field declares 15..240: a typed 5 saves as 15, a typed 500 as 240.
+    const bounded = { type: 'integer', minimum: 15, maximum: 240 }
+    expect(valueForSave(bounded, 5)).toBe(15)
+    expect(valueForSave(bounded, 500)).toBe(240)
+    expect(valueForSave(bounded, 60)).toBe(60)
+    expect(valueForSave({ type: 'integer' }, 5)).toBe(5)
+    expect(valueForSave(bounded, '')).toBe('')
+  })
+
+  it('hands the input the min, max and step the schema declares', () => {
+    expect(fieldBounds({ type: 'integer', minimum: 15, maximum: 240 })).toEqual({ min: 15, max: 240, step: 1 })
+    expect(fieldBounds({ type: 'number', multipleOf: 0.5 })).toEqual({ step: 0.5 })
+    expect(fieldBounds({ type: 'integer' })).toEqual({ step: 1 })
+    expect(fieldBounds({ type: 'string', minimum: 3 })).toEqual({})
     expect(valueForSave({ type: 'string' }, '08:30')).toBe('08:30')
     expect(valueForSave({ type: 'boolean' }, true)).toBe(true)
   })

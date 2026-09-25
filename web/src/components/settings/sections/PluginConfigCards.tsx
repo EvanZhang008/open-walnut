@@ -15,6 +15,7 @@ import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
 import { couldntSave } from '../inputs/useOptimisticSetting';
 import { saveErrorMessage } from '../settings-pane-context';
 import {
+  fieldBounds,
   fieldKindFor,
   fieldOwnerFor,
   listPlaceholder,
@@ -298,7 +299,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                         type={numeric ? 'number' : 'text'}
                         className={`settings-input ${numeric ? 'settings-input--number' : 'settings-input--long settings-input--mono'}`}
                         aria-invalid={isMissing || undefined}
-                        step={kind === 'integer' ? 1 : undefined}
+                        {...(numeric ? fieldBounds(schema) : {})}
                         value={(value as string | number) ?? ''}
                         onChange={e => setField(plugin.id, key,
                           numeric

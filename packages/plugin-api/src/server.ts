@@ -168,6 +168,76 @@ export interface NotificationService {
   readonly quiet: QuietService
 }
 
+// ── Presence and quiet events ──
+//
+// `walnut.events.on(name, handler)` delivers these to a server entry. They are what a
+// timer plugin (a stand-up reminder, a pomodoro) reads instead of polling the time
+// routes: the human's attention arrives as it is banked, and Walnut's quiet state
+// arrives as it changes. Names are stable; `event.data` has the shape named here.
+
+/**
+ * `'time:banked'`: attention the console (or the phone app) just recorded. Each record is a
+ * window the person was interacting, `ts` its ISO start. `kind` is `session`, `chat` or
+ * `triage`; `source` is absent for the browser and `ios` for the phone. Agent time never
+ * arrives here. Fired per heartbeat batch, roughly once a minute while someone is present.
+ */
+export interface TimeBankedEvent {
+  records: Array<{
+    ts: string
+    durationMs: number
+    kind: string
+    source?: string
+    taskId?: string
+    sessionId?: string
+  }>
+}
+
+/**
+ * `'time:outside'`: attention in another Mac app, from the optional frontmost-app sampler
+ * (off until the user turns it on in the Time App). Aggregated to at most one event per
+ * 30 seconds; a locked screen or an idle stretch never arrives.
+ */
+export interface TimeOutsideEvent {
+  ts: string
+  durationMs: number
+  bundleId?: string
+  idleSecs?: number
+}
+
+/** `'quiet:changed'`: the full QuietState, whenever any hold starts, changes or ends. */
+export type QuietChangedEvent = QuietState
+
+// ── Session hook contexts ──
+//
+// The shape `registry.hook` handlers receive for the turn points. Typed here so a plugin
+// that waits for a natural pause (a turn ending) does not have to sniff fields. Every
+// context carries the session; a turn end carries `result`, a failure carries `error`.
+
+export interface PluginSessionHookContext {
+  sessionId: string
+  taskId?: string
+  /** ISO time the hook fired. */
+  timestamp: string
+}
+
+/** `onTurnStart`: the first response after a send. */
+export interface PluginTurnStartContext extends PluginSessionHookContext {
+  turnIndex: number
+}
+
+/** `onTurnComplete`: the turn ended cleanly. `result` may be empty when the text is unknown. */
+export interface PluginTurnCompleteContext extends PluginSessionHookContext {
+  result: string
+  turnIndex: number
+  totalCost?: number
+  duration?: number
+}
+
+/** `onTurnError`: the turn failed. */
+export interface PluginTurnErrorContext extends PluginSessionHookContext {
+  error: string
+}
+
 /** One tappable decision on a letter. Buttons are what make a letter a question. */
 export interface LetterActionInput {
   id: string

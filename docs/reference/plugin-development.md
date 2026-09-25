@@ -395,7 +395,79 @@ export function activate(walnut: WalnutServerApi) {
 }
 ```
 
-The other points cover session start, message send, turn start, tool use and result, plan completion, mode change, turn completion and error, task created, updated, phase changed and completed, and cron fired. A handler can declare `priority`, a `timeoutMs` deadline, and a `filter` on modes, projects, phases, sources, or a predicate. One failing hook does not stop the others.
+The other points cover session start, message send, turn start, tool use and result, plan completion, mode change, turn completion and error, task created, updated, phase changed and completed, and cron fired. A handler can declare `priority`, a `timeoutMs` deadline, and a `filter` on modes, projects, phases, sources, or a predicate. One failing hook does not stop the others. The turn points hand the handler a `PluginTurnStartContext`, `PluginTurnCompleteContext` or `PluginTurnErrorContext`; every one carries `sessionId`, a completion carries `result`, a failure carries `error`.
+
+### Reminders, quiet mode and presence
+
+A plugin that interrupts the human on a schedule (a stand-up nudge, a pomodoro, a hydration reminder) needs four things the API provides, and needs nothing from Walnut's core. The bundled `plugin-store/walnut-rhythm` is the worked example.
+
+1. **Know when the human is there.** Subscribe to `time:banked` (attention the console or the phone just recorded, roughly once a minute while someone is present) and, when the user has turned on app sampling in the Time App, `time:outside` (attention in other Mac apps). Fold the records yourself: a gap longer than your threshold means the person was away.
+2. **Interrupt with a reminder, not a notice.** `notify({ kind: 'reminder' })` toasts for two minutes, chimes, raises a browser notification when the tab is hidden, and carries up to three buttons. Each button names one of YOUR ops by its local name; the host binds it to your plugin, so a click can never run someone else's op. Re-firing under the same `dedupKey` replaces the previous reminder, and `dismiss` retires it when it stops being true, so the feed never fills with stale copies.
+3. **Go quiet while the human focuses.** `notifications.quiet.set({ until, reason })` holds Walnut's quiet mode: every other producer's toasts, chimes, browser notifications and phone pushes wait, the feed still collects, and permission asks still show unless your hold says otherwise. One hold per plugin; `clear` releases it, and so does disabling or reloading the plugin. Read `quiet.get()` or subscribe to `quiet:changed` before you fire, because a reminder raised during quiet lands only in the feed.
+4. **Show progress without shouting.** A countdown belongs on the App's badge as `{ text: '24m' }`, which draws muted; a number would draw as a red count (see Badges).
+
+```ts compile=reminders
+import type {
+  PluginTurnCompleteContext, TimeBankedEvent, WalnutServerApi,
+} from '@open-walnut/plugin-api/server'
+
+const HOUR = 60 * 60_000
+const AWAY = 5 * 60_000
+
+export function activate(walnut: WalnutServerApi) {
+  let streakStart = 0
+  let lastSeen = 0
+  let turnsInFlight = 0
+
+  // 1. presence: a five-minute gap means the person stood up, so the streak restarts.
+  walnut.events.on('time:banked', (event) => {
+    for (const record of (event.data as TimeBankedEvent).records) {
+      const start = Date.parse(record.ts)
+      const end = start + record.durationMs
+      if (streakStart === 0 || start - lastSeen >= AWAY) streakStart = start
+      lastSeen = Math.max(lastSeen, end)
+    }
+  })
+
+  // Wait for a natural pause: a running agent turn is a bad moment to interrupt.
+  walnut.registry.hook({ id: 'turns', point: 'onTurnStart', handler: () => { turnsInFlight += 1 } })
+  walnut.registry.hook({
+    id: 'turn-ends', points: ['onTurnComplete', 'onTurnError'],
+    handler: (context) => {
+      turnsInFlight = Math.max(0, turnsInFlight - 1)
+      walnut.log.info('turn ended', { sessionId: (context as PluginTurnCompleteContext).sessionId })
+    },
+  })
+
+  // 2. the reminder, with buttons bound to this plugin's own ops.
+  walnut.registry.op({
+    name: 'snooze', title: 'Snooze', description: 'Put the reminder off by ten minutes.', readonly: false,
+    async handler() { streakStart = Date.now() - HOUR + 10 * 60_000; return { ok: true } },
+  })
+  walnut.timers.interval(async () => {
+    const quiet = await walnut.notifications.quiet.get()
+    if (quiet.active || turnsInFlight > 0 || streakStart === 0 || lastSeen - streakStart < HOUR) return
+    if (Date.now() - lastSeen >= AWAY) { await walnut.notifications.dismiss('stand-up'); return }
+    await walnut.notifications.notify({
+      kind: 'reminder',
+      title: 'Time to stand up',
+      body: 'An hour at the keyboard. Walk for a couple of minutes.',
+      dedupKey: 'stand-up',
+      actions: [{ label: 'Snooze 10 min', op: 'snooze' }],
+    })
+    streakStart = Date.now()
+  }, 30_000)
+
+  // 3. quiet while a focus block runs; the hold ends on its own at `until`.
+  walnut.registry.op({
+    name: 'focus', title: 'Start a focus block', description: 'Twenty-five quiet minutes.', readonly: false,
+    async handler() {
+      await walnut.notifications.quiet.set({ until: Date.now() + 25 * 60_000, reason: 'Focus block' })
+      return { ok: true }
+    },
+  })
+}
+```
 
 ## Storage and secrets
 
