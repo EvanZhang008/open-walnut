@@ -78,7 +78,7 @@ import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, getPluginLifecycleRecords, getPluginReloadIds, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, type ConnectionWatch } from '../core/plugin-sync-health.js'
@@ -133,6 +133,8 @@ import { incidentsRouter } from './routes/incidents.js'
 import { metricsRouter } from './routes/metrics.js'
 import { clientEvidenceRouter } from './routes/client-evidence.js'
 import { notificationsRouter } from './routes/notifications.js'
+import { quietRouter } from './routes/quiet.js'
+import { initQuiet, stopQuiet } from '../core/quiet/quiet-state.js'
 import { hooksRouter } from './routes/hooks.js'
 import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications } from '../core/notifications/store.js'
 import { createRecoveryTransitionTracker } from '../core/notifications/recovery-transition.js'
@@ -1568,6 +1570,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         return plugin
       } finally { startPluginSyncPolling() }
     }),
+    // Bundled store Remove: after `disable` above has turned it off, drop the record so
+    // the row reads available (the next boot leaves it there too, once config forgets it).
+    forgetBundled: (pluginId) => runPluginMutation(() => forgetBundledPlugin(registry, pluginId)),
     clearQuarantine: (pluginId) => runPluginMutation(async () => {
       await stopPluginSyncPolling(pluginId)
       try {
@@ -1696,6 +1701,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/metrics', metricsRouter)
   app.use('/api/client-evidence', clientEvidenceRouter)
   app.use('/api/notifications', notificationsRouter)
+  app.use('/api/quiet', quietRouter)
   app.use('/api/hooks', hooksRouter)
   // Deprecated alias — served from the unified hook registry (same shape as
   // the retired task-phase-hooks endpoint).
@@ -2033,6 +2039,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- Time tracking: agent-time collector (session:result) + rollup warm-up. --
   startTimeTracking()
+
+  // -- Quiet mode: load persisted holds (a restart mid-focus stays quiet) and arm
+  //    the expiry timer, so quiet:changed fires when a hold ends. Fire-and-forget:
+  //    the push gates await the same load on their own. --
+  void initQuiet()
 
   // -- Push notification service --
   initPushNotifications()
@@ -5407,6 +5418,7 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('embedding-sync')
   bus.unsubscribe('setup-health')
   stopTimeTracking()
+  stopQuiet()
   import('../core/overview-maintainer.js')
     .then(({ stopOverviewMaintainer }) => stopOverviewMaintainer())
     .catch(() => {})

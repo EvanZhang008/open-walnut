@@ -4,7 +4,7 @@ export interface Disposable {
   dispose(): void | Promise<void>
 }
 
-export type PluginAppBadge = number | 'dot' | null
+export type PluginAppBadge = number | 'dot' | null | { text: string }
 
 export interface PluginAppProps {
   basePath: string

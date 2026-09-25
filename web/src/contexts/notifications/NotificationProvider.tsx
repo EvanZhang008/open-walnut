@@ -8,7 +8,11 @@
  *   - dedup by dedupKey (replaces PermissionToast's seenRequestIds ref)
  *   - the persistent feed + unread count (loaded from /api/notifications, then
  *     appended to live via the same WS events)
- *   - browser Notifications when the tab is hidden (permission only)
+ *   - browser Notifications when the tab is hidden (permission + reminder)
+ *   - quiet mode: while the server holds quiet, nothing but a permission ask
+ *     (or an ephemeral feedback toast) toasts, chimes or raises a browser
+ *     notification (quiet-model.ts). The feed and badge keep counting: quiet
+ *     silences interruptions, it never loses them.
  *
  * Sources reach it two ways:
  *   - WS events subscribed here (cron, permission, audio-error)
@@ -31,6 +35,10 @@ import {
   TOAST_DURATION_MS, IS_PERSISTENT, MAX_FEED_BODY_CHARS, SHOULD_TOAST,
 } from './types';
 import { effectiveTs, attentionBadgeCount, actionOf } from './notification-model';
+import { wireActionsOf } from './notification-actions';
+import { useQuietState } from './quiet';
+import { quietAllowsToast, reminderSoundMuted, type QuietState } from './quiet-model';
+import { armChime, playChime } from '@/utils/chime';
 
 interface NotificationContextValue {
   /** Current top-right toast stack. */
@@ -81,6 +89,11 @@ interface NotificationContextValue {
    * is a no-op.
    */
   dismissFeed: (dedupKeys?: string[]) => void;
+  /** Mark specific entries read (server + local), by dedupKey. A reminder whose
+   *  button the human just pressed has been dealt with. */
+  markReadByKey: (dedupKeys: string[]) => void;
+  /** Quiet mode as the server reports it (NOT_QUIET until loaded). */
+  quiet: QuietState;
 }
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
@@ -133,6 +146,8 @@ export interface FeedRecord {
   /** operation-error only — the producer's own button ("Sign in" → the plugin's
    *  Settings row). Wins over the default "Go to Session" link. */
   action?: { label: string; to: string };
+  /** The record's buttons (plugin reminders). Unknown shapes are dropped by wireActionsOf. */
+  actions?: unknown;
 }
 
 /** Copy the enrichment fields off a wire record, omitting absent ones so a
@@ -155,6 +170,7 @@ function enrichmentOf(r: FeedRecord): Partial<Notification> {
     ...(r.fix ? { fix: r.fix } : {}),
     ...(typeof r.count === 'number' ? { count: r.count } : {}),
     ...(typeof r.lastTimestamp === 'number' ? { lastTimestamp: r.lastTimestamp } : {}),
+    ...(wireActionsOf(r.actions).length > 0 ? { actions: wireActionsOf(r.actions) } : {}),
   };
 }
 
@@ -162,6 +178,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Notification[]>([]);
   const [feed, setFeed] = useState<Notification[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // Read through a ref inside notify(): depending on it would rebuild notify (and
+  // the whole context value) on every quiet change.
+  const quiet = useQuietState();
+  const quietRef = useRef(quiet);
+  quietRef.current = quiet;
 
   // Latest feed, for callbacks that need a SNAPSHOT rather than a dependency.
   // dismissFeed's clear-all path is the only such reader: depending on `feed`
@@ -239,6 +260,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (causeKey && Date.now() - (causeToastAt.current.get(causeKey) ?? 0) < CAUSE_TOAST_THROTTLE_MS) {
       shouldToast = false;
     }
+    // Quiet mode demotes every toast to feed-only, except a permission ask while
+    // the holds allow them (an agent is blocked on it).
+    const quietAllows = quietAllowsToast(quietRef.current, input.kind);
+    if (!quietAllows) shouldToast = false;
 
     // Toast-level dedup: don't re-show the same dedupKey while it's live. Only
     // toastable inputs consult/claim the key — a feed-only entry has no toast
@@ -261,6 +286,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     };
 
     if (shouldToast) setToasts(prev => [...prev, notification]);
+    // Once per COMMITTED reminder toast: never for a feed-only entry, a deduped
+    // repeat, or an update (those never reach this line with shouldToast set).
+    if (shouldToast && input.kind === 'reminder' && !reminderSoundMuted()) playChime('reminder');
 
     // Append persistent notifications to the local feed. Note the asymmetry:
     // cron/permission/server-side operation-error (the log.error bridge) are
@@ -284,8 +312,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       timers.current.set(id, timer);
     }
 
-    // Browser notification when the tab is hidden (permission only).
-    if (input.browserNotify && typeof document !== 'undefined' && document.hidden
+    // Browser notification when the tab is hidden (permission + reminder), and
+    // never during quiet unless it is an allowed permission ask.
+    if (input.browserNotify && quietAllows && typeof document !== 'undefined' && document.hidden
         && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       try {
         new Notification(input.title, { body: input.body, tag: input.dedupKey });
@@ -492,8 +521,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       ...(r.taskId ? { taskId: r.taskId } : {}),
       ...(r.resolved ? { resolved: r.resolved } : {}),
       ...enrichmentOf(r),
-      // Permissions are the one kind worth waking a hidden tab for.
-      ...(kind === 'permission' ? { browserNotify: true } : {}),
+      // Permissions and reminders are the kinds worth waking a hidden tab for
+      // (a reminder is SENT to interrupt; notify() still holds it back in quiet).
+      ...(kind === 'permission' || kind === 'reminder' ? { browserNotify: true } : {}),
       ...(actionOf(r) ? { action: actionOf(r) } : {}),
     });
   });
@@ -550,6 +580,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       : [...prev, patch()]));
   });
 
+  // ── WS source: a producer removed its own record (plugin notifications.dismiss,
+  // or a reminder re-fire replacing the previous one). Drops the feed entry AND
+  // any live toast; the dismissal guard stops a slow initial GET resurrecting it,
+  // and the next notification:new for the key clears the guard again.
+  useEvent('notification:removed', (data) => {
+    const { dedupKey } = (data ?? {}) as { dedupKey?: string };
+    if (!dedupKey) return;
+    dismissedKeys.current.add(dedupKey);
+    dismissToastByDedup(dedupKey);
+    setFeed(prev => (prev.some(f => f.dedupKey === dedupKey) ? prev.filter(f => f.dedupKey !== dedupKey) : prev));
+  });
+
   // Dismiss the permission toast once it's resolved (the feed entry stays).
   // dismissToastByDedup also frees the `perm:<requestId>` dedupKey, so a LATER
   // request reusing the same requestId can toast again. (The CLI's 60s re-ask of
@@ -599,20 +641,33 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // message) plus a local API-failure path with no WS event. The Sidebar mirrors
   // its `lastError` into notify() via an effect — see Sidebar.tsx.
 
+  // A reminder chime arrives outside any gesture; unlock audio on the first one.
+  useEffect(() => armChime(), []);
+
   // Clear all pending timers on unmount.
   useEffect(() => {
     const map = timers.current;
     return () => { for (const t of map.values()) clearTimeout(t); map.clear(); };
   }, []);
 
+  const markReadByKey = useCallback((dedupKeys: string[]) => {
+    if (dedupKeys.length === 0) return;
+    markLocalRead(dedupKeys, true);
+    fetch('/api/notifications/mark-read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dedupKeys }),
+    }).catch(err => log.warn('notifications', 'mark-read by key failed', { error: String(err) }));
+  }, [markLocalRead]);
+
   const unreadCount = useMemo(() => feed.filter(f => !f.read).length, [feed]);
   const attentionCount = useMemo(() => attentionBadgeCount(feed), [feed]);
 
   const value = useMemo<NotificationContextValue>(() => ({
     toasts, feed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,
-    markLocalRead, dismissFeed,
+    markLocalRead, dismissFeed, markReadByKey, quiet,
   }), [toasts, feed, loaded, unreadCount, attentionCount, notify, dismissToast, pinToast, markAllRead,
-    markLocalRead, dismissFeed]);
+    markLocalRead, dismissFeed, markReadByKey, quiet]);
 
   return (
     <NotificationContext.Provider value={value}>

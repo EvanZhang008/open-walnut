@@ -15,7 +15,9 @@
  * on this machine and only need turning on; `git`/`npm` entries prefill the existing
  * install form (which still demands the per-install trust tick); `example` entries
  * live in this checkout and are installed with `walnut-plugin link`, so they get the
- * command and a docs link instead of a button that would not work.
+ * command and a docs link instead of a button that would not work. `bundled` entries
+ * ship inside this build's `plugin-store/` folder and are synthesised from it (see
+ * bundled-store.ts): one Install writes `plugins.<id>.enabled: true` and loads them live.
  *
  * Anything DISCOVERED but absent from the catalog still appears — the catalog is a
  * curated addition to the truth on disk, never a filter on it.
@@ -25,6 +27,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { overlayBundledCatalog, resolveBundledStoreDir, scanBundledStore } from './bundled-store.js'
 import type { LinkedCheckoutInfo } from './linked-checkout.js'
 import type { MissingDependency } from './plugin-manager.js'
 import { satisfiesDependencyRange } from './semver.js'
@@ -39,7 +42,7 @@ import { satisfiesDependencyRange } from './semver.js'
  * (copied there by hand). Nothing can check or update a `local` row, and saying `git`
  * about it (the old default) made the console draw an update chip that could never answer.
  */
-export type PluginCatalogSourceKind = 'builtin' | 'git' | 'npm' | 'example' | 'linked' | 'local'
+export type PluginCatalogSourceKind = 'builtin' | 'git' | 'npm' | 'example' | 'bundled' | 'linked' | 'local'
 
 export interface PluginCatalogSource {
   kind: PluginCatalogSourceKind
@@ -50,6 +53,7 @@ export interface PluginCatalogSource {
   /** npm: `name`, `name@1.2.3` or `@scope/name`. */
   spec?: string
   /** example: repo-relative directory to `walnut-plugin link`.
+   *  bundled: repo-relative `plugin-store/<id>` (the build ships it as `dist/plugin-store/<id>`).
    *  linked: the absolute plugin directory the link points at. */
   path?: string
   /** linked: root of the git work tree that holds the plugin directory. */
@@ -68,6 +72,8 @@ export interface PluginCatalogEntry {
   id: string
   name: string
   description?: string
+  /** The manifest version, for a `bundled` entry the catalog read off disk. */
+  version?: string
   /** Plain words for what installing this adds ("App", "Agent tools", "Task sync"). */
   adds?: string[]
   source: PluginCatalogSource
@@ -151,8 +157,9 @@ export interface InstalledPluginFacts {
   configurable?: boolean
   /** The plugin-source slug that installed it (external sources only). */
   sourceSlug?: string
-  /** git / npm, for an externally-sourced plugin. */
-  sourceKind?: 'git' | 'npm'
+  /** git / npm, for an externally-sourced plugin; `bundled` for one loaded from the
+   *  bundled store folder (its row offers Remove, which takes it back to available). */
+  sourceKind?: 'git' | 'npm' | 'bundled'
   /** Present when this plugin is a `walnut-plugin link` into a git work tree. */
   linked?: LinkedCheckoutInfo
   /** The linked scan ran out of budget before it reached this plugin: "not scanned", not "not linked". */
@@ -388,9 +395,12 @@ export function mergePluginRegistry(
         ...(plugin.linked.remote ? { remote: plugin.linked.remote } : {}),
         dirty: plugin.linked.dirty,
       }
-      : plugin.sourceKind
-        ? { kind: plugin.sourceKind }
-        : { kind: plugin.builtin ? 'builtin' : 'local' }
+      : plugin.sourceKind === 'bundled'
+        // Keeps the folder path from the catalog, so the row can say where it ships from.
+        ? { kind: 'bundled', ...(entry?.source.kind === 'bundled' && entry.source.path ? { path: entry.source.path } : {}) }
+        : plugin.sourceKind
+          ? { kind: plugin.sourceKind }
+          : { kind: plugin.builtin ? 'builtin' : 'local' }
     // A blocked row already names what it is missing; the plan says what can be DONE
     // about it, which is the difference between a dead end and a button.
     const plan = status === 'needs-dependency'
@@ -469,6 +479,7 @@ export function mergePluginRegistry(
       source: entry.source,
       installed: false,
       status: 'available',
+      ...(entry.version ? { version: entry.version } : {}),
       builtin: entry.source.kind === 'builtin',
       ...(plan.length ? { dependencyPlan: plan } : {}),
       ...(blockedBy.length ? { blockedBy } : {}),
@@ -514,7 +525,7 @@ export function parsePluginCatalog(raw: unknown): PluginCatalogEntry[] {
     const rawSource = (entry.source && typeof entry.source === 'object' ? entry.source : {}) as Record<string, unknown>
     const kind = rawSource.kind
     const source: PluginCatalogSource = {
-      kind: kind === 'builtin' || kind === 'git' || kind === 'npm' || kind === 'example' ? kind : 'git',
+      kind: kind === 'builtin' || kind === 'git' || kind === 'npm' || kind === 'example' || kind === 'bundled' ? kind : 'git',
       ...(typeof rawSource.url === 'string' ? { url: rawSource.url } : {}),
       ...(typeof rawSource.ref === 'string' ? { ref: rawSource.ref } : {}),
       ...(typeof rawSource.spec === 'string' ? { spec: rawSource.spec } : {}),
@@ -524,6 +535,7 @@ export function parsePluginCatalog(raw: unknown): PluginCatalogEntry[] {
       id,
       name: typeof entry.name === 'string' && entry.name ? entry.name : id,
       ...(typeof entry.description === 'string' ? { description: entry.description } : {}),
+      ...(typeof entry.version === 'string' && entry.version ? { version: entry.version } : {}),
       ...(Array.isArray(entry.adds)
         ? { adds: entry.adds.filter((value): value is string => typeof value === 'string') }
         : {}),
@@ -574,14 +586,22 @@ async function readCatalogFile(file: string): Promise<PluginCatalogEntry[]> {
 }
 
 /**
- * Shipped catalog + the user's overlay. Read on every call: the file is a couple of
- * kilobytes, and a cache here would mean editing the overlay does nothing until a
- * restart — exactly the kind of stale-truth bug this repo keeps paying for.
+ * Bundled store scan < shipped catalog < the user's overlay. Read on every call: the
+ * files are a couple of kilobytes, and a cache here would mean editing the overlay (or
+ * dropping a folder into the store) does nothing until a restart: exactly the kind of
+ * stale-truth bug this repo keeps paying for.
+ *
+ * `bundledStoreDir`: undefined resolves this build's store, null skips it (tests).
  */
-export async function loadPluginCatalog(walnutHome?: string): Promise<PluginCatalogEntry[]> {
-  const shipped = await readCatalogFile(shippedCatalogFile())
-  const user = walnutHome
-    ? await readCatalogFile(path.join(walnutHome, 'plugin-registry.json'))
-    : []
-  return overlayPluginCatalog(shipped, user)
+export async function loadPluginCatalog(
+  walnutHome?: string,
+  opts: { bundledStoreDir?: string | null } = {},
+): Promise<PluginCatalogEntry[]> {
+  const storeDir = opts.bundledStoreDir === undefined ? await resolveBundledStoreDir() : opts.bundledStoreDir
+  const [bundled, shipped, user] = await Promise.all([
+    scanBundledStore(storeDir).catch(() => []),
+    readCatalogFile(shippedCatalogFile()),
+    walnutHome ? readCatalogFile(path.join(walnutHome, 'plugin-registry.json')) : Promise.resolve([]),
+  ])
+  return overlayBundledCatalog(bundled, overlayPluginCatalog(shipped, user))
 }

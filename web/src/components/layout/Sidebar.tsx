@@ -14,7 +14,8 @@ import {
   updateAppPlacement,
 } from '@/apps/store';
 import type { RegisteredApp } from '@/apps/registry';
-import { useNotifications } from '@/contexts/notifications';
+import { useNotifications, effectiveQuiet, quietLabel } from '@/contexts/notifications';
+import '@/styles/notification-quiet.css';
 import { NotificationPanel } from '@/components/common/NotificationPanel';
 import { VoicePanel } from '@/components/common/VoicePanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
@@ -56,7 +57,8 @@ export function Sidebar({
   // "Open Link in New Tab" is not what right-clicking an app icon is for.
   const appMenu = useContextMenu<RegisteredApp>({ overrideLinks: true });
   const audio = useAudioCapture();
-  const { notify, attentionCount } = useNotifications();
+  const { notify, attentionCount, quiet } = useNotifications();
+  const quietNow = effectiveQuiet(quiet).active;
   const [notifOpen, setNotifOpen] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
   // Live voice status (transcribing spinner / failure dot) from any MicButton.
@@ -295,6 +297,9 @@ export function Sidebar({
                 <span className="notification-badge-dot" />
               ) : typeof app.badge === 'number' && app.badge > 0 ? (
                 <span className="notification-badge-count">{app.badge > 99 ? '99+' : app.badge}</span>
+              ) : app.badge && typeof app.badge === 'object' ? (
+                // A status, not a count: muted so it never reads as things to deal with.
+                <span className="notification-badge-count notification-badge-muted" data-testid={`sidebar-app-badge-${app.key}`}>{app.badge.text}</span>
               ) : null}
             </NavLink>
           );
@@ -330,10 +335,14 @@ export function Sidebar({
         <button
           className="sidebar-link sidebar-notification-btn"
           onClick={() => setNotifOpen(!notifOpen)}
-          title={collapsed ? 'Notifications' : undefined}
+          // Quiet mode: the one visible trace is a moon on the bell and a
+          // tooltip naming who holds quiet; the badge keeps counting as usual.
+          title={quietNow ? quietLabel(quiet) : collapsed ? 'Notifications' : undefined}
           aria-label="Notifications"
+          {...(quietNow ? { 'data-quiet': 'true' } : {})}
         >
           <BellIcon />
+          {quietNow && <span className="quiet-moon" aria-hidden="true">☾</span>}
           <span className="sidebar-label">Notifications</span>
           {/* Amber count = things waiting on the human (asks + unread letters).
               Errors never badge a number — they read as a diagnosis inside the

@@ -42,6 +42,9 @@ export interface PluginDefinition {
   id: string
   name: string
   builtin?: boolean
+  /** Loaded from the bundled `plugin-store/` folder: ships with Walnut, installed by the
+   *  user. Not builtin (Safe Mode turns it off, its engines range is enforced strictly). */
+  bundled?: boolean
   enabled?: boolean
   missingConfig?: string[]
   missingDependencies?: MissingDependency[]
@@ -59,6 +62,8 @@ export interface PluginLifecycleRecord {
   name: string
   state: PluginLifecycleState
   builtin: boolean
+  /** Present (true) only for a plugin loaded from the bundled store folder. */
+  bundled?: true
   failureCount: number
   missingConfig?: string[]
   missingDependencies?: MissingDependency[]
@@ -733,6 +738,7 @@ export class PluginManager implements Disposable {
       name: plugin.definition.name,
       state: plugin.state,
       builtin: plugin.definition.builtin ?? false,
+      ...(plugin.definition.bundled ? { bundled: true as const } : {}),
       failureCount: plugin.failureCount,
       ...(plugin.definition.missingConfig?.length ? { missingConfig: [...plugin.definition.missingConfig] } : {}),
       ...(plugin.missingDependencies?.length

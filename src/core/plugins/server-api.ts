@@ -30,6 +30,7 @@ import {
 } from './service-registry.js'
 import { clearSkillsCache } from '../skill-loader.js'
 import { toDisposable, type Disposable } from './disposable.js'
+import { createPluginNotifications } from './plugin-notifications.js'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
 import type { HumanInboxAnsweredEvent } from '../event-types.js'
 import { getConfig, updatePluginConfig } from '../config-manager.js'
@@ -310,11 +311,6 @@ function normalizeCustomEventName(pluginId: string, name: string): string {
   return `plugin:${pluginId}:${name}`
 }
 
-function namespacedDedup(pluginId: string, key: string): string {
-  if (!key.trim() || key.length > 160) throw new Error('Plugin notification dedupKey must be 1-160 characters')
-  return `plugin:${pluginId}:${key}`
-}
-
 function publicFetchResponse(response: Response) {
   return {
     ok: response.ok,
@@ -565,40 +561,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       },
     },
 
-    notifications: {
-      async notify(notice: { title: string; body?: string; severity?: 'info' | 'success' | 'warning' | 'error'; dedupKey: string; taskId?: string; sessionId?: string }) {
-        const { addNotification } = await import('../notifications/store.js')
-        const record = await addNotification({
-          kind: 'skill',
-          severity: notice.severity ?? 'info',
-          title: notice.title,
-          body: notice.body,
-          dedupKey: namespacedDedup(pluginId, notice.dedupKey),
-          taskId: notice.taskId,
-          sessionId: notice.sessionId,
-        })
-        bus.emit('notification:new', record, ['web-ui'], { source: `plugin/${pluginId}` })
-      },
-      async error(notice: { title: string; body?: string; severity?: 'info' | 'success' | 'warning' | 'error'; dedupKey: string; taskId?: string; sessionId?: string }) {
-        const { upsertNotification } = await import('../notifications/store.js')
-        const { record, outcome } = await upsertNotification({
-          kind: 'operation-error',
-          severity: notice.severity ?? 'error',
-          title: notice.title,
-          body: notice.body,
-          dedupKey: namespacedDedup(pluginId, notice.dedupKey),
-          recoveryKey: `plugin:${pluginId}`,
-          taskId: notice.taskId,
-          sessionId: notice.sessionId,
-        })
-        bus.emit(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record, ['web-ui'], { source: `plugin/${pluginId}` })
-      },
-      async recover() {
-        const { recoverNotifications } = await import('../notifications/store.js')
-        const { recovered } = await recoverNotifications([`plugin:${pluginId}`])
-        for (const record of recovered) bus.emit('notification:updated', record, ['web-ui'], { source: `plugin/${pluginId}` })
-      },
-    },
+    notifications: createPluginNotifications({ pluginId, own, assertLive }),
 
     /**
      * Letters: ask the ONE human a question, wherever they are, and hear the answer back.

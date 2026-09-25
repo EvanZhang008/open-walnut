@@ -26,6 +26,7 @@ import { getConfig, updatePushTokens } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import type { PushTokenEntry } from '../types.js'
 import { sendApns, type ApnsTarget } from './apns.js'
+import { getQuiet, logQuietSkipOnce, quietSuppresses } from '../quiet/quiet-state.js'
 import { apnsPayload, tokenKind, type PushContent } from './send.js'
 import {
   ACTIVE_LEASE_MS,
@@ -186,6 +187,20 @@ async function attemptLetterPush(
     else log.notif.info('letter push', fields)
     mark()
     return outcome
+  }
+
+  // Quiet mode. An `action_required` letter is the permission-style ask (someone
+  // is blocked on the human's decision, the same reason it gets priority 10
+  // below), so it still pushes while the holds allow permissions. The summary
+  // line below stays per letter, as this file promises; logQuietSkipOnce adds
+  // the one "push is quiet because of these holds" line.
+  const quiet = await getQuiet()
+  if (quietSuppresses(quiet, { permission: letter.type === 'action_required' })) {
+    logQuietSkipOnce('letter-push', quiet)
+    return finish({
+      attempted: false, sent: 0, failed: 0, suppressed: 0,
+      reason: 'quiet mode is on',
+    })
   }
 
   let tokens: PushTokenEntry[] = []

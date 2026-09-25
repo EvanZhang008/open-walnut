@@ -24,6 +24,7 @@ import {
 import { log } from '../../logging/index.js';
 import { localDateKey } from './rollup.js';
 import { recordOutside, type OutsideRecord } from './outside-store.js';
+import { noteOutsideAttention, resetPresenceEvents } from './presence-events.js';
 
 /** Bumped when src/data/walnut-activity.swift changes, so an upgraded machine
  *  can never keep running the old cached binary.
@@ -315,6 +316,7 @@ export function stopOutsideCollector(): void {
   prevAcceptedAtMs = null;
   stdoutBuffer = '';
   backoffMs = BACKOFF_START_MS;
+  resetPresenceEvents();
   if (!proc) return;
   proc.removeAllListeners();
   proc.stderr?.removeAllListeners();
@@ -435,7 +437,16 @@ function handleLine(line: string): void {
   const { durationMs, nextPrev } = decideSample(sample, prevAcceptedAtMs, now);
   prevAcceptedAtMs = nextPrev;
   if (durationMs <= 0) return;
-  void recordOutside([sampleToRecord(sample, durationMs, new Date(now))]);
+  const record = sampleToRecord(sample, durationMs, new Date(now));
+  void recordOutside([record]);
+  // Presence for plugins (throttled there): only banked attention reaches it, so
+  // locked / idle / away samples are already excluded by decideSample above.
+  noteOutsideAttention({
+    ts: record.ts,
+    durationMs,
+    ...(sample.bundleId ? { bundleId: sample.bundleId } : {}),
+    ...(typeof sample.idleSecs === 'number' ? { idleSecs: sample.idleSecs } : {}),
+  });
 }
 
 /** Tests only: drop the compile cache and the once-per-condition log guards. */

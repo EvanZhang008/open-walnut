@@ -22,7 +22,8 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import '@/styles/settings-sections-addons.css';
 
 export interface DependencySource {
-  kind: 'builtin' | 'git' | 'npm' | 'example';
+  /** `bundled`: ships in this build's plugin-store folder; its Install is one click. */
+  kind: 'builtin' | 'git' | 'npm' | 'example' | 'bundled';
   url?: string;
   ref?: string;
   spec?: string;

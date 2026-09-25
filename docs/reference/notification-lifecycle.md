@@ -65,6 +65,14 @@ Where the session runs depends on how Walnut was installed (`src/core/self-repai
 
 The button is hidden when `GET /api/config` reports `selfRepair.available: false` (replica, no `git` on PATH, or `~/open-walnut` exists but is not a Walnut checkout; `selfRepair.reason` says which).
 
+## Reminders, buttons and quiet mode
+
+A `reminder` is a plugin's timed prompt (a stand-up nudge, a focus block ending). It is persistent, it toasts for 120s (one of its buttons or the × closes it sooner), it plays a short WebAudio chime once per committed toast (`localStorage['open-walnut-reminder-sound'] = 'off'` mutes it), and it raises a browser notification when the tab is hidden. A reminder re-fired under the same dedupKey REPLACES the old record (`replaceNotification`, broadcast as `notification:removed` then `notification:new`), so a recurring prompt alerts again. `walnut.notifications.dismiss(key)` removes the plugin's own record and broadcasts `notification:removed`.
+
+A record may carry `actions`: up to three buttons, primary first. When present they win over the older single `action`. A `{ kind: 'op', pluginId, op, args }` button POSTs `args` to `/api/plugin-runtime/<pluginId>/ops/<op>`. On success the toast closes and the record is marked read. On failure the toast stays and shows the error inline. The plugin API builds `pluginId` and the op name itself (`pluginOpName`), so a notice can only run its own plugin's ops.
+
+Quiet mode (`src/core/quiet/quiet-state.ts`, `GET`/`PUT /api/quiet`, persisted to `quiet.json`, which git-sync ignores) is a set of holds, one per source (`user`, `plugin:<id>`). While any hold is live, no toast, chime, browser notification or push goes out. The feed and the badge still count. Permission asks are the exception while `allowPermissions` is true (the default): an agent is blocked on them. Ephemeral toasts (a sort hint, a voice-capture error) also still show: they answer the human's own action and have no feed copy to fall back on. `action_required` letters are the push-side equivalent. `quiet:changed` carries the state to the web and to plugins.
+
 ## Where things live
 
 - Repair: `src/core/self-repair/` (source resolution + clone, briefing text),

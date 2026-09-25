@@ -4,7 +4,7 @@ import { wsClient } from '@/api/ws'
 import { getAppInfo } from '@/utils/app-info'
 import { log } from '@/utils/log'
 import { disposable, type WebPluginContext } from './disposable'
-import { APP_PLACEMENTS, appRegistry, type AppBadge, type AppContribution } from '@/apps/registry'
+import { APP_PLACEMENTS, appRegistry, assertBadge, type AppBadge, type AppContribution } from '@/apps/registry'
 import { pluginUiRegistry } from './registry'
 import { createPluginViews } from './views'
 import type {
@@ -94,9 +94,11 @@ function validateComponent(component: unknown): void {
 }
 
 function validateAppBadge(badge: AppBadge | undefined): void {
-  if (badge === undefined || badge === null || badge === 'dot') return
-  if (!Number.isInteger(badge) || badge < 0) {
-    throw new Error('Plugin App badge must be a non-negative integer, dot, or null')
+  if (badge === undefined) return
+  // Same rule as the registry's own setBadge, so a bad initial badge fails here
+  // with the plugin's name instead of later with a bare registry error.
+  try { assertBadge(badge) } catch (error) {
+    throw new Error(`Plugin ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 

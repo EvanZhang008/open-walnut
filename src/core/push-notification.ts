@@ -14,6 +14,7 @@ import { getConfig } from './config-manager.js'
 import { clientCount } from '../web/ws/handler.js'
 import { log } from '../logging/index.js'
 import type { PushTokenEntry } from './types.js'
+import { getQuiet, logQuietSkipOnce, quietSuppresses } from './quiet/quiet-state.js'
 
 // Expo push message format (inline — no need for expo-server-sdk dependency for MVP)
 interface ExpoPushMessage {
@@ -104,6 +105,13 @@ async function maybePush(title: string, body: string, data?: Record<string, unkn
   // A cloud box's own `push_tokens` rows are therefore not its to send from —
   // any it still carries are orphans from before that relay existed.
   if (CLOUD_MODE) return
+  // Quiet mode (do not disturb): none of these pushes is a permission ask, so a
+  // live hold silences all of them. Logged once per hold, not per event.
+  const quiet = await getQuiet()
+  if (quietSuppresses(quiet)) {
+    logQuietSkipOnce('push', quiet)
+    return
+  }
   // Skip if there are active WebSocket clients (user is viewing)
   if (clientCount() > 0) {
     log.web.debug('push: skipped (WS clients connected)', { title, clients: clientCount() })

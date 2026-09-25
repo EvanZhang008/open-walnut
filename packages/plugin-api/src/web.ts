@@ -5,7 +5,13 @@ import type { Disposable, PluginLogger, TaskPhase, TaskPriority } from './shared
 import type { EventApi, OpsService, PluginFetchInit, PluginFetchResponse } from './server.js'
 
 export type PluginComponent<Props = Record<string, never>> = ComponentType<Props>
-export type AppBadge = number | 'dot' | null
+/**
+ * What the App's row shows beside its title. A number is a COUNT and draws red, like
+ * unread mail. `{ text }` is a short status that is not a count (a countdown, a mode)
+ * and draws muted, so a "25" for minutes left never reads as 25 things to deal with.
+ * Text is 1 to 6 characters.
+ */
+export type AppBadge = number | 'dot' | null | { text: string }
 
 export interface AppProps {
   basePath: string

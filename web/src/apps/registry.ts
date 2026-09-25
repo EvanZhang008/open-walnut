@@ -2,7 +2,9 @@ import type { ComponentType } from 'react'
 import type { PluginApp } from '@/api/apps'
 import { disposable } from '@/plugins/disposable'
 
-export type AppBadge = number | 'dot' | null
+/** A number is a count (red); `{ text }` is a short muted status such as a countdown. */
+export type AppBadge = number | 'dot' | null | { text: string }
+export const APP_BADGE_TEXT_MAX = 6
 export type AppKind = 'core' | 'native' | 'webview'
 
 /**
@@ -109,10 +111,17 @@ function pluginRouteId(pluginId: string, localId: string): string {
   return `${pluginId}~${localId}`
 }
 
-function assertBadge(value: AppBadge): void {
+export function assertBadge(value: AppBadge): void {
   if (value === null || value === 'dot') return
+  if (typeof value === 'object') {
+    const text = typeof value.text === 'string' ? value.text.trim() : ''
+    if (!text || text.length > APP_BADGE_TEXT_MAX) {
+      throw new Error(`App badge text must be 1 to ${APP_BADGE_TEXT_MAX} characters`)
+    }
+    return
+  }
   if (!Number.isInteger(value) || value < 0) {
-    throw new Error('App badge must be a non-negative integer, dot, or null')
+    throw new Error('App badge must be a non-negative integer, dot, text, or null')
   }
 }
 

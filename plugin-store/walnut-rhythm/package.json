@@ -1,0 +1,29 @@
+{
+  "name": "walnut-rhythm-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "files": [
+    "manifest.json",
+    "dist",
+    "skills",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "walnut-plugin build",
+    "dev": "walnut-plugin dev",
+    "publish-check": "walnut-plugin publish-check",
+    "test": "walnut-plugin test",
+    "plugin:test": "cd ../.. && npx vitest run --config vitest.focus.config.ts tests/plugins/walnut-rhythm",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "validate": "walnut-plugin validate"
+  },
+  "devDependencies": {
+    "@open-walnut/plugin-api": "0.1.0",
+    "@open-walnut/plugin-cli": "0.1.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "^5.8.0"
+  }
+}

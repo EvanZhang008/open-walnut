@@ -1,0 +1,51 @@
+{
+  "id": "walnut-rhythm",
+  "name": "Rhythm",
+  "description": "Focus blocks and movement breaks: a stand-up reminder that knows when you are at the keyboard, a pomodoro tied to a task, and quiet mode while you focus.",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.4.0"
+  },
+  "server": "dist/server.mjs",
+  "web": "dist/web.mjs",
+  "build": {
+    "server": "src/server.ts",
+    "web": "src/web.tsx"
+  },
+  "catalog": {
+    "adds": ["App", "Agent tools", "Skill"],
+    "docs": "plugin-store/walnut-rhythm/README.md"
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "reminder_every_minutes": { "type": "integer", "default": 60, "minimum": 15, "maximum": 240, "description": "Minutes of continuous keyboard time before the stand-up reminder" },
+      "away_reset_minutes": { "type": "integer", "default": 5, "minimum": 2, "maximum": 60, "description": "A gap this long with no attention counts as having moved, and the sitting streak starts over" },
+      "snooze_minutes": { "type": "integer", "default": 10, "minimum": 1, "maximum": 120, "description": "How long Snooze on the stand-up reminder waits" },
+      "quiet_hours": { "type": "string", "default": "22:00-08:00", "description": "Local HH:MM-HH:MM window with no stand-up reminders; empty turns it off" },
+      "defer_for_natural_pause_minutes": { "type": "integer", "default": 5, "minimum": 0, "maximum": 30, "description": "While an agent turn is running, wait up to this long for it to finish before reminding; 0 never waits" },
+      "focus_minutes": { "type": "integer", "default": 25, "minimum": 5, "maximum": 180, "description": "Length of a focus block" },
+      "break_minutes": { "type": "integer", "default": 5, "minimum": 1, "maximum": 60, "description": "Length of the break after a focus block" },
+      "long_break_minutes": { "type": "integer", "default": 15, "minimum": 1, "maximum": 120, "description": "Length of the long break" },
+      "long_break_every": { "type": "integer", "default": 4, "minimum": 1, "maximum": 12, "description": "Every Nth focus block is followed by the long break" },
+      "focus_quiets_walnut": { "type": "boolean", "default": true, "description": "Turn on Walnut quiet mode while a focus block runs" },
+      "mirror_macos_focus": { "type": "boolean", "default": true, "description": "Turn on Walnut quiet mode while a macOS Focus is on" },
+      "macos_focus_shortcuts": { "type": "boolean", "default": false, "description": "Turn macOS Do Not Disturb on and off with each focus block, through two Shortcuts" }
+    }
+  },
+  "uiHints": {
+    "reminder_every_minutes": { "label": "Stand-up reminder (minutes)", "help": "Optional. Minutes at the keyboard before Rhythm asks you to stand up, 15 to 240." },
+    "away_reset_minutes": { "label": "Away resets after (minutes)", "help": "Optional. This long with no keyboard time counts as a break, and the count starts over." },
+    "snooze_minutes": { "label": "Snooze (minutes)", "help": "Optional. How long Snooze on the stand-up reminder waits." },
+    "quiet_hours": { "label": "Quiet hours", "help": "Optional. No stand-up reminders inside this local window, as HH:MM-HH:MM. Leave empty for none." },
+    "defer_for_natural_pause_minutes": { "label": "Wait for a turn to finish (minutes)", "help": "Optional. While an agent is answering, wait up to this long so the reminder lands at a pause." },
+    "focus_minutes": { "label": "Focus block (minutes)", "help": "Optional. Length of one focus block." },
+    "break_minutes": { "label": "Break (minutes)", "help": "Optional. Length of the break after a block." },
+    "long_break_minutes": { "label": "Long break (minutes)", "help": "Optional. Length of the long break." },
+    "long_break_every": { "label": "Long break every (blocks)", "help": "Optional. Every Nth block ends with the long break." },
+    "focus_quiets_walnut": { "label": "Quiet Walnut while focusing", "help": "Optional. Walnut quiet mode stays on for the length of each focus block." },
+    "mirror_macos_focus": { "label": "Follow macOS Focus", "help": "Optional. Walnut goes quiet while a macOS Focus is on, and stand-up reminders wait." },
+    "macos_focus_shortcuts": { "label": "Drive macOS Do Not Disturb", "help": "Optional. Each focus block turns Do Not Disturb on and off through two Shortcuts you add from the Rhythm app." }
+  }
+}

@@ -14,6 +14,7 @@
 
 import { parseAskUserQuestionInput, type AskQuestion } from '@/components/sessions/ask-user-question';
 import type { Notification, NotificationAcpOption, NotificationKind } from './types';
+import { wireActionsOf } from './notification-actions';
 
 export type NotificationSection = 'action' | 'inbox' | 'errors' | 'automation' | 'all';
 
@@ -329,8 +330,11 @@ export function isRejectOption(o: NotificationAcpOption): boolean {
  * three cannot disagree about which wins.
  */
 export function actionOf(
-  r: { action?: { label?: string; to?: string }; sessionId?: string },
+  r: { action?: { label?: string; to?: string }; actions?: unknown; sessionId?: string },
 ): Notification['action'] | undefined {
+  // A record's `actions` list is authoritative: its first entry is the primary.
+  const listed = wireActionsOf(r.actions);
+  if (listed.length > 0) return listed[0];
   if (r.action?.label && r.action.to) return { label: r.action.label, kind: 'navigate', to: r.action.to };
   if (r.sessionId) return { label: 'Go to Session', kind: 'navigate', to: `/sessions?id=${r.sessionId}` };
   return undefined;

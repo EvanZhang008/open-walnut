@@ -658,6 +658,9 @@ triage-state.json
 # it would let LWW roll a settled row back to pending and re-notify — same class
 # as the cron-state storm above.
 session-requests.json
+# Quiet mode holds (src/core/quiet/quiet-state.ts): machine-local runtime state.
+# An LWW echo of another box's older holds would silence notifications here.
+quiet.json
 *.lock/
 *.lock
 
@@ -862,6 +865,8 @@ function criticalTrackedTargets(files: string[]): Map<string, { recursive: boole
  */
 const EXTRA_IGNORE_PATTERNS = [
   'memory/**/*.bak.*', 'tmp/', 'time-tracking/outside/', '*.conflicted-*', '*.corrupt-*',
+  // quiet.json: machine-local runtime state (see GITIGNORE_CONTENT), new in 2026-09.
+  'quiet.json',
 ];
 
 /**

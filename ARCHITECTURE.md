@@ -327,7 +327,7 @@ A boot sentinel records the Plugin that was activating if the process dies. Two 
 
 ### Loading and distribution
 
-Discovery order is built-in Plugins, linked or copied Plugins under `~/.open-walnut/plugins/`, then Plugin Store sources under `~/.open-walnut/plugin-stores/`. The first active id wins and later copies are reported as duplicates. Git sources are pinned by commit. npm sources are installed with lifecycle scripts disabled and record their resolved version and integrity. Updates are explicit; Walnut does not auto-update trusted code.
+Discovery order is built-in Plugins, linked or copied Plugins under `~/.open-walnut/plugins/`, then Plugin Store sources under `~/.open-walnut/plugin-stores/`. The first active id wins and later copies are reported as duplicates. Last comes the bundled store (`plugin-store/` in the repo, shipped as `dist/plugin-store/` by `scripts/ship-store-plugins.mjs`): its plugins ship with every build but are discovered only for an id whose config says `enabled: true`, which the Settings store's Install writes and Remove deletes (`src/core/plugins/bundled-store.ts`). Git sources are pinned by commit. npm sources are installed with lifecycle scripts disabled and record their resolved version and integrity. Updates are explicit; Walnut does not auto-update trusted code.
 
 Native web modules are fetched from authenticated `/api/plugin-runtime` endpoints, content-addressed by SHA-256, and imported as Blob ESM. A cloud companion relays missing modules from the primary and caches them by hash. Plugin HTTP handlers and module relays have size limits and deadlines.
 

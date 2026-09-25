@@ -52,6 +52,8 @@ export {
   attachTaskIdsBounded, bankHeartbeatSamples, narrowRelaySamples, resetHeartbeatDedupe,
 } from './ingest.js';
 export type { BankOutcome } from './ingest.js';
+// Presence for in-process subscribers (plugins); the browser route announces its banks too.
+export { emitTimeBanked } from './presence-events.js';
 export { TIME_KINDS, TIME_SOURCES } from './types.js';
 export type { TimeKind, TimeRecord, TimeSource, RollupIndex, TimeSummary } from './types.js';
 export type { DayBlocks } from './blocks.js';

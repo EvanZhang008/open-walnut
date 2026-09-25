@@ -210,12 +210,17 @@ async function fetchLoopback(
 async function managePlugin(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const pluginId = pluginIdFrom(params.pluginId)
   const operation = params.operation
-  if (operation !== 'discover' && operation !== 'reload' && operation !== 'disable' && operation !== 'clear-quarantine') {
+  if (
+    operation !== 'discover' && operation !== 'reload' && operation !== 'disable' && operation !== 'clear-quarantine'
+    && operation !== 'bundled-install' && operation !== 'bundled-remove'
+  ) {
     throw new PluginControlFailure('Invalid Plugin management operation', 400)
   }
   const target = operation === 'discover'
     ? loopbackUrl('/api/plugin-runtime/discover')
-    : loopbackUrl(`/api/plugin-runtime/${encodeURIComponent(pluginId)}/${operation}`)
+    : operation === 'bundled-install' || operation === 'bundled-remove'
+      ? loopbackUrl(`/api/plugin-runtime/bundled/${encodeURIComponent(pluginId)}/${operation === 'bundled-install' ? 'install' : 'remove'}`)
+      : loopbackUrl(`/api/plugin-runtime/${encodeURIComponent(pluginId)}/${operation}`)
   // `cascade` is the one management flag that needs a body: the disable route reads it to
   // choose between refusing (409, with the dependents) and blocking them. Without it the
   // replica's request would arrive as a plain disable and come back refused forever.

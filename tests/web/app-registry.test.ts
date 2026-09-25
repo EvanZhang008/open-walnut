@@ -70,6 +70,12 @@ describe('App Registry', () => {
     expect(registry.getSnapshot().apps[0].badge).toBe(7)
     expect(() => handle.setBadge(-1)).toThrow('non-negative integer')
 
+    // A status badge: short text, drawn muted rather than as a red count.
+    handle.setBadge({ text: '24m' })
+    expect(registry.getSnapshot().apps[0].badge).toEqual({ text: '24m' })
+    expect(() => handle.setBadge({ text: '' })).toThrow('1 to 6 characters')
+    expect(() => handle.setBadge({ text: 'seven+1' })).toThrow('1 to 6 characters')
+
     await handle.dispose()
     expect(registry.getSnapshot().apps).toEqual([])
   })

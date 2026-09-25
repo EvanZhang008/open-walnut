@@ -163,3 +163,28 @@ describe('narrowRelaySamples', () => {
     expect(bad).not.toHaveProperty('id');
   });
 });
+
+describe('time:banked presence event', () => {
+  it('announces exactly the records this call accepted, and nothing for a deduped resend', async () => {
+    const { bus, EventNames } = await import('../../../src/core/event-bus.js');
+    const events: Array<{ records: Array<Record<string, unknown>> }> = [];
+    bus.subscribe('ingest-presence', (e) => { events.push(e.data as { records: Array<Record<string, unknown>> }); }, {
+      global: true, interest: [EventNames.TIME_BANKED],
+    });
+    try {
+      const batch = [sample({ id: 'p-1' }), sample({ id: 'p-2', durationMs: 30_000, kind: 'chat', taskId: undefined })];
+      await bankHeartbeatSamples(batch, { defaultSource: 'ios' });
+      expect(events).toHaveLength(1);
+      expect(events[0].records).toEqual([
+        expect.objectContaining({ durationMs: 60_000, kind: 'session', taskId: 't_alpha', source: 'ios' }),
+        expect.objectContaining({ durationMs: 30_000, kind: 'chat', source: 'ios' }),
+      ]);
+      expect(typeof events[0].records[0].ts).toBe('string');
+
+      await bankHeartbeatSamples(batch, { defaultSource: 'ios' }); // the lost-ack resend
+      expect(events).toHaveLength(1);
+    } finally {
+      bus.unsubscribe('ingest-presence');
+    }
+  });
+});

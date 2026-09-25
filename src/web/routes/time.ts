@@ -28,7 +28,7 @@ import { Router, type Request, type Response } from 'express';
 import { CLOUD_MODE } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import {
-  attachTaskIdsBounded,
+  attachTaskIdsBounded, emitTimeBanked,
   dayBoundsMs, foldDayBlocks, foldDaySlices, foldOutsideApps, foldOutsideTimeline, getIndex, hydrate,
   isOutsideCollectorRunning,
   localDateKey, outsideDayRecords, outsideDayRows, readDayRecords, recentDateKeys,
@@ -114,6 +114,7 @@ timeRouter.post('/heartbeats', async (req: Request, res: Response) => {
     // two endpoints can never disagree about attribution.
     await attachTaskIdsBounded(records);
     void recordTime(records); // folds synchronously, appends in the background
+    emitTimeBanked(records);
     res.status(204).end();
   } catch (err) {
     // Telemetry must never surface as a user-visible failure.

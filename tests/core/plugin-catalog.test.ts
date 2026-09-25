@@ -4,9 +4,17 @@
  * to activate"). Those judgements live in one pure function so they can be pinned
  * here without a server, a plugin or a disk.
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
+import {
+  listInstalledBundledDirs,
+  overlayBundledCatalog,
+  parseManifestCatalog,
+  scanBundledStore,
+} from '../../src/core/plugins/bundled-store.js'
 import {
   blockedDependencyIds,
   isToggleable,
@@ -479,13 +487,14 @@ describe('the shipped catalog file', () => {
     for (const entry of entries) {
       expect(entry.id).toMatch(/^[a-z0-9][a-z0-9._-]*$/)
       expect(entry.name).toBeTruthy()
-      expect(['builtin', 'git', 'npm', 'example']).toContain(entry.source.kind)
+      expect(['builtin', 'git', 'npm', 'example', 'bundled']).toContain(entry.source.kind)
       // A git/npm row prefills the install form, so it needs something to prefill.
       if (entry.source.kind === 'git') expect(entry.source.url).toBeTruthy()
       if (entry.source.kind === 'npm') expect(entry.source.spec).toBeTruthy()
       // An example row shows a `walnut-plugin link <path>` command, so the path must
       // actually exist in this checkout — otherwise the command is a dead end.
-      if (entry.source.kind === 'example') {
+      // A bundled row is synthesised from a folder in this checkout, so the same holds.
+      if (entry.source.kind === 'example' || entry.source.kind === 'bundled') {
         expect(entry.source.path).toBeTruthy()
         const dir = path.resolve(process.cwd(), entry.source.path!)
         expect(fs.existsSync(path.join(dir, 'manifest.json')), `${entry.source.path}/manifest.json`).toBe(true)
@@ -496,5 +505,197 @@ describe('the shipped catalog file', () => {
   it('never lists the local fallback', async () => {
     const entries = await loadPluginCatalog()
     expect(entries.some((entry) => entry.id === 'local')).toBe(false)
+  })
+})
+
+describe('the bundled store folder', () => {
+  let base: string
+  let store: string
+
+  async function writePlugin(dirName: string, manifest: unknown, files: Record<string, string> = {}): Promise<void> {
+    const dir = path.join(store, dirName)
+    await fsp.mkdir(dir, { recursive: true })
+    await fsp.writeFile(
+      path.join(dir, 'manifest.json'),
+      typeof manifest === 'string' ? manifest : JSON.stringify(manifest),
+    )
+    for (const [rel, content] of Object.entries(files)) {
+      await fsp.mkdir(path.dirname(path.join(dir, rel)), { recursive: true })
+      await fsp.writeFile(path.join(dir, rel), content)
+    }
+  }
+
+  beforeEach(async () => {
+    base = await fsp.mkdtemp(path.join(os.tmpdir(), 'bundled-catalog-'))
+    store = path.join(base, 'plugin-store')
+    await fsp.mkdir(store, { recursive: true })
+  })
+
+  afterEach(async () => {
+    await fsp.rm(base, { recursive: true, force: true })
+  })
+
+  it('turns each readable manifest into one bundled entry', async () => {
+    await writePlugin('omega', {
+      id: 'omega',
+      name: 'Omega',
+      description: 'Ships with Walnut.',
+      version: '2.1.0',
+      apiVersion: 1,
+      catalog: { adds: ['App', 7, ''], homepage: 'https://example.invalid/omega', docs: 'plugin-store/omega/README.md' },
+    })
+
+    const entries = await scanBundledStore(store)
+
+    expect(entries).toEqual([{
+      id: 'omega',
+      name: 'Omega',
+      description: 'Ships with Walnut.',
+      version: '2.1.0',
+      // Junk inside `catalog` costs that value, never the entry.
+      adds: ['App'],
+      homepage: 'https://example.invalid/omega',
+      docs: 'plugin-store/omega/README.md',
+      source: { kind: 'bundled', path: 'plugin-store/omega' },
+    }])
+  })
+
+  it('skips what it cannot read instead of failing the whole store', async () => {
+    await writePlugin('broken', '{ not json')
+    await writePlugin('array', '[]')
+    await writePlugin('upper', { id: 'Upper', name: 'Upper' })
+    await writePlugin('reserved', { id: 'local', name: 'Local' })
+    await fsp.mkdir(path.join(store, 'no-manifest'), { recursive: true })
+    await fsp.writeFile(path.join(store, 'README.md'), '# not a plugin')
+    await writePlugin('fine', { id: 'fine' })
+
+    const entries = await scanBundledStore(store)
+
+    // A manifest with no name still lists, under its id.
+    expect(entries.map((entry) => [entry.id, entry.name])).toEqual([['fine', 'fine']])
+    expect(await scanBundledStore(path.join(base, 'absent'))).toEqual([])
+    expect(await scanBundledStore(null)).toEqual([])
+  })
+
+  it('parses the manifest catalog field defensively', () => {
+    expect(parseManifestCatalog(undefined)).toBeUndefined()
+    expect(parseManifestCatalog('App')).toBeUndefined()
+    expect(parseManifestCatalog(['App'])).toBeUndefined()
+    expect(parseManifestCatalog({ adds: 'App', homepage: 3 })).toBeUndefined()
+    expect(parseManifestCatalog({ adds: ['Task sync'], docs: ' docs/x.md ' })).toEqual({ adds: ['Task sync'], docs: 'docs/x.md' })
+  })
+
+  it('lets the curated catalog reword a bundled entry, never move it', () => {
+    const bundled: PluginCatalogEntry = {
+      id: 'omega',
+      name: 'Omega',
+      version: '2.1.0',
+      description: 'From the manifest.',
+      source: { kind: 'bundled', path: 'plugin-store/omega' },
+    }
+    const merged = overlayBundledCatalog([bundled], [
+      // Same id, claiming a git source: the text wins, the source does not.
+      { id: 'omega', name: 'Omega Deluxe', description: 'From the catalog.', adds: ['App'], source: { kind: 'git', url: 'https://example.invalid/o.git' } },
+      // A bundled claim with no folder behind it would offer an Install that can only fail.
+      { id: 'ghost', name: 'Ghost', source: { kind: 'bundled', path: 'plugin-store/ghost' } },
+      gitEntry,
+    ])
+
+    expect(merged.find((entry) => entry.id === 'omega')).toEqual({
+      id: 'omega',
+      name: 'Omega Deluxe',
+      version: '2.1.0',
+      description: 'From the catalog.',
+      adds: ['App'],
+      source: { kind: 'bundled', path: 'plugin-store/omega' },
+    })
+    expect(merged.some((entry) => entry.id === 'ghost')).toBe(false)
+    expect(merged.some((entry) => entry.id === gitEntry.id)).toBe(true)
+  })
+
+  it('keeps the folder name when a text-only overlay entry names no plugin', () => {
+    const merged = overlayBundledCatalog(
+      [{ id: 'omega', name: 'Omega', source: { kind: 'bundled', path: 'plugin-store/omega' } }],
+      // parsePluginCatalog defaults a missing name to the id.
+      parsePluginCatalog({ plugins: [{ id: 'omega', description: 'Reworded.' }] }),
+    )
+    expect(merged[0]).toMatchObject({ name: 'Omega', description: 'Reworded.', source: { kind: 'bundled' } })
+  })
+
+  it('loads bundled < shipped < user overlay, with the user text on top', async () => {
+    await writePlugin('omega', { id: 'omega', name: 'Omega', description: 'From the manifest.' })
+    const home = path.join(base, 'home')
+    await fsp.mkdir(home, { recursive: true })
+    await fsp.writeFile(path.join(home, 'plugin-registry.json'), JSON.stringify({
+      plugins: [{ id: 'omega', name: 'My Omega', description: 'Mine.', source: { kind: 'npm', spec: 'omega' } }],
+    }))
+
+    const entries = await loadPluginCatalog(home, { bundledStoreDir: store })
+    const omega = entries.find((entry) => entry.id === 'omega')!
+
+    expect(omega).toMatchObject({ name: 'My Omega', description: 'Mine.', source: { kind: 'bundled', path: 'plugin-store/omega' } })
+    // The shipped file still contributes its own entries alongside.
+    expect(entries.some((entry) => entry.id === 'walnut-time')).toBe(true)
+    // And `null` really means "no store".
+    expect((await loadPluginCatalog(home, { bundledStoreDir: null })).find((entry) => entry.id === 'omega')?.source.kind).toBe('npm')
+  })
+
+  it('merges an uninstalled bundled entry as available and an installed one as bundled', () => {
+    const entry: PluginCatalogEntry = {
+      id: 'omega', name: 'Omega', version: '2.1.0', adds: ['App'], source: { kind: 'bundled', path: 'plugin-store/omega' },
+    }
+
+    const available = mergePluginRegistry([entry], []).rows[0]!
+    expect(available).toMatchObject({
+      id: 'omega', installed: false, status: 'available', builtin: false, toggleable: false, version: '2.1.0',
+      source: { kind: 'bundled', path: 'plugin-store/omega' },
+    })
+
+    const running = mergePluginRegistry([entry], [installed({ id: 'omega', version: '2.1.0', sourceKind: 'bundled' })]).rows[0]!
+    expect(running).toMatchObject({
+      id: 'omega', installed: true, status: 'active', builtin: false, toggleable: true, adds: ['App'],
+      source: { kind: 'bundled', path: 'plugin-store/omega' },
+    })
+
+    // Installed from somewhere else (a link, a source): the bundled folder does not
+    // claim it, so it gets no bundled Remove.
+    const elsewhere = mergePluginRegistry([entry], [installed({ id: 'omega', sourceKind: 'git', sourceSlug: 'omega-src' })]).rows[0]!
+    expect(elsewhere.source.kind).toBe('git')
+  })
+
+  it('offers an uninstalled bundled dependency as something the store can install', () => {
+    const plan = planPluginDependencies(
+      [{ id: 'omega', range: '^2' }],
+      [{ id: 'omega', name: 'Omega', source: { kind: 'bundled', path: 'plugin-store/omega' } }],
+      [],
+    )
+    expect(plan).toEqual([{ id: 'omega', range: '^2', resolvable: 'catalog', source: { kind: 'bundled', path: 'plugin-store/omega' } }])
+    expect(blockedDependencyIds(plan)).toEqual([])
+  })
+
+  it('accepts bundled as a catalog source kind', () => {
+    const [entry] = parsePluginCatalog({ plugins: [{ id: 'omega', source: { kind: 'bundled', path: 'plugin-store/omega' }, version: '1.0.0' }] })
+    expect(entry).toMatchObject({ source: { kind: 'bundled', path: 'plugin-store/omega' }, version: '1.0.0' })
+  })
+
+  it('discovers only folders that are explicitly installed and built', async () => {
+    const server = 'export function activate() {}\n'
+    await writePlugin('built', { id: 'built', server: 'dist/server.mjs' }, { 'dist/server.mjs': server })
+    await writePlugin('unbuilt', { id: 'unbuilt', server: 'dist/server.mjs' })
+    await writePlugin('escape', { id: 'escape', server: '../outside.mjs' })
+    await writePlugin('off', { id: 'off', server: 'dist/server.mjs' }, { 'dist/server.mjs': server })
+    await writePlugin('unset', { id: 'unset', server: 'dist/server.mjs' }, { 'dist/server.mjs': server })
+
+    const { dirs, skipped } = await listInstalledBundledDirs(store, {
+      built: { enabled: true },
+      unbuilt: { enabled: true },
+      escape: { enabled: true },
+      off: { enabled: false },
+      // `unset` has no key at all: shipped, not installed.
+    })
+
+    expect(dirs.map((entry) => entry.id)).toEqual(['built'])
+    expect(skipped.map((entry) => path.basename(entry.dir)).sort()).toEqual(['escape', 'unbuilt'])
+    expect(skipped.find((entry) => entry.dir.endsWith('unbuilt'))!.reason).toContain('not built')
   })
 })

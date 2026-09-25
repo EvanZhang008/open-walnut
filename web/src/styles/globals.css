@@ -523,6 +523,14 @@ select {
   right: 8px;
 }
 
+/* Status flavour (a plugin App's `{ text }` badge: a countdown, a mode): muted,
+   because red means "things to deal with" and a "25" for minutes left is not that. */
+.notification-badge-count.notification-badge-muted {
+  background: var(--bg-tertiary, var(--bg-secondary, #e5e5ea));
+  color: var(--fg-muted, #6e6e73);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Bell flavour: amber "needs you" (asks + unread letters), never a red error
    count. Dark text — white on amber is unreadable at 10px. */
 .notification-badge-count.notification-badge-attention {

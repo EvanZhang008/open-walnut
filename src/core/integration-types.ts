@@ -562,4 +562,8 @@ export interface PluginManifest {
   uiHints?: Record<string, { label?: string; help?: string }>;
   /** Per-task fields this plugin exposes to the console (see TaskFieldSpec). */
   taskFields?: TaskFieldSpec[];
+  /** How the Settings store describes a plugin that ships in the bundled `plugin-store/`
+   *  folder: what installing it adds, and where to read about it. Descriptive only;
+   *  junk values are dropped (src/core/plugins/bundled-store.ts parseManifestCatalog). */
+  catalog?: { adds?: string[]; homepage?: string; docs?: string };
 }

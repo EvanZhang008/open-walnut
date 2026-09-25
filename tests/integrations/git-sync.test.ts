@@ -234,6 +234,18 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     expect(twice).toBe(once); // no duplicate append
   });
 
+  it('keeps quiet.json (machine-local quiet-mode holds) out of sync, fresh and pre-existing', async () => {
+    initSync();
+    const fresh = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
+    expect(fresh.split('\n')).toContain('quiet.json');
+
+    // An install whose .gitignore predates quiet mode gains the line on repair.
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');
+    ensureCriticalIgnores();
+    const repaired = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
+    expect(repaired.split('\n')).toContain('quiet.json');
+  });
+
   it('ensureRepo self-heals an existing repo missing the auth.json ignore', async () => {
     initSync();
     await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');

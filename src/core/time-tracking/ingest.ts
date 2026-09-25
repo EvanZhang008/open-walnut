@@ -49,6 +49,7 @@
 import { log } from '../../logging/index.js';
 import { MAX_SAMPLES_PER_REQUEST, normalizeSource, sanitizeSample } from './rollup.js';
 import { appendRecords, hydrate, recordTime } from './store.js';
+import { emitTimeBanked } from './presence-events.js';
 import type { TimeRecord, TimeSource } from './types.js';
 
 /** Session→task resolution is bounded: at most this many lookups per request. */
@@ -302,6 +303,8 @@ export async function bankHeartbeatSamples(
       if (redo.length > 0) writes.push(appendRecords(redo));
       const settled = Promise.all(writes).then((all) => all.every(Boolean));
       void settled.then(settleClaim, () => settleClaim(false));
+      // Fresh only: a `redo` record was folded (and announced) on its first attempt.
+      emitTimeBanked(fresh);
       const durable = await allLanded([settled], waitOn);
       let totalMs = 0;
       for (const rec of fresh) totalMs += rec.durationMs;

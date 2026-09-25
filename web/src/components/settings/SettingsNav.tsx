@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
+import type { AppBadge } from '@/apps/registry'
 import { usePluginUi, useWebPluginRuntime } from '@/plugins/hooks'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
 import { corePaneFilterEntry } from './settings-routing'
@@ -58,7 +59,7 @@ export interface NavRow {
   label: string
   to?: string
   appKind?: string
-  badge?: 'dot' | number | null
+  badge?: AppBadge
   /** True for rows a plugin contributed (counted for the placeholder cache). */
   fromPlugin?: boolean
   meta: SettingsPaneMeta
@@ -406,6 +407,8 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
             <span className="notification-badge-dot" />
           ) : typeof row.badge === 'number' && row.badge > 0 ? (
             <span className="notification-badge-count">{row.badge > 99 ? '99+' : row.badge}</span>
+          ) : row.badge && typeof row.badge === 'object' ? (
+            <span className="notification-badge-count notification-badge-muted">{row.badge.text}</span>
           ) : null}
           {failedPanes.has(row.key) && (
             <span

@@ -12,7 +12,10 @@ export type NotificationKind =
   | 'permission' | 'cron' | 'operation-error' | 'sort' | 'audio-error' | 'skill' | 'hook'
   /** A letter an agent wrote to the human — envelope only; the body lives in the
    *  letter store and is read in the Inbox reader (docs/plan/human-inbox.md). */
-  | 'letter';
+  | 'letter'
+  /** A plugin's timed prompt (stand-up, focus block over): long toast, chime,
+   *  up to three `actions`. Silenced by quiet mode like everything but asks. */
+  | 'reminder';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
 /** One option an ACP provider offered for a permission request. */
@@ -22,12 +25,18 @@ export interface NotificationAcpOption {
   name?: string;
 }
 
-/** A deep-link or callback the toast/feed entry can offer (e.g. "Go to Session"). */
+/** A deep-link, callback or plugin op the toast/feed entry can offer (e.g. "Go to Session"). */
 export interface NotificationAction {
   label: string;
-  /** `navigate` uses react-router; `callback` invokes onAction. */
-  kind: 'navigate' | 'callback';
+  /** `navigate` uses react-router; `callback` invokes onAction; `op` POSTs
+   *  `args` to `/api/plugin-runtime/<pluginId>/ops/<op>` (notification-actions.ts). */
+  kind: 'navigate' | 'callback' | 'op';
   to?: string;
+  /** kind 'op' only: the plugin that owns `op` (stamped server-side). */
+  pluginId?: string;
+  /** kind 'op' only: the FULL registered op name. */
+  op?: string;
+  args?: Record<string, unknown>;
 }
 
 export interface Notification {
@@ -71,8 +80,11 @@ export interface Notification {
    *  sentence; this is the developer detail that used to BE the body. */
   detail?: string;
   action?: NotificationAction;
+  /** The record's buttons, primary first, at most three. Authoritative over
+   *  `action` when present (displayActionsOf in notification-actions.ts). */
+  actions?: NotificationAction[];
   onAction?: () => void;
-  /** emit a browser Notification when the tab is hidden (permission only). */
+  /** emit a browser Notification when the tab is hidden (permission + reminder). */
   browserNotify?: boolean;
 
   // ── Permission detail (server-enriched: enough to render + answer inline) ──
@@ -129,6 +141,9 @@ export const TOAST_DURATION_MS: Record<NotificationKind, number> = {
   hook: 8000,
   // Never toasted (see SHOULD_TOAST) — the value only satisfies the Record.
   letter: 10000,
+  // A reminder waits for the human: two minutes, and one of its buttons (or the
+  // ×) takes it down earlier. A 10s toast would vanish before they looked up.
+  reminder: 120_000,
 };
 
 /**
@@ -148,6 +163,7 @@ export const IS_PERSISTENT: Record<NotificationKind, boolean> = {
   skill: true,
   hook: true,
   letter: true,
+  reminder: true,
 };
 
 /**
@@ -174,5 +190,8 @@ export function SHOULD_TOAST(n: { kind: NotificationKind; severity: Notification
     // wrong weight AND would risk the human "seeing" it without reading it.
     // The bell badge + Inbox rail count are its surfaces.
     case 'letter': return false;
+    // The point of a reminder is to interrupt (quiet mode aside, which the
+    // provider applies on top of this policy).
+    case 'reminder': return true;
   }
 }

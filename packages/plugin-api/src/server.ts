@@ -100,10 +100,72 @@ export interface PluginNotice {
   sessionId?: string
 }
 
+/**
+ * One button on a notice. `op` is the LOCAL name of one of YOUR ops ('snooze'); the host
+ * prefixes it with your plugin id, so a notice can only ever run your own ops. A click
+ * POSTs `args` to that op, then closes the toast and marks the notice read.
+ */
+export interface PluginNoticeAction {
+  label: string
+  op: string
+  args?: Record<string, unknown>
+}
+
+/**
+ * `kind: 'reminder'` is a timed prompt for the human (a stand-up nudge, a focus block
+ * ending): it toasts for two minutes, plays a soft chime, and raises a browser
+ * notification when the tab is hidden, none of which happens in quiet mode. Re-firing a
+ * reminder under the same dedupKey REPLACES the previous one (it alerts again). The
+ * default kind, 'skill', keeps first-write-wins: a key still in the feed is a no-op.
+ */
+export interface PluginNotifyInput extends PluginNotice {
+  kind?: 'skill' | 'reminder'
+  /** At most three, primary first. */
+  actions?: PluginNoticeAction[]
+}
+
+/** One reason Walnut is quiet. `until` and `since` are epoch milliseconds. */
+export interface QuietHold {
+  /** `user` (the human's toggle) or `plugin:<pluginId>`. */
+  source: string
+  until?: number
+  reason?: string
+  since: number
+}
+
+/**
+ * Walnut-level do not disturb. `active` while any hold is live. `allowPermissions` is true
+ * unless a live hold turned it off: a permission prompt blocks an agent, so it still
+ * toasts during quiet by default. The same shape arrives as the `quiet:changed` event.
+ */
+export interface QuietState {
+  active: boolean
+  allowPermissions: boolean
+  holds: QuietHold[]
+}
+
+export interface QuietInput {
+  /** Epoch ms. Absent = until you clear it, or until your plugin is disabled or reloaded. */
+  until?: number
+  reason?: string
+  /** Default true. */
+  allowPermissions?: boolean
+}
+
+/** Your plugin's ONE quiet hold (source `plugin:<pluginId>`). `set` replaces it. */
+export interface QuietService {
+  get(): Promise<QuietState>
+  set(input?: QuietInput): Promise<void>
+  clear(): Promise<void>
+}
+
 export interface NotificationService {
-  notify(notice: PluginNotice): Promise<void>
+  notify(notice: PluginNotifyInput): Promise<void>
   error(notice: PluginNotice): Promise<void>
   recover(): Promise<void>
+  /** Remove your notice by the dedupKey you gave `notify`. Resolves even when it is already gone. */
+  dismiss(dedupKey: string): Promise<void>
+  readonly quiet: QuietService
 }
 
 /** One tappable decision on a letter. Buttons are what make a letter a question. */

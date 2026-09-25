@@ -93,7 +93,9 @@ export interface PluginOpInfo {
   owner?: string
 }
 
-export type PluginManagementAction = 'discover' | 'reload' | 'disable' | 'clear-quarantine'
+/** `bundled-install` / `bundled-remove` drive the bundled store folder's Install and Remove. */
+export type PluginManagementAction =
+  | 'discover' | 'reload' | 'disable' | 'clear-quarantine' | 'bundled-install' | 'bundled-remove'
 
 export interface PluginHttpRelayRequest {
   pluginId: string
@@ -208,6 +210,8 @@ function parseLifecycleRecord(value: unknown): DiscoveredPluginRecord | null {
     name: item.name,
     state: item.state as PluginLifecycleRecord['state'],
     builtin: item.builtin,
+    // So a replica's store can label the row Bundled and offer its Remove.
+    ...(item.bundled === true ? { bundled: true as const } : {}),
     failureCount: item.failureCount,
     ...(missingConfig ? { missingConfig } : {}),
     ...(missingDependencies.length ? { missingDependencies } : {}),
@@ -498,7 +502,7 @@ export async function managePrimaryPlugin(
   pluginIdInput: string,
   operation: PluginManagementAction,
   payload?: { cascade?: boolean },
-): Promise<{ plugin?: DiscoveredPluginRecord; ok?: true }> {
+): Promise<{ plugin?: DiscoveredPluginRecord; ok?: true; removed?: boolean }> {
   const pluginId = validPluginId(pluginIdInput)
   const outcome = await callPrimaryControl(
     'server.plugin-manage',
@@ -510,6 +514,12 @@ export async function managePrimaryPlugin(
   if (operation === 'clear-quarantine') {
     if (outcome.result.ok !== true) throw new PluginRuntimeRelayError('Primary returned an invalid Plugin management result', 502)
     return { ok: true }
+  }
+  // A remove of a plugin the primary never discovered has no record to return.
+  if (operation === 'bundled-remove') {
+    if (typeof outcome.result.removed !== 'boolean') throw new PluginRuntimeRelayError('Primary returned an invalid Plugin management result', 502)
+    const record = outcome.result.plugin === undefined ? null : parseLifecycleRecord(outcome.result.plugin)
+    return { removed: outcome.result.removed, ...(record ? { plugin: record } : {}) }
   }
   const plugin = parseLifecycleRecord(outcome.result.plugin)
   if (!plugin) throw new PluginRuntimeRelayError('Primary returned an invalid Plugin lifecycle record', 502)

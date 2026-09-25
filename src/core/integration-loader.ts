@@ -4,6 +4,9 @@
  * Discovers and loads plugins from:
  * 1. Built-in dir: src/integrations/ (dev) or dist/integrations/ (prod)
  * 2. External dir: ~/.open-walnut/plugins/
+ * 3. Plugin Store sources: ~/.open-walnut/plugin-stores/
+ * 4. The bundled store folder (dist/plugin-store/ or plugin-store/), ONLY for ids the
+ *    user installed (`plugins.<id>.enabled: true`); see plugins/bundled-store.ts
  *
  * For each plugin subdirectory:
  *   - Read manifest.json → validate required fields
@@ -58,6 +61,7 @@ import {
   type DependencyRestore,
 } from './plugins/dependency-gate.js';
 import { validatePluginId } from './plugins/ids.js';
+import { listInstalledBundledDirs, parseManifestCatalog, resolveBundledStoreDir } from './plugins/bundled-store.js';
 import { listOwnedSkillDirRecords } from './plugins/skill-registry.js';
 import { CORE_SERVICE_OWNER, removeServicesOf } from './plugins/service-registry.js';
 // Only for the lifecycle announcement inside createPluginManager's onStateChange hook.
@@ -138,7 +142,11 @@ export function setPluginCodeTimeoutForTesting(timeoutMs: number | null): void {
   pluginCodeTimeoutMs = Math.max(1, timeoutMs ?? 20_000);
 }
 const pluginManagers = new WeakMap<IntegrationRegistry, PluginManager>();
-const pluginSources = new WeakMap<IntegrationRegistry, Map<string, { dir: string; isBuiltin: boolean }>>();
+/** Where each loaded id came from. `bundled` is kept apart from `isBuiltin` on purpose: a
+ *  bundled plugin ships with Walnut but is judged like an external one (strict engines
+ *  check, off in Safe Mode); the flag only decides how the store labels and removes it. */
+interface PluginSourceRecord { dir: string; isBuiltin: boolean; bundled?: boolean }
+const pluginSources = new WeakMap<IntegrationRegistry, Map<string, PluginSourceRecord>>();
 const pluginOperationTails = new WeakMap<IntegrationRegistry, Promise<unknown>>();
 interface LoadedPluginGeneration {
   manifest: PluginManifest;
@@ -291,6 +299,42 @@ export function disableLoadedPlugin(
     } finally {
       await refreshPluginDerivedState(registry);
     }
+  });
+}
+
+/**
+ * Take a bundled plugin back to "available": drop its lifecycle record, its recorded
+ * source and manifest, as if this process had never discovered it. That is exactly where
+ * the next boot leaves it once `plugins.<id>` is gone from config, so the store says the
+ * same thing before and after a restart. Callers disable it first (disableLoadedPlugin,
+ * which owns the dependents gate and the teardown); this refuses on its own too, so a
+ * live dependent can never be left pointing at a plugin that no longer exists.
+ *
+ * Resolves `false` when the id was never discovered (nothing to forget). Refuses a
+ * plugin that did not come from the bundled store: removing one of those is its
+ * source's job, not this one's.
+ */
+export function forgetBundledPlugin(registry: IntegrationRegistry, pluginId: string): Promise<boolean> {
+  return runPluginOperation(registry, async () => {
+    const manager = pluginManagers.get(registry);
+    if (!manager?.get(pluginId)) return false;
+    const source = pluginSources.get(registry)?.get(pluginId);
+    if (!source?.bundled) throw new Error(`Plugin "${pluginId}" is not a bundled plugin`);
+    const { live } = dependentsToTearDown(dependencyGate(registry, manager), pluginId);
+    if (live.length > 0) throw new PluginDependentsError(pluginId, live);
+    registry.unregister(pluginId, 'disabled');
+    try {
+      await manager.forget(pluginId);
+    } finally {
+      pluginSources.get(registry)?.delete(pluginId);
+      manifestMap(registry).delete(pluginId);
+      generations(registry).delete(pluginId);
+      recoveries(registry).delete(pluginId);
+      removePluginDiagnostics(pluginId);
+      await refreshPluginDerivedState(registry);
+      bus.emit('plugin:runtime-changed', { pluginId, action: 'removed' }, ['web-ui'], { source: 'plugin-loader' });
+    }
+    return true;
   });
 }
 
@@ -1137,17 +1181,34 @@ function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<s
 
 // ── Plugin directory scanner ──
 
-async function discoverPluginDirs(): Promise<Array<{ dir: string; isBuiltin: boolean }>> {
-  const results: Array<{ dir: string; isBuiltin: boolean }> = [];
+/** One plugin directory discovery found, and which root it came from. */
+interface DiscoveredPluginDir {
+  dir: string;
+  isBuiltin: boolean;
+  /** From the bundled store folder (never also builtin). */
+  bundled?: boolean;
+}
+
+/**
+ * Every plugin directory, in precedence order: built-ins, `~/.open-walnut/plugins/`,
+ * Plugin Store sources, then the bundled store. The bundled store is scanned only when
+ * `pluginConfigs` is given, because a bundled folder counts only for an id whose config
+ * says `enabled: true` (the user installed it); a caller with no config at hand (the
+ * config migration) must not treat a shipped-but-uninstalled folder as installed.
+ */
+async function discoverPluginDirs(
+  pluginConfigs?: Readonly<Record<string, { enabled?: unknown } | undefined>>,
+): Promise<DiscoveredPluginDir[]> {
+  const results: DiscoveredPluginDir[] = [];
   const seenRealDirs = new Set<string>();
 
-  const addCandidate = async (candidate: string, isBuiltin: boolean): Promise<void> => {
+  const addCandidate = async (candidate: string, isBuiltin: boolean, bundled = false): Promise<void> => {
     try {
       const realDir = await fsp.realpath(candidate);
       if (!(await fsp.stat(realDir)).isDirectory() || seenRealDirs.has(realDir)) return;
       await fsp.access(path.join(realDir, 'manifest.json'), fs.constants.R_OK);
       seenRealDirs.add(realDir);
-      results.push({ dir: realDir, isBuiltin });
+      results.push({ dir: realDir, isBuiltin, ...(bundled ? { bundled: true } : {}) });
     } catch { /* expected: broken link, non-directory, or no readable manifest */ }
   };
 
@@ -1186,6 +1247,14 @@ async function discoverPluginDirs(): Promise<Array<{ dir: string; isBuiltin: boo
     log.debug('plugin-source scan failed', {
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+
+  if (pluginConfigs) {
+    // Last, so a linked or source copy of the same id wins, the usual first-wins rule.
+    const storeDir = await resolveBundledStoreDir();
+    const { dirs, skipped } = await listInstalledBundledDirs(storeDir, pluginConfigs);
+    for (const entry of skipped) log.debug('Bundled plugin skipped', { dir: entry.dir, reason: entry.reason });
+    for (const entry of dirs) await addCandidate(entry.dir, false, true);
   }
 
   return results;
@@ -1370,6 +1439,7 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     ? parseUiApp({ app: obj.webview }, filePath) ?? undefined
     : undefined;
   if (invalidEntry) return null;
+  const catalog = parseManifestCatalog(obj.catalog);
 
   return {
     id: obj.id,
@@ -1392,6 +1462,7 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
       ? obj.uiHints as Record<string, { label?: string; help?: string }>
       : undefined,
     taskFields,
+    ...(catalog ? { catalog } : {}),
   };
 }
 
@@ -1472,6 +1543,8 @@ function preflightReload(
 interface PluginEntry {
   dir: string;
   isBuiltin: boolean;
+  /** Set by the discovery walk; readPluginEntry itself does not know the root. */
+  bundled?: boolean;
   manifest: PluginManifest;
 }
 
@@ -1502,6 +1575,9 @@ async function loadPlugin(
   // a visible `needs-dependency` row instead of vanishing from the list.
   cycleMembers?: ReadonlySet<string>,
   prepared?: LoadedPluginGeneration,
+  // Only the discovery walk passes this. Every later load of the same id (reload,
+  // dependency restore, recovery) inherits it from the recorded source below.
+  origin?: { bundled?: boolean },
 ): Promise<void> {
   const manifest = prereadManifest ?? (await readPluginEntry(pluginDir, isBuiltin))?.manifest;
   if (!manifest) return;
@@ -1526,7 +1602,9 @@ async function loadPlugin(
     return;
   }
   removePluginDiagnostics(pluginId);
-  sources.set(pluginId, { dir: pluginDir, isBuiltin });
+  const bundled = !isBuiltin && (origin?.bundled ?? existingSource?.bundled ?? false);
+  sources.set(pluginId, { dir: pluginDir, isBuiltin, ...(bundled ? { bundled: true } : {}) });
+  const originFields = bundled ? { bundled: true } : {};
 
   if (manifest.apiVersion !== undefined && manifest.apiVersion !== 1) {
     const reason = `Unsupported Plugin API version ${manifest.apiVersion}`;
@@ -1540,7 +1618,7 @@ async function loadPlugin(
     await discoverManagedPlugin(manager, {
       id: pluginId,
       name: manifest.name,
-      builtin: isBuiltin,
+      builtin: isBuiltin, ...originFields,
       unsupportedReason: reason,
       activate: () => undefined,
     });
@@ -1578,7 +1656,7 @@ async function loadPlugin(
       await discoverManagedPlugin(manager, {
         id: pluginId,
         name: manifest.name,
-        builtin: isBuiltin,
+        builtin: isBuiltin, ...originFields,
         unsupportedReason: reason,
         activate: () => undefined,
       });
@@ -1602,7 +1680,7 @@ async function loadPlugin(
       await discoverManagedPlugin(manager, {
         id: pluginId,
         name: manifest.name,
-        builtin: isBuiltin,
+        builtin: isBuiltin, ...originFields,
         missingDependencies: missing,
         activate: () => undefined,
       });
@@ -1616,7 +1694,7 @@ async function loadPlugin(
     await discoverManagedPlugin(manager, {
       id: pluginId,
       name: manifest.name,
-      builtin: isBuiltin,
+      builtin: isBuiltin, ...originFields,
       enabled: false,
       activate: () => undefined,
     });
@@ -1641,7 +1719,7 @@ async function loadPlugin(
     await discoverManagedPlugin(manager, {
       id: pluginId,
       name: manifest.name,
-      builtin: isBuiltin,
+      builtin: isBuiltin, ...originFields,
       unsupportedReason: `Unsupported capabilities: ${declaredCapabilities.join(', ')}`,
       activate: () => undefined,
     });
@@ -1681,7 +1759,7 @@ async function loadPlugin(
       await discoverManagedPlugin(manager, {
         id: pluginId,
         name: manifest.name,
-        builtin: isBuiltin,
+        builtin: isBuiltin, ...originFields,
         missingConfig: missing,
         activate: () => undefined,
       });
@@ -1700,7 +1778,7 @@ async function loadPlugin(
   const lifecycle = await discoverManagedPlugin(manager, {
     id: pluginId,
     name: manifest.name,
-    builtin: isBuiltin,
+    builtin: isBuiltin, ...originFields,
     activate: async (context) => {
   const generation = prepared ?? await prepareGeneration(pluginDir, isBuiltin, manifest, pluginConfig);
   const { activate: registerFn, deactivate: deactivateFn } = generation.module;
@@ -1758,7 +1836,9 @@ async function loadPlugin(
   // An ephemeral server gates EVERY plugin: its plugins/ dir is a copy of the
   // user's real one (installed sync plugins and their settings included), so
   // "not shipped" no longer means "a test's own fixture".
-  const isolationReason = builder.collected.sync && !isLocal && (isBuiltin || IS_EPHEMERAL)
+  // A bundled plugin SHIPS in the build too, so it is gated like a builtin: a test server
+  // that copied a config with `plugins.<id>.enabled: true` must not sync to a real account.
+  const isolationReason = builder.collected.sync && !isLocal && (isBuiltin || bundled || IS_EPHEMERAL)
     ? remoteSyncIsolationReason()
     : null;
   if (isolationReason) {
@@ -1856,7 +1936,7 @@ async function loadPlugin(
     id: pluginId,
     name: manifest.name,
     version: manifest.version ?? 'n/a',
-    builtin: isBuiltin,
+    builtin: isBuiltin, ...originFields,
     capabilities: effectiveCapabilities,
     hasSync: initialHasSync,
     hasClaim: !!registered.claim,
@@ -1923,8 +2003,8 @@ async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = fal
   const config = await getConfig();
   const pluginConfigs = config.plugins ?? {};
 
-  // Discover plugin directories
-  const pluginDirs = await discoverPluginDirs();
+  // Discover plugin directories (the bundled store needs the config: install is `enabled: true`)
+  const pluginDirs = await discoverPluginDirs(pluginConfigs);
   log.debug('Discovered plugin dirs', { count: pluginDirs.length, dirs: pluginDirs.map(d => d.dir) });
 
   // Built-in plugins take precedence over external, and `local` must always come
@@ -1941,7 +2021,7 @@ async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = fal
   const entries: PluginEntry[] = [];
   for (const candidate of candidates) {
     const entry = await readPluginEntry(candidate.dir, candidate.isBuiltin);
-    if (entry) entries.push(entry);
+    if (entry) entries.push(candidate.bundled ? { ...entry, bundled: true } : entry);
   }
 
   // Pass 2: first-wins on duplicate ids (earlier candidate keeps the id), then order by
@@ -1986,6 +2066,7 @@ async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = fal
     if (!entry) continue;
     await loadPlugin(
       entry.dir, entry.isBuiltin, pluginConfigs, registry, manager, additive, entry.manifest, cycleMembers,
+      undefined, entry.bundled ? { bundled: true } : undefined,
     );
   }
 

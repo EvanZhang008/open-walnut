@@ -424,6 +424,35 @@ export async function updatePluginConfig(
 }
 
 /**
+ * Atomically delete one Plugin namespace (`plugins.<id>`), settings and all. A no-op, with
+ * no write, when the key is not there. Returns whether a key was removed.
+ *
+ * What "remove" means for a plugin that ships in the bundled store: without the key its
+ * folder is not installed, so discovery skips it again on every later boot.
+ */
+export async function removePluginConfig(pluginId: string): Promise<boolean> {
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(pluginId)) throw new Error(`Invalid plugin id: ${pluginId}`);
+  return withWriteLock(async () => {
+    const raw = await readRawConfigContent();
+    if (raw === null) return false;
+    const existing = (yaml.load(raw) as Record<string, unknown>) ?? {};
+    const plugins = existing.plugins && typeof existing.plugins === 'object' && !Array.isArray(existing.plugins)
+      ? { ...(existing.plugins as Record<string, unknown>) }
+      : null;
+    if (!plugins || !(pluginId in plugins)) return false;
+    delete plugins[pluginId];
+    existing.plugins = plugins;
+    let content = yaml.dump(existing, { indent: 2, lineWidth: 120 });
+    content = content.replace(
+      /^(\s+)available_models:/m,
+      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
+    );
+    await writeConfigWithBackup(content);
+    return true;
+  });
+}
+
+/**
  * Atomically read-modify-write `push_tokens` under the config write lock.
  *
  * `updateConfig` only locks the WRITE, so a caller that reads the array with

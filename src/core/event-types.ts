@@ -1068,6 +1068,72 @@ export interface AudioTranscriptionCompleteEvent {
   durationMs: number;
 }
 
+// ── Notification feed removal ──
+
+/**
+ * A feed record was removed server-side by its producer (a plugin retiring its own
+ * reminder via `walnut.notifications.dismiss`). The web drops the feed entry and
+ * any live toast for `dedupKey`, the cross-layer identity (a live WS entry carries
+ * a frontend-local id, so `id` is informational).
+ */
+export interface NotificationRemovedEvent { id: string; dedupKey: string }
+
+// ── Quiet mode (Walnut-level do not disturb) ──
+
+/** One reason Walnut is quiet. Several sources may hold quiet at once. */
+export interface QuietHold {
+  /** `user` (the console toggle) or `plugin:<pluginId>`. */
+  source: string;
+  /** Epoch ms when the hold ends on its own; absent = until cleared. */
+  until?: number;
+  reason?: string;
+  /** Epoch ms the hold began. */
+  since: number;
+}
+
+/**
+ * The computed quiet state, also the `quiet:changed` payload. `active` = any live
+ * hold. `allowPermissions` = every live hold still lets permission prompts toast
+ * (true when there are no holds).
+ */
+export interface QuietState {
+  active: boolean;
+  allowPermissions: boolean;
+  holds: QuietHold[];
+}
+
+// ── Presence (time tracking → in-process subscribers) ──
+
+/**
+ * Human attention records just banked (phone samples via bankHeartbeatSamples,
+ * and the console browser's heartbeat POST). For in-process subscribers only:
+ * a plugin measuring how long the human has been continuously at the keyboard.
+ * Never sent to browsers. `ts` is the ISO START of each record's window.
+ */
+export interface TimeBankedEvent {
+  records: Array<{
+    ts: string;
+    durationMs: number;
+    kind: string;
+    source?: string;
+    taskId?: string;
+    sessionId?: string;
+  }>;
+}
+
+/**
+ * Mac-wide attention from the outside-activity collector (frontmost app, not
+ * idle, not locked), aggregated to at most one event per 30s. Same purpose and
+ * audience as TimeBankedEvent. `ts` is the ISO START of the first window in the
+ * batch, `durationMs` the batch sum, `bundleId`/`idleSecs` the latest sample's.
+ */
+export interface TimeOutsideEvent {
+  ts: string;
+  durationMs: number;
+  bundleId?: string;
+  idleSecs?: number;
+}
+
 // ── Master type map: EventName → Payload ──
 
 export interface EventPayloadMap {
@@ -1181,6 +1247,11 @@ export interface EventPayloadMap {
   'cron:job-started': CronJobEvent;
   'cron:job-finished': CronJobEvent;
   'cron:notification': CronJobEvent;
+
+  'notification:removed': NotificationRemovedEvent;
+  'quiet:changed': QuietState;
+  'time:banked': TimeBankedEvent;
+  'time:outside': TimeOutsideEvent;
 }
 
 // ── Type-safe helper ──

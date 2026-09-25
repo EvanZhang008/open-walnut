@@ -1,5 +1,5 @@
 {
-  "$comment": "Curated plugin catalog. LOCAL FILE ONLY: GET /api/plugin-runtime/registry merges it with live install state and never makes a network call. Listing something here installs nothing: a git/npm entry only PREFILLS the existing install form, which still requires the per-install trust acknowledgement. Users can add their own entries in ~/.open-walnut/plugin-registry.json (same shape, matched by id, theirs wins). Copied to dist/ by the `cp -r src/data dist/` build step.",
+  "$comment": "Curated plugin catalog. LOCAL FILE ONLY: GET /api/plugin-runtime/registry merges it with live install state and never makes a network call. Listing something here installs nothing: a git/npm entry only PREFILLS the existing install form, which still requires the per-install trust acknowledgement. Users can add their own entries in ~/.open-walnut/plugin-registry.json (same shape, matched by id, theirs wins). Copied to dist/ by the `cp -r src/data dist/` build step. Entries of kind `bundled` are not listed here: they are synthesised at read time from the manifests in the bundled `plugin-store/` folder (dist/plugin-store/ in a build); an entry here with the same id may only reword such a row, never change its source.",
   "version": 1,
   "plugins": [
     {

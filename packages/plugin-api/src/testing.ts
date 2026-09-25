@@ -5,7 +5,10 @@ import type {
   LetterState,
   PluginEvent,
   PluginNotice,
+  PluginNotifyInput,
   PluginOpDefinition,
+  QuietHold,
+  QuietState,
   ServiceApi,
   ServiceChange,
   WalnutServerApi,
@@ -56,7 +59,8 @@ export interface FakeWalnutOptions {
 
 export interface FakeWalnutResult {
   api: WalnutServerApi
-  notices: PluginNotice[]
+  /** Live notices: a reminder re-fire replaces its key, `dismiss` removes it. */
+  notices: PluginNotifyInput[]
   errors: PluginNotice[]
   emitted: PluginEvent[]
   /** Ops the plugin registered and has not disposed, in registration order. */
@@ -78,7 +82,7 @@ export interface FakeWalnutResult {
 
 export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutResult {
   const taskMap = new Map((options.tasks ?? []).map((task) => [task.id, structuredClone(task)]))
-  const notices: PluginNotice[] = []
+  const notices: PluginNotifyInput[] = []
   const errors: PluginNotice[] = []
   const emitted: PluginEvent[] = []
   const registeredOps: PluginOpDefinition[] = []
@@ -161,6 +165,22 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       preventExtensions() { return false },
       setPrototypeOf() { return false },
     }) as T
+  }
+
+  // This plugin's one quiet hold, observable through `events.on('quiet:changed')` like the host.
+  let quietHold: QuietHold | null = null
+  let quietAllowsPermissions = true
+  const quietState = (): QuietState => {
+    const live = quietHold && (quietHold.until === undefined || quietHold.until > Date.now()) ? quietHold : null
+    return live
+      ? { active: true, allowPermissions: quietAllowsPermissions, holds: [{ ...live }] }
+      : { active: false, allowPermissions: true, holds: [] }
+  }
+  const publishQuiet = () => {
+    const event: PluginEvent = { name: 'quiet:changed', data: quietState(), timestamp: Date.now(), source: 'quiet' }
+    for (const subscription of subscriptions) {
+      if (subscription.names.some((prefix) => event.name.startsWith(prefix))) void subscription.handler(event)
+    }
   }
 
   const events = {
@@ -246,9 +266,37 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       onChange: () => disposable(),
     },
     notifications: {
-      async notify(notice) { notices.push(structuredClone(notice)) },
+      async notify(notice) {
+        // Same replace rule as the host: a reminder re-fire takes the old one's place.
+        if (notice.kind === 'reminder') {
+          const at = notices.findIndex((one) => one.dedupKey === notice.dedupKey)
+          if (at >= 0) notices.splice(at, 1)
+        }
+        notices.push(structuredClone(notice))
+      },
       async error(notice) { errors.push(structuredClone(notice)) },
       async recover() { errors.length = 0 },
+      async dismiss(dedupKey) {
+        const at = notices.findIndex((one) => one.dedupKey === dedupKey)
+        if (at >= 0) notices.splice(at, 1)
+      },
+      quiet: {
+        async get() { return quietState() },
+        async set(input = {}) {
+          const now = Date.now()
+          if (input.until !== undefined && input.until <= now) { quietHold = null } else {
+            quietHold = {
+              source: `plugin:${options.pluginId ?? 'test-plugin'}`,
+              since: quietHold?.since ?? now,
+              ...(input.until !== undefined ? { until: input.until } : {}),
+              ...(input.reason ? { reason: input.reason } : {}),
+            }
+            quietAllowsPermissions = input.allowPermissions !== false
+          }
+          publishQuiet()
+        },
+        async clear() { quietHold = null; publishQuiet() },
+      },
     },
     ops: {
       async call(name) { return { ok: false, message: `No fake op registered: ${name}` } },

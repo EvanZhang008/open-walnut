@@ -30,6 +30,7 @@ import {
   type LinkedCheckoutOps,
 } from './plugin-linked-ops.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
+import { mountBundledPluginRoutes, type BundledPluginConfigWriter } from './plugin-bundled-routes.js'
 import {
   loadPluginCatalog,
   mergePluginRegistry,
@@ -104,6 +105,12 @@ export interface PluginRuntimeRouterDeps {
   cache?: UpdateStatusCache
   /** Override for the 60 s update deadline (tests only). */
   updateDeadlineMs?: number
+  /** Drop a disabled bundled plugin's record, so its row reads available again. */
+  forgetBundled?(pluginId: string): Promise<boolean>
+  /** The bundled store folder: undefined resolves this build's, null means none (tests). */
+  bundledStoreDir?: string | null
+  /** Install/Remove's two config writes (tests inject a fake). */
+  bundledConfig?: BundledPluginConfigWriter
 }
 
 function routePluginId(value: string | string[]): string {
@@ -219,7 +226,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
    */
   router.get('/registry', async (_req, res, next) => {
     try {
-      const catalog = await loadPluginCatalog(deps.walnutHome ?? WALNUT_HOME)
+      const catalog = await loadPluginCatalog(deps.walnutHome ?? WALNUT_HOME, { bundledStoreDir: deps.bundledStoreDir })
       const lifecycle = cloudMode ? (await listPrimaryModules()).plugins : deps.list()
       let owners = new Map<string, { slug: string; kind: 'git' | 'npm' }>()
       let pendingSchemas = new Map<string, Record<string, unknown> | undefined>()
@@ -276,9 +283,13 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
                 { properties?: Record<string, unknown> } | undefined
             )?.properties) ?? {},
           ).length > 0,
-          ...(owner ? { sourceSlug: owner.slug, sourceKind: owner.kind } : {}),
+          // A bundled plugin was installed from this build's own folder: no source owns it,
+          // and its row's Remove takes it back to available.
+          ...(record.bundled
+            ? { sourceKind: 'bundled' as const }
+            : owner ? { sourceSlug: owner.slug, sourceKind: owner.kind } : {}),
           ...(linkedCheckouts.has(record.id) ? { linked: linkedCheckouts.get(record.id) } : {}),
-          ...(linkedScanSkipped && !record.builtin && !owner && !linkedCheckouts.has(record.id)
+          ...(linkedScanSkipped && !record.builtin && !record.bundled && !owner && !linkedCheckouts.has(record.id)
             ? { linkedScanSkipped: true }
             : {}),
         }
@@ -294,6 +305,19 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
       }
       next(error)
     }
+  })
+
+  // Before every `/:pluginId/...` route, so `bundled` is never read as a plugin id.
+  mountBundledPluginRoutes(router, {
+    cloudMode,
+    list: () => deps.list(),
+    ...(deps.discover ? { discover: (pluginId: string) => deps.discover!(pluginId) } : {}),
+    disable: (pluginId, opts) => deps.disable(pluginId, opts),
+    ...(deps.forgetBundled ? { forget: (pluginId: string) => deps.forgetBundled!(pluginId) } : {}),
+    managePrimary,
+    publishCloudChange,
+    ...(deps.bundledStoreDir !== undefined ? { bundledStoreDir: deps.bundledStoreDir } : {}),
+    ...(deps.bundledConfig ? { pluginConfig: deps.bundledConfig } : {}),
   })
 
   router.post('/discover', async (req, res) => {

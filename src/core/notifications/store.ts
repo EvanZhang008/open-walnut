@@ -28,8 +28,13 @@ const MAX_NOTIFICATIONS = 200;
  *  living in its own durable store (src/core/human-inbox/), so the record here
  *  carries only the envelope + `letterId`. It behaves differently from every
  *  other kind in two deliberate ways — it is exempt from mark-all-read, and the
- *  200-cap evicts ordinary records before it (see withStore). */
-export type NotificationKind = 'permission' | 'cron' | 'operation-error' | 'skill' | 'hook' | 'letter';
+ *  200-cap evicts ordinary records before it (see withStore).
+ *
+ *  'reminder' is a plugin's timed prompt (a stand-up nudge, a focus block ending):
+ *  it toasts long, chimes, and carries up to three `actions` the human answers it
+ *  with. A re-fire REPLACES the previous record (replaceNotification) instead of
+ *  being deduped away, and its producer retires it with removeNotification. */
+export type NotificationKind = 'permission' | 'cron' | 'operation-error' | 'skill' | 'hook' | 'letter' | 'reminder';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
 export interface NotificationRecord {
@@ -101,6 +106,12 @@ export interface NotificationRecord {
    *  a plugin failure has none. `to` is a console route; the iOS app maps it. */
   action?: NotificationAction;
 
+  /** The buttons this record offers, primary first, at most three. Authoritative
+   *  over `action` when present (clients fall back to `action` otherwise). An `op`
+   *  button runs a plugin op; the plugin API stamps `pluginId` itself, so a plugin
+   *  can only ever attach buttons for its OWN ops. */
+  actions?: NotificationButton[];
+
   // ── Permission detail (so the feed can render + answer a request itself) ──
   /** Permission: the provider's request id. First-class instead of parsed back out of dedupKey. */
   requestId?: string;
@@ -156,6 +167,12 @@ export interface NotificationAction {
   /** Console route, e.g. `/settings#plugin-store`. */
   to: string;
 }
+
+/** One entry of `actions`: a console link, or a plugin op the client POSTs to
+ *  `/api/plugin-runtime/<pluginId>/ops/<op>` with `args` as the JSON body. */
+export type NotificationButton =
+  | { kind: 'navigate'; label: string; to: string }
+  | { kind: 'op'; label: string; pluginId: string; op: string; args?: Record<string, unknown> };
 
 interface NotificationsStore {
   version: 1;
@@ -339,7 +356,7 @@ const REFRESHABLE_DETAIL_KEYS = [
   // A card's action follows the latest occurrence too: a sign-in card that
   // re-fires must keep its Sign in button, and a card that first fired without
   // one gains it when the producer learns what the human can do.
-  'action',
+  'action', 'actions',
 ] as const;
 
 /**
@@ -456,15 +473,18 @@ export async function attachNotificationFix(dedupKey: string, fix: NotificationF
  * still works — that is the path the reader (and the letter store's read-state
  * mirror) uses.
  */
-export async function markRead(ids?: string[]): Promise<{ unreadCount: number }> {
+export async function markRead(ids?: string[], dedupKeys?: string[]): Promise<{ unreadCount: number }> {
   return withWriteLock(() => withStore((store) => {
     const idSet = ids && ids.length > 0 ? new Set(ids) : null;
+    // By dedupKey too: a live WS entry carries a frontend-local id, so a client
+    // that just answered a reminder's button can only name it by its key.
+    const keySet = dedupKeys && dedupKeys.length > 0 ? new Set(dedupKeys) : null;
     for (const n of store.notifications) {
-      if (!idSet) {
+      if (!idSet && !keySet) {
         if (n.kind !== 'letter') n.read = true;
         continue;
       }
-      if (idSet.has(n.id)) n.read = true;
+      if (idSet?.has(n.id) || keySet?.has(n.dedupKey)) n.read = true;
     }
     return { unreadCount: store.notifications.filter(n => !n.read).length };
   }));
@@ -537,6 +557,45 @@ export async function dismissNotifications(
       unreadCount: store.notifications.filter(n => !n.read).length,
       removed: before - store.notifications.length,
     };
+  }));
+}
+
+/**
+ * Insert a record, REPLACING any existing one with the same dedupKey, under one
+ * lock. For reminders: a recurring prompt re-fired under a stable key must
+ * alert again even when the human never touched the previous one, which
+ * addNotification's first-write-wins would swallow. Returns the fresh record and
+ * the one it replaced (the caller broadcasts the removal before the insert).
+ */
+export async function replaceNotification(
+  input: NewNotification,
+): Promise<{ record: NotificationRecord; replaced: NotificationRecord | null }> {
+  return withWriteLock(() => withStore((store) => {
+    const idx = store.notifications.findIndex(n => n.dedupKey === input.dedupKey);
+    const replaced = idx === -1 ? null : store.notifications.splice(idx, 1)[0];
+    const record: NotificationRecord = {
+      ...input,
+      id: input.id ?? generateId(),
+      timestamp: input.timestamp ?? Date.now(),
+      read: input.read ?? false,
+    };
+    store.notifications.push(record);
+    return { record: { ...record }, replaced };
+  }));
+}
+
+/** Remove ONE record by dedupKey and return it (null when absent), so the caller
+ *  can broadcast `notification:removed` with its id. */
+export async function removeNotification(dedupKey: string): Promise<NotificationRecord | null> {
+  if (!dedupKey) return null;
+  // Lock-free pre-check: retiring a reminder the human already dismissed must not
+  // take the cross-process lock and rewrite the file. An unreadable store falls
+  // through to the locked path, which repairs it.
+  const snapshot = await readStoreOrNull();
+  if (snapshot && !snapshot.notifications.some(n => n.dedupKey === dedupKey)) return null;
+  return withWriteLock(() => withStore((store) => {
+    const idx = store.notifications.findIndex(n => n.dedupKey === dedupKey);
+    return idx === -1 ? null : store.notifications.splice(idx, 1)[0];
   }));
 }
 

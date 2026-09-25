@@ -73,13 +73,22 @@ function parseStringArray(res: Response, value: unknown, field: string): { ok: b
   return { ok: true, value: value as string[] | undefined }
 }
 
-// POST /api/notifications/mark-read { ids? } — mark some (or, with no ids, all)
-// notifications read. Returns the resulting unread count.
+// POST /api/notifications/mark-read { ids?, dedupKeys? } — mark some (or, with
+// neither, all) notifications read. Returns the resulting unread count.
 notificationsRouter.post('/mark-read', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const ids = parseStringArray(res, (req.body as { ids?: unknown }).ids, 'ids')
+    const body = req.body as { ids?: unknown; dedupKeys?: unknown }
+    const ids = parseStringArray(res, body.ids, 'ids')
     if (!ids.ok) return
-    const { unreadCount } = await markRead(ids.value)
+    // dedupKeys: a live entry's id is frontend-local, its key is the shared identity.
+    const dedupKeys = parseStringArray(res, body.dedupKeys, 'dedupKeys')
+    if (!dedupKeys.ok) return
+    // An explicitly EMPTY dedupKeys list names nothing; it must not become mark-ALL.
+    if (dedupKeys.value && dedupKeys.value.length === 0 && !ids.value?.length) {
+      res.json({ unreadCount: (await listNotifications()).unreadCount })
+      return
+    }
+    const { unreadCount } = await markRead(ids.value, dedupKeys.value)
     res.json({ unreadCount })
   } catch (err) {
     next(err)

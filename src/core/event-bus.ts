@@ -164,6 +164,17 @@ export const EventNames = {
   // Human Inbox: an agent sent the human a letter, or replied in its thread.
   // Envelope only — the body stays on disk (see HumanInboxLetterEvent).
   HUMAN_INBOX_LETTER: 'human-inbox:letter',
+
+  // A producer removed its own feed record (plugin notifications.dismiss).
+  NOTIFICATION_REMOVED: 'notification:removed',
+
+  // Quiet mode changed (src/core/quiet/quiet-state.ts). Web + plugins.
+  QUIET_CHANGED: 'quiet:changed',
+
+  // Presence for in-process subscribers (plugins), never broadcast to browsers:
+  // human attention records banked, and throttled Mac-wide attention.
+  TIME_BANKED: 'time:banked',
+  TIME_OUTSIDE: 'time:outside',
 } as const;
 
 export type EventName = (typeof EventNames)[keyof typeof EventNames];

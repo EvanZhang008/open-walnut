@@ -34,6 +34,10 @@ import { type Page } from '@playwright/test'
  *      which only the catalog can supply: its button opens a consent list naming the exact
  *      source URL, and nothing is installed until a second, explicit yes. A curated
  *      catalog file is a suggestion, not permission to run someone's code.
+ *   7. A bundled plugin (in the store folder that ships with Walnut) lists as Available
+ *      and is NOT loaded; one Install loads it live and writes `enabled: true`; Remove
+ *      takes it back to Available and deletes its whole config key. Twice, because the
+ *      second Install is the one that proves Remove really forgot it.
  *
  * Runs against its own server (tests/e2e/browser/plugin-store-server.ts) because the
  * shared :3457 fixture installs no plugins by design.
@@ -48,6 +52,7 @@ interface Fixture {
   requiresEntryId: string
   dependencySourceSlug: string
   dependencySourceUrl: string
+  bundledEntryId: string
 }
 
 let child: ChildProcessWithoutNullStreams | null = null
@@ -255,6 +260,64 @@ test('installing still requires the trust acknowledgement, prefill included', as
   // And unticking takes the ability away again.
   await trust.uncheck()
   await expect(addButton).toBeDisabled()
+})
+
+test('a bundled plugin installs in one click, and Remove takes it back to Available', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  const id = fixture!.bundledEntryId
+
+  await openPlugins(page)
+  const available = page.getByTestId('plugin-store-available')
+  const installed = page.getByTestId('plugin-store-installed')
+  const row = page.getByTestId(`plugin-row-${id}`)
+
+  for (const round of [1, 2]) {
+    // ── Available: shipped, not loaded, and nothing in config says otherwise ──
+    await expect(available.getByTestId(`plugin-row-${id}`)).toHaveCount(1, { timeout: 30_000 })
+    await expect(row).toHaveAttribute('data-plugin-status', 'available')
+    await expect(row).toHaveAttribute('title', 'Ships with Walnut; not loaded until installed.')
+    await expect(page.getByTestId(`plugin-install-${id}`)).toHaveText('Install')
+    await expect(page.locator(`#plugin-toggle-${id}`)).toHaveCount(0)
+    expect(await configPluginKeys()).not.toContain(id)
+    // The section is taller than the viewport, so shoot the group under test, not the page.
+    if (round === 1) await available.screenshot({ path: `${SCREENSHOT_DIR}/store-1680-bundled-available.png` })
+
+    // ── Install: one click, loaded live, installed on disk ──
+    await page.getByTestId(`plugin-install-${id}`).click()
+    await expect(installed.getByTestId(`plugin-row-${id}`)).toHaveCount(1, { timeout: 60_000 })
+    await expect(row).toHaveAttribute('data-plugin-status', 'active')
+    await expect(row).toHaveAttribute('title', /^Bundled\. Adds agent tools\.$/)
+    await expect(page.locator(`#plugin-toggle-${id}`)).toHaveAttribute('aria-checked', 'true')
+    await expect(available.getByTestId(`plugin-row-${id}`)).toHaveCount(0)
+    await expect(page.locator('#plugin-store')).toContainText('Installed Omega.')
+    await expect.poll(() => configEnabled(id), { timeout: 15_000 }).toBe(true)
+    if (round === 1) {
+      await page.locator('.plugin-store-entry', { has: row }).screenshot({ path: `${SCREENSHOT_DIR}/store-1680-bundled-installed.png` })
+      // The switch is an ordinary switch: off persists, and Remove still works from off.
+      await page.locator(`#plugin-toggle-${id}`).click()
+      await expect(row).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 60_000 })
+      await expect.poll(() => configEnabled(id), { timeout: 15_000 }).toBe(false)
+    }
+
+    // ── Remove: two-step, back to Available, config key gone ──
+    const remove = page.getByTestId(`plugin-remove-${id}`)
+    await expect(remove).toHaveText('Remove')
+    await remove.click()
+    await expect(remove).toHaveText('Confirm remove')
+    await remove.click()
+    await expect(available.getByTestId(`plugin-row-${id}`)).toHaveCount(1, { timeout: 60_000 })
+    await expect(installed.getByTestId(`plugin-row-${id}`)).toHaveCount(0)
+    await expect(row).toHaveAttribute('data-plugin-status', 'available')
+    await expect(page.locator('#plugin-store')).toContainText('Removed Omega; it is back under Available.')
+    await expect.poll(() => configPluginKeys(), { timeout: 15_000 }).not.toContain(id)
+    if (round === 1) await available.screenshot({ path: `${SCREENSHOT_DIR}/store-1680-bundled-removed.png` })
+  }
+
+  // And a fresh page load agrees with what the store just said.
+  await openPlugins(page)
+  await expect(available.getByTestId(`plugin-row-${id}`)).toHaveCount(1, { timeout: 30_000 })
+  expect(pageErrors, 'installing and removing a bundled plugin must not throw').toEqual([])
 })
 
 /*

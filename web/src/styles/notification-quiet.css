@@ -1,0 +1,36 @@
+/* Quiet mode: the bell's moon overlay and the panel header toggle. */
+
+/* Header: sits right of "Clear All" (or takes its place when the feed is empty). */
+.nfc-quiet-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  margin-right: 10px;
+}
+.nfc-header-clear + .nfc-quiet-toggle { margin-left: 0; }
+
+.nfc-quiet-chip {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary, #8e8e93);
+  cursor: default;
+}
+
+/* Bell: a small moon at the lower-left of the icon, clear of the count badge
+   (top-right). Pointer-transparent so the whole button stays one click target. */
+.sidebar-notification-btn .quiet-moon {
+  position: absolute;
+  left: 18px;
+  bottom: 4px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-secondary, #8e8e93);
+  pointer-events: none;
+}
+.sidebar.collapsed .sidebar-notification-btn .quiet-moon { left: 22px; }
+
+/* Several notice buttons in a toast (a reminder's Done / Snooze): the permission
+   toast's row already lays buttons out; this only keeps a long label from
+   pushing the row wider than the toast. */
+.nfc-notice-actions { flex-wrap: wrap; }

@@ -14,7 +14,9 @@
  *   2. Available: catalog entries not on this machine. A `builtin` one only needs
  *      turning on; a `git`/`npm` one PREFILLS the install form below (it never
  *      installs by itself); an `example` one lives in this checkout, so it shows the
- *      `walnut-plugin link` command instead of a button that could not work.
+ *      `walnut-plugin link` command instead of a button that could not work; a
+ *      `bundled` one ships inside this build's plugin-store folder, so Install loads it
+ *      live in one click, and its installed row's Remove takes it back to Available.
  *   3. Install from a git repo or an npm package: the free-form input, unchanged,
  *      for anything the catalog does not know.
  *
@@ -55,6 +57,7 @@ import {
   type MissingDependencyView,
 } from './PluginDependencyRows';
 import { PluginAppControls } from '../PluginAppControls';
+import { BUNDLED_AVAILABLE_TITLE, runBundledAction } from './plugin-bundled-actions';
 import { PluginConnectionPanel, CONNECTION_BADGE, connectedHelp, type ConnectionReport } from '../PluginConnectionPanel';
 import { BuildPluginCard } from '../BuildPluginCard';
 // Deliberately NOT '@/plugins/hooks': that module reaches the plugin loader, which
@@ -92,7 +95,8 @@ interface RegistryRow {
   docs?: string;
   source: {
     /** `local`: a plain folder under the plugins dir that no source owns; nothing can update it. */
-    kind: 'builtin' | 'git' | 'npm' | 'example' | 'linked' | 'local';
+    /** `bundled`: ships in this build's plugin-store folder; installed only on request. */
+    kind: 'builtin' | 'git' | 'npm' | 'example' | 'bundled' | 'linked' | 'local';
     url?: string;
     ref?: string;
     spec?: string;
@@ -171,6 +175,7 @@ function originLabel(row: RegistryRow, source: PluginSource | undefined): string
   // manifest; the label names only where the code comes from.
   if (row.source.kind === 'linked') return 'Linked';
   if (row.source.kind === 'local') return 'Local folder';
+  if (row.source.kind === 'bundled') return 'Bundled';
   if (source) return sourceShortLabel(source);
   return sourceShortLabel({ kind: row.source.kind === 'npm' ? 'npm' : 'git', url: row.source.url, spec: row.source.spec });
 }
@@ -542,6 +547,17 @@ export function PluginStoreSection({ config, onSave }: Props) {
   };
 
   /**
+   * Bundled store: Install writes `enabled: true` and loads it live; Remove turns it off,
+   * forgets it and deletes its config, so the row goes back to Available. A Remove that
+   * other plugins still run on is refused, and the refusal names them.
+   */
+  const handleBundled = (row: { id: string; name: string }, action: 'install' | 'remove', busyKey = row.id) =>
+    runBundledAction(row, action, {
+      busyKey, setBusy, setError, setNotice, nameOf,
+      onChanged: async () => { emitPluginsChanged(); await requestRefresh(); },
+    });
+
+  /**
    * ON goes through `reload` and OFF through `disable` — both write the `enabled`
    * flag to config.yaml first, which is what makes the switch survive a restart.
    *
@@ -835,6 +851,14 @@ export function PluginStoreSection({ config, onSave }: Props) {
                   onConfirm={() => handleRemove(row.sourceSlug!)}
                 />
               )}
+              {row.source.kind === 'bundled' && !row.sourceSlug && (
+                <InlineConfirmButton
+                  disabled={busy === row.id}
+                  aria-label={`Remove ${row.name}`}
+                  data-testid={`plugin-remove-${row.id}`}
+                  onConfirm={() => handleBundled(row, 'remove')}
+                />
+              )}
               {/* needs-config, needs-dependency, unsupported and quarantined are refused by
                   the plugin manager itself, so a switch would flip straight back. Those rows
                   carry their reason on the left and the action that can help on the right. */}
@@ -883,7 +907,10 @@ export function PluginStoreSection({ config, onSave }: Props) {
             // would add) instead of cloning on one click. Without a source of its own the
             // row falls back to the install form, which has its own trust switch.
             onInstall={(item) => {
-              if (row.sourceSlug) {
+              // Ships in this build: nothing to fetch and nothing new to trust, so it installs.
+              if (item.source?.kind === 'bundled') {
+                void handleBundled({ id: item.id, name: nameOf(item.id) }, 'install', dependencyBusyKey(row.id, item.id));
+              } else if (row.sourceSlug) {
                 setError(null);
                 setNotice(null);
                 setPending({ slug: row.sourceSlug, plan: row.dependencyPlan ?? [], rowId: row.id });
@@ -950,12 +977,16 @@ export function PluginStoreSection({ config, onSave }: Props) {
       label={row.name}
       title={row.source.kind === 'example'
         ? `In this checkout at ${row.source.path}; install it with walnut-plugin link.`
-        : row.source.kind === 'npm'
-          ? `npm ${row.source.spec ?? row.id}`
-          : row.source.kind === 'git' ? `git ${row.source.url ?? ''}` : 'Ships with Walnut, but not in this build.'}
+        : row.source.kind === 'bundled'
+          ? BUNDLED_AVAILABLE_TITLE
+          : row.source.kind === 'npm'
+            ? `npm ${row.source.spec ?? row.id}`
+            : row.source.kind === 'git' ? `git ${row.source.url ?? ''}` : 'Ships with Walnut, but not in this build.'}
       help={
         <>
-          {firstSentence(row.description) || (row.source.kind === 'builtin' ? 'Ships with Walnut, but not in this build.' : '')}
+          {firstSentence(row.description)
+            || (row.source.kind === 'builtin' ? 'Ships with Walnut, but not in this build.' : '')
+            || (row.source.kind === 'bundled' ? BUNDLED_AVAILABLE_TITLE : '')}
           {/* What installing it would ALSO pull in, before anything is added. */}
           {row.dependencyPlan?.length ? ' ' : null}
           <PluginAlsoNeeds rowId={row.id} plan={row.dependencyPlan} blockedBy={row.blockedBy} nameFor={nameOf} />
@@ -971,6 +1002,18 @@ export function PluginStoreSection({ config, onSave }: Props) {
               onClick={() => prefillInstall(row)}
             >
               Install...
+            </SettingsButton>
+          )}
+          {row.source.kind === 'bundled' && (
+            <SettingsButton
+              data-testid={`plugin-install-${row.id}`}
+              title={BUNDLED_AVAILABLE_TITLE}
+              busy={busy === row.id}
+              busyLabel="Installing..."
+              reserve={['Install', 'Installing...']}
+              onClick={() => void handleBundled(row, 'install')}
+            >
+              Install
             </SettingsButton>
           )}
           {row.source.kind === 'example' && row.source.path && (

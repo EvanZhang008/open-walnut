@@ -22,6 +22,10 @@
  *     entry `epsilon` waits for.
  *   - `epsilon`, a plugin inside a source clone that waits on `zeta`, so a blocked row
  *     can offer an install and prove that the offer ASKS first.
+ *   - a bundled store folder holding `omega` (registers nothing), pointed at through
+ *     WALNUT_BUNDLED_STORE_DIR, so the store has a plugin that ships with Walnut, is NOT
+ *     loaded, and installs with one click. Without the override this source-run server
+ *     would read the repo's own `plugin-store/`, whose contents change as plugins land.
  *
  * Never :3456 and never the developer's data: OPEN_WALNUT_HOME, HOME and the daemon
  * dirs all point inside one temp directory that is removed on shutdown.
@@ -47,6 +51,8 @@ process.env.WALNUT_DISABLE_SEARCH = '1'
 process.env.WALNUT_DISABLE_BACKGROUND_AI = '1'
 process.env.HOME = tmpBase
 process.env.USERPROFILE = tmpBase
+// Honoured only for ephemeral children and tests (src/core/plugins/bundled-store.ts).
+process.env.WALNUT_BUNDLED_STORE_DIR = path.join(tmpBase, 'bundled-store')
 process.argv.push('--_ephemeral-child')
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
@@ -158,6 +164,21 @@ await writeFixturePlugin(
   path.join(tmpBase, 'plugin-stores', dependencySourceSlug),
 )
 
+/**
+ * A plugin that ships in the bundled store: on disk from the start, but with no
+ * `plugins.omega` key in config it must list as Available, and only Install loads it.
+ */
+const bundledEntryId = 'omega'
+await writeFixturePlugin(
+  bundledEntryId,
+  {
+    name: 'Omega',
+    description: 'A plugin that ships with Walnut and waits to be installed.',
+    catalog: { adds: ['Agent tools'] },
+  },
+  path.join(tmpBase, 'bundled-store'),
+)
+
 // Install walnut-time the documented author way: a symlink in the data home's
 // plugins/ directory, which is exactly what `walnut-plugin link` writes.
 const pluginSource = path.join(repoRoot, 'examples/plugins/walnut-time')
@@ -193,6 +214,7 @@ const fixture = {
   requiresEntryId,
   dependencySourceSlug,
   dependencySourceUrl,
+  bundledEntryId,
 }
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))
 console.log(`PLUGIN_STORE_READY ${JSON.stringify(fixture)}`)

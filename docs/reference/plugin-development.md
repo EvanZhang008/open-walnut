@@ -119,6 +119,7 @@ Walnut loads built files, never your TypeScript sources. A published plugin pack
 - **`build`**: the source entries `walnut-plugin build` compiles, plus an optional `external` list for the server bundle.
 - **`configSchema`** and **`uiHints`**: optional generated Settings form for `plugins.<id>`.
 - **`taskFields`**: optional task fields for a sync integration.
+- **`catalog`**: optional `{ "adds": ["App"], "homepage": "...", "docs": "..." }`, read by the Settings store to describe a plugin in the bundled store before it is installed (see [Bundled store](#bundled-store)). Values of the wrong type are dropped.
 
 Legacy manifests without `apiVersion` keep their old capability gates and registration API. New work should use `apiVersion: 1`.
 
@@ -159,7 +160,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 |---|---|
 | `walnut.tasks` | Read, query, create, update, complete, and delete tasks. |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
-| `walnut.notifications` | Raise notices, report plugin errors, and recover from them. |
+| `walnut.notifications` | Raise notices (including `kind: 'reminder'` with up to three op buttons), `dismiss` your own, report plugin errors and recover from them, and hold Walnut's quiet mode with `quiet.get/set/clear`. |
 | `walnut.letters` | Send a letter to the human, hear the answer, reply in its thread, withdraw a stale one. |
 | `walnut.ops` | Call stable host operations that no typed service covers yet. |
 | `walnut.services` | Publish a capability for other plugins, and use the ones you declared as dependencies. |
@@ -544,7 +545,7 @@ Treat `subpath` as your own router input. Keep it a plain string comparison for 
 
 ### Badges
 
-A badge is a number, `'dot'`, or `null`. A non-integer or negative number is refused at the call. Set an initial value on the contribution, then move it with the handle as state changes, and clear it with `null` when the user has seen whatever it was counting.
+A badge is a number, `'dot'`, `{ text }`, or `null`. A number is a count and draws red, like unread mail. `{ text: '24m' }` is a short status that is not a count (a countdown, a mode) and draws muted; the text is 1 to 6 characters. A non-integer or negative number, or text outside that length, is refused at the call. Set an initial value on the contribution, then move it with the handle as state changes, and clear it with `null` when the user has seen whatever it was counting.
 
 ### Where the App's row lives
 
@@ -710,6 +711,18 @@ Because Walnut installs with lifecycle scripts disabled, your published package 
 A plugin whose `~/.open-walnut/plugins/<id>` is a symlink into a git checkout (what `walnut-plugin link` or a hand-made `ln -s` produces) is a **linked** plugin. Its row in Settings, Plugins shows the checkout, branch, commit, and whether the tree has uncommitted changes, with two buttons: **Check** fetches and reports how many commits the checkout is behind and ahead (a fetch that fails, offline or without access, is reported as such, never as "up to date"), and **Update** fast-forwards the checkout and hot-reloads every plugin linked out of it. Update refuses a dirty or diverged tree (409 `{ code: "dirty" | "diverged" }`) rather than touching your work. The same two operations are `POST /api/plugin-runtime/<id>/linked/check` and `POST /api/plugin-runtime/<id>/linked/update`.
 
 Discovery and reload are different operations: `POST /api/plugin-runtime/discover` only picks up a plugin id the host has not loaded yet, so a plugin that is already loaded keeps the module it was loaded from and the answer comes back with `alreadyLoaded: true` plus a `note` saying so. After you change the files of a plugin that is already running, call `POST /api/plugin-runtime/<id>/reload` instead, which is what `walnut-plugin dev` does on every save.
+
+### Bundled store
+
+The repo folder `plugin-store/` holds plugins that ship inside every Walnut build but are not loaded by default. Each one uses the same layout as `examples/plugins/<id>/`, and the folder name must equal the manifest `id`. The build (`scripts/ship-store-plugins.mjs`, run by `npm run build` and `npm run web:build`) builds each one with `walnut-plugin build`, checks its declared `server` and `web` artifacts, and copies `manifest.json`, `README.md`, `dist/` and `skills/` to `dist/plugin-store/<id>/`.
+
+In Settings, Plugins, a bundled plugin lists under Available with an **Install** button:
+
+- **Install** (`POST /api/plugin-runtime/bundled/<id>/install`) writes `plugins.<id>.enabled: true` and loads the plugin live, with no restart. If nothing could load it (for example, its build output is missing), the config write is taken back and the answer says why.
+- Once installed, the row is labelled `Bundled` and has the normal on/off switch.
+- **Remove** (`POST /api/plugin-runtime/bundled/<id>/remove`) turns it off, unloads it, and deletes the whole `plugins.<id>` block, settings included, so the row is Available again. It answers 409 `{ code: "has-dependents", dependents }` while another running plugin depends on it.
+
+Only an explicit `enabled: true` makes the loader discover a bundled folder, and the bundled store is scanned last, so a linked or source-installed copy of the same id wins. A bundled plugin is not a builtin: its `engines.walnut` range is enforced strictly and Safe Mode turns it off. The store row takes its name, description and version from the manifest, and the optional manifest `catalog` field supplies `adds`, `homepage` and `docs`. A catalog entry with the same id in `src/data/plugin-registry.json` or `~/.open-walnut/plugin-registry.json` can reword the row but cannot change its source. See `plugin-store/README.md` for adding one.
 
 ## Troubleshooting
 

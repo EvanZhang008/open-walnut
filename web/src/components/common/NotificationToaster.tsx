@@ -30,13 +30,14 @@ import { useNavigate } from 'react-router-dom';
 import {
   useNotifications, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf,
-  linkTargetOf, resolvedLabelOf,
+  linkTargetOf, resolvedLabelOf, displayActionsOf,
   type Notification, type NotificationSeverity,
 } from '@/contexts/notifications';
 import {
   isSettledPermission, respondToPermissionRequest, usePermissionRequest,
 } from '@/stores/permission-request-store';
 import { PermissionAnswerForm } from './PermissionAnswerForm';
+import { NotificationActionButtons } from './NotificationActionButtons';
 import { navigateToTarget } from '@/utils/open-session';
 
 // Escape-coded so the source bytes are identical across editors/terminals
@@ -52,7 +53,7 @@ const SEVERITY_ICON: Record<NotificationSeverity, string> = {
 const RESOLVED_DISMISS_MS = 1500;
 
 export function NotificationToaster() {
-  const { toasts, dismissToast, pinToast } = useNotifications();
+  const { toasts, dismissToast, pinToast, markReadByKey } = useNotifications();
   const navigate = useNavigate();
 
   if (toasts.length === 0) return null;
@@ -101,7 +102,23 @@ export function NotificationToaster() {
             </button>
           </div>
           {toast.body && <div className="notification-toast-body">{toast.body}</div>}
-          {toast.action && (
+          {/* A record with a button LIST (a plugin reminder's Done / Snooze):
+              up to three, an `op` runs the plugin's op. Once the human pressed
+              one the reminder is dealt with: the toast goes and the record is
+              read. Touching a button pins the toast so a slow op cannot lose it. */}
+          {toast.actions && toast.actions.length > 0 ? (
+            <NotificationActionButtons
+              n={toast}
+              actions={displayActionsOf(toast)}
+              variant="toast"
+              onNavigate={(to) => navigateToTarget(to, navigate)}
+              onInteract={() => pinToast(toast.id)}
+              onDone={() => {
+                dismissToast(toast.id);
+                if (toast.persistent) markReadByKey([toast.dedupKey]);
+              }}
+            />
+          ) : toast.action && (
             <button
               className="notification-toast-action"
               onClick={(e) => {

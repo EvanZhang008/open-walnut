@@ -32,6 +32,9 @@ import {
   isSettledPermission, respondToPermissionRequest, usePermissionRequest,
 } from '@/stores/permission-request-store';
 import { PermissionAnswerForm } from './PermissionAnswerForm';
+import { NotificationActionButtons } from './NotificationActionButtons';
+import { QuietToggle } from './QuietToggle';
+import { displayActionsOf } from '@/contexts/notifications/notification-actions';
 import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } from './NotificationSystemPane';
 import { navigateToTarget } from '@/utils/open-session';
 import { fetchSelfRepair, type SelfRepairInfo } from '@/api/config';
@@ -365,6 +368,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
               Clear All
             </button>
           )}
+          <QuietToggle />
           <button className="notification-panel-close" onClick={onClose} aria-label="Close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -1056,6 +1060,12 @@ const FeedItem = memo(function FeedItem({
     && n.action?.kind === 'navigate' && n.action.to
     ? { label: n.action.label, to: n.action.to }
     : null;
+  // A record's own button LIST (a plugin reminder's Done / Snooze). No read
+  // bookkeeping on success: this card is inside the open panel, whose sweep has
+  // already marked it read, and retiring it is the plugin's call (dismiss).
+  const noticeActions = n.actions && n.actions.length > 0 && !recovered && !stale
+    ? displayActionsOf(n)
+    : [];
 
   const startFix = async (restart: boolean) => {
     if (fixBusy || fixesInFlight.has(n.dedupKey)) return;
@@ -1159,6 +1169,15 @@ const FeedItem = memo(function FeedItem({
             {producerAction.label} ↗
           </button>
         </div>
+      )}
+      {noticeActions.length > 0 && (
+        <NotificationActionButtons
+          n={n}
+          actions={noticeActions}
+          variant="card"
+          onNavigate={onNavigate}
+          onDone={() => {}}
+        />
       )}
       {/* Hand the error to a coding session in Walnut's own source. Every click in
           here stops propagation (the row itself is a click target that navigates
