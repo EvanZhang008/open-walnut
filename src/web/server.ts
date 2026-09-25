@@ -2955,10 +2955,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // A replica has no ssh and no daemons of its own — the whole block is the
   // primary's job.
   if (!CLOUD_MODE) {
-    const { addOnDaemonPhaseChange, getDaemonConnectState, getDaemonConnection, isDaemonConnected } =
+    const { addOnDaemonPhaseChange, addOnDaemonHostConnected, getDaemonConnectState, getDaemonConnection, isDaemonConnected } =
       await import('../providers/daemon-connection.js')
     const { getConfig } = await import('../core/config-manager.js')
     const { buildHostStatus } = await import('../core/hosts/host-status.js')
+    const { getHostReadiness, wireHostReadiness } = await import('../core/hosts/host-readiness.js')
     const { CONNECT_IN_FLIGHT_PHASES } = await import('../core/sessions/host-connect-hint.js')
     const { HostWarmup, hostWarmupGateReason } = await import('../core/hosts/host-warmup.js')
     const { setHostWarmup } = await import('../core/hosts/host-warmup-registry.js')
@@ -2982,7 +2983,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const def = hostDefs[host]
       if (!def) return
       try {
-        const status = buildHostStatus(host, def, getDaemonConnectState(host), hostWarmup?.stateOf(host))
+        const status = buildHostStatus(host, def, getDaemonConnectState(host), hostWarmup?.stateOf(host), Date.now(), getHostReadiness(host))
         // No sessionId/taskId in the payload — this is about a HOST, so it must
         // also reach clients that filtered their interest down to one session.
         bus.emit(EventNames.HOST_STATUS, status, ['web-ui'])
@@ -2990,7 +2991,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
 
     unsubscribeHostPhase?.()
-    unsubscribeHostPhase = addOnDaemonPhaseChange((state) => emitHostStatus(state.host))
+    const offPhase = addOnDaemonPhaseChange((state) => emitHostStatus(state.host))
+    // After each handshake, ask the host what it can run (claude, node, gcc) and
+    // re-push its status with the answer. Never on the connect path itself.
+    const offReadiness = wireHostReadiness({
+      onConnected: addOnDaemonHostConnected,
+      isKnownHost: (host) => Object.hasOwn(hostDefs, host),
+      emit: emitHostStatus,
+    })
+    unsubscribeHostPhase = () => { offPhase(); offReadiness() }
 
     const warmupGate = hostWarmupGateReason({
       cloudMode: CLOUD_MODE, ephemeral: isEphemeral, env: process.env, config: await getConfig(),

@@ -154,11 +154,15 @@ export async function pollUntil<T>(
 // .zshrc — which hard-resets PATH and thereby defeats a PATH= override on the
 // daemon's env (measured: the real CLI won, and the suite silently exercised the
 // live model). Two things make the shim authoritative instead:
-//   1. a FAKE HOME whose `.toolbox/bin/claude` IS the shim — the daemon's own
-//      PATH bootstrap puts $HOME/.toolbox/bin FIRST, and the spawn preamble
-//      appends it again, so it wins at both stages;
+//   1. a FAKE HOME whose `.toolbox/bin/claude` IS the shim. The daemon's PATH
+//      bootstrap puts the user's login-shell PATH first, then its fallback dirs
+//      with $HOME/.toolbox/bin leading them (host-runtime-core.ts
+//      buildDaemonPath). With a fake HOME and SHELL=/bin/sh that login PATH is
+//      only the system dirs, so the shim wins unless a real claude sits in one
+//      of those; the spawn preamble appends the toolbox dir again;
 //   2. SHELL=/bin/sh so the preamble's `case "$SHELL"` matches neither zsh nor
-//      bash and no RC file is sourced at all.
+//      bash and no RC file is sourced at all (the login shell reads only the
+//      system profile, since the fake HOME has none).
 // Suites MUST assert the mock actually won (record.model === 'mock-model'), so
 // this can never regress into silently testing the real CLI.
 
@@ -199,8 +203,8 @@ export async function spawnIsolatedDaemon(opts: {
       env: {
         ...process.env,
         WALNUT_DAEMON_DIR: opts.daemonDir,
-        // The shim lives at $HOME/.toolbox/bin/claude, which the daemon's PATH
-        // bootstrap AND its spawn preamble both put ahead of anything else.
+        // The shim lives at $HOME/.toolbox/bin/claude, first among the daemon's
+        // fallback dirs; only system dirs (the fake HOME's login PATH) precede it.
         HOME: opts.fakeHome,
         // No RC sourcing, so nothing can hard-reset PATH out from under the shim.
         SHELL: '/bin/sh',

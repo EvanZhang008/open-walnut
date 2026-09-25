@@ -125,6 +125,9 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-service-files.ts',
   'src/providers/daemon-service-system.ts',
   'src/providers/daemon-service-handover.ts',
+  // Host runtime discovery (daemon PATH order, claude/node spawn gate,
+  // host.preflight): imported by the binary, text-injected into the source twin.
+  'src/providers/host-runtime-core.ts',
 ] as const
 
 /**

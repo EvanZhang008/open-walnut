@@ -22,7 +22,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { spawn, execSync } from 'node:child_process'
+import { spawn, execSync, execFile, execFileSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import type { ServerWebSocket } from 'bun'
 import {
@@ -58,6 +58,7 @@ import {
   type UserMarkerInput,
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
+import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 import {
   foldLine,
   initialFoldState,
@@ -379,76 +380,20 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 
 // ── PATH setup ──
 // When running as a compiled binary, the daemon starts with a bare PATH.
-// Discover common tool locations so spawned CLI processes (claude, node) work.
 // Claude CLI (#!/usr/bin/env node) needs BOTH claude AND node in PATH.
-;(() => {
-  const home = process.env.HOME || '/root'
-  const extraPaths = [
-    // toolbox FIRST: on some hosts it ships a logged-in `claude` that must win
-    // over a separate ~/.local/bin/claude install (which may be NOT logged in).
-    // These are only a fallback for when RC sourcing fails to provide claude.
-    `${home}/.toolbox/bin`,           // toolbox
-    `${home}/.local/bin`,              // Claude CLI default install location
-    `${home}/.npm-global/bin`,         // npm global
-    `${home}/.cargo/bin`,              // Rust tools
-    `${home}/.pyenv/shims`,           // pyenv (node via pyenv)
-    `${home}/.bun/bin`,               // bun
-    // Standard system paths as safety net. Primary source is the user's RC files
-    // (.zshrc / .bashrc), which typically include system dirs and are sourced in the
-    // extraPaths retrieval above. These fallback paths ensure basic commands work
-    // if RC sourcing fails.
-    '/usr/local/bin',
-    '/usr/bin',
-    '/bin',
-    '/usr/local/sbin',
-    '/usr/sbin',
-    '/sbin',
-  ]
-
-  // Try sourcing shell RC to get full PATH (nvm, fnm, volta, pyenv, etc.)
-  // Try both .zshrc and .bashrc since $SHELL may not be set in daemon context
-  const rcFiles = [`${home}/.zshrc`, `${home}/.bashrc`]
-  let pathFromRc = ''
-
-  for (const rcFile of rcFiles) {
-    try {
-      if (!fs.existsSync(rcFile)) continue
-      // Use /bin/bash to source (works for both .bashrc and most .zshrc)
-      // Some .zshrc uses zsh-specific syntax, so try zsh first if available
-      const shells = rcFile.endsWith('.zshrc')
-        ? ['/bin/zsh', '/usr/bin/zsh', '/bin/bash']
-        : ['/bin/bash', '/bin/sh']
-      for (const shell of shells) {
-        try {
-          if (!fs.existsSync(shell)) continue
-          const result = execSync(
-            `source ${JSON.stringify(rcFile)} 2>/dev/null; echo "$PATH"`,
-            { encoding: 'utf-8', shell, timeout: 5000 },
-          ).trim()
-          if (result && result.includes('/') && result.length > 20) {
-            pathFromRc = result
-            break
-          }
-        } catch { continue }
-      }
-      if (pathFromRc) break
-    } catch { continue }
-  }
-
-  // Merge all paths: extras + RC-sourced + current PATH
-  // Note: node discovery is NOT done here — it's handled by buildSpawnPreamble()
-  // at session spawn time, which properly activates nvm/pyenv shell functions.
-  const allPaths = [
-    ...extraPaths,
-    ...(pathFromRc ? pathFromRc.split(':') : []),
-    ...(process.env.PATH || '').split(':'),
-  ].filter(Boolean)
-
-  // Deduplicate while preserving order
-  const seen = new Set<string>()
-  const deduped = allPaths.filter(p => { if (seen.has(p)) return false; seen.add(p); return true })
-  process.env.PATH = deduped.join(':')
-})()
+// Order (host-runtime-core.ts buildDaemonPath): the user's login-shell PATH,
+// captured from a CLEAN env so our inherited PATH cannot leak into it, then the
+// fallback tool dirs (~/.toolbox/bin first among them), then the inherited PATH.
+// The old order was fallbacks -> rc PATH -> inherited: the fallback dirs
+// (/usr/local/bin, /usr/bin, ...) came BEFORE the user's rc PATH, and that rc
+// PATH was captured in the inherited env, so a node in a system dir or in the
+// server's own shell beat the one the user's rc chose (a Mac session got Node 18
+// while .zshrc picked 22). Keep in sync with daemon-source.ts.
+// Node discovery is NOT done here: buildSpawnPreamble() handles it at spawn
+// time, and hostRuntime.ensureClaude() gates the spawn.
+const hostRuntime = createHostRuntime({ fs, execFile, execFileSync, env: process.env })
+const bootPath = hostRuntime.computeDaemonPath()
+process.env.PATH = bootPath.path
 
 // ── Types ──
 // L2: per-session background-task state. `resourceVersion` = byte offset of the latest
@@ -860,7 +805,7 @@ function shellQuote(s: string): string {
  * This ensures `node` is available for Claude CLI (#!/usr/bin/env node),
  * even on hosts where nvm binaries need newer GLIBC than the system provides.
  */
-function buildSpawnPreamble(): string {
+function buildSpawnPreamble(nodeDir?: string): string {
   return [
     // Source RC files FIRST, then add our paths — RC files may hard-reset PATH
     // (e.g. zsh `export PATH=; path=(...)`) which would clobber earlier prepends.
@@ -883,21 +828,14 @@ function buildSpawnPreamble(): string {
     // PATH. Keep in sync with daemon-source.ts.
     'export PATH="$PATH:$HOME/.toolbox/bin:$HOME/.local/bin:$HOME/.npm-global/bin:'
       + GATEWAY_SHIM_DIR + '"',
-    'node -v >/dev/null 2>&1 || {'
-      + ' if [ -s "$HOME/.nvm/nvm.sh" ]; then'
-      + '   . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1;'
-      + '   node -v >/dev/null 2>&1 || {'
-      // nvm default may be compiled against a newer GLIBC than the host provides
-      // (e.g. node 18+ needs GLIBC 2.27+ but AL2 has 2.26). Try each installed
-      // version in reverse order until one actually executes.
-      + '     for v in $(ls -1r "$NVM_DIR/versions/node/" 2>/dev/null); do'
-      + '       nvm use --delete-prefix "$v" >/dev/null 2>&1 && node -v >/dev/null 2>&1 && break;'
-      + '     done; };'
-      + ' elif [ -x "$HOME/.fnm/fnm" ]; then eval "$("$HOME/.fnm/fnm" env)" >/dev/null 2>&1;'
-      + ' elif [ -d "$HOME/.volta" ]; then export PATH="$HOME/.volta/bin:$PATH";'
-      + ' elif [ -s "$HOME/.asdf/asdf.sh" ]; then . "$HOME/.asdf/asdf.sh" >/dev/null 2>&1;'
-      + ' fi;'
-      + ' true; }',
+    // A node hostRuntime.ensureClaude() found outside PATH (e.g. an older nvm
+    // version on a host whose newest node needs a newer glibc) is only used when
+    // the rc PATH gives no working node.
+    ...(nodeDir ? ['node -v >/dev/null 2>&1 || export PATH=' + shellQuote(nodeDir) + ':"$PATH"'] : []),
+    // Shared with session-io REMOTE_BASE_PATH (host-runtime-core.ts). nvm's
+    // default may be compiled against a newer GLIBC than the host provides, so
+    // it tries each installed version until one actually executes.
+    NODE_DISCOVERY_SHELL,
   ].join('; ')
 }
 
@@ -1637,6 +1575,13 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'vscode.status': return codeServerStatus().then(
       (s) => sendOk(ws, id as number, s as unknown as Record<string, unknown>),
       (err) => sendError(ws, id as number, 'vscode.status failed: ' + (err as Error).message),
+    )
+    // 'preflight-v1': read-only look at what this host can run (claude and the
+    // node it needs, a C compiler, dtach). Not bridge-reachable: only the
+    // trusted walnut socket asks. Keep in sync with daemon-source.ts.
+    case 'host.preflight': return hostRuntime.preflight().then(
+      (r) => sendOk(ws, id as number, r as unknown as Record<string, unknown>),
+      (err) => sendError(ws, id as number, 'host.preflight failed: ' + (err as Error).message),
     )
     case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
@@ -2647,11 +2592,38 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   })
     .catch((error) => {
       if (error?.code === 'SESSION_STOP_SUPERSEDED') return null
+      // A host that cannot run claude answers with the reason itself, not an
+      // "internal daemon error". Keep in sync with daemon-source.ts.
+      if (error?.code === 'CLAUDE_RUNTIME') return error as Error & { errorKind?: string }
       throw error
     })
   if (!result) return sendOk(ws, id, { ok: false, reason: 'session_stopped', error: 'start: a stop request superseded this start' })
+  if (result instanceof Error) return sendError(ws, id, result.message, { errorKind: result.errorKind })
   addSubscriber(ws, sid, result.offset)
   return sendOk(ws, id, result)
+}
+
+/**
+ * Resolve how to launch the CLI, or throw the precise reason it cannot run
+ * (error code CLAUDE_RUNTIME, errorKind claude_missing | claude_needs_node).
+ * The spawn shell gets a second opinion before a refusal: its rc files may
+ * reach a claude or node the daemon PATH does not, and such a spawn must still
+ * start. When a node dir is prepended, the RESOLVED claude path runs, so the
+ * prepended dir cannot shadow the user's claude with another copy.
+ */
+async function gateClaudeLaunch(args: string[]): Promise<{ args: string[]; nodeDir?: string }> {
+  const command = args[0] || 'claude'
+  const gate = await hostRuntime.ensureClaude(command, process.env.PATH || '')
+  if (gate.ok) {
+    return gate.nodeDir ? { args: [gate.path, ...args.slice(1)], nodeDir: gate.nodeDir } : { args }
+  }
+  // An absolute node in the shebang cannot be supplied by the shell either.
+  if (!gate.fixedInterpreter) {
+    const seen = await hostRuntime.shellCanRun(process.env.SHELL || '/bin/bash', buildSpawnPreamble(), command)
+    if (gate.code === 'claude_missing' ? seen.hasCmd : seen.hasNode) return { args }
+  }
+  logMsg('warn', 'spawn gate: claude cannot run on this host', { code: gate.code, command })
+  throw Object.assign(new Error(gate.message), { code: 'CLAUDE_RUNTIME', errorKind: gate.code })
 }
 
 async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () => boolean, canStart?: () => boolean) {
@@ -2741,7 +2713,17 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
         })
       }
     }
-    if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' })
+  }
+
+  // Spawn gate: name the exact reason a CLI cannot start (not installed, or the
+  // npm build with no working node) instead of an exit 127 after the spawn.
+  // It runs BEFORE the replaced session is torn down: a refusal must leave a
+  // live CLI exactly as it was, never killed and replaced by nothing.
+  // Keep in sync with daemon-source.ts.
+  const launch = await gateClaudeLaunch(args)
+  if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' })
+
+  if (existing) {
     logMsg('warn', 'cmdStart: replacing existing session', {
       sid,
       oldPid: existing.pid,
@@ -2833,8 +2815,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // This matches the proven buildRemotePreamble() approach from session-io.ts —
   // sourcing RC files ensures the full dev environment (including node) is available,
   // even on hosts where nvm binaries need newer GLIBC than the system provides.
-  const preamble = buildSpawnPreamble()
-  const escapedArgs = args.map((a: string) => shellQuote(a)).join(' ')
+  const preamble = buildSpawnPreamble(launch.nodeDir)
+  const escapedArgs = launch.args.map((a: string) => shellQuote(a)).join(' ')
   const shellCmd = `${preamble}; exec ${escapedArgs}`
 
   // Use the user's actual shell to spawn sessions. Hardcoding /bin/bash caused
@@ -7529,6 +7511,9 @@ if (action === '--start' || SERVICE_MODE) {
     port,
     pid: process.pid,
     startedAt: DAEMON_START_TS,
+    // Where the user part of PATH came from: login-shell (clean env), rc
+    // (fallback, inherited env) or none. Keep in sync with daemon-source.ts.
+    pathSource: bootPath.source,
     // Retry policy is read from the env ONCE at boot, so log it here: this line
     // is the only way to answer "is this daemon actually retrying, and with what
     // budget?" without shell access to its environ.

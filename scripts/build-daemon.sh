@@ -95,6 +95,7 @@ SOURCES=(
   src/providers/daemon-service-files.ts
   src/providers/daemon-service-system.ts
   src/providers/daemon-service-handover.ts
+  src/providers/host-runtime-core.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

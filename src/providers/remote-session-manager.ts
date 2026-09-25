@@ -249,6 +249,12 @@ export class RemoteSessionManager implements SessionManager {
 
     if (!result.ok) {
       if (result.reason === 'session_stopped') throw new SessionStopSupersededError('Session start was superseded by a stop request')
+      // The daemon's spawn gate already wrote the sentence the user needs (claude
+      // not installed / npm build without node, with the install command): pass
+      // it through verbatim instead of burying it in a "start failed" wrapper.
+      if (result.errorKind === 'claude_missing' || result.errorKind === 'claude_needs_node') {
+        throw new Error(this.isRemote ? `${String(result.error)} [${this.hostKey}]` : String(result.error))
+      }
       throw new Error(`Daemon start failed on host "${this.hostKey}": ${result.error}`)
     }
 

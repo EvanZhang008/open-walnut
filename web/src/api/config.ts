@@ -9,22 +9,9 @@ export async function fetchConfig(): Promise<Config & { _envTokenHint?: string }
 }
 
 /**
- * Walnut's own source checkout (drives the "Fix Walnut" button). null on npm
- * installs / cloud replicas → the button hides. Cached for the page lifetime:
- * the install dir can't change without a server restart.
- */
-let _installDirPromise: Promise<string | null> | null = null;
-export function fetchInstallDir(): Promise<string | null> {
-  _installDirPromise ??= apiGet<{ installDir?: string | null }>('/api/config')
-    .then(res => res.installDir ?? null)
-    .catch(() => { _installDirPromise = null; return null; });
-  return _installDirPromise;
-}
-
-/**
  * Whether an error notification's "Ask AI to fix" can start a repair session
  * here, and in which source tree. `source: null` with `available: true` means
- * the first click has to CLONE upstream first (minutes, once) — the button says
+ * the first click has to CLONE upstream first (minutes, once), and the button says
  * so instead of looking hung. `available: false` carries a `reason` and the
  * affordance simply isn't rendered (same posture as the Fix Walnut pill).
  */
@@ -36,61 +23,105 @@ export interface SelfRepairInfo {
   reason?: string;
 }
 
-/** Same page-lifetime cache rationale as installDir, with one exception: the
- *  first repair on an npm install CLONES a source tree, which flips `source`
- *  from null to a path. `startNotificationFix` drops the memo when its result
- *  says `cloned`, so the next card stops promising a clone that already happened. */
-let _selfRepairPromise: Promise<SelfRepairInfo | null> | null = null;
+/** Which build the server runs (server: src/lib/build-info.ts). Nulls = running from source. */
+export interface BuildInfo {
+  version: string;
+  commit: string | null;
+  branch: string | null;
+  builtAt: string | null;
+  dirty: boolean;
+}
+
+/** The page-lifetime facts GET /api/config carries next to the config itself. */
+interface ServerFacts {
+  installDir?: string | null;
+  selfRepair?: SelfRepairInfo | null;
+  notesDir?: string | null;
+  canRevealLocalFiles?: boolean;
+  cloud?: boolean;
+  build?: BuildInfo | null;
+}
+
+/**
+ * ONE shared GET /api/config for every page-lifetime helper below. The route is
+ * not cheap (self-repair probe, memory stats, asset report), and these helpers
+ * all fire in the same cold-load fan-out, so each owning its own fetch cost one
+ * full request apiece. None of these facts can change without a server restart
+ * (which reloads the page); the one exception, selfRepair after a first clone,
+ * drops the shared answer via invalidateSelfRepair(). A failed fetch is dropped
+ * too, so the next caller retries, and every selector resolves its fallback.
+ */
+let _factsPromise: Promise<ServerFacts> | null = null;
+let _facts: ServerFacts | null = null;
+function serverFacts(): Promise<ServerFacts> {
+  if (!_factsPromise) {
+    const p: Promise<ServerFacts> = apiGet<ServerFacts>('/api/config')
+      .then(res => { if (_factsPromise === p) _facts = res; return res; })
+      .catch(err => { if (_factsPromise === p) _factsPromise = null; throw err; });
+    _factsPromise = p;
+  }
+  return _factsPromise;
+}
+function selectFact<T>(pick: (facts: ServerFacts) => T, fallback: T): Promise<T> {
+  return serverFacts().then(pick, () => fallback);
+}
+
+/** Test hook: forget the shared answer. */
+export function _resetServerFactsForTest(): void {
+  _factsPromise = null;
+  _facts = null;
+}
+
+/**
+ * Walnut's own source checkout (drives the "Fix Walnut" button). null on npm
+ * installs / cloud replicas → the button hides.
+ */
+export function fetchInstallDir(): Promise<string | null> {
+  return selectFact(f => f.installDir ?? null, null);
+}
+
+/** The first repair on an npm install CLONES a source tree, which flips `source`
+ *  from null to a path. `startNotificationFix` calls invalidateSelfRepair() when
+ *  its result says `cloned`, so the next card stops promising a clone that
+ *  already happened. */
 export function fetchSelfRepair(): Promise<SelfRepairInfo | null> {
-  _selfRepairPromise ??= apiGet<{ selfRepair?: SelfRepairInfo | null }>('/api/config')
-    .then(res => res.selfRepair ?? null)
-    .catch(() => { _selfRepairPromise = null; return null; });
-  return _selfRepairPromise;
+  return selectFact(f => f.selfRepair ?? null, null);
 }
 export function invalidateSelfRepair(): void {
-  _selfRepairPromise = null;
+  _factsPromise = null;
 }
 
-/**
- * Notes vault root (cwd for Claude Code sessions started from /notes). null in
- * cloud mode. Same page-lifetime cache rationale as installDir.
- */
-let _notesDirPromise: Promise<string | null> | null = null;
+/** Notes vault root (cwd for Claude Code sessions started from /notes). null in cloud mode. */
 export function fetchNotesDir(): Promise<string | null> {
-  _notesDirPromise ??= apiGet<{ notesDir?: string | null }>('/api/config')
-    .then(res => res.notesDir ?? null)
-    .catch(() => { _notesDirPromise = null; return null; });
-  return _notesDirPromise;
+  return selectFact(f => f.notesDir ?? null, null);
 }
 
 /**
- * Whether the server can hand a local path to the desktop (`open`) — macOS
+ * Whether the server can hand a local path to the desktop (`open`): macOS
  * console only, false on cloud replicas. Drives whether the file-explorer's
- * right-click menu offers Reveal in Finder / Open in default app. Same
- * page-lifetime cache rationale as installDir (platform can't change).
+ * right-click menu offers Reveal in Finder / Open in default app.
  */
-let _canRevealPromise: Promise<boolean> | null = null;
 export function fetchCanRevealLocalFiles(): Promise<boolean> {
-  _canRevealPromise ??= apiGet<{ canRevealLocalFiles?: boolean }>('/api/config')
-    .then(res => res.canRevealLocalFiles === true)
-    .catch(() => { _canRevealPromise = null; return false; });
-  return _canRevealPromise;
+  return selectFact(f => f.canRevealLocalFiles === true, false);
 }
 
 /**
  * Whether this server is a cloud replica (WALNUT_CLOUD_MODE=1). A replica has
  * no CLI and no local daemon, so surfaces that would start local work (e.g.
- * "Build a plugin") hide their action and point at the Mac instead. Same
- * page-lifetime cache rationale as installDir (the mode can't change without
- * a server restart); errors resolve false so the primary console never loses
- * the affordance to a flaky fetch.
+ * "Build a plugin") hide their action and point at the Mac instead. Errors
+ * resolve false so the primary console never loses the affordance to a flaky fetch.
  */
-let _cloudPromise: Promise<boolean> | null = null;
 export function fetchIsCloudReplica(): Promise<boolean> {
-  _cloudPromise ??= apiGet<{ cloud?: boolean }>('/api/config')
-    .then(res => res.cloud === true)
-    .catch(() => { _cloudPromise = null; return false; });
-  return _cloudPromise;
+  return selectFact(f => f.cloud === true, false);
+}
+
+/** Build identity for the Settings footer line. */
+export function fetchBuildInfo(): Promise<BuildInfo | null> {
+  return selectFact(f => f.build ?? null, null);
+}
+/** The build identity if already fetched, so a remounting view never flashes empty. */
+export function peekBuildInfo(): BuildInfo | null {
+  return _facts?.build ?? null;
 }
 
 export async function updateConfig(config: Partial<Config>): Promise<{ ok: boolean }> {

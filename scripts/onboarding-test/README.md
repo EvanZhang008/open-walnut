@@ -2,15 +2,27 @@
 
 This harness answers one question: if somebody who has never seen Walnut follows the README on a machine that has never seen Walnut, what actually happens? It provisions a throwaway machine, does exactly what the README says (`git clone`, `npm install`, `npm start`, and separately `npm install -g open-walnut`), times every step, screenshots the first-run page, writes down each place a brand-new user would have had to stop and figure something out, and then destroys the machine. It never repairs the product on the way: `probe.sh` only reports.
 
-## The three targets
+## The targets
 
 | Target | Cost | Time to a usable machine | Fidelity | Needs on your side |
 |---|---|---|---|---|
 | `mac-vm` | free | about 2 minutes | highest for a Mac user: stock macOS with no Homebrew, no Xcode Command Line Tools, no git, no node | Apple Silicon, `brew install cirruslabs/cli/tart sshpass`, and `tart pull ghcr.io/cirruslabs/macos-sequoia-vanilla:latest` (about 24 GB, once) |
 | `linux` | EC2 t3.large, about USD 0.08 per hour | about 2 minutes, plus a minute for the SSM agent to register | a clean server distro (`al2023`, `al2023-arm` or `ubuntu`), reached only through SSM: no ingress, no SSH key, no public endpoint | `awscli` plus `session-manager-plugin`, and credentials for an account you are happy to spend in |
 | `mac-ec2` | a mac2.metal is sold as a whole physical host and bills a 24 hour minimum, about USD 16 | 5 to 15 minutes before SSM answers | real Apple hardware, so the closest thing to a new laptop that is not on your desk | account eligibility for Mac hosts; without it `AllocateHosts` fails with `UnsupportedHostConfiguration`, which a support case unlocks |
+| `remote-host` | free (a local container, or the CI job `remote-host`) | about 1 minute to build and start, plus a minute for Walnut's own Bun install on the box | the second machine: a Linux dev box with no C compiler, no node, an npm-built `claude` and `~/workplace` symlinked to `/workplace`, reached over real ssh | Docker with a running daemon; `npm install`, and `npm run build:daemon` for the daemon sidecars |
 
 `mac-vm` is the one to reach for by default: it is free, it is the fastest, and a vanilla image is genuinely bare. Use `linux` when the question is about a server install, and `mac-ec2` only when the Mac VM cannot answer the question, because the 24 hour charge starts the moment the host is allocated.
+
+## The second machine: remote host
+
+Everything above tests the machine the server runs on. `remote-host/` tests the other one: a Linux dev box a user adds as a remote host, which Walnut has to provision on its own. The box is a container (`remote-host/Dockerfile`) shaped like a real one that broke for a new user: no C compiler, no node on the non-interactive ssh PATH, `~/.local/bin/claude` linked to an npm `cli.js` whose shebang is `#!/usr/bin/env node`, and `~/workplace` a symlink to `/workplace` next to a real `~/workspace`. Bun is deliberately absent, because installing it there is Walnut's job.
+
+```bash
+scripts/onboarding-test/remote-host/run.sh          # build, start, test, tear down
+scripts/onboarding-test/remote-host/run.sh --keep   # leave the container up to poke at
+```
+
+`run.sh` builds the image, makes a throwaway ed25519 key in a private temp dir, starts the container with sshd on a random loopback port, writes an ssh config that maps the alias `walnut-onboarding-devbox` to it, and runs `tests/live/remote-host-onboarding.live.test.ts`. On exit it removes only the container it started and its own temp dir. Without Docker (or with the Docker daemon stopped) it exits 1 and says so. The test drives the real `DaemonConnection` through every connect step (ssh, probe, install-runtime, upload, start, tunnel, handshake), then checks the folder picker's `~/workplace` and `~/workspace`, the terminal's "no compiler" answer, `host.preflight`, and the message a session start gives when `claude` needs a node the box does not have. Walnut's host config has no ssh-config or key option, so the test registers the host as `hosts.devbox.hostname: walnut-onboarding-devbox` in an isolated `config.yaml` and puts an `ssh` shim first on PATH that adds `-F <that config>`. It refuses to run unless the alias resolves to loopback and the box carries `/etc/walnut-onboarding-fixture`. CI runs the same script in the `remote-host` job, which is part of `CI OK`. Because that job needs the network twice (the base image from Docker Hub, and Bun from bun.sh on the box), the step runs `run.sh` up to two times, each attempt capped at 7 minutes, and uploads both attempts' logs as the `remote-host-logs` artifact, so a pass on the retry still shows why attempt 1 failed. A failure caused by a download is labelled: `run.sh` prints `NETWORK:` when the image pull or apt fetch fails, and the live test fails with `NETWORK:` when Bun never got installed and the box cannot reach bun.sh or GitHub (or the error names a download failure). Those lines are copied to the job summary; any other failure is a real regression. The base image is pinned by digest (the bump command is in the Dockerfile). Ratchet: `tests/scripts/remote-host-onboarding-ratchet.test.ts`.
 
 ## Commands
 

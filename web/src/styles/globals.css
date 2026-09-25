@@ -25743,7 +25743,42 @@ a.file-link:hover {
 .session-terminal-status-connecting { background: color-mix(in srgb, var(--warning, #ff9500) 22%, transparent); color: var(--warning, #ff9500); }
 .session-terminal-status-error,
 .session-terminal-status-exited,
-.session-terminal-status-no_dtach { background: color-mix(in srgb, var(--danger, #ff3b30) 22%, transparent); color: var(--danger, #ff3b30); }
+.session-terminal-status-ssh_failed { background: color-mix(in srgb, var(--danger, #ff3b30) 22%, transparent); color: var(--danger, #ff3b30); }
+/* "Not persistent": same pill as the status, in the warning tone. */
+.session-terminal-plain-badge { background: color-mix(in srgb, var(--warning, #ff9500) 22%, transparent); color: var(--warning, #ff9500); cursor: help; }
+
+/* One-line notice above a plain (non-persistent) terminal. */
+.session-terminal-plain-notice {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  background: color-mix(in srgb, var(--warning, #ff9500) 10%, var(--bg));
+  border-bottom: 1px solid var(--border);
+}
+.session-terminal-plain-row { display: flex; align-items: center; gap: 8px; }
+.session-terminal-plain-text { flex: 1; min-width: 0; }
+.session-terminal-plain-text code,
+.session-terminal-plain-details pre,
+.session-terminal-ssh-detail { font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace); }
+.session-terminal-plain-text code { color: var(--accent); }
+.session-terminal-plain-details { margin-top: 4px; color: var(--fg-muted); }
+.session-terminal-plain-details summary { cursor: pointer; }
+.session-terminal-plain-details pre,
+.session-terminal-ssh-detail {
+  margin: 4px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 6px 8px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+}
+.session-terminal-ssh-detail { max-width: 560px; width: 100%; color: var(--fg-muted); }
 
 .session-terminal-actions {
   display: flex;
@@ -25805,7 +25840,7 @@ a.file-link:hover {
   border-top: 1px solid var(--border);
 }
 
-/* NO_DTACH error card */
+/* Blocking error card (ssh failed: no terminal at all) */
 .session-terminal-error-card {
   flex: 1;
   display: flex;
@@ -25821,20 +25856,6 @@ a.file-link:hover {
 .session-terminal-error-icon { font-size: 32px; }
 .session-terminal-error-title { font-size: 15px; font-weight: 600; }
 .session-terminal-error-body { font-size: 13px; color: var(--fg-muted); max-width: 480px; }
-.session-terminal-install {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-}
-.session-terminal-install code {
-  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
-  font-size: 13px;
-  color: var(--accent);
-}
 .session-terminal-retry {
   margin-top: 4px;
   padding: 6px 16px;

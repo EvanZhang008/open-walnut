@@ -304,6 +304,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // over the legacy start/send/... and acp* families). Optional: without it the
   // server keeps speaking the legacy families directly.
   'agent-commands-v1',
+  // 'preflight-v1': host.preflight answers what this host can run (is claude
+  // installed, native or npm build, a working node for the npm build, a C
+  // compiler, dtach), computed host-side with short timeouts. Both twins
+  // implement it inline (host-runtime-core.ts, text-injected into the source
+  // twin), so it is NOT sidecar-gated. Not bridge-reachable. Optional: without
+  // it the host status simply carries no readiness field and shows no hint.
+  'preflight-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

@@ -24,9 +24,7 @@
  * drag in core/task-manager, which is exactly what this bundle must not hold.
  */
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { formatBuildVersion, getBuildInfo } from './lib/build-info.js';
 
 /** Data subcommands served by this entry. Mirrored in bin/open-walnut.js. */
 export const LITE_COMMANDS = new Set([
@@ -36,15 +34,10 @@ export const LITE_COMMANDS = new Set([
 
 const argv = process.argv.slice(2);
 
-// --version / -V: read the real version from package.json (dist/cli-fast.js →
-// ../package.json), same source the full CLI uses.
+// --version / -V: the version plus the commit and date this dist was built from
+// (`0.4.5 (3942cf7, 2026-09-24)`), same line the full CLI prints.
 if (argv.includes('--version') || argv.includes('-V')) {
-  try {
-    const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
-    console.log((JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version?: string }).version ?? '0.0.0');
-  } catch {
-    console.log('0.0.0');
-  }
+  console.log(formatBuildVersion(getBuildInfo()));
   process.exit(0);
 }
 

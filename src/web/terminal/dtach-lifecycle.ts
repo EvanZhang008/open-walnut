@@ -10,6 +10,11 @@
  * A dtach "session" is a unix socket (see dtachSocketPath) plus the detached
  * `dtach -A` master process holding the pty. Killing it = remove the socket and
  * kill the master process group; the shell under it dies with it.
+ *
+ * A PLAIN terminal (dtach unavailable, see dtach-check.ts) has no socket and no
+ * master: the socket helpers below simply find nothing (pgrep/pkill/rm are
+ * no-ops), and conditionalReap ends such a shell through the TerminalManager,
+ * which holds its only process.
  */
 
 import { execFile } from 'node:child_process'
@@ -153,6 +158,13 @@ export async function conditionalReap(record: Pick<SessionRecord, 'claudeSession
     if (terminalManager.isViewing(record.claudeSessionId)) {
       log.web.info('dtach kept (client attached)', { sessionId: record.claudeSessionId })
       return 'kept'
+    }
+    // Plain shell: no dtach master to inspect, and its detached pty dies at
+    // grace expiry anyway, so end it now like an idle shell.
+    if (terminalManager.liveMode(record.claudeSessionId)?.persistent === false) {
+      terminalManager.end(record.claudeSessionId)
+      log.web.info('plain terminal ended (no dtach socket)', { sessionId: record.claudeSessionId })
+      return 'killed'
     }
   } catch { /* terminal feature disabled → fall through to process check */ }
   if (await hasForegroundProcess(record)) {

@@ -16,6 +16,7 @@ import { execFileSync } from 'node:child_process'
 import { JsonlTailer } from '../core/jsonl-tailer.js'
 import { SESSION_STREAMS_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
+import { NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 
 // ── SessionIO interface ──
 
@@ -496,7 +497,7 @@ export const REMOTE_BASE_PATH = [
   // pass and skip the fallback loop; the caller then `nohup node ...` dies with
   // "GLIBC_2.27 not found" — exactly what bricked clouddev on 2026-05-05.
   //
-  // The nvm loop below walks ALL installed node versions (newest first, then
+  // The nvm loop walks ALL installed node versions (newest first, then
   // older — older nvm versions tend to be statically linked against older glibc
   // so they work on old hosts). `nvm use` + `node -v` confirms both install
   // correctness AND runtime compatibility before we accept that version.
@@ -504,18 +505,9 @@ export const REMOTE_BASE_PATH = [
   // Tries nvm > fnm > volta > asdf. All stdout suppressed to avoid JSONL pollution.
   // Use `||` instead of `if !` — zsh non-interactive mode has issues with `if ! cmd`.
   // Ends with `true` to ensure exit code 0 for downstream `&&` chains.
-  'node -v >/dev/null 2>&1 || {'
-    + ' if [ -s "$HOME/.nvm/nvm.sh" ]; then'
-    + '   . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1;'
-    + '   node -v >/dev/null 2>&1 || {'
-    + '     for v in $(ls -1r "$NVM_DIR/versions/node/" 2>/dev/null); do'
-    + '       nvm use --delete-prefix "$v" >/dev/null 2>&1 && node -v >/dev/null 2>&1 && break;'
-    + '     done; };'
-    + ' elif [ -x "$HOME/.fnm/fnm" ]; then eval "$("$HOME/.fnm/fnm" env)" >/dev/null 2>&1;'
-    + ' elif [ -d "$HOME/.volta" ]; then export PATH="$HOME/.volta/bin:$PATH";'
-    + ' elif [ -s "$HOME/.asdf/asdf.sh" ]; then . "$HOME/.asdf/asdf.sh" >/dev/null 2>&1;'
-    + ' fi;'
-    + ' true; }',
+  // The snippet is shared with the binary daemon's spawn preamble
+  // (host-runtime-core.ts), so both walk the same managers in the same order.
+  NODE_DISCOVERY_SHELL,
 ].join('; ')
 
 /**

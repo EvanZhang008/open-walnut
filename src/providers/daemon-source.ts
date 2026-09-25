@@ -45,6 +45,7 @@ import { computeExpectedDaemonVersion } from './daemon-version-check.js'
 import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers } from './daemon-fold.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
+import { createHostRuntime } from './host-runtime-core.js'
 
 /**
  * Version stamped into a source-deployed daemon, resolved at string-build time
@@ -185,6 +186,7 @@ export function getDaemonSource(): string {
     ['__SNAPSHOT_DIFFERS__', snapshotDiffers.toString()],
     ['__CREATE_COMMAND_DRAIN__', createDaemonCommandDrain.toString()],
     ['__CREATE_CRON_METADATA__', createCronMetadataTracker.toString()],
+    ['__CREATE_HOST_RUNTIME__', createHostRuntime.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -259,6 +261,14 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       void drain.close()
       if (!drain.closed) throw new Error('Daemon command drain did not close admission')
     }
+    // Host runtime smoke: the spawn gate and the boot PATH ride this text, so a
+    // reconstructed copy must classify an npm shebang and keep the user's PATH first.
+    const createRuntime = reconstructed['__CREATE_HOST_RUNTIME__'] as typeof createHostRuntime | undefined
+    if (createRuntime) {
+      const rt = createRuntime({ env: {} })
+      if (rt.classifyHead('#!/usr/bin/env node\n').kind !== 'npm') throw new Error('host runtime misclassified an npm shebang')
+      if (rt.buildDaemonPath('/u', ['/x', '/u'], '/i:/x') !== '/u:/x:/i') throw new Error('host runtime reordered the daemon PATH')
+    }
     const lines = [
       JSON.stringify({ type: 'user', message: { role: 'user', content: 'smoke turn' } }),
       JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1 }),
@@ -325,7 +335,7 @@ const path = require('path');
 const os = require('os');
 const http = require('http');
 const net = require('net');
-const { spawn, execSync } = require('child_process');
+const { spawn, execSync, execFile, execFileSync } = require('child_process');
 const crypto = require('crypto');
 
 process.umask(0o077);
@@ -712,59 +722,19 @@ function runWnMinimal(argv, stdinText) {
 }
 
 // ── PATH setup ──
-// Same logic the compiled binary uses: bun/node may launch the daemon with a
-// minimal PATH that lacks claude/node/etc. Source ~/.zshrc or ~/.bashrc to pick
-// up nvm/fnm/volta/pyenv/etc., and add common tool dirs as a safety net.
-// Without this, cmdStart's spawn('claude', ...) fails ENOENT on most hosts.
-(function() {
-  const home = process.env.HOME || '/root';
-  // toolbox FIRST: it may ship a logged-in claude that must win over a
-  // separate ~/.local/bin/claude install (which may be NOT logged in). These
-  // are only a fallback for when RC sourcing fails to provide claude.
-  const extraPaths = [
-    home + '/.toolbox/bin',
-    home + '/.local/bin',
-    home + '/.npm-global/bin',
-    home + '/.cargo/bin',
-    home + '/.pyenv/shims',
-    home + '/.bun/bin',
-    '/usr/local/bin', '/usr/bin', '/bin',
-    '/usr/local/sbin', '/usr/sbin', '/sbin',
-  ];
-  const rcFiles = [home + '/.zshrc', home + '/.bashrc'];
-  let pathFromRc = '';
-  for (const rcFile of rcFiles) {
-    try {
-      if (!fs.existsSync(rcFile)) continue;
-      const shells = rcFile.endsWith('.zshrc')
-        ? ['/bin/zsh', '/usr/bin/zsh', '/bin/bash']
-        : ['/bin/bash', '/bin/sh'];
-      for (const shell of shells) {
-        try {
-          if (!fs.existsSync(shell)) continue;
-          const result = execSync(
-            'source ' + JSON.stringify(rcFile) + ' 2>/dev/null; echo "$PATH"',
-            { encoding: 'utf-8', shell: shell, timeout: 5000 },
-          ).trim();
-          if (result && result.indexOf('/') >= 0 && result.length > 20) {
-            pathFromRc = result;
-            break;
-          }
-        } catch (e) { continue; }
-      }
-      if (pathFromRc) break;
-    } catch (e) { continue; }
-  }
-  const allPaths = []
-    .concat(extraPaths)
-    .concat(pathFromRc ? pathFromRc.split(':') : [])
-    .concat((process.env.PATH || '').split(':'))
-    .filter(Boolean);
-  const seen = {};
-  const deduped = [];
-  for (const p of allPaths) { if (!seen[p]) { seen[p] = true; deduped.push(p); } }
-  process.env.PATH = deduped.join(':');
-})();
+// Same logic the compiled binary uses, from host-runtime-core.ts (injected as
+// text). bun/node may launch the daemon with a minimal PATH that lacks
+// claude/node/etc; cmdStart spawns claude directly, so this PATH decides what
+// runs. Order: the user's login-shell PATH (captured from a CLEAN env, so the
+// PATH we inherited cannot leak into it), then the fallback tool dirs
+// (~/.toolbox/bin first among them), then the inherited PATH. The old order was
+// fallbacks -> rc PATH -> inherited: the fallback dirs (/usr/local/bin,
+// /usr/bin, ...) came BEFORE the user's rc PATH, and that rc PATH was captured
+// in the inherited env, so a node in a system dir or in the server's own shell
+// beat the one the user's rc chose. Keep in sync with daemon-standalone.ts.
+const hostRuntime = (__CREATE_HOST_RUNTIME__)({ fs: fs, execFile: execFile, execFileSync: execFileSync, env: process.env });
+const bootPath = hostRuntime.computeDaemonPath();
+process.env.PATH = bootPath.path;
 
 // ── Constants ──
 // DAEMON_DIR default is /tmp/open-walnut; tests override via env var.
@@ -2418,6 +2388,13 @@ function dispatchCommand(ws, id, cmd) {
         function (s) { sendOk(ws, id, s); },
         function (err) { sendError(ws, id, 'vscode.status failed: ' + err.message); },
       );
+    // 'preflight-v1': read-only look at what this host can run. Not
+    // bridge-reachable. Keep in sync with daemon-standalone.ts.
+    case 'host.preflight':
+      return hostRuntime.preflight().then(
+        function (r) { sendOk(ws, id, r); },
+        function (err) { sendError(ws, id, 'host.preflight failed: ' + err.message); },
+      );
     case 'fs.readRange': return cmdFsReadRange(ws, id, cmd);
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:
@@ -3352,11 +3329,32 @@ async function cmdStart(ws, id, cmd) {
   })
     .catch(function (error) {
       if (error && error.code === 'SESSION_STOP_SUPERSEDED') return null;
+      // A host that cannot run claude answers with the reason itself, not an
+      // "internal daemon error". Keep in sync with daemon-standalone.ts.
+      if (error && error.code === 'CLAUDE_RUNTIME') return { runtimeError: error };
       throw error;
     });
   if (!result) return sendOk(ws, id, { ok: false, reason: 'session_stopped', error: 'start: a stop request superseded this start' });
+  if (result.runtimeError) return sendError(ws, id, result.runtimeError.message, { errorKind: result.runtimeError.errorKind });
   addSubscriber(ws, sid, result.offset);
   return sendOk(ws, id, result);
+}
+
+// Resolve how to launch the CLI, or throw the precise reason it cannot run
+// (code CLAUDE_RUNTIME, errorKind claude_missing | claude_needs_node). When a
+// node dir gets prepended, the RESOLVED claude path runs, so that dir cannot
+// shadow the user's claude with another copy. Keep in sync with
+// daemon-standalone.ts gateClaudeLaunch.
+async function gateClaudeLaunch(args) {
+  const command = args[0] || 'claude';
+  const gate = await hostRuntime.ensureClaude(command, process.env.PATH || '');
+  if (!gate.ok) {
+    logMsg('warn', 'spawn gate: claude cannot run on this host', { code: gate.code, command: command });
+    throw Object.assign(new Error(gate.message), { code: 'CLAUDE_RUNTIME', errorKind: gate.code });
+  }
+  return gate.nodeDir
+    ? { command: gate.path, args: args.slice(1), nodeDir: gate.nodeDir }
+    : { command: command, args: args.slice(1), nodeDir: null };
 }
 
 // No ws, no request id: throws on failure, returns
@@ -3443,7 +3441,18 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
         logMsg('warn', 'cmdStart: live-adopt delivery failed — falling back to respawn', { sid, reason: sent.reason || sent.error });
       }
     }
-    if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' });
+  }
+
+  // Spawn gate: name the exact reason a CLI cannot start (not installed, or the
+  // npm build with no working node) before spawning it. This twin spawns claude
+  // directly, so the gate's PATH lookup IS the spawn's, and a node it finds
+  // outside PATH is prepended below. It runs BEFORE the replaced session is torn
+  // down: a refusal must leave a live CLI exactly as it was, never killed and
+  // replaced by nothing. Keep in sync with daemon-standalone.ts.
+  const launch = await gateClaudeLaunch(args);
+  if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' });
+
+  if (existing) {
     logMsg('warn', 'cmdStart: replacing existing session', {
       sid,
       oldPid: existing.pid,
@@ -3575,7 +3584,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // Keep in sync with daemon-standalone.ts.
       WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
       WALNUT_SESSION_ID: sid,
-      PATH: (process.env.PATH || '') + ':' + GATEWAY_SHIM_DIR,
+      PATH: (launch.nodeDir ? launch.nodeDir + ':' : '') + (process.env.PATH || '') + ':' + GATEWAY_SHIM_DIR,
       // Never let OUR watchdog pid leak into the CLI's env — a CLI session that
       // runs a dev:prod deploy would hand this stale pid to the PRODUCTION
       // daemon, whose watchdog would trip and (with the isolated-dir reap) kill
@@ -3586,8 +3595,8 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   let barrier = null;
   let proc;
   try {
-    barrier = SERVICE_MODE ? cronRuntimeCore.spawnBehindRegistry(args[0] || 'claude', args.slice(1), spawnOptions) : null;
-    proc = barrier ? barrier.process : spawn(args[0] || 'claude', args.slice(1), spawnOptions);
+    barrier = SERVICE_MODE ? cronRuntimeCore.spawnBehindRegistry(launch.command, launch.args, spawnOptions) : null;
+    proc = barrier ? barrier.process : spawn(launch.command, launch.args, spawnOptions);
   } catch (error) {
     fs.closeSync(pipeFd); fs.closeSync(outputFd); fs.closeSync(stderrFd);
     throw error;
@@ -8712,6 +8721,7 @@ async function startDaemon() {
     // answer "is this daemon retrying, and with what budget?" without shell
     // access to its environ. Keep in sync with daemon-standalone.ts.
     logMsg('info', 'daemon started', { port, pid: process.pid, startedAt: DAEMON_START_TS,
+      pathSource: bootPath.source,
       turnRetry: TURN_RETRY_CFG.enabled
         ? { budgetMs: TURN_RETRY_CFG.budgetMs, maxAttempts: TURN_RETRY_CFG.maxAttempts,
             backoffBaseMs: TURN_RETRY_CFG.backoffBaseMs, backoffMaxMs: TURN_RETRY_CFG.backoffMaxMs }

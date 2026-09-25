@@ -6,6 +6,11 @@
  * re-attaches the persistent dtach session). The xterm instance itself is owned by
  * the component — this hook just calls `onData` with incoming bytes and exposes
  * `sendInput` / `sendResize` / `kill` / `retry`.
+ *
+ * Open outcomes: a persistent terminal (dtach), a PLAIN one (`plain` is set:
+ * dtach unavailable, the shell dies with its connection, the UI must say so),
+ * or `ssh_failed` (blocking, no terminal). `retry` re-probes on the server and
+ * upgrades a plain shell to a persistent one when dtach became available.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -17,11 +22,12 @@ import {
   terminalResize,
   terminalClose,
   terminalKill,
-  type TerminalNoDtach,
+  type TerminalOpenPlain,
+  type TerminalSshFailed,
 } from '@/api/terminal';
 import { log } from '@/utils/log';
 
-export type TerminalStatus = 'idle' | 'connecting' | 'ready' | 'no_dtach' | 'error' | 'exited';
+export type TerminalStatus = 'idle' | 'connecting' | 'ready' | 'ssh_failed' | 'error' | 'exited';
 
 interface UseSessionTerminalOpts {
   sessionId: string;
@@ -36,20 +42,26 @@ interface UseSessionTerminalOpts {
 
 interface UseSessionTerminalReturn {
   status: TerminalStatus;
-  noDtach: TerminalNoDtach | null;
+  /** Set while the open terminal is a plain, non-persistent shell. */
+  plain: TerminalOpenPlain | null;
+  /** Set when ssh failed and there is no terminal (blocking card). */
+  sshFailed: TerminalSshFailed | null;
   errorMessage: string | null;
   sendInput: (data: string) => void;
   sendResize: (cols: number, rows: number) => void;
   /** Explicitly destroy (kills dtach). */
   kill: () => void;
-  /** Re-attempt open (used by the NO_DTACH retry button). */
+  /** Re-probe dtach and re-open (upgrades a plain shell when dtach is available). */
   retry: () => void;
 }
 
 export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerminalReturn {
   const { sessionId, enabled, onData, onExit, getSize } = opts;
   const [status, setStatus] = useState<TerminalStatus>('idle');
-  const [noDtach, setNoDtach] = useState<TerminalNoDtach | null>(null);
+  const [plain, setPlain] = useState<TerminalOpenPlain | null>(null);
+  const [sshFailed, setSshFailed] = useState<TerminalSshFailed | null>(null);
+  // Read inside open() without making it depend on render state.
+  const wasPlainRef = useRef(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const terminalIdRef = useRef<string | null>(null);
@@ -65,25 +77,37 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
   // resolves; without this guard we'd send two terminal:open RPCs.
   const openingRef = useRef(false);
 
-  const open = useCallback(async () => {
+  const open = useCallback(async (opts: { reprobe?: boolean } = {}) => {
     if (openingRef.current) return;
     openingRef.current = true;
     const { cols, rows } = getSizeRef.current();
     setStatus('connecting');
-    setNoDtach(null);
+    setSshFailed(null);
     setErrorMessage(null);
     try {
-      const res = await terminalOpen(sessionId, cols, rows);
+      const res = await terminalOpen(sessionId, cols, rows, opts);
       if (!res.ok) {
         terminalIdRef.current = null;
-        setNoDtach(res);
-        setStatus('no_dtach');
-        log.warn('terminal', 'open rejected: NO_DTACH', { sessionId, host: res.host });
+        wasPlainRef.current = false;
+        setPlain(null);
+        setSshFailed(res);
+        setStatus('ssh_failed');
+        log.warn('terminal', 'open rejected: SSH_FAILED', { sessionId, host: res.host });
         return;
       }
       terminalIdRef.current = res.terminalId;
+      if (res.persistent) {
+        // The upgrade kept this xterm; mark where the new shell begins.
+        if (wasPlainRef.current) onDataRef.current('\r\n\x1b[90m[persistent shell started]\x1b[0m\r\n');
+        wasPlainRef.current = false;
+        setPlain(null);
+      } else {
+        wasPlainRef.current = true;
+        setPlain(res);
+        log.warn('terminal', 'opened a plain shell (not persistent)', { sessionId, host: res.host, reason: res.reason });
+      }
       setStatus('ready');
-      log.info('terminal', 'opened', { sessionId, terminalId: res.terminalId });
+      log.info('terminal', 'opened', { sessionId, terminalId: res.terminalId, persistent: res.persistent });
     } catch (err) {
       terminalIdRef.current = null;
       setErrorMessage(err instanceof Error ? err.message : String(err));
@@ -166,7 +190,7 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
     }
   }, []);
 
-  const retry = useCallback(() => { void open(); }, [open]);
+  const retry = useCallback(() => { void open({ reprobe: true }); }, [open]);
 
-  return { status, noDtach, errorMessage, sendInput, sendResize, kill, retry };
+  return { status, plain, sshFailed, errorMessage, sendInput, sendResize, kill, retry };
 }

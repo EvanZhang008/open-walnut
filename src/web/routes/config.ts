@@ -46,6 +46,7 @@ export function setStaticRootReporter(fn: () => WebAssetsReport): void {
 // Bedrock credentials. On the trusted-LAN Mac it stays unmasked.
 import { redactConfig } from '../../core/config-redact.js'
 import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
+import { getBuildInfo } from '../../lib/build-info.js'
 
 // GET /api/config
 configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -107,7 +108,9 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // else. Best-effort: a failed probe must not take /api/config down with it.
     let selfRepair: Awaited<ReturnType<typeof getSelfRepairStatus>> | null = null
     try { selfRepair = await getSelfRepairStatus() } catch { /* diagnostics only */ }
-    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets, selfRepair })
+    // build: which commit this server was built from (package.json alone cannot
+    // tell a source checkout of main from the last npm release).
+    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, webAssets, selfRepair, build: getBuildInfo() })
   } catch (err) {
     next(err)
   }

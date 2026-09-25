@@ -21,10 +21,13 @@ vi.mock('../../../src/constants.js', () => {
 let states: Record<string, { connected?: boolean; phase?: string; phaseElapsedMs?: number; connectElapsedMs?: number; error?: string; retryInMs?: number }> = {};
 const clearFailureCache = vi.fn();
 const getDaemonConnection = vi.fn(async () => ({}));
+// The pooled connection the host preflight asks (null = not connected).
+let pooled: Record<string, { hasCapability: (c: string) => boolean; send: ReturnType<typeof vi.fn> } | null> = {};
 
 vi.mock('../../../src/providers/daemon-connection.js', () => ({
   clearDaemonFailureCache: (host?: string) => clearFailureCache(host),
   getDaemonConnection,
+  getConnectedDaemonConnection: (host: string) => pooled[host] ?? null,
   getDaemonConnectState: (host: string) => ({
     host,
     connected: states[host]?.connected ?? false,
@@ -60,6 +63,18 @@ import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { setHostWarmup } from '../../../src/core/hosts/host-warmup-registry.js';
 import type { HostWarmup } from '../../../src/core/hosts/host-warmup.js';
 import type { HostStatus } from '../../../src/core/hosts/host-status.js';
+import { clearHostReadiness, getHostReadiness, refreshHostReadiness } from '../../../src/core/hosts/host-readiness.js';
+
+/** A fresh AL2-class host: npm claude, no working node, no compiler, no dtach. */
+const NPM_NO_NODE_REPLY = {
+  ok: true,
+  claude: { found: true, path: '/home/dev/.local/bin/claude', kind: 'npm', needsNode: true, nodeFound: false },
+  compiler: { found: false },
+  dtach: { found: false },
+};
+function preflightConn(caps: string[] = ['preflight-v1'], reply: Record<string, unknown> = NPM_NO_NODE_REPLY) {
+  return { hasCapability: (c: string) => caps.includes(c), send: vi.fn(async () => reply) };
+}
 
 function createApp() {
   const app = express();
@@ -90,6 +105,8 @@ beforeEach(() => {
   getDaemonConnection.mockClear();
   kick.mockClear();
   setHostWarmup(null);
+  pooled = {};
+  clearHostReadiness();
 });
 
 describe('GET /api/hosts/status', () => {
@@ -145,6 +162,38 @@ describe('GET /api/hosts/status', () => {
     expect(marina.connected).toBe(true);
     expect(marina.steps.every((s) => s.status === 'done')).toBe(true);
     expect(marina.label).toBe('marina');   // no label configured → the alias
+  });
+
+  it('carries the readiness problems of a connected host whose daemon has preflight-v1', async () => {
+    states.devbox = { connected: true, phase: 'connected' };
+    pooled.devbox = preflightConn();
+    await refreshHostReadiness('devbox');
+    const res = await request(createApp()).get('/api/hosts/status');
+    const devbox = byHost(res.body.hosts).devbox;
+    expect(devbox.readiness?.claude).toMatchObject({ found: true, kind: 'npm', needsNode: true, nodeFound: false });
+    expect(devbox.readiness?.problems.map((p) => p.kind)).toEqual(['claude_needs_node', 'compiler_missing']);
+    expect(devbox.readiness?.problems[0].commands).toEqual(['curl -fsSL https://claude.ai/install.sh | bash']);
+    // Other hosts say nothing.
+    expect(byHost(res.body.hosts).marina.readiness).toBeUndefined();
+  });
+
+  it('an old daemon without preflight-v1: never asked, no readiness field, no error', async () => {
+    states.devbox = { connected: true, phase: 'connected' };
+    pooled.devbox = preflightConn([]);
+    await refreshHostReadiness('devbox');
+    const res = await request(createApp()).get('/api/hosts/status');
+    expect(res.status).toBe(200);
+    expect(pooled.devbox!.send).not.toHaveBeenCalled();
+    expect(byHost(res.body.hosts).devbox.readiness).toBeUndefined();
+  });
+
+  it('drops readiness while the host is down (the connect error is what to show)', async () => {
+    states.devbox = { connected: true, phase: 'connected' };
+    pooled.devbox = preflightConn();
+    await refreshHostReadiness('devbox');
+    states.devbox = { phase: 'failed', error: 'no route to host' };
+    const res = await request(createApp()).get('/api/hosts/status');
+    expect(byHost(res.body.hosts).devbox.readiness).toBeUndefined();
   });
 
   it('reflects the warmup snapshot, including a discovered host it deliberately skips', async () => {
@@ -234,6 +283,23 @@ describe('POST /api/hosts/:host/connect', () => {
     expect(clearFailureCache).toHaveBeenCalledWith('devbox');
     // A deliberate connect with nobody to hand it to must still connect something.
     expect(getDaemonConnection).toHaveBeenCalledWith('devbox', { hostname: 'devbox.example.test', user: 'builder', port: undefined });
+  });
+
+  it('on an already-connected host re-runs the preflight (the user just installed the fix)', async () => {
+    states.devbox = { connected: true, phase: 'connected' };
+    pooled.devbox = preflightConn();
+    installWarmup();
+    const res = await request(createApp()).post('/api/hosts/devbox/connect');
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => expect(getHostReadiness('devbox')).toBeDefined());
+    expect(pooled.devbox!.send).toHaveBeenCalledWith('host.preflight', {}, expect.any(Number));
+  });
+
+  it('never runs a preflight for a host that is not connected yet (the handshake listener does that)', async () => {
+    pooled.devbox = preflightConn();
+    installWarmup();
+    await request(createApp()).post('/api/hosts/devbox/connect');
+    expect(pooled.devbox!.send).not.toHaveBeenCalled();
   });
 
   it('never dials directly while a warmup exists (one connect at a time is the warmup\'s job)', async () => {

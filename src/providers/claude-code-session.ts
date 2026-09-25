@@ -60,6 +60,7 @@ import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { isWakeupArmed } from './daemon-fold.js'
 import { classifyDeliveryFailure, isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
+import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
@@ -3691,7 +3692,11 @@ export class ClaudeCodeSession {
 
     const parts: string[] = []
     if (code === 127) {
-      parts.push(this._host ? 'Claude CLI not found on remote host' : 'Claude CLI not found')
+      // 127 = the spawn shell could not run the CLI. Its stderr says which half
+      // is missing (claude itself, or the node the npm build needs): name it
+      // with the same sentence the daemon's spawn gate uses.
+      parts.push(describeClaudeLaunchFailure(cleanStderr || stderr || '')
+        ?? (this._host ? 'Claude CLI not found on remote host' : 'Claude CLI not found'))
     } else {
       // "Remote" ONLY when there is an actual remote host — the __local__ daemon
       // takes this path too, and telling a local user to "check remote host

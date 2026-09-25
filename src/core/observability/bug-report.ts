@@ -20,6 +20,7 @@ import { CLOUD_MODE, LOG_DIR } from '../../constants.js';
 import { redactSensitiveText } from '../../logging/index.js';
 import { redactConfig } from '../config-redact.js';
 import { getVersion } from '../version.js';
+import { getBuildInfo } from '../../lib/build-info.js';
 import { recentLogFiles, lineTimeMs, tailFile, grepFileLines } from './bundle.js';
 
 const DEFAULT_WINDOW_MINS = 30;
@@ -131,6 +132,7 @@ function clampWindow(v: number | undefined): number {
 function metaSection(windowMins: number): string {
   return [
     `version: ${getVersion()}`,
+    `build: ${JSON.stringify(getBuildInfo())}`,
     `mode: ${CLOUD_MODE ? 'REPLICA (cloud)' : 'LIVE'}`,
     `generatedAt: ${new Date().toISOString()}`,
     `node: ${process.version} (${process.platform}/${process.arch})`,

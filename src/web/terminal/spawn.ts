@@ -28,6 +28,11 @@
  *     intact. Verified on a real remote host: a counter kept ticking with NO
  *     ssh connected, and cwd/env survived across independent reconnects.
  *
+ * When dtach can't be had on the target (no compiler, failed build), the RPC
+ * layer asks for a PLAIN shell instead (`persistent: false`): the same ssh/pty
+ * and login shell with no dtach socket, so it dies with its connection. The UI
+ * labels it "Not persistent"; see dtach-check.ts for why that beats refusing.
+ *
  * The upper layers (TerminalManager / ring buffer / RPC) only see `IPty` — to
  * change transport you only touch this file.
  */
@@ -230,6 +235,26 @@ export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, she
   return `${mkdir}; ${body}`
 }
 
+/**
+ * The remote command for a PLAIN (non-persistent) shell: cd, then exec the
+ * login shell directly. No socket dir claim, because there is no socket: the
+ * orphan sweep and reapers have nothing on the host to find for this terminal.
+ */
+export function buildRemotePlainShellCommand(shell: string = REMOTE_DEFAULT_SHELL, cwd?: string): string {
+  const exec = `exec ${shell} -l`
+  return cwd ? `cd ${shellQuote(cwd)} && ${exec}` : exec
+}
+
+/** Full ssh argv for a remote PLAIN shell (same connection options as dtach). */
+export function buildRemotePlainSshArgs(target: SshTarget, cwd?: string, host?: string): string[] {
+  return [
+    ...sshKeepaliveArgs(target),
+    ...(host ? sshControlMasterArgs(host) : []),
+    sshHostString(target),
+    buildRemotePlainShellCommand(REMOTE_DEFAULT_SHELL, cwd),
+  ]
+}
+
 /** Full ssh argv for a remote terminal. `host` (alias) keys the shared
  * ControlMaster socket so the probe's warm connection is reused here. */
 export function buildRemoteSshArgs(
@@ -276,7 +301,7 @@ export async function prewarmRemoteHost(host: string | undefined): Promise<void>
     await remoteDtachPath(host) // warms ControlMaster + provisions dtach (memoized)
     log.web.info('terminal prewarm complete', { host })
   } catch (err) {
-    // Non-fatal: the real open will surface NO_DTACH / connection errors itself.
+    // Non-fatal: the real open reports ssh errors or falls back to a plain shell.
     log.web.debug('terminal prewarm failed (open will retry)', { host, error: String(err) })
   }
 }
@@ -286,16 +311,33 @@ export async function prewarmRemoteHost(host: string | undefined): Promise<void>
  * `node-pty` is imported lazily so a native-binary load failure can be caught
  * by the caller and degrade gracefully (terminal disabled, server stays up).
  *
- * Assumes dtach is already provisioned on the target (the RPC layer runs the
- * probe/provision before calling this).
+ * `persistent: true` assumes dtach is already provisioned on the target (the
+ * RPC layer runs the probe first). `persistent: false` spawns a plain login
+ * shell with no dtach at all (the RPC layer's fallback when dtach is missing).
  */
 export async function resolveSpawnForSession(
   record: SessionRecord,
   cols: number,
   rows: number,
+  opts: { persistent?: boolean } = {},
 ): Promise<SpawnResult> {
   const pty = await import('@homebridge/node-pty-prebuilt-multiarch')
   const env = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>
+  const persistent = opts.persistent !== false
+
+  if (!persistent) {
+    if (record.host) {
+      const target = await resolveSshTarget(record.host)
+      const args = buildRemotePlainSshArgs(target, record.cwd, record.host)
+      log.web.warn('terminal spawn (remote/plain, not persistent)', { sessionId: record.claudeSessionId, host: record.host, cwd: record.cwd })
+      const p = pty.spawn('ssh', args, { name: 'xterm-256color', cols, rows, cwd: os.homedir(), env })
+      return { pty: p, cwd: record.cwd, host: record.host }
+    }
+    const cwd = record.cwd ?? os.homedir()
+    log.web.warn('terminal spawn (local/plain, not persistent)', { sessionId: record.claudeSessionId, cwd })
+    const p = pty.spawn(localShell(), ['-l'], { name: 'xterm-256color', cols, rows, cwd, env })
+    return { pty: p, cwd }
+  }
 
   if (record.host) {
     const target = await resolveSshTarget(record.host)

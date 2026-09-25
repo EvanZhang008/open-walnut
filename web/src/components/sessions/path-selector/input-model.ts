@@ -1,9 +1,12 @@
 /**
  * Input-state classification for the session path selector.
  *
- * Four states (converged product design — see plan):
- *   browse         "walnut"          not / or ~ → fuzzy over history only
+ * Four states (converged product design, see plan):
+ *   browse         "walnut"          not / or ~ → fuzzy over history, and a bare
+ *                                    word also matches the home folder names
+ *                                    (`homeWord`, see liveListingPrefix)
  *   dir-browse     "/a/b/c/"         trailing slash → all direct children of c/
+ *                  "~"               a lone ~ is ~/
  *   segment        "/a/b/c"          last segment fuzzy-completes against b/'s children
  *   scoped-search  "/a/b keyword"    keyword fuzzy-searched under base /a/b
  *
@@ -11,7 +14,12 @@
  */
 
 export type InputState =
-  | { kind: 'browse'; query: string }
+  /** `homeWord`: set when the query is one bare word (no '/', no whitespace).
+   *  A fresh install has no history, so a history-only search for "work" showed
+   *  nothing and the user concluded the folder could not be found: the picker
+   *  also lists `~/` on the host(s) in view and matches this word against the
+   *  home folder names. */
+  | { kind: 'browse'; query: string; homeWord?: string }
   | { kind: 'dir-browse'; dir: string }
   | { kind: 'segment'; dir: string; partial: string }
   | { kind: 'scoped-search'; base: string; keyword: string };
@@ -25,7 +33,11 @@ function isPathLike(raw: string): boolean {
  *  no '/' — paths with spaces in dir names are resolved later against live data
  *  (see resolveSpaceAmbiguity). */
 export function classifyInput(raw: string): InputState {
-  if (!isPathLike(raw)) return { kind: 'browse', query: raw };
+  if (!isPathLike(raw)) {
+    const word = raw.trim();
+    return word && !/[\s/]/.test(word) ? { kind: 'browse', query: raw, homeWord: word } : { kind: 'browse', query: raw };
+  }
+  if (raw === '~') return { kind: 'dir-browse', dir: '~/' };
 
   const lastSpace = raw.lastIndexOf(' ');
   if (lastSpace > 0) {
@@ -42,8 +54,7 @@ export function classifyInput(raw: string): InputState {
   if (raw.endsWith('/')) return { kind: 'dir-browse', dir: raw };
 
   const lastSlash = raw.lastIndexOf('/');
-  // "~" alone (no slash yet) — treat as segment under root-ish; practically the
-  // caller lists '~/'. Keep dir='' guard: no slash → browse fallback.
+  // No slash at all ('~alice'): nothing to list, stay a history search.
   if (lastSlash < 0) return { kind: 'browse', query: raw };
   return {
     kind: 'segment',
@@ -90,13 +101,28 @@ export function deleteLastSegment(path: string): string {
   return p.slice(0, lastSlash + 1);
 }
 
+/** Where a bare word looks for folders, alongside its history matches. */
+export const HOME_LISTING_DIR = '~/';
+
 /** The directory whose children should be live-listed for a given state.
- *  browse → null (no live listing). */
+ *  browse → null (no live listing), except a bare word → the home folder. */
 export function parentDirOf(state: InputState): string | null {
   switch (state.kind) {
-    case 'browse': return null;
+    case 'browse': return state.homeWord ? HOME_LISTING_DIR : null;
     case 'dir-browse': return state.dir;
     case 'segment': return state.dir;
+    case 'scoped-search': return state.base;
+  }
+}
+
+/** The prefix the live listing requests for a state ('' = no live listing).
+ *  segment asks for dir + partial (the server lists its parent); a bare word
+ *  asks for the home folder; an empty or multi-word query lists nothing. */
+export function liveListingPrefix(state: InputState): string {
+  switch (state.kind) {
+    case 'browse': return state.homeWord ? HOME_LISTING_DIR : '';
+    case 'dir-browse': return state.dir;
+    case 'segment': return state.dir + state.partial;
     case 'scoped-search': return state.base;
   }
 }

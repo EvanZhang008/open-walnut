@@ -166,12 +166,16 @@ export function findBakedCloudIds(src: string): Array<{ line: number; hit: strin
 // ── the harness itself ────────────────────────────────────────────────────────
 
 describe('onboarding harness · shell syntax', () => {
-  it('has the five files the operator entry point expects', () => {
+  it('has the shell files the operator entry points expect', () => {
+    // remote-host/ is the second-machine test; its own ratchet is
+    // tests/scripts/remote-host-onboarding-ratchet.test.ts.
     expect(SHELL_FILES).toEqual([
       'scripts/onboarding-test/lib/aws.sh',
       'scripts/onboarding-test/lib/common.sh',
       'scripts/onboarding-test/lib/tart.sh',
       'scripts/onboarding-test/probe.sh',
+      'scripts/onboarding-test/remote-host/entrypoint.sh',
+      'scripts/onboarding-test/remote-host/run.sh',
       'scripts/onboarding-test/render-video.sh',
       'scripts/onboarding-test/run.sh',
     ])

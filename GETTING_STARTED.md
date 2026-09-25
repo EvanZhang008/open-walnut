@@ -516,7 +516,33 @@ hosts:
     # Optional: identity_file, port, shell_setup
 ```
 
-The agent handles node version detection (nvm, fnm, volta, asdf), image transfer, and session reconnection automatically. If SSH drops, the session keeps running on the remote host.
+Walnut connects over SSH, installs its session daemon on the host, and keeps the session
+running there if SSH drops. The first connect takes about a minute.
+
+#### What the remote host needs
+
+| On the host | Needed for | If it is missing |
+|---|---|---|
+| Passwordless SSH (key or agent) as the configured user | Everything | Connect stops at the SSH step and shows the ssh error |
+| `curl` and `unzip`, or Bun or Node.js already installed | The session daemon (Walnut installs Bun with `curl -fsSL https://bun.sh/install \| bash` when neither is present) | Connect stops at "Install runtime" and says which command failed |
+| Claude Code, signed in once | Every session | The host status shows "Claude Code is not installed on this host" with the install command |
+| A C compiler (`gcc` or `clang`) | A terminal that survives disconnects | The terminal still opens, marked `Not persistent`, and shows the one command that enables persistence |
+
+Two things worth knowing about Claude Code on a remote host:
+
+- Prefer the native build: `curl -fsSL https://claude.ai/install.sh \| bash`. The npm build
+  (`npm install -g @anthropic-ai/claude-code`) is a Node.js script, and many servers have no
+  Node.js on the PATH an SSH command sees. Walnut looks for a working Node.js in nvm, fnm, volta
+  and asdf before giving up, and tells you when it found none.
+- Walnut does not need Node.js, npm or a compiler on the host for chat, files, diffs or the
+  folder picker. Those run through the daemon, which is a single Bun binary.
+
+After the handshake Walnut runs a short preflight on the host (Claude Code present, Node.js if
+the npm build is installed, compiler present) and shows one actionable line per missing piece in
+the host status. Nothing is shown when the host is complete.
+
+Home directories that are symlinks (`~/workplace -> /workplace`) list and resolve like any other
+directory. If SSH drops, the session keeps running on the remote host and Walnut reattaches.
 
 ### Microsoft To-Do Sync
 

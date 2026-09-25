@@ -26,6 +26,7 @@ import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { SettingsNav, useSettingsNavModel, type SettingsNavModel } from '@/components/settings/SettingsNav'
 import { SettingsGroup, SettingsRow, SettingsSection } from '@/components/settings/SettingsSection'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
+import { SettingsBuildLine } from '@/components/settings/SettingsBuildLine'
 import type { SaveSectionOptions } from '@/components/settings/core-settings-registry'
 import {
   DEFAULT_PANE_ID,
@@ -478,6 +479,7 @@ function SettingsPageLayout({ model, view, targetId, hash }: LayoutProps) {
           <SettingsPaneStickyBar />
           <div className="settings-pane-inner" key={`${view.kind}:${paneId}`}>
             {body}
+            {(labelled || view.kind === 'plugin-off') && <SettingsBuildLine />}
             {anchorRoom > 0 && <div className="settings-pane-anchor-room" aria-hidden="true" style={{ height: anchorRoom }} />}
           </div>
         </div>

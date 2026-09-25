@@ -2,7 +2,8 @@
  * SessionPathSelector — popover above chat input for picking a working directory.
  *
  * Four-state input model (see path-selector/input-model.ts): history browse,
- * dir-browse (trailing /), segment fuzzy completion, scoped keyword search.
+ * dir-browse (trailing /), segment fuzzy completion, scoped keyword search. A
+ * bare word also lists the home folder (path-selector/home-folders.ts).
  * Unified ranking (path-selector/ranking.ts): history/frecency first, then
  * leaf-hit > mid-hit, prefix > substring > subsequence. All-tab fans out live
  * listings to every host in parallel (path-selector/useLiveDirs.ts).
@@ -15,13 +16,15 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, typ
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { fetchWorkingDirs, prewarmWorkingDirs, retryHostConnect, type WorkingDirEntry, type ConfiguredHost } from '@/api/sessions';
+import { retryHostConnect, type WorkingDirEntry } from '@/api/sessions';
 import type { TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import type { LaunchEngine, LaunchMemory } from '@/utils/engines';
-import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, type InputState } from './path-selector/input-model';
+import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, liveListingPrefix, type InputState } from './path-selector/input-model';
 import { rankCandidates, buildSections, type Candidate, type RankedItem } from './path-selector/ranking';
 import { useLiveDirs, type HostLiveState } from './path-selector/useLiveDirs';
+import { useWorkingDirs } from './path-selector/useWorkingDirs';
+import { buildHomeFolderSections, homeSearchHostStates } from './path-selector/home-folders';
 import { HostStatusDot } from './path-selector/HostStatusDot';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { GhostTextInput } from './path-selector/GhostTextInput';
@@ -107,12 +110,10 @@ export function SessionPathSelector({
   ownedFields,
 }: Props) {
   const navigate = useNavigate();
-  const [dirs, setDirs] = useState<WorkingDirEntry[]>([]);
-  // All hosts from config.hosts — a freshly added remote host must show as a tab
-  // even before its first session exists (else the user can't ever start one).
-  const [configuredHosts, setConfiguredHosts] = useState<ConfiguredHost[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // History + all hosts from config.hosts (a freshly added remote host must show
+  // as a tab even before its first session exists, else the user can't ever start
+  // one). Cached answer at once, refetched on every open and on a host change.
+  const { dirs, hosts: configuredHosts, loading, error } = useWorkingDirs(open);
   const [query, setQuery] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(0);
   // How the current highlight was placed. Mouse hover must NOT expand the row
@@ -186,11 +187,9 @@ export function SessionPathSelector({
     setEditingPath(p);
   }, []);
 
-  // Fetch history + pre-warm SSH connections on open
+  // Reset the picker on open (history + per-host pre-warm: useWorkingDirs)
   useEffect(() => {
     if (!open) return;
-    setLoading(true);
-    setError(null);
     setQuery('');
     setSelectedIdx(0);
     const startMeta = initialMetaRef.current ?? freshLauncherMeta();
@@ -210,17 +209,9 @@ export function SessionPathSelector({
       setEditMode(false);
       setEditingPath('');
     }
-    // Pre-warm per-host SSH connections now that the picker is actually opening
-    // (moved off the unconditional module-import side effect that used to fire
-    // on every page load and contend with the home critical path).
-    prewarmWorkingDirs();
     // Cold-read the per-host connect status so the tab dots are right on the first
     // paint; every change after this arrives as a `host:status` push.
     void hydrateHostStatus();
-    // fetchWorkingDirs returns from cache if already prefetched
-    fetchWorkingDirs()
-      .then(({ dirs: d, hosts: h }) => { setDirs(d); setConfiguredHosts(h); setLoading(false); })
-      .catch(e => { setError(e.message); setLoading(false); });
   }, [open]);
 
   // Focus search on open
@@ -269,11 +260,11 @@ export function SessionPathSelector({
   const active = editMode ? editingPath : query;
   const preState = useMemo(() => classifyInput(active), [active]);
 
-  // Path whose parent gets live-listed ('' = pure browse, no live listing)
-  const activePath = preState.kind === 'browse' ? ''
-    : preState.kind === 'scoped-search' ? preState.base
-    : preState.kind === 'dir-browse' ? preState.dir
-    : preState.dir + preState.partial;
+  // Path whose parent gets live-listed ('' = no live listing). A bare word lists
+  // ~/ on the host(s) in view: only the selected tab's host, never a fan-out
+  // beyond what the All tab already lists for a path.
+  const activePath = liveListingPrefix(preState);
+  const homeWord = preState.kind === 'browse' ? preState.homeWord : undefined;
 
   const { byHost, anyLoading, retryHost } = useLiveDirs(activePath, hostFilter, configuredHosts);
 
@@ -301,8 +292,10 @@ export function SessionPathSelector({
     const state = byHost.get(key);
     if (state?.status === 'done' && state.parent && !state.parent.startsWith('~')) {
       // Replace the ~-prefix with the resolved parent, keeping any typed partial.
-      const typedDir = editingPath.endsWith('/') ? editingPath : editingPath.slice(0, editingPath.lastIndexOf('/') + 1);
-      const partial = editingPath.slice(typedDir.length);
+      // A lone ~ lists ~/ (classifyInput), so it rewrites to the home itself.
+      const typed = editingPath === '~' ? '~/' : editingPath;
+      const typedDir = typed.endsWith('/') ? typed : typed.slice(0, typed.lastIndexOf('/') + 1);
+      const partial = typed.slice(typedDir.length);
       const parent = state.parent.endsWith('/') ? state.parent : state.parent + '/';
       fillPath(parent + partial);
     }
@@ -325,6 +318,8 @@ export function SessionPathSelector({
 
   const currentHost = hostFilter !== 'all' && hostFilter !== '__local__' ? hostFilter : null;
   const currentHostLabel = hostTabs.find(t => t.key === hostFilter)?.label;
+  // Alias → label for the per-host rows ("Big remote host", not "clouddev-2").
+  const hostLabels = useMemo(() => new Map<string, string>(hostTabs.map(t => [t.key, t.label])), [hostTabs]);
 
   // ── Candidates: live children (+preloaded deep hits) merged with history ──
   const pathMode = inputState.kind !== 'browse';
@@ -396,11 +391,19 @@ export function SessionPathSelector({
       const key = d.host ?? '__local__';
       hostActivity.set(key, (hostActivity.get(key) ?? 0) + d.count);
     }
-    return buildSections(ranked, {
+    const built = buildSections(ranked, {
       hostGrouping: pathMode && hostFilter === 'all',
       hostActivity,
     });
-  }, [dirs, hostFilter, inputState, pathMode, byHost, hostTabs]);
+    if (pathMode || !homeWord) return built;
+    // Bare word: history matches first, then the matching home folders.
+    const home = buildHomeFolderSections({
+      word: homeWord, byHost, hostLabels, history: historyByKey,
+      shown: new Set(ranked.map(r => `${r.host ?? '__local__'}::${r.cwd}`)),
+      perHost: hostFilter === 'all',
+    });
+    return home.length ? [...built, ...home] : built;
+  }, [dirs, hostFilter, inputState, pathMode, byHost, hostTabs, homeWord, hostLabels]);
 
   const flatItems = useMemo(() => sections.flatMap(s => s.items), [sections]);
 
@@ -734,12 +737,14 @@ export function SessionPathSelector({
 
   if (!open) return null;
 
-  // Live host states drive per-host empty states / host-down rows in path mode.
-  const visibleHostStates: Map<string, HostLiveState> = pathMode ? byHost : new Map();
-  // Alias → label for the per-host rows ("Big remote host", not "clouddev-2").
-  const hostLabels = new Map<string, string>(hostTabs.map(t => [t.key, t.label]));
+  // Live host states drive per-host empty states / host-down rows in path mode;
+  // a bare-word home search keeps only the connecting / could-not-connect rows.
+  const visibleHostStates: Map<string, HostLiveState> = pathMode ? byHost
+    : homeWord ? homeSearchHostStates(byHost) : new Map();
 
-  const emptyHint = editMode
+  const emptyHint = homeWord
+    ? `No history or home folder matches "${homeWord}". Type a path (e.g. ~/projects) to browse.`
+    : editMode
     ? (anyLoading ? 'Listing directories...' : 'No matches. Press ⇧Enter or click Go to use this path.')
     : dirs.length === 0
       ? 'No session history yet — type a path (e.g. ~/projects) to browse.'
@@ -857,7 +862,7 @@ export function SessionPathSelector({
         loadError={error}
         hostStates={visibleHostStates}
         hostLabels={hostLabels}
-        pathMode={pathMode}
+        pathMode={pathMode || !!homeWord}
         activeHostLabel={currentHostLabel ?? 'Local'}
         createOption={createOption}
         emptyHint={emptyHint}

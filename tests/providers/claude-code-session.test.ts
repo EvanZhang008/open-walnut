@@ -4020,6 +4020,29 @@ describe('handleRemoteProcessExit — daemon-reported exit is not always an erro
 
     expect(errors.map((e) => e.msg)).toContain('remote session process exited with error');
     expect(busErrors).toHaveLength(1);
+    // Exit 127 names the missing half with the spawn gate's own sentence.
+    expect(errorOf(busErrors[0])).toContain('Claude Code is not installed on this host. Install it: curl -fsSL https://claude.ai/install.sh | bash');
+    expect(errorOf(busErrors[0])).toContain('[clouddev]');
+  });
+
+  it('an npm claude whose shebang finds no node reports the Node.js cause, not "CLI not found"', () => {
+    const session = makeRemoteSession('remote-no-node');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._host = 'clouddev';
+    exit(session, 127, "/usr/bin/env: 'node': No such file or directory");
+
+    const err = errorOf(busErrors[0]);
+    expect(err).toContain('Claude Code on this host is the npm build and needs Node.js');
+    expect(err).toContain('curl -fsSL https://claude.ai/install.sh | bash');
+    expect(err).not.toContain('Claude CLI not found');
+  });
+
+  it('an exit 127 with an unrecognised stderr keeps the generic wording', () => {
+    const session = makeRemoteSession('remote-127-other');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._host = 'clouddev';
+    exit(session, 127, 'some-wrapper: exec failed');
+
     expect(errorOf(busErrors[0])).toContain('Claude CLI not found on remote host');
   });
 

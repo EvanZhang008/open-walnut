@@ -13,7 +13,16 @@ import {
 import { registerSessionTitle } from '@/stores/entity-label-store';
 import { patchSessionMentionTitle } from '@/stores/session-mention-index';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
-import { engineEntry, type LaunchEngine, type LaunchMemory } from '@/utils/engines';
+import { engineEntry, type LaunchEngine } from '@/utils/engines';
+import {
+  createWorkingDirsCache,
+  hostsToPrewarm,
+  type ConfiguredHost,
+  type WorkingDirEntry,
+  type WorkingDirsResult,
+} from './working-dirs-cache';
+
+export type { ConfiguredHost, WorkingDirEntry, WorkingDirsResult } from './working-dirs-cache';
 
 /** Opportunistic <session-ref/> pill-title seeding: there is no client-side
  *  all-sessions store, so any fetched record's title is registered here and
@@ -693,54 +702,25 @@ export async function executePlanContinue(sessionId: string): Promise<{ status: 
 
 // ── Quick Start Session ──
 
-export interface WorkingDirEntry {
-  cwd: string;
-  host: string | null;
-  hostLabel?: string;
-  /** Majority-vote project for this dir, or the configured default. '' = Inbox. */
-  project: string;
-  count: number;
-  lastUsed: string;
-  /** Launch config remembered from the last Quick Start on this dir. `model`
-   *  is the raw picker value (catalog ID or legacy alias). Absent = Auto/Claude. */
-  lastLaunch?: LaunchMemory;
-}
+// Working dirs are cached for the page's life so the /session popover opens
+// instantly (MainPage prefetches on mount) and the draft column can read them
+// synchronously. The picker revalidates on every open and on a config change that
+// may touch hosts: see working-dirs-cache.ts for why the old forever-cache was not
+// enough (a host added in Settings never got a tab until a reload).
+const workingDirsCache = createWorkingDirsCache(() =>
+  apiGet<{ dirs: WorkingDirEntry[]; hosts?: ConfiguredHost[] }>('/api/sessions/working-dirs')
+    .then(res => ({ dirs: res.dirs, hosts: res.hosts ?? [] })));
 
-/** A host from config.hosts — shown as a launcher tab even with zero session history. */
-export interface ConfiguredHost {
-  alias: string;
-  label: string;
-  /** True for auto-discovered FQDN-only entries with no human-chosen alias —
-   *  the launcher shows a "name this host" nudge for these. */
-  rawName?: boolean;
-}
+export function fetchWorkingDirs(): Promise<WorkingDirsResult> { return workingDirsCache.fetch(); }
 
-export interface WorkingDirsResult {
-  dirs: WorkingDirEntry[];
-  /** All configured remote hosts (may be absent on older servers). */
-  hosts: ConfiguredHost[];
-}
+/** Network answer (joins one in flight); equal to the cached answer = the same object. */
+export function revalidateWorkingDirs(): Promise<WorkingDirsResult> { return workingDirsCache.revalidate(); }
 
-// Cache working dirs so /session popover opens instantly (prefetched on page load)
-let _workingDirsCache: WorkingDirsResult | null = null;
-let _workingDirsFetching: Promise<WorkingDirsResult> | null = null;
-
-export async function fetchWorkingDirs(): Promise<WorkingDirsResult> {
-  if (_workingDirsCache) return _workingDirsCache;
-  if (_workingDirsFetching) return _workingDirsFetching;
-  _workingDirsFetching = apiGet<{ dirs: WorkingDirEntry[]; hosts?: ConfiguredHost[] }>('/api/sessions/working-dirs')
-    .then(res => {
-      const result: WorkingDirsResult = { dirs: res.dirs, hosts: res.hosts ?? [] };
-      _workingDirsCache = result;
-      _workingDirsFetching = null;
-      return result;
-    })
-    .catch(err => { _workingDirsFetching = null; throw err; });
-  return _workingDirsFetching;
-}
+/** A new request even when one is in flight: the host list just changed. */
+export function refreshWorkingDirs(): Promise<WorkingDirsResult> { return workingDirsCache.refresh(); }
 
 /** Invalidate cache (e.g. after starting a new session) */
-export function invalidateWorkingDirsCache(): void { _workingDirsCache = null; _workingDirsFetching = null; }
+export function invalidateWorkingDirsCache(): void { workingDirsCache.invalidate(); }
 
 /** The model/effort the user last picked for an Ask Walnut session — the
  *  Personal-AI counterpart of a folder's `lastLaunch`. `model` is the raw
@@ -761,7 +741,7 @@ export async function fetchAskWalnutLaunch(): Promise<{ model?: string; effort?:
  * triggers a request — callers that want the data warm must have called
  * `fetchWorkingDirs()` earlier (MainPage prefetches once on mount).
  */
-export function peekWorkingDirs(): WorkingDirsResult | null { return _workingDirsCache; }
+export function peekWorkingDirs(): WorkingDirsResult | null { return workingDirsCache.peek(); }
 
 export interface DirListingPending {
   phase: string;
@@ -849,31 +829,23 @@ export async function listDirsCached(prefix: string, host?: string | null, opts?
 /** Drop the live-dir cache (e.g. after creating a directory). */
 export function invalidateLiveDirCache(): void { _liveDirCache.clear(); }
 
-// Prefetch working dirs + pre-warm SSH (fire-and-forget). Uses the most-frequent
-// path per host (instead of root /) for a useful cache hit.
+// Pre-warm SSH per host (fire-and-forget) from the most-frequent path per host
+// (instead of root /) for a useful cache hit.
 //
 // IMPORTANT: this used to run as a top-level module-import SIDE EFFECT, firing
 // fetchWorkingDirs() + a per-host SSH listDirs on EVERY page that imported this
-// module — including non-session pages — during the cold-load fan-out, where it
+// module (including non-session pages) during the cold-load fan-out, where it
 // raced the browser's ~5 HTTP/1.1 lanes against the home critical-path requests.
-// It is now an explicit, idempotent call: invoke it when the session-start UI
-// actually opens, not at import time.
-let _prewarmStarted = false;
-export function prewarmWorkingDirs(): void {
-  if (_prewarmStarted) return;
-  _prewarmStarted = true;
-  fetchWorkingDirs().then(({ dirs, hosts }) => {
-    const bestPerHost = new Map<string, string>();
-    for (const d of dirs) {
-      if (d.host && !bestPerHost.has(d.host)) bestPerHost.set(d.host, d.cwd);
-    }
-    // Configured hosts with no history yet still get a pre-warm (from ~) so the
-    // first live browse on a fresh host isn't a cold SSH connect.
-    for (const h of hosts) {
-      if (!bestPerHost.has(h.alias)) bestPerHost.set(h.alias, '~/');
-    }
-    for (const [host, cwd] of bestPerHost) { listDirs(cwd, host).catch(() => {}); }
-  }).catch(() => { _prewarmStarted = false; /* allow retry on next open */ });
+// It is now an explicit call made when the session-start UI actually opens.
+// Idempotent PER HOST, not per page: a host that first appears in a later answer
+// (added in Settings after page load) is warmed then, and the others are not
+// warmed again.
+const _prewarmedHosts = new Set<string>();
+export function prewarmWorkingDirs(result: WorkingDirsResult): void {
+  for (const [host, cwd] of hostsToPrewarm(result, _prewarmedHosts)) {
+    _prewarmedHosts.add(host);
+    listDirs(cwd, host).catch(() => {});
+  }
 }
 
 export interface QuickStartTaskMeta {

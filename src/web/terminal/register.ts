@@ -1,9 +1,17 @@
 /**
- * Terminal RPC registration. Wires the 6 terminal methods onto the existing
+ * Terminal RPC registration. Wires the terminal methods onto the existing
  * `/ws` handler. `terminal:open` first ensures dtach is provisioned on the
- * target; if it can't be built it rejects with a structured NO_DTACH error so
- * the UI can show an install hint instead of silently giving a state-losing
- * shell.
+ * target, then answers one of:
+ *
+ *   { ok: true, terminalId, cols, rows, persistent: true }
+ *   { ok: true, terminalId, cols, rows, persistent: false, reason, installHint, installCommand, detail? }
+ *   { ok: false, code: 'SSH_FAILED', host, detail, hint }
+ *
+ * Without dtach (no compiler, failed build) it still opens a terminal, as a
+ * plain shell the UI labels "Not persistent" with the fix and a Retry. It used
+ * to refuse outright ("never a silent state-losing shell"), which left a host
+ * without gcc with no terminal at all; a LOUD fallback keeps the no-silent-loss
+ * intent. ssh failures stay blocking: nothing can run there. See dtach-check.ts.
  *
  * node-pty is a native binary — if it fails to load, terminal support is
  * disabled gracefully (the server still boots).
@@ -12,7 +20,7 @@
 import type { WebSocket } from 'ws'
 import { registerMethod } from '../ws/handler.js'
 import { terminalManager } from './terminal-manager.js'
-import { probeDtach } from './dtach-check.js'
+import { probeTerminalMode, type TerminalMode } from './dtach-check.js'
 import { killDtachSession } from './dtach-lifecycle.js'
 import { prewarmRemoteHost } from './spawn.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
@@ -36,6 +44,12 @@ function num(o: Record<string, unknown>, key: string, fallback: number): number 
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback
 }
 
+/** Flatten an open result into the wire shape: `{ ok: true, ...ids, ...mode }`. */
+function openPayload(r: { terminalId: string; cols: number; rows: number; mode: TerminalMode }) {
+  const { mode, ...ids } = r
+  return { ok: true as const, ...ids, ...mode }
+}
+
 /**
  * Register terminal RPC. Returns true if node-pty loaded and methods were
  * registered; false if the native binary is unavailable (feature disabled).
@@ -53,19 +67,30 @@ export async function registerTerminalRpc(): Promise<boolean> {
     const sessionId = str(o, 'sessionId', 'terminal:open')
     const cols = num(o, 'cols', 80)
     const rows = num(o, 'rows', 24)
+    // Set by the UI's Retry: re-probe now (skip a cached failure) and upgrade a
+    // live plain shell if dtach turns out to be available.
+    const reprobe = o.reprobe === true
 
     const record = await getSessionByClaudeId(sessionId)
     if (!record) throw new Error(`Session not found: ${sessionId}`)
 
-    const probe = await probeDtach(record)
-    if (!probe.ok) {
-      // Return as a structured payload (not a thrown error) so the install hint
-      // survives — thrown errors are flattened to a message string by the WS layer.
-      return { ok: false, code: 'NO_DTACH', host: probe.host, installHint: probe.installHint }
+    // A live terminal is reattached as it is; only an explicit Retry re-probes,
+    // because an upgrade replaces the plain shell and loses its state.
+    const live = terminalManager.liveMode(sessionId)
+    if (live && !reprobe) {
+      return openPayload(await terminalManager.open(sessionId, client, cols, rows, live))
     }
 
-    const result = await terminalManager.open(sessionId, client, cols, rows)
-    return { ok: true, ...result }
+    const decision = await probeTerminalMode(record, { fresh: reprobe })
+    if (!decision.ok) {
+      // A Retry that hit an ssh blip keeps the shell the user already has.
+      if (live) return openPayload(await terminalManager.open(sessionId, client, cols, rows, live))
+      // Structured payload (not a thrown error) so host/detail survive: thrown
+      // errors are flattened to a message string by the WS layer.
+      return decision
+    }
+
+    return openPayload(await terminalManager.open(sessionId, client, cols, rows, decision.mode))
   })
 
   // Prewarm: open the remote host's ControlMaster + provision dtach ahead of the
@@ -112,8 +137,9 @@ export async function registerTerminalRpc(): Promise<boolean> {
   registerMethod('terminal:kill', async (payload: unknown) => {
     const o = asObj(payload, 'terminal:kill')
     const terminalId = str(o, 'terminalId', 'terminal:kill')
-    // Explicit "End terminal": detach the pty AND kill the persistent dtach session.
-    terminalManager.close(terminalId)
+    // Explicit "End terminal": release the pty now (for a plain shell that IS
+    // the kill) AND kill the persistent dtach session (a no-op without one).
+    terminalManager.end(terminalId)
     const record = await getSessionByClaudeId(terminalId)
     if (record) await killDtachSession(record)
     return { killed: true }

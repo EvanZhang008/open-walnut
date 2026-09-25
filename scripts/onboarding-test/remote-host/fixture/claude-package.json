@@ -1,0 +1,6 @@
+{
+  "name": "@anthropic-ai/claude-code",
+  "version": "0.0.0-onboarding-fixture",
+  "description": "Fixture only: the npm layout of Claude Code with no real CLI inside.",
+  "bin": { "claude": "cli.js" }
+}

@@ -9,6 +9,7 @@
 import type { DaemonConnectPhase, DaemonConnectState } from '../../providers/daemon-connection.js'
 import type { Config } from '../types.js'
 import type { HostWarmupState } from './host-warmup.js'
+import type { HostReadiness } from './host-readiness.js'
 import {
   classifyHostConnectError,
   connectPhaseNote,
@@ -60,6 +61,11 @@ export interface HostStatus {
   retryInMs?: number
   warmup?: HostWarmupState
   discovered?: boolean
+  /**
+   * What the connected host can run (host.preflight). Only while connected, and
+   * only from a daemon with 'preflight-v1'; `problems` is empty when all is well.
+   */
+  readiness?: HostReadiness
   /** When this snapshot was taken (ms epoch) — the client orders pushes by it. */
   at: number
 }
@@ -70,6 +76,7 @@ export function buildHostStatus(
   state: DaemonConnectState,
   warmup?: HostWarmupState,
   now: number = Date.now(),
+  readiness?: HostReadiness,
 ): HostStatus {
   const label = hostDef.label ?? hostKey
   const status: HostStatus = {
@@ -110,6 +117,9 @@ export function buildHostStatus(
   if (state.retryInMs !== undefined) status.retryInMs = state.retryInMs
   if (warmup) status.warmup = warmup
   if (hostDef.discovered) status.discovered = true
+  // A readiness answer describes the daemon we are talking to now; while the
+  // host is down the connect error is the thing to show.
+  if (readiness && state.connected) status.readiness = readiness
   return status
 }
 

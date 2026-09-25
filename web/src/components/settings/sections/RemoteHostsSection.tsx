@@ -8,7 +8,7 @@ import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave';
 import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
-import { RemoteHostStatus, RemoteHostUnreachable } from './RemoteHostStatus';
+import { RemoteHostReadiness, RemoteHostStatus, RemoteHostUnreachable } from './RemoteHostStatus';
 import { AddLimitRow } from './RemoteHostLimits';
 import '@/styles/settings-sections-addons.css';
 
@@ -184,6 +184,9 @@ export function RemoteHostsSection({ config, onSave }: Props) {
     <SectionCard id="remote-hosts" title="Remote Hosts" onSave={handleSave} showSave={false} actions={addButton}>
       {hosts.map((host, idx) => host.alias ? (
         <RemoteHostUnreachable key={`u-${host._key}`} alias={host.alias} name={hostName(host, idx)} />
+      ) : null)}
+      {hosts.map((host, idx) => host.alias ? (
+        <RemoteHostReadiness key={`r-${host._key}`} alias={host.alias} name={hostName(host, idx)} />
       ) : null)}
       <SettingsGroup heading="Hosts">
         {hosts.length === 0 && (

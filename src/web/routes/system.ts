@@ -8,6 +8,7 @@ import { getDaemonPoolStatus } from '../../providers/daemon-connection.js'
 import { getConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { validateBearerCredential } from '../middleware/auth.js'
+import { getBuildInfo } from '../../lib/build-info.js'
 
 export const systemRouter = Router()
 
@@ -43,8 +44,9 @@ systemRouter.get('/health', async (req, res) => {
     return
   }
 
-  // Build response with optional daemons field
-  const response: Record<string, unknown> = { ...health }
+  // Build response with optional daemons field. `build` (commit + branch) stays
+  // on the detailed view: an anonymous cloud caller gets liveness only.
+  const response: Record<string, unknown> = { ...health, build: getBuildInfo() }
 
   try {
     const config = await getConfig()

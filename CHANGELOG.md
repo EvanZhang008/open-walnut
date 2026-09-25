@@ -6,6 +6,54 @@ breaking changes).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A remote host without a C compiler still gets a terminal.** The session terminal needs
+  `dtach` on the host so a shell survives a disconnect, and Walnut compiles it there from source.
+  On a host with no compiler the terminal used to refuse to open at all. Walnut now also accepts a
+  `dtach` already installed on the host, and when none can be provisioned it opens a plain shell
+  marked `Not persistent` with the one command that enables persistence and a Retry. An SSH failure
+  during provisioning is reported as an SSH failure, not as a missing compiler, and a failed build
+  shows its build log instead of the compiler hint.
+- **An npm-installed Claude Code on a remote host no longer fails on a missing Node.js.** The npm
+  build is a Node.js script, and the PATH an SSH command sees often has no `node`. The daemon that
+  runs under Bun now searches nvm, fnm, volta, asdf and the usual install directories for a working
+  Node.js before it spawns `claude`, the same way the binary daemon already did, and when it finds
+  none it says so and names the native install command. A missing `node` during a Node-runtime
+  daemon start was labelled a Walnut bug; it is now reported as Node.js missing on the host.
+- **Host status runs a preflight after connecting** (Claude Code present and which build, Node.js
+  when the npm build needs it, a compiler for the terminal) and shows one actionable line per
+  missing piece in Settings, with a Check again button. Older daemons without the capability
+  simply show nothing extra.
+- **Sessions see the PATH your own terminal sees.** The daemon used to put its fallback directories
+  (`/usr/local/bin`, `/usr/bin`, ...) ahead of the PATH your shell rc files build, and it read that
+  rc PATH inside the environment the server was started from. A Walnut server started from a shell
+  with an old Node.js first on PATH therefore handed that Node.js to every session and every MCP
+  server the session spawned, and editing `.zshrc` could not win. The login-shell PATH is now
+  captured in a clean environment and comes first; the fallback directories follow, then whatever
+  the daemon inherited. Trade-off: a host with two `claude` installs now picks the one your shell
+  picks.
+- **The terminal's fix command matches the host's OS**: `xcode-select --install` on a Mac, the
+  yum/apt pair on Linux, all three when the OS is unknown.
+- **The folder picker sees a host added in Settings without a page reload**, and a bare word such
+  as `work` on a remote host lists matching home folders (`~/workplace`, `~/workspace`) even on a
+  fresh install with no session history. Previously a bare word searched history only, so a new
+  user typing a folder name on a new host saw "No matches" although the folder existed.
+
+### Added
+
+- **A clean-room remote-host test in CI.** A container that looks like a bare dev box (no compiler,
+  no Node.js, an npm-style `claude`, `~/workplace` a symlink) is added as an SSH host, and the real
+  daemon connect, folder listing, terminal probe, preflight and session spawn run against it.
+  `scripts/onboarding-test/remote-host/run.sh` runs the same thing locally with Docker.
+- **Getting Started documents what a remote host needs** (SSH, curl or Bun or Node.js for the
+  daemon, Claude Code, optionally a compiler) and what Walnut does when each is missing.
+- **Every build says which commit it is.** `open-walnut --version`, `GET /api/config` (`build`),
+  `GET /api/system/health` and a muted line at the bottom of Settings carry the version, commit,
+  branch and build time (`+dirty` for an uncommitted tree), written by the build only after it
+  succeeds. `package.json` moves only on a release, so a checkout of main and the last npm install
+  used to be indistinguishable.
+
 ### Changed
 
 - **Search reaches the whole document, and a body match can outrank a bare title.** Every indexed

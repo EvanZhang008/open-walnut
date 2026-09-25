@@ -50,6 +50,16 @@
   --fg-muted: var(--settings-help-fg);
 }
 
+/* Build identity under the open pane: one muted, selectable line. */
+.settings-build-line {
+  margin: 32px 0 0;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  user-select: text;
+}
+
 /* ── Section shell: no box of its own; groups are the only surfaces ── */
 .settings-section.settings-card {
   max-width: none;

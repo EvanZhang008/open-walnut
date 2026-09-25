@@ -1,22 +1,14 @@
 import { Command } from 'commander';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { registerCommands } from './commands/index.js';
 import { outputJson } from './utils/json-output.js';
 import { initLogging } from './logging/index.js';
+import { formatBuildVersion, getBuildInfo } from './lib/build-info.js';
 import type { GlobalOptions } from './core/types.js';
 
-// Read the real version from package.json (dist/cli.js → ../package.json).
-// Hardcoding drifted once already (0.1.0 while the package shipped 0.3.0).
-const packageVersion = (() => {
-  try {
-    const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
-    return (JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version?: string }).version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-})();
+// Version plus the commit and date this dist was built from (dist/build-info.json),
+// the same line cli-fast prints. Never hardcode it: that drifted once already
+// (0.1.0 while the package shipped 0.3.0).
+const packageVersion = formatBuildVersion(getBuildInfo());
 
 const program = new Command();
 

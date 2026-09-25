@@ -13,11 +13,14 @@
  * - `embedded`: renders inline (no portal, no backdrop) so it can fill the left
  *   column of the session full-screen split — matching Changed / Files.
  *
- * When dtach can't be provisioned on the target, useSessionTerminal returns a
- * NO_DTACH result and we render an install-hint card instead of mounting xterm.
+ * When dtach can't be provisioned on the target, the server opens a PLAIN
+ * shell instead: xterm mounts as usual, the header shows a "Not persistent"
+ * badge and a notice above the terminal names the fix plus a Retry (see
+ * TerminalModeNotices). Only an ssh failure blocks, with a card showing ssh's
+ * own error.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -25,6 +28,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionTerminal } from '@/hooks/useSessionTerminal';
 import { useConfirm } from '@/hooks/useConfirm';
+import { TerminalPlainBadge, TerminalPlainNotice, TerminalSshFailedCard } from './TerminalModeNotices';
 
 interface SessionTerminalProps {
   sessionId: string;
@@ -47,14 +51,13 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const [copied, setCopied] = useState(false);
 
   const getSize = useCallback(() => {
     const t = termRef.current;
     return t ? { cols: t.cols, rows: t.rows } : { cols: 80, rows: 24 };
   }, []);
 
-  const { status, noDtach, errorMessage, sendInput, sendResize, kill, retry } = useSessionTerminal({
+  const { status, plain, sshFailed, errorMessage, sendInput, sendResize, kill, retry } = useSessionTerminal({
     sessionId,
     enabled: true,
     onData: (data) => termRef.current?.write(data),
@@ -62,9 +65,12 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
     getSize,
   });
 
-  // Create the xterm instance once. Skip while NO_DTACH (no terminal to mount).
+  // No xterm while ssh failed (nothing to mount); a plain shell mounts normally.
+  const blocked = sshFailed !== null;
+
+  // Create the xterm instance once. Skip while blocked.
   useEffect(() => {
-    if (noDtach) return;
+    if (blocked) return;
     if (!containerRef.current || termRef.current) return;
 
     const term = new Terminal({
@@ -92,11 +98,11 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [noDtach, sendInput]);
+  }, [blocked, sendInput]);
 
   // Refit on container resize; push the new size to the pty (debounced).
   useEffect(() => {
-    if (noDtach || !containerRef.current) return;
+    if (blocked || !containerRef.current) return;
     let raf = 0;
     let debounce: ReturnType<typeof setTimeout> | null = null;
     const ro = new ResizeObserver(() => {
@@ -116,7 +122,7 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
       cancelAnimationFrame(raf);
       if (debounce) clearTimeout(debounce);
     };
-  }, [noDtach, sendResize]);
+  }, [blocked, sendResize]);
 
   // Focus the terminal once ready.
   useEffect(() => {
@@ -151,23 +157,17 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
     const stopEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') e.stopPropagation(); };
     el.addEventListener('keydown', stopEsc);
     return () => el.removeEventListener('keydown', stopEsc);
-  }, [embedded, noDtach]);
+  }, [embedded, blocked]);
 
   const handleKill = useCallback(async () => {
-    if (await confirm({ title: 'End terminal?', message: 'Ending the terminal will close the dtach session and terminate any running processes.', confirmLabel: 'End', cancelLabel: 'Cancel', danger: true })) {
+    const message = plain
+      ? 'Ending the terminal will terminate the shell and any running processes.'
+      : 'Ending the terminal will close the dtach session and terminate any running processes.';
+    if (await confirm({ title: 'End terminal?', message, confirmLabel: 'End', cancelLabel: 'Cancel', danger: true })) {
       kill();
       onClose();
     }
-  }, [kill, onClose, confirm]);
-
-  const handleCopyHint = useCallback(() => {
-    const cmd = noDtach?.installHint?.split(/\s+#/)[0]?.trim();
-    if (!cmd) return;
-    navigator.clipboard.writeText(cmd).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }).catch(() => {});
-  }, [noDtach]);
+  }, [kill, onClose, confirm, plain]);
 
   const panel = (
     <div className={`session-terminal-panel${embedded ? ' session-terminal-panel-embedded' : ''}`}>
@@ -177,16 +177,17 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
             <span className="session-terminal-label">{label ?? 'Terminal'}</span>
             {host && <span className="session-terminal-host">SSH: {host}</span>}
             <span className={`session-terminal-status session-terminal-status-${status}`}>{status}</span>
+            {plain && <TerminalPlainBadge plain={plain} />}
           </div>
           <div className="session-terminal-actions">
-            {!noDtach && status !== 'no_dtach' && (
-              <button className="session-terminal-btn session-terminal-btn-kill" onClick={handleKill} title="End terminal (kill dtach)">
+            {!blocked && (
+              <button className="session-terminal-btn session-terminal-btn-kill" onClick={handleKill} title={plain ? 'End terminal (kill the shell)' : 'End terminal (kill dtach)'}>
                 End terminal
               </button>
             )}
             {/* In embedded mode the split's header owns closing (Changed/Files/Terminal toggle). */}
             {!embedded && (
-              <button className="session-terminal-close" onClick={onClose} title="Close (Esc) — keeps the dtach session">
+              <button className="session-terminal-close" onClick={onClose} title={plain ? 'Close (Esc). Not persistent: the shell ends about 2 minutes after closing' : 'Close (Esc). The dtach session keeps running'}>
                 &#x2715;
               </button>
             )}
@@ -194,25 +195,12 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
           </div>
         </div>
 
-        {noDtach ? (
-          <div className="session-terminal-error-card">
-            <div className="session-terminal-error-icon">&#x26A0;&#xFE0F;</div>
-            <div className="session-terminal-error-title">
-              Can't start terminal: unable to provision dtach on the target host{noDtach.host ? ` (${noDtach.host})` : ''}
-            </div>
-            <p className="session-terminal-error-body">
-              The terminal uses dtach so the session survives SSH disconnects. Walnut compiles it automatically, but this host appears to be missing a C compiler:
-            </p>
-            <div className="session-terminal-install">
-              <code>{noDtach.installHint}</code>
-              <button className="session-terminal-btn" onClick={handleCopyHint}>
-                {copied ? 'Copied' : 'Copy'}
-              </button>
-            </div>
-            <button className="session-terminal-btn session-terminal-retry" onClick={retry}>
-              Retry
-            </button>
-          </div>
+        {!blocked && plain && (
+          <TerminalPlainNotice plain={plain} retrying={status === 'connecting'} onRetry={retry} />
+        )}
+
+        {sshFailed ? (
+          <TerminalSshFailedCard failed={sshFailed} onRetry={retry} />
         ) : (
           <div className="session-terminal-body">
             <div className="session-terminal-xterm" ref={containerRef} />

@@ -33,6 +33,7 @@ import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL } from '../constants.js'
 import { buildRemotePreamble } from './session-io.js'
 import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
+import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
 import { updateRemoteDaemonService } from './daemon-service-update.js'
 import { daemonGzCachePath } from './daemon-gz-cache.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
@@ -2678,19 +2679,7 @@ export class DaemonConnection {
         let startLog = ''
         try { startLog = await this.sshExec('cat /tmp/open-walnut/daemon-start.log 2>/dev/null', 5_000) } catch {}
 
-        let hint = ''
-        if (/^(nohup|env): /m.test(startLog)) {
-          hint = ' [malformed start command: the nohup/env wrapper could not exec the daemon '
-            + '(bad path or malformed env prefix) — this is a walnut bug, not a host problem]'
-        } else if (/GLIBC_\d/.test(startLog)) {
-          hint = ' [glibc mismatch: the node binary on PATH requires newer glibc than this host has. '
-            + 'Check `node -v` on the remote — if it errors, install an older nvm-managed node (v16 on AL2/RHEL7). '
-            + 'Prefer binary daemon deploy which avoids node entirely.]'
-        } else if (startLog.includes('EADDRINUSE')) {
-          hint = ' [port in use: another daemon already running — try `daemon --stop` first]'
-        } else if (startLog.includes('Permission denied')) {
-          hint = ' [permission denied: /tmp/open-walnut may be owned by a different user]'
-        }
+        const hint = diagnoseDaemonStartLog(startLog, this.hostKey)
 
         throw new Error(
           `daemon failed to start (port='${portStr}', status='${statusLine}')${hint}. `

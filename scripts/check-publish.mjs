@@ -9,7 +9,7 @@
  * `npm pack --dry-run` (catches `files` allowlist regressions).
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,6 +21,7 @@ const required = [
   'dist/web/server.js',             // web server bundle
   'dist/web/static/index.html',     // built SPA
   'dist/data',                      // shipped skills/templates
+  'dist/build-info.json',           // which commit this build came from (tsup writes it)
   // Builtin first-party plugin Apps. A missing bundle is INVISIBLE at runtime — the
   // plugin loads with no App and the Settings row is simply absent — so the tarball
   // is where it has to be caught (scripts/ship-builtin-plugins.mjs writes these).
@@ -43,6 +44,16 @@ if (missing.length) {
   process.exit(1);
 }
 
+// Build info: tsup rewrites it after every successful build but never fails the build over it,
+// so a leftover file from an older build would ship a wrong commit. The version
+// must match the package being published.
+const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
+const buildInfo = JSON.parse(readFileSync(join(root, 'dist/build-info.json'), 'utf8'));
+if (buildInfo.version !== pkgVersion) {
+  console.error(`check-publish: dist/build-info.json is for ${buildInfo.version}, package.json is ${pkgVersion}; rebuild.`);
+  process.exit(1);
+}
+
 // SPA freshness: a server bundle newer than the SPA build usually means someone
 // rebuilt the server and forgot vite build. Warn-only — timestamps lie in CI.
 const serverMtime = statSync(join(root, 'dist/web/server.js')).mtimeMs;
@@ -58,7 +69,7 @@ const [pack] = JSON.parse(packJson);
 const files = pack.files.map((f) => f.path);
 
 const mustInclude = [
-  'dist/cli.js', 'dist/web/static/index.html', 'scripts/postinstall.mjs',
+  'dist/cli.js', 'dist/web/static/index.html', 'scripts/postinstall.mjs', 'dist/build-info.json',
   'dist/daemon-binaries/pi-acp.js', 'dist/daemon-binaries/pi-acp.LICENSE',
   'dist/daemon-binaries/daemon-cron-runtime.cjs',
   'dist/daemon-binaries/daemon-instance-lock.cjs',

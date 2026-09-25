@@ -51,6 +51,17 @@ describe('GET /api/config', () => {
     expect(res.body.config.defaults).toBeDefined();
     expect(res.body.config.defaults.priority).toBe('none');
   });
+
+  it('reports which build is running (package version, no build when run from source)', async () => {
+    const { getBuildInfo } = await import('../../../src/lib/build-info.js');
+    const res = await request(createApp()).get('/api/config');
+
+    expect(res.status).toBe(200);
+    expect(res.body.build).toEqual(getBuildInfo());
+    expect(res.body.build.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(res.body.build.commit).toBeNull();
+    expect(res.body.build.dirty).toBe(false);
+  });
 });
 
 describe('PUT /api/config', () => {

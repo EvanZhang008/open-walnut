@@ -145,6 +145,7 @@ those daemons.
   the on-disk session log.
 - Walnut deploys and updates its daemon over SSH. No manual copy step is required.
 - Chat, terminal access, files, diffs, commands, and skills work on remote hosts.
+- The host needs passwordless SSH and Claude Code; see [what the remote host needs](GETTING_STARTED.md#what-the-remote-host-needs) for the rest.
 
 Add remote hosts to `~/.open-walnut/config.yaml`:
 

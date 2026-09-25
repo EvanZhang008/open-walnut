@@ -290,11 +290,15 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     const addSubscriber = vi.fn()
     const sendOk = vi.fn((_ws, _id, result) => result)
     const sendError = vi.fn((_ws, _id, error) => { throw new Error(error) })
-    const run = new Function('sessions', 'process', 'fs', 'core', 'chainFifoWrite', 'addSubscriber', 'sendOk', 'sendError', 'logMsg', 'Buffer', 'sessionStartGate', 'sessionStopVersions', 'cronRuntime', 'ensureWatcher', 'handleSendCommand',
+    // The spawn gate sits between the adopt path and the replace path: only a
+    // replace (a real respawn) may consult it, never an adoption.
+    const ensureClaude = vi.fn(async () => ({ ok: true, path: 'fixture-cli', kind: 'native' }))
+    const run = new Function('sessions', 'process', 'fs', 'core', 'chainFifoWrite', 'addSubscriber', 'sendOk', 'sendError', 'logMsg', 'Buffer', 'sessionStartGate', 'sessionStopVersions', 'cronRuntime', 'ensureWatcher', 'handleSendCommand', 'hostRuntime',
       js + '\nreturn cmdStart')(
-      sessions, { kill }, { existsSync: () => true }, { handleSendCommand: send }, fifo,
+      sessions, { kill, env: {} }, { existsSync: () => true }, { handleSendCommand: send }, fifo,
       addSubscriber, sendOk, sendError, () => {}, Buffer,
       { run: (_sid: string, work: () => Promise<unknown>) => work() }, new Map(), null, () => {}, send,
+      { ensureClaude },
     )
     const command = { sid: 'sid', args: ['fixture-cli'], cwd: '/fixture', resume: true, message: '' }
     const result = await run({}, 1, { ...command, deferMessage: true })
@@ -304,7 +308,9 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(fifo).not.toHaveBeenCalled()
     expect(existing.state).toBe('running')
     expect(addSubscriber).toHaveBeenCalledOnce()
+    expect(ensureClaude).not.toHaveBeenCalled()
     await expect(run({}, 2, command)).rejects.toThrow('replace path reached')
+    expect(ensureClaude).toHaveBeenCalledOnce()
   })
 
   it("both spawn the CLI's stdout fd in append mode (marker-clobber defense)", () => {

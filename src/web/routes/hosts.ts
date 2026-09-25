@@ -16,6 +16,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { getConfig } from '../../core/config-manager.js'
 import { buildHostStatus, listStatusHosts, type HostStatus } from '../../core/hosts/host-status.js'
 import { getHostWarmup } from '../../core/hosts/host-warmup-registry.js'
+import { getHostReadiness, refreshHostReadiness } from '../../core/hosts/host-readiness.js'
 import type { DaemonConnectState } from '../../providers/daemon-connection.js'
 
 export const hostsRouter = Router()
@@ -53,7 +54,7 @@ hostsRouter.get('/status', async (_req, res, next) => {
     const { getDaemonConnectState } = await import('../../providers/daemon-connection.js')
     const warmup = getHostWarmup()?.snapshot() ?? {}
     for (const { key, def } of entries) {
-      hosts.push(buildHostStatus(key, def, getDaemonConnectState(key), warmup[key]?.state))
+      hosts.push(buildHostStatus(key, def, getDaemonConnectState(key), warmup[key]?.state, Date.now(), getHostReadiness(key)))
     }
     res.json({ hosts })
   } catch (err) {
@@ -106,7 +107,13 @@ hostsRouter.post('/:host/connect', async (req, res, next) => {
         .catch(() => { /* recorded in the failure cache and pushed as host:status */ })
     }
 
-    res.json({ ok: true, status: buildHostStatus(host, def, getDaemonConnectState(host), warmup?.stateOf(host)) })
+    // Already connected: the human is asking "is it ready now?" (they just
+    // installed claude or gcc), so re-run the host preflight. Fire-and-forget:
+    // the answer arrives as a host:status push, never delaying this reply.
+    const state = getDaemonConnectState(host)
+    if (state.connected) void refreshHostReadiness(host, { force: true })
+
+    res.json({ ok: true, status: buildHostStatus(host, def, state, warmup?.stateOf(host), Date.now(), getHostReadiness(host)) })
   } catch (err) {
     next(err)
   }

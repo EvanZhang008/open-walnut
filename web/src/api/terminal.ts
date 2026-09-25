@@ -5,24 +5,48 @@
 
 import { wsClient } from './ws';
 
-export interface TerminalOpenOk {
+interface TerminalOpenIds {
   ok: true;
   terminalId: string;
   cols: number;
   rows: number;
 }
 
-export interface TerminalNoDtach {
-  ok: false;
-  code: 'NO_DTACH';
-  host?: string;
-  installHint: string;
+/** The shell runs under dtach on the target: it survives disconnects. */
+export interface TerminalOpenPersistent extends TerminalOpenIds {
+  persistent: true;
 }
 
-export type TerminalOpenResult = TerminalOpenOk | TerminalNoDtach;
+/**
+ * dtach was unavailable, so the server opened a plain shell that dies with its
+ * connection. The UI must say so (badge + notice) and offer Retry.
+ */
+export interface TerminalOpenPlain extends TerminalOpenIds {
+  persistent: false;
+  reason: 'no_compiler' | 'build_failed';
+  host?: string;
+  /** Full sentence (tooltip). */
+  installHint: string;
+  /** Just the command (what Copy copies). */
+  installCommand: string;
+  /** Compiler stderr tail for build_failed. */
+  detail?: string;
+}
 
-export function terminalOpen(sessionId: string, cols: number, rows: number): Promise<TerminalOpenResult> {
-  return wsClient.sendRpc<TerminalOpenResult>('terminal:open', { sessionId, cols, rows });
+/** ssh itself failed: nothing ran on the host, so there is no terminal. */
+export interface TerminalSshFailed {
+  ok: false;
+  code: 'SSH_FAILED';
+  host: string;
+  detail: string;
+  hint: string;
+}
+
+export type TerminalOpenResult = TerminalOpenPersistent | TerminalOpenPlain | TerminalSshFailed;
+
+/** `reprobe` (Retry): re-check dtach now and upgrade a plain shell if it is available. */
+export function terminalOpen(sessionId: string, cols: number, rows: number, opts: { reprobe?: boolean } = {}): Promise<TerminalOpenResult> {
+  return wsClient.sendRpc<TerminalOpenResult>('terminal:open', { sessionId, cols, rows, ...(opts.reprobe ? { reprobe: true } : {}) });
 }
 
 export function terminalAttach(terminalId: string, cols: number, rows: number): Promise<{ ok: boolean }> {

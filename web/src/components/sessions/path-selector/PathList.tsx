@@ -2,8 +2,9 @@
  * PathList — sectioned result list for the session path selector.
  *
  * Renders labeled sections ("📁 subdirectories" / "🕘 history" / per-host
- * groups), explicit per-host empty states ("directory does not exist on X" /
- * "no subdirectories"), subtle host-down rows, and the "create & start" row.
+ * groups / "🏠 home folders" for a bare word), explicit per-host empty states
+ * ("directory does not exist on X" / "no subdirectories"), subtle host-down
+ * rows, and the "create & start" row.
  * History matches never impersonate live results — each lives under its own
  * section label.
  */
@@ -109,7 +110,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
       {loadError && !loading && <div className="sps-error">{loadError}</div>}
 
       {sections.map(section => (
-        <div className="sps-section" key={section.id}>
+        <div className="sps-section" key={section.id} data-section-id={section.id}>
           <div className="sps-section-label">{section.label}</div>
           {section.items.map(item => {
             flatIdx++;

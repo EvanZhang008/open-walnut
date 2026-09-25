@@ -8,6 +8,8 @@ import {
   resolveSpaceAmbiguity,
   deleteLastSegment,
   parentDirOf,
+  liveListingPrefix,
+  HOME_LISTING_DIR,
   ghostSuffix,
   segmentCompletion,
   pathValidity,
@@ -15,9 +17,28 @@ import {
 
 describe('classifyInput — four states', () => {
   it('non-path input → browse', () => {
-    expect(classifyInput('walnut')).toEqual({ kind: 'browse', query: 'walnut' });
+    expect(classifyInput('walnut')).toEqual({ kind: 'browse', query: 'walnut', homeWord: 'walnut' });
     expect(classifyInput('')).toEqual({ kind: 'browse', query: '' });
     expect(classifyInput('some words here')).toEqual({ kind: 'browse', query: 'some words here' });
+  });
+
+  it('a bare word flags a home-folder listing; empty, spaced or slashed input does not', () => {
+    // A fresh install has no history: "work" must still reach ~/workplace.
+    expect(classifyInput('work')).toEqual({ kind: 'browse', query: 'work', homeWord: 'work' });
+    expect(classifyInput('  work ')).toEqual({ kind: 'browse', query: '  work ', homeWord: 'work' });
+    expect(classifyInput('.config')).toMatchObject({ kind: 'browse', homeWord: '.config' });
+    for (const raw of ['', '   ', 'two words', 'a/b', 'work\tspace']) {
+      const state = classifyInput(raw);
+      expect(state.kind).toBe('browse');
+      expect(state.kind === 'browse' && state.homeWord).toBeFalsy();
+    }
+  });
+
+  it('a lone ~ behaves like ~/ (lists the home folder)', () => {
+    expect(classifyInput('~')).toEqual(classifyInput('~/'));
+    expect(classifyInput('~')).toEqual({ kind: 'dir-browse', dir: '~/' });
+    // Another user's home has no slash to list from: still a history search.
+    expect(classifyInput('~alice')).toEqual({ kind: 'browse', query: '~alice' });
   });
 
   it('trailing slash → dir-browse', () => {
@@ -95,10 +116,30 @@ describe('deleteLastSegment (Option+Backspace)', () => {
 
 describe('parentDirOf', () => {
   it('maps each state to its live-listing target', () => {
-    expect(parentDirOf(classifyInput('walnut'))).toBeNull();
+    expect(parentDirOf(classifyInput(''))).toBeNull();
+    expect(parentDirOf(classifyInput('two words'))).toBeNull();
+    expect(parentDirOf(classifyInput('walnut'))).toBe(HOME_LISTING_DIR);
+    expect(parentDirOf(classifyInput('~'))).toBe('~/');
     expect(parentDirOf(classifyInput('/a/b/'))).toBe('/a/b/');
     expect(parentDirOf(classifyInput('/a/b/c'))).toBe('/a/b/');
     expect(parentDirOf(classifyInput('/a/b kw'))).toBe('/a/b/');
+  });
+});
+
+describe('liveListingPrefix', () => {
+  it('lists nothing for an empty or multi-word query, ~/ for a bare word', () => {
+    expect(liveListingPrefix(classifyInput(''))).toBe('');
+    expect(liveListingPrefix(classifyInput('some words'))).toBe('');
+    expect(liveListingPrefix(classifyInput('work'))).toBe('~/');
+    expect(liveListingPrefix(classifyInput('~'))).toBe('~/');
+  });
+
+  it('path-like input keeps the request prefixes it always had', () => {
+    expect(liveListingPrefix(classifyInput('/'))).toBe('/');
+    expect(liveListingPrefix(classifyInput('/a/b/'))).toBe('/a/b/');
+    expect(liveListingPrefix(classifyInput('/a/b/c'))).toBe('/a/b/c');
+    expect(liveListingPrefix(classifyInput('~/.cl'))).toBe('~/.cl');
+    expect(liveListingPrefix(classifyInput('/a/b kw'))).toBe('/a/b/');
   });
 });
 
