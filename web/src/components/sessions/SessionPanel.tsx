@@ -5,6 +5,8 @@ import { SessionChatHistory } from './SessionChatHistory';
 import { SessionSupervisionBar, useSessionSupervision } from './SessionSupervisionBar';
 import { CronPill } from './CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
+import { SubtaskPill } from '@/components/tasks/SubtaskPill';
+import { LeaderPill } from '@/components/tasks/LeaderPill';
 import { CronJobsCard } from './CronJobsCard';
 import { stopSupervisedSession } from '@/stores/session-supervision-store';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
@@ -1974,6 +1976,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 />
               )}
               {!loading && <TriggerPill taskId={session?.taskId} />}
+              {/* The team links, as on the task rows: Sub leads to this task's
+                  parent, Leader lists its subtasks. A Personal AI ask is never a
+                  board row, so its session header is the one place an ask that
+                  split work off shows it. */}
+              {!loading && sessionTask && <SubtaskPill task={sessionTask} />}
+              {!loading && sessionTask && <LeaderPill task={sessionTask} />}
               {!loading && ps && (
                 <ProcessStatusBadge
                   processStatus={ps}

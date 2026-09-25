@@ -16,6 +16,7 @@
 import { expect, test } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { REAL_PANEL } from './draft-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOT_DIR = '/tmp/subtask-pill'
@@ -176,4 +177,53 @@ test('a subtask in another project is a top-level row there, and its Sub pill le
   // The three rows across two projects, for the human review of the run.
   await fs.mkdir(SHOT_DIR, { recursive: true })
   await page.locator('.todo-panel-list').first().screenshot({ path: `${SHOT_DIR}/${browserName}-cross-project.png` })
+})
+
+
+test('a parent\'s session header carries the Leader pill, and its list leads to each subtask', async ({ page, browserName }) => {
+  // A Personal AI ask is never a board row: the session header is where a parent
+  // that lives in the chat slot shows its team. The seeded "Model switch test
+  // task" has a live session record, so a row click opens its column.
+  test.setTimeout(120_000)
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const parent = 'pw-task-model-switch'
+  const near = await createTask(`Write the release note ${stamp}`, { project: 'Walnut', pinned: false, parent_task_id: parent })
+  const far = await createTask(`Tell the ops channel ${stamp}`, { project: `Sub pill C ${stamp}`, pinned: false, parent_task_id: parent })
+
+  await presetPanelView(page, { section: 'all', project: '' })
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.goto('/')
+  const parentRow = page.locator(`.todo-panel-item[data-task-id="${parent}"]`)
+  await expect(parentRow).toBeVisible({ timeout: 90_000 })
+  await parentRow.locator('.todo-item-title').click()
+
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="pw-model-switch-session"]`)
+  await expect(panel).toBeVisible({ timeout: 15_000 })
+  const header = panel.locator('.session-panel-title-meta')
+  const leader = header.locator('[data-testid="leader-pill"]')
+  await expect(leader).toHaveText('Leader · 2')
+  // It has no parent of its own, so no Sub pill in its header.
+  await expect(header.locator('[data-testid="subtask-pill"]')).toHaveCount(0)
+
+  await leader.click()
+  const flyout = page.locator('[data-testid="leader-subtasks-flyout"]')
+  await expect(flyout).toBeVisible()
+  await expect(flyout.locator('[data-testid="leader-sub-row"]')).toHaveCount(2)
+  await expect(flyout.locator(`[data-testid="leader-sub-row"][data-task-id="${far}"] .leader-sub-place`)).toHaveText(`Sub pill C ${stamp}`)
+  const box = (await flyout.boundingBox())!
+  const vp = page.viewportSize()!
+  expect(box.x).toBeGreaterThanOrEqual(0)
+  expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 0.5)
+  expect(box.y + box.height).toBeLessThanOrEqual(vp.height + 0.5)
+  const hb = (await header.boundingBox())!
+  const x = Math.max(0, Math.min(hb.x, box.x) - 8), y = Math.max(0, hb.y - 8)
+  await fs.mkdir(SHOT_DIR, { recursive: true })
+  await page.screenshot({
+    path: `${SHOT_DIR}/${browserName}-session-header-leader.png`,
+    clip: { x, y, width: Math.min(vp.width - x, Math.max(hb.x + hb.width, box.x + box.width) - x + 8), height: Math.min(vp.height - y, box.y + box.height - y + 8) },
+  })
+
+  await flyout.locator(`[data-testid="leader-sub-row"][data-task-id="${near}"]`).click()
+  await expect(flyout).toHaveCount(0)
+  await expect(page.locator(`.todo-panel-item[data-task-id="${near}"]`)).toHaveClass(/task-focused/, { timeout: 10_000 })
 })
