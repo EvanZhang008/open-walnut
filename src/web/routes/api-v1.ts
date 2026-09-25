@@ -2188,16 +2188,33 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         asyncPush: true,
       }
       let folderWarning: string | undefined
+      let parentWarning: string | undefined
+      // A worker's task in its own project is its subtask (see caller-placement).
+      let parentInput: { parent_task_id?: string } = decision.parentTaskId ? { parent_task_id: decision.parentTaskId } : {}
+      const add = async (folder: { group_id?: string }) => {
+        try {
+          return (await addTask({ ...createInput, ...parentInput, ...folder })).task
+        } catch (err) {
+          // The caller's task deleted since it was read: file the work anyway,
+          // just not as a subtask of something that no longer exists.
+          if (!parentInput.parent_task_id || !(err instanceof Error && /^Parent task not found/.test(err.message))) throw err
+          parentWarning = err.message
+          parentInput = {}
+          return (await addTask({ ...createInput, ...folder })).task
+        }
+      }
       let created
       try {
-        created = (await addTask({ ...createInput, ...(decision.group_id ? { group_id: decision.group_id } : {}) })).task
+        created = await add(decision.group_id ? { group_id: decision.group_id } : {})
       } catch (err) {
         // An INHERITED folder that vanished (deleted, or the caller moved) since
         // it was read must not fail a create that never asked for a folder.
+        // Deleting the caller can take its folder with it, so the retry keeps
+        // the missing-parent fallback too.
         const inheritedFolder = placementReq.group_id === undefined && !!decision.group_id
         if (!inheritedFolder || !(err instanceof Error && /^Folder "/.test(err.message))) throw err
         folderWarning = err.message
-        created = (await addTask(createInput)).task
+        created = await add({})
       }
       let task = created
       let folderCreated = false
@@ -2220,6 +2237,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       log.web.info('task created via api-v1', {
         taskId: task.id, project: task.project, groupId: task.group_id,
         ...(decision.inheritedFrom ? { placedBeside: decision.inheritedFrom, folderCreated } : {}),
+        ...(task.parent_task_id ? { parentTaskId: task.parent_task_id } : {}),
       })
       bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'api-v1' })
       // Project-only projection, same as GET /tasks (see the note there).
@@ -2233,8 +2251,14 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
           ...(task.group_id && folderLabel ? { group_label: folderLabel } : {}),
           folder_created: folderCreated,
           ...(decision.inheritedFrom ? { inherited_from: decision.inheritedFrom } : {}),
+          ...(task.parent_task_id ? { parent_task_id: task.parent_task_id } : {}),
           ...(task.cwd ? { cwd: task.cwd } : {}),
-          ...(folderWarning ? { warning: `The task was created but could not be put in a folder: ${folderWarning}` } : {}),
+          ...(folderWarning || parentWarning ? {
+            warning: [
+              folderWarning ? `The task was created but could not be put in a folder: ${folderWarning}` : '',
+              parentWarning ? `The task was created but not as a subtask: ${parentWarning}` : '',
+            ].filter(Boolean).join(' '),
+          } : {}),
         },
       })
     } catch (err) {

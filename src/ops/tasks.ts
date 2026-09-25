@@ -382,6 +382,7 @@ interface Placement {
   group_label?: string
   folder_created?: boolean
   inherited_from?: string
+  parent_task_id?: string
   warning?: string
 }
 
@@ -392,7 +393,7 @@ function placementSentence(p: Placement | undefined): string {
   const folder = p.group_id
     ? `, folder "${p.group_label || p.group_id}"${p.folder_created ? ' (new, holding your task and this one)' : ''}`
     : ''
-  const why = p.inherited_from ? ', beside your task' : ''
+  const why = p.parent_task_id ? ', as a subtask of your task' : p.inherited_from ? ', beside your task' : ''
   const warning = p.warning ? ` ${p.warning}.` : ''
   return `Filed in ${project}${folder}${why}.${warning} `
 }
@@ -458,7 +459,11 @@ defineOp({
     const id = taskId(task)
     if (!task || !id) throw new Error('Create response has no task id. Check task_list before retrying; the write may have succeeded.')
     const placement = created?.placement
-    const view = { ...taskView(task), ...(placement?.group_id ? { group_id: placement.group_id } : {}) }
+    const view = {
+      ...taskView(task),
+      ...(placement?.group_id ? { group_id: placement.group_id } : {}),
+      ...(placement?.parent_task_id ? { parent_task_id: placement.parent_task_id } : {}),
+    }
     const extra = placement ? { placement } : {}
     const where = placementSentence(placement)
     if (recordOnly) {

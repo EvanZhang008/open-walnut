@@ -556,7 +556,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   "priority"?, "due_date"?, "start_date"?, "end_date"?, "description"?,
   "pinned"?, "focus_tier"?, "group_id"?, "launch_cwd"?, "launch_host"? }` → `201 { "task": ProjectedTask,
   "placement": { "project", "group_id"?, "group_label"?, "folder_created",
-  "inherited_from"?, "cwd"?, "warning"? } }`.
+  "inherited_from"?, "parent_task_id"?, "cwd"?, "warning"? } }`.
   Same creation semantics as the web quick-add: omitted/empty `project` =
   config default → Inbox; a new project name auto-creates its registry row;
   **Caller placement (additive, 2026-09-23):** when the `x-walnut-caller-sid`
@@ -574,7 +574,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   Both are hints: they never change where the task is filed, and a non-worker's
   are ignored. An explicit `project` (`""` =
   Inbox) or `group_id` (`""` = no folder) always wins, and a folder never
-  follows work into another project. No header, an unknown id, or a Personal AI
+  follows work into another project. A task a worker files into its own project
+  is also that worker's SUBTASK (`parent_task_id` = the caller's task, reported as
+  `placement.parent_task_id`; the web board marks it with a Sub pill); filed into
+  another project it is independent. No header, an unknown id, or a Personal AI
   ask: the old defaults, unchanged. `placement` says where the task landed,
   because ProjectedTask carries no folder; `warning` appears when an inherited
   folder could not be applied (the task is still created). `group_id` must be a

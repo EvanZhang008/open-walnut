@@ -28,6 +28,21 @@ vi.mock('../../../src/core/fork-title.js', async (orig) => ({
   summarizeGroupLabel: vi.fn(async () => 'Refined Folder'),
 }))
 
+// Lets a test rewrite the resolved caller, to stage the caller's task vanishing
+// between resolution and the write (a race no real request can pin in time).
+type Placement = import('../../../src/core/sessions/caller-placement.js').CallerPlacement
+let rewriteCaller: ((c: Placement) => Placement) | undefined
+vi.mock('../../../src/core/sessions/caller-placement.js', async (orig) => {
+  const real = await orig<typeof import('../../../src/core/sessions/caller-placement.js')>()
+  return {
+    ...real,
+    resolveCallerPlacement: vi.fn(async (sid: string | undefined) => {
+      const c = await real.resolveCallerPlacement(sid)
+      return rewriteCaller ? rewriteCaller(c) : c
+    }),
+  }
+})
+
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { addTask, getTask, createFolder, addToGroup, updateTaskRaw, listGroups } from '../../../src/core/task-manager.js'
@@ -82,12 +97,13 @@ afterAll(async () => {
 })
 
 describe('callers that are not workers keep the old defaults', () => {
-  it('no caller header (the phone, the web UI): Inbox, no folder, no cwd', async () => {
+  it('no caller header (the phone, the web UI): Inbox, no folder, no cwd, not a subtask', async () => {
     const { status, json } = await post({ title: 'Buy oat milk' })
     expect(status).toBe(201)
     expect(['', 'Inbox']).toContain(json.task.project)
     expect(json.placement).toEqual({ project: json.task.project, folder_created: false })
     expect((await getTask(json.task.id)).group_id).toBeUndefined()
+    expect((await getTask(json.task.id)).parent_task_id).toBeUndefined()
   })
 
   it('an unknown session id is an external caller: nothing inherited', async () => {
@@ -102,6 +118,7 @@ describe('callers that are not workers keep the old defaults', () => {
     expect(json.task.project).not.toBe('Ask Walnut')
     expect(json.placement.inherited_from).toBeUndefined()
     expect(json.placement.group_id).toBeUndefined()
+    expect((await getTask(json.task.id)).parent_task_id).toBeUndefined()
   })
 })
 
@@ -125,6 +142,9 @@ describe('a worker caller', () => {
       const born = await getTask(json.task.id)
       expect(born.group_id).toBe(gid)
       expect(born.cwd).toBe('/repo/marina')
+      // And it is the caller's SUBTASK: the board draws a Sub pill from this.
+      expect(born.parent_task_id).toBe(caller.id)
+      expect(json.placement.parent_task_id).toBe(caller.id)
       // The board learns about the folder AND the create carries it.
       await vi.waitFor(() => expect(created.find((d) => d.task?.id === json.task.id)?.task?.group_id).toBe(gid))
       expect(groups.some((g) => g.group_id === gid)).toBe(true)
@@ -143,6 +163,7 @@ describe('a worker caller', () => {
     const { task: caller, sid } = await seedCaller('marina', { folder: child.group_id })
     const before = (await listGroups()).length
     const { json } = await post({ title: 'Rail spacing', priority: 'important' }, sid)
+    expect((await getTask(json.task.id)).parent_task_id).toBe(caller.id)
     expect(json.placement).toMatchObject({
       project: 'marina', group_id: child.group_id, group_label: 'Rail Top', folder_created: false, inherited_from: caller.id,
     })
@@ -163,7 +184,10 @@ describe('a worker caller', () => {
     const { json } = await post({ title: 'Release notes', project: 'acme' }, sid)
     expect(json.task.project).toBe('acme')
     expect(json.placement).toEqual({ project: 'acme', folder_created: false })
-    expect((await getTask(json.task.id)).cwd).toBeUndefined()
+    const born = await getTask(json.task.id)
+    expect(born.cwd).toBeUndefined()
+    // Work filed into another project is independent, not a subtask.
+    expect(born.parent_task_id).toBeUndefined()
   })
 
   it('naming the Inbox on purpose: Inbox, no folder', async () => {
@@ -243,6 +267,32 @@ describe('a worker caller', () => {
     expect(json.task.project).toBe('marina')
     expect(json.placement.group_id).toBeUndefined()
     expect(json.placement.warning).toMatch(/could not be put in a folder/)
+  })
+
+  it('a caller task deleted mid-create: the work is still filed, just not as its subtask', async () => {
+    const { sid } = await seedCaller('marina')
+    const vanish = (extra: Record<string, string>) => (c: Placement) =>
+      c.kind === 'worker' ? { ...c, task: { ...c.task, id: 'mdeadbee-0000', ...extra } } : c
+    try {
+      rewriteCaller = vanish({})
+      const lone = await post({ title: 'Parent gone' }, sid)
+      expect(lone.status).toBe(201)
+      expect(lone.json.task.project).toBe('marina')
+      expect(lone.json.task.parent_task_id).toBeUndefined()
+      expect(lone.json.placement.parent_task_id).toBeUndefined()
+      expect(lone.json.placement.warning).toMatch(/not as a subtask: Parent task not found/)
+
+      // Deleting the caller can take its folder too: both fallbacks must hold.
+      rewriteCaller = vanish({ group_id: 'g_ghost' })
+      const both = await post({ title: 'Parent and folder gone' }, sid)
+      expect(both.status).toBe(201)
+      expect(both.json.task.parent_task_id).toBeUndefined()
+      expect(both.json.task.group_id).toBeFalsy()
+      expect(both.json.placement.warning).toMatch(/could not be put in a folder/)
+      expect(both.json.placement.warning).toMatch(/not as a subtask/)
+    } finally {
+      rewriteCaller = undefined
+    }
   })
 
   it('an Inbox worker gets an Inbox folder beside it', async () => {

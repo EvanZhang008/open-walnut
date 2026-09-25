@@ -292,6 +292,14 @@ describe('task_create says where the task landed', () => {
     expect(rec(created.task).group_id).toBe('g_f1')
   })
 
+  it('says the new task is a subtask of the caller when the server made it one', async () => {
+    const r = createRunner({ created: { task: TASK, placement: { ...PLACED, parent_task_id: 't_caller' } } })
+    const created = await r.speak({ title: TASK.title, record_only: true })
+    expect(created.outcome).toBe('Filed in project marina, folder "Fixture work" (new, holding your task and this one), '
+      + 'as a subtask of your task. Placeholder saved. Work was explicitly not started.')
+    expect(rec(created.task).parent_task_id).toBe('t_caller')
+  })
+
   it('prefixes a started create too, and a failed start keeps the placement', async () => {
     const started = await createRunner({ created: { task: TASK, placement: { project: '', folder_created: false } } })
       .speak({ title: TASK.title })

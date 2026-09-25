@@ -61,9 +61,10 @@ describe('through the daemon gateway (what `walnut tools call` in a session does
     await addTask({ title: 'Unrelated elsewhere', project: 'acme' })
 
     const created = await call(sid, 'task_create', { title: 'Follow-up the user asked for', record_only: true })
-    expect(created.placement).toMatchObject({ project: 'gateway-proj', folder_created: true, inherited_from: caller.id })
-    expect(created.outcome).toMatch(/^Filed in project gateway-proj, folder ".+" \(new, holding your task and this one\), beside your task\. Placeholder saved/)
+    expect(created.placement).toMatchObject({ project: 'gateway-proj', folder_created: true, inherited_from: caller.id, parent_task_id: caller.id })
+    expect(created.outcome).toMatch(/^Filed in project gateway-proj, folder ".+" \(new, holding your task and this one\), as a subtask of your task\. Placeholder saved/)
     expect(created.task.group_id).toBe(created.placement.group_id)
+    expect(created.task.parent_task_id).toBe(caller.id)
 
     const listed = await call(sid, 'task_list', {})
     expect(listed.scope).toBe('folder')

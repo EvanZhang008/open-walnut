@@ -18,6 +18,11 @@
  *     one; otherwise a new folder is made holding the caller AND the new task
  *     (the same shape a fork produces). A folder never follows work into another
  *     project, because a folder is that project's private structure.
+ *   - parent: a task that lands in the caller's project is a SUBTASK of the
+ *     caller (`parent_task_id`), the same relation a promoted side question
+ *     gets. The board marks it with a Sub pill and the parent counts it, so
+ *     work an agent split off stays visibly attached to the work it came from.
+ *     Filed into another project it is independent work, not a subtask.
  *   - host + cwd: travel together (a cwd is only meaningful on its host). At
  *     create time the caller's cwd is stamped on the task when it belongs to the
  *     host the task would launch on anyway; at start time a task with no cwd of
@@ -130,6 +135,8 @@ export interface PlacementDecision {
   createFolderWithCaller: boolean;
   /** Set when the caller's placement was used (project, folder or both). */
   inheritedFrom?: string;
+  /** The caller's task, when the new task lands in its project: the parent. */
+  parentTaskId?: string;
 }
 
 /** Pure: the placement rule table (see the module header). */
@@ -139,18 +146,21 @@ export function decidePlacement(req: PlacementRequest, caller: CallerPlacement):
     return { project: req.project, group_id: explicitGroup, createFolderWithCaller: false };
   }
   const project = req.project !== undefined ? req.project : caller.task.project;
+  const own = sameProject(project, caller.task.project);
+  const parent = own ? { parentTaskId: caller.task.id } : {};
   // A folder is inherited only inside the caller's own project.
-  if (req.group_id !== undefined || !sameProject(project, caller.task.project)) {
+  if (req.group_id !== undefined || !own) {
     return {
       project,
       group_id: explicitGroup,
       createFolderWithCaller: false,
       ...(req.project === undefined ? { inheritedFrom: caller.task.id } : {}),
+      ...parent,
     };
   }
   return caller.task.group_id
-    ? { project, group_id: caller.task.group_id, createFolderWithCaller: false, inheritedFrom: caller.task.id }
-    : { project, createFolderWithCaller: true, inheritedFrom: caller.task.id };
+    ? { project, group_id: caller.task.group_id, createFolderWithCaller: false, inheritedFrom: caller.task.id, ...parent }
+    : { project, createFolderWithCaller: true, inheritedFrom: caller.task.id, ...parent };
 }
 
 /**

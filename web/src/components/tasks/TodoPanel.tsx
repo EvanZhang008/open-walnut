@@ -49,6 +49,7 @@ import { TaskStartButton } from './TaskStartButton';
 import { CronPill } from '@/components/sessions/CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
+import { SubtaskPill } from './SubtaskPill';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useShowPriority } from '@/hooks/useShowPriority';
@@ -1185,6 +1186,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <CronPill sessionId={resolveTaskSessionId(task)} />
           <TriggerPill taskId={task.id} />
           <ImportedPill task={task} />
+          <SubtaskPill task={task} />
           {/* Info pills + kebab — same line as title, no second row */}
           {startDateLabel && (
             <span className="todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>
@@ -2697,6 +2699,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       >
         {task.title}
       </span>
+      <SubtaskPill task={task} />
       {ago && <span className="todo-recent-ago" title={(isDone && task.completed_at) || task.last_session_update}>{ago}</span>}
       {/* One-click ▶ Start — hover-revealed, before the kebab */}
       <TaskStartButton task={task} isDone={isDone} onStartSession={onStartSession} />

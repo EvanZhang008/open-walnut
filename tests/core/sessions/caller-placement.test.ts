@@ -49,13 +49,13 @@ describe('decidePlacement (the rule table)', () => {
 
   it('worker, nothing named, caller in a folder: same project, same folder', () => {
     expect(decidePlacement({}, worker('g_f'))).toEqual({
-      project: 'marina', group_id: 'g_f', createFolderWithCaller: false, inheritedFrom: 't-caller',
+      project: 'marina', group_id: 'g_f', createFolderWithCaller: false, inheritedFrom: 't-caller', parentTaskId: 't-caller',
     })
   })
 
   it('worker, nothing named, caller in no folder: same project, a new folder with both', () => {
     expect(decidePlacement({}, worker())).toEqual({
-      project: 'marina', createFolderWithCaller: true, inheritedFrom: 't-caller',
+      project: 'marina', createFolderWithCaller: true, inheritedFrom: 't-caller', parentTaskId: 't-caller',
     })
   })
 
@@ -82,14 +82,24 @@ describe('decidePlacement (the rule table)', () => {
 
   it('worker saying group_id "" gets its project and no folder, and none is made', () => {
     expect(decidePlacement({ group_id: '' }, worker())).toEqual({
-      project: 'marina', group_id: undefined, createFolderWithCaller: false, inheritedFrom: 't-caller',
+      project: 'marina', group_id: undefined, createFolderWithCaller: false, inheritedFrom: 't-caller', parentTaskId: 't-caller',
     })
   })
 
   it('worker naming a folder gets that folder, never a new one', () => {
     expect(decidePlacement({ group_id: 'g_other' }, worker('g_f'))).toEqual({
-      project: 'marina', group_id: 'g_other', createFolderWithCaller: false, inheritedFrom: 't-caller',
+      project: 'marina', group_id: 'g_other', createFolderWithCaller: false, inheritedFrom: 't-caller', parentTaskId: 't-caller',
     })
+  })
+
+  it('a task landing in the caller\'s project is the caller\'s subtask; filed elsewhere it is not', () => {
+    // Work an agent splits off stays attached to the work it came from (the
+    // board shows a Sub pill); a task filed into another project is its own work.
+    expect(decidePlacement({}, worker()).parentTaskId).toBe('t-caller')
+    expect(decidePlacement({ project: 'MARINA', group_id: 'g_x' }, worker('g_f')).parentTaskId).toBe('t-caller')
+    expect(decidePlacement({}, worker(undefined, '')).parentTaskId).toBe('t-caller')
+    expect(decidePlacement({ project: 'acme' }, worker('g_f')).parentTaskId).toBeUndefined()
+    expect(decidePlacement({ project: '' }, worker('g_f')).parentTaskId).toBeUndefined()
   })
 })
 
