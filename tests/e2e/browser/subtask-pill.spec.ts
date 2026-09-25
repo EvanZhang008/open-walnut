@@ -92,7 +92,7 @@ test('a subtask shows Sub on its pinned card and its list row; a top-level task 
 })
 
 
-test('a subtask in another project is a top-level row there, and its Sub pill leads to the parent', async ({ page }) => {
+test('a subtask in another project is a top-level row there, and its Sub pill leads to the parent', async ({ page, browserName }) => {
   test.setTimeout(120_000)
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const projectA = `Sub pill A ${stamp}`, projectB = `Sub pill B ${stamp}`
@@ -130,4 +130,8 @@ test('a subtask in another project is a top-level row there, and its Sub pill le
   await farPill.click()
   await expect(row(parent)).toHaveClass(/task-focused/, { timeout: 10_000 })
   await expect(row(far)).not.toHaveClass(/task-focused/)
+
+  // The three rows across two projects, for the human review of the run.
+  await fs.mkdir(SHOT_DIR, { recursive: true })
+  await page.locator('.todo-panel-list').first().screenshot({ path: `${SHOT_DIR}/${browserName}-cross-project.png` })
 })
