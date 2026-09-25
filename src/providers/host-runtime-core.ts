@@ -47,6 +47,10 @@ export interface HostRuntimeDeps {
   /** Live reference (process.env), so later PATH edits are seen. */
   env: Record<string, string | undefined>
   now?: () => number
+  /** process.platform / process.arch of the host, reported by preflight: the
+   *  server plans host.fix and picks a prebuilt dtach by them. */
+  platform?: string
+  arch?: string
 }
 
 export type ClaudeKind = 'native' | 'npm' | 'unknown'
@@ -66,6 +70,10 @@ export interface HostPreflightResult {
   claude: ClaudeProbe
   compiler: { found: boolean; name?: string }
   dtach: { found: boolean; path?: string }
+  /** process.platform ('linux', 'darwin', ...) and process.arch ('x64', 'arm64');
+   *  absent from older daemons. */
+  platform?: string
+  arch?: string
 }
 
 export type EnsureClaudeResult =
@@ -435,7 +443,10 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
       if (resolveOnPath(ccs[i], pathStr)) { compiler = { found: true, name: ccs[i] }; break }
     }
     var dtachPath = isExecutable(home() + '/.local/bin/walnut-dtach') ? home() + '/.local/bin/walnut-dtach' : resolveOnPath('dtach', pathStr)
-    return { claude: claude, compiler: compiler, dtach: dtachPath ? { found: true, path: dtachPath } : { found: false } }
+    var out: HostPreflightResult = { claude: claude, compiler: compiler, dtach: dtachPath ? { found: true, path: dtachPath } : { found: false } }
+    if (deps.platform) out.platform = deps.platform
+    if (deps.arch) out.arch = deps.arch
+    return out
   }
 
   return {
@@ -450,6 +461,7 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
     computeDaemonPath: computeDaemonPath,
     resolveOnPath: resolveOnPath,
     ensureClaude: ensureClaude,
+    probeClaude: probeClaude,
     shellCanRun: shellCanRun,
     preflight: preflight,
   }

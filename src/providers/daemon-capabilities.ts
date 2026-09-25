@@ -311,6 +311,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // twin), so it is NOT sidecar-gated. Not bridge-reachable. Optional: without
   // it the host status simply carries no readiness field and shows no hint.
   'preflight-v1',
+  // 'hostfix-v1': host.fix runs ONE named fix the preflight asked for
+  // (install-claude-native, install-compiler under `sudo -n`, build-dtach),
+  // idempotent and one at a time, never a free-form command. Both twins
+  // implement it inline (host-fix-core.ts, text-injected into the source twin),
+  // so it is NOT sidecar-gated. Not bridge-reachable. Optional: without it the
+  // server never fixes anything and the readiness lines keep their commands.
+  'hostfix-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

@@ -18,6 +18,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import yaml from 'js-yaml'
+import type { HostFixRecord } from '../../src/core/hosts/host-autofix.js'
+import { readFixes, wantedFixes } from '../live/remote-host-onboarding-adapters.js'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
 const DIR = path.join(REPO, 'scripts', 'onboarding-test', 'remote-host')
@@ -49,7 +51,7 @@ describe('remote-host fixture · the container stays the dev box it copies', () 
 
   it('installs exactly what sshd, the Bun installer and the daemon need, without recommends', () => {
     const pkgs = aptPackages(dockerfile)
-    for (const need of ['openssh-server', 'curl', 'unzip', 'ca-certificates', 'git', 'bash', 'coreutils', 'procps']) {
+    for (const need of ['openssh-server', 'curl', 'unzip', 'ca-certificates', 'git', 'bash', 'coreutils', 'procps', 'sudo']) {
       expect(pkgs, `the fixture must install ${need}`).toContain(need)
     }
     expect(dockerCode).toContain('--no-install-recommends')
@@ -64,6 +66,11 @@ describe('remote-host fixture · the container stays the dev box it copies', () 
     const loop = /for tool in ([^;]+); do/.exec(dockerCode)?.[1].split(/\s+/) ?? []
     for (const tool of ['gcc', 'cc', 'clang', 'node', 'npm', 'bun']) expect(loop).toContain(tool)
     expect(dockerCode).toMatch(/fixture invariant broken: \$tool is installed[^\n]*exit 1/)
+  })
+
+  it('has sudo, but alice cannot use it without a password (the autofix step expects needsPassword)', () => {
+    expect(dockerCode).not.toMatch(/NOPASSWD|sudoers|-a?G sudo\b|adduser alice sudo|gpasswd/)
+    expect(dockerCode).toContain("usermod -p '*' alice")
   })
 
   it('does not preinstall Bun (Walnut installs it; that is the step under test)', () => {
@@ -221,10 +228,56 @@ describe('remote-host live test · gated and aimed at the real transport', () =>
   it('labels a download failure at install-runtime as NETWORK, only with evidence', () => {
     expect(live).toContain('throw new Error(`NETWORK: ${cause}')
     // Evidence comes from the box itself, not only from Walnut's (thin) error text.
-    expect(live).toContain('curl -fsS -o /dev/null --max-time 20 "$u"')
-    expect(live).toContain('https://bun.sh/install https://github.com')
+    // Any HTTP answer is a live network, so no `curl -f`; only a transport failure counts.
+    expect(live).toContain('curl -sS -o /dev/null --max-time 20 "$u"')
+    expect(live).toContain("unreachableFromBox(['https://bun.sh/install', 'https://github.com'])")
+    expect(live).toContain("unreachableFromBox(['https://claude.ai/install.sh', 'https://storage.googleapis.com'])")
+    expect(live).toContain('throw new Error(`NETWORK: the native Claude Code installer could not download')
     // Bun present on the box means install-runtime worked: never blame the network then.
-    expect(live).toMatch(/if \(\/\^BUN_OK\$\/m\.test\(probe\)\) return null/)
+    expect(live).toMatch(/if \(\/\^BUN_OK\$\/m\.test\(\w+\)\) return null/)
+  })
+
+  it('runs a to e with autofix OFF, set before any product module loads', () => {
+    expect(live).toContain("if (SSH_ALIAS) process.env.WALNUT_HOST_AUTOFIX = '0'")
+    // Every product import is dynamic (type imports aside), so nothing reads the env first.
+    for (const file of [live, read(REPO, 'tests', 'live', 'remote-host-onboarding-adapters.ts')]) {
+      expect(file).not.toMatch(/^import (?!type )[^\n]*'\.\.\/\.\.\/src\//m)
+    }
+  })
+
+  it('turns autofix on only in the opt-in step f', () => {
+    expect(live).toContain("const AUTOFIX_STEP = process.env.WALNUT_REMOTE_ONBOARDING_AUTOFIX === '1'")
+    expect(live.match(/process\.env\.WALNUT_HOST_AUTOFIX = '1'/g)).toHaveLength(1)
+    const reconnect = live.slice(live.indexOf('async function reconnectWithAutofix'), live.indexOf('// ── The journey'))
+    expect(reconnect).toContain("process.env.WALNUT_HOST_AUTOFIX = '1'")
+    expect(reconnect).toContain('hr.wireHostReadiness({ onConnected: dc.addOnDaemonHostConnected')
+    const stepF = live.slice(live.indexOf("it('f. (opt-in)"))
+    expect(stepF).toMatch(/if \(!AUTOFIX_STEP\) \{[^}]*ctx\.skip\(\)/)
+    expect(stepF).toContain(".toMatchObject({ ok: false, needsPassword: true })")
+    expect(stepF).toContain("toMatchObject({ found: true, kind: 'native' })")
+  })
+
+  it('takes the prebuilt branch from the server\'s own lookup, and logs which branch ran', () => {
+    const adapters = read(REPO, 'tests', 'live', 'remote-host-onboarding-adapters.ts')
+    expect(adapters).toContain("findPrebuiltDtach('Linux', unameMachine)")
+    expect(live).toContain('prebuilt = await serverPrebuiltDtach(arch)')
+    for (const step of ['c', 'd', 'f']) expect(live).toContain(`log(\`${step}. branch: \${prebuilt ? 'prebuilt' : 'no_compiler'}\`)`)
+    // A walnut-dtach left by an earlier run would fake the prebuilt branch.
+    expect(live).toContain('echo has=walnut-dtach')
+    const stepD = live.slice(live.indexOf("it('d. "), live.indexOf("it('e. "))
+    expect(stepD).toContain('path: `${remoteHome}/.local/bin/walnut-dtach`')
+  })
+
+  it('waits for the gcc fix only while dtach is missing, read from the real fix records', () => {
+    expect(wantedFixes(false)).toEqual(['install-claude-native', 'install-compiler'])
+    expect(wantedFixes(true)).toEqual(['install-claude-native'])
+    const record: HostFixRecord = { action: 'install-compiler', ok: false, needsPassword: true, finishedAt: 1, text: 'Could not install gcc automatically' }
+    expect(readFixes({ fixes: [record] })).toEqual([expect.objectContaining({ id: 'install-compiler', ok: false, needsPassword: true })])
+    const stepF = live.slice(live.indexOf("it('f. (opt-in)"))
+    expect(stepF).toContain('const wanted = wantedFixes(Boolean(prebuilt))')
+    expect(stepF).toContain('reconnectWithAutofix(wanted)')
+    expect(stepF).toContain('expect(fixes.map((f) => f.id), JSON.stringify(fixes)).toEqual(wanted)')
+    expect(stepF).toMatch(/if \(prebuilt\) \{\s*expect\(compilerFix[^\n]*\.toBeUndefined\(\)/)
   })
 
   it('drives the pooled ssh DaemonConnection, never a direct WebSocket shortcut', () => {
@@ -239,11 +292,10 @@ describe('CI · the remote-host job exists and blocks', () => {
   }
   const job = ci.jobs['remote-host']
 
-  it('runs the runner on ubuntu-latest after build, within 20 minutes', () => {
+  it('runs the runner on ubuntu-latest after build', () => {
     expect(job, 'ci.yml lost the remote-host job').toBeDefined()
     expect(job['runs-on']).toBe('ubuntu-latest')
     expect([job.needs].flat()).toContain('build')
-    expect(job['timeout-minutes']).toBe(20)
     expect(job.steps?.some((s) => s.run?.includes('scripts/onboarding-test/remote-host/run.sh'))).toBe(true)
   })
 
@@ -253,10 +305,16 @@ describe('CI · the remote-host job exists and blocks', () => {
     expect(step.run).toContain('for attempt in 1 2; do')
     // GitHub runs `shell: bash` as `bash -eo pipefail`: without +e attempt 1 ends the loop.
     expect(step.run).toMatch(/^set \+e$/m)
-    expect(step.run).toMatch(/timeout --kill-after=\S+ 7m bash scripts\/onboarding-test\/remote-host\/run\.sh 2>&1 \| tee "\$log"/)
+    const cap = /timeout --kill-after=\S+ (\d+)m bash scripts\/onboarding-test\/remote-host\/run\.sh 2>&1 \| tee "\$log"/.exec(step.run)
+    expect(cap, 'each attempt must be capped by timeout').not.toBeNull()
+    // Two capped attempts fit the step, and the step plus ~4 min of setup fits the job,
+    // so one hang can never use the budget twice.
+    const attempt = Number(cap![1])
+    expect(2 * attempt).toBeLessThanOrEqual(step['timeout-minutes'] ?? 0)
+    expect((step['timeout-minutes'] ?? 0) + 4).toBeLessThanOrEqual(job['timeout-minutes'] ?? 0)
+    expect((step as { env?: Record<string, string> }).env?.WALNUT_REMOTE_ONBOARDING_AUTOFIX, 'CI runs the autofix step').toBe('1')
     expect(step.run).toContain('status=${PIPESTATUS[0]}')
     expect(step.run).toContain('"$GITHUB_STEP_SUMMARY"')
-    expect(step['timeout-minutes']).toBeLessThan(job['timeout-minutes'] ?? 0)
     const upload = job.steps?.find((st) => (st as { uses?: string }).uses?.startsWith('actions/upload-artifact')) as
       { if?: string; with?: { path?: string } } | undefined
     expect(upload?.if, 'logs must be kept when the retry passes too').toBe('always()')
@@ -274,6 +332,8 @@ describe('CI · the remote-host job exists and blocks', () => {
     const readme = read(REPO, 'scripts', 'onboarding-test', 'README.md')
     expect(readme).toContain('## The second machine: remote host')
     expect(readme).toMatch(/^\| `remote-host` \|/m)
+    expect(readme).toContain('WALNUT_REMOTE_ONBOARDING_AUTOFIX=1')
+    expect(readme).toContain('WALNUT_HOST_AUTOFIX=0')
   })
 })
 

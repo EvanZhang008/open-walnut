@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
 /**
@@ -11,20 +13,34 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
  * and an ssh failure was blamed on the compiler.
  */
 
-vi.mock('../../../src/constants.js', () => createMockConstants('walnut-term-open'));
+// The shipped prebuilts live in a per-file dir so each test decides which exist.
+vi.mock('../../../src/constants.js', () => {
+  const c = createMockConstants('walnut-term-open');
+  return { ...c, DAEMON_BINARIES_DIR: path.join(c.WALNUT_HOME as string, 'prebuilt-bin') };
+});
 
 // ---- the remote host, as seen by execFile ----------------------------------
-type HostScenario = 'no_compiler' | 'mac_no_clt' | 'ssh_denied' | 'walnut' | 'build_fails' | 'builds';
+type HostScenario = 'no_compiler' | 'mac_no_clt' | 'ssh_denied' | 'walnut' | 'build_fails' | 'builds'
+  | 'mac_prebuilt' | 'linux_prebuilt_fails_builds';
 const hostState: { scenario: HostScenario; scripts: string[] } = { scenario: 'no_compiler', scripts: [] };
 
 function answer(input: string): { code: number; stdout: string; stderr: string } {
-  const BEGIN = 'WALNUT_DTACH_BEGIN\nOS:Linux\n';
+  const BEGIN = 'WALNUT_DTACH_BEGIN\nOS:Linux\nARCH:x86_64\n';
+  const MAC = 'WALNUT_DTACH_BEGIN\nOS:Darwin\nARCH:arm64\n';
   const isBuild = input.includes('base64 -d');
   switch (hostState.scenario) {
     case 'ssh_denied': return { code: 255, stdout: '', stderr: 'alice@devbox.example.com: Permission denied (publickey).\n' };
     case 'walnut': return { code: 0, stdout: `${BEGIN}DTACH_OK:walnut:/home/alice/.local/bin/walnut-dtach\n`, stderr: '' };
     case 'no_compiler': return { code: 0, stdout: `${BEGIN}NO_COMPILER\n`, stderr: '' };
-    case 'mac_no_clt': return { code: 0, stdout: 'WALNUT_DTACH_BEGIN\nOS:Darwin\nNO_COMPILER\n', stderr: '' };
+    case 'mac_no_clt': return { code: 0, stdout: `${MAC}NO_COMPILER\n`, stderr: '' };
+    case 'mac_prebuilt':
+      return isBuild
+        ? { code: 0, stdout: `${MAC}PREBUILT:/Users/alice/.local/bin/walnut-dtach\n`, stderr: '' }
+        : { code: 0, stdout: `${MAC}NO_COMPILER\n`, stderr: '' };
+    case 'linux_prebuilt_fails_builds':
+      return isBuild
+        ? { code: 0, stdout: `${BEGIN}PREBUILT_FAILED\nBUILT:/home/alice/.local/bin/walnut-dtach\n`, stderr: 'prebuilt dtach does not run on this host: GLIBC_2.34 not found\n' }
+        : { code: 0, stdout: `${BEGIN}NEED_BUILD:gcc\n`, stderr: '' };
     case 'build_fails':
       return isBuild
         ? { code: 0, stdout: `${BEGIN}BUILD_FAILED\n`, stderr: '/usr/bin/ld: cannot find -lutil\n' }
@@ -100,6 +116,13 @@ import { registerTerminalRpc } from '../../../src/web/terminal/register.js';
 import { terminalManager } from '../../../src/web/terminal/terminal-manager.js';
 import { resetDtachCacheForTests } from '../../../src/web/terminal/dtach-provision.js';
 import { conditionalReap } from '../../../src/web/terminal/dtach-lifecycle.js';
+import { DAEMON_BINARIES_DIR } from '../../../src/constants.js';
+
+/** Put a shipped prebuilt in place (the bytes only travel, the host is simulated). */
+function ship(name: string): void {
+  fs.mkdirSync(DAEMON_BINARIES_DIR, { recursive: true });
+  fs.writeFileSync(path.join(DAEMON_BINARIES_DIR, name), 'prebuilt-bytes');
+}
 
 const ws = { readyState: 1 };
 const open = (sessionId: string, extra: Record<string, unknown> = {}) =>
@@ -112,6 +135,7 @@ beforeEach(async () => {
   spawned.length = 0;
   sent.length = 0;
   hostState.scripts = [];
+  fs.rmSync(DAEMON_BINARIES_DIR, { recursive: true, force: true });
 });
 
 afterAll(() => terminalManager.shutdown());
@@ -138,6 +162,14 @@ describe('terminal:open without dtach on the host', () => {
     expect(spawned[0].args).toContain('-tt');
     expect(remoteCmd).toBe(`cd '/home/alice/proj' && exec "\${SHELL:-/bin/bash}" -l`);
     expect(spawned[0].args.join(' ')).not.toMatch(/dtach|dsock/);
+  });
+
+  it('no compiler and only another machine\'s prebuilt: still one probe, no upload', async () => {
+    hostState.scenario = 'no_compiler';
+    ship('dtach-darwin-arm64'); // the host is Linux x86_64
+    const res = await open('sess-other-arch');
+    expect(res).toMatchObject({ persistent: false, reason: 'no_compiler' });
+    expect(hostState.scripts).toHaveLength(1);
   });
 
   it('a remote Mac without the Command Line Tools gets xcode-select, not yum', async () => {
@@ -170,6 +202,39 @@ describe('terminal:open without dtach on the host', () => {
     const res = await open('sess-p');
     expect(res).toEqual({ ok: true, terminalId: 'sess-p', cols: 100, rows: 30, persistent: true });
     expect(spawned[0].args.at(-1)).toContain("exec '/home/alice/.local/bin/walnut-dtach' -A");
+  });
+});
+
+describe('terminal:open with a shipped prebuilt for the host', () => {
+  it('a remote Mac without the Command Line Tools gets the prebuilt: persistent, no compile', async () => {
+    hostState.scenario = 'mac_prebuilt';
+    ship('dtach-darwin-arm64');
+    const res = await open('sess-mac-pre');
+    expect(res).toEqual({ ok: true, terminalId: 'sess-mac-pre', cols: 100, rows: 30, persistent: true });
+    expect(hostState.scripts).toHaveLength(2); // probe, then install
+    const install = hostState.scripts[1];
+    expect(install).toContain('WALNUT_DTACH_PREBUILT_EOF');
+    expect(install).toContain(Buffer.from('prebuilt-bytes').toString('base64'));
+    expect(install).not.toContain('master.c'); // no compiler, so no source shipped
+    expect(spawned[0].args.at(-1)).toContain("exec '/Users/alice/.local/bin/walnut-dtach' -A");
+  });
+
+  it('a Linux prebuilt that will not run there falls back to compiling in the same round trip', async () => {
+    hostState.scenario = 'linux_prebuilt_fails_builds';
+    ship('dtach-linux-x64');
+    const res = await open('sess-linux-pre');
+    expect(res).toMatchObject({ ok: true, persistent: true });
+    expect(hostState.scripts).toHaveLength(2);
+    expect(hostState.scripts[1]).toContain('WALNUT_DTACH_PREBUILT_EOF');
+    expect(hostState.scripts[1]).toContain('master.c');
+  });
+
+  it('with a compiler and no matching prebuilt the install ships only the source', async () => {
+    hostState.scenario = 'builds';
+    ship('dtach-darwin-arm64');
+    await open('sess-src-only');
+    expect(hostState.scripts[1]).not.toContain('WALNUT_DTACH_PREBUILT_EOF');
+    expect(hostState.scripts[1]).toContain('master.c');
   });
 });
 

@@ -63,7 +63,7 @@ import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { setHostWarmup } from '../../../src/core/hosts/host-warmup-registry.js';
 import type { HostWarmup } from '../../../src/core/hosts/host-warmup.js';
 import type { HostStatus } from '../../../src/core/hosts/host-status.js';
-import { clearHostReadiness, getHostReadiness, refreshHostReadiness } from '../../../src/core/hosts/host-readiness.js';
+import { clearHostReadiness, getHostReadiness, hostAutofixRound, refreshHostReadiness } from '../../../src/core/hosts/host-readiness.js';
 
 /** A fresh AL2-class host: npm claude, no working node, no compiler, no dtach. */
 const NPM_NO_NODE_REPLY = {
@@ -75,6 +75,22 @@ const NPM_NO_NODE_REPLY = {
 function preflightConn(caps: string[] = ['preflight-v1'], reply: Record<string, unknown> = NPM_NO_NODE_REPLY) {
   return { hasCapability: (c: string) => caps.includes(c), send: vi.fn(async () => reply) };
 }
+
+/**
+ * A host whose daemon can fix things (hostfix-v1) but whose fixes both fail: the
+ * installer cannot download, and sudo wants a password. Nothing runs anywhere.
+ */
+function fixingConn() {
+  const send = vi.fn(async (cmd: string, params: Record<string, unknown> = {}) => {
+    if (cmd === 'host.preflight') return NPM_NO_NODE_REPLY;
+    if (params.action === 'install-claude-native') {
+      return { ok: true, result: { action: 'install-claude-native', ok: false, error: 'download-failed', manualCommand: 'curl -fsSL https://claude.ai/install.sh | bash', log: 'curl: (6) Could not resolve host', durationMs: 4 } };
+    }
+    return { ok: true, result: { action: 'install-compiler', ok: false, error: 'needs-password', needsPassword: true, manualCommand: 'sudo yum install -y gcc glibc-devel', log: 'sudo: a password is required', durationMs: 2 } };
+  });
+  return { hasCapability: (c: string) => c === 'preflight-v1' || c === 'hostfix-v1', send };
+}
+const fixCalls = (send: ReturnType<typeof vi.fn>) => send.mock.calls.filter((c) => c[0] === 'host.fix').map((c) => (c[1] as { action: string }).action);
 
 function createApp() {
   const app = express();
@@ -175,6 +191,37 @@ describe('GET /api/hosts/status', () => {
     expect(devbox.readiness?.problems[0].commands).toEqual(['curl -fsSL https://claude.ai/install.sh | bash']);
     // Other hosts say nothing.
     expect(byHost(res.body.hosts).marina.readiness).toBeUndefined();
+  });
+
+  it('carries the automatic fixes: each failed one keeps its line, says why, and hands over the exact command', async () => {
+    const saved = process.env.WALNUT_HOST_AUTOFIX;
+    delete process.env.WALNUT_HOST_AUTOFIX;
+    try {
+      states.devbox = { connected: true, phase: 'connected' };
+      const conn = fixingConn();
+      pooled.devbox = conn;
+      await refreshHostReadiness('devbox');
+      await hostAutofixRound('devbox');
+      expect(fixCalls(conn.send)).toEqual(['install-claude-native', 'install-compiler']);
+      const res = await request(createApp()).get('/api/hosts/status');
+      const r = byHost(res.body.hosts).devbox.readiness!;
+      expect(r.fixing).toBeUndefined();
+      expect(r.fixes.map((f) => [f.action, f.ok, f.needsPassword ?? false])).toEqual([
+        ['install-claude-native', false, false], ['install-compiler', false, true],
+      ]);
+      expect(r.problems).toEqual([
+        expect.objectContaining({
+          kind: 'claude_needs_node', commands: ['curl -fsSL https://claude.ai/install.sh | bash'],
+          fix: expect.objectContaining({ state: 'failed', text: 'Could not install Claude Code automatically (the installer could not be downloaded)' }),
+        }),
+        expect.objectContaining({
+          kind: 'compiler_missing', commands: ['sudo yum install -y gcc glibc-devel'],
+          fix: expect.objectContaining({ state: 'failed', needsPassword: true, text: 'Could not install gcc automatically (sudo needs a password)' }),
+        }),
+      ]);
+    } finally {
+      if (saved !== undefined) process.env.WALNUT_HOST_AUTOFIX = saved;
+    }
   });
 
   it('an old daemon without preflight-v1: never asked, no readiness field, no error', async () => {
@@ -293,6 +340,53 @@ describe('POST /api/hosts/:host/connect', () => {
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(getHostReadiness('devbox')).toBeDefined());
     expect(pooled.devbox!.send).toHaveBeenCalledWith('host.preflight', {}, expect.any(Number));
+  });
+
+  it('"Check again" lets every failed automatic fix run once more; a plain reconnect does not', async () => {
+    const saved = process.env.WALNUT_HOST_AUTOFIX;
+    delete process.env.WALNUT_HOST_AUTOFIX;
+    try {
+      states.devbox = { connected: true, phase: 'connected' };
+      const conn = fixingConn();
+      pooled.devbox = conn;
+      installWarmup();
+      await refreshHostReadiness('devbox');
+      await hostAutofixRound('devbox');
+      await refreshHostReadiness('devbox');   // a reconnect: the failures stand
+      await hostAutofixRound('devbox');
+      expect(fixCalls(conn.send)).toHaveLength(2);
+      await request(createApp()).post('/api/hosts/devbox/connect');
+      await vi.waitFor(() => expect(fixCalls(conn.send)).toHaveLength(4));
+      await hostAutofixRound('devbox');
+      expect(getHostReadiness('devbox')!.fixes).toHaveLength(4);
+    } finally {
+      if (saved !== undefined) process.env.WALNUT_HOST_AUTOFIX = saved;
+    }
+  });
+
+  it('"Check again" on a host that is down still clears the tried fixes, so the next handshake runs them', async () => {
+    const saved = process.env.WALNUT_HOST_AUTOFIX;
+    delete process.env.WALNUT_HOST_AUTOFIX;
+    try {
+      states.devbox = { connected: true, phase: 'connected' };
+      const conn = fixingConn();
+      pooled.devbox = conn;
+      installWarmup();
+      await refreshHostReadiness('devbox');
+      await hostAutofixRound('devbox');
+      expect(fixCalls(conn.send)).toHaveLength(2);
+      // The host drops; the user presses Check again while it is down.
+      states.devbox = { connected: false, phase: 'failed' };
+      await request(createApp()).post('/api/hosts/devbox/connect');
+      expect(fixCalls(conn.send)).toHaveLength(2);
+      // The reconnect's handshake refresh is what runs them again.
+      states.devbox = { connected: true, phase: 'connected' };
+      await refreshHostReadiness('devbox');
+      await hostAutofixRound('devbox');
+      expect(fixCalls(conn.send)).toHaveLength(4);
+    } finally {
+      if (saved !== undefined) process.env.WALNUT_HOST_AUTOFIX = saved;
+    }
   });
 
   it('never runs a preflight for a host that is not connected yet (the handshake listener does that)', async () => {

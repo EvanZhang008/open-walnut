@@ -29,7 +29,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # --no-install-recommends matters: recommends are how a compiler sneaks in.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      openssh-server curl unzip ca-certificates git bash coreutils procps \
+      openssh-server curl unzip ca-certificates git bash coreutils procps sudo \
  && rm -rf /var/lib/apt/lists/*
 
 # Fail the BUILD if the image ever gains what the real dev box lacks. A fixture
@@ -42,6 +42,9 @@ RUN for tool in gcc cc clang tcc node nodejs npm bun; do \
 
 # alice: a normal login user. '*' means "no password" without the '!' lock
 # prefix, which some sshd builds treat as "account locked" even for key auth.
+# sudo is installed but alice has no sudoers entry and no usable password, like
+# a dev box whose user cannot sudo without asking: `sudo -n` answers "a password
+# is required", which is what an automatic gcc install must report.
 RUN useradd --create-home --shell /bin/bash alice \
  && usermod -p '*' alice
 

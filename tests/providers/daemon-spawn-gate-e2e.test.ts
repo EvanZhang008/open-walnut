@@ -192,3 +192,38 @@ describe.each(TWINS)('daemon spawn gate: $name', (t) => {
     expect(hello.capabilities).toEqual(expect.arrayContaining(['preflight-v1']))
   }, 60_000)
 })
+
+/**
+ * host.fix over the wire, against the same real twins. Nothing here installs or
+ * compiles: only answers that run nothing are exercised (an unknown action, a
+ * build-dtach whose source is incomplete, the Mac refusal). The fake HOME keeps
+ * even the idempotency probe (`~/.local/bin/walnut-dtach --help`) away from the
+ * real one.
+ */
+describe.each(TWINS)('host.fix: $name', (t) => {
+  beforeAll(() => { twin = t })
+
+  it('advertises hostfix-v1, preflight reports the platform and arch, and only named actions run', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-host-fix-')))
+    const home = fakeHome()
+    await spawnDaemon(home)
+    const hello = await rpc({ id: 1, cmd: 'hello' })
+    expect(hello.capabilities).toEqual(expect.arrayContaining(['preflight-v1', 'hostfix-v1']))
+    const pre = await rpc({ id: 2, cmd: 'host.preflight' })
+    expect(pre).toMatchObject({ ok: true, platform: process.platform, arch: process.arch })
+
+    // The result rides under `result`: its own ok:false is an answer, not an RPC error.
+    const unknown = await rpc({ id: 3, cmd: 'host.fix', action: 'sh -c id' })
+    expect(unknown).toMatchObject({ ok: true, result: { action: 'sh -c id', ok: false, error: 'unknown-action' } })
+    const bad = await rpc({ id: 4, cmd: 'host.fix', action: 'build-dtach', sources: { 'main.c': 'bWFpbg==' } })
+    expect(bad).toMatchObject({ ok: true, result: { action: 'build-dtach', ok: false, error: 'bad-sources' } })
+    expect(fs.existsSync(path.join(home, '.local/bin/walnut-dtach'))).toBe(false)
+  }, 60_000)
+
+  it.runIf(process.platform === 'darwin')('a Mac refuses install-compiler without running anything', async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-host-fix-')))
+    await spawnDaemon(fakeHome())
+    const res = await rpc({ id: 1, cmd: 'host.fix', action: 'install-compiler' })
+    expect(res).toMatchObject({ ok: true, result: { ok: false, error: 'darwin-needs-command-line-tools', manualCommand: 'xcode-select --install' } })
+  }, 60_000)
+})

@@ -13,9 +13,29 @@
  *      tunnel, handshake; the daemon runs under Bun and answers a ping
  *   b. the folder picker lists ~/workplace (flagged as a symlink) and ~/workspace,
  *      and ~/workplace/ lists proj-a and proj-b (pins f0799ff8 on a Linux daemon)
- *   c. the terminal probe reaches the host and reports "no compiler", not ssh
- *   d. host.preflight (capability preflight-v1) sees the npm build without node
+ *   c. the terminal probe reaches the host (never an ssh failure) and, by branch,
+ *      runs persistent on the shipped prebuilt dtach or reports "no compiler"
+ *   d. host.preflight (capability preflight-v1) sees no compiler, the npm build
+ *      without node, and dtach exactly where step c installed the prebuilt
  *   e. a session start names Node.js and the native installer
+ *   f. (only with WALNUT_REMOTE_ONBOARDING_AUTOFIX=1, set by the CI job) reconnect
+ *      with autofix on: host.fix installs the native claude, and (no-compiler
+ *      branch only) reports that the gcc install needs a sudo password; a fresh
+ *      preflight sees claude 'native'
+ *
+ * TWO BRANCHES, logged as `branch: prebuilt` or `branch: no_compiler`. The server
+ * ships a prebuilt dtach for the box's `uname -m` when dist/daemon-binaries has
+ * one: `npm run build:daemon` on a Linux machine with gcc writes it, so the amd64
+ * CI runner takes the prebuilt branch, while an arm64 container on a Mac has none
+ * and takes the no-compiler branch. Once dtach runs, a compiler is pointless, so
+ * the prebuilt branch never sees a gcc fix (or a sudo prompt) in step f.
+ *
+ * a to e assert pure DIAGNOSIS, so this process runs with WALNUT_HOST_AUTOFIX=0
+ * until f turns it on: an automatic fix during a to e would install the native
+ * claude and change the very answers those steps pin.
+ *
+ * Moving contracts (terminal fallback, spawn gate, host.fix) are read through
+ * ./remote-host-onboarding-adapters.ts; each carries a TODO naming its final shape.
  *
  * RUN: scripts/onboarding-test/remote-host/run.sh (builds and starts the container,
  * sets the two env vars below, tears the container down). CI job: `remote-host`.
@@ -39,10 +59,14 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import type { SessionRecord } from '../../src/core/types.js'
+import { createHash } from 'node:crypto'
 import type { DaemonConnection, DaemonConnectState } from '../../src/providers/daemon-connection.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 import { createMockConstants } from '../helpers/mock-constants.js'
+import {
+  expectSpawnNamesNodeAndNativeInstall, expectTerminalOnHost, probeTerminal, readFixes, serverPrebuiltDtach, wantedFixes,
+  type FixView, type SpawnOutcome,
+} from './remote-host-onboarding-adapters.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-remote-onboarding'))
 
@@ -53,79 +77,19 @@ const describeIf = SSH_ALIAS ? describe : describe.skip
 const HOST_KEY = 'devbox'
 const SSH_TARGET: SshTarget = { hostname: SSH_ALIAS }
 const CONNECT_STEPS = ['ssh', 'probe', 'install-runtime', 'upload', 'start', 'tunnel', 'handshake', 'connected']
-
-// ── Adapters: the two contracts other changes are landing in right now ────────
-// Each reads the product in ONE place, so flipping to the final shape is a
-// one-function edit. Delete a legacy branch as soon as its change is committed:
-// a legacy branch left in place would let the old failure pass here again.
-
-interface TerminalView { ok: boolean; persistent?: boolean; reason?: string; code?: string; hint: string; sshReached: boolean }
-
-/**
- * TODO(terminal-fallback): once the no-compiler fallback in src/web/terminal/* is
- * committed, delete the `probeDtach` branch. Final terminal:open shape on this host:
- * `{ ok: true, persistent: false, reason: 'no_compiler' }` (ssh trouble would be
- * `{ ok: false, code: 'SSH_FAILED' }`). probeTerminalMode is the decision terminal:open
- * returns verbatim (ok:false) or spreads into its payload (ok:true); see register.ts.
- */
-async function probeTerminal(sockDir: string): Promise<TerminalView> {
-  const mod = await import('../../src/web/terminal/dtach-check.js') as Record<string, unknown>
-  const record = { host: HOST_KEY, claudeSessionId: 'remote-onboarding-terminal' } as unknown as SessionRecord
-  if (typeof mod.probeTerminalMode === 'function') {
-    const probe = mod.probeTerminalMode as (r: SessionRecord, o: { fresh: boolean }) => Promise<Record<string, any>>
-    const d = await probe(record, { fresh: true })
-    if (!d.ok) return { ok: false, code: d.code, hint: String(d.hint ?? d.detail ?? ''), sshReached: d.code !== 'SSH_FAILED' }
-    return { ok: true, persistent: d.mode.persistent, reason: d.mode.reason, hint: String(d.mode.installHint ?? ''), sshReached: true }
-  }
-  // Legacy: NO_DTACH covered both "ssh failed" and "no compiler", so the ssh half
-  // is proven separately: the probe's own ControlMaster must be up afterwards.
-  const legacy = await (mod.probeDtach as (r: SessionRecord) => Promise<Record<string, any>>)(record)
-  return { ok: legacy.ok, code: legacy.code, hint: String(legacy.installHint ?? ''), sshReached: controlMasterUp(sockDir, 'walnut-term-ssh-') }
-}
-
-function expectTerminalOnNoCompilerHost(v: TerminalView): void {
-  expect(v.code, `terminal reported an ssh failure: ${v.hint}`).not.toBe('SSH_FAILED')
-  expect(v.sshReached, 'the terminal probe never reached the host over ssh').toBe(true)
-  if (v.persistent !== undefined || v.reason !== undefined) {
-    expect(v).toMatchObject({ ok: true, persistent: false, reason: 'no_compiler' })
-  } else {
-    // TODO(terminal-fallback): legacy blocking card; delete with the probeDtach branch.
-    expect(v).toMatchObject({ ok: false, code: 'NO_DTACH' })
-  }
-  expect(v.hint).toMatch(/gcc/)
-}
-
-type SpawnOutcome =
-  | { kind: 'refused'; text: string }              // start rejected, no process ran
-  | { kind: 'exited'; code: number; text: string } // a process ran and died
-  | { kind: 'running' }                            // neither in the window: a real claude?
-
-/**
- * TODO(claude-node): the spawn gate (src/providers/host-runtime-core.ts, capability
- * preflight-v1) refuses to start the npm build on a host without node, with
- * HOST_RUNTIME_MESSAGES.claudeNeedsNode. Once committed, delete the legacy branch,
- * so a daemon that spawns the npm build into a Node-less host fails this test.
- */
-function expectSpawnNamesNodeAndNativeInstall(o: SpawnOutcome, gated: boolean): void {
-  if (gated) {
-    expect(o.kind, `expected the start to be refused, got ${JSON.stringify(o)}`).toBe('refused')
-    const text = (o as { text: string }).text
-    expect(text).toMatch(/Node\.js/)
-    expect(text).toMatch(/claude\.ai\/install\.sh/)
-    return
-  }
-  // Legacy: the daemon spawns the npm build, the kernel cannot find node, env exits
-  // 127. ClaudeCodeSession renders this as "Process exited with code 127 before
-  // initialization" (or "Claude CLI not found on remote host" after an init).
-  expect(o, JSON.stringify(o)).toMatchObject({ kind: 'exited', code: 127 })
-  expect((o as { text: string }).text).toMatch(/env: .node.: No such file or directory/)
-}
+const AUTOFIX_STEP = process.env.WALNUT_REMOTE_ONBOARDING_AUTOFIX === '1'
+const FIX_WAIT_MS = 6 * 60_000
+// Diagnosis first: no automatic host fix may run before step f (see the header).
+// Set before any product module is imported; every src import below is dynamic.
+if (SSH_ALIAS) process.env.WALNUT_HOST_AUTOFIX = '0'
 
 // ── Shared state and helpers ───────────────────────────────────────────────────
 
 let sockDir = ''
 let realSsh = ''
 let remoteHome = ''
+/** The prebuilt dtach the server ships for the box's arch, or null: picks the branch. */
+let prebuilt: string | null = null
 let conn: DaemonConnection | null = null
 const saved = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR }
 const failures: string[] = []
@@ -161,8 +125,9 @@ function controlMasterUp(dir: string, prefix: string): boolean {
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
-/** Download failures as curl, the Bun installer and ssh print them. */
-const NETWORK_PATTERN = /Could not resolve host|Temporary failure in name resolution|curl: \(\d+\)|Failed to connect to|Connection timed out|Operation timed out|SSL_|bun\.sh/i
+/** Download failures as curl, the installers and ssh print them (no bare URL: a
+ *  command line that merely names a host is not evidence of a download error). */
+const DOWNLOAD_ERROR = /Could not resolve host|Temporary failure in name resolution|curl: \(\d+\)|Failed to connect to|Connection timed out|Operation timed out|SSL_|Failed to download/i
 
 /** This run's own Walnut log lines about the host (its log dir is the mocked temp one). */
 async function hostLogLines(): Promise<string[]> {
@@ -174,9 +139,25 @@ async function hostLogLines(): Promise<string[]> {
 }
 
 /**
+ * Ask the BOX (not Walnut) whether it can reach each URL at all. Any HTTP answer
+ * counts as reachable (no `curl -f`: a 400 from a bucket root is a live network);
+ * only a curl transport failure (resolve, connect, TLS, timeout) is not.
+ * Returns the first unreachable line, or null.
+ */
+function unreachableFromBox(urls: string[]): string | null {
+  let out = ''
+  try {
+    out = remote(`for u in ${urls.join(' ')}; do out=$(curl -sS -o /dev/null --max-time 20 "$u" 2>&1); echo "curl_exit=$? $u $out"; done; true`, 90_000)
+  } catch (e) {
+    return `probe failed: ${errText(e)}`
+  }
+  return out.split('\n').find((l) => /^curl_exit=[1-9]/.test(l))?.trim() ?? null
+}
+
+/**
  * Step a failed: was it the network at install-runtime? Only when Bun never got
  * installed on the box AND there is download evidence: the box itself cannot
- * fetch the installer or GitHub (where the installer downloads Bun from), or the
+ * reach the installer or GitHub (where the installer downloads Bun from), or the
  * connect error, Walnut's log for the host, or the daemon start log names a
  * download failure. A reachable network with a failed install is a Walnut bug
  * and stays a plain failure. (Walnut's own evidence is thin: its install runs
@@ -184,22 +165,17 @@ async function hostLogLines(): Promise<string[]> {
  */
 async function networkCauseAtInstallRuntime(phases: string[], err: unknown): Promise<string | null> {
   if (!phases.includes('install-runtime')) return null
-  let probe = ''
+  let facts = ''
   try {
-    probe = remote([
-      '[ -x "$HOME/.bun/bin/bun" ] && echo BUN_OK',
-      'for u in https://bun.sh/install https://github.com; do out=$(curl -fsS -o /dev/null --max-time 20 "$u" 2>&1); echo "curl_exit=$? $u $out"; done',
-      'tail -n 20 /tmp/open-walnut/daemon-start.log 2>/dev/null',
-      'true',
-    ].join('; '), 90_000)
+    facts = remote('[ -x "$HOME/.bun/bin/bun" ] && echo BUN_OK; tail -n 20 /tmp/open-walnut/daemon-start.log 2>/dev/null; true', 30_000)
   } catch (e) {
-    probe = `probe failed: ${errText(e)}`
+    facts = `probe failed: ${errText(e)}`
   }
-  if (/^BUN_OK$/m.test(probe)) return null
-  const unreachable = probe.split('\n').find((l) => /^curl_exit=[1-9]/.test(l))
-  if (unreachable) return `the box cannot fetch the Bun installer (${unreachable.trim()})`
-  const evidence = [errText(err), ...probe.split('\n').filter((l) => !l.startsWith('curl_exit=')), ...(await hostLogLines())]
-    .find((l) => NETWORK_PATTERN.test(l))
+  if (/^BUN_OK$/m.test(facts)) return null
+  const unreachable = unreachableFromBox(['https://bun.sh/install', 'https://github.com'])
+  if (unreachable) return `the box cannot reach the Bun installer (${unreachable})`
+  const evidence = [errText(err), ...facts.split('\n'), ...(await hostLogLines())]
+    .find((l) => DOWNLOAD_ERROR.test(l) || /bun\.sh/i.test(l))
   return evidence ? `Bun was never installed and a download failed: ${evidence.trim().slice(0, 300)}` : null
 }
 
@@ -227,6 +203,36 @@ async function spawnOnce(): Promise<SpawnOutcome> {
   })
   rsm.detach()
   return outcome
+}
+
+/**
+ * Reconnect with autofix ON, wired exactly as src/web/server.ts wires it (readiness,
+ * and with it host.fix, after each handshake), wait for the wanted fix outcomes,
+ * then for the round to end, so a fix that must NOT run would be seen too.
+ */
+async function reconnectWithAutofix(wanted: string[]): Promise<{ fixes: FixView[]; roundEnded: boolean }> {
+  const dc = await import('../../src/providers/daemon-connection.js')
+  const hr = await import('../../src/core/hosts/host-readiness.js')
+  process.env.WALNUT_HOST_AUTOFIX = '1'
+  dc.disconnectAllDaemons()
+  // The old ControlMaster must be gone first: a new one on the same socket path
+  // would otherwise ride (and then lose) the dying connection.
+  for (let i = 0; i < 20 && fs.readdirSync(sockDir).some((n) => n.startsWith('walnut-ssh-')); i++) {
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  hr.clearHostReadiness(HOST_KEY)
+  const unwire = hr.wireHostReadiness({ onConnected: dc.addOnDaemonHostConnected, isKnownHost: (h) => h === HOST_KEY, emit: () => {} })
+  try {
+    conn = await dc.getDaemonConnection(HOST_KEY, SSH_TARGET)
+    const deadline = Date.now() + FIX_WAIT_MS
+    const allIn = () => wanted.every((id) => readFixes(hr.getHostReadiness(HOST_KEY)).some((f) => f.id === id))
+    while (Date.now() < deadline && !allIn()) await new Promise((r) => setTimeout(r, 5_000))
+    const round = hr.hostAutofixRound(HOST_KEY)
+    if (round && allIn()) await Promise.race([round, new Promise((r) => setTimeout(r, 60_000))])
+    return { fixes: readFixes(hr.getHostReadiness(HOST_KEY)), roundEnded: hr.hostAutofixRound(HOST_KEY) === undefined }
+  } finally {
+    unwire()
+  }
 }
 
 // ── The journey ────────────────────────────────────────────────────────────────
@@ -261,8 +267,10 @@ describeIf(`remote-host onboarding (ssh alias: ${SSH_ALIAS})`, () => {
     const facts = remote([
       'cat /etc/walnut-onboarding-fixture 2>/dev/null || echo NO_MARKER',
       'echo "home=$HOME"',
-      'for t in gcc cc clang node npm; do command -v "$t" >/dev/null 2>&1 && echo "has=$t"; done',
+      'echo "arch=$(uname -m)"',
+      'for t in gcc cc clang node npm dtach; do command -v "$t" >/dev/null 2>&1 && echo "has=$t"; done',
       '[ -e "$HOME/.bun" ] && echo has=bun-dir',
+      '[ -e "$HOME/.local/bin/walnut-dtach" ] && echo has=walnut-dtach',
       '[ -e /tmp/open-walnut/daemon.pid ] && echo has=daemon',
       'true',
     ].join('; '))
@@ -271,8 +279,14 @@ describeIf(`remote-host onboarding (ssh alias: ${SSH_ALIAS})`, () => {
     expect(facts.match(/^has=.*$/gm) ?? [], 'the container is not fresh or grew a tool the dev box lacks; restart it').toEqual([])
     remoteHome = /^home=(\S+)$/m.exec(facts)?.[1] ?? ''
     expect(remoteHome).toMatch(/^\/home\/alice$/)
+    const arch = /^arch=(\S+)$/m.exec(facts)?.[1] ?? ''
+    expect(arch, 'uname -m printed nothing on the box').not.toBe('')
 
-    const { CONFIG_FILE, WALNUT_HOME } = await import('../../src/constants.js')
+    const { CONFIG_FILE, WALNUT_HOME, DAEMON_BINARIES_DIR } = await import('../../src/constants.js')
+    prebuilt = await serverPrebuiltDtach(arch)
+    log(prebuilt
+      ? `branch: prebuilt (${prebuilt} for the box's ${arch}); expect a persistent terminal and dtach at ~/.local/bin/walnut-dtach`
+      : `branch: no_compiler (no prebuilt dtach for Linux ${arch} in ${DAEMON_BINARIES_DIR}); expect the no-compiler plain shell`)
     fs.mkdirSync(WALNUT_HOME, { recursive: true })
     fs.writeFileSync(CONFIG_FILE, `hosts:\n  ${HOST_KEY}:\n    hostname: ${SSH_ALIAS}\n    label: ${HOST_KEY}\n`)
   }, 120_000)
@@ -362,14 +376,20 @@ describeIf(`remote-host onboarding (ssh alias: ${SSH_ALIAS})`, () => {
     expect(inside.dirs.map((d) => path.posix.basename(d))).toEqual(expect.arrayContaining(['proj-a', 'proj-b']))
   }, 90_000)
 
-  it('c. the terminal reaches the host and reports the missing compiler, not an ssh failure', async () => {
+  it('c. the terminal reaches the host: persistent on the shipped prebuilt, else it names the missing compiler', async () => {
     requireConn()
-    const view = await timed('c. terminal probe', () => probeTerminal(sockDir))
+    log(`c. branch: ${prebuilt ? 'prebuilt' : 'no_compiler'}`)
+    const view = await timed('c. terminal probe', () => probeTerminal(HOST_KEY, () => controlMasterUp(sockDir, 'walnut-term-ssh-')))
     log(`c. terminal: ${JSON.stringify(view)}`)
-    expectTerminalOnNoCompilerHost(view)
+    expectTerminalOnHost(view, prebuilt)
+    if (!prebuilt) return
+    // The box has no compiler, so a dtach there can only be the one the server shipped.
+    const local = createHash('sha256').update(fs.readFileSync(prebuilt)).digest('hex')
+    const onBox = remote('sha256sum "$HOME/.local/bin/walnut-dtach" 2>&1; true').split(/\s+/)[0]
+    expect(onBox, `~/.local/bin/walnut-dtach on the box should be byte-identical to ${prebuilt}`).toBe(local)
   }, 120_000)
 
-  it('d. host.preflight sees no compiler and an npm-built claude without node', async (ctx) => {
+  it('d. host.preflight sees no compiler, an npm-built claude without node, and the dtach step c installed', async (ctx) => {
     const c = requireConn()
     if (!c.hasCapability('preflight-v1')) {
       console.warn('[remote-onboarding] SKIPPED d: this daemon does not advertise preflight-v1 yet')
@@ -381,6 +401,9 @@ describeIf(`remote-host onboarding (ssh alias: ${SSH_ALIAS})`, () => {
     expect(res.ok).toBe(true)
     expect(res.compiler).toMatchObject({ found: false })
     expect(res.claude).toMatchObject({ found: true, kind: 'npm', needsNode: true, nodeFound: false })
+    log(`d. branch: ${prebuilt ? 'prebuilt' : 'no_compiler'}`)
+    if (prebuilt) expect(res.dtach, 'step c installed the prebuilt').toMatchObject({ found: true, path: `${remoteHome}/.local/bin/walnut-dtach` })
+    else expect(res.dtach, 'no prebuilt and no compiler, so no dtach').toMatchObject({ found: false })
   }, 60_000)
 
   it('e. starting a session names Node.js and the native installer', async () => {
@@ -389,6 +412,48 @@ describeIf(`remote-host onboarding (ssh alias: ${SSH_ALIAS})`, () => {
     log(`e. outcome: ${JSON.stringify(outcome)}`)
     expectSpawnNamesNodeAndNativeInstall(outcome, c.hasCapability('preflight-v1'))
   }, 120_000)
+
+  it('f. (opt-in) autofix installs the native claude, and without a prebuilt reports that gcc needs a sudo password', async (ctx) => {
+    if (!AUTOFIX_STEP) {
+      console.warn('[remote-onboarding] SKIPPED f: set WALNUT_REMOTE_ONBOARDING_AUTOFIX=1 to run it (the CI job does)')
+      ctx.skip()
+      return
+    }
+    if (!requireConn().hasCapability('hostfix-v1')) {
+      console.warn('[remote-onboarding] SKIPPED f: this daemon does not advertise hostfix-v1 yet')
+      ctx.skip()
+      return
+    }
+    log(`f. branch: ${prebuilt ? 'prebuilt' : 'no_compiler'}`)
+    const wanted = wantedFixes(Boolean(prebuilt))
+    const { fixes, roundEnded } = await timed('f. reconnect + autofix', () => reconnectWithAutofix(wanted))
+    log(`f. fixes: ${fixes.map((f) => f.raw).join(' | ') || '(none)'}; round ended: ${roundEnded}`)
+    const claudeFix = fixes.find((f) => f.id === 'install-claude-native')
+    if (!claudeFix?.ok) {
+      const unreachable = unreachableFromBox(['https://claude.ai/install.sh', 'https://storage.googleapis.com'])
+      const said = claudeFix && DOWNLOAD_ERROR.test(claudeFix.raw) ? claudeFix.raw : null
+      if (unreachable || said) {
+        throw new Error(`NETWORK: the native Claude Code installer could not download (${unreachable ?? said}). Not a Walnut regression; rerun the job.`)
+      }
+    }
+    expect(claudeFix, `no successful install-claude-native within ${FIX_WAIT_MS / 60_000} min: ${JSON.stringify(fixes)}`).toMatchObject({ ok: true })
+    const compilerFix = fixes.find((f) => f.id === 'install-compiler')
+    if (prebuilt) {
+      expect(compilerFix, 'dtach already runs (step c), so gcc is pointless and sudo must not be asked for').toBeUndefined()
+    } else {
+      expect(compilerFix, 'gcc needs root, and alice cannot sudo without a password').toMatchObject({ ok: false, needsPassword: true })
+    }
+    expect(roundEnded, 'the autofix round should end after its last fix').toBe(true)
+    // Exactly these, in order. With the prebuilt, step c already put dtach in place,
+    // so neither gcc nor a dtach install (build-dtach) may run.
+    expect(fixes.map((f) => f.id), JSON.stringify(fixes)).toEqual(wanted)
+
+    const res = await timed('f. host.preflight after the fixes', () => requireConn().send('host.preflight', {}, 30_000))
+    log(`f. preflight: ${JSON.stringify(res)}`)
+    expect(res.claude).toMatchObject({ found: true, kind: 'native' })
+    expect(res.compiler).toMatchObject({ found: false })
+    expect(res.dtach).toMatchObject({ found: Boolean(prebuilt) })
+  }, FIX_WAIT_MS + 120_000)
 })
 
 /** On failure: the tail of this run's own Walnut log for the host, so CI shows the cause. */

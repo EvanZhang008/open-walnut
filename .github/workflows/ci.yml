@@ -269,7 +269,8 @@ jobs:
     name: Remote host (fresh Linux dev box)
     runs-on: ubuntu-latest
     needs: build
-    timeout-minutes: 20
+    # Setup (~4 min) plus two capped attempts (2 x 12 min) fits in 30.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -285,13 +286,16 @@ jobs:
           WALNUT_REQUIRE_BUN: '1'
       # One retry: this job pulls the base image from Docker Hub and the remote
       # host downloads Bun from bun.sh, so a network blip must not fail an
-      # unrelated PR. Each attempt is capped at 7 minutes so a hang cannot use
-      # the job's budget twice, both attempts' logs are uploaded (a pass on the
+      # unrelated PR. Each attempt is capped at 12 minutes (step f alone may wait 6
+      # for the native Claude Code install) so a hang cannot use the budget twice, both attempts' logs are uploaded (a pass on the
       # retry still shows why attempt 1 failed), and any line starting with
       # NETWORK: (the test's label for a download failure) goes to the summary.
       - name: Provision a clean-room remote host and onboard it (one retry)
         shell: bash
-        timeout-minutes: 15
+        timeout-minutes: 26
+        env:
+          # Runs the opt-in step f: reconnect with autofix on (host.fix).
+          WALNUT_REMOTE_ONBOARDING_AUTOFIX: '1'
         run: |
           # GitHub runs this as `bash -eo pipefail`; -e would end the loop at attempt 1.
           set +e
@@ -301,11 +305,11 @@ jobs:
           for attempt in 1 2; do
             log="/tmp/remote-host-logs/attempt-$attempt.log"
             echo "::group::remote-host attempt $attempt"
-            timeout --kill-after=30s 7m bash scripts/onboarding-test/remote-host/run.sh 2>&1 | tee "$log"
+            timeout --kill-after=30s 12m bash scripts/onboarding-test/remote-host/run.sh 2>&1 | tee "$log"
             status=${PIPESTATUS[0]}
             echo "::endgroup::"
             [ "$status" = 0 ] && break
-            [ "$status" = 124 ] && echo "::warning title=remote-host::attempt $attempt hit its 7 minute cap"
+            [ "$status" = 124 ] && echo "::warning title=remote-host::attempt $attempt hit its 12 minute cap"
             echo "::warning title=remote-host::attempt $attempt failed with exit $status"
           done
           if grep -h 'NETWORK:' /tmp/remote-host-logs/attempt-*.log > /tmp/remote-host-logs/network.txt; then

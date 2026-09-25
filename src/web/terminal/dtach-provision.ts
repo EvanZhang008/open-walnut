@@ -6,16 +6,21 @@
  * in the package repos of some managed dev hosts Walnut targets (verified: `yum
  * install dtach` said "No package dtach available"). So Walnut ships the dtach
  * 0.9 source embedded (see dtach-sources.ts) and compiles it on the target with
- * a single `cc *.c -lutil`, which builds cleanly on macOS and Linux.
+ * a single `cc *.c -lutil`, which builds cleanly on macOS and Linux. A Mac
+ * without the Command Line Tools has no compiler, so the package also ships
+ * prebuilt binaries (see dtach-prebuilt.ts, built by scripts/build-dtach.sh).
  *
  * Search order, local and remote alike:
- *   1. Walnut's own build   local <WALNUT_HOME>/tmp/bin/walnut-dtach,
+ *   1. Walnut's own copy    local <WALNUT_HOME>/tmp/bin/walnut-dtach,
  *                           remote ~/.local/bin/walnut-dtach
  *   2. a system dtach       yum/apt/brew install, found on PATH
- *   3. compile the vendored source into the path from step 1
- *   4. none: `no_compiler`, or `build_failed` with the compiler's stderr
- * Remote steps 1, 2 and the compiler check share ONE ssh round trip; see
- * dtach-probe-script.ts for the scripts and the ssh-vs-compiler rule.
+ *   3. the shipped prebuilt for this platform/arch, installed into the path
+ *      from step 1 once it passes `--help` there
+ *   4. compile the vendored source into the path from step 1
+ *   5. none: `no_compiler`, or `build_failed` with the compiler's stderr
+ * Remote steps 1, 2 and the compiler check share ONE ssh round trip; steps 3
+ * and 4 share the second. See dtach-probe-script.ts for the scripts and the
+ * ssh-vs-compiler rule.
  *
  * The local cache lives under tmp/ because it is a platform-specific COMPILED
  * artifact: rebuildable in ~1s from the embedded source, and actively wrong for
@@ -38,13 +43,16 @@ import { DTACH_SOURCES, DTACH_VERSION } from './dtach-sources.js'
 import {
   ALL_FILES,
   C_FILES,
-  buildCompileScript,
+  DTACH_BANNER,
+  buildInstallScript,
   buildProbeScript,
   classifyScriptRun,
+  parseHostPlatform,
   toHostOs,
   type DtachResolution,
   type ScriptRun,
 } from './dtach-probe-script.js'
+import { readPrebuiltDtach } from './dtach-prebuilt.js'
 import { log } from '../../logging/index.js'
 
 export type { DtachResolution, DtachSource, HostOs } from './dtach-probe-script.js'
@@ -65,11 +73,20 @@ const LOCAL_SYSTEM_CANDIDATES = ['/opt/homebrew/bin/dtach', '/usr/local/bin/dtac
 
 function run(cmd: string, args: string[], opts: { timeout?: number; input?: string; cwd?: string } = {}): Promise<ScriptRun> {
   return new Promise((resolve) => {
-    const child = execFile(cmd, args, { timeout: opts.timeout ?? PROVISION_TIMEOUT_MS, encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024, cwd: opts.cwd }, (err, stdout, stderr) => {
-      const e = err as (Error & { code?: unknown; killed?: boolean }) | null
-      const code = e && typeof e.code === 'number' ? e.code : e ? 1 : 0
-      resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '', timedOut: Boolean(e?.killed) })
-    })
+    const execOpts = { timeout: opts.timeout ?? PROVISION_TIMEOUT_MS, encoding: 'utf-8' as const, maxBuffer: 8 * 1024 * 1024, cwd: opts.cwd }
+    let child: ReturnType<typeof execFile>
+    try {
+      child = execFile(cmd, args, execOpts, (err, stdout, stderr) => {
+        const e = err as (Error & { code?: unknown; killed?: boolean }) | null
+        const code = e && typeof e.code === 'number' ? e.code : e ? 1 : 0
+        resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '', timedOut: Boolean(e?.killed) })
+      })
+    } catch (err) {
+      // execFile THROWS (instead of calling back) for a file the kernel can't
+      // exec, e.g. `spawn ENOEXEC` on a corrupt prebuilt: an answer, not a crash.
+      resolve({ code: 1, stdout: '', stderr: err instanceof Error ? err.message : String(err) })
+      return
+    }
     if (opts.input !== undefined) {
       // ssh can exit before draining stdin (auth failure); an EPIPE on this
       // stream is then expected and must not become an uncaught error.
@@ -121,6 +138,16 @@ export function resetDtachCacheForTests(): void {
   cache.clear()
 }
 
+/**
+ * Forget one host's cached resolution ('' = local), so the next terminal open
+ * probes again. Called when host.fix built dtach or installed a compiler there:
+ * a cached `no_compiler` would otherwise answer the open that follows. An
+ * in-flight probe keeps running for its callers; the next caller starts fresh.
+ */
+export function invalidateDtachCache(host: string): void {
+  cache.delete(host)
+}
+
 /** Human one-liner for a non-ok resolution (errors and logs). */
 export function describeResolution(r: DtachResolution, host?: string): string {
   const where = host ?? 'this machine'
@@ -167,6 +194,9 @@ async function provisionLocal(): Promise<DtachResolution> {
     }
   }
 
+  const prebuilt = await installLocalPrebuilt()
+  if (prebuilt) return prebuilt
+
   const cc = await firstAvailable(['cc', 'gcc', 'clang'])
   if (!cc) return { kind: 'no_compiler', os: LOCAL_OS }
 
@@ -191,6 +221,33 @@ async function provisionLocal(): Promise<DtachResolution> {
   }
 }
 
+/**
+ * Step 3: the shipped prebuilt for this machine, copied to a temp name, checked,
+ * then renamed into LOCAL_BIN. Null (fall through to compiling) when there is
+ * none or it fails `--help` here. The bytes are written fresh instead of
+ * copyFile'd so the copy carries no extended attributes from the package dir.
+ */
+async function installLocalPrebuilt(): Promise<DtachResolution | null> {
+  const found = await readPrebuiltDtach(process.platform, process.arch)
+  if (!found) return null
+  const tmp = `${LOCAL_BIN}.prebuilt-${process.pid}`
+  try {
+    await fs.mkdir(path.dirname(LOCAL_BIN), { recursive: true })
+    await fs.writeFile(tmp, found.bytes)
+    await fs.chmod(tmp, 0o755)
+    if (await isRunnable(tmp)) {
+      await fs.rename(tmp, LOCAL_BIN)
+      log.web.info('dtach provisioned (local, prebuilt)', { path: LOCAL_BIN, from: found.path, version: DTACH_VERSION })
+      return { kind: 'ok', path: LOCAL_BIN, source: 'prebuilt' }
+    }
+    log.web.warn('dtach prebuilt failed its --help check, compiling instead', { from: found.path })
+  } catch (err) {
+    log.web.warn('dtach prebuilt install failed, compiling instead', { from: found.path, error: err instanceof Error ? err.message : String(err) })
+  }
+  await fs.rm(tmp, { force: true }).catch(() => {})
+  return null
+}
+
 async function firstAvailable(cands: string[]): Promise<string | null> {
   for (const c of cands) {
     const w = await run('which', [c])
@@ -207,10 +264,11 @@ async function isRunnable(p: string, opts: { requireWinch?: boolean } = {}): Pro
     return false
   }
   const res = await run(p, ['--help'])
-  const help = res.stdout + res.stderr
-  // Require "dtach" so a foreign binary that merely prints "Usage:" can't pass;
-  // a system build must also know `-r winch`, which spawn always passes.
-  return /dtach/i.test(help) && (!opts.requireWinch || /winch/i.test(help))
+  const help = (res.stdout + res.stderr).toLowerCase()
+  // Require the "dtach - version" banner so a foreign binary that merely prints
+  // "Usage:" can't pass, nor an error that just names the walnut-dtach file; a
+  // system build must also know `-r winch`, which spawn always passes.
+  return help.includes(DTACH_BANNER) && (!opts.requireWinch || help.includes('winch'))
 }
 
 // ---- REMOTE -----------------------------------------------------------------
@@ -246,24 +304,42 @@ async function sshArgsFor(host: string): Promise<string[]> {
 async function provisionRemote(host: string): Promise<DtachResolution> {
   const args = await sshArgsFor(host)
   // Round trip 1 (also warms the ControlMaster the spawn reuses).
-  const probe = classifyScriptRun(await run('ssh', args, { input: buildProbeScript() }))
-  if (probe.kind !== 'need_build') {
+  const probeRun = await run('ssh', args, { input: buildProbeScript() })
+  const probe = classifyScriptRun(probeRun)
+  if (probe.kind !== 'need_build' && probe.kind !== 'no_compiler') {
     logRemote(host, probe)
     return probe
   }
-  // Round trip 2, once per host: ship the source and compile.
-  const built = classifyScriptRun(await run('ssh', args, { input: buildCompileScript(probe.cc, DTACH_SOURCES) }))
-  const result: DtachResolution = built.kind === 'need_build'
-    ? { kind: 'build_failed', stderr: 'build script asked for another build', os: 'unknown' }
-    : built
-  logRemote(host, result, probe.cc)
+  // A shipped prebuilt for the host's uname beats compiling, and is the only
+  // way in for a host with no compiler (a Mac without the Command Line Tools).
+  const platform = parseHostPlatform(probeRun.stdout)
+  const prebuilt = await readPrebuiltDtach(platform.os, platform.arch)
+  if (!prebuilt && probe.kind === 'no_compiler') {
+    logRemote(host, probe, { arch: platform.arch })
+    return probe
+  }
+  const cc = probe.kind === 'need_build' ? probe.cc : undefined
+  // Round trip 2, once per host: ship the prebuilt and/or the source.
+  const script = buildInstallScript({ prebuilt: prebuilt?.bytes, cc, sources: DTACH_SOURCES })
+  const installRun = await run('ssh', args, { input: script })
+  const installed = classifyScriptRun(installRun)
+  const result: DtachResolution = installed.kind === 'need_build'
+    ? { kind: 'build_failed', stderr: 'install script asked for another build', os: 'unknown' }
+    : installed
+  const prebuiltFailed = prebuilt && /^PREBUILT_FAILED$/m.test(installRun.stdout)
+  logRemote(host, result, {
+    cc,
+    arch: platform.arch,
+    prebuilt: prebuilt ? (prebuiltFailed ? 'failed' : 'offered') : undefined,
+    prebuiltError: prebuiltFailed ? installRun.stderr.match(/^prebuilt dtach does not run.*$/m)?.[0]?.slice(0, 400) : undefined,
+  })
   return result
 }
 
-function logRemote(host: string, r: DtachResolution, cc?: string): void {
+function logRemote(host: string, r: DtachResolution, extra: Record<string, string | undefined> = {}): void {
   if (r.kind === 'ok') {
-    log.web.info('dtach resolved (remote)', { host, path: r.path, source: r.source, cc, version: DTACH_VERSION })
+    log.web.info('dtach resolved (remote)', { host, path: r.path, source: r.source, ...extra, version: DTACH_VERSION })
   } else {
-    log.web.warn('dtach remote provision failed', { host, kind: r.kind, cc, detail: 'stderr' in r ? r.stderr.slice(-400) : undefined })
+    log.web.warn('dtach remote provision failed', { host, kind: r.kind, ...extra, detail: 'stderr' in r ? r.stderr.slice(-400) : undefined })
   }
 }

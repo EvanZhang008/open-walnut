@@ -46,6 +46,7 @@ import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers } from '.
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
 import { createHostRuntime } from './host-runtime-core.js'
+import { createHostFix } from './host-fix-core.js'
 
 /**
  * Version stamped into a source-deployed daemon, resolved at string-build time
@@ -187,6 +188,7 @@ export function getDaemonSource(): string {
     ['__CREATE_COMMAND_DRAIN__', createDaemonCommandDrain.toString()],
     ['__CREATE_CRON_METADATA__', createCronMetadataTracker.toString()],
     ['__CREATE_HOST_RUNTIME__', createHostRuntime.toString()],
+    ['__CREATE_HOST_FIX__', createHostFix.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -268,6 +270,16 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const rt = createRuntime({ env: {} })
       if (rt.classifyHead('#!/usr/bin/env node\n').kind !== 'npm') throw new Error('host runtime misclassified an npm shebang')
       if (rt.buildDaemonPath('/u', ['/x', '/u'], '/i:/x') !== '/u:/x:/i') throw new Error('host runtime reordered the daemon PATH')
+    }
+    // host.fix smoke: the package-manager table and the sudo refusal reader ride
+    // this text, so a reconstructed copy must still build apk's argv and read
+    // "a password is required" as a password refusal, not a package failure.
+    const createFix = reconstructed['__CREATE_HOST_FIX__'] as typeof createHostFix | undefined
+    if (createFix) {
+      const fx = createFix({ env: {}, os: { platform: () => 'linux', tmpdir: () => '/tmp', uid: () => 1000 }, runtime: { resolveOnPath: () => null, probeClaude: async () => ({ found: false }) } })
+      if (fx.packageArgs('apk').join(' ') !== 'add gcc musl-dev') throw new Error('host fix built the wrong apk argv')
+      if (fx.classifySudo({ code: 1, stdout: '', stderr: 'sudo: a password is required\n' }) !== 'password') throw new Error('host fix misread a sudo password refusal')
+      if (fx.running !== null) throw new Error('host fix started busy')
     }
     const lines = [
       JSON.stringify({ type: 'user', message: { role: 'user', content: 'smoke turn' } }),
@@ -732,9 +744,16 @@ function runWnMinimal(argv, stdinText) {
 // /usr/bin, ...) came BEFORE the user's rc PATH, and that rc PATH was captured
 // in the inherited env, so a node in a system dir or in the server's own shell
 // beat the one the user's rc chose. Keep in sync with daemon-standalone.ts.
-const hostRuntime = (__CREATE_HOST_RUNTIME__)({ fs: fs, execFile: execFile, execFileSync: execFileSync, env: process.env });
+const hostRuntime = (__CREATE_HOST_RUNTIME__)({ fs: fs, execFile: execFile, execFileSync: execFileSync, env: process.env, platform: process.platform, arch: process.arch });
 const bootPath = hostRuntime.computeDaemonPath();
 process.env.PATH = bootPath.path;
+// 'hostfix-v1': the named, idempotent fixes host.fix runs (host-fix-core.ts,
+// injected as text). Keep in sync with daemon-standalone.ts.
+const hostFix = (__CREATE_HOST_FIX__)({
+  fs: fs, execFile: execFile, env: process.env, runtime: hostRuntime,
+  os: { platform: function () { return process.platform; }, tmpdir: function () { return os.tmpdir(); }, uid: function () { return typeof process.getuid === 'function' ? process.getuid() : -1; } },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
 
 // ── Constants ──
 // DAEMON_DIR default is /tmp/open-walnut; tests override via env var.
@@ -2395,6 +2414,16 @@ function dispatchCommand(ws, id, cmd) {
         function (r) { sendOk(ws, id, r); },
         function (err) { sendError(ws, id, 'host.preflight failed: ' + err.message); },
       );
+    // 'hostfix-v1': run ONE named fix, never a free-form command, one at a time.
+    // Not bridge-reachable. Tracked like start/send (run), so a handover waits
+    // for it and a shutdown drains it. Keep in sync with daemon-standalone.ts.
+    case 'host.fix':
+      return daemonCommands.run(function () {
+        return hostFix.run(cmd.action, cmd).then(
+          function (r) { sendOk(ws, id, { result: r }); },
+          function (err) { sendError(ws, id, 'host.fix failed: ' + err.message); },
+        );
+      });
     case 'fs.readRange': return cmdFsReadRange(ws, id, cmd);
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:

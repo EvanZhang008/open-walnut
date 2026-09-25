@@ -525,8 +525,8 @@ running there if SSH drops. The first connect takes about a minute.
 |---|---|---|
 | Passwordless SSH (key or agent) as the configured user | Everything | Connect stops at the SSH step and shows the ssh error |
 | `curl` and `unzip`, or Bun or Node.js already installed | The session daemon (Walnut installs Bun with `curl -fsSL https://bun.sh/install \| bash` when neither is present) | Connect stops at "Install runtime" and says which command failed |
-| Claude Code, signed in once | Every session | The host status shows "Claude Code is not installed on this host" with the install command |
-| A C compiler (`gcc` or `clang`) | A terminal that survives disconnects | The terminal still opens, marked `Not persistent`, and shows the one command that enables persistence |
+| Claude Code, signed in once | Every session | Walnut installs the native build itself (`curl -fsSL https://claude.ai/install.sh \| bash`). Signing in stays yours. Only when the install cannot run (no network, no `curl` or `wget`) does the host status show the command and why |
+| A C compiler (`gcc` or `clang`) | A terminal that survives disconnects, when no prebuilt `dtach` fits the host | Walnut installs `gcc` and the C headers with the host's package manager under `sudo -n` (so only when sudo needs no password), then builds `dtach`. When sudo wants a password the host status shows the exact command, and the terminal opens marked `Not persistent` |
 
 Two things worth knowing about Claude Code on a remote host:
 
@@ -538,8 +538,11 @@ Two things worth knowing about Claude Code on a remote host:
   folder picker. Those run through the daemon, which is a single Bun binary.
 
 After the handshake Walnut runs a short preflight on the host (Claude Code present, Node.js if
-the npm build is installed, compiler present) and shows one actionable line per missing piece in
-the host status. Nothing is shown when the host is complete.
+the npm build is installed, compiler present) and fixes what it can by itself, one fix at a time,
+with `Installing ... on <host>...` in Settings while it runs. Whatever it cannot fix keeps one
+actionable line with the command and the reason. Nothing is shown when the host is complete. Each
+fix runs once per host until you press Check again. To turn the fixes off, set
+`WALNUT_HOST_AUTOFIX=0` for every host, or `autofix: false` under `hosts.<alias>` for one.
 
 Home directories that are symlinks (`~/workplace -> /workplace`) list and resolve like any other
 directory. If SSH drops, the session keeps running on the remote host and Walnut reattaches.

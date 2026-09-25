@@ -59,6 +59,7 @@ import {
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
+import { createHostFix } from './host-fix-core.js'
 import {
   foldLine,
   initialFoldState,
@@ -391,9 +392,16 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 // while .zshrc picked 22). Keep in sync with daemon-source.ts.
 // Node discovery is NOT done here: buildSpawnPreamble() handles it at spawn
 // time, and hostRuntime.ensureClaude() gates the spawn.
-const hostRuntime = createHostRuntime({ fs, execFile, execFileSync, env: process.env })
+const hostRuntime = createHostRuntime({ fs, execFile, execFileSync, env: process.env, platform: process.platform, arch: process.arch })
 const bootPath = hostRuntime.computeDaemonPath()
 process.env.PATH = bootPath.path
+// 'hostfix-v1': the named, idempotent fixes host.fix runs (host-fix-core.ts).
+// Keep in sync with daemon-source.ts.
+const hostFix = createHostFix({
+  fs, execFile, env: process.env, runtime: hostRuntime,
+  os: { platform: () => process.platform, tmpdir: () => os.tmpdir(), uid: () => (typeof process.getuid === 'function' ? process.getuid() : -1) },
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
 
 // ── Types ──
 // L2: per-session background-task state. `resourceVersion` = byte offset of the latest
@@ -1583,6 +1591,16 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       (r) => sendOk(ws, id as number, r as unknown as Record<string, unknown>),
       (err) => sendError(ws, id as number, 'host.preflight failed: ' + (err as Error).message),
     )
+    // 'hostfix-v1': run ONE named fix (install the native claude, gcc under
+    // sudo -n, build dtach). Never a free-form command, one at a time. Not
+    // bridge-reachable: only the trusted walnut socket asks. Tracked like
+    // start/send (run, not just admit): a handover pause then waits for it, and
+    // a shutdown drains it, instead of cutting a package install mid-dpkg.
+    // Keep in sync with daemon-source.ts.
+    case 'host.fix': return daemonCommands.run(() => hostFix.run(cmd.action, cmd).then(
+      (r) => sendOk(ws, id as number, { result: r }),
+      (err) => sendError(ws, id as number, 'host.fix failed: ' + (err as Error).message),
+    ))
     case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     // File-history family ('git-file-history-v1'). NOT in BRIDGE_ALLOWED_COMMANDS:

@@ -10,6 +10,7 @@
 #   dist/daemon-binaries/daemon-linux-x64
 #   dist/daemon-binaries/daemon-linux-arm64
 #   dist/daemon-binaries/daemon-darwin-arm64
+#   dist/daemon-binaries/dtach-<platform>-<arch>  (when a C compiler exists; see build-dtach.sh)
 #
 # Version strategy: hash of daemon source files. Immune to git dirty state,
 # forgotten commits, or branch switches — if any byte of the sources changes
@@ -96,6 +97,7 @@ SOURCES=(
   src/providers/daemon-service-system.ts
   src/providers/daemon-service-handover.ts
   src/providers/host-runtime-core.ts
+  src/providers/host-fix-core.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then
@@ -213,9 +215,17 @@ echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
   --outfile "$OUTDIR/daemon-service-cli.cjs" \
   src/providers/daemon-service-cli.ts
 
+# Prebuilt dtach for the session terminal, so a Mac without the Command Line Tools
+# still gets a persistent shell (the tarball ships it; the big daemon binaries it
+# sits next to do not). No compiler means one info line and no prebuilt, never a
+# failed build: the terminal still compiles dtach on demand.
+bash scripts/build-dtach.sh "$OUTDIR" \
+  || echo "build-daemon.sh: the prebuilt dtach step failed; continuing (the terminal compiles dtach on demand)." >&2
+
 # Invalidate stale .gz caches — DaemonConnection.deployBinary reuses them
 # if present, which would ship an old binary under a new version label.
 rm -f "$OUTDIR"/daemon-linux-*.gz
 
 echo "Done. Binaries:"
 ls -lh "$OUTDIR"/daemon-*
+ls -lh "$OUTDIR"/dtach-* 2>/dev/null || true

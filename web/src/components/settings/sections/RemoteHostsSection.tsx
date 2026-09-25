@@ -22,6 +22,8 @@ interface HostEntry {
   shell_setup: string;
   enabled: boolean;
   discovered: boolean;
+  /** Only `false` is ever written (config-only switch, no control here yet). */
+  autofix?: boolean;
 }
 
 let nextHostKey = 0;
@@ -41,6 +43,7 @@ function hostsFromConfig(config: Config): HostEntry[] {
     shell_setup: h.shell_setup ?? '',
     enabled: h.enabled ?? true,
     discovered: h.discovered ?? false,
+    ...(h.autofix === false ? { autofix: false } : {}),
   }));
 }
 
@@ -93,6 +96,9 @@ export function RemoteHostsSection({ config, onSave }: Props) {
         shell_setup: h.shell_setup || undefined,
         enabled: h.enabled,
         discovered: h.discovered,
+        // Kept through a save: the editor has no control for it, and dropping it
+        // would silently turn a host's automatic fixes back on.
+        ...(h.autofix === false ? { autofix: false } : {}),
       };
     }
     return hostsConfig;
@@ -127,6 +133,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
         shell_setup: v.shell_setup || undefined,
         enabled: v.enabled ?? true,
         discovered: v.discovered ?? false,
+        ...(v.autofix === false ? { autofix: false } : {}),
       };
     }
     return out;

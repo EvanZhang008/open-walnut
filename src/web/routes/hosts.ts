@@ -16,7 +16,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { getConfig } from '../../core/config-manager.js'
 import { buildHostStatus, listStatusHosts, type HostStatus } from '../../core/hosts/host-status.js'
 import { getHostWarmup } from '../../core/hosts/host-warmup-registry.js'
-import { getHostReadiness, refreshHostReadiness } from '../../core/hosts/host-readiness.js'
+import { getHostReadiness, refreshHostReadiness, resetHostAutofixAttempts } from '../../core/hosts/host-readiness.js'
 import type { DaemonConnectState } from '../../providers/daemon-connection.js'
 
 export const hostsRouter = Router()
@@ -94,6 +94,9 @@ hostsRouter.post('/:host/connect', async (req, res, next) => {
     const { clearDaemonFailureCache, getDaemonConnection, getDaemonConnectState } =
       await import('../../providers/daemon-connection.js')
     clearDaemonFailureCache(host)
+    // A human asked: every automatic fix that already failed on this host may
+    // run once more, whether it is connected now or the handshake comes later.
+    resetHostAutofixAttempts(host)
     const warmup = getHostWarmup()
     if (warmup) {
       // Resolves once the host is QUEUED (listing hosts, no ssh), so the reply

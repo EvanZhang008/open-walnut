@@ -128,6 +128,8 @@ const DAEMON_SOURCE_FILES = [
   // Host runtime discovery (daemon PATH order, claude/node spawn gate,
   // host.preflight): imported by the binary, text-injected into the source twin.
   'src/providers/host-runtime-core.ts',
+  // host.fix (install claude / gcc, build dtach): same import-or-inline rule.
+  'src/providers/host-fix-core.ts',
 ] as const
 
 /**

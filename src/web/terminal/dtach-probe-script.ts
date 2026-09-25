@@ -6,14 +6,16 @@
  * Two scripts, both fed to `sh -s` over stdin (the remote command is just
  * `sh -s`, which works under any login shell, csh and fish included):
  *
- *   probe  (small, every cold probe): walnut binary → system dtach → compiler?
- *   build  (~48KB of source, once per host ever): compile + install
+ *   probe    (small, every cold probe): walnut binary → system dtach → compiler?
+ *   install  (once per host ever): the shipped prebuilt for the host's
+ *            `uname -s`/`uname -m` when there is one, else (or when it won't
+ *            run there) compile the ~48KB vendored source
  *
  * The common case (a binary already exists) is ONE round trip; only a host that
- * needs a build pays a second one, and only once.
+ * needs an install pays a second one, and only once.
  *
- * Every script prints BEGIN_MARKER, then `OS:<uname -s>`, before doing
- * anything else. The OS picks the fix command the UI offers: a Mac without the
+ * Every script prints BEGIN_MARKER, then `OS:<uname -s>` and `ARCH:<uname -m>`,
+ * before doing anything else. The OS picks the fix command the UI offers: a Mac without the
  * Command Line Tools needs `xcode-select --install`, not yum. Its absence means
  * the script never ran, so the failure belongs to ssh (auth, VPN, unknown
  * host), never to the compiler. A "no compiler" verdict needs the positive
@@ -38,7 +40,8 @@ const STDERR_TAIL = 2000
 /** ssh's own exit status for connection/auth errors (see ssh(1)). */
 const SSH_ERROR_EXIT = 255
 
-export type DtachSource = 'walnut' | 'system' | 'built'
+/** walnut = our cached copy, prebuilt = the shipped binary just installed, built = compiled here. */
+export type DtachSource = 'walnut' | 'system' | 'prebuilt' | 'built'
 
 /** Target OS as far as the fix command cares (from `uname -s`). */
 export type HostOs = 'linux' | 'darwin' | 'unknown'
@@ -68,8 +71,17 @@ export function toHostOs(name: string | undefined): HostOs {
   return 'unknown'
 }
 
-/** First lines of every script: the start marker, then the OS for the fix hint. */
-const PREAMBLE = [`echo ${BEGIN_MARKER}`, 'echo "OS:$(uname -s 2>/dev/null)"']
+/**
+ * First lines of every script: the start marker, the OS for the fix hint, and the
+ * machine for picking a shipped prebuilt.
+ */
+const PREAMBLE = [`echo ${BEGIN_MARKER}`, 'echo "OS:$(uname -s 2>/dev/null)"', 'echo "ARCH:$(uname -m 2>/dev/null)"']
+
+/** The host's `uname -s` (as a HostOs) and raw `uname -m`, from any script's stdout. */
+export function parseHostPlatform(stdout: string): { os: HostOs; arch: string | undefined } {
+  const arch = stdout.match(/^ARCH:(.*)$/m)?.[1]?.trim()
+  return { os: toHostOs(stdout.match(/^OS:(.*)$/m)?.[1]?.trim()), arch: arch || undefined }
+}
 
 function tail(s: string): string {
   const t = s.trim()
@@ -78,12 +90,16 @@ function tail(s: string): string {
 
 /**
  * Shell predicate: "$1 is a dtach we can drive". `--help` exits non-zero on
- * some builds but always prints a usage naming dtach. A SYSTEM binary must
- * also list the `winch` redraw method, because spawn passes `-r winch` and a
- * dtach older than 0.8 would reject it on every open.
+ * some builds but always prints the "dtach - version" banner. The full banner,
+ * not the bare word: a file the kernel can't exec (a corrupt upload, a binary for
+ * another machine) is retried by sh as a script, and sh's error line names the
+ * file, which is called walnut-dtach. A SYSTEM binary must also list the `winch`
+ * redraw method, because spawn passes `-r winch` and a dtach older than 0.8 would
+ * reject it on every open.
  */
+export const DTACH_BANNER = 'dtach - version'
 const SH_HELPERS = [
-  'is_dtach() { [ -x "$1" ] && "$1" --help 2>&1 | grep -qi dtach; }',
+  `is_dtach() { [ -x "$1" ] && "$1" --help 2>&1 | grep -qi '${DTACH_BANNER}'; }`,
   'is_modern_dtach() { is_dtach "$1" && "$1" --help 2>&1 | grep -qi winch; }',
 ]
 
@@ -110,22 +126,63 @@ export function buildProbeScript(): string {
   ].join('\n')
 }
 
+/** Heredoc terminator for the prebuilt's base64; the base64 alphabet can't contain it. */
+const PREBUILT_EOF = 'WALNUT_DTACH_PREBUILT_EOF'
+
+/** Base64 in 76-column lines, so no shell ever reads one huge line. */
+function wrapBase64(bytes: Buffer): string[] {
+  const b64 = bytes.toString('base64')
+  const out: string[] = []
+  for (let i = 0; i < b64.length; i += 76) out.push(b64.slice(i, i + 76))
+  return out
+}
+
 /**
- * Build script: unpack the vendored source into a private temp dir, compile to
- * a temp name, then `mv` into place. The private dir replaces a fixed
- * /tmp/walnut-dtach-build that another user on a shared host could own; the
- * temp-then-mv keeps a half-written binary from ever sitting at the cache path
- * where the next probe would trust it. Compiler output goes to stderr, which
- * the classifier keeps for the UI's Details panel.
+ * Prebuilt half of the install script: write the shipped binary to a temp name,
+ * `--help` it, then `mv` into place and stop. A binary that won't run here (a
+ * Linux one linked against a newer glibc) prints PREBUILT_FAILED plus its error
+ * on stderr and falls through to the compile half. `--decode` backs up `-d` for
+ * a macOS older than 13, whose base64 only knew -D/--decode.
  */
-export function buildCompileScript(cc: string, sources: Record<string, string>): string {
+function prebuiltLines(prebuilt: Buffer): string[] {
+  return [
+    'P="$B.prebuilt.$$"',
+    `cat > "$P.b64" <<'${PREBUILT_EOF}'`,
+    ...wrapBase64(prebuilt),
+    PREBUILT_EOF,
+    '{ base64 -d < "$P.b64" > "$P" || base64 --decode < "$P.b64" > "$P"; } 2>/dev/null',
+    'rm -f "$P.b64"; chmod 755 "$P" 2>/dev/null',
+    'if is_dtach "$P" && mv -f "$P" "$B"; then echo "PREBUILT:$B"; exit 0; fi',
+    'echo "prebuilt dtach does not run on this host: $("$P" --help 2>&1 | head -n 3)" >&2',
+    'rm -f "$P"; echo PREBUILT_FAILED',
+  ]
+}
+
+/**
+ * Install script. With `prebuilt`, try the shipped binary first (see
+ * prebuiltLines). With `cc`, compile: unpack the vendored source into a private
+ * temp dir, compile to a temp name, then `mv` into place. The private dir
+ * replaces a fixed /tmp/walnut-dtach-build that another user on a shared host
+ * could own; the temp-then-mv keeps a half-written binary from ever sitting at
+ * the cache path where the next probe would trust it. Compiler output goes to
+ * stderr, which the classifier keeps for the UI's Details panel. With a prebuilt
+ * but no compiler, a prebuilt that fails ends in NO_COMPILER: installing one is
+ * the fix left.
+ */
+export function buildInstallScript(opts: { prebuilt?: Buffer; cc?: string; sources: Record<string, string> }): string {
+  const { prebuilt, cc, sources } = opts
   const lines = [
     ...PREAMBLE,
     ...SH_HELPERS,
     `B="$HOME/${REMOTE_BIN}"`,
-    'D="$(mktemp -d 2>/dev/null || mktemp -d -t walnut-dtach)" || { echo BUILD_FAILED; exit 0; }',
     'mkdir -p "$(dirname "$B")" || { echo BUILD_FAILED; exit 0; }',
   ]
+  if (prebuilt) lines.push(...prebuiltLines(prebuilt))
+  if (!cc) {
+    lines.push('echo NO_COMPILER', 'exit 0')
+    return lines.join('\n')
+  }
+  lines.push('D="$(mktemp -d 2>/dev/null || mktemp -d -t walnut-dtach)" || { echo BUILD_FAILED; exit 0; }')
   for (const f of ALL_FILES) {
     const b64 = sources[f]
     if (!b64) throw new Error(`Vendored dtach source missing: ${f}`)
@@ -144,6 +201,11 @@ export function buildCompileScript(cc: string, sources: Record<string, string>):
   return lines.join('\n')
 }
 
+/** Compile-only install script (no prebuilt for this host). */
+export function buildCompileScript(cc: string, sources: Record<string, string>): string {
+  return buildInstallScript({ cc, sources })
+}
+
 /**
  * Classify one script run. Order matters: a positive marker wins over the exit
  * code (ssh can exit non-zero AFTER the script finished, e.g. a mux warning),
@@ -159,6 +221,8 @@ export function classifyScriptRun(run: ScriptRun): DtachScriptOutcome {
   const os = toHostOs(stdout.match(/^OS:(.*)$/m)?.[1]?.trim())
   const ok = stdout.match(/^DTACH_OK:(walnut|system):(.+)$/m)
   if (ok) return { kind: 'ok', source: ok[1] as 'walnut' | 'system', path: ok[2].trim() }
+  const prebuilt = stdout.match(/^PREBUILT:(.+)$/m)
+  if (prebuilt) return { kind: 'ok', source: 'prebuilt', path: prebuilt[1].trim() }
   const built = stdout.match(/^BUILT:(.+)$/m)
   if (built) return { kind: 'ok', source: 'built', path: built[1].trim() }
   const need = stdout.match(/^NEED_BUILD:(\S+)$/m)

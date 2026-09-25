@@ -6,13 +6,13 @@
  * (the section owns the auto-saving host editor; re-rendering it on every phase
  * push would fight the inputs the user is typing in).
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { connectHost } from '@/api/hosts';
 import { seedHostStatus, useHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 import {
   elapsedNow, formatElapsed, hostIndicatorStatus, hostStatusText, isHostConnecting, isHostFailed,
 } from '@/utils/host-connect';
-import { hostReadinessCheck, hostReadinessProblems } from '@/utils/host-readiness';
+import { hostReadinessCheck, hostReadinessNotes, hostReadinessProblems } from '@/utils/host-readiness';
 import { StatusIndicator } from '../inputs/StatusIndicator';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { CopyButton } from '../inputs/CopyButton';
@@ -98,16 +98,31 @@ const RECHECK_WAIT_MS = 15_000;
  * without a working node, no C compiler for dtach), each with its command and a
  * Copy. Renders nothing when the host is fine or its daemon cannot tell.
  *
- * "Check again" asks the server to re-run the host's preflight. The POST answers
- * at once, but the preflight takes up to 12s and reports through a LATER
- * host:status push, so the button stays in "Checking..." until a readiness with
- * a newer `checkedAt` arrives (or 15s pass). A newer answer that carries
- * `checkError`, or no answer within 15s, reads "Check failed"; an answer with no
- * problems left removes the lines.
+ * Walnut fixes most of these by itself (server host autofix): a problem being
+ * fixed reads "Installing Claude Code on <host>..." instead of its command, a
+ * failed fix keeps the line and adds why ("... (sudo needs a password): run
+ * <exact command>"), and a fixed problem simply disappears with the next
+ * readiness. A finished fix no problem carries (a success, or a dtach build)
+ * gets one muted line for a while.
+ *
+ * "Check again" asks the server to re-run the host's preflight (and lets a
+ * failed fix run once more). The POST answers at once, but the preflight takes
+ * up to 12s and reports through a LATER host:status push, so the button stays in
+ * "Checking..." until a readiness with a newer `checkedAt` arrives (or 15s
+ * pass). A newer answer that carries `checkError`, or no answer within 15s,
+ * reads "Check failed"; an answer with no problems left removes the lines.
  */
 export function RemoteHostReadiness({ alias, name }: { alias: string; name: string }) {
   const status = useHostStatus(alias);
   const problems = hostReadinessProblems(status);
+  // When THIS status arrived, on this browser's clock: a fix line's age is the
+  // server's `ageMs` plus how long we have held the snapshot, never a
+  // comparison of the two machines' clocks.
+  const receivedAt = useMemo(() => Date.now(), [status]);
+  const [, setExpiryTick] = useState(0);
+  const notes = hostReadinessNotes(status, Date.now() - receivedAt);
+  const nextExpiry = notes.reduce<number | null>(
+    (min, n) => (n.expiresInMs === undefined ? min : min === null ? n.expiresInMs : Math.min(min, n.expiresInMs)), null);
   const { checkedAt, checkError } = hostReadinessCheck(status);
   // The checkedAt on screen when the user clicked; null = not waiting.
   const [waitingFrom, setWaitingFrom] = useState<number | null>(null);
@@ -126,8 +141,17 @@ export function RemoteHostReadiness({ alias, name }: { alias: string; name: stri
     return () => clearTimeout(timer);
   }, [waitingFrom, checkedAt, checkError]);
 
-  if (problems.length === 0) return null;
+  // A finished-fix line disappears on its own, even when no push arrives.
+  useEffect(() => {
+    if (nextExpiry === null) return;
+    const timer = setTimeout(() => setExpiryTick((n) => n + 1), nextExpiry + 50);
+    return () => clearTimeout(timer);
+  }, [nextExpiry, receivedAt]);
+
+  if (problems.length === 0 && notes.length === 0) return null;
   const checking = waitingFrom !== null;
+  // "Check again" rides the first line that still asks the user for something.
+  const recheckAt = problems.findIndex((p) => p.fix?.state !== 'running');
 
   const recheck = () => {
     clickedAt.current = Date.now();
@@ -143,16 +167,27 @@ export function RemoteHostReadiness({ alias, name }: { alias: string; name: stri
   return (
     <>
       {problems.map((problem, idx) => {
+        if (problem.fix?.state === 'running') {
+          return (
+            <SettingsNotice key={problem.kind} kind="info">
+              <span className="rh-readiness" data-host={alias} data-problem={problem.kind} data-fix="running">
+                {`${problem.fix.text} on ${name}...`}
+              </span>
+            </SettingsNotice>
+          );
+        }
+        const failedFix = problem.fix?.state === 'failed' ? problem.fix : undefined;
         const [first, ...alternatives] = problem.commands;
+        const withRecheck = idx === recheckAt;
         return (
           <SettingsNotice
             key={problem.kind}
             kind="warn"
-            action={(first || idx === 0) && (
+            action={(first || withRecheck) && (
               <>
                 {first && <CopyButton text={first} data-testid={`rh-readiness-copy-${problem.kind}`} />}
-                {idx === 0 && failed && !checking && <span className="rh-status-error">Check failed</span>}
-                {idx === 0 && (
+                {withRecheck && failed && !checking && <span className="rh-status-error">Check failed</span>}
+                {withRecheck && (
                   <SettingsButton
                     variant="text"
                     disabled={checking}
@@ -166,14 +201,28 @@ export function RemoteHostReadiness({ alias, name }: { alias: string; name: stri
               </>
             )}
           >
-            <span className="rh-readiness" data-host={alias} data-problem={problem.kind}>
-              {`${name}: ${problem.message}`}
-              {first && <> <code>{first}</code></>}
+            <span
+              className="rh-readiness"
+              data-host={alias}
+              data-problem={problem.kind}
+              data-fix={failedFix ? 'failed' : undefined}
+              title={failedFix?.detail}
+            >
+              {failedFix
+                ? <>{`${name}: ${problem.message} ${failedFix.text}`}{first ? <>: run <code>{first}</code></> : '.'}</>
+                : <>{`${name}: ${problem.message}`}{first && <> <code>{first}</code></>}</>}
               {alternatives.map((alt) => <span key={alt}> or <code>{alt}</code></span>)}
             </span>
           </SettingsNotice>
         );
       })}
+      {notes.map((note) => (
+        <SettingsNotice key={note.key} kind="info">
+          <span className="rh-readiness-note" data-host={alias} data-fix={note.kind} title={note.detail}>
+            {note.kind === 'running' ? `${note.text} on ${name}...` : `${name}: ${note.text}.`}
+          </span>
+        </SettingsNotice>
+      ))}
     </>
   );
 }

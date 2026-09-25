@@ -8,6 +8,11 @@ breaking changes).
 
 ### Fixed
 
+- **A Mac needs no compiler for a persistent terminal: the package ships a prebuilt dtach.** The
+  build compiles the vendored `dtach` for both Mac architectures and the npm package carries it, so
+  a Mac without the Xcode Command Line Tools (this one, or a remote Mac over SSH) gets a terminal
+  that survives a disconnect instead of a `Not persistent` shell. Walnut checks the binary runs
+  before using it and still compiles from source when it does not.
 - **A remote host without a C compiler still gets a terminal.** The session terminal needs
   `dtach` on the host so a shell survives a disconnect, and Walnut compiles it there from source.
   On a host with no compiler the terminal used to refuse to open at all. Walnut now also accepts a
@@ -25,6 +30,17 @@ breaking changes).
   when the npm build needs it, a compiler for the terminal) and shows one actionable line per
   missing piece in Settings, with a Check again button. Older daemons without the capability
   simply show nothing extra.
+- **Walnut installs what a remote host is missing instead of asking you to.** When the preflight
+  finds Claude Code missing (or only the npm build with no Node.js), Walnut runs the native
+  installer on the host. When `dtach` is missing it installs the prebuilt one that fits the host;
+  only when none fits (or it does not run there) and there is no compiler does it install `gcc`
+  and the C headers with the host's package manager under `sudo -n`, then build `dtach`. A
+  daemon's refusal counts as a failed fix with the host's own words; a dropped connection does
+  not count. Settings shows `Installing ... on <host>...` while that runs. Only when a fix cannot run
+  (sudo needs a password, no network) does the line keep its command, now the exact one for that
+  host, with the reason. Each fix runs once per host until you press Check again. Turn it off with
+  `WALNUT_HOST_AUTOFIX=0`, or per host with `autofix: false` under `hosts.<alias>`. Signing in to
+  Claude Code stays yours.
 - **Sessions see the PATH your own terminal sees.** The daemon used to put its fallback directories
   (`/usr/local/bin`, `/usr/bin`, ...) ahead of the PATH your shell rc files build, and it read that
   rc PATH inside the environment the server was started from. A Walnut server started from a shell

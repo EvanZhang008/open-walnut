@@ -1056,6 +1056,10 @@ export interface Config {
     /** Whether this host was auto-discovered from SSH config (vs manually added).
      *  Informational only — doesn't affect behavior. */
     discovered?: boolean;
+    /** Automatic host fixes after a preflight (install the native Claude Code,
+     *  gcc under passwordless sudo, build dtach). Default on; `false` turns them
+     *  off for this host. WALNUT_HOST_AUTOFIX=0 turns them off for every host. */
+    autofix?: boolean;
   }>;
   /** Startup warmup of every explicitly configured host's session daemon.
    *  On by default: without it the FIRST folder-picker open on a host pays the

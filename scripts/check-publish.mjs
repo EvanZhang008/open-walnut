@@ -9,7 +9,7 @@
  * `npm pack --dry-run` (catches `files` allowlist regressions).
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,11 +37,47 @@ const required = [
   'scripts/postinstall.mjs',
 ];
 
+// Prebuilt dtach (scripts/build-dtach.sh): a Mac without the Command Line Tools has
+// no compiler, so the tarball is its only way to a persistent terminal. The build
+// skips the step quietly on a machine without a compiler, which is right for a
+// dev build and wrong for a release, so a machine that CAN build it must have.
+const hostDtach = hostPrebuiltDtachName();
+if (hostDtach && compilerWorks()) {
+  required.push(`dist/daemon-binaries/${hostDtach}`, `dist/daemon-binaries/${hostDtach}.source-hash`);
+}
+
 const missing = required.filter((rel) => !existsSync(join(root, rel)));
 if (missing.length) {
   console.error('check-publish: missing build artifacts:\n' + missing.map((m) => `  - ${m}`).join('\n'));
   console.error('Run `npm run build && cd web && npx vite build` first.');
   process.exit(1);
+}
+
+// Every shipped dtach must be built from the vendored source as it is now (dist/ is
+// never cleaned, so an old build can linger) and must run here when it is ours.
+const dtachFiles = readdirSync(join(root, 'dist/daemon-binaries')).filter((f) => /^dtach-[a-z]+-[a-z0-9]+$/.test(f));
+if (dtachFiles.length) {
+  const expectedHash = execFileSync('bash', [join(root, 'scripts/build-dtach.sh'), '--print-hash'], { cwd: root, encoding: 'utf8' }).trim();
+  for (const f of dtachFiles) {
+    const sidecar = join(root, 'dist/daemon-binaries', `${f}.source-hash`);
+    const got = existsSync(sidecar) ? readFileSync(sidecar, 'utf8').trim() : '(missing)';
+    if (got !== expectedHash) {
+      console.error(`check-publish: dist/daemon-binaries/${f} was built from other dtach sources (${got}, want ${expectedHash}); run \`bash scripts/build-dtach.sh\`.`);
+      process.exit(1);
+    }
+  }
+  if (hostDtach && dtachFiles.includes(hostDtach)) {
+    let help = '';
+    try {
+      help = execFileSync(join(root, 'dist/daemon-binaries', hostDtach), ['--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      help = `${err.stdout ?? ''}${err.stderr ?? ''}`;
+    }
+    if (!help.includes('dtach - version')) {
+      console.error(`check-publish: dist/daemon-binaries/${hostDtach} does not run here (--help printed: ${help.slice(0, 200) || 'nothing'}).`);
+      process.exit(1);
+    }
+  }
 }
 
 // Build info: tsup rewrites it after every successful build but never fails the build over it,
@@ -74,6 +110,7 @@ const mustInclude = [
   'dist/daemon-binaries/daemon-cron-runtime.cjs',
   'dist/daemon-binaries/daemon-instance-lock.cjs',
   'dist/daemon-binaries/daemon-service-cli.cjs',
+  ...dtachFiles.flatMap((f) => [`dist/daemon-binaries/${f}`, `dist/daemon-binaries/${f}.source-hash`]),
 ];
 const notPacked = mustInclude.filter((f) => !files.includes(f));
 if (notPacked.length) {
@@ -91,4 +128,22 @@ console.log(`check-publish: OK — ${pack.entryCount} files, ${totalMB} MB unpac
 if (pack.unpackedSize > 200 * 1024 * 1024) {
   console.error('check-publish: unpacked size exceeds 200MB — something large slipped into the tarball.');
   process.exit(1);
+}
+
+/** dtach-<platform>-<arch> for this machine, in Node's words; null when none is built. */
+function hostPrebuiltDtachName() {
+  const platform = { darwin: 'darwin', linux: 'linux' }[process.platform];
+  const arch = { arm64: 'arm64', x64: 'x64' }[process.arch];
+  return platform && arch ? `dtach-${platform}-${arch}` : null;
+}
+
+/** Same test as build-dtach.sh: a compiler that answers --version (a Mac's cc stub does not). */
+function compilerWorks() {
+  for (const cc of ['cc', 'clang', 'gcc']) {
+    try {
+      execFileSync(cc, ['--version'], { stdio: 'ignore', timeout: 20_000 });
+      return true;
+    } catch { /* try the next one */ }
+  }
+  return false;
 }
