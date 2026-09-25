@@ -256,17 +256,33 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
     const box = await page.locator('.home-companion').boundingBox();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
-    // It opens as the LEFTMOST Home column, right beside the rail; on a wide
-    // window the task panel follows it (narrow windows overlay it, same edge).
-    const main = await page.locator('.main-page').boundingBox();
-    expect(Math.abs(box!.x - main!.x), `the agenda is the leftmost column at ${width}px`).toBeLessThanOrEqual(1);
+    // It opens right of the task panel, as the first of the columns beside it; a
+    // wide window moves the rest over, a narrow one overlays it from the same edge.
+    // One read of both boxes, polled: the task panel animates its width after the rail toggle above.
+    await expect.poll(() => page.evaluate(() => {
+      const todo = document.querySelector('.main-page-todo')!.getBoundingClientRect();
+      return Math.round(document.querySelector('.home-companion')!.getBoundingClientRect().x - todo.right);
+    }), `the agenda starts at the task panel's right edge at ${width}px`).toBe(0);
     if (width >= 1280) {
-      const todo = await page.locator('.main-page-todo').boundingBox();
-      expect(todo!.x, 'the task panel sits right of the agenda').toBeGreaterThanOrEqual(box!.x + box!.width - 1);
+      const right = await page.locator('.main-page-right').boundingBox();
+      expect(right!.x, 'the conversation and sessions sit right of the agenda').toBeGreaterThanOrEqual(box!.x + box!.width - 1);
     }
-    await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-agenda-left-${width}.png`, clip: { x: 0, y: 0, width: Math.min(width, 1280), height: 840 } });
+    await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-agenda-right-of-tasks-${width}.png`, clip: { x: 0, y: 0, width: Math.min(width, 1280), height: 840 } });
     await page.locator('.home-companion').locator('[title="Close calendar panel"]').click();
     await expect(page.locator('[data-testid="cal-side-panel"]')).toBeHidden();
+  }
+  // With the task panel hidden, the agenda takes its place beside the rail.
+  for (const width of [1280, 820]) {
+    await page.setViewportSize({ width, height: 840 });
+    await toggle.click();
+    await expect(navigation(page)).toHaveAttribute('inert', '');
+    await page.getByTestId('sidebar-toggle-calendar').click();
+    await expect(page.locator('[data-testid="cal-side-panel"]')).toBeVisible();
+    const mainX = (await page.locator('.main-page').boundingBox())!.x;
+    await expect.poll(async () => Math.round((await page.locator('.home-companion').boundingBox())!.x - mainX), `no task panel at ${width}px`).toBe(0);
+    await page.locator('.home-companion').locator('[title="Close calendar panel"]').click();
+    await toggle.click();
+    await expect(navigation(page)).not.toHaveAttribute('inert', '');
   }
   await page.setViewportSize({ width: 390, height: 840 });
   expect(await overflow(page)).toBe(false);
@@ -1018,8 +1034,9 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
     await expect(calendar).toBeVisible();
     const [cal, pad, column] = await Promise.all([calendar, pane, page.locator('.home-companion')].map(l => l.boundingBox()));
     expect(cal!.y + cal!.height).toBeLessThanOrEqual(pad!.y + 1);
-    // The shared column is the leftmost one, beside the rail.
-    expect(Math.abs(column!.x - (await page.locator('.main-page').boundingBox())!.x)).toBeLessThanOrEqual(1);
+    // The shared column starts at the task panel's right edge.
+    const todoBox = (await page.locator('.main-page-todo').boundingBox())!;
+    expect(Math.abs(column!.x - (todoBox.x + todoBox.width))).toBeLessThanOrEqual(1);
     expect(cal!.height).toBeGreaterThan(column!.height * 0.3);
     expect(pad!.height).toBeGreaterThan(column!.height * 0.3);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);

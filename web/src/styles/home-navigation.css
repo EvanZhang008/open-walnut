@@ -219,8 +219,14 @@
 .home-companion-scratchpad .global-notes-label { font-size: 13.5px; font-weight: 700; color: var(--fg); text-transform: none; letter-spacing: 0; }
 .home-companion-scratchpad .global-notes-body { padding: 8px 14px; }
 .home-companion-scratchpad .global-notes-close-btn { font-size: 16px; }
+/* A narrow window overlays the column from the task panel's right edge (the panel's width
+   rides in as --home-companion-left, a % of .main-page like the panel's own width). */
 @media (max-width: 1100px) {
-  .home-companion { position: absolute; top: 0; left: 0; bottom: 0; z-index: 45; box-shadow: 10px 0 36px rgb(0 0 0 / 10%); }
+  .home-companion { position: absolute; top: 0; left: var(--home-companion-left, 0); bottom: 0; z-index: 45; box-shadow: 10px 0 36px rgb(0 0 0 / 10%); }
+}
+/* A phone stacks the task panel above the rest, so the overlay starts at the left edge. */
+@media (max-width: 768px) {
+  .home-companion { left: 0; }
 }
 @media (hover: none) {
   .navigation-more { opacity: .65; pointer-events: auto; }

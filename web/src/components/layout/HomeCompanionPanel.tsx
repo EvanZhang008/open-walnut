@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type CSSProperties } from 'react';
 import { useLocation } from 'react-router-dom';
 import { CalendarSidePanel } from '@/components/calendar/CalendarSidePanel';
 import { GlobalNotesSection } from '@/components/notes/GlobalNotesSection';
@@ -14,13 +14,15 @@ interface Props {
   tasks: Task[];
   focusedTaskId?: string;
   onTaskClick: (taskId: string) => void;
+  /** The task panel's width (a CSS length): a narrow window overlays the column from that edge. */
+  overlayLeft?: string;
 }
 
 /**
- * The column beside the home conversation: the day agenda and the scratchpad, each toggled
+ * The column right of the task panel: the day agenda and the scratchpad, each toggled
  * from the rail's Home group. With both on they share the column, agenda on top.
  */
-export function HomeCompanionPanel({ calendarOpen: calendarRequested, scratchpadOpen: scratchpadRequested, onCloseCalendar, onCloseScratchpad, tasks, focusedTaskId, onTaskClick }: Props) {
+export function HomeCompanionPanel({ calendarOpen: calendarRequested, scratchpadOpen: scratchpadRequested, onCloseCalendar, onCloseScratchpad, tasks, focusedTaskId, onTaskClick, overlayLeft }: Props) {
   const home = useLocation().pathname === '/';
   const calendarOpen = home && calendarRequested;
   const scratchpadOpen = home && scratchpadRequested;
@@ -56,7 +58,10 @@ export function HomeCompanionPanel({ calendarOpen: calendarRequested, scratchpad
       className={`home-companion${calendarOpen ? ' home-companion-calendar' : ''}${scratchpadOpen ? ' home-companion-has-scratchpad' : ''}`}
       data-testid="home-companion"
       data-active={active}
-      style={open ? undefined : { display: 'none' }}
+      style={{
+        ...(open ? {} : { display: 'none' }),
+        ...(overlayLeft ? { '--home-companion-left': overlayLeft } : {}),
+      } as CSSProperties}
       inert={!open}
     >
       {visitedCalendar.current && (
