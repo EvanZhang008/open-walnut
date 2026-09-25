@@ -256,6 +256,15 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
     const box = await page.locator('.home-companion').boundingBox();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+    // It opens as the LEFTMOST Home column, right beside the rail; on a wide
+    // window the task panel follows it (narrow windows overlay it, same edge).
+    const main = await page.locator('.main-page').boundingBox();
+    expect(Math.abs(box!.x - main!.x), `the agenda is the leftmost column at ${width}px`).toBeLessThanOrEqual(1);
+    if (width >= 1280) {
+      const todo = await page.locator('.main-page-todo').boundingBox();
+      expect(todo!.x, 'the task panel sits right of the agenda').toBeGreaterThanOrEqual(box!.x + box!.width - 1);
+    }
+    await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-agenda-left-${width}.png`, clip: { x: 0, y: 0, width: Math.min(width, 1280), height: 840 } });
     await page.locator('.home-companion').locator('[title="Close calendar panel"]').click();
     await expect(page.locator('[data-testid="cal-side-panel"]')).toBeHidden();
   }
@@ -1009,6 +1018,8 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
     await expect(calendar).toBeVisible();
     const [cal, pad, column] = await Promise.all([calendar, pane, page.locator('.home-companion')].map(l => l.boundingBox()));
     expect(cal!.y + cal!.height).toBeLessThanOrEqual(pad!.y + 1);
+    // The shared column is the leftmost one, beside the rail.
+    expect(Math.abs(column!.x - (await page.locator('.main-page').boundingBox())!.x)).toBeLessThanOrEqual(1);
     expect(cal!.height).toBeGreaterThan(column!.height * 0.3);
     expect(pad!.height).toBeGreaterThan(column!.height * 0.3);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);

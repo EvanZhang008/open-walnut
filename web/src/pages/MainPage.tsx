@@ -2614,6 +2614,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       style={{ position: 'relative' }}
     >
 
+      {/* The day agenda and the scratchpad open as the LEFTMOST column, next to
+          the rail that toggles them (user, 2026-09-25: it opened on the far
+          right, away from where it was asked for). */}
+      <HomeCompanionPanel
+        calendarOpen={calendarVisible}
+        scratchpadOpen={scratchpadVisible}
+        onCloseCalendar={closeCompanion}
+        onCloseScratchpad={closeScratchpad}
+        tasks={tasks}
+        focusedTaskId={focusedTask?.id}
+        onTaskClick={handleFocusTaskById}
+      />
+
       {/* Todo Panel (LEFT — collapsible via Sidebar toggle) */}
       <div
         ref={todoPanel.panelRef}
@@ -2910,16 +2923,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {focusBar.visible && <FocusDock focusBar={focusBar} onQuickAddToFocus={handleQuickAddToFocus} />}
 
       </div>{/* end .main-page-right */}
-
-      <HomeCompanionPanel
-        calendarOpen={calendarVisible}
-        scratchpadOpen={scratchpadVisible}
-        onCloseCalendar={closeCompanion}
-        onCloseScratchpad={closeScratchpad}
-        tasks={tasks}
-        focusedTaskId={focusedTask?.id}
-        onTaskClick={handleFocusTaskById}
-      />
 
       {/* Full-screen task detail — shared by TodoPanel clicks AND the Session panel
           kebab "Task detail" item (both drive focusedTask). suppressDetail (set by

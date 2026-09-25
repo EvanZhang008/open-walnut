@@ -208,7 +208,8 @@
 .home-navigation-scroll .todo-group-project:hover .focus-inline-add-trigger,
 .home-navigation-scroll .todo-group-project:focus-within .focus-inline-add-trigger { opacity: 1; }
 
-.home-companion { flex: 0 0 400px; width: 400px; max-width: 100%; min-height: 0; height: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--bg); }
+/* The leftmost Home column, beside the rail (MainPage renders it first). */
+.home-companion { flex: 0 0 400px; width: 400px; max-width: 100%; min-height: 0; height: 100%; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg); }
 .home-companion[hidden], .home-companion [hidden] { display: none !important; }
 .home-companion-body, .home-companion-content { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .home-companion .cal-side-panel { width: 100% !important; flex: 1; min-width: 0; border: 0; border-right: 0; }
@@ -219,7 +220,7 @@
 .home-companion-scratchpad .global-notes-body { padding: 8px 14px; }
 .home-companion-scratchpad .global-notes-close-btn { font-size: 16px; }
 @media (max-width: 1100px) {
-  .home-companion { position: absolute; top: 0; right: 0; bottom: 0; z-index: 45; box-shadow: -10px 0 36px rgb(0 0 0 / 10%); }
+  .home-companion { position: absolute; top: 0; left: 0; bottom: 0; z-index: 45; box-shadow: 10px 0 36px rgb(0 0 0 / 10%); }
 }
 @media (hover: none) {
   .navigation-more { opacity: .65; pointer-events: auto; }
