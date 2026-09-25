@@ -866,7 +866,9 @@ export class RemoteSessionManager implements SessionManager {
     for (const localPath of imagePaths) {
       try {
         const data = fs.readFileSync(localPath)
-        const remotePath = `/tmp/open-walnut-images/${path.basename(localPath)}`
+        // Beside the daemon dir (/tmp/open-walnut-images, or ~/.cache/open-walnut-images
+        // when /tmp is unusable on this host): never inside it, which fs.write refuses.
+        const remotePath = `${this.conn.remoteDaemonDir || '/tmp/open-walnut'}-images/${path.basename(localPath)}`
 
         const result = await this.conn.send('fs.write', {
           path: remotePath,

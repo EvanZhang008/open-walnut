@@ -329,6 +329,78 @@ describe('install-claude-native', () => {
   })
 })
 
+// ── update-claude ────────────────────────────────────────────────────────────
+
+describe('update-claude', () => {
+  const VERSIONS = `${HOME}/.local/share/claude/versions`
+  /** A native-installer host whose `claude update` moves ~/.local/bin/claude from `from` to `to`. */
+  function nativeHost(opts: { from?: string; to?: string; updateCode?: number; updateOut?: string; env?: Record<string, string>; realpath?: string } = {}) {
+    let version = opts.from ?? '2.1.258'
+    const h = fakeHost({
+      bins: { claude: BIN, curl: '/usr/bin/curl', bash: '/bin/bash' },
+      claude: { [BIN]: { ...NATIVE, path: BIN } },
+      script: (file, args) => {
+        if (file === BIN && args[0] === '--version') return { code: 0, stdout: `${version} (Claude Code)\n` }
+        if (file === BIN && args[0] === 'update') {
+          if ((opts.updateCode ?? 0) === 0) version = opts.to ?? '2.1.280'
+          return { code: opts.updateCode ?? 0, stdout: opts.updateOut ?? `Current version: 2.1.258\nSuccessfully updated from 2.1.258 to ${opts.to ?? '2.1.280'}\n` }
+        }
+        if (file === '/bin/bash') { version = opts.to ?? '2.1.280'; return { code: 0 } }
+        return { code: 0 }
+      },
+    })
+    const fixFs = { ...(h.deps.fs as object), realpathSync: (p: string) => (p === BIN ? opts.realpath ?? `${VERSIONS}/${version}` : p) }
+    const fix = createHostFix({ ...h.deps, fs: fixFs as unknown as HostFixDeps['fs'], env: { ...h.deps.env, ...opts.env } })
+    return { ...h, fix }
+  }
+
+  it('runs `claude update` on the native installer\'s claude, then verifies the new version against the floor', async () => {
+    const h = nativeHost()
+    const r = await h.fix.run('update-claude', { minClaudeVersion: '2.1.280' })
+    expect(nonProbe(h.calls).map(cmdLine)).toEqual([`${BIN} --version`, `${BIN} update`, `${BIN} --version`])
+    expect(r).toMatchObject({ action: 'update-claude', ok: true, claude: { path: BIN, kind: 'native', version: '2.1.280' } })
+    expect(r.skipped).toBeUndefined()
+  })
+
+  it('already new enough: nothing runs but the version check', async () => {
+    const h = nativeHost({ from: '2.1.281' })
+    expect(await h.fix.run('update-claude', { minClaudeVersion: '2.1.280' })).toMatchObject({ ok: true, skipped: true, claude: { version: '2.1.281' } })
+    expect(nonProbe(h.calls).map(cmdLine)).toEqual([`${BIN} --version`])
+  })
+
+  it('an update that stops short of the floor (a release channel behind it) is still-outdated, with the command that reaches it', async () => {
+    const h = nativeHost({ to: '2.1.270', updateOut: 'Claude Code is up to date (2.1.270)\n' })
+    expect(await h.fix.run('update-claude', { minClaudeVersion: '2.1.280' }))
+      .toMatchObject({ ok: false, error: 'still-outdated', manualCommand: 'claude install latest', claude: { version: '2.1.270' } })
+  })
+
+  it('a failing updater falls back to the official installer', async () => {
+    const h = nativeHost({ updateCode: 1, updateOut: 'Error: Failed to install native update\n' })
+    const r = await h.fix.run('update-claude', { minClaudeVersion: '2.1.280' })
+    expect(nonProbe(h.calls).map((c) => c.file)).toEqual([BIN, BIN, '/usr/bin/curl', '/bin/bash', BIN])
+    expect(r).toMatchObject({ ok: true, claude: { version: '2.1.280' } })
+  })
+
+  it('DISABLE_UPDATES is respected: no updater, no installer', async () => {
+    const h = nativeHost({ env: { DISABLE_UPDATES: '1' } })
+    expect(await h.fix.run('update-claude', { minClaudeVersion: '2.1.280' })).toMatchObject({ ok: false, error: 'updates-disabled', manualCommand: 'claude update' })
+    expect(nonProbe(h.calls).map(cmdLine)).toEqual([`${BIN} --version`])
+    // Turned off in settings instead: the updater says so, and the installer does not run behind its back.
+    const said = nativeHost({ updateCode: 1, updateOut: 'Updates are disabled by DISABLE_UPDATES\n' })
+    expect(await said.fix.run('update-claude', { minClaudeVersion: '2.1.280' })).toMatchObject({ ok: false, error: 'updates-disabled' })
+    expect(nonProbe(said.calls).map((c) => c.file)).not.toContain('/bin/bash')
+  })
+
+  it('never touches a claude the native installer did not put there (a wrapper script, Homebrew) or an npm build', async () => {
+    const wrapper = nativeHost({ realpath: `${HOME}/.wrappers/launcher/1.0/exec` })
+    expect(await wrapper.fix.run('update-claude', { minClaudeVersion: '2.1.280' })).toMatchObject({ ok: false, error: 'unmanaged-install' })
+    expect(nonProbe(wrapper.calls)).toEqual([])
+    const npm = fakeHost({ bins: { claude: BIN }, claude: { [BIN]: { ...NPM, path: BIN } } })
+    expect(await npm.fix.run('update-claude', { minClaudeVersion: '2.1.280' })).toMatchObject({ ok: false, error: 'unmanaged-install' })
+    expect(nonProbe(npm.calls)).toEqual([])
+  })
+})
+
 // ── build-dtach ──────────────────────────────────────────────────────────────
 
 const b64 = (s: string) => Buffer.from(s).toString('base64')

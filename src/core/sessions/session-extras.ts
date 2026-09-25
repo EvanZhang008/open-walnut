@@ -590,6 +590,8 @@ export interface ListDirsResult {
   pending?: ListDirsPending;
   /** Set (with `dirs: []`) when the host connect failed and the caller opted into `pending` mode. */
   hostError?: ListDirsHostError;
+  /** Some entries did not answer (a link into a hung mount): the list may be missing directories. */
+  incomplete?: { unanswered: number; message: string };
 }
 
 export interface ListDirsOptions {
@@ -712,6 +714,15 @@ export async function listSessionDirs(
   }
 
   // Cache results (also under the resolved path — the daemon may have expanded ~).
+  // A partial listing is never cached: the entries that did not answer may be
+  // directories, and the next ask may find the mount awake again.
+  if (listing.unanswered) {
+    const n = listing.unanswered;
+    return {
+      dirs: listing.dirs, parent: listing.parent, exists: listing.exists,
+      incomplete: { unanswered: n, message: `listing incomplete: ${n} ${n === 1 ? 'entry' : 'entries'} did not answer` },
+    };
+  }
   const resolvedCacheKey = `${host}::${listing.parent}::${depth}`;
   const entry = { dirs: listing.dirs, parent: listing.parent, exists: listing.exists, ts: Date.now() };
   dirCache.set(cacheKey, entry);

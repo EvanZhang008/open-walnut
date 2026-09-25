@@ -4,7 +4,8 @@
  * Renders labeled sections ("📁 subdirectories" / "🕘 history" / per-host
  * groups / "🏠 home folders" for a bare word), explicit per-host empty states
  * ("directory does not exist on X" / "no subdirectories"), subtle host-down
- * rows, and the "create & start" row.
+ * rows, the "create & start" row, and a muted "listing incomplete" line for a
+ * listing some entries did not answer (the server's text, as is).
  * History matches never impersonate live results — each lives under its own
  * section label.
  */
@@ -94,6 +95,16 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
         liveNotes.push({ key: hostKey, kind: 'connecting', label, pending: state.pending });
       } else if (state.status === 'done' && !state.exists) liveNotes.push({ key: hostKey, kind: 'missing', label });
       else if (state.status === 'done' && state.exists && state.dirs.length === 0) liveNotes.push({ key: hostKey, kind: 'empty', label });
+    }
+  }
+  // Listings that came back partial (a link into a hung mount did not answer):
+  // one muted line each, the server's own text. With two or more, each names its host.
+  const incompleteNotes: Array<{ key: string; label: string; message: string }> = [];
+  if (pathMode) {
+    for (const [hostKey, state] of hostStates) {
+      if (state.status !== 'done' || !state.incomplete) continue;
+      const label = hostKey === '__local__' ? 'Local' : (hostLabels?.get(hostKey) ?? hostKey);
+      incompleteNotes.push({ key: hostKey, label, message: state.incomplete.message });
     }
   }
   // A host-specific "connecting…" row already says what is loading; the generic
@@ -227,6 +238,12 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
       {!loading && !loadError && totalItems === 0 && liveNotes.length === 0 && !createOption && (
         <div className="sps-empty">{emptyHint}</div>
       )}
+
+      {incompleteNotes.map(note => (
+        <div key={note.key} className="sps-list-incomplete" data-host={note.key} title={note.message}>
+          {incompleteNotes.length > 1 ? `${note.label}: ${note.message}` : note.message}
+        </div>
+      ))}
     </div>
   );
 });

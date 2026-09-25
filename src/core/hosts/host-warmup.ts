@@ -28,11 +28,20 @@
  *     would otherwise burn a full ssh timeout every resweep, forever. Each
  *     consecutive failure doubles its wait, capped at an hour; a success, a
  *     config edit or a human retry resets it.
+ *   - WAITS FOR CREDENTIALS. An expired SSH certificate or a missing agent
+ *     (CREDENTIAL_WAIT_KINDS) is fixed OUTSIDE Walnut, by a login command, so
+ *     nobody comes back to click Retry. Those hosts are re-dialled on their own
+ *     clock (1, 2, 5, 10 minutes, then hourly) and ONLY by it: the periodic
+ *     resweep skips them, or every failure would advance the clock twice. A host
+ *     known only from ~/.ssh/config (one Retry dialled it) stops after a day.
  */
 
 import { bus, EventNames } from '../event-bus.js'
 import { log } from '../../logging/index.js'
 import type { SshTarget } from '../../providers/session-io.js'
+import {
+  classifyHostConnectError, CREDENTIAL_WAIT_KINDS, credentialRetryDelayMs, type HostConnectErrorKind,
+} from '../sessions/host-connect-hint.js'
 
 export type HostWarmupState = 'queued' | 'running' | 'done' | 'failed' | 'skipped'
 
@@ -48,6 +57,8 @@ export interface HostWarmupEntry {
   /** When this state was recorded (ms epoch). */
   at: number
   error?: string
+  /** A credential wait is armed: the host is re-dialled on its own at this time (ms epoch). */
+  retryAt?: number
 }
 
 export interface HostWarmupDeps {
@@ -83,6 +94,8 @@ export interface HostWarmupDeps {
    */
   configQuietMs?: number
   onChange?: (key: string, state: HostWarmupState) => void
+  /** Error kind of a failed connect; default classifyHostConnectError. */
+  classify?: (message: string, host: HostWarmupCandidate) => HostConnectErrorKind
   log?: { info: (msg: string, meta?: Record<string, unknown>) => void; warn: (msg: string, meta?: Record<string, unknown>) => void }
 }
 
@@ -95,7 +108,7 @@ const DEFAULTS = {
 } as const
 
 /** Why a sweep is running — decides which hosts it may touch. */
-type SweepReason = 'startup' | 'resweep' | 'config' | 'explicit'
+type SweepReason = 'startup' | 'resweep' | 'config' | 'explicit' | 'credential'
 
 /** Bus subscriber names are the unsubscribe key, so each instance needs its own. */
 let instanceSeq = 0
@@ -129,6 +142,8 @@ export function hostWarmupGateReason(opts: {
 }
 
 export class HostWarmup {
+  /** How long a host known only from ~/.ssh/config keeps its credential re-dials. */
+  static readonly DISCOVERED_CREDENTIAL_WAIT_MS = 24 * 60 * 60_000
   private readonly deps: HostWarmupDeps
   private readonly startupDelayMs: number
   private readonly paceMs: number
@@ -146,6 +161,8 @@ export class HostWarmup {
   private states = new Map<string, HostWarmupEntry>()
   /** Consecutive failures per host — the exponent of its resweep backoff. */
   private failures = new Map<string, { count: number; at: number }>()
+  /** Hosts waiting on a credential fix: how many re-dials so far, and the armed timer. */
+  private credentialWaits = new Map<string, { attempts: number; timer: ReturnType<typeof setTimeout>; at: number; since: number }>()
   private timers = new Set<ReturnType<typeof setTimeout>>()
   /** Resolvers of in-flight pace sleeps, so stop() can release the drain loop. */
   private sleepResolvers = new Set<() => void>()
@@ -208,6 +225,7 @@ export class HostWarmup {
     this.sleepResolvers.clear()
     this.queue = []
     this.queued.clear()
+    this.credentialWaits.clear()
   }
 
   /**
@@ -261,7 +279,9 @@ export class HostWarmup {
 
     for (const host of hosts) {
       if (hostKey && host.key !== hostKey) continue
-      const skip = this.skipReason(host, reason === 'explicit')
+      // A credential re-dial was asked for by a connect that already ran, so
+      // the host is as eligible as when a human asked for it.
+      const skip = this.skipReason(host, reason === 'explicit' || reason === 'credential')
       if (skip) {
         // Recorded (so the status surface can say why) but NOT announced: a user
         // with 40 Host blocks in ~/.ssh/config would otherwise get 40 live
@@ -274,7 +294,10 @@ export class HostWarmup {
       if (this.isConnected(host.key)) { this.record(host.key, 'done'); continue }
       // Somebody else is already connecting it: theirs to finish.
       if (this.isConnecting(host.key)) continue
+      // The credential clock alone re-dials a waiting host (else each tier advances twice).
+      if (reason === 'resweep' && this.credentialWaits.has(host.key)) continue
       if (reason === 'resweep' && !this.dueForResweep(host.key)) continue
+      if (reason === 'explicit' || reason === 'config') this.clearCredentialWait(host.key, true)
       if (reason === 'explicit') this.failures.delete(host.key)
       this.push(host)
     }
@@ -315,9 +338,10 @@ export class HostWarmup {
     this.record(host.key, 'queued')
   }
 
-  private record(key: string, state: HostWarmupState, error?: string, notify = true): void {
+  private record(key: string, state: HostWarmupState, error?: string, notify = true, retryAt?: number): void {
     const entry: HostWarmupEntry = { state, at: this.now() }
     if (error) entry.error = error
+    if (retryAt !== undefined) entry.retryAt = retryAt
     this.states.set(key, entry)
     if (!notify) return
     try { this.deps.onChange?.(key, state) } catch { /* observers never break warmup */ }
@@ -363,17 +387,22 @@ export class HostWarmup {
           throw new Error('connect finished without a live connection')
         }
         this.failures.delete(host.key)
+        this.clearCredentialWait(host.key, true)
         this.record(host.key, 'done')
         this.logger.info('host warmup: connected', { host: host.key, elapsedMs: this.now() - started })
       } catch (err) {
         const message = errText(err)
         const prior = this.failures.get(host.key)
         this.failures.set(host.key, { count: (prior?.count ?? 0) + 1, at: this.now() })
-        this.record(host.key, 'failed', message)
+        const kind = this.classify(message, host)
+        const retryAt = CREDENTIAL_WAIT_KINDS.has(kind) ? this.armCredentialWait(host) : undefined
+        if (retryAt === undefined) this.clearCredentialWait(host.key, true)
+        this.record(host.key, 'failed', message, true, retryAt)
         // Expected at startup (host asleep, VPN down) — warn, never throw.
         this.logger.warn('host warmup: connect failed', {
           host: host.key, elapsedMs: this.now() - started, error: message,
-          consecutiveFailures: (prior?.count ?? 0) + 1,
+          consecutiveFailures: (prior?.count ?? 0) + 1, kind,
+          ...(retryAt !== undefined ? { credentialRetryInMs: retryAt - this.now() } : {}),
         })
       } finally {
         this.inFlight--
@@ -382,6 +411,60 @@ export class HostWarmup {
       if (this.stopped) return
       if (this.queue.length > 0 && this.paceMs > 0) await this.sleep(this.paceMs)
     }
+  }
+
+  private classify(message: string, host: HostWarmupCandidate): HostConnectErrorKind {
+    try {
+      if (this.deps.classify) return this.deps.classify(message, host)
+      const t = host.sshTarget
+      const target = t?.user ? `${t.user}@${t.hostname}` : t?.hostname ?? host.key
+      return classifyHostConnectError(message, target, [host.key, t?.hostname ?? '', t?.user ?? '']).kind
+    } catch { return 'unknown' }
+  }
+
+  /**
+   * Re-dial `host` on the credential schedule (credentialRetryDelayMs). The
+   * attempt count survives each re-dial, so the waits grow 1 → 2 → 5 → 10
+   * minutes, then stay hourly. Returns when the re-dial fires.
+   */
+  private armCredentialWait(host: HostWarmupCandidate): number | undefined {
+    const prior = this.credentialWaits.get(host.key)
+    if (prior) { clearTimeout(prior.timer); this.timers.delete(prior.timer) }
+    const since = prior?.since ?? this.now()
+    // A ~/.ssh/config host dialled by one Retry gets a day, not hourly ssh forever.
+    if (host.discovered === true && this.now() - since >= HostWarmup.DISCOVERED_CREDENTIAL_WAIT_MS) {
+      this.credentialWaits.delete(host.key)
+      this.logger.info('host warmup: giving up the credential wait for a host not in config', { host: host.key })
+      return undefined
+    }
+    const attempts = prior?.attempts ?? 0
+    const delay = credentialRetryDelayMs(attempts)
+    const t = setTimeout(() => {
+      this.timers.delete(t)
+      if (this.stopped) return
+      const wait = this.credentialWaits.get(host.key)
+      if (wait?.timer !== t) return
+      void this.sweep('credential', host.key)
+    }, delay)
+    unref(t)
+    this.timers.add(t)
+    const at = this.now() + delay
+    this.credentialWaits.set(host.key, { attempts: attempts + 1, timer: t, at, since })
+    return at
+  }
+
+  /** Forget a host's credential wait (connected, a different failure, a human retry, a config edit). */
+  private clearCredentialWait(key: string, resetAttempts: boolean): void {
+    const wait = this.credentialWaits.get(key)
+    if (!wait) return
+    clearTimeout(wait.timer)
+    this.timers.delete(wait.timer)
+    if (resetAttempts) this.credentialWaits.delete(key)
+  }
+
+  /** When the host's next credential re-dial fires (ms epoch), if one is armed. */
+  credentialRetryAt(hostKey: string): number | undefined {
+    return this.credentialWaits.get(hostKey)?.at
   }
 
   private sleep(ms: number): Promise<void> {

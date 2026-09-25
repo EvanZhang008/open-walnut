@@ -17789,6 +17789,17 @@ a.task-kebab-info:hover {
   cursor: pointer;
 }
 .sps-host-retry:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* A listing that came back partial: the "not responding" line's look, as its own row. */
+.sps-list-incomplete {
+  padding: 6px 12px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sps-host-down-message {
   margin-top: 3px;
   font-family: var(--font-mono, ui-monospace, monospace);

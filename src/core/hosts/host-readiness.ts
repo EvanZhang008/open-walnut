@@ -3,8 +3,12 @@
  * `host.preflight` RPC (capability 'preflight-v1', computed host-side in
  * src/providers/host-runtime-core.ts). The connect chain (ssh → … → handshake)
  * proves the daemon runs; it says nothing about whether `claude` is installed,
- * or whether an npm-built claude has a node it can start with. This answers
- * that, once per successful handshake and on every deliberate human connect.
+ * whether an npm-built claude has a node it can start with, whether it is
+ * signed in, or whether it is new enough for the configured model (the floor
+ * the server sends, claude-version-floor.ts). This answers that, once per
+ * successful handshake and on every deliberate human connect. The wording lives
+ * in host-readiness-problems.ts, shared with this machine's banner
+ * (local-readiness.ts).
  *
  * Never blocks a connect: it runs after the host is connected and pushes the
  * result as a fresh `host:status` when it lands. An old daemon without the
@@ -12,29 +16,17 @@
  */
 
 import { log } from '../../logging/index.js'
-import { HOST_RUNTIME_MESSAGES, type HostPreflightResult } from '../../providers/host-runtime-core.js'
+import type { HostPreflightResult } from '../../providers/host-runtime-core.js'
 import {
-  FIX_FOR_PROBLEM, autofixDisabledReason, nextFixAction, runHostAutofix,
+  autofixDisabledReason, nextFixAction, runHostAutofix, withFixState,
   type DtachProvisionOutcome, type HostFixAction, type HostFixing, type HostFixRecord,
 } from './host-autofix.js'
+import { applyClaudeFloor, parsePreflight, readinessProblems, type ReadinessProblem } from './host-readiness-problems.js'
+import { configuredClaudeCliFloor, type ClaudeCliFloor } from './claude-version-floor.js'
 
 export type { HostFixAction, HostFixing, HostFixRecord }
-
-export type ReadinessProblemKind = 'claude_missing' | 'claude_needs_node' | 'claude_error' | 'compiler_missing' | 'dtach_missing'
-
-export interface ReadinessProblem {
-  kind: ReadinessProblemKind
-  /** One sentence a user can act on. */
-  message: string
-  /** Commands to copy, in the order they are worth trying. */
-  commands: string[]
-  /**
-   * Walnut is fixing this itself right now ('running': show that instead of the
-   * command), or its attempt failed ('failed': `text` is the reason, and
-   * `commands` then holds the exact command the host needs).
-   */
-  fix?: { action: HostFixAction; state: 'running' | 'failed'; text: string; needsPassword?: boolean; detail?: string }
-}
+export { parsePreflight, readinessProblems }
+export type { ReadinessProblem, ReadinessProblemKind } from './host-readiness-problems.js'
 
 export interface HostReadiness extends HostPreflightResult {
   /** When the host was last ASKED (success or failure): the UI's "is this answer new" key. */
@@ -69,7 +61,7 @@ export interface PreflightConnection {
  * The daemon caps itself at 12s; 2s more covers the tunnel. Kept under the
  * UI's 15s "Check again" wait, so a hung probe still answers as checkError.
  */
-const PREFLIGHT_TIMEOUT_MS = 14_000
+export const PREFLIGHT_TIMEOUT_MS = 14_000
 /**
  * A reconnect re-probes a HEALTHY host at most this often (a flapping tunnel
  * reconnects dozens of times a day). A host with a problem re-probes on every
@@ -77,73 +69,32 @@ const PREFLIGHT_TIMEOUT_MS = 14_000
  */
 const HEALTHY_RECHECK_MS = 10 * 60_000
 
-const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
-const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? v as Record<string, unknown> : {})
-
-/** The wire answer, defensively: a field an old or odd daemon omits stays absent. */
-export function parsePreflight(raw: unknown): HostPreflightResult | null {
-  const r = obj(raw)
-  if (!r.claude || typeof r.claude !== 'object') return null
-  const c = obj(r.claude)
-  const kind = c.kind === 'native' || c.kind === 'npm' || c.kind === 'unknown' ? c.kind : undefined
-  const claude: HostPreflightResult['claude'] = { found: c.found === true }
-  if (str(c.path)) claude.path = str(c.path)
-  if (str(c.version)) claude.version = str(c.version)
-  if (kind) claude.kind = kind
-  if (typeof c.needsNode === 'boolean') claude.needsNode = c.needsNode
-  if (typeof c.nodeFound === 'boolean') claude.nodeFound = c.nodeFound
-  if (str(c.nodeVersion)) claude.nodeVersion = str(c.nodeVersion)
-  if (str(c.error)) claude.error = str(c.error)!.slice(0, 300)
-  const cc = obj(r.compiler)
-  const dt = obj(r.dtach)
-  return {
-    claude,
-    compiler: cc.found === true ? { found: true, ...(str(cc.name) ? { name: str(cc.name) } : {}) } : { found: false },
-    dtach: dt.found === true ? { found: true, ...(str(dt.path) ? { path: str(dt.path) } : {}) } : { found: false },
-    ...(str(r.platform) ? { platform: str(r.platform)!.slice(0, 32) } : {}),
-    ...(str(r.arch) ? { arch: str(r.arch)!.slice(0, 32) } : {}),
-  }
+/** How a host's lines name it: its label, the ssh target a user types, and the model floor. */
+export interface HostContext {
+  label?: string
+  sshTarget?: string
+  floor: ClaudeCliFloor | null
 }
 
-/**
- * One line per thing the user must fix. Nothing when the host is fine.
- * `prebuiltDtach`: the server ships a dtach that runs there, so no compiler is needed.
- */
-export function readinessProblems(p: HostPreflightResult, opts: { prebuiltDtach?: boolean } = {}): ReadinessProblem[] {
-  const install = HOST_RUNTIME_MESSAGES.install
-  const out: ReadinessProblem[] = []
-  if (!p.claude.found) {
-    out.push({ kind: 'claude_missing', message: 'Claude Code is not installed on this host.', commands: [install] })
-  } else if (p.claude.needsNode && p.claude.nodeFound === false) {
-    out.push({
-      kind: 'claude_needs_node',
-      message: 'Claude Code here is the npm build and no working Node.js was found. Install the native build, which needs no Node.',
-      commands: [install],
-    })
-  } else if (p.claude.error) {
-    out.push({ kind: 'claude_error', message: `Claude Code did not start: ${p.claude.error}`, commands: [install] })
+/** `ssh` arguments as the user would type them: `[-p port] [user@]hostname`. */
+export function sshTargetText(def: { hostname?: unknown; user?: unknown; port?: unknown } | undefined, host: string): string {
+  const hostname = typeof def?.hostname === 'string' && def.hostname ? def.hostname : host
+  const user = typeof def?.user === 'string' && def.user ? `${def.user}@` : ''
+  const port = typeof def?.port === 'number' && def.port !== 22 ? `-p ${def.port} ` : ''
+  return `${port}${user}${hostname}`
+}
+
+async function defaultHostContext(host: string): Promise<HostContext> {
+  const floor = await configuredClaudeCliFloor()
+  try {
+    const { getConfig } = await import('../config-manager.js')
+    const hosts = (await getConfig()).hosts ?? {}
+    const def = Object.hasOwn(hosts, host) ? hosts[host] as { hostname?: unknown; user?: unknown; port?: unknown; label?: unknown } : undefined
+    const label = typeof def?.label === 'string' && def.label ? def.label : host
+    return { label, sshTarget: sshTargetText(def, host), floor }
+  } catch {
+    return { label: host, sshTarget: host, floor }
   }
-  // A compiler only matters while dtach is missing: Walnut builds dtach from
-  // source, and dtach is what keeps a terminal alive across disconnects. A
-  // shipped prebuilt for the host's platform/arch needs no compiler at all.
-  if (!p.compiler.found && !p.dtach.found && opts.prebuiltDtach) {
-    // The compiler line is moot, but dtach is still missing: a host whose
-    // prebuilt turns out not to run must never read as healthy. The autofix
-    // installs the prebuilt (or learns it fails and asks for gcc instead).
-    out.push({
-      kind: 'dtach_missing',
-      message: 'dtach is not installed yet, so terminals on this host will not survive a disconnect until Walnut installs it.',
-      commands: [],
-    })
-  } else if (!p.compiler.found && !p.dtach.found) {
-    out.push({
-      kind: 'compiler_missing',
-      message: 'No C compiler, so terminals on this host will not survive a disconnect.',
-      // A Mac's compiler comes with the Command Line Tools, never from yum/apt.
-      commands: p.platform === 'darwin' ? ['xcode-select --install'] : ['sudo yum install -y gcc', 'sudo apt-get install -y gcc'],
-    })
-  }
-  return out
 }
 
 // ── Per-host store ──
@@ -170,22 +121,7 @@ export function getHostReadiness(host: string, now: number = Date.now()): HostRe
   const fx = fixState.get(host)
   const fixes = fx?.fixes ?? []
   const fixing = fx?.fixing
-  const problems = base.problems.map((p): ReadinessProblem => {
-    const action = FIX_FOR_PROBLEM[p.kind]
-    if (!action) return p
-    if (fixing?.action === action) return { ...p, fix: { action, state: 'running', text: fixing.text } }
-    let last: HostFixRecord | undefined
-    for (const r of fixes) if (r.action === action) last = r
-    if (!last || last.ok) return p
-    return {
-      ...p,
-      commands: last.command ? [last.command] : p.commands,
-      fix: {
-        action, state: 'failed', text: last.text,
-        ...(last.needsPassword ? { needsPassword: true } : {}), ...(last.detail ? { detail: last.detail } : {}),
-      },
-    }
-  })
+  const problems = withFixState(base.problems, base, fixing, fixes)
   return {
     ...base, problems,
     fixes: fixes.map((f) => ({ ...f, ageMs: Math.max(0, now - f.finishedAt) })),
@@ -258,6 +194,8 @@ export interface AutofixOptions {
   provisionDtach?: (host: string) => Promise<DtachProvisionOutcome>
 }
 
+type RefreshContext = (host: string) => Promise<HostContext>
+
 /** Does the server ship a prebuilt dtach for this platform/arch? Path or null. */
 export type PrebuiltLookup = (platform: string | undefined, arch: string | undefined) => Promise<string | null>
 
@@ -307,7 +245,7 @@ function setFixState(host: string, update: (s: { fixing?: HostFixing; fixes: Hos
  * the daemon can run fixes. Fire-and-forget: the caller (a connect, a human
  * re-check) never waits for an install.
  */
-function maybeStartAutofix(host: string, conn: PreflightConnection, answer: HostReadiness, opts: AutofixOptions, now: () => number, findPrebuilt?: PrebuiltLookup): void {
+function maybeStartAutofix(host: string, conn: PreflightConnection, answer: HostReadiness, opts: AutofixOptions, now: () => number, findPrebuilt?: PrebuiltLookup, context?: RefreshContext): void {
   if (answer.problems.length === 0 || !conn.hasCapability('hostfix-v1') || rounds.has(host)) return
   let tried = attempted.get(host)
   if (!tried) { tried = new Set(); attempted.set(host, tried) }
@@ -333,7 +271,8 @@ function maybeStartAutofix(host: string, conn: PreflightConnection, answer: Host
       conn,
       tried: triedNow,
       now,
-      preflight: () => refreshHostReadiness(host, { getConnection: () => conn, now, force: true, autofix: false, findPrebuilt }),
+      ...(answer.claude.minVersion ? { minClaudeVersion: answer.claude.minVersion } : {}),
+      preflight: () => refreshHostReadiness(host, { getConnection: () => conn, now, force: true, autofix: false, findPrebuilt, hostContext: context }),
       prebuiltDtach,
       provisionDtach: () => (opts.provisionDtach ?? defaultProvisionDtach)(host),
       onPrebuiltUnusable: () => {
@@ -391,6 +330,8 @@ export function refreshHostReadiness(
     autofix?: false | AutofixOptions
     /** Test seam: the shipped-prebuilt lookup (dtach-prebuilt.ts). */
     findPrebuilt?: PrebuiltLookup
+    /** Test seam: the host's label, ssh target and model floor (config by default). */
+    hostContext?: RefreshContext
   } = {},
 ): Promise<HostReadiness | null> {
   if (!host || host === '__local__') return Promise.resolve(null)
@@ -409,8 +350,10 @@ export function refreshHostReadiness(
         if (store.delete(host)) notify(host)
         return null
       }
-      const reply = await conn.send('host.preflight', {}, PREFLIGHT_TIMEOUT_MS)
-      const parsed = reply.ok ? parsePreflight(reply) : null
+      const ctx = await (opts.hostContext ?? defaultHostContext)(host)
+      const reply = await conn.send('host.preflight', ctx.floor ? { minClaudeVersion: ctx.floor.minVersion } : {}, PREFLIGHT_TIMEOUT_MS)
+      const raw = reply.ok ? parsePreflight(reply) : null
+      const parsed = raw ? applyClaudeFloor(raw, ctx.floor) : null
       if (!parsed) {
         log.session.warn('host preflight returned no usable answer', { host, error: reply.error })
         markCheckFailed(host, reply.error || 'the host gave no usable answer', now())
@@ -420,14 +363,18 @@ export function refreshHostReadiness(
       const prebuilt = !parsed.dtach.found && !parsed.compiler.found && !prebuiltUnusable.has(host)
         && !!(await (opts.findPrebuilt ?? defaultFindPrebuilt)(parsed.platform, parsed.arch).catch(() => null))
       prebuiltFor.set(host, prebuilt)
-      store.set(host, { ...parsed, checkedAt: now(), problems: readinessProblems(parsed, { prebuiltDtach: prebuilt }) })
+      store.set(host, {
+        ...parsed, checkedAt: now(),
+        problems: readinessProblems(parsed, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget, floorModel: ctx.floor?.model }),
+      })
       const readiness = getHostReadiness(host)!
       log.session.info('host preflight', {
         host, problems: readiness.problems.map((p) => p.kind),
         claude: readiness.claude.found ? readiness.claude.kind : 'missing', compiler: readiness.compiler.found,
+        claudeVersion: readiness.claude.version, versionOk: readiness.claude.versionOk, auth: readiness.claude.auth,
       })
       notify(host)
-      if (opts.autofix !== false) maybeStartAutofix(host, conn, readiness, opts.autofix ?? {}, now, opts.findPrebuilt)
+      if (opts.autofix !== false) maybeStartAutofix(host, conn, readiness, opts.autofix ?? {}, now, opts.findPrebuilt, opts.hostContext)
       return readiness
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

@@ -64,6 +64,17 @@ afterEach(async () => {
 })
 
 describe('RemoteSessionManager.prepareOutbound (local → remote image upload)', () => {
+  it('a host whose daemon moved to ~/.cache (read-only /tmp) gets images beside THAT dir', async () => {
+    const imgPath = path.join(tmpBase, 'chart.png')
+    fs.writeFileSync(imgPath, 'fake-png-data')
+    const mgr = new RemoteSessionManager('sid-upload-fallback', 'remotehost', REMOTE_TARGET)
+    const conn = { ...makeConn(), remoteDaemonDir: '/home/admin/.cache/open-walnut' }
+    injectConn(mgr, conn)
+    const result = await mgr.prepareOutbound(`look: ${imgPath}`)
+    expect(fsWrites(conn)[0].path).toBe('/home/admin/.cache/open-walnut-images/chart.png')
+    expect(result).toBe('look: /home/admin/.cache/open-walnut-images/chart.png')
+  })
+
   it('uploads the image via daemon fs.write and rewrites the path', async () => {
     const imgPath = path.join(tmpBase, 'dashboard.png')
     fs.writeFileSync(imgPath, 'fake-png-data')

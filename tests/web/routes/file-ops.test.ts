@@ -584,6 +584,10 @@ describe('isProtectedStatePath', () => {
     expect(isProtectedStatePath(`${dataDir}/tmp`)).toBe(true)
     expect(isProtectedStatePath(`${dataDir}/tmp/streams/abc-123.jsonl`)).toBe(true)
     expect(isProtectedStatePath(`${dataDir}/tmp/file-history/ab/cd.blob`)).toBe(true)
+    // A daemon moved off an unusable /tmp keeps its dir under ~/.cache.
+    expect(isProtectedStatePath(path.join(os.homedir(), '.cache', 'open-walnut'))).toBe(true)
+    expect(isProtectedStatePath(path.join(os.homedir(), '.cache', 'open-walnut', 'daemon.pid'))).toBe(true)
+    expect(isProtectedStatePath(path.join(os.homedir(), '.cache', 'other-tool', 'x'))).toBe(false)
   })
 
   it('resolves the data dir from OPEN_WALNUT_HOME when the test seam is unset', () => {

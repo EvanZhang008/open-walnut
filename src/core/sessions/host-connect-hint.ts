@@ -106,6 +106,11 @@ export function connectPhaseNote(phase: DaemonConnectPhase, hostLabel: string): 
 
 export type HostConnectErrorKind =
   | 'auth'
+  | 'host_key'
+  | 'cert_expired'
+  | 'agent_missing'
+  | 'proxy'
+  | 'shell_noise'
   | 'dns'
   | 'unreachable'
   | 'refused'
@@ -120,19 +125,117 @@ export interface HostConnectHint {
   kind: HostConnectErrorKind
   /** One sentence telling the user what to do next. */
   hint: string
+  /**
+   * The same attempt can succeed later with nothing changed on this machine or
+   * the host (a network blip, a proxy that dropped the link, a daemon still
+   * booting). False means a person has to act first; for the credential kinds
+   * the warmup still re-dials on its own (CREDENTIAL_WAIT_KINDS), so a login
+   * done outside Walnut reconnects without a click.
+   */
+  retryable: boolean
+}
+
+/** Failures a person fixes OUTSIDE Walnut (a login command, an agent): re-dialled on a schedule. */
+export const CREDENTIAL_WAIT_KINDS: ReadonlySet<HostConnectErrorKind> = new Set<HostConnectErrorKind>(['cert_expired', 'agent_missing'])
+
+/** 1, 2, 5, 10 minutes, then hourly: fast enough to feel automatic after a login, slow enough to never hammer. */
+const CREDENTIAL_RETRY_STEPS_MS = [1, 2, 5, 10].map((m) => m * 60_000)
+const CREDENTIAL_RETRY_CAP_MS = 60 * 60_000
+
+/** Delay before credential re-dial number `attempt` (0-based). */
+export function credentialRetryDelayMs(attempt: number): number {
+  return CREDENTIAL_RETRY_STEPS_MS[Math.max(0, Math.floor(attempt))] ?? CREDENTIAL_RETRY_CAP_MS
+}
+
+const RETRYABLE: Record<HostConnectErrorKind, boolean> = {
+  auth: false, host_key: false, cert_expired: false, agent_missing: false, proxy: true, shell_noise: false,
+  dns: false, unreachable: true, refused: true, timeout: true, runtime: false, daemon: true,
+  ephemeral: false, listing: true, unknown: true,
+}
+
+/** Extra facts about the target the hints quote back (the known_hosts key needs the bare hostname and port). */
+export interface HostConnectTarget {
+  hostname?: string
+  port?: number
 }
 
 /**
+ * The `ssh-keygen -R` argument for a host: known_hosts stores a non-default
+ * port as `[host]:port`, and removing the bare name would leave that entry.
+ */
+function knownHostsName(sshTarget: string, target: HostConnectTarget): string {
+  const host = target.hostname || sshTarget.replace(/^[^@]*@/, '')
+  return target.port && target.port !== 22 ? `'[${host}]:${target.port}'` : host
+}
+
+/** The next step for a kind. Exported so a surface holding only the kind can still say it. */
+export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, target: HostConnectTarget = {}): string {
+  switch (kind) {
+    case 'ephemeral': return 'This is a throwaway test server: it stays off shared remote hosts and never installs a daemon there. Use the main Walnut server for remote hosts, or start the test server with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach.'
+    case 'shell_noise': return `SSH works, but the login shell on ${sshTarget} did not run Walnut's command as written (a ForceCommand, or a login shell that is not a shell). Check that \`ssh ${sshTarget} sh -c 'echo ok'\` prints just ok, then retry.`
+    case 'host_key': return `The host key of ${sshTarget} changed since this machine last saw it. If the host was rebuilt, run \`ssh-keygen -R ${knownHostsName(sshTarget, target)}\` and then \`ssh ${sshTarget}\` once to accept the new key; if nothing changed on the host, stop: a changed key can also mean someone is intercepting the connection.`
+    case 'cert_expired': return 'Your SSH certificate expired; run your organisation\'s login command, then Retry. Walnut also retries by itself every few minutes.'
+    case 'agent_missing': return 'Walnut could not reach an SSH agent holding your key (no agent running, or no key loaded). Start your agent or run your organisation\'s login command, then Retry; Walnut also retries by itself every few minutes.'
+    case 'proxy': return `SSH to ${sshTarget} goes through a proxy or jump host (ProxyCommand / ProxyJump), and it closed the connection. Check that \`ssh ${sshTarget}\` works in a terminal (VPN, the jump host, or the proxy's own login), then retry.`
+    case 'auth': return `Walnut runs \`ssh ${sshTarget}\` without a password prompt. Make sure that command works from this machine on its own (an SSH key or ssh-agent, and any VPN or auth step your host needs), then retry.`
+    case 'dns': return `The hostname "${sshTarget}" does not resolve from this machine. Check the host's hostname in Settings › Hosts (or your VPN / SSH config).`
+    case 'refused': return `Nothing is listening for SSH at ${sshTarget}. Check the port and that sshd is running on the host.`
+    case 'unreachable': return `${sshTarget} is not reachable from this machine right now (VPN down, host asleep, or a firewall). Retry once the network is back.`
+    case 'timeout': return `Connecting to ${sshTarget} took too long. The host may be unreachable (VPN?), or a first-time daemon install is still running; retry in a moment.`
+    case 'runtime': return 'The session daemon needs bun or node on the host, and neither could run there. Install one (curl -fsSL https://bun.sh/install | bash, or Node.js from your package manager) and retry.'
+    case 'daemon': return 'SSH works but the session daemon did not come up. Retry; if it keeps failing, check daemon-start.log in the daemon directory on the host (/tmp/open-walnut, or ~/.cache/open-walnut when /tmp is unusable).'
+    case 'listing': return `${sshTarget} is connected, but this directory could not be listed. Check that the path exists and is readable there, then retry.`
+    case 'unknown':
+    default:
+      return `Retry, and if it keeps failing run \`ssh ${sshTarget}\` from a terminal to see what SSH itself says.`
+  }
+}
+
+/**
+ * Text patterns per kind, MOST SPECIFIC FIRST: ssh output often carries
+ * several of these words at once (a changed host key prints its warning and
+ * then "Permission denied"; a proxy failure says "Connection closed"). The
+ * `walnut-ssh-evidence:` tags come from providers/ssh-credential-evidence.ts,
+ * which asks this machine's agent why ssh only said "Permission denied".
+ */
+const PATTERNS: Array<[HostConnectErrorKind, RegExp]> = [
+  ['ephemeral', /ephemeral server|attach-only/],
+  ['shell_noise', /shell_noise/],
+  ['host_key', /remote host identification has changed|host key verification failed|host key for \S+ has changed|you have requested strict checking|offending \S+ key in|disabled to avoid man-in-the-middle/],
+  ['cert_expired', /walnut-ssh-evidence: cert-expired|certificate (has )?expired|expired certificate|certificate invalid: expired/],
+  ['agent_missing', /walnut-ssh-evidence: agent-(missing|empty)|could not open a connection to your authentication agent|error connecting to agent|ssh_auth_sock is not set/],
+  ['proxy', /kex_exchange_identification|ssh_exchange_identification|connection closed by unknown port 65535|proxycommand|proxyjump|proxy (connect|error|failed)|stdio forwarding failed|jump host/],
+  // ssh's own refusal shapes only: a bare "permission denied" is also what an
+  // EACCES in a daemon start log says, and that is not a key problem.
+  ['auth', /permission denied \([a-z0-9@.,-]+\)|too many authentication failures|no supported authentication methods|unprotected private key file/],
+  ['dns', /could not resolve hostname|name or service not known|nodename nor servname|no address associated|temporary failure in name resolution/],
+  ['refused', /connection refused/],
+  ['unreachable', /no route to host|network is unreachable|connection reset|broken pipe|connection closed by/],
+  ['timeout', /timed out|timeout|etimedout/],
+  ['runtime', /bun|node|runtime|glibc|command not found|exec format error|illegal instruction/],
+  ['daemon', /daemon|handshake|capabilit|hello|tunnel|websocket/],
+]
+
+/**
  * Map a connect failure (the one-line summary from summarizeConnectFailure, or a
- * raw ssh/daemon error) to a next step. Order matters: the more specific
- * patterns come first because ssh text often contains several of these words.
+ * raw ssh/daemon error) to a kind, a next step and whether a plain retry can
+ * work.
  *
  * `hostNames` are the user's own words for the host (alias, label, hostname,
  * user): the failure text embeds them ("Connection to nodedev failed …"), and a
- * name like `nodedev` or `bun-box` must not read as a runtime problem.
+ * name like `nodedev` or `bun-box` must not read as a runtime problem. The
+ * echoed ssh command line is dropped too: Walnut's own `-o
+ * StrictHostKeyChecking=no` must never read as a host key problem.
  */
-export function classifyHostConnectError(message: string, sshTarget: string, hostNames: readonly string[] = []): HostConnectHint {
+export function classifyHostConnectError(
+  message: string,
+  sshTarget: string,
+  hostNames: readonly string[] = [],
+  target: HostConnectTarget = {},
+): HostConnectHint {
   let m = message.toLowerCase()
+    .split('\n').filter((line) => !line.trim().startsWith('command failed:')).join('\n')
+    .replace(/(^|\s)-o\s*\S+/g, ' ')
   for (const name of hostNames) {
     const n = name.trim().toLowerCase()
     if (!n) continue
@@ -140,35 +243,8 @@ export function classifyHostConnectError(message: string, sshTarget: string, hos
     const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     m = m.replace(new RegExp(`(?<![a-z0-9_.-])${escaped}(?![a-z0-9_-])`, 'g'), ' ')
   }
-
-  if (/ephemeral server|attach-only/.test(m)) {
-    return { kind: 'ephemeral', hint: 'This is a throwaway test server: it stays off shared remote hosts and never installs a daemon there. Use the main Walnut server for remote hosts, or start the test server with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach.' }
-  }
-  if (/permission denied|publickey|authentication failed|too many authentication failures|host key verification failed|no supported authentication/.test(m)) {
-    return {
-      kind: 'auth',
-      hint: `Walnut runs \`ssh ${sshTarget}\` without a password prompt. Make sure that command works from this machine on its own (an SSH key or ssh-agent, and any VPN or auth step your host needs), then retry.`,
-    }
-  }
-  if (/could not resolve hostname|name or service not known|nodename nor servname|no address associated|temporary failure in name resolution/.test(m)) {
-    return { kind: 'dns', hint: `The hostname "${sshTarget}" does not resolve from this machine. Check the host's hostname in Settings › Hosts (or your VPN / SSH config).` }
-  }
-  if (/connection refused/.test(m)) {
-    return { kind: 'refused', hint: `Nothing is listening for SSH at ${sshTarget}. Check the port and that sshd is running on the host.` }
-  }
-  if (/no route to host|network is unreachable|connection reset|broken pipe|connection closed by/.test(m)) {
-    return { kind: 'unreachable', hint: `${sshTarget} is not reachable from this machine right now (VPN down, host asleep, or a firewall). Retry once the network is back.` }
-  }
-  if (/timed out|timeout|etimedout/.test(m)) {
-    return { kind: 'timeout', hint: `Connecting to ${sshTarget} took too long. The host may be unreachable (VPN?), or a first-time daemon install is still running; retry in a moment.` }
-  }
-  if (/bun|node|runtime|glibc|command not found/.test(m)) {
-    return { kind: 'runtime', hint: 'The session daemon needs bun or node on the host. Install one there (curl -fsSL https://bun.sh/install | bash) and retry.' }
-  }
-  if (/daemon|handshake|capabilit|hello|tunnel|websocket/.test(m)) {
-    return { kind: 'daemon', hint: 'SSH works but the session daemon did not come up. Retry; if it keeps failing, check the daemon log under /tmp/open-walnut on the host.' }
-  }
-  return { kind: 'unknown', hint: `Retry, and if it keeps failing run \`ssh ${sshTarget}\` from a terminal to see what SSH itself says.` }
+  const kind = PATTERNS.find(([, re]) => re.test(m))?.[0] ?? 'unknown'
+  return { kind, hint: hintForKind(kind, sshTarget, target), retryable: RETRYABLE[kind] }
 }
 
 /**
@@ -177,8 +253,5 @@ export function classifyHostConnectError(message: string, sshTarget: string, hos
  * "EACCES: permission denied" here used to be read as an SSH key problem.
  */
 export function describeListingError(hostLabel: string): HostConnectHint {
-  return {
-    kind: 'listing',
-    hint: `${hostLabel} is connected, but this directory could not be listed. Check that the path exists and is readable there, then retry.`,
-  }
+  return { kind: 'listing', hint: hintForKind('listing', hostLabel), retryable: RETRYABLE.listing }
 }

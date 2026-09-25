@@ -98,6 +98,9 @@ SOURCES=(
   src/providers/daemon-service-handover.ts
   src/providers/host-runtime-core.ts
   src/providers/host-fix-core.ts
+  src/providers/claude-check-core.ts
+  src/providers/fs-ls-core.ts
+  src/providers/git-diff-core.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

@@ -26,7 +26,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
-import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPath } from './gateway-core.js'
+import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPaths } from './gateway-core.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs } from './tool-args-source.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
 
@@ -332,8 +332,15 @@ export function resolveWalnutCliEndpoint(
   const injected = (env.WALNUT_AGENT_SOCKET ?? '').trim()
   if (injected) return { ok: true, socketPath: injected, sid, external }
 
-  const fallback = wellKnownGatewaySocketPath(env)
-  const info = probe(fallback)
+  // The first well-known socket that exists: /tmp/open-walnut, then the
+  // ~/.cache/open-walnut dir a daemon uses when /tmp is unusable.
+  const candidates = wellKnownGatewaySocketPaths(env)
+  let fallback = candidates[0]
+  let info: WalnutSocketInfo | null = null
+  for (const candidate of candidates) {
+    info = probe(candidate)
+    if (info) { fallback = candidate; break }
+  }
   if (!info) {
     return {
       ok: false,

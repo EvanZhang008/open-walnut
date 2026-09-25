@@ -110,6 +110,31 @@ describe('buildDaemonStartCmd', () => {
     expect(envDump).toContain('WALNUT_ENFORCE_SESSION_CRON=1')
   })
 
+  it.each(['bun', 'binary', 'node'] as const)('%s: a daemon dir and runtime path with spaces (HOME="/home/John Smith") still boot', async (runtime) => {
+    // The ~/.cache fallback puts the daemon under HOME, and a HOME with a space
+    // used to split every path in the start command.
+    const spaced = path.join(dir, 'John Smith', '.cache', 'open-walnut')
+    await fsp.mkdir(spaced, { recursive: true })
+    const exec = path.join(spaced, runtime === 'node' ? 'node' : `fake ${runtime}`)
+    await fsp.writeFile(exec, [
+      '#!/bin/sh',
+      'if [ "$1" = "--status" ]; then echo "{\\"running\\":true,\\"port\\":41673}"; exit 0; fi',
+      'printf "%s\\n" "$@" > "$(dirname "$0")/args.txt"',
+      'echo $$ > "$(dirname "$0")/daemon.pid"',
+      'echo 41673 > "$(dirname "$0")/daemon.port"',
+      'sleep 5',
+    ].join('\n'), { mode: 0o755 })
+    const cmd = runtime === 'node'
+      ? buildDaemonStartCmd({ runtime, dir: spaced, preamble: `PATH=${"'"}${spaced}${"'"}:"$PATH"` })
+      : buildDaemonStartCmd({ runtime, execPath: exec, dir: spaced, env: { WALNUT_DAEMON_DIR: spaced } })
+    const { stdout } = await run(cmd)
+    expect(stdout).toContain('41673')
+    expect(stdout).toContain('"running":true')
+    const args = (await fsp.readFile(path.join(spaced, 'args.txt'), 'utf-8')).trim().split('\n')
+    expect(args).toEqual(runtime === 'binary' ? ['--start'] : [path.join(spaced, 'daemon.cjs'), '--start'])
+    expect(await fsp.readFile(path.join(spaced, 'daemon-start.log'), 'utf-8')).not.toMatch(/No such file|not found/)
+  })
+
   it('env values with spaces/quotes survive shell quoting', async () => {
     const fake = await writeFakeRuntime('fake-bun')
     const cmd = buildDaemonStartCmd({
@@ -138,6 +163,30 @@ describe('buildDaemonStartCmd', () => {
     const started = Date.now()
     await expect(run(cmd)).rejects.toThrow() // confirmRunning fails — no port file
     expect(Date.now() - started).toBeLessThan(15_000)
+  })
+
+  it('a runtime killed by SIGILL before it writes a pid is reaped once and logged as walnut-daemon-exit=132', async () => {
+    // A bun build the CPU cannot run dies silently: no shell is left to say so,
+    // and without this the poll spun its whole ~45s and the log said nothing.
+    const p = path.join(dir, 'fake-bun-sigill')
+    await fsp.writeFile(p, '#!/bin/sh\nkill -ILL $$\n', { mode: 0o755 })
+    const cmd = buildDaemonStartCmd({ runtime: 'bun', execPath: p, dir, env: { WALNUT_ENFORCE_SESSION_CRON: '1' } })
+    const started = Date.now()
+    await expect(run(cmd)).rejects.toThrow()
+    expect(Date.now() - started).toBeLessThan(10_000)
+    const log = await fsp.readFile(path.join(dir, 'daemon-start.log'), 'utf-8')
+    expect(log).toMatch(/walnut-daemon-exit=132\b/)
+  })
+
+  it('a runtime that exits non-zero with a loader error keeps that error AND the exit line', async () => {
+    const p = path.join(dir, 'fake-node-glibc')
+    await fsp.writeFile(p, "#!/bin/sh\necho \"node: /lib64/libc.so.6: version \\\`GLIBC_2.28' not found\" >&2\nexit 1\n", { mode: 0o755 })
+    const started = Date.now()
+    await expect(run(buildDaemonStartCmd({ runtime: 'binary', execPath: p, dir }))).rejects.toThrow()
+    expect(Date.now() - started).toBeLessThan(10_000)
+    const log = await fsp.readFile(path.join(dir, 'daemon-start.log'), 'utf-8')
+    expect(log).toContain('GLIBC_2.28')
+    expect(log).toContain('walnut-daemon-exit=1')
   })
 
   it('fail-fast also triggers without an env prefix (bare nohup failure)', async () => {

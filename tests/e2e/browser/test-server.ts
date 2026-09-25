@@ -38,6 +38,12 @@ process.env.MOCK_ACP_LOAD_DELAY_SESSION_ID = 'pw-codex-cold-detail-session'
 // installed. The unavailable case is covered by stubbing the endpoint
 // (tests/e2e/browser/engine-matrix.spec.ts).
 process.env.WALNUT_ENGINE_PROBE_ALL = '1'
+// No startup probe of this machine's Claude Code for the setup banner: with the
+// fake HOME below, a real claude on PATH reads as signed out, and every spec
+// would open under a sign-in banner. The banner's own states are unit tested
+// (tests/web/setup-banner.test.ts) and its routes run in tests/e2e/setup-health.test.ts.
+// A manual fixture run may set WALNUT_LOCAL_CLAUDE_PROBE=1 to see that banner for real.
+process.env.WALNUT_LOCAL_CLAUDE_PROBE ??= '0'
 // Keep host discovery, Claude history, credentials, and child processes inside
 // the fixture. Inheriting the developer's HOME makes browser tests probe real
 // SSH aliases and can even project unrelated ~/.claude journals.

@@ -130,6 +130,12 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/host-runtime-core.ts',
   // host.fix (install claude / gcc, build dtach): same import-or-inline rule.
   'src/providers/host-fix-core.ts',
+  // The Claude Code sign-in and version check of host.preflight: same rule.
+  'src/providers/claude-check-core.ts',
+  // fs.ls with its per-entry and whole-listing budgets: same rule.
+  'src/providers/fs-ls-core.ts',
+  // git.diff, run host-side: imported by the standalone twin.
+  'src/providers/git-diff-core.ts',
 ] as const
 
 /**

@@ -10,6 +10,8 @@ import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { RemoteHostReadiness, RemoteHostStatus, RemoteHostUnreachable } from './RemoteHostStatus';
 import { AddLimitRow } from './RemoteHostLimits';
+import { CopyHostDiagnosticsButton, DiagnosticsFallback, useCopyDiagnostics } from '../CopyDiagnostics';
+import { hasStatusHosts } from '../diagnostics-copy';
 import '@/styles/settings-sections-addons.css';
 
 interface HostEntry {
@@ -59,6 +61,8 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   // Per-host concurrency caps (config.session_limits). Keyed by the same aliases
   // as the hosts above (plus "local"), so they belong on this card.
   const [sessionLimits, setSessionLimits] = useState<Record<string, string | number>>(config.session_limits ?? {});
+  // Diagnostics cover SAVED, enabled hosts (the server's listStatusHosts), never a draft row.
+  const hostCopy = useCopyDiagnostics('hosts');
 
   // Cold-read the connect status once; every change after this is a WS push.
   useEffect(() => { void hydrateHostStatus(); }, []);
@@ -188,7 +192,14 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   );
 
   return (
-    <SectionCard id="remote-hosts" title="Remote Hosts" onSave={handleSave} showSave={false} actions={addButton}>
+    <SectionCard
+      id="remote-hosts"
+      title="Remote Hosts"
+      onSave={handleSave}
+      showSave={false}
+      actions={<>{hasStatusHosts(config) && <CopyHostDiagnosticsButton copy={hostCopy} />}{addButton}</>}
+    >
+      <DiagnosticsFallback copy={hostCopy} testId="remote-hosts-diagnostics-fallback" />
       {hosts.map((host, idx) => host.alias ? (
         <RemoteHostUnreachable key={`u-${host._key}`} alias={host.alias} name={hostName(host, idx)} />
       ) : null)}

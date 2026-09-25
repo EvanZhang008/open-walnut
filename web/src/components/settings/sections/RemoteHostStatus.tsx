@@ -17,6 +17,7 @@ import { StatusIndicator } from '../inputs/StatusIndicator';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { CopyButton } from '../inputs/CopyButton';
 import { SettingsNotice } from '../SettingsSection';
+import { InlineCodeText } from '@/components/common/InlineCodeText';
 
 /** Shared status text uses a typographic ellipsis; settings copy uses `...`. */
 const plain = (text: string) => text.replace(/\u2026/g, '...');
@@ -94,9 +95,26 @@ export function RemoteHostUnreachable({ alias, name }: { alias: string; name: st
 const RECHECK_WAIT_MS = 15_000;
 
 /**
+ * `<host>: <message>`, unless the message already names the host ("Claude Code
+ * on devbox is not signed in. Run `ssh -t devbox claude` ..."), and with its
+ * `backticked` commands as code. `inline`: the message already quotes the command.
+ */
+function ProblemText({ name, message, command }: { name: string; message: string; command?: string }) {
+  const named = message.includes(name);
+  const inline = !!command && message.includes('`' + command + '`');
+  return (
+    <>
+      {named ? '' : `${name}: `}<InlineCodeText text={message} />
+      {command && !inline && <> <code>{command}</code></>}
+    </>
+  );
+}
+
+/**
  * One line per thing a CONNECTED host still needs (claude missing, an npm claude
- * without a working node, no C compiler for dtach), each with its command and a
- * Copy. Renders nothing when the host is fine or its daemon cannot tell.
+ * without a working node, a claude too old for the model or not signed in, no C
+ * compiler for dtach), each with its command and a Copy. Renders nothing when
+ * the host is fine or its daemon cannot tell.
  *
  * Walnut fixes most of these by itself (server host autofix): a problem being
  * fixed reads "Installing Claude Code on <host>..." instead of its command, a
@@ -209,8 +227,8 @@ export function RemoteHostReadiness({ alias, name }: { alias: string; name: stri
               title={failedFix?.detail}
             >
               {failedFix
-                ? <>{`${name}: ${problem.message} ${failedFix.text}`}{first ? <>: run <code>{first}</code></> : '.'}</>
-                : <>{`${name}: ${problem.message}`}{first && <> <code>{first}</code></>}</>}
+                ? <><ProblemText name={name} message={problem.message} />{` ${failedFix.text}`}{first ? <>: run <code>{first}</code></> : '.'}</>
+                : <ProblemText name={name} message={problem.message} command={first} />}
               {alternatives.map((alt) => <span key={alt}> or <code>{alt}</code></span>)}
             </span>
           </SettingsNotice>

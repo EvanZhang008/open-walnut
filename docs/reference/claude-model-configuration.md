@@ -7,6 +7,10 @@ Read this before changing model switching, the model picker, session spawn
 models, or organization model restrictions. The current CLI uses a data-driven
 model registry; older fork source does not describe this pipeline accurately.
 
+Opus 5.5 needs Claude Code 2.1.280 or newer: host readiness checks every host's
+CLI against the floor of the configured default model
+(`src/core/hosts/claude-version-floor.ts`) and reports it as outdated below that.
+
 ## Model Catalog Pipeline
 
 The `/model` menu, CLI `initialize.models[]`, and Walnut catalog use the same

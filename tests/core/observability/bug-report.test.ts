@@ -19,6 +19,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants());
 
 import { LOG_DIR } from '../../../src/constants.js';
 import { buildBugReportText } from '../../../src/core/observability/bug-report.js';
+import { ENV, fakeProbes } from '../diagnostics/fakes.js';
 
 function writeLogLine(file: string, entry: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -121,8 +122,50 @@ describe('buildBugReportText', () => {
     expect(text).toContain('mydevbox'); // alias stays — log lines reference it
     expect(text).not.toContain('real-internal-host.example.corp');
     expect(text).not.toContain('realusername');
-    expect(text).toContain('[host:mydevbox]');
-    expect(text).toContain('[user:mydevbox]');
+    // Ordinal markers: the alias never rides inside one (it can be the machine's own name).
+    expect(text).toContain('[host:1]');
+    expect(text).toContain('[user:1]');
+  });
+
+  // Review round 1, item 1: an ssh-config alias that IS the FQDN or an IP (no HostName).
+  it('masks an alias that names the machine itself, in config, logs and the embedded doctor block', async () => {
+    const { WALNUT_HOME } = await import('../../../src/constants.js');
+    fs.mkdirSync(WALNUT_HOME, { recursive: true });
+    fs.writeFileSync(
+      path.join(WALNUT_HOME, 'config.yaml'),
+      [
+        'version: 1',
+        'hosts:',
+        // No HostName in ssh config: the host's hostname is its alias.
+        '  build-7.corp.example.com:',
+        '    hostname: build-7.corp.example.com',
+        '    user: realusername',
+        "  '10.1.2.3':",
+        "    hostname: '10.1.2.3'",
+        '  plainbox:',
+        '    hostname: plain.example.org',
+      ].join('\n'),
+    );
+    writeLogLine(todayLogFile(), {
+      time: new Date().toISOString(), level: 'warn', subsystem: 'session',
+      message: 'ssh realusername@build-7.corp.example.com failed; 10.1.2.3 refused; plainbox ok',
+    });
+    const fqdn = 'build-7.corp.example.com';
+    const probes = fakeProbes({
+      hosts: async () => [{
+        alias: fqdn, label: fqdn, hostname: fqdn, user: 'realusername', connected: false, phase: 'failed',
+        runtime: null, daemonVersion: null, readiness: null, lastError: `ssh: Could not resolve hostname ${fqdn}`,
+      }],
+    });
+    const text = await buildBugReportText({ diagnostics: { collector: 'server', probes, env: ENV } });
+    expect(text).not.toContain('build-7');
+    expect(text).not.toContain('10.1.2.3');
+    expect(text).not.toContain('realusername');
+    expect(text).not.toContain('plain.example.org');
+    expect(text).toContain('ssh [user:1]@[host:1] failed; [host:2] refused; plainbox ok');
+    // The embedded doctor block and the log lines agree on the marker.
+    expect(text).toContain('    [host:1]  [user:1]@[host:1]  failed');
+    expect(text).toContain('error: ssh: Could not resolve hostname [host:1]');
   });
 
   it('clamps windowMins into [5, 1440]', async () => {

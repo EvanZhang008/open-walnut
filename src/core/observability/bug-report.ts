@@ -22,6 +22,8 @@ import { redactConfig } from '../config-redact.js';
 import { getVersion } from '../version.js';
 import { getBuildInfo } from '../../lib/build-info.js';
 import { recentLogFiles, lineTimeMs, tailFile, grepFileLines } from './bundle.js';
+import type { CollectOptions } from '../diagnostics/doctor.js';
+import { maskHostIdentitiesInText, redactDiagnostics, type HostIdentity } from '../diagnostics/redact.js';
 
 const DEFAULT_WINDOW_MINS = 30;
 /** Caps per section — keep the whole artifact pasteable. */
@@ -37,6 +39,8 @@ export interface BugReportOpts {
   windowMins?: number;
   /** Injected by the route (web layer owns getSystemHealth — core must not import it). */
   systemHealth?: unknown;
+  /** Doctor probes the web layer owns (terminal dtach, served web assets); see routes/diagnostics.ts. */
+  diagnostics?: CollectOptions;
 }
 
 /** Build the full diagnostic text. Resolves always; never rejects. */
@@ -63,11 +67,13 @@ export async function buildBugReportText(opts?: BugReportOpts): Promise<string> 
         sections.push({ name, body: `(unavailable: ${reason})` });
       });
 
+  // One host table for the whole bundle, so `[host:2]` names the same host in every section.
+  const hostTable = configuredHostIdentities();
   try {
     const cutoffMs = Date.now() - windowMins * 60_000;
     const recent = recentLogFiles();
 
-    await add('meta', () => metaSection(windowMins));
+    await add('meta', async () => metaSection(windowMins, opts?.diagnostics, await hostTable));
     await add('system health', () => systemHealthSection(opts?.systemHealth));
     await add('process health', () => processHealthSection());
     await add('config (secrets masked)', () => configSection());
@@ -95,30 +101,31 @@ export async function buildBugReportText(opts?: BugReportOpts): Promise<string> 
   ].join('\n');
 
   text = enforceTotalBudget(text);
-  text = await maskKnownHostIdentities(text);
+  text = maskHostIdentitiesInText(text, await hostTable);
   return redactSensitiveText(text);
 }
 
 /**
- * Replace each configured remote host's REAL hostname/username with its alias
- * marker across the WHOLE bundle — log lines mention real DNS names (ssh,
- * daemon connect lines) that the config-section masking can't reach. Targeted
- * find/replace of values we know are private beats trying to regex "what
- * looks like a hostname". Best-effort: config unreadable → text unchanged.
+ * Every configured remote host, in config order: the bundle masks each one's
+ * REAL hostname and username across the WHOLE text with an ordinal marker
+ * (`[host:1]`, `[user:1]`), because log lines mention real DNS names (ssh,
+ * daemon connect lines) that the config-section masking can't reach. The
+ * marker never carries the alias: an alias can itself be the FQDN or an IP (an
+ * ssh-config `Host build-7.corp.example.com`), and such an alias is masked too
+ * (see diagnostics/redact.ts). Best-effort: config unreadable → no hosts.
  */
-async function maskKnownHostIdentities(text: string): Promise<string> {
+async function configuredHostIdentities(): Promise<HostIdentity[]> {
   try {
     const { getConfig } = await import('../config-manager.js');
     const hosts = (await getConfig()).hosts ?? {};
-    let out = text;
-    for (const [alias, host] of Object.entries(hosts)) {
-      const h = host as { hostname?: string; user?: string };
-      if (h.hostname && h.hostname.length > 3) out = out.split(h.hostname).join(`[host:${alias}]`);
-      if (h.user && h.user.length > 3) out = out.split(h.user).join(`[user:${alias}]`);
-    }
-    return out;
+    return Object.entries(hosts)
+      .filter(([alias]) => alias !== '__local__')
+      .map(([alias, host]) => {
+        const h = host as { hostname?: string; user?: string };
+        return { alias, ...(h.hostname ? { hostname: h.hostname } : {}), ...(h.user ? { user: h.user } : {}) };
+      });
   } catch {
-    return text;
+    return [];
   }
 }
 
@@ -129,7 +136,7 @@ function clampWindow(v: number | undefined): number {
 
 // ── sections ──
 
-function metaSection(windowMins: number): string {
+async function metaSection(windowMins: number, diagnostics: CollectOptions | undefined, hosts: HostIdentity[]): Promise<string> {
   return [
     `version: ${getVersion()}`,
     `build: ${JSON.stringify(getBuildInfo())}`,
@@ -139,7 +146,24 @@ function metaSection(windowMins: number): string {
     `uptimeSec: ${Math.round(process.uptime())}`,
     `logDir: ${LOG_DIR}`,
     `windowMins: ${windowMins}`,
+    'diagnostics:',
+    (await diagnosticsText(diagnostics, hosts)).split('\n').map(l => `  ${l}`).join('\n'),
   ].join('\n');
+}
+
+/**
+ * The `open-walnut doctor` block, redacted (the same text Settings copies), so
+ * a bug report answers which build, claude, node and hosts without a follow-up.
+ * Its own failure stays inside this line: the rest of meta must still render.
+ */
+async function diagnosticsText(opts: CollectOptions | undefined, hosts: HostIdentity[]): Promise<string> {
+  try {
+    const { collectDiagnostics } = await import('../diagnostics/doctor.js');
+    const { renderDiagnosticsText } = await import('../diagnostics/render.js');
+    return renderDiagnosticsText(redactDiagnostics(await collectDiagnostics(opts), { hosts }));
+  } catch (err) {
+    return `(unavailable: ${err instanceof Error ? err.message : String(err)})`;
+  }
 }
 
 async function systemHealthSection(injected: unknown): Promise<string> {

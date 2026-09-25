@@ -5,6 +5,10 @@
  * each through the daemon's `host.fix` RPC (host-side, src/providers/host-fix-core.ts):
  *
  *   claude missing, or the npm build with no node   → install-claude-native
+ *   claude older than the model's floor: the npm
+ *     build                                         → install-claude-native
+ *     the native installer's build                  → update-claude
+ *     (Homebrew or a wrapper: never touched, the line says how to update)
  *   no compiler and no dtach, host not a Mac, and
  *     no prebuilt dtach this server ships for it    → install-compiler (sudo -n)
  *   dtach missing, and a compiler or a prebuilt     → build-dtach
@@ -23,7 +27,8 @@
  *   - a lost connection or a busy daemon does NOT count as an attempt;
  *   - never on a host whose preflight had no problems, never blocking a connect;
  *   - off with WALNUT_HOST_AUTOFIX=0, or per host with `hosts.<alias>.autofix: false`.
- * Signing in to Claude Code stays human: nothing here touches credentials.
+ * Signing in to Claude Code stays human: nothing here touches credentials, and
+ * `claude_not_logged_in` has no fix at all.
  *
  * Pure planning and wording live here; the per-host state lives in host-readiness.ts.
  */
@@ -31,6 +36,7 @@
 import type { HostPreflightResult } from '../../providers/host-runtime-core.js'
 import type { HostFixAction, HostFixResult } from '../../providers/host-fix-core.js'
 import type { PreflightConnection } from './host-readiness.js'
+import type { ReadinessProblem } from './host-readiness-problems.js'
 
 export type { HostFixAction }
 
@@ -62,18 +68,21 @@ export interface HostFixing {
 /** The daemon answers inside its own 5-minute cap; 30s more covers the tunnel. */
 export const HOST_FIX_TIMEOUT_MS: Record<HostFixAction, number> = {
   'install-claude-native': 330_000,
+  'update-claude': 330_000,
   'install-compiler': 330_000,
   'build-dtach': 150_000,
 }
 
 const RUNNING_TEXT: Record<HostFixAction, string> = {
   'install-claude-native': 'Installing Claude Code',
+  'update-claude': 'Updating Claude Code',
   'install-compiler': 'Installing gcc',
   'build-dtach': 'Installing dtach',
 }
 
 const FAILED_PREFIX: Record<HostFixAction, string> = {
   'install-claude-native': 'Could not install Claude Code automatically',
+  'update-claude': 'Could not update Claude Code automatically',
   'install-compiler': 'Could not install gcc automatically',
   'build-dtach': 'Could not install dtach automatically',
 }
@@ -100,14 +109,55 @@ const REASONS: Record<string, string> = {
   'timeout': 'it took longer than 5 minutes',
   'busy': 'another fix was running',
   'connection-lost': 'the connection to the host dropped',
+  'unmanaged-install': 'it was not installed by the native installer',
+  'updates-disabled': 'updates are turned off with DISABLE_UPDATES',
+  'still-outdated': 'the newest release it could reach is still too old',
+  'unknown-action': 'the session daemon there is too old for this fix',
 }
 
-/** Which fix answers which readiness problem. */
+/** Which fix answers which readiness problem (claude_outdated: see fixActionFor). */
 export const FIX_FOR_PROBLEM: Record<string, HostFixAction> = {
   claude_missing: 'install-claude-native',
   claude_needs_node: 'install-claude-native',
+  claude_outdated: 'update-claude',
   compiler_missing: 'install-compiler',
   dtach_missing: 'build-dtach',
+}
+
+/**
+ * The fix for one problem on this preflight, or null when Walnut must not try:
+ * an outdated npm build gets the native build beside it (which then comes
+ * first), only the native installer's own build gets `claude update`, and a
+ * Homebrew or wrapper install is left alone. `installMethod` only comes from a
+ * daemon that also runs update-claude, so its presence is the capability.
+ */
+export function fixActionFor(kind: string, p: HostPreflightResult): HostFixAction | null {
+  if (kind !== 'claude_outdated') return FIX_FOR_PROBLEM[kind] ?? null
+  if (p.claude.installMethod === 'npm' || (!p.claude.installMethod && p.claude.kind === 'npm')) return 'install-claude-native'
+  return p.claude.installMethod === 'native' ? 'update-claude' : null
+}
+
+/**
+ * Problems with the fix state merged in: the one running now reads 'running',
+ * a failed last attempt reads 'failed' with its reason and exact command.
+ */
+export function withFixState(problems: ReadinessProblem[], p: HostPreflightResult, fixing: HostFixing | undefined, fixes: HostFixRecord[]): ReadinessProblem[] {
+  return problems.map((problem): ReadinessProblem => {
+    const action = fixActionFor(problem.kind, p)
+    if (!action) return problem
+    if (fixing?.action === action) return { ...problem, fix: { action, state: 'running', text: fixing.text } }
+    let last: HostFixRecord | undefined
+    for (const r of fixes) if (r.action === action) last = r
+    if (!last || last.ok) return problem
+    return {
+      ...problem,
+      commands: last.command ? [last.command] : problem.commands,
+      fix: {
+        action, state: 'failed', text: last.text,
+        ...(last.needsPassword ? { needsPassword: true } : {}), ...(last.detail ? { detail: last.detail } : {}),
+      },
+    }
+  })
 }
 
 export function fixingText(action: HostFixAction): string {
@@ -130,6 +180,10 @@ export function autofixDisabledReason(env: Record<string, string | undefined>, h
 export function nextFixAction(p: HostPreflightResult, tried: ReadonlySet<HostFixAction>, ctx: { prebuiltDtach?: boolean } = {}): HostFixAction | null {
   const claudeBroken = !p.claude.found || (p.claude.needsNode === true && p.claude.nodeFound === false)
   if (claudeBroken && !tried.has('install-claude-native')) return 'install-claude-native'
+  if (!claudeBroken && !p.claude.error && p.claude.versionOk === false) {
+    const update = fixActionFor('claude_outdated', p)
+    if (update && !tried.has(update)) return update
+  }
   if (p.dtach.found) return null
   // A compiler only matters while dtach is missing, and not at all while a
   // prebuilt can stand in. A Mac's compiler comes with the Command Line Tools,
@@ -190,6 +244,8 @@ export function describeFixOutcome(action: HostFixAction, outcome: FixOutcome, f
     const version = str(raw.claude?.version)
     record.text = action === 'install-claude-native'
       ? `${record.skipped ? 'Claude Code' : 'Installed Claude Code'}${version ? ` ${version}` : ''}${record.skipped ? ' is installed' : ''}`
+      : action === 'update-claude'
+        ? (record.skipped ? `Claude Code${version ? ` ${version}` : ''} is up to date` : `Updated Claude Code${version ? ` to ${version}` : ''}`)
       : action === 'install-compiler'
         ? (record.skipped ? 'A C compiler is installed' : 'Installed gcc')
         : record.skipped ? 'dtach is installed'
@@ -246,6 +302,8 @@ export interface AutofixIo {
   /** The dtach source for build-dtach (base64 by file name). */
   dtachSources: () => Promise<Record<string, string>>
   now: () => number
+  /** The floor update-claude must reach (the server's configured model). */
+  minClaudeVersion?: string
 }
 
 /** Fields a finished terminal provisioning maps to, in host.fix's own result shape. */
@@ -257,18 +315,29 @@ function provisionResult(res: DtachProvisionOutcome): Partial<HostFixResult> & {
   return { action: 'build-dtach', ok: false, error: res.kind === 'no_compiler' ? 'no-compiler' : 'build-failed', log: res.stderr ?? '' }
 }
 
-async function sendFix(io: AutofixIo, action: HostFixAction): Promise<FixOutcome> {
+/** One host.fix RPC → its outcome. Shared with the local machine's fixes (local-readiness.ts). */
+export async function sendHostFix(conn: PreflightConnection, action: HostFixAction, params: Record<string, unknown>): Promise<FixOutcome> {
   let reply: { ok: boolean; error?: string; [key: string]: unknown }
   try {
-    const params: Record<string, unknown> = { action }
-    if (action === 'build-dtach') params.sources = await io.dtachSources()
-    reply = await io.conn.send('host.fix', params, HOST_FIX_TIMEOUT_MS[action])
+    reply = await conn.send('host.fix', { ...params, action }, HOST_FIX_TIMEOUT_MS[action])
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return isTransportError(message) ? { result: null, transportError: message } : { result: null, daemonError: message }
   }
   if (reply.ok && reply.result && typeof reply.result === 'object') return { result: reply.result as Partial<HostFixResult> }
   return { result: null, daemonError: reply.error || '' }
+}
+
+async function sendFix(io: AutofixIo, action: HostFixAction): Promise<FixOutcome> {
+  const params: Record<string, unknown> = {}
+  try {
+    if (action === 'build-dtach') params.sources = await io.dtachSources()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return isTransportError(message) ? { result: null, transportError: message } : { result: null, daemonError: message }
+  }
+  if (action === 'update-claude' && io.minClaudeVersion) params.minClaudeVersion = io.minClaudeVersion
+  return sendHostFix(io.conn, action, params)
 }
 
 /**
@@ -296,8 +365,8 @@ async function fixDtach(io: AutofixIo, current: HostPreflightResult): Promise<Fi
  */
 export async function runHostAutofix(first: HostPreflightResult, io: AutofixIo): Promise<void> {
   let current = first
-  // Three fixes exist; build-dtach may run a second time after gcc arrived.
-  for (let step = 0; step < 4; step++) {
+  // Four fixes exist; build-dtach may run a second time after gcc arrived.
+  for (let step = 0; step < 5; step++) {
     const action = nextFixAction(current, io.tried, { prebuiltDtach: io.prebuiltDtach() })
     if (!action) return
     io.tried.add(action)

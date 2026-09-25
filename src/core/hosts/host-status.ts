@@ -7,9 +7,11 @@
  */
 
 import type { DaemonConnectPhase, DaemonConnectState } from '../../providers/daemon-connection.js'
+import type { RemoteRuntime } from '../../providers/remote-runtime.js'
+import { MIN_DAEMON_FREE_MB, daemonDirWarning, displayDaemonDir } from '../../providers/remote-daemon-dir.js'
 import type { Config } from '../types.js'
 import type { HostWarmupState } from './host-warmup.js'
-import type { HostReadiness } from './host-readiness.js'
+import type { HostReadiness, ReadinessProblem } from './host-readiness.js'
 import {
   classifyHostConnectError,
   connectPhaseNote,
@@ -57,6 +59,8 @@ export interface HostStatus {
   error?: string
   kind?: HostConnectErrorKind
   hint?: string
+  /** A plain retry can work with nothing changed (see HostConnectHint.retryable). */
+  retryable?: boolean
   /** ms until an automatic retry is allowed again. */
   retryInMs?: number
   warmup?: HostWarmupState
@@ -66,8 +70,42 @@ export interface HostStatus {
    * only from a daemon with 'preflight-v1'; `problems` is empty when all is well.
    */
   readiness?: HostReadiness
+  /** Which runtime the daemon ended up on after any fallback (bun, the prebuilt binary, or node). */
+  runtime?: RemoteRuntime | 'unknown'
+  /**
+   * Where the daemon keeps its files on the host. `fallback` = it moved to
+   * ~/.cache/open-walnut because /tmp could not take it (`reason` says why).
+   */
+  daemonDir?: { path: string; display: string; fallback: boolean; reason?: string; freeMb?: number }
+  /** Lines worth saying even when nothing is broken ("Using ~/.cache/open-walnut … because /tmp is read-only"). */
+  warnings?: string[]
   /** When this snapshot was taken (ms epoch) — the client orders pushes by it. */
   at: number
+}
+
+/**
+ * Readiness lines that come from the CONNECT (the daemon dir probe), merged
+ * after the daemon's own preflight problems: a relocated daemon dir and a disk
+ * too full for sessions. Same shape, so every surface already renders them.
+ */
+export function connectReadinessProblems(state: Pick<DaemonConnectState, 'daemonDir'>, hostLabel: string): ReadinessProblem[] {
+  const dir = state.daemonDir
+  if (!dir) return []
+  const out: ReadinessProblem[] = []
+  const shown = displayDaemonDir(dir.path, dir.home)
+  const warning = daemonDirWarning(dir, dir.home)
+  // Each line names the host (the UI then drops its own "<host>: " prefix) and
+  // quotes paths and commands in backticks (rendered as code).
+  if (warning) out.push({ kind: 'daemon_dir_fallback', message: `${hostLabel}: ${warning}`, commands: [] })
+  if (typeof dir.freeMb === 'number' && dir.freeMb < MIN_DAEMON_FREE_MB) {
+    const df = `df -h ${dir.fallback ? '~/.cache' : '/tmp'}`
+    out.push({
+      kind: 'disk_low',
+      message: `${hostLabel} has only ${dir.freeMb} MB free where the session daemon keeps its files (\`${shown}\`); sessions need at least ${MIN_DAEMON_FREE_MB} MB. Free some space there (\`${df}\` shows where it went).`,
+      commands: [df],
+    })
+  }
+  return out
 }
 
 export function buildHostStatus(
@@ -108,18 +146,33 @@ export function buildHostStatus(
     status.error = state.error
     // The ssh target as the USER would type it — the hint quotes it back.
     const sshTargetText = hostDef.user ? `${hostDef.user}@${hostDef.hostname}` : hostDef.hostname
-    const { kind, hint } = classifyHostConnectError(
+    const { kind, hint, retryable } = classifyHostConnectError(
       state.error, sshTargetText, [hostKey, label, hostDef.hostname, hostDef.user ?? ''],
+      { hostname: hostDef.hostname, ...(hostDef.port ? { port: hostDef.port } : {}) },
     )
     status.kind = kind
     status.hint = hint
+    status.retryable = retryable
+  }
+  if (state.runtime) status.runtime = state.runtime
+  if (state.daemonDir) {
+    const d = state.daemonDir
+    status.daemonDir = {
+      path: d.path, display: displayDaemonDir(d.path, d.home), fallback: d.fallback,
+      ...(d.reason ? { reason: d.reason } : {}), ...(d.freeMb !== undefined ? { freeMb: d.freeMb } : {}),
+    }
+    const warning = daemonDirWarning(d, d.home)
+    if (warning) status.warnings = [warning]
   }
   if (state.retryInMs !== undefined) status.retryInMs = state.retryInMs
   if (warmup) status.warmup = warmup
   if (hostDef.discovered) status.discovered = true
   // A readiness answer describes the daemon we are talking to now; while the
   // host is down the connect error is the thing to show.
-  if (readiness && state.connected) status.readiness = readiness
+  if (readiness && state.connected) {
+    const extra = connectReadinessProblems(state, label)
+    status.readiness = extra.length ? { ...readiness, problems: [...readiness.problems, ...extra] } : readiness
+  }
   return status
 }
 

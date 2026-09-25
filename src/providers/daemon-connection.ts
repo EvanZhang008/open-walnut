@@ -53,6 +53,17 @@ import { isRecoverableSessionError, isRescuableStoppedRecord } from '../core/ses
 import { isAcpEngine } from '../core/agents/engine-registry.js'
 import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
+import { classifyHostConnectError, CREDENTIAL_WAIT_KINDS, credentialRetryDelayMs } from '../core/sessions/host-connect-hint.js'
+import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, shq, userShellPathScript } from './remote-sh.js'
+import {
+  PROD_REMOTE_DAEMON_DIR, buildDaemonDirProbeScript, chooseDaemonDir, daemonDirEnv, parseDaemonDirProbe,
+  buildLiveDaemonScanScript, parseLiveDaemonScan, productionDaemonDirs, type DaemonDirChoice,
+} from './remote-daemon-dir.js'
+import {
+  buildBunInstallScript, buildBunProbeScript, installTailForError, isRuntimeStartFailure, nextRuntimeAfterStartFailure,
+  parseBunInstall, parseBunProbe, type RemoteRuntime,
+} from './remote-runtime.js'
+import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
 
 const execFileAsync = promisify(execFileCb)
 
@@ -278,6 +289,8 @@ export class DaemonConnection {
   private _missedPongs = 0
   /** Counter of consecutive reconnect attempts since last successful connect. Reset in setConnected(true). */
   private _reconnectAttempts = 0
+  /** Consecutive reconnects that failed on a credential wait (index into credentialRetryDelayMs). */
+  private _credentialReconnects = 0
   /** Last WebSocket URL opened — logged on close for troubleshooting. */
   private _lastWsUrl: string | null = null
   /**
@@ -393,6 +406,26 @@ export class DaemonConnection {
   private _deployedViaSource = false
   /** Resolved path to bun on the remote host, or null if unavailable / not yet probed. */
   private _bunPath: string | null = null
+  /**
+   * The daemon dir on the host: /tmp/open-walnut, or $HOME/.cache/open-walnut
+   * when /tmp cannot take it (remote-daemon-dir.ts). Decided at every probe
+   * phase; every remote path below is built from it.
+   */
+  private _remoteDir: string = PROD_REMOTE_DAEMON_DIR
+  private _dirChoice: DaemonDirChoice | null = null
+  /** $HOME on the host, from the dir probe (pins the streams dir for a relocated daemon). */
+  private _remoteHome: string | null = null
+  /** The runtime the connected daemon runs on (null until a probe or start tells). */
+  private _runtime: RemoteRuntime | 'unknown' | null = null
+  /** Why a bun install failed on this connect, carried into the final error. */
+  private _bunInstallNote: string | null = null
+  /**
+   * Runtimes that died at start on THIS host (exec format, illegal instruction,
+   * GLIBC), with why. Kept for the connection's life (the pool keeps one per
+   * host until its target changes), so a CPU the binary cannot run does not get
+   * the 37MB binary re-uploaded on every connect.
+   */
+  private _failedRuntimes = new Map<RemoteRuntime, string>()
 
   constructor(hostKey: string, sshTarget: SshTarget | null) {
     this.hostKey = hostKey
@@ -460,7 +493,7 @@ export class DaemonConnection {
 
   /** Full remote path where the binary is deployed. */
   private async getRemoteDaemonPath(): Promise<string> {
-    return `/tmp/open-walnut/${await this.getRemoteBinaryName()}`
+    return `${this._remoteDir}/${await this.getRemoteBinaryName()}`
   }
 
   /**
@@ -498,6 +531,13 @@ export class DaemonConnection {
   get connectPhaseSince(): number { return this._phaseSince }
   /** When the current/last connect() attempt began (null = never attempted). */
   get connectStartedAt(): number | null { return this._connectStartedAt }
+  /** Where the daemon keeps its files on the host, once a probe has decided. */
+  get remoteDirChoice(): DaemonDirChoice | null { return this._dirChoice }
+  /** Where the daemon keeps its files on the host (/tmp/open-walnut unless it had to move). */
+  get remoteDaemonDir(): string { return this._remoteDir }
+  get remoteHome(): string | null { return this._remoteHome }
+  /** Which runtime the daemon runs on ('unknown' = attached to one we could not identify). */
+  get remoteRuntime(): RemoteRuntime | 'unknown' | null { return this._runtime }
 
   private setPhase(phase: DaemonConnectPhase): void {
     if (this._phase === phase) return
@@ -558,6 +598,7 @@ export class DaemonConnection {
     if (value) {
       this._disconnectedSince = null
       this._reconnectAttempts = 0
+      this._credentialReconnects = 0
       this.setPhase('connected')
     } else if (changed) {
       this._disconnectedSince = Date.now()
@@ -977,8 +1018,9 @@ export class DaemonConnection {
       this.setPhase('ssh')
       await this.ensureControlMaster()
 
-      // Step 1: Check if daemon is already running
+      // Step 1: Where the daemon lives on this host, then is it already running
       this.setPhase('probe')
+      await this.resolveRemoteDir()
       let daemonPort = await this.checkDaemonRunning()
 
       if (daemonPort === null) {
@@ -991,12 +1033,9 @@ export class DaemonConnection {
             `sandboxes do not deploy/start remote daemons (attach-only)`,
           )
         }
-        // Step 2: Deploy daemon (stamps install-runtime / upload itself)
-        await this.deployDaemon()
-
-        // Step 3: Start daemon
-        this.setPhase('start')
-        daemonPort = await this.startDaemon()
+        // Steps 2-3: deploy (stamps install-runtime / upload) and start, with
+        // one runtime fallback chain if the start fails in a runtime-shaped way.
+        daemonPort = await this.deployAndStart()
       }
 
       this.remotePort = daemonPort
@@ -1063,9 +1102,13 @@ export class DaemonConnection {
       // from a previous server run (e.g. server restart while sessions were error).
       this.recoverDisconnectedSessions().catch(() => {})
     } catch (err) {
+      // Ask the local agent why an auth failure happened (expired certificate,
+      // no agent) before anyone reads the error. Still inside _connecting, so a
+      // second caller keeps waiting on this attempt.
+      const annotated = this.sshTarget ? await annotateCredentialFailure(err, this.sshHostString) : err
       this._connecting = false
       this.setPhase('failed')
-      throw err
+      throw annotated
     }
   }
 
@@ -1662,10 +1705,13 @@ export class DaemonConnection {
    * Returns true on success, false on any failure (caller decides whether to fall back).
    */
   private async pipeSingleStream(data: Buffer, remotePath: string, expectedSha256: string): Promise<boolean> {
+    const q = shq(remotePath)
     const args = [
       ...this.baseSshArgs,
       this.sshHostString,
-      `cat > ${remotePath} && sha256sum ${remotePath} | awk '{print $1}' && wc -c < ${remotePath}`,
+      // `sh -c` + markers (remote-sh.ts): the login shell may be csh, and an rc
+      // banner on stdout must not read as the checksum.
+      markedUploadCommand(remotePath, `sha256sum ${q} | awk '{print $1}' && wc -c < ${q}`),
     ]
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
     proc.stdin!.on('error', () => {})
@@ -1683,7 +1729,8 @@ export class DaemonConnection {
 
     if (!ok) return false
 
-    const lines = stdout.trim().split(/\s+/).filter(Boolean)
+    const marked = extractMarkedOutput(stdout)
+    const lines = (marked.found ? marked.body : '').trim().split(/\s+/).filter(Boolean)
     const remoteSha = lines[0]
     const remoteSize = parseInt(lines[1] ?? '0', 10)
     if (remoteSize !== data.length || remoteSha !== expectedSha256) {
@@ -1704,8 +1751,8 @@ export class DaemonConnection {
    */
   private async pipeChunk(data: Buffer, remoteDir: string, chunkIndex: number): Promise<boolean> {
     const chunkFile = `${remoteDir}/chunk_${String(chunkIndex).padStart(4, '0')}`
-    // Write data then echo the byte count for verification
-    const args = [...this.buildSshArgs({ useControlMaster: false }), this.sshHostString, `cat > ${chunkFile} && wc -c < ${chunkFile}`]
+    // Write data then echo the byte count for verification (marked: see pipeSingleStream)
+    const args = [...this.buildSshArgs({ useControlMaster: false }), this.sshHostString, markedUploadCommand(chunkFile, `wc -c < ${shq(chunkFile)}`)]
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
     proc.stdin!.on('error', () => {})  // swallow EPIPE if SSH dies mid-write
 
@@ -1722,7 +1769,8 @@ export class DaemonConnection {
     if (!ok) return false
 
     // Verify size — proxy can kill mid-write but SSH may still exit 0
-    const remoteSize = parseInt(stdout.trim(), 10)
+    const marked = extractMarkedOutput(stdout)
+    const remoteSize = parseInt(marked.found ? marked.body.trim() : '', 10)
     if (remoteSize !== data.length) {
       log.session.warn('DaemonConnection: chunk size mismatch', {
         host: this.hostKey, chunkIndex, expected: data.length, got: remoteSize,
@@ -1733,16 +1781,79 @@ export class DaemonConnection {
   }
 
   /**
-   * Execute a command on the remote host via SSH and return stdout.
+   * Run a POSIX sh script on the remote host and return its output, trimmed.
    * Uses ControlMaster if available (single TCP connection for all commands).
+   *
+   * The script never reaches the user's login shell: the remote command is
+   * `sh -s` and the script rides stdin, and only the text between Walnut's
+   * markers counts (remote-sh.ts). A csh/fish login shell or an rc file that
+   * prints a banner used to corrupt every JSON or port-number answer here.
    */
   private async sshExec(remoteCmd: string, timeoutMs = 10_000): Promise<string> {
-    const args = [...this.baseSshArgs, this.sshHostString, remoteCmd]
-    const { stdout } = await execFileAsync('ssh', args, {
-      encoding: 'utf-8',
-      timeout: timeoutMs,
+    return runRemoteSh([...this.baseSshArgs, this.sshHostString], remoteCmd, timeoutMs)
+  }
+
+  /**
+   * Decide where the daemon lives on this host (remote-daemon-dir.ts): a live
+   * daemon's dir wins, then a usable /tmp/open-walnut, then
+   * $HOME/.cache/open-walnut. One round trip that also learns the arch.
+   *
+   * An ssh-level failure (exit 255, no markers) is the real connect error and
+   * is thrown now: every later step would fail the same way, only with a less
+   * truthful message. Anything else keeps the previous choice.
+   */
+  private async resolveRemoteDir(): Promise<void> {
+    // No answer means no deploy: guessing /tmp while a daemon runs from
+    // ~/.cache would start a second one on the same streams dir, and its
+    // orphan adoption would take every CLI from the first. So a probe that
+    // times out or answers garbage fails this connect (retryable), always.
+    let output: string
+    try {
+      output = await this.sshExec(buildDaemonDirProbeScript({ writeTest: !this.isReadOnlyRemote }), 15_000)
+    } catch (err) {
+      if (isSshTransportFailure(err)) throw err
+      const detail = (err instanceof Error ? err.message : String(err)).split('\n').filter(Boolean).pop() ?? 'no answer'
+      throw new Error(`daemon dir check on ${this.hostKey} did not finish (${detail.slice(0, 200)}); Walnut will not guess where the daemon lives, and retries the connect`)
+    }
+    const probe = parseDaemonDirProbe(output)
+    if (!probe) {
+      throw new Error(`daemon dir check on ${this.hostKey} answered without its result lines; Walnut will not guess where the daemon lives, and retries the connect`)
+    }
+    if (probe.arch) this._remoteArch = probe.arch.trim() === 'aarch64' ? 'arm64' : 'x64'
+    if (probe.home) this._remoteHome = probe.home
+    const choice = chooseDaemonDir(probe)
+    if (choice.path !== this._remoteDir || choice.fallback !== this._dirChoice?.fallback) {
+      const logFn = choice.fallback || choice.unusable ? log.session.warn : log.session.info
+      logFn.call(log.session, 'DaemonConnection: daemon dir chosen', {
+        host: this.hostKey, dir: choice.path, fallback: choice.fallback, reason: choice.reason,
+        freeMb: choice.freeMb, unusable: choice.unusable, tmp: probe.tmp, cache: probe.cache,
+      })
+    }
+    this._remoteDir = choice.path
+    this._dirChoice = choice
+  }
+
+  /** Env the daemon needs for the chosen dir (empty on /tmp). */
+  private get dirEnv(): Record<string, string> {
+    return daemonDirEnv(this._dirChoice, this._remoteHome ?? undefined)
+  }
+
+  /** A daemon already answers from the other production dir: that dir is this host's now. */
+  private adoptLiveDaemonDir(dir: string): void {
+    const fallback = dir !== PROD_REMOTE_DAEMON_DIR
+    log.session.warn('DaemonConnection: adopting the daemon already running in the other daemon dir', {
+      host: this.hostKey, from: this._remoteDir, to: dir,
     })
-    return stdout.trim()
+    this._remoteDir = dir
+    this._dirChoice = fallback
+      ? { path: dir, fallback: true, reason: 'a daemon started there earlier is still running', ...(this._dirChoice?.freeMb !== undefined && this._dirChoice.path === dir ? { freeMb: this._dirChoice.freeMb } : {}) }
+      : { path: dir, fallback: false }
+  }
+
+  /** `env K='V' ` for commands that must find the relocated daemon (its --status), '' on /tmp. */
+  private get dirEnvPrefix(): string {
+    const entries = Object.entries(this.dirEnv)
+    return entries.length ? `env ${entries.map(([k, v]) => `${k}=${shq(v)}`).join(' ')} ` : ''
   }
 
   // ── Private: Daemon management ──
@@ -1756,7 +1867,7 @@ export class DaemonConnection {
    * managed — see the rule block in local-daemon.ts. One SSH round trip.
    */
   private async detectServiceTakeover(): Promise<ServiceTakeover> {
-    const paths = remoteServiceProbePaths()
+    const paths = remoteServiceProbePaths(this._remoteDir)
     let output = ''
     try {
       output = await this.sshExec(buildRemoteServiceProbeCmd(paths), 5_000)
@@ -1795,13 +1906,14 @@ export class DaemonConnection {
     let binarySshErr: unknown = null
     try {
       const remotePath = await this.getRemoteDaemonPath()
-      const result = await this.sshExec(`${remotePath} --status 2>/dev/null || true`)
+      const result = await this.sshExec(`${this.dirEnvPrefix}${shq(remotePath)} --status 2>/dev/null || true`)
       if (result) {
         const status = JSON.parse(result)
         if (status.running && status.port) {
           if (await this.shouldUpgradeDaemon(remotePath, service)) {
             return service.managed ? this.checkDaemonRunning(opts) : null
           }
+          // The pid files say a daemon runs, not what runs it: the hello says that.
           log.session.info('DaemonConnection: daemon already running (binary)', {
             host: this.hostKey, port: status.port, pid: status.pid,
             serviceManaged: service.managed || undefined,
@@ -1822,30 +1934,28 @@ export class DaemonConnection {
     // from a previous server run.
     let fileSshErr: unknown = null
     try {
-      const result = await this.sshExec(
-        'PID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null); ' +
-        'PORT=$(cat /tmp/open-walnut/daemon.port 2>/dev/null); ' +
-        '[ -n "$PID" ] && [ -n "$PORT" ] && kill -0 "$PID" 2>/dev/null && ' +
-        'echo "{\\"running\\":true,\\"pid\\":$PID,\\"port\\":$PORT}" || true',
-        5_000,
-      )
-      if (result) {
-        const status = JSON.parse(result)
-        if (status.running && status.port) {
-          // Same staleness check as the binary arm — a source/bun daemon can
-          // be outdated too (it writes daemon.version at startup just like the
-          // binary). Without this, hosts where the binary probe fails would
-          // keep an old source daemon alive forever.
-          const remotePath = await this.getRemoteDaemonPath()
-          if (await this.shouldUpgradeDaemon(remotePath, service)) {
-            return service.managed ? this.checkDaemonRunning(opts) : null
-          }
-          log.session.info('DaemonConnection: daemon already running (source/bun)', {
-            host: this.hostKey, port: status.port, pid: status.pid,
-            serviceManaged: service.managed || undefined,
-          })
-          return status.port
+      // BOTH production dirs, the chosen one first: a daemon already alive in
+      // the other one is adopted, never duplicated (a second daemon on the same
+      // streams dir takes over every CLI of the first). The runtime token comes
+      // from the live process's command line (status / diagnostics).
+      const dirs = productionDaemonDirs(this._remoteDir, this._remoteHome)
+      const status = parseLiveDaemonScan(await this.sshExec(buildLiveDaemonScanScript(dirs), 5_000), dirs)
+      if (status) {
+        if (status.dir !== this._remoteDir) this.adoptLiveDaemonDir(status.dir)
+        // Same staleness check as the binary arm: a source/bun daemon can
+        // be outdated too (it writes daemon.version at startup just like the
+        // binary). Without this, hosts where the binary probe fails would
+        // keep an old source daemon alive forever.
+        const remotePath = await this.getRemoteDaemonPath()
+        if (await this.shouldUpgradeDaemon(remotePath, service)) {
+          return service.managed ? this.checkDaemonRunning(opts) : null
         }
+        this._runtime = status.runtime
+        log.session.info('DaemonConnection: daemon already running (source/bun)', {
+          host: this.hostKey, port: status.port, pid: status.pid, runtime: this._runtime, dir: status.dir,
+          serviceManaged: service.managed || undefined,
+        })
+        return status.port
       }
     } catch (err) {
       if (err instanceof DaemonShutdownPendingError || err instanceof DaemonServiceNotReadyError) throw err
@@ -1903,7 +2013,7 @@ export class DaemonConnection {
       const takeover = service ?? await this.detectServiceTakeover()
 
       const remoteVersion = (await this.sshExec(
-        'cat /tmp/open-walnut/daemon.version 2>/dev/null || true', 5_000,
+        `cat ${shq(this._remoteDir + '/daemon.version')} 2>/dev/null || true`, 5_000,
       )).trim()
 
       if (takeover.managed) {
@@ -1950,7 +2060,7 @@ export class DaemonConnection {
       // (stale >2min = not busy, so this can never wedge upgrades).
       try {
         const busyRaw = (await this.sshExec(
-          'cat /tmp/open-walnut/acp-busy.json 2>/dev/null || true', 5_000,
+          `cat ${shq(this._remoteDir + '/acp-busy.json')} 2>/dev/null || true`, 5_000,
         )).trim()
         if (busyRaw) {
           const busy = JSON.parse(busyRaw) as { busySids?: string[]; updatedAt?: number }
@@ -2006,7 +2116,7 @@ export class DaemonConnection {
     const takeover = await this.detectServiceTakeover()
     if (takeover.managed) throw new DaemonServiceNotReadyError(this.hostKey, 'refusing an unmanaged stop', takeover)
     try {
-      const output = await this.sshExec(buildDaemonStopCmd(), 45_000)
+      const output = await this.sshExec(buildDaemonStopCmd(this._remoteDir), 45_000)
       if (!output.split('\n').includes('walnut-daemon-stop-confirmed')) throw new Error('missing shutdown confirmation')
     } catch (error) {
       throw new DaemonShutdownPendingError(`Daemon shutdown was not confirmed; no replacement was started: ${String(error)}`)
@@ -2077,6 +2187,9 @@ export class DaemonConnection {
       }
       const caps = Array.isArray(res.capabilities) ? res.capabilities as string[] : []
       this._capabilities = caps
+      // What actually runs the daemon (bun, the prebuilt binary, node): the pid
+      // files cannot tell a bun-run daemon from the binary, the daemon can.
+      if (res.runtime === 'bun' || res.runtime === 'binary' || res.runtime === 'node') this._runtime = res.runtime
       const startup = (res.cronSupervision as { startup?: unknown } | undefined)?.startup
       this._daemonStartup = typeof startup === 'string' && ['boot', 'login', 'on-demand', 'service'].includes(startup) ? startup : 'on-demand'
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))
@@ -2183,8 +2296,7 @@ export class DaemonConnection {
       await this.stopUnmanagedDaemon()
 
       // Redeploy + start + tunnel + reconnect
-      await this.deployDaemon()
-      const daemonPort = await this.startDaemon()
+      const daemonPort = await this.deployAndStart()
       this.remotePort = daemonPort
       this.localPort = await this.createTunnel(daemonPort)
       await this.connectWebSocket(this.localPort)
@@ -2221,27 +2333,30 @@ export class DaemonConnection {
   }
 
   /**
-   * Deploy daemon to the remote host.
+   * Deploy daemon to the remote host and say which runtime it will start on.
    *
-   * Prefers binary deployment (fast, no runtime deps) when pre-compiled binaries
-   * are available. Falls back to source-based deploy (node + npm install ws) when
-   * binaries haven't been built yet (dev workflow).
+   * Prefers bun + source (tiny upload) when a bun on the host RUNS, then the
+   * prebuilt binary, then node + source (see remote-runtime.ts).
    */
-  private async deployDaemon(): Promise<void> {
+  private async deployDaemon(): Promise<RemoteRuntime> {
     // Preferred path: bun + ~63KB JS source. Bypasses corporate-proxy bulk-transfer kills
     // entirely (binary is 37MB compressed; source is gzipped to ~17KB on the
     // wire). Bun is a single static binary so probe-or-install completes in a
     // few seconds when missing. Falls through to binary on probe/install
     // failure (offline hosts, restrictive networks, glibc-too-old for bun).
     this.setPhase('install-runtime')
-    const bunPath = await this.probeOrInstallBun()
+    this._bunInstallNote = null
+    const skipBun = this._failedRuntimes.has('bun')
+    if (skipBun) log.session.info('DaemonConnection: bun already failed to run the daemon on this host, skipping it', { host: this.hostKey })
+    const bunPath = skipBun ? null : await this.probeOrInstallBun()
     this.setPhase('upload')
     if (bunPath) {
+      // Set BEFORE deploySource: it skips the npm `ws` install under bun.
+      this._bunPath = bunPath
       try {
         await this.deploySource()
-        this._bunPath = bunPath
         this._deployedViaSource = true
-        return
+        return 'bun'
       } catch (err) {
         log.session.warn('DaemonConnection: bun source deploy failed, falling back to binary', {
           host: this.hostKey, error: err instanceof Error ? err.message : String(err),
@@ -2250,13 +2365,15 @@ export class DaemonConnection {
       }
     }
 
-    const localBinary = await this.getLocalBinaryPath()
+    const skipBinary = this._failedRuntimes.has('binary')
+    if (skipBinary) log.session.info('DaemonConnection: the prebuilt binary already failed to run on this host, skipping it', { host: this.hostKey })
+    const localBinary = skipBinary ? null : await this.getLocalBinaryPath()
 
     if (localBinary) {
       try {
         await this.deployBinary(localBinary)
         this._deployedViaSource = false
-        return
+        return 'binary'
       } catch (err) {
         // Binary deploy failed (e.g. SSH proxy killed the transfer).
         // Fall back to lightweight source deploy (~44KB, always passes).
@@ -2270,26 +2387,86 @@ export class DaemonConnection {
       })
     }
 
+    this._bunPath = null
+    await this.deploySource()
+    this._deployedViaSource = true
+    return 'node'
+  }
+
+  /**
+   * Deploy, then start; when the start fails in a runtime-shaped way (exec
+   * format, illegal instruction, GLIBC, a runtime killed by a signal), move
+   * along bun → binary → node inside THIS connect. Each runtime is tried at most
+   * once, so there is exactly one fallback chain per connect and no loop.
+   */
+  private async deployAndStart(): Promise<number> {
+    let runtime = await this.deployDaemon()
+    // A runtime that already died at start here is never tried again (node,
+    // the cheap last resort, always stays eligible).
+    const tried = new Set<RemoteRuntime>([runtime, ...[...this._failedRuntimes.keys()].filter((r) => r !== 'node')])
+    for (;;) {
+      this.setPhase('start')
+      try {
+        const port = await this.startDaemon(runtime)
+        this._runtime = runtime
+        return port
+      } catch (err) {
+        const text = err instanceof Error ? err.message : String(err)
+        if (isRuntimeStartFailure(text)) this._failedRuntimes.set(runtime, text.slice(0, 300))
+        const next = nextRuntimeAfterStartFailure(runtime, text, { haveBinary: !!(await this.getLocalBinaryPath()), tried })
+        if (!next) throw this.withBunInstallNote(err)
+        log.session.warn('DaemonConnection: daemon start failed on this runtime, trying the next one', {
+          host: this.hostKey, failed: runtime, next, error: text.slice(0, 500),
+        })
+        tried.add(next)
+        this.setPhase('upload')
+        try {
+          await this.deployForRuntime(next)
+          runtime = next
+        } catch (deployErr) {
+          // The binary would not even deploy: node is the last way in.
+          if (next !== 'binary' || tried.has('node')) throw this.withBunInstallNote(deployErr)
+          tried.add('node')
+          await this.deployForRuntime('node')
+          runtime = 'node'
+        }
+      }
+    }
+  }
+
+  /** Put `runtime`'s artifact in place for a fallback start. */
+  private async deployForRuntime(runtime: RemoteRuntime): Promise<void> {
+    if (runtime === 'binary') {
+      const localBinary = await this.getLocalBinaryPath()
+      if (!localBinary) throw new Error('no prebuilt daemon binary for this host')
+      await this.deployBinary(localBinary)
+      this._deployedViaSource = false
+      return
+    }
+    if (runtime === 'node') this._bunPath = null
     await this.deploySource()
     this._deployedViaSource = true
   }
 
+  /** A failed bun install explains a later failure: keep its log tail on the error. */
+  private withBunInstallNote(err: unknown): unknown {
+    if (!this._bunInstallNote) return err
+    const message = err instanceof Error ? err.message : String(err)
+    return new Error(`${message}\nbun install failed: ${this._bunInstallNote}`)
+  }
+
   /**
-   * Probe for bun on the remote host. If absent, attempt one-shot install via
-   * the official curl|bash script (which fetches from bun.sh — egress from the
-   * remote, NOT through the corporate proxy). Returns the resolved bun executable path, or
-   * null if probe and install both failed.
+   * Find a bun on the host that RUNS (`bun --version`, 10s cap), installing one
+   * when there is none. Returns its absolute path, or null: a bun that is there
+   * but cannot run is "no bun" (its output is logged, it is not reinstalled
+   * over), and a failed install keeps its log on the host (bun-install.log in
+   * the daemon dir) with the tail in this connect's error.
    */
   private async probeOrInstallBun(): Promise<string | null> {
-    // Probe: PATH first, then the install script's default location. Returning
-    // an absolute path lets startDaemon() exec bun without depending on shell_setup.
-    const probeCmd =
-      `if command -v bun >/dev/null 2>&1; then command -v bun; ` +
-      `elif [ -x "$HOME/.bun/bin/bun" ]; then echo "$HOME/.bun/bin/bun"; ` +
-      `else echo MISSING; fi`
-    let path: string
+    const probeScript = buildBunProbeScript()
+    let probe
     try {
-      path = (await this.sshExec(probeCmd, 10_000)).trim().split('\n').pop()?.trim() || ''
+      probe = parseBunProbe(await this.sshExec(probeScript, 20_000))
     } catch (err) {
       log.session.warn('DaemonConnection: bun probe failed', {
         host: this.hostKey, error: err instanceof Error ? err.message : String(err),
@@ -2297,37 +2474,52 @@ export class DaemonConnection {
       return null
     }
 
-    if (path && path !== 'MISSING') {
-      log.session.info('DaemonConnection: bun present', { host: this.hostKey, path })
-      return path
+    if (probe.path && probe.ok) {
+      log.session.info('DaemonConnection: bun present', { host: this.hostKey, path: probe.path, version: probe.version })
+      return probe.path
+    }
+    if (probe.path) {
+      log.session.warn('DaemonConnection: bun is installed but does not run, using another runtime', {
+        host: this.hostKey, path: probe.path, error: probe.error,
+      })
+      return null
     }
 
     // Install. The install script writes to ~/.bun/bin/bun and downloads ~30MB
     // straight from bun.sh — that's a remote-host outbound HTTPS connection,
     // bypassing the corporate proxy entirely. 90s budget covers slow corporate egress.
-    log.session.info('DaemonConnection: bun absent, attempting one-shot install', {
-      host: this.hostKey,
-    })
+    const logPath = `${this._remoteDir}/bun-install.log`
+    log.session.info('DaemonConnection: bun absent, attempting one-shot install', { host: this.hostKey, logPath })
+    let install
     try {
-      await this.sshExec('curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1', 90_000)
+      install = parseBunInstall(await this.sshExec(buildBunInstallScript(logPath), 90_000))
     } catch (err) {
-      log.session.warn('DaemonConnection: bun install failed — will fall back to binary', {
-        host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+      const message = err instanceof Error ? err.message : String(err)
+      this._bunInstallNote = `the installer did not finish (${message.split('\n').pop()}); log: ${logPath}`
+      log.session.warn('DaemonConnection: bun install failed, falling back to the binary or node', { host: this.hostKey, error: message })
+      return null
+    }
+    if (install.rc !== 0) {
+      this._bunInstallNote = `exit ${install.rc}: ${installTailForError(install) || '(no output)'}; log: ${install.logPath ?? logPath}`
+      log.session.warn('DaemonConnection: bun install failed, falling back to the binary or node', {
+        host: this.hostKey, rc: install.rc, log: install.logPath ?? logPath, tail: install.tail.slice(-1500),
       })
       return null
     }
 
     try {
-      const after = (await this.sshExec(probeCmd, 5_000)).trim().split('\n').pop()?.trim() || ''
-      if (after && after !== 'MISSING') {
-        log.session.info('DaemonConnection: bun installed', { host: this.hostKey, path: after })
-        return after
+      const after = parseBunProbe(await this.sshExec(probeScript, 20_000))
+      if (after.path && after.ok) {
+        log.session.info('DaemonConnection: bun installed', { host: this.hostKey, path: after.path, version: after.version })
+        return after.path
       }
-    } catch {}
-
-    log.session.warn('DaemonConnection: bun install reported success but probe still missing', {
-      host: this.hostKey,
-    })
+      this._bunInstallNote = `installed, but ${after.error ?? 'bun is still missing'}; log: ${install.logPath ?? logPath}`
+      log.session.warn('DaemonConnection: bun installed but does not run', { host: this.hostKey, error: after.error, tail: install.tail.slice(-1500) })
+    } catch (err) {
+      log.session.warn('DaemonConnection: bun re-probe after install failed', {
+        host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+      })
+    }
     return null
   }
 
@@ -2341,7 +2533,7 @@ export class DaemonConnection {
 
     try {
       // Create directory
-      await this.sshExec('mkdir -p /tmp/open-walnut')
+      await this.sshExec(`mkdir -p ${shq(this._remoteDir)}`)
 
       // Check if remote binary is already up to date by comparing version strings.
       // The binary embeds a version via --define at build time.
@@ -2352,7 +2544,7 @@ export class DaemonConnection {
         const versionFile = localBinaryPath + '.version'
         const localVersion = fs.readFileSync(versionFile, 'utf-8').trim()
         const remoteDaemonPath = await this.getRemoteDaemonPath()
-        const remoteVersion = await this.sshExec(`${remoteDaemonPath} --version 2>/dev/null`, 5_000)
+        const remoteVersion = await this.sshExec(`${shq(remoteDaemonPath)} --version 2>/dev/null`, 5_000)
         if (localVersion && remoteVersion && localVersion === remoteVersion) {
           needsDeploy = false
           log.session.info('DaemonConnection: binary already up to date', {
@@ -2395,7 +2587,7 @@ export class DaemonConnection {
         const singleOk = await this.pipeSingleStream(gzData, `${remotePath}.gz`, gzSha256)
         if (singleOk) {
           const unpackResult = await this.sshExec(
-            `gunzip -f ${remotePath}.gz && chmod +x ${remotePath} && ${remotePath} --version`,
+            `gunzip -f ${shq(remotePath + '.gz')} && chmod +x ${shq(remotePath)} && ${shq(remotePath)} --version`,
             30_000,
           )
           const remoteBinaryName = await this.getRemoteBinaryName()
@@ -2423,10 +2615,10 @@ export class DaemonConnection {
         // confirming 256KB survives reliably across proxy variants.
         const CHUNK_SIZE = 262_144
         const totalChunks = Math.ceil(gzSize / CHUNK_SIZE)
-        const chunkDir = '/tmp/open-walnut/deploy_chunks'
+        const chunkDir = `${this._remoteDir}/deploy_chunks`
 
         // Clean any partial previous transfer
-        await this.sshExec(`rm -rf ${chunkDir} && mkdir -p ${chunkDir}`, 5_000).catch(() => {})
+        await this.sshExec(`rm -rf ${shq(chunkDir)} && mkdir -p ${shq(chunkDir)}`, 5_000).catch(() => {})
 
         // Per-chunk retry budget: proxy kills are transient. 5 attempts per
         // chunk with exponential backoff (3s → 5s → 10s → 15s → 20s) gives
@@ -2503,17 +2695,17 @@ export class DaemonConnection {
 
         // Reassemble chunks and verify size before unpacking
         const remoteSize = parseInt(
-          await this.sshExec(`cat ${chunkDir}/chunk_* > ${remotePath}.gz && wc -c < ${remotePath}.gz`, 30_000),
+          await this.sshExec(`cat ${shq(chunkDir)}/chunk_* > ${shq(remotePath + '.gz')} && wc -c < ${shq(remotePath + '.gz')}`, 30_000),
           10,
         )
         if (remoteSize !== gzSize) {
-          await this.sshExec(`rm -rf ${chunkDir} ${remotePath}.gz`, 5_000).catch(() => {})
+          await this.sshExec(`rm -rf ${shq(chunkDir)} ${shq(remotePath + '.gz')}`, 5_000).catch(() => {})
           throw new Error(`binary deploy size mismatch: remote=${remoteSize} local=${gzSize}`)
         }
 
         // Unpack and make executable
         const unpackResult = await this.sshExec(
-          `rm -rf ${chunkDir} && gunzip -f ${remotePath}.gz && chmod +x ${remotePath} && ${remotePath} --version`,
+          `rm -rf ${shq(chunkDir)} && gunzip -f ${shq(remotePath + '.gz')} && chmod +x ${shq(remotePath)} && ${shq(remotePath)} --version`,
           30_000,
         )
 
@@ -2540,9 +2732,10 @@ export class DaemonConnection {
 
     try {
       // Create directory and clean up legacy daemon.js (which breaks under "type":"module")
-      await this.sshExec('mkdir -p /tmp/open-walnut && rm -f /tmp/open-walnut/daemon.js')
+      const dir = this._remoteDir
+      await this.sshExec(`mkdir -p ${shq(dir)} && rm -f ${shq(dir + '/daemon.js')}`)
 
-      const args = [...this.baseSshArgs, this.sshHostString, 'cat > /tmp/open-walnut/daemon.cjs']
+      const args = [...this.baseSshArgs, this.sshHostString, markedUploadCommand(`${dir}/daemon.cjs`)]
       const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
       proc.stdin!.on('error', () => {})  // prevent EPIPE crash if SSH dies
 
@@ -2563,7 +2756,7 @@ export class DaemonConnection {
       for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs']) {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
-          const scArgs = [...this.baseSshArgs, this.sshHostString, `cat > /tmp/open-walnut/${sidecarFile}`]
+          const scArgs = [...this.baseSshArgs, this.sshHostString, markedUploadCommand(`${dir}/${sidecarFile}`)]
           const scProc = spawn('ssh', scArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
           scProc.stdin!.on('error', () => {})
           await new Promise<void>((resolve, reject) => {
@@ -2589,7 +2782,7 @@ export class DaemonConnection {
       // saves 5-30s and avoids EBADPLATFORM on hosts without npm.
       if (!this._bunPath) {
         try {
-          await this.sshExec(`${preamble}; cd /tmp/open-walnut && node -e "require('ws')" 2>/dev/null || (rm -f package.json && npm install --prefix /tmp/open-walnut ws 2>/dev/null)`, 30_000)
+          await this.sshExec(`${userShellPathScript(preamble)}\ncd ${shq(dir)} && node -e "require('ws')" 2>/dev/null || (rm -f package.json && npm install --prefix ${shq(dir)} ws 2>/dev/null)`, 30_000)
         } catch {
           log.session.debug('DaemonConnection: ws install skipped', { host: this.hostKey })
         }
@@ -2609,7 +2802,7 @@ export class DaemonConnection {
    * Uses the binary directly when deployed (no PATH discovery needed).
    * Falls back to node + preamble for source-based deployments.
    */
-  private async startDaemon(): Promise<number> {
+  private async startDaemon(runtime?: RemoteRuntime): Promise<number> {
     try {
       // Start command is built by the PURE builder in daemon-start-cmd.ts —
       // env vars ride as structured data (rendered `nohup env K=V cmd`; a
@@ -2640,25 +2833,44 @@ export class DaemonConnection {
         Object.assign(daemonEnv, buildTurnRetryEnv(cfg.session?.turn_retry))
       } catch { /* config unavailable — default policy */ }
 
+      // A relocated daemon (remote-daemon-dir.ts) learns its dir from the env.
+      Object.assign(daemonEnv, this.dirEnv)
+      const dir = this._remoteDir
+      const chosen: RemoteRuntime = runtime
+        ?? (this._deployedViaSource && this._bunPath ? 'bun'
+          : !this._deployedViaSource && await this.getLocalBinaryPath() ? 'binary' : 'node')
       let startCmd: string
-      if (this._deployedViaSource && this._bunPath) {
-        startCmd = buildDaemonStartCmd({ runtime: 'bun', execPath: this._bunPath, env: daemonEnv })
-      } else if (!this._deployedViaSource && await this.getLocalBinaryPath()) {
-        startCmd = buildDaemonStartCmd({ runtime: 'binary', execPath: await this.getRemoteDaemonPath(), env: daemonEnv })
+      if (chosen === 'bun' && this._bunPath) {
+        startCmd = buildDaemonStartCmd({ runtime: 'bun', execPath: this._bunPath, env: daemonEnv, dir })
+      } else if (chosen === 'binary') {
+        startCmd = buildDaemonStartCmd({ runtime: 'binary', execPath: await this.getRemoteDaemonPath(), env: daemonEnv, dir })
       } else {
         startCmd = buildDaemonStartCmd({
           runtime: 'node',
           env: daemonEnv,
-          preamble: buildRemotePreamble(this.ssh.shell_setup),
+          dir,
+          // The node PATH comes from the user's own shell running the preamble
+          // (remote-sh.ts), since the start itself now runs under sh.
+          preamble: userShellPathScript(buildRemotePreamble(this.ssh.shell_setup)),
         })
       }
 
-      const output = await this.sshExec(startCmd, 60_000)
+      // A non-zero exit here is the start failing (no port file, --status says
+      // not running): read the start log either way, since the runtime's own
+      // death (walnut-daemon-exit=N, "Illegal instruction") is recorded THERE
+      // and the runtime fallback reads it. Only a dead link is rethrown as is.
+      let output = ''
+      let startErr = ''
+      try {
+        output = await this.sshExec(startCmd, 60_000)
+      } catch (err) {
+        if (isSshTransportFailure(err)) throw err
+        startErr = (err instanceof Error ? err.message : String(err)).split('\n').slice(1).join(' ').trim()
+      }
 
-      // Parse out port + status confirmation. Defensive against preamble noise:
-      // the source-deploy branch runs shell_setup which may source rc files
-      // that print banners, MOTDs, or nvm/pyenv init lines. Match by shape:
-      // port = pure digits, status = contains "running":true.
+      // Parse out port + status confirmation. Only the marked output reaches
+      // here (remote-sh.ts), but the node branch still runs shell_setup, which
+      // may print: match by shape. port = pure digits, status = "running":true.
       const lines = output.trim().split('\n').map(l => l.trim()).filter(Boolean)
       // Extract port: prefer a pure-digit line, fall back to leading digits of
       // any line (handles cases where port file has no trailing newline and
@@ -2673,17 +2885,18 @@ export class DaemonConnection {
       const statusLine = lines.find(l => l.includes('"running":true')) || ''
       const port = parseInt(portStr, 10)
 
-      if (isNaN(port) || port < 1 || port > 65535 || !statusLine.includes('"running":true')) {
+      if (startErr || isNaN(port) || port < 1 || port > 65535 || !statusLine.includes('"running":true')) {
         // Read the startup log for diagnostics and detect the specific failure
         // modes we've seen in production.
         let startLog = ''
-        try { startLog = await this.sshExec('cat /tmp/open-walnut/daemon-start.log 2>/dev/null', 5_000) } catch {}
+        try { startLog = await this.sshExec(`cat ${shq(dir + '/daemon-start.log')} 2>/dev/null || true`, 5_000) } catch {}
 
         const hint = diagnoseDaemonStartLog(startLog, this.hostKey)
 
         throw new Error(
           `daemon failed to start (port='${portStr}', status='${statusLine}')${hint}. `
-          + `Startup log: ${startLog.slice(0, 500)}`,
+          + `Startup log: ${startLog.slice(0, 500)}`
+          + (startErr ? `. Start command said: ${startErr.slice(0, 300)}` : ''),
         )
       }
 
@@ -2727,6 +2940,11 @@ export class DaemonConnection {
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     this.tunnel.unref()
+    // What ssh said while setting the tunnel up ("Port forwarding is disabled
+    // to avoid man-in-the-middle attacks" after a host key change): the error
+    // below quotes it so the failure can be classified. Bounded, then ignored.
+    let tunnelStderr = ''
+    this.tunnel.stderr?.on('data', (d: Buffer) => { if (tunnelStderr.length < 4096) tunnelStderr += d.toString() })
 
     // Monitor tunnel death for auto-reconnect
     this.tunnel.on('exit', (code) => {
@@ -2741,7 +2959,8 @@ export class DaemonConnection {
     // SSH tunnel needs time to establish the port forwarding. Fixed sleeps are unreliable.
     const tunnelReady = await this.waitForTunnel(localPort, 10_000)
     if (!tunnelReady) {
-      throw new Error(`SSH tunnel created but port ${localPort} not accepting connections after 10s`)
+      const said = tunnelStderr.trim().split('\n').slice(-6).join('\n')
+      throw new Error(`SSH tunnel created but port ${localPort} not accepting connections after 10s${said ? `\n${said}` : ''}`)
     }
 
     log.session.info('DaemonConnection: SSH tunnel created', {
@@ -3238,21 +3457,35 @@ export class DaemonConnection {
       this._reconnectAttempts += 1
       try {
         await this.reconnect()
-      } catch (err) {
+      } catch (rawErr) {
+        // Same local evidence as a first connect: an expired certificate on a
+        // host that WAS connected must read as cert_expired, not plain auth.
+        const err = this.sshTarget ? await annotateCredentialFailure(rawErr, this.sshHostString) : rawErr
+        if (this._destroyed || this._connected) return
         const msg = err instanceof Error ? err.message : String(err)
         // Standing failures: retrying every 30s can't fix an expired SSH cert
-        // (needs mwinit) or a hostname that no longer resolves. Back off to a
-        // slow probe instead of hammering — see RECONNECT_STANDING_FAILURE_DELAY_MS.
-        const standing = /Permission denied \(publickey\)|Could not resolve hostname/.test(msg)
-        const nextDelayMs = standing
-          ? DaemonConnection.RECONNECT_STANDING_FAILURE_DELAY_MS
-          : Math.min(delayMs * 2, DaemonConnection.RECONNECT_MAX_DELAY_MS)
+        // (needs a login), a changed host key, or a hostname that no longer
+        // resolves. Credential waits follow the warmup's schedule (1, 2, 5, 10
+        // minutes, then hourly) so a login done elsewhere reconnects soon;
+        // the rest back off to a slow probe (RECONNECT_STANDING_FAILURE_DELAY_MS).
+        const kind = this.sshTarget
+          ? classifyHostConnectError(msg, this.sshHostString, [this.hostKey, this.ssh.hostname, this.ssh.user ?? '']).kind
+          : 'unknown'
+        const credentialWait = CREDENTIAL_WAIT_KINDS.has(kind)
+        const standing = credentialWait || kind === 'auth' || kind === 'dns' || kind === 'host_key'
+        const nextDelayMs = credentialWait
+          ? credentialRetryDelayMs(this._credentialReconnects++)
+          : standing
+            ? DaemonConnection.RECONNECT_STANDING_FAILURE_DELAY_MS
+            : Math.min(delayMs * 2, DaemonConnection.RECONNECT_MAX_DELAY_MS)
+        if (!credentialWait) this._credentialReconnects = 0
         log.session.warn('DaemonConnection: reconnect failed, will retry', {
           host: this.hostKey,
           attempt: this._reconnectAttempts,
           stuckForMs: this._disconnectedSince ? Date.now() - this._disconnectedSince : null,
           error: msg,
           standingFailure: standing || undefined,
+          kind,
           nextDelayMs,
         })
         this.scheduleReconnect(nextDelayMs)
@@ -3322,6 +3555,7 @@ export class DaemonConnection {
     // outer reconnect loop retries with backoff instead of redeploying.
     let daemonPort: number | null
     try {
+      await this.resolveRemoteDir()
       daemonPort = await this.checkDaemonRunning({ strict: true })
     } catch (err) {
       log.session.warn('DaemonConnection: daemon status probe failed via SSH — will retry reconnect', {
@@ -3342,8 +3576,7 @@ export class DaemonConnection {
       }
       // Daemon genuinely absent — redeploy and restart
       log.session.info('DaemonConnection: daemon not running, redeploying', { host: this.hostKey })
-      await this.deployDaemon()
-      daemonPort = await this.startDaemon()
+      daemonPort = await this.deployAndStart()
     }
 
     this.remotePort = daemonPort
@@ -4023,13 +4256,20 @@ const FAILURE_CACHE_TTL_MS = 60_000  // 60s — longer than the worst-case SSH t
  */
 export function summarizeConnectFailure(raw: string, maxLen = 160): string {
   const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean)
+  // Evidence the connect gathered locally (ssh-credential-evidence.ts) is the
+  // part that says WHY, so it always survives the summary.
+  const evidence = lines.find((l) => l.startsWith(SSH_EVIDENCE_PREFIX))
+  const rest = lines.filter((l) => l !== evidence && !/^@+$/.test(l))
   // Prefer the line that says what went wrong over the echoed command.
-  const signal = lines.find((l) => /^(ssh|Connection|Permission|Host|kex_|Timeout|error:|Error:)/i.test(l)
+  const signal = rest.find((l) => /^(ssh|Connection|Permission|Host|kex_|Timeout|error:|Error:|Could not|shell_noise|Port forwarding|@\s+WARNING)/i.test(l)
     && !l.startsWith('Command failed:'))
-    ?? lines.find((l) => !l.startsWith('Command failed:') && !l.includes(' -o '))
-    ?? lines[0] ?? raw
+    ?? rest.find((l) => !l.startsWith('Command failed:') && !l.includes(' -o '))
+    ?? rest[0] ?? evidence ?? raw
+  const clip = (text: string, len: number) => (text.length > len ? `${text.slice(0, Math.max(0, len - 1))}…` : text)
   const oneLine = signal.replace(/\s+/g, ' ')
-  return oneLine.length > maxLen ? `${oneLine.slice(0, maxLen - 1)}…` : oneLine
+  if (!evidence || signal === evidence) return clip(oneLine, maxLen)
+  const tail = ` [${evidence.replace(/\s+/g, ' ')}]`
+  return clip(oneLine, Math.max(20, maxLen - tail.length)) + clip(tail, maxLen)
 }
 
 /**
@@ -4243,6 +4483,10 @@ export interface DaemonConnectState {
   error?: string
   /** ms until the failure cache expires and an automatic retry is allowed. */
   retryInMs?: number
+  /** Which runtime the host's daemon ended up on (after any fallback). */
+  runtime?: RemoteRuntime | 'unknown'
+  /** Where the daemon keeps its files there, once a probe decided. */
+  daemonDir?: DaemonDirChoice & { home?: string }
 }
 
 export function getDaemonConnectState(hostKey: string): DaemonConnectState {
@@ -4255,6 +4499,9 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
     phaseElapsedMs: conn ? Math.max(0, now - conn.connectPhaseSince) : 0,
     connectElapsedMs: conn?.connectStartedAt ? Math.max(0, now - conn.connectStartedAt) : 0,
   }
+  if (conn?.remoteRuntime) state.runtime = conn.remoteRuntime
+  const dir = conn?.remoteDirChoice
+  if (dir) state.daemonDir = { ...dir, ...(conn?.remoteHome ? { home: conn.remoteHome } : {}) }
   const failure = failureCache.get(hostKey)
   if (failure && now - failure.time < FAILURE_CACHE_TTL_MS) {
     state.phase = 'failed'

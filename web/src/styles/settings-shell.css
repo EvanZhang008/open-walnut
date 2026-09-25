@@ -60,6 +60,67 @@
   user-select: text;
 }
 
+/* "Copy diagnostics" on the build line: the line's own muted text, underlined on hover. */
+.settings-build-line-action {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+}
+
+.settings-build-line-action:hover:not(:disabled) {
+  text-decoration-color: currentColor;
+}
+
+.settings-build-line-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.settings-build-line-action:disabled {
+  cursor: progress;
+}
+
+/* A failed copy says why without adding a row: one clipped line, full text on hover. */
+.settings-build-line-error,
+.settings-copy-diagnostics-error {
+  display: inline-block;
+  max-width: 36ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--settings-error-text, var(--error));
+}
+
+.settings-build-line-error {
+  margin-left: 8px;
+}
+
+.settings-copy-diagnostics-error {
+  font-size: 12.5px;
+  line-height: 17px;
+}
+
+/* After a failed copy: the text itself, read-only, to select by hand. */
+.settings-diagnostics-fallback {
+  margin: 12px 0 0;
+}
+
+.settings-diagnostics-fallback-note {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--fg-muted);
+}
+
 /* ── Section shell: no box of its own; groups are the only surfaces ── */
 .settings-section.settings-card {
   max-width: none;

@@ -32,7 +32,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { listDirsCached, type ConfiguredHost, type DirListingHostError, type DirListingPending } from '@/api/sessions';
+import { listDirsCached, type ConfiguredHost, type DirListingHostError, type DirListingIncomplete, type DirListingPending } from '@/api/sessions';
 import { wsClient } from '@/api/ws';
 import { getHostStatus, hasSeenHostStatusPush, subscribeHostStatus, useAllHostStatus } from '@/hooks/useHostStatus';
 import { isHostFailed } from '@/utils/host-connect';
@@ -49,6 +49,8 @@ export interface HostLiveState {
   pending?: DirListingPending;
   /** Structured connect failure while status is 'error' (remote hosts only). */
   hostError?: DirListingHostError;
+  /** Listed ('done'), but some entries did not answer: `dirs` may be missing some. */
+  incomplete?: DirListingIncomplete;
 }
 
 export interface LiveDirsResult {
@@ -209,7 +211,10 @@ export function useLiveDirs(
               return;
             }
             connectingRef.current.delete(key);
-            update(key, { status: 'done', parent: listing.parent, exists: listing.exists, dirs: listing.dirs });
+            update(key, {
+              status: 'done', parent: listing.parent, exists: listing.exists, dirs: listing.dirs,
+              ...(listing.incomplete ? { incomplete: listing.incomplete } : {}),
+            });
           })
           .catch(err => {
             if (epoch !== epochRef.current) return;

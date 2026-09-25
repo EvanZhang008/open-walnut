@@ -68,6 +68,8 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
   it('Test 1 — connect(), no daemon running → throws attach-only, never deploys/starts', async () => {
     const conn = new DaemonConnection('clouddev', testSshTarget)
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
+    // The daemon dir probe is the connect's first ssh call; no host is dialled here.
+    vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
     vi.spyOn(priv(conn), 'checkDaemonRunning').mockResolvedValue(null)
     const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
     const start = vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(12345)
@@ -80,6 +82,8 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
   it('Test 2 — connect() handshake fail → throws attach-only, never forceRedeploy', async () => {
     const conn = new DaemonConnection('clouddev', testSshTarget)
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
+    // The daemon dir probe is the connect's first ssh call; no host is dialled here.
+    vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
     // Non-null port → skip the deploy branch and reach the handshake guard.
     vi.spyOn(priv(conn), 'checkDaemonRunning').mockResolvedValue(9999)
     vi.spyOn(priv(conn), 'createTunnel').mockResolvedValue(5555)
@@ -117,6 +121,8 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
     // host !== '__local__' with sshTarget → takes the SSH branch.
     vi.spyOn(priv(conn), 'stopControlMaster').mockResolvedValue(undefined)
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
+    // The daemon dir probe is the connect's first ssh call; no host is dialled here.
+    vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
     vi.spyOn(priv(conn), 'checkDaemonRunning').mockResolvedValue(null)
     const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
     const start = vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(12345)
@@ -130,6 +136,8 @@ describe('ephemeral attach-only: prevents destructive daemon ops', () => {
     const conn = new DaemonConnection('clouddev', testSshTarget)
     vi.spyOn(priv(conn), 'stopControlMaster').mockResolvedValue(undefined)
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
+    // The daemon dir probe is the connect's first ssh call; no host is dialled here.
+    vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
     // Non-null port → skip deploy branch, reach the reconnect handshake guard.
     vi.spyOn(priv(conn), 'checkDaemonRunning').mockResolvedValue(9999)
     vi.spyOn(priv(conn), 'createTunnel').mockResolvedValue(5555)
@@ -163,10 +171,12 @@ describe('ephemeral remote hosts: off unless WALNUT_EPHEMERAL_REMOTE_HOSTS=1', (
     delete process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS
     const conn = new DaemonConnection('clouddev', testSshTarget)
     const ssh = vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
+    const dirProbe = vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
     const probe = vi.spyOn(priv(conn), 'checkDaemonRunning').mockResolvedValue(9999)
 
     await expect(conn.connect()).rejects.toThrow(/ephemeral server: remote host 'clouddev' is off for test servers/)
     expect(ssh).toHaveBeenCalledTimes(0)
+    expect(dirProbe).toHaveBeenCalledTimes(0)
     expect(probe).toHaveBeenCalledTimes(0)
     const { classifyHostConnectError } = await import('../../src/core/sessions/host-connect-hint.js')
     expect(classifyHostConnectError(`ephemeral server: remote host 'clouddev' is off for test servers`, 'clouddev').kind).toBe('ephemeral')
@@ -176,6 +186,8 @@ describe('ephemeral remote hosts: off unless WALNUT_EPHEMERAL_REMOTE_HOSTS=1', (
     process.env.WALNUT_EPHEMERAL_REMOTE_HOSTS = '1'
     const conn = new DaemonConnection('clouddev', testSshTarget)
     const ssh = vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
+    // The daemon dir probe is the connect's first ssh call; no host is dialled here.
+    vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
     vi.spyOn(priv(conn), 'checkDaemonRunning').mockResolvedValue(null)
 
     await expect(conn.connect()).rejects.toThrow(/attach-only/)

@@ -185,6 +185,8 @@ describe('DaemonConnection — managed host, daemon not answering', () => {
     const conn = new DaemonConnection('devbox', TARGET)
     stubSsh(conn, { probe: managedProbe() })
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
+    // The daemon dir probe has its own tests; the stub ssh does not answer it.
+    vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
     const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
     const start = vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(1234)
 
@@ -198,6 +200,8 @@ describe('DaemonConnection — managed host, daemon not answering', () => {
     stubSsh(conn, { probe: managedProbe() })
     vi.spyOn(priv(conn), 'stopControlMaster').mockResolvedValue(undefined)
     vi.spyOn(priv(conn), 'ensureControlMaster').mockResolvedValue(undefined)
+    // The daemon dir probe has its own tests; the stub ssh does not answer it.
+    vi.spyOn(priv(conn), 'resolveRemoteDir').mockResolvedValue(undefined)
     const deploy = vi.spyOn(priv(conn), 'deployDaemon').mockResolvedValue(undefined)
     const start = vi.spyOn(priv(conn), 'startDaemon').mockResolvedValue(1234)
 

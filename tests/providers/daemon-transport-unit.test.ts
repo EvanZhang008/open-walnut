@@ -60,6 +60,8 @@ describe('B0: ephemeral attach-only discriminator (non-ephemeral)', () => {
     const priv = conn as unknown as Record<string, (...args: unknown[]) => unknown>
 
     vi.spyOn(priv, 'ensureControlMaster').mockResolvedValue(undefined)
+    // The daemon dir probe is the connect's first ssh call; no host is dialled here.
+    vi.spyOn(priv, 'resolveRemoteDir').mockResolvedValue(undefined)
     vi.spyOn(priv, 'checkDaemonRunning').mockResolvedValue(null)
     const deploy = vi.spyOn(priv, 'deployDaemon').mockResolvedValue(undefined)
     const start = vi.spyOn(priv, 'startDaemon').mockResolvedValue(42424)

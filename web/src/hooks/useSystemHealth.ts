@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { useEvent } from './useWebSocket';
+import type { LocalClaudeStatus } from '@/api/local-claude';
 
 export interface GitSyncHealth {
   protected: boolean;
@@ -39,6 +40,8 @@ export interface SystemHealth {
   mainProviderImplicit?: boolean;
   /** How the local Claude Code signs in, e.g. "Bedrock (us-west-2)" or "your Claude subscription". */
   claudeCliAuth?: string;
+  /** This machine's Claude Code: installed, signed in, new enough for the configured model. */
+  localClaude?: LocalClaudeStatus;
 }
 
 const defaultHealth: SystemHealth = {};

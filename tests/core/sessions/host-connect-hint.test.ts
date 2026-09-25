@@ -5,6 +5,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyHostConnectError,
+  credentialRetryDelayMs,
+  CREDENTIAL_WAIT_KINDS,
   describeConnectPhase,
   describeListingError,
   IN_PROGRESS_PHASES,
@@ -17,12 +19,13 @@ describe('classifyHostConnectError', () => {
   it.each([
     ['me@h: Permission denied (publickey).', 'auth'],
     ['Connection to devbox failed 12s ago: Permission denied (publickey,keyboard-interactive)', 'auth'],
-    ['Host key verification failed.', 'auth'],
+    ['Host key verification failed.', 'host_key'],
     ['ssh: Could not resolve hostname devbox.example.test: nodename nor servname provided, or not known', 'dns'],
     ['ssh: Could not resolve hostname x: Name or service not known', 'dns'],
     ['ssh: connect to host 10.0.0.9 port 22: Connection refused', 'refused'],
     ['ssh: connect to host 10.0.0.9 port 22: No route to host', 'unreachable'],
-    ['Connection closed by UNKNOWN port 65535', 'unreachable'],
+    ['Connection closed by UNKNOWN port 65535', 'proxy'],
+    ['Connection closed by 10.0.0.9 port 22', 'unreachable'],
     ['ssh: connect to host h port 22: Operation timed out', 'timeout'],
     ['Remote connection to devbox timed out', 'timeout'],
     ['bun: command not found', 'runtime'],
@@ -39,7 +42,7 @@ describe('classifyHostConnectError', () => {
   it("the host's own names are not evidence: an alias like `nodedev` is not a runtime problem", () => {
     const names = ['nodedev', 'Bun box', 'nodedev.example.test', 'me'];
     const closed = 'Connection to nodedev failed 8s ago: kex_exchange_identification: Connection closed by remote host';
-    expect(classifyHostConnectError(closed, 'me@nodedev.example.test', names).kind).toBe('unreachable');
+    expect(classifyHostConnectError(closed, 'me@nodedev.example.test', names).kind).toBe('proxy');
     // Without the names the alias would have matched /node/ first.
     expect(classifyHostConnectError('Connection to nodedev failed 8s ago: exit 255', 'me@nodedev.example.test').kind).toBe('runtime');
     expect(classifyHostConnectError('Connection to nodedev failed 8s ago: exit 255', 'me@nodedev.example.test', names).kind).toBe('unknown');
@@ -69,7 +72,9 @@ describe('classifyHostConnectError', () => {
   });
 
   it('every hint is one actionable sentence, never empty', () => {
-    for (const m of ['Permission denied', 'Could not resolve hostname', 'Connection refused', 'No route to host', 'timed out', 'bun missing', 'handshake', 'attach-only', 'zzz']) {
+    for (const m of ['Permission denied', 'Could not resolve hostname', 'Connection refused', 'No route to host', 'timed out', 'bun missing', 'handshake', 'attach-only', 'zzz',
+      'Host key verification failed.', 'walnut-ssh-evidence: cert-expired (x)', 'Could not open a connection to your authentication agent.',
+      'kex_exchange_identification: read: Connection reset by peer', 'shell_noise: no markers']) {
       const { hint } = classifyHostConnectError(m, T);
       expect(hint.length).toBeGreaterThan(20);
       expect(hint.trim()).toBe(hint);
@@ -92,5 +97,100 @@ describe('describeConnectPhase', () => {
     for (const p of phases) {
       expect(IN_PROGRESS_PHASES.has(p)).toBe(p !== 'connected' && p !== 'failed');
     }
+  });
+});
+
+/**
+ * Captured ssh stderr, one real shape per new kind. Each carries the text ssh
+ * actually prints (OpenSSH 9/10), including the echoed command Walnut's own
+ * error adds in front, because the classifier sees the whole message.
+ */
+const ECHO = 'Command failed: ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ControlPath=/tmp/walnut-ssh-devbox-1 me@devbox.example.test sh -s';
+
+const CAPTURED: Array<[string, string, string]> = [
+  ['host_key', 'changed key, strict checking', [
+    ECHO,
+    '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@',
+    '@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @',
+    '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@',
+    'IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!',
+    'Offending ED25519 key in /home/me/.ssh/known_hosts:12',
+    'Host key for devbox.example.test has changed and you have requested strict checking.',
+    'Host key verification failed.',
+  ].join('\n')],
+  ['host_key', 'changed key under StrictHostKeyChecking=no (the tunnel loses port forwarding)', [
+    'SSH tunnel created but port 51234 not accepting connections after 10s',
+    '@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @',
+    'Password authentication is disabled to avoid man-in-the-middle attacks.',
+    'Port forwarding is disabled to avoid man-in-the-middle attacks.',
+  ].join('\n')],
+  ['cert_expired', 'publickey refusal plus the local agent evidence', [
+    ECHO, 'me@devbox.example.test: Permission denied (publickey).',
+    'walnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-09-24 08:00)',
+  ].join('\n')],
+  ['cert_expired', 'the one-line cached summary keeps the evidence', 'Permission denied (publickey). [walnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-09-24 08:00)]'],
+  ['agent_missing', 'ssh-add style agent refusal', 'Could not open a connection to your authentication agent.'],
+  ['agent_missing', 'dead agent socket', [ECHO, 'Error connecting to agent: No such file or directory', 'me@devbox.example.test: Permission denied (publickey).'].join('\n')],
+  ['agent_missing', 'publickey refusal with SSH_AUTH_SOCK unset', [
+    ECHO, 'me@devbox.example.test: Permission denied (publickey).',
+    'walnut-ssh-evidence: agent-missing (SSH_AUTH_SOCK is not set for Walnut)',
+  ].join('\n')],
+  ['proxy', 'ProxyCommand that died', [
+    ECHO, '/bin/sh: line 1: jump-helper: command not found',
+    'kex_exchange_identification: Connection closed by remote host',
+    'Connection closed by UNKNOWN port 65535',
+  ].join('\n')],
+  ['proxy', 'ProxyJump bastion that cannot reach the target', [
+    ECHO, 'channel 0: open failed: connect failed: No route to host',
+    'stdio forwarding failed',
+    'Connection closed by UNKNOWN port 65535',
+  ].join('\n')],
+  ['shell_noise', 'login shell that never ran sh -s', "shell_noise: the login shell on me@devbox.example.test answered without Walnut's output markers (it did not run `sh -s` as written). It printed: This account is restricted."],
+];
+
+describe('classifyHostConnectError: captured ssh stderr for each new kind', () => {
+  it.each(CAPTURED)('%s: %s', (kind, _label, message) => {
+    const r = classifyHostConnectError(message, T, ['devbox', 'devbox.example.test', 'me'], { hostname: 'devbox.example.test' });
+    expect(r.kind).toBe(kind);
+    expect(r.hint.trim()).toBe(r.hint);
+    expect(r.hint).not.toMatch(/\n/);
+  });
+
+  it("Walnut's own echoed `-o StrictHostKeyChecking=no` is never host key evidence", () => {
+    const m = `${ECHO}\nme@devbox.example.test: Permission denied (publickey).`;
+    expect(classifyHostConnectError(m, T).kind).toBe('auth');
+  });
+
+  it('the host_key hint names the exact ssh-keygen -R command and why not to run it blindly', () => {
+    const { hint } = classifyHostConnectError('Host key verification failed.', T, [], { hostname: 'devbox.example.test' });
+    expect(hint).toContain('`ssh-keygen -R devbox.example.test`');
+    expect(hint).toMatch(/intercepting/);
+    // A non-default port is stored as [host]:port in known_hosts.
+    const ported = classifyHostConnectError('Host key verification failed.', T, [], { hostname: 'devbox.example.test', port: 2222 });
+    expect(ported.hint).toContain("`ssh-keygen -R '[devbox.example.test]:2222'`");
+  });
+
+  it('the cert_expired hint names no product, only "your organisation\'s login command"', () => {
+    const { hint } = classifyHostConnectError('walnut-ssh-evidence: cert-expired (x)', T);
+    expect(hint).toMatch(/SSH certificate expired/);
+    expect(hint).toMatch(/organisation's login command/);
+    expect(hint).toMatch(/Retry/);
+  });
+
+  it('retryable: a plain retry can work for network-shaped kinds, not for ones a person must fix', () => {
+    const r = (m: string) => classifyHostConnectError(m, T).retryable;
+    expect(r('Connection closed by UNKNOWN port 65535')).toBe(true);
+    expect(r('ssh: connect to host h port 22: Operation timed out')).toBe(true);
+    expect(r('No route to host')).toBe(true);
+    expect(r('Host key verification failed.')).toBe(false);
+    expect(r('Permission denied (publickey).')).toBe(false);
+    expect(r('walnut-ssh-evidence: cert-expired (x)')).toBe(false);
+    expect(r('shell_noise: x')).toBe(false);
+    expect(describeListingError('X').retryable).toBe(true);
+  });
+
+  it('the credential kinds are the ones the warmup re-dials on 1, 2, 5, 10 minutes, then hourly', () => {
+    expect([...CREDENTIAL_WAIT_KINDS].sort()).toEqual(['agent_missing', 'cert_expired']);
+    expect([0, 1, 2, 3, 4, 9].map(credentialRetryDelayMs)).toEqual([60_000, 120_000, 300_000, 600_000, 3_600_000, 3_600_000]);
   });
 });

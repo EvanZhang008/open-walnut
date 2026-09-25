@@ -69,3 +69,34 @@ systemRouter.get('/health', async (req, res) => {
 
   res.json(response)
 })
+
+// ── This machine's Claude Code (the setup banner) ──
+
+/** The banner's re-check answers inside this even when the probe hangs (the daemon caps itself at 12s). */
+const LOCAL_CHECK_DEADLINE_MS = 14_000
+
+// POST /api/system/local-claude/check: ask this machine again. `{ poll: true }`
+// (the banner's 15s timer) is answered from a result under 10s old, so several
+// open windows share one probe; a click always asks.
+systemRouter.post('/local-claude/check', async (req, res) => {
+  if (CLOUD_MODE) { res.status(404).json({ error: 'not available on a cloud companion' }); return }
+  const { refreshLocalClaude, getLocalClaude } = await import('../../core/hosts/local-readiness.js')
+  const poll = (req.body as { poll?: unknown } | undefined)?.poll === true
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), LOCAL_CHECK_DEADLINE_MS) })
+  const status = await Promise.race([refreshLocalClaude({ maxAgeMs: poll ? 10_000 : 0 }), deadline])
+  clearTimeout(timer)
+  // Timed out or failed: the stored answer (with its checkError), never a hang.
+  res.status(status ? 200 : 202).json({ localClaude: status ?? getLocalClaude() ?? null })
+})
+
+// POST /api/system/local-claude/fix { kind }: the banner's one-click install or
+// update for one problem. Answers at once; progress arrives on system:health.
+systemRouter.post('/local-claude/fix', async (req, res) => {
+  if (CLOUD_MODE) { res.status(404).json({ error: 'not available on a cloud companion' }); return }
+  const { startLocalClaudeFix, getLocalClaude } = await import('../../core/hosts/local-readiness.js')
+  const kind = (req.body as { kind?: unknown } | undefined)?.kind
+  const started = startLocalClaudeFix(typeof kind === 'string' ? kind : '')
+  if (!started.ok) { res.status(409).json({ error: started.error, localClaude: getLocalClaude() ?? null }); return }
+  res.status(202).json({ localClaude: started.status })
+})

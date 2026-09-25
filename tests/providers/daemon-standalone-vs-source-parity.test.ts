@@ -432,7 +432,10 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       // direct-spawn test launchers must get the fix without opting in, and a
       // stale inherited parent pid must never make PROD reap live sessions.
       expect(src).toMatch(/function shouldReapOnExit/)
-      expect(src).toMatch(/path\.resolve\(DAEMON_DIR\)\s*!==\s*path\.resolve\(PROD_DAEMON_DIR\)/)
+      // Production = /tmp/open-walnut or the ~/.cache/open-walnut fallback a
+      // connect moves to when /tmp cannot take the daemon; anything else is isolated.
+      expect(src).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)/)
+      expect(src).toMatch(/function shouldReapOnExit\(\)[^{]*\{[\s\S]{0,400}!IS_PROD_DAEMON_DIR/)
       // ownsFiles gate is load-bearing: a daemon that LOST the pid-file race must
       // not kill the process groups its successor already adopted.
       expect(src).toMatch(/if\s*\(ownsFiles\s*&&\s*shouldReapOnExit\(\)\)\s*reapAllSessionGroupsSync\(\)/)

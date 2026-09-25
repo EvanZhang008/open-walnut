@@ -245,6 +245,26 @@ describe('listRemoteDirs — daemon branch (fake connection)', () => {
     expect(conn.asked).not.toContain('/r/a/link');
   });
 
+  it('entries that did not answer (a link into a hung mount) are counted, never listed as dirs', async () => {
+    const listing = await listRemoteDirs(fakeConn({
+      '/w/': { ok: true, resolvedPath: '/w', partial: true, timedOut: 1, entries: [
+        { name: 'nas', type: 'unknown', symlink: true, timedOut: true },
+        { name: 'src', type: 'dir' },
+      ]},
+      '/w/src': { ok: true, partial: true, timedOut: 2, entries: [{ name: 'lib', type: 'dir' }] },
+    }), '/w/', 2);
+    expect(listing.dirs).toEqual(['/w/src', '/w/src/lib']);
+    expect(listing.unanswered).toBe(3);
+  });
+
+  it('a complete reply (or an older daemon without the fields) has no unanswered count', async () => {
+    const listing = await listRemoteDirs(fakeConn({
+      '/c/': { ok: true, resolvedPath: '/c', entries: [{ name: 'a', type: 'dir' }] },
+      '/c/a': { ok: true, partial: false, timedOut: 0, entries: [] },
+    }), '/c/', 2);
+    expect(listing).not.toHaveProperty('unanswered');
+  });
+
   it('isEnoentLike matches cwd-check semantics', () => {
     expect(isEnoentLike('fs.ls failed: ENOENT: no such file or directory')).toBe(true);
     expect(isEnoentLike('No such file or directory')).toBe(true);

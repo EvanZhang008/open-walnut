@@ -68,12 +68,16 @@ function extractCmdSkillsSync(): (homeDir: string, daemonDir: string, prodDir: s
     let reply: Reply = {}
     const sendOk = (_ws: unknown, _id: unknown, data: Reply) => { reply = { ok: true, ...data } }
     const sendError = (_ws: unknown, _id: unknown, error: string) => { reply = { ok: false, error } }
+    // Mirrors the twin's module-level IS_PROD_DAEMON_DIR: /tmp/open-walnut, or the
+    // $HOME/.cache/open-walnut fallback a connect moves to when /tmp is unusable.
+    const isProd = path.resolve(daemonDir) === path.resolve(prodDir)
+      || path.resolve(daemonDir) === path.resolve(path.join(homeDir, '.cache', 'open-walnut'))
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const bound = new Function(
-      'path', 'fs', 'HOME_DIR', 'DAEMON_DIR', 'PROD_DAEMON_DIR', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER', 'CMD',
+      'path', 'fs', 'HOME_DIR', 'DAEMON_DIR', 'PROD_DAEMON_DIR', 'IS_PROD_DAEMON_DIR', 'sendOk', 'sendError', 'logMsg', 'SKILL_SYNC_MARKER', 'CMD',
       fnSrc + '\nreturn cmdSkillsSync(null, 1, CMD);',
     ) as (...a: unknown[]) => void
-    bound(path, fs, homeDir, daemonDir, prodDir, sendOk, sendError, () => {}, 'walnut-managed v1', cmd)
+    bound(path, fs, homeDir, daemonDir, prodDir, isProd, sendOk, sendError, () => {}, 'walnut-managed v1', cmd)
     return reply
   }
 }
@@ -291,6 +295,24 @@ describe('node twin cmdSkillsSync (v2: canonical copy + engine symlinks)', () =>
     expect(r.skipped).toBe('non-prod')
     expect(fs.existsSync(canonical())).toBe(false)
     expect(fs.existsSync(claudeLink())).toBe(false)
+    // A dir that merely LOOKS like the fallback (another home's) is still a sandbox.
+    const lookalike = cmdSkillsSync(tmp, path.join(tmp, 'other-home', '.cache', 'open-walnut'), '/tmp/open-walnut', PAYLOAD)
+    expect(lookalike.skipped).toBe('non-prod')
+    expect(fs.existsSync(canonical())).toBe(false)
+  })
+
+  it('a daemon moved to ~/.cache/open-walnut (/tmp unusable) is production: it installs the skill', () => {
+    const r = cmdSkillsSync(tmp, path.join(tmp, '.cache', 'open-walnut'), '/tmp/open-walnut', PAYLOAD)
+    expect(r.ok).toBe(true)
+    expect(r.skipped).toBeUndefined()
+    expect(fs.existsSync(canonical())).toBe(true)
+  })
+
+  it("the binding mirrors the twin's own IS_PROD_DAEMON_DIR rule", () => {
+    const src = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
+    expect(src).toMatch(/const FALLBACK_DAEMON_DIR = path\.join\(process\.env\.HOME \|\| HOME_DIR, '\.cache', 'open-walnut'\);/)
+    expect(src).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\);/)
+    expect(src).toMatch(/function cmdSkillsSync[\s\S]*?if \(!IS_PROD_DAEMON_DIR\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
   })
 
   it('rejects a payload without the managed marker', () => {
@@ -411,6 +433,7 @@ describe('twin parity', () => {
     // gemini: the one engine with a private skills dir.
     expect(standalone).toContain("if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))")
     expect(standalone).toContain('fs.symlinkSync(canonicalDir, link)')
-    expect(standalone).toMatch(/skills\.sync[\s\S]{0,2600}PROD_DAEMON_DIR\)\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
+    expect(standalone).toMatch(/skills\.sync[\s\S]{0,2600}if \(!IS_PROD_DAEMON_DIR\) \{\s*\n\s*return sendOk\(ws, id, \{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
+    expect(standalone).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)/)
   })
 })

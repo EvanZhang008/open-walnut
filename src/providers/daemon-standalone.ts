@@ -60,6 +60,8 @@ import {
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
+import { createFsLs } from './fs-ls-core.js'
+import { createClaudeCheck } from './claude-check-core.js'
 import {
   foldLine,
   initialFoldState,
@@ -186,8 +188,16 @@ const PROD_STREAMS_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp', 'streams')
 // Env override is for TESTS ONLY (never set in prod) — without it a spawned
 // test daemon would migrate the REAL production /tmp/open-walnut-streams.
 const LEGACY_STREAMS_DIR = process.env.WALNUT_LEGACY_STREAMS_DIR || '/tmp/open-walnut-streams'
+// The home fallback a remote host uses when /tmp cannot take the daemon
+// (read-only, noexec, full: the server's remote-daemon-dir.ts). A daemon there
+// IS the production daemon, relocated: same streams, same user shim, and its
+// sessions outlive it. Only this exact path counts, so a test daemon that
+// inherits the env still reads as isolated. Mirror daemon-source.ts.
+const FALLBACK_DAEMON_DIR = path.join(process.env.HOME || HOME_DIR, '.cache', 'open-walnut')
+const IS_PROD_DAEMON_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON_DIR)
+  || path.resolve(DAEMON_DIR) === path.resolve(FALLBACK_DAEMON_DIR)
 const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR
-  || (DAEMON_DIR === PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
+  || (IS_PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
 
 // ── Spawn ledger ────────────────────────────────────────────────────────────
 // One empty file per CLI session ANY daemon on this host has ever started,
@@ -372,6 +382,10 @@ function sweepDeadStreams(): void {
 // lines without dominating. Written to daemon.instance so clients can verify
 // they're talking to the same daemon they expected (detect PID reuse / swap).
 const DAEMON_START_TS = Date.now()
+// What runs this daemon, for `hello`: the compiled binary (its own executable),
+// or bun running this file. The server shows it in the host status; the pid
+// files alone cannot tell them apart. Keep in sync with daemon-source.ts.
+const DAEMON_RUNTIME: 'bun' | 'binary' = /(^|\/)bun(-debug)?$/.test(process.execPath) ? 'bun' : 'binary'
 const DAEMON_INSTANCE_ID = (() => {
   const seed = `${process.pid}-${DAEMON_START_TS}-${Math.random()}`
   const hash = crypto.createHash('sha256').update(seed).digest('hex').slice(0, 8)
@@ -392,7 +406,11 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 // while .zshrc picked 22). Keep in sync with daemon-source.ts.
 // Node discovery is NOT done here: buildSpawnPreamble() handles it at spawn
 // time, and hostRuntime.ensureClaude() gates the spawn.
-const hostRuntime = createHostRuntime({ fs, execFile, execFileSync, env: process.env, platform: process.platform, arch: process.arch })
+// claudeCheck: host.preflight's sign-in and version-floor answer (claude-check-core.ts).
+const hostRuntime = createHostRuntime({
+  fs, execFile, execFileSync, env: process.env, platform: process.platform, arch: process.arch,
+  claudeCheck: createClaudeCheck({ fs, execFile, env: process.env }),
+})
 const bootPath = hostRuntime.computeDaemonPath()
 process.env.PATH = bootPath.path
 // 'hostfix-v1': the named, idempotent fixes host.fix runs (host-fix-core.ts).
@@ -743,7 +761,7 @@ function sleepSync(ms: number) {
  */
 function shouldReapOnExit(): boolean {
   try {
-    return !SERVICE_MODE && !handoverPrepared && path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)
+    return !SERVICE_MODE && !handoverPrepared && !IS_PROD_DAEMON_DIR
   } catch {
     return false // unresolvable → treat as prod (never kill)
   }
@@ -1587,7 +1605,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // 'preflight-v1': read-only look at what this host can run (claude and the
     // node it needs, a C compiler, dtach). Not bridge-reachable: only the
     // trusted walnut socket asks. Keep in sync with daemon-source.ts.
-    case 'host.preflight': return hostRuntime.preflight().then(
+    case 'host.preflight': return hostRuntime.preflight(cmd).then(
       (r) => sendOk(ws, id as number, r as unknown as Record<string, unknown>),
       (err) => sendError(ws, id as number, 'host.preflight failed: ' + (err as Error).message),
     )
@@ -1682,6 +1700,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       ...(SERVICE_MODE ? { serviceExecutable: process.execPath } : {}),
       startedAt: DAEMON_START_TS,
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
+      runtime: DAEMON_RUNTIME,
     })
     default: return sendError(ws, id as number, 'unknown command: ' + cmd.cmd)
   }
@@ -2343,9 +2362,23 @@ function userWalnutShimText(): string {
     + '  IFS=$old_ifs && exec "$d/walnut" "$@"\n'
     + 'done\n'
     + 'IFS=$old_ifs\n'
-    + 'dir="${WALNUT_DAEMON_DIR:-' + PROD_DAEMON_DIR + '}"\n'
-    + '[ -x "$dir/bin/walnut" ] && exec "$dir/bin/walnut" "$@"\n'
-    + 'echo "walnut: no Walnut daemon on this host ($dir/bin/walnut is missing)." >&2\n'
+    + '# The daemon dir: WALNUT_DAEMON_DIR when set; otherwise ' + PROD_DAEMON_DIR + ' or\n'
+    + '# ~/.cache/open-walnut (a daemon moved there because /tmp was unusable), the\n'
+    + '# one whose daemon is alive first. Exported, so walnut reaches THAT socket.\n'
+    + 'if [ -n "$WALNUT_DAEMON_DIR" ]; then\n'
+    + '  [ -x "$WALNUT_DAEMON_DIR/bin/walnut" ] && exec "$WALNUT_DAEMON_DIR/bin/walnut" "$@"\n'
+    + '  echo "walnut: no Walnut daemon on this host ($WALNUT_DAEMON_DIR/bin/walnut is missing)." >&2\n'
+    + '  exit 6\n'
+    + 'fi\n'
+    + 'found=\n'
+    + 'for d in "' + PROD_DAEMON_DIR + '" "$HOME/.cache/open-walnut"; do\n'
+    + '  [ -x "$d/bin/walnut" ] || continue\n'
+    + '  p=$(cat "$d/daemon.pid" 2>/dev/null)\n'
+    + '  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then found=$d; break; fi\n'
+    + '  [ -n "$found" ] || found=$d\n'
+    + 'done\n'
+    + 'if [ -n "$found" ]; then WALNUT_DAEMON_DIR=$found; export WALNUT_DAEMON_DIR; exec "$found/bin/walnut" "$@"; fi\n'
+    + 'echo "walnut: no Walnut daemon on this host (' + PROD_DAEMON_DIR + '/bin/walnut is missing)." >&2\n'
     + 'exit 6\n'
 }
 
@@ -2360,7 +2393,7 @@ function userWalnutShimText(): string {
  * alias era are deleted here (marker-guarded — a foreign `wn` is left alone).
  */
 function installUserWalnutShim() {
-  if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) return
+  if (!IS_PROD_DAEMON_DIR) return
   const text = userWalnutShimText()
   const installed: string[] = []
   for (const [dir, createDir] of [
@@ -3622,7 +3655,7 @@ function cmdSkillsSync(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
     }
     entries.push({ name, body })
   }
-  if (path.resolve(DAEMON_DIR) !== path.resolve(PROD_DAEMON_DIR)) {
+  if (!IS_PROD_DAEMON_DIR) {
     return sendOk(ws, id, { applied: true, changed: false, skipped: 'non-prod' })
   }
   const wrote: string[] = []
@@ -5639,6 +5672,9 @@ function fsMutateDenied(p: string): boolean {
   const runtimeRoots = [
     '/tmp/open-walnut', '/tmp/open-walnut-streams',
     path.join(HOME_DIR, '.open-walnut', 'tmp'),
+    // The daemon dir a connect uses when /tmp is unusable, protected whichever
+    // dir THIS daemon runs from (a /tmp daemon must not delete a live one there).
+    FALLBACK_DAEMON_DIR,
     process.env.WALNUT_DAEMON_DIR, process.env.WALNUT_STREAMS_DIR, process.env.WALNUT_LEGACY_STREAMS_DIR,
   ].filter((r) => typeof r === 'string' && r.length > 0)
   for (const root of runtimeRoots) {
@@ -5757,6 +5793,15 @@ async function cmdFsCopy(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   }
 }
 
+// PARITY: keep in sync with daemon-source.ts cmdFsLs. The listing itself
+// (per-entry and whole-listing budgets, symlink following, detail stats) is
+// fs-ls-core.ts, shared with the source twin.
+const fsLs = createFsLs({
+  readdir: (d) => fs.promises.readdir(d, { withFileTypes: true }),
+  stat: (p) => fs.promises.stat(p),
+  readlink: (p) => fs.promises.readlink(p),
+})
+
 async function cmdFsLs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   let dirPath = cmd.path as string
   if (!dirPath) return sendError(ws, id, 'fs.ls: missing path')
@@ -5767,36 +5812,12 @@ async function cmdFsLs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   }
 
   try {
-    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true })
     // detail:true adds per-file size/mtimeMs (one stat per entry) — used by the
     // session-changes subagent cache to skip re-reading unchanged files. Off by
     // default so high-frequency callers (git-root walks) don't pay the stats.
-    const detail = cmd.detail === true
-    const result = await Promise.all(entries.map(async e => {
-      // readdir dirents carry lstat semantics: a symlink is never a dir or a
-      // file by itself. Follow it once so a linked directory (dev boxes where
-      // /home/<user> -> /local/home/<user>) lists as a dir instead of vanishing
-      // as 'other'. `symlink: true` tells walkers not to descend (link loops).
-      if (e.isSymbolicLink()) {
-        try {
-          const st = await fs.promises.stat(dirPath + '/' + e.name)
-          const type = st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other'
-          if (detail && type === 'file') return { name: e.name, type, symlink: true, size: st.size, mtimeMs: st.mtimeMs }
-          return { name: e.name, type, symlink: true }
-        } catch {
-          return { name: e.name, type: 'other', symlink: true } // dangling link
-        }
-      }
-      const type = e.isDirectory() ? 'dir' : e.isFile() ? 'file' : 'other'
-      if (!detail || type !== 'file') return { name: e.name, type }
-      try {
-        const st = await fs.promises.stat(dirPath + '/' + e.name)
-        return { name: e.name, type, size: st.size, mtimeMs: st.mtimeMs }
-      } catch {
-        return { name: e.name, type }
-      }
-    }))
-    sendOk(ws, id, { entries: result, resolvedPath: dirPath })
+    const r = await fsLs.list(dirPath, cmd.detail === true)
+    // Entries that did not answer in time: the server says "listing incomplete".
+    sendOk(ws, id, { entries: r.entries, resolvedPath: dirPath, ...(r.timedOut > 0 ? { partial: true, timedOut: r.timedOut } : {}) })
   } catch (err: unknown) {
     sendError(ws, id, 'fs.ls failed: ' + (err as Error).message)
   }

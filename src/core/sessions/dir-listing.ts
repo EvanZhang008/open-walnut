@@ -38,6 +38,17 @@ export interface DirListing {
   dirs: string[]
   parent: string
   exists: boolean
+  /**
+   * Remote only: entries whose stat did not answer in the daemon's budget
+   * (fs.ls `partial`, a link into a hung mount). They may be directories the
+   * list is missing, so the caller says "listing incomplete" and skips caching.
+   */
+  unanswered?: number
+}
+
+/** The daemon's count of entries that did not answer (0 for a complete or older reply). */
+function unansweredOf(result: Record<string, unknown>): number {
+  return result.partial === true && typeof result.timedOut === 'number' && result.timedOut > 0 ? result.timedOut : 0
 }
 
 /** Same ENOENT semantics as providers/cwd-check.ts — keep in sync. */
@@ -128,6 +139,7 @@ export async function listRemoteDirs(conn: DaemonLsConnection, dir: string, dept
       : rootResult.resolvedPath + '/'
   }
 
+  let unanswered = unansweredOf(rootResult)
   const queue: { dirPath: string; currentDepth: number }[] = []
   // `symlink` is set by daemons that follow links (a linked dir is `type: 'dir'`);
   // older daemons report a symlink as 'other' and never set it. A linked dir is
@@ -152,6 +164,7 @@ export async function listRemoteDirs(conn: DaemonLsConnection, dir: string, dept
       try {
         const result = await conn.send('fs.ls', { path: item.dirPath })
         if (!result.ok) continue
+        unanswered += unansweredOf(result)
         const lsEntries = result.entries as Array<{ name: string; type: string; symlink?: boolean }>
         for (const e of lsEntries) {
           if (entries.length >= DIR_LIST_MAX_ENTRIES) break
@@ -168,5 +181,5 @@ export async function listRemoteDirs(conn: DaemonLsConnection, dir: string, dept
     }
   }
 
-  return { dirs: entries, parent: resolvedDir, exists: true }
+  return { dirs: entries, parent: resolvedDir, exists: true, ...(unanswered > 0 ? { unanswered } : {}) }
 }

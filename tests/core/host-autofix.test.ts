@@ -22,7 +22,7 @@ import {
   type AutofixOptions,
   type PreflightConnection,
 } from '../../src/core/hosts/host-readiness.js'
-import { autofixDisabledReason, describeFixOutcome, isTransportError, nextFixAction } from '../../src/core/hosts/host-autofix.js'
+import { autofixDisabledReason, describeFixOutcome, fixActionFor, isTransportError, nextFixAction, withFixState } from '../../src/core/hosts/host-autofix.js'
 import type { HostFixAction } from '../../src/core/hosts/host-autofix.js'
 
 interface HostState {
@@ -46,6 +46,7 @@ function fakeHost(initial: Partial<HostState>, replies: Partial<Record<HostFixAc
   const params: Array<Record<string, unknown>> = []
   const defaults: Record<HostFixAction, (s: HostState) => FixReply> = {
     'install-claude-native': (s) => { s.claude = NATIVE; return { action: 'install-claude-native', ok: true, claude: { path: NATIVE.path, kind: 'native', version: '2.1.280' }, log: '', durationMs: 5 } },
+    'update-claude': (s) => { s.claude = { ...s.claude, version: '2.1.280', versionOk: true }; return { action: 'update-claude', ok: true, claude: { path: NATIVE.path, kind: 'native', version: '2.1.280' }, log: '', durationMs: 5 } },
     'install-compiler': (s) => { s.compiler = { found: true, name: 'gcc' }; return { action: 'install-compiler', ok: true, packageManager: 'yum', log: '', durationMs: 5 } },
     'build-dtach': (s) => { s.dtach = { found: true, path: '/home/dev/.local/bin/walnut-dtach' }; return { action: 'build-dtach', ok: true, path: '/home/dev/.local/bin/walnut-dtach', log: '', durationMs: 5 } },
   }
@@ -406,6 +407,70 @@ describe('a prebuilt dtach the server ships', () => {
       kind: 'compiler_missing', commands: ['sudo yum install -y gcc glibc-devel'],
       fix: expect.objectContaining({ state: 'failed', needsPassword: true }),
     })])
+  })
+})
+
+describe('a claude older than the model needs', () => {
+  const OLD_NATIVE = { ...NATIVE, version: '2.1.258', versionOk: false, minVersion: '2.1.280', installMethod: 'native', auth: 'ok' }
+  const floorCtx = async () => ({ label: 'devbox', sshTarget: 'devbox', floor: { minVersion: '2.1.280', model: 'Opus 5.5' } })
+
+  it('the native installer\'s build gets update-claude with the floor, then the line is gone', async () => {
+    const h = fakeHost({ claude: OLD_NATIVE, compiler: { found: true, name: 'gcc' }, dtach: { found: true } })
+    await refreshHostReadiness('devbox', { getConnection: () => h.conn, autofix: autofix(), hostContext: floorCtx })
+    await hostAutofixRound('devbox')
+    expect(h.sent).toEqual(['preflight', 'fix:update-claude', 'preflight'])
+    expect(h.params[0]).toEqual({ action: 'update-claude', minClaudeVersion: '2.1.280' })
+    const r = getHostReadiness('devbox')!
+    expect(r.problems).toEqual([])
+    expect(r.fixes.map((f) => [f.action, f.ok, f.text])).toEqual([['update-claude', true, 'Updated Claude Code to 2.1.280']])
+  })
+
+  it('while it runs the outdated line reads "Updating Claude Code"; a refusal keeps the line with its reason', async () => {
+    let release!: (v: Record<string, unknown>) => void
+    const h = fakeHost({ claude: OLD_NATIVE, compiler: { found: true, name: 'gcc' }, dtach: { found: true } }, {
+      'update-claude': () => new Promise((resolve) => { release = resolve }),
+    })
+    await refreshHostReadiness('devbox', { getConnection: () => h.conn, autofix: autofix(), hostContext: floorCtx })
+    await vi.waitFor(() => expect(getHostReadiness('devbox')!.fixing?.action).toBe('update-claude'))
+    expect(getHostReadiness('devbox')!.problems[0]).toMatchObject({ kind: 'claude_outdated', fix: { action: 'update-claude', state: 'running', text: 'Updating Claude Code' } })
+    release({ action: 'update-claude', ok: false, error: 'still-outdated', manualCommand: 'claude install latest', log: 'Claude Code is up to date\n', durationMs: 5 })
+    await hostAutofixRound('devbox')
+    expect(getHostReadiness('devbox')!.problems[0]).toMatchObject({
+      kind: 'claude_outdated', commands: ['claude install latest'],
+      fix: { action: 'update-claude', state: 'failed', text: 'Could not update Claude Code automatically (the newest release it could reach is still too old)' },
+    })
+  })
+
+  it('an outdated npm build gets the native build instead; Homebrew, a wrapper, or sign-in get no fix at all', () => {
+    const q = (claude: Record<string, unknown>) => ({ claude, compiler: { found: true }, dtach: { found: true } }) as never
+    expect(nextFixAction(q({ ...OLD_NATIVE, kind: 'npm', installMethod: 'npm' }), new Set())).toBe('install-claude-native')
+    expect(nextFixAction(q(OLD_NATIVE), new Set())).toBe('update-claude')
+    expect(nextFixAction(q(OLD_NATIVE), new Set(['update-claude']))).toBeNull()
+    expect(nextFixAction(q({ ...OLD_NATIVE, installMethod: 'homebrew' }), new Set())).toBeNull()
+    expect(nextFixAction(q({ ...OLD_NATIVE, installMethod: 'other' }), new Set())).toBeNull()
+    // A daemon from before install methods: the version is known but not how it was installed.
+    expect(nextFixAction(q({ ...OLD_NATIVE, installMethod: undefined }), new Set())).toBeNull()
+    expect(nextFixAction(q({ ...NATIVE, auth: 'not-logged-in', versionOk: true }), new Set())).toBeNull()
+    expect(fixActionFor('claude_not_logged_in', q(NATIVE))).toBeNull()
+    expect(fixActionFor('claude_outdated', q({ ...OLD_NATIVE, installMethod: undefined, kind: 'npm' }))).toBe('install-claude-native')
+  })
+
+  it('withFixState attaches a running install to an outdated npm line (its fix is install-claude-native)', () => {
+    const q = { claude: { ...OLD_NATIVE, kind: 'npm', installMethod: 'npm' }, compiler: { found: true }, dtach: { found: true } } as never
+    const line = { kind: 'claude_outdated' as const, message: 'm', commands: ['x'] }
+    expect(withFixState([line], q, { action: 'install-claude-native', startedAt: 1, text: 'Installing Claude Code' }, [])[0])
+      .toMatchObject({ fix: { action: 'install-claude-native', state: 'running' } })
+    expect(withFixState([line], q, { action: 'update-claude', startedAt: 1, text: 'Updating Claude Code' }, [])[0]!.fix).toBeUndefined()
+  })
+
+  it('describeFixOutcome words every update-claude answer', () => {
+    const d = (result: Record<string, unknown>) => describeFixOutcome('update-claude', { result }, 5)
+    expect(d({ ok: true, skipped: true, claude: { path: 'p', kind: 'native', version: '2.1.281' } }).text).toBe('Claude Code 2.1.281 is up to date')
+    expect(d({ ok: false, error: 'unmanaged-install' }).text).toBe('Could not update Claude Code automatically (it was not installed by the native installer)')
+    expect(d({ ok: false, error: 'updates-disabled', manualCommand: 'claude update' })).toMatchObject({
+      text: 'Could not update Claude Code automatically (updates are turned off with DISABLE_UPDATES)', command: 'claude update',
+    })
+    expect(d({ ok: false, error: 'unknown-action' }).text).toBe('Could not update Claude Code automatically (the session daemon there is too old for this fix)')
   })
 })
 

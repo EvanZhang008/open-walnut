@@ -766,6 +766,22 @@ export interface DirListing {
   pending?: DirListingPending;
   /** Remote host connect failed — `dirs` is not known. */
   hostError?: DirListingHostError;
+  /** Some entries did not answer (a link into a hung mount): `dirs` may be missing some. */
+  incomplete?: DirListingIncomplete;
+}
+
+/** The server's "listing incomplete" note; `message` is shown as is. */
+export interface DirListingIncomplete {
+  unanswered: number;
+  message: string;
+}
+
+/** The `incomplete` field of a list-dirs answer, or undefined when absent or malformed. */
+export function parseDirListingIncomplete(raw: unknown): DirListingIncomplete | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as { unanswered?: unknown; message?: unknown };
+  if (typeof r.message !== 'string' || !r.message) return undefined;
+  return { unanswered: typeof r.unanswered === 'number' ? r.unanswered : 0, message: r.message };
 }
 
 /** How long a remote list-dirs waits for a connecting host before answering `pending`. */
@@ -786,11 +802,14 @@ export async function listDirs(prefix: string, host?: string | null, opts?: List
     params.set('pending', '1');
     params.set('wait', String(opts?.waitMs ?? LIST_DIRS_PENDING_WAIT_MS));
   }
-  const res = await apiGet<{ dirs: string[]; parent: string; exists?: boolean; pending?: DirListingPending; hostError?: DirListingHostError }>(
+  const res = await apiGet<{ dirs: string[]; parent: string; exists?: boolean; pending?: DirListingPending; hostError?: DirListingHostError; incomplete?: unknown }>(
     `/api/sessions/list-dirs?${params}`, undefined, { signal: opts?.signal },
   );
   // Tolerate old servers that don't send `exists` (mixed-version window)
-  return { dirs: res.dirs, parent: res.parent, exists: res.exists ?? true, pending: res.pending, hostError: res.hostError };
+  const listing: DirListing = { dirs: res.dirs, parent: res.parent, exists: res.exists ?? true, pending: res.pending, hostError: res.hostError };
+  const incomplete = parseDirListingIncomplete(res.incomplete);
+  if (incomplete) listing.incomplete = incomplete;
+  return listing;
 }
 
 /** Deliberate human retry of a failed remote host: clears the server's connect failure cache. */
@@ -817,8 +836,10 @@ export async function listDirsCached(prefix: string, host?: string | null, opts?
   if (hit && Date.now() - hit.ts < LIVE_DIR_CACHE_TTL) return hit.listing;
   const listing = await listDirs(prefix, host, opts);
   // A "still connecting" / "connect failed" answer is a moment in time, not a
-  // listing: caching it would freeze the picker on that state for 30s.
-  if (listing.pending || listing.hostError) return listing;
+  // listing: caching it would freeze the picker on that state for 30s. Nor is a
+  // partial one cached (the server does not cache it either): the next ask may
+  // find the hung mount awake again.
+  if (listing.pending || listing.hostError || listing.incomplete) return listing;
   const entry = { listing, ts: Date.now() };
   _liveDirCache.set(key, entry);
   const resolvedKey = liveDirCacheKey(host, listing.parent.endsWith('/') ? listing.parent : listing.parent + '/');

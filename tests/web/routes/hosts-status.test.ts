@@ -193,6 +193,31 @@ describe('GET /api/hosts/status', () => {
     expect(byHost(res.body.hosts).marina.readiness).toBeUndefined();
   });
 
+  it('carries sign-in and the version floor: the new claude fields ride the status, worded with the configured host', async () => {
+    states.devbox = { connected: true, phase: 'connected' };
+    pooled.devbox = preflightConn(['preflight-v1'], {
+      ok: true,
+      claude: {
+        found: true, path: '/home/builder/.local/bin/claude', kind: 'native', needsNode: false, version: '2.1.258',
+        auth: 'not-logged-in', authDetail: 'claude auth status: not logged in', versionOk: false, minVersion: '2.1.280', installMethod: 'native',
+      },
+      compiler: { found: true, name: 'gcc' },
+      dtach: { found: true, path: '/usr/bin/dtach' },
+    });
+    await refreshHostReadiness('devbox', { autofix: false });
+    const res = await request(createApp()).get('/api/hosts/status');
+    const r = byHost(res.body.hosts).devbox.readiness!;
+    expect(r.claude).toMatchObject({ auth: 'not-logged-in', versionOk: false, minVersion: '2.1.280', installMethod: 'native', version: '2.1.258' });
+    expect(r.problems).toEqual([
+      { kind: 'claude_outdated', message: 'Claude Code on Big dev box is 2.1.258, but Opus 5.5 needs 2.1.280 or newer.', commands: ['claude update'] },
+      {
+        kind: 'claude_not_logged_in',
+        message: 'Claude Code on Big dev box is not signed in. Run `ssh -t builder@devbox.example.test claude` once and sign in, then Check again.',
+        commands: ['ssh -t builder@devbox.example.test claude'],
+      },
+    ]);
+  });
+
   it('carries the automatic fixes: each failed one keeps its line, says why, and hands over the exact command', async () => {
     const saved = process.env.WALNUT_HOST_AUTOFIX;
     delete process.env.WALNUT_HOST_AUTOFIX;
@@ -339,7 +364,8 @@ describe('POST /api/hosts/:host/connect', () => {
     const res = await request(createApp()).post('/api/hosts/devbox/connect');
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(getHostReadiness('devbox')).toBeDefined());
-    expect(pooled.devbox!.send).toHaveBeenCalledWith('host.preflight', {}, expect.any(Number));
+    // The configured model (the default, Opus 5.5) sets the Claude Code floor the host is asked about.
+    expect(pooled.devbox!.send).toHaveBeenCalledWith('host.preflight', { minClaudeVersion: '2.1.280' }, expect.any(Number));
   });
 
   it('"Check again" lets every failed automatic fix run once more; a plain reconnect does not', async () => {

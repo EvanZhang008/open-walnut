@@ -51,6 +51,7 @@ const GUESS_HINTS: Record<string, string> = {
   version: 'walnut --version',
   info: "walnut tools call walnut_status '{}'",
   health: "walnut tools call walnut_status '{}'",
+  diagnos: 'walnut doctor   # build, claude, node, PATH and hosts, paste-ready',
   mode: "walnut tools call walnut_status '{}'",
   search: `walnut tools call search '{"q":"..."}'`,
   find: `walnut tools call search '{"q":"..."}'`,

@@ -331,6 +331,36 @@ describe('preflight', () => {
     expect(String(versionCall.env.PATH).split(':')[0]).toBe(`${HOME}/.nvm/versions/node/v16.20.2/bin`)
   })
 
+  it('with claudeCheck: sign-in and the floor ride on the claude block, the floor comes from the RPC args', async () => {
+    const files = { [`${HOME}/.local/bin/claude`]: { content: ELF, exec: true }, '/usr/bin/gcc': { content: ELF, exec: true } }
+    const { deps } = fakeHost(files, (file, args) => args[0] === '--version' ? { code: 0, stdout: '2.1.258 (Claude Code)\n' } : { code: 1 },
+      { HOME, PATH: `${HOME}/.local/bin:/usr/bin` })
+    const seen: unknown[] = []
+    const claudeCheck = {
+      check: async (input: Record<string, unknown>) => {
+        seen.push(input)
+        return { auth: 'not-logged-in' as const, versionOk: false, minVersion: '2.1.280', installMethod: 'native' as const }
+      },
+    }
+    const out = await createHostRuntime({ ...deps, claudeCheck }).preflight({ minClaudeVersion: '2.1.280' })
+    expect(out.claude).toEqual({
+      found: true, path: `${HOME}/.local/bin/claude`, kind: 'native', needsNode: false, version: '2.1.258',
+      auth: 'not-logged-in', versionOk: false, minVersion: '2.1.280', installMethod: 'native',
+    })
+    expect(seen).toEqual([expect.objectContaining({ path: `${HOME}/.local/bin/claude`, version: '2.1.258', kind: 'native', minVersion: '2.1.280', deadline: expect.any(Number) })])
+    // A floor that is not a plain version is ignored, never passed on.
+    await createHostRuntime({ ...deps, claudeCheck }).preflight({ minClaudeVersion: '2.1.280; rm -rf /' })
+    expect((seen[1] as { minVersion?: string }).minVersion).toBeUndefined()
+  })
+
+  it('with claudeCheck: a claude that does not start is never asked about sign-in', async () => {
+    const { deps } = fakeHost(npmHostFiles(), () => glibcFail, { HOME, PATH: `${HOME}/.local/bin:/usr/bin` })
+    let asked = false
+    const out = await createHostRuntime({ ...deps, claudeCheck: { check: async () => { asked = true; return { auth: 'ok' as const, installMethod: 'npm' as const } } } }).preflight()
+    expect(asked).toBe(false)
+    expect(out.claude.auth).toBeUndefined()
+  })
+
   it('claude missing entirely', async () => {
     const { deps } = fakeHost({ '/usr/bin/cc': { content: ELF, exec: true } }, () => ({ code: 0 }), { HOME, PATH: '/usr/bin' })
     const out = await createHostRuntime(deps).preflight()
@@ -378,12 +408,16 @@ describe('injection into the source daemon twin', () => {
   it('the deployed template has no placeholder residue and wires the gate + preflight like the binary twin', () => {
     const generated = getDaemonSource()
     expect(generated).not.toContain('__CREATE_HOST_RUNTIME__')
+    expect(generated).not.toContain('__CREATE_CLAUDE_CHECK__')
     const root = path.resolve(__dirname, '../..')
     const standalone = fs.readFileSync(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8')
     const template = fs.readFileSync(path.join(root, 'src/providers/daemon-source.ts'), 'utf-8')
     for (const [label, src] of [['standalone', standalone], ['template', template]] as const) {
       expect(src, label).toMatch(/process\.env\.PATH = bootPath\.path/)
       expect(src, label).toMatch(/case 'host\.preflight':/)
+      // The server's floor reaches the daemon, and both twins hand the runtime a sign-in check.
+      expect(src, label).toMatch(/hostRuntime\.preflight\(cmd\)/)
+      expect(src, label).toMatch(/claudeCheck: (createClaudeCheck|\(__CREATE_CLAUDE_CHECK__\))\(\{ fs(: fs)?, execFile(: execFile)?, env: process\.env \}\)/)
       expect(src, label).toMatch(/const launch = await gateClaudeLaunch\(args\)/)
       expect(src, label).toMatch(/code: 'CLAUDE_RUNTIME', errorKind: gate\.code/)
       // The reason reaches the client verbatim, not as an "internal daemon error".

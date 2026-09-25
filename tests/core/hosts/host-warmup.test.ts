@@ -424,3 +424,136 @@ describe('hostWarmupGateReason', () => {
     })).toBeNull();
   });
 });
+
+/**
+ * An expired SSH certificate or a missing agent is fixed OUTSIDE Walnut (a login
+ * command), so nobody comes back to click Retry: the warmup re-dials those
+ * hosts on its own at 1, 2, 5, 10 minutes, then hourly.
+ */
+describe('HostWarmup credential waits', () => {
+  let warmup: HostWarmup | null = null;
+  const MIN = 60_000;
+  const CERT_EXPIRED = 'Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-09-14 08:00)';
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    warmup?.stop();
+    warmup = null;
+    vi.useRealTimers();
+  });
+
+  function credentialWarmup(fail: () => string | null, opts: { resweepIntervalMs?: number; discovered?: boolean } = {}) {
+    const calls: number[] = [];
+    const connect = vi.fn(async () => {
+      calls.push(Date.now() - NOW);
+      const err = fail();
+      if (err) throw new Error(err);
+    });
+    warmup = new HostWarmup({
+      startupDelayMs: 0, paceMs: 0, resweepIntervalMs: opts.resweepIntervalMs ?? 0, log: silent,
+      listHosts: async () => [host('devbox', opts.discovered ? { discovered: true } : {})],
+      connect, isConnected: () => false, now: () => Date.now(),
+    });
+    return { connect, calls };
+  }
+
+  it('the periodic resweep leaves a waiting host to the credential clock (one schedule, tiers advance once)', async () => {
+    // Resweep every 30s: without the skip it dials at 30s, 90s, ... and every
+    // failure there advanced the 1/2/5/10 counter a second time.
+    const { calls } = credentialWarmup(() => CERT_EXPIRED, { resweepIntervalMs: 30_000 });
+    warmup!.start();
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(18 * MIN);
+    const gaps = calls.slice(1).map((t, i) => Math.round((t - calls[i]) / MIN));
+    expect(gaps).toEqual([1, 2, 5, 10]);
+  });
+
+  it('a host known only from ~/.ssh/config stops re-dialling after a day; a configured one keeps going', async () => {
+    const { calls } = credentialWarmup(() => CERT_EXPIRED, { discovered: true });
+    warmup!.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toHaveLength(0);                 // never dialled at boot
+    await warmup!.kick('devbox');                  // one deliberate Retry
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(26 * 60 * MIN);
+    const afterADay = calls.length;
+    expect(calls[afterADay - 1]).toBeLessThanOrEqual(25 * 60 * MIN);
+    expect(warmup!.credentialRetryAt('devbox')).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(10 * 60 * MIN);
+    expect(calls).toHaveLength(afterADay);
+
+    warmup!.stop();
+    vi.setSystemTime(NOW);
+    const configured = credentialWarmup(() => CERT_EXPIRED);
+    warmup!.start();
+    await vi.advanceTimersByTimeAsync(30 * 60 * MIN);
+    expect(configured.calls.at(-1)).toBeGreaterThan(29 * 60 * MIN);
+    expect(warmup!.credentialRetryAt('devbox')).toBeDefined();
+  });
+
+  it('re-dials a cert_expired host at 1, 2, 5, 10 minutes, then hourly, with no click', async () => {
+    const { calls } = credentialWarmup(() => CERT_EXPIRED);
+    warmup!.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toHaveLength(1);
+    expect(warmup!.snapshot().devbox).toMatchObject({ state: 'failed', retryAt: NOW + MIN });
+    expect(warmup!.credentialRetryAt('devbox')).toBe(NOW + MIN);
+
+    await vi.advanceTimersByTimeAsync(1 * MIN);
+    expect(calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(2 * MIN);
+    expect(calls).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(5 * MIN);
+    expect(calls).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(10 * MIN);
+    expect(calls).toHaveLength(5);
+    await vi.advanceTimersByTimeAsync(59 * MIN);
+    expect(calls).toHaveLength(5);               // hourly from here on
+    await vi.advanceTimersByTimeAsync(1 * MIN);
+    expect(calls).toHaveLength(6);
+    const gaps = calls.slice(1).map((t, i) => Math.round((t - calls[i]) / MIN));
+    expect(gaps).toEqual([1, 2, 5, 10, 60]);
+  });
+
+  it('a login done elsewhere reconnects on the next re-dial, and the waits stop', async () => {
+    let fixed = false;
+    const { calls } = credentialWarmup(() => (fixed ? null : 'Could not open a connection to your authentication agent.'));
+    warmup!.start();
+    await vi.advanceTimersByTimeAsync(10);
+    fixed = true;                                  // the user ran their login command
+    await vi.advanceTimersByTimeAsync(1 * MIN);
+    expect(calls).toHaveLength(2);
+    expect(warmup!.snapshot().devbox).toMatchObject({ state: 'done' });
+    expect(warmup!.credentialRetryAt('devbox')).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(3 * 60 * MIN);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('other failures are not re-dialled on the credential clock', async () => {
+    const { calls } = credentialWarmup(() => 'ssh: connect to host devbox port 22: Connection refused');
+    warmup!.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(warmup!.snapshot().devbox.retryAt).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(30 * MIN);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('a human retry restarts the schedule at 1 minute; stop() disarms it', async () => {
+    const { calls } = credentialWarmup(() => CERT_EXPIRED);
+    warmup!.start();
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(3 * MIN);    // re-dials at 1 and 3 min: next wait would be 5
+    expect(calls).toHaveLength(3);
+    await warmup!.kick('devbox');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toHaveLength(4);
+    expect(warmup!.credentialRetryAt('devbox')).toBe(Date.now() - 10 + MIN);
+    warmup!.stop();
+    await vi.advanceTimersByTimeAsync(2 * 60 * MIN);
+    expect(calls).toHaveLength(4);
+  });
+});

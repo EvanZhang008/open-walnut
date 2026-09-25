@@ -39,6 +39,11 @@ export function setStaticRootReporter(fn: () => WebAssetsReport): void {
   staticRootReporter = fn
 }
 
+/** The same answer /api/config reports as `webAssets`; null when nothing is served. */
+export function getWebAssetsReport(): WebAssetsReport | null {
+  return staticRootReporter?.() ?? null
+}
+
 // Secret masking lives in core so the bug-report bundler can reuse it.
 // CLOUD-mode rationale: config.yaml is git-synced to the public box, and
 // `GET /api/config` is reachable by ANY paired device — returning plaintext

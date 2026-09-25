@@ -284,6 +284,16 @@ export function registerCommands(program: Command): void {
     });
 
   program
+    .command('doctor')
+    .description('Print a paste-ready report: build, claude, node, PATH, and what each host can run')
+    .option('--no-redact', 'Keep usernames and hostnames (masked by default, safe for a public issue)')
+    .option('--hosts', 'Only the remote hosts block')
+    .action(async (options: Record<string, unknown>, cmd) => {
+      const { runDoctor } = await import('./doctor.js');
+      await runDoctor(options as { redact?: boolean; hosts?: boolean }, cmd.optsWithGlobals());
+    });
+
+  program
     .command('daemon [args...]')
     .description('Manage this host daemon service (status | install | update | uninstall | restart)')
     .allowUnknownOption(true)

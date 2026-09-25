@@ -15,6 +15,7 @@
  */
 
 import type fsType from 'node:fs'
+import type { ClaudeCheck, ClaudeCheckResult } from './claude-check-core.js'
 
 /**
  * Shell twin of `findNode` for the spawn preambles (session-io REMOTE_BASE_PATH
@@ -51,6 +52,8 @@ export interface HostRuntimeDeps {
    *  server plans host.fix and picks a prebuilt dtach by them. */
   platform?: string
   arch?: string
+  /** Sign-in, version floor and install method (claude-check-core.ts). Absent = preflight omits them. */
+  claudeCheck?: Pick<ClaudeCheck, 'check'>
 }
 
 export type ClaudeKind = 'native' | 'npm' | 'unknown'
@@ -64,6 +67,12 @@ export interface ClaudeProbe {
   nodeFound?: boolean
   nodeVersion?: string
   error?: string
+  /** From claudeCheck (daemons with it only): see claude-check-core.ts for the exact rule. */
+  auth?: ClaudeCheckResult['auth']
+  authDetail?: string
+  versionOk?: boolean
+  minVersion?: string
+  installMethod?: ClaudeCheckResult['installMethod']
 }
 
 export interface HostPreflightResult {
@@ -401,9 +410,13 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
     return { hasCmd: r.stdout.indexOf('__WALNUT_HAS_CMD__') >= 0, hasNode: r.stdout.indexOf('__WALNUT_HAS_NODE__') >= 0 }
   }
 
-  /** host.preflight: what this host can run. Each probe ≤ 5s, the whole thing ≤ 12s. */
-  async function preflight(): Promise<HostPreflightResult> {
+  /**
+   * host.preflight: what this host can run. Each probe ≤ 5s, the whole thing ≤ 12s.
+   * `minClaudeVersion`: the floor of the model the server is set to use.
+   */
+  async function preflight(args?: { minClaudeVersion?: unknown }): Promise<HostPreflightResult> {
     var deadline = now() + 12000
+    var floor = args && typeof args.minClaudeVersion === 'string' && /^\d+\.\d+\.\d+$/.test(args.minClaudeVersion) ? args.minClaudeVersion : undefined
     var pathStr = deps.env.PATH || ''
     var probe = await probeClaude('claude', pathStr, deadline - 5000)
     var claude: ClaudeProbe = { found: probe.found }
@@ -432,6 +445,12 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
             var why = (named || lines[lines.length - 1] || '').slice(0, 200)
             claude.error = 'claude --version exited with code ' + r.code + (why ? ': ' + why : '')
           }
+        }
+        // A claude that starts: is it signed in, and new enough for the model?
+        if (deps.claudeCheck && !claude.error) {
+          Object.assign(claude, await deps.claudeCheck.check({
+            path: probe.path as string, version: claude.version, kind: probe.kind, nodeDir: probe.nodeDir, minVersion: floor, deadline: deadline,
+          }))
         }
       }
     } else {

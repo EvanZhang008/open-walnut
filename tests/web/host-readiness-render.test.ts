@@ -90,6 +90,43 @@ describe('RemoteHostReadiness with automatic fixes', () => {
   })
 })
 
+describe('RemoteHostReadiness: sign-in and version lines', () => {
+  it('not signed in names the host once, shows the ssh line as code once, and Copy copies it', () => {
+    const command = 'ssh -t dev@devbox.example.test claude'
+    const html = render({
+      checkedAt: 10, fixes: [],
+      problems: [{ kind: 'claude_not_logged_in', message: `Claude Code on devbox is not signed in. Run \`${command}\` once and sign in, then Check again.`, commands: [command] }],
+    })
+    expect(text(html)).toContain(`Claude Code on devbox is not signed in. Run ${command} once and sign in, then Check again.`)
+    expect(text(html)).not.toContain('devbox: Claude Code')
+    expect(html.split(`<code>${command}</code>`).length - 1).toBe(1)
+    expect(html).toContain('rh-readiness-copy-claude_not_logged_in')
+    expect(html).toContain('rh-readiness-recheck')
+  })
+
+  it('too old on a host whose message names it: no "<host>: " prefix, the update command after it', () => {
+    const html = render({
+      checkedAt: 11, fixes: [],
+      problems: [{ kind: 'claude_outdated', message: 'Claude Code on devbox is 2.1.258, but Opus 5.5 needs 2.1.280 or newer.', commands: ['claude update'] }],
+    })
+    expect(text(html)).toContain('Claude Code on devbox is 2.1.258, but Opus 5.5 needs 2.1.280 or newer. claude update')
+    expect(text(html)).not.toContain('devbox: Claude Code')
+  })
+
+  it('while the update runs the line says so; a line that does not name the host keeps the prefix', () => {
+    const html = render({
+      checkedAt: 12, fixes: [], fixing: { action: 'update-claude', startedAt: 12, text: 'Updating Claude Code' },
+      problems: [
+        { kind: 'claude_outdated', message: 'Claude Code on devbox is 2.1.258, but Opus 5.5 needs 2.1.280 or newer.', commands: ['claude update'],
+          fix: { action: 'update-claude', state: 'running', text: 'Updating Claude Code' } },
+        GCC,
+      ],
+    })
+    expect(text(html)).toContain('Updating Claude Code on devbox...')
+    expect(text(html)).toContain('devbox: No C compiler')
+  })
+})
+
 describe('a finished-fix line leaves on its own', () => {
   let doc: Document
   beforeAll(() => {

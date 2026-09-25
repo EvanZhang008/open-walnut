@@ -16,9 +16,12 @@ import {
   parsePreflight,
   readinessProblems,
   refreshHostReadiness,
+  sshTargetText,
   wireHostReadiness,
   type PreflightConnection,
 } from '../../src/core/hosts/host-readiness.js'
+import { applyClaudeFloor } from '../../src/core/hosts/host-readiness-problems.js'
+import { claudeCliFloorFor, claudeVersionAtLeast } from '../../src/core/hosts/claude-version-floor.js'
 
 const INSTALL = 'curl -fsSL https://claude.ai/install.sh | bash'
 
@@ -86,7 +89,8 @@ describe('refreshHostReadiness', () => {
     const off = onHostReadinessChange((h) => seen.push(h))
     const r = await refreshHostReadiness('devbox', { getConnection: () => conn, now: () => 1000 })
     off()
-    expect(send).toHaveBeenCalledWith('host.preflight', {}, expect.any(Number))
+    // The default context reads config: its model (Opus 5.5 by default) sets the floor.
+    expect(send).toHaveBeenCalledWith('host.preflight', { minClaudeVersion: '2.1.280' }, expect.any(Number))
     expect(r?.checkedAt).toBe(1000)
     expect(r?.problems.map((p) => p.kind)).toEqual(['claude_needs_node', 'compiler_missing'])
     expect(getHostReadiness('devbox')).toEqual(r)
@@ -180,5 +184,110 @@ describe('wireHostReadiness', () => {
     expect(emit).toHaveBeenCalledWith('devbox')
     off()
     expect(fire).toBeNull()
+  })
+})
+
+// ── Claude Code sign-in and the model's version floor ───────────────────────
+
+const OPUS_55 = { minVersion: '2.1.280', model: 'Opus 5.5' }
+const REMOTE = { hostLabel: 'devbox', sshTarget: 'dev@devbox.example.test', floorModel: 'Opus 5.5' }
+const claude = (over: Record<string, unknown>) => parsePreflight({ ...READY, claude: { ...READY.claude, ...over } })!
+
+describe('claude_outdated and claude_not_logged_in', () => {
+  it('an outdated native build names both versions and offers `claude update`', () => {
+    const p = claude({ version: '2.1.258', versionOk: false, minVersion: '2.1.280', installMethod: 'native', auth: 'ok' })
+    expect(readinessProblems(p, REMOTE)).toEqual([{
+      kind: 'claude_outdated', message: 'Claude Code on devbox is 2.1.258, but Opus 5.5 needs 2.1.280 or newer.', commands: ['claude update'],
+    }])
+  })
+
+  it('each install method gets its own way to update, and an unknown one is never guessed at', () => {
+    const line = (installMethod: string, extra: Record<string, unknown> = {}) =>
+      readinessProblems(claude({ version: '2.1.258', versionOk: false, minVersion: '2.1.280', installMethod, ...extra }), REMOTE)[0]!
+    expect(line('npm')).toMatchObject({ message: expect.stringContaining('It is the npm build'), commands: [INSTALL] })
+    expect(line('homebrew').commands).toEqual(['brew upgrade claude-code'])
+    const other = line('other', { path: '/home/dev/.wrappers/bin/claude' })
+    expect(other.message).toBe('Claude Code on devbox is 2.1.258, but Opus 5.5 needs 2.1.280 or newer. It was not installed by the native installer,'
+      + ' so update it the way it was installed (/home/dev/.wrappers/bin/claude).')
+    expect(other.commands).toEqual([])
+  })
+
+  it('not signed in names the host and the exact ssh line (with -t: sign-in needs a terminal)', () => {
+    expect(readinessProblems(claude({ auth: 'not-logged-in', versionOk: true }), { ...REMOTE, sshTarget: '-p 2222 dev@devbox.example.test' })).toEqual([{
+      kind: 'claude_not_logged_in',
+      message: 'Claude Code on devbox is not signed in. Run `ssh -t -p 2222 dev@devbox.example.test claude` once and sign in, then Check again.',
+      commands: ['ssh -t -p 2222 dev@devbox.example.test claude'],
+    }])
+  })
+
+  it('outdated and signed out at once: both lines, outdated first; an unknown sign-in says nothing', () => {
+    const both = claude({ version: '2.1.258', versionOk: false, minVersion: '2.1.280', installMethod: 'native', auth: 'not-logged-in' })
+    expect(readinessProblems(both, REMOTE).map((x) => x.kind)).toEqual(['claude_outdated', 'claude_not_logged_in'])
+    expect(readinessProblems(claude({ auth: 'unknown', versionOk: true }), REMOTE)).toEqual([])
+    // A claude that does not start is its own line: no sign-in or version guess on top.
+    expect(readinessProblems(claude({ error: 'claude --version exited with code 1', auth: 'not-logged-in', versionOk: false }), REMOTE).map((x) => x.kind)).toEqual(['claude_error'])
+  })
+
+  it('this computer (the setup banner): its own wording, and no terminal lines', () => {
+    const local = { local: true, floorModel: 'Opus 5.5' }
+    const noCompiler = { compiler: { found: false }, dtach: { found: false } }
+    expect(readinessProblems({ ...parsePreflight(READY)!, ...noCompiler, claude: { found: false } }, local))
+      .toEqual([{ kind: 'claude_missing', message: 'Claude Code is not installed on this computer.', commands: [INSTALL] }])
+    expect(readinessProblems({ ...claude({ auth: 'not-logged-in' }), ...noCompiler }, local)).toEqual([{
+      kind: 'claude_not_logged_in', message: 'Claude Code is not signed in. Run `claude` once in a terminal and sign in.', commands: ['claude'],
+    }])
+    expect(readinessProblems(claude({ version: '2.1.258', versionOk: false, minVersion: '2.1.280', installMethod: 'native' }), local)[0]!.message)
+      .toBe('Claude Code on this computer is 2.1.258, but Opus 5.5 needs 2.1.280 or newer.')
+  })
+
+  it('parsePreflight keeps the new fields and drops junk in them', () => {
+    expect(claude({ auth: 'not-logged-in', authDetail: 'claude auth status: not logged in', versionOk: false, minVersion: '2.1.280', installMethod: 'native' }).claude)
+      .toMatchObject({ auth: 'not-logged-in', authDetail: 'claude auth status: not logged in', versionOk: false, minVersion: '2.1.280', installMethod: 'native' })
+    const junk = claude({ auth: 'maybe', versionOk: 'no', minVersion: '2.1.280; rm', installMethod: 'curl' }).claude
+    for (const k of ['auth', 'versionOk', 'minVersion', 'installMethod']) expect(junk, k).not.toHaveProperty(k)
+  })
+
+  it('a daemon from before the floor check still gets compared, by the server', () => {
+    const old = parsePreflight({ ...READY, claude: { ...READY.claude, version: '2.1.258' } })!
+    expect(applyClaudeFloor(old, OPUS_55).claude).toMatchObject({ versionOk: false, minVersion: '2.1.280' })
+    // The daemon's own answer wins, and no floor or no version changes nothing.
+    expect(applyClaudeFloor(claude({ versionOk: true }), OPUS_55).claude.versionOk).toBe(true)
+    expect(applyClaudeFloor(old, null)).toBe(old)
+    expect(applyClaudeFloor(claude({ version: undefined }), OPUS_55).claude.versionOk).toBeUndefined()
+  })
+
+  it('the floor table: Opus 5.5 by any provider id needs 2.1.280; other models need nothing', () => {
+    for (const id of ['global.anthropic.claude-opus-5-5', 'claude-opus-5-5', 'us.anthropic.claude-opus-5-5[1m]', 'anthropic/claude-opus-5.5']) {
+      expect(claudeCliFloorFor(id), id).toEqual(OPUS_55)
+    }
+    for (const id of ['global.anthropic.claude-opus-5', 'claude-opus-4-8', 'claude-opus-5-50', 'fable', '', undefined]) expect(claudeCliFloorFor(id), String(id)).toBeNull()
+    expect(claudeVersionAtLeast('2.1.280', '2.1.280')).toBe(true)
+    expect(claudeVersionAtLeast('2.1.258', '2.1.280')).toBe(false)
+    expect(claudeVersionAtLeast(undefined, '2.1.280')).toBeNull()
+  })
+
+  it('refreshHostReadiness sends the floor, words the lines with the host context, and logs nothing secret', async () => {
+    const { conn, send } = fakeConn({ ...READY, claude: { ...READY.claude, version: '2.1.258', auth: 'not-logged-in', installMethod: 'native' } })
+    const r = await refreshHostReadiness('devbox', {
+      getConnection: () => conn,
+      hostContext: async () => ({ label: 'Dev box', sshTarget: 'dev@devbox.example.test', floor: OPUS_55 }),
+    })
+    expect(send).toHaveBeenCalledWith('host.preflight', { minClaudeVersion: '2.1.280' }, expect.any(Number))
+    // An old daemon answered without versionOk: the server compared 2.1.258 itself.
+    expect(r?.claude).toMatchObject({ versionOk: false, minVersion: '2.1.280' })
+    expect(r?.problems.map((x) => x.message)).toEqual([
+      'Claude Code on Dev box is 2.1.258, but Opus 5.5 needs 2.1.280 or newer.',
+      'Claude Code on Dev box is not signed in. Run `ssh -t dev@devbox.example.test claude` once and sign in, then Check again.',
+    ])
+    // No floor: nothing is sent, nothing is compared.
+    const plain = fakeConn(READY)
+    await refreshHostReadiness('marina', { getConnection: () => plain.conn, hostContext: async () => ({ label: 'marina', sshTarget: 'marina', floor: null }) })
+    expect(plain.send).toHaveBeenCalledWith('host.preflight', {}, expect.any(Number))
+  })
+
+  it('sshTargetText is what the user types after ssh', () => {
+    expect(sshTargetText({ hostname: 'devbox.example.test', user: 'dev', port: 2222 }, 'devbox')).toBe('-p 2222 dev@devbox.example.test')
+    expect(sshTargetText({ hostname: 'devbox.example.test', port: 22 }, 'devbox')).toBe('devbox.example.test')
+    expect(sshTargetText(undefined, 'devbox')).toBe('devbox')
   })
 })

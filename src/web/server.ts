@@ -39,6 +39,7 @@ import { registerChatRpc } from './routes/chat.js'
 import { registerSessionChatRpc } from './routes/session-chat.js'
 import { registerBrowserLogsRpc, browserLogsRouter } from './routes/browser-logs.js'
 import { bugReportRouter } from './routes/bug-report.js'
+import { diagnosticsRouter } from './routes/diagnostics.js'
 import { usageRouter } from './routes/usage.js'
 import { timeRouter, startTimeTracking, stopTimeTracking } from './routes/time.js'
 import { imagesRouter } from './routes/images.js'
@@ -514,6 +515,8 @@ let sessionReaper: SessionReaper | null = null
 let hostWarmup: import('../core/hosts/host-warmup.js').HostWarmup | null = null
 /** Unhooks the daemon phase listener → host:status push (module-global set). */
 let unsubscribeHostPhase: (() => void) | null = null
+/** Unhooks the local Claude Code readiness → system:health push. */
+let unsubscribeLocalClaude: (() => void) | null = null
 let heartbeatHandle: HeartbeatRunnerHandle | null = null
 /** Keeps the Inbox Triage routine in line with config.triage (no restart). */
 let triageConfigWatcher: { stop: () => void } | null = null
@@ -748,6 +751,8 @@ export interface SystemHealthState {
   mainProviderImplicit?: boolean;
   /** How the local Claude Code signs in, for display ("Bedrock (us-west-2)", "your Claude subscription"). */
   claudeCliAuth?: string;
+  /** This machine's Claude Code: installed, signed in, new enough (the setup banner's three states). */
+  localClaude?: import('../core/hosts/local-readiness.js').LocalClaudeStatus;
 }
 
 const systemHealth: SystemHealthState = {
@@ -1011,6 +1016,22 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       error: err instanceof Error ? err.message : String(err),
     })
     // Don't throw — remote sessions may still work, and user can fix daemon issues
+  }
+  // This machine's Claude Code (missing / not signed in / too old for the model),
+  // for the setup banner. After the daemon start, so the probe can use it. A
+  // vitest server, and the Playwright fixture (WALNUT_LOCAL_CLAUDE_PROBE=0, its
+  // fake HOME would read as signed out), only ask when a test calls the route.
+  if (!CLOUD_MODE) {
+    const { wireLocalClaude } = await import('../core/hosts/local-readiness.js')
+    unsubscribeLocalClaude?.()
+    unsubscribeLocalClaude = wireLocalClaude({
+      probeNow: !process.env.VITEST && process.env.WALNUT_LOCAL_CLAUDE_PROBE !== '0',
+      onChange: (status) => {
+        systemHealth.localClaude = status
+        systemHealth.claudeCliAvailable = checkClaudeCliAvailable()
+        broadcastEvent('system:health', systemHealth)
+      },
+    })
   }
 
   const port = options.port ?? DEFAULT_PORT
@@ -1667,6 +1688,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/browser-logs', browserLogsRouter)
   // One-shot diagnostic bundle (Settings → Bug Report; also curl-able).
   app.use('/api/bug-report', bugReportRouter)
+  // `open-walnut doctor` report (Settings > Copy diagnostics; also curl-able).
+  app.use('/api/diagnostics', diagnosticsRouter)
   app.use('/api/audio', audioRouter)
   app.use('/api/stt', sttRouter)
   app.use('/api/incidents', incidentsRouter)
@@ -3113,6 +3136,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (cred.hasReadyProvider !== prev || cred.source !== prevSource || cred.mainProvider !== prevProvider) {
         broadcastEvent('system:health', systemHealth)
       }
+      // A different model may need a newer Claude Code (claude-version-floor.ts).
+      if (!CLOUD_MODE) void import('../core/hosts/local-readiness.js').then((m) => m.localClaudeConfigChanged()).catch(() => {})
     } catch { /* non-critical */ }
   })
 
@@ -5217,6 +5242,8 @@ export async function stopServer(): Promise<void> {
   } catch { /* import failed (partial dist) — nothing published to clear */ }
   unsubscribeHostPhase?.()
   unsubscribeHostPhase = null
+  unsubscribeLocalClaude?.()
+  unsubscribeLocalClaude = null
   bus.unsubscribe('host-status-defs')
   if (routineWakeHandle) {
     routineWakeHandle.stop()

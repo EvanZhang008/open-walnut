@@ -35,6 +35,7 @@ import {
   resolveCallerSid,
   resolveGatewayCallerSid,
   wellKnownGatewaySocketPath,
+  wellKnownGatewaySocketPaths,
   PROD_DAEMON_DIR,
   GATEWAY_SOCKET_FILENAME,
 } from '../../../src/providers/gateway-core.js';
@@ -83,6 +84,30 @@ describe('resolveWalnutCliEndpoint', () => {
     const r = resolveWalnutCliEndpoint({}, probe, UID);
     expect(r).toEqual({ ok: true, socketPath: sock, sid: EXTERNAL_CALLER_SID, external: true });
     expect(sock).toBe(`${PROD_DAEMON_DIR}/${GATEWAY_SOCKET_FILENAME}`);
+  });
+
+  it('with no env, a daemon moved to ~/.cache/open-walnut (/tmp unusable) is found after /tmp', () => {
+    const cacheSock = `/home/me/.cache/open-walnut/${GATEWAY_SOCKET_FILENAME}`;
+    expect(wellKnownGatewaySocketPaths({ HOME: '/home/me/' })).toEqual([`${PROD_DAEMON_DIR}/${GATEWAY_SOCKET_FILENAME}`, cacheSock]);
+    const { probe, seen } = probeFor({ [cacheSock]: TRUSTED });
+    const r = resolveWalnutCliEndpoint({ HOME: '/home/me' }, probe, UID);
+    expect(r).toEqual({ ok: true, socketPath: cacheSock, sid: EXTERNAL_CALLER_SID, external: true });
+    expect(seen).toEqual([`${PROD_DAEMON_DIR}/${GATEWAY_SOCKET_FILENAME}`, cacheSock]);
+    // /tmp first when both exist.
+    const both = probeFor({ [cacheSock]: TRUSTED, [`${PROD_DAEMON_DIR}/${GATEWAY_SOCKET_FILENAME}`]: TRUSTED });
+    expect(resolveWalnutCliEndpoint({ HOME: '/home/me' }, both.probe, UID).ok && both.seen).toEqual([`${PROD_DAEMON_DIR}/${GATEWAY_SOCKET_FILENAME}`]);
+  });
+
+  it('a set WALNUT_DAEMON_DIR is the only dir tried (an isolated daemon never reaches the real one)', () => {
+    const { probe, seen } = probeFor({});
+    const r = resolveWalnutCliEndpoint({ WALNUT_DAEMON_DIR: '/tmp/walnut-iso', HOME: '/home/me' }, probe, UID);
+    expect(r.ok).toBe(false);
+    expect(seen).toEqual([`/tmp/walnut-iso/${GATEWAY_SOCKET_FILENAME}`]);
+  });
+
+  it('the source twin CLI mirrors the same candidate order', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../../src/providers/daemon-source.ts'), 'utf-8');
+    expect(src).toContain("[PROD_DAEMON_DIR].concat(process.env.HOME ? [path.join(process.env.HOME, '.cache', 'open-walnut')] : [])");
   });
 
   it('honours WALNUT_DAEMON_DIR so an isolated daemon is reachable', () => {
@@ -239,7 +264,9 @@ describe('daemon twin parity for the external caller', () => {
       expect(src).toMatch(/function installUserWalnutShim/);
       expect(src).toMatch(/installUserWalnutShim\(\)/);
       // Never for an isolated (test/sandbox/ephemeral) daemon.
-      expect(src).toMatch(/if \(path\.resolve\(DAEMON_DIR\) !== path\.resolve\(PROD_DAEMON_DIR\)\) return/);
+      // (Production is /tmp/open-walnut or its ~/.cache/open-walnut fallback.)
+      expect(src).toMatch(/function installUserWalnutShim\(\)[^{]*\{\s*if \(!IS_PROD_DAEMON_DIR\) return/);
+      expect(src).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)/);
       // Never clobber a foreign binary: the guard reads the shim's marker.
       expect(src).toMatch(/existing\.(includes|indexOf)\((USER_WALNUT_SHIM_MARKER|marker)\)/);
       expect(src).toMatch(/USER_WALNUT_SHIM_MARKER = 'walnut-user-shim v1'/);

@@ -49,9 +49,18 @@ function extractMutateTwin(homeDir: string): Twin {
     expect(end).toBeGreaterThan(i)
     return twin.slice(i, end + 2)
   }
+  const grabLine = (prefix: string): string => {
+    const i = twin.indexOf(prefix)
+    expect(i, `${prefix} not found in the daemon template`).toBeGreaterThan(-1)
+    return twin.slice(i, twin.indexOf('\n', i) + 1)
+  }
   // The `async ` prefix is part of the header on purpose: a body containing
   // `await` rebuilt as a plain function is a syntax error.
   const parts = [
+    // Module-level constant the denylist reads, taken verbatim from the twin so
+    // the binding is computed the way the twin computes it (from the injected
+    // empty env, so it lands under the temp HOME_DIR).
+    grabLine('const FALLBACK_DAEMON_DIR ='),
     grab('function fsMutateFloor('),
     grab('function fsMutateDenied('),
     grab('async function fsMutateResolve('),
@@ -183,6 +192,18 @@ describe('daemon fsMutateDenied', () => {
     // is how a user fixes a broken skill file.
     expect(twin.denied(path.join(home, '.open-walnut/skills/x/SKILL.md'))).toBe(false)
     expect(twin.denied(path.join(home, '.open-walnut/config.yaml'))).toBe(false)
+  })
+
+  it('refuses the home fallback daemon dir (used when /tmp cannot hold the daemon), not its neighbours', () => {
+    for (const p of [
+      path.join(home, '.cache/open-walnut'),
+      path.join(home, '.cache/open-walnut/daemon.pid'),
+      path.join(home, '.cache/open-walnut/bin/walnut'),
+    ]) {
+      expect(twin.denied(p), `must deny ${p}`).toBe(true)
+    }
+    expect(twin.denied(path.join(home, '.cache/open-walnut-notes/a.md'))).toBe(false)
+    expect(twin.denied(path.join(home, '.cache/other-tool/x'))).toBe(false)
   })
 })
 

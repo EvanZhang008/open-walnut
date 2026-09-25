@@ -17,6 +17,7 @@
 
 import { Router, type Request, type Response } from 'express'
 import { buildBugReportText } from '../../core/observability/bug-report.js'
+import { serverDiagnosticsOptions } from './diagnostics.js'
 import { getSystemHealth } from '../server.js'
 import { log } from '../../logging/index.js'
 
@@ -39,7 +40,7 @@ bugReportRouter.get('/', async (req: Request, res: Response) => {
 
   let text: string
   try {
-    text = await buildBugReportText({ windowMins, systemHealth: getSystemHealth() })
+    text = await buildBugReportText({ windowMins, systemHealth: getSystemHealth(), diagnostics: serverDiagnosticsOptions() })
   } catch (err) {
     // buildBugReportText never throws by contract; this is a belt-and-braces
     // guard so even a contract violation still hands the user SOMETHING.

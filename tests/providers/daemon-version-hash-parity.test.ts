@@ -100,4 +100,19 @@ describe('daemon version hash: the two source lists agree', () => {
       expect(list, `${rel} must be hashed`).toContain(rel)
     }
   })
+
+  // Ratchet: every module the standalone twin imports at runtime ships inside
+  // the binary, so an edit to it must move the version. fs-ls-core.ts and
+  // git-diff-core.ts were missing, so a change there never redeployed a host.
+  it("every relative runtime import of daemon-standalone.ts is in BOTH lists", () => {
+    const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
+    const imports = [...standalone.matchAll(/^import\s+(?!type\b)[\s\S]*?\s+from\s+'(\.{1,2}\/[^']+)\.js'/gm)]
+      .map((m) => path.posix.normalize(path.posix.join('src/providers', m[1]!)) + '.ts')
+    expect(imports.length).toBeGreaterThan(10)
+    const shell = shellSourceList()
+    const ts = tsSourceList()
+    const missing = imports.filter((rel) => !shell.includes(rel) || !ts.includes(rel))
+    expect(missing, `imported by the standalone twin but not hashed: ${missing.join(', ')}`).toEqual([])
+    for (const rel of ['src/providers/fs-ls-core.ts', 'src/providers/git-diff-core.ts']) expect(shell).toContain(rel)
+  })
 })

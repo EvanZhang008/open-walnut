@@ -5,6 +5,9 @@
  *
  *   install-claude-native  the official native installer, verified by running
  *                          ~/.local/bin/claude --version afterwards
+ *   update-claude          `claude update` on a claude the native installer put
+ *                          there (never an npm, Homebrew or wrapper install),
+ *                          the installer when the updater itself fails
  *   install-compiler       gcc plus the C library headers through the host's
  *                          package manager, under `sudo -n` (never a prompt)
  *   build-dtach            compile the vendored dtach into ~/.local/bin/walnut-dtach
@@ -25,7 +28,7 @@
 import type fsType from 'node:fs'
 import type { ClaudeProbe } from './host-runtime-core.js'
 
-export type HostFixAction = 'install-claude-native' | 'install-compiler' | 'build-dtach'
+export type HostFixAction = 'install-claude-native' | 'update-claude' | 'install-compiler' | 'build-dtach'
 
 export interface HostFixResult {
   action: string
@@ -41,7 +44,7 @@ export interface HostFixResult {
   skipped?: boolean
   /** What a human can run instead when the fix could not be done. */
   manualCommand?: string
-  /** install-claude-native: what is installed now. */
+  /** install-claude-native / update-claude: what is installed now. */
   claude?: { path: string; kind: string; version?: string }
   /** install-claude-native 'shadowed': the claude that comes first on PATH. */
   shadowedBy?: string
@@ -74,8 +77,8 @@ export interface HostFixDeps {
 export function createHostFix(deps: HostFixDeps) {
   var INSTALL_URL = 'https://claude.ai/install.sh'
   var INSTALL_LINE = 'curl -fsSL ' + INSTALL_URL + ' | bash'
-  var ACTIONS = ['install-claude-native', 'install-compiler', 'build-dtach']
-  var ACTION_MS: Record<string, number> = { 'install-claude-native': 300000, 'install-compiler': 300000, 'build-dtach': 120000 }
+  var ACTIONS = ['install-claude-native', 'update-claude', 'install-compiler', 'build-dtach']
+  var ACTION_MS: Record<string, number> = { 'install-claude-native': 300000, 'update-claude': 300000, 'install-compiler': 300000, 'build-dtach': 120000 }
   var LOG_TAIL = 4096
   var PACKAGE_MANAGERS = ['dnf', 'yum', 'apt-get', 'apk', 'zypper']
   var DTACH_C = ['attach.c', 'main.c', 'master.c']
@@ -290,6 +293,12 @@ export function createHostFix(deps: HostFixDeps) {
     if (current.found && current.kind === 'native' && current.path) return reportClaude(current.path, deadline, logs, true)
     var local = await deps.runtime.probeClaude(bin, pathStr(), deadline)
     if (local.found && local.kind === 'native') return reportClaude(bin, deadline, logs, true)
+    var failed = await runInstaller(deadline, logs)
+    return failed || reportClaude(bin, deadline, logs, false)
+  }
+
+  /** The official installer, downloaded then run. Null when it succeeded, else why not. */
+  async function runInstaller(deadline: number, logs: string[]): Promise<Result | null> {
     var curl = deps.runtime.resolveOnPath('curl', pathStr())
     var wget = curl ? null : deps.runtime.resolveOnPath('wget', pathStr())
     if (!curl && !wget) return { ok: false, error: 'no-downloader', manualCommand: INSTALL_LINE }
@@ -313,7 +322,66 @@ export function createHostFix(deps: HostFixDeps) {
     } finally {
       removeDir(dir, ['install.sh'])
     }
-    return reportClaude(bin, deadline, logs, false)
+    return null
+  }
+
+  // ── update-claude ──
+
+  /** The CLI's isEnvTruthy. */
+  function truthy(v: string | undefined): boolean { return !!v && ['1', 'true', 'yes', 'on'].indexOf(v.trim().toLowerCase()) >= 0 }
+
+  /** have >= need, by major.minor.patch; false when either is not a version. */
+  function atLeast(have: string, need: string): boolean {
+    var a = /^(\d+)\.(\d+)\.(\d+)/.exec(have)
+    var b = /^(\d+)\.(\d+)\.(\d+)/.exec(need)
+    if (!a || !b) return false
+    for (var i = 1; i <= 3; i++) if (Number(a[i]) !== Number(b[i])) return Number(a[i]) > Number(b[i])
+    return true
+  }
+
+  /** The native installer keeps every version under ~/.local/share/claude/versions/. */
+  function isNativeInstall(p: string): boolean {
+    var real = p
+    try { if (deps.fs) real = deps.fs.realpathSync(p) } catch { return false }
+    var roots = [home() + '/.local/share/claude/versions/']
+    if (deps.env.XDG_DATA_HOME) roots.push(deps.env.XDG_DATA_HOME.replace(/\/$/, '') + '/claude/versions/')
+    for (var i = 0; i < roots.length; i++) if (real.indexOf(roots[i]) === 0) return true
+    return false
+  }
+
+  /**
+   * `claude update` on the claude a session starts, when the native installer
+   * put it there: an npm build is the planner's install-claude-native, and a
+   * Homebrew install or a wrapper script is never touched.
+   * `claude update` answers without a prompt (it defers any consent to the next
+   * interactive session); when it fails, the installer runs instead, unless
+   * updates were turned off with DISABLE_UPDATES. `minClaudeVersion` is what
+   * the server needs: an update that stops short of it is 'still-outdated'.
+   */
+  async function updateClaude(params: Record<string, unknown>, deadline: number, logs: string[]): Promise<Result> {
+    var need = typeof params.minClaudeVersion === 'string' ? params.minClaudeVersion : ''
+    var current = await deps.runtime.probeClaude('claude', pathStr(), deadline)
+    if (!current.found || !current.path) return { ok: false, error: 'verify-failed', manualCommand: INSTALL_LINE }
+    var bin = current.path
+    if (current.kind !== 'native' || !isNativeInstall(bin)) return { ok: false, error: 'unmanaged-install', log: 'not a native-installer claude: ' + bin }
+    var before = await claudeVersion(bin, undefined, deadline, logs)
+    if (before && need && atLeast(before, need)) return { ok: true, skipped: true, claude: { path: bin, kind: 'native', version: before } }
+    if (truthy(deps.env.DISABLE_UPDATES)) return { ok: false, error: 'updates-disabled', manualCommand: 'claude update' }
+    var up = await run(bin, ['update'], { timeoutMs: Math.max(1, Math.min(180000, deadline - now())) })
+    transcript(logs, [bin, 'update'], up)
+    if (up.timedOut) return { ok: false, error: 'timeout', manualCommand: 'claude update' }
+    if (/DISABLE_UPDATES|updates are disabled/i.test(up.stdout + up.stderr)) return { ok: false, error: 'updates-disabled', manualCommand: 'claude update' }
+    if (up.code !== 0) {
+      var failed = await runInstaller(deadline, logs)
+      if (failed) return failed
+    }
+    var report = await reportClaude(deps.runtime.resolveOnPath('claude', pathStr()) || bin, deadline, logs, false)
+    var after = report.claude && report.claude.version
+    if (report.ok && after && need && !atLeast(after, need)) {
+      return { ok: false, error: 'still-outdated', claude: report.claude, manualCommand: 'claude install latest' }
+    }
+    if (report.ok && after && before === after) report.skipped = true
+    return report
   }
 
   // ── build-dtach ──
@@ -390,8 +458,9 @@ export function createHostFix(deps: HostFixDeps) {
     var r: Result
     try {
       r = name === 'install-claude-native' ? await installClaudeNative(deadline, logs)
-        : name === 'install-compiler' ? await installCompiler(deadline, logs)
-          : await buildDtach(params || {}, deadline, logs)
+        : name === 'update-claude' ? await updateClaude(params || {}, deadline, logs)
+          : name === 'install-compiler' ? await installCompiler(deadline, logs)
+            : await buildDtach(params || {}, deadline, logs)
     } catch (e) {
       r = { ok: false, error: 'internal', log: String((e as Error).message || e) }
     } finally {

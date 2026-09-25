@@ -26,9 +26,22 @@ export const PROD_DAEMON_DIR = '/tmp/open-walnut';
  * so tests and ephemeral daemons stay isolated.
  */
 export function wellKnownGatewaySocketPath(env?: Record<string, string | undefined>): string {
+  return wellKnownGatewaySocketPaths(env)[0];
+}
+
+/**
+ * Every well-known socket, in the order to try: the WALNUT_DAEMON_DIR one alone
+ * when it is set; otherwise /tmp/open-walnut, then $HOME/.cache/open-walnut
+ * (where a connect moves the daemon when /tmp is read-only, noexec or full).
+ */
+export function wellKnownGatewaySocketPaths(env?: Record<string, string | undefined>): string[] {
   const e: Record<string, string | undefined> = env ?? (typeof process !== 'undefined' ? process.env : {});
-  const dir = (e.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR).replace(/\/+$/, '');
-  return `${dir}/${GATEWAY_SOCKET_FILENAME}`;
+  if (e.WALNUT_DAEMON_DIR) return [`${e.WALNUT_DAEMON_DIR.replace(/\/+$/, '')}/${GATEWAY_SOCKET_FILENAME}`];
+  const home = (e.HOME || '').replace(/\/+$/, '');
+  return [
+    `${PROD_DAEMON_DIR}/${GATEWAY_SOCKET_FILENAME}`,
+    ...(home ? [`${home}/.cache/open-walnut/${GATEWAY_SOCKET_FILENAME}`] : []),
+  ];
 }
 
 /**

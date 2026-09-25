@@ -105,19 +105,41 @@ export function buildDaemonStartCmd(opts: DaemonStartCmdOpts): string {
   // env prefix is present). The `i -ge 2` guard skips iteration 1 so a STALE
   // error from a previous attempt (log truncates when the new nohup spawns,
   // racing the poll) can't abort a healthy boot.
+  //
+  // A runtime that dies on its own before writing the pid file (SIGILL on a
+  // CPU the build does not support, a loader error) prints nothing: a killed
+  // background job has no shell left to report it. So the poll also watches
+  // the job itself, and once it is gone, reaps it ONCE and appends
+  // `walnut-daemon-exit=<status>` to the start log. The server reads that line
+  // to decide whether to fall back to another runtime (remote-runtime.ts).
+  // A zombie still answers kill -0, so `ps` confirms; a `ps` that cannot answer
+  // (busybox without -p) reads as alive, never as dead: `wait` on a live job
+  // would block the whole start.
+  // Every path is single-quoted: a fallback dir under a HOME with a space
+  // ("/home/John Smith/.cache/open-walnut") must stay one word.
+  const log = shq(`${dir}/daemon-start.log`)
+  const pidFile = shq(`${dir}/daemon.pid`)
+  const portFile = shq(`${dir}/daemon.port`)
+  const script = shq(`${dir}/daemon.cjs`)
+  const exec = opts.execPath ? shq(opts.execPath) : ''
   const waitReady =
-    'for i in $(seq 1 22); do ' +
-    `DPID=$(cat "${dir}/daemon.pid" 2>/dev/null); ` +
-    `[ -s "${dir}/daemon.port" ] && [ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && break; ` +
-    `[ "$i" -ge 2 ] && grep -Eq "^(nohup|env): " "${dir}/daemon-start.log" 2>/dev/null && break; ` +
+    'WALNUT_BG=$!; WALNUT_BG_DONE=; for i in $(seq 1 22); do ' +
+    `DPID=$(cat ${pidFile} 2>/dev/null); ` +
+    `[ -s ${portFile} ] && [ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && break; ` +
+    `[ "$i" -ge 2 ] && grep -Eq "^(nohup|env): " ${log} 2>/dev/null && break; ` +
+    'if [ -z "$WALNUT_BG_DONE" ]; then WALNUT_BG_GONE=; ' +
+    'if ! kill -0 "$WALNUT_BG" 2>/dev/null; then WALNUT_BG_GONE=1; ' +
+    'else case "$(ps -o stat= -p "$WALNUT_BG" 2>/dev/null)" in Z*) WALNUT_BG_GONE=1;; esac; fi; ' +
+    'if [ -n "$WALNUT_BG_GONE" ]; then WALNUT_BG_DONE=1; wait "$WALNUT_BG"; WALNUT_BG_RC=$?; ' +
+    `if [ "$WALNUT_BG_RC" -ne 0 ]; then echo "walnut-daemon-exit=$WALNUT_BG_RC" >> ${log}; break; fi; fi; fi; ` +
     'sleep 2; done'
 
   // `[ -n "$DPID" ]` guards against an empty pid file (cat succeeds but
   // yields empty → `kill -0 ""` behavior is shell-dependent; some emit the
   // current shell's pid).
   const confirmRunning =
-    `cat "${dir}/daemon.port" && echo && ` +
-    `DPID=$(cat "${dir}/daemon.pid" 2>/dev/null) && ` +
+    `cat ${portFile} && echo && ` +
+    `DPID=$(cat ${pidFile} 2>/dev/null) && ` +
     `[ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && echo "{\\"running\\":true}"`
 
   switch (opts.runtime) {
@@ -126,17 +148,17 @@ export function buildDaemonStartCmd(opts: DaemonStartCmdOpts): string {
       // The daemon source itself sources ~/.zshrc / ~/.bashrc on startup to
       // populate process.env.PATH so cmdStart's spawn('claude', ...) finds
       // the CLI. See daemon-source.ts "PATH setup" block.
-      return `nohup ${envPrefix}${opts.execPath} ${dir}/daemon.cjs --start > ${dir}/daemon-start.log 2>&1 & ` +
+      return `nohup ${envPrefix}${exec} ${script} --start > ${log} 2>&1 & ` +
         `${waitReady}; ${confirmRunning}`
     case 'binary':
       // Binary deploy — run directly, no PATH setup needed. Binary has a
       // `--status` subcommand, so use it as the liveness confirmation.
-      return `nohup ${envPrefix}${opts.execPath} --start > ${dir}/daemon-start.log 2>&1 & ` +
-        `${waitReady}; cat "${dir}/daemon.port" && echo && ${opts.execPath} --status`
+      return `nohup ${envPrefix}${exec} --start > ${log} 2>&1 & ` +
+        `${waitReady}; cat ${portFile} && echo && ${envPrefix}${exec} --status`
     case 'node':
       // Source deploy under node — needs the shell preamble for node PATH
       // discovery (rc files, nvm init).
-      return `${opts.preamble ?? 'true'}; nohup ${envPrefix}node ${dir}/daemon.cjs --start > ${dir}/daemon-start.log 2>&1 & ` +
+      return `${opts.preamble ?? 'true'}; nohup ${envPrefix}node ${script} --start > ${log} 2>&1 & ` +
         `${waitReady}; ${confirmRunning}`
   }
 }

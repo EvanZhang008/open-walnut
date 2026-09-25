@@ -312,13 +312,25 @@ Sessions are where the real coding happens. A session is a Claude Code process a
 
 ### Prerequisites for Sessions
 
-Make sure the Claude Code CLI is installed and authenticated:
+Make sure the Claude Code CLI is installed and signed in:
 
 ```bash
-npm install -g @anthropic-ai/claude-code
+curl -fsSL https://claude.ai/install.sh | bash   # the native build, which needs no Node.js
 claude --version    # Should print a version number
-claude              # Run once to complete authentication if needed
+claude              # Run once to sign in if needed
 ```
+
+Walnut checks this for you. The setup banner on the home page shows one of three states for this
+computer, and goes away once nothing is left:
+
+| State | What Walnut does |
+|---|---|
+| Claude Code is not installed | **Install Claude Code** runs the native installer, then checks again |
+| Claude Code is older than the configured model needs (Opus 5.5 needs 2.1.280 or newer) | **Update Claude Code** runs `claude update` on a native install, or installs the native build next to an npm one. A Homebrew or other install gets the command to run instead |
+| Claude Code is not signed in | Shows the `claude` command to run once in a terminal, checks again every 15 seconds, and hides itself when sign-in is done |
+
+Signing in is always yours: Walnut only asks Claude Code whether it is signed in
+(`claude auth status`, which starts no session and makes no model call) and never reads a token.
 
 ### Starting a Session
 
@@ -525,7 +537,9 @@ running there if SSH drops. The first connect takes about a minute.
 |---|---|---|
 | Passwordless SSH (key or agent) as the configured user | Everything | Connect stops at the SSH step and shows the ssh error |
 | `curl` and `unzip`, or Bun or Node.js already installed | The session daemon (Walnut installs Bun with `curl -fsSL https://bun.sh/install \| bash` when neither is present) | Connect stops at "Install runtime" and says which command failed |
-| Claude Code, signed in once | Every session | Walnut installs the native build itself (`curl -fsSL https://claude.ai/install.sh \| bash`). Signing in stays yours. Only when the install cannot run (no network, no `curl` or `wget`) does the host status show the command and why |
+| Claude Code, signed in once | Every session | Walnut installs the native build itself (`curl -fsSL https://claude.ai/install.sh \| bash`). Only when the install cannot run (no network, no `curl` or `wget`) does the host status show the command and why |
+| Claude Code new enough for the configured model (Opus 5.5 needs 2.1.280 or newer) | Every session on that model | Walnut runs `claude update` on a native install (or installs the native build next to an npm one) and checks again. A Homebrew or other install gets a line with both versions and the command to run |
+| Claude Code signed in | Every session | Walnut detects it without starting a session and shows `ssh -t <host> claude` to run once, then Check again. Signing in stays yours |
 | A C compiler (`gcc` or `clang`) | A terminal that survives disconnects, when no prebuilt `dtach` fits the host | Walnut installs `gcc` and the C headers with the host's package manager under `sudo -n` (so only when sudo needs no password), then builds `dtach`. When sudo wants a password the host status shows the exact command, and the terminal opens marked `Not persistent` |
 
 Two things worth knowing about Claude Code on a remote host:
@@ -537,8 +551,9 @@ Two things worth knowing about Claude Code on a remote host:
 - Walnut does not need Node.js, npm or a compiler on the host for chat, files, diffs or the
   folder picker. Those run through the daemon, which is a single Bun binary.
 
-After the handshake Walnut runs a short preflight on the host (Claude Code present, Node.js if
-the npm build is installed, compiler present) and fixes what it can by itself, one fix at a time,
+After the handshake Walnut runs a short preflight on the host (Claude Code present, signed in and
+new enough, Node.js if the npm build is installed, compiler present) and fixes what it can by
+itself, one fix at a time,
 with `Installing ... on <host>...` in Settings while it runs. Whatever it cannot fix keeps one
 actionable line with the command and the reason. Nothing is shown when the host is complete. Each
 fix runs once per host until you press Check again. To turn the fixes off, set
@@ -638,6 +653,7 @@ walnut sync                         # Sync with external integrations
 walnut logs                         # View recent logs
 walnut logs -f -s agent             # Follow agent logs
 walnut logs --json                  # Raw JSON output
+walnut doctor                       # Paste-ready report: build, claude, node, PATH, hosts
 ```
 
 All commands support `--json` for structured output.
@@ -648,6 +664,13 @@ Walnut session runs anyway; for a single machine-readable answer use `walnut too
 ---
 
 ## Troubleshooting
+
+**Asking for help? Run `open-walnut doctor` and paste the output.** It prints one block with the
+build and commit you run, which `claude` and `node` Walnut finds, the PATH your sessions start
+with, and what each remote host can run, with usernames and hostnames masked so it is safe for a
+public issue. The same text is behind **Copy diagnostics** at the bottom of Settings, and
+**Copy host diagnostics** in Settings > Remote Hosts copies only the hosts. With no server running
+the command still reports this machine and says so.
 
 ### Agent doesn't reply in chat
 

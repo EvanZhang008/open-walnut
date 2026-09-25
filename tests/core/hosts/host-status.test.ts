@@ -169,3 +169,57 @@ describe('listStatusHosts', () => {
     expect(listStatusHosts({} as Config)).toEqual([]);
   });
 });
+
+describe('buildHostStatus: first-connect facts (runtime, daemon dir, credential kinds)', () => {
+  const readiness = { checkedAt: AT, problems: [], fixes: [] } as unknown as import('../../../src/core/hosts/host-readiness.js').HostReadiness;
+  const fallbackDir = { path: '/home/builder/.cache/open-walnut', fallback: true, reason: '/tmp is read-only', freeMb: 4_000, home: '/home/builder' };
+
+  it('says which runtime the daemon ended up on and where its files live', () => {
+    const s = buildHostStatus('devbox', devbox, state('connected', { runtime: 'binary', daemonDir: fallbackDir }), undefined, AT, readiness);
+    expect(s.runtime).toBe('binary');
+    expect(s.daemonDir).toEqual({ path: '/home/builder/.cache/open-walnut', display: '~/.cache/open-walnut', fallback: true, reason: '/tmp is read-only', freeMb: 4_000 });
+    expect(s.warnings).toEqual(['Using `~/.cache/open-walnut` for the session daemon because `/tmp` is read-only.']);
+    expect(s.readiness?.problems).toEqual([{
+      kind: 'daemon_dir_fallback',
+      message: 'Big dev box: Using `~/.cache/open-walnut` for the session daemon because `/tmp` is read-only.',
+      commands: [],
+    }]);
+  });
+
+  it('a disk below 200 MB is a readiness problem with the number and the command that shows where it went', () => {
+    const tmpDir = { path: '/tmp/open-walnut', fallback: false, freeMb: 120, home: '/home/builder' };
+    const s = buildHostStatus('devbox', devbox, state('connected', { runtime: 'bun', daemonDir: tmpDir }), undefined, AT, readiness);
+    expect(s.warnings).toBeUndefined();
+    expect(s.readiness?.problems).toEqual([{
+      kind: 'disk_low',
+      message: 'Big dev box has only 120 MB free where the session daemon keeps its files (`/tmp/open-walnut`); sessions need at least 200 MB. Free some space there (`df -h /tmp` shows where it went).',
+      commands: ['df -h /tmp'],
+    }]);
+  });
+
+  it('a healthy /tmp adds nothing, and while disconnected the connect error stays the story', () => {
+    const ok = { path: '/tmp/open-walnut', fallback: false, freeMb: 9_000, home: '/home/builder' };
+    const up = buildHostStatus('devbox', devbox, state('connected', { daemonDir: ok }), undefined, AT, readiness);
+    expect(up.readiness).toBe(readiness);
+    expect(up.warnings).toBeUndefined();
+    const down = buildHostStatus('devbox', devbox, state('failed', { daemonDir: fallbackDir, error: 'x' }), undefined, AT, readiness);
+    expect(down.readiness).toBeUndefined();
+  });
+
+  it.each([
+    ['Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-09-14 08:00)', 'cert_expired', false],
+    ['Could not open a connection to your authentication agent.', 'agent_missing', false],
+    ['@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\nHost key verification failed.', 'host_key', false],
+    ['kex_exchange_identification: Connection closed by remote host\nConnection closed by UNKNOWN port 65535', 'proxy', true],
+  ] as const)('classifies %j as %s (retryable %s)', (error, kind, retryable) => {
+    const s = buildHostStatus('devbox', devbox, state('failed', { error }), undefined, AT);
+    expect(s.kind).toBe(kind);
+    expect(s.retryable).toBe(retryable);
+    expect(s.hint).not.toMatch(/[\u2013\u2014]/);
+  });
+
+  it('a host key hint names the exact ssh-keygen -R line, with the port when there is one', () => {
+    const s = buildHostStatus('devbox', { ...devbox, port: 2222 }, state('failed', { error: 'Host key verification failed.' }), undefined, AT);
+    expect(s.hint).toContain("`ssh-keygen -R '[devbox.example.test]:2222'`");
+  });
+});

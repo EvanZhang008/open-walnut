@@ -58,6 +58,14 @@ breaking changes).
 
 ### Added
 
+- **`open-walnut doctor` prints one paste-ready report for support.** Build and commit (`+dirty`
+  for an uncommitted tree), the server's node, port and nice value, which `claude` and `node`
+  this machine runs, the login-shell and process PATH, compiler, dtach, SQLite, the provider and
+  model, and one line per remote host with its connection, daemon version and preflight. Every
+  probe has a deadline and a failed one becomes a warning line. Usernames and hostnames are
+  masked by default. The same report is `GET /api/diagnostics` (`?format=text`), a **Copy
+  diagnostics** link on the Settings build line, **Copy host diagnostics** on Remote Hosts, and
+  part of the bug report.
 - **A clean-room remote-host test in CI.** A container that looks like a bare dev box (no compiler,
   no Node.js, an npm-style `claude`, `~/workplace` a symlink) is added as an SSH host, and the real
   daemon connect, folder listing, terminal probe, preflight and session spawn run against it.

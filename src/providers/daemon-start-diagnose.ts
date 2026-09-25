@@ -41,7 +41,7 @@ export function diagnoseDaemonStartLog(startLog: string, hostKey: string): strin
     return ' [port in use: another daemon already running. Try `daemon --stop` first]'
   }
   if (startLog.includes('Permission denied')) {
-    return ' [permission denied: /tmp/open-walnut may be owned by a different user]'
+    return ' [permission denied: the daemon dir (/tmp/open-walnut, or ~/.cache/open-walnut when /tmp is unusable) may be owned by a different user]'
   }
   return ''
 }

@@ -51,6 +51,8 @@ function extractWriteTwin(homeDir: string): (cmd: Cmd) => Promise<Reply> {
   // The `async ` prefix is part of the header on purpose: a body containing
   // `await` rebuilt as a plain function is a syntax error.
   const parts = [
+    // Read by fsMutateDenied; taken verbatim from the twin (see daemon-fs-mutate.test.ts).
+    grabLine('const FALLBACK_DAEMON_DIR ='),
     grabLine('const FS_WRITE_PRECONDITION_MAX_BYTES ='),
     grabLine('const FS_WRITE_TEMP_STALE_MS ='),
     grab('function fsMutateFloor('),

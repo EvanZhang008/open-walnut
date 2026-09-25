@@ -249,6 +249,8 @@ export function isProtectedStatePath(p: string): boolean {
     '/tmp/open-walnut-streams',
     path.join(os.tmpdir(), 'open-walnut'),
     path.join(os.tmpdir(), 'open-walnut-streams'),
+    // Where a session daemon lives when /tmp is unusable (remote-daemon-dir.ts).
+    path.join(os.homedir(), '.cache', 'open-walnut'),
     // The CURRENT home of the stream JSONLs (moved from /tmp in 2026-08) and
     // everything else Walnut keeps under its tmp dir (daemon state, file
     // history). The legacy roots above stayed for older daemons; forgetting the
