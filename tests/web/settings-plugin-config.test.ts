@@ -105,6 +105,15 @@ describe('the form goes through this one function', () => {
     expect(source).toContain('pluginSavePayload(draft, schemas)')
   })
 
+  it('shows the value that was stored after a save, not the one that was typed', () => {
+    // A number field clamps to the manifest's minimum / maximum on save (5 in a min-15 box saves as
+    // 15). The box kept showing the 5 while config held 15, so the draft takes the payload back.
+    const saved = source.indexOf('await onSave(')
+    const writeBack = source.indexOf('...cleaned } }))')
+    expect(saved).toBeGreaterThan(-1)
+    expect(writeBack).toBeGreaterThan(saved)
+  })
+
   it('puts a value in its config shape BEFORE anything tests it for emptiness', () => {
     // That order IS the bug: filtering the raw draft first meant an emptied list never became [].
     expect(source.indexOf('valueForSave(schemas[k], v)')).toBeGreaterThan(-1)

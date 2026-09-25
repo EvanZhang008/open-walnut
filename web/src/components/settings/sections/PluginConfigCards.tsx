@@ -177,6 +177,8 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
         },
       } as Partial<Config>);
       for (const k of Object.keys(cleaned)) edited.delete(k);
+      // A save clamps to the manifest's bounds, so show what was stored (15), not what was typed (5).
+      setDrafts(d => ({ ...d, [plugin.id]: { ...d[plugin.id], ...cleaned } }));
       // Server soft-reloads the plugin on CONFIG_CHANGED (async); poll a couple
       // of echoes so the "needs setup" badge flips to active without a reload.
       emitPluginsChanged([1200, 3500]);
