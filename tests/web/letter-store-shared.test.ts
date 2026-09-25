@@ -203,3 +203,63 @@ describe('a patch reaches every reader at once', () => {
     expect(getLetterSnapshot().letters.find(l => l.id === 'lt-1')?.pinned).toBe(false);
   });
 });
+
+describe('readAt follows read (the grace-window clock)', () => {
+  // The store owns the stamp so every surface (rail, session tab, reader) starts
+  // a read decision's Needs Action window the moment the human acts, and so a
+  // stale record merged later cannot close it early.
+  const T0 = 1_800_000_000_000;
+
+  it('stamps a read flip that arrives without a stamp, from whichever surface', async () => {
+    serve([letter({ id: 'lt-d', type: 'action_required', read: false })]);
+    await loadLetters();
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    patchLetter('lt-d', { read: true });
+    expect(getLetterSnapshot().letters[0]).toMatchObject({ read: true, readAt: T0 });
+    vi.setSystemTime(T0 + 5_000);
+    patchLetter('lt-d', { read: false });
+    expect(getLetterSnapshot().letters[0]).toMatchObject({ read: false, readAt: T0 + 5_000 });
+    vi.useRealTimers();
+  });
+
+  it('does not restart the window when read is re-asserted unchanged', async () => {
+    serve([letter({ id: 'lt-d', type: 'action_required', read: true, readAt: T0 })]);
+    await loadLetters();
+    vi.useFakeTimers();
+    vi.setSystemTime(T0 + 60_000);
+    patchLetter('lt-d', { read: true });
+    patchLetter('lt-d', { pinned: true });
+    expect(getLetterSnapshot().letters[0].readAt).toBe(T0);
+    vi.useRealTimers();
+  });
+
+  it('never moves the stamp BACKWARDS: the reader GET that raced its own read POST', async () => {
+    // Marked unread an hour ago (server stamp T0), opened now: the optimistic
+    // flip stamps now, then the detail fetched before the POST comes back still
+    // carrying T0. Taking it would close the five-minute window on the spot.
+    serve([letter({ id: 'lt-d', type: 'action_required', read: false, readAt: T0 })]);
+    await loadLetters();
+    vi.useFakeTimers();
+    vi.setSystemTime(T0 + 3_600_000);
+    patchLetter('lt-d', { read: true });
+    const staleDetail = { ...letter({ id: 'lt-d', type: 'action_required', read: false, readAt: T0 }), read: true };
+    patchLetter('lt-d', staleDetail);
+    expect(getLetterSnapshot().letters[0]).toMatchObject({ read: true, readAt: T0 + 3_600_000 });
+    vi.useRealTimers();
+  });
+
+  it('takes a NEWER server stamp, and keeps a record with no stamp at all', async () => {
+    serve([letter({ id: 'lt-d', type: 'action_required', read: true, readAt: T0 })]);
+    await loadLetters();
+    patchLetter('lt-d', { read: false, readAt: T0 + 10 });
+    expect(getLetterSnapshot().letters[0].readAt).toBe(T0 + 10);
+    // A legacy record (read before the stamp existed) stays unstamped through an
+    // unrelated patch — nothing invents a time the server never recorded.
+    serve([letter({ id: 'lt-old', type: 'action_required', read: true })]);
+    resetLetterStore();
+    await loadLetters();
+    patchLetter('lt-old', { pinned: true });
+    expect('readAt' in getLetterSnapshot().letters[0]).toBe(false);
+  });
+});

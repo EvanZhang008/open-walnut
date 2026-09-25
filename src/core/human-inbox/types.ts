@@ -78,13 +78,14 @@ export interface LetterRecord {
   createdAt: number;
   read: boolean;
   /**
-   * When `read` last CHANGED. Recorded metadata only — NOTHING reads it yet.
-   * Conflict resolution between two copies of the index is decided by the file's
-   * top-level `lastUpdated` (see LetterStoreFile), not by this. It is here because
-   * `read` is a bare boolean and a boolean carries no order at all, so the moment
-   * anything wants to reconcile or display per-letter read history (the phone's
-   * reader is the likely first caller) the information has to already be on disk.
-   * Absent on a letter whose read flag has never moved.
+   * When `read` last CHANGED. Conflict resolution between two copies of the
+   * index is decided by the file's top-level `lastUpdated` (see LetterStoreFile),
+   * not by this. It is here because `read` is a bare boolean and a boolean
+   * carries no order at all. Its one consumer so far is the web console's Needs
+   * Action grace window: a read but unanswered `action_required` letter stays
+   * listed there for five minutes measured from this stamp (web/src/api/
+   * human-inbox.ts isOpenDecision). Absent on a letter whose read flag has never
+   * moved, which that consumer reads as "seen long ago".
    */
   readAt?: number;
   pinned: boolean;

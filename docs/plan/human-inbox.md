@@ -17,7 +17,7 @@ Every letter declares WHY it was sent, and the type drives how the UI treats it:
 | `review` | a report/artifact needs human eyes | overnight investigation report, weekly digest |
 | `info` | communication worth keeping, no action | "heads up: the EC2 disk is at 70%" |
 
-`action_required` letters also count into the notification center's Needs Action section until answered, because they block work the same way a permission ask does.
+`action_required` letters also count into the notification center's Needs Action section, because they block work the same way a permission ask does. The badge counts the ones the human has not read yet: reading one is taking it on (the ask is often handled elsewhere, in Slack or a terminal, and never gets a button click here). A read but unanswered letter stays listed in the section for five more minutes, then lives only in the Inbox; "Mark unread" puts it back. The Inbox toolbar has an "Unread" filter (remembered per browser); a read letter, decision or not, is reachable by turning it off.
 
 ## The writing standard: extremely simple, short, self-contained
 

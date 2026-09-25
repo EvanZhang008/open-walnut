@@ -202,6 +202,17 @@ describe('sectionCounts', () => {
     expect(counts.action).toBe(3);       // 2 pending permissions + the 1 open decision
   });
 
+  it('a READ but unanswered decision has left the Needs Action badge (the human took it on)', () => {
+    // A Slack ask the human read and handled in Slack never gets a button click
+    // here; counting it kept the rail at 15 with nothing new in it. The panel
+    // still LISTS it for a grace window (tests/web/inbox-filter.test.ts).
+    const counts = sectionCounts(feed, [
+      { type: 'action_required', read: true },
+      { type: 'action_required', read: false, archived: true },
+    ]);
+    expect(counts.action).toBe(2);       // just the 2 pending permissions
+  });
+
   it('an EXPIRED permission stops inflating the Needs Action badge', () => {
     const withExpired = [
       ...feed,

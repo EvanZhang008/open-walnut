@@ -40,6 +40,11 @@ export function decisionLetterCount(letters: readonly LetterEnvelope[]): number 
  * The tab badge: letters that still want the human — unread OR waiting on a
  * decision, counted as a UNION so each letter counts once.
  *
+ * Deliberately NOT the notification rail's rule. The rail's Needs Action badge
+ * drops a decision once it is READ (sectionCounts; the human took it on, often
+ * in Slack or a terminal). This chip sits on the SESSION that asked and is the
+ * one place that still says "this session is blocked on you" after the read.
+ *
  * Unread alone was wrong and hid the one case the warning colour exists for:
  * reading an `action_required` letter and deciding later (which is the entire
  * point of an async ask) left unread at 0, so the chip went bare while the agent

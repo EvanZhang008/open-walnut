@@ -37,6 +37,11 @@ const NONCE = Date.now().toString(36)
 const DECISION_SUBJECT = `PW LTR decision ${NONCE}`
 const INFO_SUBJECT = `PW LTR filing ${NONCE}`
 const UNREAD_SUBJECT = `PW LTR quiet ${NONCE}`
+const GRACE_SUBJECT = `PW LTR seen ${NONCE}`
+const FILTER_READ_SUBJECT = `PW LTR filter-read ${NONCE}`
+const FILTER_UNREAD_SUBJECT = `PW LTR filter-unread ${NONCE}`
+/** DECISION_SEEN_GRACE_MS in web/src/api/human-inbox.ts (the spec cannot import the aliased module). */
+const DECISION_GRACE_MS = 5 * 60 * 1000
 
 /** Markers that must survive (or must NOT appear) inside the sandboxed body. */
 const HTML_BODY_MARKER = `LETTER-HTML-BODY-${NONCE}`
@@ -398,6 +403,180 @@ test('opening the notification panel does not mark a letter read', async ({ page
   const reopened = await openCenter(page)
   await openInbox(reopened)
   await expect(envelope(reopened, UNREAD_SUBJECT)).toHaveClass(/hib-unread/, { timeout: 15_000 })
+})
+
+// ── 3b. Reading a decision is taking it on: badge drops now, row leaves later ──
+
+/**
+ * The 15-with-nothing-new-in-it bug. A Slack ask the human read and then handled
+ * in Slack never gets a button click here, so an unanswered decision used to sit
+ * in Needs Action (and inflate its badge) until archived. Now reading it drops
+ * the badge at once — the same relation the Inbox badge has to its list — and
+ * the row lingers for a five-minute grace so it does not vanish from under the
+ * cursor, then lives only in the Inbox. Mark unread puts it back.
+ *
+ * The five minutes are REAL product time: the page runs under Playwright's clock
+ * (real code, real timers, time advanced), never a shortened constant.
+ */
+test('reading a decision drops it from the Needs Action badge at once and from the list after the grace', async ({ page, request }) => {
+  test.setTimeout(150_000)
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => {
+    // WebKit reports a fetch that `page.reload()` below cuts off mid-flight (the
+    // low-priority Notes prefetch) as a page error "…due to access control
+    // checks", although the app catches the rejection. Chromium reports nothing
+    // for the same reload. Not a defect of this flow.
+    if (/access control checks/.test(err.message)) return
+    pageErrors.push(err.message)
+  })
+  // Before the first load, so every timer the app arms is under this clock.
+  await page.clock.install({ time: new Date() })
+
+  await sendLetter(request, {
+    subject: GRACE_SUBJECT,
+    type: 'action_required',
+    markdown: `## Deploy window\n\nThe rollout wants a go/no-go; decide in the channel (${NONCE}).`,
+    text: `Deploy window needs your call in the channel (${NONCE}).`,
+    actions: [
+      { id: 'approve', label: 'Approve' },
+      { id: 'hold', label: 'Hold' },
+    ],
+  })
+
+  await loadHome(page)
+  const panel = await openCenter(page)
+  await rail(panel, 'Needs Action').click()
+  const row = envelope(panel, GRACE_SUBJECT)
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  await expect(row).toHaveClass(/hib-unread/)
+  const before = await railBadge(panel, 'Needs Action')
+  expect(before).toBeGreaterThanOrEqual(1)
+
+  // Open it (reading IS the human taking it on), then close WITHOUT answering.
+  await row.click()
+  const reader = page.locator('.hib-reader')
+  await expect(reader).toBeVisible({ timeout: 15_000 })
+  await expect(reader.locator('.hib-action-btn').first()).toBeVisible()
+  await reader.getByRole('button', { name: 'Close letter' }).click()
+  await expect(reader).toHaveCount(0)
+
+  // The badge is down by one at once (a DELTA — the fixture feed is shared)…
+  await expect.poll(() => railBadge(panel, 'Needs Action'), { timeout: 10_000 })
+    .toBeLessThanOrEqual(before - 1)
+  // …while the row is still listed, now read, with its buttons intact.
+  await expect(row).toBeVisible()
+  await expect(row).not.toHaveClass(/hib-unread/)
+  await expect(row.locator('.hib-answered-chip')).toHaveCount(0)
+  await shot(page, 'e2e-09-read-decision-lingers')
+
+  // A fresh page has none of the optimistic state: it judges by the SERVER's
+  // readAt (the phone reads letters too). Still inside the window, so the row is
+  // still listed — which is what proves the server stamp is carried and honoured
+  // (a missing stamp would read as "seen long ago" and drop the row here).
+  await page.reload()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
+  const reopened = await openCenter(page)
+  await rail(reopened, 'Needs Action').click()
+  const rowAfterReload = envelope(reopened, GRACE_SUBJECT)
+  await expect(rowAfterReload).toBeVisible({ timeout: 15_000 })
+  await expect(rowAfterReload).not.toHaveClass(/hib-unread/)
+
+  // Five minutes on: the ONE armed timer moves the row out of Needs Action (no
+  // list refresh is involved), and it stays in the Inbox.
+  await page.clock.fastForward(DECISION_GRACE_MS + 2_000)
+  await expect(rowAfterReload).toHaveCount(0, { timeout: 15_000 })
+  await expect(rail(reopened, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  await openInbox(reopened)
+  await expect(envelope(reopened, GRACE_SUBJECT)).toBeVisible()
+  await expect(envelope(reopened, GRACE_SUBJECT)).not.toHaveClass(/hib-unread/)
+  await shot(page, 'e2e-10-read-decision-left-needs-action')
+
+  // Mark unread puts the decision back: listed again, and counted again.
+  const after = await railBadge(reopened, 'Needs Action')
+  await rowButton(envelope(reopened, GRACE_SUBJECT), 'Mark unread').click()
+  await expect(envelope(reopened, GRACE_SUBJECT)).toHaveClass(/hib-unread/)
+  await rail(reopened, 'Needs Action').click()
+  await expect(envelope(reopened, GRACE_SUBJECT)).toBeVisible({ timeout: 15_000 })
+  await expect.poll(() => railBadge(reopened, 'Needs Action'), { timeout: 10_000 })
+    .toBeGreaterThanOrEqual(after + 1)
+  await shot(page, 'e2e-11-mark-unread-restores-decision')
+
+  expect(pageErrors, `uncaught page errors: ${pageErrors.join(' | ')}`).toEqual([])
+})
+
+// ── 3c. The Inbox Unread filter ──
+
+test('the Inbox Unread filter narrows the list and keeps the letter just opened', async ({ page, request }) => {
+  test.setTimeout(120_000)
+  const readId = await sendLetter(request, {
+    subject: FILTER_READ_SUBJECT,
+    type: 'info',
+    markdown: `Already read (${NONCE}).`,
+    text: `Already read (${NONCE}).`,
+  })
+  // Read the way the phone would: through the route, before the page exists.
+  const readRes = await request.post(`/api/v1/human-inbox/${readId}/read`, { data: { read: true } })
+  expect(readRes.status(), await readRes.text()).toBe(200)
+  await sendLetter(request, {
+    subject: FILTER_UNREAD_SUBJECT,
+    type: 'info',
+    markdown: `Not read yet (${NONCE}).`,
+    text: `Not read yet (${NONCE}).`,
+  })
+
+  await loadHome(page)
+  const panel = await openCenter(page)
+  await openInbox(panel)
+  const toggle = panel.locator('.hib-toolbar').getByRole('button', { name: 'Unread', exact: true })
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  await expect(envelope(panel, FILTER_READ_SUBJECT)).toBeVisible({ timeout: 15_000 })
+  await expect(envelope(panel, FILTER_UNREAD_SUBJECT)).toBeVisible()
+
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(envelope(panel, FILTER_READ_SUBJECT)).toHaveCount(0)
+  await expect(envelope(panel, FILTER_UNREAD_SUBJECT)).toBeVisible()
+  // Every row still listed is unread: the filter is the list, not a badge.
+  expect(await panel.locator('.hib-row').count())
+    .toBe(await panel.locator('.hib-row.hib-unread').count())
+  await shot(page, 'e2e-12-unread-filter-on')
+
+  // Opening the unread letter marks it read — the row STAYS until the filter flips.
+  await envelope(panel, FILTER_UNREAD_SUBJECT).click()
+  const reader = page.locator('.hib-reader')
+  await expect(reader).toBeVisible({ timeout: 15_000 })
+  await reader.getByRole('button', { name: 'Close letter' }).click()
+  await expect(reader).toHaveCount(0)
+  const opened = envelope(panel, FILTER_UNREAD_SUBJECT)
+  await expect(opened).toBeVisible()
+  await expect(opened).not.toHaveClass(/hib-unread/)
+  await shot(page, 'e2e-13-unread-filter-keeps-just-opened')
+
+  // Off: everything is back. On again: the letter just read is filtered too.
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  await expect(envelope(panel, FILTER_READ_SUBJECT)).toBeVisible()
+  await expect(envelope(panel, FILTER_UNREAD_SUBJECT)).toBeVisible()
+  await toggle.click()
+  await expect(envelope(panel, FILTER_READ_SUBJECT)).toHaveCount(0)
+  await expect(envelope(panel, FILTER_UNREAD_SUBJECT)).toHaveCount(0)
+
+  // A letter marked unread again is back under the filter (the filtered view
+  // hides the read rows, so the button is reached with the filter off).
+  await toggle.click()
+  await rowButton(envelope(panel, FILTER_READ_SUBJECT), 'Mark unread').click()
+  await toggle.click()
+  await expect(envelope(panel, FILTER_READ_SUBJECT)).toBeVisible()
+
+  // The filter is a preference of this browser: it survives a reload.
+  await page.reload()
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
+  const reopened = await openCenter(page)
+  await openInbox(reopened)
+  await expect(reopened.locator('.hib-toolbar').getByRole('button', { name: 'Unread', exact: true }))
+    .toHaveAttribute('aria-pressed', 'true')
+  await expect(envelope(reopened, FILTER_READ_SUBJECT)).toBeVisible({ timeout: 15_000 })
+  await expect(envelope(reopened, FILTER_UNREAD_SUBJECT)).toHaveCount(0)
 })
 
 // ── 4. The audio digest: a multi-MB html letter whose podcast has to PLAY ──

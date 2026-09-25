@@ -641,12 +641,12 @@ function find(store: LetterStoreFile, id: string): LetterRecord {
  * Move the read flag and stamp WHEN it moved. The ONE place `read` is assigned,
  * so the stamp cannot drift from the flag.
  *
- * `readAt` has NO consumer today — the merge between two copies of this file is
- * decided by the index's top-level `lastUpdated`, not by any per-letter field. It
- * is written because `read` is a bare boolean with no order of its own, and that
- * history cannot be recovered after the fact; the first reader that wants it
- * (per-letter read history in a mobile reader) needs it already on disk. No stamp
- * when the value is unchanged: re-opening an already-read letter is not news.
+ * `readAt` is the clock behind the web console's Needs Action grace window (a
+ * read but unanswered decision stays listed five minutes from this stamp), so
+ * it has to be right on every flip, not only on the first read. The merge
+ * between two copies of this file is still decided by the index's top-level
+ * `lastUpdated`, never by this field. No stamp when the value is unchanged:
+ * re-opening an already-read letter is not news, and must not restart the window.
  */
 function setReadFlag(letter: LetterRecord, read: boolean): void {
   if (letter.read === read) return;

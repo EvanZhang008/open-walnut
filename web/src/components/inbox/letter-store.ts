@@ -154,7 +154,7 @@ export function markLettersStale(): void {
 export function patchLetter(id: string, patch: Partial<LetterEnvelope>): void {
   const patchOne = (list: readonly LetterEnvelope[]): readonly LetterEnvelope[] => (
     list.some(l => l.id === id)
-      ? list.map(l => (l.id === id ? { ...l, ...patch } : l))
+      ? list.map(l => (l.id === id ? mergeLetterPatch(l, patch) : l))
       : list
   );
   const letters = patchOne(snapshot.letters);
@@ -162,6 +162,34 @@ export function patchLetter(id: string, patch: Partial<LetterEnvelope>): void {
   if (letters === snapshot.letters && archived === snapshot.archived) return;
   snapshot = { ...snapshot, letters, archived };
   emit();
+}
+
+/**
+ * Apply a patch to one envelope, keeping `readAt` honest.
+ *
+ * `readAt` is the clock behind a read decision's Needs Action grace window
+ * (api/human-inbox.ts isOpenDecision), so it follows the same rule the server's
+ * setReadFlag applies on disk: it MOVES whenever `read` flips, and only forward.
+ *   - A patch that flips `read` without a stamp (every optimistic read/unread
+ *     toggle, from whichever surface) is stamped now, so the window starts the
+ *     moment the human acts instead of at the next list refresh.
+ *   - A patch carrying an OLDER stamp keeps the newer one. The reader's GET goes
+ *     out before its own read POST, so the detail it merges back carries the
+ *     stamp of the previous flip; on a letter marked unread an hour ago that stale
+ *     value would have closed the window on the spot (the row vanished under the
+ *     open reader until a refresh brought the real stamp back).
+ * Both stamps are wall clocks (browser here, server on refresh); a skew between
+ * them shifts the window by the skew, which for a five-minute window is noise.
+ */
+function mergeLetterPatch(l: LetterEnvelope, patch: Partial<LetterEnvelope>): LetterEnvelope {
+  const flipped = patch.read !== undefined && patch.read !== l.read;
+  const readAt = patch.readAt === undefined
+    ? (flipped ? Date.now() : l.readAt)
+    : (l.readAt !== undefined && patch.readAt < l.readAt ? l.readAt : patch.readAt);
+  const next: LetterEnvelope = { ...l, ...patch };
+  if (readAt === undefined) delete next.readAt;
+  else next.readAt = readAt;
+  return next;
 }
 
 /**

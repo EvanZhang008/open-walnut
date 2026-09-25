@@ -129,8 +129,8 @@ export interface LetterCountable {
  * given: read/pin/archive live there, and the 200-entry feed can have dropped a
  * durable letter's envelope entirely. Without it the feed's letter envelopes are
  * used as a stand-in so the Inbox badge is right before the list loads. An
- * UNANSWERED action_required letter also counts into Needs Action — it blocks
- * work exactly like a permission ask does.
+ * UNREAD, unanswered action_required letter also counts into Needs Action — it
+ * blocks work like a permission ask does, until the human has looked at it.
  */
 export function sectionCounts(feed: Notification[], letters?: LetterCountable[]): SectionCounts {
   const counts: SectionCounts = {
@@ -153,7 +153,11 @@ export function sectionCounts(feed: Notification[], letters?: LetterCountable[])
       if (l.archived) continue;
       counts.inboxTotal++;
       if (!l.read) counts.inbox++;
-      if (l.type === 'action_required' && !l.answered) counts.action++;
+      // A decision counts while it is UNSEEN: reading it is the human taking it
+      // on (isUnseenDecision in api/human-inbox.ts has the reasoning). The panel
+      // still LISTS a just-read one for a grace window, but the number drops at
+      // once — the same relation the Inbox badge has to the Inbox list.
+      if (l.type === 'action_required' && !l.answered && !l.read) counts.action++;
     }
   }
   return counts;
@@ -171,12 +175,10 @@ export function sectionCounts(feed: Notification[], letters?: LetterCountable[])
  * state). Feed-only derivation — the sidebar has no letter store; envelope
  * read state follows the store via markLocalRead.
  *
- * KNOWN GAP vs the panel's Needs Action rail: a READ but UNANSWERED
- * action_required letter still counts there (the panel has the letter store,
- * which knows `answered`), but drops off this badge once its envelope is read —
- * the envelope record carries neither the letter type nor the answered flag.
- * Accepted: the badge means "new things waiting on you", and a read letter has
- * been seen; the rail stays the persistent blocked-work tracker.
+ * The panel's Needs Action rail agrees on letters: a READ but UNANSWERED
+ * action_required letter counts in neither (sectionCounts drops it once read,
+ * the same moment its envelope leaves this badge). It used to keep counting in
+ * the rail, which left the rail at 15 with nothing new in it.
  */
 export function attentionBadgeCount(feed: Notification[]): number {
   const c = sectionCounts(feed);

@@ -113,9 +113,9 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
     createdAt: typeof r.createdAt === 'number' ? r.createdAt : 0,
     read: r.read === true,
     // Both survive normalization. `bodyBytes` is load-bearing (a replica compares
-    // its own copy of the body against it); `readAt` is recorded metadata with no
-    // reader yet, and dropping it on every rewrite would quietly make it useless
-    // to the first one — see LetterRecord.readAt.
+    // its own copy of the body against it); `readAt` drives the console's Needs
+    // Action grace window for a read decision, and dropping it on a rewrite would
+    // make every such letter look "seen long ago" — see LetterRecord.readAt.
     ...(typeof r.readAt === 'number' && r.readAt > 0 ? { readAt: r.readAt } : {}),
     ...(typeof r.bodyBytes === 'number' && r.bodyBytes >= 0 ? { bodyBytes: r.bodyBytes } : {}),
     pinned: r.pinned === true,

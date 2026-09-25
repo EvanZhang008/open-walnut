@@ -42,7 +42,10 @@ import { LetterEnvelopeRow } from '@/components/inbox/LetterEnvelopeRow';
 import { InboxPane } from '@/components/inbox/InboxPane';
 import { LetterReader } from '@/components/inbox/LetterReader';
 import {
-  isAwaitingDecision, setLetterArchived, setLetterPinned, setLetterRead,
+  filterInboxLetters, nextDecisionGraceExpiry, readUnreadOnlyPref, writeUnreadOnlyPref,
+} from '@/components/inbox/inbox-filter';
+import {
+  isOpenDecision, setLetterArchived, setLetterPinned, setLetterRead,
   type LetterEnvelope,
 } from '@/api/human-inbox';
 
@@ -89,6 +92,23 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   const inbox = useHumanInbox({ enabled: open, archived: showArchived });
   const inboxRef = useRef(inbox);
   inboxRef.current = inbox;
+
+  // The Inbox "Unread" filter. `keptReadIds` are the letters read WHILE it was
+  // on: they stay listed until the filter flips or the panel closes, so opening
+  // one does not pull its row out from under the cursor (inbox-filter.ts).
+  const [unreadOnly, setUnreadOnly] = useState(readUnreadOnlyPref);
+  const [keptReadIds, setKeptReadIds] = useState<ReadonlySet<string>>(() => new Set());
+  const unreadOnlyRef = useRef(unreadOnly);
+  unreadOnlyRef.current = unreadOnly;
+  const toggleUnreadOnly = useCallback(() => {
+    const next = !unreadOnlyRef.current;
+    writeUnreadOnlyPref(next);
+    setUnreadOnly(next);
+    setKeptReadIds(prev => (prev.size ? new Set() : prev));
+  }, []);
+  useEffect(() => {
+    if (!open) setKeptReadIds(prev => (prev.size ? new Set() : prev));
+  }, [open]);
   // Escape belongs to the top-most layer: with the reader open, the panel must
   // not also close (both listeners sit on `document`, so stopPropagation in the
   // reader cannot help — the panel has to opt out itself).
@@ -107,6 +127,11 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
     const current = inboxRef.current.byId.get(id);
     if (current && current.read === read) return;
     markLocalRead([`letter:${id}`], read);
+    if (read && unreadOnlyRef.current) {
+      setKeptReadIds(prev => (prev.has(id) ? prev : new Set(prev).add(id)));
+    }
+    // The store stamps `readAt` on the flip (letter-store.ts mergeLetterPatch):
+    // that is the clock behind a read decision's Needs Action grace window.
     void inboxRef.current.applyChange(id, { read }, () => setLetterRead(id, read), 'read');
   }, [markLocalRead]);
 
@@ -161,9 +186,33 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   // An unanswered action_required letter blocks work exactly like a permission
   // ask, so it is counted into Needs Action — and therefore has to be LISTED
   // there too: a badge whose section shows nothing is how a decision gets lost.
+  //
+  // A decision the human has READ stays listed for DECISION_SEEN_GRACE_MS after
+  // the read (the badge already dropped it), then leaves for the Inbox. `graceNow`
+  // is the clock those rows are judged against: re-taken on every open, and
+  // advanced by ONE timer armed for the next expiry, so a row leaves on time with
+  // the panel left open and nothing polls when no row is in its window.
+  const [graceNow, setGraceNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (open) setGraceNow(Date.now());
+  }, [open]);
+  useEffect(() => {
+    const next = nextDecisionGraceExpiry(inbox.liveLetters, graceNow);
+    if (next === null) return;
+    const timer = setTimeout(() => setGraceNow(Date.now()), Math.max(0, next - Date.now()) + 50);
+    return () => clearTimeout(timer);
+  }, [inbox.liveLetters, graceNow]);
+  // Judged against `graceNow` ONLY (never a fresh Date.now() in render): the
+  // armed timer is the one thing that moves a row out, so a timer that failed
+  // to fire shows up as a row that stays, instead of being papered over by the
+  // next unrelated list refresh.
   const decisionLetters = useMemo(
-    () => inbox.liveLetters.filter(isAwaitingDecision),
-    [inbox.liveLetters],
+    () => inbox.liveLetters.filter(l => isOpenDecision(l, graceNow)),
+    [inbox.liveLetters, graceNow],
+  );
+  const inboxRows = useMemo(
+    () => filterInboxLetters(inbox.letters, unreadOnly, keptReadIds),
+    [inbox.letters, unreadOnly, keptReadIds],
   );
 
   // Same-origin entries collapse into one expandable group (iPhone-style):
@@ -396,11 +445,13 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
               <NotificationSystemPane indexStatus={indexStatus} />
             ) : section === 'inbox' ? (
               <InboxPane
-                letters={inbox.letters}
+                letters={inboxRows}
                 loaded={inbox.loaded}
                 error={inbox.error}
                 showArchived={showArchived}
                 onToggleArchived={() => setShowArchived(v => !v)}
+                unreadOnly={unreadOnly}
+                onToggleUnreadOnly={toggleUnreadOnly}
                 onOpen={openLetter}
                 onTogglePin={toggleLetterPin}
                 onToggleArchive={toggleLetterArchive}

@@ -144,6 +144,15 @@
 
 .hib-row-btn:hover { background: var(--bg-hover); color: var(--fg); }
 
+/* The Unread filter chip in the Inbox toolbar: pressed = accent outline + tint,
+   so the narrowed list is never mistaken for an empty inbox. */
+.hib-filter-btn[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+.hib-filter-btn[aria-pressed="true"]:hover { color: var(--accent); }
+
 /* ── Reader overlay ────────────────────────────────────────────────────────── */
 
 .hib-reader-overlay {
