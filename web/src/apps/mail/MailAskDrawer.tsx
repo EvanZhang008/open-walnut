@@ -1,8 +1,8 @@
 /**
  * Mail's side of the Ask-Walnut drawer: the store's `ask` turned into `AskObjectDrawer` props.
  *
- * A thin adapter on purpose. Everything reusable (the conversation per object, the single flight, the
- * once-per-object context prefix, the preset send, Escape and the focus return) lives in
+ * A thin adapter on purpose. Everything reusable (the session per object, the single flight, the
+ * context block on the first question, the preset send, Escape and the focus return) lives in
  * `AskObjectDrawer`; everything mail-shaped (the block, the quote, the key) lives in the pure
  * `mail-ask.ts`. What is left here is which agent answers and how the drawer is closed, which is the
  * only part a second surface could not share.
@@ -12,7 +12,6 @@
  * specialist they have never met.
  */
 import { AskObjectDrawer } from '@/components/chat/AskObjectDrawer';
-import { askObjectTitle } from '@/components/chat/ask-object-conversation';
 import type { MailAccountDto } from '@/api/mail';
 import { mailAskKey, mailAskQuote, mailContextBlock, mailRowSelector } from './mail-ask';
 import { closeMailAsk, type MailAsk } from './mail-store';
@@ -30,22 +29,21 @@ function accountLabel(accounts: MailAccountDto[], accountId: string): string {
 export function MailAskDrawer({ ask, accounts }: { ask: MailAsk; accounts: MailAccountDto[] }) {
   const label = accountLabel(accounts, ask.accountId);
   const quote = mailAskQuote(ask.message, label, ask.bodyText);
+  const objectKey = mailAskKey(ask.accountId, ask.messageId);
   return (
     <AskObjectDrawer
-      objectKey={mailAskKey(ask.accountId, ask.messageId)}
+      // One drawer per mail: asking about another mail while this one is open starts from a clean view
+      // (and the old one's focus return runs), never from this mail's draft or pending state.
+      key={objectKey}
+      objectKey={objectKey}
       title="Ask Walnut"
       quote={quote}
       agentId={MAIL_ASK_AGENT}
       // `window.location.origin`: the block carries a link back to THIS console, and a hard-coded host
       // would send a phone's Walnut to the Mac's.
       contextBlock={mailContextBlock(ask.message, label, ask.bodyText, window.location.origin)}
+      contextName="Mail you are asking about"
       {...(ask.preset ? { preset: ask.preset, autoSend: true } : {})}
-      // Named for the agent's conversation list, where asks from every surface sit together:
-      // `Mail: <who>: <subject>`. The drawer's own default would title it from the quote's preview,
-      // which here begins with the subject and then runs into the body.
-      conversationTitle={askObjectTitle(`Mail: ${quote.who}`, ask.message.subject || '(no subject)')}
-      placeholder="Ask about this mail"
-      emptyText={`Ask Walnut about this mail${quote.who ? ` from ${quote.who}` : ''}.`}
       onClose={closeMailAsk}
       // Back to the row the menu opened on, which is where the person's place in the list is.
       restoreFocusTo={mailRowSelector(ask.accountId, ask.messageId)}

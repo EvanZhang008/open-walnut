@@ -128,6 +128,8 @@ const RECIPIENTS_SHOWN = 6;
 
 /** A subject is attacker-controlled text; the block states one, it does not carry a paragraph. */
 const SUBJECT_CHARS = 300;
+/** One name, address or date header, flattened to a line. Longer than any real one. */
+const ADDRESS_CHARS = 200;
 
 /**
  * The row this mail is drawn as, as a CSS selector, for the drawer's focus return.
@@ -156,8 +158,10 @@ function oneLine(text: string, max: number): string {
 /** `Name <address>`, or whichever half the provider gave. */
 function addressLine(who: MailAddress | undefined): string {
   if (!who) return 'unknown';
-  const name = who.name?.trim() ?? '';
-  const address = who.address?.trim() ?? '';
+  // Flattened: a header is sender-controlled, and a newline in a display name could close the context
+  // block early and leak the rest of the mail into the question.
+  const name = oneLine(who.name ?? '', ADDRESS_CHARS);
+  const address = oneLine(who.address ?? '', ADDRESS_CHARS);
   if (name && address) return `${name} <${address}>`;
   return name || address || 'unknown';
 }
@@ -210,7 +214,7 @@ export function mailContextBlock(
   const cc = addressList(message.cc);
   // The `Date` header VERBATIM when the provider kept one: it carries the sender's own offset, which
   // a local render throws away. The local render is the fallback, never both.
-  const when = message.sentAtHeader?.trim() || formatMailDate(message.sentAt) || 'unknown';
+  const when = oneLine(message.sentAtHeader ?? '', ADDRESS_CHARS) || formatMailDate(message.sentAt) || 'unknown';
   const lines = [
     'The mail I am looking at in Walnut:',
     '',
@@ -240,7 +244,7 @@ export function mailAskQuote(
     : (bodyText.trim() || message.snippet || '');
   return {
     who: senderLabel(message.from),
-    when: message.sentAtHeader?.trim() || formatMailDate(message.sentAt),
+    when: oneLine(message.sentAtHeader ?? '', ADDRESS_CHARS) || formatMailDate(message.sentAt),
     where: accountLabel,
     preview: oneLine(message.subject || '(no subject)', 120)
       + (preview ? `\n${oneLine(preview, 300)}` : ''),

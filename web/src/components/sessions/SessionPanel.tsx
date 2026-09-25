@@ -40,7 +40,7 @@ import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
 import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
-import { navigateToTarget } from '@/utils/open-session';
+import { locateTaskOnHome, navigateToTarget } from '@/utils/open-session';
 import { UserMessagesSummary } from './UserMessagesSummary';
 import { typedUserText } from './injected-banner';
 // PlanPreviewSection replaced by inline plan popover in meta bar
@@ -228,6 +228,9 @@ interface SessionPanelProps {
    * panel is an overlay and a drawer opened from it would land behind it.
    */
   headerLeading?: ReactNode;
+  /** Put the caret in the composer once, on mount: a host that opened this panel for someone about
+   *  to type (an Ask drawer in Ask mode). */
+  focusComposer?: boolean;
   /** Whether this panel is locked — pinned to the rightmost region, not evicted by new sessions. */
   locked?: boolean;
   /** Toggle the lock state. Parent re-orders slots so locked panels sit on the right. */
@@ -250,7 +253,7 @@ interface SessionPanelProps {
   }) => void;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, headerLeading, locked, onToggleLock, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, headerLeading, focusComposer, locked, onToggleLock, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -665,6 +668,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     autoCollapsed.current = false;
     setChatCollapsed(false);
   }, []);
+  // Once per mount, and without moving the timeline: the panel lands where it always lands.
+  const composerFocusedOnMount = useRef(false);
+  useEffect(() => {
+    if (!focusComposer || composerFocusedOnMount.current) return;
+    composerFocusedOnMount.current = true;
+    requestComposerFocus({ keepTimelinePosition: true });
+  }, [focusComposer, requestComposerFocus]);
   /**
    * The anchor the NEXT send actually uses — and the only anchor any surface reads.
    *
@@ -1829,9 +1839,18 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               {!loading && session?.taskId && (
                 <button
                   className="task-action-btn session-panel-locate"
-                  onClick={() => (onLocateTask ?? onTaskClick)?.(session.taskId!)}
-                  title={taskTitle ? `Go to task: ${taskTitle}` : `Go to task ${session.taskId}`}
-                  aria-label="Locate task"
+                  data-testid="session-panel-locate"
+                  onClick={() => {
+                    const locate = onLocateTask ?? onTaskClick;
+                    // A panel no page gave a handler to lives off Home (an ask drawer, Notes, a plugin
+                    // view): its Locate takes the person to the task on Home instead of doing nothing.
+                    if (locate) locate(session.taskId!);
+                    else locateTaskOnHome(session.taskId!, navigate, { sessionId });
+                  }}
+                  title={onLocateTask ?? onTaskClick
+                    ? (taskTitle ? `Go to task: ${taskTitle}` : `Go to task ${session.taskId}`)
+                    : (taskTitle ? `Find on Home: ${taskTitle}` : 'Find this task on Home')}
+                  aria-label={onLocateTask ?? onTaskClick ? 'Locate task' : 'Find on Home'}
                 >
                   {ICON_LOCATE}
                 </button>

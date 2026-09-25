@@ -270,3 +270,66 @@ export function unsubscribeStatusLine(
   }
   return null;
 }
+
+/**
+ * Does a click leave the list without a model? True for the rungs the server runs itself (one-click,
+ * a mail to the list, the unsubscribe page) and for their aftermath; false for the states that hand
+ * the job to Walnut (`needs-human`, `asked`) and for a message with no way out at all.
+ *
+ * This is what decides where the row menu draws it: a click that just does the thing is an ordinary
+ * row next to `Make a task`, and only the ones that start a conversation belong in the Walnut group
+ * (2026-09-25: "if it can unsubscribe through one click, show it, not under AI").
+ */
+export function unsubscribeIsDirect(state: UnsubscribeRowState): boolean {
+  return state.status === 'ready' || state.status === 'pending' || state.status === 'done'
+    || state.status === 'failed';
+}
+
+/** What a `ready` click will do, by rung, for the reader button's `title`. */
+function directTitle(available: MailUnsubscribeDto['available'] | undefined): string {
+  if (available === 'one-click') return 'Leaves this list with one click. Nothing is sent from your account.';
+  if (available === 'mailto') return 'Sends the list\'s unsubscribe mail from this account.';
+  if (available === 'link') return 'Opens the list\'s unsubscribe page for you and reports what it said.';
+  return '';
+}
+
+export interface UnsubscribeReaderControl {
+  status: UnsubscribeRowStatus;
+  label: string;
+  title: string;
+  disabled: boolean;
+  action: UnsubscribeRowState['action'];
+  /** Draws the ✦: this click opens Ask Walnut rather than leaving the list itself. */
+  ai: boolean;
+  reason?: string;
+}
+
+/**
+ * The reader's labelled button under the sender, or null when there is nothing to press.
+ *
+ * A WORD rather than the icon it used to be, because an envelope-with-a-slash among five round icons
+ * was never found (2026-09-25). It is drawn only where a click does something: `none` has no way out to
+ * offer, and `done` / `asked` are facts the status line beside it already says. `pending` IS the
+ * feedback (`Unsubscribing…`, disabled), so the line stays quiet while it shows.
+ */
+export function unsubscribeReaderControl(
+  state: UnsubscribeRowState,
+  available: MailUnsubscribeDto['available'] | undefined,
+): UnsubscribeReaderControl | null {
+  const base = { status: state.status, disabled: state.disabled, action: state.action, ai: false };
+  if (state.status === 'ready') {
+    return { ...base, label: UNSUBSCRIBE_LABELS.ready, title: state.title || directTitle(available) };
+  }
+  if (state.status === 'failed') return { ...base, label: 'Try again', title: state.title };
+  if (state.status === 'pending') return { ...base, label: UNSUBSCRIBE_LABELS.pending, title: state.title };
+  if (state.status === 'needs-human') {
+    return {
+      ...base,
+      label: 'Finish with Walnut',
+      title: state.title,
+      ai: true,
+      ...(state.reason ? { reason: state.reason } : {}),
+    };
+  }
+  return null;
+}

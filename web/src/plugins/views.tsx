@@ -5,7 +5,9 @@ import { SessionPanel } from '@/components/sessions/SessionPanel'
 import { SessionTerminal } from '@/components/sessions/SessionTerminal'
 import { TaskViewSurface } from '@/components/tasks/TaskViewSurface'
 import { PluginChatView } from '@/components/chat/PluginChatView'
+import { AskObjectDrawer } from '@/components/chat/AskObjectDrawer'
 import type {
+  AskObjectViewProps,
   ChatViewProps,
   FileViewProps,
   PluginViews,
@@ -82,6 +84,23 @@ export function createPluginViews(pluginId: string): PluginViews {
     )
   }
 
+  function AskObjectView({ objectKey, agentId, ...props }: AskObjectViewProps) {
+    // Scoped to the plugin, so two plugins naming their objects alike never share a session.
+    const key = `plugin:${pluginId}:${objectKey}`
+    const agent = agentId || 'general'
+    return (
+      <div className="plugin-ask-object-view">
+        <AskObjectDrawer
+          {...props}
+          // A new object is a new drawer: nothing of the previous object's view survives the switch.
+          key={`${agent}\u0000${key}`}
+          objectKey={key}
+          agentId={agent}
+        />
+      </div>
+    )
+  }
+
   return {
     CalendarView,
     FileView,
@@ -90,6 +109,7 @@ export function createPluginViews(pluginId: string): PluginViews {
     SessionView,
     TaskView,
     ChatView,
+    AskObjectView,
   }
 }
 

@@ -85,6 +85,9 @@ export function injectedBannerLabel(name: string): string {
   const n = name.trim();
   if (/^conversation context$/i.test(n)) return 'Context Walnut added';
   if (/^task context$/i.test(n)) return 'Task context Walnut added';
+  // An ask drawer's quote (`Mail you are asking about`, see ask-object-session.ts): the person chose
+  // the object, so the name already says whose it is.
+  if (/ you are asking about$/i.test(n)) return n;
   return `${n} (added by Walnut)`;
 }
 

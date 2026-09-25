@@ -49,6 +49,27 @@ export function openSessionOnHome(
 }
 
 /**
+ * Find a task on the HOME page from anywhere: open its session in the columns (when there is one),
+ * reveal the task in the task panel, and go home.
+ *
+ * The default of a session panel's Locate button wherever the panel lives off Home (the Mail and Slack
+ * ask drawers, Notes, a plugin's session view). There its button used to do nothing at all, because no
+ * page handed it a handler (2026-09-25: "every session we start off the home page should be able to find
+ * itself and take me to that task"). Same window-event bridge as `openSessionOnHome`: MainPage stays
+ * mounted behind every route, so the listener is live before the navigation.
+ */
+export function locateTaskOnHome(
+  taskId: string,
+  navigate: (to: string) => void,
+  opts?: { sessionId?: string },
+): void {
+  window.dispatchEvent(new CustomEvent('main:locate-task', {
+    detail: { taskId, ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) },
+  }));
+  navigate('/');
+}
+
+/**
  * Open a NEW draft session column on the home page, optionally seeded with a
  * project — the cross-page twin of the home panel's project-header "+".
  *

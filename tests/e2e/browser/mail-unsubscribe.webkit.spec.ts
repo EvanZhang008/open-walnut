@@ -71,7 +71,8 @@ function menu(page: Page): Locator {
 
 /** The `Unsubscribe` row: the LAST item, because its words are the thing under test. */
 function unsubItem(page: Page): Locator {
-  return menu(page).locator('[role="menuitem"]').last()
+  // By key, not position: a one-click row sits beside Add as task, a Walnut-assisted one in the Walnut group.
+  return menu(page).locator('[data-menu-key="unsubscribe"]')
 }
 
 function unsubButton(page: Page): Locator {
@@ -124,11 +125,11 @@ test('the Unsubscribe row is reachable over the row\'s own words in this engine'
   })
   expect(selected.trim(), 'the word the press selected is dropped with it').toBe('')
 
-  // And the row itself is the one this slice adds, in its ready state: the last item, enabled, with the
-  // ✦ mark drawn inside its label rather than in an icon column this menu does not have.
+  // And the row itself, in its ready state: enabled, and an ORDINARY row, because a one-click
+  // unsubscribe involves no model (2026-09-25: "show it, not under AI").
   await expect(unsubItem(page).locator('.wn-context-menu-label')).toHaveText('Unsubscribe')
   await expect(unsubItem(page)).toBeEnabled()
-  await expect(unsubItem(page)).toHaveAttribute('data-ai', 'true')
+  await expect(unsubItem(page)).not.toHaveAttribute('data-ai', 'true')
   await expect(menu(page).locator('.wn-context-menu-icon')).toHaveCount(0)
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'row-menu-unsub')}`)
   await page.keyboard.press('Escape')
@@ -147,7 +148,12 @@ test('the mailto rung sends exactly one mail here too, filed as the click that a
 
   // The optimistic mark is `Unsubscribing…` and never a tick. It may already have settled by the time
   // this reads, which is why the assertion is "one of the two honest states" rather than a sleep.
-  await expect(unsubButton(page)).toHaveAttribute('data-unsub-state', /pending|done/, { timeout: 60_000 })
+  // Done hands the button's place to the line, so whichever of the two is on screen answers.
+  await expect.poll(async () => {
+    if (await unsubButton(page).count()) return unsubButton(page).getAttribute('data-unsub-state')
+    if (await statusLine(page).count()) return statusLine(page).getAttribute('data-state')
+    return null
+  }, { timeout: 60_000 }).toMatch(/pending|done/)
 
   // The mail itself, as the provider was handed it: one recipient and the subject the sender's own
   // header asked for.
@@ -164,9 +170,10 @@ test('the mailto rung sends exactly one mail here too, filed as the click that a
   expect(ledger[0]!.approvalKind).toBe('console')
   expect(ledger[0]!.approvalRef).toBe(`unsubscribe:${MAILTO}`)
 
-  // And it settles to `done`, on both surfaces, with the wording each one owns.
-  await expect(unsubButton(page)).toHaveAttribute('data-unsub-state', 'done', { timeout: 90_000 })
-  await expect(statusLine(page)).toHaveAttribute('data-state', 'done')
+  // And it settles to `done`, on both surfaces, with the wording each one owns: in the reader the button
+  // gives way to the line, with a tick.
+  await expect(statusLine(page)).toHaveAttribute('data-state', 'done', { timeout: 90_000 })
+  await expect(unsubButton(page)).toHaveCount(0)
   await expect(statusLine(page)).toContainText('Unsubscribed via a mail to the list')
   await row(page, MAILTO).click({ button: 'right' })
   await expect(menu(page)).toHaveCount(1)

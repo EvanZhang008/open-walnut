@@ -12,7 +12,7 @@
  *      exists to prevent is an indent. WebKit lays an inline-flex span inside a text box with an
  *      ellipsis differently enough to be worth measuring here: every row's words must still start at
  *      the same x, and the row must not have grown taller than its neighbours.
- *   3. THE DRAWER. It is the reader pane's tenant and its chat is `PluginChatView`; the Mac app is
+ *   3. THE DRAWER. It is the reader pane's tenant and holds an ordinary session panel; the Mac app is
  *      where it will actually be used, so one full open/auto-send/Escape round trip is graded in this
  *      engine too.
  *
@@ -128,21 +128,13 @@ test('S4-W3: one full round trip in the engine the Mac app is', async ({ page })
   await expect(drawer(page)).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('mail-reader')).toHaveCount(0)
 
-  // The question went out as one user turn, carrying the block. A long plain user
-  // message renders COLLAPSED, so the text has to be opened the way a person opens
-  // it; and the facts are read with retrying assertions rather than one innerText,
-  // which races the paint that follows the count settling.
-  const turns = drawer(page).locator('.chat-message-user')
-  await expect(turns).toHaveCount(1, { timeout: 60_000 })
-  const turn = turns.first()
-  const toggle = turn.locator('.chat-collapse-toggle')
-  if (await toggle.count() > 0) {
-    await expect(toggle).toHaveText('▶')
-    await turn.locator('.chat-notification-header').click()
-    await expect(toggle).toHaveText('▼')
-  }
-  await expect(turn).toContainText('Subject: Quarterly keeper report')
-  await expect(turn).toContainText('> ')
+  // The question went out as the session's first message, context block and all: the mock CLI echoes
+  // what it is sent, so its answer is the proof.
+  const session = drawer(page).getByTestId('ask-object-session')
+  await expect(session).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+  const answer = drawer(page).locator('.session-msg-assistant').filter({ hasText: /summarize this mail/i })
+  await expect(answer).toHaveCount(1, { timeout: 90_000 })
+  await expect(answer).toContainText('Subject: Quarterly keeper report')
   console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'drawer-open')}`)
 
   // The drawer fills the reader's column and nothing else moved.
@@ -165,4 +157,40 @@ test('S4-W3: one full round trip in the engine the Mac app is', async ({ page })
   await expect(drawer(page)).toHaveCount(0)
   await expect(page.getByTestId('mail-reader')).toBeVisible()
   await expect(row(page, KEEPER)).toBeFocused()
+})
+
+test('S4-W4: Find on Home from the drawer lands on the ask in the chat slot', async ({ page }) => {
+  await openWriterInbox(page)
+  await row(page, KEEPER).click({ button: 'right' })
+  await expect(menu(page)).toHaveCount(1)
+  await item(page, SUMMARIZE).click()
+  const session = drawer(page).getByTestId('ask-object-session')
+  await expect(session).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+  const sessionId = await session.getAttribute('data-session-id')
+  await session.getByTestId('session-panel-locate').click()
+
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.locator(`[data-testid="ask-walnut-session"][data-session-id="${sessionId}"]`))
+    .toBeVisible({ timeout: 30_000 })
+  await expect(page.locator(`.main-page-session-column [data-session-id="${sessionId}"]`)).toHaveCount(0)
+  await expect(page.locator('#home-task-navigation .task-focused')).toHaveCount(1, { timeout: 30_000 })
+  console.log(`shot: ${await shoot(page, SHOT_DIR, 'find-on-home-webkit')}`)
+})
+
+test('S4-W5: Escape with the composer menu open closes the menu, and only then the drawer', async ({ page }) => {
+  await openWriterInbox(page)
+  await row(page, LUNCH).click({ button: 'right' })
+  await expect(menu(page)).toHaveCount(1)
+  await item(page, SUMMARIZE).click()
+  const session = drawer(page).getByTestId('ask-object-session')
+  await expect(session).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+  // WebKit does not focus a button on click, so the Escape arrives at <body>: the open menu is what
+  // the drawer has to notice, not the focused element.
+  await session.locator('button[aria-haspopup="menu"]').first().click()
+  await expect(session.locator('.chat-plus-menu')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(session.locator('.chat-plus-menu')).toHaveCount(0)
+  await expect(drawer(page)).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(drawer(page)).toHaveCount(0)
 })

@@ -84,6 +84,8 @@ const FRAME_RESET = `<style>
   blockquote { margin: 0 0 1em 12px; padding-left: 12px; border-left: 2px solid rgba(60,60,67,0.22); color: #4b4b50; }
   a { color: #0a5bd5; }
   a:not([href]) { color: inherit; text-decoration: none; cursor: default; }
+  span.walnut-held-image { color: #6e6e73; }
+  a span.walnut-held-image { color: inherit; }
   span.walnut-cid-image { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 10px; border: 1px solid rgba(60,60,67,0.22); border-radius: 999px; background: #f2f2f5; color: #6e6e73; font-size: 12px; line-height: 1.5; vertical-align: middle; }
 </style>`;
 
@@ -334,6 +336,28 @@ const IMG_SRC = /\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i;
 /** Remote means "leaves this machine": http, https, and protocol-relative, which inherits one. */
 function isRemoteUrl(value: string): boolean {
   return /^(?:https?:)?\/\//i.test(value.trim());
+}
+
+/**
+ * While images are blocked, a remote image is drawn as the words its sender wrote for it, or not at all.
+ *
+ * The policy alone stops the fetch, but the browser still lays the `<img>` out at its declared size and
+ * paints its broken-image frame there: WebKit draws a bordered empty box with the alt text in a corner,
+ * so a newsletter read as a column of torn boxes (reported 2026-09-25 on a real one). `alt` is the
+ * sender's own text for "the picture is not showing", so it takes the image's place as plain text (link
+ * coloured when the image was a link), and an image with no alt (a tracking pixel, a spacer) leaves
+ * nothing behind. "Load images" rebuilds the frame from the untouched body, so nothing here is lost.
+ */
+export function holdRemoteImages(html: string): string {
+  return html.replace(IMG_ELEMENT, (whole, attrs: string) => {
+    const match = IMG_SRC.exec(whole);
+    const value = match?.[1] ?? match?.[2] ?? match?.[3] ?? '';
+    if (!isRemoteUrl(value)) return whole;
+    const alt = ALT_ATTR.exec(attrs);
+    const label = (alt?.[1] ?? alt?.[2] ?? alt?.[3] ?? '').trim();
+    if (!label) return '';
+    return `<span class="walnut-held-image">${label.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>`;
+  });
 }
 
 /**

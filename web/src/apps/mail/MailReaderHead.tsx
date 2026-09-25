@@ -25,15 +25,16 @@ import type { MailOpenMessage } from './mail-store';
 import { openFinishUnsubscribeAsk, unsubscribeFromMessage } from './mail-unsubscribe-actions';
 import {
   unsubscribeHandsOverToAsk,
+  unsubscribeReaderControl,
   unsubscribeRowState,
   unsubscribeStatusLine,
 } from './mail-unsubscribe-state';
+import { SparklesIcon } from '@/components/icons/SparklesIcon';
 import {
   ArchiveBoxIcon,
   ChevronIcon,
   DocumentIcon,
   EnvelopeIcon,
-  EnvelopeOffIcon,
   EnvelopeOpenIcon,
   ForwardIcon,
   ImageIcon,
@@ -62,9 +63,6 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
   const account = accounts.length > 1
     ? accounts.find((one) => one.accountId === open.accountId)
     : undefined;
-  // The SAME pure answer the row menu reads, so the header and the menu can never disagree about where
-  // one message stands (they were the two places that could, and this is the one function they share).
-  const statusLine = unsubscribeStatusLine(message);
 
   return (
     <header className="mail-reader-head mail-reader-column">
@@ -121,21 +119,7 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
         </span>
       </div>
 
-      {/* Where the message is up to with its mailing list, when it is up to anything.
-          A LINE rather than a badge next to the button, because it is a fact about the past ("you left
-          this list on Sep 21") and the button is about the future; and under the sender rather than in
-          the title row, because the title row clips and the subject is what must survive. It draws
-          nothing at all in the two states that have nothing to report (see `unsubscribeStatusLine`). */}
-      {statusLine && (
-        <p
-          className="mail-reader-unsub"
-          data-testid="mail-reader-unsub"
-          data-state={statusLine.status}
-          role="status"
-        >
-          {statusLine.text}
-        </p>
-      )}
+      <UnsubscribeLine open={open} message={message} accounts={accounts} providers={providers} />
 
       {details && extras.length > 0 && (
         <dl className="mail-reader-detail-rows" data-testid="mail-reader-detail-rows">
@@ -230,9 +214,6 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
   const canMark = mayOfferMarkRead(providers, open.accountId);
   const unread = isUnread(message.flags);
   const sendTitle = (live: string) => (canSend ? live : CANNOT_SEND_TITLE);
-  // One pure answer for the label, the title, the disabled state and what the click does. The reader
-  // draws it as an icon button and the row menu draws it as a row; neither decides anything itself.
-  const unsubscribe = unsubscribeRowState({ message, canSend });
 
   const reply = (all: boolean) => {
     void openMailReplyComposer({
@@ -290,37 +271,6 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
         <ForwardIcon size={15} />
       </button>
       <MailTaskButton open={open} />
-      {/* Leaving the list, from the open message. The reader has NO context menu (its body is a
-          sandboxed iframe, see MailReaderBody), so this button is the only way to reach the ladder
-          from here. `data-unsub-state` is how a spec asserts the state without reading the title. */}
-      <button
-        type="button"
-        className="mail-round-btn"
-        data-testid="mail-unsubscribe"
-        data-unsub-state={unsubscribe.status}
-        disabled={unsubscribe.disabled}
-        title={unsubscribe.title || unsubscribe.label}
-        aria-label={unsubscribe.label}
-        onClick={() => {
-          if (unsubscribe.action === 'ask') {
-            openFinishUnsubscribeAsk(open.accountId, open.messageId, unsubscribe.reason);
-            return;
-          }
-          if (unsubscribe.action === 'run') {
-            // A `needs-human` verdict carries straight on into the drawer, exactly as the row menu's
-            // own Unsubscribe does. Two reasons it is not left as "the note tells them to click again":
-            // the two surfaces must not behave differently about one verdict, and the url the page was
-            // at is on the wire ONCE — the ledger keeps the reason, not the page, so a later click can
-            // only ask the model to go and find the way out again.
-            void unsubscribeFromMessage(open.accountId, open.messageId).then((answered) => {
-              if (!unsubscribeHandsOverToAsk(answered)) return;
-              openFinishUnsubscribeAsk(open.accountId, open.messageId, answered?.reason, answered?.url);
-            });
-          }
-        }}
-      >
-        <EnvelopeOffIcon size={15} />
-      </button>
       <button
         type="button"
         className="mail-round-btn"
@@ -334,6 +284,77 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
       >
         {unread ? <EnvelopeOpenIcon size={15} /> : <EnvelopeIcon size={15} />}
       </button>
+    </div>
+  );
+}
+
+/**
+ * Leaving the list, from the open message: a labelled button under the sender and the line that says
+ * where it stands.
+ *
+ * Its own row rather than an icon in the toolbar above or a chip in the sender row: the icon was never
+ * found (2026-09-25, "show it, not under AI, somewhere I can click, and tell me what happened"), and the
+ * sender row is a flex line whose items already compete for width. The row menu and this row read the
+ * SAME pure answers (`unsubscribeRowState`, `unsubscribeStatusLine`), so the two surfaces can never
+ * disagree about one message. The reader has no context menu (its body is a sandboxed iframe), so this
+ * is the only way to reach the ladder from here.
+ *
+ * The feedback is the row itself: the click turns the button into `Unsubscribing…` on the first frame,
+ * and the verdict replaces it with the line (`Unsubscribed via one-click · Sep 25`, or what went wrong
+ * and a `Try again`), with the server's own sentence in the list's note strip as well.
+ */
+function UnsubscribeLine({ open, message, accounts, providers }: Props) {
+  const canSend = canSendFrom(providers, open.accountId, accounts);
+  const state = unsubscribeRowState({ message, canSend });
+  const control = unsubscribeReaderControl(state, message.unsubscribe?.available);
+  const line = unsubscribeStatusLine(message);
+  // `pending` is said by the button; a line repeating `Unsubscribing…` beside it would say it twice.
+  const shownLine = line && !(control && line.status === 'pending') ? line : null;
+  if (!control && !shownLine) return null;
+  return (
+    <div className="mail-reader-unsub-row">
+      {shownLine && (
+        <p
+          className="mail-reader-unsub"
+          data-testid="mail-reader-unsub"
+          data-state={shownLine.status}
+          role="status"
+        >
+          {shownLine.status === 'done' && <span className="mail-reader-unsub-check" aria-hidden="true">✓</span>}
+          {shownLine.text}
+        </p>
+      )}
+      {control && (
+        <button
+          type="button"
+          className={`mail-reader-unsub-btn${control.ai ? ' ai' : ''}`}
+          data-testid="mail-unsubscribe"
+          data-unsub-state={control.status}
+          {...(control.ai ? { 'data-ai': 'true' } : {})}
+          disabled={control.disabled}
+          title={control.title || control.label}
+          aria-busy={control.status === 'pending' || undefined}
+          onClick={() => {
+            if (control.action === 'ask') {
+              openFinishUnsubscribeAsk(open.accountId, open.messageId, control.reason);
+              return;
+            }
+            if (control.action === 'run') {
+              // A `needs-human` verdict carries straight on into the drawer, exactly as the row menu's
+              // own Unsubscribe does: the url the page was at is on the wire ONCE (the ledger keeps the
+              // reason, not the page), so a later click could only ask the model to go and find it again.
+              void unsubscribeFromMessage(open.accountId, open.messageId).then((answered) => {
+                if (!unsubscribeHandsOverToAsk(answered)) return;
+                openFinishUnsubscribeAsk(open.accountId, open.messageId, answered?.reason, answered?.url);
+              });
+            }
+          }}
+        >
+          {control.status === 'pending' && <span className="mail-reader-unsub-spin" aria-hidden="true" />}
+          {control.ai && <SparklesIcon size={12} className="mail-reader-unsub-ai" />}
+          {control.label}
+        </button>
+      )}
     </div>
   );
 }

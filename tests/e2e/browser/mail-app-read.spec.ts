@@ -308,8 +308,10 @@ test('add an account, read the mailbox, open a hostile HTML body, search the cac
   expect(blocked!).not.toContain('bg.png')
   expect(blocked!).not.toContain('paper.png')
   expect(blocked!.toLowerCase()).not.toContain('url(http')
-  // The one remaining remote URL is the pixel's, and only the POLICY stops it leaving.
-  expect(blocked!).toContain('pixel.png')
+  // The pixel is counted (the banner below) but not drawn: a blocked image is its alt text, and this
+  // one has none, so no broken frame is left in the prose. The policy still stands behind it.
+  expect(blocked!).not.toContain('pixel.png')
+  expect(cspOf(blocked!)).not.toMatch(/https?:/)
   expect(cspOf(blocked!)).toContain("base-uri 'none'")
 
   const banner = page.getByTestId('mail-blocked-images')
@@ -323,6 +325,8 @@ test('add an account, read the mailbox, open a hostile HTML body, search the cac
     async () => cspOf((await frame.getAttribute('srcdoc')) ?? ''),
     { timeout: 15_000 },
   ).toContain('https:')
+  // Loading brings back exactly what the banner counted.
+  expect(await frame.getAttribute('srcdoc')).toContain('pixel.png')
 
   // ── (c) the read flag moved the row and both badges ──
 

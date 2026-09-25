@@ -44,7 +44,9 @@ import { fetchTask, recordSuggestFeedback, updateTask, SUGGEST_RULES_VERSION } f
 import { isBuiltinTier } from '@/api/focus';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
-import { AskWalnutSlot } from '@/components/chat/AskWalnutSlot';
+import { AskWalnutSlot, showAskInSlot } from '@/components/chat/AskWalnutSlot';
+import { agentOfTask, slotAgents } from '@/components/chat/ask-walnut-slot-model';
+import { getAgentsSnapshot } from '@/stores/agents-store';
 import { log } from '@/utils/log';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { visibleInterval } from '@/utils/page-visibility';
@@ -1925,6 +1927,50 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (sid) handleToggleSession(sid);
     handleLocateTaskById(taskId);
   }, [handleLocateTaskById, handleToggleSession]);
+
+  // `locateTaskOnHome` (utils/open-session.ts): a session panel off Home asked to be found. Its task
+  // may be seconds old and not in this page's list yet (an ask started from Mail), so the locate is
+  // held until the task arrives, for a bounded while, rather than dropped on the first miss. The panel
+  // the person was reading is not on Home, so its session opens here too: an ask in the chat slot,
+  // where every ask lives, anything else in a session column.
+  const pendingLocateRef = useRef<{ taskId: string; sessionId?: string; until: number } | null>(null);
+  const revealOnHome = useCallback((task: Task, sessionId?: string) => {
+    if (sessionId) {
+      // The slot's own rule (`agentOfTask` over the agents it lists): a task it would not show goes to a
+      // column rather than to a slot that would drop the selection.
+      if (agentOfTask(task, slotAgents(getAgentsSnapshot().agents))) {
+        showAskInSlot(task.id);
+        setChatVisible(true);
+      } else {
+        openSessionOrToast(sessionId);
+      }
+    }
+    handleLocateTaskById(task.id);
+  }, [handleLocateTaskById, openSessionOrToast]);
+  useEffect(() => {
+    const handleLocate = (e: Event) => {
+      const { taskId, sessionId } = (e as CustomEvent).detail as { taskId?: string; sessionId?: string };
+      if (!taskId) return;
+      const task = taskMapRef.current.get(taskId);
+      if (task) {
+        pendingLocateRef.current = null;
+        revealOnHome(task, sessionId);
+      } else {
+        pendingLocateRef.current = { taskId, ...(sessionId ? { sessionId } : {}), until: Date.now() + 15_000 };
+      }
+    };
+    window.addEventListener('main:locate-task', handleLocate);
+    return () => window.removeEventListener('main:locate-task', handleLocate);
+  }, [revealOnHome]);
+  useEffect(() => {
+    const pending = pendingLocateRef.current;
+    if (!pending) return;
+    if (Date.now() > pending.until) { pendingLocateRef.current = null; return; }
+    const task = taskMap.get(pending.taskId);
+    if (!task) return;
+    pendingLocateRef.current = null;
+    revealOnHome(task, pending.sessionId);
+  }, [taskMap, revealOnHome]);
 
   const handleClearFocus = useCallback(() => {
     setFocusedTask(null);

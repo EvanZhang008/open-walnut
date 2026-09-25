@@ -329,3 +329,55 @@ describe('mailRowSelector', () => {
     expect(selector).toContain('data-message-id="IN\\\\BOX:2"');
   });
 });
+
+describe('an unsubscribe the click just does is not a Walnut row', () => {
+  // 2026-09-25: "if it can unsubscribe through one click, show it, not under AI". A rung the server runs
+  // itself is an ordinary thing to do with this mail; only the states that open a conversation are Walnut's.
+  const keys = (items: ContextMenuItem[]) => items.map((one) => (one.divider ? '-' : one.key));
+
+  it('puts a one-click Unsubscribe beside Make a task, with no mark, and nothing in the group', () => {
+    const items = build({ message: { unsubscribe: { available: 'one-click' } } });
+    const at = keys(items).indexOf('task');
+    expect(keys(items)[at + 1]).toBe('unsubscribe');
+    const unsub = items.find((one) => one.key === 'unsubscribe')!;
+    expect(unsub.ai).toBeUndefined();
+    expect(unsub.label).toBe(UNSUBSCRIBE_LABELS.ready);
+    expect(group(items).some((one) => one.key === 'unsubscribe')).toBe(false);
+    expect(items.filter((one) => one.key === 'unsubscribe')).toHaveLength(1);
+    unsub.onSelect!();
+    expect(acted).toEqual([`unsubscribe ${WRITER} INBOX:1:31`]);
+  });
+
+  it('keeps the list\'s mail, its page, a retry and a finished one out of the group as well', () => {
+    for (const unsubscribe of [
+      { available: 'mailto' as const },
+      { available: 'link' as const },
+      { available: 'link' as const, attempt: { status: 'failed' as const, at: 1 } },
+      { available: 'one-click' as const, attempt: { status: 'in-flight' as const, at: 1 } },
+      { available: 'one-click' as const, done: { method: 'one-click', at: 1, scope: 'message' as const } },
+    ]) {
+      const items = build({ message: { unsubscribe } });
+      const unsub = items.find((one) => one.key === 'unsubscribe')!;
+      expect(unsub.ai, JSON.stringify(unsubscribe)).toBeUndefined();
+      expect(group(items).some((one) => one.key === 'unsubscribe'), JSON.stringify(unsubscribe)).toBe(false);
+    }
+  });
+
+  it('leaves Finish unsubscribing in the group, marked, because that click opens Ask Walnut', () => {
+    const items = build({
+      message: { unsubscribe: { available: 'link', attempt: { status: 'needs-human', reason: 'confirm-form', at: 1 } } },
+    });
+    const unsub = group(items).find((one) => one.key === 'unsubscribe')!;
+    expect(unsub.ai).toBe(true);
+    expect(unsub.label).toBe(UNSUBSCRIBE_LABELS.needsHuman);
+    unsub.onSelect!();
+    expect(acted).toEqual([`finish-unsubscribe ${WRITER} INBOX:1:31 confirm-form`]);
+  });
+
+  it('drops it everywhere on mail this person wrote', () => {
+    for (const over of [{ outbound: true }, { draftsView: true }]) {
+      const items = build({ ...over, message: { unsubscribe: { available: 'one-click' } } });
+      expect(items.some((one) => one.key === 'unsubscribe')).toBe(false);
+    }
+  });
+});

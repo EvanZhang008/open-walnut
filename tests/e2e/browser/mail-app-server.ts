@@ -159,6 +159,24 @@ if (withDense) {
   await fs.symlink(denseSource, path.join(tmpBase, 'plugins', 'mail-dense-provider'), 'dir')
 }
 
+// Sessions run the repo's mock CLI, never a real `claude`: the Ask drawer starts an ordinary Ask Walnut
+// session. Same two seams as test-server.ts (the runner's command, and the daemon's `start` argv).
+// The mock writes no CLI transcript, so a spec sees the mock's echo of what a launch sent, not the user
+// turn itself: assert on the echo (and on the quick-start body), never on a user bubble.
+const mockCli = path.join(repoRoot, 'tests/providers/mock-claude.mjs')
+const { sessionRunner } = await import('../../../src/providers/claude-code-session.js')
+sessionRunner.setCliCommand(mockCli)
+const { DaemonConnection } = await import('../../../src/providers/daemon-connection.js')
+const daemonSend = DaemonConnection.prototype.send
+DaemonConnection.prototype.send = function (command, payload, ...rest) {
+  if (command === 'start') {
+    const args = payload.args as string[]
+    if (args?.[0] !== 'claude') throw new Error('Unexpected fixture executable')
+    payload = { ...payload, args: [process.execPath, mockCli, ...args.slice(1)] }
+  }
+  return daemonSend.call(this, command, payload, ...rest)
+}
+
 const { startServer, stopServer } = await import('../../../src/web/server.js')
 const apiServer = await startServer({ port: 0, dev: true })
 const apiAddress = apiServer.address()

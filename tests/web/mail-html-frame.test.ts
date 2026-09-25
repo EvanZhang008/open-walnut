@@ -23,6 +23,7 @@ import {
   fixedTableWidth,
   hardenMailHtml,
   mailFrameCsp,
+  holdRemoteImages,
   replaceCidImages,
 } from '../../web/src/apps/mail/mail-html';
 
@@ -377,5 +378,44 @@ describe('countRemoteImages', () => {
       + '<p>text<img src="cid:inline1"></p>'
       + '<img src="https://track.example.invalid/open.gif" width="1" height="1">';
     expect(countRemoteImages(body)).toBe(2);
+  });
+});
+
+describe('a blocked remote image is its alt text, not a broken frame', () => {
+  // Reported 2026-09-25: WebKit lays a blocked `<img>` out at its declared size and paints a bordered
+  // empty box with the alt text in a corner, so a newsletter read as a column of torn boxes.
+  it('puts the sender\'s alt text where the picture was, inside its link', () => {
+    const body = '<a href="https://example.invalid/devday"><img src="https://cdn.example.invalid/hero.png" width="600" height="200" alt="DevDay 2026" style="border:0"></a>';
+    const held = holdRemoteImages(body);
+    expect(held).toBe('<a href="https://example.invalid/devday"><span class="walnut-held-image">DevDay 2026</span></a>');
+    expect(held).not.toContain('<img');
+  });
+
+  it('leaves nothing for an image with no words: a tracking pixel, a spacer', () => {
+    expect(holdRemoteImages('<p>a<img src="https://t.example.invalid/open.gif" width="1" height="1">b</p>')).toBe('<p>ab</p>');
+    expect(holdRemoteImages('<img alt="   " src="//cdn.example.invalid/spacer.gif">')).toBe('');
+  });
+
+  it('keeps every image that is not remote, and escapes markup an alt may carry', () => {
+    for (const img of [
+      '<img src="data:image/png;base64,AAAA" alt="dot">',
+      '<img src="/relative/logo.png" alt="logo">',
+      '<img alt="no source">',
+    ]) {
+      expect(holdRemoteImages(img)).toBe(img);
+    }
+    expect(holdRemoteImages('<img src="https://cdn.example.invalid/a.png" alt="a<b>c">')).toBe('<span class="walnut-held-image">a&lt;b&gt;c</span>');
+  });
+
+  it('holds every remote image in a body and leaves the count to the body as sent', () => {
+    const body = '<img src="https://a.example.invalid/1.png" alt="one"><img src="http://b.example.invalid/2.png"><img src=\'https://c.example.invalid/3.png\' alt=\'three\'>';
+    expect(holdRemoteImages(body)).toBe('<span class="walnut-held-image">one</span><span class="walnut-held-image">three</span>');
+    expect(countRemoteImages(body)).toBe(3);
+  });
+
+  it('keeps Unicode alt text as written', () => {
+    // A Chinese newsletter's banner alt ("account funded"), escaped so this file stays ASCII.
+    const alt = '\u8d44\u91d1\u5df2\u5230\u8d26';
+    expect(holdRemoteImages(`<img src="https://cdn.example.invalid/b.png" alt="${alt}">`)).toContain(alt);
   });
 });

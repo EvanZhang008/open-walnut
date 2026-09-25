@@ -277,7 +277,7 @@ describe('autoSendOutcome', () => {
  * back to the shape the bugs had — a claim with no correction, and a latch keyed without its agent. The
  * behaviour of the parts they call is graded above; a Playwright spec covers the click.
  */
-describe('the drawer and the chat view still wire it this way', () => {
+describe('the chat view still wires it this way, and the drawer no longer does', () => {
   const read = (rel: string) => readFileSync(path.join(import.meta.dirname, '../../web/src', rel), 'utf8')
   const view = read('components/chat/PluginChatView.tsx')
   const drawer = read('components/chat/AskObjectDrawer.tsx')
@@ -290,16 +290,13 @@ describe('the drawer and the chat view still wire it this way', () => {
     expect(view).toMatch(/watchRef\.current = \{[\s\S]*handleSend\(autoSend\)/)
   })
 
-  it('gives both latches back when the auto-send went nowhere', () => {
-    expect(drawer).toContain("releaseAskObjectLatch('preset', presetScope)")
-    expect(drawer).toContain("releaseAskObjectLatch('context', contextScope)")
-  })
-
-  it('keys every latch by agent AND object', () => {
-    // A bare string reaching a latch call is the defect: the conversation key has the agent in it and
-    // the latch must be built from the same pair.
-    expect(drawer).toContain('const contextScope = { agentId, key: objectKey }')
-    expect(drawer).toMatch(/askObjectLatchTaken\('preset', presetScope\)/)
-    expect(drawer).toMatch(/prefixContextOnce\(contextScope,/)
+  // The drawer itself no longer spends these latches: since 2026-09-25 an ask is a SESSION, and what
+  // was asked in it is remembered with the session (ask-object-session.ts, graded in
+  // ask-object-session.test.ts). Pinned so a revert to the latch path is a visible change.
+  it('the drawer keys its session by agent AND object and asks through the session record', () => {
+    expect(drawer).toContain('({ agentId, key: objectKey })')
+    expect(drawer).toContain('launchAskSession(scope,')
+    expect(drawer).toContain('askSessionAsked(record, ask)')
+    expect(drawer).not.toMatch(/import[^\n]*PluginChatView/)
   })
 })

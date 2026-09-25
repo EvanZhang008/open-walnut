@@ -1,29 +1,36 @@
 /**
  * The Walnut group of the message row menu, driven as a person drives it (S4).
  *
- * The promise being graded is that three menu rows turn one mail into a conversation, and that the
- * conversation is about THAT mail and only made once:
+ * The promise being graded is that three menu rows turn one mail into an ordinary Ask Walnut session,
+ * drawn by the same panels as every other session, and that the session is about THAT mail and only
+ * made once:
  *
  *   1. The group is the last thing in the menu, under its own name, and each of its rows carries the
  *      shared ✦ mark (`data-ai="true"`) WITHOUT indenting any other row: the mark rides inside the
  *      label, because the icon column this menu never draws would shift only this group's words.
  *   2. `Draft a reply with Walnut` is disabled with the SMTP reason on an account that cannot send,
  *      and absent on mail this person wrote. The other two never need SMTP.
- *   3. The drawer takes the READER's pane, its composer takes the caret, and Escape gives the pane
- *      back and the keyboard to the row the menu opened from.
- *   4. ONE conversation per mail: opening the same row twice POSTs `/conversations` once, and the
- *      second open lands in the same chat.
- *   5. `Summarize` and `Draft a reply` send their question immediately (one visible user turn, whose
- *      text is the context block: From, Subject, Date, the Walnut link, and the body quoted with `> `);
- *      `Ask Walnut about this…` sends nothing.
+ *   3. The drawer takes the READER's pane, its draft composer takes the caret, and Escape gives the
+ *      pane back and the keyboard to the row the menu opened from.
+ *   4. ONE session per mail: the first question POSTs `/api/sessions/quick-start` once, and a second
+ *      open lands in the same session.
+ *   5. `Summarize` and `Draft a reply` start the session with their question at once. The launch
+ *      carries the context block (From, Subject, Date, the Walnut link, the body quoted with `> `) as a
+ *      leading `[Mail you are asking about]` block, which the session panel folds into one row so the
+ *      bubble reads as the question. `Ask Walnut about this…` starts nothing until the person types.
  *   6. Identity is the PAIR. In a merged list two accounts can hold the same provider message id, and
- *      the dense fixture really does (`shared-8042`): the two rows must open two different drawers.
+ *      the dense fixture really does (`shared-8042`): the two rows must open two different sessions.
+ *   7. Its session panel's Locate takes the person to that task on Home.
+ *   8. Escape belongs to an open menu first: with the composer's + menu open it closes the menu and
+ *      leaves the drawer, and only the next Escape closes the drawer.
+ *   9. A second canned question asked while the first launch is still out joins that launch and goes
+ *      into the same session as a follow-up: one quick-start, both questions answered.
  *
  * Two fixtures, because the two halves need opposite installs: `PW_MAIL_CTX=1` is the small mailbox
  * with one account that can send and one that cannot, and `PW_MAIL_DENSE=1` is the production-density
- * pair that holds one message id twice. The model never runs for real: the fixture points the main
- * agent at `tests/providers/mock-main-agent.mjs`, and these cases assert the USER turn (what the menu
- * did) rather than an answer (what a model would say).
+ * pair that holds one message id twice. The model never runs for real: sessions run
+ * `tests/providers/mock-claude.mjs`, and these cases assert the LAUNCH and the mock's echo of each
+ * question (what the menu did) rather than an answer (what a model would say).
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
@@ -104,40 +111,45 @@ async function ask(page: Page, accountId: string, messageId: string, label: stri
   await expect(drawer(page)).toBeVisible({ timeout: 60_000 })
 }
 
-/** The user turns in the drawer's chat, oldest first. */
+/** The user turns in the drawer's session, oldest first. */
 function userTurns(page: Page): Locator {
-  return drawer(page).locator('.chat-message-user')
+  return drawer(page).locator('.session-msg-user')
+}
+
+/** The drawer's session body, once there is one; its `data-session-id` is the session. */
+function sessionBody(page: Page): Locator {
+  return drawer(page).getByTestId('ask-object-session')
+}
+
+interface LaunchBody {
+  message?: string
+  walnutAgent?: boolean
+  project?: string
+  cwd?: string
+  taskMeta?: { pinTier?: unknown }
+}
+
+/** Every quick-start POST (one ask session each), with its body, for the whole page's life. */
+function recordLaunches(page: Page): { bodies: LaunchBody[] } {
+  const record = { bodies: [] as LaunchBody[] }
+  page.on('request', (request) => {
+    if (request.method() !== 'POST') return
+    if (new URL(request.url()).pathname !== '/api/sessions/quick-start') return
+    try { record.bodies.push(request.postDataJSON() as LaunchBody) } catch { record.bodies.push({}) }
+  })
+  return record
 }
 
 /**
- * The first user turn, OPENED, ready to be asserted on.
- *
- * Two things this exists for, both of which made these cases read as product bugs when they were not:
- * a long pasted turn renders COLLAPSED (`isLongPlainUser` in ChatMessage), so its text is one summary
- * line until somebody opens it; and the row appears before React has filled it, so a single
- * `innerText()` read right after `toHaveCount(1)` can catch nothing but the role label. Everything
- * below therefore waits for the content with a RETRYING assertion.
+ * The mock CLI's answers in the drawer's session: it echoes every message it is sent
+ * (`Hello! I processed your message: <message>`), so an answer carrying a question is proof the
+ * session received that question. The USER row itself is not graded here: the default mock writes no
+ * transcript, so a fresh session's history has no user line to draw (the fold of the context block
+ * into one row is graded on `splitLeadingBanners` in tests/web/ask-object-session.test.ts and against
+ * a real CLI before a deploy).
  */
-async function openedFirstTurn(page: Page): Promise<Locator> {
-  const turn = userTurns(page).first()
-  await expect(turn).toHaveCount(1, { timeout: 60_000 })
-  const toggle = turn.locator('.chat-collapse-toggle')
-  if (await toggle.count() > 0) {
-    await expect(toggle).toHaveText('▶')
-    await turn.locator('.chat-notification-header').click()
-    await expect(toggle).toHaveText('▼')
-  }
-  return turn
-}
-
-/** Every POST that made a conversation, counted for the whole page's life. */
-function countConversationPosts(page: Page): { total: () => number } {
-  let total = 0
-  page.on('request', (request) => {
-    if (request.method() !== 'POST') return
-    if (/\/api\/agents\/[^/]+\/conversations$/.test(new URL(request.url()).pathname)) total += 1
-  })
-  return { total: () => total }
+function answers(page: Page, question: RegExp): Locator {
+  return drawer(page).locator('.session-msg-assistant').filter({ hasText: question })
 }
 
 // ───────────────────────────────── the small mailbox ─────────────────────────────────
@@ -235,9 +247,11 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(drawer(page).getByTestId('ask-object-quote')).toContainText('Quarterly keeper report')
     await expect(drawer(page).getByTestId('ask-object-quote')).toContainText('Keeper Reports')
     await expect(drawer(page).getByTestId('ask-object-quote')).not.toContainText('Lunch tomorrow')
-    // `Ask` lands the caret in the composer and sends nothing.
-    await expect(drawer(page).locator('.plugin-chat-view textarea')).toBeFocused()
+    // `Ask` opens the ordinary draft panel, lands the caret in its composer, and starts nothing.
+    await expect(drawer(page)).toHaveAttribute('data-view', 'compose')
+    await expect(drawer(page).locator('.draft-session-panel textarea')).toBeFocused()
     await expect(userTurns(page)).toHaveCount(0)
+    console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'ask-compose')}`)
 
     await page.keyboard.press('Escape')
     await expect(drawer(page)).toHaveCount(0)
@@ -246,63 +260,159 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(row(page, WRITER, KEEPER)).toBeFocused()
   })
 
-  test('S4-4: Summarize sends one turn carrying the whole context block', async ({ page }) => {
+  test('S4-4: Summarize starts one session whose first turn folds the context block', async ({ page }) => {
+    const launches = recordLaunches(page)
     await openWriterInbox(page)
     await ask(page, WRITER, KEEPER, SUMMARIZE)
 
-    await expect(userTurns(page)).toHaveCount(1, { timeout: 60_000 })
-    const turn = await openedFirstTurn(page)
-    // The headers a model cannot see on screen. Retrying assertions, one per fact, so a turn that is
-    // still being painted is waited for rather than reported as a missing header.
-    await expect(turn).toContainText('From: ')
-    await expect(turn).toContainText('Subject: ')
-    await expect(turn).toContainText('Date: ')
+    await expect.poll(() => launches.bodies.length, { timeout: 60_000 }).toBe(1)
+    const body = launches.bodies[0]
+    // An ordinary Ask Walnut launch that does not pin itself anywhere.
+    expect(body.walnutAgent).toBe(true)
+    expect(body.project).toBe('Ask Walnut')
+    expect(body.cwd).toBe('')
+    expect(body.taskMeta?.pinTier).toBeNull()
+    // The headers a model cannot see on screen, inside the named block, then the question.
+    const message = body.message ?? ''
+    expect(message.startsWith('[Mail you are asking about]\n')).toBe(true)
+    expect(message).toContain('\n[/Mail you are asking about]\n\n')
+    expect(message).toContain('From: ')
+    expect(message).toContain('Subject: Quarterly keeper report')
+    expect(message).toContain('Date: ')
     // The Walnut deep link back to THIS console, with both ids.
-    await expect(turn).toContainText(new RegExp(`Link: http://127\\.0\\.0\\.1:${port}/mail\\?`))
-    await expect(turn).toContainText(encodeURIComponent(WRITER))
+    expect(message).toMatch(new RegExp(`Link: http://127\\.0\\.0\\.1:${port}/mail\\?`))
+    expect(message).toContain(encodeURIComponent(WRITER))
     // The body, quoted line by line, which is what makes a hostile line harmless.
-    await expect(turn).toContainText('> ')
-    // And the question itself, which is what `Summarize` stands for.
-    await expect(turn).toContainText(/summarize this mail/i)
+    expect(message).toContain('> ')
+    expect(message.split('[/Mail you are asking about]')[1]).toMatch(/summarize this mail/i)
+
+    // On screen: the regular session panel, and the session answered the question it was started with.
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    await expect(sessionBody(page).locator('.session-panel')).toBeVisible()
+    await expect(answers(page, /processed your message: \[Mail you are asking about\]/)).toHaveCount(1, { timeout: 90_000 })
+    await expect(answers(page, /summarize this mail/i)).toHaveCount(1)
+    console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'summarize-session')}`)
   })
 
   test('S4-5: Draft a reply asks for a draft and names the approval, never a send', async ({ page }) => {
+    const launches = recordLaunches(page)
     await openWriterInbox(page)
     await ask(page, WRITER, LUNCH, DRAFT_REPLY)
-    await expect(userTurns(page)).toHaveCount(1, { timeout: 60_000 })
-    const turn = await openedFirstTurn(page)
-    await expect(turn).toContainText(/do not send/i)
-    await expect(turn).toContainText('mail_request_send')
-    // No composer was opened and no draft was written: this is a conversation, not a reply.
+    await expect.poll(() => launches.bodies.length, { timeout: 60_000 }).toBe(1)
+    const question = (launches.bodies[0].message ?? '').split('[/Mail you are asking about]')[1] ?? ''
+    expect(question).toMatch(/do not send/i)
+    expect(question).toContain('mail_request_send')
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    // No composer was opened and no draft was written: this is a question, not a reply.
     await expect(page.locator('.mail-composer-pane')).toHaveCount(0)
   })
 
-  test('S4-6: two opens of one mail make ONE conversation, and land in the same chat', async ({ page }) => {
-    const posts = countConversationPosts(page)
+  test('S4-6: one mail is ONE session across opens, and a second canned question goes into it', async ({ page }) => {
+    const launches = recordLaunches(page)
     await openWriterInbox(page)
 
+    // Ask mode starts nothing until the person types; the first question is the launch.
     await ask(page, WRITER, KEEPER, ASK)
-    // Waited for, not read once: the id lands when the conversation POST answers, and reading the
-    // attribute the moment the element exists catches the empty value before it.
-    const chat = drawer(page).getByTestId('ask-object-chat')
-    await expect(chat).toHaveAttribute('data-conversation', /.+/, { timeout: 60_000 })
-    const first = await chat.getAttribute('data-conversation')
-    expect(first).toBeTruthy()
+    await expect(drawer(page)).toHaveAttribute('data-view', 'compose')
+    const composer = drawer(page).locator('.draft-session-panel textarea')
+    await composer.fill('Who sends this report?')
+    await composer.press('Enter')
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    const first = await sessionBody(page).getAttribute('data-session-id')
+    expect(launches.bodies).toHaveLength(1)
+    await expect(answers(page, /Who sends this report\?/)).toHaveCount(1, { timeout: 90_000 })
     await page.keyboard.press('Escape')
     await expect(drawer(page)).toHaveCount(0)
 
+    // Reopened: the same session, nothing new started, and Ask mode still lands the caret in its composer.
     await ask(page, WRITER, KEEPER, ASK)
-    await expect(drawer(page).getByTestId('ask-object-chat')).toHaveAttribute('data-conversation', first!)
-    expect(posts.total()).toBe(1)
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', first!, { timeout: 60_000 })
+    expect(launches.bodies).toHaveLength(1)
+    await expect(sessionBody(page).locator('textarea.chat-input-textarea')).toBeFocused({ timeout: 30_000 })
 
-    // A DIFFERENT mail is a different conversation, which is the other half of the same rule.
+    // A canned question on the same mail goes INTO that session rather than starting another.
     await page.keyboard.press('Escape')
-    await ask(page, WRITER, LUNCH, ASK)
-    const otherChat = drawer(page).getByTestId('ask-object-chat')
-    await expect(otherChat).toHaveAttribute('data-conversation', /.+/, { timeout: 60_000 })
-    const second = await otherChat.getAttribute('data-conversation')
+    await expect(drawer(page)).toHaveCount(0)
+    await ask(page, WRITER, KEEPER, SUMMARIZE)
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', first!, { timeout: 60_000 })
+    await expect(answers(page, /processed your message: Summarize this mail/i)).toHaveCount(1, { timeout: 90_000 })
+    expect(launches.bodies).toHaveLength(1)
+    // And asked once: the same entry again opens the session without asking a second time.
+    await page.keyboard.press('Escape')
+    await ask(page, WRITER, KEEPER, SUMMARIZE)
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', first!, { timeout: 60_000 })
+    // Held a moment so a second send would have had time to be answered: absence needs a window.
+    await page.waitForTimeout(3_000)
+    await expect(answers(page, /processed your message: Summarize this mail/i)).toHaveCount(1)
+
+    // A DIFFERENT mail is a different session, which is the other half of the same rule.
+    await page.keyboard.press('Escape')
+    await ask(page, WRITER, LUNCH, SUMMARIZE)
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    const second = await sessionBody(page).getAttribute('data-session-id')
     expect(second).not.toBe(first)
-    expect(posts.total()).toBe(2)
+    expect(launches.bodies).toHaveLength(2)
+  })
+
+  test('S4-12: Escape with a composer menu open closes the menu, not the drawer', async ({ page }) => {
+    await openWriterInbox(page)
+    await ask(page, WRITER, LUNCH, SUMMARIZE)
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    const plus = sessionBody(page).locator('button[aria-haspopup="menu"]').first()
+    await plus.click()
+    await expect(sessionBody(page).locator('.chat-plus-menu')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(sessionBody(page).locator('.chat-plus-menu')).toHaveCount(0)
+    await expect(drawer(page)).toBeVisible()
+    // With nothing open, the next Escape is the drawer's.
+    await page.keyboard.press('Escape')
+    await expect(drawer(page)).toHaveCount(0)
+  })
+
+  test('S4-13: a second canned question asked while the first is starting reaches the same session', async ({ page }) => {
+    const launches = recordLaunches(page)
+    await openWriterInbox(page)
+    // Hold the launch, so the second question lands while the first is still out.
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => { release = resolve })
+    await page.route('**/api/sessions/quick-start', async (route) => { await held; await route.continue() })
+    await ask(page, WRITER, KEEPER, SUMMARIZE)
+    await expect(drawer(page)).toHaveAttribute('data-view', 'starting')
+    await openRowMenu(page, WRITER, KEEPER)
+    await clickItem(page, DRAFT_REPLY)
+    await page.waitForTimeout(500)
+    release()
+
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    await expect(answers(page, /processed your message: \[Mail you are asking about\]/)).toHaveCount(1, { timeout: 90_000 })
+    // Matched anywhere in the session, not only on a settled answer row: the follow-up lands mid-turn,
+    // and the mock's echo of it can still be the live streaming block when the assertion runs.
+    await expect(sessionBody(page).getByText(/Hello! I processed your message: Draft a reply to this mail/))
+      .toHaveCount(1, { timeout: 90_000 })
+    // One session: the second question joined the first launch instead of starting another.
+    expect(launches.bodies).toHaveLength(1)
+    await page.unroute('**/api/sessions/quick-start')
+  })
+
+  test('S4-11: Locate in the drawer\'s session finds the task on Home', async ({ page }) => {
+    await openWriterInbox(page)
+    await ask(page, WRITER, KEEPER, SUMMARIZE)
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    const sessionId = await sessionBody(page).getAttribute('data-session-id')
+    const locate = sessionBody(page).getByTestId('session-panel-locate')
+    await expect(locate).toBeVisible({ timeout: 60_000 })
+    await expect(locate).toHaveAttribute('aria-label', 'Find on Home')
+    await locate.click()
+
+    // Home, with the ask's task selected in the task panel and its session in the chat slot, where
+    // every ask lives, and NOT a second copy of it in a session column beside the slot.
+    await expect(page).toHaveURL(/\/$/)
+    await expect(page.locator(`[data-testid="ask-walnut-session"][data-session-id="${sessionId}"]`))
+      .toBeVisible({ timeout: 30_000 })
+    await expect(page.locator(`.main-page-session-column [data-session-id="${sessionId}"]`)).toHaveCount(0)
+    const focused = page.locator('#home-task-navigation .task-focused')
+    await expect(focused).toHaveCount(1, { timeout: 30_000 })
+    console.log(`shot: ${await shoot(page, SHOT_DIR, 'find-on-home')}`)
   })
 
   test('S4-7: the drawer is about the row the menu opened on, not the selected row', async ({ page }) => {
@@ -390,33 +500,31 @@ test.describe('a merged list where two accounts hold the same message id', () =>
 
   test.afterAll(async () => { await server.stop() })
 
-  test('S4-10: the two rows open two different conversations', async ({ page }) => {
-    const posts = countConversationPosts(page)
+  test('S4-10: the two rows open two different sessions', async ({ page }) => {
+    const launches = recordLaunches(page)
     await openMail(page, port)
     // All Inboxes: one list across both accounts, which is where the collision is visible.
     await page.locator('.mail-accounts-pane .mail-mailbox.smart[data-smart="inbox"]').click()
     await expect(row(page, HARBOUR, SHARED)).toBeVisible({ timeout: 90_000 })
     await expect(row(page, MARINA, SHARED)).toBeVisible()
 
-    await ask(page, HARBOUR, SHARED, ASK)
+    await ask(page, HARBOUR, SHARED, SUMMARIZE)
     const first = await drawer(page).getAttribute('data-object-key')
-    await expect(drawer(page).getByTestId('ask-object-chat'))
-      .toHaveAttribute('data-conversation', /.+/, { timeout: 60_000 })
-    const firstChat = await drawer(page).getByTestId('ask-object-chat').getAttribute('data-conversation')
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    const firstSession = await sessionBody(page).getAttribute('data-session-id')
     await page.keyboard.press('Escape')
     await expect(drawer(page)).toHaveCount(0)
 
-    await ask(page, MARINA, SHARED, ASK)
+    await ask(page, MARINA, SHARED, SUMMARIZE)
     const second = await drawer(page).getAttribute('data-object-key')
-    await expect(drawer(page).getByTestId('ask-object-chat'))
-      .toHaveAttribute('data-conversation', /.+/, { timeout: 60_000 })
-    const secondChat = await drawer(page).getByTestId('ask-object-chat').getAttribute('data-conversation')
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    const secondSession = await sessionBody(page).getAttribute('data-session-id')
 
     expect(first).toContain(HARBOUR)
     expect(second).toContain(MARINA)
     expect(second).not.toBe(first)
-    expect(secondChat).not.toBe(firstChat)
-    // Two mails, two conversations: the pair is the identity, never the message id alone.
-    expect(posts.total()).toBe(2)
+    expect(secondSession).not.toBe(firstSession)
+    // Two mails, two sessions: the pair is the identity, never the message id alone.
+    expect(launches.bodies).toHaveLength(2)
   })
 })

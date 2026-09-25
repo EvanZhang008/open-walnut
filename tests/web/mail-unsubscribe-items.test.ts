@@ -27,6 +27,8 @@ import {
   UNSUBSCRIBE_RETRY_TITLE,
   unsubscribeDoneTitle,
   unsubscribeHandsOverToAsk,
+  unsubscribeIsDirect,
+  unsubscribeReaderControl,
   unsubscribeRowState,
   unsubscribeStatusLine,
 } from '../../web/src/apps/mail/mail-unsubscribe-state';
@@ -331,5 +333,55 @@ describe('the reader\'s status line', () => {
       expect(line?.status, status).toBe(status);
       expect(line?.text.length, status).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('the reader\'s labelled button', () => {
+  // 2026-09-25: the reader's unsubscribe was an envelope icon among five and was never found. It is now a
+  // word under the sender, drawn only where a click does something, with the line beside it saying what
+  // happened.
+  const control = (unsubscribe?: MailUnsubscribeDto, canSend = true) =>
+    unsubscribeReaderControl(state(unsubscribe, canSend), unsubscribe?.available);
+
+  it('says what a one-click, a mail and a page will each do, before the click', () => {
+    expect(control({ available: 'one-click' })).toMatchObject({
+      status: 'ready', label: 'Unsubscribe', disabled: false, action: 'run', ai: false,
+    });
+    expect(control({ available: 'one-click' })!.title).toContain('one click');
+    expect(control({ available: 'mailto' })!.title).toContain('unsubscribe mail');
+    expect(control({ available: 'link' })!.title).toContain('unsubscribe page');
+  });
+
+  it('is disabled with the SMTP reason on a mail-only list the account cannot send to', () => {
+    expect(control({ available: 'mailto' }, false)).toMatchObject({ disabled: true, title: CANNOT_SEND_TITLE });
+  });
+
+  it('is the feedback while it runs, and a retry after a failure', () => {
+    expect(control({ available: 'one-click', attempt: { status: 'in-flight', at: NOW } })).toMatchObject({
+      status: 'pending', label: 'Unsubscribing…', disabled: true, action: 'none',
+    });
+    expect(control({ available: 'link', attempt: { status: 'failed', at: NOW } })).toMatchObject({
+      status: 'failed', label: 'Try again', disabled: false, action: 'run', title: UNSUBSCRIBE_RETRY_TITLE,
+    });
+  });
+
+  it('hands a page that wants a person to Walnut, marked, with the reason', () => {
+    expect(control({ available: 'link', attempt: { status: 'needs-human', reason: 'confirm-form', at: NOW } }))
+      .toMatchObject({ status: 'needs-human', label: 'Finish with Walnut', ai: true, action: 'ask', reason: 'confirm-form' });
+  });
+
+  it('draws nothing where there is nothing to press: no way out, a finished one, the agent\'s letter', () => {
+    expect(control()).toBeNull();
+    expect(control({ available: 'one-click', done: { method: 'one-click', at: NOW, scope: 'message' } })).toBeNull();
+    expect(control({ available: 'mailto', attempt: { status: 'needs-human', reason: 'asked', at: NOW } })).toBeNull();
+  });
+
+  it('agrees with the menu about which clicks are direct', () => {
+    expect(unsubscribeIsDirect(state({ available: 'one-click' }))).toBe(true);
+    expect(unsubscribeIsDirect(state({ available: 'link', attempt: { status: 'failed', at: NOW } }))).toBe(true);
+    expect(unsubscribeIsDirect(state({ available: 'one-click', done: { method: 'one-click', at: NOW, scope: 'message' } }))).toBe(true);
+    expect(unsubscribeIsDirect(state())).toBe(false);
+    expect(unsubscribeIsDirect(state({ available: 'link', attempt: { status: 'needs-human', reason: 'x', at: NOW } }))).toBe(false);
+    expect(unsubscribeIsDirect(state({ available: 'mailto', attempt: { status: 'needs-human', reason: 'asked', at: NOW } }))).toBe(false);
   });
 });

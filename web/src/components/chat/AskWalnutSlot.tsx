@@ -45,7 +45,7 @@ import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
 import {
-  GENERAL_AGENT_ID, GENERAL_ASK_AGENT, agentOfTask, resolveSelection, selectAgentTasks, toAskAgent,
+  GENERAL_AGENT_ID, GENERAL_ASK_AGENT, agentOfTask, resolveSelection, selectAgentTasks, slotAgents,
   type AskAgent,
 } from './ask-walnut-slot-model';
 import '@/styles/walnut-agent.css';
@@ -57,6 +57,19 @@ const SS_SELECTED_KEY = 'walnut:ask-slot:selected';
  *  its own only while the agent has no asks (a reload must not drop the user
  *  from Mentor's empty composer back to Walnut). */
 const SS_AGENT_KEY = 'walnut:ask-slot:agent';
+
+/** The window event that asks a mounted slot to show one ask (see `showAskInSlot`). */
+const SHOW_ASK_EVENT = 'ask-slot:show';
+
+/**
+ * Show this ask in the chat slot: what "Find on Home" does for an ask started off Home (a Mail or Slack
+ * drawer), whose home on Home is this slot rather than a session column. Written to the selection's
+ * storage too, because the slot only mounts while the chat is open: a slot mounting after this reads it.
+ */
+export function showAskInSlot(taskId: string): void {
+  try { sessionStorage.setItem(SS_SELECTED_KEY, taskId); } catch { /* the event still reaches a mounted slot */ }
+  window.dispatchEvent(new CustomEvent(SHOW_ASK_EVENT, { detail: { taskId } }));
+}
 
 /** The synthetic draft row's id. Fixed rather than timestamped: the slot holds at
  *  most ONE draft, and a stable id means ChatInput's persisted composer text
@@ -136,13 +149,7 @@ export function AskWalnutSlot({
   const agentsSnapshot = useSyncExternalStore(subscribeAgents, getAgentsSnapshot, getAgentsSnapshot);
   useEffect(() => { void loadAgents(); }, []);
   useEvent('agents:changed', () => { void loadAgents(true); });
-  const agents = useMemo<AskAgent[]>(() => {
-    const consoleAgents = agentsSnapshot.agents
-      .filter((a) => a.console || a.id === GENERAL_AGENT_ID)
-      .map(toAskAgent);
-    const general = consoleAgents.find((a) => a.id === GENERAL_AGENT_ID) ?? GENERAL_ASK_AGENT;
-    return [general, ...consoleAgents.filter((a) => a.id !== GENERAL_AGENT_ID)];
-  }, [agentsSnapshot.agents]);
+  const agents = useMemo<AskAgent[]>(() => slotAgents(agentsSnapshot.agents), [agentsSnapshot.agents]);
   // Until the registry has answered once (a failed load counts: the list is
   // then Walnut alone, for good), every agent but Walnut is unknown, and any
   // selection logic run against that stand-in list would move the user off a
@@ -381,6 +388,15 @@ export function AskWalnutSlot({
     setNewMode(false);
     setSelectedTaskId(taskId);
   }, [dropLaunchedUnless]);
+
+  useEffect(() => {
+    const show = (e: Event) => {
+      const taskId = (e as CustomEvent<{ taskId?: string }>).detail?.taskId;
+      if (taskId) selectAsk(taskId);
+    };
+    window.addEventListener(SHOW_ASK_EVENT, show);
+    return () => window.removeEventListener(SHOW_ASK_EVENT, show);
+  }, [selectAsk]);
 
   // Switch the drawer (and the slot) to another agent: its newest ask with a
   // conversation comes up, or, when it has none yet, its composer — the way

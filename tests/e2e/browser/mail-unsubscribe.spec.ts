@@ -111,7 +111,8 @@ function row(page: Page, accountId: string, messageId: string): Locator {
  * answer` depending on the state, and a `hasText` locator would match three of those at once.
  */
 function unsubItem(page: Page): Locator {
-  return menu(page).locator('[role="menuitem"]').last()
+  // By key, not position: a one-click row sits beside Add as task, a Walnut-assisted one in the Walnut group.
+  return menu(page).locator('[data-menu-key="unsubscribe"]')
 }
 
 async function unsubLabel(page: Page): Promise<string> {
@@ -232,12 +233,17 @@ test('acceptance 6, 5: four messages, four different answers, and every disabled
   const mailto = await unsubState(page, WRITER, MAILTO)
   expect(mailto).toEqual({ label: 'Unsubscribe', title: '', disabled: false })
 
-  // The row carries the ✦ mark and draws it INSIDE its label: this menu has no icon column, so an
-  // icon here would indent the Walnut group's words and leave the ten rows above them flush left.
+  // A one-click row is an ordinary action, NOT a Walnut row (2026-09-25: "show it, not under AI"): no
+  // ✦ mark, and still no icon column, so every row's words stay flush left.
   await openRowMenu(page, WRITER, ONE_CLICK)
-  await expect(unsubItem(page)).toHaveAttribute('data-ai', 'true')
-  await expect(unsubItem(page).locator('.wn-context-menu-label .wn-context-ai-mark svg')).toHaveCount(1)
+  await expect(unsubItem(page)).not.toHaveAttribute('data-ai', 'true')
+  await expect(unsubItem(page).locator('.wn-context-ai-mark')).toHaveCount(0)
   await expect(menu(page).locator('.wn-context-menu-icon')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  // The message with no way out keeps its disabled row in the Walnut group, marked, because what can
+  // try instead is Ask Walnut.
+  await openRowMenu(page, WRITER, NOTHING)
+  await expect(unsubItem(page)).toHaveAttribute('data-ai', 'true')
   // A disabled row's reason is also readable without a mouse, which is what the reason line is for.
   await page.keyboard.press('Escape')
   await openRowMenu(page, WRITER, NOTHING)
@@ -259,20 +265,22 @@ test('acceptance 6, 5: four messages, four different answers, and every disabled
 test('acceptance 8: the reader carries the button, and learns the link off the body it just read', async ({ page }) => {
   await openWriterInbox(page)
 
-  // Nothing to unsubscribe from: the button is there and disabled with the same sentence the menu
-  // gives, and there is NO status line — the reader already has a control saying it, and a header row
-  // repeating "this message cannot be unsubscribed from" is noise on top of it.
+  // Nothing to unsubscribe from: nothing drawn at all. A disabled button on every mail from a person
+  // was noise; the row menu still says why and what can try instead.
   await openMessage(page, WRITER, NOTHING)
-  await expect(unsubButton(page)).toHaveAttribute('data-unsub-state', 'none')
-  await expect(unsubButton(page)).toBeDisabled()
-  await expect(unsubButton(page)).toHaveAttribute('title', NONE_TITLE)
+  await expect(unsubButton(page)).toHaveCount(0)
   await expect(statusLine(page)).toHaveCount(0)
 
-  // A one-click newsletter: enabled, and still no line, because nothing has happened yet.
+  // A one-click newsletter: a labelled button under the sender, enabled, saying what the click does,
+  // and no line, because nothing has happened yet.
   await openMessage(page, WRITER, ONE_CLICK)
   await expect(unsubButton(page)).toHaveAttribute('data-unsub-state', 'ready')
+  await expect(unsubButton(page)).toHaveText('Unsubscribe')
+  await expect(unsubButton(page)).toHaveAttribute('title', /one click/)
   await expect(unsubButton(page)).toBeEnabled()
+  await expect(unsubButton(page)).not.toHaveAttribute('data-ai', 'true')
   await expect(statusLine(page)).toHaveCount(0)
+  console.log(`shot: ${await shoot(page.getByTestId('mail-reader'), SHOT_DIR, 'reader-one-click-button')}`)
 
   // The footer message carries NO headers at all: its only way out is the https anchor in its own
   // markup, and this very read is what finds it (`readMessage` restates `available` off the body it
@@ -301,8 +309,9 @@ test('acceptance 6, 4: the optimistic mark is `Unsubscribing…`, and a refusal 
   // tick: the whole point of the ladder is that leaving a list can fail quietly.
   await expect(unsubButton(page)).toHaveAttribute('data-unsub-state', 'pending')
   await expect(unsubButton(page)).toBeDisabled()
-  await expect(statusLine(page)).toHaveAttribute('data-state', 'pending')
-  await expect(statusLine(page)).toHaveText('Unsubscribing…')
+  // The button IS the feedback: it says `Unsubscribing…` on the first frame, and no line repeats it.
+  await expect(unsubButton(page)).toHaveText('Unsubscribing…')
+  await expect(statusLine(page)).toHaveCount(0)
   expect(await unsubState(page, WRITER, ONE_CLICK)).toMatchObject({
     label: 'Unsubscribing…',
     disabled: true,
@@ -318,6 +327,7 @@ test('acceptance 6, 4: the optimistic mark is `Unsubscribing…`, and a refusal 
   await expect(note).toContainText('could not be reached', { timeout: 60_000 })
   await expect(note).toContainText('Nothing was changed')
   await expect(unsubButton(page)).toHaveAttribute('data-unsub-state', 'failed')
+  await expect(unsubButton(page)).toHaveText('Try again')
   await expect(statusLine(page)).toHaveText('Unsubscribe did not work')
   // Enabled again, and the title says what the click now means. A retry is a first-class answer here:
   // nothing left the machine, so there is nothing to be careful about.
@@ -372,7 +382,10 @@ test('acceptance 1, 6, 7: the mailto rung sends one mail as a console click, and
   // tens of seconds, so the response does not hold one of the browser's six connections open for it).
   // The console learns the verdict from the bus event, so the wait is on the STATE and not on a clock.
   await openMessage(page, WRITER, MAILTO)
-  await expect(unsubButton(page)).toHaveAttribute('data-unsub-state', 'done', { timeout: 60_000 })
+  await expect(statusLine(page)).toHaveAttribute('data-state', 'done', { timeout: 60_000 })
+  // Done is a fact the line says, with a tick; there is nothing left to press in the reader.
+  await expect(statusLine(page)).toContainText('✓')
+  await expect(unsubButton(page)).toHaveCount(0)
 
   // The row that was clicked names the RUNG and the day, because that is the fact about this mail.
   const done = await unsubState(page, WRITER, MAILTO)
@@ -386,7 +399,7 @@ test('acceptance 1, 6, 7: the mailto rung sends one mail as a console click, and
   // clicked, now says so too — and says "this list" rather than "this sender", because the key came
   // from a `List-Id` and not from the address.
   await openMessage(page, WRITER, SIBLING)
-  await expect(unsubButton(page)).toHaveAttribute('data-unsub-state', 'done', { timeout: 60_000 })
+  await expect(statusLine(page)).toHaveAttribute('data-state', 'done', { timeout: 60_000 })
   const sibling = await unsubState(page, WRITER, SIBLING)
   expect(sibling.label).toBe('Unsubscribed ✓')
   expect(sibling.title).toMatch(/^You unsubscribed from this list on .+/)
@@ -396,8 +409,8 @@ test('acceptance 1, 6, 7: the mailto rung sends one mail as a console click, and
   // The reader agrees with the menu, which is the one thing these two surfaces must never do
   // differently: it repeats the menu's own sentence rather than composing a second one.
   await expect(statusLine(page)).toHaveAttribute('data-state', 'done')
-  expect((await statusLine(page).innerText()).trim()).toBe(sibling.title)
-  await expect(unsubButton(page)).toBeEnabled()
+  expect((await statusLine(page).innerText()).trim()).toBe(`✓${sibling.title}`)
+  await expect(unsubButton(page)).toHaveCount(0)
   console.log(`shot: ${await shoot(page.getByTestId('mail-reader'), SHOT_DIR, 'reader-done-list')}`)
 
   // A message of a DIFFERENT list is untouched by any of it: the ledger is keyed, not global.
@@ -446,18 +459,13 @@ test('acceptance 9: a page that wants a confirmation hands the rest to Ask Walnu
   // The click carries straight on into the drawer, with the page and the reason in the first turn:
   // "finish this" is useless to a model that is not told what stopped or where.
   await expect(page.getByTestId(DRAWER)).toBeVisible({ timeout: 60_000 })
-  const turn = page.getByTestId(DRAWER).locator('.chat-message-user').first()
-  // The turn arrives COLLAPSED, because a long pasted user message is (`isLongPlainUser` in
-  // ChatMessage), and its summary line is the context block's first line. So it is opened the way a
-  // person opens it, by clicking the header: asserting on the collapsed row would only ever be able to
-  // see that first line, which says nothing about whether the question and the page reached the model.
-  await expect(turn.locator('.chat-collapse-toggle')).toHaveText('▶')
-  await turn.locator('.chat-notification-header').click()
-  await expect(turn.locator('.chat-collapse-toggle')).toHaveText('▼')
-  await expect(turn).toContainText('I want off this list')
-  await expect(turn).toContainText('lists.example.invalid/u/footer')
-  await expect(turn).toContainText('wants a confirmation pressed')
-  await expect(turn).toContainText('Do not tell me I am unsubscribed unless the page said so')
+  // The drawer's session answered the question it was started with. The mock CLI echoes what it is
+  // sent, so the answer carrying the page and the reason is proof they reached the session.
+  const answer = page.getByTestId(DRAWER).locator('.session-msg-assistant').filter({ hasText: 'I want off this list' })
+  await expect(answer).toHaveCount(1, { timeout: 90_000 })
+  await expect(answer).toContainText('lists.example.invalid/u/footer')
+  await expect(answer).toContainText('wants a confirmation pressed')
+  await expect(answer).toContainText('Do not tell me I am unsubscribed unless the page said so')
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'needs-human-drawer')}`)
   await page.keyboard.press('Escape')
   await expect(page.getByTestId(DRAWER)).toHaveCount(0)
@@ -518,12 +526,11 @@ test('the agent\'s own ask is a different state: disabled, and it points at the 
 
   await openMessage(page, WRITER, ONE_CLICK)
   await unsubButton(page).click()
-  await expect(unsubButton(page)).toHaveAttribute('data-unsub-state', 'asked', { timeout: 60_000 })
-  // DISABLED, and that is the deliberate half. The ledger WOULD let a click through, and running the
+  await expect(statusLine(page)).toHaveAttribute('data-state', 'asked', { timeout: 60_000 })
+  // NO button, and that is the deliberate half. The ledger WOULD let a click through, and running the
   // ladder here would leave the agent's letter sitting in the inbox with a button that no longer means
-  // anything.
-  await expect(unsubButton(page)).toBeDisabled()
-  await expect(unsubButton(page)).toHaveAttribute('title', ASKED_TITLE)
+  // anything. The menu keeps the disabled row with the reason (`ASKED_TITLE`).
+  await expect(unsubButton(page)).toHaveCount(0)
   await expect(statusLine(page)).toHaveText('Walnut asked you about unsubscribing')
   // And NO drawer, which is the whole difference from the case above: the question is already in front
   // of the person somewhere else, so opening a conversation about finishing it would be Walnut answering

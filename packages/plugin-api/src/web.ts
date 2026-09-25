@@ -130,6 +130,31 @@ export interface ChatViewProps {
   onAutoSent?(text: string): void
 }
 
+/**
+ * Ask Walnut about one object the plugin shows (a message, a record), as an ordinary Ask Walnut session.
+ *
+ * The host draws its own draft panel (with `quote` above the composer) until the first question, then
+ * the regular session panel. `contextBlock` rides the first question only, folded in the session under
+ * a row named `contextName`. `objectKey` is scoped to the plugin by the host; reopening the same key
+ * lands in the same session, and a `preset` with `autoSend` is sent once per session. Optional on the
+ * views object: a host older than this view does not have it, so feature-detect and fall back.
+ */
+export interface AskObjectViewProps {
+  objectKey: string
+  title: string
+  quote: { who: string; when: string; where: string; preview: string }
+  contextBlock: string
+  contextName: string
+  /** Console agent that answers. Defaults to Walnut (`general`). */
+  agentId?: string
+  preset?: string
+  autoSend?: boolean
+  onClose(): void
+  onBack?(): void
+  /** CSS selector of what the keyboard returns to on close. */
+  restoreFocusTo?: string
+}
+
 export interface WebUiService {
   app(contribution: AppContribution): AppHandle
   page(contribution: PageContribution): Disposable
@@ -143,6 +168,7 @@ export interface WebUiService {
     SessionView: PluginComponent<SessionViewProps>
     TaskView: PluginComponent<TaskViewProps>
     ChatView: PluginComponent<ChatViewProps>
+    AskObjectView?: PluginComponent<AskObjectViewProps>
   }
 }
 

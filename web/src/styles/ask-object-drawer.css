@@ -97,15 +97,39 @@
   text-decoration: underline;
 }
 
-.ask-object-chat {
+/* The three bodies. The draft and the session are the ordinary panels, which fill their wrapper
+   (their headers and composers are positioned against it); no `contain: paint` here for the same
+   reason as .ask-walnut-session: it would trap the panel's fixed-position fullscreen mode. */
+.ask-object-session,
+.ask-object-compose,
+.ask-object-pending {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
-/* The drawer's own header is the one header. PluginChatView draws its own (title +
-   Clear) because a plugin hosting it has no chrome of its own; here it would be a
-   second title row directly under the first. */
-.ask-object-chat .plugin-chat-view { min-height: 0; }
-.ask-object-chat .plugin-chat-view-header { display: none; }
+.ask-object-session > .session-panel,
+.ask-object-compose > .session-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Inside the draft panel's empty body the quote sits where Walnut's starter chips would. */
+.ask-object-compose .ask-object-quote {
+  margin: 0;
+  width: 100%;
+  max-width: 520px;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+/* A plugin's host for the drawer (ui.views.AskObjectView): it fills what the plugin gives it. */
+.plugin-ask-object-view {
+  height: 100%;
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

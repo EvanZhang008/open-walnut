@@ -195,6 +195,21 @@ export interface ChatViewProps {
   onAutoSent?(text: string): void
 }
 
+/** Mirrors `@open-walnut/plugin-api`'s `AskObjectViewProps` (see ChatViewProps for why it must). */
+export interface AskObjectViewProps {
+  objectKey: string
+  title: string
+  quote: { who: string; when: string; where: string; preview: string }
+  contextBlock: string
+  contextName: string
+  agentId?: string
+  preset?: string
+  autoSend?: boolean
+  onClose(): void
+  onBack?(): void
+  restoreFocusTo?: string
+}
+
 export interface PluginViews {
   CalendarView: ComponentType<Record<string, never>>
   FileView: ComponentType<FileViewProps>
@@ -203,6 +218,7 @@ export interface PluginViews {
   SessionView: ComponentType<SessionViewProps>
   TaskView: ComponentType<TaskViewProps>
   ChatView: ComponentType<ChatViewProps>
+  AskObjectView: ComponentType<AskObjectViewProps>
 }
 
 export interface WalnutWebApiHost {

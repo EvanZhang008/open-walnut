@@ -23,7 +23,7 @@ import type { MailAccountDto, MailMessageDto, MailProviderSummary } from '@/api/
 import { normalizeContextMenuItems, type ContextMenuItem } from '@/utils/context-menu';
 import { isUnread, rowRecipientLabel, senderLabel } from './mail-format';
 import { mayOfferMarkRead } from './mail-providers';
-import { unsubscribeRowState } from './mail-unsubscribe-state';
+import { unsubscribeIsDirect, unsubscribeRowState } from './mail-unsubscribe-state';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
 
 /** What the menu's items call. The row is passed back so a handler never has to find it again. */
@@ -258,6 +258,14 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
   // event (`plugin:mail:unsubscribed`) while a menu can already be open, and a row built from the
   // right-click's frozen payload would keep offering `Unsubscribe` for a list already left.
   const unsubscribe = unsubscribeRowState({ message, canSend });
+  // Where the row goes: a click that leaves the list by itself is an ordinary action on this mail, and
+  // only the states that open a conversation stay in the Walnut group (2026-09-25).
+  const unsubscribeDirect = unsubscribeIsDirect(unsubscribe);
+  const offerUnsubscribe = !outbound && !draftsView;
+  const unsubscribeSelect = () => {
+    if (unsubscribe.action === 'ask') actions.onFinishUnsubscribe(message, unsubscribe.reason);
+    else if (unsubscribe.action === 'run') actions.onUnsubscribe(message);
+  };
   return normalizeContextMenuItems([
     // `info`, not `section`: the section row neither truncates nor carries a title, and it
     // UPPERCASES, which shouts an account whose display name is its own address.
@@ -325,6 +333,19 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
       label: taskId ? 'Open task' : 'Make a task',
       onSelect: () => { if (taskId) actions.onOpenTask(taskId); else actions.onMakeTask(message); },
     },
+    {
+      // `Unsubscribe` when the click just does it (one-click, the list's mail, its page): beside `Make a
+      // task`, as another thing to do with this mail, with no ✦ because no model is involved.
+      //
+      // Dropped on OUTBOUND and DRAFT lists, where it is genuinely dead: mail this person wrote has no
+      // list to leave, and a `List-Unsubscribe` on their own sent copy would be their own footer.
+      key: 'unsubscribe',
+      when: offerUnsubscribe && unsubscribeDirect,
+      label: unsubscribe.label,
+      disabled: unsubscribe.disabled,
+      ...(unsubscribe.title ? { title: unsubscribe.title } : {}),
+      onSelect: unsubscribeSelect,
+    },
     { divider: true },
     {
       key: 'sender',
@@ -373,26 +394,21 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
       onSelect: () => actions.onAskAbout(message),
     },
     {
-      // `Unsubscribe`, UNDER the three questions: it is the one Walnut row that acts on the world
-      // rather than asking about it, so it sits at the bottom where a stray click is least likely.
+      // The states that are Walnut's: `Finish unsubscribing…` (a page wants a person, and the click opens
+      // Ask Walnut), `Waiting on your answer` (the agent's letter), and a message with no way out at all.
+      // UNDER the three questions, where a stray click is least likely.
       //
-      // Present in EVERY state, including `none`, which is the one exception this menu makes to its own
-      // no-dead-controls rule and makes deliberately: the other rows here can look at a message with no
-      // unsubscribe link at all, so dropping this one would answer "why is there no Unsubscribe?" with
-      // silence. It is disabled and the title says what to do instead (`UNSUBSCRIBE_NONE_TITLE`).
-      //
-      // Dropped on OUTBOUND and DRAFT lists, where it is genuinely dead: mail this person wrote has no
-      // list to leave, and a `List-Unsubscribe` on their own sent copy would be their own footer.
+      // `none` is present and disabled, the one exception this menu makes to its own no-dead-controls
+      // rule and makes deliberately: the rows above can look at a message with no unsubscribe link, so
+      // dropping this one would answer "why is there no Unsubscribe?" with silence
+      // (`UNSUBSCRIBE_NONE_TITLE` says what to do instead).
       key: 'unsubscribe',
-      when: !outbound && !draftsView,
+      when: offerUnsubscribe && !unsubscribeDirect,
       ai: true,
       label: unsubscribe.label,
       disabled: unsubscribe.disabled,
       ...(unsubscribe.title ? { title: unsubscribe.title } : {}),
-      onSelect: () => {
-        if (unsubscribe.action === 'ask') actions.onFinishUnsubscribe(message, unsubscribe.reason);
-        else if (unsubscribe.action === 'run') actions.onUnsubscribe(message);
-      },
+      onSelect: unsubscribeSelect,
     },
   ]);
 }

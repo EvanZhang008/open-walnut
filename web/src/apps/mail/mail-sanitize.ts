@@ -12,7 +12,7 @@
  * is what routes a link out of the sandbox, and it applies whether that module was loaded or not.
  */
 import DOMPurify from 'dompurify';
-import { buildMailSrcdoc, countRemoteImages, hardenMailHtml } from './mail-html';
+import { buildMailSrcdoc, countRemoteImages, hardenMailHtml, holdRemoteImages } from './mail-html';
 
 /**
  * Named even though DOMPurify's defaults already cover most of it: this list is the CONTRACT,
@@ -45,7 +45,9 @@ export function buildMailBodyFrame(rawHtml: string, allowRemoteImages: boolean):
   const clean = DOMPurify.sanitize(hardenMailHtml(rawHtml), MAIL_SANITIZE);
   const html = typeof clean === 'string' ? clean : String(clean);
   return {
-    srcdoc: buildMailSrcdoc(html, { allowRemoteImages }),
+    // Blocked images leave their alt text rather than a broken frame (see `holdRemoteImages`); the
+    // count is still taken from the body as sent, so the banner offers exactly what loading brings back.
+    srcdoc: buildMailSrcdoc(allowRemoteImages ? html : holdRemoteImages(html), { allowRemoteImages }),
     remoteImages: countRemoteImages(html),
   };
 }

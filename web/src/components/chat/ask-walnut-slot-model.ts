@@ -65,6 +65,17 @@ export function toAskAgent(def: { id: string; name: string; description?: string
   };
 }
 
+/**
+ * The agents the slot lists, from the registry's definitions: Walnut first and always present, then
+ * every console agent. The slot and "Find on Home" both use it, so a task the slot would not show is
+ * never sent there.
+ */
+export function slotAgents(defs: readonly { id: string; name: string; description?: string; console?: boolean }[]): AskAgent[] {
+  const consoleAgents = defs.filter((a) => a.console || a.id === GENERAL_AGENT_ID).map(toAskAgent);
+  const general = consoleAgents.find((a) => a.id === GENERAL_AGENT_ID) ?? GENERAL_ASK_AGENT;
+  return [general, ...consoleAgents.filter((a) => a.id !== GENERAL_AGENT_ID)];
+}
+
 /** ISO → ms, with an unparseable/absent stamp sorting LAST rather than poisoning
  *  the comparison with NaN. */
 function ms(iso: string | undefined): number {

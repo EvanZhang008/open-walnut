@@ -270,12 +270,15 @@ interface Props {
   /** Rendered directly above the launch bar: the live host-connect banner, on
    *  the one draft column that hosts it while the chat slot is hidden. */
   hostNotice?: ReactNode;
+  /** Rendered at the top of the empty body in place of Walnut's starter suggestions: an ask drawer's
+   *  quote of the object being asked about (AskObjectDrawer), where "Plan my day" means nothing. */
+  intro?: ReactNode;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse, onWalnutToggle,
-  onTaskFieldChange, onReturnFieldToWalnut, hostNotice,
+  onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -625,7 +628,8 @@ export function DraftSessionPanel({
             )}
             {/* Not on a bound draft: "plan my day" / "organize tasks" seeds have
                 nothing to do with the one task this column is about. */}
-            {isWalnut && !askAgent && !isBound && !text.trim() && (
+            {intro}
+            {isWalnut && !intro && !askAgent && !isBound && !text.trim() && (
               <div className="draft-walnut-suggests" role="group" aria-label="Ask Walnut suggestions">
                 {WALNUT_SUGGESTS.map((s) => (
                   <button

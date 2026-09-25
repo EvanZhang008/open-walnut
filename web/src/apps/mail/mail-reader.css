@@ -171,11 +171,84 @@
    items already compete for width (name, address, account pill, date, Details), and a sixth item there
    pushed the date down on a long display name. Colour carries the state and the WORDS repeat it, because
    colour alone is not a message: `done` is quiet, and the two states somebody has to act on are warm. */
+/* The unsubscribe row: the line that says where the message stands, and the button that acts. One row
+   under the sender, wrapping rather than clipping on a narrow reader. */
+.mail-reader-unsub-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+}
+
 .mail-reader-unsub {
   margin: 0;
   font-size: 12px;
   color: var(--fg-muted);
   overflow-wrap: anywhere;
+}
+
+.mail-reader-unsub[data-state='done'] {
+  color: var(--fg-secondary);
+}
+
+.mail-reader-unsub-check {
+  margin-right: 4px;
+  color: var(--success, #1f9d55);
+  font-weight: 600;
+}
+
+/* A word, not an icon: the icon it replaced sat among five round toolbar icons and was never found.
+   Quiet outline so it never outshouts Reply; the accent is on hover only. */
+.mail-reader-unsub-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.mail-reader-unsub-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+  border-color: var(--border-strong, var(--border));
+}
+
+.mail-reader-unsub-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.mail-reader-unsub-btn.ai .mail-reader-unsub-ai {
+  color: var(--accent);
+}
+
+.mail-reader-unsub-spin {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: mail-reader-unsub-spin 0.8s linear infinite;
+}
+
+@keyframes mail-reader-unsub-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mail-reader-unsub-spin { animation: none; }
 }
 
 .mail-reader-unsub[data-state='needs-human'],
