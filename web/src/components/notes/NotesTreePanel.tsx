@@ -91,6 +91,8 @@ interface NotesTreePanelProps {
   onSelect: (path: string, opts?: { newTab?: boolean; scrollToText?: string | string[] }) => void;
   /** Preview an attachment (image/pdf) — distinct from onSelect, which markdown-loads. */
   onPreviewAttachment: (path: string) => void;
+  /** Pointer resting on a note row: a hint that it is about to be opened (content prefetch). */
+  onHoverNote?: (path: string) => void;
   onCreateNote: (path: string) => void;
   onCreateFolder: (path: string) => void;
   onDeleteNote: (path: string) => void;
@@ -152,6 +154,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   selectedPath,
   onSelect,
   onPreviewAttachment,
+  onHoverNote,
   onCreateNote,
   onCreateFolder,
   onDeleteNote,
@@ -778,6 +781,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
         onDragEnd={handleDragEnd}
         // ⌘/Ctrl-click opens in a NEW tab (Obsidian/browser convention).
         onClick={(e) => !isRenaming && onSelect(node.path, { newTab: e.metaKey || e.ctrlKey })}
+        onMouseEnter={onHoverNote ? () => onHoverNote(node.path) : undefined}
         onContextMenu={(e) => handleContextMenu(e, node)}
         style={{ paddingLeft: `${12 + depth * 16}px` }}
       >

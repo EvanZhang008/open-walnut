@@ -8,6 +8,9 @@ import {
 import type { Editor } from '@tiptap/core';
 import { log } from '@/utils/log';
 import { splitFrontmatter, joinFrontmatter } from '@/components/notes/frontmatter';
+import {
+  dropCachedNote, getCachedNote, loadNoteIntoCache, peekCachedNote, putCachedNote, wireNoteContentCacheEvents, type CachedNote,
+} from '@/stores/note-content-cache';
 
 const DEBOUNCE_MS = 500;
 
@@ -24,8 +27,17 @@ export interface PendingExternalChange {
 }
 
 export function useNoteContent(notePath: string | null) {
-  const [content, setContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  wireNoteContentCacheEvents();
+  /**
+   * The loaded body, tagged with the path it belongs to. Tagging is what lets the
+   * render that follows a click show the right thing at once: the click render
+   * happens BEFORE the load effect runs, and an untagged `content` state still
+   * held the previous note, so the editor was mounted under the new key with the
+   * old note's markdown (a full parse + editor build, thrown away one effect
+   * later). Now that render shows the new note from the cache when it has it,
+   * and the spinner otherwise, never the wrong note.
+   */
+  const [doc, setDoc] = useState<{ path: string | null; body: string | null }>({ path: null, body: null });
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | 'idle'>('idle');
   /**
@@ -40,6 +52,13 @@ export function useNoteContent(notePath: string | null) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentPathRef = useRef<string | null>(null);
+  /** The path prop as of the latest render (currentPathRef only catches up in the load effect). */
+  const propPathRef = useRef<string | null>(notePath);
+  propPathRef.current = notePath;
+  /** Body for the note the load effect is currently serving (always currentPathRef). */
+  const setContent = useCallback((body: string | null) => {
+    setDoc({ path: currentPathRef.current, body });
+  }, []);
   const editorRef = useRef<Editor | null>(null);
   const contentHashRef = useRef<string | null>(null);
   /**
@@ -94,6 +113,26 @@ export function useNoteContent(notePath: string | null) {
    * path-change effect when prevPath matches.
    */
   const movedAwayPathRef = useRef<string | null>(null);
+  /**
+   * Unsaved bytes of an editor that was destroyed while dirty, keyed by its
+   * note. The click render shows the NEXT note (from the cache, or a spinner)
+   * before the load effect runs, so React unmounts the departing editor first,
+   * and tiptap empties its storage on destroy; a flush that reached into it
+   * then read `undefined.getMarkdown()` (render crash → crash-recovery reload →
+   * the edit lost). The editor serializes itself on its own 'destroy' event
+   * instead (see onEditorUpdate), and every flush takes that snapshot when the
+   * live instance is gone.
+   */
+  const departedEditRef = useRef<{ path: string; md: string } | null>(null);
+  /** The editor instance whose 'destroy' event is already subscribed. */
+  const watchedEditorRef = useRef<Editor | null>(null);
+  /** The bytes to flush for `path`: the live editor's, else its destroy snapshot; null when neither exists. */
+  const departingMarkdown = useCallback((path: string): string | null => {
+    const editor = editorRef.current;
+    if (editor && !editor.isDestroyed) return joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
+    const snap = departedEditRef.current;
+    return snap && snap.path === path ? snap.md : null;
+  }, []);
 
   // ── Reload helper (used by WS handler and 409 recovery) ──
   const reloadContent = useCallback((targetPath: string) => {
@@ -116,6 +155,7 @@ export function useNoteContent(notePath: string | null) {
         }
         contentHashRef.current = contentHash;
         lastWrittenRef.current = c;
+        putCachedNote(targetPath, { content: c, updatedAt: u, contentHash });
         dirtyRef.current = false;
         // Strip frontmatter before the editor sees it; preserve it for re-save.
         const { frontmatter, body } = splitFrontmatter(c);
@@ -164,18 +204,17 @@ export function useNoteContent(notePath: string | null) {
   const markMovedAway = useCallback(async (oldPath: string) => {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     movedAwayPathRef.current = oldPath;
-    const editor = editorRef.current;
     // Only flush if the open note IS the one being moved and it's dirty.
-    if (editor && currentPathRef.current === oldPath && dirtyRef.current) {
+    const md = currentPathRef.current === oldPath && dirtyRef.current ? departingMarkdown(oldPath) : null;
+    if (md != null) {
       try {
-        const md = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
         const hash = contentHashRef.current ?? undefined;
         const result = await saveNoteContent(oldPath, md, hash, surfaceIdRef.current);
         if (result.contentHash) contentHashRef.current = result.contentHash;
       } catch { /* best-effort — the move proceeds with last-saved content */ }
     }
     dirtyRef.current = false;
-  }, []);
+  }, [departingMarkdown]);
 
   // ── Listen for external notes updates via WebSocket ──
   useEvent('notes:updated', (data: unknown) => {
@@ -266,6 +305,7 @@ export function useNoteContent(notePath: string | null) {
       log.info('notes', 'Adopting a note saved in another view', { path: notePath });
       contentHashRef.current = sig.contentHash;
       lastWrittenRef.current = sig.content;
+      putCachedNote(notePath, { content: sig.content, updatedAt: new Date().toISOString(), contentHash: sig.contentHash });
       const { frontmatter, body } = splitFrontmatter(sig.content);
       frontmatterRef.current = frontmatter;
       setContent(body);
@@ -342,53 +382,93 @@ export function useNoteContent(notePath: string | null) {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
-      if (!wasMovedAway && dirtyRef.current && editorRef.current && prevPath) {
-        const editor = editorRef.current;
-        const md = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
-        if (md !== lastWrittenRef.current) {
+      if (!wasMovedAway && dirtyRef.current && prevPath) {
+        const md = departingMarkdown(prevPath);
+        if (md != null && md !== lastWrittenRef.current) {
           const hash = contentHashRef.current ?? undefined;
-          saveNoteContent(prevPath, md, hash, surfaceIdRef.current).catch(() => {});
+          saveNoteContent(prevPath, md, hash, surfaceIdRef.current)
+            // The cache must learn the write too, or coming back paints the
+            // pre-edit bytes for a moment before the revalidation catches up.
+            .then((r) => { putCachedNote(prevPath, { content: md, updatedAt: r.updatedAt, contentHash: r.contentHash }); })
+            .catch(() => {});
         }
       }
     }
 
-    setLoading(true);
-    setContent(null);
+    departedEditRef.current = null;
     setSaveStatus('idle');
     dirtyRef.current = false;
     contentHashRef.current = null;
-
     frontmatterRef.current = '';
     lastWrittenRef.current = null;
     let cancelled = false;
-    fetchNoteContent(notePath)
+
+    const adopt = (c: string, u: string, contentHash: string) => {
+      // Split frontmatter out of the editing surface; keep it for re-save so
+      // the stamped id never renders as a heading or gets duplicated.
+      const { frontmatter, body } = splitFrontmatter(c);
+      frontmatterRef.current = frontmatter;
+      lastWrittenRef.current = c;
+      contentHashRef.current = contentHash;
+      setContent(body);
+      setUpdatedAt(u);
+    };
+
+    // 404 = new file (or one moved/deleted since we last saw it): start empty.
+    const startEmpty = () => {
+      dropCachedNote(notePath);
+      frontmatterRef.current = '';
+      lastWrittenRef.current = '';
+      setContent('');
+      setUpdatedAt(null);
+      contentHashRef.current = null;
+    };
+
+    // Cache hit: the render that followed the click already shows these bytes
+    // (see `doc`); adopt them as the baseline, then check the disk quietly. A
+    // changed disk is applied only while the editor is still clean; otherwise it
+    // becomes the same deferred "changed on disk" affordance the WS path uses.
+    const cached: CachedNote | undefined = getCachedNote(notePath);
+    if (cached) {
+      adopt(cached.content, cached.updatedAt, cached.contentHash);
+      loadNoteIntoCache(notePath)
+        .then(({ content: c, updatedAt: u, contentHash }) => {
+          if (cancelled || currentPathRef.current !== notePath) return;
+          if (contentHash === contentHashRef.current) return;
+          if (dirtyRef.current) {
+            const pending: PendingExternalChange = { kind: 'external', path: notePath };
+            pendingExternalRef.current = pending;
+            setPendingExternal(pending);
+            return;
+          }
+          adopt(c, u, contentHash);
+        })
+        .catch((err) => {
+          if (cancelled || currentPathRef.current !== notePath) return;
+          // Gone from disk while cached (moved or deleted elsewhere): the cached
+          // bytes must not stand in for a note that is not there.
+          if (err?.status === 404 && !dirtyRef.current) startEmpty();
+          /* any other failure: the cached bytes stand; the next open re-checks */
+        });
+      return () => { cancelled = true; };
+    }
+
+    // Cache miss: `doc` keeps its old tag, so this render and the ones until the
+    // bytes land read as loading (spinner), not as an empty or failed note.
+    loadNoteIntoCache(notePath)
       .then(({ content: c, updatedAt: u, contentHash }) => {
         if (cancelled) return;
-        // Split frontmatter out of the editing surface; keep it for re-save so
-        // the stamped id never renders as a heading or gets duplicated.
-        const { frontmatter, body } = splitFrontmatter(c);
-        frontmatterRef.current = frontmatter;
-        lastWrittenRef.current = c;
-        setContent(body);
-        setUpdatedAt(u);
-        contentHashRef.current = contentHash;
+        adopt(c, u, contentHash);
       })
       .catch((err) => {
         if (cancelled) return;
-        // 404 = new file, start empty
         if (err.status === 404) {
-          frontmatterRef.current = '';
-          lastWrittenRef.current = '';
-          setContent('');
-          setUpdatedAt(null);
-          contentHashRef.current = null;
+          startEmpty();
         } else {
           setContent(null);
           log.error('notes', 'Failed to load note', { path: notePath, error: err.message });
         }
       })
-      .finally(() => { if (!cancelled) setLoading(false); });
-
     return () => { cancelled = true; };
   }, [notePath]);
 
@@ -400,7 +480,16 @@ export function useNoteContent(notePath: string | null) {
     // Re-attach the preserved frontmatter so the saved bytes are
     // `frontmatter + editedBody` — keeps the id stable (no re-stamp) and the
     // round-trip byte-clean.
-    const editorMd = editor.storage.markdown.getMarkdown();
+    // A timer can outlive its editor (the panel remounted with the path unchanged):
+    // the destroyed instance has no storage, but its destroy snapshot has the bytes.
+    let editorMd: string;
+    if (editor.isDestroyed) {
+      const snap = departedEditRef.current;
+      if (!snap || snap.path !== pathToSave) return;
+      editorMd = splitFrontmatter(snap.md).body;
+    } else {
+      editorMd = editor.storage.markdown.getMarkdown();
+    }
     const md = joinFrontmatter(frontmatterRef.current, editorMd);
     if (md === lastWrittenRef.current) {
       // The editor re-emitted the bytes already on disk (its normalization pass
@@ -455,6 +544,7 @@ export function useNoteContent(notePath: string | null) {
           frontmatterRef.current = `---\nid: ${result.id}\n---\n`;
         }
         lastWrittenRef.current = joinFrontmatter(frontmatterRef.current, editorMd);
+        putCachedNote(pathToSave, { content: lastWrittenRef.current, updatedAt: result.updatedAt, contentHash: result.contentHash });
         setSaveStatus('saved');
         dirtyRef.current = false;
         // Adopt what we just wrote as the content STATE (same as the home Notes
@@ -523,7 +613,26 @@ export function useNoteContent(notePath: string | null) {
   // drag-reorder) when that edit landed in the brief window after a save-triggered
   // reload set the flag, silently dropping the change until the next keystroke.
   const onEditorUpdate = useCallback((editor: Editor) => {
+    // The click render can mount the NEXT note's editor from the cache before
+    // this hook's load effect has switched paths. Its mount-time normalization
+    // update is not user input, and marking dirty here would let the flush in
+    // that effect write the new note's markdown into the OLD path.
+    if (propPathRef.current !== currentPathRef.current) return;
     editorRef.current = editor;
+    if (watchedEditorRef.current !== editor) {
+      watchedEditorRef.current = editor;
+      // tiptap emits 'destroy' before it empties the storage: the last chance to
+      // serialize a dirty doc whose editor React already unmounted.
+      editor.on('destroy', () => {
+        if (editorRef.current !== editor) return;
+        const path = currentPathRef.current;
+        if (dirtyRef.current && path) {
+          const md = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
+          if (md !== lastWrittenRef.current) departedEditRef.current = { path, md };
+        }
+        editorRef.current = null;
+      });
+    }
 
     // The current path was just moved away on disk but activePath hasn't
     // switched yet. Any save now would target the OLD (renamed-away) path and
@@ -555,12 +664,11 @@ export function useNoteContent(notePath: string | null) {
         clearTimeout(savedFadeTimerRef.current);
         savedFadeTimerRef.current = null;
       }
-      if (dirtyRef.current && editorRef.current) {
+      const pathToSave = currentPathRef.current;
+      if (dirtyRef.current && pathToSave) {
         // Fire-and-forget save
-        const editor = editorRef.current;
-        const pathToSave = currentPathRef.current;
-        if (pathToSave) {
-          const md = joinFrontmatter(frontmatterRef.current, editor.storage.markdown.getMarkdown());
+        const md = departingMarkdown(pathToSave);
+        if (md != null) {
           const hash = contentHashRef.current ?? undefined;
           saveNoteContent(pathToSave, md, hash, surfaceIdRef.current).catch((e) => {
             log.warn('notes', 'Unmount flush failed', { error: e instanceof Error ? e.message : String(e) });
@@ -568,7 +676,23 @@ export function useNoteContent(notePath: string | null) {
         }
       }
     };
-  }, []);
+  }, [departingMarkdown]);
+
+  // What this render shows for `notePath`: the loaded body when it is the
+  // note's own; otherwise the cached bytes (instant paint, revalidated by the
+  // load effect); otherwise nothing yet (spinner). A failed load stores
+  // `body: null` under the path, which reads as "not loading, no content".
+  let content: string | null = null;
+  let loading = false;
+  if (notePath) {
+    if (doc.path === notePath) {
+      content = doc.body;
+    } else {
+      const hit = peekCachedNote(notePath);
+      if (hit) content = splitFrontmatter(hit.content).body;
+      else loading = true;
+    }
+  }
 
   return {
     content,

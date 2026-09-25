@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useNotesTree } from '@/hooks/useNotesTree';
 import { useNoteContent } from '@/hooks/useNoteContent';
+import { prefetchNoteOnHover } from '@/stores/note-content-cache';
 import { useFavorites } from '@/hooks/useFavorites';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { NotesTreePanel } from '@/components/notes/NotesTreePanel';
@@ -839,6 +840,7 @@ export function NotesPage() {
           selectedPath={activePath}
           onSelect={handleSelect}
           onPreviewAttachment={handlePreviewAttachment}
+          onHoverNote={prefetchNoteOnHover}
           onCreateNote={handleCreateNote}
           onCreateFolder={addFolder}
           onDeleteNote={handleDeleteNote}

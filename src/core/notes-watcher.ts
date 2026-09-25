@@ -22,25 +22,36 @@ import {
   stopNotesIndexer,
 } from './notes-indexer.js';
 import { log } from '../logging/index.js';
-import { invalidateNotesTree } from './notes-tree.js';
+import { refreshNotesTreeIfChanged } from './notes-tree.js';
 import { bus, EventNames } from './event-bus.js';
 
 /**
  * Tell open Notes pages the vault's shape changed behind their back (a note
  * created, deleted or moved by Obsidian, git-sync or an agent). The page's own
- * create/delete/move already refresh; this covers everything else. One event
+ * create/delete/move already refresh; this covers everything else. One check
  * per burst: a sync that touches a hundred files must not trigger a hundred
- * tree fetches from every open tab.
+ * tree fetches from every open tab. The check is the tree's own (dir mtimes,
+ * then the serialized shape), because on macOS the event type does not tell a
+ * save from a create: an in-place write arrives as 'rename' too, and announcing
+ * on every save made every open page refetch the tree, the note list and its
+ * content cache after each autosave.
  */
-const TREE_CHANGED_DEBOUNCE_MS = 1000;
+export const TREE_CHANGED_DEBOUNCE_MS = 1000;
 let treeChangedTimer: ReturnType<typeof setTimeout> | null = null;
 let treeChangedPath = '';
-function announceTreeChanged(filename: string): void {
+function scheduleTreeShapeCheck(filename: string): void {
   treeChangedPath = filename;
   if (treeChangedTimer) return;
   treeChangedTimer = setTimeout(() => {
     treeChangedTimer = null;
-    bus.emit(EventNames.NOTES_TREE_CHANGED, { path: treeChangedPath.split(path.sep).join('/') }, ['web-ui']);
+    const changedPath = treeChangedPath.split(path.sep).join('/');
+    refreshNotesTreeIfChanged()
+      .then((changed) => {
+        if (changed) bus.emit(EventNames.NOTES_TREE_CHANGED, { path: changedPath }, ['web-ui']);
+      })
+      .catch((err) => {
+        log.memory.debug('notes-watcher: tree check failed', { error: err instanceof Error ? err.message : String(err) });
+      });
   }, TREE_CHANGED_DEBOUNCE_MS);
   treeChangedTimer.unref?.();
 }
@@ -94,16 +105,12 @@ export function startNotesWatcher(opts?: { semantic?: boolean }): { stop: () => 
       // ONE inotify registration → the structural sidecar reconciler, which
       // ALSO drives the search index per changed file. The reconciler has its
       // own per-path coalescing queue + debounce, so we hand it the changed path.
-      watchers.push(fs.watch(NOTES_DIR, { recursive: true }, (eventType, filename) => {
+      watchers.push(fs.watch(NOTES_DIR, { recursive: true }, (_eventType, filename) => {
         if (!filename) return;
-        // 'rename' is how fs.watch reports an entry created, removed or renamed:
-        // the vault's SHAPE changed, so the tree snapshot is stale. 'change'
-        // (bytes rewritten) leaves the tree alone; the snapshot's own mtime check
-        // covers anything this event stream misses.
-        if (eventType === 'rename') {
-          invalidateNotesTree();
-          announceTreeChanged(filename);
-        }
+        // Every event may be a shape change (macOS reports a plain write as
+        // 'rename'); the tree decides from the disk, once per burst. Reads in
+        // between are safe: getNotesTree() re-checks the directory mtimes itself.
+        scheduleTreeShapeCheck(filename);
         if (filename.endsWith('.md')) {
           scheduleNotesIndexUpdate(filename);
         } else {

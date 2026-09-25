@@ -24,6 +24,7 @@ import {
   resetNotesTreeCache,
   scheduleNotesTreeWarmup,
   peekNotesTree,
+  refreshNotesTreeIfChanged,
   scanTree,
   isAttachmentFile,
   REWARM_DEBOUNCE_MS,
@@ -265,5 +266,58 @@ describe('invalidation and timers', () => {
     vi.useRealTimers();
     await new Promise((r) => setTimeout(r, 30));
     expect(peekNotesTree()).toBeNull();
+  });
+});
+
+/**
+ * The watcher's question after a burst of fs events: did the SHAPE change since
+ * open pages were last told? macOS reports an in-place write as 'rename', so
+ * the event type is not evidence; the tree itself is.
+ */
+describe('refreshNotesTreeIfChanged', () => {
+  it('the first check after boot announces nothing: nobody holds a tree yet', async () => {
+    await write('a.md');
+    expect(await refreshNotesTreeIfChanged()).toBe(false);
+  });
+
+  it('rewriting a note in place (an autosave) is not a shape change', async () => {
+    await write('a/b.md', 'v1');
+    await getNotesTree();
+    await tick();
+    await write('a/b.md', 'v2: a save from the editor, Obsidian or git-sync');
+    expect(await refreshNotesTreeIfChanged()).toBe(false);
+  });
+
+  it('a note created, then deleted, each announce exactly once', async () => {
+    await write('a/b.md');
+    await getNotesTree();
+    await tick();
+    await write('a/c.md');
+    expect(await refreshNotesTreeIfChanged()).toBe(true);
+    expect(await refreshNotesTreeIfChanged()).toBe(false);
+    await tick();
+    await fs.rm(path.join(NOTES_DIR, 'a/c.md'));
+    expect(await refreshNotesTreeIfChanged()).toBe(true);
+    expect(names((await getNotesTree()).tree[0].children!)).toEqual(['b.md']);
+  });
+
+  it('a burst is judged against what clients hold, not against a mid-burst rebuild', async () => {
+    await write('a/b.md');
+    await getNotesTree();
+    await tick();
+    await write('a/c.md');
+    await getNotesTree(); // a page read the tree mid-burst; the snapshot is rebuilt
+    await tick();
+    await write('a/b.md', 'and then a plain save');
+    expect(await refreshNotesTreeIfChanged()).toBe(true); // c.md is new to everyone told before the burst
+  });
+
+  it('a temp file that appeared and vanished within the burst moves an mtime but not the tree', async () => {
+    await write('a/b.md');
+    await getNotesTree();
+    await tick();
+    await write('a/.b.md.tmp');
+    await fs.rm(path.join(NOTES_DIR, 'a/.b.md.tmp'));
+    expect(await refreshNotesTreeIfChanged()).toBe(false);
   });
 });

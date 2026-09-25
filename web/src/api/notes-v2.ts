@@ -159,8 +159,11 @@ export async function fetchNotesTree(opts?: CorpusFetchOptions): Promise<NoteTre
   return res.tree;
 }
 
-export async function fetchNoteContent(notePath: string): Promise<{ content: string; updatedAt: string; contentHash: string }> {
-  return apiGet<{ content: string; updatedAt: string; contentHash: string }>(`/api/notes-v2/content/${notePath}`);
+export async function fetchNoteContent(
+  notePath: string,
+  opts?: CorpusFetchOptions,
+): Promise<{ content: string; updatedAt: string; contentHash: string }> {
+  return apiGet<{ content: string; updatedAt: string; contentHash: string }>(`/api/notes-v2/content/${notePath}`, undefined, opts);
 }
 
 export async function saveNoteContent(

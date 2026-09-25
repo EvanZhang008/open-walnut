@@ -72,6 +72,13 @@ export const REWARM_DEBOUNCE_MS = 500
 export const WARMUP_DELAY_MS = 20_000
 
 let snapshot: NotesTreeSnapshot | null = null
+/**
+ * The serialized shape open pages were last told about (set by the first build,
+ * advanced by `refreshNotesTreeIfChanged`). Survives invalidation on purpose: a
+ * burst of events is judged against what clients hold, not against a mid-burst
+ * rebuild.
+ */
+let announcedJson: string | null = null
 let buildInFlight: Promise<NotesTreeSnapshot> | null = null
 let validateInFlight: Promise<NotesTreeSnapshot> | null = null
 let rewarmTimer: ReturnType<typeof setTimeout> | null = null
@@ -171,6 +178,7 @@ function build(reason: string): Promise<NotesTreeSnapshot> {
       buildMs: Date.now() - startedAt,
     }
     snapshot = snap
+    if (announcedJson == null) announcedJson = snap.json
     // The boot warmup is logged at info (one line per start) so ops can see the
     // first click was served warm; the routine rebuilds stay at debug.
     const entry = { reason, dirs: dirs.size, notes: countNotes(tree), ms: snap.buildMs }
@@ -206,6 +214,28 @@ export async function getNotesTree(): Promise<NotesTreeSnapshot> {
 /** The snapshot as it stands, without touching the disk (null before the first build). */
 export function peekNotesTree(): NotesTreeSnapshot | null {
   return snapshot
+}
+
+/**
+ * After a vault file event: bring the snapshot up to date and say whether the
+ * tree's SHAPE differs from what open pages were last told. The event type
+ * cannot decide this: macOS FSEvents reports an in-place write as 'rename' too
+ * (measured 2026-09-24: `fsp.writeFile` on an existing note → 'rename'), so a
+ * watcher keyed on 'rename' announced a shape change on every save, and every
+ * open Notes page refetched the tree and the 291 KB list and dropped its content
+ * cache. Two cheap checks decide instead: the directory mtimes (a listing
+ * changed) and then the serialized tree (something visible changed; a temp file
+ * created and removed within the burst changes an mtime but not the tree).
+ * Returns true once per real change.
+ */
+export async function refreshNotesTreeIfChanged(): Promise<boolean> {
+  const snap = await getNotesTree()
+  if (announcedJson == null || snap.json === announcedJson) {
+    announcedJson = snap.json
+    return false
+  }
+  announcedJson = snap.json
+  return true
 }
 
 /**
@@ -251,6 +281,7 @@ export function scheduleNotesTreeWarmup(delayMs: number = WARMUP_DELAY_MS): () =
 /** Forget everything, including pending timers. Tests and server shutdown. */
 export function resetNotesTreeCache(): void {
   snapshot = null
+  announcedJson = null
   if (rewarmTimer) { clearTimeout(rewarmTimer); rewarmTimer = null }
   if (warmupTimer) { clearTimeout(warmupTimer); warmupTimer = null }
 }
