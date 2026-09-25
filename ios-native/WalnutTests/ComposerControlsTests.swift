@@ -49,6 +49,62 @@ final class ComposerControlsTests: XCTestCase {
         XCTAssertEqual(controls.effortMenu.sections.flatMap(\.items).filter(\.checked).map(\.title), ["High"])
     }
 
+    /// Both menus are headed by the current value, which at the accessibility
+    /// sizes can open scrolled out of view (gate r3 P2-4: "Extra High" cut off at
+    /// the bottom of the AX5 effort menu). A just-failed write's reason goes
+    /// above, as the menu's own title.
+    func testTheMenusNameTheCurrentValueInTheirHeading() {
+        let controls = ComposerControlsModel(
+            models: [model("global.anthropic.claude-opus-5[1m]", "Opus", levels: ["low", "high", "xhigh"])],
+            currentModelID: "global.anthropic.claude-opus-5[1m]",
+            currentEffort: "xhigh",
+            writeTarget: .session(id: "s")
+        )
+        XCTAssertEqual(controls.effortMenu.sections.map(\.title), ["Effort: Extra High"])
+        XCTAssertEqual(controls.modelMenu.sections.map(\.title), ["Model: Opus 5 1M"])
+        XCTAssertEqual(controls.modelMenu.title, "")
+        let unset = ComposerControlsModel(models: [model("a", "A", levels: ["low"])], currentModelID: "a", currentEffort: nil)
+        XCTAssertEqual(unset.effortMenu.sections.map(\.title), ["Effort"], "no level known, no level named")
+        let failed = ComposerControlsModel(
+            models: [model("a", "A", levels: ["low"])], currentModelID: "a", currentEffort: "low",
+            statusNote: "That switch didn't go through"
+        )
+        XCTAssertEqual(failed.effortMenu.title, "That switch didn't go through")
+        XCTAssertEqual(failed.effortMenu.sections.map(\.title), ["Effort: Low"])
+        XCTAssertEqual(PillMenuUIButton.build(failed.effortMenu) { _, _ in }.title, "That switch didn't go through",
+                       "the reason is not on the UIKit menu")
+    }
+
+    /// A model the catalog does not list is named by its raw id, which the pill
+    /// shortens (two lines at most, in the middle) instead of growing into a
+    /// circle at AX5 (gate r3 P2-3). A catalog name is never shortened.
+    func testARawModelIDIsCappedAndACatalogNameIsNot() {
+        let raw = ComposerControlsModel(
+            models: [model("haiku", "Haiku")], currentModelID: "custom-proxy-model-extra-long-name-v2", currentEffort: nil
+        )
+        XCTAssertEqual(raw.pillLabel, "custom-proxy-model-extra-long-name-v2")
+        XCTAssertTrue(raw.pillLabelIsRawID)
+        let listed = ComposerControlsModel(models: [model("haiku", "Haiku")], currentModelID: "haiku", currentEffort: nil)
+        XCTAssertFalse(listed.pillLabelIsRawID)
+        XCTAssertEqual(PillChipText.lineLimit(wraps: true, rawID: true), 2)
+        XCTAssertNil(PillChipText.lineLimit(wraps: true, rawID: false), "a catalog name must never be cut")
+        XCTAssertEqual(PillChipText.lineLimit(wraps: false, rawID: false), 1)
+        XCTAssertEqual(PillChipText.lineLimit(wraps: false, rawID: true), 1)
+    }
+
+    /// One line: a capsule. Wrapped: a fixed 14pt radius, not a circle.
+    func testAWrappedPillIsARoundedRectangleNotACircle() {
+        let shape = PillChipShape(oneLineHeight: 61)
+        let oneLine = shape.path(in: CGRect(x: 0, y: 0, width: 283, height: 61))
+        XCTAssertFalse(oneLine.contains(CGPoint(x: 6, y: 6)), "one line is a capsule")
+        XCTAssertTrue(oneLine.contains(CGPoint(x: 30, y: 30)))
+        let twoLines = shape.path(in: CGRect(x: 0, y: 0, width: 262, height: 118))
+        XCTAssertTrue(twoLines.contains(CGPoint(x: 6, y: 6)), "a wrapped pill keeps its corners")
+        XCTAssertFalse(twoLines.contains(CGPoint(x: 1, y: 1)))
+        XCTAssertTrue(twoLines.contains(CGPoint(x: 6, y: 112)))
+        XCTAssertGreaterThan(PillChipText.oneLineHeight(.accessibility5), PillChipText.oneLineHeight(.large) * 2)
+    }
+
     /// A model with an effort axis but no level reported yet still offers the
     /// pill (to set one), named for what it is.
     func testTheEffortPillWithNoReportedLevelSaysEffort() {

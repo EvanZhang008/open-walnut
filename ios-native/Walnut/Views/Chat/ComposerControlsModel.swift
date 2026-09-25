@@ -96,6 +96,27 @@ final class ComposerControlsModel {
     /// Which pick is being written, so the spinner sits on the pill that asked.
     enum PickKind: Equatable { case model, effort }
 
+    /// What a pill takes and how it reads, decided here for both pills so the
+    /// view has one value to draw from (`ComposerPillInk.ink(for:)`), not flags
+    /// it could combine its own way. The gate's mutation of the view's ink
+    /// choice (`enabled ? .enabled : .disabled`) made the name being written
+    /// 1.69:1 and survived every test; `testAPickWritesTheTappedModelAndThePillsWaitForTheWrite`
+    /// now measures the drawn text.
+    enum PillState: Equatable {
+        /// Takes taps.
+        case ready
+        /// Its own pick is being written: readable, a spinner, no taps.
+        case writing
+        /// Waiting on something else (the other pill's write, a switch): quiet,
+        /// no taps.
+        case waiting
+        /// The last known value while the Mac is away: readable, no taps.
+        case lastKnown
+
+        var takesTaps: Bool { self == .ready }
+        var spins: Bool { self == .writing }
+    }
+
     /// Identifies the state a menu was built from (see `PillMenu.token`).
     struct MenuToken: Equatable {
         let generation: Int
@@ -236,15 +257,43 @@ final class ComposerControlsModel {
 
     /// The effort pill: the current level ("High"), or nil when there is nothing
     /// to set (the model has no effort axis, or it isn't established).
+    ///
+    /// With the Mac away it keeps the LAST KNOWN level of this source, like the
+    /// model pill keeps its name (it used to vanish, and "High" with it). It then
+    /// takes no taps (`effortPillState`): there is nothing to write to.
     var effortPillLabel: String? {
-        guard pillLabel != nil, !unreachable, !readOnly else { return nil }
+        guard pillLabel != nil, !readOnly else { return nil }
         guard !effortLevelsForCurrentModel.isEmpty else { return nil }
         if let currentEffort, !currentEffort.isEmpty { return Self.effortLabel(currentEffort) }
-        return "Effort"
+        return unreachable ? nil : "Effort"
+    }
+
+    var effortPillAccessibilityLabel: String {
+        guard let label = effortPillLabel else { return "Effort" }
+        return unreachable ? "Effort: \(label), last known" : "Effort: \(label)"
     }
 
     /// Both pills take a tap only when a pick has somewhere true to go.
     var pillEnabled: Bool { !applying && !resolving }
+
+    var modelPillState: PillState {
+        if applyingWhat == .model { return .writing }
+        return pillEnabled ? .ready : .waiting
+    }
+
+    var effortPillState: PillState {
+        if applyingWhat == .effort { return .writing }
+        if unreachable { return .lastKnown }
+        return pillEnabled ? .ready : .waiting
+    }
+
+    /// The pill names a model the catalog does not list: its raw id (a custom
+    /// proxy model), which can be as long as a sentence. The pill shortens it
+    /// in the middle instead of growing without end (gate r3 P2-3: a 5-line
+    /// circle at AX5). Catalog names are never shortened.
+    var pillLabelIsRawID: Bool {
+        currentModelLabel != nil && ModelCatalogRowLabel.activeRow(in: models, for: currentModelID) == nil
+    }
 
     private var currentModelLabel: String? {
         if let row = ModelCatalogRowLabel.activeRow(in: models, for: currentModelID) {
@@ -314,8 +363,9 @@ final class ComposerControlsModel {
             )], token: menuToken)
         }
         let rows = ModelCatalogRowLabel.menuRows(models: models, currentModelID: currentModelID)
+        let current = rows.first(where: \.checked)?.title ?? pillLabel
         return PillMenu(sections: [.init(
-            title: statusNote ?? "Model",
+            title: Self.heading("Model", current: current),
             items: rows.map { row in
                 .init(
                     title: row.title,
@@ -324,18 +374,28 @@ final class ComposerControlsModel {
                     enabled: row.kind == .catalog
                 )
             }
-        )], token: menuToken)
+        )], token: menuToken, title: statusNote ?? "")
     }
 
     /// The effort pill's menu: only the levels the CURRENT model declares, so a
     /// 409 from the server is unreachable through the UI.
     var effortMenu: PillMenu {
-        PillMenu(sections: [.init(
-            title: statusNote ?? "Effort",
+        let current = currentEffort.flatMap { $0.isEmpty ? nil : Self.effortLabel($0) }
+        return PillMenu(sections: [.init(
+            title: Self.heading("Effort", current: current),
             items: effortLevelsForCurrentModel.map { level in
                 .init(title: Self.effortLabel(level), choice: .effort(level), checked: level == currentEffort)
             }
-        )], token: menuToken)
+        )], token: menuToken, title: statusNote ?? "")
+    }
+
+    /// A menu's heading names the current value ("Effort: Extra High"): at the
+    /// accessibility sizes the list scrolls, and the checked row can open out of
+    /// view (gate r3 P2-4: "Extra High" cut off at the bottom of the AX5 menu).
+    /// A just-failed write's reason goes above it, as the menu's own title.
+    static func heading(_ axis: String, current: String?) -> String {
+        guard let current, !current.isEmpty else { return axis }
+        return "\(axis): \(current)"
     }
 
     /// A row was tapped. A tap on a menu built from a state that has since been

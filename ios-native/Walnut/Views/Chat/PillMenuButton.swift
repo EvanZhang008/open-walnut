@@ -34,6 +34,8 @@ struct PillMenu: Equatable {
     /// replaced since (an answer staged while it was open, applied as it closed)
     /// is dropped instead of being applied to rows the user never saw.
     var token: ComposerControlsModel.MenuToken
+    /// A heading above every section (a just-failed write's reason), or "".
+    var title = ""
 }
 
 /// A transparent UIKit button laid over a SwiftUI pill, owning the pill's menu.
@@ -47,7 +49,8 @@ struct PillMenu: Equatable {
 /// holds every answer while a menu is open (`ComposerControlsModel.setMenuPresented`),
 /// so the rows on screen are the rows the menu opened with.
 ///
-/// The menu opens ABOVE the pill, never over it (`previewAbovePill`).
+/// The menu opens ABOVE the pill, never over it (`previewAbovePill`). With the
+/// keyboard up, a tap first puts the keyboard away (`menuMayOpenNow`).
 ///
 /// Enabled state is NOT set here: SwiftUI owns `UIControl.isEnabled` for a
 /// representable and writes its environment's value back after every update
@@ -116,6 +119,28 @@ final class PillMenuUIButton: UIButton {
     /// ABOVE this one (the model pill over the effort pill at the accessibility
     /// sizes), so a tap on either pill with this menu up lands outside it too.
     var menuClearance: CGFloat = 0
+    /// A tap on this pill is putting the keyboard away (see `menuMayOpenNow`):
+    /// until the keyboard is down and the pill has settled, a tap opens nothing.
+    private(set) var waitingForTheKeyboard = false
+    private var keyboardWait = 0
+    private var keyboardHideSeen = false
+    private var keyboardObserver: NSObjectProtocol?
+    /// No keyboard announced its hiding by then (nothing was on screen): done.
+    static var noKeyboardWait: TimeInterval = 0.3
+    /// Past the keyboard's own animation, for the layout that rides it.
+    static let afterKeyboardMargin: TimeInterval = 0.1
+    /// The text view a pill tap took the focus from, and when. Shared by the
+    /// pills of the composer: the tap that put the keyboard away may be on the
+    /// model pill and the menu then opened from the effort pill.
+    /// Internal so a test can start from a clean slate.
+    static weak var focusPutAway: UIResponder?
+    static var focusPutAwayAt: Date?
+    /// A menu opened this long after the keyboard went away gives the focus back
+    /// when it closes; later than that, the user has moved on.
+    static let focusReturnWindow: TimeInterval = 15
+    static var now: () -> Date = Date.init
+    /// This open took over a put-away focus, to give back when it closes.
+    private var returnsFocus = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -178,7 +203,7 @@ final class PillMenuUIButton: UIButton {
                 return action
             })
         }
-        return UIMenu(children: sections)
+        return UIMenu(title: menu.title, children: sections)
     }
 
     // MARK: - Where the menu opens: above the pill, never over it
@@ -243,6 +268,7 @@ final class PillMenuUIButton: UIButton {
         _ interaction: UIContextMenuInteraction,
         configurationForMenuAtLocation location: CGPoint
     ) -> UIContextMenuConfiguration? {
+        guard menuMayOpenNow() else { return nil }
         let configuration = super.contextMenuInteraction(interaction, configurationForMenuAtLocation: location)
         if configuration != nil { menuRequested() }
         return configuration
@@ -272,12 +298,104 @@ final class PillMenuUIButton: UIButton {
         }
     }
 
+    // MARK: - With the keyboard up: the first tap puts it away
+
+    /// A tap that would open the menu: may it open NOW?
+    ///
+    /// Not while the keyboard is up. The model list is about 460pt tall, and a
+    /// pill above the keyboard has about 420pt over it, so UIKit laid the menu
+    /// over the pill (measured: rows down to y=520 with the pill at 488-522, and
+    /// at 515 once the menu had taken the focus and the QuickType row had gone).
+    /// A double tap, or a tap 3pt above the pill, wrote the row there (gate r3
+    /// P1-1; P2-1 fired Retry the same way). No placement fixes that: a list that
+    /// tall cannot fit above that pill, and UIKit moves a menu that does not fit
+    /// over its source.
+    ///
+    /// So with the keyboard up, the tap puts the keyboard away and opens
+    /// nothing: the pill settles at its keyboard-down place, and the next tap
+    /// opens the menu there, the geometry every gesture already passes. Opening
+    /// it automatically once the keyboard is down is not possible with a UIKit
+    /// menu: measured on iOS 26, `performPrimaryAction()` asks for the menu and
+    /// its preview, reports the button held, and never shows it (with or without
+    /// the keyboard), and `accessibilityActivate()` returns false. A tap while
+    /// the keyboard is still going away opens nothing either. When a menu opened
+    /// soon after closes, picked or not, the focus goes back to the text view,
+    /// so typing goes on.
+    func menuMayOpenNow() -> Bool {
+        if waitingForTheKeyboard { return false }
+        guard let focus = window?.textFocus else { return true }
+        putTheKeyboardAway(focus)
+        return false
+    }
+
+    private func putTheKeyboardAway(_ focus: UIView) {
+        waitingForTheKeyboard = true
+        keyboardWait &+= 1
+        let wait = keyboardWait
+        keyboardHideSeen = false
+        Self.focusPutAway = focus
+        Self.focusPutAwayAt = Self.now()
+        keyboardObserver = NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.35
+            MainActor.assumeIsolated {
+                self?.keyboardHideSeen = true
+                self?.stopWaiting(wait, after: duration + Self.afterKeyboardMargin)
+            }
+        }
+        AppLog.info("chat", "composer model: keyboard put away by a pill tap", ["menu": menuID])
+        _ = focus.resignFirstResponder()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.noKeyboardWait) { [weak self] in
+            guard let self, !self.keyboardHideSeen else { return }
+            self.stopWaiting(wait, after: 0)
+        }
+    }
+
+    private func stopWaiting(_ wait: Int, after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.waitingForTheKeyboard, self.keyboardWait == wait else { return }
+            self.endKeyboardWait()
+        }
+    }
+
+    private func endKeyboardWait() {
+        waitingForTheKeyboard = false
+        if let keyboardObserver { NotificationCenter.default.removeObserver(keyboardObserver) }
+        keyboardObserver = nil
+    }
+
+    /// A menu is opening: does it give a put-away focus back when it closes?
+    private func takeOverPutAwayFocus() {
+        guard Self.focusPutAway != nil, let at = Self.focusPutAwayAt else { return }
+        if Self.now().timeIntervalSince(at) < Self.focusReturnWindow {
+            returnsFocus = true
+        } else {
+            Self.focusPutAway = nil
+            Self.focusPutAwayAt = nil
+        }
+    }
+
+    /// The menu closed: the text view gets the focus back, unless it is gone or
+    /// something else already has it.
+    private func returnFocus() {
+        guard returnsFocus else { return }
+        returnsFocus = false
+        let focus = Self.focusPutAway
+        Self.focusPutAway = nil
+        Self.focusPutAwayAt = nil
+        guard let view = focus as? UIView, view.window != nil, view.window?.textFocus == nil else { return }
+        AppLog.info("chat", "composer model: focus back after the menu", ["menu": menuID])
+        _ = view.becomeFirstResponder()
+    }
+
     // The three edges, internal so `PillMenuButtonTests` can drive them without
     // a UIKit menu on screen.
 
     /// UIKit asked for the menu: it may be on screen from now on.
     func menuRequested() {
         guard !isPresenting else { return }
+        takeOverPutAwayFocus()
         isPresenting = true
         displayConfirmed = false
         presentation &+= 1
@@ -304,12 +422,26 @@ final class PillMenuUIButton: UIButton {
         guard isPresenting else { return }
         isPresenting = false
         onPresentedChange?(menuID, false)
+        returnFocus()
     }
 
     /// The view is going away: report the menu closed without touching UIKit.
     func forgetPresentation() {
+        if waitingForTheKeyboard { endKeyboardWait() }
+        returnsFocus = false
         guard isPresenting else { return }
         isPresenting = false
         onPresentedChange?(menuID, false)
+    }
+}
+
+private extension UIView {
+    /// The text view holding the focus (and so the keyboard) in this subtree.
+    var textFocus: UIView? {
+        if isFirstResponder, self is UITextInput { return self }
+        for subview in subviews {
+            if let focus = subview.textFocus { return focus }
+        }
+        return nil
     }
 }

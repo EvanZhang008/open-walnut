@@ -31,6 +31,7 @@ final class ModelPillHealUITests: XCTestCase {
     /// The pills once they show the Mac's current model (Fable 5.1, High).
     private static let healedLabel = "Model: Fable 5.1"
     private static let healedEffort = "Effort: High"
+    private static let healedID = "global.anthropic.claude-fable-5-1[1m]"
     /// Rows only the Mac's catalog has; the degraded answer has none of them.
     /// Spelled as the Mac's picker spells them (`catalogRowLabel`), which is the
     /// point: "Haiku 4.5", not the catalog's bare "Haiku".
@@ -328,6 +329,15 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertFalse(effort.isEnabled, "the effort pill took taps while a model pick was being written")
         XCTAssertEqual(pill.label, "Model: Sonnet 5", "the pick is not shown while it is written")
         try await stub.screenshot(app, "model-pill-09-disabled-pills-while-writing")
+        // What the user reads, measured off the screen: the name being written in
+        // readable ink (it was 1.69:1, gate r2), the pill that waits in the quiet
+        // one. The second number proves the measurement tells the two apart.
+        let writing = Self.textContrast(of: pill)
+        let waiting = Self.textContrast(of: effort)
+        print("[evidence] while writing: the model pill's text is \(Self.fmt1(writing)):1, "
+              + "the waiting effort pill's \(Self.fmt1(waiting)):1")
+        XCTAssertGreaterThanOrEqual(writing, 4.5, "the name being written reads \(Self.fmt1(writing)):1")
+        XCTAssertLessThan(waiting, 3, "the waiting pill does not look waiting (\(Self.fmt1(waiting)):1)")
         effort.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertFalse(app.buttons["Extra High"].waitForExistence(timeout: 1.5),
                        "a disabled effort pill opened its menu mid-write")
@@ -406,6 +416,9 @@ final class ModelPillHealUITests: XCTestCase {
             // at the bottom of a scrolling menu keeps its whole frame, over the pill,
             // though the menu clips it. At the big sizes the TAP below is the proof.
             if size == nil { assertNoRowCovers(pill, rows: Self.macOrder, app, tag: tag) }
+            let current = size == ax5 ? widest.id : Self.healedID
+            let row = Self.macOrder[Self.pillLabels.firstIndex { $0.id == current }!]
+            assertTheHeadingShows("Model: \(row)", above: Self.macOrder, app, tag: tag)
             try await stub.screenshot(app, "model-pill-08-\(tag)-menu")
             // Every row, in the Mac's order. At the big sizes the list is taller than
             // the menu and scrolls, and a row far out of view is not in the tree at
@@ -448,6 +461,10 @@ final class ModelPillHealUITests: XCTestCase {
                 try await openMenu(app, effort)
                 XCTAssertTrue(app.buttons["Extra High"].waitForExistence(timeout: 5), "\(tag): the effort menu did not open")
                 if size == nil { assertNoRowCovers(effort, rows: Self.effortRows, app, tag: "\(tag) effort") }
+                // At AX5 the checked level can sit below the fold (gate r3 P2-4): the
+                // heading names it where the menu starts.
+                assertTheHeadingShows(size == ax5 ? "Effort: Extra High" : Self.healedEffort,
+                                      above: Self.effortRows, app, tag: "\(tag) effort")
                 try await stub.screenshot(app, "model-pill-08-\(tag)-effort-menu")
                 try await tapPillToClose(app, effort, rows: Self.effortRows, tag: "\(tag) effort")
                 if size == ax5 {
@@ -462,6 +479,61 @@ final class ModelPillHealUITests: XCTestCase {
             }
             let writes = try await stub.writes()
             XCTAssertTrue(writes.isEmpty, "\(tag): looking at the menus wrote \(writes.map(\.path))")
+            app.terminate()
+        }
+    }
+
+    // MARK: - Scenario 5b: a long raw model id (gate r3 P2-3)
+
+    /// A model the catalog does not know (a custom proxy id) reaches the pill as
+    /// its raw id. At AX5 that wrapped to five lines and the Capsule turned the
+    /// pill into a 262x266pt circle. A raw id now takes at most two lines, cut in
+    /// the middle, in a rounded rectangle; at the default size it is one line.
+    /// Catalog names are not capped (the size test holds that they never truncate).
+    @MainActor
+    func testALongRawModelIDKeepsThePillASaneSize() async throws {
+        let stub = try await stubUnderTest()
+        let raw = "custom-proxy-model-extra-long-name-v2"
+        let sizes: [(String?, UIContentSizeCategory, String)] = [
+            (nil, .large, "default"),
+            ("UICTContentSizeCategoryAccessibilityXXXL", .accessibilityExtraExtraExtraLarge, "ax5"),
+        ]
+        for (size, category, tag) in sizes {
+            try await stub.reset()
+            try await stub.setEngine("lane")
+            try await stub.setLane(model: raw, effort: "xhigh")
+            let app = try launchPaired(size.map { ["-UIPreferredContentSizeCategoryName", $0] } ?? [])
+            openChatTab(app)
+            let pill = app.buttons["composer.modelPill"]
+            XCTAssertTrue(waitForLabel(pill, "Model: \(raw)", timeout: 45),
+                          "\(tag): the pill reads \(pill.exists ? pill.label : "absent")")
+            let mic = element(app, "chat.mic")
+            XCTAssertTrue(mic.waitForExistence(timeout: 5))
+            let frame = pill.frame
+            // The button's frame is at least 34pt tall (its hit area), so the drawn
+            // chip is read off the screen.
+            guard let chip = Self.drawnChip(of: pill) else {
+                XCTFail("\(tag): no pill drawn in \(frame)")
+                return
+            }
+            let lineHeight = Self.pillFont(at: category).lineHeight
+            let lines = (chip.height - 10) / lineHeight
+            print("[evidence] \(tag): raw id pill drawn \(Int(frame.width))x\(String(format: "%.1f", chip.height))pt "
+                  + "(button \(frame)) = \(String(format: "%.2f", lines)) line(s) of \(String(format: "%.1f", lineHeight))pt; "
+                  + "corner \(chip.corner) vs fill \(chip.fill) vs outside \(chip.outside), mic \(mic.frame)")
+            try await stub.screenshot(app, "model-pill-15-\(tag)-raw-id")
+            XCTAssertLessThanOrEqual(frame.maxX, mic.frame.minX, "\(tag): the raw id pill runs into the mic")
+            if size == nil {
+                XCTAssertLessThan(lines, 1.3, "default: the raw id wrapped (\(chip.height)pt)")
+            } else {
+                XCTAssertLessThan(lines, 2.3, "ax5: the raw id takes more than two lines (\(chip.height)pt)")
+                XCTAssertGreaterThan(lines, 1.5, "ax5: the raw id was not given its second line (\(chip.height)pt)")
+                XCTAssertGreaterThan(frame.width, chip.height * 1.5, "ax5: the pill is a blob, \(frame)")
+                XCTAssertTrue(chip.cornerFilled, "ax5: the wrapped pill is round at its corner (a capsule): "
+                              + "\(chip.corner) vs fill \(chip.fill)")
+            }
+            let writes = try await stub.writes()
+            XCTAssertTrue(writes.isEmpty, "\(tag): showing a raw id wrote \(writes.map(\.path))")
             app.terminate()
         }
     }
@@ -579,6 +651,28 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertTrue(covering.isEmpty, "\(tag): \(covering) sit over the pill \(target)", file: file, line: line)
     }
 
+    /// The open menu starts with a heading that names the current value, in view
+    /// with no scrolling: on screen, above the topmost row, and that row is
+    /// reachable (a menu scrolled away from its start would clip it).
+    @MainActor
+    private func assertTheHeadingShows(
+        _ heading: String, above rows: [String], _ app: XCUIApplication, tag: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let text = app.staticTexts[heading]
+        XCTAssertTrue(text.waitForExistence(timeout: 3), "\(tag): the open menu has no heading \"\(heading)\" "
+                      + "(texts: \(app.staticTexts.allElementsBoundByIndex.prefix(12).map(\.label)))", file: file, line: line)
+        guard text.exists else { return }
+        let screen = app.windows.firstMatch.frame
+        let top = rows.filter { app.buttons[$0].exists }.min { app.buttons[$0].frame.minY < app.buttons[$1].frame.minY }
+        let topRow = top.map { app.buttons[$0] }
+        XCTAssertTrue(screen.contains(text.frame), "\(tag): the heading is off screen at \(text.frame)", file: file, line: line)
+        XCTAssertTrue(topRow.map { $0.isHittable && text.frame.maxY <= $0.frame.minY + 1 } ?? false,
+                      "\(tag): the heading \(text.frame) is not above a reachable top row \(top ?? "none")",
+                      file: file, line: line)
+        print("[evidence] \(tag): the menu opens with \"\(heading)\" in view at \(text.frame), above \(top ?? "none")")
+    }
+
     // MARK: - Scenario 7: a second tap on the pill never picks a row (gate r2 D1)
 
     /// The gate's repro: the menu grew out of the pill and covered it, with its
@@ -654,7 +748,15 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertEqual(writes.count, before, "\(tag): a double tap on the pill wrote \(writes.dropFirst(before).map(\.path))",
                        file: file, line: line)
 
-        for gap in [600, 1200] {
+        pill.tap(withNumberOfTaps: 3, numberOfTouches: 1)
+        try await Task.sleep(for: .milliseconds(1500))
+        try await stub.screenshot(app, "model-pill-10-\(tag)-after-triple-tap")
+        if menuIsUp() { closeMenu(app) }
+        writes = try await stub.writes()
+        XCTAssertEqual(writes.count, before, "\(tag): a triple tap on the pill wrote \(writes.dropFirst(before).map(\.path))",
+                       file: file, line: line)
+
+        for gap in [300, 600, 1200, 3000] {
             spot.tap()
             try await Task.sleep(for: .milliseconds(gap))
             XCTAssertTrue(menuIsUp(), "\(tag): the menu did not open", file: file, line: line)
@@ -675,8 +777,226 @@ final class ModelPillHealUITests: XCTestCase {
                            "\(tag): a second tap on the pill after \(gap)ms wrote \(writes.dropFirst(before).map(\.path))",
                            file: file, line: line)
         }
-        print("[evidence] \(tag): double tap, 600ms and 1200ms second taps at \(spot.screenPoint): "
-              + "\(try await stub.writes().count - before) writes")
+        // Open, then a tap 3pt above the pill: outside the menu, so it only closes.
+        let above = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.minY - 3))
+        spot.tap()
+        try await Task.sleep(for: .milliseconds(1000))
+        XCTAssertTrue(menuIsUp(), "\(tag): the menu did not open", file: file, line: line)
+        above.tap()
+        try await Task.sleep(for: .milliseconds(1500))
+        try await stub.screenshot(app, "model-pill-10-\(tag)-after-tap-3pt-above")
+        XCTAssertFalse(menuIsUp(), "\(tag): a tap 3pt above the pill did not close its menu", file: file, line: line)
+        if menuIsUp() { closeMenu(app) }
+        writes = try await stub.writes()
+        XCTAssertEqual(writes.count, before, "\(tag): a tap 3pt above the pill wrote \(writes.dropFirst(before).map(\.path))",
+                       file: file, line: line)
+        print("[evidence] \(tag) keyboard down: double tap, triple tap, 300/600/1200/3000ms second taps and a tap 3pt "
+              + "above, at \(spot.screenPoint): \(try await stub.writes().count - before) writes")
+    }
+
+    // MARK: - Scenario 10: the same taps with the keyboard up (gate r3 P1-1, P2-1)
+
+    /// The gate: with the keyboard up (how the pill is used while typing), opening
+    /// a menu took the text focus, the keyboard dropped its QuickType row and the
+    /// composer moved down about 30pt while the menu opened. The menu followed the
+    /// pill, and its bottom row covered the spot where the user had just seen it:
+    /// a double tap wrote `opus`, at XXXL `gpt-6-sol`, and a tap 3pt above the pill
+    /// wrote `gpt-5.6-sol` and `max`. Every earlier test ran with the keyboard down.
+    @MainActor
+    func testWithTheKeyboardUpNoTapWhereThePillWasPicksARow() async throws {
+        let stub = try await stubUnderTest()
+        for (size, tag) in [(nil as String?, "default"), ("UICTContentSizeCategoryXXXL", "xxxl")] {
+            try await stub.reset()
+            try await stub.setEngine("lane")
+            try await stub.setLane(model: "global.anthropic.claude-sonnet-5", effort: "high")
+            let app = try launchPaired(size.map { ["-UIPreferredContentSizeCategoryName", $0] } ?? [])
+            openChatTab(app)
+            let pill = app.buttons["composer.modelPill"]
+            let effort = app.buttons["composer.effortPill"]
+            XCTAssertTrue(waitForLabel(pill, "Model: Sonnet 5", timeout: 45), "\(tag): the pill never showed Sonnet 5")
+            XCTAssertTrue(waitForLabel(effort, "Effort: High", timeout: 10), "\(tag): no effort pill on High")
+            try await keyboardUpTaps(app, stub, pill, rows: Self.macOrder, tag: "\(tag)-model")
+            try await keyboardUpTaps(app, stub, effort, rows: Self.effortRows, tag: "\(tag)-effort")
+            XCTAssertEqual(pill.label, "Model: Sonnet 5")
+            XCTAssertEqual(effort.label, "Effort: High")
+            if size == nil {
+                // No level checked (the CLI default): nothing "safe" to land on.
+                try await stub.setLane(model: "global.anthropic.claude-sonnet-5", effort: "none")
+                XCUIDevice.shared.press(.home)
+                try await Task.sleep(for: .seconds(1))
+                app.activate()
+                XCTAssertTrue(waitForLabel(effort, "Effort: Effort", timeout: 20),
+                              "no unknown-effort pill (reads \(effort.exists ? effort.label : "absent"))")
+                try await keyboardUpTaps(app, stub, effort, rows: Self.effortRows, tag: "\(tag)-effort-unknown")
+                try await keyboardUpPick(app, stub, effort, row: "Medium", tag: "\(tag)-effort")
+            }
+            app.terminate()
+        }
+    }
+
+    /// The Retry-only menu with the keyboard up: a tap 3pt above the pill fired
+    /// Retry (gate r3 P2-1). Retry writes nothing, so it is caught on the wire: it
+    /// restarts the ladder, which puts two lookups about 1s apart, while the
+    /// ladder on its own is past the 15s rung and asks at most every 15s.
+    @MainActor
+    func testWithTheKeyboardUpNoTapWhereTheRetryPillWasFiresRetry() async throws {
+        let stub = try await stubUnderTest()
+        for (size, tag) in [(nil as String?, "default"), ("UICTContentSizeCategoryXXXL", "xxxl")] {
+            try await stub.reset()
+            try await stub.setEngine("unreachable")
+            let app = try launchPaired(size.map { ["-UIPreferredContentSizeCategoryName", $0] } ?? [])
+            openChatTab(app)
+            let pill = app.buttons["composer.modelPill"]
+            XCTAssertTrue(waitForLabel(pill, "Model: unknown", timeout: 45), "\(tag): no unreachable pill")
+            XCTAssertTrue(waitUntil(timeout: 40) { ((try? self.syncEngineGets(stub).count) ?? 0) >= 5 },
+                          "\(tag): the ladder never reached its 15s rung")
+            let from = Date()
+            try await keyboardUpTaps(app, stub, pill, rows: ["Retry"], tag: "\(tag)-retry",
+                                     retryID: "composer.modelPill.retry")
+            let gets = try await stub.engineGets().filter { $0.at > from.addingTimeInterval(-1) }
+            let gaps = zip(gets.dropFirst(), gets).map { $0.at.timeIntervalSince($1.at) }
+            print("[evidence] \(tag)-retry keyboard up: \(gets.count) lookups over \(Int(Date().timeIntervalSince(from)))s, "
+                  + "gaps \(Self.fmt(gaps))")
+            XCTAssertTrue(gaps.allSatisfy { $0 >= 10 }, "\(tag): Retry fired (lookups \(Self.fmt(gaps)) apart)")
+            app.terminate()
+        }
+    }
+
+    /// With the keyboard up, where the user SAW the pill before touching it: a
+    /// double tap, a triple tap, a tap followed by a second one after 300, 600,
+    /// 1200 and 3000ms, and a tap followed by one 3pt above the pill. The first
+    /// tap puts the keyboard away and opens nothing, so none of them may write or
+    /// open a menu. Then the menu the user opens with the next tap, on the pill
+    /// where it now is: it opens above the pill, a tap on the pill closes it,
+    /// and the focus is back in the composer (typing goes on).
+    @MainActor
+    private func keyboardUpTaps(
+        _ app: XCUIApplication, _ stub: StubControl, _ pill: XCUIElement, rows: [String], tag: String,
+        retryID: String? = nil, file: StaticString = #filePath, line: UInt = #line
+    ) async throws {
+        let field = element(app, "chat.composer")
+        func raiseKeyboard() async throws {
+            if !app.keyboards.element.exists {
+                field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 5), "\(tag): no keyboard",
+                              file: file, line: line)
+            }
+            // The QuickType row settles after the keyboard.
+            try await Task.sleep(for: .milliseconds(900))
+        }
+        func menuIsUp() -> Bool {
+            if let retryID, element(app, retryID).exists { return true }
+            return rows.contains { app.buttons[$0].exists }
+        }
+        try await raiseKeyboard()
+        let seen = pill.frame
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let spot = origin.withOffset(CGVector(dx: seen.midX, dy: seen.midY))
+        let above = origin.withOffset(CGVector(dx: seen.midX, dy: seen.minY - 3))
+        let before = try await stub.writes().count
+        var notes: [String] = []
+
+        func check(_ what: String) async throws {
+            try await Task.sleep(for: .milliseconds(1500))
+            try await stub.screenshot(app, "model-pill-13-\(tag)-\(what)")
+            let wasUp = menuIsUp()
+            if wasUp { closeMenu(app) }
+            XCTAssertFalse(wasUp, "\(tag) \(what): a menu opened from a tap made with the keyboard up",
+                           file: file, line: line)
+            let writes = try await stub.writes()
+            XCTAssertEqual(writes.count, before, "\(tag) \(what) wrote \(writes.dropFirst(before).map(\.path))",
+                           file: file, line: line)
+            try await raiseKeyboard()
+            XCTAssertEqual(pill.frame.minY, seen.minY, accuracy: 1,
+                           "\(tag) \(what): with the keyboard up the pill is not where the user saw it",
+                           file: file, line: line)
+        }
+
+        spot.doubleTap()
+        try await check("double-tap")
+        pill.tap(withNumberOfTaps: 3, numberOfTouches: 1)
+        try await check("triple-tap")
+        for gap in [300, 600, 1200, 3000] {
+            let t0 = Date()
+            spot.tap()
+            try await Task.sleep(for: .milliseconds(gap))
+            let t1 = Date()
+            spot.tap()
+            notes.append("\(gap)ms (taps \(Int(t1.timeIntervalSince(t0) * 1000))ms apart)")
+            try await check("second-tap-\(gap)ms")
+        }
+        spot.tap()
+        try await Task.sleep(for: .milliseconds(1000))
+        above.tap()
+        try await check("tap-3pt-above")
+
+        // The next tap, on the pill where it now is, opens the menu above it.
+        spot.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { !app.keyboards.element.exists }, "\(tag): the keyboard stayed up",
+                      file: file, line: line)
+        try await Task.sleep(for: .milliseconds(600))
+        let settled = pill.frame
+        let place = origin.withOffset(CGVector(dx: settled.midX, dy: settled.midY))
+        place.tap()
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertTrue(menuIsUp(), "\(tag): the tap on the settled pill did not open its menu", file: file, line: line)
+        // Row frames prove it only while the menu does not scroll (a row cut off
+        // at the bottom of a scrolling menu keeps its whole frame); at the big
+        // sizes the tap below is the proof.
+        if rows.allSatisfy({ app.buttons[$0].exists && app.buttons[$0].isHittable }) {
+            assertNoRowCovers(pill, rows: rows, app, tag: "\(tag) opened after the keyboard", file: file, line: line)
+            let lowest = rows.map { app.buttons[$0].frame.maxY }.max() ?? 0
+            notes.append("then opened on the settled pill at \(Int(settled.minY))-\(Int(settled.maxY)), "
+                         + "menu's lowest row ends at \(Int(lowest))")
+        } else {
+            notes.append("then opened on the settled pill at \(Int(settled.minY))-\(Int(settled.maxY)) (the menu scrolls)")
+        }
+        try await stub.screenshot(app, "model-pill-13-\(tag)-opened-after-keyboard")
+        place.tap()
+        try await Task.sleep(for: .milliseconds(1500))
+        XCTAssertFalse(menuIsUp(), "\(tag): a tap on the pill did not close its menu", file: file, line: line)
+        if menuIsUp() { closeMenu(app) }
+        XCTAssertTrue(waitUntil(timeout: 3) { app.keyboards.element.exists },
+                      "\(tag): the focus did not come back after the menu closed", file: file, line: line)
+        let writes = try await stub.writes()
+        XCTAssertEqual(writes.count, before, "\(tag): opening and closing the menu wrote \(writes.dropFirst(before).map(\.path))",
+                       file: file, line: line)
+        // Typing goes on in the field the user was typing in.
+        field.typeText("ok")
+        XCTAssertTrue(waitUntil(timeout: 3) { ((field.value as? String) ?? "").contains("ok") },
+                      "\(tag): typing after the menu did not reach the composer (value \(String(describing: field.value)))",
+                      file: file, line: line)
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 2))
+        print("[evidence] \(tag) keyboard up, pill seen at \(Int(seen.minY))-\(Int(seen.maxY)) (tap at \(spot.screenPoint)): "
+              + "double, triple, second taps at \(notes.prefix(4).joined(separator: ", ")), 3pt above: "
+              + "\(try await stub.writes().count - before) writes, no menu; " + notes.dropFirst(4).joined(separator: "; ")
+              + "; focus back, typing goes on")
+    }
+
+    /// With the keyboard up, a PICK: the first tap puts the keyboard away, the
+    /// next opens the menu, the row is written, and the focus comes back.
+    @MainActor
+    private func keyboardUpPick(
+        _ app: XCUIApplication, _ stub: StubControl, _ pill: XCUIElement, row: String, tag: String
+    ) async throws {
+        let field = element(app, "chat.composer")
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 5), "\(tag): no keyboard")
+        try await Task.sleep(for: .milliseconds(900))
+        let before = try await stub.writes().count
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: pill.frame.midX, dy: pill.frame.midY)).tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { !app.keyboards.element.exists }, "\(tag): the keyboard stayed up")
+        try await Task.sleep(for: .milliseconds(600))
+        origin.withOffset(CGVector(dx: pill.frame.midX, dy: pill.frame.midY)).tap()
+        XCTAssertTrue(app.buttons[row].waitForExistence(timeout: 3), "\(tag): the menu did not open")
+        app.buttons[row].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { app.keyboards.element.exists },
+                      "\(tag): the focus did not come back after a pick")
+        XCTAssertTrue(waitUntil(timeout: 10) { ((try? self.syncWrites(stub).count) ?? 0) == before + 1 },
+                      "\(tag): the pick was not written once")
+        let wrote = try await stub.writes().dropFirst(before).map(\.path)
+        print("[evidence] \(tag) keyboard up: pick \(row) wrote \(wrote), focus back")
     }
 
     // MARK: - Scenario 8: a composer on another tab never re-asks (gate r2 D4)
@@ -754,6 +1074,95 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertTrue(waitForLabel(pill, Self.healedLabel, timeout: 10))
     }
 
+    // MARK: - Scenario 11: a SESSION page's composer off screen never re-asks
+
+    /// Gate r3 left the session composer (the `.session(id)` surface) unverified:
+    /// the D4 fix was proved on the Chat tab only. A session page pushed on the
+    /// Tasks tab stays mounted while the user is on Inbox; its composer must not
+    /// ask while hidden (not on a stream reconnect, not on the 60s TTL), must ask
+    /// once when the user comes back to it, and must go quiet for good once the
+    /// page is popped.
+    @MainActor
+    func testASessionPagesComposerOffScreenNeverAsks() async throws {
+        let stub = try await stubUnderTest()
+        try await stub.reset()
+        try await stub.setEngine("lane")
+        try await stub.call("POST", "__stub/work-session?on=1")
+        let app = try launchPaired()
+        let tasksTab = app.buttons["Tasks"]
+        XCTAssertTrue(tasksTab.waitForExistence(timeout: 60), "the tab bar never appeared")
+        tasksTab.tap()
+        let row = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'board.row.'")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 45), "the board never showed the work task")
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).tap()
+        let pill = app.buttons["composer.modelPill"]
+        XCTAssertTrue(waitForLabel(pill, Self.healedLabel, timeout: 45),
+                      "the session page's pill never showed the session's model (reads \(pill.exists ? pill.label : "absent"))")
+        XCTAssertTrue(element(app, "chat.composer").exists, "no composer on the session page")
+        try await stub.screenshot(app, "model-pill-14-session-page")
+        let sessionAsks = { (records: [StubControl.Record], after: Date) in
+            records.filter { $0.at > after && $0.path.hasSuffix("/sessions/sess-stub-lane/model-options") }
+        }
+        let sessionStreams = { (records: [StubControl.Record], after: Date) in
+            records.filter { $0.at > after && $0.path.hasSuffix("/sessions/sess-stub-lane/stream") }
+        }
+
+        // Away on Inbox with the page still pushed on Tasks: past the TTL, through
+        // two stream drops (the page closes its own stream once hidden, so these
+        // find only the Chat tab's), and through a trip to the home screen, the
+        // trigger that re-asks a composer on screen.
+        let inbox = app.buttons["Inbox"]
+        inbox.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { inbox.isSelected }, "the Inbox tab did not become selected")
+        let leftAt = Date()
+        try await Task.sleep(for: .seconds(12))
+        try await stub.dropStreams()
+        try await Task.sleep(for: .seconds(30))
+        try await stub.dropStreams()
+        try await Task.sleep(for: .seconds(20))
+        XCUIDevice.shared.press(.home)
+        try await Task.sleep(for: .seconds(2))
+        app.activate()
+        try await Task.sleep(for: .seconds(8))
+        var records = try await stub.requests()
+        let hidden = sessionAsks(records, leftAt)
+        print("[evidence] session page hidden on Inbox \(Int(Date().timeIntervalSince(leftAt)))s, home and back: "
+              + "\(sessionStreams(records, leftAt).count) session stream (re)connects, \(hidden.count) model asks")
+        XCTAssertTrue(hidden.isEmpty, "the hidden session composer asked \(hidden.count) time(s) while on Inbox")
+        try await stub.screenshot(app, "model-pill-14-inbox-over-session-page")
+
+        // Back on Tasks: the page is on screen again, and its stale answer is asked once.
+        let backAt = Date()
+        tasksTab.tap()
+        XCTAssertTrue(waitUntil(timeout: 10) { !sessionAsks((try? self.syncRequests(stub)) ?? [], backAt).isEmpty },
+                      "coming back to the session page did not re-ask a stale answer")
+        try await Task.sleep(for: .seconds(2))
+        records = try await stub.requests()
+        XCTAssertEqual(sessionAsks(records, backAt).count, 1, "coming back to the session page asked more than once")
+        XCTAssertTrue(waitForLabel(pill, Self.healedLabel, timeout: 10))
+
+        // Popped: the composer is gone, and nothing it armed may fire.
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(back.waitForExistence(timeout: 5), "no back button on the session page")
+        back.tap()
+        XCTAssertTrue(waitUntil(timeout: 10) { !app.buttons["composer.modelPill"].exists || !self.element(app, "chat.composer").exists },
+                      "the session page did not pop")
+        let poppedAt = Date()
+        try await Task.sleep(for: .seconds(8))
+        try await stub.dropStreams()
+        try await Task.sleep(for: .seconds(48))
+        XCUIDevice.shared.press(.home)
+        try await Task.sleep(for: .seconds(2))
+        app.activate()
+        try await Task.sleep(for: .seconds(8))
+        records = try await stub.requests()
+        let afterPop = sessionAsks(records, poppedAt)
+        print("[evidence] session page popped \(Int(Date().timeIntervalSince(poppedAt)))s, home and back: "
+              + "\(afterPop.count) model asks for the session")
+        XCTAssertTrue(afterPop.isEmpty, "the popped session page's composer asked \(afterPop.count) time(s)")
+    }
+
     // MARK: - Scenario 9: the Mac goes away after a good answer (gate r2 D3)
 
     /// The gate: with the Mac away, the pill showed the raw catalog id
@@ -783,7 +1192,15 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertTrue(waitForLabel(pill, lastKnown, timeout: 20),
                       "the unreachable pill reads \(pill.exists ? pill.label : "absent"), not \(lastKnown)")
         XCTAssertFalse(pill.label.contains("global.anthropic"), "the pill shows a raw catalog id: \(pill.label)")
-        print("[evidence] mac away after a good answer: pill reads \"\(pill.label)\"")
+        // Its effort stays too, as last known and not tappable (gate r3 UX note).
+        let effort = app.buttons["composer.effortPill"]
+        XCTAssertTrue(waitForLabel(effort, "Effort: High, last known", timeout: 5),
+                      "the effort pill reads \(effort.exists ? effort.label : "absent") with the Mac away")
+        XCTAssertFalse(effort.isEnabled, "a last known level took taps with nowhere to write it")
+        let quiet = Self.textContrast(of: effort)
+        XCTAssertGreaterThanOrEqual(quiet, 4.5, "the last known level reads \(Self.fmt1(quiet)):1")
+        print("[evidence] mac away after a good answer: pill reads \"\(pill.label)\", effort \"\(effort.label)\" "
+              + "(enabled \(effort.isEnabled), text \(Self.fmt1(quiet)):1)")
         try await stub.screenshot(app, "model-pill-12-last-known-name")
         try await openMenu(app, pill)
         XCTAssertTrue(element(app, "composer.modelPill.retry").waitForExistence(timeout: 5),
@@ -794,6 +1211,8 @@ final class ModelPillHealUITests: XCTestCase {
 
         try await stub.setEngine("lane")
         XCTAssertTrue(waitForLabel(pill, Self.healedLabel, timeout: 45), "the pill did not heal once the Mac was back")
+        XCTAssertTrue(waitForLabel(effort, Self.healedEffort, timeout: 10), "the effort pill did not come back live")
+        XCTAssertTrue(effort.isEnabled)
         let writes = try await stub.writes()
         XCTAssertTrue(writes.isEmpty, "the Mac being away wrote \(writes.map(\.path))")
     }
@@ -929,6 +1348,80 @@ final class ModelPillHealUITests: XCTestCase {
         return condition()
     }
 
+    private static func fmt1(_ value: Double) -> String { String(format: "%.2f", value) }
+
+    /// The contrast of a pill's drawn text against its own capsule, off a real
+    /// screenshot: the capsule is the commonest colour in the text band, the ink
+    /// the pixel furthest from it. The band skips the left of the pill, where the
+    /// spinner sits while a pick is written.
+    @MainActor
+    private static func textContrast(of element: XCUIElement) -> Double {
+        guard case let (pixels, width, height)? = bitmap(of: element) else { return 0 }
+        func luminance(_ i: Int) -> Double {
+            func channel(_ v: UInt8) -> Double {
+                let c = Double(v) / 255
+                return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * channel(pixels[i]) + 0.7152 * channel(pixels[i + 1]) + 0.0722 * channel(pixels[i + 2])
+        }
+        var counts: [Int: Int] = [:]
+        var band: [Int] = []
+        for y in Int(Double(height) * 0.25)..<Int(Double(height) * 0.75) {
+            for x in Int(Double(width) * 0.45)..<Int(Double(width) * 0.92) {
+                let i = (y * width + x) * 4
+                band.append(i)
+                let key = (Int(pixels[i]) >> 3) << 10 | (Int(pixels[i + 1]) >> 3) << 5 | Int(pixels[i + 2]) >> 3
+                counts[key, default: 0] += 1
+            }
+        }
+        guard let common = counts.max(by: { $0.value < $1.value })?.key,
+              let backgroundIndex = band.first(where: { i in
+                  ((Int(pixels[i]) >> 3) << 10 | (Int(pixels[i + 1]) >> 3) << 5 | Int(pixels[i + 2]) >> 3) == common
+              })
+        else { return 0 }
+        let background = luminance(backgroundIndex)
+        let ink = band.map(luminance).max { abs($0 - background) < abs($1 - background) } ?? background
+        return (max(ink, background) + 0.05) / (min(ink, background) + 0.05)
+    }
+
+    /// An element's screenshot as RGBA bytes, top row first.
+    @MainActor
+    private static func bitmap(of element: XCUIElement) -> (pixels: [UInt8], width: Int, height: Int)? {
+        guard let image = element.screenshot().image.cgImage else { return nil }
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return (pixels, width, height)
+    }
+
+    /// The chip a pill draws inside its button: its height, and whether a point
+    /// 6pt in from its top left corner is filled (a 14pt rounded rectangle) or
+    /// outside it (a capsule taller than about 30pt). Its top and bottom are the
+    /// first and last rows of the middle column that differ from the corner of
+    /// the button, which is outside the chip either way.
+    @MainActor
+    private static func drawnChip(of element: XCUIElement)
+        -> (height: CGFloat, cornerFilled: Bool, corner: [Int], fill: [Int], outside: [Int])? {
+        guard case let (pixels, width, height)? = bitmap(of: element), element.frame.width > 0 else { return nil }
+        let scale = Double(width) / element.frame.width
+        func rgb(_ x: Int, _ y: Int) -> [Int] {
+            let i = (y * width + x) * 4
+            return [Int(pixels[i]), Int(pixels[i + 1]), Int(pixels[i + 2])]
+        }
+        func differs(_ a: [Int], _ b: [Int]) -> Bool { zip(a, b).contains { abs($0 - $1) > 6 } }
+        let outside = rgb(0, 0)
+        let rows = (0..<height).filter { differs(rgb(width / 2, $0), outside) }
+        guard let top = rows.first, let bottom = rows.last else { return nil }
+        let x = Int(6 * scale)
+        let corner = rgb(x, min(bottom, top + Int(6 * scale)))
+        let fill = rgb(x, (top + bottom) / 2)
+        return (Double(bottom - top + 1) / scale, differs(fill, outside) && !differs(corner, fill), corner, fill, outside)
+    }
+
     private static func fmt(_ gaps: [TimeInterval]) -> String {
         gaps.map { String(format: "%.1fs", $0) }.joined(separator: ", ")
     }
@@ -953,6 +1446,13 @@ final class ModelPillHealUITests: XCTestCase {
 
     private func syncEngineGets(_ stub: StubControl) throws -> [StubControl.Record] {
         try syncRequests(stub).filter { $0.method == "GET" && $0.path == "/api/v1/chat/engine" }
+    }
+
+    private func syncWrites(_ stub: StubControl) throws -> [StubControl.Record] {
+        try syncRequests(stub).filter {
+            $0.method == "POST" && $0.path.hasPrefix("/api/v1/sessions/")
+                && ($0.path.hasSuffix("/model") || $0.path.hasSuffix("/effort"))
+        }
     }
 
     /// Synchronous read for a polling predicate (the XCUITest wait loop is sync).

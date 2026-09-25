@@ -127,8 +127,8 @@ final class ModelStrengthOrderTests: XCTestCase {
         XCTAssertEqual(items.map(\.title), Self.webRealOrder.map { String($0.split(separator: "=")[1]) })
         XCTAssertEqual(items.filter(\.checked).map(\.title), ["Fable 5.1 1M"])
         XCTAssertTrue(items.allSatisfy(\.enabled))
-        XCTAssertEqual(controls.modelMenu.sections.map(\.title), ["Model"],
-                       "one section: models only (effort has its own pill)")
+        XCTAssertEqual(controls.modelMenu.sections.map(\.title), ["Model: Fable 5.1 1M"],
+                       "one section: models only (effort has its own pill), headed by the current one")
     }
 
     /// A current model the catalog does not list is shown checked and NOT

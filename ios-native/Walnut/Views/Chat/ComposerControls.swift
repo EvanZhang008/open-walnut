@@ -28,10 +28,12 @@ import SwiftUI
 ///  - Path/host are not in a live session's composer at all: they are facts of a
 ///    running CLI, and belong to session CREATION (see NewSessionChatView).
 ///
-/// Keyboard: the pills are UIKit button menus (`PillMenuButton`), so a tap does
-/// NOT dismiss the keyboard, and UIKit places the menu (it can never overflow the
-/// screen however many models the catalog carries). The web AGENTS.md rule "menus
-/// never overflow the viewport" holds by construction here.
+/// The pills are UIKit button menus (`PillMenuButton`), so UIKit places the menu
+/// (it can never overflow the screen however many models the catalog carries).
+/// The web AGENTS.md rule "menus never overflow the viewport" holds by
+/// construction here. With the keyboard up, a tap on a pill puts the keyboard
+/// away and the next tap opens the menu: there is no room above a pill that sits
+/// on the keyboard, and a menu laid over the pill picked rows on a double tap.
 ///
 /// Text size: side by side up to the largest standard size, STACKED at the
 /// accessibility sizes, where the model name also wraps instead of truncating.
@@ -63,9 +65,9 @@ struct ComposerModelPill: View {
                     // itself says so rather than only the menu: a stale value that
                     // looks live is the failure that state exists to avoid.
                     glyph: controls.unreachable ? .warning : (controls.readOnly ? .none : .chevron),
-                    spinning: controls.applyingWhat == .model,
-                    enabled: controls.pillEnabled,
+                    state: controls.modelPillState,
                     wraps: stacked,
+                    rawID: controls.pillLabelIsRawID,
                     menu: controls.modelMenu,
                     menuID: "model",
                     accessibilityID: "composer.modelPill",
@@ -80,10 +82,11 @@ struct ComposerModelPill: View {
             if let effort = controls.effortPillLabel {
                 PillChip(
                     text: effort,
-                    glyph: .chevron,
-                    spinning: controls.applyingWhat == .effort,
-                    enabled: controls.pillEnabled,
+                    // Last known (the Mac is away): a fact to read, no menu.
+                    glyph: controls.effortPillState == .lastKnown ? .none : .chevron,
+                    state: controls.effortPillState,
                     wraps: stacked,
+                    rawID: false,
                     menu: controls.effortMenu,
                     menuID: "effort",
                     // Stacked, the model pill sits above this one, and the effort
@@ -91,7 +94,7 @@ struct ComposerModelPill: View {
                     // pill is. It opens above both.
                     menuClearance: stacked && controls.pillLabel != nil ? modelPillHeight + Self.spacing : 0,
                     accessibilityID: "composer.effortPill",
-                    accessibilityLabel: "Effort: \(effort)",
+                    accessibilityLabel: controls.effortPillAccessibilityLabel,
                     controls: controls
                 )
             }
@@ -106,10 +109,12 @@ private struct PillChip: View {
 
     let text: String
     let glyph: Glyph
-    let spinning: Bool
-    let enabled: Bool
+    /// Everything the pill draws and takes follows from this one value.
+    let state: ComposerControlsModel.PillState
     /// Wrap onto more lines rather than truncate (the stacked layout).
     let wraps: Bool
+    /// The text is a raw model id: at most two lines, shortened in the middle.
+    let rawID: Bool
     let menu: PillMenu
     let menuID: String
     var menuClearance: CGFloat = 0
@@ -120,15 +125,17 @@ private struct PillChip: View {
     /// The glyph grows with the text: a fixed 8pt chevron sat cramped and tiny
     /// against an XXXL label.
     @ScaledMetric(relativeTo: .caption) private var glyphSize: CGFloat = 8
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         HStack(spacing: 4) {
-            if spinning {
+            if state.spins {
                 ProgressView().controlSize(.mini)
             }
             Text(text)
                 .font(.caption.weight(.medium))
-                .lineLimit(wraps ? nil : 1)
+                .lineLimit(PillChipText.lineLimit(wraps: wraps, rawID: rawID))
+                .truncationMode(rawID ? .middle : .tail)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: wraps)
             switch glyph {
@@ -142,10 +149,13 @@ private struct PillChip: View {
                 EmptyView()
             }
         }
-        .foregroundStyle(Color(uiColor: ComposerPillInk.ink(enabled: enabled, busy: spinning)))
+        .foregroundStyle(Color(uiColor: ComposerPillInk.ink(for: state)))
         .padding(.horizontal, 9)
         .padding(.vertical, 5)
-        .background(Color(uiColor: ComposerPillInk.capsule), in: Capsule())
+        .background(
+            Color(uiColor: ComposerPillInk.capsule),
+            in: PillChipShape(oneLineHeight: PillChipText.oneLineHeight(dynamicTypeSize) + 10)
+        )
         // The pressed look a SwiftUI Button gives, which the transparent UIKit
         // button on top can't draw itself.
         .opacity(pressed ? 0.5 : 1)
@@ -165,7 +175,7 @@ private struct PillChip: View {
             )
             // SwiftUI writes this onto the UIButton's `isEnabled` after every
             // update, so it is the ONLY way to disable it (see PillMenuButton).
-            .disabled(!enabled)
+            .disabled(!state.takesTaps)
         }
     }
 }
@@ -183,7 +193,8 @@ private struct PillChip: View {
 /// Except while the pill's OWN pick is being written: that pill names the model
 /// the user just chose, so it keeps the readable ink, and the spinner beside the
 /// name is what says "busy" (it still takes no taps). The quiet ink made the new
-/// name 1.69:1 for the whole write (gate r2).
+/// name 1.69:1 for the whole write (gate r2). A last known effort (the Mac is
+/// away) is a fact to read as well, so it keeps the readable ink too.
 enum ComposerPillInk {
     static let enabled = UIColor { traits in
         UIColor.label.resolvedColor(with: traits).withAlphaComponent(0.78)
@@ -191,8 +202,40 @@ enum ComposerPillInk {
     static let disabled = UIColor.tertiaryLabel
     static let capsule = UIColor.tertiarySystemFill
 
-    /// The ink for a pill: readable when it takes taps or shows its own write.
-    static func ink(enabled: Bool, busy: Bool) -> UIColor {
-        enabled || busy ? Self.enabled : disabled
+    /// The ink for a pill: quiet only while it waits on something else.
+    static func ink(for state: ComposerControlsModel.PillState) -> UIColor {
+        state == .waiting ? disabled : enabled
+    }
+}
+
+/// How a pill's text is laid out.
+enum PillChipText {
+    /// One line side by side. Stacked (the accessibility sizes) a catalog name
+    /// wraps as far as it needs (the longest is "GPT-6 Astra", one line at AX5),
+    /// and a raw model id stops at two lines, shortened in the middle.
+    static func lineLimit(wraps: Bool, rawID: Bool) -> Int? {
+        guard wraps else { return 1 }
+        return rawID ? 2 : nil
+    }
+
+    /// The height of one line of the pill's font at a text size.
+    static func oneLineHeight(_ size: DynamicTypeSize) -> CGFloat {
+        let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(size))
+        return UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: traits).lineHeight
+    }
+}
+
+/// A capsule while the pill is one line; once its text wraps, a rounded
+/// rectangle with a fixed radius. A capsule around five lines was a 262x266pt
+/// circle with the text spilling past its edge (gate r3 P2-3).
+struct PillChipShape: Shape {
+    /// The pill's height with one line of text; taller than about 1.5 times that
+    /// means the text wrapped.
+    var oneLineHeight: CGFloat
+    static let wrappedCornerRadius: CGFloat = 14
+
+    func path(in rect: CGRect) -> Path {
+        if rect.height <= oneLineHeight * 1.5 { return Capsule().path(in: rect) }
+        return RoundedRectangle(cornerRadius: Self.wrappedCornerRadius, style: .continuous).path(in: rect)
     }
 }

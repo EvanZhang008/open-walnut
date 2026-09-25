@@ -318,7 +318,8 @@ final class ComposerModelRefreshTests: XCTestCase {
         await fireWake(model)
         XCTAssertTrue(model.unreachable)
         XCTAssertEqual(model.currentModelID, Self.fable, "the last known name stays on the pill")
-        XCTAssertEqual(pills(model), "Fable 5.1", "no effort pill without a catalog, but the name stays")
+        XCTAssertEqual(pills(model), "Fable 5.1 · High", "the last known name AND level stay (gate r3 UX note)")
+        XCTAssertEqual(model.effortPillState, .lastKnown, "a level with nowhere to be written takes no taps")
         XCTAssertEqual(menuRows(model), ["Retry"], "no list we can't honor: the menu is the Retry")
 
         // The ladder: every rung is one request, spaced, then capped.
@@ -676,7 +677,7 @@ final class ComposerModelRefreshTests: XCTestCase {
         model.revalidate(.streamConnected)
         await model.settleForTesting()
         XCTAssertTrue(model.unreachable)
-        XCTAssertEqual(pills(model), "Fable 5.1", "last known name, warning state")
+        XCTAssertEqual(pills(model), "Fable 5.1 · High", "last known name and level, warning state")
         XCTAssertEqual(model.scheduledWake, Policy.Wake(trigger: .retry, delay: 1))
 
         transport.options = { _ in
@@ -894,7 +895,11 @@ final class ComposerModelRefreshTests: XCTestCase {
             XCTAssertEqual(model.pillLabel, name, "\(current): the unreachable pill lost its name")
             XCTAssertEqual(model.pillAccessibilityLabel, "Model: \(name), last known")
             XCTAssertEqual(menuRows(model), ["Retry"], "the kept catalog names the model; it is never offered")
-            XCTAssertNil(model.effortPillLabel)
+            // And its effort (gate r3 UX note: "High" vanished with the Mac).
+            XCTAssertEqual(model.effortPillLabel, "High", "\(current): the last known effort vanished")
+            XCTAssertEqual(model.effortPillState, .lastKnown)
+            XCTAssertFalse(model.effortPillState.takesTaps, "nothing to write a level to while the Mac is away")
+            XCTAssertEqual(model.effortPillAccessibilityLabel, "Effort: High, last known")
         }
     }
 
@@ -1195,6 +1200,43 @@ final class ComposerModelRefreshTests: XCTestCase {
         await model.settleForTesting()
         XCTAssertEqual(model.currentEffort, "high", "A's effort read-back landed on B")
         XCTAssertEqual(pills(model), "Sonnet 5 · High")
+    }
+
+    // MARK: - Gate r3 P2-2: the state each pill is drawn from
+
+    /// The pill whose pick is being written is `.writing` (readable, spinner, no
+    /// taps), the other one `.waiting` (quiet, no taps), and both are `.ready`
+    /// once the Mac has answered. The view draws only from these.
+    func testThePillBeingWrittenIsWritingAndTheOtherWaits() async {
+        transport.engine = { _ in .success(Self.laneEngine) }
+        let model = makeModel()
+        await open(model)
+        XCTAssertEqual(pills(model), "Fable 5.1 · High")
+        XCTAssertEqual(model.modelPillState, .ready)
+        XCTAssertEqual(model.effortPillState, .ready)
+
+        var write = transport.holdNext(.write)
+        var pick = Task { await model.pick(model: Self.opus55) }
+        await write.reached()
+        XCTAssertEqual(model.modelPillState, .writing)
+        XCTAssertEqual(model.effortPillState, .waiting)
+        write.release()
+        await pick.value
+        await model.settleForTesting()
+        XCTAssertEqual(model.modelPillState, .ready)
+
+        guard let level = model.effortLevelsForCurrentModel.first(where: { $0 != model.currentEffort }) else {
+            return XCTFail("no other level to pick (current \(model.currentEffort ?? "none"))")
+        }
+        write = transport.holdNext(.write)
+        pick = Task { await model.pick(effort: level) }
+        await write.reached()
+        XCTAssertEqual(model.effortPillState, .writing)
+        XCTAssertEqual(model.modelPillState, .waiting)
+        write.release()
+        await pick.value
+        await model.settleForTesting()
+        XCTAssertEqual(model.effortPillState, .ready)
     }
 
     // MARK: - P2: automatic attempts stay at least 1s apart

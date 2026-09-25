@@ -109,8 +109,15 @@
 //                               effort as the Mac reports them, without a recorded
 //                               app write (`effort=none` = the session reports no
 //                               effort, the CLI default). Reset clears both.
-//   POST /__stub/drop-streams → end every open conversation SSE stream, so the
-//                               app reconnects (what a network blip does).
+//   POST /__stub/drop-streams → end every open conversation SSE stream (and the
+//                               work session's), so the app reconnects (what a
+//                               network blip does).
+//   POST /__stub/work-session?on=1 → the Tasks board gets one pinned task whose
+//                               session is the lane session, so a test can open a
+//                               SESSION page (its composer is the `.session(id)`
+//                               surface): GET /tasks, /focus/tasks, /tasks/:id,
+//                               /sessions, /sessions/:id, its transcript and its
+//                               SSE stream. Off (the default) they answer as before.
 
 import http from 'node:http'
 import fs from 'node:fs'
@@ -255,6 +262,61 @@ function notFound(res, message) {
 
 // ── SSE ──────────────────────────────────────────────────────────────────────
 
+// ── The work session (a pinned task with a live session) ────────────────────
+
+const WORK_TASK_ID = 'task-stub-work'
+let workSession = false
+
+function workTask() {
+  return {
+    id: WORK_TASK_ID, title: 'Stub work task', status: 'in_progress', phase: 'IN_PROGRESS',
+    priority: 'none', project: 'Stub', pinned: true,
+    created_at: '2026-09-24T00:00:00Z', updated_at: '2026-09-24T00:00:00Z',
+  }
+}
+
+function workSessionRow() {
+  const now = new Date().toISOString()
+  return {
+    id: LANE_SESSION_ID, title: 'Stub work session', task_id: WORK_TASK_ID, task_title: 'Stub work task',
+    project: 'Stub', host: '', process_status: 'idle', model: laneModel ?? FULL_CATALOG.current,
+    mode: null, started_at: now, last_active_at: now, message_count: 0, cwd: '/tmp', pinned: false,
+  }
+}
+
+/** The work-session routes, or false when the flag is off or the path is not one. */
+function answerWorkSession(p, req, res) {
+  if (!workSession || req.method !== 'GET') return false
+  const now = new Date().toISOString()
+  if (p === '/api/v1/tasks') return json(res, 200, { tasks: [workTask()], syncedAt: now }), true
+  if (p === '/api/v1/focus/tasks') {
+    return json(res, 200, { pinned_tasks: [WORK_TASK_ID], focus_tasks: [WORK_TASK_ID] }), true
+  }
+  if (p === `/api/v1/tasks/${WORK_TASK_ID}`) {
+    return json(res, 200, { task: { ...workTask(), session_ids: [LANE_SESSION_ID] } }), true
+  }
+  if (p === '/api/v1/sessions') return json(res, 200, { sessions: [workSessionRow()], syncedAt: now }), true
+  if (p === `/api/v1/sessions/${LANE_SESSION_ID}`) {
+    const row = workSessionRow()
+    return json(res, 200, {
+      session: {
+        claudeSessionId: LANE_SESSION_ID, process_status: 'idle', title: row.title, taskId: WORK_TASK_ID,
+        project: 'Stub', host: '', cwd: '/tmp', startedAt: now, lastActiveAt: now, messageCount: 0,
+        model: row.model,
+      },
+      pendingPermissions: [],
+    }), true
+  }
+  if (p === `/api/v1/sessions/${LANE_SESSION_ID}/transcript`) {
+    return json(res, 200, { sessionId: LANE_SESSION_ID, exportedAt: now, truncated: false, messages: [] }), true
+  }
+  if (p === `/api/v1/sessions/${LANE_SESSION_ID}/stream`) {
+    attachStream(`session:${LANE_SESSION_ID}`, res)
+    return true
+  }
+  return false
+}
+
 function attachStream(conversationID, res) {
   res.writeHead(200, {
     'content-type': 'text/event-stream',
@@ -342,6 +404,7 @@ function resetAll() {
   laneModel = null
   laneEffort = null
   laneWriteDelayMs = 0
+  workSession = false
   generation += 1
   try {
     fs.mkdirSync(path.dirname(RECORD_PATH), { recursive: true })
@@ -447,6 +510,11 @@ const server = http.createServer(async (req, res) => {
       if (e) laneEffort = e === 'none' ? NO_EFFORT : e
       console.log(`[stub] lane current → model=${laneModel} effort=${String(e)}`)
       return json(res, 200, { ok: true })
+    }
+    if (p === '/__stub/work-session' && req.method === 'POST') {
+      workSession = url.searchParams.get('on') === '1'
+      console.log(`[stub] work session ${workSession ? 'on' : 'off'}`)
+      return json(res, 200, { ok: true, on: workSession })
     }
     if (p === '/__stub/drop-streams' && req.method === 'POST') {
       let dropped = 0
@@ -569,6 +637,7 @@ const server = http.createServer(async (req, res) => {
   // Answered with the smallest valid body rather than 404 only where a 404
   // costs something (a retry loop, a visible banner). The probe run is what
   // decided this list; see the header.
+  if (answerWorkSession(p, req, res)) return
   if (p === '/api/v1/chat/engine' && req.method === 'GET') return answerEngine(res)
   const modelOptionsMatch = p.match(/^\/api\/v1\/sessions\/([^/]+)\/model-options$/)
   if (modelOptionsMatch && req.method === 'GET') {

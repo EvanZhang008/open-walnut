@@ -77,14 +77,20 @@ final class ComposerPillContrastTests: XCTestCase {
     /// it keeps readable ink (the spinner says busy). It measured 1.69:1 in the
     /// quiet ink (gate r2).
     func testThePillBeingWrittenStaysReadable() {
-        XCTAssertTrue(ComposerPillInk.ink(enabled: false, busy: true) === ComposerPillInk.enabled)
-        XCTAssertTrue(ComposerPillInk.ink(enabled: true, busy: false) === ComposerPillInk.enabled)
-        XCTAssertTrue(ComposerPillInk.ink(enabled: false, busy: false) === ComposerPillInk.disabled,
-                      "a pill that is only waiting (the other pill, a switch) stays quiet")
-        for style in [UIUserInterfaceStyle.light, .dark] {
-            let ratio = pillContrast(ink: ComposerPillInk.ink(enabled: false, busy: true), style)
-            XCTAssertGreaterThanOrEqual(ratio, 4.5, "the name being written is \(ratio):1 in \(style == .dark ? "dark" : "light")")
+        typealias State = ComposerControlsModel.PillState
+        for state in [State.ready, .writing, .lastKnown] {
+            XCTAssertTrue(ComposerPillInk.ink(for: state) === ComposerPillInk.enabled, "\(state) must be readable")
+            for style in [UIUserInterfaceStyle.light, .dark] {
+                let ratio = pillContrast(ink: ComposerPillInk.ink(for: state), style)
+                XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(state) is \(ratio):1 in \(style == .dark ? "dark" : "light")")
+            }
         }
+        XCTAssertTrue(ComposerPillInk.ink(for: .waiting) === ComposerPillInk.disabled,
+                      "a pill that is only waiting (the other pill, a switch) stays quiet")
+        XCTAssertTrue(State.ready.takesTaps)
+        XCTAssertFalse(State.writing.takesTaps || State.waiting.takesTaps || State.lastKnown.takesTaps)
+        XCTAssertTrue(State.writing.spins)
+        XCTAssertFalse(State.ready.spins || State.waiting.spins || State.lastKnown.spins)
     }
 
     func testTheDisabledPillIsQuieterThanTheEnabledOne() {

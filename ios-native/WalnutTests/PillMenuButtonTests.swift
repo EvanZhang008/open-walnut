@@ -123,6 +123,10 @@ final class PillMenuButtonTests: XCTestCase {
 
     override func tearDown() {
         PillMenuUIButton.displayDeadline = 2
+        PillMenuUIButton.noKeyboardWait = 0.3
+        PillMenuUIButton.now = Date.init
+        PillMenuUIButton.focusPutAway = nil
+        PillMenuUIButton.focusPutAwayAt = nil
         windows.forEach { $0.isHidden = true }
         windows = []
         super.tearDown()
@@ -186,6 +190,110 @@ final class PillMenuButtonTests: XCTestCase {
         button.menuDisplayed()
         button.forgetPresentation()
         XCTAssertEqual(reports(), [true, false])
+    }
+
+    // MARK: - With the keyboard up (gate r3 P1-1)
+
+    /// A text field with the focus in the button's window, as the composer's is
+    /// while the user types.
+    private func typing(in button: PillMenuUIButton) -> UITextField {
+        let field = UITextField(frame: CGRect(x: 28, y: 700, width: 346, height: 30))
+        button.window?.addSubview(field)
+        button.window?.makeKey()
+        XCTAssertTrue(field.becomeFirstResponder(), "the test field took no focus")
+        return field
+    }
+
+    /// With the focus in the text view, a tap opens nothing and puts the keyboard
+    /// away; a tap while it goes away opens nothing either; once it is down, the
+    /// next tap opens the menu (the geometry every gesture passes).
+    func testWithTheKeyboardUpTheFirstTapPutsItAwayAndOpensNothing() {
+        PillMenuUIButton.noKeyboardWait = 0.05
+        let button = self.button()
+        let field = typing(in: button)
+        XCTAssertFalse(button.menuMayOpenNow(), "a menu opened over the keyboard")
+        XCTAssertFalse(field.isFirstResponder, "the keyboard was not put away")
+        XCTAssertTrue(button.waitingForTheKeyboard)
+        XCTAssertFalse(button.menuMayOpenNow(), "a second tap while the keyboard goes away opened the menu")
+        let settled = expectation(description: "the keyboard is down")
+        let poll = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { _ in
+            MainActor.assumeIsolated { if !button.waitingForTheKeyboard { settled.fulfill() } }
+        }
+        wait(for: [settled], timeout: 2)
+        poll.invalidate()
+        XCTAssertTrue(button.menuMayOpenNow(), "the tap after the keyboard went away did not open the menu")
+    }
+
+    /// The menu opened after that closes, picked or not, and the focus is back in
+    /// the text view the user was typing in.
+    func testTheMenuOpenedAfterPuttingTheKeyboardAwayGivesTheFocusBack() {
+        PillMenuUIButton.noKeyboardWait = 0.05
+        let button = self.button()
+        let field = typing(in: button)
+        XCTAssertFalse(button.menuMayOpenNow())
+        wait(0.3)
+        XCTAssertTrue(button.menuMayOpenNow())
+        button.menuRequested()
+        button.menuDisplayed()
+        XCTAssertFalse(field.isFirstResponder)
+        button.menuEnded()
+        XCTAssertTrue(field.isFirstResponder, "typing cannot go on: the focus did not come back")
+        // Only once: the next menu (no keyboard put away before it) leaves it.
+        field.resignFirstResponder()
+        button.menuRequested()
+        button.menuEnded()
+        XCTAssertFalse(field.isFirstResponder, "a later menu grabbed the focus")
+    }
+
+    /// The other pill's menu gives it back as well: the keyboard may be put away
+    /// by the model pill and the menu then opened from the effort pill.
+    func testTheOtherPillsMenuGivesTheFocusBackToo() {
+        PillMenuUIButton.noKeyboardWait = 0.05
+        let model = self.button()
+        let field = typing(in: model)
+        let effort = PillMenuUIButton(frame: CGRect(x: 140, y: 755, width: 57, height: 24))
+        model.window?.addSubview(effort)
+        XCTAssertFalse(model.menuMayOpenNow())
+        wait(0.3)
+        effort.menuRequested()
+        effort.menuEnded()
+        XCTAssertTrue(field.isFirstResponder)
+    }
+
+    /// Not when the user has moved on: a menu opened long after the keyboard went
+    /// away, or with the focus already back somewhere, leaves the focus alone.
+    func testALateMenuOrAFocusedFieldLeavesTheFocusAlone() {
+        PillMenuUIButton.noKeyboardWait = 0.05
+        var clock = Date(timeIntervalSince1970: 1_000)
+        PillMenuUIButton.now = { clock }
+        let button = self.button()
+        let field = typing(in: button)
+        XCTAssertFalse(button.menuMayOpenNow())
+        wait(0.3)
+        clock += PillMenuUIButton.focusReturnWindow + 1
+        button.menuRequested()
+        button.menuEnded()
+        XCTAssertFalse(field.isFirstResponder, "a menu opened long after gave the focus back")
+
+        let other = UITextField(frame: CGRect(x: 28, y: 600, width: 346, height: 30))
+        button.window?.addSubview(other)
+        XCTAssertTrue(field.becomeFirstResponder())
+        XCTAssertFalse(button.menuMayOpenNow())
+        wait(0.3)
+        XCTAssertTrue(other.becomeFirstResponder(), "the user tapped another field")
+        button.menuRequested()
+        button.menuEnded()
+        XCTAssertTrue(other.isFirstResponder, "the focus the user moved was taken back")
+    }
+
+    /// The pill going away while the keyboard goes away leaves nothing waiting.
+    func testATornDownPillStopsWaitingForTheKeyboard() {
+        let button = self.button()
+        _ = typing(in: button)
+        XCTAssertFalse(button.menuMayOpenNow())
+        XCTAssertTrue(button.waitingForTheKeyboard)
+        button.forgetPresentation()
+        XCTAssertFalse(button.waitingForTheKeyboard)
     }
 
     // MARK: - The menu itself
