@@ -80,13 +80,14 @@ const activeTag = (page: Page) => page.evaluate(() => {
 })
 
 // C3 C4 C35 C62: the empty draft and the row structure.
-test('an empty draft shows folder, project and More only; a landed parse orders legend, chips, then the bar', async ({ page }) => {
+test('an empty draft shows the folder pill and More only; a landed parse orders legend, chips, then the bar', async ({ page }) => {
   const mock = await boot(page, D1)
   const panel = await openDraft(page)
   await expect(draftDecisionChips(panel)).toHaveCount(0)
   await expect(panel.locator('.draft-decision-row')).toHaveCount(0)
   await expect(panel.locator('.draft-decisions-key')).toHaveCount(0)
-  await expect(draftPills(panel)).toHaveCount(2)
+  // No project chip yet: the project follows the folder, and there is none.
+  await expect(draftPills(panel)).toHaveCount(1)
   const more = draftMoreButton(panel)
   await expect(more).toHaveText('More')
   await expect(more).toHaveAttribute('aria-label', 'Task settings')
@@ -94,13 +95,15 @@ test('an empty draft shows folder, project and More only; a landed parse orders 
   await expect(more).toHaveAttribute('aria-expanded', 'false')
   expect(await panel.locator('.draft-composer-bar').evaluate((bar) => {
     const kids = Array.from(bar.children)
-    return kids.map((k) => (k.classList.contains('draft-more-btn') ? 'more' : k.classList.contains('session-action-chip') ? 'pill' : 'other'))
-  })).toEqual(['pill', 'pill', 'more'])
+    return kids.map((k) => (k.classList.contains('draft-more-btn') ? 'more'
+      : k.classList.contains('session-action-chip') ? 'pill'
+      : k.classList.contains('draft-pills-break') ? 'break' : 'other'))
+  })).toEqual(['pill', 'break', 'more'])
 
   await typeAndSettle(page, mock, 'fix the flaky login test by friday, urgent')
   await expect(draftDecisionChips(panel)).toHaveCount(3)
-  // C4: still exactly two pills, folder first.
-  await expect(draftPills(panel)).toHaveCount(2)
+  // C4: the parse proposed no project, so still the folder pill alone.
+  await expect(draftPills(panel)).toHaveCount(1)
   await expect(draftPills(panel).first()).toHaveText(/Choose folder/)
   // C35: DOM order = reading order.
   const order = await panel.locator('.draft-launch-bar').evaluate((bar) => {
@@ -273,7 +276,7 @@ for (const showPriority of [true, false]) {
     }
     // More's own tooltip names what it opens (priority only when shown).
     expect(await draftMoreButton(panel).getAttribute('title'))
-      .toMatch(showPriority ? /^Pin tier, dates, priority, start unread \((⌘|Ctrl\+)\.\)$/ : /^Pin tier, dates, start unread \((⌘|Ctrl\+)\.\)$/)
+      .toMatch(showPriority ? /^Project, pin tier, dates, priority, start unread \((⌘|Ctrl\+)\.\)$/ : /^Project, pin tier, dates, start unread \((⌘|Ctrl\+)\.\)$/)
     // Picking Focus from nothing is a human decision: a chip WITHOUT ✦.
     await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Focus' }).click()
     await expect(draftTaskMenu(page)).toHaveCount(0)
@@ -334,7 +337,7 @@ async function pressModPeriod(page: Page): Promise<void> {
 }
 
 // C40: keyboard. Tab reaches every control once (Chromium); Mod+. works in both engines.
-test('keyboard: Tab visits folder, project, each chip and More; Mod+. opens the menu on the first tier row', async ({ page, browserName }) => {
+test('keyboard: Tab visits folder, each chip and More; Mod+. opens the menu on the first tier row', async ({ page, browserName }) => {
   const panel = await draftWithD1(page)
   if (browserName === 'chromium') {
     // Start at the bar's first control (quick folders, if any): the chip row sits
@@ -347,10 +350,8 @@ test('keyboard: Tab visits folder, project, each chip and More; Mod+. opens the 
         if (!el) return 'none'
         if (el.classList.contains('draft-more-btn')) return 'more'
         if (el.classList.contains('draft-decision-chip')) return `chip:${el.getAttribute('data-field')}`
-        if (el.classList.contains('session-action-chip')) {
-          const pills = Array.from(document.querySelectorAll('.main-page-session-column .draft-composer-bar .session-action-chip'))
-          return pills.indexOf(el) === 0 ? 'folder' : 'project'
-        }
+        if (el.classList.contains('draft-project-chip')) return 'project'
+        if (el.classList.contains('draft-folder-pill')) return 'folder'
         if (el.classList.contains('chat-input-textarea')) return 'composer'
         return 'other'
       })
@@ -365,10 +366,11 @@ test('keyboard: Tab visits folder, project, each chip and More; Mod+. opens the 
       if (id === 'composer') break
       await page.keyboard.press('Tab')
     }
-    for (const want of ['folder', 'project', 'chip:pinTier', 'chip:priority', 'chip:dueDate', 'more']) {
+    for (const want of ['folder', 'chip:pinTier', 'chip:priority', 'chip:dueDate', 'more']) {
       expect(seen.filter((s) => s === want), `Tab reaches ${want} exactly once: ${seen.join(' > ')}`).toHaveLength(1)
     }
-    expect(seen.indexOf('folder')).toBeLessThan(seen.indexOf('project'))
+    // No project yet (D1 proposes none), so no project chip to visit.
+    expect(seen).not.toContain('project')
     expect(seen.indexOf('chip:dueDate')).toBeLessThan(seen.indexOf('more'))
   }
   // Mod+. (the Mac app path: WKWebView does not Tab to buttons by default).

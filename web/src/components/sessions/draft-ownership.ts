@@ -181,7 +181,11 @@ export function applyDraftPathPick(
     userTouched: true,
     createCwd: path.createCwd === true,
     metaTouched: draft.metaTouched || launchDivergesFromDirMemory(meta, path.cwd, path.host),
-    ...(project !== null ? { project, projectSource: 'folder' as const } : {}),
+    ...(project !== null ? { project, projectSource: 'folder' as const }
+      // The previous folder's project does not follow into a folder that has
+      // none of its own (a dot-folder, say): it would read "Set by the folder x"
+      // for a folder that set nothing. Back to Inbox; a user/seed/AI pick stays.
+      : draft.projectSource === 'folder' ? { project: '', projectSource: undefined } : {}),
   });
 }
 

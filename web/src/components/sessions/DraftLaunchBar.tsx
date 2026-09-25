@@ -15,9 +15,12 @@
  *      let the row hold eight chips: unlabelled and flush against the rows below,
  *      the whole stack read as one wall of buttons with no way to tell which button
  *      answered which question (user feedback).
- *   2. path + project: the cwd/host pill and the project pill, LEFT-ALIGNED.
- *      FIXED as the last row: "where does this run" is the statement the composer
- *      answers, so it stays glued to it and never moves.
+ *   2. folder/host + project: "Folder/Host: x · host", then (once there is one)
+ *      "Project: y", then More (DraftLaunchPills). FIXED as the last row: "where
+ *      does this run" is the statement the composer answers, so it stays glued
+ *      to it and never moves. The project follows the folder and is changed in
+ *      More (2026-09-24: the always-present "Inbox" pill read as noise, and
+ *      neither pill said what it was).
  * Plus:  the folder picker, POPPED OUT of the column: portalled to <body>
  *        (a ~300px column can't contain a browsing surface, and any in-column
  *        placement gets painted over by sibling panels) but ANCHORED to the
@@ -52,9 +55,10 @@
  * lives.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ProjectPickerFlyout } from '@/components/tasks/TaskKebabMenu';
+import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import type { WorkingDirEntry } from '@/api/sessions';
+import { useAllHostStatus } from '@/hooks/useHostStatus';
+import { hostDisplayLabel, LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useShowPriorityState } from '@/hooks/useShowPriority';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from './SessionPathSelector';
@@ -68,6 +72,8 @@ import {
 } from './draft-decisions';
 import { DraftDecisionChips, DraftMoreButton, useDraftDecisionMenu } from './DraftDecisionRow';
 import { DraftTaskMenuPopover } from './DraftTaskMenu';
+import { DraftFolderPill, DraftPillsBreak, DraftProjectChip } from './DraftLaunchPills';
+import { draftProjectChip, draftProjectIsNew, draftProjectProvenance } from './draft-project-chip';
 
 /** The owner map of a draft whose task fields nobody owns yet. */
 const NO_OWNERS: NonNullable<DraftColumn['fieldOwner']> = Object.freeze({});
@@ -87,9 +93,12 @@ interface Props {
    *  picker's stale copy). Absent for a quick folder chip. */
   onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta, openedMeta?: QuickStartTaskMeta) => void;
   onProjectChange: (draftId: string, project: string) => void;
-  /** Registry membership (case-insensitive): drives the project pill's "new"
-   *  badge when the launch will auto-create the project (folder-derived name). */
+  /** Registry membership (case-insensitive): a project the launch will create
+   *  reads "New project: x" (folder-derived or AI-invented name). */
   isKnownProject: (name: string) => boolean;
+  /** Bound draft: a project pick MOVES the existing task now (its launch reuses
+   *  the task and never refiles it). */
+  onBoundProjectMove?: (project: string) => void;
   /** Called after a chip pick so the owner can put the caret back in the composer. */
   onAfterQuickPick?: () => void;
   /** A More or chip edit of task fields. Present = decision chips + More + the
@@ -105,20 +114,6 @@ interface Props {
   openMenuNonce?: number;
 }
 
-/** ✦: this value came from the background parse of what the user is typing, not
- *  from them. Same badge (and same meaning) as the Quick Task confirm panel. */
-function AiBadge({ on }: { on: boolean }) {
-  return on ? <span className="draft-ai-badge" aria-label="AI suggested">✦</span> : null;
-}
-
-/** "walnut · devbox": folder basename plus the host alias when remote. */
-function pathLabel(draft: DraftColumn): string {
-  if (!draft.cwd) return 'Choose folder…';
-  const dir = basename(draft.cwd);
-  const host = draft.hostLabel ?? draft.host;
-  return host ? `${dir} · ${host}` : dir;
-}
-
 /** Trailing-slash-tolerant basename: the chip label and the pill label. */
 function basename(cwd: string): string {
   return cwd.replace(/\/+$/, '').split('/').pop() || '/';
@@ -126,15 +121,13 @@ function basename(cwd: string): string {
 
 export function DraftLaunchBar({
   draft, pickerOpen, onOpenPicker, onClosePicker,
-  onPathChange, onProjectChange, isKnownProject, onAfterQuickPick,
+  onPathChange, onProjectChange, isKnownProject, onBoundProjectMove, onAfterQuickPick,
   onTaskFieldChange, onReturnFieldToWalnut, composerText, getComposer, openMenuNonce,
 }: Props) {
-  const projectBtnRef = useRef<HTMLButtonElement>(null);
   // Anchor for the folder picker's POPOUT: the panel portals to <body> (so the
   // column can't clip it and siblings can't paint over it) but opens FROM this
   // pill: "pops from where you clicked", not a centered modal.
   const cwdPillRef = useRef<HTMLButtonElement>(null);
-  const [projectOpen, setProjectOpen] = useState(false);
   const moreRef = useRef<HTMLButtonElement>(null);
   const menu = useDraftDecisionMenu({ getComposer, composerText, openMenuNonce, moreRef });
 
@@ -181,26 +174,6 @@ export function DraftLaunchBar({
     [onReturnFieldToWalnut, draft.id],
   );
 
-  // The project flyout is portalled to <body> and owns no closer (its usual host
-  // is a kebab menu that provides one), so this bar does, exempting the portal
-  // itself or every click inside it would self-close.
-  useEffect(() => {
-    if (!projectOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as HTMLElement;
-      if (projectBtnRef.current?.contains(t)) return;
-      if (t.closest?.('.task-kebab-project-flyout')) return;
-      setProjectOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setProjectOpen(false); };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [projectOpen]);
-
   // A quick chip is a full path pick: it goes through the SAME onPathChange the
   // picker uses (so it pins the cwd and can't be overwritten by a late project
   // default), carrying that folder's remembered model/engine unless the user has
@@ -221,16 +194,23 @@ export function DraftLaunchBar({
   // Ask Walnut: folder and project are server-owned facts (WALNUT_HOME /
   // 'Walnut'), so the pills render read-only, the same treatment as a fork.
   const isWalnut = !!draft.walnut;
-  // The pill's project doesn't exist yet: launching will create it (the
-  // folder-derived default, or a name the AI invented). Same badge + meaning as
-  // the Quick Task confirm panel's. Never on a fork: its project is the source
-  // task's, already real.
-  const projectIsNew = !isFork && !isWalnut && !!draft.project && !isKnownProject(draft.project);
+  const projectChip = draftProjectChip(draft, { isKnownProject, hasMenu: decisionsOn });
+  const pickProject = useCallback((project: string) => {
+    if (draft.taskId) onBoundProjectMove?.(project);
+    else onProjectChange(draft.id, project);
+  }, [draft.taskId, draft.id, onBoundProjectMove, onProjectChange]);
+  const menuProject = decisionsOn && !isWalnut ? {
+    value: draft.project ?? '',
+    isNew: draftProjectIsNew(draft, isKnownProject),
+    why: draftProjectProvenance(draft, isKnownProject),
+    onPick: (project: string) => onProjectChange(draft.id, project),
+  } : undefined;
   // No quick chips on a fork draft: the folder is immutable, so a row of other
   // folders would be five inert buttons (or worse, five ways to break the fork).
   // Same for Ask Walnut.
   const chips = isFork || isWalnut ? [] : quickDirsFor();
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
+  const chipHostLabel = useQuickChipHostLabels(chips);
   const isAi = (field: DraftAiField) => !!draft.aiFields?.has(field);
 
   return (
@@ -270,6 +250,7 @@ export function DraftLaunchBar({
                   title={d.host ? `${d.cwd} (on ${d.hostLabel ?? d.host})` : d.cwd}
                 >
                   {basename(d.cwd)}
+                  {chipHostLabel(d) && <>{' '}<span className="draft-quick-chip-host">· {chipHostLabel(d)}</span></>}
                 </button>
               );
             })}
@@ -305,51 +286,24 @@ export function DraftLaunchBar({
           folder pill's usual slot read as "runs in that folder" (user). */}
       {!isWalnut && (
         <div className="draft-launch-pills draft-composer-bar">
-          {/* OPEN-only, never a toggle (matches the chat launcher pill): the
-              picker's own document-level mousedown closer has already fired by the
-              time this click runs, so a toggle would read the freshly-closed state
-              and re-open. Close via Esc / outside click / picking a path. */}
-          <button
-            ref={cwdPillRef}
-            className={`session-action-chip${pickerOpen ? ' session-action-chip-active' : ''}${isAi('cwd') ? ' session-action-chip-ai' : ''}`}
-            onClick={isFork ? undefined : onOpenPicker}
-            disabled={isFork}
-            title={isFork
-              ? `A fork continues the source session, so it runs in its folder: ${draft.cwd}`
-              : draft.cwd ? `Working folder: ${draft.cwd}` : 'Pick the folder this session runs in'}
-          >
-            {pathLabel(draft)}
-            <AiBadge on={isAi('cwd')} />
-          </button>
-          <button
-            ref={projectBtnRef}
-            className={`session-action-chip${projectOpen ? ' session-action-chip-active' : ''}${isAi('project') ? ' session-action-chip-ai' : ''}`}
-            onClick={isFork ? undefined : () => setProjectOpen(o => !o)}
-            disabled={isFork}
-            title={isFork
-              ? 'The forked task files as a sibling of the source task, in its project'
-              : projectIsNew
-                ? `Project "${draft.project}" doesn't exist yet. Starting will create it`
-                : 'Project the new task files under'}
-          >
-            {draft.project || 'Inbox'}
-            {projectIsNew && <span className="qtc-confirm-new">new</span>}
-            <AiBadge on={isAi('project')} />
-          </button>
-          {projectOpen && (
-            <ProjectPickerFlyout
-              open
-              anchorRef={projectBtnRef}
-              current={draft.project ?? ''}
-              onPick={(project) => onProjectChange(draft.id, project)}
-              onClose={() => setProjectOpen(false)}
-              // UPWARD like the folder picker beside it: both pills live at the
-              // column's bottom, and one row opening two directions reads broken.
-              preferSide="up"
+          <DraftFolderPill
+            draft={draft}
+            pillRef={cwdPillRef}
+            pickerOpen={pickerOpen}
+            ai={isAi('cwd')}
+            onOpenPicker={onOpenPicker}
+          />
+          <DraftPillsBreak />
+          {projectChip && (
+            <DraftProjectChip
+              chip={projectChip}
+              menu={decisionsOn ? menu : undefined}
+              project={draft.project ?? ''}
+              onPick={pickProject}
             />
           )}
           {/* LAST element child of the row, unwrapped (the specs assert it). */}
-          {decisionsOn && <DraftMoreButton menu={menu} moreRef={moreRef} priorityVisible={priorityVisible} />}
+          {decisionsOn && <DraftMoreButton menu={menu} moreRef={moreRef} priorityVisible={priorityVisible} withProject />}
         </div>
       )}
 
@@ -368,6 +322,8 @@ export function DraftLaunchBar({
           onAnchorLost={menu.onAnchorLost}
           // Only a keyboard open moves focus into the menu (C26, C40).
           focusNonce={menu.mode === 'keyboard' ? menu.focusNonce : 0}
+          focusTarget={menu.anchor?.classList.contains('draft-project-chip') ? 'project' : 'tier'}
+          project={menuProject}
         />
       )}
 
@@ -403,4 +359,26 @@ export function DraftLaunchBar({
       />
     </div>
   );
+}
+
+/**
+ * The host part of each quick chip's label: a remote folder always names its
+ * host (the same checkout on two machines must not read as two identical
+ * chips); a local one says "Local" only when another chip shares its name.
+ * Returns '' for "no suffix".
+ */
+function useQuickChipHostLabels(chips: readonly WorkingDirEntry[]): (d: WorkingDirEntry) => string {
+  const statuses = useAllHostStatus();
+  return useMemo(() => {
+    const live = new Map(statuses.map((s) => [s.host, s.label]));
+    const names = new Map<string, number>();
+    for (const d of chips) {
+      const n = basename(d.cwd).toLowerCase();
+      names.set(n, (names.get(n) ?? 0) + 1);
+    }
+    return (d: WorkingDirEntry) => {
+      if (d.host) return hostDisplayLabel(d.host, live.get(d.host), d.hostLabel);
+      return (names.get(basename(d.cwd).toLowerCase()) ?? 0) > 1 ? LOCAL_HOST_LABEL : '';
+    };
+  }, [statuses, chips]);
 }

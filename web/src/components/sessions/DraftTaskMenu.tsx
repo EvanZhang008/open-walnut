@@ -2,8 +2,9 @@
  * DraftTaskMenuPopover: the ONE settings menu of a draft column's launch bar,
  * opened from the bar's More button or from any decision chip above it
  * (DraftDecisionRow owns the anchor, the open mode and the focus rules). It
- * edits the task the launch will create (pin tier, priority, start / due, start
- * unread) before anything exists server-side.
+ * edits the task the launch will create (project, pin tier, priority, start /
+ * due, start unread) before anything exists server-side. The project comes first:
+ * it follows the folder, and this is where the user overrides it (2026-09-24).
  *
  * History: until 2026-09-24 this was a "⋮" in the draft HEADER. Walnut's own
  * decisions (the background parse) then became visible chips next to the folder
@@ -24,10 +25,10 @@
  * it was and the menu grows down from its top, capped to the viewport (C25b).
  */
 
-import { useEffect, useLayoutEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { TaskPriority } from '@open-walnut/core';
-import { TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
+import { ProjectPickerFlyout, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
 import type { DraftTaskField, DraftTaskFieldPatch } from './draft-column';
@@ -56,13 +57,30 @@ interface Props {
   onClose: (reason: DraftMenuCloseReason) => void;
   /** The anchor stopped being placeable (useMenuPlacement onAnchorLost). */
   onAnchorLost: () => void;
-  /** Bumped on every keyboard open: focus moves into the tier row. */
+  /** Bumped on every keyboard open: focus moves into the tier row (or the
+   *  Project trigger when `focusTarget` says so). */
   focusNonce: number;
+  /** Where a keyboard open puts focus: the Project chip opens on its own row. */
+  focusTarget?: 'tier' | 'project';
+  /** The Project section at the top (absent: Ask Walnut, whose project is a
+   *  server fact). */
+  project?: DraftMenuProject;
+}
+
+/** The task's project, as the menu's first section shows it. */
+export interface DraftMenuProject {
+  /** '' = Inbox. */
+  value: string;
+  /** Start will create it. */
+  isNew: boolean;
+  /** One line on where the value came from (draftProjectProvenance). */
+  why: string;
+  onPick: (project: string) => void;
 }
 
 export function DraftTaskMenuPopover({
   open, anchorEl, menuRef, meta, tierDecided, priorityVisible, walnutPicks,
-  onChange, onReturnToWalnut, onClose, onAnchorLost, focusNonce,
+  onChange, onReturnToWalnut, onClose, onAnchorLost, focusNonce, focusTarget = 'tier', project,
 }: Props) {
   // A fresh ref OBJECT per anchor: useMenuPlacement re-places (and re-decides
   // the side) when its ref identity changes, so a re-anchor moves the open menu.
@@ -115,10 +133,11 @@ export function DraftTaskMenuPopover({
   useEffect(() => {
     if (!open || !placed || !focusNonce) return;
     const menu = menuRef.current;
-    const target = menu?.querySelector<HTMLElement>('.task-kebab-tier-btn.active')
+    const target = (focusTarget === 'project' ? menu?.querySelector<HTMLElement>('.draft-task-menu-project .task-kebab-project-current') : null)
+      ?? menu?.querySelector<HTMLElement>('.task-kebab-tier-btn.active')
       ?? menu?.querySelector<HTMLElement>('.task-kebab-tier-btn');
     target?.focus({ preventScroll: true });
-  }, [open, placed, focusNonce, menuRef]);
+  }, [open, placed, focusNonce, menuRef, focusTarget]);
 
   const walnutPick = useMemo(() => {
     if (!walnutPicks || !onReturnToWalnut) return undefined;
@@ -147,6 +166,7 @@ export function DraftTaskMenuPopover({
       <div className="task-kebab-item task-kebab-info draft-task-menu-title" aria-hidden="true">
         <span>The task this launch creates</span>
       </div>
+      {project && <ProjectSection project={project} onDone={() => onClose('select')} />}
       <TaskActionMenuItems
         task={{
           priority: (meta.priority ?? 'none') as TaskPriority,
@@ -189,5 +209,59 @@ export function DraftTaskMenuPopover({
       </button>
     </div>,
     document.body,
+  );
+}
+
+/**
+ * "Project  [Walnut ▾]" and why. The value follows the folder, so this is where
+ * the user overrides it; the list is the board kebab's (registry + Inbox).
+ */
+function ProjectSection({ project, onDone }: { project: DraftMenuProject; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  // One Escape closes one layer: the flyout first. Window capture runs before
+  // the draft menu's own document-capture Escape, which would close both.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setOpen(false);
+      btnRef.current?.focus({ preventScroll: true });
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open]);
+  return (
+    <>
+      <div className="task-kebab-project draft-task-menu-project" data-testid="draft-menu-project">
+        <span className="task-kebab-project-label">Project</span>
+        <button
+          ref={btnRef}
+          type="button"
+          className={`task-kebab-project-current${open ? ' open' : ''}`}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        >
+          <span className="task-kebab-project-current-name">{project.value || 'Inbox'}</span>
+          {project.isNew && <span className="qtc-confirm-new">new</span>}
+          <span className="task-kebab-project-caret">▾</span>
+        </button>
+        {project.why && <div className="draft-task-menu-project-why" title={project.why}>{project.why}</div>}
+      </div>
+      <ProjectPickerFlyout
+        open={open}
+        anchorRef={btnRef}
+        current={project.value}
+        onPick={(name) => {
+          // Re-picking the current value only closes, it writes nothing.
+          if (name !== project.value) project.onPick(name);
+          onDone();
+        }}
+        onClose={() => setOpen(false)}
+      />
+      <div className="task-kebab-divider" />
+    </>
   );
 }

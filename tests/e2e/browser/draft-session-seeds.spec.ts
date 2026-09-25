@@ -119,12 +119,12 @@ test('project header "+" opens a draft in one click with the project AND its def
   await expect(page.getByTestId('plus-menu')).toHaveCount(0)
 
   // Half one of the seed — synchronous, from the click itself.
-  await expect(draftProjectPill(panel)).toHaveText(PLUS_PROJECT)
+  await expect(draftProjectPill(panel)).toHaveText(`Project: ${PLUS_PROJECT}`)
   // Half two — the project's declared folder, patched in when the detail fetch
   // lands (the column opens FIRST on purpose, so this is polled, not awaited
   // before the assertion above).
-  await expect(draftCwdPill(panel)).toHaveText(basenameOf(seedCwd), { timeout: 15_000 })
-  await expect(draftCwdPill(panel)).toHaveAttribute('title', `Working folder: ${seedCwd}`)
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(seedCwd)} · Local`, { timeout: 15_000 })
+  await expect(draftCwdPill(panel)).toHaveAttribute('title', new RegExp(`^Folder: ${seedCwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n`))
 
   // The seeded folder is NOT ✦-badged: it came from the registry, not the AI.
   await expect(panel.locator('.draft-ai-badge')).toHaveCount(0)
@@ -222,8 +222,8 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
   // A tier seed leaves everything else neutral (this is not a project route):
   // no folder, no project. Nothing pre-selects either on an unseeded/tier-only
   // draft (user rule, 2026-09-02).
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
+  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  await expect(draftProjectPill(panel)).toHaveCount(0)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/02-tier-plus-seeds-tier.png`, fullPage: false })
 
@@ -316,7 +316,7 @@ test('typing back-fills the project pill and the tier chip with a ✦ badge, and
 
   const panel = await openDraft(page)
   // The starting state, so every flip below is a real change.
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
+  await expect(draftProjectPill(panel)).toHaveCount(0)
   await expect(panel.locator('.draft-ai-badge')).toHaveCount(0)
 
   // Typing is the trigger — the draft OPEN path is contractually network-free, so
@@ -327,7 +327,7 @@ test('typing back-fills the project pill and the tier chip with a ✦ badge, and
   await parsed()
 
   // THE assertion: the project pill follows the suggestion and says WHO chose (✦).
-  await expect(draftProjectPill(panel)).toHaveText(`${AI_PROJECT}✦`, { timeout: 10_000 })
+  await expect(draftProjectPill(panel)).toHaveText(`Project: ${AI_PROJECT}✦`, { timeout: 10_000 })
   await expect(draftProjectPill(panel)).toHaveClass(/session-action-chip-ai/)
   // The stub's Backlog is applied, shown, and badged as Walnut's decision.
   await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
@@ -335,7 +335,7 @@ test('typing back-fills the project pill and the tier chip with a ✦ badge, and
   await expect(draftDecisionChip(panel, 'pinTier').locator('.draft-ai-badge')).toHaveCount(1)
   // The AI project drags its folder along (one gesture configures both, same rule
   // the quick chips follow) — and that folder is ✦ too, since nobody picked it.
-  await expect(draftCwdPill(panel)).toHaveText(`${basenameOf(aiCwd)}✦`)
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(aiCwd)} · Local✦`)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03a-ai-backfill.png`, fullPage: false })
 
@@ -355,7 +355,7 @@ test('typing back-fills the project pill and the tier chip with a ✦ badge, and
   await draftComposer(page).type(' and add the receipts screen')
   await reparsed()
   await expect(draftProjectPill(panel), 'a user-picked project is FINAL against the AI')
-    .toHaveText('Inbox')
+    .toHaveText('Project: Inbox')
   await expect(draftProjectPill(panel)).not.toHaveClass(/session-action-chip-ai/)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03b-user-pick-wins.png`, fullPage: false })
@@ -464,7 +464,7 @@ test('Fork opens a pre-bound draft: pinned folder/project, no chips/meta/task-ex
   // The immutable seed: both pills render the SOURCE's facts, disabled.
   await expect(draftCwdPill(panel)).toBeDisabled()
   await expect(draftProjectPill(panel)).toBeDisabled()
-  await expect(draftProjectPill(panel)).toHaveText('Walnut')
+  await expect(draftProjectPill(panel)).toHaveText('Project: Walnut')
   // No folder chips, no tier/priority row, no task exit — only message + model.
   // C22: and no More and no decision chips either.
   await expect(panel.locator('.draft-quick-chips')).toHaveCount(0)
@@ -556,16 +556,16 @@ test('a failing quick-parse is a silent no-op — no toast, no pill change, no c
 
   const panel = await openDraft(page)
   // The pills BEFORE typing: a fresh draft opens with nothing pre-selected.
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
+  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  await expect(draftProjectPill(panel)).toHaveCount(0)
   const failed = armParse(page, 500)
   await draftComposer(page).type('this sentence will never be understood')
   await failed()
 
   // The pills stay untouched, nothing is badged, and no error surfaces. Asserted
   // AFTER the 500 landed, so this is the post-failure state, not a race.
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
+  await expect(draftProjectPill(panel)).toHaveCount(0)
+  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
   await expect(panel.locator('.draft-ai-badge')).toHaveCount(0)
   await expect(page.locator('.notification-toast--error')).toHaveCount(0)
   await expect(page.locator('.notification-toast--warning')).toHaveCount(0)

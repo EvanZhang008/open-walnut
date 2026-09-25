@@ -103,8 +103,8 @@ test('"+" opens a focused draft column with no network in the open path', async 
   // seeds a history and loadHome primes it), so an empty pill proves the open
   // path chose not to fill it, not that it had nothing to fill it with. User
   // rule (2026-09-02): a fresh draft never pre-picks a folder or a project.
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
+  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  await expect(draftProjectPill(panel)).toHaveCount(0)
 
   // ── The v4 layout, asserted as GEOMETRY, not as "these classes exist" ──
   //
@@ -151,7 +151,7 @@ test('Start with no folder picked says so and opens the picker — no request, t
   // resolves it, and the composer keeps the text.
   await loadHome(page)
   const panel = await openDraft(page)
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
+  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
 
   const message = `no folder yet ${Date.now()}`
   await draftComposer(page).fill(message)
@@ -372,7 +372,7 @@ test('project header "+" pre-fills the project pill, and Create task for later f
   // the launch bar is cwd/host first, project second.
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 10_000 })
-  await expect(draftProjectPill(panel)).toHaveText('Walnut')
+  await expect(draftProjectPill(panel)).toHaveText('Project: Walnut')
 
   const title = `project seeded capture ${Date.now()}`
   await draftComposer(page).fill(title)
@@ -486,7 +486,7 @@ test('title-only task ▶ Start opens a bound draft (no launch), and its Start r
   await expect(panel.locator('.draft-bound-task')).toContainText(title)
   // …the task's own folder came along as a pin (so Start needs no picker)…
   await expect(draftCwdPill(panel)).toContainText(basenameOf(cwd))
-  await expect(draftProjectPill(panel)).toHaveText('Walnut')
+  await expect(draftProjectPill(panel)).toHaveText('Project: Walnut')
   // …and "Create task for later" is GONE: this draft already IS a task, so
   // offering to create one could only mint a duplicate.
   await expect(panel.locator('.draft-later-btn')).toHaveCount(0)

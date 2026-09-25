@@ -395,6 +395,17 @@ describe('applyDraftPathPick: the picker footer rebases per field', () => {
     expect(out.projectSource).toBe('folder');
     expect(aiOf(out)).toEqual([]);
   });
+
+  it("the previous folder's project does not follow into a folder that has none", () => {
+    const first = own.applyDraftPathPick(draft(), path, draft().meta, undefined, none);
+    expect(first.project).toBe('acme');
+    const dot = own.applyDraftPathPick(first, { cwd: '/work/.dotted', host: null }, first.meta, undefined, none);
+    expect(dot.project).toBe('');
+    expect(dot.projectSource).toBeUndefined();
+    // A pick the user made stays put.
+    const mine = { ...first, project: 'Marina', projectSource: 'user' as const };
+    expect(own.applyDraftPathPick(mine, { cwd: '/work/.dotted', host: null }, mine.meta, undefined, none).project).toBe('Marina');
+  });
 });
 
 describe('applyTierSeed: a tier "+" owns the tier', () => {

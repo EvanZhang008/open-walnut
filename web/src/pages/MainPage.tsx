@@ -56,6 +56,7 @@ import { useSessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { FocusDock } from '@/components/dock/FocusDock';
 import { SetupBanner } from '@/components/common/SetupBanner';
+import { HostConnectBanner } from '@/components/common/HostConnectBanner';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import {
   type SessionSlot,
@@ -417,6 +418,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   });
   // String[] projection for URL sync (doesn't need lock state — URL carries ids only).
   const sessionColumnIds = useMemo(() => sessionColumns.map(c => c.id), [sessionColumns]);
+  // ONE host-connect banner on the page: in the chat slot when it shows, else on
+  // the leftmost draft column (opening a draft borrows the chat spot, and a
+  // launch is exactly when a connecting host matters). Neither: none.
+  const hostBannerDraftId = chatVisible ? undefined : sessionColumns.find(s => isDraftColumnId(s.id))?.id;
   // "The current session" (stores/active-session.ts) must stay inside the open
   // strip: a closed column stops being the target, an empty strip has none.
   useEffect(() => { reconcileActiveSession(sessionColumnIds); }, [sessionColumnIds]);
@@ -2692,12 +2697,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSessionReplaced={handleSessionReplaced}
           onOpenForkDraft={handleOpenForkDraft}
           banner={(
-            <SetupBanner
-              health={health}
-              loading={healthLoading}
-              onNavigateSettings={handleNavigateSettings}
-              onStartSession={() => openDraftColumn()}
-            />
+            <>
+              <SetupBanner
+                health={health}
+                loading={healthLoading}
+                onNavigateSettings={handleNavigateSettings}
+                onStartSession={() => openDraftColumn()}
+              />
+              <HostConnectBanner onNavigateSettings={handleNavigateSettings} />
+            </>
           )}
           inspectorPanel={inspector.isOpen ? (
             /* No ask selected = nothing to describe. The inspector used to GET
@@ -2807,6 +2815,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     // where a plain draft shows them).
                     onTaskFieldChange={handleDraftTaskFieldChange}
                     onReturnFieldToWalnut={handleDraftReturnFieldToWalnut}
+                    // The live host-connect banner, when the chat slot that
+                    // normally carries it is hidden (a draft borrows that spot).
+                    hostNotice={sid === hostBannerDraftId
+                      ? <HostConnectBanner compact onNavigateSettings={handleNavigateSettings} />
+                      : undefined}
                   />
                 ) : null
               ) : isPending && pendingMeta ? (

@@ -42,7 +42,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { ImageAttachment } from '@/api/chat';
-import { quickParseTask } from '@/api/tasks';
+import { quickParseTask, updateTask, fetchTask } from '@/api/tasks';
 import { useQuickParseEnabled, setQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
@@ -64,7 +64,7 @@ import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 import { GENERAL_AGENT_ID } from '@/components/chat/ask-walnut-slot-model';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
-import { useStoreTask } from '@/contexts/TasksContext';
+import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import '@/styles/walnut-agent.css';
 
 const PLACEHOLDER = 'What should this session do?';
@@ -267,12 +267,15 @@ interface Props {
   /** The Start Task / Ask Walnut tab switch. The owner rewrites the row
    *  (project/tier seed on enter, restore on leave) — the panel only reports. */
   onWalnutToggle?: (draftId: string, walnut: boolean) => void;
+  /** Rendered directly above the launch bar: the live host-connect banner, on
+   *  the one draft column that hosts it while the chat slot is hidden. */
+  hostNotice?: ReactNode;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse, onWalnutToggle,
-  onTaskFieldChange, onReturnFieldToWalnut,
+  onTaskFieldChange, onReturnFieldToWalnut, hostNotice,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -344,6 +347,21 @@ export function DraftSessionPanel({
   // alone until the task itself moves again.
   const boundTask = useStoreTask(boundTaskId);
   const boundProject = boundTask ? boundTask.project ?? '' : null;
+  // The launch bar's project chip on a bound draft moves the task NOW, the same
+  // write as the header kebab's Project row: Start reuses the existing task and
+  // never refiles it, so a draft-only pick would be a control that does nothing.
+  const taskStore = useTasksContextSafe();
+  const moveBoundTask = useCallback((project: string) => {
+    if (!boundTaskId) return;
+    if (taskStore && taskStore.tasks.some((t) => t.id === boundTaskId)) {
+      taskStore.moveTask(boundTaskId, project);
+      return;
+    }
+    onProjectChange(draft.id, project);
+    updateTask(boundTaskId, { project }).catch(() => {
+      fetchTask(boundTaskId).then((t) => onProjectChange(draft.id, t.project ?? '')).catch(() => {});
+    });
+  }, [boundTaskId, taskStore, onProjectChange, draft.id]);
   const lastBoundProject = useRef<string | null>(null);
   useEffect(() => {
     if (boundProject === null) return;
@@ -632,6 +650,7 @@ export function DraftSessionPanel({
       <div className="session-panel-input">
         {/* Why the last Start didn't start. Above the launch bar so it sits
             directly over the folder pill that resolves it. */}
+        {hostNotice}
         {needsFolder && !draft.cwd && (
           <div className="draft-needs-folder" role="status" data-testid="draft-needs-folder">
             Pick a folder first — the session runs in it.
@@ -645,6 +664,7 @@ export function DraftSessionPanel({
           onPathChange={onPathChange}
           onProjectChange={onProjectChange}
           isKnownProject={isKnownProject}
+          onBoundProjectMove={isBound ? moveBoundTask : undefined}
           onAfterQuickPick={focusComposer}
           // Decision chips + More only where the header kebab used to be.
           onTaskFieldChange={showDraftMenu ? onTaskFieldChange : undefined}

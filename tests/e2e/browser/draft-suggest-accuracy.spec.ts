@@ -115,8 +115,8 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
 
   const panel = await openDraft(page)
   // The starting state, so every flip below is a real change.
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
+  await expect(draftProjectPill(panel)).toHaveCount(0)
+  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
 
   // Typing is the only trigger (the draft OPEN path is contractually network-free).
   // `type`, not `fill`, so the 500ms debounce sees a real keystroke burst.
@@ -126,9 +126,9 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   await parsed()
 
   // Both suggestions landed, badged ✦: the project, and the folder it declares.
-  await expect(draftProjectPill(panel)).toHaveText(`${AI_PROJECT}✦`, { timeout: 10_000 })
+  await expect(draftProjectPill(panel)).toHaveText(`Project: ${AI_PROJECT}✦`, { timeout: 10_000 })
   await expect(draftProjectPill(panel)).toHaveClass(/session-action-chip-ai/)
-  await expect(draftCwdPill(panel)).toHaveText(`${basenameOf(aiCwd)}✦`)
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(aiCwd)} · Local✦`)
   // C7: the task decisions are chips, each badged.
   for (const [field, words] of [['pinTier', 'Backlog'], ['priority', 'Immediate'], ['dueDate', `Due ${dayWords(3)}`]] as const) {
     await expect(draftDecisionChip(panel, field)).toContainText(words)
@@ -143,7 +143,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   // This is the case the whole feature exists to count, and one record carrying a
   // kept field beside a changed one is what makes the per-field table meaningful.
   await pickDraftProject(page, panel, USER_PROJECT)
-  await expect(draftCwdPill(panel), 'the folder stays as the AI left it').toHaveText(`${basenameOf(aiCwd)}✦`)
+  await expect(draftCwdPill(panel), 'the folder stays as the AI left it').toHaveText(`Folder/Host: ${basenameOf(aiCwd)} · Local✦`)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/01-override-before-commit.png`, fullPage: false })
 
@@ -229,7 +229,7 @@ test('a commit the parse had no opinion about records nothing', async ({ page })
   const parsed = armParse(page)
   await draftComposer(page).type(`Run the build ${Date.now()}`)
   await parsed()
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
+  await expect(draftProjectPill(panel)).toHaveCount(0)
 
   await createTaskForLater(page, panel)
   await expect(draftPanels(page)).toHaveCount(0, { timeout: 30_000 })

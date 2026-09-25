@@ -16,7 +16,7 @@
  */
 
 import { expect, type Locator, type Page } from '@playwright/test'
-import { draftComposer, draftProjectPill } from './draft-helpers'
+import { draftComposer, draftMenuProject, draftMoreButton, draftProjectPill, draftTaskMenu } from './draft-helpers'
 
 /**
  * The tier a task is pinned in, read from the focus API — the SAME source the
@@ -107,14 +107,17 @@ export function armParse(page: Page, status = 200): () => Promise<void> {
   }
 }
 
-/** Pick `name` for the draft's project through the real pill flyout, and check the
- *  pill took it as the user's own (no ✦ left on it). */
+/** Pick `name` for the draft's project the way a user does now: More, then the
+ *  menu's Project row, then the project list. Checks the chip took it as the
+ *  user's own (no ✦ left on it). */
 export async function pickDraftProject(page: Page, panel: Locator, name: string): Promise<void> {
-  await draftProjectPill(panel).click()
+  await draftMoreButton(panel).click()
+  await draftMenuProject(page).locator('.task-kebab-project-current').click()
   const flyout = page.locator('.task-kebab-project-flyout')
   await expect(flyout).toBeVisible({ timeout: 10_000 })
   await flyout.locator('.task-kebab-project-opt', { hasText: new RegExp(`^${name}$`) }).first().click()
-  await expect(draftProjectPill(panel)).toHaveText(name)
+  await expect(draftTaskMenu(page)).toHaveCount(0)
+  await expect(draftProjectPill(panel)).toHaveText(`Project: ${name}`)
   await expect(draftProjectPill(panel)).not.toHaveClass(/session-action-chip-ai/)
 }
 

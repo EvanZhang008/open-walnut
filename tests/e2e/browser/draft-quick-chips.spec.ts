@@ -238,8 +238,8 @@ test('a quick-access chip is a bare basename and sets cwd AND project in one off
   // than a value that was already there. A fresh draft opens EMPTY by design:
   // nothing pre-selects a folder or a project (user rule, 2026-09-02) — the chip
   // click below is what fills them.
-  await expect(draftCwdPill(panel)).toHaveText('Choose folder…')
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
+  await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
+  await expect(draftProjectPill(panel)).toHaveCount(0)
 
   const seen = watchForbiddenRequests(page)
   await dirChip.click()
@@ -249,7 +249,7 @@ test('a quick-access chip is a bare basename and sets cwd AND project in one off
   // as its default_cwd. A chip that only set the folder would leave the task
   // filed in the Inbox while the session ran in a project's checkout.
   await expect(draftCwdPill(panel)).toContainText(basenameOf(cwd))
-  await expect(draftProjectPill(panel)).toHaveText(CHIP_PROJECT)
+  await expect(draftProjectPill(panel)).toHaveText(`Project: ${CHIP_PROJECT}`)
   // …and the row does NOT reshuffle: the clicked chip stays, at the same slot,
   // now active and inert. (Retiring it re-ranked every chip 21ms after the pick,
   // so a double-click landed back on the folder just left.)
@@ -318,7 +318,7 @@ test('a quick-access chip for an unclaimed folder sets the cwd and keeps the see
 
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 10_000 })
-  await expect(draftProjectPill(panel)).toHaveText('Walnut')
+  await expect(draftProjectPill(panel)).toHaveText('Project: Walnut')
 
   // Pick a chip NO project declares — the exclusion set is read from the LIVE
   // registry rather than being a hardcoded folder name, because the chips that
@@ -348,7 +348,7 @@ test('a quick-access chip for an unclaimed folder sets the cwd and keeps the see
 
   await expect(draftCwdPill(panel)).toContainText(basenameOf(unclaimed!))
   // THE assertion: the seeded project survived the folder pick.
-  await expect(draftProjectPill(panel)).toHaveText('Walnut')
+  await expect(draftProjectPill(panel)).toHaveText('Project: Walnut')
   expect(seen, 'the chip must not fetch to decide there is no project').toEqual([])
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-chip-keeps-project.png`, fullPage: false })
@@ -384,8 +384,8 @@ test('an unclaimed folder defaults the project to its basename, badged new, and 
   // The pick fills the project pill with the folder's basename, badged "new"
   // (same badge + meaning as Quick Task's confirm panel): this project doesn't
   // exist yet, starting will create it.
-  await expect(draftProjectPill(panel)).toContainText(projectName)
-  await expect(draftProjectPill(panel).locator('.qtc-confirm-new')).toHaveText('new')
+  await expect(draftProjectPill(panel)).toHaveText(`New project: ${projectName}`)
+  await expect(draftProjectPill(panel)).toHaveClass(/draft-project-chip-new/)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/04-folder-derived-project.png`, fullPage: false })
 
   // Launch for real: the task files under the derived project, and the registry

@@ -98,13 +98,12 @@ function cwdPill(panel: Locator): Locator {
 
 /**
  * Assert the pill adopted `cwd` — the equivalent of the old `.qsb-path` check.
- * The title carries the FULL path (exact match); the visible label is the folder
- * basename, optionally suffixed with the host label ("walnut · Local"), so that
- * half is a containment check.
+ * The title's first line is "Folder: <full path>"; the visible label is
+ * "Folder/Host: <basename> · <host>", so that half is a containment check.
  */
 async function expectPickedCwd(panel: Locator, cwd: string): Promise<void> {
   const pill = cwdPill(panel)
-  await expect(pill).toHaveAttribute('title', `Working folder: ${cwd}`)
+  await expect(pill).toHaveAttribute('title', new RegExp(`^Folder: ${cwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n`))
   await expect(pill).toContainText(cwd.split('/').pop()!)
 }
 
@@ -232,7 +231,7 @@ test('dismissing with no path picked still just closes (no path adopted)', async
   // with no folder pre-selected).
   await clickOutsideUntilClosed(page)
   await expect(page.locator('.session-path-selector')).toHaveCount(0)
-  await expect(cwdPill(panel)).toHaveText('Choose folder…')
+  await expect(cwdPill(panel)).toHaveText('Choose folder and host…')
 })
 
 test('panel height is fixed — drilling into a dir with few children must not shrink it', async ({ page }) => {

@@ -161,7 +161,7 @@ test('history paths render as flat single-line rows with only remote host metada
   // is the folder basename, optionally suffixed with the host label ("wallets ·
   // Local"), hence containText there and an exact match on the title.
   const cwdPill = panel.locator('.draft-composer-bar .session-action-chip').first()
-  await expect(cwdPill).toHaveAttribute('title', `Working folder: ${secondLocalCwd}`)
+  await expect(cwdPill).toHaveAttribute('title', new RegExp(`^Folder: ${secondLocalCwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n`))
   await expect(cwdPill).toContainText('wallets')
 })
 

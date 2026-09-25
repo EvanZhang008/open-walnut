@@ -149,7 +149,7 @@ test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async 
   // nothing in the column may pretend otherwise.
   await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
   // A tier seed leaves everything else neutral — this is not a project route.
-  await expect(draftProjectPill(panel)).toHaveText('Inbox')
+  await expect(draftProjectPill(panel)).toHaveCount(0)
 
   expect(await tierModes(), 'the tier "+" must not flip the tier view mode').toBe(modesBefore)
 
@@ -240,12 +240,12 @@ test('a tier "By project" label offers a project "+" that seeds project AND its 
   await expect(page.getByTestId('plus-menu'), 'the menu closes behind the choice').toHaveCount(0)
 
   // Half one of the seed — synchronous, from the click itself.
-  await expect(draftProjectPill(panel)).toHaveText(SURFACE_PROJECT)
+  await expect(draftProjectPill(panel)).toHaveText(`Project: ${SURFACE_PROJECT}`)
   // Half two — the project's declared folder, patched in when the detail fetch
   // lands. This is what proves the label's "+" routes through the SAME handler as
   // the All-view project header rather than merely setting a pill.
-  await expect(draftCwdPill(panel)).toHaveText(basenameOf(surfaceCwd), { timeout: 15_000 })
-  await expect(draftCwdPill(panel)).toHaveAttribute('title', `Working folder: ${surfaceCwd}`)
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(surfaceCwd)} · Local`, { timeout: 15_000 })
+  await expect(draftCwdPill(panel)).toHaveAttribute('title', new RegExp(`^Folder: ${surfaceCwd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n`))
   // Registry-sourced, so NOT ✦-badged.
   await expect(panel.locator('.draft-ai-badge')).toHaveCount(0)
 
@@ -292,10 +292,10 @@ test('the /tasks group header "+" lands on home with a draft seeded from that pr
     { timeout: 15_000, message: 'the "+" never navigated home' }).toBe('/')
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 15_000 })
-  await expect(draftProjectPill(panel)).toHaveText(SURFACE_PROJECT)
+  await expect(draftProjectPill(panel)).toHaveText(`Project: ${SURFACE_PROJECT}`)
   // The folder half: only handleOpenLauncherForProject patches this in, so its
   // presence is what distinguishes the fix from a generic "open a draft" event.
-  await expect(draftCwdPill(panel)).toHaveText(basenameOf(surfaceCwd), { timeout: 15_000 })
+  await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(surfaceCwd)} · Local`, { timeout: 15_000 })
   // The header's click handler toggles the group's collapse — the "+" must not have
   // also folded it (checked after the navigation, so the state is the persisted one).
   const collapsed = await page.evaluate(() => {
@@ -351,7 +351,7 @@ test('▶ on a title-only pinned tier card opens a bound draft, exactly like a l
   // The binding is visible, and the task's own folder + project came along.
   await expect(panel.locator('.draft-bound-task')).toContainText(title)
   await expect(draftCwdPill(panel)).toContainText(basenameOf(surfaceCwd))
-  await expect(draftProjectPill(panel)).toHaveText(SURFACE_PROJECT)
+  await expect(draftProjectPill(panel)).toHaveText(`Project: ${SURFACE_PROJECT}`)
   // A bound draft already IS a task, so offering to create one could only duplicate.
   await expect(panel.locator('.draft-later-btn')).toHaveCount(0)
   // The press must not have leaked to the CARD's own click handler, which focuses

@@ -115,18 +115,21 @@ export function draftComposer(page: Page): Locator {
 }
 
 /**
- * The two launch pills, addressed POSITIONALLY inside the launch stack: cwd/host
- * first, project second. `.draft-composer-bar` is the container marker that
- * survived both moves (composer row → under the header → v4's stack above the
- * composer), so the index contract is the same one the older specs already rely
- * on. Nothing else in the row is a `.session-action-chip` — the v4 layout dropped
- * the repair readout that used to sit beside them — so the indices are stable.
+ * The launch row's pills: "Folder/Host: x · host" first, then the Project chip
+ * once the draft has a project ("Project: y", or "New project: y" when Start will
+ * create it). `.draft-composer-bar` is the container marker that survived every
+ * move of this row. A fresh draft has NO project chip (the project follows the
+ * folder, and is changed in More), so the chip is addressed by its own class.
  */
 export function draftPills(panel: Locator): Locator {
   return panel.locator('.draft-composer-bar .session-action-chip')
 }
 export const draftCwdPill = (panel: Locator): Locator => draftPills(panel).first()
-export const draftProjectPill = (panel: Locator): Locator => draftPills(panel).nth(1)
+export const draftProjectPill = (panel: Locator): Locator => panel.locator('.draft-composer-bar .draft-project-chip')
+/** The folder pill's empty-state copy. */
+export const CHOOSE_FOLDER = 'Choose folder and host…'
+/** The More menu's Project section (page-scoped: the menu is portalled). */
+export const draftMenuProject = (page: Page): Locator => page.locator('[data-testid="draft-menu-project"]')
 
 /** The launch stack (quick chips → pin-tier row → pills), which in v4 lives
  *  INSIDE `.session-panel-input` above the composer. Scoped through that wrapper
@@ -291,16 +294,24 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   expect(pillsY, 'the pills are the LAST row before the composer').toBeLessThan(composerY)
   await expect(bar.locator('.sps-meta-footer, .pin-tier-options, .sps-meta-more-btn')).toHaveCount(0)
 
-  // 4. The pills are LEFT-ALIGNED as a pair (v4): the cwd pill starts at the row's
-  //    left edge and the project pill follows it on the SAME line — they used to
-  //    read as two opposite corners of the panel.
+  // 4. The folder pill starts at the row's left edge. The project chip (present
+  //    once there is a project) follows it: on the same line in a wide column,
+  //    on the second line under 421px, where the row always takes two lines so
+  //    the chip appearing never changes the row's height.
   const row = await bar.locator('.draft-composer-bar').boundingBox()
   const cwd = await draftCwdPill(panel).boundingBox()
-  const project = await draftProjectPill(panel).boundingBox()
-  if (!row || !cwd || !project) throw new Error('the pills row did not render')
+  if (!row || !cwd) throw new Error('the pills row did not render')
   expect(Math.abs(cwd.x - row.x), 'the cwd pill starts at the row edge').toBeLessThan(6)
-  expect(project.x, 'the project pill follows the cwd pill').toBeGreaterThan(cwd.x)
-  expect(Math.abs(project.y - cwd.y), 'both pills share one line').toBeLessThan(4)
+  if (await draftProjectPill(panel).count()) {
+    const project = await draftProjectPill(panel).boundingBox()
+    if (!project) throw new Error('the project chip did not render')
+    if (row.width > 420) {
+      expect(project.x, 'the project chip follows the cwd pill').toBeGreaterThan(cwd.x)
+      expect(Math.abs(project.y - cwd.y), 'both share one line in a wide column').toBeLessThan(4)
+    } else {
+      expect(project.y, 'the project chip sits on the second line').toBeGreaterThan(cwd.y)
+    }
+  }
 
   // 4b. ONE LEFT EDGE for the whole stack — the caption, the first chip and the
   //     cwd pill all start at the same x (user feedback: "I want them beautifully
@@ -381,9 +392,8 @@ export async function pickDraftFolder(
   cwd: string,
   opts: { engine?: 'Codex' } = {},
 ): Promise<void> {
-  // The cwd/host pill. Label is the folder basename once a path is set, and
-  // "Choose folder…" on a fresh browser with no launch memory — match either,
-  // and take the FIRST chip (the project pill sits right after it).
+  // The folder/host pill: "Folder/Host: <basename> · <host>" once a path is set,
+  // "Choose folder and host…" before. Always the FIRST pill of the row.
   await draftCwdPill(panel).click()
 
   // PAGE-scoped: the picker pops out (portalled to <body>, anchored to the

@@ -268,11 +268,11 @@ function shortcutLabel(): string {
   return typeof navigator !== 'undefined' && /Mac|iP/.test(navigator.platform) ? '⌘.' : 'Ctrl+.';
 }
 
-/** The More title (spec 5.3): no "priority" while the priority setting is off. */
-export function draftMoreTitle(priorityVisible: boolean | 'unknown', shortcut = shortcutLabel()): string {
-  return priorityVisible === true
-    ? `Pin tier, dates, priority, start unread (${shortcut})`
-    : `Pin tier, dates, start unread (${shortcut})`;
+/** The More title (spec 5.3): no "priority" while the priority setting is off,
+ *  and "Project" only where the menu has that section (not Ask Walnut). */
+export function draftMoreTitle(priorityVisible: boolean | 'unknown', shortcut = shortcutLabel(), withProject = false): string {
+  const fields = priorityVisible === true ? 'Pin tier, dates, priority, start unread' : 'Pin tier, dates, start unread';
+  return `${withProject ? `Project, ${fields.charAt(0).toLowerCase()}${fields.slice(1)}` : fields} (${shortcut})`;
 }
 
 /**
@@ -280,13 +280,15 @@ export function draftMoreTitle(priorityVisible: boolean | 'unknown', shortcut = 
  * last child of its row (no wrapper, the specs assert the button itself). It
  * never lights up for "has edits": the edits already show as chips.
  */
-export function DraftMoreButton({ menu, moreRef, priorityVisible }: {
+export function DraftMoreButton({ menu, moreRef, priorityVisible, withProject = false }: {
   menu: DraftDecisionMenu;
   moreRef: RefObject<HTMLButtonElement | null>;
   priorityVisible: boolean | 'unknown';
+  /** The menu opens with a Project section. */
+  withProject?: boolean;
 }) {
   const active = menu.anchor !== null && menu.anchor === moreRef.current;
-  const title = useMemo(() => draftMoreTitle(priorityVisible), [priorityVisible]);
+  const title = useMemo(() => draftMoreTitle(priorityVisible, undefined, withProject), [priorityVisible, withProject]);
   return (
     <button
       ref={moreRef}

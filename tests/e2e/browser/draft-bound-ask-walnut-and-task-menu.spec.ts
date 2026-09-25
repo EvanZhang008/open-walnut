@@ -207,12 +207,12 @@ test('a bound draft\'s header ⋮ pins the REAL task without launching anything'
 
   // Move the task through the same ⋮ (a live write). The draft's project pill
   // was seeded once at ▶; it must follow the task, not keep promising Walnut.
-  await expect(draftProjectPill(panel)).toHaveText('Walnut')
+  await expect(draftProjectPill(panel)).toHaveText('Project: Walnut')
   await kebab.click()
   await page.locator('.task-kebab-menu .task-kebab-project-current').click()
   await page.locator('.task-kebab-project-flyout .task-kebab-project-opt').filter({ hasText: /^\s*Ideas\s*$/ }).click()
   await expect.poll(async () => (await fetchTask(page, taskId)).project, { timeout: 10_000 }).toBe('Ideas')
-  await expect(draftProjectPill(panel)).toHaveText('Ideas', { timeout: 10_000 })
+  await expect(draftProjectPill(panel)).toHaveText('Project: Ideas', { timeout: 10_000 })
   expect(seen).toEqual([])
 
   // Discard the draft; the task keeps its new tier and project.
