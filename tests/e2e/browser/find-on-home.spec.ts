@@ -12,6 +12,10 @@ import { test, expect, type Page } from '@playwright/test'
 
 const NOTE = 'FindOnHome/Locate Note.md'
 
+// The first paint waits on a cold fixture (networkidle), which alone can pass the 30s default when the
+// machine is loaded; every step below keeps its own deadline.
+test.setTimeout(180_000)
+
 async function seedNote(baseURL: string): Promise<void> {
   await fetch(`${baseURL}/api/notes-v2/content/${NOTE}`, {
     method: 'PUT',

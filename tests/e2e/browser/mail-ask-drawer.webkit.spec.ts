@@ -1,7 +1,7 @@
 /**
  * The Walnut group and its drawer in WEBKIT, which is the engine the Mac app is (S4).
  *
- * Only what an engine can disagree about, which here is three things:
+ * Only what an engine can disagree about, which here is four things:
  *
  *   1. THE GESTURE. WebKit selects the word under the pointer as the default action of a right-press,
  *      before dispatching `contextmenu`, and a mail row's subject and snippet are selectable on
@@ -15,13 +15,17 @@
  *   3. THE DRAWER. It is the reader pane's tenant and holds an ordinary session panel; the Mac app is
  *      where it will actually be used, so one full open/auto-send/Escape round trip is graded in this
  *      engine too.
+ *   4. THE FORK. Start Task's folder picker and More are menus over the drawer, and WebKit leaves focus
+ *      on <body> after a button click, so Escape has to find the open menu rather than a focused one.
  *
  * A `test.use` browser pin only applies at the top level of its own spec file, so this is a file rather
  * than a project, and its helpers are inline: importing the Chromium spec would run all ten of its
  * cases in this engine as well.
  */
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { draftCwdPill, draftTaskMenu, openDraftSettings } from './draft-helpers'
 import { MailFixtureServer, folderRow, openMail, shoot } from './mail-review-helpers'
 
 const SHOT_DIR = '/tmp/mail-ask-drawer/webkit'
@@ -43,11 +47,16 @@ test.setTimeout(420_000)
 
 const server = new MailFixtureServer()
 let port = 0
+/** A real folder in the fixture's home, for the Start Task case. */
+let folder = ''
 
 test.beforeAll(async () => {
   test.setTimeout(300_000)
   await fs.mkdir(SHOT_DIR, { recursive: true })
-  port = (await server.start({ PW_MAIL_CTX: '1', PW_MAIL_DENSE: '' })).port
+  const fixture = await server.start({ PW_MAIL_CTX: '1', PW_MAIL_DENSE: '' })
+  port = fixture.port
+  folder = path.join(fixture.home, 'work', 'marina-app')
+  await fs.mkdir(folder, { recursive: true })
 })
 
 test.afterAll(async () => { await server.stop() })
@@ -173,7 +182,9 @@ test('S4-W4: Find on Home from the drawer lands on the ask in the chat slot', as
   await expect(page.locator(`[data-testid="ask-walnut-session"][data-session-id="${sessionId}"]`))
     .toBeVisible({ timeout: 30_000 })
   await expect(page.locator(`.main-page-session-column [data-session-id="${sessionId}"]`)).toHaveCount(0)
-  await expect(page.locator('#home-task-navigation .task-focused')).toHaveCount(1, { timeout: 30_000 })
+  // An ask starts in Focus, so it is selected as the tier's active card, not as a listed row.
+  await expect(page.locator('#home-task-navigation').locator('.task-focused, .todo-pinned-card-active'))
+    .toHaveCount(1, { timeout: 30_000 })
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'find-on-home-webkit')}`)
 })
 
@@ -193,4 +204,47 @@ test('S4-W5: Escape with the composer menu open closes the menu, and only then t
   await expect(drawer(page)).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(drawer(page)).toHaveCount(0)
+})
+
+test('S4-W6: Start Task picks its folder, More closes on Escape, and the launch runs there in Focus', async ({ page }) => {
+  const launches: Array<Record<string, unknown>> = []
+  page.on('request', (request) => {
+    if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/sessions/quick-start') return
+    try { launches.push(request.postDataJSON() as Record<string, unknown>) } catch { launches.push({}) }
+  })
+  await openWriterInbox(page)
+  await row(page, KEEPER).click({ button: 'right' })
+  await expect(menu(page)).toHaveCount(1)
+  await item(page, ASK).click()
+  const draft = drawer(page).locator('.draft-session-panel')
+  await expect(draft).toBeVisible({ timeout: 60_000 })
+  const card = (label: string) => draft.locator('.draft-intent-card', { hasText: label })
+  await expect(card('Ask Walnut')).toHaveAttribute('aria-pressed', 'true')
+  await card('Start Task').click()
+  await expect(card('Start Task')).toHaveAttribute('aria-pressed', 'true')
+
+  await draftCwdPill(draft).click()
+  const picker = page.locator('.session-path-selector')
+  await expect(picker).toBeVisible({ timeout: 10_000 })
+  await picker.locator('.sps-search-input').fill(folder)
+  await picker.locator('.sps-search-input').press('Shift+Enter')
+  await expect(picker).toBeHidden()
+  await expect(draftCwdPill(draft)).toContainText('marina-app')
+
+  // WebKit leaves focus on <body> after a button click: the open menu is what Escape must find.
+  const more = await openDraftSettings(draft, 'more')
+  await expect(more.locator('.task-kebab-tier-label')).toHaveText('Pin to (default Focus)')
+  await page.keyboard.press('Escape')
+  await expect(draftTaskMenu(page)).toHaveCount(0)
+  await expect(drawer(page)).toBeVisible()
+
+  const composer = draft.locator('textarea.chat-input-textarea')
+  await composer.fill('Write the reply as a script in this repo')
+  await draft.locator('.draft-start-btn').click()
+  await expect.poll(() => launches.length, { timeout: 60_000 }).toBe(1)
+  expect(launches[0]).toMatchObject({ cwd: folder, project: 'marina-app', taskMeta: { pinTier: 'focus' } })
+  expect(launches[0]).not.toHaveProperty('walnutAgent')
+  const answer = drawer(page).locator('.session-msg-assistant').filter({ hasText: /Write the reply as a script in this repo/ })
+  await expect(answer).toHaveCount(1, { timeout: 90_000 })
+  console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'start-task-webkit')}`)
 })

@@ -8,28 +8,34 @@
  * first bubble reads as the question (see ask-object-session.ts). A `preset` + `autoSend` pair is the
  * "open AND ask" entries (`Summarize…`, `Draft a reply…`): sent once per session, into the object's
  * existing session when it has one. Ask-mode passes no preset and lands the caret in the composer.
+ * The draft offers the Home draft's fork: Ask Walnut by default, or Start Task in a folder and host the
+ * person picks, with More for the task fields; the task starts in Focus (ask-object-draft.ts).
  *
  * It was a lane conversation drawn by `PluginChatView` until 2026-09-25, when the person asked for "the
  * same UI like regular session". The Slack plugin reaches this through `ui.views.AskObjectView`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { ImageAttachment } from '@/api/chat';
 import { fetchSession, fetchSessionsForTask } from '@/api/sessions';
+import { createTask } from '@/api/tasks';
 import { wsClient } from '@/api/ws';
 import { ICON_CHEVRON_LEFT, ICON_CLOSE } from '@/components/common/Icons';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
-import type { DraftColumn } from '@/components/sessions/draft-column';
-import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
-import type { QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
+import { draftComposerKey } from '@/components/sessions/draft-column';
+import { useNotifications } from '@/contexts/notifications/NotificationProvider';
+import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
+import { locateTaskOnHome } from '@/utils/open-session';
 import { visibleInterval } from '@/utils/page-visibility';
+import { askLaunchBody, askTaskForLater } from './ask-object-draft';
+import { useAskObjectDraft } from './useAskObjectDraft';
 import {
   askObjectFirstMessage, askSessionAsked, forgetAskSession, launchAskSession, readAskSession,
-  withAsked, writeAskSession, type AskSessionLaunch, type AskSessionRecord, type AskSessionScope,
+  withAsked, writeAskSession, type AskSessionRecord, type AskSessionScope,
 } from './ask-object-session';
-import { GENERAL_AGENT_ID, GENERAL_ASK_AGENT } from './ask-walnut-slot-model';
 import '@/styles/ask-object-drawer.css';
 import '@/styles/walnut-agent.css';
 
@@ -105,20 +111,6 @@ function escapeBelongsToAnOverlay(e: KeyboardEvent, drawer: HTMLElement | null):
   return Array.from(document.querySelectorAll(OVERLAY)).some((one) => !one.closest('#root'));
 }
 
-/** The quick-start body for an ask. Same shape the Ask Walnut slot sends, minus a tier: an ask about
- *  one mail should not pin itself to Focus. */
-function launchPayload(agentId: string, message: string, meta: QuickStartTaskMeta, images?: ImageAttachment[]): AskSessionLaunch {
-  return {
-    cwd: '',
-    message,
-    ...(images?.length ? { images } : {}),
-    walnutAgent: true,
-    ...(agentId === GENERAL_AGENT_ID ? { project: GENERAL_ASK_AGENT.project } : { agentId }),
-    taskMeta: { unread: false, priority: meta.priority, pinTier: null },
-    ...(meta.model ? { model: meta.model } : {}),
-  };
-}
-
 async function sendIntoSession(sessionId: string, message: string): Promise<void> {
   await wsClient.sendRpc<{ messageId: string }>('session:send', { sessionId, message });
 }
@@ -127,13 +119,15 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
   const { objectKey, agentId, quote, contextBlock, contextName, preset, autoSend } = props;
   const scope = useMemo<AskSessionScope>(() => ({ agentId, key: objectKey }), [agentId, objectKey]);
   const [view, setView] = useState<View>({ kind: 'resolving' });
-  const [meta, setMeta] = useState<QuickStartTaskMeta>(() => ({ ...freshLauncherMeta(), pinTier: undefined }));
+  // The draft row: Ask Walnut by default, Start Task (a folder and host) one tab away, More for the
+  // task fields. What it launches is askLaunchBody's rule.
+  const askDraft = useAskObjectDraft(`ask-object:${agentId}:${objectKey}`);
   // The scope a result belongs to: an answer that lands after the drawer moved to another object must
   // not paint that object's session here.
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
-  const contextRef = useRef({ contextBlock, contextName, meta });
-  contextRef.current = { contextBlock, contextName, meta };
+  const contextRef = useRef({ contextBlock, contextName });
+  contextRef.current = { contextBlock, contextName };
   // A question that joined another launch still in flight, sent once the session is known (adopt).
   const followUpRef = useRef('');
   const drawerRef = useRef<HTMLElement | null>(null);
@@ -157,11 +151,18 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
   }, [scope]);
 
   const launch = useCallback(async (question: string, fromPreset?: string, images?: ImageAttachment[]): Promise<boolean> => {
-    const { contextBlock: block, contextName: name, meta: launchMeta } = contextRef.current;
-    const message = askObjectFirstMessage(name, block, question);
+    const { contextBlock: block, contextName: name } = contextRef.current;
+    const body = askLaunchBody({
+      draft: askDraft.draftRef.current,
+      agentId,
+      message: askObjectFirstMessage(name, block, question),
+      ...(images?.length ? { images } : {}),
+      tierKnown: askDraft.tierKnown,
+      catalog: getEngineCatalog(),
+    });
     setView({ kind: 'starting', question, ...(fromPreset ? { preset: fromPreset } : {}), ...(images?.length ? { images } : {}) });
     try {
-      const { record, joined } = await launchAskSession(scope, launchPayload(agentId, message, launchMeta, images), fromPreset);
+      const { record, joined } = await launchAskSession(scope, body, fromPreset);
       log.info('ask-object', 'ask session launched', { objectKey: scope.key, taskId: record.taskId, sessionId: record.sessionId ?? null, joined });
       if (scopeRef.current !== scope) return true;
       // Another launch for this object was already out, carrying ITS question: this one goes into the
@@ -183,7 +184,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
       }
       return false;
     }
-  }, [agentId, scope, openSession]);
+  }, [agentId, scope, openSession, askDraft.draftRef, askDraft.tierKnown]);
 
   // Which session is this object's, and what to do on open. Re-runs for a new object or a new canned
   // question; StrictMode's second run is harmless because a launch is single-flight per scope and an
@@ -318,23 +319,49 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     </blockquote>
   );
 
-  const draft = useMemo<DraftColumn>(() => ({
-    id: `ask-object:${agentId}:${objectKey}`,
-    cwd: '',
-    host: null,
-    walnut: true,
-    project: GENERAL_ASK_AGENT.project,
-    projectSource: 'seed',
-    meta,
-  }), [agentId, objectKey, meta]);
-  const noop = useCallback(() => { /* an ask has no folder or project to pick */ }, []);
-  const known = useCallback(() => true, []);
-  const onMetaChange = useCallback((_id: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => {
-    setMeta((m) => updater(m));
-  }, []);
-  const onStart = useCallback((_id: string, text: string, images?: ImageAttachment[]) => (
-    launch(text.trim(), undefined, images)
-  ), [launch]);
+  const { requestFolder, draftRef } = askDraft;
+  const onStart = useCallback(async (_id: string, text: string, images?: ImageAttachment[]): Promise<boolean> => {
+    // Start Task runs in a folder: without one, open the picker and keep the text (the panel checks
+    // this first; this is the same rule if the row changed under it).
+    if (!draftRef.current.walnut && !draftRef.current.cwd) {
+      requestFolder();
+      return false;
+    }
+    return launch(text.trim(), undefined, images);
+  }, [launch, draftRef, requestFolder]);
+
+  // "Create task for later" (Start Task mode): the text becomes a task that carries the object's
+  // context, and the drawer closes with a notice that can find it on Home.
+  const { notify } = useNotifications();
+  const navigate = useNavigate();
+  const [saveError, setSaveError] = useState('');
+  const onSaveAsTask = useCallback(async (draftId: string, text: string) => {
+    const input = askTaskForLater({
+      draft: draftRef.current, text, contextBlock: contextRef.current.contextBlock, tierKnown: askDraft.tierKnown,
+    });
+    if (!input) return;
+    setSaveError('');
+    try {
+      const task = await createTask(input);
+      try { localStorage.removeItem(draftComposerKey(draftId)); } catch { /* storage disabled */ }
+      log.info('ask-object', 'task for later created', { objectKey: scope.key, taskId: task.id });
+      notify({
+        kind: 'sort',
+        severity: 'success',
+        title: `Task created: ${task.title}`,
+        body: input.project?.trim() || 'Inbox',
+        dedupKey: task.id,
+        persistent: false,
+        action: { label: 'Find on Home', kind: 'callback' },
+        onAction: () => { locateTaskOnHome(task.id, navigate); },
+      });
+      onCloseRef.current();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.warn('ask-object', 'task for later failed', { objectKey: scope.key, error: message });
+      setSaveError(message);
+    }
+  }, [draftRef, askDraft.tierKnown, notify, navigate, scope]);
 
   // One retry at a time: a double click on Try again must not send the question twice.
   const [retrying, setRetrying] = useState(false);
@@ -379,17 +406,27 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     body = (
       <div className="ask-object-compose" data-testid="ask-object-compose">
         <DraftSessionPanel
-          draft={draft}
+          draft={askDraft.draft}
           autoFocus
           {...(backButton ? { headerLeading: backButton } : {})}
           intro={quoteCard}
           onStart={onStart}
-          onSaveAsTask={noop}
+          onSaveAsTask={onSaveAsTask}
           onClose={onClose}
-          onPathChange={noop}
-          onProjectChange={noop}
-          onMetaChange={onMetaChange}
-          isKnownProject={known}
+          onWalnutToggle={askDraft.onWalnutToggle}
+          onPathChange={askDraft.onPathChange}
+          onProjectChange={askDraft.onProjectChange}
+          onMetaChange={askDraft.onMetaChange}
+          onTaskFieldChange={askDraft.onTaskFieldChange}
+          onReturnFieldToWalnut={askDraft.onReturnFieldToWalnut}
+          isKnownProject={askDraft.isKnownProject}
+          {...(saveError ? {
+            hostNotice: (
+              <div className="draft-needs-folder" role="alert" data-testid="ask-object-save-error">
+                Could not create the task. {saveError}
+              </div>
+            ),
+          } : {})}
         />
       </div>
     );
@@ -460,7 +497,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
           ) : (
             <p className="ask-walnut-pending-status">
               <span className="spinner ask-walnut-pending-spinner" />
-              {view.kind === 'resolving' ? 'Opening…' : 'Starting Walnut…'}
+              {view.kind === 'resolving' ? 'Opening…' : askDraft.draft.walnut ? 'Starting Walnut…' : 'Starting the session…'}
             </p>
           )}
           {view.kind === 'starting' && view.question ? <p className="ask-walnut-pending-echo">{view.question}</p> : null}

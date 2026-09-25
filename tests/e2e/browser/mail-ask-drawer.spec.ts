@@ -25,6 +25,9 @@
  *      leaves the drawer, and only the next Escape closes the drawer.
  *   9. A second canned question asked while the first launch is still out joins that launch and goes
  *      into the same session as a follow-up: one quick-start, both questions answered.
+ *  10. The draft is the Home draft's fork: Ask Walnut by default, Start Task one card away (it needs a
+ *      folder, and runs there with the mail as its context), a task that starts in Focus, and More for
+ *      its fields. "Create task for later" files the text with the mail in its description.
  *
  * Two fixtures, because the two halves need opposite installs: `PW_MAIL_CTX=1` is the small mailbox
  * with one account that can send and one that cannot, and `PW_MAIL_DENSE=1` is the production-density
@@ -33,7 +36,9 @@
  * question (what the menu did) rather than an answer (what a model would say).
  */
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { draftCwdPill, draftTaskMenu, openDraftSettings } from './draft-helpers'
 import { MailFixtureServer, folderRow, openMail, shoot } from './mail-review-helpers'
 
 const SHOT_DIR = '/tmp/mail-ask-drawer/chromium'
@@ -116,6 +121,39 @@ function userTurns(page: Page): Locator {
   return drawer(page).locator('.session-msg-user')
 }
 
+/** The drawer's draft panel (before the first question). */
+function draftPanel(page: Page): Locator {
+  return drawer(page).locator('.draft-session-panel')
+}
+
+/** One of the draft's two mode cards. */
+function intentCard(page: Page, label: 'Ask Walnut' | 'Start Task'): Locator {
+  return draftPanel(page).locator('.draft-intent-card', { hasText: label })
+}
+
+/** Point the drawer's Start Task draft at `cwd` through the folder picker (it may already be open: a
+ *  Start with no folder opens it). */
+async function pickFolder(page: Page, cwd: string): Promise<void> {
+  const picker = page.locator('.session-path-selector')
+  if (!(await picker.isVisible())) await draftCwdPill(draftPanel(page)).click()
+  await expect(picker).toBeVisible({ timeout: 10_000 })
+  const input = picker.locator('.sps-search-input')
+  await input.fill(cwd)
+  await input.press('Shift+Enter')
+  await expect(picker).toBeHidden()
+  await expect(draftCwdPill(draftPanel(page))).toContainText(path.basename(cwd))
+}
+
+/** Every task create (POST /api/tasks), with its body. */
+function recordTaskCreates(page: Page): { bodies: Record<string, unknown>[] } {
+  const record = { bodies: [] as Record<string, unknown>[] }
+  page.on('request', (request) => {
+    if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/tasks') return
+    try { record.bodies.push(request.postDataJSON() as Record<string, unknown>) } catch { record.bodies.push({}) }
+  })
+  return record
+}
+
 /** The drawer's session body, once there is one; its `data-session-id` is the session. */
 function sessionBody(page: Page): Locator {
   return drawer(page).getByTestId('ask-object-session')
@@ -130,12 +168,16 @@ interface LaunchBody {
 }
 
 /** Every quick-start POST (one ask session each), with its body, for the whole page's life. */
-function recordLaunches(page: Page): { bodies: LaunchBody[] } {
-  const record = { bodies: [] as LaunchBody[] }
+function recordLaunches(page: Page): { bodies: LaunchBody[]; results: Array<{ taskId?: string; sessionId?: string }> } {
+  const record = { bodies: [] as LaunchBody[], results: [] as Array<{ taskId?: string; sessionId?: string }> }
+  const isLaunch = (method: string, url: string) => method === 'POST' && new URL(url).pathname === '/api/sessions/quick-start'
   page.on('request', (request) => {
-    if (request.method() !== 'POST') return
-    if (new URL(request.url()).pathname !== '/api/sessions/quick-start') return
+    if (!isLaunch(request.method(), request.url())) return
     try { record.bodies.push(request.postDataJSON() as LaunchBody) } catch { record.bodies.push({}) }
+  })
+  page.on('response', (response) => {
+    if (!isLaunch(response.request().method(), response.url())) return
+    response.json().then((json) => { record.results.push(json as { taskId?: string; sessionId?: string }) }, () => {})
   })
   return record
 }
@@ -157,13 +199,18 @@ function answers(page: Page, question: RegExp): Locator {
 test.describe('the Walnut group, on a mailbox whose second account cannot send', () => {
   const server = new MailFixtureServer()
   let port = 0
+  /** A real folder inside the fixture's throwaway home, for the Start Task cases. */
+  let folder = ''
 
   test.beforeAll(async () => {
     test.setTimeout(300_000)
     await fs.mkdir(SHOT_DIR, { recursive: true })
     // `PW_MAIL_DENSE` emptied rather than omitted: the helper defaults it on, and two linked providers
     // double every count and put two options in the add-an-account dialog.
-    port = (await server.start({ PW_MAIL_CTX: '1', PW_MAIL_DENSE: '' })).port
+    const fixture = await server.start({ PW_MAIL_CTX: '1', PW_MAIL_DENSE: '' })
+    port = fixture.port
+    folder = path.join(fixture.home, 'work', 'marina-app')
+    await fs.mkdir(folder, { recursive: true })
   })
 
   test.afterAll(async () => { await server.stop() })
@@ -250,6 +297,10 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     // `Ask` opens the ordinary draft panel, lands the caret in its composer, and starts nothing.
     await expect(drawer(page)).toHaveAttribute('data-view', 'compose')
     await expect(drawer(page).locator('.draft-session-panel textarea')).toBeFocused()
+    // The Home draft's fork, Ask Walnut chosen, and More for the task fields.
+    await expect(intentCard(page, 'Ask Walnut')).toHaveAttribute('aria-pressed', 'true')
+    await expect(intentCard(page, 'Start Task')).toHaveAttribute('aria-pressed', 'false')
+    await expect(draftPanel(page).locator('.draft-launch-bar button.draft-more-btn')).toBeVisible()
     await expect(userTurns(page)).toHaveCount(0)
     console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'ask-compose')}`)
 
@@ -271,7 +322,8 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     expect(body.walnutAgent).toBe(true)
     expect(body.project).toBe('Ask Walnut')
     expect(body.cwd).toBe('')
-    expect(body.taskMeta?.pinTier).toBeNull()
+    // A new task starts in Focus, like every task a draft launches (More changes it).
+    expect(body.taskMeta?.pinTier).toBe('focus')
     // The headers a model cannot see on screen, inside the named block, then the question.
     const message = body.message ?? ''
     expect(message.startsWith('[Mail you are asking about]\n')).toBe(true)
@@ -335,7 +387,11 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(drawer(page)).toHaveCount(0)
     await ask(page, WRITER, KEEPER, SUMMARIZE)
     await expect(sessionBody(page)).toHaveAttribute('data-session-id', first!, { timeout: 60_000 })
-    await expect(answers(page, /processed your message: Summarize this mail/i)).toHaveCount(1, { timeout: 90_000 })
+    // By its words, not by `.session-msg-assistant`: this mock writes no transcript, so a reopened drawer
+    // can still be drawing the reply from the live stream block (and the first `session:send` carries the
+    // one-time rich-output note, whose echoed "```html-app" leaves a building placeholder after the words).
+    const summarized = sessionBody(page).getByText(/Hello! I processed your message: Summarize this mail/)
+    await expect(summarized).toHaveCount(1, { timeout: 90_000 })
     expect(launches.bodies).toHaveLength(1)
     // And asked once: the same entry again opens the session without asking a second time.
     await page.keyboard.press('Escape')
@@ -343,7 +399,7 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(sessionBody(page)).toHaveAttribute('data-session-id', first!, { timeout: 60_000 })
     // Held a moment so a second send would have had time to be answered: absence needs a window.
     await page.waitForTimeout(3_000)
-    await expect(answers(page, /processed your message: Summarize this mail/i)).toHaveCount(1)
+    await expect(summarized).toHaveCount(1)
 
     // A DIFFERENT mail is a different session, which is the other half of the same rule.
     await page.keyboard.press('Escape')
@@ -394,7 +450,115 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await page.unroute('**/api/sessions/quick-start')
   })
 
+  test('S4-14: Start Task runs in a picked folder, in Focus, with the mail as its context', async ({ page }) => {
+    const launches = recordLaunches(page)
+    await openWriterInbox(page)
+    await ask(page, WRITER, KEEPER, ASK)
+    await intentCard(page, 'Start Task').click()
+    await expect(intentCard(page, 'Start Task')).toHaveAttribute('aria-pressed', 'true')
+    // Still about the mail.
+    await expect(drawer(page).getByTestId('ask-object-quote')).toContainText('Quarterly keeper report')
+
+    // A Start with no folder says so, opens the picker, keeps the text and starts nothing.
+    const composer = draftPanel(page).locator('textarea.chat-input-textarea')
+    await composer.fill('Write the reply as a script in this repo')
+    await draftPanel(page).locator('.draft-start-btn').click()
+    await expect(draftPanel(page).getByTestId('draft-needs-folder')).toBeVisible()
+    await expect(composer).toHaveValue('Write the reply as a script in this repo')
+    expect(launches.bodies).toHaveLength(0)
+
+    await pickFolder(page, folder)
+    // More opens on the default Focus, and its Escape closes the menu, not the drawer.
+    const menu = await openDraftSettings(draftPanel(page), 'more')
+    await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pin to (default Focus)')
+    await page.keyboard.press('Escape')
+    await expect(draftTaskMenu(page)).toHaveCount(0)
+    await expect(drawer(page)).toBeVisible()
+    console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'start-task-draft')}`)
+
+    await draftPanel(page).locator('.draft-start-btn').click()
+    await expect.poll(() => launches.bodies.length, { timeout: 60_000 }).toBe(1)
+    const body = launches.bodies[0] as LaunchBody & { host?: string; projectFromFolder?: boolean }
+    expect(body.cwd).toBe(folder)
+    expect(body.walnutAgent).toBeUndefined()
+    expect(body.project).toBe('marina-app')
+    expect(body.projectFromFolder).toBe(true)
+    expect(body.taskMeta?.pinTier).toBe('focus')
+    const message = body.message ?? ''
+    expect(message.startsWith('[Mail you are asking about]\n')).toBe(true)
+    expect(message).toContain('Subject: Quarterly keeper report')
+    expect(message.split('[/Mail you are asking about]')[1]?.trim()).toBe('Write the reply as a script in this repo')
+
+    // The regular session panel, in the drawer, answering in that folder.
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+    await expect(answers(page, /Write the reply as a script in this repo/)).toHaveCount(1, { timeout: 90_000 })
+    const sessionId = await sessionBody(page).getAttribute('data-session-id')
+    await expect.poll(() => launches.results.length).toBe(1)
+    const launched = launches.results[0]
+    // And the task it made is in Focus, filed under the folder's project, its session in that folder.
+    // The mail fixture's own server, not the Playwright config's baseURL (a different fixture).
+    const api = `http://localhost:${port}`
+    expect(launched.sessionId).toBe(sessionId)
+    const { session } = await (await page.request.get(`${api}/api/sessions/${sessionId}`)).json() as { session: { taskId: string; cwd?: string } }
+    expect(session).toMatchObject({ taskId: launched.taskId, cwd: folder })
+    const { task } = await (await page.request.get(`${api}/api/tasks/${launched.taskId}`)).json() as { task: { project?: string; pinned?: boolean; focus_tier?: string } }
+    expect(task.project).toBe('marina-app')
+    expect(task.pinned).toBe(true)
+    // `focus_tier` absent would mean Satellite, so the tier is read, not defaulted.
+    expect(task.focus_tier).toBe('focus')
+
+    // Reopened: the same session, not a new draft.
+    await page.keyboard.press('Escape')
+    await expect(drawer(page)).toHaveCount(0)
+    await ask(page, WRITER, KEEPER, ASK)
+    await expect(sessionBody(page)).toHaveAttribute('data-session-id', sessionId!, { timeout: 60_000 })
+    expect(launches.bodies).toHaveLength(1)
+  })
+
+  test('S4-15: More on the Ask Walnut draft picks the tier the ask is filed in', async ({ page }) => {
+    const launches = recordLaunches(page)
+    await openWriterInbox(page)
+    await ask(page, WRITER, LUNCH, ASK)
+    const menu = await openDraftSettings(draftPanel(page), 'more')
+    await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Satellite' }).click()
+    await expect(draftTaskMenu(page)).toHaveCount(0)
+    const composer = draftPanel(page).locator('textarea.chat-input-textarea')
+    await composer.fill('When is lunch?')
+    await composer.press('Enter')
+    await expect.poll(() => launches.bodies.length, { timeout: 60_000 }).toBe(1)
+    expect(launches.bodies[0].walnutAgent).toBe(true)
+    expect(launches.bodies[0].taskMeta?.pinTier).toBe('satellite')
+    await expect(answers(page, /When is lunch\?/)).toHaveCount(1, { timeout: 90_000 })
+  })
+
+  test('S4-16: Create task for later files the text with the mail in its description', async ({ page }) => {
+    const creates = recordTaskCreates(page)
+    const launches = recordLaunches(page)
+    await openWriterInbox(page)
+    await ask(page, WRITER, KEEPER, ASK)
+    // Walnut mode has no such exit: it would file the question with nothing to answer it.
+    await expect(draftPanel(page).locator('.draft-later-btn')).toHaveCount(0)
+    await intentCard(page, 'Start Task').click()
+    const composer = draftPanel(page).locator('textarea.chat-input-textarea')
+    await composer.fill('Reply to the keeper\nBefore the May opening.')
+    await draftPanel(page).locator('.draft-later-btn').click()
+
+    await expect(drawer(page)).toHaveCount(0, { timeout: 30_000 })
+    await expect.poll(() => creates.bodies.length, { timeout: 30_000 }).toBe(1)
+    const body = creates.bodies[0] as { title?: string; description?: string; pinned?: boolean; focus_tier?: string }
+    expect(body.title).toBe('Reply to the keeper')
+    expect(body.description).toContain('Before the May opening.')
+    expect(body.description).toContain('Subject: Quarterly keeper report')
+    expect(body.description).toMatch(/Link: http:\/\/127\.0\.0\.1:\d+\/mail\?/)
+    expect(body).toMatchObject({ pinned: true, focus_tier: 'focus' })
+    expect(launches.bodies).toHaveLength(0)
+    // The notice says so and can find it on Home.
+    const notice = page.getByText('Task created: Reply to the keeper')
+    await expect(notice).toBeVisible({ timeout: 15_000 })
+  })
+
   test('S4-11: Locate in the drawer\'s session finds the task on Home', async ({ page }) => {
+    const launches = recordLaunches(page)
     await openWriterInbox(page)
     await ask(page, WRITER, KEEPER, SUMMARIZE)
     await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
@@ -410,8 +574,11 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(page.locator(`[data-testid="ask-walnut-session"][data-session-id="${sessionId}"]`))
       .toBeVisible({ timeout: 30_000 })
     await expect(page.locator(`.main-page-session-column [data-session-id="${sessionId}"]`)).toHaveCount(0)
-    const focused = page.locator('#home-task-navigation .task-focused')
-    await expect(focused).toHaveCount(1, { timeout: 30_000 })
+    // Selected where it is drawn: an ask starts in Focus, so its row is the tier's active card (a
+    // listed task would be a focused row). By the task's id, not by its title: every ask is "Ask Walnut".
+    const selected = page.locator('#home-task-navigation').locator('.task-focused, .todo-pinned-card-active')
+    await expect(selected).toHaveCount(1, { timeout: 30_000 })
+    await expect(selected).toHaveAttribute('data-task-id', launches.results[0]?.taskId ?? 'no launch result')
     console.log(`shot: ${await shoot(page, SHOT_DIR, 'find-on-home')}`)
   })
 
