@@ -1,7 +1,9 @@
 /**
  * The "Sub" pill (web/src/components/tasks/SubtaskPill.tsx): a task with a
  * parent_task_id carries it on its pinned card and on its list row, a top-level
- * task never does, and clicking it leads to the parent.
+ * task never does, and clicking it leads to the parent. Its twin, the
+ * "Leader · N" pill (LeaderPill.tsx), sits on the parent and lists every
+ * subtask, the ones in other projects included; a row leads to that subtask.
  *
  * Why it matters: whatever a session files is that session's SUBTASK
  * (caller-placement.ts), wherever it lands: new tasks land pinned in Satellite,
@@ -63,6 +65,10 @@ test('a subtask shows Sub on its pinned card and its list row; a top-level task 
   await expect(pill).toHaveAttribute('data-parent-task-id', parent)
   await expect(card(parent).locator('[data-testid="subtask-pill"]')).toHaveCount(0)
   await expect(card(loose).locator('[data-testid="subtask-pill"]')).toHaveCount(0)
+  // The parent's card carries the Leader pill with the count; the others do not.
+  await expect(card(parent).locator('[data-testid="leader-pill"]')).toHaveText('Leader · 2')
+  await expect(card(pinnedChild).locator('[data-testid="leader-pill"]')).toHaveCount(0)
+  await expect(card(loose).locator('[data-testid="leader-pill"]')).toHaveCount(0)
 
   // Its own violet, not the base pill's grey: the stylesheet loads before
   // globals.css, so a selector that only ties the base rule loses on order.
@@ -123,13 +129,49 @@ test('a subtask in another project is a top-level row there, and its Sub pill le
   await expect(farPill).toHaveAttribute('data-parent-task-id', parent)
   await expect(farPill).toHaveAttribute('title', new RegExp(`GitLab token expiry ${stamp}`))
   await expect(row(near).locator('[data-testid="subtask-pill"]')).toHaveText('Sub')
-  // The parent counts both, across projects.
-  await expect(row(parent).locator('.task-children-badge')).toHaveText('2 sub')
+  // The parent leads both, across projects.
+  const leaderPill = row(parent).locator('[data-testid="leader-pill"]')
+  await expect(leaderPill).toHaveText('Leader · 2')
+  await expect(row(near).locator('[data-testid="leader-pill"]')).toHaveCount(0)
 
   // Clicking the pill locates the PARENT (selects it), not the row it sits in.
   await farPill.click()
   await expect(row(parent)).toHaveClass(/task-focused/, { timeout: 10_000 })
   await expect(row(far)).not.toHaveClass(/task-focused/)
+
+  // The Leader pill opens the list of subtasks: both of them, the one in the
+  // other project labelled with that project; a row leads to that subtask.
+  await leaderPill.click()
+  const flyout = page.locator('[data-testid="leader-subtasks-flyout"]')
+  await expect(flyout).toBeVisible()
+  await expect(flyout.locator('[data-testid="leader-sub-row"]')).toHaveCount(2)
+  const farRow = flyout.locator(`[data-testid="leader-sub-row"][data-task-id="${far}"]`)
+  await expect(farRow.locator('.leader-sub-place')).toHaveText(projectB)
+  await expect(flyout.locator(`[data-testid="leader-sub-row"][data-task-id="${near}"] .leader-sub-place`)).toHaveCount(0)
+  // The flyout never leaves the viewport.
+  const box = await flyout.boundingBox()
+  const vp = page.viewportSize()!
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.y).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(vp.width + 0.5)
+  expect(box!.y + box!.height).toBeLessThanOrEqual(vp.height + 0.5)
+  // The leader's row and its open flyout together, for the human review of the run.
+  const rowBox = (await row(parent).boundingBox())!
+  const x = Math.max(0, Math.min(rowBox.x, box!.x) - 8), y = Math.max(0, Math.min(rowBox.y, box!.y) - 8)
+  await fs.mkdir(SHOT_DIR, { recursive: true })
+  await page.screenshot({
+    path: `${SHOT_DIR}/${browserName}-leader-flyout.png`,
+    clip: { x, y, width: Math.min(vp.width - x, Math.max(rowBox.x + rowBox.width, box!.x + box!.width) - x + 8), height: Math.min(vp.height - y, Math.max(rowBox.y + rowBox.height, box!.y + box!.height) - y + 8) },
+  })
+  await farRow.click()
+  await expect(flyout).toHaveCount(0)
+  await expect(row(far)).toHaveClass(/task-focused/, { timeout: 10_000 })
+  await expect(row(parent)).not.toHaveClass(/task-focused/)
+  // Escape closes a reopened flyout without leaving the page.
+  await leaderPill.click()
+  await expect(flyout).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(flyout).toHaveCount(0)
 
   // The three rows across two projects, for the human review of the run.
   await fs.mkdir(SHOT_DIR, { recursive: true })

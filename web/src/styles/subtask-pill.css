@@ -41,3 +41,131 @@
     background: rgba(160, 140, 255, 0.32);
   }
 }
+
+/* Leader pill (LeaderPill.tsx): the Sub pill's twin on the parent, same violet
+   so the pair reads as one relation. It is a real <button>, so the browser's
+   button chrome is reset here (the base pill is a span). */
+.todo-item-due-pill.todo-item-leader-pill {
+  background: rgba(124, 92, 255, 0.12);
+  color: #6a4fd8;
+  flex-shrink: 0;
+  cursor: pointer;
+  border: 0;
+  font: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.todo-item-due-pill.todo-item-leader-pill:hover,
+.todo-item-due-pill.todo-item-leader-pill:focus-visible,
+.todo-item-due-pill.todo-item-leader-pill[aria-expanded="true"] {
+  background: rgba(124, 92, 255, 0.24);
+  outline: none;
+}
+
+:root[data-theme="dark"] .todo-item-due-pill.todo-item-leader-pill {
+  background: rgba(160, 140, 255, 0.18);
+  color: #b9a8ff;
+}
+
+:root[data-theme="dark"] .todo-item-due-pill.todo-item-leader-pill:hover,
+:root[data-theme="dark"] .todo-item-due-pill.todo-item-leader-pill:focus-visible,
+:root[data-theme="dark"] .todo-item-due-pill.todo-item-leader-pill[aria-expanded="true"] {
+  background: rgba(160, 140, 255, 0.32);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .todo-item-due-pill.todo-item-leader-pill {
+    background: rgba(160, 140, 255, 0.18);
+    color: #b9a8ff;
+  }
+  :root:not([data-theme]) .todo-item-due-pill.todo-item-leader-pill:hover,
+  :root:not([data-theme]) .todo-item-due-pill.todo-item-leader-pill:focus-visible,
+  :root:not([data-theme]) .todo-item-due-pill.todo-item-leader-pill[aria-expanded="true"] {
+    background: rgba(160, 140, 255, 0.32);
+  }
+}
+
+/* The leader's flyout: every subtask, wherever it lives. Same shell as the
+   TRIGGER flyout (fixed, placed by useMenuPlacement, above the columns). */
+.leader-subtasks-flyout {
+  position: fixed;
+  z-index: 9500;
+  width: min(380px, calc(100vw - 16px));
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  color: var(--fg);
+  font-size: 12px;
+  overflow: auto;
+}
+
+.leader-subtasks-title {
+  padding: 2px 6px 6px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leader-subtasks-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.leader-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.leader-sub-row:hover,
+.leader-sub-row:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.leader-sub-row .leader-sub-phase { cursor: inherit; }
+.leader-sub-row .leader-sub-phase:hover { background: none; }
+
+.leader-sub-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leader-sub-row.is-done .leader-sub-title { color: var(--fg-muted); }
+
+.leader-sub-place {
+  flex: 0 1 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-secondary);
+  font-size: 11px;
+}
+
+.leader-sub-phase-label {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-size: 10px;
+}

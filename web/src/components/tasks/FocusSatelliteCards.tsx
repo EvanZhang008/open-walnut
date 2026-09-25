@@ -17,6 +17,7 @@ import { TaskStartButton } from './TaskStartButton';
 import { CronPill } from '@/components/sessions/CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { SubtaskPill } from './SubtaskPill';
+import { LeaderPill } from './LeaderPill';
 import * as ICONS from '../common/Icons';
 
 
@@ -459,6 +460,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         {task.title}
       </span>
       <SubtaskPill task={task} />
+      <LeaderPill task={task} />
       <CronPill sessionId={resolveTaskSessionId(task)} />
       <TriggerPill taskId={task.id} />
       {/* ▶ — hover-revealed, immediately before the kebab, exactly as on the list
