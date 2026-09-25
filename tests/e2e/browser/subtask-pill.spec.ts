@@ -1,14 +1,15 @@
 /**
  * The "Sub" pill (web/src/components/tasks/SubtaskPill.tsx): a task with a
- * parent_task_id carries it on its pinned card and on its list row, and a
- * top-level task never does.
+ * parent_task_id carries it on its pinned card and on its list row, a top-level
+ * task never does, and clicking it leads to the parent.
  *
- * Why it matters: work an agent splits off from its own task is filed as that
- * task's SUBTASK (caller-placement.ts), and new tasks land pinned in Satellite,
- * where every task is a flat card. Without the pill a delegated piece of work
- * looked like an unrelated top-level task. The server half (who becomes a
- * subtask) is pinned by tests/web/routes/api-v1-task-create-placement.test.ts;
- * this spec owns what a human SEES.
+ * Why it matters: whatever a session files is that session's SUBTASK
+ * (caller-placement.ts), wherever it lands: new tasks land pinned in Satellite,
+ * where every task is a flat card, and a task filed into ANOTHER project is a
+ * top-level row there. Without the pill a delegated piece of work looked like
+ * an unrelated top-level task. The server half (who becomes a subtask) is
+ * pinned by tests/web/routes/api-v1-task-create-placement.test.ts; this spec
+ * owns what a human SEES and can click.
  */
 import { expect, test } from '@playwright/test'
 import fs from 'node:fs/promises'
@@ -88,4 +89,45 @@ test('a subtask shows Sub on its pinned card and its list row; a top-level task 
   await expect(row).toBeVisible({ timeout: 15_000 })
   await expect(row.locator('[data-testid="subtask-pill"]')).toHaveText('Sub')
   await row.screenshot({ path: `${SHOT_DIR}/${browserName}-list-row.png` })
+})
+
+
+test('a subtask in another project is a top-level row there, and its Sub pill leads to the parent', async ({ page }) => {
+  test.setTimeout(120_000)
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const projectA = `Sub pill A ${stamp}`, projectB = `Sub pill B ${stamp}`
+  const parent = await createTask(`GitLab token expiry ${stamp}`, { project: projectA, pinned: false })
+  const near = await createTask(`Check the sync job ${stamp}`, { project: projectA, pinned: false, parent_task_id: parent })
+  const far = await createTask(`Rotate the token ${stamp}`, { project: projectB, pinned: false, parent_task_id: parent })
+
+  await presetPanelView(page, { section: 'all', project: '' })
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.goto('/')
+
+  const row = (id: string) => page.locator(`.todo-panel-item[data-task-id="${id}"]`)
+  await expect(row(far)).toBeVisible({ timeout: 90_000 })
+  await expect(row(near)).toBeVisible({ timeout: 15_000 })
+
+  // Same project: indented under the parent. Another project: its own top-level
+  // row, flush with the parent (an indent would have moved it under the parent's
+  // project header). Measured against the parent, because a top-level row has a
+  // base margin of its own.
+  const indent = (id: string) => row(id).evaluate((el) => parseFloat(getComputedStyle(el).marginLeft) || 0)
+  const top = await indent(parent)
+  expect(await indent(near)).toBeGreaterThan(top)
+  expect(await indent(far)).toBe(top)
+
+  // Both carry the pill, and the pill names the parent.
+  const farPill = row(far).locator('[data-testid="subtask-pill"]')
+  await expect(farPill).toHaveText('Sub')
+  await expect(farPill).toHaveAttribute('data-parent-task-id', parent)
+  await expect(farPill).toHaveAttribute('title', new RegExp(`GitLab token expiry ${stamp}`))
+  await expect(row(near).locator('[data-testid="subtask-pill"]')).toHaveText('Sub')
+  // The parent counts both, across projects.
+  await expect(row(parent).locator('.task-children-badge')).toHaveText('2 sub')
+
+  // Clicking the pill locates the PARENT (selects it), not the row it sits in.
+  await farPill.click()
+  await expect(row(parent)).toHaveClass(/task-focused/, { timeout: 10_000 })
+  await expect(row(far)).not.toHaveClass(/task-focused/)
 })

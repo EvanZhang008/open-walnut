@@ -2359,13 +2359,19 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     const registryKey = decidedProject.registryKey;
     const project = registryKey ?? requestedProject;
     const registrySource: TaskSource | undefined = registryKey ? projects[registryKey].source : undefined;
+    // A subtask inherits its parent's source only inside the parent's project.
+    // Filed into another project it is that project's kind of task (a local ask
+    // may spawn work in a synced project, and the reverse), so the target's
+    // registry decides, exactly as for a task with no parent.
+    const parentHere = parentTask && (parentTask.project ?? '').trim().toLowerCase() === project.trim().toLowerCase()
+      ? parentTask : undefined;
 
-    // Source chain: parent → registry row → caller override → plugin claim.
+    // Source chain: parent (same project) → registry row → caller override → plugin claim.
     // Inbox is structurally local-only: no registry row exists for '' and no
     // provider may claim it, so a provider-sourced task MUST name a project.
     let source: TaskSource;
     if (!project) {
-      const demanded = parentTask?.source ?? input.source;
+      const demanded = parentHere?.source ?? input.source;
       if (demanded && demanded !== 'local') {
         throw new Error(
           decidedProject.blocked
@@ -2374,7 +2380,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
         );
       }
       source = 'local';
-    } else if (input.source === 'local' && !parentTask) {
+    } else if (input.source === 'local' && !parentHere) {
       // An EXPLICIT 'local' outranks the registry claim: the caller (quick-start,
       // external-session import) is saying "this task must never sync". The
       // project is then just a folder — a local task parked in a provider-claimed
@@ -2388,9 +2394,9 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       // project gets that provider rather than a 409 (the task has to be
       // pushable to live there). input.source only decides a project that has
       // no row yet. A conflict is therefore only reachable through parent
-      // inheritance — a child whose parent belongs to provider A can't be filed
-      // under provider B's project.
-      source = parentTask?.source
+      // inheritance inside one project — a child filed beside a parent that
+      // belongs to provider A while the project has moved to provider B.
+      source = parentHere?.source
         ?? registrySource
         ?? input.source
         ?? (await registry.getForProject(project)).id;

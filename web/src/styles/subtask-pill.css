@@ -4,12 +4,21 @@
    Every selector pairs both classes: this file is injected BEFORE globals.css
    (the component module loads first), so a single class ties with the base
    .todo-item-due-pill and loses on order, which painted the pill grey.
+   The pill is a button (it leads to the parent task), so it takes the pointer
+   cursor and a hover/focus tint the plain due pill does not have.
    Dark mode follows the app's two switches: an explicit data-theme, or the OS
    preference when no theme is set (same pattern as globals.css). */
 .todo-item-due-pill.todo-item-subtask-pill {
   background: rgba(124, 92, 255, 0.12);
   color: #6a4fd8;
   flex-shrink: 0;
+  cursor: pointer;
+}
+
+.todo-item-due-pill.todo-item-subtask-pill:hover,
+.todo-item-due-pill.todo-item-subtask-pill:focus-visible {
+  background: rgba(124, 92, 255, 0.24);
+  outline: none;
 }
 
 :root[data-theme="dark"] .todo-item-due-pill.todo-item-subtask-pill {
@@ -17,9 +26,18 @@
   color: #b9a8ff;
 }
 
+:root[data-theme="dark"] .todo-item-due-pill.todo-item-subtask-pill:hover,
+:root[data-theme="dark"] .todo-item-due-pill.todo-item-subtask-pill:focus-visible {
+  background: rgba(160, 140, 255, 0.32);
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .todo-item-due-pill.todo-item-subtask-pill {
     background: rgba(160, 140, 255, 0.18);
     color: #b9a8ff;
+  }
+  :root:not([data-theme]) .todo-item-due-pill.todo-item-subtask-pill:hover,
+  :root:not([data-theme]) .todo-item-due-pill.todo-item-subtask-pill:focus-visible {
+    background: rgba(160, 140, 255, 0.32);
   }
 }

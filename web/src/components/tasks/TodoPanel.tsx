@@ -665,6 +665,11 @@ function clusterTierByGroup(tasks: Task[], sinkFolders = false): string[] {
  * (idempotent), and NEVER applied mid-drag — during a drag the user's live
  * order is authority (same contract as group clustering).
  */
+/** Case-insensitive project identity, the registry's rule ('' = Inbox). */
+function sameProjectKey(a: string | undefined, b: string | undefined): boolean {
+  return (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
+}
+
 function clusterTierByProject(ids: string[], tasks: Task[], projectOrder?: string[]): string[] {
   const taskById = new Map(tasks.map((t) => [t.id, t]));
   // 1. Blocks: same-group contiguous runs collapse into one block; everything
@@ -5161,8 +5166,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         // Respect completed filter even for children (but keep recently-completed visible)
         if (!completedBypass(t) && !showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE' && !keepWhileCompleting(t)) continue;
         // parent_task_id uses a prefix convention: check if any visible task's id
-        // starts with this task's parent_task_id (handles composite/prefixed IDs)
-        const parentVisible = result.some(p => p.id.startsWith(t.parent_task_id!));
+        // starts with this task's parent_task_id (handles composite/prefixed IDs).
+        // Only a parent in the SAME project pulls its child in: a subtask filed
+        // into another project is that project's own row (its Sub pill carries
+        // the link), and must not drag its project into a view filtered to the parent's.
+        const parentVisible = result.some(p => p.id.startsWith(t.parent_task_id!) && sameProjectKey(p.project, t.project));
         if (parentVisible) {
           result.push(t);
           included.add(t.id);
@@ -5556,6 +5564,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     // Build a prefix→fullId lookup so parent_task_id (short prefix) resolves to the actual parent
     const fullIds = items.map((t) => t.id);
+    const byId = new Map(items.map((t) => [t.id, t]));
     const resolveParent = (prefix: string): string | undefined =>
       fullIds.find((id) => id.startsWith(prefix));
 
@@ -5564,9 +5573,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         topLevel.push(task);
         continue;
       }
-      // parent_task_id may be a short prefix (e.g. "mlk71mm5") — resolve via prefix match
+      // parent_task_id may be a short prefix (e.g. "mlk71mm5") — resolve via prefix match.
+      // Nesting stays inside one project: a subtask filed into another project
+      // is a top-level row there (the list buckets rows by project below, so
+      // nesting it would move it under the parent's project header).
       const parentFullId = resolveParent(task.parent_task_id);
-      if (parentFullId) {
+      const parentTask = parentFullId ? byId.get(parentFullId) : undefined;
+      if (parentFullId && parentTask && sameProjectKey(parentTask.project, task.project)) {
         let siblings = childrenOf.get(parentFullId);
         if (!siblings) { siblings = []; childrenOf.set(parentFullId, siblings); }
         siblings.push(task);
@@ -5806,11 +5819,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         // Find parent — match by prefix (parent_task_id may be a short prefix)
         const parentId = task.parent_task_id;
         const parent = sorted.find((t) => t.id.startsWith(parentId));
-        if (parent) {
+        // Same project only, as computeSortOrder nests: a cross-project subtask
+        // is a top-level row in its own project, never indented or folded away.
+        if (parent && sameProjectKey(parent.project, task.project)) {
           childIds.add(task.id);
           parentMap.set(task.id, parent.id);
         }
-        // If parent not visible → orphan: no childIds entry, renders as top-level
+        // If parent not visible (or in another project) → orphan: no childIds entry, renders as top-level
       }
     }
     // Compute depth for each task by walking the parent chain (supports unlimited nesting)

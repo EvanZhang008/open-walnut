@@ -574,11 +574,15 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   Both are hints: they never change where the task is filed, and a non-worker's
   are ignored. An explicit `project` (`""` =
   Inbox) or `group_id` (`""` = no folder) always wins, and a folder never
-  follows work into another project. A task a worker files into its own project
-  is also that worker's SUBTASK (`parent_task_id` = the caller's task, reported as
-  `placement.parent_task_id`; the web board marks it with a Sub pill); filed into
-  another project it is independent. No header, an unknown id, or a Personal AI
-  ask: the old defaults, unchanged. `placement` says where the task landed,
+  follows work into another project. Whatever a session files is that session's
+  task's SUBTASK (`parent_task_id` = the caller's task, reported as
+  `placement.parent_task_id`; the web board marks it with a Sub pill that leads
+  back to the parent), wherever it lands: another project too, and from a
+  Personal AI ask as well. A subtask filed into another project takes that
+  project's source, not its parent's. No header or an unknown id: the old
+  defaults, unchanged. An ask keeps the old defaults for project, folder and cwd
+  (its own `Ask …` project is never a place for the user's work) and only adds
+  the parent link. `placement` says where the task landed,
   because ProjectedTask carries no folder; `warning` appears when an inherited
   folder could not be applied (the task is still created). `group_id` must be a
   folder of the resulting project: malformed, unknown, or another project's

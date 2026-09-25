@@ -18,11 +18,12 @@
  *     one; otherwise a new folder is made holding the caller AND the new task
  *     (the same shape a fork produces). A folder never follows work into another
  *     project, because a folder is that project's private structure.
- *   - parent: a task that lands in the caller's project is a SUBTASK of the
- *     caller (`parent_task_id`), the same relation a promoted side question
- *     gets. The board marks it with a Sub pill and the parent counts it, so
- *     work an agent split off stays visibly attached to the work it came from.
- *     Filed into another project it is independent work, not a subtask.
+ *   - parent: whatever a session files is a SUBTASK of that session's task
+ *     (`parent_task_id`), the same relation a promoted side question gets:
+ *     in the caller's project, in another one, and from a Personal AI
+ *     conversation too. The board marks it with a Sub pill that leads back to
+ *     the parent, and the parent counts it, so work an agent split off stays
+ *     visibly attached to the work it came from wherever it lands.
  *   - host + cwd: travel together (a cwd is only meaningful on its host). At
  *     create time the caller's cwd is stamped on the task when it belongs to the
  *     host the task would launch on anyway; at start time a task with no cwd of
@@ -30,9 +31,10 @@
  *
  * Only a WORKER caller (a session running a regular task) is placed from. The
  * Personal AI's own conversations are sessions too, but their tasks live in the
- * `Ask …` projects, and filing the user's work there would bury it. Humans,
- * external processes and a cloud replica (no session registry) keep the old
- * behaviour.
+ * `Ask …` projects, and filing the user's work there would bury it: an ask keeps
+ * the old defaults for project, folder and cwd and only gets the parent link.
+ * Humans, external processes and a cloud replica (no session registry) keep the
+ * old behaviour entirely.
  */
 
 import path from 'node:path';
@@ -135,19 +137,25 @@ export interface PlacementDecision {
   createFolderWithCaller: boolean;
   /** Set when the caller's placement was used (project, folder or both). */
   inheritedFrom?: string;
-  /** The caller's task, when the new task lands in its project: the parent. */
+  /** The caller's task, for any session caller (worker or ask): the parent,
+   *  wherever the new task lands. */
   parentTaskId?: string;
 }
 
 /** Pure: the placement rule table (see the module header). */
 export function decidePlacement(req: PlacementRequest, caller: CallerPlacement): PlacementDecision {
   const explicitGroup = req.group_id === undefined ? undefined : (req.group_id || undefined);
+  if (caller.kind === 'ask') {
+    // Its `Ask …` project is never a place for the user's work, but the work
+    // is still this conversation's: the parent link and nothing else.
+    return { project: req.project, group_id: explicitGroup, createFolderWithCaller: false, parentTaskId: caller.task.id };
+  }
   if (caller.kind !== 'worker') {
     return { project: req.project, group_id: explicitGroup, createFolderWithCaller: false };
   }
   const project = req.project !== undefined ? req.project : caller.task.project;
   const own = sameProject(project, caller.task.project);
-  const parent = own ? { parentTaskId: caller.task.id } : {};
+  const parent = { parentTaskId: caller.task.id };
   // A folder is inherited only inside the caller's own project.
   if (req.group_id !== undefined || !own) {
     return {

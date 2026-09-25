@@ -640,6 +640,30 @@ describe('updateTask — unread (read marker)', () => {
 // blob on the task_projects registry row, covered by
 // tests/core/project-source-validation.test.ts ('project metadata').
 
+describe('addTask — a subtask in another project', () => {
+  // A session's task is its subtask wherever it lands (caller-placement). Inside
+  // the parent's project the child inherits the parent's provider, as before;
+  // filed into another project it is that project's kind of task, so a synced
+  // parent does not turn a local project's task into a provider row (and the
+  // reverse), and no provider conflict is raised across projects.
+  it('takes the target project and its source, not the parent\'s', async () => {
+    const { task: parent } = await addTask({ title: 'Synced parent', project: 'Remote', source: 'ms-todo' });
+    const { task: child } = await addTask({ title: 'Local child', project: 'Local', parent_task_id: parent.id });
+    expect(child.project).toBe('Local');
+    expect(child.source).toBe('local');
+    expect(child.parent_task_id).toBe(parent.id);
+  });
+
+  it('inside the parent\'s project (any case) still inherits the parent\'s source', async () => {
+    const { task: parent } = await addTask({ title: 'Synced parent', project: 'Remote', source: 'ms-todo' });
+    const { task: implicit } = await addTask({ title: 'Beside', parent_task_id: parent.id });
+    expect(implicit.project).toBe('Remote');
+    expect(implicit.source).toBe('ms-todo');
+    const { task: cased } = await addTask({ title: 'Beside, cased', project: 'remote', parent_task_id: parent.id });
+    expect(cased.source).toBe('ms-todo');
+  });
+});
+
 describe('updateTask — parent_task_id re-parenting', () => {
   it('re-parents a task to a new parent', async () => {
     const { task: parent1 } = await addTask({ title: 'Parent 1' });

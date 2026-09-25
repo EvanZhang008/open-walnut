@@ -2151,8 +2151,9 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     const { projectTask } = await import('../../core/task-projection.js')
     // Work created from INSIDE a task lands beside it: the caller's project and
     // folder (a new folder when it has none), unless the body names another
-    // place. Only a worker session is placed from; the phone, the web UI and the
-    // Personal AI send no worker caller and keep the old defaults.
+    // place, and it is the caller's subtask wherever it lands. Only a worker
+    // session is placed from; a Personal AI ask gets the parent link alone, and
+    // the phone and the web UI send no caller and keep the old defaults.
     const { resolveCallerPlacement, decidePlacement, createTimeCwd, joinOrCreateSiblingFolder } =
       await import('../../core/sessions/caller-placement.js')
     const rawSid = req.headers['x-walnut-caller-sid']
@@ -2165,6 +2166,13 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       ...(typeof launchHost === 'string' ? { launch_host: launchHost } : {}),
     }
     const decision = decidePlacement(placementReq, caller)
+    if (caller.kind === 'ask' && decision.project === undefined) {
+      // An ask's own project is `Ask …`, never a place for the user's work. With
+      // a parent set, addTask would inherit the parent's project, so the default
+      // a parentless create gets is made explicit here.
+      const { getConfig } = await import('../../core/config-manager.js')
+      decision.project = (await getConfig()).defaults?.project ?? ''
+    }
     const stampedCwd = await createTimeCwd(placementReq, caller, decision).catch(() => undefined)
     try {
       // asyncPush like the web create path: the client renders the task
@@ -2189,7 +2197,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       }
       let folderWarning: string | undefined
       let parentWarning: string | undefined
-      // A worker's task in its own project is its subtask (see caller-placement).
+      // A session's task is its subtask wherever it lands (see caller-placement).
       let parentInput: { parent_task_id?: string } = decision.parentTaskId ? { parent_task_id: decision.parentTaskId } : {}
       const add = async (folder: { group_id?: string }) => {
         try {

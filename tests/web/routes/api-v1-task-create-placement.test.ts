@@ -112,13 +112,21 @@ describe('callers that are not workers keep the old defaults', () => {
     expect(['', 'Inbox']).toContain(json.task.project)
   })
 
-  it('a Personal AI ask never files the user\'s work under its Ask project', async () => {
-    const { sid } = await seedCaller('Ask Walnut', { walnutAgent: true })
+  it('a Personal AI ask never files the user\'s work under its Ask project, but the work is its subtask', async () => {
+    const { task: ask, sid } = await seedCaller('Ask Walnut', { walnutAgent: true })
     const { json } = await post({ title: 'Track the dentist call' }, sid)
-    expect(json.task.project).not.toBe('Ask Walnut')
+    // The project default a parentless create gets, never the ask's own project
+    // (which addTask would otherwise inherit through the parent).
+    expect(['', 'Inbox']).toContain(json.task.project)
     expect(json.placement.inherited_from).toBeUndefined()
     expect(json.placement.group_id).toBeUndefined()
-    expect((await getTask(json.task.id)).parent_task_id).toBeUndefined()
+    expect(json.placement.parent_task_id).toBe(ask.id)
+    expect((await getTask(json.task.id)).parent_task_id).toBe(ask.id)
+    // Naming a project: that project, and still this conversation's subtask.
+    const named = await post({ title: 'Rotate the token', project: 'acme' }, sid)
+    expect(named.json.task.project).toBe('acme')
+    expect(named.json.placement).toEqual({ project: 'acme', folder_created: false, parent_task_id: ask.id })
+    expect((await getTask(named.json.task.id)).parent_task_id).toBe(ask.id)
   })
 })
 
@@ -178,16 +186,17 @@ describe('a worker caller', () => {
     expect(json.placement.group_id).toBe(folder.group_id)
   })
 
-  it('naming another project: that project, and the folder does not follow', async () => {
+  it('naming another project: that project, the folder does not follow, the parent link does', async () => {
     const folder = await createFolder('Stays', 'marina')
-    const { sid } = await seedCaller('marina', { folder: folder.group_id })
+    const { task: caller, sid } = await seedCaller('marina', { folder: folder.group_id })
     const { json } = await post({ title: 'Release notes', project: 'acme' }, sid)
     expect(json.task.project).toBe('acme')
-    expect(json.placement).toEqual({ project: 'acme', folder_created: false })
+    expect(json.placement).toEqual({ project: 'acme', folder_created: false, parent_task_id: caller.id })
     const born = await getTask(json.task.id)
     expect(born.cwd).toBeUndefined()
-    // Work filed into another project is independent, not a subtask.
-    expect(born.parent_task_id).toBeUndefined()
+    expect(born.group_id).toBeUndefined()
+    // Work filed into another project is still this task's subtask.
+    expect(born.parent_task_id).toBe(caller.id)
   })
 
   it('naming the Inbox on purpose: Inbox, no folder', async () => {
@@ -250,11 +259,12 @@ describe('a worker caller', () => {
     expect((await getTask(human.json.task.id)).cwd).toBeUndefined()
   })
 
-  it('a task in an Ask project without the flag is still an ask: nothing filed into it', async () => {
-    const { sid } = await seedCaller('Ask Mentor')
+  it('a task in an Ask project without the flag is still an ask: nothing filed into it, subtask all the same', async () => {
+    const { task: ask, sid } = await seedCaller('Ask Mentor')
     const { json } = await post({ title: 'Not a mentor chat' }, sid)
     expect(json.task.project).not.toBe('Ask Mentor')
     expect(json.placement.inherited_from).toBeUndefined()
+    expect(json.placement.parent_task_id).toBe(ask.id)
   })
 
   it('a folder the caller had that no longer exists never fails the create', async () => {

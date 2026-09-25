@@ -1,22 +1,54 @@
+import type { KeyboardEvent, MouseEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { locateTaskOnHome } from '@/utils/open-session';
+import { resolveTaskSessionId } from '@/utils/session-status';
 import '@/styles/subtask-pill.css';
 
 /**
- * "Sub" pill: this task is a subtask (it has a parent_task_id). The main list
- * already indents a subtask under its parent, but the pinned tiers show every
- * task as a flat card, and that is where work an agent split off from its own
- * task lands (caller-placement.ts makes it a subtask of the caller). Without the
- * pill a delegated piece of work looked like an unrelated top-level task.
+ * "Sub" pill: this task is a subtask (it has a parent_task_id), and the pill
+ * leads back to the parent.
+ *
+ * Work a session files is that session's subtask wherever it lands (see
+ * caller-placement.ts): beside it, in another project, or from a Personal AI
+ * conversation. The main list indents a subtask under its parent only inside
+ * one project; everywhere else (the pinned tiers show every task as a flat
+ * card, a subtask in another project is a top-level row there) the pill is the
+ * only sign. Clicking it is the same locate a chat task reference does: the
+ * parent is selected and scrolled to, its session opens (an ask in the chat
+ * slot), and the page goes home when it is not there already.
  */
-export const SUBTASK_PILL_TITLE = 'Subtask: part of another task. Its parent shows how many subtasks it has.';
+export function subtaskPillTitle(parentTitle: string | undefined): string {
+  return parentTitle
+    ? `Subtask of "${parentTitle}". Click to go to that task.`
+    : 'Subtask of another task. Click to go to it.';
+}
 
 export function SubtaskPill({ task, className }: { task: { parent_task_id?: string }; className?: string }) {
-  if (!task.parent_task_id) return null;
+  const navigate = useNavigate();
+  const store = useTasksContextSafe();
+  const parentId = task.parent_task_id;
+  if (!parentId) return null;
+  // parent_task_id may be a short prefix (legacy data): the store's rule everywhere.
+  const parent = store?.tasks.find((t) => t.id.startsWith(parentId)) ?? null;
+  const open = (e: MouseEvent | KeyboardEvent) => {
+    // The pill sits inside a clickable, draggable row: this click is the pill's alone.
+    e.stopPropagation();
+    e.preventDefault();
+    const sid = parent ? resolveTaskSessionId(parent) : null;
+    locateTaskOnHome(parent?.id ?? parentId, navigate, sid ? { sessionId: sid } : undefined);
+  };
   return (
     <span
+      role="button"
+      tabIndex={0}
       className={`todo-item-due-pill todo-item-subtask-pill${className ? ` ${className}` : ''}`}
-      title={SUBTASK_PILL_TITLE}
+      title={subtaskPillTitle(parent?.title)}
       data-testid="subtask-pill"
-      data-parent-task-id={task.parent_task_id}
+      data-parent-task-id={parent?.id ?? parentId}
+      onClick={open}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') open(e); }}
+      onPointerDown={(e) => e.stopPropagation()}
     >
       Sub
     </span>

@@ -38,13 +38,22 @@ describe('decidePlacement (the rule table)', () => {
   const others: CallerPlacement[] = [
     { kind: 'human' }, { kind: 'external' }, { kind: 'unknown' },
     { kind: 'untracked', session: SESSION },
-    { kind: 'ask', task: { id: 't-ask', title: 'Ask', project: 'Ask Walnut' }, session: SESSION },
   ]
   it.each(others.map((c) => [c.kind, c] as const))('a %s caller keeps the old defaults', (_kind, caller) => {
     expect(decidePlacement({}, caller)).toEqual({ project: undefined, group_id: undefined, createFolderWithCaller: false })
     expect(decidePlacement({ project: 'acme', group_id: 'g_x' }, caller))
       .toEqual({ project: 'acme', group_id: 'g_x', createFolderWithCaller: false })
     expect(decidePlacement({ group_id: '' }, caller).group_id).toBeUndefined()
+  })
+
+  it('a Personal AI ask keeps the old defaults for project and folder, but the work is its subtask', () => {
+    // Its own `Ask …` project is never a place for the user's work, so nothing
+    // is inherited from it; the task is still this conversation's, wherever it lands.
+    const ask: CallerPlacement = { kind: 'ask', task: { id: 't-ask', title: 'Ask', project: 'Ask Walnut' }, session: SESSION }
+    expect(decidePlacement({}, ask)).toEqual({ project: undefined, group_id: undefined, createFolderWithCaller: false, parentTaskId: 't-ask' })
+    expect(decidePlacement({ project: 'acme', group_id: 'g_x' }, ask))
+      .toEqual({ project: 'acme', group_id: 'g_x', createFolderWithCaller: false, parentTaskId: 't-ask' })
+    expect(decidePlacement({ group_id: '' }, ask).group_id).toBeUndefined()
   })
 
   it('worker, nothing named, caller in a folder: same project, same folder', () => {
@@ -66,13 +75,13 @@ describe('decidePlacement (the rule table)', () => {
 
   it('worker naming another project: that project, and the folder does not follow', () => {
     expect(decidePlacement({ project: 'acme' }, worker('g_f'))).toEqual({
-      project: 'acme', group_id: undefined, createFolderWithCaller: false,
+      project: 'acme', group_id: undefined, createFolderWithCaller: false, parentTaskId: 't-caller',
     })
   })
 
   it('worker naming the Inbox on purpose from a project: Inbox, no folder', () => {
     expect(decidePlacement({ project: '' }, worker('g_f'))).toEqual({
-      project: '', group_id: undefined, createFolderWithCaller: false,
+      project: '', group_id: undefined, createFolderWithCaller: false, parentTaskId: 't-caller',
     })
   })
 
@@ -92,14 +101,16 @@ describe('decidePlacement (the rule table)', () => {
     })
   })
 
-  it('a task landing in the caller\'s project is the caller\'s subtask; filed elsewhere it is not', () => {
+  it('whatever a session files is its subtask, wherever it lands', () => {
     // Work an agent splits off stays attached to the work it came from (the
-    // board shows a Sub pill); a task filed into another project is its own work.
+    // board shows a Sub pill): beside it, in another project, in the Inbox.
     expect(decidePlacement({}, worker()).parentTaskId).toBe('t-caller')
     expect(decidePlacement({ project: 'MARINA', group_id: 'g_x' }, worker('g_f')).parentTaskId).toBe('t-caller')
     expect(decidePlacement({}, worker(undefined, '')).parentTaskId).toBe('t-caller')
-    expect(decidePlacement({ project: 'acme' }, worker('g_f')).parentTaskId).toBeUndefined()
-    expect(decidePlacement({ project: '' }, worker('g_f')).parentTaskId).toBeUndefined()
+    expect(decidePlacement({ project: 'acme' }, worker('g_f')).parentTaskId).toBe('t-caller')
+    expect(decidePlacement({ project: '' }, worker('g_f')).parentTaskId).toBe('t-caller')
+    // Only a caller with no task of its own has nothing to be the parent.
+    for (const c of others) expect(decidePlacement({}, c).parentTaskId).toBeUndefined()
   })
 })
 
