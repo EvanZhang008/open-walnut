@@ -8,9 +8,8 @@
  * own timers. `macos_shortcuts_install` stays in-process: it writes files and opens a
  * dialog on the Mac's screen, which should always follow a human's click in the App.
  */
-import type { PluginOpDefinition } from '@open-walnut/plugin-api/server'
+import type { PluginOpDefinition, WalnutServerApi } from '@open-walnut/plugin-api/server'
 import * as actions from './actions'
-import type { RhythmHostApi } from './host'
 import type { RhythmRuntime } from './runtime'
 
 type Handler = (args: Record<string, unknown>) => Promise<unknown>
@@ -88,7 +87,7 @@ function replicaHandlers(): Record<string, Handler> {
   return out
 }
 
-export function registerOps(walnut: RhythmHostApi, runtime: RhythmRuntime | null): void {
+export function registerOps(walnut: WalnutServerApi, runtime: RhythmRuntime | null): void {
   const table = runtime ? handlers(runtime) : replicaHandlers()
   for (const spec of OP_SPECS) {
     const handler = table[spec.name]!

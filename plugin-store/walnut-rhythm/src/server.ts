@@ -10,7 +10,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Disposable, WalnutServerApi } from '@open-walnut/plugin-api/server'
 import { runProcess } from './server/exec'
-import { asRhythmHost } from './server/host'
 import { MacosBridge } from './server/macos-bridge'
 import { readMacosFocus } from './server/macos-focus'
 import { registerOps } from './server/ops'
@@ -25,14 +24,13 @@ const BOUNDARY_SLACK_MS = 250
 let active: RhythmRuntime | null = null
 
 export async function activate(walnut: WalnutServerApi): Promise<void> {
-  const host = asRhythmHost(walnut)
   // The working directory is the server's, so the skills path comes from this module's own URL.
   const moduleDir = path.dirname(fileURLToPath(import.meta.url))
   walnut.registry.skill({ id: 'rhythm', directory: path.resolve(moduleDir, '..', 'skills') })
 
   if (walnut.replica) {
     // The primary owns the timers, the reminders and the Mac. Two boxes would remind twice.
-    registerOps(host, null)
+    registerOps(walnut, null)
     walnut.log.info('Rhythm is idle on this cloud replica; the primary runs it')
     return
   }
@@ -46,7 +44,7 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
     shortcutsDir: path.join(walnut.storage.dataDir, 'shortcuts'),
     onChange: () => { emitState() },
   })
-  const runtime = new RhythmRuntime({ walnut: host, macos })
+  const runtime = new RhythmRuntime({ walnut, macos })
   await runtime.load()
   active = runtime
 
@@ -69,7 +67,7 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
     boundary = at ? { at, timer: walnut.timers.timeout(() => runtime.kick(), at - now + BOUNDARY_SLACK_MS) } : null
   }
 
-  registerOps(host, runtime)
+  registerOps(walnut, runtime)
 
   walnut.events.on('time:banked', (event) => runtime.attention(spansFromBanked(event.data, runtime.now()), 'walnut'))
   walnut.events.on('time:outside', (event) => {
@@ -95,7 +93,6 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
   walnut.log.info('Rhythm activated', {
     focus: runtime.focus.phase,
     reminderEveryMinutes: runtime.config.reminderEveryMinutes,
-    quietAvailable: runtime.quietAvailable,
   })
 }
 

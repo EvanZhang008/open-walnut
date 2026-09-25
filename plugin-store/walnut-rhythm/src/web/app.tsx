@@ -27,7 +27,6 @@ function useRhythm(store: RhythmStore): RhythmPublicState | null {
 
 function quietText(state: RhythmPublicState): string {
   const { quiet } = state
-  if (!quiet.available) return 'This Walnut has no quiet mode yet.'
   if (!quiet.active || quiet.holds.length === 0) return 'Walnut is not quiet.'
   return quiet.holds
     .map((hold) => {

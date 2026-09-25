@@ -7,6 +7,7 @@
  * by the pure modules (presence, scheduler, focus); this file only applies what they
  * decide: notices, the quiet hold, shortcuts, storage, and the `state` event.
  */
+import type { PluginNotifyInput, QuietState, WalnutServerApi } from '@open-walnut/plugin-api/server'
 import { localDayKey, parseQuietHours, inQuietWindow, MINUTE_MS, type QuietWindow } from './clock'
 import { normalizeConfig, type RhythmConfig } from './config'
 import { applyDay, emptyDay, parseDay, type DayChange, type DayLog } from './day-log'
@@ -14,7 +15,6 @@ import {
   advanceFocus, desiredHold, focusOnBoot, IDLE_FOCUS, ownsBreak, sameHold, skipBreak,
   type FocusDurations, type FocusEvent, type FocusState, type HoldSpec,
 } from './focus'
-import { dismissNotice, normalizeQuietState, quietOf, type QuietState, type RhythmHostApi, type RhythmNotice } from './host'
 import type { MacosBridge } from './macos-bridge'
 import { breakOverNotice, focusDoneNotice, KEY_BREAK_OVER, KEY_FOCUS_DONE, KEY_STAND_UP, standUpNotice } from './notices'
 import {
@@ -37,13 +37,13 @@ interface StoredState {
 }
 
 export interface RuntimeDeps {
-  walnut: RhythmHostApi
+  walnut: WalnutServerApi
   macos: MacosBridge
   now?: () => number
 }
 
 export class RhythmRuntime {
-  readonly walnut: RhythmHostApi
+  readonly walnut: WalnutServerApi
   readonly macos: MacosBridge
   readonly now: () => number
   config: RhythmConfig = normalizeConfig({})
@@ -53,8 +53,7 @@ export class RhythmRuntime {
   reminder: ReminderState = { ...EMPTY_REMINDER }
   focus: FocusState = { ...IDLE_FOCUS }
   day: DayLog
-  quietState: QuietState = { active: false, holds: [] }
-  readonly quietAvailable: boolean
+  quietState: QuietState = { active: false, allowPermissions: true, holds: [] }
   readonly signals = { walnut: 0, mac: 0 }
   private hold: HoldSpec | null = null
   private turns = new Map<string, number>()
@@ -72,7 +71,6 @@ export class RhythmRuntime {
     this.walnut = deps.walnut
     this.macos = deps.macos
     this.now = deps.now ?? Date.now
-    this.quietAvailable = quietOf(deps.walnut).available
     this.day = emptyDay(localDayKey(this.now()))
   }
 
@@ -267,27 +265,22 @@ export class RhythmRuntime {
   // ── effects ───────────────────────────────────────────────────────────────
 
   /** Dismiss-then-notify, so the feed never holds a stale copy of the same reminder. */
-  async raise(notice: RhythmNotice): Promise<void> {
+  async raise(notice: PluginNotifyInput): Promise<void> {
     await this.dismiss(notice.dedupKey)
-    // A host older than `dismiss` keeps the first notice per key forever, so a fixed key
-    // would remind exactly once. There, each reminder gets a key of its own instead.
-    const canDismiss = typeof this.walnut.notifications.dismiss === 'function'
-    const sent = canDismiss ? notice : { ...notice, dedupKey: `${notice.dedupKey}:${this.now()}` }
-    try { await this.walnut.notifications.notify(sent) }
+    try { await this.walnut.notifications.notify(notice) }
     catch (error) { this.walnut.log.warn('Rhythm could not raise a reminder', { dedupKey: notice.dedupKey, error: String(error) }) }
   }
 
   async dismiss(dedupKey: string): Promise<void> {
-    try { await dismissNotice(this.walnut, dedupKey) }
+    try { await this.walnut.notifications.dismiss(dedupKey) }
     catch (error) { this.warnOnce(`dismiss:${dedupKey}`, 'Rhythm could not dismiss a reminder', { dedupKey, error: String(error) }) }
   }
 
   /** Keep Walnut's one quiet hold for this plugin equal to what Rhythm wants right now. */
   async syncHold(): Promise<void> {
-    if (!this.quietAvailable) return
     const wanted = desiredHold({ focus: this.focus, focusQuietsWalnut: this.config.focusQuietsWalnut, macosFocusName: this.macos.activeFocusName() })
     if (sameHold(wanted, this.hold)) return
-    const quiet = quietOf(this.walnut).api
+    const quiet = this.walnut.notifications.quiet
     try {
       if (wanted) await quiet.set(wanted.until !== undefined ? { reason: wanted.reason, until: wanted.until } : { reason: wanted.reason })
       else await quiet.clear()
@@ -298,7 +291,7 @@ export class RhythmRuntime {
   }
 
   async readQuiet(): Promise<QuietState> {
-    try { this.quietState = normalizeQuietState(await quietOf(this.walnut).api.get()) }
+    try { this.quietState = await this.walnut.notifications.quiet.get() }
     catch (error) { this.warnOnce('quiet:get', 'Rhythm could not read quiet mode', { error: String(error) }) }
     return this.quietState
   }

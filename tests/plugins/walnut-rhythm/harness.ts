@@ -8,7 +8,7 @@
  */
 import { createFakeWalnut } from '../../../packages/plugin-api/src/testing.js'
 import type { WalnutTask } from '../../../packages/plugin-api/src/shared.js'
-import { asRhythmHost, type QuietHold, type RhythmNotice } from '../../../plugin-store/walnut-rhythm/src/server/host'
+import type { PluginNotifyInput, QuietHold } from '../../../packages/plugin-api/src/server.js'
 import type { RunResult, Runner } from '../../../plugin-store/walnut-rhythm/src/server/exec'
 import { MacosBridge } from '../../../plugin-store/walnut-rhythm/src/server/macos-bridge'
 import type { MacosFocusRead } from '../../../plugin-store/walnut-rhythm/src/server/macos-focus'
@@ -18,7 +18,7 @@ import { RhythmRuntime } from '../../../plugin-store/walnut-rhythm/src/server/ru
 export const MIN = 60_000
 
 export type HostCall =
-  | { type: 'notify'; notice: RhythmNotice }
+  | { type: 'notify'; notice: PluginNotifyInput }
   | { type: 'dismiss'; key: string }
   | { type: 'quiet.set'; input: { until?: number; reason?: string } }
   | { type: 'quiet.clear' }
@@ -35,12 +35,12 @@ export interface HarnessOptions {
 export function makeHarness(options: HarnessOptions) {
   const clock = { t: options.start }
   const calls: HostCall[] = []
-  const feed = new Map<string, RhythmNotice>()
+  const feed = new Map<string, PluginNotifyInput>()
   let ourHold: QuietHold | null = null
   let userHold: QuietHold | null = null
   const live = (hold: QuietHold | null) => (hold && (hold.until === undefined || hold.until > clock.t) ? hold : null)
   const notifications = {
-    async notify(notice: RhythmNotice) { calls.push({ type: 'notify', notice }); feed.set(notice.dedupKey, notice) },
+    async notify(notice: PluginNotifyInput) { calls.push({ type: 'notify', notice }); feed.set(notice.dedupKey, notice) },
     async error() { /* not used */ },
     async recover() { /* not used */ },
     async dismiss(key: string) { calls.push({ type: 'dismiss', key }); feed.delete(key) },
@@ -79,7 +79,7 @@ export function makeHarness(options: HarnessOptions) {
       shortcutsDir: '/tmp/walnut-rhythm-test-shortcuts',
       onChange: () => undefined,
     })
-    return new RhythmRuntime({ walnut: asRhythmHost(fake.api), macos, now: () => clock.t })
+    return new RhythmRuntime({ walnut: fake.api, macos, now: () => clock.t })
   }
 
   return {

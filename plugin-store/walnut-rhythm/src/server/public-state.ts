@@ -5,10 +5,10 @@
  * The web entry reads this type with `import type`, which the build erases, so the
  * browser bundle never pulls in server code.
  */
+import type { QuietHold } from '@open-walnut/plugin-api/server'
 import type { RhythmConfig } from './config'
 import type { DayLog } from './day-log'
 import type { BreakKind, FocusPhase, HoldSpec } from './focus'
-import type { QuietHold } from './host'
 import type { MirrorView, ShortcutsView } from './macos-bridge'
 import { isPresent } from './presence'
 import type { RhythmRuntime } from './runtime'
@@ -44,7 +44,6 @@ export interface RhythmPublicState {
     breakKind?: BreakKind
   }
   quiet: {
-    available: boolean
     active: boolean
     holds: QuietHold[]
     ours: HoldSpec | null
@@ -92,7 +91,6 @@ export function buildPublicState(runtime: RhythmRuntime, now: number): RhythmPub
       ...(focus.breakKind && focus.phase !== 'idle' && focus.phase !== 'focus' ? { breakKind: focus.breakKind } : {}),
     },
     quiet: {
-      available: runtime.quietAvailable,
       active: runtime.quietState.active,
       holds: runtime.quietState.holds,
       ours: runtime.ownHold(),

@@ -6,7 +6,7 @@
  * walked away, a new block started). Action `op`s are LOCAL op names; the host prefixes
  * them, so a button can only ever run one of this plugin's own ops.
  */
-import type { NoticeAction, RhythmNotice } from './host'
+import type { PluginNoticeAction, PluginNotifyInput } from '@open-walnut/plugin-api/server'
 import { formatSitting } from './clock'
 import type { BreakKind, CompletedBlock, FocusState } from './focus'
 
@@ -14,7 +14,7 @@ export const KEY_STAND_UP = 'stand-up'
 export const KEY_FOCUS_DONE = 'focus-done'
 export const KEY_BREAK_OVER = 'break-over'
 
-export function standUpNotice(sittingMs: number, snoozeMinutes: number): RhythmNotice {
+export function standUpNotice(sittingMs: number, snoozeMinutes: number): PluginNotifyInput {
   return {
     kind: 'reminder',
     title: 'Time to stand up',
@@ -35,10 +35,10 @@ function nextBlockArgs(focus: { taskId?: string; minutes: number }): Record<stri
   }
 }
 
-export function focusDoneNotice(block: CompletedBlock, breakKind: BreakKind, breakMinutes: number): RhythmNotice {
+export function focusDoneNotice(block: CompletedBlock, breakKind: BreakKind, breakMinutes: number): PluginNotifyInput {
   const what = block.title ? ` on ${block.title}` : ''
   const breakText = breakKind === 'long' ? `a ${breakMinutes} min long break` : `a ${breakMinutes} min break`
-  const actions: NoticeAction[] = [
+  const actions: PluginNoticeAction[] = [
     { label: 'Start break', op: 'break_start' },
     { label: 'Skip break', op: 'break_skip' },
     { label: 'Another block', op: 'focus_start', args: nextBlockArgs(block) },
@@ -54,7 +54,7 @@ export function focusDoneNotice(block: CompletedBlock, breakKind: BreakKind, bre
   }
 }
 
-export function breakOverNotice(focus: Pick<FocusState, 'taskId' | 'title' | 'minutes'>): RhythmNotice {
+export function breakOverNotice(focus: Pick<FocusState, 'taskId' | 'title' | 'minutes'>): PluginNotifyInput {
   const what = focus.title ? ` on ${focus.title}` : ''
   return {
     kind: 'reminder',
