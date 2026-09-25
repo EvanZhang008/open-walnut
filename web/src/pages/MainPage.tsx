@@ -1791,7 +1791,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } catch { /* non-critical */ }
   }, [openSessionOrToast]);
 
-  const handleCreate = useCallback(async (input: { title: string; priority: string; project?: string; description?: string; due_date?: string; start_date?: string; end_date?: string; pinnedTier?: string; capture?: boolean }) => {
+  // `pinnedTier: null` = explicitly NOT pinned (a draft whose tier the user
+  // unpinned): sent as `pinned: false`, because a create that says nothing is
+  // pinned to Satellite by the server (newTaskPinDefault).
+  const handleCreate = useCallback(async (input: { title: string; priority: string; project?: string; description?: string; due_date?: string; start_date?: string; end_date?: string; pinnedTier?: string | null; capture?: boolean }) => {
     const tier = input.pinnedTier;
     // Quick-capture ("Add to <tier>…" inline rows, Focus Dock) routes to the user's
     // configured Default Platform + Project instead of the active tab's project — so a
@@ -1828,7 +1831,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         start_date: input.start_date,
         end_date: input.end_date,
         ...(input.capture ? { source: captureSource } : {}),
-        ...(tier ? { pinned: true, ...(tierKnown ? { focus_tier: tier } : {}) } : {}),
+        ...(tier ? { pinned: true, ...(tierKnown ? { focus_tier: tier } : {}) } : tier === null ? { pinned: false } : {}),
       },
       tier
         ? {
@@ -2357,7 +2360,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         priority: meta?.priority ?? 'none',
         ...(draft?.project ? { project: draft.project } : {}),
         ...(description ? { description } : {}),
-        ...(meta?.pinTier ? { pinnedTier: meta.pinTier } : {}),
+        // No tier on the launch meta = the user unpinned it (a fresh draft holds
+        // the default Focus): say so, or the server files it in Satellite.
+        ...(meta ? { pinnedTier: meta.pinTier ?? null } : {}),
         ...(meta?.dueDate ? { due_date: meta.dueDate } : {}),
         ...(meta?.startDate ? { start_date: meta.startDate } : {}),
         ...(meta?.endDate ? { end_date: meta.endDate } : {}),

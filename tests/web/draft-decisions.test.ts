@@ -78,11 +78,11 @@ describe('tier chip', () => {
     expect(chip(draft({ pinTier: 'focus' }, { owner: { dueDate: 'user' } }), 'pinTier')).toBeUndefined();
   });
 
-  it('a user-owned undefined tier is "Not pinned" with the muted unpinned glyph', () => {
-    const c = chip(draft({ pinTier: undefined }, { owner: { pinTier: 'user' } }), 'pinTier')!;
-    expect(c.label).toBe('Not pinned');
-    expect(c.glyph).toEqual({ kind: 'tier', tier: null, color: 'var(--fg-muted)' });
-    expect(c.title).toBe('Pinned tier: Not pinned. Set by you. Click to change.');
+  it('an unpinned tier shows no chip, but still counts as decided (2026-09-25)', () => {
+    const d = draft({ pinTier: undefined }, { owner: { pinTier: 'user' } });
+    expect(chip(d, 'pinTier')).toBeUndefined();
+    expect(dec.draftTierDecided(d)).toBe(true);
+    expect(dec.draftTierDecided(draft({ pinTier: 'focus' }))).toBe(false);
   });
 });
 

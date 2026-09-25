@@ -23,7 +23,7 @@
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
-import { REAL_PANEL, basenameOf, draftCwdPill, openDraft } from './draft-helpers'
+import { REAL_PANEL, basenameOf, draftCwdPill, footerEngineButton, openDraft } from './draft-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 let fixtureRoot = ''
@@ -80,13 +80,19 @@ async function openDraftWithEngine(page: Page, cwd: string, displayName: string)
   // Exact label: a substring match would let a short name ("pi") ride inside
   // another engine's label the day one is added.
   const exact = new RegExp(`^\\s*${displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`)
-  const button = picker.locator('.sps-engine-toggle .sps-engine-btn', { hasText: exact })
+  // Claude and Codex sit in the footer row; the rest are in its More until used.
+  const button = await footerEngineButton(page, picker, exact)
   await expect(button).toBeVisible({ timeout: 15_000 })
   // Enabled = the catalog reports it installed AND the picked host is local; a
   // disabled button here would mean the fixture's probe override never applied.
   await expect(button).toBeEnabled()
   await button.click()
-  await expect(button).toHaveClass(/active/)
+  // The pick is up front now, lit, whichever list it came from.
+  const picked = picker.locator('.sps-meta-footer .sps-engine-toggle .sps-engine-btn', { hasText: exact })
+  await expect(picked).toHaveClass(/active/)
+  const more = page.getByRole('dialog', { name: 'More task settings' })
+  if (await more.isVisible()) await page.keyboard.press('Escape')
+  await expect(more).toHaveCount(0)
 
   const input = picker.locator('.sps-search-input')
   await input.fill(cwd)
@@ -469,8 +475,7 @@ test('an engine the server cannot run renders disabled with its reason', async (
   const picker = page.locator('.session-path-selector')
   await expect(picker).toBeVisible({ timeout: 10_000 })
 
-  const toggle = picker.locator('.sps-engine-toggle')
-  const unconfigured = toggle.locator('.sps-engine-btn', { hasText: 'Custom (ACP)' })
+  const unconfigured = await footerEngineButton(page, picker, 'Custom (ACP)')
   await expect(unconfigured).toBeVisible({ timeout: 15_000 })
   await expect(unconfigured).toBeDisabled()
   // The tooltip is the server's actionable reason, not a generic "unavailable".
@@ -478,6 +483,6 @@ test('an engine the server cannot run renders disabled with its reason', async (
 
   // Same catalog, installed engine: still clickable. Proves the lock is per-row
   // data, not a blanket "everything new is off".
-  await expect(toggle.locator('.sps-engine-btn', { hasText: 'Gemini' })).toBeEnabled()
+  await expect(await footerEngineButton(page, picker, 'Gemini')).toBeEnabled()
   await audit.assertClean()
 })

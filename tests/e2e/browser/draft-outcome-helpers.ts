@@ -54,7 +54,7 @@ export async function pinnedTierOf(page: Page, taskId: string): Promise<string> 
  * leaves the task in the server's pin default whenever the page dies in between —
  * which is exactly how this was found (a probe killed right after the POST).
  */
-export async function createTaskForLater(page: Page, panel: Locator): Promise<string> {
+export async function createTaskForLater(page: Page, panel: Locator, opts: { pinned?: boolean } = {}): Promise<string> {
   const created = page.waitForResponse((res) =>
     res.request().method() === 'POST' && new URL(res.url()).pathname === '/api/tasks')
   await panel.locator('.draft-later-btn').click()
@@ -63,6 +63,12 @@ export async function createTaskForLater(page: Page, panel: Locator): Promise<st
   const body = (await res.json()) as { task?: { id?: string; pinned?: boolean; focus_tier?: string } }
   if (!body.task?.id) throw new Error(`POST /api/tasks answered without a task id: ${JSON.stringify(body).slice(0, 200)}`)
   const sent = res.request().postDataJSON() as { pinned?: boolean; focus_tier?: string }
+  if (opts.pinned === false) {
+    // An unpinned launch carries no pin at all, not a pin to undo later.
+    expect(sent.pinned, 'an unpinned launch sends no pin').toBeFalsy()
+    expect(sent.focus_tier).toBeUndefined()
+    return body.task.id
+  }
   expect(sent.pinned, 'the create itself pins the task').toBe(true)
   // Satellite is stored as "no focus_tier" (the pinned default), every other tier verbatim.
   expect(sent.focus_tier, 'the tier rides the create, not a follow-up write').toBe(body.task.focus_tier ?? 'satellite')

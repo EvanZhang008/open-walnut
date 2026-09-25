@@ -254,22 +254,21 @@ test('a plain draft has no header ⋮; More ends the pills row, sets tier + unre
   await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveCount(0)
   await menu.screenshot({ path: `${SCREENSHOT_DIR}/05b-plain-draft-task-menu.png` })
 
-  // Unread first: a toggle row, so the menu stays open and the chip appears at once.
-  await menu.getByRole('button', { name: /Start unread/ }).click()
-  await expect(menu).toBeVisible()
-  await expect(draftDecisionChip(panel, 'unread')).toHaveText(/Starts unread/)
+  // Dates and "Start unread" are not launch rows (2026-09-25).
+  await expect(menu.getByRole('button', { name: /Start unread/ })).toHaveCount(0)
+  await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
-  // More never lights up for edits: the edits are the chips.
-  await expect(draftMoreButton(panel)).not.toHaveClass(/draft-more-btn-active/)
 
   // A tier pick is one synchronous meta write, so a Start right after it carries it.
-  await draftComposer(page).fill(`land in backlog, unread ${Date.now()}`)
+  await draftComposer(page).fill(`land in backlog ${Date.now()}`)
   await openDraftSettings(panel, 'more')
   await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Backlog' }).click()
   await expect(menu).toHaveCount(0)
   await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Backlog/)
   await expect(draftDecisionChip(panel, 'pinTier').locator('.draft-ai-badge')).toHaveCount(0)
+  // More never lights up for edits: the edits are the chips.
+  await expect(draftMoreButton(panel)).not.toHaveClass(/draft-more-btn-active/)
   const launched = page.waitForResponse((res) => res.request().method() === 'POST' && isQuickStart(res.url()))
   await panel.locator('.draft-start-btn').click()
   const res = await launched
@@ -278,13 +277,12 @@ test('a plain draft has no header ⋮; More ends the pills row, sets tier + unre
     taskMeta?: { pinTier?: string | null; unread?: boolean }; sessionId?: string
   }
   expect(payload.taskMeta?.pinTier).toBe('backlog')
-  expect(payload.taskMeta?.unread).toBe(true)
+  expect(payload.taskMeta?.unread).toBeFalsy()
   const created = ((await res.json()) as { taskId: string }).taskId
 
   await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${payload.sessionId}"]`))
     .toBeVisible({ timeout: 30_000 })
   await expectTaskInTier(page, created, 'backlog')
-  await expect.poll(async () => (await fetchTask(page, created)).unread, { timeout: 10_000 }).toBe(true)
 })
 
 // ── 4. Ask Walnut tab, Fix Walnut, and the chat slot ──────────────────────────
@@ -317,11 +315,11 @@ test('the Ask Walnut tab gets a More-only row that never parses; Fix Walnut and 
 
   // A value set through More shows as a chip in the same row (W2).
   const menu = await openDraftSettings(panel, 'more')
-  await menu.locator('.task-kebab-date-toggle').filter({ hasText: /Due/ }).click()
-  await menu.locator(`.dp-pill[title="${isoDay(1)}"]`).click()
+  await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(0)
+  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Backlog' }).click()
   await expect(draftTaskMenu(page)).toHaveCount(0)
-  await expect(draftDecisionChip(panel, 'dueDate')).toHaveText(/Due Tomorrow/)
-  await expect(draftDecisionChip(panel, 'dueDate')).not.toHaveClass(/draft-decision-chip-ai/)
+  await expect(row.locator('.draft-decision-chip[data-field="pinTier"]')).toHaveText(/Backlog/)
+  await expect(draftDecisionChip(panel, 'pinTier')).not.toHaveClass(/draft-decision-chip-ai/)
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/06-ask-walnut-more-row.png` })
   await panel.locator('.session-panel-close').click()
   await expect(draftPanels(page)).toHaveCount(0)

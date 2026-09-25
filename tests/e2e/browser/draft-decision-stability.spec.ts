@@ -118,11 +118,7 @@ test('the densest state (D4) fits a 300px column with every built-in chip word w
   await pinColumnWidth(page, 300)
   const panel = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
   await typeAndSettle(page, mock, 'pair on the marina release friday 3 to 5pm, urgent, due sunday')
-  const menu = await openDraftSettings(panel, 'more')
-  await menu.getByRole('button', { name: /Start unread/ }).click()
-  await page.keyboard.press('Escape')
-  await expect(draftTaskMenu(page)).toHaveCount(0)
-  await expect(draftDecisionChips(panel)).toHaveCount(5)
+  await expect(draftDecisionChips(panel)).toHaveCount(4)
   await expect(draftDecisionChip(panel, 'startDate')).toHaveText(/ to /)
   for (const sel of ['.draft-decision-row', '.draft-composer-bar']) {
     const fits = await panel.locator(sel).evaluate((el) => el.scrollWidth <= el.clientWidth + 1)
@@ -207,10 +203,11 @@ for (const theme of ['light', 'dark'] as const) {
     await pinColumnWidth(page, 360)
     const panel = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
     await typeAndSettle(page, mock, 'pair on the marina release friday 3 to 5pm, urgent, due sunday')
-    let menu = await openDraftSettings(panel, 'more')
-    await menu.getByRole('button', { name: /Start unread/ }).click()
-    await page.keyboard.press('Escape')
-    await expect(draftDecisionChips(panel)).toHaveCount(5)
+    // Accept the priority: a plain (user) chip to hold the AI outline against.
+    let menu = await openDraftSettings(panel, 'priority')
+    await menu.locator('.task-kebab-priority-options .badge-active').click()
+    await expect(draftTaskMenu(page)).toHaveCount(0)
+    await expect(draftDecisionChips(panel)).toHaveCount(4)
     await page.waitForTimeout(450)
     const dir = '/tmp/draft-decisions'
     await panel.locator('.session-panel-input').screenshot({ path: `${dir}/c39-${theme}-d4-${browserName}.png` })
@@ -221,7 +218,7 @@ for (const theme of ['light', 'dark'] as const) {
     expect(await svg(draftDecisionChip(panel, 'pinTier'))).toBe(await svg(lit))
     // The AI outline differs from a plain chip's in this theme too.
     const border = (loc: Locator) => loc.evaluate((el) => getComputedStyle(el).borderTopColor)
-    expect(await border(draftDecisionChip(panel, 'pinTier'))).not.toBe(await border(draftDecisionChip(panel, 'unread')))
+    expect(await border(draftDecisionChip(panel, 'pinTier'))).not.toBe(await border(draftDecisionChip(panel, 'priority')))
     const menuBox = await menu.boundingBox()
     const barBox = await panel.locator('.session-panel-input').boundingBox()
     if (!menuBox || !barBox) throw new Error('nothing to crop')

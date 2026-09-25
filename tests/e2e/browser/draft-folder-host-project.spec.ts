@@ -169,6 +169,26 @@ test('Inbox picked in More stays visible as Project: Inbox', async ({ page }) =>
   await expect(draftProjectPill(panel)).toHaveAttribute('title', 'Your pick: no project. Change it in More.')
 })
 
+test('a quick folder names its host only when two chips share a folder name', async ({ page }) => {
+  await page.setViewportSize({ width: 1800, height: 1000 })
+  const now = new Date().toISOString()
+  // Read-only stub of the history: two "walnut" checkouts (remote + local) and
+  // one unique folder on each side.
+  await page.route('**/api/sessions/working-dirs', (route) => route.fulfill({ json: { hosts: [], dirs: [
+    { cwd: '/home/pw/remote/walnut', host: 'remote-fixture', hostLabel: 'Big remote host', project: '', count: 9, lastUsed: now },
+    { cwd: '/Users/pw/code/walnut', host: null, project: '', count: 8, lastUsed: now },
+    { cwd: '/home/pw/remote/solo-remote', host: 'remote-fixture', hostLabel: 'Big remote host', project: '', count: 7, lastUsed: now },
+    { cwd: '/Users/pw/code/solo-local', host: null, project: '', count: 6, lastUsed: now },
+  ] } }))
+  await loadHome(page)
+  const panel = await openDraft(page)
+  const chips = draftQuickChips(panel)
+  await expect(chips).toHaveCount(4)
+  const texts = (await chips.allTextContents()).map((t) => t.trim()).sort()
+  expect(texts).toEqual(['solo-local', 'solo-remote', 'walnut · Big remote host', 'walnut · Local'])
+  await draftLaunchBar(panel).screenshot({ path: `${SHOTS}/quick-chips-collision.png` })
+})
+
 /** Top of every quick chip plus the pill row's height. */
 async function rowGeometry(panel: Locator): Promise<{ tops: number[]; bar: number }> {
   const tops = await draftQuickChips(panel).evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)))

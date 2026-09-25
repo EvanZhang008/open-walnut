@@ -271,7 +271,9 @@ function shortcutLabel(): string {
 /** The More title (spec 5.3): no "priority" while the priority setting is off,
  *  and "Project" only where the menu has that section (not Ask Walnut). */
 export function draftMoreTitle(priorityVisible: boolean | 'unknown', shortcut = shortcutLabel(), withProject = false): string {
-  const fields = priorityVisible === true ? 'Pin tier, dates, priority, start unread' : 'Pin tier, dates, start unread';
+  // Dates and start unread are no longer launch rows (only while set), so the
+  // tooltip names what More always holds.
+  const fields = priorityVisible === true ? 'Pin tier, priority' : 'Pin tier';
   return `${withProject ? `Project, ${fields.charAt(0).toLowerCase()}${fields.slice(1)}` : fields} (${shortcut})`;
 }
 

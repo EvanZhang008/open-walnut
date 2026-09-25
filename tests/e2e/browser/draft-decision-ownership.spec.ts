@@ -355,17 +355,17 @@ test('an emptied composer (after the debounce) withdraws AI tier, dates, project
   await expect(draftModelPill(panel)).toHaveAttribute('data-model', model ?? '')
 })
 
-// ── C43: Create task for later carries what the chips say, unread by PATCH ────
+// ── C43: Create task for later carries what the chips say ────────────────────
+// ("Start unread" left the launch menus on 2026-09-25, so no unread PATCH.)
 
-test('Create task for later sends the chips\' tier, priority and due, then PATCHes unread', async ({ page }) => {
+test('Create task for later sends the chips\' tier, priority and due', async ({ page }) => {
   const due = isoDay(3)
   const mock = await boot(page, { pinTier: 'satellite', priority: 'immediate', due_date: due })
   const log = await captureDraftRequests(page)
   const panel = await openDraft(page)
   await typeAndSettle(page, mock, `write the marina retro notes by friday, urgent ${Date.now()}`)
   const menu = await openDraftSettings(panel, 'more')
-  await menu.getByRole('button', { name: /Start unread/ }).click()
-  await expectUserChip(panel, 'unread', 'Starts unread')
+  await expect(menu.getByRole('button', { name: /Start unread/ })).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(draftTaskMenu(page)).toHaveCount(0)
 
@@ -374,9 +374,7 @@ test('Create task for later sends the chips\' tier, priority and due, then PATCH
   expect(create.focus_tier).toBe('satellite')
   expect(create.priority).toBe('immediate')
   expect(create.due_date).toBe(due)
-  await expect.poll(() => log.patchTask.find((p) => p.id === taskId)?.body.unread, { timeout: 15_000 }).toBe(true)
-  await expect.poll(async () => ((await (await page.request.get(`/api/tasks/${taskId}`)).json()) as
-    { task?: { unread?: boolean } }).task?.unread, { timeout: 15_000 }).toBe(true)
+  expect(log.patchTask.find((p) => p.id === taskId && p.body.unread !== undefined)).toBeUndefined()
   const feedback = await nthRequest(log, 'feedback')
   expect(feedback.surface).toBe('draft-task')
   await expect(draftPanels(page)).toHaveCount(0, { timeout: 30_000 })

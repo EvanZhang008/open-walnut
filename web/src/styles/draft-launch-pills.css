@@ -141,8 +141,9 @@
   .draft-pill-dot-connecting { animation: none; }
 }
 
-/* Quick folder chips: a remote folder names its host (muted), so the same
-   checkout on two machines never reads as two identical chips. */
+/* Quick folder chips: when two chips share a folder name, each names its host
+   (muted), so the same checkout on two machines never reads as two identical
+   chips. A unique name shows no host. */
 .draft-quick-chip-host {
   margin-left: 4px;
   color: var(--fg-muted);

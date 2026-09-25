@@ -27,52 +27,56 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   await expect(selector).toBeVisible({ timeout: 10_000 })
 
   const footer = selector.locator('.sps-meta-footer')
+  // Up front: Claude and Codex (plus engines used before, and the current pick);
+  // every other engine waits in More (2026-09-25).
+  const engines = footer.getByRole('group', { name: 'Coding agent engine' })
+  await expect(engines).toBeVisible()
+  // The folder's launch memory may hold an ACP engine (no model list): Claude
+  // brings the model select, which travels with the engine.
+  await engines.locator('.sps-engine-btn', { hasText: /^Claude$/ }).click()
   await expect(footer.getByRole('combobox', { name: 'Session model' })).toBeVisible()
-  await expect(footer.getByRole('group', { name: 'Coding agent engine' })).toBeVisible()
+  const more = footer.getByRole('button', { name: /More/ })
+  // More appears once the catalog lists engines beyond the compiled-in pair.
+  await expect(more).toBeVisible({ timeout: 15_000 })
+  const upFront = await engines.locator('.sps-engine-btn').allTextContents()
+  expect(upFront.slice(0, 2)).toEqual(['Claude', 'Codex'])
   // The pin tier is a per-launch decision — it stays in the PRIMARY row, and a
   // fresh launcher defaults to Focus (DEFAULT_META). The draft's own More menu edits
   // the same meta; a tier picked in either place owns the tier.
   const tiers = footer.getByRole('group', { name: 'Pin new task to tier' })
   await expect(tiers).toBeVisible()
   await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
-
-  await expect(footer.getByTitle('Start this task marked unread')).toHaveCount(0)
   await expect(footer.getByText('Priority', { exact: true })).toHaveCount(0)
 
-  const more = footer.getByRole('button', { name: /More/ })
   await more.click()
-
   // PAGE-scoped: the More popover pops out of its host (portalled to <body>,
   // fixed own width, placed at the button by useMenuPlacement) — it is no
   // longer a footer descendant.
   const popover = page.getByRole('dialog', { name: 'More task settings' })
   await expect(popover).toBeVisible()
-  // The retired star toggle is gone from the menu entirely (pin + focus tier is
-  // the working set now).
-  await expect(popover.getByTitle('Star this task')).toHaveCount(0)
-  await expect(popover.getByTitle('Start this task marked unread')).toBeVisible()
-  // C42: the toggle says the same words as the draft menu's row.
-  await expect(popover.getByTitle('Start this task marked unread')).toHaveText(/Start unread/)
-  await expect(popover.getByText('Mark unread', { exact: true })).toHaveCount(0)
+  const others = popover.getByRole('group', { name: 'Other coding agent engines' })
+  const inMore = await others.locator('.sps-engine-btn').allTextContents()
+  expect(inMore.length, 'the rest of the catalog').toBeGreaterThan(0)
+  expect(inMore.filter((n) => upFront.includes(n)), 'no engine is in both places').toEqual([])
+  expect(inMore).not.toContain('Claude')
+  expect(inMore).not.toContain('Codex')
+  // Not launch questions: no dates and no "Start unread" while none is set.
+  await expect(popover.locator('.sps-meta-dates')).toHaveCount(0)
+  await expect(popover.getByText('Start unread')).toHaveCount(0)
   // Priority is hidden site-wide by default (Settings → Tasks → Show task
-  // priority, `ui.show_priority`), so the menu draws no Priority row either —
-  // a control for a value the user cannot see anywhere else would be a trap.
-  // (The "comes back when on" half is the second test below.)
+  // priority, `ui.show_priority`), so the menu draws no Priority row either.
   await expect(popover.getByText('Priority', { exact: true })).toHaveCount(0)
-  // The task dates trio lives here too (start leads; end/due ghost when empty) —
-  // the launch IS a task create, so the Quick Task form's dates exist on it.
-  await expect(popover.locator('.sps-meta-dates .dp-trigger')).toHaveCount(3)
-  // Pin moved OUT of the menu — it must not be duplicated there.
+  // Pin lives in the footer row, never duplicated here.
   await expect(popover.getByRole('group', { name: 'Pin new task to tier' })).toHaveCount(0)
-
   await page.screenshot({ path: '/tmp/quick-start-footer/more-open.png' })
 
-  // Toggling a menu-owned field flips the "More · N" changed-from-default badge.
-  // (This used to click the star toggle; unread is the remaining boolean there.)
-  const before = await more.textContent()
-  await popover.getByTitle('Start this task marked unread').click()
-  await expect(more).toHaveClass(/active/)
-  await expect(more).not.toHaveText(before ?? '')
+  // Picking an engine from More brings it up front, lit; More no longer lists it.
+  const firstEnabled = others.locator('.sps-engine-btn:not([disabled])').first()
+  const name = (await firstEnabled.textContent())?.trim() ?? ''
+  await firstEnabled.click()
+  const picked = engines.locator('.sps-engine-btn', { hasText: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) })
+  await expect(picked).toHaveClass(/active/)
+  await expect(others.locator('.sps-engine-btn', { hasText: name })).toHaveCount(0)
 
   await page.keyboard.press('Escape')
   await expect(popover).toHaveCount(0)
@@ -116,8 +120,53 @@ test('More · N counts only what the user set here, never a date Walnut decided'
   await more.click()
   const popover = page.getByRole('dialog', { name: 'More task settings' })
   await expect(popover).toBeVisible()
-  await popover.getByTitle('Start this task marked unread').click()
+  // Walnut's date keeps the dates row here; an End the user sets counts as one.
+  await popover.locator('.sps-meta-dates .dp-trigger').nth(1).click()
+  await page.locator(`.dp-popover .dp-pill[title="${isoDay(4)}"]`).click()
   await expect(more.locator('.sps-meta-more-badge')).toHaveText('· 1')
   await page.keyboard.press('Escape')
+  await expect(popover).toHaveCount(0)
+})
+
+test('More that empties while open closes, and does not pop back open by itself', async ({ page }) => {
+  // A catalog with ONE engine beyond Claude and Codex: picking it moves it up
+  // front and leaves More with nothing to hold.
+  const acp = {
+    runtimeKind: 'acp', isDefault: false, localOnly: true,
+    capabilities: { rewind: false, fork: false, modelCatalog: 'provider-advertised', modeControl: 'config-options', idProvisioning: 'provider-issued' },
+    availability: { installed: true, version: null, reason: null },
+  }
+  await page.route('**/api/engines', (route) => route.fulfill({ json: { engines: [
+    {
+      id: 'claude', displayName: 'Claude', runtimeKind: 'native', isDefault: true, localOnly: false,
+      capabilities: { rewind: true, fork: true, modelCatalog: 'static', modeControl: 'claude-modes', idProvisioning: 'preassigned' },
+      availability: { installed: true, version: null, reason: null },
+    },
+    { ...acp, id: 'codex', displayName: 'Codex' },
+    { ...acp, id: 'gemini', displayName: 'Gemini' },
+  ] } }))
+  await page.goto('/')
+  const panel = await openDraft(page)
+  await draftCwdPill(panel).click()
+  const footer = page.locator('.session-path-selector .sps-meta-footer')
+  await expect(footer).toBeVisible({ timeout: 10_000 })
+  const engines = footer.getByRole('group', { name: 'Coding agent engine' })
+  await engines.locator('.sps-engine-btn', { hasText: /^Claude$/ }).click()
+  const more = footer.locator('.sps-meta-more-btn')
+  await expect(more).toBeVisible({ timeout: 15_000 })
+  await more.click()
+  const popover = page.getByRole('dialog', { name: 'More task settings' })
+  await popover.getByRole('group', { name: 'Other coding agent engines' }).locator('.sps-engine-btn', { hasText: 'Gemini' }).click()
+  // Gemini is up front and lit; More has nothing left, so it and its menu go.
+  await expect(engines.locator('.sps-engine-btn', { hasText: 'Gemini' })).toHaveClass(/active/)
+  await expect(more).toHaveCount(0)
+  await expect(popover).toHaveCount(0)
+  // Back to Claude from the KEYBOARD (no mousedown, so no outside-click closer
+  // can hide a stale open state): Gemini returns to More, which comes back CLOSED.
+  await engines.locator('.sps-engine-btn', { hasText: /^Claude$/ }).focus()
+  await page.keyboard.press('Enter')
+  await expect(engines.locator('.sps-engine-btn', { hasText: /^Claude$/ })).toHaveClass(/active/)
+  await expect(more).toBeVisible()
+  await expect(more).toHaveAttribute('aria-expanded', 'false')
   await expect(popover).toHaveCount(0)
 })

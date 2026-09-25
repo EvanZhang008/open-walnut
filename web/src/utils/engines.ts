@@ -223,3 +223,34 @@ export function engineLockReason(
   }
   return null;
 }
+
+/** Engines the launcher's engine row always shows (with the default engine). */
+export const ALWAYS_SHOWN_ENGINES: ReadonlySet<SessionEngine> = new Set<SessionEngine>(['claude', 'codex']);
+
+/** Every engine a remembered launch used (working-dirs `lastLaunch`); an
+ *  absent engine is the default one. */
+export function usedEngineIds(dirs: ReadonlyArray<{ lastLaunch?: LaunchMemory }>): Set<SessionEngine> {
+  const out = new Set<SessionEngine>();
+  for (const d of dirs) if (d.lastLaunch) out.add(resolveEngine(d.lastLaunch.engine));
+  return out;
+}
+
+/**
+ * The launcher's engine row, split in two (user, 2026-09-25): up front, Claude
+ * and Codex, every engine the user has launched before and the current pick;
+ * everything else waits in More. Catalog order is kept on both sides.
+ */
+export function splitEngineRow(
+  catalog: EngineCatalog,
+  active: SessionEngine,
+  used: ReadonlySet<SessionEngine>,
+): { primary: EngineCatalogEntry[]; more: EngineCatalogEntry[] } {
+  const primary: EngineCatalogEntry[] = [];
+  const more: EngineCatalogEntry[] = [];
+  for (const entry of catalog) {
+    const id = resolveEngine(entry.id);
+    const up = entry.isDefault || ALWAYS_SHOWN_ENGINES.has(id) || used.has(id) || id === active;
+    (up ? primary : more).push(entry);
+  }
+  return { primary, more };
+}

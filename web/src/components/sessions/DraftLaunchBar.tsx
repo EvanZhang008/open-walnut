@@ -67,7 +67,7 @@ import {
   type DraftAiField, type DraftColumn, type DraftTaskField, type DraftTaskFieldPatch,
 } from './draft-column';
 import {
-  customTierLabelLookup, draftDecisionChips, draftDecisionsKeyVisible, draftSuggestionLabel, draftWalnutPicks,
+  customTierLabelLookup, draftDecisionChips, draftDecisionsKeyVisible, draftSuggestionLabel, draftTierDecided, draftWalnutPicks,
   type DraftDecisionCtx,
 } from './draft-decisions';
 import { DraftDecisionChips, DraftMoreButton, useDraftDecisionMenu } from './DraftDecisionRow';
@@ -313,7 +313,7 @@ export function DraftLaunchBar({
           anchorEl={menu.anchor}
           menuRef={menu.menuRef}
           meta={draft.meta}
-          tierDecided={decisionChips.some((c) => c.field === 'pinTier')}
+          tierDecided={draftTierDecided(draft)}
           priorityVisible={priorityVisible}
           walnutPicks={walnutPicks}
           onChange={handleTaskFieldChange}
@@ -362,10 +362,10 @@ export function DraftLaunchBar({
 }
 
 /**
- * The host part of each quick chip's label: a remote folder always names its
- * host (the same checkout on two machines must not read as two identical
- * chips); a local one says "Local" only when another chip shares its name.
- * Returns '' for "no suffix".
+ * The host part of each quick chip's label, only where two chips share a
+ * folder name (user, 2026-09-25: the host is noise otherwise; people know where
+ * their folders live). A colliding remote chip names its host, a colliding
+ * local one says "Local". Returns '' for "no suffix".
  */
 function useQuickChipHostLabels(chips: readonly WorkingDirEntry[]): (d: WorkingDirEntry) => string {
   const statuses = useAllHostStatus();
@@ -377,8 +377,8 @@ function useQuickChipHostLabels(chips: readonly WorkingDirEntry[]): (d: WorkingD
       names.set(n, (names.get(n) ?? 0) + 1);
     }
     return (d: WorkingDirEntry) => {
-      if (d.host) return hostDisplayLabel(d.host, live.get(d.host), d.hostLabel);
-      return (names.get(basename(d.cwd).toLowerCase()) ?? 0) > 1 ? LOCAL_HOST_LABEL : '';
+      if ((names.get(basename(d.cwd).toLowerCase()) ?? 0) < 2) return '';
+      return d.host ? hostDisplayLabel(d.host, live.get(d.host), d.hostLabel) : LOCAL_HOST_LABEL;
     };
   }, [statuses, chips]);
 }

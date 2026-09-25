@@ -2,9 +2,14 @@
  * DraftTaskMenuPopover: the ONE settings menu of a draft column's launch bar,
  * opened from the bar's More button or from any decision chip above it
  * (DraftDecisionRow owns the anchor, the open mode and the focus rules). It
- * edits the task the launch will create (project, pin tier, priority, start /
- * due, start unread) before anything exists server-side. The project comes first:
- * it follows the folder, and this is where the user overrides it (2026-09-24).
+ * edits the task the launch will create (project, pin tier, priority) before
+ * anything exists server-side. The project comes first: it follows the folder,
+ * and this is where the user overrides it (2026-09-24).
+ *
+ * Dates and "start unread" are not launch questions (user, 2026-09-25: nothing
+ * to put there at launch). Their rows show only while the value is SET, for
+ * instance a date Walnut read from the text, so its chip still leads somewhere
+ * the value can be changed or cleared; once cleared the row goes away.
  *
  * History: until 2026-09-24 this was a "⋮" in the draft HEADER. Walnut's own
  * decisions (the background parse) then became visible chips next to the folder
@@ -13,8 +18,8 @@
  *
  * Same rows as the board's task kebab (TaskActionMenuItems, one definition),
  * with the draft's opt-in props: icon + label priority buttons (the chip's own
- * words), a lit tier or priority that ACCEPTS on click instead of unpinning, a
- * trailing "Don't pin", "Use Walnut's pick" rows, and the chip's date format.
+ * words), a lit priority that ACCEPTS on click, "Use Walnut's pick" rows, and
+ * the chip's date format. The lit tier unpins on a second click, as on the board.
  * Every edit is one per-field patch (DraftTaskFieldPatch): the owner marks that
  * field the user's and never touches `metaTouched`.
  *
@@ -46,8 +51,9 @@ interface Props {
   /** Owned by DraftDecisionRow: its outside-click closer tests against it. */
   menuRef: RefObject<HTMLDivElement | null>;
   meta: QuickStartTaskMeta;
-  /** The row shows a tier chip (the tier is decided). False: nothing is lit and
-   *  the heading says which tier an undecided draft lands in. */
+  /** Someone decided the tier (draftTierDecided): the user, a seed or Walnut,
+   *  including "not pinned". False: nothing is lit and the heading says which
+   *  tier an undecided draft lands in. */
   tierDecided: boolean;
   priorityVisible: boolean | 'unknown';
   /** Fields offering "Use Walnut's pick", with the label to show. */
@@ -187,26 +193,30 @@ export function DraftTaskMenuPopover({
         onSetPriority={priorityVisible === true
           ? (p) => onChange({ priority: p as QuickStartTaskMeta['priority'] })
           : undefined}
-        onSetStartDate={(date) => onChange({ startDate: date ?? undefined })}
-        onSetDate={(date) => onChange({ dueDate: date ?? undefined })}
+        onSetStartDate={meta.startDate ? (date) => onChange({ startDate: date ?? undefined }) : undefined}
+        onSetDate={meta.dueDate ? (date) => onChange({ dueDate: date ?? undefined }) : undefined}
         afterAction={() => onClose('select')}
         formatDate={(iso) => formatDraftDate(iso)}
         showPriorityLabels
         litClickAccepts
         walnutPick={walnutPick}
       />
-      <div className="task-kebab-divider" />
-      <button
-        type="button"
-        className={`task-kebab-item draft-task-menu-unread${meta.unread ? ' task-kebab-item-active' : ''}`}
-        aria-pressed={!!meta.unread}
-        title="Start this task marked unread"
-        // Toggles in place; the menu stays open (C42).
-        onClick={(e) => { e.stopPropagation(); onChange({ unread: !meta.unread }); }}
-      >
-        <span className="task-kebab-icon">●</span>
-        <span>Start unread</span>
-      </button>
+      {meta.unread && (
+        <>
+          <div className="task-kebab-divider" />
+          <button
+            type="button"
+            className="task-kebab-item draft-task-menu-unread task-kebab-item-active"
+            aria-pressed
+            title="This task starts marked unread. Click to start it read."
+            // The row goes away with the value, so the menu goes too.
+            onClick={(e) => { e.stopPropagation(); onChange({ unread: false }); onClose('select'); }}
+          >
+            <span className="task-kebab-icon">●</span>
+            <span>Start unread</span>
+          </button>
+        </>
+      )}
     </div>,
     document.body,
   );

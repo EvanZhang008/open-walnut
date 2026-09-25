@@ -86,7 +86,7 @@ vi.mock('@/components/sessions/TaskQuickActions', () => ({
   TaskQuickActions: () => createElement('div', { className: 'task-quick-actions-stub' }),
 }));
 // The bound-draft project follower reads the task store; these drafts are unbound.
-vi.mock('@/contexts/TasksContext', () => ({ useStoreTask: () => null }));
+vi.mock('@/contexts/TasksContext', () => ({ useStoreTask: () => null, useTasksContextSafe: () => null }));
 vi.mock('@/hooks/useSlashCommands', () => ({
   useSlashCommands: () => ({
     items: [], search: () => [], refresh: () => {}, status: 'ready', onPaletteOpen: () => {},

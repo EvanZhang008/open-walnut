@@ -145,14 +145,18 @@ function chipOf(
   return { field, label, glyph, ai: source === 'ai', source, title, ariaLabel: title, ...extra };
 }
 
+/** The tier is someone's decision (the user, a seed or Walnut), "not pinned"
+ *  included. Undecided drafts land in the default tier (Focus). */
+export function draftTierDecided(draft: DraftColumn): boolean {
+  return !!draft.fieldOwner?.pinTier || isAiOwned(draft, 'pinTier');
+}
+
 function tierChip(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionChip | null {
-  const owned = !!draft.fieldOwner?.pinTier;
-  if (!owned && !isAiOwned(draft, 'pinTier')) return null;
+  if (!draftTierDecided(draft)) return null;
   const tier = draft.meta.pinTier;
-  if (!tier) {
-    return chipOf(draft, 'pinTier', 'Not pinned', { kind: 'tier', tier: null, color: 'var(--fg-muted)' },
-      'Pinned tier', 'Not pinned');
-  }
+  // Not pinned says nothing (user, 2026-09-25: a "Not pinned" chip is noise;
+  // the lit tier's second click is how it got here).
+  if (!tier) return null;
   const builtin = BUILTIN_TIER_LABEL.get(tier);
   if (builtin) {
     return chipOf(draft, 'pinTier', builtin, { kind: 'tier', tier, color: tierColor(tier) },

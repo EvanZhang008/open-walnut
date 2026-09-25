@@ -54,9 +54,11 @@ describe('task kebab menus stay lean and shared', () => {
 
   it('the draft menu differences are opt-in props the board kebab never passes', () => {
     const block = KEBAB.slice(KEBAB.indexOf('export function TaskActionMenuItems'), KEBAB.indexOf('export function ProjectPickerFlyout'));
-    // "Don't pin" and accept-on-lit exist only behind litClickAccepts.
-    expect(block).toMatch(/\{litClickAccepts && !batchMode && \(/);
-    expect(block).toMatch(/if \(isCurrent && litClickAccepts\) onSetTier\?\.\(t\.value\)/);
+    // Accept-on-lit is the priority row's only (litClickAccepts); the lit tier
+    // unpins on a second click everywhere, and there is no "Don't pin".
+    expect(block).not.toMatch(/>\s*Don't pin\s*</);
+    expect(block).toMatch(/if \(isCurrent\) onUnpinTask\?\.\(\)/);
+    expect(block).toMatch(/p\.value !== task\.priority \|\| litClickAccepts/);
     const boardCall = KEBAB.slice(KEBAB.lastIndexOf('<TaskActionMenuItems'));
     const boardProps = boardCall.slice(0, boardCall.indexOf('/>'));
     for (const prop of ['litClickAccepts', 'showPriorityLabels', 'formatDate', 'tierHeading', 'walnutPick']) {

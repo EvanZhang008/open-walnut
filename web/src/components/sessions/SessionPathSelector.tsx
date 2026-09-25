@@ -19,7 +19,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { retryHostConnect, type WorkingDirEntry } from '@/api/sessions';
 import type { TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
-import type { LaunchEngine, LaunchMemory } from '@/utils/engines';
+import { usedEngineIds, type LaunchEngine, type LaunchMemory } from '@/utils/engines';
 import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, liveListingPrefix, type InputState } from './path-selector/input-model';
 import { rankCandidates, buildSections, type Candidate, type RankedItem } from './path-selector/ranking';
 import { useLiveDirs, type HostLiveState } from './path-selector/useLiveDirs';
@@ -114,6 +114,7 @@ export function SessionPathSelector({
   // as a tab even before its first session exists, else the user can't ever start
   // one). Cached answer at once, refetched on every open and on a host change.
   const { dirs, hosts: configuredHosts, loading, error } = useWorkingDirs(open);
+  const usedEngines = useMemo(() => usedEngineIds(dirs), [dirs]);
   const [query, setQuery] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(0);
   // How the current highlight was placed. Mouse hover must NOT expand the row
@@ -882,7 +883,7 @@ export function SessionPathSelector({
           Compact single row in edit mode: space goes back to the path list.
           host: the active tab's host drives which catalog fills the model
           dropdown ('all' tab → local catalog, the overwhelmingly common case). */}
-      <MetaFooter meta={meta} onChange={handleMetaChange} compact={editMode} host={currentHost} ownedFields={footerOwned} />
+      <MetaFooter meta={meta} onChange={handleMetaChange} compact={editMode} host={currentHost} ownedFields={footerOwned} usedEngines={usedEngines} />
     </div>
   );
 

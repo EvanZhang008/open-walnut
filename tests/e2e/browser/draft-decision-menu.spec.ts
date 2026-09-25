@@ -7,7 +7,9 @@
  * a remount (C6 C41); chip words equal the lit menu row's words (C36); Escape,
  * outside click and focus return (C26); the popover is a portalled dialog that stays
  * inside a 1280x800 and an 800x600 viewport, Due calendar open included (C25 C25b);
- * the lit-row "accept" grammar, `Don't pin`, and `Use Walnut's pick` (C56 C61 C65);
+ * the lit tier's second click unpins (no "Don't pin", no "Not pinned" chip), the
+ * lit priority accepts, and `Use Walnut's pick` (C56 C61 C65); Start / Due /
+ * Start unread rows only while set (2026-09-25);
  * the legend (C34); keyboard entry, Mod+. included (C40); typing closes the menu
  * (C46); the fade-in and its reduced-motion opt-out (C48 C66); ARIA names (C62);
  * the exactly-7-days date words (C64).
@@ -23,6 +25,7 @@ import {
   draftMoreButton, draftPills, draftTaskMenu, isoDay, openDraft, openDraftSettings, typeAndSettle,
   type ParseSource,
 } from './draft-helpers'
+import { createTaskForLater, pinnedTierOf } from './draft-outcome-helpers'
 
 const SHOT_DIR = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-decisions/menu'
 test.setTimeout(180_000)
@@ -257,26 +260,26 @@ for (const vp of [DESKTOP, SMALL]) {
 
 // C5 C65: what More opens on a fresh draft, with and without priority shown.
 for (const showPriority of [true, false]) {
-  test(`More on a fresh draft lists tiers with Don't pin, Start, Due, Start unread; priority row ${showPriority ? 'shown' : 'hidden'}`, async ({ page }) => {
+  test(`More on a fresh draft lists Project and the four tiers, no dates or unread; priority row ${showPriority ? 'shown' : 'hidden'}`, async ({ page }) => {
     await boot(page, {}, DESKTOP, showPriority)
     const panel = await openDraft(page)
     const menu = await openDraftSettings(panel, 'more')
-    for (const tier of ['Focus', 'Satellite', 'Backlog', 'Wait', "Don't pin"]) {
-      await expect(menu.locator('.task-kebab-tier-btn, .task-kebab-tier button').filter({ hasText: tier }).first()).toBeVisible()
-    }
+    await expect(menu.locator('.task-kebab-tier-btn')).toHaveText(['Focus', 'Satellite', 'Backlog', 'Wait'].map((t) => new RegExp(t)))
+    await expect(menu.getByRole('button', { name: /Don't pin/ })).toHaveCount(0)
     // C65: nobody owns the tier, so nothing is lit and the label names the default.
     await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveCount(0)
     await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pin to (default Focus)')
-    await expect(menu.locator('.task-kebab-date-toggle').filter({ hasText: /Start/ })).toBeVisible()
-    await expect(menu.locator('.task-kebab-date-toggle').filter({ hasText: /Due/ })).toBeVisible()
-    await expect(menu.getByRole('button', { name: /Start unread/ })).toBeVisible()
+    // Not launch questions: no Start / Due / Start unread rows while unset.
+    await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(0)
+    await expect(menu.getByRole('button', { name: /Start unread/ })).toHaveCount(0)
     await expect(menu.locator('.task-kebab-priority')).toHaveCount(showPriority ? 1 : 0)
     if (showPriority) {
       await expect(menu.locator('.task-kebab-priority-options button')).toHaveText([/!!\s*Immediate/, /!\s*Important/, /~\s*Backlog/, /None/])
     }
+    await page.screenshot({ path: `${SHOT_DIR}/c5-fresh-more-${showPriority ? 'priority' : 'plain'}.png` })
     // More's own tooltip names what it opens (priority only when shown).
     expect(await draftMoreButton(panel).getAttribute('title'))
-      .toMatch(showPriority ? /^Project, pin tier, dates, priority, start unread \((⌘|Ctrl\+)\.\)$/ : /^Project, pin tier, dates, start unread \((⌘|Ctrl\+)\.\)$/)
+      .toMatch(showPriority ? /^Project, pin tier, priority \((⌘|Ctrl\+)\.\)$/ : /^Project, pin tier \((⌘|Ctrl\+)\.\)$/)
     // Picking Focus from nothing is a human decision: a chip WITHOUT ✦.
     await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Focus' }).click()
     await expect(draftTaskMenu(page)).toHaveCount(0)
@@ -285,15 +288,24 @@ for (const showPriority of [true, false]) {
   })
 }
 
-// C56 C61: the lit row accepts Walnut's pick; Don't pin; Use Walnut's pick hands it back.
-test('clicking the lit tier or priority accepts it, Don\'t pin gives Not pinned, and Use Walnut\'s pick returns the field to the AI', async ({ page }) => {
+// C56 C61: a second click on the lit tier unpins; the lit priority accepts; Use
+// Walnut's pick hands the field back; the launch honors "not pinned".
+test('clicking the lit tier unpins it with no chip, the lit priority accepts, and Use Walnut\'s pick returns the field to the AI', async ({ page }) => {
   const mock = await boot(page, D1)
   const panel = await openDraft(page)
   await typeAndSettle(page, mock, 'fix the flaky login test by friday, urgent')
 
   let menu = await openDraftSettings(panel, 'pinTier')
+  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveAttribute('title', 'Unpin from Satellite')
   await menu.locator('.task-kebab-tier-btn[aria-pressed="true"]').click()
   await expect(draftTaskMenu(page)).toHaveCount(0)
+  // Not pinned is said by nothing: no chip, and More lights no tier and names no default.
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveCount(0)
+  menu = await openDraftSettings(panel, 'more')
+  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveCount(0)
+  await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pin to')
+  // A tier from nothing pins again, as a human decision.
+  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Satellite' }).click()
   await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/)
   await expect(draftDecisionChip(panel, 'pinTier')).not.toHaveClass(AI)
   menu = await openDraftSettings(panel, 'priority')
@@ -319,11 +331,12 @@ test('clicking the lit tier or priority accepts it, Don\'t pin gives Not pinned,
   await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Wait/)
   await expect(draftDecisionChip(panel, 'pinTier')).toHaveClass(AI)
 
-  // Don't pin: the one unpin entry in a draft.
+  // The lit Walnut pick, clicked again, unpins too; the launch then pins nothing.
   menu = await openDraftSettings(panel, 'pinTier')
-  await menu.getByRole('button', { name: /Don't pin/ }).click()
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Not pinned/)
-  await expect(draftDecisionChip(panel, 'pinTier')).not.toHaveClass(AI)
+  await menu.locator('.task-kebab-tier-btn[aria-pressed="true"]').click()
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveCount(0)
+  const taskId = await createTaskForLater(page, panel, { pinned: false })
+  expect(await pinnedTierOf(page, taskId)).toBe('unpinned')
 })
 
 /** Mod+. in the composer. Tried with Meta first, then Control: the app reads the

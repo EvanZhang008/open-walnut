@@ -168,7 +168,7 @@ export function TaskActionMenuItems({
    *  Start will create) shaped like a task — see DraftTaskMenu. */
   task: Pick<Task, 'priority' | 'start_date' | 'due_date'> | null;
   isPinned: boolean;
-  /** null = explicitly not pinned: with `litClickAccepts` it lights "Don't pin". */
+  /** null = explicitly not pinned (nothing lit, like undefined). */
   pinnedTier?: FocusTier | null;
   isDone: boolean;
   /** Batch mode: tier button calls onSetTier(tier) directly (caller fans out pin+tier per task). */
@@ -192,8 +192,9 @@ export function TaskActionMenuItems({
   formatDate?: (iso: string, kind: 'start' | 'due') => string;
   /** Priority buttons read icon + label ("!! Immediate"), not the icon alone. */
   showPriorityLabels?: boolean;
-  /** Clicking the lit tier or priority re-sends the same value (accept it),
-   *  never unpins; the tier row gains a trailing "Don't pin" option. */
+  /** Clicking the lit priority re-sends the same value (accept it). The lit
+   *  tier always unpins on a second click, draft menu included: that click IS
+   *  "don't pin" (2026-09-25: a separate "Don't pin" button read as clutter). */
   litClickAccepts?: boolean;
   /** Tier block heading instead of "Pinned" / "Pin to". */
   tierHeading?: string;
@@ -224,7 +225,7 @@ export function TaskActionMenuItems({
                   key={t.value}
                   className={`task-kebab-tier-btn${isCurrent ? ' active' : ''}`}
                   style={{ color: TIER_COLORS[t.value] ?? 'var(--tier-custom)' }}
-                  title={isCurrent ? (litClickAccepts ? `Keep ${t.label}` : `Unpin from ${t.label}`) : t.label}
+                  title={isCurrent ? `Unpin from ${t.label}` : t.label}
                   aria-pressed={isCurrent || undefined}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -233,10 +234,7 @@ export function TaskActionMenuItems({
                       onSetTier?.(t.value);
                     } else if (isPinned) {
                       // The lit pill is the pin itself: click it again to unpin.
-                      // In the draft menu the lit pill is Walnut's pick, and a
-                      // click on it means "yes, that one" (accept, same value).
-                      if (isCurrent && litClickAccepts) onSetTier?.(t.value);
-                      else if (isCurrent) onUnpinTask?.();
+                      if (isCurrent) onUnpinTask?.();
                       else onSetTier?.(t.value);
                     } else if (onPinWithTier) {
                       onPinWithTier(t.value);
@@ -258,19 +256,6 @@ export function TaskActionMenuItems({
                 </button>
                 );
               })}
-              {litClickAccepts && !batchMode && (
-                <button
-                  type="button"
-                  className={`task-kebab-tier-btn task-kebab-tier-unpin${!isPinned && pinnedTier === null ? ' active' : ''}`}
-                  style={{ color: 'var(--fg-muted)' }}
-                  title="Start the task unpinned"
-                  aria-pressed={(!isPinned && pinnedTier === null) || undefined}
-                  onClick={(e) => { e.stopPropagation(); onUnpinTask?.(); afterAction(); }}
-                >
-                  <span className="task-kebab-tier-btn-icon">{ICONS.ICON_PIN}</span>
-                  Don't pin
-                </button>
-              )}
             </div>
           </div>
           <WalnutPickRow pick={walnutPick?.pinTier} afterAction={afterAction} />

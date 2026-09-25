@@ -1,6 +1,6 @@
 /**
  * TaskActionMenuItems' draft-only props (the draft menu, DraftTaskMenuPopover):
- * a lit tier or priority ACCEPTS on click, a trailing "Don't pin", icon + label
+ * a lit priority ACCEPTS on click (a lit tier unpins, as on the board), icon + label
  * priority buttons, the caller's date format, a tier heading and "Use Walnut's
  * pick" rows. Without those props every row behaves as on the board kebab.
  *
@@ -103,31 +103,29 @@ describe('TaskActionMenuItems without the draft props (board kebab)', () => {
 describe('TaskActionMenuItems with the draft props', () => {
   const draftProps = { showPriorityLabels: true, litClickAccepts: true };
 
-  it('clicking the lit tier accepts it (same value), never unpins (C56)', async () => {
+  it('a second click on the lit tier unpins it; there is no "Don\'t pin" (2026-09-25)', async () => {
     const s = spies();
     const host = await mount({ task: TASK, isPinned: true, pinnedTier: 'satellite', isDone: false, ...s, ...draftProps });
+    const labels = [...host.querySelectorAll('.task-kebab-tier-btn')].map((b) => b.textContent?.trim());
+    expect(labels).not.toContain("Don't pin");
     const lit = tierBtn(host, 'Satellite')!;
-    expect(lit.getAttribute('title')).toBe('Keep Satellite');
+    expect(lit.getAttribute('title')).toBe('Unpin from Satellite');
     await click(lit);
-    expect(s.onSetTier).toHaveBeenCalledWith('satellite');
-    expect(s.onUnpinTask).not.toHaveBeenCalled();
+    expect(s.onUnpinTask).toHaveBeenCalledTimes(1);
+    expect(s.onSetTier).not.toHaveBeenCalled();
     expect(s.afterAction).toHaveBeenCalledTimes(1);
   });
 
-  it('"Don\'t pin" trails the tier row, unpins, and is lit for an explicit null tier', async () => {
-    const s = spies();
-    const host = await mount({ task: TASK, isPinned: false, pinnedTier: null, isDone: false, ...s, ...draftProps });
-    const labels = [...host.querySelectorAll('.task-kebab-tier-btn')].map((b) => b.textContent?.trim());
-    expect(labels[labels.length - 1]).toBe("Don't pin");
-    const unpin = tierBtn(host, "Don't pin")!;
-    expect(unpin.classList.contains('active')).toBe(true);
-    await click(unpin);
-    expect(s.onUnpinTask).toHaveBeenCalledTimes(1);
-    // An undecided tier (undefined) lights nothing, not even "Don't pin".
-    await act(async () => { root!.unmount(); });
-    root = null;
-    const host2 = await mount({ task: TASK, isPinned: false, isDone: false, ...spies(), ...draftProps });
-    expect(host2.querySelectorAll('.task-kebab-tier-btn.active').length).toBe(0);
+  it('an explicitly unpinned (null) or undecided tier lights nothing; a click pins', async () => {
+    for (const pinnedTier of [null, undefined]) {
+      const s = spies();
+      const host = await mount({ task: TASK, isPinned: false, pinnedTier, isDone: false, ...s, ...draftProps });
+      expect(host.querySelectorAll('.task-kebab-tier-btn.active').length).toBe(0);
+      await click(tierBtn(host, 'Backlog')!);
+      expect(s.onPinWithTier).toHaveBeenCalledWith('backlog');
+      await act(async () => { root!.unmount(); });
+      root = null;
+    }
   });
 
   it('priority buttons read icon + label, and the lit one accepts', async () => {
@@ -176,9 +174,10 @@ describe('TaskActionMenuItems with the draft props', () => {
 
 describe('the More title (spec 5.3)', () => {
   it('names the shortcut and drops "priority" while it is hidden', () => {
-    expect(draftMoreTitle(true, '⌘.')).toBe('Pin tier, dates, priority, start unread (⌘.)');
-    expect(draftMoreTitle(false, 'Ctrl+.')).toBe('Pin tier, dates, start unread (Ctrl+.)');
-    expect(draftMoreTitle('unknown', '⌘.')).toBe('Pin tier, dates, start unread (⌘.)');
+    expect(draftMoreTitle(true, '⌘.')).toBe('Pin tier, priority (⌘.)');
+    expect(draftMoreTitle(false, 'Ctrl+.')).toBe('Pin tier (Ctrl+.)');
+    expect(draftMoreTitle('unknown', '⌘.')).toBe('Pin tier (⌘.)');
+    expect(draftMoreTitle(false, '⌘.', true)).toBe('Project, pin tier (⌘.)');
   });
 });
 
@@ -212,7 +211,7 @@ function chipsFor(meta: Record<string, unknown>, ai: string[]): Chip[] {
   );
 }
 
-interface HarnessProps { chips: Chip[]; text: string; composer: HTMLElement; onChange: (p: unknown) => void; nonce?: number; more?: boolean }
+interface HarnessProps { chips: Chip[]; text: string; composer: HTMLElement; onChange: (p: unknown) => void; nonce?: number; more?: boolean; meta?: Record<string, unknown> }
 function Harness(p: HarnessProps) {
   const moreRef = useRef<HTMLButtonElement>(null);
   const menu = useDraftDecisionMenu({ getComposer: () => p.composer as never, composerText: p.text, openMenuNonce: p.nonce, moreRef });
@@ -220,7 +219,7 @@ function Harness(p: HarnessProps) {
     createElement(DraftDecisionChips, { chips: p.chips, menu }),
     p.more === false ? null : createElement(DraftMoreButton, { menu, moreRef, priorityVisible: true }),
     createElement(DraftTaskMenuPopover, {
-      open: menu.open, anchorEl: menu.anchor, menuRef: menu.menuRef, meta: DEFAULT_META, tierDecided: true,
+      open: menu.open, anchorEl: menu.anchor, menuRef: menu.menuRef, meta: { ...DEFAULT_META, ...p.meta }, tierDecided: true,
       priorityVisible: true, onChange: p.onChange, onClose: menu.close, onAnchorLost: menu.onAnchorLost,
       focusNonce: menu.mode === 'keyboard' ? menu.focusNonce : 0,
     }));
@@ -326,18 +325,28 @@ describe('draft decision menu controller', () => {
     expect(more().classList.contains('draft-more-btn-active')).toBe(true);
   });
 
-  it('"Start unread" toggles and keeps the menu open (C42)', async () => {
+  it('no Start, Due or "Start unread" rows unless the value is set (2026-09-25)', async () => {
     await render();
     await press(more(), 1);
+    expect(menuEl()!.querySelector('.draft-task-menu-unread')).toBeNull();
+    expect(menuEl()!.querySelectorAll('.task-kebab-date-toggle').length).toBe(0);
+    await press(more(), 1);
+    // A set value keeps its row, so it can be cleared; clearing unread closes.
+    await render({ meta: { unread: true, startDate: '2026-09-27' } });
+    await press(more(), 1);
+    const dates = [...menuEl()!.querySelectorAll('.task-kebab-date-toggle')].map((b) => b.textContent ?? '');
+    expect(dates.length).toBe(1);
+    expect(dates[0]).toMatch(/^Start/);
     const row = menuEl()!.querySelector('.draft-task-menu-unread')!;
     expect(row.textContent).toContain('Start unread');
     await press(row, 1);
-    expect(props.onChange).toHaveBeenCalledWith({ unread: true });
-    expect(menuEl()).toBeTruthy();
+    expect(props.onChange).toHaveBeenCalledWith({ unread: false });
+    expect(menuEl()).toBeNull();
+    await render({ meta: {} });
   });
 
   it('opening a date row keeps the menu top where it was and caps it to the viewport (C25b)', async () => {
-    await render();
+    await render({ meta: { dueDate: '2026-09-26' } });
     await press(more(), 1);
     const menu = menuEl() as HTMLElement;
     // Placed upward over the stubbed anchor: bottom edge on the anchor.

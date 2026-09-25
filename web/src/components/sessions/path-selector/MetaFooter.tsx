@@ -3,7 +3,10 @@
  * The primary row keeps launch-critical choices visible — model + engine (as ONE
  * pair; see EngineToggle) and the pin tier (which tier column the new task lands
  * in, changed often enough that burying it cost a click every launch) — while
- * rarer metadata (dates, unread, priority) lives in an upward-opening More menu.
+ * the rest lives in an upward-opening More menu: the engines the user has never
+ * launched (splitEngineRow) and priority. Dates and "start unread" are not
+ * launch questions (user, 2026-09-25); their rows show only while one is SET
+ * (Walnut read a date from the text), so it can still be changed or cleared.
  */
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -21,7 +24,10 @@ import {
   engineTitle,
   normalizeEngine,
   resolveEngineForHost,
+  splitEngineRow,
+  type EngineCatalogEntry,
 } from '@/utils/engines';
+import type { SessionEngine } from '@/types/session';
 import { formatModelName } from '@/hooks/useSessionUsage';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useShowPriority } from '@/hooks/useShowPriority';
@@ -40,6 +46,9 @@ interface Props {
    *  background parse filled is not something the user changed. endDate follows
    *  startDate's owner. Omitted: every non-default field counts, as before. */
   ownedFields?: Readonly<Partial<Record<DraftOwnedField, DraftFieldOwner>>>;
+  /** Engines the user has launched before (usedEngineIds over the working
+   *  dirs): shown up front next to Claude and Codex. */
+  usedEngines?: ReadonlySet<SessionEngine>;
 }
 
 /** Model dropdown rows: the host's last-known CLI catalog (values = full
@@ -124,15 +133,19 @@ export function MetaModelSelect({ meta, onChange, host, className }: Pick<Props,
  *  Buttons the launch can't use are disabled with the reason as their tooltip: an
  *  engine whose CLI isn't installed, and every ACP engine on a remote host tab
  *  (the ACP worker is local-only for now). */
-function EngineToggle({ meta, onChange, host }: Pick<Props, 'meta' | 'onChange' | 'host'>) {
+function EngineToggle({ meta, onChange, host, entries, label = 'Coding agent engine' }: Pick<Props, 'meta' | 'onChange' | 'host'> & {
+  /** The buttons to draw (splitEngineRow's primary or more half). */
+  entries: EngineCatalogEntry[];
+  label?: string;
+}) {
   const catalog = useEngineCatalog();
   // The engine that will ACTUALLY launch (quick-start drops a local-only flag on
   // a remote tab), so the highlight mirrors effective behavior rather than the
   // stored value — see resolveEngineForHost.
   const active = resolveEngineForHost(meta.engine, host, catalog);
   return (
-    <div className="sps-engine-toggle" role="group" aria-label="Coding agent engine">
-      {catalog.map((entry) => {
+    <div className="sps-engine-toggle" role="group" aria-label={label}>
+      {entries.map((entry) => {
         const lock = engineLockReason(entry, host);
         return (
           <button
@@ -203,8 +216,12 @@ export function withFooterEdits(
   return out;
 }
 
-export function MetaFooter({ meta, onChange, compact, host, ownedFields }: Props) {
+export function MetaFooter({ meta, onChange, compact, host, ownedFields, usedEngines }: Props) {
   const showPriority = useShowPriority();
+  const catalog = useEngineCatalog();
+  const engines = splitEngineRow(catalog, resolveEngineForHost(meta.engine, host, catalog), usedEngines ?? new Set());
+  const hasDates = !!(meta.startDate || meta.endDate || meta.dueDate);
+  const hasMore = engines.more.length > 0 || hasDates || !!meta.unread || showPriority;
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
@@ -230,6 +247,9 @@ export function MetaFooter({ meta, onChange, compact, host, ownedFields }: Props
   // badge would read "More · 1" for a value the user cannot see or change here.
   // With `ownedFields` a field counts only when the user owns it (C65).
   const nonDefaultCount = metaFooterEditCount(meta, showPriority, ownedFields);
+  // More can empty out while open (its last engine picked moves up front): the
+  // button goes, so the menu must not stay "open" to reappear later by itself.
+  useEffect(() => { if (!hasMore) setMoreOpen(false); }, [hasMore]);
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -274,9 +294,9 @@ export function MetaFooter({ meta, onChange, compact, host, ownedFields }: Props
       <div className="sps-meta-row">
         {/* Model + provider travel together — see EngineToggle's note. */}
         <MetaModelSelect meta={meta} onChange={onChange} host={host} />
-        <EngineToggle meta={meta} onChange={onChange} host={host} />
+        <EngineToggle meta={meta} onChange={onChange} host={host} entries={engines.primary} />
         <TierPicker meta={meta} onChange={onChange} />
-        <div className="sps-meta-more" ref={moreRef}>
+        {hasMore && <div className="sps-meta-more" ref={moreRef}>
           {moreOpen && createPortal(
             <div
               ref={popoverRef}
@@ -287,12 +307,17 @@ export function MetaFooter({ meta, onChange, compact, host, ownedFields }: Props
               // clamped — never sized by the host column, never off-screen.
               style={menuPlacementStyle(morePlacement)}
             >
-              {/* Task dates — the same Start / End / Due trio as the Quick Task
-                  form (a launch IS a task create). Same calendar semantics too:
-                  Start leads, End/Due are usually empty so they ghost. Popover
-                  pickers (not inline): three inline calendars would triple the
-                  menu's height. */}
-              <div className="sps-meta-row">
+              {engines.more.length > 0 && (
+                <div className="sps-meta-row">
+                  <span className="sps-meta-label">Engine</span>
+                  <EngineToggle meta={meta} onChange={onChange} host={host} entries={engines.more} label="Other coding agent engines" />
+                </div>
+              )}
+              {/* Task dates, only while one is set — the same Start / End / Due
+                  trio as the Quick Task form (a launch IS a task create). Start
+                  leads, End/Due are usually empty so they ghost. Popover pickers
+                  (not inline): three inline calendars would triple the menu. */}
+              {hasDates && <div className="sps-meta-row">
                 <span className="sps-meta-label">Dates</span>
                 <div className="sps-meta-dates">
                   <DatePicker
@@ -313,18 +338,20 @@ export function MetaFooter({ meta, onChange, compact, host, ownedFields }: Props
                     onChange={(dueDate) => onChange(m => ({ ...m, dueDate: dueDate ?? undefined }))}
                   />
                 </div>
-              </div>
-              <div className="sps-meta-row">
-                <button
-                  type="button"
-                  className={`sps-meta-toggle${meta.unread ? ' active unread' : ''}`}
-                  onClick={() => onChange(m => ({ ...m, unread: !m.unread }))}
-                  title="Start this task marked unread"
-                >
-                  <span className="sps-meta-toggle-icon">●</span>
-                  <span>Start unread</span>
-                </button>
-              </div>
+              </div>}
+              {meta.unread && (
+                <div className="sps-meta-row">
+                  <button
+                    type="button"
+                    className="sps-meta-toggle active unread"
+                    onClick={() => onChange(m => ({ ...m, unread: false }))}
+                    title="This task starts marked unread. Click to start it read."
+                  >
+                    <span className="sps-meta-toggle-icon">●</span>
+                    <span>Start unread</span>
+                  </button>
+                </div>
+              )}
               {showPriority && (
                 <div className="sps-meta-row">
                   <span className="sps-meta-label">Priority</span>
@@ -356,7 +383,7 @@ export function MetaFooter({ meta, onChange, compact, host, ownedFields }: Props
             <span>More</span>
             {nonDefaultCount > 0 && <span className="sps-meta-more-badge">· {nonDefaultCount}</span>}
           </button>
-        </div>
+        </div>}
       </div>
     </div>
   );

@@ -854,3 +854,20 @@ export async function typeAndSettle(page: Page, mock: ParseMock, text: string): 
     { timeout: 15_000, message: `no trailing parse for "${text}"` }).toBe(true)
   await page.waitForTimeout(250)
 }
+
+/**
+ * An engine button in the folder picker's footer. Claude, Codex, engines used
+ * before and the current pick sit in the footer row; every other engine sits in
+ * the footer's More (2026-09-25). Opens More when the engine is not up front.
+ * Waits for the engine catalog first: before it lands only the compiled-in pair
+ * exists, and More (engines beyond the pair) is not drawn yet.
+ */
+export async function footerEngineButton(page: Page, picker: Locator, name: string | RegExp): Promise<Locator> {
+  const primary = picker.locator('.sps-meta-footer .sps-engine-toggle .sps-engine-btn', { hasText: name })
+  const moreBtn = picker.locator('.sps-meta-more-btn')
+  await expect.poll(async () => (await primary.count()) > 0 || (await moreBtn.count()) > 0, { timeout: 15_000 }).toBe(true)
+  if (await primary.count()) return primary
+  const dialog = page.getByRole('dialog', { name: 'More task settings' })
+  if (!(await dialog.isVisible())) await moreBtn.click()
+  return dialog.getByRole('group', { name: 'Other coding agent engines' }).locator('.sps-engine-btn', { hasText: name })
+}
