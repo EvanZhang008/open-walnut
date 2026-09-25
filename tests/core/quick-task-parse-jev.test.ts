@@ -272,3 +272,75 @@ describe('parseQuickTask without Jev', () => {
     expect(decideMock).not.toHaveBeenCalled();
   });
 });
+
+// C53: the per-leg outcome the draft column reads before reverting a chip.
+// classify = Jev, dates = the LLM leg.
+describe('parseQuickTask legs with Jev', () => {
+  it('both legs answer: classify ok, dates ok', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Fix login","due_date":"2026-07-24"}'));
+    decideMock.mockResolvedValue({ pinTier: choice('satellite', 0.8) });
+    const result = await parseQuickTask('fix login bug by friday');
+    expect(result.legs).toEqual({ classify: 'ok', dates: 'ok' });
+  });
+
+  it('Jev answers with no confident field: still ok (an answer, not a failure)', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Fix login"}'));
+    decideMock.mockResolvedValue({ pinTier: choice('satellite', 0.1) });
+    const result = await parseQuickTask('fix login bug');
+    expect(result.legs).toEqual({ classify: 'ok', dates: 'ok' });
+  });
+
+  it('Jev returns undefined (transport error swallowed): classify failed', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Fix login","pinTier":"focus"}'));
+    decideMock.mockRejectedValue(new Error('Jev 503'));
+    const result = await parseQuickTask('fix login bug');
+    expect(result.legs).toEqual({ classify: 'failed', dates: 'ok' });
+  });
+
+  it('LLM leg throws while Jev answers: classify ok, dates failed', async () => {
+    sendMessageMock.mockRejectedValue(new Error('model down'));
+    decideMock.mockResolvedValue({ pinTier: choice('satellite', 0.8) });
+    const result = await parseQuickTask('fix login bug');
+    expect(result.legs).toEqual({ classify: 'ok', dates: 'failed' });
+    expect(result.parse.pinTier).toBe('satellite');
+  });
+
+  it('LLM leg times out while Jev answers: dates failed', async () => {
+    sendMessageMock.mockImplementation(({ signal }: { signal: AbortSignal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    }));
+    decideMock.mockResolvedValue({ priority: choice('immediate', 0.8) });
+    const result = await parseQuickTask('fix login bug', { timeoutMs: 20 });
+    expect(result.legs).toEqual({ classify: 'ok', dates: 'failed' });
+    expect(result.parse.priority).toBe('immediate');
+  });
+
+  it('CLI-only provider: dates skipped, classify ok', async () => {
+    config.agent.main_provider = 'claude_cli';
+    decideMock.mockResolvedValue({ pinTier: choice('satellite', 0.8) });
+    const result = await parseQuickTask('fix login bug by friday');
+    expect(sendMessageMock).not.toHaveBeenCalled();
+    expect(result.legs).toEqual({ classify: 'ok', dates: 'skipped' });
+  });
+
+  it('CLI-only provider with a failing Jev: classify failed, dates skipped', async () => {
+    config.agent.main_provider = 'claude_cli';
+    decideMock.mockRejectedValue(new Error('Jev 503'));
+    const result = await parseQuickTask('fix login bug');
+    expect(result.legs).toEqual({ classify: 'failed', dates: 'skipped' });
+  });
+
+  it('Jev not configured: classify skipped', async () => {
+    getJevClientMock.mockReturnValue(undefined);
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Fix login"}'));
+    const result = await parseQuickTask('fix login bug');
+    expect(result.legs).toEqual({ classify: 'skipped', dates: 'ok' });
+  });
+
+  it('a Jev setup that throws counts as failed, never as skipped', async () => {
+    getJevClientMock.mockImplementation(() => { throw new Error('bad jev section'); });
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Fix login"}'));
+    const result = await parseQuickTask('fix login bug');
+    expect(result.legs).toEqual({ classify: 'failed', dates: 'ok' });
+  });
+});

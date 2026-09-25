@@ -35,17 +35,18 @@ import { createRoot } from '../../web/node_modules/react-dom/client.js';
 
 /** Recorded parse requests, in order, with the signal the component handed us. */
 const spy = vi.hoisted(() => ({
-  calls: [] as Array<{ text: string; signal: AbortSignal }>,
+  calls: [] as Array<{ text: string; signal: AbortSignal; resolve: (parse: unknown) => void }>,
   /** Set by the ChatInput stub — the composer's text mirror (`onValueChange`). */
   typeInto: null as null | ((text: string) => void),
+  /** The props the launch bar stub last received. */
+  barProps: null as null | Record<string, unknown>,
 }));
 
 vi.mock('@/api/tasks', () => ({
-  quickParseTask: (text: string, signal?: AbortSignal) => {
-    spy.calls.push({ text, signal: signal! });
-    // Never settles: the request holds its slot exactly as a 10s server timeout would.
-    return new Promise(() => {});
-  },
+  quickParseTask: (text: string, signal?: AbortSignal) =>
+    // Pending until a case resolves it: unresolved, the request holds its slot
+    // exactly as a 10s server timeout would.
+    new Promise((resolve) => { spy.calls.push({ text, signal: signal!, resolve }); }),
 }));
 
 // The effect is gated off unless `agent.quick_parse` is on. The real hook reads
@@ -63,19 +64,23 @@ vi.mock('@/hooks/useQuickParse', () => ({
 vi.mock('@/components/chat/ChatInput', () => ({
   ChatInput: ({ onValueChange }: { onValueChange: (t: string) => void }) => {
     spy.typeInto = onValueChange;
-    return createElement('div', { className: 'chat-input-stub' });
+    // A div, not a textarea: React's input-event polyfill trips on linkedom's
+    // text controls. The panel only matches the class.
+    return createElement('div', { className: 'chat-input-stub' },
+      createElement('div', { className: 'chat-input-textarea', tabIndex: 0 }));
   },
 }));
 
-// Launch bar / slash commands / the header's task-settings ⋮ are unrelated
-// surfaces; keep them out of the mount. The ⋮ stubs matter for the harness: the
-// real menus reach the markdown renderer through the task kebab's import chain,
-// and DOMPurify's hook registration at module load has no window under linkedom.
+// Launch bar / slash commands / the bound task kebab are unrelated surfaces;
+// keep them out of the mount. The stubs matter for the harness: the real draft
+// menu (reached only through DraftLaunchBar, never imported by the panel) and the
+// task kebab reach the markdown renderer, and DOMPurify's hook registration at
+// module load has no window under linkedom. The bar stub records its props.
 vi.mock('@/components/sessions/DraftLaunchBar', () => ({
-  DraftLaunchBar: () => createElement('div', { className: 'draft-launch-bar-stub' }),
-}));
-vi.mock('@/components/sessions/DraftTaskMenu', () => ({
-  DraftTaskMenu: () => createElement('div', { className: 'draft-task-menu-stub' }),
+  DraftLaunchBar: (props: Record<string, unknown>) => {
+    spy.barProps = props;
+    return createElement('div', { className: 'draft-launch-bar-stub' });
+  },
 }));
 vi.mock('@/components/sessions/TaskQuickActions', () => ({
   TaskQuickActions: () => createElement('div', { className: 'task-quick-actions-stub' }),
@@ -119,6 +124,7 @@ describe('draft composer parse: one abort controller per kind', () => {
     // at zero elapsed (Date.now() is faked too — the eager throttle reads it).
     spy.calls.length = 0;
     spy.typeInto = null;
+    spy.barProps = null;
     root = null;
     vi.useFakeTimers();
   });
@@ -132,7 +138,10 @@ describe('draft composer parse: one abort controller per kind', () => {
   });
 
   /** Mount the real panel with the AI backfill enabled. */
-  async function mountPanel(): Promise<void> {
+  async function mountPanel(
+    onAiParse: (...args: unknown[]) => void = () => {},
+    extra: Record<string, unknown> = {},
+  ): Promise<void> {
     const host = doc.createElement('div');
     doc.body.appendChild(host);
     root = createRoot(host);
@@ -152,7 +161,8 @@ describe('draft composer parse: one abort controller per kind', () => {
         onMetaChange: () => {},
         isKnownProject: () => true,
         // Required, or the effect returns before firing anything.
-        onAiParse: () => {},
+        onAiParse,
+        ...extra,
       } as never));
     });
     expect(spy.typeInto, 'the composer stub must have been rendered').toBeTypeOf('function');
@@ -270,5 +280,92 @@ describe('draft composer parse: one abort controller per kind', () => {
     expect(eager[0].signal.aborted).toBe(true);
     expect(trailing[0].signal.aborted).toBe(true);
     expect(inFlight()).toBe(0);
+  });
+
+  // ── Parse kinds and the debounced clear (spec 6.2.0, 6.3; C51 C52) ──
+
+  const clearCalls = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.filter((c) => c[2] === 'clear');
+
+  it('(a) an empty composer that comes back inside the debounce never reports a clear', async () => {
+    // Starting state: a sentence typed, both parses pending. This is the refused
+    // Start round trip: dispatchSend empties the composer, then restores it.
+    const onAiParse = vi.fn();
+    await mountPanel(onAiParse);
+    await type(SENTENCE);
+    await advance(PARSE_DEBOUNCE_MS);
+    await type('');
+    await advance(50);
+    await type(SENTENCE);
+    await advance(PARSE_DEBOUNCE_MS * 4);
+    expect(clearCalls(onAiParse)).toHaveLength(0);
+  });
+
+  it('(b) an empty composer that stays empty past the debounce reports exactly one clear', async () => {
+    const onAiParse = vi.fn();
+    await mountPanel(onAiParse);
+    const eager = await type(SENTENCE);
+    await type('');
+    expect(eager[0].signal.aborted, 'emptying still aborts what is in flight').toBe(true);
+    await advance(PARSE_DEBOUNCE_MS - 1);
+    expect(clearCalls(onAiParse), 'not before the debounce').toHaveLength(0);
+    await advance(2);
+    await advance(PARSE_DEBOUNCE_MS * 4);
+    expect(clearCalls(onAiParse)).toEqual([['draft:test-1', {}, 'clear']]);
+  });
+
+  it('(b2) a parse that lands after the clear is ignored (the seq bump comes first)', async () => {
+    const onAiParse = vi.fn();
+    await mountPanel(onAiParse);
+    const eager = await type(SENTENCE);
+    await type('');
+    await advance(PARSE_DEBOUNCE_MS + 1);
+    await act(async () => { eager[0].resolve({ title: 'x', pinTier: 'satellite' }); });
+    expect(onAiParse.mock.calls.map((c) => c[2])).toEqual(['clear']);
+  });
+
+  it('(c) eager lands as eager; trailing as trailing while the text matches, else as eager', async () => {
+    const onAiParse = vi.fn();
+    await mountPanel(onAiParse);
+    const [eager] = await type(SENTENCE);
+    await act(async () => { eager.resolve({ title: 'x', pinTier: 'satellite' }); });
+    expect(onAiParse.mock.calls.at(-1)).toEqual(['draft:test-1', { title: 'x', pinTier: 'satellite' }, 'eager']);
+
+    const [trailing] = await advance(PARSE_DEBOUNCE_MS);
+    await act(async () => { trailing.resolve({ title: 'x' }); });
+    expect(onAiParse.mock.calls.at(-1)).toEqual(['draft:test-1', { title: 'x' }, 'trailing']);
+
+    // A trailing parse the user has typed past describes a prefix: it still
+    // lands (today's drop is gone) but may only add or change, like an eager one.
+    await advance(PARSE_THROTTLE_MS);
+    const later = `${SENTENCE} tomorrow`;
+    await type(later);
+    const [stale] = await advance(PARSE_DEBOUNCE_MS);
+    expect(stale.text).toBe(later);
+    await type(`${later} please`);
+    await act(async () => { stale.resolve({ title: 'y', priority: 'important' }); });
+    expect(onAiParse.mock.calls.at(-1)).toEqual(['draft:test-1', { title: 'y', priority: 'important' }, 'eager']);
+    expect(clearCalls(onAiParse)).toHaveLength(0);
+  });
+
+  it('Mod+. inside the composer bumps the menu nonce on the launch bar', async () => {
+    await mountPanel(() => {}, { onWalnutToggle: () => {}, onTaskFieldChange: () => {} });
+    expect(spy.barProps?.openMenuNonce).toBe(0);
+    expect(spy.barProps?.onTaskFieldChange).toBeTypeOf('function');
+    const textarea = doc.querySelector('.chat-input-textarea')!;
+    const mac = /Mac|iP/.test(globalThis.navigator?.platform ?? '');
+    const ev = new (doc.defaultView as unknown as { Event: typeof Event }).Event('keydown', { bubbles: true, cancelable: true });
+    Object.assign(ev, { key: '.', metaKey: mac, ctrlKey: !mac, shiftKey: false, altKey: false });
+    await act(async () => { textarea.dispatchEvent(ev); });
+    expect(spy.barProps?.openMenuNonce).toBe(1);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('a plain draft passes the task-field handlers; a fork draft does not', async () => {
+    await mountPanel(() => {}, {
+      onTaskFieldChange: () => {}, onReturnFieldToWalnut: () => {},
+      draft: { id: 'draft:fork-1', cwd: '/tmp/acme', host: null, meta: {}, forkOf: { sessionId: 's1', title: 't' } },
+    });
+    expect(spy.barProps?.onTaskFieldChange).toBeUndefined();
+    expect(spy.barProps?.onReturnFieldToWalnut).toBeUndefined();
   });
 });

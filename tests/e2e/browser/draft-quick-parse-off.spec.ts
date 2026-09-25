@@ -39,8 +39,9 @@
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
-  draftComposer, draftCwdPill, draftQuickChips, draftQuickKey, DRAFT_PANEL,
-  loadHome, openDraft, watchForbiddenRequests,
+  captureDraftRequests, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip,
+  draftDecisionChips, draftMoreButton, draftQuickChips, draftQuickKey, DRAFT_PANEL, isoDay, loadHome,
+  mockQuickParse, nthRequest, openDraft, openDraftOnCwd, openDraftSettings, watchForbiddenRequests,
 } from './draft-helpers'
 
 /** Evidence lives outside test-results/ — concurrent Playwright runs wipe that dir. */
@@ -202,6 +203,10 @@ test('typing a whole sentence into the draft composer fires zero quick-parse req
   // show zero requests, so the text is half of this assertion.
   await expect(draftComposer(page)).toHaveValue(SENTENCE)
   expect(SENTENCE.length, 'a realistic sentence, not a 3-char probe').toBeGreaterThan(30)
+  // X1: no decision was made for the user, so no chip and no ✦; the pills row is
+  // folder, project, More.
+  await expect(panel.locator('.draft-decision-chip, .draft-ai-badge, .draft-decisions-key')).toHaveCount(0)
+  await expect(draftMoreButton(panel)).toBeVisible()
 
   await panel.screenshot({ path: `${SHOT_DIR}/01-typed-no-parse.png` })
 })
@@ -485,4 +490,50 @@ test('turning the switch ON makes typing parse, and turning it OFF stops it agai
   await draftComposer(page).pressSequentially(' and land it', { delay: 25 })
   await page.waitForTimeout(SETTLE_MS)
   expect(parses, 'switched off mid-sentence, so nothing more may leave').toEqual([])
+})
+
+test('turning the switch OFF mid-draft drops the AI chips at once, keeps a More-set chip, and Start sends no AI value', async ({ page }) => {
+  // Also LAST-group: it writes config through the real switch (afterEach restores).
+  // The parse is mocked so the ON half has chips to take away.
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const parse = await mockQuickParse(page, { pinTier: 'satellite', due_date: isoDay(3) })
+  const log = await captureDraftRequests(page, { blockQuickStart: true })
+  await loadHome(page)
+  const panel = await openDraftOnCwd(page, `${await discoverFixtureRoot()}/projects/walnut`)
+
+  // OFF (the default): More still works, and its value is a chip without ✦.
+  const menu = await openDraftSettings(panel, 'more')
+  await menu.getByRole('button', { name: /Start unread/ }).click()
+  await expect(draftDecisionChip(panel, 'unread')).toHaveText(/Starts unread/)
+  await page.keyboard.press('Escape')
+  await draftComposer(page).fill('pair on the marina release notes by friday')
+  await page.waitForTimeout(900)
+  expect(parse.calls, 'off: nothing parsed').toHaveLength(0)
+  await expect(panel.locator('.draft-ai-badge')).toHaveCount(0)
+
+  // ON: the sentence already in the composer is parsed right away.
+  const [, on] = await openPlusMenu(panel)
+  await on.click()
+  await expect(on).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('Escape')
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/, { timeout: 15_000 })
+  await expect(draftDecisionChip(panel, 'dueDate').locator('.draft-ai-badge')).toHaveCount(1)
+  await panel.screenshot({ path: `${SHOT_DIR}/06-on-ai-chips.png` })
+
+  // OFF again: "don't decide for me" takes the earlier decisions with it.
+  const [, off] = await openPlusMenu(panel)
+  await off.click()
+  await expect(off).toHaveAttribute('aria-checked', 'false')
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveCount(0)
+  await expect(draftDecisionChip(panel, 'dueDate')).toHaveCount(0)
+  await expect(draftDecisionChip(panel, 'unread')).toHaveText(/Starts unread/)
+  await expect(draftDecisionChips(panel)).toHaveCount(1)
+  await page.keyboard.press('Escape')
+  await panel.screenshot({ path: `${SHOT_DIR}/07-off-ai-chips-gone.png` })
+
+  await panel.locator('.draft-start-btn').click()
+  const body = await nthRequest(log, 'quickStart')
+  expect(body.taskMeta?.pinTier).toBe('focus')
+  expect(body.taskMeta?.due_date).toBeUndefined()
+  expect(body.taskMeta?.unread).toBe(true)
 })

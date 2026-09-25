@@ -26,8 +26,9 @@ import { HostStatusDot } from './path-selector/HostStatusDot';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { GhostTextInput } from './path-selector/GhostTextInput';
 import { PathList } from './path-selector/PathList';
-import { MetaFooter } from './path-selector/MetaFooter';
+import { MetaFooter, withFooterEdits } from './path-selector/MetaFooter';
 import { freshLauncherMeta } from './task-meta-constants';
+import type { DraftFieldOwner, DraftOwnedField } from './draft-column';
 
 export interface QuickStartPath {
   cwd: string;
@@ -95,11 +96,15 @@ interface Props {
    *  simply escapes the ~300px column that can't contain it. Must be
    *  referentially stable. Omit → the classic `bottom: 100%` popover. */
   popoutAnchor?: RefObject<HTMLElement | null>;
+  /** Per-field owners of the host draft's task fields, passed through to the
+   *  footer so its More badge counts only what the user changed (MetaFooter). */
+  ownedFields?: Readonly<Partial<Record<DraftOwnedField, DraftFieldOwner>>>;
 }
 
 
 export function SessionPathSelector({
   open, onClose, onSelect, initialMeta, lockLaunchMemory = false, initialPath, confirmOnDismiss = true, popoutAnchor,
+  ownedFields,
 }: Props) {
   const navigate = useNavigate();
   const [dirs, setDirs] = useState<WorkingDirEntry[]>([]);
@@ -143,6 +148,13 @@ export function SessionPathSelector({
   // Same ref pattern for initialPath — read in the open effect, kept out of its deps.
   const initialPathRef = useRef(initialPath);
   initialPathRef.current = initialPath;
+  // The meta this open started from. A footer edit made during the open is the
+  // user's too: the More badge counts it before the confirm rebases it in.
+  const openedMetaRef = useRef<QuickStartTaskMeta | null>(null);
+  const footerOwned = useMemo(
+    () => withFooterEdits(ownedFields, openedMetaRef.current, meta),
+    [ownedFields, meta],
+  );
 
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -181,7 +193,9 @@ export function SessionPathSelector({
     setError(null);
     setQuery('');
     setSelectedIdx(0);
-    setMeta(initialMetaRef.current ?? freshLauncherMeta());
+    const startMeta = initialMetaRef.current ?? freshLauncherMeta();
+    openedMetaRef.current = startMeta;
+    setMeta(startMeta);
     launchTouchedRef.current = false;
     // Re-opening to edit a confirmed selection: open straight into edit mode with the
     // path pre-filled and its host tab active — an "edit this selection" view. Without
@@ -863,7 +877,7 @@ export function SessionPathSelector({
           Compact single row in edit mode: space goes back to the path list.
           host: the active tab's host drives which catalog fills the model
           dropdown ('all' tab → local catalog, the overwhelmingly common case). */}
-      <MetaFooter meta={meta} onChange={handleMetaChange} compact={editMode} host={currentHost} />
+      <MetaFooter meta={meta} onChange={handleMetaChange} compact={editMode} host={currentHost} ownedFields={footerOwned} />
     </div>
   );
 

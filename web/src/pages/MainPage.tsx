@@ -24,10 +24,13 @@ import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
   applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, followProjectRegistryChange,
-  restoreMetaAfterWalnut,
-  withDirLaunchMemory, launchDivergesFromDirMemory, projectForFolderPick, suggestDiff,
-  type DraftColumn,
+  withDirLaunchMemory, suggestDiff,
+  type DraftColumn, type DraftParseInput, type DraftParseKind, type DraftTaskField, type DraftTaskFieldPatch,
 } from '@/components/sessions/draft-column';
+import {
+  applyDraftPathPick, applyDraftTaskFieldEdit, applyTierSeed, enterWalnutDraft, launchMetaFor, leaveWalnutDraft,
+  makeTierKnown, rederiveDraftParse, returnFieldToWalnut, revertAiTaskFields,
+} from '@/components/sessions/draft-ownership';
 import type { QuickStartPath, QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
 import {
@@ -37,7 +40,7 @@ import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
 import { adoptAgentSearchSession } from '@/api/agentSearch';
-import { fetchTask, recordSuggestFeedback, type QuickTaskParse } from '@/api/tasks';
+import { fetchTask, recordSuggestFeedback, updateTask, SUGGEST_RULES_VERSION } from '@/api/tasks';
 import { isBuiltinTier } from '@/api/focus';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
@@ -46,6 +49,8 @@ import { log } from '@/utils/log';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { visibleInterval } from '@/utils/page-visibility';
 import { useContextInspector } from '@/hooks/useContextInspector';
+import { useShowPriorityState } from '@/hooks/useShowPriority';
+import { useQuickParseEnabled } from '@/hooks/useQuickParse';
 import { useUrlSync } from '@/hooks/useUrlSync';
 import { useSessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { resolveTaskSessionId } from '@/utils/session-status';
@@ -145,12 +150,13 @@ interface DraftSeed {
   host?: string | null;
   hostLabel?: string;
   /**
-   * Pin tier the new task should land in — a pin-tier group header's "+" (R8).
+   * Pin tier the new task should land in: a pin-tier group header's "+" (R8).
    *
-   * A SEED, not a user edit: it is written into `meta.pinTier` WITHOUT setting
-   * `metaTouched`, because that flag is also the per-directory launch-memory
-   * switch — latching it here would freeze the model at whatever folder the draft
-   * opened on and make every later folder change launch with the wrong one.
+   * The seed OWNS the tier (`fieldOwner.pinTier = 'seed'`, no ✦): the user clicked
+   * that header, so a parse proposing another tier never moves it, and a later
+   * More edit still can. It never sets `metaTouched`, which is the per-directory
+   * launch-memory switch for model/engine only: latching it here would freeze the
+   * model at whatever folder the draft opened on.
    */
   pinTier?: string;
   /** This `cwd` is an explicit PIN (a task's own folder), not a suggestion — a
@@ -172,6 +178,29 @@ interface DraftSeed {
    *  turns the launch into a repair (server-side briefing + task title/project).
    *  Only ever set together with a pinned `cwd`. */
   intent?: 'fix-walnut';
+}
+
+/** Rewrite one draft row. The SAME array when the rewrite is a no-op (the
+ *  draft-column writers return the same object then), so a parse that changes
+ *  nothing never re-renders the page. */
+function mapDraft(prev: DraftColumn[], draftId: string, fn: (d: DraftColumn) => DraftColumn): DraftColumn[] {
+  const i = prev.findIndex((d) => d.id === draftId);
+  if (i < 0) return prev;
+  const next = fn(prev[i]);
+  if (next === prev[i]) return prev;
+  const out = prev.slice();
+  out[i] = next;
+  return out;
+}
+
+/** Every draft row through `fn`; the SAME array when none changed. */
+function mapDrafts(prev: DraftColumn[], fn: (d: DraftColumn) => DraftColumn): DraftColumn[] {
+  let out: DraftColumn[] | null = null;
+  prev.forEach((d, i) => {
+    const next = fn(d);
+    if (next !== d) (out ??= prev.slice())[i] = next;
+  });
+  return out ?? prev;
 }
 
 /** The one Quick Start failure notification shape — used by both the retry
@@ -858,6 +887,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * common folders one click away, which is why inheriting the previous launch's
    * path is no longer worth the surprise of a draft silently pointing elsewhere.
    */
+  /** The registry's project defaults, read LIVE by the []-dep draft handlers
+   *  (applyDraftParse's folder-follows-project lookup). No fetch. */
+  const projectDefaultsRef = useRef(projectDefaults);
+  projectDefaultsRef.current = projectDefaults;
+  const draftProjectDefault = useCallback(
+    (name: string) => projectDefaultsRef.current.get(name.trim().toLowerCase()),
+    [],
+  );
+
   const openDraftColumn = useCallback((seed?: DraftSeed): string => {
     // Every exit below puts a draft in front of the user (new or refocused), and a
     // fullscreen panel — the Fork chip lives in one — would cover it (useFullscreen).
@@ -914,16 +952,21 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         if (seed) {
           setDraftColumns(prev => prev.map(d => {
             if (d.id !== leftmostDraft.id) return d;
-            const next = { ...d };
+            // The composer is empty, but its debounced 'clear' may not have run
+            // yet: take back what the old text decided (AI project, folder, task
+            // fields) BEFORE the seed lands, so a stale ✦ never rides the reuse.
+            // The same rules as the debounce, so model/engine stay put.
+            let next = applyDraftParse(d, {}, draftProjectDefault, { kind: 'clear' });
             // A seeded rebind resets the mode: the seed decides the shape (a
             // fork can't be walnut at all; a task/project seed starts on Start
             // Task like every fresh column, the user re-picks Ask Walnut if that
             // is what they want). Normally unreachable: the toggle marks the
             // draft userTouched, so a seed opens a fresh column instead.
             if (next.walnut) {
-              next.meta = restoreMetaAfterWalnut(next.meta, next.walnutPrev);
-              delete next.walnut; delete next.walnutPrev;
+              next = leaveWalnutDraft(next);
+              delete next.walnut;
             }
+            next = { ...next };
             if (seed.project !== undefined) {
               next.project = seed.project;
               // A "+" seed outranks a previous AI guess but NOT the user's own
@@ -931,9 +974,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               // they chose by hand.
               if (d.projectSource !== 'user') next.projectSource = 'seed';
             }
-            // Tier/model seed (pin-tier header "+", fork), again without
-            // metaTouched — see DraftSeed.pinTier. Skipped once the user edited.
-            if (seed.pinTier && !d.metaTouched) next.meta = { ...next.meta, pinTier: seed.pinTier };
+            // Tier seed (pin-tier header "+"): owned by the seed unless the user
+            // already picked a tier by hand (see DraftSeed.pinTier). The model
+            // seed (fork) is launch memory, so it still yields to metaTouched.
+            if (seed.pinTier) next = applyTierSeed(next, seed.pinTier);
             if (seed.model && !d.metaTouched) next.meta = { ...next.meta, model: seed.model };
             if (seed.taskId || seed.forkOf) {
               if (seed.taskId) {
@@ -958,6 +1002,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               next.host = seed.host ?? null;
               next.hostLabel = seed.hostLabel;
               next.cwdPinned = seed.cwdPinned === true;
+              // The folder this draft now "opened with": a later 'clear' of an AI
+              // folder goes back here, not to the pre-seed one.
+              next.openedCwd = next.cwd;
+              next.openedHost = next.host;
               if (!next.metaTouched) next.meta = withDirLaunchMemory(next.meta, next.cwd, next.host);
             }
             // A seeded rebind rewrites the intent too, in both directions: reusing
@@ -998,6 +1046,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         ...(seed?.forkOf ? { forkOf: seed.forkOf } : {}),
         ...(seed?.intent ? { intent: seed.intent } : {}),
         ...(pinnedSeed ? { cwdPinned: true } : {}),
+        // Where a 'clear' sends an AI folder back to ('' = none).
+        openedCwd: cwd, openedHost: host,
+        // A tier "+" seed OWNS the tier: no ✦, and no parse moves it.
+        ...(seed?.pinTier ? { fieldOwner: { pinTier: 'seed' as const } } : {}),
         // Per-directory launch memory, applied at OPEN time: the bar shows the
         // model/engine this folder actually launches with, instead of "Auto" that
         // silently becomes something else at Start. metaTouched is false here by
@@ -1029,7 +1081,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // Stable identity (refs only, no state deps) — TodoPanel is React.memo'd and
     // takes this as a prop; a new arrow per render would re-render the task list
     // on every draft keystroke.
-  }, []);
+  }, [draftProjectDefault]);
   openDraftColumnRef.current = openDraftColumn;
 
   /** Drop a draft's client-side state: the row, its persisted composer text and
@@ -1062,46 +1114,27 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const projectForDirRef = useRef<(cwd: string) => string>(() => '');
 
   /**
-   * A cwd/host pick landed on this draft (folder picker, or a recent-dir chip in
-   * the draft body).
+   * A cwd/host pick landed on this draft (folder picker, or a quick folder chip).
    *
-   * `meta` is stored VERBATIM — every caller has already resolved the
-   * launch-memory question for the directory it is handing over, and re-resolving
-   * it here would undo the answer: the picker suppresses memory once the user
-   * touches its model/engine controls during that open, so re-applying would
-   * silently restore the folder's remembered model over the user's explicit Auto.
-   *
-   * `metaTouched` therefore STICKS once the confirmed meta diverges from the
-   * picked directory's memory — that divergence is the only thing that can mean
-   * "the user chose this" (see launchDivergesFromDirMemory), and without latching
-   * it here a later cwd change would refresh model/engine right back over the
-   * choice they just made inside the picker.
+   * model / engine come VERBATIM from `meta`: every caller has already resolved
+   * the launch-memory question for the directory it hands over (re-resolving here
+   * would restore the folder's model over the user's explicit Auto in the picker).
+   * `metaTouched` STICKS once they diverge from the picked directory's memory
+   * (launchDivergesFromDirMemory), the only thing that can mean "the user chose
+   * this". Task fields are rebased per field (applyDraftPathPick): only what the
+   * picker footer actually changed becomes the user's.
    *
    * The PROJECT follows the folder in the same write ("a folder is a project"):
-   * the registry owner of the folder when one declares it, else the folder's
-   * basename as the project the launch will auto-create. projectForFolderPick
-   * owns the rules (never over a 'user'/'seed' pick, never on bound/fork drafts);
-   * seeding here — the ONE state writer every folder pick routes through — is what
-   * makes the quick chips and the full picker behave identically.
+   * projectForFolderPick owns the rules (never over a 'user'/'seed' pick, never on
+   * bound/fork drafts), so the quick chips and the full picker behave identically.
    */
-  const handleDraftPathChange = useCallback((draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta) => {
-    setDraftColumns(prev => prev.map(d => {
-      if (d.id !== draftId) return d;
-      const project = projectForFolderPick(d, path.cwd, projectForDirRef.current);
-      // `createCwd` is always REWRITTEN (never merged) so re-picking an existing
-      // folder clears a stale "create it" flag from an earlier pick.
-      return {
-        // The folder is now the user's own pick (`cwdPinned`), so any ✦ the AI
-        // put on it is no longer true — drop the badge with the same write. A
-        // folder-derived project likewise replaces an AI guess, badge included.
-        ...clearAiFields(d, project !== null ? ['cwd', 'project'] : ['cwd']),
-        cwd: path.cwd, host: path.host, hostLabel: path.hostLabel, meta, cwdPinned: true,
-        userTouched: true,
-        createCwd: path.createCwd === true,
-        metaTouched: d.metaTouched || launchDivergesFromDirMemory(meta, path.cwd, path.host),
-        ...(project !== null ? { project, projectSource: 'folder' as const } : {}),
-      };
-    }));
+  const handleDraftPathChange = useCallback((
+    draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta, openedMeta?: QuickStartTaskMeta,
+  ) => {
+    // Task fields rebase per field against `openedMeta` (applyDraftPathPick), so a
+    // parse that landed while the picker was open survives, and a quick folder
+    // chip (no `openedMeta`) takes only model/engine from its render-time meta.
+    setDraftColumns(prev => mapDraft(prev, draftId, (d) => applyDraftPathPick(d, path, meta, openedMeta, projectForDirRef.current)));
   }, []);
 
   /** Project pill / quick-access chip → an EXPLICIT project choice. `projectSource:
@@ -1114,22 +1147,73 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   /**
-   * A background parse of a draft's composer text landed (R9).
+   * A background parse of a draft's composer text landed (R9), with its kind.
    *
-   * Purely additive back-fill of the launch pills — which fields it MAY write is
-   * `applyDraftParse`'s rule, not this handler's: project only while unclaimed,
-   * priority/dates only while `metaTouched` is false, the tier never, and NONE
-   * may latch an authority flag (an AI value must not masquerade as a user pick,
-   * or it would switch off per-directory launch memory). Registry lookup only —
-   * no fetch.
+   * What it MAY write is `applyDraftParse`'s rule, not this handler's: project
+   * only while unclaimed; tier / priority / dates per field unless someone owns
+   * the field; a revert only on a 'trailing' or 'clear' parse whose owning leg
+   * answered; priority not at all while `ui.show_priority` is off or unknown; and
+   * NO authority flag latched (an AI value must not masquerade as a user pick, or
+   * it would switch off per-directory launch memory). Registry lookup only, no
+   * fetch. The inputs ride refs so this stays a []-dep callback.
    */
-  const projectDefaultsRef = useRef(projectDefaults);
-  projectDefaultsRef.current = projectDefaults;
-  const handleDraftAiParse = useCallback((draftId: string, parse: QuickTaskParse) => {
-    setDraftColumns(prev => prev.map(d => (d.id === draftId
-      ? applyDraftParse(d, parse, (name) => projectDefaultsRef.current.get(name.trim().toLowerCase()))
-      : d)));
+  const priorityVisible = useShowPriorityState();
+  const tierKnown = useMemo(
+    () => makeTierKnown(focusBar.customTiers, focusBar.customTiersLoaded),
+    [focusBar.customTiers, focusBar.customTiersLoaded],
+  );
+  const draftParseOptsRef = useRef({ tierKnown, priorityVisible });
+  draftParseOptsRef.current = { tierKnown, priorityVisible };
+  const handleDraftAiParse = useCallback((draftId: string, parse: DraftParseInput, kind: DraftParseKind) => {
+    setDraftColumns(prev => mapDraft(prev, draftId, (d) =>
+      applyDraftParse(d, parse, draftProjectDefault, { ...draftParseOptsRef.current, kind })));
+  }, [draftProjectDefault]);
+
+  /** More / a decision chip edited task fields: those fields become the user's
+   *  (no ✦, final against the AI). Never `metaTouched`: that is model/engine
+   *  launch memory only, so a folder picked afterwards still brings its model. */
+  const handleDraftTaskFieldChange = useCallback((draftId: string, patch: DraftTaskFieldPatch) => {
+    setDraftColumns(prev => mapDraft(prev, draftId, (d) => applyDraftTaskFieldEdit(d, patch)));
   }, []);
+
+  /** "Use Walnut's pick": the field goes back to the AI, ✦ included. */
+  const handleDraftReturnFieldToWalnut = useCallback((draftId: string, field: DraftTaskField) => {
+    setDraftColumns(prev => mapDraft(prev, draftId, (d) => returnFieldToWalnut(d, field)));
+  }, []);
+
+  // Visibility changes re-derive or revert AI task fields on every open draft,
+  // so a chip never shows a decision the product hides, and one appears the
+  // moment it becomes showable (no keystroke needed). Same-object no-ops.
+  const lastPriorityVisibleRef = useRef(priorityVisible);
+  const lastCustomTiersLoadedRef = useRef(focusBar.customTiersLoaded);
+  useEffect(() => {
+    const wasVisible = lastPriorityVisibleRef.current;
+    const tiersWereLoaded = lastCustomTiersLoadedRef.current;
+    lastPriorityVisibleRef.current = priorityVisible;
+    lastCustomTiersLoadedRef.current = focusBar.customTiersLoaded;
+    const becameVisible = priorityVisible === true && wasVisible !== true;
+    const tiersLoaded = focusBar.customTiersLoaded && !tiersWereLoaded;
+    if (priorityVisible === false && wasVisible === true) {
+      // Hidden now: an AI priority must not ride a Start unseen. A user's stays.
+      setDraftColumns(prev => mapDrafts(prev, (d) => revertAiTaskFields(d, ['priority'])));
+    }
+    if (becameVisible || tiersLoaded) {
+      const opts = { tierKnown, priorityVisible };
+      setDraftColumns(prev => mapDrafts(prev, (d) => rederiveDraftParse(d, draftProjectDefault, opts)));
+    }
+  }, [priorityVisible, focusBar.customTiersLoaded, tierKnown, draftProjectDefault]);
+
+  // The composer "+" switch turned quick-parse off: the user just said "don't
+  // decide for me", so earlier AI task decisions must not ride the Start. User
+  // and seed values stay; project/cwd stay (the text that justified them is
+  // still there, and no parse will change them now).
+  const quickParseOn = useQuickParseEnabled();
+  const lastQuickParseOnRef = useRef(quickParseOn);
+  useEffect(() => {
+    const was = lastQuickParseOnRef.current;
+    lastQuickParseOnRef.current = quickParseOn;
+    if (was && !quickParseOn) setDraftColumns(prev => mapDrafts(prev, (d) => revertAiTaskFields(d)));
+  }, [quickParseOn]);
 
   /** Which registry project OWNS this folder (its `default_cwd`), so a draft's
    *  folder pick sets folder + project in one gesture. '' = no project declares
@@ -1150,19 +1234,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     [projectRegistry.loaded, projectRegistry.isKnownProject],
   );
 
-  /** A launch-meta edit from the draft column (the composer's model / engine
-   *  pill; the launch bar itself carries no meta controls any more). Every route
-   *  in is a USER action, so this is also the one place that flips `metaTouched`
-   *  — from then on the row's meta is authoritative and per-directory launch
-   *  memory stops overwriting it (same contract as SessionPathSelector's
-   *  `launchTouchedRef`). */
+  /** A model / engine edit from the draft composer's model pill. Task fields no
+   *  longer come through here (More writes them via handleDraftTaskFieldChange,
+   *  per-field ownership). Every route in is a USER action, so this is the one
+   *  place that flips `metaTouched`: from then on the row's model/engine are
+   *  authoritative and per-directory launch memory stops overwriting them (same
+   *  contract as SessionPathSelector's `launchTouchedRef`). */
   const handleDraftMetaChange = useCallback((
     draftId: string,
     updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta,
   ) => {
     setDraftColumns(prev => prev.map(d => (d.id === draftId
-      // No ✦ to drop here: the launch bar badges only project/cwd, and a meta edit
-      // touches neither. metaTouched is what stops the AI writing the meta.
       ? { ...d, meta: updater(d.meta), metaTouched: true, userTouched: true }
       : d)));
   }, []);
@@ -1171,7 +1253,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * Start Task ⇄ Ask Walnut tab switch on a draft column.
    *
    * Entering walnut mode SEEDS the row with the facts the launch will carry
-   * (project ASK_WALNUT_PROJECT, tier Focus) so every downstream reader — the
+   * (project ASK_WALNUT_PROJECT, tier Focus unless a user or seed owns it) so every downstream reader — the
    * "Create task for later" exit, the launch itself — sees one consistent row.
    * `projectSource: 'seed'` (not 'user'): switching back must be able to undo
    * it, and the AI backfill is disabled in walnut mode anyway. Leaving restores
@@ -1199,53 +1281,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         )));
       }).catch(() => { /* pill stays on Auto */ });
     }
-    setDraftColumns(prev => prev.map(d => {
-      if (d.id !== draftId) return d;
-      if (walnut) {
-        if (d.walnut) return d; // re-click on the active tab — never re-stash
-        return {
-          ...d,
-          walnut: true,
-          // A deliberate mode choice: a seeded open (task ▶, fork, project "+")
-          // must open its OWN column rather than silently rebinding this draft
-          // into a half-walnut bound/fork hybrid.
-          userTouched: true,
-          // Stash what the seed is about to overwrite so leaving can RESTORE it
-          // — without this, a tab round-trip destroyed an explicit project pick
-          // (cleared to Inbox, then the AI backfill rewrote it) and downgraded a
-          // Focus-seeded tier to Satellite. The model is stashed too: it came
-          // from the previous folder's launch memory, and the Personal AI should
-          // start on its own default (Auto), not on a model borrowed from an
-          // unrelated coding folder.
-          walnutPrev: { project: d.project, projectSource: d.projectSource, model: d.meta.model, pinTier: d.meta.pinTier },
-          // A BOUND draft's task already lives somewhere: asking Walnut about it
-          // must not re-file it under "Ask Walnut" (the server keeps an existing
-          // task's project anyway; the pill would just have lied).
-          ...(d.taskId ? {} : { project: ASK_WALNUT_PROJECT, projectSource: 'seed' as const }),
-          meta: {
-            ...d.meta,
-            // Focus is the walnut default. Only an EXPLICIT non-default tier the
-            // user picked beforehand survives — gating the seed on metaTouched
-            // alone was too coarse (touching the model blocked it, silently
-            // landing the Ask on Satellite).
-            pinTier: d.metaTouched && d.meta.pinTier && d.meta.pinTier !== DEFAULT_META.pinTier
-              ? d.meta.pinTier
-              : 'focus',
-            model: undefined,
-          },
-        };
-      }
-      if (!d.walnut) return d;
-      const prev = d.walnutPrev;
-      // Undo only what walnut mode wrote (tier seed, model reset / memory
-      // seed); a pick made by hand inside walnut mode is kept.
-      const back: DraftColumn = { ...d, walnut: false, walnutPrev: undefined, meta: restoreMetaAfterWalnut(d.meta, prev) };
-      if (d.projectSource === 'seed' && d.project === ASK_WALNUT_PROJECT) {
-        back.project = prev?.project;
-        back.projectSource = prev?.projectSource;
-      }
-      return back;
-    }));
+    // The pure halves (draft-ownership.ts): entering reverts every AI-owned task
+    // field (walnut mode runs no parse, so none may ride the Ask unseen) and
+    // stashes only owned values; leaving restores the stash and the text is
+    // re-parsed, so the AI chips come back.
+    setDraftColumns(prev => mapDraft(prev, draftId, walnut ? enterWalnutDraft : leaveWalnutDraft));
   }, []);
 
   // A launcher column remembers its project for as long as the tab lives, so a
@@ -2179,6 +2219,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // Gone (double-send, closed mid-flight): report success so ChatInput doesn't
     // resurrect text into a composer that no longer exists.
     if (!draft) return true;
+    const { tierKnown: knownTier } = draftParseOptsRef.current;
     // ASK WALNUT draft: no folder to require — the server owns the cwd
     // (WALNUT_HOME) and spawns with the Personal AI profile. Same one-commit
     // morph (draft: → pending:) as a normal launch; project/tier were seeded on
@@ -2196,7 +2237,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const bound = draft.taskId;
       launchQuickStart(
         { cwd: '', host: null },
-        draft.meta,
+        launchMetaFor(draft, knownTier),
         text.trim() || (bound ? draft.boundTaskTitle ?? '' : ''),
         images,
         bound ? draft.project || undefined : draft.project || ASK_WALNUT_PROJECT,
@@ -2237,11 +2278,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const message = text.trim() || (draft.taskId ? draft.boundTaskTitle ?? '' : text);
     // What the background parse suggested vs. what this launch actually carries.
     // Recorded BEFORE forgetDraft (the row is the only place the suggestions live)
-    // and deliberately not awaited — see recordSuggestFeedback.
+    // and deliberately not awaited (see recordSuggestFeedback). Tagged with the
+    // rules generation so the server never blends it with pre-chip records.
     recordSuggestFeedback({
       surface: 'draft-session',
-      entries: suggestDiff(draft),
+      entries: suggestDiff(draft, { tierKnown: knownTier }),
       textLen: message.length,
+      rules: SUGGEST_RULES_VERSION,
     });
     // ONE commit: the strip slot morphs draft:→pending: (inside launchQuickStart)
     // while the draft row + its composer key disappear. Splitting these would
@@ -2258,7 +2301,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         ...(draft.createCwd ? { createCwd: true } : {}),
         ...(draft.intent ? { intent: draft.intent } : {}),
       },
-      draft.meta,
+      // A tier the app knows is gone (deleted custom tier) launches as Focus,
+      // the same value the ledger records as chosen.
+      launchMetaFor(draft, knownTier),
       message,
       images,
       draft.project || undefined,
@@ -2282,31 +2327,35 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const title = firstLine.trim();
     if (!title) return;   // button is disabled on empty, but a whitespace-only body can still reach here
     const description = rest.join('\n').trim();
+    const { tierKnown: knownTier } = draftParseOptsRef.current;
+    const meta = draft ? launchMetaFor(draft, knownTier) : undefined;
     // Same ledger as Start: the task exit carries the same suggested pills, so its
     // accuracy is measured the same way (surface tells the two apart).
     if (draft) {
       recordSuggestFeedback({
         surface: 'draft-task',
-        entries: suggestDiff(draft),
+        entries: suggestDiff(draft, { tierKnown: knownTier }),
         textLen: text.length,
+        rules: SUGGEST_RULES_VERSION,
       });
     }
     // Optimistic: the column vanishes on click, before the POST. handleQuickTaskCreate
     // owns the outcome UI (toast + Undo, or the shared operation-error banner).
     closeDraftColumn(draftId);
+    let created: Awaited<ReturnType<typeof handleQuickTaskCreate>>;
     try {
-      await handleQuickTaskCreate({
+      created = await handleQuickTaskCreate({
         title,
-        // The launch bar's meta applies to the TASK exit too — tier, priority and
+        // The launch bar's meta applies to the TASK exit too: tier, priority and
         // dates were picked (or ✦-suggested) for this work item, not for the
         // session transport. Same fields quick-start would have written.
-        priority: draft?.meta.priority ?? 'none',
+        priority: meta?.priority ?? 'none',
         ...(draft?.project ? { project: draft.project } : {}),
         ...(description ? { description } : {}),
-        ...(draft?.meta.pinTier ? { pinnedTier: draft.meta.pinTier } : {}),
-        ...(draft?.meta.dueDate ? { due_date: draft.meta.dueDate } : {}),
-        ...(draft?.meta.startDate ? { start_date: draft.meta.startDate } : {}),
-        ...(draft?.meta.endDate ? { end_date: draft.meta.endDate } : {}),
+        ...(meta?.pinTier ? { pinnedTier: meta.pinTier } : {}),
+        ...(meta?.dueDate ? { due_date: meta.dueDate } : {}),
+        ...(meta?.startDate ? { start_date: meta.startDate } : {}),
+        ...(meta?.endDate ? { end_date: meta.endDate } : {}),
       });
     } catch {
       // The create rejected (useTasks already showed the operation-error banner and
@@ -2321,6 +2370,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         setSessionColumns(prev => forceAddSessionColumn(prev, draft.id));
         setFocusDraftId(draft.id);
       }
+      return;
+    }
+    // `Starts unread` rides a PATCH after the create (the POST contract has no
+    // unread). A failure is logged, never rolled back: the task exists, and a
+    // retry would mint a second one.
+    if (meta?.unread) {
+      updateTask(created.id, { unread: true }).catch((err) => {
+        log.warn('draft', 'create task for later: unread PATCH failed', {
+          taskId: created.id, error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
   }, [closeDraftColumn, handleQuickTaskCreate]);
 
@@ -2743,6 +2803,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     onAiParse={handleDraftAiParse}
                     // Start Task ⇄ Ask Walnut tab switch.
                     onWalnutToggle={handleDraftWalnutToggle}
+                    // More + decision chips (the panel passes them on only
+                    // where a plain draft shows them).
+                    onTaskFieldChange={handleDraftTaskFieldChange}
+                    onReturnFieldToWalnut={handleDraftReturnFieldToWalnut}
                   />
                 ) : null
               ) : isPending && pendingMeta ? (

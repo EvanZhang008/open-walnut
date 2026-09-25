@@ -37,6 +37,9 @@ function lastUserContent(): string {
 }
 
 const validBody = { timeZone: 'America/Los_Angeles' };
+// No Jev in this file, so the classify leg is always skipped; `dates` names the LLM leg.
+const LLM_OK = { classify: 'skipped', dates: 'ok' };
+const LLM_FAILED = { classify: 'skipped', dates: 'failed' };
 
 beforeEach(async () => {
   sendMessageMock.mockReset();
@@ -73,6 +76,7 @@ describe('POST /api/tasks/quick-parse', () => {
       due_date: '2026-07-15T10:00:00',
       pinTier: 'focus',
       priority: 'important',
+      legs: LLM_OK,
     });
     expect(res.body).not.toHaveProperty('parseMs');
     expect(res.body).not.toHaveProperty('model');
@@ -115,7 +119,7 @@ describe('POST /api/tasks/quick-parse', () => {
       .send({ text, ...validBody });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ title: text });
+    expect(res.body).toEqual({ title: text, legs: LLM_FAILED });
   });
 
   it('includes the seeded project digest in model content', async () => {
@@ -151,7 +155,7 @@ describe('POST /api/tasks/quick-parse', () => {
       .send({ text: 'call the clinic', ...validBody });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ title: 'Call the clinic' });
+    expect(res.body).toEqual({ title: 'Call the clinic', legs: LLM_OK });
   });
 
   it('passes a project_is_new proposal through so the UI can badge it', async () => {
@@ -169,6 +173,7 @@ describe('POST /api/tasks/quick-parse', () => {
       title: 'Book the Kyoto flights',
       project: 'Kyoto Trip',
       project_is_new: true,
+      legs: LLM_OK,
     });
   });
 
@@ -185,6 +190,6 @@ describe('POST /api/tasks/quick-parse', () => {
     // "Inbox" is shown in the digest but is the ABSENCE of a project, so the
     // parser must never echo it back as a project name.
     expect(lastUserContent()).toContain('- Inbox — no project (1 open tasks): "Loose thought"');
-    expect(res.body).toEqual({ title: 'Call the clinic' });
+    expect(res.body).toEqual({ title: 'Call the clinic', legs: LLM_OK });
   });
 });

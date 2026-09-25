@@ -22343,6 +22343,114 @@ td.usage-share-col {
 .draft-launch-pills .session-action-chip-ai {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
+/* ── Draft decision chips + More (DraftDecisionRow) ──
+   The chips sit on their OWN row above the folder/project pills: filled, not
+   outlined (outlined = where it runs, filled = what the task is), same height
+   and radius as the pills. An AI chip takes the same accent outline as an AI
+   pill. row-gap is unconditional so a wrap never nudges a chip by 2px. */
+.draft-decision-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  row-gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+.draft-decision-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: normal;   /* same box height as the pills beside it */
+  cursor: pointer;
+  animation: draft-decision-in 120ms ease-out both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+.draft-decision-chip:hover { border-color: var(--border); }
+.draft-decision-chip-ai,
+.draft-decision-chip-ai:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.draft-decision-chip-active,
+.draft-decision-chip-active:hover {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.draft-decision-chip-overdue { color: var(--danger, var(--error)); }
+.draft-decision-chip .draft-ai-badge { margin-left: 0; }
+.draft-decision-glyph {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+.draft-decision-glyph svg { width: 11px; height: 11px; }
+.draft-decision-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.draft-decision-label-custom { max-width: 18ch; }
+.draft-decision-chip-removed .draft-decision-label { text-decoration: line-through; }
+.draft-decision-chip-removed { border-color: color-mix(in srgb, var(--danger, var(--error)) 45%, transparent); }
+/* More: a ghost button at the end of the pills row. It never lights for
+   "has edits" (those already show as chips), only while its menu is open. */
+.draft-more-btn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: normal;   /* same box height as the pills beside it */
+  cursor: pointer;
+}
+.draft-more-btn:hover { color: var(--fg); background: var(--bg-secondary); }
+.draft-more-btn-active,
+.draft-more-btn-active:hover { color: var(--fg); background: var(--bg-secondary); border-color: var(--border); }
+.draft-decision-chip:focus-visible,
+.draft-more-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The legend copies .draft-quick-key so the two captions read as one kind. */
+.draft-decisions-key {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  user-select: none;
+}
+.draft-decisions-key-mark { color: var(--accent); }
+/* Ask Walnut: chips and More share one wrapping row. */
+.draft-walnut-meta-row .draft-decision-row { display: contents; }
+/* The draft menu's priority buttons carry words ("!! Immediate"): let them wrap,
+   and keep the chip's casing (.badge uppercases), so both read the same words. */
+.draft-task-menu .task-kebab-priority-options { flex-wrap: wrap; }
+.draft-task-menu .task-kebab-priority-options .badge { text-transform: none; }
+.task-kebab-walnut-pick { color: var(--accent); }
+@keyframes draft-decision-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .draft-decision-chip { animation: none; animation-delay: 0s; }
+}
 /* The draft's controlsSlot row reuses .session-mode-bar wholesale (wrap +
    row-gap: a session column can be ~270px wide) and carries the marker class
    .draft-actions-bar purely as a DOM hook. Deliberately no `margin-left: auto` on

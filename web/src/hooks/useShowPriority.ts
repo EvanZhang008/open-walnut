@@ -64,6 +64,24 @@ export function useShowPriority(): boolean {
   return value;
 }
 
+/**
+ * Same flag, but says 'unknown' until the first config read lands (the module
+ * cache starts at null). For callers that must not DECIDE anything from the
+ * "hidden" placeholder, like the draft parse, which would otherwise drop a
+ * priority on a machine that shows it.
+ */
+export function useShowPriorityState(): boolean | 'unknown' {
+  const [value, setValue] = useState<boolean | 'unknown'>(cached ?? 'unknown');
+  useEffect(() => {
+    listeners.add(setValue);
+    bindConfigChanges();
+    if (cached === null) void load();
+    else setValue(cached);
+    return () => { listeners.delete(setValue); };
+  }, []);
+  return value;
+}
+
 /** Flip the flag: local echo to every mounted instance first, then persist. */
 export function setShowPriority(v: boolean): void {
   publish(v);

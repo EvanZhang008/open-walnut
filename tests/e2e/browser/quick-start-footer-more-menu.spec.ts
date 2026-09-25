@@ -1,5 +1,7 @@
 import { test, expect, type Page } from '@playwright/test'
-import { openDraft } from './draft-helpers'
+import {
+  bootDecisions, draftCwdPill, draftDecisionChip, isoDay, openDraft, typeAndSettle,
+} from './draft-helpers'
 
 /** Flip `ui.show_priority` on the fixture server (merging the rest of `ui`), the
  *  same way task-filters.spec.ts does. GET /api/config wraps the file under
@@ -28,8 +30,8 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   await expect(footer.getByRole('combobox', { name: 'Session model' })).toBeVisible()
   await expect(footer.getByRole('group', { name: 'Coding agent engine' })).toBeVisible()
   // The pin tier is a per-launch decision — it stays in the PRIMARY row, and a
-  // fresh launcher defaults to Focus (DEFAULT_META). This footer is the one place
-  // a launch can still pick a tier: the draft column's own bar has no tier row.
+  // fresh launcher defaults to Focus (DEFAULT_META). The draft's own More menu edits
+  // the same meta; a tier picked in either place owns the tier.
   const tiers = footer.getByRole('group', { name: 'Pin new task to tier' })
   await expect(tiers).toBeVisible()
   await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
@@ -49,6 +51,9 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   // the working set now).
   await expect(popover.getByTitle('Star this task')).toHaveCount(0)
   await expect(popover.getByTitle('Start this task marked unread')).toBeVisible()
+  // C42: the toggle says the same words as the draft menu's row.
+  await expect(popover.getByTitle('Start this task marked unread')).toHaveText(/Start unread/)
+  await expect(popover.getByText('Mark unread', { exact: true })).toHaveCount(0)
   // Priority is hidden site-wide by default (Settings → Tasks → Show task
   // priority, `ui.show_priority`), so the menu draws no Priority row either —
   // a control for a value the user cannot see anywhere else would be a trap.
@@ -92,4 +97,27 @@ test('the More menu draws the Priority row once ui.show_priority is on', async (
   } finally {
     await setShowPriority(page, false)
   }
+})
+
+test('More · N counts only what the user set here, never a date Walnut decided', async ({ page }) => {
+  // C65: the parse writes an AI due (a ✦ chip on the draft); the footer's badge must
+  // not call that "your change". Then a real toggle here counts as one.
+  const mock = await bootDecisions(page, { due_date: isoDay(3) })
+  const panel = await openDraft(page)
+  await typeAndSettle(page, mock, 'send the marina invoice by friday')
+  await expect(draftDecisionChip(panel, 'dueDate').locator('.draft-ai-badge')).toHaveCount(1)
+
+  await draftCwdPill(panel).click()
+  const footer = page.locator('.session-path-selector .sps-meta-footer')
+  await expect(footer).toBeVisible({ timeout: 10_000 })
+  const more = footer.getByRole('button', { name: /More/ })
+  await expect(more).not.toHaveClass(/active/)
+  await expect(more.locator('.sps-meta-more-badge')).toHaveCount(0)
+  await more.click()
+  const popover = page.getByRole('dialog', { name: 'More task settings' })
+  await expect(popover).toBeVisible()
+  await popover.getByTitle('Start this task marked unread').click()
+  await expect(more.locator('.sps-meta-more-badge')).toHaveText('· 1')
+  await page.keyboard.press('Escape')
+  await expect(popover).toHaveCount(0)
 })

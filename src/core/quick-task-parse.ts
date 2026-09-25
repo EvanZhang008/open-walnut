@@ -3,7 +3,7 @@ import { log } from '../logging/index.js';
 import { fastModelFor, fastModelRidesCli } from './cheap-model.js';
 import { getJevClient, readChoice, type JevClient } from './decision/jev-client.js';
 import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY } from './types.js';
-import type { Config, CustomTierRecord, QuickTaskParse } from './types.js';
+import type { Config, CustomTierRecord, LegStatus, QuickTaskParse, QuickTaskParseLegs } from './types.js';
 
 export type { QuickTaskParse } from './types.js';
 
@@ -11,7 +11,14 @@ export interface QuickTaskParseEnvelope {
   parse: QuickTaskParse;
   parseMs: number;
   model?: string;
+  /** Which legs answered. On the envelope, not on `parse`, so only the web route
+   *  that opts in (POST /api/tasks/quick-parse) returns it; the frozen /api/v1
+   *  route serializes `parse` alone and stays byte-identical. */
+  legs: QuickTaskParseLegs;
 }
+
+/** Neither leg ran: parse disabled, empty note, or no model consulted. */
+const NO_LEGS: QuickTaskParseLegs = Object.freeze({ classify: 'skipped', dates: 'skipped' });
 
 export interface QuickTaskParseOptions {
   now?: Date;
@@ -213,7 +220,7 @@ export async function quickParseEnabled(): Promise<boolean> {
 /** The answer when no model is consulted: the sentence itself, nothing invented. */
 export function unparsedTask(text: string): QuickTaskParseEnvelope {
   const trimmed = text.trim();
-  return { parse: { title: trimmed.slice(0, 200) || text }, parseMs: 0 };
+  return { parse: { title: trimmed.slice(0, 200) || text }, parseMs: 0, legs: { ...NO_LEGS } };
 }
 
 /** Floor for acting on a Jev classification. These are suggestions the user
@@ -371,7 +378,7 @@ export async function parseQuickTask(
   opts: QuickTaskParseOptions = {},
 ): Promise<QuickTaskParseEnvelope> {
   const trimmed = text.trim();
-  if (!trimmed) return { parse: { title: text }, parseMs: 0 };
+  if (!trimmed) return { parse: { title: text }, parseMs: 0, legs: { ...NO_LEGS } };
 
   // Config once: fast-model resolution + Jev availability. Unreadable config
   // degrades to "no model, no Jev" — the note itself is still the answer.
@@ -392,6 +399,11 @@ export async function parseQuickTask(
   let jev: JevClient | undefined;
   let jevPromise: Promise<JevQuickFields | undefined> | undefined;
   let skipLlm = false;
+  // A configured classifier whose setup threw counts as failed, not skipped:
+  // the client must not read its silence as "no opinion".
+  let jevSetupFailed = false;
+  const classifyLeg = (fields: JevQuickFields | undefined): LegStatus =>
+    jevPromise === undefined ? (jevSetupFailed ? 'failed' : 'skipped') : fields ? 'ok' : 'failed';
   try {
     // decisions.quick_parse === false is the Settings opt-out for this ONE
     // decision; unset means on (Jev configured = Jev used).
@@ -400,6 +412,7 @@ export async function parseQuickTask(
     jevPromise = jev ? jevClassify(jev, trimmed.slice(0, 500), opts) : undefined;
     skipLlm = jevPromise !== undefined && config !== undefined && fastModelRidesCli(config);
   } catch (err) {
+    jevSetupFailed = true;
     log.web.debug('jev setup failed — LLM-only parse', {
       errorKind: err instanceof Error ? err.name : typeof err,
     });
@@ -410,6 +423,7 @@ export async function parseQuickTask(
     const jevFields = await jevPromise;
     if (jevFields) applyJevFields(envelope.parse, jevFields);
     envelope.parseMs = Date.now() - started;
+    envelope.legs = { classify: classifyLeg(jevFields), dates: 'skipped' };
     // No title cleanup and no dates in this mode — Jev cannot generate text,
     // and the only model that could is the one that can't answer in time.
     // Attribute the parse to Jev only when Jev actually answered: a swallowed
@@ -514,7 +528,7 @@ export async function parseQuickTask(
     const jevFields = jevPromise ? await jevPromise : undefined;
     if (jevFields) applyJevFields(output, jevFields);
 
-    return { parse: output, parseMs, ...(model ? { model } : {}) };
+    return { parse: output, parseMs, ...(model ? { model } : {}), legs: { classify: classifyLeg(jevFields), dates: 'ok' } };
   } catch (err) {
     // Log only the error kind — JSON.parse messages embed a prefix of the model
     // output, which can echo the user's note into persistent logs.
@@ -525,6 +539,7 @@ export async function parseQuickTask(
     const parse: QuickTaskParse = { title: trimmed };
     const jevFields = jevPromise ? await jevPromise : undefined;
     if (jevFields) applyJevFields(parse, jevFields);
-    return { parse, parseMs, ...(model ? { model } : {}) };
+    // The catch covers the timeout too: the abort surfaces as a thrown AbortError.
+    return { parse, parseMs, ...(model ? { model } : {}), legs: { classify: classifyLeg(jevFields), dates: 'failed' } };
   }
 }

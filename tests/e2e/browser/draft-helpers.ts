@@ -30,6 +30,7 @@
  */
 
 import { expect, type Locator, type Page } from '@playwright/test'
+import { presetPanelView } from './todo-panel-helpers'
 
 /**
  * A REAL session panel — neither the pending placeholder nor a draft.
@@ -569,4 +570,277 @@ export async function discoverFixtureRoot(): Promise<string> {
   const walnut = body.dirs.find((d) => /\/ps-fixture\/projects\/walnut$/.test(d.cwd))
   if (!walnut) throw new Error('ps-fixture/projects/walnut seed missing from working-dirs')
   return walnut.cwd.replace(/\/projects\/walnut$/, '')
+}
+
+// ── Decision chips, More and the parse mock (the draft-decisions slice) ───────
+//
+// The launch bar grew a chip row ABOVE the folder/project pills: one chip per task
+// field Walnut (or the user) decided, `✦` on the AI ones, plus a `More` button as the
+// LAST element of `.draft-composer-bar`. Both open ONE settings popover
+// (`[data-testid=draft-task-menu]`, portalled to <body>). `draftPills` above is
+// deliberately unchanged: the chips and More carry no `session-action-chip` class,
+// so folder and project stay indices 0 and 1.
+
+export type LegStatus = 'ok' | 'failed' | 'skipped'
+export interface ParseLegs { classify: LegStatus; dates: LegStatus }
+export type DecisionField = 'pinTier' | 'priority' | 'startDate' | 'dueDate' | 'unread'
+/** One quick-parse request as the mock saw it (order = send order). */
+export interface ParseCall { index: number; text: string; at: number }
+export type ParseBody = Record<string, unknown> | 'error'
+/** A per-request answer: its body, an optional delay, and a legs override
+ *  (`null` = omit `legs`, i.e. an old server). */
+export interface ParseAnswer { body: ParseBody; delayMs?: number; legs?: ParseLegs | null }
+export type ParseSource = ParseBody | ((call: ParseCall) => ParseBody | ParseAnswer)
+export interface ParseMock {
+  calls: ParseCall[]
+  /** Swap the answer source for every LATER request (never re-route). */
+  set(source: ParseSource): void
+}
+
+export const LEGS_OK: ParseLegs = { classify: 'ok', dates: 'ok' }
+
+function isParseAnswer(v: unknown): v is ParseAnswer {
+  return typeof v === 'object' && v !== null && 'body' in v
+}
+
+/**
+ * Answer `POST /api/tasks/quick-parse` from the test.
+ *
+ * `legs` defaults to both legs `ok`: a reply WITHOUT legs is an old server, and the
+ * client then never reverts a field for "not proposed". A revert test written
+ * against a legs-less mock would pass for the wrong reason (nothing ever reverts),
+ * so the default is the shape a current server sends. A function source answers
+ * per request (eager vs trailing by order or text) and may delay one reply, which
+ * is how the out-of-order guard is exercised. A request the client aborted while
+ * the reply was delayed is swallowed.
+ */
+export async function mockQuickParse(
+  page: Page,
+  source: ParseSource,
+  opts: { legs?: ParseLegs | null; delayMs?: number } = {},
+): Promise<ParseMock> {
+  let current = source
+  const calls: ParseCall[] = []
+  await page.route('**/api/tasks/quick-parse', async (route) => {
+    let text = ''
+    try { text = String((route.request().postDataJSON() as { text?: unknown })?.text ?? '') } catch { /* no body */ }
+    const call: ParseCall = { index: calls.length, text, at: Date.now() }
+    calls.push(call)
+    const raw = typeof current === 'function' ? current(call) : current
+    const answer: ParseAnswer = isParseAnswer(raw) ? raw : { body: raw }
+    const delay = answer.delayMs ?? opts.delayMs ?? 0
+    if (delay > 0) await new Promise((done) => setTimeout(done, delay))
+    if (answer.body === 'error') {
+      await route.fulfill({ status: 500, json: { error: 'no provider' } }).catch(() => {})
+      return
+    }
+    const legs = answer.legs !== undefined ? answer.legs : opts.legs !== undefined ? opts.legs : LEGS_OK
+    const body: Record<string, unknown> = { title: text.slice(0, 60), ...answer.body }
+    if (legs && !('legs' in body)) body.legs = legs
+    await route.fulfill({ status: 200, json: body }).catch(() => {})
+  })
+  return { calls, set: (next) => { current = next } }
+}
+
+/** The draft's More button: the last element of `.draft-composer-bar` on a plain
+ *  draft, the only control of `.draft-walnut-meta-row` on the Ask Walnut tab. */
+export const draftMoreButton = (panel: Locator): Locator => panel.locator('.draft-launch-bar button.draft-more-btn')
+/** Every decision chip, in row order (tier, priority, start, due, unread). */
+export const draftDecisionChips = (panel: Locator): Locator =>
+  panel.locator('.draft-launch-bar .draft-decision-row > button.draft-decision-chip')
+export const draftDecisionChip = (panel: Locator, field: DecisionField): Locator =>
+  panel.locator(`.draft-launch-bar .draft-decision-row > button.draft-decision-chip[data-field="${field}"]`)
+/** The one settings popover (portalled to <body>, so PAGE scoped). */
+export const draftTaskMenu = (page: Page): Locator => page.locator('[data-testid="draft-task-menu"]')
+
+/** Open the settings popover from More or from one chip, and return it. */
+export async function openDraftSettings(panel: Locator, from: 'more' | DecisionField = 'more'): Promise<Locator> {
+  const trigger = from === 'more' ? draftMoreButton(panel) : draftDecisionChip(panel, from)
+  await trigger.click()
+  const menu = draftTaskMenu(panel.page())
+  await expect(menu).toBeVisible({ timeout: 10_000 })
+  return menu
+}
+
+/** A chip's visible words WITHOUT the ✦ badge, whitespace collapsed. */
+export async function chipLabel(chip: Locator): Promise<string> {
+  return chip.evaluate((el) => {
+    const copy = el.cloneNode(true) as HTMLElement
+    copy.querySelectorAll('.draft-ai-badge').forEach((b) => b.remove())
+    return (copy.textContent ?? '').replace(/\s+/g, ' ').trim()
+  })
+}
+
+/** Local YYYY-MM-DD `days` from today (the day pills' `title`). */
+export function isoDay(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+/** The date words a chip shows for a date-only value `days` ahead (formatDateTimeDisplay,
+ *  with the slice's "exactly 7 days = M/D" exception). */
+export function dayWords(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  if (days === 0) return 'Today'
+  if (days === 1) return 'Tomorrow'
+  if (days > 1 && days < 7) return DOW[d.getDay()]
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+/**
+ * Page-local config overrides: GET /api/config answers with `agent.quick_parse` and
+ * `ui.show_priority` forced, everything else real. Page-local on purpose: the
+ * fixture server is shared by every spec file in a run, and a real write from one
+ * file would flip the flag under another file's worker. Writes still go through.
+ * Register BEFORE loadHome. The returned object can be mutated; the next read
+ * (a `config:changed` echo) sees the new value.
+ */
+export async function patchClientConfig(
+  page: Page,
+  patch: { quickParse?: boolean; showPriority?: boolean },
+): Promise<{ quickParse?: boolean; showPriority?: boolean }> {
+  const state = { ...patch }
+  await page.route((url) => url.pathname === '/api/config', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue().catch(() => {})
+    // A read still in flight when the test ends: the page is gone, nothing to answer.
+    const res = await route.fetch().catch(() => null)
+    if (!res) return
+    const body = (await res.json().catch(() => ({}))) as { config?: { agent?: Record<string, unknown>; ui?: Record<string, unknown> } }
+    const config = body.config ?? {}
+    if (state.quickParse !== undefined) config.agent = { ...config.agent, quick_parse: state.quickParse }
+    if (state.showPriority !== undefined) config.ui = { ...config.ui, show_priority: state.showPriority }
+    await route.fulfill({ response: res, json: { ...body, config } }).catch(() => {})
+  })
+  return state
+}
+
+/** Request bodies a draft's exits send, recorded from NOW on. */
+export interface DraftRequestLog {
+  quickStart: Array<Record<string, any>>
+  createTask: Array<Record<string, any>>
+  patchTask: Array<{ id: string; body: Record<string, any> }>
+  feedback: Array<Record<string, any>>
+}
+
+/**
+ * Record every launch-side request body: POST /api/sessions/quick-start, the task
+ * create (POST /api/tasks, exact path), PATCH /api/tasks/:id and the ledger POST.
+ * `blockQuickStart` answers the launch with a 503 instead of spawning a CLI, for
+ * the scenarios that only read the body (the draft's own state is the claim).
+ */
+export async function captureDraftRequests(page: Page, opts: { blockQuickStart?: boolean } = {}): Promise<DraftRequestLog> {
+  const log: DraftRequestLog = { quickStart: [], createTask: [], patchTask: [], feedback: [] }
+  const json = (raw: () => unknown): Record<string, any> => { try { return (raw() ?? {}) as Record<string, any> } catch { return {} } }
+  page.on('request', (req) => {
+    const path = new URL(req.url()).pathname
+    const m = req.method()
+    if (m === 'POST' && path === '/api/sessions/quick-start') log.quickStart.push(json(() => req.postDataJSON()))
+    else if (m === 'POST' && path === '/api/tasks') log.createTask.push(json(() => req.postDataJSON()))
+    else if (m === 'POST' && path === '/api/tasks/suggest-feedback') log.feedback.push(json(() => req.postDataJSON()))
+    else if (m === 'PATCH' && /^\/api\/tasks\/[^/]+$/.test(path)) {
+      log.patchTask.push({ id: decodeURIComponent(path.split('/').pop() ?? ''), body: json(() => req.postDataJSON()) })
+    }
+  })
+  if (opts.blockQuickStart) {
+    await page.route('**/api/sessions/quick-start', (route) =>
+      route.fulfill({ status: 503, json: { error: 'blocked by the test' } }))
+  }
+  return log
+}
+
+/** Wait until `log[key]` has at least `n` entries and return the newest. */
+export async function nthRequest<K extends 'quickStart' | 'createTask' | 'feedback'>(
+  log: DraftRequestLog, key: K, n = 1, timeout = 20_000,
+): Promise<DraftRequestLog[K][number]> {
+  await expect.poll(() => log[key].length, { timeout, message: `waiting for ${key} #${n}` }).toBeGreaterThanOrEqual(n)
+  return log[key][n - 1]
+}
+
+/**
+ * GET /api/sessions/working-dirs, real, with `lastLaunch.model` stamped onto the
+ * rows whose cwd is listed: the quick-folder chips then carry launch memory, the
+ * way tests/e2e/browser/quick-start-launch-memory.spec.ts seeds it (there the whole
+ * reply is synthetic; here the fixture's real folders keep existing on disk).
+ */
+export async function rememberModelFor(page: Page, memory: Record<string, string>): Promise<void> {
+  await page.route('**/api/sessions/working-dirs', async (route) => {
+    const res = await route.fetch().catch(() => null)
+    if (!res) return
+    const body = (await res.json().catch(() => ({}))) as { dirs?: Array<Record<string, unknown>> }
+    const now = new Date().toISOString()
+    const dirs = body.dirs ?? (body.dirs = [])
+    for (const [cwd, model] of Object.entries(memory)) {
+      // A folder the fixture never launched in gets its own row (it exists on disk).
+      let row = dirs.find((d) => d.cwd === cwd)
+      if (!row) { row = { cwd, host: null, project: 'Work' }; dirs.unshift(row) }
+      Object.assign(row, { lastLaunch: { model }, lastUsed: now, count: Math.max(Number(row.count ?? 0), 50) })
+    }
+    await route.fulfill({ response: res, json: body }).catch(() => {})
+  })
+}
+
+/** The quick-folder chip for one absolute path (its `title` is the full path). */
+export const draftQuickChipFor = (panel: Locator, cwd: string): Locator =>
+  draftLaunchBar(panel).locator(`.draft-quick-chips .draft-quick-chip[title="${cwd}"]`)
+
+/** The composer's model pill; `data-model` = the alias the launch will carry ('' = Auto). */
+export const draftModelPill = (panel: Locator): Locator => panel.locator('.draft-actions-bar .draft-model-select')
+
+/**
+ * Record every `.draft-decision-chip` that leaves the DOM from now on, into
+ * `window.__chipRemovals` (field names). The panel is observed as a subtree, so a
+ * chip dropped together with its whole row is counted too.
+ */
+export async function watchChipRemovals(panel: Locator): Promise<() => Promise<string[]>> {
+  await panel.evaluate((root) => {
+    const w = window as unknown as { __chipRemovals: string[]; __chipObserver?: MutationObserver }
+    w.__chipObserver?.disconnect()
+    w.__chipRemovals = []
+    const obs = new MutationObserver((records) => {
+      for (const r of records) {
+        r.removedNodes.forEach((n) => {
+          if (!(n instanceof Element)) return
+          const hits = n.matches('.draft-decision-chip') ? [n] : Array.from(n.querySelectorAll('.draft-decision-chip'))
+          for (const h of hits) w.__chipRemovals.push(h.getAttribute('data-field') ?? '?')
+        })
+      }
+    })
+    obs.observe(root, { childList: true, subtree: true })
+    w.__chipObserver = obs
+  })
+  return () => panel.page().evaluate(() => (window as unknown as { __chipRemovals: string[] }).__chipRemovals.slice())
+}
+
+/**
+ * The decision specs' boot: viewport, the todo panel on All, page-local config (parse
+ * on, priority shown unless told otherwise), the parse mock, then the initial load.
+ */
+export async function bootDecisions(
+  page: Page,
+  source: ParseSource,
+  cfg: { quickParse?: boolean; showPriority?: boolean } = { quickParse: true, showPriority: true },
+  viewport: { width: number; height: number } = { width: 2400, height: 1000 },
+): Promise<ParseMock> {
+  await page.setViewportSize(viewport)
+  await presetPanelView(page, { section: 'all', project: '' })
+  await patchClientConfig(page, cfg)
+  const mock = await mockQuickParse(page, source)
+  await loadHome(page)
+  return mock
+}
+
+/**
+ * Replace the composer text and wait for the TRAILING parse of exactly that text
+ * (it fires PARSE_DEBOUNCE_MS = 350ms after the change; an eager one may fire at
+ * once). Only a trailing parse may revert a field, so waiting for it is what makes
+ * a "the chip stayed" assertion mean something.
+ */
+export async function typeAndSettle(page: Page, mock: ParseMock, text: string): Promise<void> {
+  const t0 = Date.now()
+  await draftComposer(page).fill(text)
+  await expect.poll(() => mock.calls.some((c) => c.text === text.trim() && c.at - t0 >= 300),
+    { timeout: 15_000, message: `no trailing parse for "${text}"` }).toBe(true)
+  await page.waitForTimeout(250)
 }

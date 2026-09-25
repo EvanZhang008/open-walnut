@@ -17,7 +17,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
   getConfig: async () => ({ agent: { main_provider: 'bedrock' } }),
 }));
 
-import { normalizeLabel, summarizeForkPrompt, parseForkTitle, titleCoversLabel } from '../../src/core/fork-title.js';
+import { normalizeLabel, summarizeForkPrompt, summarizeGroupLabel, parseForkTitle, titleCoversLabel } from '../../src/core/fork-title.js';
 
 function textResult(text: string) {
   return { content: [{ type: 'text', text }], stopReason: 'end_turn' };
@@ -46,7 +46,7 @@ describe('normalizeLabel', () => {
   });
 
   it('returns empty string when nothing usable survives', () => {
-    expect(normalizeLabel('！！！')).toBe('');
+    expect(normalizeLabel('\uFF01\uFF01\uFF01')).toBe('');
     expect(normalizeLabel('')).toBe('');
   });
 
@@ -91,7 +91,7 @@ describe('summarizeForkPrompt', () => {
   });
 
   it('falls back to heuristic when the model returns an empty/garbage label', async () => {
-    sendMessageMock.mockResolvedValue(textResult('！！！'));
+    sendMessageMock.mockResolvedValue(textResult('\uFF01\uFF01\uFF01'));
     const label = await summarizeForkPrompt('fix the login redirect loop');
     // "the" is a stopword; first 4 meaningful words Title-Cased.
     expect(label).toBe('Fix Login Redirect Loop');
@@ -102,6 +102,31 @@ describe('summarizeForkPrompt', () => {
     // A prompt with only stopwords → heuristic yields '' (caller keeps placeholder).
     const label = await summarizeForkPrompt('please can you');
     expect(typeof label).toBe('string');
+  });
+});
+
+describe('summarizeGroupLabel', () => {
+  beforeEach(() => {
+    sendMessageMock.mockReset();
+  });
+
+  it('returns the normalized model label on success', async () => {
+    sendMessageMock.mockResolvedValue(textResult('Bakery Website'));
+    expect(await summarizeGroupLabel(['Bakery website', 'Bakery site: home page'])).toBe('Bakery Website');
+  });
+
+  it('falls back to the lead title, not a run-on of every title, when the model fails', async () => {
+    // Regression: the offline name joined every title and kept the first 4 words,
+    // so a short lead bled into the next title ("Bakery Website Bakery Site").
+    sendMessageMock.mockRejectedValue(new Error('model unreachable'));
+    expect(await summarizeGroupLabel(['Bakery website', 'Bakery site: home page'])).toBe('Bakery Website');
+    sendMessageMock.mockResolvedValue(textResult('\uFF01\uFF01\uFF01'));
+    expect(await summarizeGroupLabel(['Fix the login redirect loop and add tests', 'Login docs'])).toBe('Fix Login Redirect Loop');
+  });
+
+  it('returns empty string for no titles without calling the model', async () => {
+    expect(await summarizeGroupLabel(['', '  '])).toBe('');
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });
 

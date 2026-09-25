@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import { SESSION_MODELS } from '@open-walnut/core';
 import { PRIORITY_OPTIONS, DEFAULT_META } from '../task-meta-constants';
 import type { QuickStartTaskMeta } from '../SessionPathSelector';
+import type { DraftFieldOwner, DraftOwnedField } from '../draft-column';
 import { DatePicker } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
@@ -34,6 +35,11 @@ interface Props {
   /** Host the session will spawn on (null/undefined = local; drives which
    *  host's model catalog fills the dropdown). */
   host?: string | null;
+  /** Per-field owners of the host draft's task fields (DraftColumn.fieldOwner).
+   *  When given, the More badge counts only fields the user owns: a date the
+   *  background parse filled is not something the user changed. endDate follows
+   *  startDate's owner. Omitted: every non-default field counts, as before. */
+  ownedFields?: Readonly<Partial<Record<DraftOwnedField, DraftFieldOwner>>>;
 }
 
 /** Model dropdown rows: the host's last-known CLI catalog (values = full
@@ -156,8 +162,8 @@ function EngineToggle({ meta, onChange, host }: Pick<Props, 'meta' | 'onChange' 
  *  click away. The buttons are the shared PinTierPicker (same control as Quick
  *  Task). Deliberately NOT sticky: every fresh launcher opens on the default
  *  tier (DEFAULT_META, Focus) and a pick applies to this launch only. The draft
- *  column's launch bar dropped its tier row (see DraftLaunchBar); its header ⋮
- *  (DraftTaskMenu) edits the same meta, so a pick here and a pick there agree. */
+ *  column's launch bar dropped its tier row (see DraftLaunchBar); its More menu
+ *  (DraftTaskMenuPopover) edits the same meta, so a pick here and a pick there agree. */
 function TierPicker({ meta, onChange }: Pick<Props, 'meta' | 'onChange'>) {
   return (
     <PinTierPicker
@@ -168,7 +174,36 @@ function TierPicker({ meta, onChange }: Pick<Props, 'meta' | 'onChange'>) {
   );
 }
 
-export function MetaFooter({ meta, onChange, compact, host }: Props) {
+type OwnedFields = Readonly<Partial<Record<DraftOwnedField, DraftFieldOwner>>>;
+
+/**
+ * The More badge's count: fields changed from the quick-start defaults that the
+ * menu draws (priority only while shown). With `ownedFields` a field counts only
+ * when the user owns it, so an AI-written date is not "More · 1" (C65).
+ */
+export function metaFooterEditCount(meta: QuickStartTaskMeta, showPriority: boolean, ownedFields?: OwnedFields): number {
+  const owned = (f: DraftOwnedField) => !ownedFields || !!ownedFields[f];
+  return Number(meta.unread !== DEFAULT_META.unread && owned('unread'))
+    + Number(showPriority && meta.priority !== DEFAULT_META.priority && owned('priority'))
+    + Number(!!meta.startDate && owned('startDate')) + Number(!!meta.endDate && owned('startDate'))
+    + Number(!!meta.dueDate && owned('dueDate'));
+}
+
+/** `ownedFields` plus every field the footer changed since the picker opened:
+ *  an edit made here is the user's before the confirm rebases it in. */
+export function withFooterEdits(
+  ownedFields: OwnedFields | undefined, opened: QuickStartTaskMeta | null, meta: QuickStartTaskMeta,
+): OwnedFields | undefined {
+  if (!ownedFields || !opened) return ownedFields;
+  const out: Partial<Record<DraftOwnedField, DraftFieldOwner>> = { ...ownedFields };
+  if (meta.unread !== opened.unread) out.unread = 'user';
+  if (meta.priority !== opened.priority) out.priority = 'user';
+  if (meta.startDate !== opened.startDate || meta.endDate !== opened.endDate) out.startDate = 'user';
+  if (meta.dueDate !== opened.dueDate) out.dueDate = 'user';
+  return out;
+}
+
+export function MetaFooter({ meta, onChange, compact, host, ownedFields }: Props) {
   const showPriority = useShowPriority();
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
@@ -193,9 +228,8 @@ export function MetaFooter({ meta, onChange, compact, host }: Props) {
   // state is already visible.
   // A field the menu does not draw must not be counted: with priority hidden the
   // badge would read "More · 1" for a value the user cannot see or change here.
-  const nonDefaultCount = Number(meta.unread !== DEFAULT_META.unread)
-    + Number(showPriority && meta.priority !== DEFAULT_META.priority)
-    + Number(!!meta.startDate) + Number(!!meta.endDate) + Number(!!meta.dueDate);
+  // With `ownedFields` a field counts only when the user owns it (C65).
+  const nonDefaultCount = metaFooterEditCount(meta, showPriority, ownedFields);
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -288,7 +322,7 @@ export function MetaFooter({ meta, onChange, compact, host }: Props) {
                   title="Start this task marked unread"
                 >
                   <span className="sps-meta-toggle-icon">●</span>
-                  <span>Mark unread</span>
+                  <span>Start unread</span>
                 </button>
               </div>
               {showPriority && (

@@ -18,6 +18,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import fsp from 'node:fs/promises';
 import {
   SUGGEST_MAX_RECORDS,
+  SUGGEST_RULES_CURRENT,
   SUGGEST_TRIM_AT,
   recordSuggestDiff,
   readSuggestRecords,
@@ -166,6 +167,7 @@ describe('summarizeSuggestAccuracy', () => {
   it('counts per field and overall, with accuracy = kept / total', async () => {
     await recordSuggestDiff({
       surface: 'draft-session',
+      rules: SUGGEST_RULES_CURRENT,
       entries: [
         { field: 'project', suggested: 'Walnut', chosen: 'Walnut' },
         { field: 'pinTier', suggested: 'focus', chosen: 'satellite' },
@@ -173,6 +175,7 @@ describe('summarizeSuggestAccuracy', () => {
     });
     await recordSuggestDiff({
       surface: 'draft-task',
+      rules: SUGGEST_RULES_CURRENT,
       entries: [
         { field: 'project', suggested: 'Walnut', chosen: 'Walnut' },
         { field: 'pinTier', suggested: 'wait' },
@@ -211,6 +214,7 @@ describe('summarizeSuggestAccuracy', () => {
       JSON.stringify({
         at: '2026-08-01T00:00:00.000Z',
         surface: 'draft-session',
+        rules: SUGGEST_RULES_CURRENT,
         entries: [{ field: 'project', suggested: 'Walnut', chosen: 'Other', verdict: 'kept' }],
       }) + '\n',
       'utf-8',
@@ -224,6 +228,7 @@ describe('summarizeSuggestAccuracy', () => {
 
     await recordSuggestDiff({
       surface: 'draft-session',
+      rules: SUGGEST_RULES_CURRENT,
       entries: [{ field: 'project', suggested: 'Walnut', chosen: 'Walnut' }],
     });
     // Exactly what a SIGKILL mid-append leaves behind.
@@ -232,5 +237,78 @@ describe('summarizeSuggestAccuracy', () => {
     const summary = await summarizeSuggestAccuracy();
     expect(summary.commits).toBe(1);
     expect(summary.fields.project.kept).toBe(1);
+  });
+});
+
+// C63: records are grouped by the client rule set that wrote them, so a field
+// that meant something else under the old rules never blends into today's number.
+describe('summarizeSuggestAccuracy by rules', () => {
+  it('the tag is the same literal the client sends', () => {
+    expect(SUGGEST_RULES_CURRENT).toBe('visible-chips-v1');
+  });
+
+  it('stores the rules tag on the record, and omits it when absent', async () => {
+    await recordSuggestDiff({
+      surface: 'draft-session', rules: SUGGEST_RULES_CURRENT,
+      entries: [{ field: 'pinTier', suggested: 'satellite', chosen: 'satellite' }],
+    });
+    await recordSuggestDiff({
+      surface: 'draft-session',
+      entries: [{ field: 'pinTier', suggested: 'wait', chosen: 'wait' }],
+    });
+    const [tagged, untagged] = await readSuggestRecords();
+    expect(tagged.rules).toBe('visible-chips-v1');
+    expect('rules' in untagged).toBe(false);
+  });
+
+  it('top-level fields and overall count only current-rules records; the rest sit in byRules', async () => {
+    await recordSuggestDiff({
+      surface: 'draft-session', rules: SUGGEST_RULES_CURRENT,
+      entries: [
+        { field: 'pinTier', suggested: 'satellite', chosen: 'satellite' },
+        { field: 'dueDate', suggested: '2026-10-02', chosen: '2026-10-03' },
+      ],
+    });
+    await recordSuggestDiff({
+      surface: 'draft-session',
+      entries: [
+        { field: 'pinTier', suggested: 'focus', chosen: 'wait' },
+        { field: 'endDate', suggested: '2026-10-02T17:00', chosen: '2026-10-02T17:00' },
+      ],
+    });
+    await recordSuggestDiff({
+      surface: 'draft-task', rules: 'visible-chips-v2',
+      entries: [{ field: 'priority', suggested: 'immediate' }],
+    });
+
+    const summary = await summarizeSuggestAccuracy();
+    expect(summary.commits).toBe(3);
+    expect(summary.fields.pinTier).toMatchObject({ kept: 1, changed: 0, total: 1, accuracy: 1 });
+    expect(summary.fields.dueDate).toMatchObject({ changed: 1, total: 1 });
+    expect(summary.fields.endDate.total).toBe(0);
+    expect(summary.overall).toMatchObject({ kept: 1, changed: 1, total: 2, accuracy: 0.5 });
+    expect(Object.keys(summary.byRules).sort()).toEqual(['legacy', 'visible-chips-v1', 'visible-chips-v2']);
+    expect(summary.byRules['visible-chips-v1']).toEqual(summary.fields);
+    expect(summary.byRules.legacy.pinTier).toMatchObject({ changed: 1, total: 1, accuracy: 0 });
+    expect(summary.byRules.legacy.endDate).toMatchObject({ kept: 1, total: 1 });
+    expect(summary.byRules['visible-chips-v2'].priority).toMatchObject({ dropped: 1 });
+    // recent is unchanged: every record, newest first, whatever its rules.
+    expect(summary.recent.map((r) => r.surface)).toEqual(['draft-task', 'draft-session', 'draft-session']);
+  });
+
+  it('an empty ledger still names the current rules group', async () => {
+    const summary = await summarizeSuggestAccuracy();
+    expect(summary.byRules['visible-chips-v1'].pinTier).toMatchObject({ total: 0, accuracy: null });
+  });
+
+  it('a corrupt line naming a prototype key never writes through to Object', async () => {
+    await fsp.mkdir(suggestAccuracyFile().replace(/\/[^/]+$/, ''), { recursive: true });
+    await fsp.writeFile(suggestAccuracyFile(), JSON.stringify({
+      at: '2026-08-01T00:00:00.000Z', surface: 'draft-session', rules: SUGGEST_RULES_CURRENT,
+      entries: [{ field: '__proto__', suggested: 'x', verdict: 'kept' }, { field: 'toString', suggested: 'x', verdict: 'kept' }],
+    }) + '\n', 'utf-8');
+    const summary = await summarizeSuggestAccuracy();
+    expect(summary.overall.total).toBe(0);
+    expect(({} as Record<string, unknown>).kept).toBeUndefined();
   });
 });

@@ -9,16 +9,20 @@
  *
  * Layout (top → bottom) — the approved v4 shape, everything stacked upward from
  * the composer, because a normal chat has NO folder/project controls inside it:
- *   header             title + Draft badge + (bound task) + ⋮ task settings + ✕
+ *   header             title + Draft badge + (bound task: its real task kebab) + ✕
  *   body               nothing but one centered muted line of "what happens next"
- *   DraftLaunchBar     quick-access folder chips → cwd pill · project pill (fixed
- *                      last; no tier/More row since 2026-09-15, see that file),
- *                      with the folder picker POPPING OUT over the page (fixed,
- *                      anchored to the cwd pill — a ~300px column can't contain it)
+ *   DraftLaunchBar     quick-access folder chips, then the decision chips row
+ *                      (every tier / priority / date Walnut or the user decided),
+ *                      then the bar: cwd pill, project pill, More. The folder
+ *                      picker POPS OUT over the page (fixed, anchored to the cwd
+ *                      pill; a ~300px column can't contain it)
  *   composer           shared ChatInput; its controls row holds the model select
- *                      and the two verbs
+ *                      and the two verbs. Mod+. here opens the More menu.
  *
- * Row shape + launch-memory rules live in ./draft-column (shared with MainPage).
+ * Row shape, launch-memory and field-ownership rules live in ./draft-column and
+ * ./draft-ownership (shared with MainPage). This panel only delivers parses with
+ * their kind ('eager' / 'trailing' / 'clear') and never imports the chip row or
+ * its menu itself: DraftLaunchBar owns both.
  *
  * ZERO NETWORK on open is a hard requirement of this design, so everything the
  * bar reads is either client state or the working-dirs MODULE CACHE
@@ -35,10 +39,10 @@
  * ever touched on open.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { ImageAttachment } from '@/api/chat';
-import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
+import { quickParseTask } from '@/api/tasks';
 import { useQuickParseEnabled, setQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
@@ -52,10 +56,12 @@ import {
 } from '@/utils/engines';
 import { ModelPicker, shortAcpModelName } from './ModelPicker';
 import { fetchEngineModelCatalog } from '@/api/sessions';
-import { draftComposerKey, type DraftColumn } from './draft-column';
+import {
+  draftComposerKey, type DraftColumn, type DraftParseInput, type DraftParseKind, type DraftTaskField,
+  type DraftTaskFieldPatch,
+} from './draft-column';
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 import { GENERAL_AGENT_ID } from '@/components/chat/ask-walnut-slot-model';
-import { DraftTaskMenu } from './DraftTaskMenu';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useStoreTask } from '@/contexts/TasksContext';
@@ -236,19 +242,28 @@ interface Props {
    *  slot's session switcher), so the draft header reads like the session header
    *  it is about to become. */
   headerLeading?: ReactNode;
-  onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta) => void;
+  /** A folder pick. `openedMeta` is the meta the full picker opened with (its
+   *  footer edits are rebased per field against it); a quick folder chip omits it. */
+  onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta, openedMeta?: QuickStartTaskMeta) => void;
   onProjectChange: (draftId: string, project: string) => void;
-  /** Launch-meta edit from the bar. Takes an UPDATER (not a value) so rapid
-   *  clicks fold onto the freshest row instead of a props snapshot; the owner
-   *  also flips `metaTouched` here — every path into it is a user edit. */
+  /** Model / engine edit from the composer's model pill. Takes an UPDATER (not a
+   *  value) so rapid clicks fold onto the freshest row instead of a props
+   *  snapshot; the owner flips `metaTouched` (the folder launch memory) here. */
   onMetaChange: (draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
+  /** A task-field edit from More or a decision chip: the owner makes those fields
+   *  the user's. Omit (with onReturnFieldToWalnut) to draw no More and no chips. */
+  onTaskFieldChange?: (draftId: string, patch: DraftTaskFieldPatch) => void;
+  /** "Use Walnut's pick": give one field back to the AI. */
+  onReturnFieldToWalnut?: (draftId: string, field: DraftTaskField) => void;
   /** Registry membership (case-insensitive) — the launch bar badges a project
    *  that doesn't exist yet ("new"), e.g. the folder-derived default. */
   isKnownProject: (name: string) => boolean;
-  /** A landed background parse of the composer text. The owner decides what it is
-   *  allowed to write (see draft-column's applyDraftParse) — the panel only
+  /** A landed background parse of the composer text, with its kind: 'eager'
+   *  (a prefix, may only add or change), 'trailing' (the sentence as it stands),
+   *  or 'clear' with `{}` (the composer stayed empty for a debounce). The owner
+   *  decides what it may write (draft-column's applyDraftParse); the panel only
    *  delivers it. Omit to disable the backfill entirely. */
-  onAiParse?: (draftId: string, parse: QuickTaskParse) => void;
+  onAiParse?: (draftId: string, parse: DraftParseInput, kind: DraftParseKind) => void;
   /** The Start Task / Ask Walnut tab switch. The owner rewrites the row
    *  (project/tier seed on enter, restore on leave) — the panel only reports. */
   onWalnutToggle?: (draftId: string, walnut: boolean) => void;
@@ -257,6 +272,7 @@ interface Props {
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse, onWalnutToggle,
+  onTaskFieldChange, onReturnFieldToWalnut,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -268,13 +284,9 @@ export function DraftSessionPanel({
   // this is the ordinary "typed first, forgot the folder" path, not an edge
   // case. Drives the one-line notice above the launch bar — see startWith.
   const [needsFolder, setNeedsFolder] = useState(false);
-  // Slash-command palette, same source a real session's composer uses: no folder
-  // yet → the LOCAL list (skills + built-ins, no project commands); once a
-  // folder/host is picked the list follows it (a remote host shows that host's
-  // skills). Globally cached + SWR, so the common keys are usually already warm;
-  // the fetch is background and gates nothing — the palette is simply empty
-  // until it lands. The message itself travels as plain text either way (the
-  // CLI interprets /commands natively), so this is purely a discovery surface.
+  // Slash-command palette, same source as a real session's composer: no folder
+  // yet = the LOCAL list; then it follows the folder/host. Cached + SWR, gates
+  // nothing (empty until it lands); the CLI reads /commands natively either way.
   const {
     items: slashCommands, search: searchSlashCommands, refresh: refreshSlashCommands,
     status: slashCommandsStatus, onPaletteOpen: onSlashPaletteOpen,
@@ -289,34 +301,35 @@ export function DraftSessionPanel({
   // (the fork route creates the sibling task itself), and no AI backfill —
   // project/folder are immutable facts, so there is nothing for it to fill.
   const isFork = !!draft.forkOf;
-  // Ask Walnut tab: project/folder are server-owned facts, so like a fork there
-  // is nothing for the AI backfill to fill. Tabs render on a plain draft AND on
-  // a bound one (task-row ▶): a task can be handed to the Personal AI as well as
-  // to a coding agent, and the binding survives the switch — Start reuses the
-  // task either way (MainPage.handleDraftStart). Fork and repair drafts are
-  // committed to a shape and show no tabs.
+  // Ask Walnut tab: project/folder are server-owned, so no AI backfill. Tabs
+  // render on a plain AND a bound draft (the binding survives the switch; Start
+  // reuses the task either way). Fork and repair drafts show no tabs.
   const isWalnut = !!draft.walnut;
   // A walnut draft for ANOTHER console agent (Mentor, Note Assistant, …): same
   // launch shape, its own name in the header/placeholder, and the Walnut seeds
   // (tasks, schedule) give way to the agent's own description.
   const askAgent = isWalnut && draft.agent && draft.agent.id !== GENERAL_AGENT_ID ? draft.agent : null;
   const askLabel = askAgent ? `Ask ${askAgent.name}` : 'Ask Walnut';
-  // "Fix Walnut": a draft pre-armed on Walnut's own checkout, carrying the repair
-  // intent. Committed to a shape like a bound or fork draft, so it shows NO mode
-  // fork — the "Ask Walnut" card would flip it to a walnut launch, whose payload
-  // has no cwd and therefore silently drops the repair the user just asked for.
+  // "Fix Walnut": pre-armed on Walnut's own checkout with the repair intent. No
+  // mode fork: an Ask Walnut launch has no cwd and would drop the repair.
   const isRepair = draft.intent === 'fix-walnut';
   const showTabs = !isFork && !isRepair && !!onWalnutToggle;
 
-  // Header ⋮. A bound draft's task EXISTS, so it gets the real task's kebab
-  // (pin / dates / priority / project — live writes, the same menu a session
-  // header has); pin state comes from the shared Focus Bar store, like there.
-  // A plain draft has no task yet: its ⋮ edits the launch meta the task will be
-  // created with (DraftTaskMenu). A fork inherits the source task's meta by
-  // contract and a repair is filed by the server, so neither draws one; nor
-  // does the chat slot's fixed-walnut draft (no toggle) — that surface stays
-  // minimal by design, its asks land in Focus.
+  // A bound draft's task EXISTS: the header gets its real kebab (live writes; pin
+  // state from the Focus Bar store). A plain draft edits its task fields from the
+  // launch bar (chips + More). Fork (inherits its meta), repair (server-filed) and
+  // the chat slot's fixed-walnut draft (no toggle, minimal by design) get neither.
   const showDraftMenu = !isBound && !isFork && !isRepair && (!!onWalnutToggle || !isWalnut);
+  // Mod+. in the composer opens More (keyboard focus rules): the Mac app's web
+  // view skips buttons on Tab without Full Keyboard Access.
+  const [openMenuNonce, setOpenMenuNonce] = useState(0);
+  const onComposerKeyDown = useCallback((e: ReactKeyboardEvent) => {
+    if (e.key !== '.' || e.shiftKey || e.altKey) return;
+    const mod = /Mac|iP/.test(navigator.platform) ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+    if (!mod || !(e.target as Element | null)?.closest?.('.chat-input-textarea')) return;
+    e.preventDefault();
+    setOpenMenuNonce((n) => n + 1);
+  }, []);
   const focusBar = useFocusBarContextSafe();
   const boundTaskId = draft.taskId;
   const boundPinned = !!boundTaskId && !!focusBar?.isPinned(boundTaskId);
@@ -339,9 +352,11 @@ export function DraftSessionPanel({
     if (prev !== null && prev !== boundProject) onProjectChange(draft.id, boundProject);
   }, [boundProject, draft.id, onProjectChange]);
 
-  const focusComposer = useCallback(() => {
-    rootRef.current?.querySelector<HTMLTextAreaElement>('.chat-input-textarea')?.focus();
-  }, []);
+  const getComposer = useCallback(
+    () => rootRef.current?.querySelector<HTMLTextAreaElement>('.chat-input-textarea') ?? null,
+    [],
+  );
+  const focusComposer = useCallback(() => { getComposer()?.focus(); }, [getComposer]);
 
   // Focus the textarea AFTER paint, and query inside rootRef only: several draft
   // columns can be open at once, so a document-level query would grab whichever
@@ -374,30 +389,15 @@ export function DraftSessionPanel({
   }, [draft.cwd]);
 
   // ── Background AI backfill of the launch pills (R9) ──
-  //
-  // Debounced parse of what the user is typing, mirroring QuickTaskComposer: the
-  // draft column IS a task-create surface, so the same sentence that starts the
-  // session can also say which project and tier it belongs to. STRICTLY additive —
-  // nothing waits on it, nothing blocks on it, and every failure (no provider
-  // configured → the route 500s; offline; 400) is swallowed, leaving the draft
-  // exactly as the user left it.
-  //
-  // OFF unless `agent.quick_parse` says otherwise — see that field in types.ts.
-  //
-  // Not "network-free because text can only appear by typing": the composer RESTORES
-  // a persisted draft, so a panel opening on left-over text fired this on MOUNT with
-  // no keystroke at all. That is what the user saw ("I didn't type").
-  //
-  // Every in-flight parse is now aborted before the next one starts. The seq guard
-  // below only ever discarded the RESULT; the request itself kept running and kept
-  // its connection slot until the server's 10s timeout, which is how one sentence
-  // put six ten-second no-ops in the air at once.
-  // Ordering: every request takes the next seq; a response applies only if no
-  // NEWER response has already landed (appliedSeq). A plain "latest nonce wins"
-  // guard would discard every eager response — the user typing one more character
-  // bumps the nonce before the response lands, which is precisely the eager case.
-  // `agent.quick_parse`, surfaced as a toggle in the composer's "+" menu below.
-  // False until config says otherwise, so a slow config read reads as off.
+  // Parse of what the user types, mirroring QuickTaskComposer: the sentence that
+  // starts the session can also say its project, tier, priority and dates.
+  // STRICTLY additive: nothing waits on it and every failure is swallowed. OFF
+  // unless `agent.quick_parse` (the composer "+" toggle; false until config
+  // loads). A restored draft opens on text, so this can fire on mount with no
+  // keystroke. Every in-flight parse is aborted before its replacement (a result
+  // guard alone left six 10s requests holding connection slots). Ordering: each
+  // request takes the next seq and applies only if no NEWER one has landed
+  // (appliedSeq); "latest nonce wins" would drop every eager answer.
   const aiParseOn = useQuickParseEnabled();
   const parseSeqRef = useRef(0);
   const parseAppliedSeqRef = useRef(0);
@@ -407,15 +407,9 @@ export function DraftSessionPanel({
   onAiParseRef.current = onAiParse;
   // When the last EAGER (mid-typing) parse fired, for the throttle window.
   const lastEagerParseRef = useRef(0);
-  // In-flight parse PER KIND, so a request that is being replaced is aborted
-  // instead of left to hold a connection slot until the server gives up on it.
-  //
-  // Per kind, not one shared controller: the eager and trailing paths are two
-  // different questions about the same sentence, and one controller let the
-  // trailing fire (350ms later) cancel the eager one before it could ever answer,
-  // which quietly deleted the eager feature while looking like a fix. So an eager
-  // parse only ever supersedes the previous EAGER parse. Ceiling: two in flight
-  // per composer, against the eleven that one continuous sentence used to reach.
+  // In-flight parse PER KIND: a replaced request is aborted, not left holding a
+  // connection slot. Not one shared controller: the trailing fire would cancel
+  // the eager one before it could answer. Ceiling: two in flight per composer.
   const parseAbortRef = useRef<{ eager: AbortController | null; trailing: AbortController | null }>({ eager: null, trailing: null });
   const abortAllParses = useCallback(() => {
     parseAbortRef.current.eager?.abort();
@@ -426,11 +420,19 @@ export function DraftSessionPanel({
   useEffect(() => {
     if (!onAiParseRef.current || isFork || isWalnut) return;
     const requested = text.trim();
-    // Empty composer → invalidate everything in flight and stop.
+    // Empty composer: invalidate everything in flight, then, only if it STAYS
+    // empty for a debounce, report a 'clear' (the decisions made from the text go
+    // with it). Not at once: a refused Start (no folder) empties the composer and
+    // restores it a moment later, and that round trip must not wipe the chips.
+    // The seq bump first, so a parse still in the air can never land after it.
     if (!requested) {
       parseAppliedSeqRef.current = ++parseSeqRef.current;
       abortAllParses();
-      return;
+      const clearTimer = setTimeout(() => {
+        if (textRef.current.trim()) return;
+        onAiParseRef.current?.(draft.id, {}, 'clear');
+      }, PARSE_DEBOUNCE_MS);
+      return () => clearTimeout(clearTimer);
     }
     // After the empty check, so opening a draft with an empty composer still costs
     // nothing at all — the flag's own `/api/config` read is triggered HERE, by there
@@ -449,14 +451,13 @@ export function DraftSessionPanel({
         .then((result) => {
           // Out-of-order guard: never let an older response overwrite a newer one.
           if (seq <= parseAppliedSeqRef.current) return;
-          // The trailing parse additionally requires the sentence to still be
-          // what it described (same rule as QuickTaskComposer). The EAGER parse
-          // deliberately skips this — it is by definition of a prefix the user
-          // is still extending, and filling pills from that prefix is the point.
-          // User picks are protected by ownership flags, not by recency.
-          if (!eager && requested !== textRef.current.trim()) return;
+          // Only a parse of the sentence AS IT STANDS may take a decision back
+          // ('trailing'). An eager parse, or a trailing one the user has typed
+          // past, describes a prefix: it may add or change a chip, never remove
+          // one. User picks are protected by field ownership, not by recency.
+          const landed: DraftParseKind = !eager && requested === textRef.current.trim() ? 'trailing' : 'eager';
           parseAppliedSeqRef.current = seq;
-          onAiParseRef.current?.(draft.id, result);
+          onAiParseRef.current?.(draft.id, result, landed);
         })
         .catch(() => { /* no provider / offline / 400 — degrade silently */ });
     };
@@ -482,12 +483,8 @@ export function DraftSessionPanel({
   const startWith = useCallback(async (body: string, images?: ImageAttachment[]): Promise<boolean> => {
     // Ask Walnut needs no folder — the server owns the cwd (WALNUT_HOME).
     if (!draft.cwd && !draft.walnut) {
-      // Opening the picker is the RECOVERY, not the explanation. On its own this
-      // read as a dead Start button: the click produced a file browser, no
-      // request, and nothing that said why — which is how "it can't start" got
-      // reported. Say the reason out loud, next to the pill the user has to fix.
-      // Cleared as soon as a folder lands (the effect below), so the notice can
-      // never outlive the condition it describes.
+      // The picker is the RECOVERY, not the explanation (alone it read as a dead
+      // Start button), so say why next to the pill. Cleared once a folder lands.
       setNeedsFolder(true);
       setPickerOpen(true);
       return false;
@@ -495,15 +492,11 @@ export function DraftSessionPanel({
     return onStart(draft.id, body, images);
   }, [draft.cwd, draft.walnut, draft.id, onStart]);
 
-  // "Start ↵" is Enter by another name: when anything is composed, click
-  // ChatInput's own send button (scoped to THIS column via rootRef) so attached
-  // IMAGES ride along and dispatchSend's draft-settle rules apply — we only
-  // mirror text, so a hand-rolled call would silently drop pasted screenshots.
-  // That button's `disabled` is exactly "nothing composed". The fallback passes
-  // the mirrored TEXT, never '': if the selector ever drifts the worst case must
-  // be "images lost", not "message replaced by empty". (An EMPTY composer on a
-  // bound draft resolves to the task title — in the owner, so every route in
-  // gets it.)
+  // "Start" is Enter by another name: click ChatInput's own send button (in THIS
+  // column) so pasted IMAGES ride along and dispatchSend's settle rules apply;
+  // its `disabled` is exactly "nothing composed". The fallback passes the mirrored
+  // TEXT, never '' (worst case "images lost", not "message emptied"). An empty
+  // bound composer resolves to the task title in the owner.
   const handleStartClick = useCallback(() => {
     const sendBtn = rootRef.current?.querySelector<HTMLButtonElement>('.chat-send-btn-icon');
     if (sendBtn && !sendBtn.disabled) { sendBtn.click(); return; }
@@ -511,7 +504,12 @@ export function DraftSessionPanel({
   }, [startWith, text]);
 
   return (
-    <div className={`session-panel draft-session-panel${isWalnut ? ' draft-session-panel-walnut' : ''}`} ref={rootRef} data-draft-id={draft.id}>
+    <div
+      className={`session-panel draft-session-panel${isWalnut ? ' draft-session-panel-walnut' : ''}`}
+      ref={rootRef}
+      data-draft-id={draft.id}
+      onKeyDownCapture={showDraftMenu && onTaskFieldChange ? onComposerKeyDown : undefined}
+    >
       <div className="session-panel-header">
         <div className="session-panel-header-top">
           {headerLeading && <div className="session-panel-header-leading">{headerLeading}</div>}
@@ -540,12 +538,6 @@ export function DraftSessionPanel({
               onPinTask={pinBound}
               onUnpinTask={unpinBound}
               onSetTier={setBoundTier}
-            />
-          )}
-          {showDraftMenu && (
-            <DraftTaskMenu
-              meta={draft.meta}
-              onMetaChange={(updater) => onMetaChange(draft.id, updater)}
             />
           )}
           <button
@@ -654,6 +646,12 @@ export function DraftSessionPanel({
           onProjectChange={onProjectChange}
           isKnownProject={isKnownProject}
           onAfterQuickPick={focusComposer}
+          // Decision chips + More only where the header kebab used to be.
+          onTaskFieldChange={showDraftMenu ? onTaskFieldChange : undefined}
+          onReturnFieldToWalnut={showDraftMenu ? onReturnFieldToWalnut : undefined}
+          composerText={text}
+          getComposer={getComposer}
+          openMenuNonce={openMenuNonce}
         />
         <ChatInput
           onSend={(body, images) => startWith(body, images)}

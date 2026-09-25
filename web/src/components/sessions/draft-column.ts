@@ -15,7 +15,20 @@
 
 import { peekWorkingDirs, type WorkingDirEntry } from '@/api/sessions';
 import type { LaunchMemory } from '@/utils/engines';
+import type { SuggestField } from '@/api/tasks';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
+import {
+  clearAiPlacement, foldTaskFields, normalizeParse, proposalsDiffer, sameParse, taskFieldSuggestions,
+} from './draft-parse-rules';
+import type {
+  ApplyDraftParseOpts, DraftFieldOwner, DraftOwnedField, DraftParseInput, DraftTaskField,
+} from './draft-parse-rules';
+
+export { suggestDiff, type SuggestDiffEntry } from './draft-parse-rules';
+export type {
+  ApplyDraftParseOpts, DraftFieldOwner, DraftOwnedField, DraftParseInput, DraftParseKind,
+  DraftTaskField, DraftTaskFieldPatch,
+} from './draft-parse-rules';
 
 /** Prefix of every draft composer's localStorage key — MainPage sweeps stale
  *  `draft:new-session:*` entries with it on mount. */
@@ -29,11 +42,15 @@ export function draftComposerKey(draftId: string): string {
   return DRAFT_COMPOSER_KEY_PREFIX + draftId;
 }
 
-/** A draft field the background AI parse filled in AND the launch bar shows
- *  (✦-badged on its pill): the project and, through the project's `default_cwd`,
- *  the folder. Only these two are badged and ledgered — the launch bar draws no
- *  other meta (see applyDraftParse for what happens to the rest). */
-export type DraftAiField = 'project' | 'cwd';
+/** A draft field the background AI parse can fill AND the draft shows (✦-badged):
+ *  the project, the folder (through the project's `default_cwd`), and the task
+ *  fields. A compile-time checked subset of the ledger's `SuggestField`. */
+export type DraftAiField = 'project' | 'cwd' | DraftTaskField;
+
+// C45: every field the draft ledgers must be a name the server's ledger accepts.
+// A typo on either side fails the typecheck here instead of silently dropping data.
+type AssertSubset<A, B> = [A] extends [B] ? true : never;
+export const DRAFT_AI_FIELDS_ARE_SUGGEST_FIELDS: AssertSubset<DraftAiField, SuggestField> = true;
 
 /** Who put the current `project` on the row — the ownership rule the AI backfill
  *  obeys. 'seed' = a project/tier "+" seeded it, 'user' = an explicit pick on the
@@ -63,10 +80,25 @@ export interface DraftColumn {
   /** Provenance of `project`. 'user'/'seed' are FINAL — the AI backfill never
    *  overwrites them; 'ai' (and absent) it may. */
   projectSource?: DraftProjectSource;
-  /** Fields the background parse filled. Purely presentational (the ✦ badges) —
-   *  ownership decisions read `projectSource` / `metaTouched` / `cwdPinned`, never
-   *  this set. */
+  /** Fields whose CURRENT value the background parse wrote (the ✦ badges). For
+   *  project/cwd it is presentational only (authority is `projectSource` /
+   *  `cwdPinned`); for the task fields it is also the one record that "this value
+   *  is the AI's", which is what lets a newer parse revert it to the default. */
   aiFields?: ReadonlySet<DraftAiField>;
+  /** Per-field owner of the task fields. An owned field is FINAL against the AI
+   *  (it still records proposals). Replaces the old all-or-nothing `metaTouched`
+   *  gate for task fields: editing the tier locks the tier only. endDate has no
+   *  slot of its own; it follows `startDate`. */
+  fieldOwner?: Readonly<Partial<Record<DraftOwnedField, DraftFieldOwner>>>;
+  /** Folder the draft opened with ('' = none), and its host: where a cleared
+   *  composer returns an AI-moved folder to (applyDraftParse kind 'clear'). */
+  openedCwd?: string;
+  openedHost?: string | null;
+  /** The last parse applied (eager or trailing), stored WITHOUT its title so a
+   *  retitled but otherwise identical parse stays a no-op. Re-derived when priority
+   *  visibility or the custom tiers become known, so a chip appears without a new
+   *  keystroke (rederiveDraftParse). Deleted by a 'clear'. */
+  lastParse?: DraftParseInput;
   /** The last value the background parse PROPOSED per field, whether or not the
    *  ownership rules let it land, and kept after the user takes over. This is the
    *  left column of the suggested-vs-chosen ledger (`suggestDiff`): a suggestion
@@ -77,11 +109,14 @@ export interface DraftColumn {
   /** True once the user picked the path explicitly — a later async seed (e.g. a
    *  project's default dir) must not overwrite their choice. */
   cwdPinned?: boolean;
-  /** True once the user edited the launch meta (model / engine / tier / star /
-   *  priority) in the launch bar or through the picker's footer. While FALSE a cwd
+  /** Launch-memory switch for model / engine ONLY. True once the user picked the
+   *  model or engine on the composer pills, or the picker confirmed a model/engine
+   *  that differs from the folder's memory. Task fields (tier, priority, dates,
+   *  unread) are owned per field through `fieldOwner` and never set it, and no AI
+   *  write ever does, so the memory keeps following the folder. While FALSE a cwd
    *  change is free to refresh model+engine from that directory's launch memory;
-   *  once TRUE the explicit pick wins and memory never overwrites it. This is the
-   *  launch-memory switch — it replaced `cwdPinned` in that role, which turned the
+   *  once TRUE the explicit pick wins and memory never overwrites it. It replaced
+   *  `cwdPinned` in that role, which turned the
    *  memory off after the FIRST pick and made every later folder change silently
    *  launch with the previous folder's model. */
   metaTouched?: boolean;
@@ -134,7 +169,11 @@ export interface DraftColumn {
     project?: string;
     projectSource?: DraftColumn['projectSource'];
     model?: string;
+    /** Stashed only when a user or seed owned the tier: an AI tier is reverted on
+     *  entry and must not come back hidden on leave (enterWalnutDraft). */
     pinTier?: QuickStartTaskMeta['pinTier'];
+    /** The owner map at entry, restored with the values on leave. */
+    fieldOwner?: DraftColumn['fieldOwner'];
     /** The model Ask Walnut's launch memory seeded onto the row (server: the
      *  last pick made for an Ask Walnut session). Leaving walnut mode with the
      *  model still on this value restores the stash — the Personal AI's
@@ -150,8 +189,9 @@ export interface DraftColumn {
 }
 
 /** Undo what entering walnut mode wrote to `meta`, keeping what the user picked
- *  INSIDE walnut mode. Tier: the seeded 'focus' reverts to the stash (any other
- *  tier was a hand pick). Model: the reset to Auto (`undefined`, or walnut's
+ *  INSIDE walnut mode. Tier: a stashed tier (stashed only when a user or a seed
+ *  owned it) comes back over 'focus'; without one the row stays on 'focus',
+ *  never unpinned (any other tier was a hand pick). Model: the reset to Auto (`undefined`, or walnut's
  *  explicit-Auto sentinel 'default' — never valid outside walnut mode) and the
  *  model Ask Walnut's launch memory seeded both revert; a model picked by hand
  *  stays. Shared by the tab switch and the seeded-rebind teardown so a coding
@@ -162,7 +202,7 @@ export function restoreMetaAfterWalnut(
 ): QuickStartTaskMeta {
   if (!prev) return meta;
   const next = { ...meta };
-  if (next.pinTier === 'focus') next.pinTier = prev.pinTier;
+  if (next.pinTier === 'focus' && prev.pinTier !== undefined) next.pinTier = prev.pinTier;
   if (next.model === undefined || next.model === 'default' || next.model === prev.seededModel) next.model = prev.model;
   return next;
 }
@@ -396,54 +436,48 @@ export function followProjectRegistryChange(
  * Fold a background parse of the composer text into a draft row.
  *
  * The ownership rule, one place: the AI may only write a field NOBODY ELSE has
- * claimed.
- *   · `project` — only while `projectSource` is unset or a previous 'ai' write.
+ * claimed, and everything it writes is shown (✦) so nothing is decided unseen.
+ *   · `project`: only while `projectSource` is unset or a previous 'ai' write.
  *     A 'user' pick (project pill / quick chip) or a 'seed' (project & tier "+")
  *     is FINAL.
- *   · `cwd`/`host` — only as a consequence of an AI project, and only when the cwd
+ *   · `cwd`/`host`: only as a consequence of an AI project, and only when the cwd
  *     is not pinned (no explicit folder pick) and the project actually declares a
- *     `default_cwd`. Never sets `cwdPinned` for the same reason.
- *   · `priority` / dates — only while `metaTouched` is false, and applying them
- *     must NOT set it: `metaTouched` means "the human chose", and it is also the
- *     per-directory launch-memory switch, so latching it here would silently
- *     freeze the model at whatever folder was selected first. These ride the
- *     create ("by Friday 3-5pm" becomes the due date) but are NOT badged or
- *     ledgered: the launch bar draws no meta row (DraftLaunchBar, 2026-09-15), so
- *     there is nothing to badge and no human decision to measure against; the
- *     value shows on the task card the moment it exists, where it is one click to
- *     fix.
- *   · `pinTier` — NEVER, not even applied. A date the user did not see is a
- *     detail on a task they can still find; a tier they did not see moves the
- *     task to a section they are not looking at. Every task lands on the default
- *     (or a tier "+" seed, which is the user asking). The parse endpoint still
- *     returns `pinTier` for the Quick Task form, which does draw the picker.
+ *     `default_cwd`. Never sets `cwdPinned` for the same reason. A typing parse
+ *     never takes project/cwd back; only a 'clear' does (the text is gone).
+ *   · tier / priority / start (+ end) / due, per field (draft-parse-rules.ts):
+ *     written and badged unless `fieldOwner` owns the field; an AI-owned field a
+ *     newer trailing parse no longer proposes goes back to its default, but only
+ *     when the leg that owns it answered 'ok'. The tier used to be NEVER applied,
+ *     because a tier the user could not see moved the task somewhere they were not
+ *     looking; the decision chip makes it visible, so it is applied now.
+ *   · Priority follows `ui.show_priority`: while hidden the AI does not decide it.
+ *     A behavior change: on a default install (hidden) "urgent" used to land as a
+ *     hidden Immediate that still sorted first; it now lands as none.
+ *   · No AI write sets `metaTouched`, `userTouched`, `fieldOwner` or `cwdPinned`.
  * Returns the SAME object when nothing applies, so a no-op parse can't re-render.
  *
- * Separately from all of that it records what the parse PROPOSED (`aiSuggested`)
- * for the two fields the bar shows, including proposals the ownership rules
- * refused — an overridden suggestion is precisely the evidence the accuracy
- * ledger needs, and a field the user could not have overridden is no evidence.
+ * Separately it records what the parse PROPOSED (`aiSuggested`), including
+ * proposals the ownership rules refused: an overridden suggestion is precisely the
+ * evidence the accuracy ledger needs.
  */
 export function applyDraftParse(
   draft: DraftColumn,
-  parse: {
-    project?: string; project_is_new?: boolean;
-    pinTier?: string; priority?: QuickStartTaskMeta['priority'];
-    due_date?: string; start_date?: string; end_date?: string;
-  },
+  parse: DraftParseInput,
   projectDefault: ProjectDefaultLookup,
+  opts: ApplyDraftParseOpts = {},
 ): DraftColumn {
+  const kind = opts.kind ?? 'trailing';
   const ai = new Set<DraftAiField>(draft.aiFields ?? []);
-  // Work on a copy and return the ORIGINAL unless something actually changed —
+  // Work on a copy and return the ORIGINAL unless something actually changed:
   // this runs on every landed parse (i.e. every ~500ms typing pause), and handing
   // React a new row for an identical result would re-render the column for nothing.
   const next: DraftColumn = { ...draft };
   let changed = false;
 
-  const project = parse.project?.trim();
+  const project = kind === 'clear' ? undefined : parse.project?.trim();
   // The proposal ledger is filled BEFORE the ownership gates, so "the AI said
   // Walnut, the user launched under Fix Walnut" is recordable at all.
-  const proposed: Partial<Record<DraftAiField, string>> = {};
+  const proposed: Partial<Record<DraftAiField, string>> = taskFieldSuggestions(draft, parse, opts, kind);
   // ONE registry lookup, shared with the apply branch below, so the folder the
   // ledger records can never be a different folder from the one applied.
   const home = project ? projectDefault(project) : undefined;
@@ -451,51 +485,43 @@ export function applyDraftParse(
     proposed.project = project;
     if (home?.cwd) proposed.cwd = home.cwd;
   }
-  if (differs(proposed, draft.aiSuggested)) {
+  if (proposalsDiffer(proposed, draft.aiSuggested)) {
     next.aiSuggested = proposed;
     changed = true;
   }
 
-  const projectFree = draft.projectSource === undefined || draft.projectSource === 'ai';
-  if (project && projectFree && project !== draft.project) {
-    next.project = project;
-    next.projectSource = 'ai';
-    ai.add('project');
-    changed = true;
-    // Follow the project to its folder — the same "one gesture configures both"
-    // rule the quick chips use, minus the click. A pinned cwd (explicit pick) or
-    // an undeclared project leaves the folder alone.
-    if (home?.cwd && !next.cwdPinned && home.cwd !== next.cwd) {
-      next.cwd = home.cwd;
-      next.host = home.host;
-      next.hostLabel = undefined;
-      ai.add('cwd');
-      // The bar SHOWS the model, so a cwd move has to move the launch memory with
-      // it — otherwise it would advertise the previous folder's model.
-      if (!next.metaTouched) next.meta = withDirLaunchMemory(next.meta, next.cwd, next.host);
+  if (kind === 'clear') {
+    changed = clearAiPlacement(next, ai) || changed;
+  } else {
+    const projectFree = draft.projectSource === undefined || draft.projectSource === 'ai';
+    if (project && projectFree && project !== draft.project) {
+      next.project = project;
+      next.projectSource = 'ai';
+      ai.add('project');
+      changed = true;
+      // Follow the project to its folder, the same "one gesture configures both"
+      // rule the quick chips use, minus the click. A pinned cwd (explicit pick) or
+      // an undeclared project leaves the folder alone.
+      if (home?.cwd && !next.cwdPinned && home.cwd !== next.cwd) {
+        next.cwd = home.cwd;
+        next.host = home.host;
+        next.hostLabel = undefined;
+        ai.add('cwd');
+        // The bar SHOWS the model, so a cwd move has to move the launch memory with
+        // it, otherwise it would advertise the previous folder's model.
+        if (!next.metaTouched) next.meta = withDirLaunchMemory(next.meta, next.cwd, next.host);
+      }
     }
   }
 
-  if (!draft.metaTouched) {
-    const meta = { ...draft.meta };
-    let metaChanged = false;
-    if (parse.priority && parse.priority !== meta.priority) {
-      meta.priority = parse.priority; metaChanged = true;
-    }
-    // Dates ("by Friday", "3-5pm") — same ownership rule as priority: any user
-    // edit of the meta (metaTouched) freezes ALL of it, dates included.
-    if (parse.due_date && parse.due_date !== meta.dueDate) {
-      meta.dueDate = parse.due_date; metaChanged = true;
-    }
-    if (parse.start_date && parse.start_date !== meta.startDate) {
-      meta.startDate = parse.start_date; metaChanged = true;
-    }
-    if (parse.end_date && parse.end_date !== meta.endDate) {
-      meta.endDate = parse.end_date; metaChanged = true;
-    }
-    // `meta` is REPLACED, never mutated in place; metaTouched deliberately stays
-    // as it was (an AI value must not read as a user pick — see the doc above).
-    if (metaChanged) { next.meta = meta; changed = true; }
+  const folded = foldTaskFields(draft, next.meta, ai, parse, opts, kind);
+  if (folded.changed) { next.meta = folded.meta; changed = true; }
+
+  const stored = kind === 'clear' ? undefined : normalizeParse(parse);
+  if (!sameParse(draft.lastParse, stored)) {
+    if (stored) next.lastParse = stored;
+    else delete next.lastParse;
+    changed = true;
   }
 
   if (!changed) return draft;
@@ -506,10 +532,12 @@ export function applyDraftParse(
 /**
  * The user just took over a field — drop its ✦ badge.
  *
- * Only the BADGE: the authority flags (`projectSource`, `metaTouched`,
+ * Only the BADGE: the authority flags (`projectSource`, `fieldOwner`,
  * `cwdPinned`) are set by the handlers that own those edits, and they are what
- * actually stops further AI writes. This keeps the two concerns from drifting:
- * a badge is never load-bearing.
+ * actually stops further AI writes. For project/cwd the badge is never
+ * load-bearing. For a task field it also means "the AI may revert this", so a
+ * human takeover of one goes through applyDraftTaskFieldEdit (draft-ownership.ts),
+ * which sets the owner and drops the badge together.
  */
 export function clearAiFields(draft: DraftColumn, fields: readonly DraftAiField[]): DraftColumn {
   if (!draft.aiFields?.size) return draft;
@@ -517,57 +545,4 @@ export function clearAiFields(draft: DraftColumn, fields: readonly DraftAiField[
   let changed = false;
   for (const f of fields) changed = ai.delete(f) || changed;
   return changed ? { ...draft, aiFields: ai } : draft;
-}
-
-/** Shallow value compare of two proposal maps (both may be undefined). */
-function differs(
-  a: Partial<Record<DraftAiField, string>>,
-  b: Readonly<Partial<Record<DraftAiField, string>>> | undefined,
-): boolean {
-  const keysA = Object.keys(a);
-  const keysB = b ? Object.keys(b) : [];
-  if (keysA.length !== keysB.length) return true;
-  return keysA.some((k) => a[k as DraftAiField] !== b?.[k as DraftAiField]);
-}
-
-/** One field's suggested-vs-chosen pair. */
-export interface SuggestDiffEntry {
-  field: DraftAiField;
-  /** What the background parse proposed. Always present — see suggestDiff. */
-  suggested: string;
-  /** What the launch actually carried, or undefined (left unset / unpinned). */
-  chosen?: string;
-}
-
-/**
- * The suggested-vs-chosen ledger for a draft that is about to commit (Start, or
- * "Create task for later").
- *
- * Why record this at all: the auto-suggestion is the one part of the draft the user
- * cannot audit — it fills pills silently while they type, so a wrong guess is only
- * visible if they happen to look. Recording every proposal against what the launch
- * actually carried turns "the AI feels inaccurate" into a per-field number.
- *
- * Only fields the AI actually PROPOSED are recorded. A field it stayed silent on
- * carries no evidence about it: the folder is always set (a launch needs one), so
- * counting it as "the AI missed it" would bury the real signal under defaults.
- * Only the project and the folder are ledger fields now: they are the two the
- * launch bar shows and the user can override before committing. The tier is
- * never proposed, and priority/dates ride the create unseen (applyDraftParse), so
- * for them "kept" would just mean "nobody could have changed it".
- */
-export function suggestDiff(draft: DraftColumn): SuggestDiffEntry[] {
-  const chosen: Partial<Record<DraftAiField, string | undefined>> = {
-    project: draft.project || undefined,
-    cwd: draft.cwd || undefined,
-  };
-  const fields: DraftAiField[] = ['project', 'cwd'];
-  const out: SuggestDiffEntry[] = [];
-  for (const field of fields) {
-    const suggested = draft.aiSuggested?.[field];
-    if (suggested === undefined) continue;
-    const picked = chosen[field];
-    out.push({ field, suggested, ...(picked !== undefined ? { chosen: picked } : {}) });
-  }
-  return out;
 }

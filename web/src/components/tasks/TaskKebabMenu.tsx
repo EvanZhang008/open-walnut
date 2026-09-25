@@ -19,6 +19,7 @@ import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { PluginFieldsSection } from './PluginFieldPicker';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
+import type { DraftTaskField } from '@/components/sessions/draft-column';
 
 type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -125,6 +126,24 @@ export function KebabDateRow({ label, date, display, onChange }: {
   );
 }
 
+/** "Use Walnut's pick: <label>": hands one draft field back to the AI. */
+function WalnutPickRow({ pick, afterAction }: {
+  pick: { label: string; onPick: () => void } | undefined;
+  afterAction: () => void;
+}) {
+  if (!pick) return null;
+  return (
+    <button
+      type="button"
+      className="task-kebab-item task-kebab-walnut-pick"
+      onClick={(e) => { e.stopPropagation(); pick.onPick(); afterAction(); }}
+    >
+      <span className="task-kebab-icon" aria-hidden="true">✦</span>
+      <span>Use Walnut's pick: {pick.label}</span>
+    </button>
+  );
+}
+
 /**
  * Shared pin-to-tier / set-priority / set-date blocks — the SAME panel rows the
  * per-task kebab shows, reused by the session panel's kebab (TaskQuickActions)
@@ -136,17 +155,21 @@ export function KebabDateRow({ label, date, display, onChange }: {
  * Pinning has no separate "Unpin" row: the highlighted tier pill IS the pin, and
  * clicking it again unpins. Priority renders only when Settings says so
  * (`ui.show_priority`, off by default). Dates are collapsed rows (KebabDateRow).
+ * The draft menu opts into a few differences through optional props (see the
+ * prop docs); the board kebab passes none of them and keeps this behavior.
  */
 export function TaskActionMenuItems({
   task, isPinned, pinnedTier, isDone, batchMode,
   onSetPriority, onPinTask, onPinWithTier, onUnpinTask, onSetTier, onSetDate, onSetStartDate, afterAction,
+  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick,
 }: {
   /** Single task (kebab) — null in batch mode. Only the fields the rows READ are
    *  required, so a draft column can hand in its launch meta (the task that
    *  Start will create) shaped like a task — see DraftTaskMenu. */
   task: Pick<Task, 'priority' | 'start_date' | 'due_date'> | null;
   isPinned: boolean;
-  pinnedTier?: FocusTier;
+  /** null = explicitly not pinned: with `litClickAccepts` it lights "Don't pin". */
+  pinnedTier?: FocusTier | null;
   isDone: boolean;
   /** Batch mode: tier button calls onSetTier(tier) directly (caller fans out pin+tier per task). */
   batchMode?: boolean;
@@ -163,6 +186,19 @@ export function TaskActionMenuItems({
   onSetStartDate?: (date: string | null) => void;
   /** Close the menu after an action fires. */
   afterAction: () => void;
+  // The props below are the DRAFT menu's (DraftTaskMenuPopover). Absent, every
+  // row behaves exactly as on the board kebab.
+  /** Collapsed Start / Due row text. Default: the board's relative format. */
+  formatDate?: (iso: string, kind: 'start' | 'due') => string;
+  /** Priority buttons read icon + label ("!! Immediate"), not the icon alone. */
+  showPriorityLabels?: boolean;
+  /** Clicking the lit tier or priority re-sends the same value (accept it),
+   *  never unpins; the tier row gains a trailing "Don't pin" option. */
+  litClickAccepts?: boolean;
+  /** Tier block heading instead of "Pinned" / "Pin to". */
+  tierHeading?: string;
+  /** Per field, a trailing "Use Walnut's pick: <label>" row. */
+  walnutPick?: Partial<Record<DraftTaskField, { label: string; onPick: () => void }>>;
 }) {
   // Custom tiers append after the built-ins. Safe hook: kebabs also render on
   // isolated surfaces (tests, popouts) that may sit outside the FocusBarProvider.
@@ -179,7 +215,7 @@ export function TaskActionMenuItems({
         <>
           <div className="task-kebab-divider" />
           <div className="task-kebab-tier">
-            <span className="task-kebab-tier-label">{!batchMode && isPinned ? 'Pinned' : 'Pin to'}</span>
+            <span className="task-kebab-tier-label">{tierHeading ?? (!batchMode && isPinned ? 'Pinned' : 'Pin to')}</span>
             <div className="task-kebab-tier-options">
               {tierOptions.map((t) => {
                 const isCurrent = !batchMode && isPinned && pinnedTier === t.value;
@@ -188,7 +224,7 @@ export function TaskActionMenuItems({
                   key={t.value}
                   className={`task-kebab-tier-btn${isCurrent ? ' active' : ''}`}
                   style={{ color: TIER_COLORS[t.value] ?? 'var(--tier-custom)' }}
-                  title={isCurrent ? `Unpin from ${t.label}` : t.label}
+                  title={isCurrent ? (litClickAccepts ? `Keep ${t.label}` : `Unpin from ${t.label}`) : t.label}
                   aria-pressed={isCurrent || undefined}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -197,7 +233,10 @@ export function TaskActionMenuItems({
                       onSetTier?.(t.value);
                     } else if (isPinned) {
                       // The lit pill is the pin itself: click it again to unpin.
-                      if (isCurrent) onUnpinTask?.();
+                      // In the draft menu the lit pill is Walnut's pick, and a
+                      // click on it means "yes, that one" (accept, same value).
+                      if (isCurrent && litClickAccepts) onSetTier?.(t.value);
+                      else if (isCurrent) onUnpinTask?.();
                       else onSetTier?.(t.value);
                     } else if (onPinWithTier) {
                       onPinWithTier(t.value);
@@ -219,8 +258,22 @@ export function TaskActionMenuItems({
                 </button>
                 );
               })}
+              {litClickAccepts && !batchMode && (
+                <button
+                  type="button"
+                  className={`task-kebab-tier-btn task-kebab-tier-unpin${!isPinned && pinnedTier === null ? ' active' : ''}`}
+                  style={{ color: 'var(--fg-muted)' }}
+                  title="Start the task unpinned"
+                  aria-pressed={(!isPinned && pinnedTier === null) || undefined}
+                  onClick={(e) => { e.stopPropagation(); onUnpinTask?.(); afterAction(); }}
+                >
+                  <span className="task-kebab-tier-btn-icon">{ICONS.ICON_PIN}</span>
+                  Don't pin
+                </button>
+              )}
             </div>
           </div>
+          <WalnutPickRow pick={walnutPick?.pinTier} afterAction={afterAction} />
         </>
       )}
 
@@ -236,17 +289,19 @@ export function TaskActionMenuItems({
                   key={p.value}
                   className={`badge badge-${p.value}${task && task.priority === p.value ? ' badge-active' : ''} badge-clickable`}
                   title={p.label}
+                  aria-pressed={showPriorityLabels ? (!!task && task.priority === p.value) : undefined}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (!task || p.value !== task.priority) onSetPriority(p.value);
+                    if (!task || p.value !== task.priority || litClickAccepts) onSetPriority(p.value);
                     afterAction();
                   }}
                 >
-                  {p.icon}
+                  {showPriorityLabels ? `${p.icon} ${p.label}` : p.icon}
                 </button>
               ))}
             </div>
           </div>
+          <WalnutPickRow pick={walnutPick?.priority} afterAction={afterAction} />
         </>
       )}
 
@@ -257,18 +312,20 @@ export function TaskActionMenuItems({
         <KebabDateRow
           label="Start"
           date={task?.start_date}
-          display={task?.start_date ? formatStartDateDisplay(task.start_date) : ''}
+          display={task?.start_date ? (formatDate ? formatDate(task.start_date, 'start') : formatStartDateDisplay(task.start_date)) : ''}
           onChange={(date) => { onSetStartDate(date); afterAction(); }}
         />
       )}
+      {onSetStartDate && <WalnutPickRow pick={walnutPick?.startDate} afterAction={afterAction} />}
       {onSetDate && (
         <KebabDateRow
           label="Due"
           date={task?.due_date}
-          display={task?.due_date ? formatDateDisplay(task.due_date) : ''}
+          display={task?.due_date ? (formatDate ? formatDate(task.due_date, 'due') : formatDateDisplay(task.due_date)) : ''}
           onChange={(date) => { onSetDate(date); afterAction(); }}
         />
       )}
+      {onSetDate && <WalnutPickRow pick={walnutPick?.dueDate} afterAction={afterAction} />}
     </>
   );
 }

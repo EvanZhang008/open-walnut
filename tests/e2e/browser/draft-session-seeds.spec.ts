@@ -9,12 +9,12 @@
  *                                   folder, each ✦-badged, and a human's own pick
  *                                   is FINAL against every later parse
  *
- * 2026-09-15: the draft column lost its tier row (Focus / Satellite / Backlog /
- * Wait · More) — the user found it "complicated for people" — and every new task
- * lands in Focus. Two consequences this file now pins: a tier SEED (R8) is
- * invisible until it commits, so it is asserted on the OUTCOME (which tier the
- * created task lands in, via the focus API), and the parse (R9) may no longer
- * touch the tier at all, however confidently it answers.
+ * 2026-09-24 (visible decisions): every task field the draft carries is a chip
+ * above the pills. A tier SEED (R8) shows as a tier chip WITHOUT ✦ (the user's own
+ * "+") and no parse may overwrite it; the parse (R9) now applies its tier too, with a
+ * ✦ chip, because a tier the user can see and change no longer files the task
+ * somewhere they are not looking. The outcome checks (which tier the created task
+ * lands in, via the focus API) stay: a chip that lies is still a bug.
  *
  * Why a separate file from tests/e2e/browser/draft-session-column.spec.ts: that one
  * owns the column's LIFECYCLE (open → configure → Start / task / discard); this one
@@ -36,14 +36,14 @@
 
 import { test, expect } from '@playwright/test'
 import {
-  basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftPanel, draftPanels,
-  draftProjectPill, loadHome, openDraft, openDraftOnCwd, pickDraftFolder, seedColumns,
-  watchForbiddenRequests,
+  basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip, draftDecisionChips,
+  draftPanel, draftPanels, draftProjectPill, loadHome, mockQuickParse, openDraft, openDraftOnCwd,
+  patchClientConfig, pickDraftFolder, seedColumns, typeAndSettle, watchForbiddenRequests,
 } from './draft-helpers'
 import {
   armParse, createTaskForLater, expectSeededTierLands, expectTaskInTier, pickDraftProject,
 } from './draft-outcome-helpers'
-import { openSessionFromPlus, plusControl } from './draft-surface-helpers'
+import { openSessionFromPlus, pinToTier, plusControl } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 
 /** Artifacts of this run. Per-run overridable so a later revision's artifacts
@@ -162,24 +162,26 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
   //
   // The tier picked is Backlog: it is NOT the launcher default (every draft opens on
   // Focus), so a task landing in Backlog can only mean the seed was applied.
-  // Backlog renders unconditionally, but the whole PINNED wrapper only mounts when
-  // some pinned task exists — so pin one (any tier) to make the tier headers real.
+  // A built-in tier header only renders while that tier holds a pinned task, so
+  // an anchor is pinned INTO Backlog to make its header (and its "+") real.
   const stamp = Date.now()
   const taskRes = await page.request.post('/api/tasks', {
     data: { title: `tier-plus anchor ${stamp}`, source: 'local', project: 'Work' },
   })
   expect(taskRes.ok(), await taskRes.text()).toBe(true)
   const taskId = ((await taskRes.json()) as { task: { id: string } }).task.id
-  const pinRes = await page.request.post(`/api/focus/tasks/${taskId}`)
-  expect(pinRes.ok(), await pinRes.text()).toBe(true)
+  // An EMPTY built-in tier draws no header (home navigation), so the anchor sits
+  // in Backlog itself; the seed is still read off the NEW task's tier.
+  await pinToTier(page, taskId, 'backlog')
 
   await page.setViewportSize({ width: 2400, height: 1000 })
   await presetPanelView(page, { section: 'all', project: '' })
+  // Parse ON for this page, answering with a DIFFERENT tier than the seed.
+  await patchClientConfig(page, { quickParse: true })
+  const parse = await mockQuickParse(page, { pinTier: 'satellite' })
   await loadHome(page)
 
-  const sublabel = page.locator('.todo-pinned-sublabel').filter({
-    has: page.locator('.todo-pinned-sublabel-text').filter({ hasText: /^Backlog$/ }),
-  }).first()
+  const sublabel = page.locator('.todo-pinned-sublabel[data-navigation-id="backlog"]').first()
   await expect(sublabel).toBeVisible({ timeout: 25_000 })
   await sublabel.hover()
   const plus = plusControl(sublabel)
@@ -188,6 +190,8 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
   // Armed BEFORE the click: a tier is a local value, so unlike the project "+"
   // (which fetches the project detail for its default_cwd) this route must touch
   // nothing server-side at all — opening the menu included.
+  // The tier's fold state before the click (home navigation may start it folded).
+  const zonesBefore = await page.locator('[data-drop-zone="backlog-drop-zone"]').count()
   const seen = watchForbiddenRequests(page)
   await openSessionFromPlus(page, sublabel)
 
@@ -195,12 +199,16 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
   await expect(panel).toBeVisible({ timeout: 10_000 })
   expect(seen, 'the tier "+" is a pure client-state route').toEqual([])
   // The click must NOT have reached the sublabel's own collapse handler — the tier's
-  // task list is still mounted (a fold would unmount its drop zone).
-  await expect(page.locator('[data-drop-zone="backlog-drop-zone"]')).toHaveCount(1)
+  // task list is exactly as mounted as before (a fold toggle would flip its drop zone).
+  await expect(page.locator('[data-drop-zone="backlog-drop-zone"]')).toHaveCount(zonesBefore)
 
-  // No tier control anywhere in the column — the seed rides `meta.pinTier`
-  // silently, and the column must not grow a row back to show it.
+  // C17: the seed shows as a tier chip, WITHOUT ✦ (the user clicked the "+"),
+  // and the old tier row stays gone.
   await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
+  const tierChip = draftDecisionChip(panel, 'pinTier')
+  await expect(tierChip).toHaveText(/Backlog/)
+  await expect(tierChip.locator('.draft-ai-badge')).toHaveCount(0)
+  await expect(tierChip).toHaveAttribute('title', 'Pinned tier: Backlog. From the + on the Backlog section. Click to change.')
   // The seed must NOT read as a user meta edit — `metaTouched` is also the
   // per-directory launch-memory switch, and latching it here would freeze the
   // model at whatever folder is picked first. Observable proxy: picking a folder
@@ -219,6 +227,11 @@ test('pin-tier header "+" opens a draft whose task lands in that tier', async ({
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/02-tier-plus-seeds-tier.png`, fullPage: false })
 
+  // A parse that proposes another tier does not move the seed.
+  await typeAndSettle(page, parse, `put this in satellite ${stamp}`)
+  await expect(tierChip).toHaveText(/Backlog/)
+  await expect(tierChip.locator('.draft-ai-badge')).toHaveCount(0)
+
   // THE assertion, read off the OUTCOME on the board: the task this draft creates
   // lands in Backlog, not in the Focus default.
   await expectSeededTierLands(page, panel, 'backlog', `backlog header seed probe ${stamp}`)
@@ -236,15 +249,15 @@ test('a tier seed survives the folder picker (the pick a seeded draft must make 
   })
   expect(taskRes.ok(), await taskRes.text()).toBe(true)
   const anchorId = ((await taskRes.json()) as { task: { id: string } }).task.id
-  expect((await page.request.post(`/api/focus/tasks/${anchorId}`)).ok()).toBe(true)
+  // An EMPTY built-in tier draws no header (home navigation), so the anchor sits
+  // in Backlog itself; the seed is still read off the NEW task's tier.
+  await pinToTier(page, anchorId, 'backlog')
 
   await page.setViewportSize({ width: 2400, height: 1000 })
   await presetPanelView(page, { section: 'all', project: '' })
   await loadHome(page)
 
-  const sublabel = page.locator('.todo-pinned-sublabel').filter({
-    has: page.locator('.todo-pinned-sublabel-text').filter({ hasText: /^Backlog$/ }),
-  }).first()
+  const sublabel = page.locator('.todo-pinned-sublabel[data-navigation-id="backlog"]').first()
   await expect(sublabel).toBeVisible({ timeout: 25_000 })
   await sublabel.hover()
   await openSessionFromPlus(page, sublabel)
@@ -278,12 +291,13 @@ async function stubParse(
   page: import('@playwright/test').Page,
   body: Record<string, unknown> | 'error',
 ): Promise<void> {
-  await page.route('**/api/tasks/quick-parse', (route) => (body === 'error'
-    ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'no provider' }) })
-    : route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })))
+  // The parse is opt-in (`agent.quick_parse`, default off); switch it on for this
+  // page only, so no other spec file's worker sees the flag move.
+  await patchClientConfig(page, { quickParse: true })
+  await mockQuickParse(page, body)
 }
 
-test('typing back-fills the project pill with a ✦ badge (never the tier), and a user pick then wins', async ({ page }) => {
+test('typing back-fills the project pill and the tier chip with a ✦ badge, and a user pick then wins', async ({ page }) => {
   // The project the stub "suggests" must EXIST in the registry with a declared
   // folder, because the backfill's cwd half is a registry lookup (no fetch) — a
   // name with no row would prove only half the rule.
@@ -295,9 +309,8 @@ test('typing back-fills the project pill with a ✦ badge (never the tier), and 
   expect(seed.ok(), await seed.text()).toBe(true)
 
   await page.setViewportSize({ width: 2400, height: 1000 })
-  // The stub ALSO answers with a tier that is not the default. The column has no
-  // tier control, so the parse must leave the tier alone: a guess the user cannot
-  // see or undo would file the task somewhere they will not look for it.
+  // The stub ALSO answers with a tier that is not the default. Since the visible
+  // decisions slice it is applied AND shown as a ✦ tier chip the user can change.
   await stubParse(page, { title: 'ship the wallet flow', project: AI_PROJECT, pinTier: 'backlog' })
   await loadHome(page)
 
@@ -316,8 +329,10 @@ test('typing back-fills the project pill with a ✦ badge (never the tier), and 
   // THE assertion: the project pill follows the suggestion and says WHO chose (✦).
   await expect(draftProjectPill(panel)).toHaveText(`${AI_PROJECT}✦`, { timeout: 10_000 })
   await expect(draftProjectPill(panel)).toHaveClass(/session-action-chip-ai/)
-  // No tier control appeared to show the stub's Backlog — there is none to show.
+  // The stub's Backlog is applied, shown, and badged as Walnut's decision.
   await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Backlog/)
+  await expect(draftDecisionChip(panel, 'pinTier').locator('.draft-ai-badge')).toHaveCount(1)
   // The AI project drags its folder along (one gesture configures both, same rule
   // the quick chips follow) — and that folder is ✦ too, since nobody picked it.
   await expect(draftCwdPill(panel)).toHaveText(`${basenameOf(aiCwd)}✦`)
@@ -347,8 +362,7 @@ test('typing back-fills the project pill with a ✦ badge (never the tier), and 
 
   // Commit, and read the two claims off what the commit carried: the ledger
   // records AI_PROJECT as proposed and the human's Inbox as what won (chosen
-  // absent = Inbox), and it carries NO tier entry — the tier is never a
-  // suggestion, so it is never a ledger field.
+  // absent = Inbox), and the tier the user saw and kept is on record too.
   const feedback = page.waitForRequest((req) =>
     req.method() === 'POST' && new URL(req.url()).pathname === '/api/tasks/suggest-feedback',
   { timeout: 20_000 })
@@ -360,22 +374,20 @@ test('typing back-fills the project pill with a ✦ badge (never the tier), and 
   expect(byField.get('project'), 'the overridden project suggestion is on record')
     .toMatchObject({ suggested: AI_PROJECT })
   expect(byField.get('project')?.chosen, 'Inbox won').toBeUndefined()
-  expect(byField.has('pinTier')).toBe(false)
-  // …and the task itself: the user's Inbox, and the DEFAULT tier — the stub's
-  // Backlog never reached it.
+  expect(byField.get('pinTier')).toMatchObject({ suggested: 'backlog', chosen: 'backlog' })
+  // …and the task itself: the user's Inbox, and the tier the chip showed.
   const detail = (await (await page.request.get(`/api/tasks/${taskId}`)).json()) as
     { task?: { project?: string } }
   expect(detail.task?.project ?? '').toBe('')
-  await expectTaskInTier(page, taskId, 'focus')
+  await expectTaskInTier(page, taskId, 'backlog')
 })
 
 test('AI-suggested dates ride BOTH exits onto the task', async ({ page }) => {
   // The Quick Task form's date trio (start/end/due) exists on the draft too — the
   // parse fills meta.dueDate/startDate/endDate, and BOTH exits (Create task for
-  // later, Start) write the dates onto the created task. Nothing in the column
-  // shows them any more (the meta row with its More menu is gone), so the dates
-  // are asserted against the API only — which is also where end_date lives, since
-  // no list surface shows it.
+  // later, Start) write the dates onto the created task. The column shows them as
+  // ✦ chips (Start, Due; this due is in the past, so it reads as overdue), and the
+  // outcome is asserted against the API, which is also where end_date lives.
   const DUE = '2026-08-14T17:00:00'
   const START = '2026-08-14T15:00:00'
   await page.setViewportSize({ width: 2400, height: 1000 })
@@ -391,9 +403,12 @@ test('AI-suggested dates ride BOTH exits onto the task', async ({ page }) => {
   const parsed = armParse(page)
   await draftComposer(page).type(`Ship the launch checklist ${stamp} by friday 3-5pm`)
   await parsed()
-  // No More menu to open — the row is gone, and it must stay gone.
+  // The old meta row stays gone; the dates are chips instead.
   await expect(panel.locator('.sps-meta-more-btn')).toHaveCount(0)
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/03d-ai-dates-no-meta-row.png`, fullPage: false })
+  await expect(draftDecisionChip(panel, 'dueDate').locator('.draft-ai-badge')).toHaveCount(1)
+  await expect(draftDecisionChip(panel, 'dueDate')).toHaveClass(/draft-decision-chip-overdue/)
+  await expect(draftDecisionChip(panel, 'startDate')).toHaveText(/^Start /)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/03d-ai-dates-as-chips.png`, fullPage: false })
 
   const taskId = await createTaskForLater(page, panel)
   const detail = (await (await page.request.get(`/api/tasks/${taskId}`)).json()) as
@@ -451,8 +466,11 @@ test('Fork opens a pre-bound draft: pinned folder/project, no chips/meta/task-ex
   await expect(draftProjectPill(panel)).toBeDisabled()
   await expect(draftProjectPill(panel)).toHaveText('Walnut')
   // No folder chips, no tier/priority row, no task exit — only message + model.
+  // C22: and no More and no decision chips either.
   await expect(panel.locator('.draft-quick-chips')).toHaveCount(0)
   await expect(panel.locator('.pin-tier-options, .sps-meta-more-btn')).toHaveCount(0)
+  await expect(panel.locator('.draft-more-btn, .draft-decision-row')).toHaveCount(0)
+  await expect(draftDecisionChips(panel)).toHaveCount(0)
   await expect(panel.locator('.draft-later-btn')).toHaveCount(0)
   await expect(panel.locator('.draft-model-select')).toBeVisible()
   await expect(panel.locator('.draft-start-btn')).toHaveText('Fork ↵')

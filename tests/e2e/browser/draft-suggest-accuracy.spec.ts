@@ -16,12 +16,12 @@
  *   2. the reader shows it: the Settings card reaches the same ledger through the
  *      HTTP route and renders the field, both values and the verdict.
  *
- * The override used to be the TIER (parse says focus, user clicks Backlog). The
- * draft column has had no tier control since 2026-09-15; the parse no longer
- * proposes a tier, and dates/priority ride the create unseen and unledgered
- * (draft-column.ts applyDraftParse / suggestDiff). Project and folder are the two
- * fields the bar still shows, so they are the two the ledger measures — and this
- * file pins that a stubbed `pinTier`/`due_date` never reach a record.
+ * Since the visible-chips rules (2026-09-24) the parse's tier, priority and dates are
+ * shown as chips and can be changed from them, so the ledger measures those too:
+ * `pinTier`, `priority`, `startDate`, `dueDate` beside project and folder, every
+ * record stamped `rules: 'visible-chips-v1'` so the older generation (tier never
+ * applied, dates applied unseen) is counted apart. Priority is recorded only while
+ * `ui.show_priority` is on: a hidden field is neither written nor measured.
  *
  * Committed through "◌ Create task for later" rather than Start: both exits record
  * (`surface` tells them apart), and the task exit needs no folder and spawns no CLI,
@@ -36,7 +36,9 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import {
-  basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftPanels, draftProjectPill, loadHome, openDraft,
+  basenameOf, captureDraftRequests, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip,
+  draftPanels, draftProjectPill, isoDay, loadHome, mockQuickParse, nthRequest, openDraft, openDraftOnCwd,
+  openDraftSettings, patchClientConfig, dayWords,
 } from './draft-helpers'
 import { armParse, createTaskForLater, pickDraftProject } from './draft-outcome-helpers'
 
@@ -53,11 +55,19 @@ test.setTimeout(180_000)
 // other's records.
 test.describe.configure({ mode: 'serial' })
 
-/** Answer the background parse with a fixed suggestion. */
-async function stubParse(page: Page, body: Record<string, unknown>): Promise<void> {
-  await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
-    status: 200, contentType: 'application/json', body: JSON.stringify(body),
-  }))
+/** Answer the background parse with a fixed suggestion (both legs ok), with the
+ *  parse switched on and priority shown for this page only. */
+async function stubParse(page: Page, body: Record<string, unknown>, showPriority = true): Promise<void> {
+  await patchClientConfig(page, { quickParse: true, showPriority })
+  await mockQuickParse(page, body)
+}
+
+/** GET /api/tasks/suggest-accuracy, the current-rules tally for one field. */
+async function tally(page: Page, field: string): Promise<number> {
+  const res = await page.request.get('/api/tasks/suggest-accuracy?limit=1')
+  expect(res.ok(), await res.text()).toBe(true)
+  const body = (await res.json()) as { fields?: Record<string, { total: number }> }
+  return body.fields?.[field]?.total ?? 0
 }
 
 /** Real-UI walk to the accuracy card: sidebar → Settings → the section's nav item
@@ -94,14 +104,14 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   expect(registered.ok(), await registered.text()).toBe(true)
 
   await page.setViewportSize({ width: 2400, height: 1000 })
-  // `pinTier` and `due_date` are in the stub on purpose: the endpoint does return
-  // them (the Quick Task form uses them), and the draft must RECORD neither — the
-  // tier is not applied at all, the date is applied but not shown, so there is no
-  // human verdict on either.
+  // Tier, priority and due ride the stub too: each one is a visible chip now, so
+  // each one gets a verdict (the tier is overridden below, the other two kept).
+  const DUE = isoDay(3)
   await stubParse(page, {
-    title: 'ship the ledger', project: AI_PROJECT, due_date: '2026-08-14T17:00:00', pinTier: 'backlog',
+    title: 'ship the ledger', project: AI_PROJECT, due_date: DUE, pinTier: 'backlog', priority: 'immediate',
   })
   await loadHome(page)
+  const tierBefore = await tally(page, 'pinTier')
 
   const panel = await openDraft(page)
   // The starting state, so every flip below is a real change.
@@ -119,6 +129,15 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   await expect(draftProjectPill(panel)).toHaveText(`${AI_PROJECT}✦`, { timeout: 10_000 })
   await expect(draftProjectPill(panel)).toHaveClass(/session-action-chip-ai/)
   await expect(draftCwdPill(panel)).toHaveText(`${basenameOf(aiCwd)}✦`)
+  // C7: the task decisions are chips, each badged.
+  for (const [field, words] of [['pinTier', 'Backlog'], ['priority', 'Immediate'], ['dueDate', `Due ${dayWords(3)}`]] as const) {
+    await expect(draftDecisionChip(panel, field)).toContainText(words)
+    await expect(draftDecisionChip(panel, field).locator('.draft-ai-badge')).toHaveCount(1)
+  }
+  // The tier is overridden from its chip.
+  const menu = await openDraftSettings(panel, 'pinTier')
+  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Satellite' }).click()
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/)
 
   // ── The override: the human disagrees about the project, keeps the folder ──
   // This is the case the whole feature exists to count, and one record carrying a
@@ -135,19 +154,29 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
 
   // CLAIM 1 — the commit posts both sides of every field the parse proposed AND the
   // user could see; nothing else.
-  const payload = (await feedback).postDataJSON() as {
+  const feedbackReq = await feedback
+  const payload = feedbackReq.postDataJSON() as {
     surface?: string
     textLen?: number
-    entries?: Array<{ field: string; suggested?: string; chosen?: string }>
+    rules?: string
+    entries?: Array<{ field: string; suggested?: string; chosen?: string; rules?: string }>
   }
+  expect((await feedbackReq.response())?.status(), 'the ledger route accepts it').toBe(204)
   expect(payload.surface).toBe('draft-task')
   expect(payload.textLen, 'the LENGTH rides along, never the text').toBe(text.length)
   const byField = new Map((payload.entries ?? []).map((e) => [e.field, e]))
   expect(byField.get('project'), 'the project override is the record that matters')
     .toMatchObject({ suggested: AI_PROJECT, chosen: USER_PROJECT })
   expect(byField.get('cwd')).toMatchObject({ suggested: aiCwd, chosen: aiCwd })
-  expect([...byField.keys()].sort(), 'tier and date are not ledger fields: no human could have overridden them')
-    .toEqual(['cwd', 'project'])
+  expect(byField.get('pinTier')).toMatchObject({ suggested: 'backlog', chosen: 'satellite' })
+  expect(byField.get('priority')).toMatchObject({ suggested: 'immediate', chosen: 'immediate' })
+  expect(byField.get('dueDate')).toMatchObject({ suggested: DUE, chosen: DUE })
+  expect([...byField.keys()].sort(), 'every visible decision, and nothing else (no endDate)')
+    .toEqual(['cwd', 'dueDate', 'pinTier', 'priority', 'project'])
+  // C63: the record names its rules generation.
+  expect(payload.rules ?? payload.entries?.[0]?.rules).toBe('visible-chips-v1')
+  // C27: the current-rules tally counted this commit's tier.
+  await expect.poll(() => tally(page, 'pinTier'), { timeout: 10_000 }).toBeGreaterThanOrEqual(tierBefore + 1)
   // The composer text must never ride along — only its length.
   expect(JSON.stringify(payload)).not.toContain('Ship the accuracy ledger')
 
@@ -165,9 +194,12 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   // project name, so another spec's records can't satisfy the assertion.
   const record = page.locator('.suggest-accuracy-record', { hasText: AI_PROJECT }).first()
   await expect(record).toBeVisible({ timeout: 20_000 })
-  await expect(record.locator('.suggest-accuracy-entry.verdict-kept')).toContainText(aiCwd)
-  await expect(record.locator('.suggest-accuracy-entry.verdict-changed'))
-    .toContainText(`${AI_PROJECT} to ${USER_PROJECT}`)
+  // Several fields per record now (folder, priority, due kept; project, tier
+  // changed), so each verdict is found by its own words.
+  await expect(record.locator('.suggest-accuracy-entry.verdict-kept', { hasText: aiCwd })).toBeVisible()
+  await expect(record.locator('.suggest-accuracy-entry.verdict-changed', { hasText: `${AI_PROJECT} to ${USER_PROJECT}` }))
+    .toBeVisible()
+  await expect(record.locator('.suggest-accuracy-entry.verdict-changed', { hasText: 'backlog to satellite' })).toBeVisible()
 
   // Scroll the card fully into frame for the artifact — the assertions above are
   // done, and a screenshot of the section header proves nothing to a human reviewer.
@@ -202,4 +234,50 @@ test('a commit the parse had no opinion about records nothing', async ({ page })
   await createTaskForLater(page, panel)
   await expect(draftPanels(page)).toHaveCount(0, { timeout: 30_000 })
   expect(posted, 'nothing suggested → nothing recorded').toBe(false)
+})
+
+test('Start carries the chips\' tier, priority and due, and the ledger records each one', async ({ page }) => {
+  // C7 + C8 + C27 through the Start exit (a real launch on the fixture's mock CLI).
+  const DUE = isoDay(3)
+  await page.setViewportSize({ width: 2400, height: 1000 })
+  await stubParse(page, { pinTier: 'satellite', priority: 'immediate', due_date: DUE })
+  const log = await captureDraftRequests(page)
+  await loadHome(page)
+  const panel = await openDraftOnCwd(page, `${await discoverFixtureRoot()}/projects/walnut`)
+  const parsed = armParse(page)
+  await draftComposer(page).type(`fix the flaky login test by friday, urgent ${Date.now()}`)
+  await parsed()
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/, { timeout: 10_000 })
+  await expect(draftDecisionChip(panel, 'priority')).toHaveText(/Immediate/)
+  await expect(draftDecisionChip(panel, 'dueDate')).toHaveText(new RegExp(`Due ${dayWords(3)}`))
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/03-chips-before-start.png`, fullPage: false })
+
+  await panel.locator('.draft-start-btn').click()
+  const body = await nthRequest(log, 'quickStart')
+  expect(body.taskMeta).toMatchObject({ pinTier: 'satellite', priority: 'immediate', due_date: DUE })
+  const ledger = await nthRequest(log, 'feedback')
+  expect(ledger.surface).toBe('draft-session')
+  const byField = new Map(((ledger.entries ?? []) as Array<{ field: string }>).map((e) => [e.field, e]))
+  expect(byField.get('pinTier')).toMatchObject({ suggested: 'satellite', chosen: 'satellite' })
+  expect(byField.get('priority')).toMatchObject({ suggested: 'immediate', chosen: 'immediate' })
+  expect(byField.get('dueDate')).toMatchObject({ suggested: DUE, chosen: DUE })
+})
+
+test('with priority hidden an AI priority is neither shown, launched nor recorded', async ({ page }) => {
+  // C32: the default install (ui.show_priority off).
+  await page.setViewportSize({ width: 2400, height: 1000 })
+  await stubParse(page, { pinTier: 'satellite', priority: 'immediate' }, false)
+  const log = await captureDraftRequests(page, { blockQuickStart: true })
+  await loadHome(page)
+  const panel = await openDraftOnCwd(page, `${await discoverFixtureRoot()}/projects/walnut`)
+  const parsed = armParse(page)
+  await draftComposer(page).type('fix the flaky login test, urgent')
+  await parsed()
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/, { timeout: 10_000 })
+  await expect(draftDecisionChip(panel, 'priority')).toHaveCount(0)
+  await panel.locator('.draft-start-btn').click()
+  const body = await nthRequest(log, 'quickStart')
+  expect(body.taskMeta?.priority ?? 'none').toBe('none')
+  const ledger = await nthRequest(log, 'feedback')
+  expect(((ledger.entries ?? []) as Array<{ field: string }>).map((e) => e.field)).not.toContain('priority')
 })

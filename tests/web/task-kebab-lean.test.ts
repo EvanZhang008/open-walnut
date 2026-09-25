@@ -20,6 +20,7 @@ const read = (rel: string) => fs.readFileSync(path.resolve(import.meta.dirname, 
 const KEBAB = read('components/tasks/TaskKebabMenu.tsx');
 const QUICK = read('components/sessions/TaskQuickActions.tsx');
 const CSS = read('styles/globals.css');
+const DRAFT_MENU = read('components/sessions/DraftTaskMenu.tsx');
 
 describe('task kebab menus stay lean and shared', () => {
   it('the session-panel kebab renders the shared action block, not its own copy', () => {
@@ -49,6 +50,23 @@ describe('task kebab menus stay lean and shared', () => {
   it('priority in the shared block is gated on the show-priority setting', () => {
     expect(KEBAB).toContain("from '@/hooks/useShowPriority'");
     expect(KEBAB).toMatch(/\{onSetPriority && showPriority && \(/);
+  });
+
+  it('the draft menu differences are opt-in props the board kebab never passes', () => {
+    const block = KEBAB.slice(KEBAB.indexOf('export function TaskActionMenuItems'), KEBAB.indexOf('export function ProjectPickerFlyout'));
+    // "Don't pin" and accept-on-lit exist only behind litClickAccepts.
+    expect(block).toMatch(/\{litClickAccepts && !batchMode && \(/);
+    expect(block).toMatch(/if \(isCurrent && litClickAccepts\) onSetTier\?\.\(t\.value\)/);
+    const boardCall = KEBAB.slice(KEBAB.lastIndexOf('<TaskActionMenuItems'));
+    const boardProps = boardCall.slice(0, boardCall.indexOf('/>'));
+    for (const prop of ['litClickAccepts', 'showPriorityLabels', 'formatDate', 'tierHeading', 'walnutPick']) {
+      expect(boardProps).not.toContain(prop);
+      expect(QUICK).not.toContain(prop);
+    }
+    // The draft menu is a popover now: no header trigger, no "edited" light.
+    expect(DRAFT_MENU).not.toContain('draft-task-menu-btn');
+    expect(DRAFT_MENU).not.toContain('draftMetaEdited');
+    expect(DRAFT_MENU).toContain('export function DraftTaskMenuPopover');
   });
 
   it('dates are collapsed rows with the calendar behind a click', () => {

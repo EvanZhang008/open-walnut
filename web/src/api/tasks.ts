@@ -109,7 +109,7 @@ export interface TaskDetail extends Task {
  */
 export type { TaskQuery } from '@open-walnut/task-query';
 
-export type { QuickTaskParse } from '@open-walnut/core';
+export type { QuickTaskParse, QuickTaskParseLegs, LegStatus } from '@open-walnut/core';
 
 /**
  * Background NL parse. Callers MUST pass a signal and abort the previous call
@@ -127,9 +127,17 @@ export async function quickParseTask(text: string, signal?: AbortSignal): Promis
 
 // ── Suggestion accuracy ledger ───────────────────────────────────────────────
 
-/** A launch field the draft's background parse can propose. Same names as
- *  `DraftAiField` (web/src/components/sessions/draft-column.ts) and as the
- *  server's SUGGEST_FIELDS — the server drops anything it doesn't recognise. */
+/** Rules generation stamped on every new ledger record. `visible-chips-v1`: every
+ *  task field the parse writes is shown as a chip and can be changed in the draft.
+ *  A version (not a cutoff date) follows the code, so clocks and rollbacks can't
+ *  mix the two generations. */
+export const SUGGEST_RULES_VERSION = 'visible-chips-v1';
+
+/** A launch field the draft's background parse can propose. Same names as the
+ *  server's SUGGEST_FIELDS (the server drops anything it doesn't recognise).
+ *  `DraftAiField` (web/src/components/sessions/draft-column.ts) is a compile-time
+ *  checked subset: every field but `endDate`, which only rides along with the start
+ *  and so cannot be kept or changed on its own. */
 export type SuggestField = 'project' | 'cwd' | 'pinTier' | 'priority' | 'dueDate' | 'startDate' | 'endDate';
 export type SuggestVerdict = 'kept' | 'changed' | 'dropped';
 
@@ -153,6 +161,8 @@ export interface SuggestRecord {
   at: string;
   surface: string;
   textLen?: number;
+  /** Rules generation that wrote the record (SUGGEST_RULES_VERSION); absent on legacy records. */
+  rules?: string;
   entries: Array<SuggestFeedbackEntry & { verdict: SuggestVerdict }>;
 }
 
@@ -161,6 +171,9 @@ export interface SuggestAccuracySummary {
   fields: Record<SuggestField, SuggestFieldStats>;
   overall: SuggestFieldStats;
   recent: SuggestRecord[];
+  /** Per-field stats grouped by rules generation. Key 'legacy' = records written
+   *  without `rules` (tier never applied, dates applied silently). */
+  byRules?: Record<string, Record<SuggestField, SuggestFieldStats>>;
   since?: string;
   until?: string;
 }
@@ -176,6 +189,8 @@ export function recordSuggestFeedback(input: {
   surface: string;
   entries: readonly SuggestFeedbackEntry[];
   textLen?: number;
+  /** Rules generation, sent verbatim (normally SUGGEST_RULES_VERSION). */
+  rules?: string;
 }): void {
   if (input.entries.length === 0) return;   // nothing was suggested — nothing to learn
   void apiPost('/api/tasks/suggest-feedback', input).catch(() => {

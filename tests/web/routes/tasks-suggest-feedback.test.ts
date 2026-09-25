@@ -49,6 +49,7 @@ describe('POST /api/tasks/suggest-feedback', () => {
     const post = await request(app).post('/api/tasks/suggest-feedback').send({
       surface: 'draft-session',
       textLen: 64,
+      rules: 'visible-chips-v1',
       entries: [
         { field: 'project', suggested: 'Walnut', chosen: 'Fix Walnut' },
         { field: 'pinTier', suggested: 'satellite', chosen: 'satellite' },
@@ -135,5 +136,60 @@ describe('POST /api/tasks/suggest-feedback', () => {
     expect(res.body.recent[0].entries[0].suggested).toBe('C');   // newest first
     // Non-numeric limits fall back to the default rather than 400ing a read-only route.
     expect((await request(app).get('/api/tasks/suggest-accuracy?limit=abc')).body.recent).toHaveLength(3);
+  });
+});
+
+// C27 (server half) and C63: the visible-chips client tags every record; the
+// tag is validated by shape and a bad one is dropped, never a 400.
+describe('suggest-feedback rules tag', () => {
+  const entries = [
+    { field: 'pinTier', suggested: 'satellite', chosen: 'satellite' },
+    { field: 'priority', suggested: 'immediate', chosen: 'important' },
+    { field: 'dueDate', suggested: '2026-10-02', chosen: '2026-10-02' },
+  ];
+
+  it('a tagged Start answers 204 and moves the current pinTier count by one', async () => {
+    const app = createApp();
+    const before = (await request(app).get('/api/tasks/suggest-accuracy')).body;
+    expect(before.fields.pinTier.total).toBe(0);
+    const post = await request(app).post('/api/tasks/suggest-feedback')
+      .send({ surface: 'draft-session', rules: 'visible-chips-v1', entries });
+    expect(post.status).toBe(204);
+    const after = (await request(app).get('/api/tasks/suggest-accuracy')).body;
+    expect(after.fields.pinTier).toMatchObject({ kept: 1, total: before.fields.pinTier.total + 1 });
+    expect(after.fields.priority).toMatchObject({ changed: 1, total: 1 });
+    expect(after.fields.dueDate).toMatchObject({ kept: 1, total: 1 });
+    expect(after.recent[0].rules).toBe('visible-chips-v1');
+    expect(after.byRules['visible-chips-v1'].pinTier.total).toBe(1);
+  });
+
+  it('an untagged record is legacy: out of the top-level numbers, inside byRules.legacy', async () => {
+    const app = createApp();
+    expect((await request(app).post('/api/tasks/suggest-feedback')
+      .send({ surface: 'draft-session', entries })).status).toBe(204);
+    const res = (await request(app).get('/api/tasks/suggest-accuracy')).body;
+    expect(res.commits).toBe(1);
+    expect(res.fields.pinTier.total).toBe(0);
+    expect(res.overall.total).toBe(0);
+    expect(res.byRules.legacy.pinTier).toMatchObject({ kept: 1, total: 1 });
+    expect(res.recent[0]).not.toHaveProperty('rules');
+  });
+
+  it.each([
+    ['a number', 7],
+    ['upper case', 'Visible-Chips-V1'],
+    ['spaces and punctuation', 'visible chips; v1'],
+    ['a prototype key', '__proto__'],
+    ['an over-long slug', 'v'.repeat(41)],
+    ['an empty string', ''],
+  ])('drops a malformed tag (%s) and still records the commit as legacy', async (_label, rules) => {
+    const app = createApp();
+    const post = await request(app).post('/api/tasks/suggest-feedback')
+      .send({ surface: 'draft-session', rules, entries });
+    expect(post.status).toBe(204);
+    const res = (await request(app).get('/api/tasks/suggest-accuracy')).body;
+    expect(res.commits).toBe(1);
+    expect(res.recent[0]).not.toHaveProperty('rules');
+    expect(res.byRules.legacy.pinTier.total).toBe(1);
   });
 });

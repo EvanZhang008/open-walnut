@@ -139,8 +139,9 @@ describe('parseQuickTask', () => {
   });
 
   it('returns empty input without calling the model', async () => {
-    await expect(parseQuickTask('')).resolves.toEqual({ parse: { title: '' }, parseMs: 0 });
-    await expect(parseQuickTask('   ')).resolves.toEqual({ parse: { title: '   ' }, parseMs: 0 });
+    const noLegs = { classify: 'skipped', dates: 'skipped' };
+    await expect(parseQuickTask('')).resolves.toEqual({ parse: { title: '' }, parseMs: 0, legs: noLegs });
+    await expect(parseQuickTask('   ')).resolves.toEqual({ parse: { title: '   ' }, parseMs: 0, legs: noLegs });
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
@@ -401,5 +402,44 @@ describe('parseQuickTask', () => {
     expect(lastCall().messages[0].content).toContain(
       'Current local datetime: 2026-07-23T14:00:00 (Thursday)',
     );
+  });
+});
+
+// C53: every return names which legs answered, so the draft column can tell
+// "Walnut changed its mind" from "a leg failed and answered with fewer fields".
+// No classifier is configured in this file, so classify is always 'skipped'.
+describe('parseQuickTask legs (LLM leg only)', () => {
+  beforeEach(() => {
+    sendMessageMock.mockReset();
+    config.agent.fast_model = undefined;
+  });
+
+  it('LLM leg answers: dates ok, classify skipped', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice","due_date":"2026-07-24"}'));
+    const result = await parseQuickTask('pay invoice friday');
+    expect(result.legs).toEqual({ classify: 'skipped', dates: 'ok' });
+    expect(result.parse).toEqual({ title: 'Pay invoice', due_date: '2026-07-24' });
+  });
+
+  it('LLM leg throws: dates failed, the parse still answers with the note', async () => {
+    sendMessageMock.mockRejectedValue(new Error('model unavailable'));
+    const result = await parseQuickTask('pay invoice friday');
+    expect(result.legs).toEqual({ classify: 'skipped', dates: 'failed' });
+    expect(result.parse).toEqual({ title: 'pay invoice friday' });
+  });
+
+  it('LLM leg times out: the abort lands in the catch and dates is failed', async () => {
+    sendMessageMock.mockImplementation(({ signal }: { signal: AbortSignal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    }));
+    const result = await parseQuickTask('pay invoice friday', { timeoutMs: 20 });
+    expect(result.legs).toEqual({ classify: 'skipped', dates: 'failed' });
+    expect(result.parse).toEqual({ title: 'pay invoice friday' });
+  });
+
+  it('unparseable model output counts as a failed leg, not as "no dates"', async () => {
+    sendMessageMock.mockResolvedValue(textResult('not json at all'));
+    const result = await parseQuickTask('pay invoice friday');
+    expect(result.legs).toEqual({ classify: 'skipped', dates: 'failed' });
   });
 });

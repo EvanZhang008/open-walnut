@@ -626,7 +626,8 @@ tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextF
     // running a pre-gate bundle cheap (2ms) instead of letting it hold one of the
     // browser's six connection slots for the full 10s model timeout.
     if (!(await quickParseEnabled())) {
-      res.json(unparsedTask(text).parse)
+      const unparsed = unparsedTask(text)
+      res.json({ ...unparsed.parse, legs: unparsed.legs })
       return
     }
 
@@ -639,7 +640,7 @@ tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextF
         error: err instanceof Error ? err.message : String(err),
       })
     }
-    const { parse, parseMs, model } = await parseQuickTask(text, {
+    const { parse, parseMs, model, legs } = await parseQuickTask(text, {
       timeZone,
       projectDigest: projectDigest.digest,
       knownProjects: projectDigest.projects,
@@ -651,8 +652,11 @@ tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextF
       totalMs: Date.now() - startedAt,
       model,
       textLen: text.length,
+      legs,
     })
-    res.json(parse)
+    // `legs` rides this route only: the draft column needs it to tell "Walnut
+    // changed its mind" from "a leg failed". The frozen /api/v1 twin omits it.
+    res.json({ ...parse, legs })
   } catch (err) {
     next(err)
   }
@@ -669,12 +673,14 @@ tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextF
 const MAX_SUGGEST_ENTRIES = 20
 /** Values are project names / tiers / dates / paths, never prose. */
 const MAX_SUGGEST_VALUE_CHARS = 300
+/** A rules tag is a short slug like 'visible-chips-v1'. */
+const MAX_SUGGEST_RULES_CHARS = 40
 
 // POST /api/tasks/suggest-feedback — record one commit's suggested-vs-chosen pairs
 tasksRouter.post('/suggest-feedback', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { surface, entries, textLen } = req.body as {
-      surface?: unknown; entries?: unknown; textLen?: unknown
+    const { surface, entries, textLen, rules } = req.body as {
+      surface?: unknown; entries?: unknown; textLen?: unknown; rules?: unknown
     }
     if (typeof surface !== 'string' || surface.trim() === '' || surface.length > 40) {
       res.status(400).json({ error: 'surface must be a short non-empty string' })
@@ -704,6 +710,11 @@ tasksRouter.post('/suggest-feedback', async (req: Request, res: Response, next: 
       entries: clean,
       ...(typeof textLen === 'number' && Number.isFinite(textLen) && textLen >= 0
         ? { textLen: Math.min(Math.round(textLen), 1_000_000) }
+        : {}),
+      // Rule-set tag (SUGGEST_RULES_CURRENT). Same drop-not-400 policy: a bad
+      // tag files the record as legacy, it never fails the write.
+      ...(typeof rules === 'string' && rules.length <= MAX_SUGGEST_RULES_CHARS && /^[a-z0-9-]+$/.test(rules)
+        ? { rules }
         : {}),
     })
     res.status(204).end()

@@ -31,11 +31,14 @@ import { WALNUT_HOME } from '../constants.js';
 import { withFileLock } from '../utils/file-lock.js';
 import { log } from '../logging/index.js';
 
-/** Every launch field a draft has ever ledgered. A SUPERSET of the client's
- *  DraftAiField (web/src/components/sessions/draft-column.ts): since 2026-09-15
- *  new records carry only project/cwd (the draft column shows nothing else the
- *  user could override), but pinTier/priority/dates stay accepted and summarized
- *  because older records on disk carry them. */
+/** Every launch field a draft has ever ledgered. The client's DraftAiField
+ *  (web/src/components/sessions/draft-column.ts) must stay a subset; it has a
+ *  compile-time check for that. Since the visible-chips rules the draft column
+ *  applies and SHOWS tier, priority and start/due as chips the user can change,
+ *  so new records carry project, cwd, pinTier, priority, startDate and dueDate.
+ *  endDate is still accepted because older records carry it (it rode along with
+ *  a silently applied start) and new clients never send it: the user cannot
+ *  change it on its own, so "kept" would say nothing. */
 export const SUGGEST_FIELDS = [
   'project', 'cwd', 'pinTier', 'priority', 'dueDate', 'startDate', 'endDate',
 ] as const;
@@ -61,6 +64,20 @@ export interface SuggestEntry extends SuggestDiffEntry {
   verdict: SuggestVerdict;
 }
 
+/**
+ * The rule set live clients ledger under. Records are grouped by this tag
+ * because the same field name meant different things before: under the old
+ * rules pinTier was never applied and dates were applied without being shown,
+ * so "kept" there says nothing about a chip the user saw. A version tag beats a
+ * cutoff date: it travels with the code that wrote the record, so a skewed
+ * clock, a rollback, or an old window still open after a deploy cannot file a
+ * record under the wrong rules. Same literal as the client's
+ * SUGGEST_RULES_VERSION.
+ */
+export const SUGGEST_RULES_CURRENT = 'visible-chips-v1';
+/** byRules key for records written before clients sent a rules tag. */
+export const SUGGEST_RULES_LEGACY = 'legacy';
+
 /** One commit (a Start, or a "create task for later") worth of suggestions. */
 export interface SuggestRecord {
   at: string;
@@ -70,6 +87,9 @@ export interface SuggestRecord {
   surface: string;
   /** Composer length in characters. NEVER the text itself. */
   textLen?: number;
+  /** The client rule set that produced the suggestions (SUGGEST_RULES_CURRENT).
+   *  Absent on records written before the tag existed. */
+  rules?: string;
   entries: SuggestEntry[];
 }
 
@@ -82,12 +102,24 @@ export interface SuggestFieldStats {
   accuracy: number | null;
 }
 
-export interface SuggestAccuracySummary {
-  /** Commits that carried at least one suggestion. */
+/** Tallies for the records written under one rule set. */
+interface SuggestRulesGroup {
   commits: number;
-  /** Every field, always present — a field with no evidence reads as zeroes. */
   fields: Record<SuggestField, SuggestFieldStats>;
   overall: SuggestFieldStats;
+}
+
+export interface SuggestAccuracySummary {
+  /** Commits that carried at least one suggestion, under ANY rule set. */
+  commits: number;
+  /** Every field, always present (no evidence reads as zeroes). Counts only
+   *  records written under SUGGEST_RULES_CURRENT. */
+  fields: Record<SuggestField, SuggestFieldStats>;
+  overall: SuggestFieldStats;
+  /** Per-field stats for every rule set seen, keyed by its tag; untagged records
+   *  under 'legacy'. The current tag is always present (it equals `fields`), so a
+   *  reader never has to guard it. Same shape as the web client's type. */
+  byRules: Record<string, Record<SuggestField, SuggestFieldStats>>;
   /** Newest first, capped by the caller's `limit`. */
   recent: SuggestRecord[];
   /** First/last record timestamps, for "over what window is this measured". */
@@ -127,6 +159,8 @@ export async function recordSuggestDiff(input: {
   surface: string;
   entries: readonly SuggestDiffEntry[];
   textLen?: number;
+  /** Rule-set tag (SUGGEST_RULES_CURRENT); the route validates its shape. */
+  rules?: string;
   now?: Date;
 }): Promise<void> {
   const entries = input.entries
@@ -138,6 +172,7 @@ export async function recordSuggestDiff(input: {
     at: (input.now ?? new Date()).toISOString(),
     surface: input.surface,
     ...(typeof input.textLen === 'number' ? { textLen: input.textLen } : {}),
+    ...(typeof input.rules === 'string' && input.rules !== '' ? { rules: input.rules } : {}),
     entries,
   };
   const file = suggestAccuracyFile();
@@ -204,6 +239,18 @@ export async function readSuggestRecords(): Promise<SuggestRecord[]> {
   return out;
 }
 
+function emptyGroup(): SuggestRulesGroup {
+  return {
+    commits: 0,
+    fields: Object.fromEntries(SUGGEST_FIELDS.map((f) => [f, emptyStats()])) as Record<SuggestField, SuggestFieldStats>,
+    overall: emptyStats(),
+  };
+}
+
+function rulesKey(rec: SuggestRecord): string {
+  return typeof rec.rules === 'string' && rec.rules !== '' ? rec.rules : SUGGEST_RULES_LEGACY;
+}
+
 /**
  * Per-field accuracy over the whole retained ledger, plus the newest `limit`
  * records for a human to eyeball ("it said Walnut, I launched Fix Walnut").
@@ -211,34 +258,44 @@ export async function readSuggestRecords(): Promise<SuggestRecord[]> {
  * The verdict stored on disk WINS over recomputing it: the rule that classified a
  * record is the rule that was live when the user made the choice, and silently
  * re-judging old records under a new rule would make the number un-auditable.
+ * Same reason the top-level numbers read only SUGGEST_RULES_CURRENT records:
+ * older rule sets live in `byRules`, never blended into today's accuracy.
  */
 export async function summarizeSuggestAccuracy(limit = 20): Promise<SuggestAccuracySummary> {
   const records = await readSuggestRecords();
-  const fields = Object.fromEntries(
-    SUGGEST_FIELDS.map((f) => [f, emptyStats()]),
-  ) as Record<SuggestField, SuggestFieldStats>;
-  const overall = emptyStats();
+  // A Map, so a hostile tag read from disk can never land on a prototype.
+  const groups = new Map<string, SuggestRulesGroup>([[SUGGEST_RULES_CURRENT, emptyGroup()]]);
 
   for (const rec of records) {
+    const key = rulesKey(rec);
+    let group = groups.get(key);
+    if (!group) { group = emptyGroup(); groups.set(key, group); }
+    group.commits += 1;
     for (const entry of rec.entries) {
-      const stats = fields[entry.field];
-      if (!stats) continue;   // a field this build doesn't know — ignore, don't crash
+      // A field this build doesn't know: ignore, don't crash. hasOwn, so a
+      // corrupt line naming a prototype key cannot write through to Object.
+      if (!Object.hasOwn(group.fields, entry.field)) continue;
+      const stats = group.fields[entry.field];
       const verdict = entry.verdict ?? verdictFor(entry);
       stats[verdict] += 1;
       stats.total += 1;
-      overall[verdict] += 1;
-      overall.total += 1;
+      group.overall[verdict] += 1;
+      group.overall.total += 1;
     }
   }
-  for (const stats of [...Object.values(fields), overall]) {
-    stats.accuracy = stats.total > 0 ? stats.kept / stats.total : null;
+  for (const group of groups.values()) {
+    for (const stats of [...Object.values(group.fields), group.overall]) {
+      stats.accuracy = stats.total > 0 ? stats.kept / stats.total : null;
+    }
   }
 
+  const current = groups.get(SUGGEST_RULES_CURRENT)!;
   const bounded = Math.max(1, Math.min(limit, 100));
   return {
     commits: records.length,
-    fields,
-    overall,
+    fields: current.fields,
+    overall: current.overall,
+    byRules: Object.fromEntries([...groups].map(([key, group]) => [key, group.fields])),
     recent: records.slice(-bounded).reverse(),
     ...(records.length > 0 ? { since: records[0].at, until: records[records.length - 1].at } : {}),
   };

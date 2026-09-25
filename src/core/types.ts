@@ -24,6 +24,21 @@ export function isExternalImportTask(task: { tags?: string[] | undefined }): boo
 }
 export type TaskSource = string;
 
+/** Outcome of one quick-parse leg: answered, errored or timed out, or not run at all. */
+export type LegStatus = 'ok' | 'failed' | 'skipped';
+
+/**
+ * Which quick-parse legs answered. `classify` is the fast classifier leg (tier,
+ * priority, project); `dates` is the LLM leg (dates, and tier/priority when the
+ * classifier is not configured). Additive: a client that sees no `legs` must never
+ * read a missing field as "Walnut changed its mind", because a failed leg still
+ * answers 200 with fewer fields.
+ */
+export interface QuickTaskParseLegs {
+  classify: LegStatus;
+  dates: LegStatus;
+}
+
 export interface QuickTaskParse {
   title: string;
   due_date?: string;
@@ -37,6 +52,8 @@ export interface QuickTaskParse {
   /** True when `project` is a name the model invented (not in the known list) —
    *  the confirm UI badges it so the user knows a new project will be created. */
   project_is_new?: boolean;
+  /** Per-leg outcome of this parse (see QuickTaskParseLegs). Omitted by older servers. */
+  legs?: QuickTaskParseLegs;
 }
 
 // ── Pin tier routing policy ───────────────────────────────────────────────

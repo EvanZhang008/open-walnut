@@ -7,11 +7,12 @@
  *      the Personal AI. Now the fork renders on a bound draft too, and its Ask
  *      Walnut Start launches an Ask Walnut session ON that task (taskId in the
  *      payload; the task keeps its project; no second task).
- *   2. A draft had no "⋮": since the tier row left the column (2026-09-15) the
- *      only place to pin / date / prioritise before launching was the folder
- *      picker's footer. Now the header carries the same ⋮ a task row has — on a
- *      plain draft it edits the launch meta (DraftTaskMenu), on a bound draft it
- *      is the real task's kebab (live writes).
+ *   2. A draft had no place to pin / date / prioritise before launching except
+ *      the folder picker's footer. A BOUND draft's header carries the real task's
+ *      kebab (live writes). A plain draft has no header menu at all (2026-09-24):
+ *      its launch bar ends in `More`, which opens the same settings popover every
+ *      decision chip opens, and whatever is set there shows up as a chip. The Ask
+ *      Walnut tab gets a row with just More (and the chips of what the user set).
  *
  * House rules as the sibling draft specs: `page.goto('/')` is the initial load
  * only (loadHome), every later step is a real click, and every task probe is
@@ -20,8 +21,10 @@
 
 import { test, expect, type Page } from '@playwright/test'
 import {
-  basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftPanel, draftPanels,
-  draftProjectPill, loadHome, openDraftOnCwd, tasksTitled, watchForbiddenRequests,
+  basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip, draftDecisionChips,
+  draftMoreButton, draftPanel, draftPanels, draftProjectPill, draftTaskMenu, isoDay, loadHome, mockQuickParse,
+  openAskWalnutDrawer, openDraft, openDraftOnCwd, openDraftSettings, patchClientConfig, tasksTitled,
+  watchForbiddenRequests,
 } from './draft-helpers'
 import { expectTaskInTier, pinnedTierOf } from './draft-outcome-helpers'
 import { presetPanelView } from './todo-panel-helpers'
@@ -175,9 +178,15 @@ test('a bound draft\'s header ⋮ pins the REAL task without launching anything'
   // The header ⋮ appears once the task fetch lands (TaskQuickActions).
   const kebab = panel.locator('.session-panel-header .task-kebab-btn')
   await expect(kebab).toBeVisible({ timeout: 10_000 })
+  // C21: a bound draft's launch bar has no More and no decision chips (the task
+  // already exists; its truth is this kebab), and the header kept the real kebab.
+  await expect(draftMoreButton(panel)).toHaveCount(0)
+  await expect(panel.locator('.draft-decision-chip, .draft-decision-row')).toHaveCount(0)
+  await expect(panel.locator('.session-panel-header .draft-task-menu-btn')).toHaveCount(0)
   await kebab.click()
   const menu = page.locator('.task-kebab-menu')
   await expect(menu).toBeVisible()
+  await expect(page.locator('[data-testid="draft-task-menu"]')).toHaveCount(0)
   // The pin row shows the task's CURRENT tier lit — this is the real task's menu.
   await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Satellite/)
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/04-bound-draft-header.png` })
@@ -213,9 +222,9 @@ test('a bound draft\'s header ⋮ pins the REAL task without launching anything'
   expect((await fetchTask(page, taskId)).project).toBe('Ideas')
 })
 
-// ── 3. Plain draft ⋮ = launch meta; the created task lands with it ───────────
+// ── 3. Plain draft: no header menu; More ends the bar and edits the launch ────
 
-test('a plain draft\'s header ⋮ sets tier + unread on the launch meta, and the created task carries them', async ({ page }) => {
+test('a plain draft has no header ⋮; More ends the pills row, sets tier + unread as chips, and the created task carries them', async ({ page }) => {
   await page.setViewportSize({ width: 2400, height: 1000 })
   await presetPanelView(page, { section: 'all', project: '' })
   await loadHome(page)
@@ -223,47 +232,45 @@ test('a plain draft\'s header ⋮ sets tier + unread on the launch meta, and the
   const cwd = `${fixtureRoot}/projects/walnut`
   const panel = await openDraftOnCwd(page, cwd)
 
-  const kebab = panel.locator('.draft-task-menu-btn')
-  await expect(kebab).toBeVisible()
-  // Fresh draft: default meta, so the trigger is NOT lit.
-  await expect(kebab).not.toHaveClass(/active/)
-  await kebab.click()
-  const menu = page.locator('[data-testid="draft-task-menu"]')
-  await expect(menu).toBeVisible()
-  // Focus is the launcher default (DEFAULT_META) and shows as the lit tier.
-  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Focus/)
-  await panel.screenshot({ path: `${SCREENSHOT_DIR}/05-plain-draft-header.png` })
+  // C1: nothing in the header opens task settings any more.
+  const header = panel.locator('.session-panel-header')
+  await expect(header.locator('.draft-task-menu-btn')).toHaveCount(0)
+  await expect(header.locator('button[aria-label="Task settings"]')).toHaveCount(0)
+  // C2: More is the LAST element of the pills row, the button itself.
+  const last = await panel.locator('.draft-composer-bar').evaluate((bar) => {
+    const el = bar.lastElementChild as HTMLElement | null
+    return el ? { tag: el.tagName, cls: el.className, text: el.textContent?.trim(), label: el.getAttribute('aria-label'), popup: el.getAttribute('aria-haspopup') } : null
+  })
+  expect(last?.tag).toBe('BUTTON')
+  expect(last?.cls).toMatch(/\bdraft-more-btn\b/)
+  expect(last).toMatchObject({ text: 'More', label: 'Task settings', popup: 'dialog' })
+  // A fresh draft shows no decision chip at all (the default Focus is not drawn).
+  await expect(draftDecisionChips(panel)).toHaveCount(0)
+  await panel.screenshot({ path: `${SCREENSHOT_DIR}/05-plain-draft-more.png` })
+
+  const menu = await openDraftSettings(panel, 'more')
+  await expect(menu).toHaveAttribute('role', 'dialog')
+  await expect(menu).toHaveAttribute('aria-label', 'Task settings')
+  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveCount(0)
   await menu.screenshot({ path: `${SCREENSHOT_DIR}/05b-plain-draft-task-menu.png` })
 
-  // Unread first (the menu stays open for a toggle row), then Esc.
-  await menu.getByRole('button', { name: /Start marked unread/ }).click()
-  await expect(menu.getByRole('button', { name: /Starts unread/ })).toHaveAttribute('aria-pressed', 'true')
+  // Unread first: a toggle row, so the menu stays open and the chip appears at once.
+  await menu.getByRole('button', { name: /Start unread/ }).click()
+  await expect(menu).toBeVisible()
+  await expect(draftDecisionChip(panel, 'unread')).toHaveText(/Starts unread/)
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
-  // The trigger lights up: this draft now carries edits.
-  await expect(kebab).toHaveClass(/active/)
+  // More never lights up for edits: the edits are the chips.
+  await expect(draftMoreButton(panel)).not.toHaveClass(/draft-more-btn-active/)
 
-  // Clicking the lit tier unpins (same grammar as a task row).
-  await kebab.click()
-  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Focus' }).click()
-  await expect(menu).toHaveCount(0)
-  await kebab.click()
-  await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pin to')
-  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveCount(0)
-
-  // Re-pin from the unpinned state and Start IMMEDIATELY. The row kebab's grammar
-  // (pin now, set the tier 100ms later) would lose this race: the launch would
-  // read the unpinned meta and the late tier write would hit a draft that is
-  // already gone. A draft's pin is one synchronous meta write, so it can't.
-  // The composer is filled first so nothing sits between the pick and Start.
-  await page.keyboard.press('Escape')
+  // A tier pick is one synchronous meta write, so a Start right after it carries it.
   await draftComposer(page).fill(`land in backlog, unread ${Date.now()}`)
-  await kebab.click()
-  // The RESPONSE names the task the launch created (a quick-start task's title
-  // is a placeholder until the background namer runs, so the message text is
-  // not a handle to find it by).
-  const launched = page.waitForResponse((res) => res.request().method() === 'POST' && isQuickStart(res.url()))
+  await openDraftSettings(panel, 'more')
   await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Backlog' }).click()
+  await expect(menu).toHaveCount(0)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Backlog/)
+  await expect(draftDecisionChip(panel, 'pinTier').locator('.draft-ai-badge')).toHaveCount(0)
+  const launched = page.waitForResponse((res) => res.request().method() === 'POST' && isQuickStart(res.url()))
   await panel.locator('.draft-start-btn').click()
   const res = await launched
   expect(res.ok(), await res.text()).toBe(true)
@@ -278,4 +285,62 @@ test('a plain draft\'s header ⋮ sets tier + unread on the launch meta, and the
     .toBeVisible({ timeout: 30_000 })
   await expectTaskInTier(page, created, 'backlog')
   await expect.poll(async () => (await fetchTask(page, created)).unread, { timeout: 10_000 }).toBe(true)
+})
+
+// ── 4. Ask Walnut tab, Fix Walnut, and the chat slot ──────────────────────────
+
+test('the Ask Walnut tab gets a More-only row that never parses; Fix Walnut and the chat slot draft get neither', async ({ page }) => {
+  await page.setViewportSize({ width: 2400, height: 1000 })
+  await presetPanelView(page, { section: 'all', project: '' })
+  // Parse ON (page-local) so "the tab never parses" is a real claim, not the default.
+  await patchClientConfig(page, { quickParse: true })
+  const parse = await mockQuickParse(page, { pinTier: 'satellite', due_date: isoDay(3) })
+  await loadHome(page)
+
+  const panel = await openDraft(page)
+  await askWalnutCard(page).click()
+  await expect(panel.locator('.session-panel-title')).toHaveText('Ask Walnut')
+  // C1 on the tab: still no header settings button.
+  await expect(panel.locator('.session-panel-header .draft-task-menu-btn')).toHaveCount(0)
+  await expect(panel.locator('.session-panel-header button[aria-label="Task settings"]')).toHaveCount(0)
+  // C20: its own row, not the pills row, holding just More.
+  const row = panel.locator('.draft-launch-pills.draft-walnut-meta-row')
+  await expect(row).toBeVisible()
+  await expect(row).not.toHaveClass(/draft-composer-bar/)
+  await expect(panel.locator('.draft-composer-bar')).toHaveCount(0)
+  await expect(row.locator('button.draft-more-btn')).toHaveText('More')
+  await expect(row.locator('.draft-decision-chip')).toHaveCount(0)
+  await draftComposer(page).fill('plan my week around the marina launch by friday')
+  await page.waitForTimeout(1_200)
+  expect(parse.calls, 'typing on the Ask Walnut tab sends no quick-parse').toHaveLength(0)
+  await expect(panel.locator('.draft-ai-badge')).toHaveCount(0)
+
+  // A value set through More shows as a chip in the same row (W2).
+  const menu = await openDraftSettings(panel, 'more')
+  await menu.locator('.task-kebab-date-toggle').filter({ hasText: /Due/ }).click()
+  await menu.locator(`.dp-pill[title="${isoDay(1)}"]`).click()
+  await expect(draftTaskMenu(page)).toHaveCount(0)
+  await expect(draftDecisionChip(panel, 'dueDate')).toHaveText(/Due Tomorrow/)
+  await expect(draftDecisionChip(panel, 'dueDate')).not.toHaveClass(/draft-decision-chip-ai/)
+  await panel.screenshot({ path: `${SCREENSHOT_DIR}/06-ask-walnut-more-row.png` })
+  await panel.locator('.session-panel-close').click()
+  await expect(draftPanels(page)).toHaveCount(0)
+
+  // C22: the Fix Walnut repair draft has no More and no decision chips.
+  const drawer = await openAskWalnutDrawer(page)
+  await drawer.locator('[data-testid="ask-walnut-fix"]').click()
+  const fix = draftPanel(page)
+  await expect(fix).toBeVisible({ timeout: 20_000 })
+  await expect(fix.locator('.draft-more-btn')).toHaveCount(0)
+  await expect(fix.locator('.draft-decision-chip, .draft-decision-row, .draft-walnut-meta-row')).toHaveCount(0)
+  await fix.locator('.session-panel-close').click()
+  await expect(draftPanels(page)).toHaveCount(0)
+
+  // C22: the chat slot's fixed walnut draft has no row and no menu.
+  const drawer2 = await openAskWalnutDrawer(page)
+  await drawer2.locator('[data-testid="ask-walnut-new"]').click()
+  const slotDraft = page.locator('[data-testid="ask-walnut-draft"]')
+  await expect(slotDraft).toBeVisible({ timeout: 20_000 })
+  await expect(slotDraft.locator('.draft-more-btn, .draft-walnut-meta-row, .draft-decision-row')).toHaveCount(0)
+  await expect(slotDraft.locator('.draft-task-menu-btn')).toHaveCount(0)
 })

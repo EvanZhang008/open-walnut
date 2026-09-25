@@ -127,6 +127,16 @@ const GROUP_LABEL_SYSTEM =
   'Examples: "Login Flow", "Stream Parser Forks", "Onboarding Polish".';
 
 /**
+ * Offline group name: the LEAD title (callers pass it first), shortened. Joining
+ * every title read only its first few words, so a short lead bled into the next
+ * title: ["Bakery website", "Bakery site: home page"] became "Bakery Website
+ * Bakery Site".
+ */
+function groupHeuristicLabel(titles: string[]): string {
+  return heuristicLabel(titles[0] ?? '');
+}
+
+/**
  * Summarize a set of task titles into a short English group label. Mirrors
  * summarizeForkPrompt: cheap Haiku-tier call, best-effort, NEVER throws (returns
  * a heuristic label or '' so the caller can fall back to the lead task's title).
@@ -162,12 +172,12 @@ export async function summarizeGroupLabel(titles: string[], timeoutMs = 15_000):
 
     const label = normalizeLabel(text);
     if (label) return label;
-    return heuristicLabel(cleaned.join(' '));
+    return groupHeuristicLabel(cleaned);
   } catch (err) {
     log.web.warn('summarizeGroupLabel failed, using heuristic', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return heuristicLabel(cleaned.join(' '));
+    return groupHeuristicLabel(cleaned);
   }
 }
 

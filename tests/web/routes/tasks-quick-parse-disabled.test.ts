@@ -46,6 +46,8 @@ function createApp() {
 }
 
 const validBody = { timeZone: 'America/Los_Angeles' };
+// The gate never runs a leg, and says so, so the client cannot read its silence as "no opinion".
+const NO_LEGS = { classify: 'skipped', dates: 'skipped' };
 
 beforeEach(async () => {
   sendMessageMock.mockReset();
@@ -69,7 +71,7 @@ describe('POST /api/tasks/quick-parse — not opted in', () => {
       .send({ text: 'file my tax tomorrow at 10am pinned focus important', ...validBody });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ title: 'file my tax tomorrow at 10am pinned focus important' });
+    expect(res.body).toEqual({ title: 'file my tax tomorrow at 10am pinned focus important', legs: NO_LEGS });
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
@@ -90,7 +92,7 @@ describe('POST /api/tasks/quick-parse — not opted in', () => {
       .send({ text: 'call the dentist next tuesday', ...validBody });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ title: 'call the dentist next tuesday' });
+    expect(res.body).toEqual({ title: 'call the dentist next tuesday', legs: NO_LEGS });
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(buildProjectDigestMock).not.toHaveBeenCalled();
   });
@@ -100,7 +102,7 @@ describe('POST /api/tasks/quick-parse — not opted in', () => {
       .post('/api/tasks/quick-parse')
       .send({ text: 'book the Kyoto flights tomorrow 10am urgent', ...validBody });
 
-    expect(Object.keys(res.body)).toEqual(['title']);
+    expect(Object.keys(res.body)).toEqual(['title', 'legs']);
     expect(res.body).not.toHaveProperty('due_date');
     expect(res.body).not.toHaveProperty('project');
     expect(res.body).not.toHaveProperty('pinTier');
@@ -140,7 +142,7 @@ describe('POST /api/tasks/quick-parse — not opted in', () => {
       .send({ text: 'file my tax tomorrow', ...validBody });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ title: 'File my tax' });
+    expect(res.body).toEqual({ title: 'File my tax', legs: { classify: 'skipped', dates: 'ok' } });
     expect(sendMessageMock).toHaveBeenCalledOnce();
     expect(buildProjectDigestMock).toHaveBeenCalledOnce();
   });

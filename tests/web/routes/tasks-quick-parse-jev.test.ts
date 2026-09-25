@@ -126,6 +126,7 @@ describe('POST /api/tasks/quick-parse with Jev (CLI provider: no spawn)', () => 
       pinTier: 'focus',
       priority: 'immediate',
       project: 'walnut',
+      legs: { classify: 'ok', dates: 'skipped' },
     });
     // The whole point: no `claude -p` (sendMessage) spawn on the CLI provider.
     expect(sendMessageMock).not.toHaveBeenCalled();
@@ -146,7 +147,7 @@ describe('POST /api/tasks/quick-parse with Jev (CLI provider: no spawn)', () => 
       .send({ text: 'call the bank asap', ...validBody });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ title: 'call the bank asap' });
+    expect(res.body).toEqual({ title: 'call the bank asap', legs: { classify: 'failed', dates: 'skipped' } });
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });
