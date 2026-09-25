@@ -979,9 +979,27 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     }
   }
   const skipEnqueueIndices = new Set<number>();
+  // ── Removed pass (runs first) ──
+  // A queued message the CLI dropped before running it (a Stop with cancel_queued,
+  // Esc in the CLI's own UI) logs `remove` with the same content and never gets a
+  // user line, so it was never part of the conversation: its enqueue must not become
+  // a Pattern B row. First, so a resend of the same text keeps its own twin.
+  for (let i = 0; i < rawMessages.length; i++) {
+    const raw = rawMessages[i];
+    if (raw.type !== 'queue-operation' || raw.operation !== 'remove' || !raw.content) continue;
+    for (let j = i - 1; j >= 0; j--) {
+      const e = rawMessages[j];
+      if (e.type === 'queue-operation' && e.operation === 'enqueue' && e.content === raw.content
+        && !skipEnqueueIndices.has(j)) {
+        skipEnqueueIndices.add(j);
+        break;
+      }
+    }
+  }
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
     if (raw.type !== 'queue-operation' || raw.operation !== 'enqueue' || !raw.content) continue;
+    if (skipEnqueueIndices.has(i)) continue;
     // Claim the earliest not-yet-claimed real user line within the lookahead window whose
     // text matches. Found → Pattern A (skip enqueue). None → Pattern B (emit synthetic msg).
     const wanted = raw.content.trim();

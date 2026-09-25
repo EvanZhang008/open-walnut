@@ -168,6 +168,21 @@ describe('golden 7 — error result and dead process', () => {
     expect(alive.lastResult?.isError).toBe(true)
   })
 
+  it('a stopped turn (aborted terminal_reason) settles on its idle as a normal turn, not an error', () => {
+    // CLI 2.1.280 after an interrupt control_request: the result is is_error with
+    // terminal_reason aborted_streaming (aborted_tools mid-tool), then idle. The CLI's
+    // own error test excludes both reasons; reading is_error alone showed a red Error.
+    for (const reason of ['aborted_streaming', 'aborted_tools']) {
+      const aborted = line({ type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: reason, num_turns: 2 })
+      const pending = fold([userLine(), userLine('[Request interrupted by user]'), aborted])
+      expect(pending.turnActive).toBe(true)
+      const s = fold([userLine(), userLine('[Request interrupted by user]'), aborted, stateLine('idle')])
+      expect(s.turnActive).toBe(false)
+      expect(snap(s).cliState).toBe('idle')
+      expect(snap(s).lastResult?.isError).toBe(false)
+    }
+  })
+
   it('dead + nonzero exit → dead snapshot carrying the error result', () => {
     const s = fold([userLine(), resultLine(true)])
     const dead = snap(s, { dead: true, pid: null, exitCode: 1 })

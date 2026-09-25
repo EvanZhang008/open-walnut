@@ -12,7 +12,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
-import { getSessionByClaudeId, getSessionsForTask } from '../../src/core/session-tracker.js'
+import { getSessionByClaudeId, getSessionsForTask, updateSessionRecord } from '../../src/core/session-tracker.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -139,7 +139,16 @@ async function waitForStreamedText(sid: string, atLeast: number): Promise<void> 
   await waitUntil(() => streamedDeltas(sid) >= atLeast, 15000, `${atLeast} streamed text delta(s)`)
 }
 
-const TASKS = ['001', '002', '003', '004', '005', '006', '007', '008', '009']
+/** After a process-level stop the next message still gets answered (cold --resume). */
+async function expectFollowUpAnswered(ws: WebSocket, sid: string, text: string): Promise<void> {
+  await waitUntil(async () => (await getSessionByClaudeId(sid))?.process_status !== 'running', 10000, 'record left running')
+  const answer = waitForWsEvent(ws, 'session:result', (d) => d.sessionId === sid && String(d.result ?? '').includes(text), 20000)
+  expect((await sendWsRpc(ws, 'session:send', { sessionId: sid, message: `snapshot-clean-turn:${text}` })).ok).toBe(true)
+  expect((await answer).data!.isError).toBe(false)
+  expect(daemonCmds(sid, 'start')).toBe(2)
+}
+
+const TASKS = ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012']
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -337,14 +346,18 @@ describe('turn stop keeps the CLI process alive', () => {
     try {
       const sid = await startLongTurn(ws, 'int-alive-006', 'snapshot-long-turn:60000:text')
       await waitForStreamedText(sid, 1)
+      await updateSessionRecord(sid, { pendingResumeSessionAt: 'rewind-anchor-uuid' })
       // The pipe is gone (reader died): sendRaw answers ENXIO, exactly like the real daemon.
       daemon.injectSendFault(sid, 'ENXIO')
       const stopRes = await sendWsRpc(ws, 'session:interrupt', { sessionId: sid })
       expect(stopRes.ok).toBe(true)
       // The user must still be able to stop: the hard path asks the daemon to stop the process.
       await waitUntil(() => daemonCmds(sid, 'stop') >= 1, 10000, 'daemon stop on fallback')
+      // The stopped turn wrote its lines, so the cold resume must not rewind past them.
+      await waitUntil(async () => (await getSessionByClaudeId(sid))?.pendingResumeSessionAt === undefined, 5000, 'rewind anchor cleared')
       const raws = daemon.getCommandHistoryFor('sendRaw').filter((c) => c.payload.sid === sid)
       expect(raws.some((c) => String(c.payload.raw).includes('"subtype":"interrupt"'))).toBe(true)
+      await expectFollowUpAnswered(ws, sid, 'after the fallback stop')
     } finally {
       ws.close()
     }
@@ -402,8 +415,94 @@ describe('turn stop keeps the CLI process alive', () => {
         .filter((c) => c.payload.sid === sid && String(c.payload.raw).includes('"subtype":"interrupt"'))
       // Exactly one control_request: the escalation did not ask the CLI again.
       expect(interrupts).toHaveLength(1)
+      await expectFollowUpAnswered(ws, sid, 'after the escalated stop')
     } finally {
       ws.close()
     }
   }, 40000)
+
+  it('a message queued behind the running turn is cancelled with it and handed back, not run after the Stop', async () => {
+    const ws = await connectWs()
+    try {
+      const sid = await startLongTurn(ws, 'int-alive-010', 'snapshot-long-turn:60000:text')
+      await waitForStreamedText(sid, 1)
+      const results = collectWsEvents(ws, 'session:result', sid)
+      const handedBack = collectWsEvents(ws, 'session:queued-cancelled', sid)
+      // Sent mid-turn (a plain composer send, no client uuid): it reaches the CLI's
+      // own queue and waits behind the turn.
+      const sent = await sendWsRpc(ws, 'session:send', { sessionId: sid, message: 'snapshot-clean-turn:queued behind the turn' })
+      expect(sent.ok).toBe(true)
+      const queuedId = (sent.payload as { messageId: string }).messageId
+      await waitUntil(() => daemonCmds(sid, 'send') >= 1, 10000, 'queued message written to the CLI')
+      // Walnut names the line itself, so the CLI can list it when the Stop cancels it.
+      const queuedUuid = daemon.getCommandHistoryFor('send').find((c) => c.payload.sid === sid)?.payload.uuid
+      expect(typeof queuedUuid).toBe('string')
+
+      expect((await sendWsRpc(ws, 'session:interrupt', { sessionId: sid })).ok).toBe(true)
+      await waitUntil(() => results.frames.length >= 1, 10000, 'interrupted result')
+      const request = daemon.getCommandHistoryFor('sendRaw')
+        .map((c) => JSON.parse(String(c.payload.raw)) as { request?: Record<string, unknown> })
+        .find((raw) => raw.request?.subtype === 'interrupt')
+      expect(request?.request).toEqual({ subtype: 'interrupt', cancel_queued: true })
+      expect(fsSync.readFileSync(daemon.streamFilePath(sid), 'utf8')).toContain(`"cancelled":["${queuedUuid}"]`)
+      // Handed back to the composer exactly once (lifecycle frame and receipt both name it).
+      await waitUntil(() => handedBack.frames.length >= 1, 5000, 'queued message handed back')
+      await delay(1500)
+      handedBack.stop()
+      expect(handedBack.frames.map((f) => f.data)).toEqual([{
+        sessionId: sid, messageIds: [queuedId], messages: [expect.stringContaining('snapshot-clean-turn:queued behind the turn')],
+      }])
+      expect(results.frames.map((f) => String(f.data?.result ?? ''))).not.toContain('queued behind the turn')
+
+      const next = waitForWsEvent(ws, 'session:result', (d) => d.sessionId === sid && String(d.result ?? '').includes('after the cancelled queue'), 15000)
+      expect((await sendWsRpc(ws, 'session:send', { sessionId: sid, message: 'snapshot-clean-turn:after the cancelled queue' })).ok).toBe(true)
+      await next
+      results.stop()
+      expect(results.frames.map((f) => (f.data?.interrupted ? 'interrupted' : String(f.data?.result ?? ''))))
+        .toEqual(['interrupted', 'after the cancelled queue'])
+      expect(daemonCmds(sid, 'stop')).toBe(0)
+      expect(daemonCmds(sid, 'start')).toBe(1)
+    } finally {
+      ws.close()
+    }
+  }, 40000)
+
+  it('Stop on a settled turn whose background command still runs stops the process', async () => {
+    const ws = await connectWs()
+    try {
+      const first = waitForWsEvent(ws, 'session:result', (d) => d.taskId === 'int-alive-011', 15000)
+      const res = await sendWsRpc(ws, 'session:start', {
+        taskId: 'int-alive-011', message: 'backgrounded-test', project: 'Walnut', mode: 'bypass', model: 'opus',
+      })
+      expect(res.ok).toBe(true)
+      const sid = (await first).data!.sessionId as string
+      // The turn is over but the detached command keeps the session running.
+      await waitUntil(async () => (await getSessionByClaudeId(sid))?.activity === 'Background command running', 5000, 'background command running')
+      expect((await getSessionByClaudeId(sid))!.process_status).toBe('running')
+
+      expect((await sendWsRpc(ws, 'session:interrupt', { sessionId: sid })).ok).toBe(true)
+      await waitUntil(() => daemonCmds(sid, 'stop') >= 1, 5000, 'process stop')
+      // No turn to abort, so no interrupt request: the command only ends with the process.
+      expect(daemon.getCommandHistoryFor('sendRaw').filter((c) =>
+        c.payload.sid === sid && String(c.payload.raw).includes('"subtype":"interrupt"'))).toHaveLength(0)
+      await expectFollowUpAnswered(ws, sid, 'after stopping the background command')
+    } finally {
+      ws.close()
+    }
+  }, 40000)
+
+  it('Stop closes a pending rewind window: the stopped turn already wrote its lines', async () => {
+    const ws = await connectWs()
+    try {
+      const sid = await startLongTurn(ws, 'int-alive-012', 'snapshot-long-turn:60000:text')
+      await updateSessionRecord(sid, { pendingResumeSessionAt: 'rewind-anchor-uuid' })
+      const aborted = waitForWsEvent(ws, 'session:result', (d) => d.sessionId === sid && d.interrupted === true, 10000)
+      expect((await sendWsRpc(ws, 'session:interrupt', { sessionId: sid })).ok).toBe(true)
+      await aborted
+      await waitUntil(async () => (await getSessionByClaudeId(sid))?.pendingResumeSessionAt === undefined, 5000, 'rewind anchor cleared')
+      expect(daemonCmds(sid, 'stop')).toBe(0)
+    } finally {
+      ws.close()
+    }
+  }, 30000)
 })

@@ -386,6 +386,16 @@ export interface SessionMessagesDeliveredEvent {
   messageIds?: string[];
 }
 
+/** Messages the CLI had queued behind a running turn and dropped when the user
+ *  stopped it (like Esc in Claude Code, which puts them back in the input). */
+export interface SessionQueuedCancelledEvent {
+  sessionId: string;
+  /** Queue ids (`qm-…`) of the dropped messages, oldest first. */
+  messageIds: string[];
+  /** Their text as queued, one entry per id (send wrappers included). */
+  messages: string[];
+}
+
 export interface SessionBatchCompletedEvent {
   sessionId: string;
   count: number;
@@ -1092,6 +1102,7 @@ export interface EventPayloadMap {
   'session:unknown-event': SessionUnknownEventPayload;
   'session:status-changed': SessionStatusChangedEvent;
   'session:messages-delivered': SessionMessagesDeliveredEvent;
+  'session:queued-cancelled': SessionQueuedCancelledEvent;
   'session:batch-completed': SessionBatchCompletedEvent;
   'session:batch-failed': SessionBatchFailedEvent;
   'session:message-queued': SessionMessageQueuedEvent;

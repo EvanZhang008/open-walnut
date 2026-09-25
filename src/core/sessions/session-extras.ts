@@ -470,15 +470,13 @@ export async function executeCompactSession(
     throw new SessionControlError('Could not find session JSONL file. Use /execute instead.', 400);
   }
 
-  // Stop the session process if alive (must stop before JSONL injection).
+  // Stop the session process if alive (must stop before JSONL injection): a live CLI
+  // keeps its history in memory and would never load the injected boundary.
   if (sourceRecord.process_status !== 'stopped') {
     log.web.info('execute-compact: stopping session process before injection', { planSessionId: actualPlanSessionId });
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
     const liveSession = sessionRunner.findByClaudeId(actualPlanSessionId);
-    if (liveSession) {
-      liveSession.interrupt();
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
+    if (liveSession) await liveSession.stopProcess();
   }
 
   // Inject compact boundary + plan summary into the JSONL.

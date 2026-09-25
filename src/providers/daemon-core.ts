@@ -1747,8 +1747,12 @@ export function parseTurnErrorLine(line: string): { isTurnError: boolean; text: 
     return { isTurnError: false, text: null }
   }
   try {
-    const parsed = JSON.parse(line) as { type?: string; is_error?: boolean; result?: unknown }
+    const parsed = JSON.parse(line) as { type?: string; is_error?: boolean; result?: unknown; terminal_reason?: unknown }
     if (parsed.type !== 'result' || parsed.is_error !== true) return { isTurnError: false, text: null }
+    // A stopped turn is not a failed one: the CLI's own error test excludes these reasons.
+    if (parsed.terminal_reason === 'aborted_streaming' || parsed.terminal_reason === 'aborted_tools') {
+      return { isTurnError: false, text: null }
+    }
     return { isTurnError: true, text: typeof parsed.result === 'string' ? parsed.result : null }
   } catch {
     return { isTurnError: false, text: null }

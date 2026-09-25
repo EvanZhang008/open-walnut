@@ -71,6 +71,7 @@ export const EventNames = {
   SESSION_UNKNOWN_EVENT: 'session:unknown-event',
   SESSION_STATUS_CHANGED: 'session:status-changed',
   SESSION_MESSAGES_DELIVERED: 'session:messages-delivered',
+  SESSION_QUEUED_CANCELLED: 'session:queued-cancelled',
   SESSION_BATCH_COMPLETED: 'session:batch-completed',
   SESSION_BATCH_FAILED: 'session:batch-failed',
   SESSION_MESSAGE_QUEUED: 'session:message-queued',

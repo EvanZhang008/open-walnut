@@ -212,6 +212,20 @@ describe('foldSessionTail — turn-end evidence semantics', () => {
     expect(fold.workStatus).toBe('error')
   })
 
+  it('a stopped turn (aborted terminal_reason) is not an error: it settles on its idle', () => {
+    // CLI 2.1.280 stream shape after an interrupt control_request (live run 2026-09-25).
+    const aborted = JSON.stringify({
+      type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'aborted_streaming',
+      num_turns: 2, session_id: sid, errors: ['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null'],
+    })
+    const marker = JSON.stringify({ type: 'user', session_id: sid, message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
+    const open = foldSessionTail([initEvent(sid), userEvent(sid), marker, aborted].join('\n'))
+    expect(open.turnEnded).toBe(false)
+    const settled = foldSessionTail([initEvent(sid), userEvent(sid), marker, aborted, stateEvent(sid, 'idle')].join('\n'))
+    expect(settled.turnEnded).toBe(true)
+    expect(settled.workStatus).toBe('agent_complete')
+  })
+
   it('user message AFTER the result re-anchors the fold → no verdict (turn in progress)', () => {
     const fold = foldSessionTail([
       initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle'),

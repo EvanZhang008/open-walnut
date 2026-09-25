@@ -163,8 +163,9 @@ test('Stop mid-stream keeps the process: no error banner, follow-up streams with
   const composer = panel.locator('.chat-input-textarea')
   await composer.fill('snapshot-clean-turn:after the stop')
   await composer.press('Enter')
-  await expect(panel.getByText('after the stop', { exact: false }).last()).toBeVisible({ timeout: 20_000 })
-  await expect.poll(() => sessionRecord(page, sessionId).then((r) => r.process_status), { timeout: 10_000 }).toBe('idle')
+  // Exact text: the answer, not the user bubble that carries the mode prefix.
+  await expect(panel.getByText('after the stop', { exact: true })).toBeVisible({ timeout: 20_000 })
+  await expect.poll(() => sessionRecord(page, sessionId).then((r) => r.status_reason), { timeout: 10_000 }).toBe('turn_completed')
   const afterFollowUp = await sessionRecord(page, sessionId)
   expect(afterFollowUp.pid).toBe(pidBefore)
   expect(afterFollowUp.errorMessage).toBeUndefined()
@@ -192,8 +193,8 @@ test('three Stop rounds in a row on one process', async ({ page }) => {
   const composer = panel.locator('.chat-input-textarea')
   await composer.fill('snapshot-clean-turn:round three done')
   await composer.press('Enter')
-  await expect(panel.getByText('round three done', { exact: false }).last()).toBeVisible({ timeout: 20_000 })
-  await expect.poll(() => sessionRecord(page, sessionId).then((r) => r.process_status), { timeout: 10_000 }).toBe('idle')
+  await expect(panel.getByText('round three done', { exact: true })).toBeVisible({ timeout: 20_000 })
+  await expect.poll(() => sessionRecord(page, sessionId).then((r) => r.status_reason), { timeout: 10_000 }).toBe('turn_completed')
   expect((await sessionRecord(page, sessionId)).pid).toBe(pidBefore)
   expect(await resumingSightings(page)).toBe(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/04-three-rounds-same-process.png` })
@@ -219,6 +220,52 @@ test('Stop preserves a dense partial answer and a Unicode follow-up', async ({ p
   await page.screenshot({ path: `${SCREENSHOT_DIR}/07-dense-partial-preserved.png` })
 })
 
+test('Stop also cancels a message sent while the turn was running and hands its text back', async ({ page }) => {
+  test.setTimeout(90_000)
+  const { sessionId, panel } = await startLongTurnFromDraft(page)
+  await armResumingWatch(page)
+  const pidBefore = (await sessionRecord(page, sessionId)).pid
+  expect(pidBefore).toBeTruthy()
+
+  // Sent mid-turn, the message waits in the CLI's queue behind the running turn.
+  const composer = panel.locator('.chat-input-textarea')
+  await composer.fill('snapshot-clean-turn:sent while running')
+  await composer.press('Enter')
+  await expect(panel.getByText('sent while running', { exact: false }).first()).toBeVisible({ timeout: 10_000 })
+  await expect(stopButton(panel)).toBeVisible()
+  await stopButton(panel).click()
+
+  await expect.poll(() => sessionRecord(page, sessionId).then((r) => r.status_reason), { timeout: 10_000 })
+    .toBe('turn_interrupted')
+  // The Stop covered the queued message too: it never gets an answer. Like Esc in
+  // Claude Code, its text is back in the input and its "Delivered" bubble is gone.
+  await expect(composer).toHaveValue('snapshot-clean-turn:sent while running', { timeout: 5_000 })
+  await expect(panel.locator('.session-msg-delivered-badge')).toHaveCount(0)
+  // Scoped to the conversation: the fixture's auto-title can also carry the text.
+  await expect(panel.locator('.session-history').getByText('sent while running', { exact: false })).toHaveCount(0)
+  await page.waitForTimeout(1500)
+  expect((await sessionRecord(page, sessionId)).process_status).toBe('idle')
+  await expect(panel.locator('.session-error-banner')).toHaveCount(0)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/08-queued-message-cancelled.png` })
+
+  await composer.fill('snapshot-clean-turn:after the cancelled message')
+  await composer.press('Enter')
+  await expect(panel.getByText('after the cancelled message', { exact: true })).toBeVisible({ timeout: 20_000 })
+  await expect.poll(() => sessionRecord(page, sessionId).then((r) => r.status_reason), { timeout: 10_000 }).toBe('turn_completed')
+  const rec = await sessionRecord(page, sessionId)
+  expect(rec.pid).toBe(pidBefore)
+  expect(await resumingSightings(page)).toBe(0)
+  // Stored history agrees with the screen: the follow-up got an answer, the cancelled
+  // message did not.
+  const history = await page.request.get(`/api/sessions/${sessionId}/history`)
+  expect(history.ok()).toBe(true)
+  const answers = ((await history.json()) as { messages: Array<{ role: string; text?: string; content?: unknown }> }).messages
+    .filter((m) => m.role === 'assistant').map((m) => JSON.stringify(m))
+  expect(answers.some((a) => a.includes('after the cancelled message'))).toBe(true)
+  expect(answers.some((a) => a.includes('sent while running'))).toBe(false)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/09-follow-up-after-cancelled-message.png` })
+})
+
 test('"Interrupt & send" from the split menu replaces the turn on the same process', async ({ page }) => {
   test.setTimeout(90_000)
   const { sessionId, panel } = await startLongTurnFromDraft(page)
@@ -234,7 +281,7 @@ test('"Interrupt & send" from the split menu replaces the turn on the same proce
   await page.screenshot({ path: `${SCREENSHOT_DIR}/05-split-menu-open.png` })
   await page.getByRole('menuitem', { name: 'Interrupt & send' }).click()
 
-  await expect(panel.getByText('replacement question', { exact: false }).last()).toBeVisible({ timeout: 20_000 })
+  await expect(panel.getByText('replacement question', { exact: true })).toBeVisible({ timeout: 20_000 })
   await expect.poll(() => sessionRecord(page, sessionId).then((r) => r.process_status), { timeout: 10_000 }).toBe('idle')
   const rec = await sessionRecord(page, sessionId)
   expect(rec.pid).toBe(pidBefore)

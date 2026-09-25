@@ -412,6 +412,8 @@ export class MockDaemon {
     })
 
     this.sessions.set(sid, session)
+    // Like the real daemon's registry, a fresh spawn (a cold --resume) replaces the dead entry.
+    this._deadSessions.delete(sid)
 
     // Start polling JSONL file for new lines
     session.pollTimer = setInterval(() => {
@@ -492,9 +494,11 @@ export class MockDaemon {
 
     // 3. Normal path — write to FIFO
     try {
+      // Same envelope as daemon-core: the pre-assigned uuid rides the line when set.
       const payload = JSON.stringify({
         type: 'user',
         message: { role: 'user', content: message },
+        ...(typeof cmd.uuid === 'string' ? { uuid: cmd.uuid } : {}),
       })
       const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
       fs.writeSync(fd, Buffer.from(payload + '\n'))

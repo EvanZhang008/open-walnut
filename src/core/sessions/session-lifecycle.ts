@@ -552,7 +552,7 @@ export interface TerminateResult { status: 'terminated' | 'pending'; sessionId: 
 /**
  * Close the CLI process, full stop. No respawn, no queue drain, no error
  * banner — the intentional kill is suppressed via the live session's
- * interrupt() (sets resultEmitted so the daemon's reap isn't surfaced as
+ * stopProcess() (sets resultEmitted so the daemon's reap isn't surfaced as
  * "exited with code -1"). Pending messages stay in the queue.
  */
 export async function terminateSession(
@@ -608,8 +608,8 @@ export async function terminateSession(
   }
   const live = sessionRunner.findSessionByClaudeId(sessionId);
   if (live) {
-    log.session.info('session terminate: interrupting live session', { sessionId, host: record.host });
-    await live.interrupt();
+    log.session.info('session terminate: stopping live session process', { sessionId, host: record.host });
+    await live.stopProcess();
   } else {
     const { getRegisteredSessionManager } = await import('../../providers/session-manager.js');
     const mgr = getRegisteredSessionManager(sessionId);

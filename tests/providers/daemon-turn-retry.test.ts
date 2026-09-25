@@ -114,6 +114,13 @@ describe('parseTurnErrorLine', () => {
     })
   })
 
+  it('ignores a stopped turn: the CLI does not count aborted_streaming or aborted_tools as errors', () => {
+    for (const reason of ['aborted_streaming', 'aborted_tools']) {
+      const line = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: reason })
+      expect(parseTurnErrorLine(line).isTurnError).toBe(false)
+    }
+  })
+
   it('ignores a clean result', () => {
     const line = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'done' })
     expect(parseTurnErrorLine(line).isTurnError).toBe(false)

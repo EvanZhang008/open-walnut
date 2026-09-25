@@ -2422,6 +2422,9 @@ describe('turn-error auto-retry daemon-core vs daemon-source parity', () => {
       expect(body).toMatch(/"is_error":true/)
       expect(body).toMatch(/is_error !== true/)
       expect(body).not.toMatch(/subtype ===/)
+      // A user Stop is not a failed turn in either twin.
+      expect(body).toMatch(/aborted_streaming/)
+      expect(body).toMatch(/aborted_tools/)
     }
   })
 

@@ -101,6 +101,14 @@ let onControlResponse = null;
 // listener ACKs every `interrupt` control_request like the real CLI does; only a
 // mode that registered this hook then emits the aborted-turn sequence.
 let onInterrupt = null;
+// User lines that arrive while a turn is in flight. The real CLI queues each and runs
+// it after the turn; an interrupt with cancel_queued drops them and lists their uuids
+// under `cancelled`, one without lists them under `still_queued` and they still run
+// (live probe, CLI 2.1.280).
+const queuedUserLines = [];
+// The partial answer a long turn has streamed so far. On an interrupt the real CLI
+// consolidates it into an `assistant` message before its interrupted marker.
+let streamedPartial = null;
 
 // When --input-format stream-json is used, read the message from stdin (FIFO pipe).
 // The real CLI reads JSON lines like: {"type":"user","message":{"role":"user","content":"..."}}
@@ -181,9 +189,15 @@ if (inputFormat === 'stream-json') {
           // CLI 2.1.258 (live probe): the ACK is immediate and unconditional —
           // an idle CLI answers it too and emits nothing else. Only a mode with a
           // turn in flight (onInterrupt registered) then plays the abort sequence.
+          const uuids = queuedUserLines.map((q) => q.uuid).filter(Boolean);
+          const cancel = parsed.request.cancel_queued === true;
+          if (cancel) {
+            queuedUserLines.length = 0;
+            for (const uuid of uuids) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: uuid, state: 'cancelled', session_id: outputSessionId }) + '\n');
+          }
           process.stdout.write(JSON.stringify({
             type: 'control_response',
-            response: { subtype: 'success', request_id: parsed.request_id, response: { still_queued: [] } },
+            response: { subtype: 'success', request_id: parsed.request_id, response: cancel ? { still_queued: [], cancelled: uuids } : { still_queued: uuids } },
           }) + '\n');
           if (onInterrupt) { const abort = onInterrupt; onInterrupt = null; abort(); }
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'apply_flag_settings') {
@@ -237,6 +251,9 @@ if (inputFormat === 'stream-json') {
           const resolve = pendingUserResolve;
           pendingUserResolve = null;
           resolve(typeof c === 'string' ? c : JSON.stringify(c));
+        } else if (parsed.type === 'user' && parsed.message?.content !== undefined && onInterrupt) {
+          queuedUserLines.push(parsed);
+          if (parsed.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: parsed.uuid, state: 'queued', session_id: outputSessionId }) + '\n');
         } else if (parsed.type === 'user' && parsed.message?.content !== undefined && onUserLine) {
           const c = parsed.message.content;
           onUserLine(typeof c === 'string' ? c : JSON.stringify(c));
@@ -373,16 +390,28 @@ if (outputFormat === 'stream-json') {
       computeMessageParts();
       emitRemainingEvents();
     };
+    const queued = queuedUserLines.shift();
+    if (queued) {
+      if (queued.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: queued.uuid, state: 'started', session_id: outputSessionId }) + '\n');
+      const c = queued.message.content;
+      setTimeout(() => onUserLine?.(typeof c === 'string' ? c : JSON.stringify(c)), 0);
+    }
   }
-  // The aborted-turn tail of CLI 2.1.258 (live probe 2026-09-11), emitted AFTER
-  // the stdin listener's ACK: the CLI-inserted user line, an is_error result with
-  // only an [ede_diagnostic] error and no text, then idle. The process then arms
-  // the next FIFO user line as a new turn — it never exits on an interrupt.
+  // The aborted-turn tail of CLI 2.1.258 (live probe 2026-09-11; 2.1.280 on
+  // 2026-09-25), emitted AFTER the stdin listener's ACK: the streamed partial as a
+  // consolidated assistant message, the CLI-inserted user line, an is_error result
+  // (terminal_reason aborted_streaming) with only an [ede_diagnostic] error and no
+  // text, then idle. The process then arms the next FIFO user line as a new turn:
+  // it never exits on an interrupt.
   function emitAbortedTurnTail() {
     const sid = outputSessionId;
     const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+    if (streamedPartial) {
+      emit({ type: 'assistant', message: { id: streamedPartial.msgId, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: streamedPartial.text }], stop_reason: null, usage: { input_tokens: 10, output_tokens: 0 } }, session_id: sid, parent_tool_use_id: null });
+      streamedPartial = null;
+    }
     emit({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] }, session_id: sid, parent_tool_use_id: null });
-    emit({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 300, duration_api_ms: 250, num_turns: 2, stop_reason: null, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 10, output_tokens: 0 }, errors: ['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null'] });
+    emit({ type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'aborted_streaming', duration_ms: 300, duration_api_ms: 250, num_turns: 2, stop_reason: null, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 10, output_tokens: 0 }, errors: ['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null'] });
     emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
     armSnapshotNextTurn();
   }
@@ -502,7 +531,7 @@ if (outputFormat === 'stream-json') {
     //         behaves and it keeps an E2E to one CLI process for several turns.
     if (effectiveMessage === 'snapshot-clean-turn' || effectiveMessage.startsWith('snapshot-clean-turn:')) {
       const text = effectiveMessage.includes(':')
-        ? effectiveMessage.split('\n\n[Rich output mode enabled')[0].split(':').slice(1).join(':')
+        ? effectiveMessage.split('\n\n[Rich output mode')[0].split(':').slice(1).join(':')
         : 'Clean turn done; process stays alive.';
       const sid = outputSessionId;
       const emit = (line) => {
@@ -571,9 +600,11 @@ if (outputFormat === 'stream-json') {
         emit(wrap({ type: 'message_start', message: { id: msgId, role: 'assistant', content: [], model: 'mock-model', usage: { input_tokens: 10, output_tokens: 0 } } }));
         emit(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
         emit(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: partialText } }));
+        streamedPartial = { msgId, text: partialText };
       }
       const natural = setTimeout(() => {
         onInterrupt = null;
+        streamedPartial = null;
         const text = `Long turn ${seq} ran to completion.`;
         emit({ type: 'assistant', message: { id: `msg_long_done_${seq}`, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }, session_id: sid });
         emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: holdMs, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });

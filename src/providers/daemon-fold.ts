@@ -415,8 +415,11 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     next.followupResult = notification && next.sawNormalResult
     if (!notification) next.sawNormalResult = true
     const numTurns = parsed.num_turns
+    // A stopped turn (interrupt, or the CLI preempting it for a follow-up) ends in an
+    // is_error result, but the CLI's own error test excludes these terminal reasons.
+    const aborted = parsed.terminal_reason === 'aborted_streaming' || parsed.terminal_reason === 'aborted_tools'
     next.lastResult = {
-      isError: parsed.is_error === true,
+      isError: parsed.is_error === true && !aborted,
       ...(typeof numTurns === 'number' ? { numTurns } : {}),
       endOffset: lineEndV,
     }

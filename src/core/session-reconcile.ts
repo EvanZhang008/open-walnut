@@ -420,8 +420,10 @@ export function foldSessionTail(
       const notification = (parsed.origin as { kind?: string } | undefined)?.kind === 'task-notification'
       followupResult = notification && sawNormalResult
       if (!notification) sawNormalResult = true
+      // Same aborted-turn rule as daemon-fold: a stopped turn is not an error.
+      const aborted = parsed.terminal_reason === 'aborted_streaming' || parsed.terminal_reason === 'aborted_tools'
       fold.lastResult = {
-        isError: parsed.is_error === true,
+        isError: parsed.is_error === true && !aborted,
         numTurns: parsed.num_turns as number | undefined,
         ...(lineEndOffset !== undefined ? { endOffset: lineEndOffset } : {}),
       }

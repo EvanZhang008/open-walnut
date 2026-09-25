@@ -47,7 +47,7 @@ import { typedUserText } from './injected-banner';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { SideQuestionDrawer } from '@/components/sessions/SideQuestionDrawer';
 import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
-import { useSessionSend } from '@/hooks/useSessionSend';
+import { stripSendPrefixes, useSessionSend } from '@/hooks/useSessionSend';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
@@ -886,6 +886,23 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
     return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
   }, [sessionId]);
+  // Messages the CLI had queued behind the turn that a Stop dropped: like Esc in
+  // Claude Code, their text goes back into the input (ahead of anything typed since)
+  // and the "Delivered" bubbles go, since the model never saw them.
+  useEvent('session:queued-cancelled', (data) => {
+    const d = data as { sessionId?: string; messageIds?: string[]; messages?: string[] };
+    if (d.sessionId !== sessionId || !Array.isArray(d.messageIds)) return;
+    const texts = d.messageIds.map((id, i) => {
+      const bubble = optimisticMsgs.find((m) => m.queueId === id);
+      dismissFailed(id);
+      return bubble?.text ?? stripSendPrefixes(d.messages?.[i] ?? '');
+    }).filter((t) => t.trim() !== '');
+    log.info('session-panel', 'stop returned queued messages to the composer', { sessionId, messageIds: d.messageIds });
+    if (texts.length === 0) return;
+    setPrefillText(texts.join('\n\n'));
+    setPrefillMode('keep-draft');
+    setPrefillNonce((n) => n + 1);
+  });
   // A line comment from the diff → send straight to this session's main agent.
   const handleDiffComment = useCallback((message: string) => {
     void send(sessionId, message);

@@ -361,12 +361,13 @@ interface StreamToolProgressEvent {
   type: 'tool_progress'
 }
 
-/** command_lifecycle (CLI 2.1.25x): brackets one turn — `started` right before
- *  its `system/init`, `completed` after its `result`. Plumbing, never rendered. */
+/** command_lifecycle (CLI 2.1.25x): the fate of one queued command — `queued`,
+ *  `started` when it drains into a turn (also mid-turn, at a tool boundary), then
+ *  `completed` / `cancelled` / `discarded` / `refused`. Plumbing, never rendered. */
 interface StreamCommandLifecycleEvent {
   type: 'command_lifecycle'
   command_uuid?: string
-  state?: 'started' | 'completed' | string
+  state?: 'queued' | 'started' | 'completed' | 'cancelled' | string
 }
 
 /** control_cancel_request: the CLI WITHDRAWS a pending control_request it
@@ -680,6 +681,13 @@ export class ClaudeCodeSession {
   private _interruptRequested = false
   private _interruptSettle: (() => void) | undefined
   private _interruptPromise: Promise<void> | undefined
+  /** User lines written behind a running turn, by the uuid they went out under,
+   *  until the CLI starts them. Ones a Stop drops go back to the composer. */
+  private _queuedLines = new Map<string, Array<{ message: string; messageId: string }>>()
+  private _cancelledLines: Array<{ message: string; messageId: string }> = []
+  /** The CLI reports each queued line's fate (command_lifecycle, 2.1.25x+). Without
+   *  that, the tracked lines may long have run, so none can be said to be dropped. */
+  private _sawCommandLifecycle = false
   /** Monotonic counter of OBSERVED TURN-START EDGES. Stamped onto every SESSION_RESULT
    *  so a LATE consumer can tell "this result is still the current turn" from "a newer
    *  turn has already started" (incident ed347bde, 2026-08-05: the result's ~800ms-late
@@ -3152,10 +3160,21 @@ export class ClaudeCodeSession {
       this._firstTextTs = undefined
       this._firstToolTs = undefined
     }
+    // A line written behind a running turn waits in the CLI's queue. It needs a uuid
+    // for the CLI to name it when a Stop cancels it (uuid-less lines go unlisted).
+    let uuid = opts?.uuid
+    const queuedBehindTurn = this._processStatus === 'running' && !this._turnResultEmitted
+      && !!opts?.markers?.length
+    if (queuedBehindTurn) {
+      uuid ??= crypto.randomUUID()
+      this._queuedLines.set(uuid, opts!.markers!)
+      // Bounded: a line the CLI never reports on must not pin memory.
+      if (this._queuedLines.size > 32) this._queuedLines.delete(this._queuedLines.keys().next().value!)
+    }
     let ok: boolean
-    try { ok = await transport.writeMessage(message, { ...opts, stopFence, onDispatch }) }
-    catch (error) { undoDispatch?.(); throw error }
-    if (!ok) { undoDispatch?.(); return false }
+    try { ok = await transport.writeMessage(message, { ...opts, ...(uuid ? { uuid } : {}), stopFence, onDispatch }) }
+    catch (error) { if (queuedBehindTurn) this._queuedLines.delete(uuid!); undoDispatch?.(); throw error }
+    if (!ok) { if (queuedBehindTurn) this._queuedLines.delete(uuid!); undoDispatch?.(); return false }
     log.session.info('message sent to session via FIFO', { taskId: this.taskId, sessionId: this.claudeSessionId, messageLength: message.length })
     // If a fast reply already settled the turn, a late send ack must not reopen it.
     if (this._turnResultEmitted) return true
@@ -3277,34 +3296,55 @@ export class ClaudeCodeSession {
 
   private async interruptTurnInPlace(): Promise<boolean> {
     if (!this._transport?.hasPipe) return false
-    if (this._processStatus !== 'running' || this._turnResultEmitted) return true
+    if (this._processStatus !== 'running') return true
+    // A settled turn whose session still runs (detached command, armed wakeup, team
+    // poll loop) has no turn to abort. On CLI 2.1.280 the interrupt left a
+    // run_in_background command alive, so stopping that work needs the process stop.
+    if (this._turnResultEmitted) return false
     const settled = new Promise<boolean>((resolve) => { this._interruptSettle = () => resolve(true) })
     this._interruptRequested = true
     log.session.info('interrupt: sending interrupt control_request', {
       sessionId: this.claudeSessionId, taskId: this.taskId, pid: this.pid,
     })
+    let receipt: Record<string, unknown> | null
     try {
-      await this.readControlPayloadWithRequest(
+      // cancel_queued: messages already queued in the CLI are cancelled with the turn,
+      // so a Stop is never followed by a queued message running (older CLIs ignore it).
+      receipt = await this.readControlPayloadWithRequest(
         `int-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
-        { subtype: 'interrupt' }, INTERRUPT_ACK_TIMEOUT_MS, true)
+        { subtype: 'interrupt', cancel_queued: true }, INTERRUPT_ACK_TIMEOUT_MS, true)
     } catch (err) {
-      if (!this._interruptRequested) return true
+      if (!this._interruptRequested) return this.waitUntilStopped(Date.now() + INTERRUPT_SETTLE_TIMEOUT_MS)
       log.session.warn('interrupt: control request failed, stopping process', {
         sessionId: this.claudeSessionId, taskId: this.taskId,
         error: err instanceof Error ? err.message : String(err),
       })
       return false
     }
+    if (Array.isArray(receipt?.cancelled)) this.returnCancelledLines(receipt.cancelled)
+    // A CLI before interrupt_receipt_v1 answers with no still_queued at all: whatever
+    // Walnut queued behind the turn may then run after the Stop, so count it as surviving.
+    const survivors = Array.isArray(receipt?.still_queued) ? receipt.still_queued : [...this._queuedLines.keys()]
+    if (survivors.length > 0) {
+      log.session.warn('interrupt: queued messages survive the interrupt, stopping process', {
+        sessionId: this.claudeSessionId, taskId: this.taskId, stillQueued: survivors.length,
+      })
+      return false
+    }
     // An ACK is not a turn boundary: a late result must never settle the replacement turn.
+    const until = Date.now() + INTERRUPT_SETTLE_TIMEOUT_MS
     let timer: ReturnType<typeof setTimeout> | undefined
     const consumed = await Promise.race([
       settled,
       new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), INTERRUPT_SETTLE_TIMEOUT_MS) }),
     ])
     if (timer) clearTimeout(timer)
-    if (!consumed) {
+    // Work the aborted turn leaves running (a detached command, an armed wakeup, a team)
+    // keeps the session 'running' for good, so waiting for it to stop is pointless.
+    const workOutlivesTurn = this._detachedBgCount() > 0 || this._wakeupArmed() || this._teamActive
+    if (!consumed || workOutlivesTurn || !(await this.waitUntilStopped(until))) {
       log.session.warn('interrupt: turn did not settle, stopping process', {
-        sessionId: this.claudeSessionId, taskId: this.taskId, pid: this.pid,
+        sessionId: this.claudeSessionId, taskId: this.taskId, pid: this.pid, resultConsumed: consumed, workOutlivesTurn,
       })
       return false
     }
@@ -3312,6 +3352,50 @@ export class ClaudeCodeSession {
       sessionId: this.claudeSessionId, taskId: this.taskId, pid: this.pid,
     })
     return true
+  }
+
+  /** The aborted turn's result can settle while its background tasks are still being
+   *  torn down; Stop only counts once the session has actually left 'running'. */
+  private async waitUntilStopped(until: number): Promise<boolean> {
+    while (this._processStatus === 'running') {
+      if (Date.now() >= until) return false
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    return true
+  }
+
+  /** Queued lines the CLI dropped go back to the composer, like Esc in Claude Code.
+   *  One event per burst: a Stop's cancellations arrive as several frames at once. */
+  private returnCancelledLines(uuids: unknown[]): void {
+    for (const uuid of uuids) {
+      const markers = typeof uuid === 'string' ? this._queuedLines.get(uuid) : undefined
+      if (!markers) continue
+      this._queuedLines.delete(uuid as string)
+      if (this._cancelledLines.length === 0) {
+        setTimeout(() => {
+          const lines = this._cancelledLines
+          this._cancelledLines = []
+          if (!this.claudeSessionId || lines.length === 0) return
+          log.session.info('queued messages cancelled by stop, returning them to the composer', {
+            sessionId: this.claudeSessionId, taskId: this.taskId, messageIds: lines.map((l) => l.messageId),
+          })
+          bus.emit(EventNames.SESSION_QUEUED_CANCELLED, {
+            sessionId: this.claudeSessionId,
+            messageIds: lines.map((l) => l.messageId),
+            messages: lines.map((l) => l.message),
+          }, ['web-ui'], { source: 'session-runner' })
+        }, 0)
+      }
+      this._cancelledLines.push(...markers)
+    }
+  }
+
+  /** Stop the CLI process itself. interrupt() only aborts the running turn and keeps
+   *  the process, so a caller that rewrites the transcript on disk (compact) or ends
+   *  the session needs this, awaited until the daemon confirms the stop. */
+  async stopProcess(): Promise<void> {
+    await this._interruptPromise?.catch(() => {})
+    await this.hardInterrupt()
   }
 
   private async hardInterrupt(): Promise<void> {
@@ -3328,6 +3412,19 @@ export class ClaudeCodeSession {
     this._pendingPermissionRequests.clear()
     this._clearAllPermissionReEmitTimers()
     this._rejectAllSideQuestions('session stopped')
+    // The CLI's queue died with the process: nothing it held will ever run.
+    if (this._sawCommandLifecycle) this.returnCancelledLines([...this._queuedLines.keys()])
+    this._queuedLines.clear()
+    // The daemon confirmed the stop, and its exit event lands after stopMonitoring(),
+    // so nothing else reports it: the record would stay 'running' with a dead pid.
+    this.pid = null
+    this.emitStatusChanged('NEED_ACTION', undefined, { status_reason: 'user_stopped', status_changed_by: 'user' })
+    const sid = this.claudeSessionId
+    if (sid) {
+      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+        updateSessionRecord(sid, { pid: undefined, pendingPermission: undefined }),
+      ).catch(() => {})
+    }
   }
 
   /**
@@ -5566,7 +5663,11 @@ export class ClaudeCodeSession {
         // is_error shape with NO text when the stop landed before the first token —
         // the soft-ede check above can't see it. The user stopped it; not an error.
         const userInterrupted = this.consumeInterruptRequest()
-        const effectiveIsError = result.is_error && !isSoftEdeError && !userInterrupted
+        // Nor is any other stopped turn (the CLI preempting it for a follow-up, a stop
+        // whose flag was already spent): the CLI's own error test excludes these reasons.
+        const reason = (result as { terminal_reason?: unknown }).terminal_reason
+        const abortedTurn = reason === 'aborted_streaming' || reason === 'aborted_tools'
+        const effectiveIsError = result.is_error && !isSoftEdeError && !userInterrupted && !abortedTurn
 
         let conversationLost = false
         if (effectiveIsError && resultErrors?.length) {
@@ -6137,7 +6238,14 @@ export class ClaudeCodeSession {
         // before the turn's `system/init`, `{state:'completed'}` after its result.
         // Protocol plumbing like the control_* family, not conversation content —
         // through the catch-all it rendered an "Unknown Claude event" card on
-        // every turn (reported 2026-09-18).
+        // every turn (reported 2026-09-18). A queued line's fate rides it too:
+        // started means the model has it; cancelled means a Stop dropped it.
+        const lc = event as unknown as StreamCommandLifecycleEvent
+        this._sawCommandLifecycle = true
+        if (typeof lc.command_uuid === 'string' && lc.state !== 'queued') {
+          if (lc.state === 'cancelled') this.returnCancelledLines([lc.command_uuid])
+          else this._queuedLines.delete(lc.command_uuid)
+        }
         break
       }
 
@@ -7922,7 +8030,12 @@ export class SessionRunner {
             }).catch(() => {})
           }
 
-          if (this.nativeInterrupts.has(sessionId)) break
+          if (this.nativeInterrupts.has(sessionId)) {
+            // The interrupt settles the stopped batch itself, but the stopped turn
+            // wrote its lines to the transcript, so a pending rewind anchor is spent.
+            if (event.name === EventNames.SESSION_RESULT) this.clearPendingResumeSessionAt(sessionId)
+            break
+          }
 
           // Clear activeProcessing — try direct match first, then the rename fixup.
           // Session ID can change when --resume fails and Claude creates a new
@@ -9936,7 +10049,11 @@ export class SessionRunner {
     const interruptedBatch = this.batchMessageIds.get(sessionId)
     const pending = Promise.resolve().then(async () => {
       await session.awaitSpawn()
+      const turnRan = session.processStatus === 'running'
       await session.interrupt()
+      // The stopped turn wrote its lines to the transcript, whichever way it was
+      // stopped, so a cold resume must not rewind past them to a pending anchor.
+      if (turnRan) this.clearPendingResumeSessionAt(sessionId)
       if (this.activeProcessing.has(sessionId) && this.batchMessageIds.get(sessionId) === interruptedBatch) {
         const count = this.batchCounts.get(sessionId) ?? 1
         const messageIds = this.batchMessageIds.get(sessionId)

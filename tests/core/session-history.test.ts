@@ -628,6 +628,37 @@ describe('readSessionHistory', () => {
     expect(messages[1]).toMatchObject({ role: 'assistant', text: 'Hi' });
   });
 
+  it('a queued message the CLI removed (a Stop with cancel_queued) is not shown', async () => {
+    // CLI 2.1.280 transcript shape (live run 2026-09-25): the dropped message logs
+    // enqueue then remove with the same content, and never gets a user line.
+    await writeJsonl('s-fifo-removed', '/test', [
+      msg('u1', 'user', 'Write a long essay'),
+      { type: 'assistant', timestamp: '2025-01-01T00:00:01Z', message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'The essay starts' }] } },
+      { type: 'queue-operation', operation: 'enqueue', content: 'Reply with one word', timestamp: '2025-01-01T00:00:02Z' },
+      { type: 'queue-operation', operation: 'remove', content: 'Reply with one word', timestamp: '2025-01-01T00:00:03Z' },
+      { type: 'user', timestamp: '2025-01-01T00:00:03Z', uuid: 'int-1', message: { role: 'user', content: [{ type: 'text', text: '[Request interrupted by user]' }] } },
+    ])
+    const messages = await readSessionHistory('s-fifo-removed', '/test')
+    expect(messages.some((m) => m.text === 'Reply with one word')).toBe(false)
+    expect(messages[0]).toMatchObject({ role: 'user', text: 'Write a long essay' })
+  });
+
+  it('the same text sent again after a removal shows once, as the message that ran', async () => {
+    await writeJsonl('s-fifo-removed-resend', '/test', [
+      msg('u1', 'user', 'Write a long essay'),
+      { type: 'assistant', timestamp: '2025-01-01T00:00:01Z', message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'The essay starts' }] } },
+      { type: 'queue-operation', operation: 'enqueue', content: 'Reply with one word', timestamp: '2025-01-01T00:00:02Z' },
+      { type: 'queue-operation', operation: 'remove', content: 'Reply with one word', timestamp: '2025-01-01T00:00:03Z' },
+      { type: 'queue-operation', operation: 'enqueue', content: 'Reply with one word', timestamp: '2025-01-01T00:00:05Z' },
+      { type: 'queue-operation', operation: 'dequeue', timestamp: '2025-01-01T00:00:05Z' },
+      { type: 'user', timestamp: '2025-01-01T00:00:05Z', uuid: 'u2', message: { role: 'user', content: 'Reply with one word' } },
+      { type: 'assistant', timestamp: '2025-01-01T00:00:06Z', message: { id: 'a2', role: 'assistant', content: [{ type: 'text', text: 'Word' }] } },
+    ])
+    const messages = await readSessionHistory('s-fifo-removed-resend', '/test')
+    expect(messages.filter((m) => m.text === 'Reply with one word')).toHaveLength(1)
+    expect(messages.map((m) => m.text)).toEqual(['Write a long essay', 'The essay starts', 'Reply with one word', 'Word'])
+  });
+
   it('skips unparseable JSONL lines', async () => {
     const encoded = encodeProjectPath('/test');
     const dir = path.join(tmpBase, 'projects', encoded);
