@@ -22,6 +22,8 @@ test('a wide column keeps every control on one row, with no overflow button', as
   const panel = await openControlsSession(page, { narrow: false });
   expect((await rowState(panel)).visible).toEqual(['mode', 'model', 'output', 'btw', 'note']);
   await expect(overflowBtn(panel)).toHaveCount(0);
+  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeVisible();
+  await expect(controlOf(panel, 'output').locator('.mode-toggle-pill-label')).toHaveText('Rich');
   await expectSingleRow(panel);
   await shootComposer(panel, 'wide');
 });
@@ -32,8 +34,10 @@ test('a narrow column collapses to one row and the menu names the hidden control
   const panel = await openControlsSession(page, { narrow: true });
   await expect(overflowBtn(panel)).toBeVisible();
   const state = await rowState(panel);
-  expect(state.visible).toContain('mode');
-  expect(state.hidden.length).toBeGreaterThan(0);
+  expect(state.visible).toEqual(['mode', 'output']);
+  expect(state.hidden).toEqual(['model', 'btw', 'note']);
+  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeHidden();
+  expect(await controlOf(panel, 'output').locator('button').evaluate((button) => getComputedStyle(button, '::after').content)).toBe('"R"');
   expect(state.height).toBeLessThanOrEqual(26);
   await expectSingleRow(panel);
   await shootComposer(panel, 'narrow');
@@ -50,13 +54,15 @@ test('a narrow column collapses to one row and the menu names the hidden control
   await shootComposer(panel, 'narrow-menu-open', 260);
 });
 
-test('a proxy row acts on the real control', async ({ page }) => {
+test('the condensed reply-style control acts on the real session setting', async ({ page }) => {
   const writes: SettingsWrites = { body: [] };
   await mockControlsSession(page, CTRL_SESSION, writes);
   await mockControlsSession(page, CTRL_FILLER);
   const panel = await openControlsSession(page, { narrow: true });
-  await overflowBtn(panel).click();
-  await page.getByTestId('composer-overflow-item-output').click();
-  await expect.poll(() => controlOf(panel, 'output').evaluate((el) => (el.textContent ?? '').trim())).toBe('MD');
+  const button = controlOf(panel, 'output').locator('button');
+  await expect(button).toHaveAttribute('aria-label', 'Output mode: Rich');
+  await button.click();
+  await expect(button).toHaveAttribute('aria-label', 'Output mode: MD');
+  expect(await button.evaluate((el) => getComputedStyle(el, '::after').content)).toBe('"M"');
   await expect.poll(() => writes.body.some((b) => b.output_mode === 'markdown')).toBe(true);
 });

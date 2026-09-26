@@ -470,7 +470,8 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await pickFolder(page, folder)
     // More opens on the default Focus, and its Escape closes the menu, not the drawer.
     const menu = await openDraftSettings(draftPanel(page), 'more')
-    await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pin to (default Focus)')
+    await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pinned')
+    await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Focus/)
     await page.keyboard.press('Escape')
     await expect(draftTaskMenu(page)).toHaveCount(0)
     await expect(drawer(page)).toBeVisible()

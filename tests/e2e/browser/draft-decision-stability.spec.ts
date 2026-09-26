@@ -88,7 +88,8 @@ for (const width of [300, 420]) {
     await pinColumnWidth(page, width)
     const panel = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
     await typeAndSettle(page, mock, 'pair on the marina release friday 3pm, urgent, due sunday')
-    await expect(draftDecisionChips(panel)).toHaveCount(0)
+    await expect(draftDecisionChips(panel)).toHaveCount(1)
+    await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
     // Measure AFTER the text is in (the composer may have grown) and BEFORE the reply.
     mock.set({ body: FOUR, delayMs: 1_200 })
     await draftComposer(page).fill('pair on the marina release friday 3pm, urgent, due monday')

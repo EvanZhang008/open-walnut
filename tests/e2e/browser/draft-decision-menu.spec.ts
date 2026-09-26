@@ -1,8 +1,8 @@
 /**
  * The draft's decision chips and its More button share ONE settings popover.
  *
- * What this file pins (checklist ids in each test name's comment): the empty draft
- * has no chips and the folder/project/More row is exact (C3 C4 C35); every chip
+ * What this file pins (checklist ids in each test name's comment): a fresh draft
+ * shows its default Focus and the folder/More row is exact (C3 C4 C35); every chip
  * opens the same popover anchored on itself, a second trigger re-anchors it without
  * a remount (C6 C41); chip words equal the lit menu row's words (C36); Escape,
  * outside click and focus return (C26); the popover is a portalled dialog that stays
@@ -83,11 +83,13 @@ const activeTag = (page: Page) => page.evaluate(() => {
 })
 
 // C3 C4 C35 C62: the empty draft and the row structure.
-test('an empty draft shows the folder pill and More only; a landed parse orders legend, chips, then the bar', async ({ page }) => {
+test('a fresh draft shows its Focus tier; a landed parse orders legend, chips, then the bar', async ({ page }) => {
   const mock = await boot(page, D1)
   const panel = await openDraft(page)
-  await expect(draftDecisionChips(panel)).toHaveCount(0)
-  await expect(panel.locator('.draft-decision-row')).toHaveCount(0)
+  await expect(draftDecisionChips(panel)).toHaveCount(1)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
+  await expect(draftDecisionChip(panel, 'pinTier')).not.toHaveClass(AI)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveAttribute('title', 'Pinned tier: Focus. Default for new tasks. Click to change.')
   await expect(panel.locator('.draft-decisions-key')).toHaveCount(0)
   // No project chip yet: the project follows the folder, and there is none.
   await expect(draftPills(panel)).toHaveCount(1)
@@ -266,9 +268,8 @@ for (const showPriority of [true, false]) {
     const menu = await openDraftSettings(panel, 'more')
     await expect(menu.locator('.task-kebab-tier-btn')).toHaveText(['Focus', 'Satellite', 'Backlog', 'Wait'].map((t) => new RegExp(t)))
     await expect(menu.getByRole('button', { name: /Don't pin/ })).toHaveCount(0)
-    // C65: nobody owns the tier, so nothing is lit and the label names the default.
-    await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveCount(0)
-    await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pin to (default Focus)')
+    await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Focus/)
+    await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pinned')
     // Not launch questions: no Start / Due / Start unread rows while unset.
     await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(0)
     await expect(menu.getByRole('button', { name: /Start unread/ })).toHaveCount(0)
@@ -280,13 +281,31 @@ for (const showPriority of [true, false]) {
     // More's own tooltip names what it opens (priority only when shown).
     expect(await draftMoreButton(panel).getAttribute('title'))
       .toMatch(showPriority ? /^Project, pin tier, priority \((⌘|Ctrl\+)\.\)$/ : /^Project, pin tier \((⌘|Ctrl\+)\.\)$/)
-    // Picking Focus from nothing is a human decision: a chip WITHOUT ✦.
-    await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Focus' }).click()
+    await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Satellite' }).click()
     await expect(draftTaskMenu(page)).toHaveCount(0)
-    await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Focus/)
+    await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/)
     await expect(draftDecisionChip(panel, 'pinTier')).not.toHaveClass(AI)
   })
 }
+
+test('a fresh Focus chip reflects unpinning and re-pinning before the task is created', async ({ page, browserName }) => {
+  await boot(page, {})
+  const panel = await openDraft(page)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
+  await page.screenshot({ path: `${SHOT_DIR}/fresh-focus-${browserName}.png` })
+  let menu = await openDraftSettings(panel, 'pinTier')
+  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Focus/)
+  await menu.locator('.task-kebab-tier-btn[aria-pressed="true"]').click()
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveCount(0)
+  menu = await openDraftSettings(panel, 'more')
+  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveCount(0)
+  await menu.locator('.task-kebab-tier-btn').filter({ hasText: 'Focus' }).click()
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveAttribute('title', 'Pinned tier: Focus. Set by you. Click to change.')
+  await draftComposer(page).fill(`Finish the marina review ${Date.now()}`)
+  const taskId = await createTaskForLater(page, panel)
+  expect(await pinnedTierOf(page, taskId)).toBe('focus')
+})
 
 // C56 C61: a second click on the lit tier unpins; the lit priority accepts; Use
 // Walnut's pick hands the field back; the launch honors "not pinned".
@@ -437,7 +456,8 @@ for (const reduced of [false, true]) {
     // A withdrawal is instant (no fade-out showing a decision that no longer holds).
     mock.set({})
     await typeAndSettle(page, mock, 'fix the flaky login test')
-    await expect(draftDecisionChips(panel)).toHaveCount(0, { timeout: 1_000 })
+    await expect(draftDecisionChips(panel)).toHaveCount(1, { timeout: 1_000 })
+    await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
   })
 }
 

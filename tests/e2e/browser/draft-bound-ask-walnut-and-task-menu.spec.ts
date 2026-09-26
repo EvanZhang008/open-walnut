@@ -244,14 +244,14 @@ test('a plain draft has no header ⋮; More ends the pills row, sets tier + unre
   expect(last?.tag).toBe('BUTTON')
   expect(last?.cls).toMatch(/\bdraft-more-btn\b/)
   expect(last).toMatchObject({ text: 'More', label: 'Task settings', popup: 'dialog' })
-  // A fresh draft shows no decision chip at all (the default Focus is not drawn).
-  await expect(draftDecisionChips(panel)).toHaveCount(0)
+  await expect(draftDecisionChips(panel)).toHaveCount(1)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/05-plain-draft-more.png` })
 
   const menu = await openDraftSettings(panel, 'more')
   await expect(menu).toHaveAttribute('role', 'dialog')
   await expect(menu).toHaveAttribute('aria-label', 'Task settings')
-  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveCount(0)
+  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Focus/)
   await menu.screenshot({ path: `${SCREENSHOT_DIR}/05b-plain-draft-task-menu.png` })
 
   // Dates and "Start unread" are not launch rows (2026-09-25).

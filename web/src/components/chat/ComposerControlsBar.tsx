@@ -71,6 +71,7 @@ export function ComposerControlsBar({ controls, className }: ComposerControlsBar
   /** Last measured natural width per control id; hidden ones keep their last. */
   const widths = useRef(new Map<string, number>());
   const [overflow, setOverflow] = useState<string[]>([]);
+  const [condensed, setCondensed] = useState(false);
   const [pinned, setPinned] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const placement = useMenuPlacement(open, buttonRef, menuRef, {
@@ -83,20 +84,21 @@ export function ComposerControlsBar({ controls, className }: ComposerControlsBar
     if (!bar) return;
     for (const el of bar.querySelectorAll<HTMLElement>('[data-control-id]')) {
       const id = el.dataset.controlId!;
-      // A hidden control measures 0 — keep whatever it measured while visible.
       const w = el.getBoundingClientRect().width;
-      if (w > 0) widths.current.set(id, w);
+      if (w > 0 && !condensed) widths.current.set(id, w);
     }
-    // What the row COULD use: its own box plus the slack the spacer is holding
-    // next to it. The row does not grow (`flex: 0 1 auto`), so its own width is
-    // only what its current content needs; the spacer between it and the
-    // mic/send cluster owns the rest. Without this term the row would keep
-    // whatever it collapsed to and never expand again.
     const spacer = bar.parentElement?.querySelector<HTMLElement>('.chat-input-controls-spacer');
     const available = bar.getBoundingClientRect().width + (spacer?.getBoundingClientRect().width ?? 0);
+    const compact = available < 220;
+    setCondensed((prev) => prev === compact ? prev : compact);
     const buttonWidth = buttonRef.current?.getBoundingClientRect().width || 22;
     const input: ControlFitInput[] = present.map((c) => ({
-      id: c.id, priority: pinned === c.id ? 0 : c.priority, width: widths.current.get(c.id),
+      id: c.id,
+      priority: pinned === c.id ? 0 : compact && c.id === 'output' ? 2 : compact && c.id === 'model' ? 3 : c.priority,
+      width: compact && c.id === 'output' ? 28
+        : compact && c.id === 'mode' && bar.querySelector('[data-control-id="mode"] .mode-toggle-pill-shortcut')
+          ? Math.max(40, (widths.current.get(c.id) ?? 80) - 28)
+          : widths.current.get(c.id),
     }));
     const next = pickVisibleControls(input, available, { gap: ROW_GAP, overflowButtonWidth: buttonWidth });
     setOverflow((prev) => (prev.length === next.overflow.length && prev.every((id, i) => id === next.overflow[i])
@@ -104,7 +106,7 @@ export function ComposerControlsBar({ controls, className }: ComposerControlsBar
     // Everything fits again: drop the pin, so a column that grew goes back to
     // the plain priority order instead of remembering one menu click forever.
     if (next.overflow.length === 0) setPinned((p) => (p === null ? p : null));
-  }, [present, pinned]);
+  }, [present, pinned, condensed]);
 
   useLayoutEffect(() => {
     measure();
@@ -164,7 +166,7 @@ export function ComposerControlsBar({ controls, className }: ComposerControlsBar
     <>
       <div
         ref={barRef}
-        className={`composer-controls-bar${className ? ` ${className}` : ''}`}
+        className={`composer-controls-bar${className ? ` ${className}` : ''}${condensed ? ' is-condensed' : ''}`}
         onPointerDownCapture={pinTouched}
       >
         {present.map((c) => (

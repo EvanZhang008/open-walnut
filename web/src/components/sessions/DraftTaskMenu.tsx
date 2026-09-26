@@ -51,10 +51,6 @@ interface Props {
   /** Owned by DraftDecisionRow: its outside-click closer tests against it. */
   menuRef: RefObject<HTMLDivElement | null>;
   meta: QuickStartTaskMeta;
-  /** Someone decided the tier (draftTierDecided): the user, a seed or Walnut,
-   *  including "not pinned". False: nothing is lit and the heading says which
-   *  tier an undecided draft lands in. */
-  tierDecided: boolean;
   priorityVisible: boolean | 'unknown';
   /** Fields offering "Use Walnut's pick", with the label to show. */
   walnutPicks?: Partial<Record<DraftTaskField, string>>;
@@ -85,7 +81,7 @@ export interface DraftMenuProject {
 }
 
 export function DraftTaskMenuPopover({
-  open, anchorEl, menuRef, meta, tierDecided, priorityVisible, walnutPicks,
+  open, anchorEl, menuRef, meta, priorityVisible, walnutPicks,
   onChange, onReturnToWalnut, onClose, onAnchorLost, focusNonce, focusTarget = 'tier', project,
 }: Props) {
   // A fresh ref OBJECT per anchor: useMenuPlacement re-places (and re-decides
@@ -155,7 +151,7 @@ export function DraftTaskMenuPopover({
   }, [walnutPicks, onReturnToWalnut]);
 
   if (!open || !anchorEl) return null;
-  const hasTier = tierDecided && !!meta.pinTier;
+  const hasTier = !!meta.pinTier;
   return createPortal(
     <div
       ref={menuRef}
@@ -179,12 +175,9 @@ export function DraftTaskMenuPopover({
           start_date: meta.startDate,
           due_date: meta.dueDate,
         }}
-        // Undecided (no tier chip): nothing lit, even though the launch meta
-        // holds the default Focus; the heading says so instead (C65).
         isPinned={hasTier}
-        pinnedTier={tierDecided ? (meta.pinTier ?? null) : undefined}
+        pinnedTier={meta.pinTier ?? null}
         isDone={false}
-        tierHeading={tierDecided ? undefined : 'Pin to (default Focus)'}
         // One synchronous patch per pick: the tier rides the create, never the
         // row kebab's pin + delayed tier.
         onPinWithTier={(tier) => onChange({ pinTier: tier })}

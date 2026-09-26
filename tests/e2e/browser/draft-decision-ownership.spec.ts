@@ -121,8 +121,9 @@ test('a field the newer trailing parse no longer proposes goes back to its defau
   mock.set({ legs: LEGS_OK })
   await typeAndSettle(page, mock, 'wait on the vendor reply')
   await expect(draftDecisionChip(panel, 'dueDate')).toHaveCount(0)
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveCount(0)
-  await expect(draftDecisionChips(panel)).toHaveCount(0)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
+  await expect(draftDecisionChip(panel, 'pinTier')).not.toHaveClass(AI)
+  await expect(draftDecisionChips(panel)).toHaveCount(1)
 
   await panel.locator('.draft-start-btn').click()
   const body = await nthRequest(log, 'quickStart')
@@ -304,7 +305,8 @@ test('entering Ask Walnut resets AI task fields, and switching back re-parses th
   await panel.locator('.draft-intent-card-walnut').click()
   await expect(panel.locator('.draft-walnut-meta-row')).toBeVisible()
   await expect(panel.locator('.draft-ai-badge')).toHaveCount(0)
-  await expect(draftDecisionChips(panel)).toHaveCount(0)
+  await expect(draftDecisionChips(panel)).toHaveCount(1)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
 
   const walnutCalls = mock.calls.length
   await draftComposer(page).fill('plan the marina offsite by friday, urgent!')
@@ -317,7 +319,8 @@ test('entering Ask Walnut resets AI task fields, and switching back re-parses th
 
   // And the Ask launch itself carries none of them.
   await panel.locator('.draft-intent-card-walnut').click()
-  await expect(draftDecisionChips(panel)).toHaveCount(0)
+  await expect(draftDecisionChips(panel)).toHaveCount(1)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
   // An unbound Ask has no Start button: the composer's send (Enter) is the launch.
   await draftComposer(page).press('Enter')
   const body = await nthRequest(log, 'quickStart')
@@ -348,7 +351,8 @@ test('an emptied composer (after the debounce) withdraws AI tier, dates, project
   await expect(panel.locator('.draft-decisions-key')).toHaveText('✦ = decided by Walnut')
 
   await draftComposer(page).fill('')
-  await expect(draftDecisionChips(panel)).toHaveCount(0, { timeout: 5_000 })
+  await expect(draftDecisionChips(panel)).toHaveCount(1, { timeout: 5_000 })
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
   await expect(draftProjectPill(panel)).toHaveCount(0)
   await expect(draftCwdPill(panel)).toHaveText('Choose folder and host…')
   await expect(panel.locator('.draft-decisions-key')).toHaveCount(0)

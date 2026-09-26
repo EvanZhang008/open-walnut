@@ -233,7 +233,8 @@ test('S4-W6: Start Task picks its folder, More closes on Escape, and the launch 
 
   // WebKit leaves focus on <body> after a button click: the open menu is what Escape must find.
   const more = await openDraftSettings(draft, 'more')
-  await expect(more.locator('.task-kebab-tier-label')).toHaveText('Pin to (default Focus)')
+  await expect(more.locator('.task-kebab-tier-label')).toHaveText('Pinned')
+  await expect(more.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Focus/)
   await page.keyboard.press('Escape')
   await expect(draftTaskMenu(page)).toHaveCount(0)
   await expect(drawer(page)).toBeVisible()

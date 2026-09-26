@@ -3,9 +3,9 @@
  * shows, in which order, with which words. Pure (no React); DraftDecisionRow only
  * renders what this returns.
  *
- * One chip per decided field, fixed order tier, priority, start, due, unread, so
- * the n-th chip matches the n-th block of the menu it opens. A chip marks ✦ only
- * when the AI owns the field (isAiOwned). Words come from the same tables the
+ * The effective tier is always shown when pinned, including the Focus default;
+ * other fields appear when set. Fixed order: tier, priority, start, due, unread.
+ * A chip marks ✦ only when the AI owns the field (isAiOwned). Words come from the same tables the
  * menu renders (TIER_OPTIONS, PRIORITY_OPTIONS, the app's custom tier labels):
  * never a second copy here, or the chip and the menu stop agreeing.
  *
@@ -29,7 +29,7 @@ export type DraftDecisionGlyph =
   | { kind: 'unread' }
   | null;
 
-export type DraftDecisionSource = 'ai' | 'user' | 'seed';
+export type DraftDecisionSource = 'ai' | 'user' | 'seed' | 'default';
 
 export interface DraftDecisionChip {
   field: DraftOwnedField;
@@ -131,12 +131,14 @@ function sourceOf(draft: DraftColumn, field: DraftOwnedField): DraftDecisionSour
   if (owner === 'seed') return 'seed';
   if (owner === 'user') return 'user';
   if (field !== 'unread' && isAiOwned(draft, field)) return 'ai';
+  if (field === 'pinTier' && !owner) return 'default';
   return 'user';
 }
 
 function sourceSentence(source: DraftDecisionSource, seedTier: string | undefined): string {
   if (source === 'ai') return 'Set by Walnut from your text.';
   if (source === 'seed') return `From the + on the ${seedTier ?? 'tier'} section.`;
+  if (source === 'default') return 'Default for new tasks.';
   return 'Set by you.';
 }
 
@@ -150,19 +152,12 @@ function chipOf(
   return { field, label, glyph, ai: source === 'ai', source, title, ariaLabel: title, ...extra };
 }
 
-/** The tier is someone's decision (the user, a seed or Walnut), "not pinned"
- *  included. Undecided drafts land in the default tier (Focus). */
-export function draftTierDecided(draft: DraftColumn): boolean {
-  return !!draft.fieldOwner?.pinTier || isAiOwned(draft, 'pinTier');
-}
-
 function tierChip(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionChip | null {
   const chip = tierChipValue(draft, ctx);
   return chip && { ...chip, key: 'Pinned:' };
 }
 
 function tierChipValue(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionChip | null {
-  if (!draftTierDecided(draft)) return null;
   const tier = draft.meta.pinTier;
   // Not pinned says nothing (user, 2026-09-25: a "Not pinned" chip is noise;
   // the lit tier's second click is how it got here).

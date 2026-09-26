@@ -69,7 +69,7 @@ import {
   type DraftAiField, type DraftColumn, type DraftTaskField, type DraftTaskFieldPatch,
 } from './draft-column';
 import {
-  customTierLabelLookup, draftDecisionChips, draftDecisionsKeyVisible, draftSuggestionLabel, draftTierDecided, draftWalnutPicks,
+  customTierLabelLookup, draftDecisionChips, draftDecisionsKeyVisible, draftSuggestionLabel, draftWalnutPicks,
   type DraftDecisionCtx,
 } from './draft-decisions';
 import { DraftDecisionChips, DraftMoreButton, useDraftDecisionMenu } from './DraftDecisionRow';
@@ -321,7 +321,6 @@ export function DraftLaunchBar({
           anchorEl={menu.anchor}
           menuRef={menu.menuRef}
           meta={draft.meta}
-          tierDecided={draftTierDecided(draft)}
           priorityVisible={priorityVisible}
           walnutPicks={walnutPicks}
           onChange={handleTaskFieldChange}

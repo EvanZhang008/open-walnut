@@ -113,6 +113,8 @@ export function OutputModePill({
     <button
       type="button"
       className="mode-toggle-pill"
+      data-compact-label={current === 'rich' ? 'R' : 'M'}
+      aria-label={`Output mode: ${current === 'rich' ? 'Rich' : 'MD'}`}
       onClick={toggle}
       // Accent (not the amber .plan-active) marks the non-default state: rich
       // output is a formatting choice, not a permission warning.

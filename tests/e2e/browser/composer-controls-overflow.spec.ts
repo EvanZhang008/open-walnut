@@ -17,18 +17,23 @@ test('1. a wide column keeps every control on one row, with no overflow button',
   expect(state.visible).toEqual(['mode', 'model', 'output', 'btw', 'note']);
   expect(state.hidden).toEqual([]);
   await expect(overflowBtn(panel)).toHaveCount(0);
+  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeVisible();
+  await expect(controlOf(panel, 'output').locator('.mode-toggle-pill-label')).toHaveText('Rich');
   await expectSingleRow(panel);
   await shootComposer(panel, 'wide');
 });
 
-test('2. a narrow column collapses to one row: the mode pill plus the button', async ({ page }) => {
+test('2. a narrow column keeps Bypass and R on one row with the overflow button', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   await mockControlsSession(page, CTRL_FILLER);
   const panel = await openControlsSession(page, { narrow: true });
   await expect(overflowBtn(panel)).toBeVisible();
   const state = await rowState(panel);
-  expect(state.visible).toContain('mode');
-  expect(state.hidden.length, 'nothing moved into the menu').toBeGreaterThan(0);
+  expect(state.visible).toEqual(['mode', 'output']);
+  expect(state.hidden).toEqual(['model', 'btw', 'note']);
+  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeHidden();
+  await expect(controlOf(panel, 'output').locator('.mode-toggle-pill-label')).toBeHidden();
+  expect(await controlOf(panel, 'output').locator('button').evaluate((button) => getComputedStyle(button, '::after').content)).toBe('"R"');
   await expectSingleRow(panel);
   // One pill tall: the reported bug was a row four pills high.
   expect(state.height).toBeLessThanOrEqual(26);
@@ -54,19 +59,19 @@ test('3. the menu names each hidden control, carries its live state, and fits th
   await shootComposer(panel, 'narrow-menu-open', 260);
 });
 
-test('4. a plain row acts on the REAL control: the reply-style pill flips', async ({ page }) => {
+test('4. the condensed reply-style pill acts on the real session setting', async ({ page }) => {
   const writes: SettingsWrites = { body: [] };
   await mockControlsSession(page, CTRL_SESSION, writes);
   await mockControlsSession(page, CTRL_FILLER);
   const panel = await openControlsSession(page, { narrow: true });
-  const before = await controlOf(panel, 'output').evaluate((el) => (el.textContent ?? '').trim());
-  expect(before).toBe('Rich');
-  await overflowBtn(panel).click();
-  await page.getByTestId('composer-overflow-item-output').click();
-  // The hidden pill itself changed, and the row's label followed it.
-  await expect.poll(() => controlOf(panel, 'output').evaluate((el) => (el.textContent ?? '').trim())).toBe('MD');
-  await expect(page.getByTestId('composer-overflow-item-output').locator('.composer-overflow-item-value')).toHaveText('MD');
+  const button = controlOf(panel, 'output').locator('button');
+  await expect(button).toHaveAttribute('aria-label', 'Output mode: Rich');
+  await button.click();
+  await expect(button).toHaveAttribute('aria-label', 'Output mode: MD');
+  expect(await button.evaluate((el) => getComputedStyle(el, '::after').content)).toBe('"M"');
   await expect.poll(() => writes.body.some((b) => b.output_mode === 'markdown')).toBe(true);
+  await overflowBtn(panel).click();
+  await expectMenuNamesHidden(panel, (await rowState(panel)).hidden, CTRL_NAMES);
 });
 
 test('5. an anchored row pins its pill onto the row and opens its picker there', async ({ page }) => {
