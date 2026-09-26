@@ -473,11 +473,20 @@ button.plugin-update-chip--current:hover {
   container-type: inline-size;
 }
 
-.plugin-store-installed .settings-row {
+/*
+ * The row rules in this file are for the LIST's own rows (a plugin, its account, its app
+ * controls), never the rows of a plugin's config form (`.plugin-store-config`): those sit
+ * inside the list but are generic settings rows. Reaching them broke two field kinds. A
+ * stacked list field is a COLUMN, so the 320px basis became a 320px gap under its label,
+ * and the list's centring (settings-sections-addons.css) pulled label and editor to the
+ * middle. A wide text field wrapped, and `margin-left: auto` pushed it flush right under
+ * its label. `:where()` keeps each rule's specificity, so the list rows cascade unchanged.
+ */
+.plugin-store-installed .settings-row:where(:not(.plugin-store-config *)) {
   flex-wrap: wrap;
 }
 
-.plugin-store-installed .settings-row-copy {
+.plugin-store-installed .settings-row-copy:where(:not(.plugin-store-config *)) {
   flex: 1 1 320px;
 }
 
@@ -487,7 +496,7 @@ button.plugin-update-chip--current:hover {
  * like the Sources card (N3-3, N3-15). Left-aligned, the invisible Update placeholder that
  * keeps rows aligned started every control 82px in from the text edge.
  */
-.plugin-store-installed .settings-row-actions {
+.plugin-store-installed .settings-row-actions:where(:not(.plugin-store-config *)) {
   flex: 0 0 auto;
   flex-wrap: nowrap;
   margin-left: auto;
@@ -550,12 +559,12 @@ button.plugin-update-chip--current:hover {
  * the top of the copy instead, with the same 12px/3px offsets the copy's first line has,
  * so the buttons sit where they sat and only the copy grows (N11).
  */
-.plugin-store-installed .settings-row {
+.plugin-store-installed .settings-row:where(:not(.plugin-store-config *)) {
   align-items: flex-start;
 }
 
 /* -5px centres a 28px control on the 18px title line (the copy's first row). */
-.plugin-store-installed .settings-row-actions {
+.plugin-store-installed .settings-row-actions:where(:not(.plugin-store-config *)) {
   align-self: flex-start;
   margin-top: -5px;
 }

@@ -403,12 +403,14 @@ span.plugin-store-why {
 }
 
 /* One vertical rule on every pane: controls centre on their row, as macOS
-   does (N13). plugin-updates.css pinned Plugins rows to the top. */
-.settings-pane .plugin-store-installed .settings-row {
+   does (N13). plugin-updates.css pinned Plugins rows to the top. Like those
+   rules, this one is for the list's rows: a config form row keeps the generic
+   row (a stacked field stretches, see plugin-updates.css). */
+.settings-pane .plugin-store-installed .settings-row:where(:not(.plugin-store-config *)) {
   align-items: center;
 }
 
-.settings-pane .plugin-store-installed .settings-row-actions {
+.settings-pane .plugin-store-installed .settings-row-actions:where(:not(.plugin-store-config *)) {
   align-self: auto;
   margin-top: 0;
 }
