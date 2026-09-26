@@ -33,7 +33,12 @@ export type DraftDecisionSource = 'ai' | 'user' | 'seed';
 
 export interface DraftDecisionChip {
   field: DraftOwnedField;
-  /** The chip's words, without the glyph and without the ✦. */
+  /** The muted field name in front of the value ("Pinned:", "Priority:"), the
+   *  same shape as the project chip's "Project:". Two chips can share a value
+   *  word (tier Backlog, priority Backlog), so the value alone does not say which
+   *  decision it is. Dates and unread carry their field in the label itself. */
+  key?: 'Pinned:' | 'Priority:';
+  /** The chip's words, without the key, the glyph and the ✦. */
   label: string;
   glyph: DraftDecisionGlyph;
   /** The AI owns this value: render the ✦ and the accent outline. */
@@ -152,6 +157,11 @@ export function draftTierDecided(draft: DraftColumn): boolean {
 }
 
 function tierChip(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionChip | null {
+  const chip = tierChipValue(draft, ctx);
+  return chip && { ...chip, key: 'Pinned:' };
+}
+
+function tierChipValue(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionChip | null {
   if (!draftTierDecided(draft)) return null;
   const tier = draft.meta.pinTier;
   // Not pinned says nothing (user, 2026-09-25: a "Not pinned" chip is noise;
@@ -186,7 +196,7 @@ function priorityChip(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionC
   const opt = PRIORITY_OPTIONS.find((o) => o.value === value)!;
   return chipOf(draft, 'priority', opt.label,
     { kind: 'priority', value, icon: opt.icon, color: `var(--priority-${value})` },
-    'Priority', opt.label);
+    'Priority', opt.label, undefined, { key: 'Priority:' });
 }
 
 function startChip(draft: DraftColumn, now: Date): DraftDecisionChip | null {

@@ -672,11 +672,12 @@ export async function openDraftSettings(panel: Locator, from: 'more' | DecisionF
   return menu
 }
 
-/** A chip's visible words WITHOUT the ✦ badge, whitespace collapsed. */
+/** A chip's visible words WITHOUT the ✦ badge and the field key ("Pinned:"),
+ *  whitespace collapsed: the value words, which must match the menu's. */
 export async function chipLabel(chip: Locator): Promise<string> {
   return chip.evaluate((el) => {
     const copy = el.cloneNode(true) as HTMLElement
-    copy.querySelectorAll('.draft-ai-badge').forEach((b) => b.remove())
+    copy.querySelectorAll('.draft-ai-badge, .draft-decision-key').forEach((b) => b.remove())
     return (copy.textContent ?? '').replace(/\s+/g, ' ').trim()
   })
 }

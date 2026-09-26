@@ -22406,6 +22406,9 @@ td.usage-share-col {
 }
 .draft-decision-chip-overdue { color: var(--danger, var(--error)); }
 .draft-decision-chip .draft-ai-badge { margin-left: 0; }
+/* "Pinned:" / "Priority:", the same muted key as the project pill's "Project:". */
+.draft-decision-key { flex-shrink: 0; color: var(--fg-muted); font-weight: 400; }
+.draft-decision-chip-active .draft-decision-key { color: inherit; }
 .draft-decision-glyph {
   display: inline-flex;
   align-items: center;

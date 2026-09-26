@@ -206,6 +206,24 @@ describe('unread chip and order', () => {
       .toEqual(['pinTier', 'priority', 'startDate', 'dueDate', 'unread']);
     expect(dec.draftDecisionChips(draft({}), ctx())).toEqual([]);
   });
+
+  it('tier and priority name their field, so two chips that share a value word stay distinct', () => {
+    // "someday: ..." decides tier Backlog AND priority Backlog: without the key
+    // the row showed two identical "Backlog" chips.
+    const d = draft(
+      { pinTier: 'backlog', priority: 'backlog', startDate: '2026-09-25', dueDate: '2026-09-26', unread: true },
+      { ai: ['pinTier', 'priority', 'startDate', 'dueDate'], owner: { unread: 'user' } },
+    );
+    const byField = new Map(dec.draftDecisionChips(d, ctx()).map((c) => [c.field, c]));
+    expect(byField.get('pinTier')).toMatchObject({ key: 'Pinned:', label: 'Backlog' });
+    expect(byField.get('priority')).toMatchObject({ key: 'Priority:', label: 'Backlog' });
+    // Dates and unread already say their field in the label.
+    for (const f of ['startDate', 'dueDate', 'unread'] as const) expect(byField.get(f)!.key).toBeUndefined();
+    // Every tier branch keys the chip, custom and removed tiers included.
+    expect(chip(draft({ pinTier: 'ct_deep' }, { ai: ['pinTier'] }), 'pinTier')!.key).toBe('Pinned:');
+    expect(chip(draft({ pinTier: 'ct_gone' }, { ai: ['pinTier'] }), 'pinTier')!.key).toBe('Pinned:');
+    expect(chip(draft({ pinTier: 'ct_gone' }, { ai: ['pinTier'] }), 'pinTier', ctx({ customTiersLoaded: false }))!.key).toBe('Pinned:');
+  });
 });
 
 describe('formatDraftDate (C64)', () => {

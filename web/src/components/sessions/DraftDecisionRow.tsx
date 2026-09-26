@@ -253,6 +253,7 @@ export function DraftDecisionChips({ chips, menu }: { chips: readonly DraftDecis
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => menu.openFrom(e.currentTarget, e)}
           >
+            {c.key && <><span className="draft-decision-key">{c.key}</span>{' '}</>}
             <ChipGlyph chip={c} />
             <span className={labelCls}>{c.label}</span>
             {c.ai && <span className="draft-ai-badge" aria-hidden="true">✦</span>}
