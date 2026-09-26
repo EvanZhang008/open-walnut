@@ -32,6 +32,14 @@
 //
 // Compiled, signed and cached lazily by src/core/helper-build.ts, for
 // src/core/calendar/sources/eventkit.ts (which owns HELPER_VERSION).
+//
+// The SAME file is also compiled into Walnut.app (desktop/build.sh, with
+// -D WALNUT_APP), where `Walnut --calendar-bridge <subcommand> …` runs
+// walnutCalendarMain. That is the preferred route: the Calendars grant then
+// belongs to Walnut itself, one certificate-signed identity that survives every
+// rebuild, instead of to a helper whose version bumps each asked again. So:
+// everything here except walnutCalendarMain is `private` (the app module has its
+// own `fail`/`output`), and the `@main` entry point exists only in the helper.
 
 import Darwin
 import EventKit
@@ -47,7 +55,7 @@ import Foundation
 // responsible process and tccd reads the usage keys from our embedded
 // __info_plist section (injected at compile time by eventkit.ts). The grant
 // then sticks to this binary, independent of who launched Walnut.
-func reexecDisclaimedIfNeeded() {
+private func reexecDisclaimedIfNeeded() {
     guard ProcessInfo.processInfo.environment["WALNUT_CAL_DISCLAIMED"] != "1" else { return }
     typealias DisclaimFn = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>?, Int32) -> Int32
     let RTLD_DEFAULT = UnsafeMutableRawPointer(bitPattern: -2)
@@ -75,9 +83,9 @@ func reexecDisclaimedIfNeeded() {
     exit((status & 0x7f) == 0 ? (status >> 8) & 0xff : 1)
 }
 
-let store = EKEventStore()
+private let store = EKEventStore()
 
-func fail(_ message: String, code: String) -> Never {
+private func fail(_ message: String, code: String) -> Never {
     let payload: [String: String] = ["error": message, "code": code]
     let data = try! JSONSerialization.data(withJSONObject: payload)
     FileHandle.standardOutput.write(data)
@@ -86,7 +94,7 @@ func fail(_ message: String, code: String) -> Never {
 
 // ── date helpers (local wall time, no tz suffix) ────────────────────────────
 
-let localFormatter: DateFormatter = {
+private let localFormatter: DateFormatter = {
     let f = DateFormatter()
     f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
     f.timeZone = TimeZone.current
@@ -94,7 +102,7 @@ let localFormatter: DateFormatter = {
     return f
 }()
 
-let dayFormatter: DateFormatter = {
+private let dayFormatter: DateFormatter = {
     let f = DateFormatter()
     f.dateFormat = "yyyy-MM-dd"
     f.timeZone = TimeZone.current
@@ -102,12 +110,12 @@ let dayFormatter: DateFormatter = {
     return f
 }()
 
-func parseLocal(_ s: String) -> Date? {
+private func parseLocal(_ s: String) -> Date? {
     if s.contains("T") { return localFormatter.date(from: s) }
     return dayFormatter.date(from: s)
 }
 
-func formatLocal(_ d: Date) -> String { localFormatter.string(from: d) }
+private func formatLocal(_ d: Date) -> String { localFormatter.string(from: d) }
 
 // ── access ──────────────────────────────────────────────────────────────────
 
@@ -117,7 +125,7 @@ func formatLocal(_ d: Date) -> String { localFormatter.string(from: d) }
 /// pop the dialog on every poll tick. Because this helper disclaims parent
 /// responsibility (see reexecDisclaimedIfNeeded), the state reported here is
 /// the helper's OWN grant — the one that actually gates list/create/update.
-func printAuthStatus() -> Never {
+private func printAuthStatus() -> Never {
     let status = EKEventStore.authorizationStatus(for: .event)
     let state: String
     switch status {
@@ -130,7 +138,7 @@ func printAuthStatus() -> Never {
     exit(0)
 }
 
-func requestAccess() {
+private func requestAccess() {
     let sema = DispatchSemaphore(value: 0)
     var granted = false
     var accessError: Error?
@@ -151,13 +159,13 @@ func requestAccess() {
     }
 }
 
-func colorHex(_ calendar: EKCalendar) -> String {
+private func colorHex(_ calendar: EKCalendar) -> String {
     guard let cg = calendar.cgColor, let comps = cg.components, comps.count >= 3 else { return "#0A84FF" }
     let r = Int((comps[0] * 255).rounded()), g = Int((comps[1] * 255).rounded()), b = Int((comps[2] * 255).rounded())
     return String(format: "#%02X%02X%02X", r, g, b)
 }
 
-func calendarJson(_ c: EKCalendar) -> [String: Any] {
+private func calendarJson(_ c: EKCalendar) -> [String: Any] {
     return [
         "id": c.calendarIdentifier,
         "title": c.title,
@@ -169,7 +177,7 @@ func calendarJson(_ c: EKCalendar) -> [String: Any] {
 
 /// EKEventStatus → wire string. `.none` (most personal events) returns nil so
 /// the key is omitted entirely rather than shipping a meaningless "none".
-func statusString(_ status: EKEventStatus) -> String? {
+private func statusString(_ status: EKEventStatus) -> String? {
     switch status {
     case .confirmed: return "confirmed"
     case .tentative: return "tentative"
@@ -181,7 +189,7 @@ func statusString(_ status: EKEventStatus) -> String? {
 /// The CURRENT USER's response to an invitation, when the source tracks it.
 /// Only the states a caller can act on are reported; .unknown/.completed/
 /// .inProcess say nothing about whether the user is going, so they're omitted.
-func selfStatusString(_ e: EKEvent) -> String? {
+private func selfStatusString(_ e: EKEvent) -> String? {
     guard let attendees = e.attendees else { return nil }
     for a in attendees where a.isCurrentUser {
         switch a.participantStatus {
@@ -196,7 +204,7 @@ func selfStatusString(_ e: EKEvent) -> String? {
     return nil
 }
 
-func eventJson(_ e: EKEvent) -> [String: Any] {
+private func eventJson(_ e: EKEvent) -> [String: Any] {
     // Occurrences of a recurring event share eventIdentifier; suffix the start
     // timestamp so every rendered chip has a unique, re-findable id.
     let baseId = e.eventIdentifier ?? "unknown"
@@ -222,7 +230,7 @@ func eventJson(_ e: EKEvent) -> [String: Any] {
 
 /// Resolve an occurrence id ("<ekid>" or "<ekid>#<epoch>") to the concrete
 /// EKEvent instance, searching around the occurrence time for recurring events.
-func findEvent(_ occId: String) -> EKEvent? {
+private func findEvent(_ occId: String) -> EKEvent? {
     let parts = occId.split(separator: "#", maxSplits: 1)
     let baseId = String(parts[0])
     guard let base = store.event(withIdentifier: baseId) else { return nil }
@@ -239,19 +247,27 @@ func findEvent(_ occId: String) -> EKEvent? {
     } ?? base
 }
 
-func output(_ obj: Any) {
+private func output(_ obj: Any) {
     let data = try! JSONSerialization.data(withJSONObject: obj)
     FileHandle.standardOutput.write(data)
 }
 
 // ── main ────────────────────────────────────────────────────────────────────
 
-let args = CommandLine.arguments
+/// One request, then exit. `args` is argv-shaped: args[0] is the program, args[1]
+/// the subcommand. Walnut.app passes its own argv with `--calendar-bridge` removed.
+func walnutCalendarMain(_ args: [String]) -> Never {
 guard args.count >= 2 else { fail("usage: walnut-calendar <status|calendars|list|update|create|delete> …", code: "usage") }
 reexecDisclaimedIfNeeded()
 // `status` must run BEFORE requestAccess(): it exists precisely to observe
 // the auth state without mutating it (no prompt, no denial recorded).
 if args[1] == "status" { printAuthStatus() }
+// And a subcommand we do not know is refused BEFORE requestAccess() too: asking
+// for Calendars and then answering "usage" put a real permission dialog on the
+// user's screen for a typo (2026-09-26, a verification run of this very file).
+guard ["calendars", "list", "update", "create", "delete"].contains(args[1]) else {
+    fail("unknown subcommand: \(args[1])", code: "usage")
+}
 requestAccess()
 
 switch args[1] {
@@ -321,3 +337,16 @@ case "delete":
 default:
     fail("unknown subcommand: \(args[1])", code: "usage")
 }
+exit(0)
+}
+
+// The helper's entry point. `@main` rather than a bare call because Swift rejects a
+// top-level expression in a non-main file even inside an INACTIVE #if, and in the
+// app build this file is not main.swift. Needs -parse-as-library when compiled on
+// its own (HelperSpec.parseAsLibrary in src/core/calendar/sources/eventkit.ts).
+#if !WALNUT_APP
+@main
+struct WalnutCalendarHelper {
+    static func main() { walnutCalendarMain(CommandLine.arguments) }
+}
+#endif

@@ -19,7 +19,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CLOUD_MODE } from '../../constants.js';
-import { calendarAuthStatus, calendarHelperFallback } from '../calendar/sources/eventkit.js';
+import { calendarAuthStatus, calendarGrantApp, calendarHelperFallback } from '../calendar/sources/eventkit.js';
 import { log } from '../../logging/index.js';
 import type { Config } from '../types.js';
 import type { LauncherInfo, PermissionsReport, PermissionStatus } from './types.js';
@@ -264,6 +264,9 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
   // be holding the grant and serving real events, and saying "not granted" over
   // a full calendar is how a correct panel loses the user's trust.
   const calFallback = calState === 'granted' ? null : calendarHelperFallback();
+  // Walnut.app itself when it answers calendar requests; null means the helper does
+  // and asks for itself. Resolved by the status probe above, so this is a lookup.
+  const calApp = await calendarGrantApp();
 
   // ONE binding for the path the session row names: the row's grantTarget and
   // the copy control inside its paste step have to be the same string, and
@@ -283,12 +286,12 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
         'Shows your Mac calendar events (iCloud, Google, Exchange) in the calendar view.'
         + (calFallback
           ? ` Your calendar is working right now through an older copy of the helper (${calFallback.version}),`
-            + ' so nothing is missing; granting the current one just retires the old copy.'
+            + ` so nothing is missing; granting ${calApp ? 'Walnut' : 'the current one'} just retires the old copy.`
           : ''),
       ...(calFallback ? { workingVia: `an older copy of the helper (${calFallback.version})` } : {}),
-      // The v2+ helper disclaims parent responsibility, so the grant target
-      // is the helper itself — launcher-independent by design.
-      grantTarget: 'walnut-calendar (asks by itself — one Allow click)',
+      // Both routes disclaim parent responsibility (Walnut.app re-execs itself the
+      // same way the helper does), so the grant is launcher-independent either way.
+      grantTarget: calApp ?? 'walnut-calendar (asks by itself — one Allow click)',
       launcherIndependent: true,
       settingsUrl: SETTINGS_URL.calendars,
       steps:
@@ -299,13 +302,17 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
               // usually true: macOS keys a grant to a CODE IDENTITY, so a helper
               // that got rebuilt or re-signed is a different program with no
               // history. Naming that up front stops it reading as data loss.
-              'If you have granted this before, macOS is asking again because Walnut re-signed the helper, and a re-signed program is a new one to macOS. It is now signed with a certificate, so this is the last time.',
+              calApp
+                // The move to Walnut itself is the one extra ask, and it is the
+                // last: the app keeps one certificate identity across updates.
+                ? 'If you granted this before, that was to a separate helper. Calendar now belongs to Walnut itself, so macOS asks once more, and this is the last time.'
+                : 'If you have granted this before, macOS is asking again because Walnut re-signed the helper, and a re-signed program is a new one to macOS. It is now signed with a certificate, so this is the last time.',
               'Click "Request access" below.',
               'Click Allow Full Access in the macOS dialog.',
             ]
           : [
               { text: 'Open System Settings → Privacy & Security → Calendars.', open: true },
-              'Find the walnut-calendar entry and enable Full Access.',
+              `Find ${calApp ? 'Walnut' : 'the walnut-calendar entry'} and enable Full Access.`,
               'No entry? Click "Request access" below to re-trigger the prompt.',
             ],
     },

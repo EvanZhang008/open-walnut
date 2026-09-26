@@ -23,6 +23,14 @@ import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-helper-cache'));
+// This file tests the helper generations themselves, so it opens the temp-data-dir
+// gate (src/core/helper-build.ts) that would otherwise refuse every helper here. It
+// uses stub binaries, never a real EventKit helper.
+//
+// And with the gate open, the calendar would first look for the REAL Walnut.app and
+// run `--calendar-bridge list` on it, which asks for Calendars on the user's screen.
+// So there is never an app in this file: the route under test is the helper's.
+vi.mock('../../src/providers/desktop-app.js', () => ({ findDesktopAppWith: async () => null }));
 
 const { WALNUT_HOME } = await import('../../src/constants.js');
 const { helperCacheDecision, olderHelperGenerations } = await import('../../src/core/helper-build.js');
@@ -48,10 +56,12 @@ function fingerprintOf(spec: HelperSpec, source: string): string {
 }
 
 beforeEach(async () => {
+  process.env.WALNUT_NATIVE_HELPERS = '1';
   await fsp.mkdir(CACHE, { recursive: true });
 });
 
 afterEach(async () => {
+  delete process.env.WALNUT_NATIVE_HELPERS;
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 

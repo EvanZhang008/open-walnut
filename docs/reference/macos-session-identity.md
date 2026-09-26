@@ -59,6 +59,20 @@ setup is a paste. The row keeps saying "Can't be checked" afterwards, because
 macOS offers no way to read this grant back; the observable signal is that the
 popups stop.
 
+## Calendar follows the same rule
+
+Calendar requests go to the same app: `Walnut --calendar-bridge <subcommand> …`
+answers one EventKit request and exits (no window, no Dock icon). So System
+Settings → Privacy & Security → Calendars shows **Walnut**, one certificate-signed
+identity that keeps its grant across rebuilds.
+
+Before this, a separate `walnut-calendar-v<N>` helper asked for itself, and every
+version bump was a new program to macOS that asked again. The helper remains for
+installs with no Walnut.app. While Walnut has not been granted yet, a helper you
+granted earlier keeps the calendar full, and Settings says so.
+
+Moving to Walnut costs one more Calendars prompt, naming Walnut. It is the last one.
+
 ## Scope, precisely
 
 - **Full Disk Access granted to Walnut covers the daemon and everything it
@@ -119,4 +133,7 @@ popups stop.
 Implementation: `desktop/SessionHost.swift` (the supervisor, called by
 `desktop/main.swift` before any UI exists), `src/providers/session-host.ts` (find
 the app, approve the command), `src/providers/session-host-core.ts` (paths,
-manifest, launch decision).
+manifest, launch decision), `src/providers/desktop-app.ts` (find the app and read
+which flags it knows without running it). Calendar: `desktop/CalendarBridge.swift`
+plus `src/data/walnut-calendar.swift` (one protocol, compiled into the app and into
+the helper), routed by `src/core/calendar/sources/eventkit.ts`.

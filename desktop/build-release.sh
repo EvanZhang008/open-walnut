@@ -25,15 +25,17 @@ echo "Compiling for arm64..."
 swiftc -O -o "$MACOS/${APP_NAME}_arm64" \
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
-    "$SCRIPT_DIR/SessionHost.swift" \
-    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -target arm64-apple-macos12.0
+    "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" \
+    "$SCRIPT_DIR/../src/data/walnut-calendar.swift" -D WALNUT_APP \
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -target arm64-apple-macos12.0
 
 echo "Compiling for x86_64..."
 swiftc -O -o "$MACOS/${APP_NAME}_x86_64" \
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
-    "$SCRIPT_DIR/SessionHost.swift" \
-    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -target x86_64-apple-macos12.0
+    "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" \
+    "$SCRIPT_DIR/../src/data/walnut-calendar.swift" -D WALNUT_APP \
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -target x86_64-apple-macos12.0
 
 echo "Creating universal binary..."
 lipo -create "$MACOS/${APP_NAME}_arm64" "$MACOS/${APP_NAME}_x86_64" \

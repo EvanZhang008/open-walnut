@@ -1890,6 +1890,9 @@ extension AppDelegate: WKNavigationDelegate {
 // visible app instance. Returns immediately on a normal launch. See
 // desktop/SessionHost.swift.
 runSessionHostIfRequested()
+// `Walnut --calendar-bridge <subcommand> …` answers one calendar request, for the
+// same reason and under the same rule: see desktop/CalendarBridge.swift.
+runCalendarBridgeIfRequested()
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

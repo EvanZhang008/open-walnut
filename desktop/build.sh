@@ -23,8 +23,9 @@ mkdir -p "$MACOS" "$RESOURCES"
 swiftc -O -o "$MACOS/$APP_NAME" \
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
-    "$SCRIPT_DIR/SessionHost.swift" \
-    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon
+    "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" \
+    "$SCRIPT_DIR/../src/data/walnut-calendar.swift" -D WALNUT_APP \
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit
 
 # Create Info.plist
 cat > "$CONTENTS/Info.plist" << 'EOF'

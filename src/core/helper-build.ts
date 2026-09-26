@@ -92,7 +92,30 @@ import { log } from '../logging/index.js';
 export type HelperUnavailable = 'not_macos' | 'no_compiler' | 'compile_failed' | 'ephemeral';
 
 /**
+ * The system temp roots, in the spellings a path can arrive in. macOS's per-user
+ * temp dir is /var/folders/…, which tccd reports as /private/var/folders/….
+ *
+ * Fixed roots and deliberately NOT os.tmpdir(): that is just $TMPDIR, and a TMPDIR
+ * pointed at the home would make the user's real data dir "temporary" and silently
+ * switch off calendar, Screen Time and the rest on their own server.
+ */
+const SYSTEM_TEMP_ROOTS = ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders'];
+
+/** True when `dir` sits under a system temp root, compared by whole path segment. */
+export function isThrowawayDataDir(dir: string): boolean {
+  const resolved = path.resolve(dir);
+  return SYSTEM_TEMP_ROOTS.some((root) => resolved === root || resolved.startsWith(`${root}/`));
+}
+
+/**
  * Whether this process may compile and run native helpers at all.
+ *
+ * Refused when the data dir is throwaway, however the server was started. The
+ * earlier rule keyed on `--_ephemeral-child` alone, and a server started IN a vitest
+ * worker never carries that flag: on 2026-09-26 tests/e2e/health-e2e.test.ts
+ * compiled `walnut-calendar-v6` into its temp home and put the Calendars dialog on
+ * the user's screen. The data dir is the real invariant, because it is what makes
+ * the helper a new TCC subject.
  *
  * An ephemeral server (Playwright fixture, `dev:ephemeral`, any `--_ephemeral-child`)
  * gets a fresh WALNUT_HOME under the system temp dir, so its helper cache is a path
@@ -109,13 +132,19 @@ export type HelperUnavailable = 'not_macos' | 'no_compiler' | 'compile_failed' |
  * really wants a fixture to reach the real calendar.
  */
 export function nativeHelpersAllowed(): boolean {
-  if (!IS_EPHEMERAL) return true;
+  if (!IS_EPHEMERAL && !isThrowawayDataDir(WALNUT_HOME)) return true;
   return process.env.WALNUT_NATIVE_HELPERS === '1';
 }
 
 export interface HelperSpec {
   /** Base name, no version: `walnut-reader`. The cached file appends the version. */
   name: string;
+  /**
+   * Compile with `-parse-as-library`, for a source whose entry point is `@main`
+   * rather than top-level code. The calendar helper needs it because the same file
+   * is also compiled into Walnut.app, where top-level code is not allowed.
+   */
+  parseAsLibrary?: boolean;
   /** Bumped when the .swift changes. Part of the cached file name so an upgrade
    *  never runs a stale binary, and so two Walnut versions can coexist. */
   version: string;
@@ -179,6 +208,24 @@ export function clearFailedHelper(name: string): void {
   builds.delete(name);
 }
 
+/**
+ * The already-built current-version binary, or null. Never compiles, never
+ * rewrites: for a caller that only wants to TRY a helper the user may have granted
+ * before (the calendar, once Walnut.app answers instead), building one just to ask
+ * it would mint a program macOS has never seen.
+ */
+export function existingHelperBinary(spec: HelperSpec): string | null {
+  if (!nativeHelpersAllowed()) return null;
+  const bin = cachedBinPath(spec);
+  try {
+    if (!fs.statSync(bin).isFile()) return null;
+    fs.accessSync(bin, fs.constants.X_OK);
+    return bin;
+  } catch {
+    return null;
+  }
+}
+
 /** Drop all memoized builds (tests, and a WALNUT_HOME swap). */
 export function resetHelperBuilds(): void {
   builds.clear();
@@ -225,6 +272,10 @@ function sourceFingerprint(spec: HelperSpec, srcPath: string): string | null {
     .update(spec.identifier)
     .update('\n--\n')
     .update(spec.infoPlist ?? '')
+    // Only when set: an unconditional term would move EVERY helper's fingerprint and
+    // rebuild them all in place, which for an ad-hoc signed helper throws away the
+    // permission the user granted it.
+    .update(spec.parseAsLibrary ? '\n--\nparse-as-library' : '')
     .digest('hex');
 }
 
@@ -275,6 +326,9 @@ export function helperCacheDecision(spec: HelperSpec, srcPath: string): HelperCa
  * caller still has to prove the older protocol does what it needs.
  */
 export function olderHelperGenerations(spec: HelperSpec): string[] {
+  // Same gate as ensureHelper: an old generation in a throwaway cache (a copied data
+  // dir carries them) is just as new to tccd as a freshly compiled one.
+  if (!nativeHelpersAllowed()) return [];
   const current = /^v(\d+)$/.exec(spec.version);
   if (!current) return [];
   const currentN = Number(current[1]);
@@ -331,7 +385,7 @@ async function buildHelper(spec: HelperSpec, sourceFile: string): Promise<BuildO
   // Before the cache lookup on purpose: even a helper that already sits in this temp
   // dir must not run, because running it is what asks the user for the permission.
   if (!nativeHelpersAllowed()) {
-    log.web.info('native helper skipped on an ephemeral server', {
+    log.web.info('native helper skipped: temporary data dir', {
       helper: spec.name,
       note: 'a helper under a temp data dir is a new TCC subject and would prompt; set WALNUT_NATIVE_HELPERS=1 to allow',
     });
@@ -374,6 +428,7 @@ async function buildHelper(spec: HelperSpec, sourceFile: string): Promise<BuildO
   const args = ['-n', '10', 'xcrun', 'swiftc', '-O', '-o', '', src];
   const tmpBin = `${bin}.tmp-${process.pid}`;
   args[6] = tmpBin;
+  if (spec.parseAsLibrary) args.push('-parse-as-library');
   let plistPath: string | undefined;
   if (spec.infoPlist) {
     // tccd reads the usage description out of this section once the helper

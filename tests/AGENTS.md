@@ -44,12 +44,15 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
   `scripts/pw-cleanup.sh status` first — at load 486 (14 cores) every spec failed on
   `page.waitForLoadState`. Fixture cold boot: ~20 s idle, ~70 s at load 133.
 - **A fixture server never compiles or runs a native macOS helper** (walnut-calendar, walnut-activity,
-  walnut-extract, walnut-reader). `src/core/helper-build.ts` refuses on any `--_ephemeral-child`
-  process, because tccd keys a bare executable's grant by PATH: a helper compiled into a throwaway
-  `OPEN_WALNUT_HOME` is a program macOS has never seen, and its first calendar read puts the
-  Calendars dialog on the developer's screen (2026-09-11: 29 dialogs in one afternoon, one per mail
-  fixture boot). Calendar and Time surfaces answer `not-configured` / `reason: 'ephemeral'` in a
-  fixture, the same shape Linux CI sees. `WALNUT_NATIVE_HELPERS=1` is the explicit opt back in.
+  walnut-extract, walnut-reader). `src/core/helper-build.ts` refuses whenever the data dir sits
+  under a system temp root (and on any `--_ephemeral-child`), because tccd keys a bare executable's
+  grant by PATH: a helper compiled into a throwaway `OPEN_WALNUT_HOME` is a program macOS has never
+  seen, and its first calendar read puts the Calendars dialog on the developer's screen (2026-09-11:
+  29 dialogs in one afternoon, one per mail fixture boot; 2026-09-26: an in-process `startServer`
+  vitest test, which never carries the ephemeral flag). Calendar and Time surfaces answer
+  `not-configured` / `reason: 'ephemeral'` in a fixture, the same shape Linux CI sees. The same gate
+  keeps a test server from running the real Walnut.app for Calendar. `WALNUT_NATIVE_HELPERS=1` is the
+  explicit opt back in.
 
 ## iOS long-session rendering tests (`ios-native/WalnutTests` + `scripts/ios-perf-check.sh`)
 

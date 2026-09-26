@@ -164,12 +164,19 @@ afterAll(async () => {
 });
 
 describe.skipIf(!hasSwift)('the compiled supervisor', () => {
-  it('reports its own identity, and is its own responsible process', async () => {
+  it('reports its own identity', async () => {
     // Through the production reader, which passes no environment of its own.
     const identity = await readSessionHostIdentity(executable);
     expect(identity?.bundleIdentifier).toBe(TEST_BUNDLE_ID);
     expect(identity?.bundlePath).toBe(app);
-    expect(identity?.selfResponsible).toBe(true);
+    // Reported, but NOT asserted true: `--identity` answers from the first,
+    // undisclaimed generation, so who is responsible for it depends on who started
+    // the test. It was true while sessions ran under node, and became false the day
+    // they started running under Walnut.app (2026-09-26), with no code change. The
+    // claim the feature rests on, that the app is responsible for what it runs, is
+    // the grandchild test below, which disclaims and does not depend on the caller.
+    expect(typeof identity?.selfResponsible).toBe('boolean');
+    expect(identity?.responsiblePid).toBeGreaterThan(1);
   });
 
   it('reads the manifest path it was given, not one from its own environment', () => {

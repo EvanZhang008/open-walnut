@@ -24,14 +24,12 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { CLOUD_MODE, IS_EPHEMERAL } from '../constants.js';
 import { log } from '../logging/index.js';
+import { findDesktopApp, findDesktopAppWith, realHome } from './desktop-app.js';
 import {
   buildSessionHostManifest,
-  desktopAppCandidates,
-  desktopAppExecutable,
   parseSessionHostIdentity,
   sessionHostArgv,
   sessionHostManifestPath,
@@ -56,40 +54,6 @@ async function hashFile(target: string): Promise<string> {
     await handle.close();
   }
   return hash.digest('hex');
-}
-
-/**
- * Does this Walnut.app know `--session-host`?
- *
- * Answered by searching the Mach-O for the flag, NEVER by running it: an app that
- * does not know the flag would ignore it and start the GUI. Chunked with an
- * overlap so a match spanning two reads is still found.
- */
-async function appSupportsSessionHost(executable: string): Promise<boolean> {
-  const needle = Buffer.from(SESSION_HOST_FLAG, 'utf8');
-  let handle: fsp.FileHandle;
-  try {
-    handle = await fsp.open(executable, 'r');
-  } catch {
-    return false;
-  }
-  try {
-    const chunk = 1 << 20;
-    const overlap = needle.length - 1;
-    const buffer = Buffer.allocUnsafe(chunk + overlap);
-    let carried = 0;
-    for (;;) {
-      const { bytesRead } = await handle.read(buffer, carried, chunk, null);
-      if (bytesRead === 0) return false;
-      const filled = buffer.subarray(0, carried + bytesRead);
-      if (filled.includes(needle)) return true;
-      // Keep the tail so the next window can complete a straddling match.
-      filled.subarray(filled.length - overlap).copy(buffer, 0);
-      carried = Math.min(overlap, filled.length);
-    }
-  } finally {
-    await handle.close();
-  }
 }
 
 /**
@@ -140,23 +104,6 @@ export async function readSessionHostIdentity(executable: string): Promise<Sessi
   });
 }
 
-/**
- * The REAL user's home, from the passwd entry rather than `$HOME`.
- *
- * Never os.homedir(): it IS `$HOME`, and Walnut deliberately runs with a fake
- * HOME in sandbox/onboarding modes. Looking for Walnut.app under a throwaway home
- * would report "not installed" on a machine that has it, and would write the
- * manifest somewhere the app will never read.
- */
-function realHome(): string | null {
-  try {
-    const home = os.userInfo().homedir;
-    return home && path.isAbsolute(home) ? home : null;
-  } catch {
-    return null;
-  }
-}
-
 export interface SessionHostInspection {
   /** The app that would supervise the daemon, or null when there is none usable. */
   app: string | null;
@@ -185,14 +132,13 @@ export async function inspectSessionHost(input: {
     optedOut: process.env.WALNUT_SESSION_HOST === '0',
   });
   if (blocked) return { app: null, reason: blocked };
-  const home = realHome();
-  if (!home) return { app: null, reason: 'not_installed', detail: 'no passwd home for this user' };
-  const app = desktopAppCandidates(home).find((c) => fs.existsSync(desktopAppExecutable(c)));
-  if (!app) return { app: null, reason: 'not_installed', detail: 'no Walnut.app on this machine' };
-  if (!(await appSupportsSessionHost(desktopAppExecutable(app)))) {
-    return { app: null, reason: 'unsupported_app', detail: `${app} predates ${SESSION_HOST_FLAG}` };
+  if (!realHome()) return { app: null, reason: 'not_installed', detail: 'no passwd home for this user' };
+  const installed = findDesktopApp();
+  if (!installed) return { app: null, reason: 'not_installed', detail: 'no Walnut.app on this machine' };
+  if (!(await findDesktopAppWith(SESSION_HOST_FLAG))) {
+    return { app: null, reason: 'unsupported_app', detail: `${installed.app} predates ${SESSION_HOST_FLAG}` };
   }
-  return { app };
+  return { app: installed.app };
 }
 
 export type SessionHostResolution =
@@ -224,16 +170,16 @@ export async function resolveSessionHostLaunch(input: {
   const home = realHome();
   if (!home) return { available: false, reason: 'not_installed', detail: 'no passwd home for this user' };
 
-  const app = desktopAppCandidates(home).find((candidate) => fs.existsSync(desktopAppExecutable(candidate)));
-  if (!app) {
+  const installed = findDesktopApp();
+  if (!installed) {
     return {
       available: false,
       reason: 'not_installed',
       detail: 'no Walnut.app found; sessions run under the plain node identity',
     };
   }
-  const executable = desktopAppExecutable(app);
-  if (!(await appSupportsSessionHost(executable))) {
+  const { app, executable } = installed;
+  if (!(await findDesktopAppWith(SESSION_HOST_FLAG))) {
     // `desktop/build.sh`, NOT build-release.sh: the release script ad-hoc signs
     // when the box has no Developer ID Application certificate, and an ad-hoc
     // signature gives tccd a CONTENT-HASH identity that changes on every rebuild.

@@ -14,7 +14,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CLOUD_MODE } from '../../../constants.js';
 import { log } from '../../../logging/index.js';
-import { ensureHelper, helperFailure, olderHelperGenerations, type HelperSpec } from '../../helper-build.js';
+import {
+  ensureHelper, existingHelperBinary, helperFailure, nativeHelpersAllowed, olderHelperGenerations,
+  type HelperSpec,
+} from '../../helper-build.js';
+import { findDesktopAppWith } from '../../../providers/desktop-app.js';
 import { CalendarHelperError } from '../helper-error.js';
 import type {
   CalendarEvent,
@@ -63,6 +67,17 @@ const execFileAsync = promisify(execFile);
 // because tccd had already recorded an entry for v5's path whose code
 // requirement no longer matches, and it will not re-prompt for that path.
 const HELPER_VERSION = 'v6';
+
+/**
+ * Walnut.app answers calendar requests itself: `Walnut --calendar-bridge <sub> …`
+ * (desktop/CalendarBridge.swift, compiled from the same walnut-calendar.swift).
+ * Preferred over the helper because the Calendars grant then belongs to Walnut, one
+ * certificate-signed identity that survives rebuilds, instead of to a helper whose
+ * version bumps each asked again (v2 … v6 above). The helper remains for installs
+ * with no Walnut.app, and as the stand-in while Walnut is not granted yet.
+ * Pinned against the Swift constant by tests/core/calendar-bridge.test.ts.
+ */
+export const CALENDAR_BRIDGE_FLAG = '--calendar-bridge';
 const HELPER_TIMEOUT_MS = 30_000;
 
 /** Embedded plist: tccd reads usage keys from here once the helper is its own
@@ -106,6 +121,8 @@ const HELPER_SPEC: HelperSpec = {
   // the dialog for a binary that does not declare the entitlement. See the
   // `entitlements` field's comment in src/core/helper-build.ts.
   entitlements: ['com.apple.security.personal-information.calendars'],
+  // The source's entry point is `@main`, because Walnut.app compiles the same file.
+  parseAsLibrary: true,
 };
 
 /**
@@ -138,10 +155,15 @@ export function calendarHelperFallback(): { path: string; version: string } | nu
 export function resetCalendarHelperFallback(): void {
   fallbackBin = null;
   lastFallbackProbe = 0;
+  lastStandInProbe = 0;
+  appAnswered = false;
 }
 
-async function execHelper<T>(bin: string, args: string[]): Promise<T> {
-  const { stdout } = await execFileAsync(bin, args, {
+/** `[program, ...leading args]`: `[helper]` or `[Walnut, '--calendar-bridge']`. */
+type CalendarCommand = readonly string[];
+
+async function execHelper<T>(cmd: CalendarCommand, args: string[]): Promise<T> {
+  const { stdout } = await execFileAsync(cmd[0]!, [...cmd.slice(1), ...args], {
     timeout: HELPER_TIMEOUT_MS,
     maxBuffer: 16 * 1024 * 1024,
   });
@@ -155,12 +177,17 @@ async function execHelper<T>(bin: string, args: string[]): Promise<T> {
  * the JSON shapes used here would parse but not match, and an array of calendars
  * is the cheapest thing that fails loudly if it does not).
  */
-async function findGrantedOlderHelper(): Promise<string | null> {
-  for (const bin of olderHelperGenerations(HELPER_SPEC)) {
+async function findGrantedOlderHelper(currentIsApp: boolean): Promise<string | null> {
+  // With Walnut.app answering, the current HELPER is itself a previous identity:
+  // the one most likely to hold the grant, so it is tried first. Only an already
+  // built one: compiling a helper just to ask it would mint a new, ungranted program.
+  const current = currentIsApp ? existingHelperBinary(HELPER_SPEC) : null;
+  const candidates = [...(current ? [current] : []), ...olderHelperGenerations(HELPER_SPEC)];
+  for (const bin of candidates) {
     try {
-      const { state } = await execHelper<{ state?: string }>(bin, ['status']);
+      const { state } = await execHelper<{ state?: string }>([bin], ['status']);
       if (state !== 'granted') continue;
-      const cals = await execHelper<unknown>(bin, ['calendars']);
+      const cals = await execHelper<unknown>([bin], ['calendars']);
       if (!Array.isArray(cals)) continue;
       return bin;
     } catch {
@@ -179,19 +206,91 @@ async function findGrantedOlderHelper(): Promise<string | null> {
  * previous generation is standing in would send the user away with the problem
  * still there.
  */
+/** Which identity the CURRENT route asks as, for the Permission Doctor and the
+ *  degraded message. Null until the first request resolves it. */
+let currentRoute: { kind: 'app'; app: string } | { kind: 'helper' } | null = null;
+/** Set once Walnut.app has answered a real request, which ends the migration
+ *  check below for the life of the process. */
+let appAnswered = false;
+/** Its own clock, not lastFallbackProbe: sharing one would let this check use up
+ *  the cooldown and stop a DENIED Walnut from falling back right after it. */
+let lastStandInProbe = 0;
+
+/**
+ * The helper to use INSTEAD of asking Walnut, while Walnut has never been asked
+ * and a helper the user granted before still holds Calendars.
+ *
+ * Why not just ask: the first read after the move to Walnut would put the
+ * Calendars dialog up from a background poll, while the user is looking at
+ * something else, and a request nobody answers times out after 30s as an error
+ * rather than a denial, so the calendar would not even fall back. Instead the old
+ * grant keeps the calendar full and the ONE ask for Walnut waits for the user to
+ * press Request access in Settings → macOS Access (requestCalendarAccess).
+ * With no granted helper there is nothing to stand in, and Walnut asks as before.
+ */
+async function standInWhileWalnutUnasked(app: CalendarCommand): Promise<string | null> {
+  if (Date.now() - lastStandInProbe <= FALLBACK_PROBE_COOLDOWN_MS) return null;
+  lastStandInProbe = Date.now();
+  try {
+    const { state } = await execHelper<{ state?: string }>(app, ['status']);
+    if (state !== 'not-determined') return null;
+  } catch {
+    return null;
+  }
+  return findGrantedOlderHelper(true);
+}
+
+/**
+ * Where a calendar request goes: Walnut.app when it knows the bridge, else the
+ * helper. The app route obeys the same gate as the helper, because a test server
+ * running the real Walnut.app would put the same dialog on the user's screen.
+ */
+async function currentCommand(): Promise<CalendarCommand | null> {
+  if (process.platform === 'darwin' && !CLOUD_MODE && nativeHelpersAllowed()) {
+    const found = await findDesktopAppWith(CALENDAR_BRIDGE_FLAG);
+    if (found) {
+      currentRoute = { kind: 'app', app: found.app };
+      return [found.executable, CALENDAR_BRIDGE_FLAG];
+    }
+  }
+  const bin = await ensureHelper(HELPER_SPEC, 'walnut-calendar.swift');
+  currentRoute = bin ? { kind: 'helper' } : null;
+  return bin ? [bin] : null;
+}
+
+/** The app that holds the Calendars grant when Walnut.app answers, else null (the
+ *  helper asks for itself). Resolves the route if nothing has yet. */
+export async function calendarGrantApp(): Promise<string | null> {
+  if (!currentRoute) await currentCommand();
+  return currentRoute?.kind === 'app' ? currentRoute.app : null;
+}
+
 async function runHelper<T>(args: string[], opts?: { currentOnly?: boolean }): Promise<T> {
-  const current = await ensureHelper(HELPER_SPEC, 'walnut-calendar.swift');
-  const bin = opts?.currentOnly ? current : (fallbackBin ?? current);
-  if (!bin) {
+  const current = await currentCommand();
+  const cmd = opts?.currentOnly ? current : (fallbackBin ? [fallbackBin] : current);
+  if (!cmd) {
     // The compile message would send a fixture author to install Xcode for a helper
     // that was refused on purpose.
-    const message = helperFailure(HELPER_SPEC.name) === 'ephemeral'
-      ? 'Calendar helper is not run on an ephemeral server (a temp data dir would re-prompt for Calendars); set WALNUT_NATIVE_HELPERS=1 to allow it.'
+    const message = !nativeHelpersAllowed() || helperFailure(HELPER_SPEC.name) === 'ephemeral'
+      ? 'Calendar helper is not run from a temporary data dir (it would re-prompt for Calendars); set WALNUT_NATIVE_HELPERS=1 to allow it.'
       : 'Calendar helper unavailable (needs macOS + Xcode Command Line Tools for one-time compile).';
     throw new CalendarHelperError(message, 'not-configured');
   }
+  if (!opts?.currentOnly && !fallbackBin && currentRoute?.kind === 'app' && !appAnswered && current) {
+    const standIn = await standInWhileWalnutUnasked(current);
+    if (standIn) {
+      fallbackBin = standIn;
+      log.calendar.info('Walnut has not been asked for Calendars yet, reading through the granted helper', {
+        fallback: standIn,
+        note: 'Settings → macOS Access → Calendar → Request access moves the grant to Walnut',
+      });
+      return await execHelper<T>([standIn], args);
+    }
+  }
   try {
-    return await execHelper<T>(bin, args);
+    const result = await execHelper<T>(cmd, args);
+    if (cmd === current && currentRoute?.kind === 'app') appAnswered = true;
+    return result;
   } catch (err) {
     const mapped = toHelperError(err);
     // A denial on the CURRENT generation is the one failure a previous generation
@@ -199,19 +298,19 @@ async function runHelper<T>(args: string[], opts?: { currentOnly?: boolean }): P
     if (
       mapped.code === 'permission-denied' &&
       !opts?.currentOnly &&
-      bin === current &&
+      cmd === current &&
       Date.now() - lastFallbackProbe > FALLBACK_PROBE_COOLDOWN_MS
     ) {
       lastFallbackProbe = Date.now();
-      const older = await findGrantedOlderHelper();
+      const older = await findGrantedOlderHelper(currentRoute?.kind === 'app');
       if (older) {
         fallbackBin = older;
-        log.calendar.warn('calendar permission lost on the current helper, using an older one', {
-          current: bin,
+        log.calendar.warn('calendar permission missing on the current route, using an older helper', {
+          current: cmd.join(' '),
           fallback: older,
-          note: 'grant Calendars to the current helper again in System Settings → Privacy & Security → Calendars',
+          note: 'grant Calendars to Walnut in System Settings → Privacy & Security → Calendars',
         });
-        return await execHelper<T>(older, args);
+        return await execHelper<T>([older], args);
       }
     }
     throw mapped;
@@ -360,7 +459,9 @@ export function createEventKitSource(): CalendarSource {
     degraded(): string | undefined {
       const fallback = calendarHelperFallback();
       if (!fallback) return undefined;
-      return `Calendar access was lost after the helper was rebuilt, so events are coming from the previous helper (${fallback.version}). Grant Calendars to Walnut again in System Settings → Privacy & Security → Calendars.`;
+      return currentRoute?.kind === 'app'
+        ? `Calendar now belongs to Walnut, which has not been allowed yet, so events are coming from the older helper (${fallback.version}). Settings → macOS Access → Calendar → Request access moves it over.`
+        : `Calendar access was lost after the helper was rebuilt, so events are coming from the previous helper (${fallback.version}). Grant Calendars to Walnut again in System Settings → Privacy & Security → Calendars.`;
     },
 
     async listCalendars(): Promise<CalendarInfo[]> {

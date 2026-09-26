@@ -111,7 +111,7 @@ describe('native helpers on an ephemeral server', () => {
 
     expect(failure).toBeInstanceOf(CalendarHelperError);
     expect((failure as InstanceType<typeof CalendarHelperError>).code).toBe('not-configured');
-    expect(String((failure as Error).message)).toMatch(/ephemeral server/);
+    expect(String((failure as Error).message)).toMatch(/temporary data dir/);
     expect(String((failure as Error).message)).not.toMatch(/Xcode/);
     expect(spawnCalls).toEqual([]);
   });

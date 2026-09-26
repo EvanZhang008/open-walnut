@@ -9,12 +9,17 @@
  * that inner process sampling forever.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-outside-child'));
+// The helper here is a node stub, so this file opens the temp-data-dir gate that
+// refuses every native helper under a throwaway home (src/core/helper-build.ts).
+// Set before any import that could read it; the spawned child inherits it.
+process.env.WALNUT_NATIVE_HELPERS = '1';
+afterAll(() => { delete process.env.WALNUT_NATIVE_HELPERS; });
 
 import { CONFIG_FILE, WALNUT_HOME } from '../../../src/constants.js';
 import {
