@@ -109,6 +109,18 @@ describe('composeWithRefs', () => {
   it('keeps the newlines inside the prose', () => {
     expect(composeWithRefs([TASK], 'one\n\ntwo')).toBe(`${TASK} one\n\ntwo`);
   });
+
+  it('keeps a leading slash command first, so the engine still runs it', () => {
+    // An engine reads `/name` as a command only as the message's first word.
+    expect(composeWithRefs([TASK, SESSION], '/walnut-trigger watch this'))
+      .toBe(`/walnut-trigger ${TASK} ${SESSION} watch this`);
+    expect(composeWithRefs([TASK], '/walnut-trigger')).toBe(`/walnut-trigger ${TASK}`);
+    // Round trip: the chips come back and the box shows the command with its words.
+    expect(splitComposerRefs(composeWithRefs([TASK], '/walnut-trigger watch this')))
+      .toEqual({ refs: [TASK], body: '/walnut-trigger watch this' });
+    // A path is not a command: the tags lead as before.
+    expect(composeWithRefs([TASK], '/Users/a/b.ts is broken')).toBe(`${TASK} /Users/a/b.ts is broken`);
+  });
 });
 
 describe('the ChatInput paths, expressed as the calls ChatInput makes', () => {

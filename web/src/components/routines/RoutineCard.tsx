@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Routine } from '@/api/routines';
 import { describeRoutineTiming, describeExecutorBadge, describeCheck, describeFireTally, describeLastCheck } from '@/utils/routine-format';
+import '@/styles/routine-description.css';
 
 interface RoutineCardProps {
   routine: Routine;
@@ -95,6 +96,7 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
           </div>
         </div>
       </div>
+      {routine.description && <p className="routine-description routine-card-description">{routine.description}</p>}
       {routine.check && (
         <div className="routine-check-line text-xs" title={routine.check.run}>
           <code className="routine-check-run">{describeCheck(routine.check)}</code>

@@ -10,7 +10,7 @@ description: >-
 
 # Trigger
 
-A trigger is a **check script + an interval + a prompt**. The daemon on the host
+A trigger is a **check script + an interval + a prompt + a description**. The daemon on the host
 runs the script; when it says something happened, Walnut delivers the prompt into
 a session (the same conversation, resumed if it has gone quiet; a new session on
 the same task only if none can be resumed). You write the script, test it, arm it.
@@ -92,7 +92,8 @@ or a file only that host has), and never paste one inline as `curl -H
    Keep going until `parsed` is non-null. `wouldFire: false` with `parsed` set is a
    working check with nothing to report: that is a pass, not a failure.
 3. **Tell the user in ONE line** what will be watched and how often, before arming it.
-4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"..."}'`.
+4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"...","description":"..."}'`.
+   `description` is required (see below).
    `session` defaults to `"this"`, so the fire lands in this conversation (resumed
    if it has gone quiet by then). `cwd` and `host` default to this session's.
 5. **Report the id and the cadence.** Then stop; do not poll the trigger yourself.
@@ -107,10 +108,30 @@ instruction, not a notification: "Read each new comment; change the code where i
 asks, then reply on the PR" beats "there are new comments". The fire already
 carries the items as JSON, so do not ask the model to go re-fetch them.
 
+## Description writing
+
+The description is for the USER, on the task's trigger card, where the rest is a
+name and `bash …/check.sh @ host`. Without it nobody can tell what fires the
+trigger. One or two plain sentences, 600 characters at most, covering three things:
+
+1. **What is watched**, naming the real source: the PR number, the channel, the
+   folder, the build.
+2. **When it fires**: the condition, and the cadence when it matters.
+3. **What the session does** when it fires.
+
+- Good: "Checks PR 123 for new review comments every 5 minutes. When one arrives,
+  the session makes the requested change and replies on the PR."
+- Good: "Watches ~/Downloads for new PDF invoices. Each new one is filed into the
+  Finance notes with its amount and due date."
+- Bad: "Runs check.sh" (says nothing), "PR watcher" (that is a name), or the
+  script explained line by line.
+
+Write it in the language you use with the user.
+
 ## Managing them
 
-- `trigger_list`: every trigger with its interval, host, and last check (fired
-  with an item count / quiet with a reason / the error).
+- `trigger_list`: every trigger with its description, interval, host, and last
+  check (fired with an item count / quiet with a reason / the error).
 - `trigger_delete '{"id":"..."}'`: stop it. The script file stays on disk.
 - The Routines page shows the same thing with an enable toggle, which is the
   kill switch.

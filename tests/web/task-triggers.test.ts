@@ -65,4 +65,16 @@ describe('triggerPillTitle', () => {
       'CI red: Every 5 min, $ gh run list @ devbox, never fired yet, last check not checked yet',
     ]);
   });
+
+  it('puts the description the author wrote right after the name', () => {
+    const title = triggerPillTitle([
+      routine({ id: 'a', name: 'PR comments', description: 'Checks PR 123 for new review comments; the session replies.' }),
+      routine({ id: 'b', name: 'CI red' }),
+    ], NOW);
+    expect(title.split('\n')).toEqual([
+      'PR comments: Checks PR 123 for new review comments; the session replies. · Every 30s, $ bash ~/.open-walnut/triggers/pr/check.sh @ local, never fired yet, last check not checked yet',
+      // A trigger created before descriptions were required reads as before.
+      'CI red: Every 30s, $ bash ~/.open-walnut/triggers/pr/check.sh @ local, never fired yet, last check not checked yet',
+    ]);
+  });
 });

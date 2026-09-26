@@ -30,6 +30,7 @@ import { listNotifications } from '../../src/core/notifications/store.js'
 import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../src/providers/trigger-check-core.js'
 import { FIRE_DELIVERY_MAX_ATTEMPTS } from '../../src/core/cron/trigger-apply.js'
 import { registerExecutor } from '../../src/core/routines/registry.js'
+import { triggerDefOf } from '../../src/core/routines/trigger-push.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -170,6 +171,7 @@ describe('POST /api/v1/routines/trigger', () => {
       run: 'bash ~/.open-walnut/triggers/pr/check.sh',
       every: '5m',
       prompt: 'Read each new comment and change the code where it asks.',
+      description: 'Checks the PR for new review comments every 5 minutes; the session addresses each one.',
     }, { 'x-walnut-caller-sid': sessionId })
 
     expect(created.status).toBe(201)
@@ -187,6 +189,7 @@ describe('POST /api/v1/routines/trigger', () => {
       },
     })
     expect(job.schedule).toMatchObject({ kind: 'every', everyMs: 300_000 })
+    expect(job.description).toBe('Checks the PR for new review comments every 5 minutes; the session addresses each one.')
     // The name is the prompt itself when none was given (short enough to keep whole).
     expect(job.name).toBe('Read each new comment and change the code where it asks.')
     // The server never invents a next check time for a check job.
@@ -194,14 +197,14 @@ describe('POST /api/v1/routines/trigger', () => {
   })
 
   it('refuses "this" when nothing says who is calling', async () => {
-    const r = await post('/api/v1/routines/trigger', { run: 'x', every: '5m', prompt: 'p' })
+    const r = await post('/api/v1/routines/trigger', { run: 'x', every: '5m', prompt: 'p', description: 'd' })
     expect(r.status).toBe(400)
     expect(JSON.stringify(r.json)).toContain('no calling session')
   })
 
   it('refuses an unknown task as the target instead of arming a trigger that can never deliver', async () => {
     const r = await post('/api/v1/routines/trigger', {
-      run: 'x', every: '5m', prompt: 'p', session: 'task-that-never-existed',
+      run: 'x', every: '5m', prompt: 'p', description: 'd', session: 'task-that-never-existed',
     })
     expect(r.status).toBe(400)
     expect(JSON.stringify(r.json)).toContain('no task task-that-never-existed')
@@ -209,10 +212,79 @@ describe('POST /api/v1/routines/trigger', () => {
 
   it('refuses a cadence faster than the floor', async () => {
     const r = await post('/api/v1/routines/trigger', {
-      run: 'x', every: '2s', prompt: 'p', session: taskId,
+      run: 'x', every: '2s', prompt: 'p', description: 'd', session: taskId,
     }, { 'x-walnut-caller-sid': sessionId })
     expect(r.status).toBe(400)
     expect(JSON.stringify(r.json)).toContain('at least 10s')
+  })
+
+  it('refuses a trigger with no usable description, and arms nothing', async () => {
+    const countJobs = async () => ((await get('/api/routines?includeDisabled=true')).json.jobs as unknown[]).length
+    const before = await countJobs()
+    const base = { run: 'bash check.sh', every: '5m', prompt: 'p', session: taskId }
+    for (const [description, message] of [
+      [undefined, 'description is required'],
+      ['  \n\t ', 'description is required'],
+      ['x'.repeat(601), 'the limit is 600'],
+    ] as const) {
+      const r = await post('/api/v1/routines/trigger', { ...base, ...(description === undefined ? {} : { description }) })
+      expect(r.status, JSON.stringify(description)).toBe(400)
+      expect(JSON.stringify(r.json)).toContain(message)
+    }
+    expect(await countJobs()).toBe(before)
+  })
+
+  it('keeps a description verbatim apart from folding its whitespace onto one line', async () => {
+    // Non-ASCII test data (Latin accents + CJK), written as escapes.
+    const made: string[] = []
+    try {
+      const created = await post('/api/v1/routines/trigger', {
+        run: 'bash check.sh', every: '10m', prompt: 'p', session: taskId,
+        description: '  Watches the caf\u00e9 order feed\n  for \u65b0\u8ba2\u5355 every 10 minutes.  ',
+      })
+      expect(created.status).toBe(201)
+      made.push(created.json.job.id)
+      expect((await jobState(created.json.job.id)).description)
+        .toBe('Watches the caf\u00e9 order feed for \u65b0\u8ba2\u5355 every 10 minutes.')
+      // Exactly the limit is accepted.
+      const atLimit = await post('/api/v1/routines/trigger', {
+        run: 'bash check.sh', every: '10m', prompt: 'p', session: taskId, description: 'y'.repeat(600),
+      })
+      expect(atLimit.status).toBe(201)
+      made.push(atLimit.json.job.id)
+    } finally {
+      for (const id of made) await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
+    }
+  })
+
+  it('edits and clears a description without touching what the daemon runs', async () => {
+    const created = await post('/api/v1/routines/trigger', {
+      run: 'bash check.sh', every: '5m', prompt: 'p', session: taskId, description: 'First words.',
+    })
+    const id = created.json.job.id
+    try {
+      const before = await jobState(id)
+      // Compared below, so it must be a real def (an enabled local check job).
+      expect(triggerDefOf(before, '__local__')).not.toBeNull()
+      const patch = async (body: unknown) => {
+        const res = await fetch(apiUrl(`/api/routines/${id}`), {
+          method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+        })
+        expect(res.status).toBe(200)
+        return await jobState(id)
+      }
+      const edited = await patch({ description: 'Second words.' })
+      expect(edited.description).toBe('Second words.')
+      // The def the daemon holds is unchanged, so its clock and cursor carry on.
+      expect(triggerDefOf(edited, '__local__')).toEqual(triggerDefOf(before, '__local__'))
+      expect(edited.executor).toEqual(before.executor)
+      // An empty description (what the form sends when the field is cleared) removes it.
+      const cleared = await patch({ description: '' })
+      expect(cleared.description).toBeUndefined()
+      expect(triggerDefOf(cleared, '__local__')).toEqual(triggerDefOf(before, '__local__'))
+    } finally {
+      await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
+    }
   })
 })
 
@@ -398,6 +470,7 @@ describe('trigger.fired from the daemon', () => {
       run: 'bash fire.sh',
       every: '5m',
       prompt: 'Read each new comment.',
+      description: 'Fires when fire.sh reports a new comment; the session reads it.',
       session: taskId,
     })
     firedJobId = created.json.job.id

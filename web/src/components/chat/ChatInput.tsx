@@ -22,6 +22,7 @@ import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { PlusMenuActionRows } from './PlusMenuActionRows';
 import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
+import { withLeadingCommand } from './leading-command';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_IMAGES = 5;
@@ -1212,6 +1213,26 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     el.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
+  // "+" menu "Set up a trigger": the skill runs only as the message's leading
+  // command, so it goes at the start and what the user typed becomes its argument.
+  const insertLeadingCommand = (command: string) => {
+    setPlusOpen(false);
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    const next = withLeadingCommand(el.value, command);
+    // The text moved right (or left, when leading blanks were dropped): a
+    // dictation in flight keeps replacing ITS words, not the ones now there.
+    const shift = next.value.length - el.value.length;
+    const span = dictationSpanRef.current;
+    if (span && shift) dictationSpanRef.current = { ...span, start: Math.max(0, span.start + shift) };
+    const last = lastDictationRef.current;
+    if (last && shift) lastDictationRef.current = { ...last, start: Math.max(0, last.start + shift) };
+    if (next.value !== el.value) el.setRangeText(next.value, 0, el.value.length, 'end');
+    el.setSelectionRange(next.caret, next.caret);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
   const handleFileChange = () => {
     const files = fileInputRef.current?.files;
     if (files && files.length > 0) {
@@ -1505,6 +1526,23 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                     >
                       <span className="chat-plus-menu-key">/</span>
                       <span>Commands</span>
+                    </button>
+                  )}
+                  {isSessionMode && (
+                    <button
+                      className="chat-plus-menu-item"
+                      onClick={() => insertLeadingCommand('/walnut-trigger')}
+                      type="button"
+                      role="menuitem"
+                      title="Starts the message with /walnut-trigger: say what to watch, and the agent sets up a check that runs every few minutes and messages this session when it changes"
+                    >
+                      <span className="chat-plus-menu-key" aria-hidden="true">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+                          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                        </svg>
+                      </span>
+                      <span>Set up a trigger</span>
                     </button>
                   )}
                 </>

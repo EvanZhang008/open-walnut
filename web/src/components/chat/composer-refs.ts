@@ -19,6 +19,7 @@
  * PURE MODULE: no React, no DOM. It has to load in a bare node test.
  */
 import { extractEntityRefs } from '@/utils/entity-ref-tags';
+import { splitLeadingCommand } from './leading-command';
 
 export interface ComposerRefSplit {
   /** Tag strings, verbatim, in the order they were referenced. */
@@ -94,10 +95,16 @@ export function splitComposerRefs(text: string, existing: readonly string[] = []
  * The message (and the persisted draft): tags first, then the prose. Tags lead
  * so the agent reads the references before the sentence about them, and so the
  * draft round-trips through `splitComposerRefs` back to the same chips.
+ *
+ * The one exception is prose that starts with a slash command: an engine runs
+ * `/name` only as the message's first word, so the command stays first and the
+ * tags ride in its arguments (`/name <tags> rest`, which splits back the same).
  */
 export function composeWithRefs(refs: readonly string[], body: string): string {
   const prose = body.trim();
   if (refs.length === 0) return prose;
   const tags = refs.join(' ');
+  const lead = splitLeadingCommand(prose);
+  if (lead) return lead.rest ? `${lead.command} ${tags} ${lead.rest}` : `${lead.command} ${tags}`;
   return prose ? `${tags} ${prose}` : tags;
 }

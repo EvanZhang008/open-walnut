@@ -46,12 +46,18 @@ defineOp({
     + 'session defaults to "this" (the calling session\'s task), so a fire lands in this conversation even '
     + 'if it has gone quiet meanwhile (it is resumed; a new session on the same task only if none can be '
     + 'resumed). Pass a task id to point it elsewhere; a completed task is an error, never a resurrected one. '
-    + 'Keep credentials inside the script file: `run` is stored with the routine and shown on its card.',
+    + 'Keep credentials inside the script file: `run` is stored with the routine and shown on its card. '
+    + '`description` is required: the card otherwise shows only a name and a script path, which does not '
+    + 'tell the user what fires it.',
   input: {
     run: z.string().min(1).describe('Shell command that decides whether to fire (e.g. "bash ~/.open-walnut/triggers/pr-comments/check.sh")'),
     every: z.union([z.number().int().positive(), z.string().min(1)])
       .describe('Poll interval: "30s" | "5m" | "1h", or milliseconds. Minimum 10s'),
     prompt: z.string().min(1).describe('What the session should DO when it fires — the message it receives'),
+    description: z.string().min(1)
+      .describe('One or two plain sentences for the user: what this watches, when it fires, and what the session '
+        + 'does then (e.g. "Checks PR 123 for new review comments every 5 minutes; when one arrives, the session '
+        + 'addresses it and replies on the PR."). Shown on the task\'s trigger card, so name the real source'),
     name: z.string().optional().describe('Routine name shown on the Routines page (defaults to the prompt\'s opening words)'),
     session: z.string().optional().describe('"this" (default) = the calling session\'s task; or an explicit task id'),
     cwd: z.string().optional().describe('Working directory for the check (defaults to the calling session\'s cwd)'),
@@ -79,7 +85,7 @@ defineOp({
   name: 'trigger_list',
   title: 'List Walnut triggers',
   description:
-    'Every armed and disabled trigger: id, name, interval, host, whether it is enabled, how many times '
+    'Every armed and disabled trigger: id, name, description, interval, host, whether it is enabled, how many times '
     + 'it has fired, the last check the daemon reported (fired with an item count / quiet with a reason / '
     + 'the error text) and the recent check history. Use it to answer "what are you watching?" and to '
     + 'check whether a trigger you created is healthy — a trigger disabled with an error is one whose '
@@ -93,7 +99,7 @@ defineOp({
     const jobs = Array.isArray(body?.jobs) ? body.jobs : []
     const triggers = jobs
       .map((raw) => raw as {
-        id?: string; name?: string; enabled?: boolean
+        id?: string; name?: string; description?: string; enabled?: boolean
         schedule?: { everyMs?: number }
         check?: { run?: string; host?: string; cwd?: string }
         state?: {
@@ -105,6 +111,7 @@ defineOp({
       .map((job) => ({
         id: job.id,
         name: job.name,
+        ...(job.description ? { description: job.description } : {}),
         every: everyLabel(job.schedule?.everyMs),
         host: job.check?.host ?? '__local__',
         enabled: job.enabled === true,

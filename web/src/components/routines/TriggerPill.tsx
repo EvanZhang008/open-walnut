@@ -1,8 +1,8 @@
 /**
  * TRIGGER pill: a task with an armed walnut-trigger shows it next to its title,
  * the way a live CLI cron job shows CRON. The pill is the trigger's own handle:
- * clicking it opens the trigger itself (name, cadence, the check command and
- * host, the last check the daemon reported) with Run now / Disable / Delete,
+ * clicking it opens the trigger itself (name, what it does, cadence, the check
+ * command and host, the last check the daemon reported) with Run now / Disable / Delete,
  * never a generic page. Rendered on the task rows, the Focus cards and the
  * session header from the one shared routines store.
  *
@@ -22,6 +22,7 @@ import {
   describeNextRun, describeSchedule,
 } from '@/utils/routine-format';
 import { openSessionOnHome } from '@/utils/open-session';
+import '@/styles/routine-description.css';
 import { log } from '@/utils/log';
 
 export interface TriggerPillProps {
@@ -31,7 +32,7 @@ export interface TriggerPillProps {
 /** The hover text: one line per trigger, so the pill alone tells what is polling. */
 export function triggerPillTitle(routines: readonly Routine[], nowMs = Date.now()): string {
   return routines
-    .map((r) => `${r.name}: ${describeSchedule(r.schedule)}, ${r.check ? describeCheck(r.check) : ''}, ${describeFireTally(r.state, nowMs)}, last check ${describeLastCheck(r.state.lastCheck, nowMs)}`)
+    .map((r) => `${r.name}: ${r.description ? `${r.description.replace(/\s+/g, ' ')} · ` : ''}${describeSchedule(r.schedule)}, ${r.check ? describeCheck(r.check) : ''}, ${describeFireTally(r.state, nowMs)}, last check ${describeLastCheck(r.state.lastCheck, nowMs)}`)
     .join('\n');
 }
 
@@ -131,6 +132,9 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
         <strong>{routine.name}</strong>
         <span className="trigger-jobs-cadence">{describeSchedule(routine.schedule)}</span>
       </div>
+      {routine.description && (
+        <p className="routine-description trigger-jobs-description" title={routine.description}>{routine.description}</p>
+      )}
       {routine.check && <code className="trigger-jobs-run" title={routine.check.run}>{describeCheck(routine.check)}</code>}
       {/* The one line that answers "does this actually work": how many times it
           has fired, and when — not just what the newest check decided. */}

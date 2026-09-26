@@ -23,7 +23,7 @@ This supersedes the `command` probe half of `docs/plan/task-watchers.md`; the `a
    │ reads the skill, writes check.sh
    │ trigger_test ─────────────────▶ POST /routines/check-test ──▶ triggers.test ──▶ sh -c run (no state write)
    │                                 ◀── parsed output, wouldFire ◀──────────────────
-   │ trigger_create ───────────────▶ POST /routines {schedule, check, executor}
+   │ trigger_create ───────────────▶ POST /routines {schedule, check, executor, description}
                                      │ store; push set to that host ──▶ triggers.configure {triggers:[...]}
                                      │                                    │ persist triggers.json, arm timers
                                      │                                    │ every N: sh -c run, stdin {state}
@@ -117,7 +117,7 @@ Server side, a check job is never ticked by the cron timer (`findMissedJobs` ski
 
 ## The skill: `/walnut-trigger`
 
-Shipped at `src/data/skills/walnut-trigger/SKILL.md`. The `/` palette lists every shipped skill by directory name and sends "Apply your walnut-trigger skill now. Request: ...", so no CLI-side install is needed. The skill tells the agent: the contract above, two templates (bash + jq, node), and the order of operations: write the script under `~/.open-walnut/triggers/<slug>/`, run `trigger_test` until it parses, tell the user in one line what will be watched and how often, then `trigger_create`, then report the id and the next check time. Default cadence when the user gave none: every 5 minutes.
+Shipped at `src/data/skills/walnut-trigger/SKILL.md`. The `/` palette lists every shipped skill by directory name and sends "Apply your walnut-trigger skill now. Request: ...", so no CLI-side install is needed. The skill tells the agent: the contract above, two templates (bash + jq, node), and the order of operations: write the script under `~/.open-walnut/triggers/<slug>/`, run `trigger_test` until it parses, tell the user in one line what will be watched and how often, then `trigger_create` with a required `description` (one or two sentences for the user: what is watched, when it fires, what the session does; at most 600 characters, shown on the trigger card), then report the id and the next check time. Default cadence when the user gave none: every 5 minutes. The composer's "+" menu has a "Set up a trigger" row that starts the message with `/walnut-trigger `.
 
 Ops (`src/ops/triggers.ts`, rendered as CLI, MCP and the in-session gateway by the registry): `trigger_create`, `trigger_list`, `trigger_test`, `trigger_delete`.
 

@@ -135,10 +135,20 @@ export function defaultTriggerName(prompt: string, max = 60): string {
 }
 
 /**
- * Create a trigger in one call: check + interval + prompt + where to deliver.
+ * The longest `description` trigger_create accepts. It is shown in full on the
+ * Routines card and clamped to three lines in the task's trigger flyout, so it is
+ * meant to be one or two sentences, not the script explained line by line.
+ */
+export const TRIGGER_DESCRIPTION_MAX = 600;
+
+/**
+ * Create a trigger in one call: check + interval + prompt + description + where
+ * to deliver.
  *
  * Everything the caller omits is taken from the session that is asking, which is
- * what makes `/walnut-trigger` a one-liner from inside a session.
+ * what makes `/walnut-trigger` a one-liner from inside a session. The description
+ * is the exception: only the author knows what the script watches, and a card
+ * that shows a name and `bash …/check.sh` does not tell the user what fires it.
  */
 export async function createTriggerRoutine(body: unknown, callerSid?: string): Promise<{
   job: unknown;
@@ -151,6 +161,20 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string): P
   if (!run) throw new SessionControlError('run is required: the shell command that decides whether to fire', 400);
   const prompt = str(b.prompt);
   if (!prompt) throw new SessionControlError('prompt is required: what the session should do when it fires', 400);
+  const description = str(b.description).replace(/\s+/g, ' ');
+  if (!description) {
+    throw new SessionControlError(
+      'description is required: one or two plain sentences saying what this watches, when it fires, '
+      + 'and what the session does then',
+      400,
+    );
+  }
+  if (description.length > TRIGGER_DESCRIPTION_MAX) {
+    throw new SessionControlError(
+      `description is ${description.length} characters; the limit is ${TRIGGER_DESCRIPTION_MAX} (one or two sentences)`,
+      400,
+    );
+  }
   const everyMs = parseEveryMs(b.every);
   if (everyMs === null) {
     throw new SessionControlError('every is required: milliseconds, or a duration like "30s" / "5m" / "1h"', 400);
@@ -167,6 +191,7 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string): P
 
   const created = await createRoutine({
     name,
+    description,
     schedule: { kind: 'every', everyMs },
     check: {
       run,

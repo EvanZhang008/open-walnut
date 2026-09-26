@@ -47,6 +47,7 @@ import { UserMessagesSummary } from './UserMessagesSummary';
 import { typedUserText } from './injected-banner';
 // PlanPreviewSection replaced by inline plan popover in meta bar
 import { ChatInput } from '@/components/chat/ChatInput';
+import { keepCommandFirst } from '@/components/chat/leading-command';
 import { SideQuestionDrawer } from '@/components/sessions/SideQuestionDrawer';
 import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { stripSendPrefixes, useSessionSend } from '@/hooks/useSessionSend';
@@ -1440,7 +1441,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     const dispatch = interrupt ? interruptSend : send;
     if (!anchor) return dispatch(sessionId, message, images);
     const userUuid = newUserUuid();
-    const text = composeAnchoredText(message, anchor, threadTreeRef.current.latestKey);
+    // A leading `/name` stays the first word (the engine runs it only there).
+    const text = keepCommandFirst(message, (t) => composeAnchoredText(t, anchor, threadTreeRef.current.latestKey));
     if (userUuid) {
       threadsStore.add({
         msgId: userUuid,

@@ -5,6 +5,7 @@ import type {
 } from '@/api/routines';
 import { testRoutineCheck } from '@/api/routines';
 import { describeSchedule, describeWake } from '@/utils/routine-format';
+import '@/styles/routine-description.css';
 
 interface RoutineFormProps {
   /** Prefill from an AI draft or an existing routine (edit mode). */
@@ -170,6 +171,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     : draft;
 
   const [name, setName] = useState(source?.name ?? '');
+  const [description, setDescription] = useState(source?.description ?? '');
   const [trigger, setTrigger] = useState<TriggerState>(() => scheduleToTrigger(source?.schedule));
   const [executorType, setExecutorType] = useState(source?.executor?.type ?? 'claude-code');
   const [config, setConfig] = useState<Record<string, unknown>>(source?.executor?.config ?? {});
@@ -183,6 +185,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   useEffect(() => {
     if (!draft) return;
     setName(draft.name ?? '');
+    setDescription(draft.description ?? '');
     setTrigger(scheduleToTrigger(draft.schedule));
     setExecutorType(draft.executor?.type ?? 'claude-code');
     setConfig(draft.executor?.config ?? {});
@@ -298,7 +301,8 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     setSaving(true);
     setError(null);
     try {
-      await onSave({ name: name.trim(), schedule, executor, ...checkField });
+      // Sent even when empty: on an edit that is how a cleared description is removed.
+      await onSave({ name: name.trim(), description: description.trim(), schedule, executor, ...checkField });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
@@ -375,6 +379,20 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Briefing"
+            />
+          </div>
+
+          {/* 600: the limit trigger_create holds an agent to (TRIGGER_DESCRIPTION_MAX). */}
+          <div className="form-group">
+            <label htmlFor="routine-description">Description</label>
+            <textarea
+              id="routine-description"
+              className="routine-description-input"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="What it does, in a sentence or two. Shown on the card."
+              rows={3}
+              maxLength={600}
             />
           </div>
 

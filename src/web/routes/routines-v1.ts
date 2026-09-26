@@ -16,7 +16,7 @@
  *   POST   /routines/:id/run             → { result }
  *   POST   /routines/draft { text }      → { draft } (Wave 3 — one LLM call)
  *   POST   /routines/check-test { check } → { result } (walnut-trigger: run once)
- *   POST   /routines/trigger { run, every, prompt, … } → 201 { job, host, nextCheckAt }
+ *   POST   /routines/trigger { run, every, prompt, description, … } → 201 { job, host, nextCheckAt }
  *
  * Cloud companion (REPLICA): Class B — the PRIMARY's cron engine is the
  * single writer of cron-jobs.json (a replica-local write would recreate the

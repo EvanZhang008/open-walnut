@@ -1,0 +1,31 @@
+/* What a routine does, in its author's words: the trigger flyout, the Routines
+   card and the form field. */
+.routine-description {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+/* The flyout is a compact overlay: three lines, the full text on hover.
+   An integer line-height keeps the clamp at exactly three lines in WebKit. */
+.trigger-jobs-description {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+.routine-card-description {
+  margin-top: 6px;
+  color: var(--fg-secondary);
+}
+
+.routine-description-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
