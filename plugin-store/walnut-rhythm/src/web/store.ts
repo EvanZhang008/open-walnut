@@ -35,6 +35,10 @@ export function createRhythmStore(walnut: WalnutWebApi): RhythmStore {
   const accept = (next: unknown) => {
     if (!next || typeof next !== 'object' || (next as { version?: unknown }).version !== 1) return
     const value = next as RhythmPublicState
+    // An op's answer and the live `state` event race; the snapshot the server took later
+    // wins. (An Install answer computed before the watch saw the Add would otherwise put
+    // "Missing" back after the event said both are installed.)
+    if (state && typeof value.now === 'number' && value.now < state.now) return
     if (typeof value.now === 'number') skewMs = value.now - Date.now()
     state = value
     error = null

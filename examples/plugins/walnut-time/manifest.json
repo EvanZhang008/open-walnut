@@ -3,6 +3,7 @@
   "name": "Time",
   "description": "Your day as a timeline: an attention tape, work chapters and task swimlanes, plus the Overview and Agents reports and an opt-in per-app breakdown of the rest of your screen time.",
   "version": "0.1.0",
+  "icon": "icon.svg",
   "apiVersion": 1,
   "engines": {
     "walnut": ">=0.3.2"

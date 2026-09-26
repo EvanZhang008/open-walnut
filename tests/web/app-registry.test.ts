@@ -111,12 +111,13 @@ describe('App Registry', () => {
     ])
   })
 
-  it('defaults a Plugin App to the Sidebar and refuses an unknown placement', () => {
+  it('defaults a Plugin App to Settings, takes an explicit Sidebar, and refuses an unknown placement', () => {
+    // The sidebar is the small, expensive surface: an App gets a row there only by asking.
     registry.registerPlugin('plugin-a', 'Plugin A', {
-      id: 'main', title: 'Sidebar by default', component: Component,
+      id: 'main', title: 'Settings by default', component: Component,
     })
     registry.registerPlugin('plugin-b', 'Plugin B', {
-      id: 'main', title: 'Settings row', component: Component, placement: 'settings',
+      id: 'main', title: 'Sidebar row', component: Component, placement: 'sidebar',
     })
     registry.registerCore({
       id: 'tasks', title: 'Tasks', path: '/tasks', component: Component,
@@ -124,8 +125,8 @@ describe('App Registry', () => {
 
     expect(registry.getSnapshot().apps.map((app) => [app.key, app.placement])).toEqual([
       ['core:tasks', 'sidebar'],
-      ['plugin-a:main', 'sidebar'],
-      ['plugin-b:main', 'settings'],
+      ['plugin-a:main', 'settings'],
+      ['plugin-b:main', 'sidebar'],
     ])
 
     // An unknown placement matches no consumer's filter, so a typo would register

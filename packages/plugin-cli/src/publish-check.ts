@@ -129,6 +129,8 @@ export async function publishCheck(root = process.cwd()): Promise<PublishCheckRe
     'manifest.json',
     ...build.outputs.map((output) => normalize(output.path)),
     ...webviewFiles,
+    // The Settings tile: a declared icon that is not packed would 404 on every install.
+    ...(manifest.icon ? [normalize(manifest.icon)] : []),
     ...await localFilesUnder(root, 'skills'),
   ])
   // Sorted, because `readdir` order is filesystem-dependent and would report the same break differently per machine.

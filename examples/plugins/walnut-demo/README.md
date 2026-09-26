@@ -6,7 +6,7 @@ It depends only on `@open-walnut/plugin-api` and `@open-walnut/plugin-cli`, so y
 
 ## The app
 
-The main browser surface is one App registered through `walnut.ui.app`, plus one auxiliary `ui.page`, one settings panel, and one injected stylesheet. The App automatically gets its Sidebar entry, route, deep link, Command Palette entry, badge, and owner-scoped lifecycle. The auxiliary page proves that a Plugin can add a native route without adding another Sidebar App.
+The main browser surface is one App registered through `walnut.ui.app`, plus one auxiliary `ui.page`, one settings panel, and one injected stylesheet. The App automatically gets its entry row (in the Sidebar here, because the demo asks for `placement: 'sidebar'`; an App that does not ask lands in the Settings Plugins group), route, deep link, Command Palette entry, badge, and owner-scoped lifecycle. The auxiliary page proves that a Plugin can add a native route without adding another App row.
 
 The app has six sections, and the section comes from the route the host passes in, so `<app route>/views` opens the host views section directly and switching tabs moves the host's URL:
 

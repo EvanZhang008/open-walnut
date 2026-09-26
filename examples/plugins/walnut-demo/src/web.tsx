@@ -130,6 +130,8 @@ export async function activate(walnut: WalnutWebApi) {
     badge: null,
     order: 50,
     fullBleed: true,
+    // The demo shows off a sidebar App; the default would put this row in Settings.
+    placement: 'sidebar',
   })
 
   demo.appPath = app.path

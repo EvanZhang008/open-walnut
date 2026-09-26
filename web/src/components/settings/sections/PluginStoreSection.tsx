@@ -37,7 +37,9 @@
  * Built-in rows take no part in any of it.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { Config } from '@open-walnut/core';
+import { useAppCatalog } from '@/apps/hooks';
 import { SettingsSection, SettingsRow, SettingsGroup, SettingsNotice, SettingsTag, SettingsLoadingRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -60,6 +62,7 @@ import { PluginAppControls } from '../PluginAppControls';
 import { BUNDLED_AVAILABLE_TITLE, runBundledAction } from './plugin-bundled-actions';
 import { PluginConnectionPanel, CONNECTION_BADGE, connectedHelp, type ConnectionReport } from '../PluginConnectionPanel';
 import { BuildPluginCard } from '../BuildPluginCard';
+import { PluginIcon, pluginTileTints } from '../PluginIcon';
 // Deliberately NOT '@/plugins/hooks': that module reaches the plugin loader, which
 // reaches every view a plugin may mount (NotesPage, CalendarPage, SessionPanel …).
 // Importing it here would pull that whole graph into anything that touches the
@@ -127,9 +130,13 @@ interface RegistryRow {
   reason?: string;
   error?: string;
   configurable: boolean;
+  /** `'app'`: the plugin's own App draws its settings, so the row's Configure goes to the App. */
+  settingsIn?: 'plugins' | 'app';
   catalog: boolean;
   sourceSlug?: string;
   toggleable: boolean;
+  /** Present only when the manifest's icon exists on the server; otherwise the tile is a monogram. */
+  iconUrl?: string;
 }
 
 interface RegistryResponse {
@@ -220,6 +227,8 @@ function homeDirFor(source: RegistryRow['source'], homeDir: string | undefined):
 }
 
 export function PluginStoreSection({ config, onSave }: Props) {
+  const navigate = useNavigate();
+  const apps = useAppCatalog();
   const [registry, setRegistry] = useState<RegistryResponse | null>(null);
   const [sources, setSources] = useState<PluginSource[]>([]);
   const [url, setUrl] = useState('');
@@ -698,6 +707,11 @@ export function PluginStoreSection({ config, onSave }: Props) {
     .map((row) => row.sourceSlug)
     .filter((slug): slug is string => Boolean(slug) && updates.rows[sourceRowKey(slug!)]?.state.kind !== 'missing'));
   const available = rows.filter((row) => !row.installed);
+  // One tint per plugin across both lists, picked the way the Settings sidebar picks them.
+  const tileTints = pluginTileTints(rows);
+  const tileFor = (row: RegistryRow) => (
+    <PluginIcon name={row.name} iconUrl={row.iconUrl} tint={tileTints.get(row.id) ?? 'var(--fg-muted)'} />
+  );
 
   /** One installed plugin: its row, then its indented sub-rows in the same group. */
   const renderInstalledRow = (row: RegistryRow) => {
@@ -710,6 +724,14 @@ export function PluginStoreSection({ config, onSave }: Props) {
     // Never auto-open. In a LIST, expanding an eight-field form on mount buries every
     // row under it; the row already says Needs setup, names the field, and offers Configure.
     const open = configuring === row.id;
+    // A plugin whose App draws its own settings (manifest settingsIn: 'app') keeps its
+    // Configure button, which goes to the App instead of expanding a second copy of the
+    // form here, so the form has one home. (Not "Open": the App row right below already
+    // says Open.) Falls back to the inline form when the App is not registered (web entry
+    // failed to load), so the settings are never unreachable.
+    const settingsApp = row.settingsIn === 'app'
+      ? apps.all.find((app) => app.kind !== 'core' && app.pluginId === row.id)
+      : undefined;
     const connection = connections[row.id];
     // Only when the account needs the human: a healthy link says so on the account
     // row below, not as a second tag in the title.
@@ -747,10 +769,11 @@ export function PluginStoreSection({ config, onSave }: Props) {
         <SettingsRow
           data-testid={`plugin-row-${row.id}`}
           data-plugin-status={row.status}
-          className="plugin-store-row"
+          className="plugin-store-row plugin-row-with-icon"
           title={origin}
           label={
             <span className="settings-addons-inline plugin-store-title">
+              {tileFor(row)}
               <span className="settings-addons-ellipsis plugin-store-name">{row.name}</span>
               {row.version && <span className="settings-addons-muted plugin-store-version">v{row.version}</span>}
               {rowTags({ status: row.status, restartPending }).map((tag) => (
@@ -807,7 +830,19 @@ export function PluginStoreSection({ config, onSave }: Props) {
           error={toggleError[row.id] ? couldntSave(toggleError[row.id]) : undefined}
           control={
             <>
-              {row.configurable && (
+              {row.configurable && settingsApp && (
+                <SettingsButton
+                  variant={needsSetup ? 'primary' : 'default'}
+                  data-testid={`plugin-open-settings-${row.id}`}
+                  disabled={updating}
+                  reserve={['Configure', 'Done']}
+                  title={`Settings are on the ${settingsApp.title} page`}
+                  onClick={() => navigate(settingsApp.path)}
+                >
+                  Configure
+                </SettingsButton>
+              )}
+              {row.configurable && !settingsApp && (
                 <SettingsButton
                   variant={needsSetup ? 'primary' : 'default'}
                   data-testid={`plugin-configure-${row.id}`}
@@ -941,7 +976,7 @@ export function PluginStoreSection({ config, onSave }: Props) {
         {!connection && isOn && providersOf(row.id).map((provider) => (
           <ProviderRow key={provider.id} provider={provider} connection={connections[provider.id]} />
         ))}
-        {open && row.configurable && (
+        {open && row.configurable && !settingsApp && (
           <div
             className="settings-addons-rows plugin-store-config"
             data-testid={`plugin-config-${row.id}`}
@@ -974,7 +1009,8 @@ export function PluginStoreSection({ config, onSave }: Props) {
       key={row.id}
       data-testid={`plugin-row-${row.id}`}
       data-plugin-status={row.status}
-      label={row.name}
+      className="plugin-row-with-icon"
+      label={<>{tileFor(row)}{row.name}</>}
       title={row.source.kind === 'example'
         ? `In this checkout at ${row.source.path}; install it with walnut-plugin link.`
         : row.source.kind === 'bundled'

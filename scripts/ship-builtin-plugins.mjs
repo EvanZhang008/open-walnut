@@ -53,6 +53,21 @@ const MIN_BUNDLE_BYTES = 1024;
 
 const cli = join(root, 'packages/plugin-cli/dist/cli.js');
 
+/** The manifest's relative `.svg` icon, verified to exist; null when none is declared. */
+function shippedIconPath(rel, manifest) {
+  if (manifest.icon === undefined) return null;
+  const icon = typeof manifest.icon === 'string' ? manifest.icon.replace(/\\/g, '/') : '';
+  if (!icon.toLowerCase().endsWith('.svg') || icon.startsWith('/') || icon.split('/').includes('..')) {
+    console.error(`ship-builtin-plugins: ${rel}/manifest.json icon must be a relative .svg path inside the plugin`);
+    process.exit(1);
+  }
+  if (!existsSync(join(root, rel, icon))) {
+    console.error(`ship-builtin-plugins: ${rel} declares icon ${icon}, which does not exist`);
+    process.exit(1);
+  }
+  return icon;
+}
+
 function run(command, args) {
   execFileSync(command, args, { cwd: root, stdio: 'inherit' });
 }
@@ -91,6 +106,13 @@ for (const rel of SHIPPED) {
   mkdirSync(dirname(join(target, web)), { recursive: true });
   cpSync(manifestPath, join(target, 'manifest.json'));
   cpSync(bundle, join(target, web));
+  // The Settings tile. Optional, but a declared icon that did not ship would leave the row
+  // on its monogram with no hint why, so a missing file fails here like a missing bundle.
+  const icon = shippedIconPath(rel, manifest);
+  if (icon) {
+    mkdirSync(dirname(join(target, icon)), { recursive: true });
+    cpSync(join(source, icon), join(target, icon));
+  }
 
   const shipped = join(target, web);
   if (!existsSync(shipped) || statSync(shipped).size < MIN_BUNDLE_BYTES) {

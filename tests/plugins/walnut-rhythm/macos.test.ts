@@ -4,8 +4,10 @@
  * ~/Library path is read and no real `shortcuts` / `plutil` / `open` runs.
  */
 import { describe, expect, it } from 'vitest'
+import { createFakeWalnut } from '../../../packages/plugin-api/src/testing.js'
 import type { RunResult, Runner } from '../../../plugin-store/walnut-rhythm/src/server/exec'
-import { modeName, parseMacosFocus, readMacosFocus } from '../../../plugin-store/walnut-rhythm/src/server/macos-focus'
+import { INSTALL_POLL_MS, INSTALL_WATCH_MS, MacosBridge } from '../../../plugin-store/walnut-rhythm/src/server/macos-bridge'
+import { modeName, parseMacosFocus, readMacosFocus, type MacosFocusRead } from '../../../plugin-store/walnut-rhythm/src/server/macos-focus'
 import {
   buildShortcutPlistXml, ensureShortcuts, installShortcuts, parseShortcutsList, runShortcut,
   SHORTCUT_OFF, SHORTCUT_ON,
@@ -164,5 +166,118 @@ describe('Shortcuts status and install', () => {
     const { run, calls } = scripted({ 'shortcuts run': { ok: false, error: 'not found' } })
     expect(await runShortcut(run, SHORTCUT_ON)).toEqual({ ok: false, error: 'not found' })
     expect(calls[0]).toEqual({ command: 'shortcuts', args: ['run', SHORTCUT_ON], timeoutMs: 10_000 })
+  })
+})
+
+describe('the install watch', () => {
+  const okRun = (stdout = ''): RunResult => ({ ok: true, code: 0, stdout, stderr: '' })
+  const focusOff = async (): Promise<MacosFocusRead> => ({ ok: true, focus: { active: false } })
+  const dir = '/tmp/walnut-rhythm-test-shortcuts'
+
+  it('re-lists Shortcuts after the Add dialogs open and stops once both exist, announcing each Add', async () => {
+    // Nothing tells Rhythm that the person clicked Add in another app, so after opening
+    // the dialogs it lists again every few seconds; the App must not need Check again.
+    let lists = 0
+    const run: Runner = async (command, args) => {
+      if (command === 'shortcuts' && args[0] === 'list') {
+        lists++
+        // Install's own check sees none; the watch then sees On, then both.
+        return okRun(lists === 1 ? '' : lists === 2 ? `${SHORTCUT_ON}\n` : `${SHORTCUT_ON}\n${SHORTCUT_OFF}\n`)
+      }
+      return okRun()
+    }
+    let t = 1_000_000
+    const seen: string[] = []
+    const bridge = new MacosBridge({
+      enabled: true, log: createFakeWalnut({ pluginId: 'rhythm-fixture', pluginName: 'Rhythm' }).api.log, run, readFocus: focusOff, shortcutsDir: dir,
+      onChange: () => seen.push(`${bridge.shortcuts.watching ? 'watching' : 'idle'}:${bridge.shortcuts.missing.length}`),
+      wait: async () => { t += INSTALL_POLL_MS },
+    })
+    const result = await bridge.install(() => t)
+    expect(result.alreadyInstalled).toBe(false)
+    await bridge.settled()
+    expect(lists).toBe(3)
+    expect(bridge.shortcuts.missing).toEqual([])
+    expect(bridge.shortcuts.watching).toBe(false)
+    // Each change of what is missing reached the App, and the watch announced its start and end.
+    expect(seen).toEqual(['idle:2', 'watching:2', 'watching:1', 'watching:0', 'idle:0'])
+  })
+
+  it('gives up after the watch window when the person never clicks Add', async () => {
+    let lists = 0
+    const run: Runner = async (command, args) => {
+      if (command === 'shortcuts' && args[0] === 'list') lists++
+      return okRun()
+    }
+    let t = 5_000_000
+    const bridge = new MacosBridge({
+      enabled: true, log: createFakeWalnut({ pluginId: 'rhythm-fixture', pluginName: 'Rhythm' }).api.log, run, readFocus: focusOff, shortcutsDir: dir,
+      onChange: () => undefined,
+      wait: async () => { t += INSTALL_POLL_MS },
+    })
+    await bridge.install(() => t)
+    await bridge.settled()
+    expect(lists).toBe(1 + INSTALL_WATCH_MS / INSTALL_POLL_MS)
+    expect(bridge.shortcuts.missing).toEqual([SHORTCUT_ON, SHORTCUT_OFF])
+    expect(bridge.shortcuts.watching).toBe(false)
+  })
+
+  it('stops listing and announcing once the plugin is disposed mid-watch', async () => {
+    // Disabling or reloading Rhythm within the watch window must not leave the old
+    // instance listing Shortcuts and emitting state over the new one's.
+    let lists = 0
+    const run: Runner = async (command, args) => {
+      if (command === 'shortcuts' && args[0] === 'list') lists++
+      return okRun()
+    }
+    let t = 7_000_000
+    let waits = 0
+    const seen: string[] = []
+    const bridge: MacosBridge = new MacosBridge({
+      enabled: true, log: createFakeWalnut({ pluginId: 'rhythm-fixture', pluginName: 'Rhythm' }).api.log, run, readFocus: focusOff, shortcutsDir: dir,
+      onChange: () => seen.push(`${bridge.shortcuts.watching ? 'watching' : 'idle'}:${bridge.shortcuts.missing.length}`),
+      // The host tears the plugin down while the watch sleeps before its second list.
+      wait: async () => { t += INSTALL_POLL_MS; if (++waits === 2) bridge.dispose() },
+    })
+    await bridge.install(() => t)
+    await bridge.settled()
+    expect(lists).toBe(2)
+    expect(seen).toEqual(['idle:2', 'watching:2'])
+    // A later Install on the disposed bridge opens nothing to watch for.
+    await bridge.install(() => t)
+    await bridge.settled()
+    expect(seen).toEqual(['idle:2', 'watching:2', 'idle:2'])
+  })
+})
+
+describe('the Full Disk Access path', () => {
+  it('flags a refused read as needing access, names the program, and Check again skips the backoff', async () => {
+    let reads = 0
+    let refuse = true
+    const readFocus = async (): Promise<MacosFocusRead> => {
+      reads++
+      return refuse
+        ? { ok: false, reason: 'permission', message: 'macOS did not allow reading the Focus state (Full Disk Access may be needed)' }
+        : { ok: true, focus: { active: false } }
+    }
+    const calls: string[] = []
+    const run: Runner = async (command, args) => { calls.push([command, ...args].join(' ')); return { ok: true, code: 0, stdout: '', stderr: '' } }
+    const bridge = new MacosBridge({
+      enabled: true, log: createFakeWalnut({ pluginId: 'rhythm-fixture', pluginName: 'Rhythm' }).api.log, run, readFocus,
+      shortcutsDir: '/tmp/walnut-rhythm-test-shortcuts', onChange: () => undefined,
+    })
+    await bridge.pollMirror(1_000, true)
+    expect(bridge.mirror).toMatchObject({ phase: 'unavailable', needsAccess: true, processPath: process.execPath })
+    // The refusal backs off for ten minutes: a plain poll a minute later reads nothing.
+    await bridge.pollMirror(61_000, true)
+    expect(reads).toBe(1)
+    // The person granted access and clicked Check again: the forced read goes through.
+    refuse = false
+    await bridge.pollMirror(62_000, true, true)
+    expect(reads).toBe(2)
+    expect(bridge.mirror).toEqual({ phase: 'inactive', checkedAt: 62_000 })
+    // The button opens exactly the Full Disk Access pane and nothing else.
+    await bridge.openPrivacySettings()
+    expect(calls).toEqual(['open x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'])
   })
 })

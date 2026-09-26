@@ -1,7 +1,7 @@
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import { Router, type RequestHandler } from 'express'
-import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { CLOUD_MODE, WALNUT_HOME, WALNUT_INSTALL_DIR, WALNUT_PACKAGE_ROOT } from '../../constants.js'
 import { bus } from '../../core/event-bus.js'
 import type { IntegrationRegistry } from '../../core/integration-registry.js'
 import { PluginDependentsError } from '../../core/plugins/dependency-gate.js'
@@ -31,6 +31,8 @@ import {
 } from './plugin-linked-ops.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { mountBundledPluginRoutes, type BundledPluginConfigWriter } from './plugin-bundled-routes.js'
+import { mountPluginIconRoute, withPluginIconUrls, type PluginIconDirs } from './plugin-icon-route.js'
+import { resolveBundledStoreDir } from '../../core/plugins/bundled-store.js'
 import {
   loadPluginCatalog,
   mergePluginRegistry,
@@ -111,6 +113,11 @@ export interface PluginRuntimeRouterDeps {
   bundledStoreDir?: string | null
   /** Install/Remove's two config writes (tests inject a fake). */
   bundledConfig?: BundledPluginConfigWriter
+  /** Where plugin files live for icons: the installed folder of an id, the builtin folder, and
+   *  the checkout example paths are relative to. Tests point these at temp folders. */
+  pluginDirOf?(pluginId: string): Promise<string | undefined>
+  builtinPluginDir?: string | null
+  exampleRoot?: string | null
 }
 
 function routePluginId(value: string | string[]): string {
@@ -180,6 +187,22 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
   const publishCloudChange = (pluginId: string, action: string) => {
     if (!cloudMode) return
     bus.emit('plugin:runtime-changed', { pluginId, action }, ['web-ui'], { source: 'plugin-runtime-relay' })
+  }
+  /** Icons: the loader is imported lazily for the same reason as the schemas above. */
+  const iconDirs: PluginIconDirs = {
+    installed: deps.pluginDirOf ?? (async (pluginId) => {
+      const live = deps.registry.get(pluginId)?.pluginDir
+      if (live) return live
+      const { getPluginSourceDir } = await import('../../core/integration-loader.js')
+      return getPluginSourceDir(deps.registry, pluginId)
+    }),
+    storeDir: async () => (deps.bundledStoreDir === undefined ? resolveBundledStoreDir() : deps.bundledStoreDir),
+    builtinDir: async () => {
+      if (deps.builtinPluginDir !== undefined) return deps.builtinPluginDir
+      const { getBuiltinPluginDir } = await import('../../core/integration-loader.js')
+      return getBuiltinPluginDir()
+    },
+    exampleRoot: deps.exampleRoot !== undefined ? deps.exampleRoot : (WALNUT_INSTALL_DIR ?? WALNUT_PACKAGE_ROOT),
   }
 
   router.get('/', async (_req, res, next) => {
@@ -283,6 +306,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
                 { properties?: Record<string, unknown> } | undefined
             )?.properties) ?? {},
           ).length > 0,
+          ...(live?.settingsIn === 'app' ? { settingsIn: 'app' as const } : {}),
           // A bundled plugin was installed from this build's own folder: no source owns it,
           // and its row's Remove takes it back to available.
           ...(record.bundled
@@ -295,9 +319,10 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         }
       })
       const merged: PluginRegistryResult = mergePluginRegistry(catalog, installed)
+      const rows = await withPluginIconUrls(merged.rows, catalog, iconDirs)
       // A replica's home is not where the checkouts live, so it says nothing about it.
       const homeDir = cloudMode ? undefined : await homeDirPromise
-      res.json({ ...merged, sourcesUnavailable, cloud: cloudMode, ...(homeDir ? { homeDir } : {}) })
+      res.json({ ...merged, rows, sourcesUnavailable, cloud: cloudMode, ...(homeDir ? { homeDir } : {}) })
     } catch (error) {
       if (error instanceof PluginRuntimeRelayError) {
         res.status(error.status).json({ error: error.message })
@@ -305,6 +330,11 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
       }
       next(error)
     }
+  })
+
+  mountPluginIconRoute(router, {
+    dirs: iconDirs,
+    loadCatalog: () => loadPluginCatalog(deps.walnutHome ?? WALNUT_HOME, { bundledStoreDir: deps.bundledStoreDir }),
   })
 
   // Before every `/:pluginId/...` route, so `bundled` is never read as a plugin id.

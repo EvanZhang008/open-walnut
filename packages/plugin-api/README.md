@@ -70,7 +70,7 @@ Walnut exposes that local `ping` registration to the model as `my_plugin_ping`. 
 
 ## Web plugin
 
-One `ui.app` call is the whole browser surface. The host derives the route `/apps/<pluginId>~<appId>`, the Sidebar entry, deep links into every subpath, the App Command Palette entry, and the badge channel.
+One `ui.app` call is the whole browser surface. The host derives the route `/apps/<pluginId>~<appId>`, a nav row, deep links into every subpath, the App Command Palette entry, and the badge channel. The row lives under Settings by default; pass `placement: 'sidebar'` for an App people open every day. The person can move it either way.
 
 ```tsx
 import { useState } from 'react'
@@ -88,7 +88,7 @@ export function activate(walnut: WalnutWebApi) {
     )
   }
 
-  const app = walnut.ui.app({ id: 'main', title: 'My Plugin', component: MyApp })
+  const app = walnut.ui.app({ id: 'main', title: 'My Plugin', component: MyApp, placement: 'sidebar' })
   app.setBadge('dot')
 }
 ```

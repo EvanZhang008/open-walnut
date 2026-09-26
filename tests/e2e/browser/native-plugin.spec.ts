@@ -1283,7 +1283,7 @@ test('reloads, isolates a render crash, restores, adapts to mobile, and disables
   const crashBundle = `
 export async function activate(walnut) {
   function CrashApp() { throw new Error('Plugin App fixture crash'); }
-  walnut.ui.app({ id: 'main', title: 'Plugin Demo', component: CrashApp });
+  walnut.ui.app({ id: 'main', title: 'Plugin Demo', component: CrashApp, placement: 'sidebar' });
 }
 `
   await fs.writeFile(installedBundle, crashBundle)

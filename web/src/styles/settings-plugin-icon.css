@@ -1,0 +1,63 @@
+/* Settings, Plugins: the 28px tile that leads every top-level plugin row
+   (PluginIcon.tsx). Same shape language as the sidebar tiles in settings-shell.css:
+   a tint with a white mark, radius a quarter of the side. */
+
+.plugin-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  overflow: hidden;
+  color: #fff;
+  background: var(--fg-muted);
+  user-select: none;
+}
+
+/* The icon is a template mark: an <img> draws a currentColor SVG black, so every
+   visible pixel is turned white here, which reads on any tint in either theme. */
+.plugin-icon-image {
+  display: block;
+  width: 18px;
+  height: 18px;
+  filter: brightness(0) invert(1);
+  pointer-events: none;
+}
+
+/* The letter comes from `data-letter` so it never joins the row's text content. */
+.plugin-icon-monogram::before {
+  content: attr(data-letter);
+  display: block;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* The tile lives in the copy column's left gutter, so the title, the help line and
+   the row's 44px rhythm are exactly what they were; only the text moves right by
+   the tile plus a 12px gap. It is centered on the title for a one-line row, on the
+   title and help for a two-line row, and stays beside the title when the help wraps
+   further (min() caps the drop at the title+help midpoint: 19px title line). */
+.settings-row.plugin-row-with-icon > .settings-row-copy {
+  position: relative;
+  padding-left: 40px;
+}
+
+/* Absolute, so it takes no part in the title's own flex row of name, version and tags. */
+.settings-row.plugin-row-with-icon > .settings-row-copy .plugin-icon {
+  position: absolute;
+  left: 0;
+  top: min(50%, 19px);
+  transform: translateY(-50%);
+}
+
+/* Everything under a plugin row (its providers, apps, account, the config form) indents
+   to the title's x, 14px pad + 28px tile + 12px gap, so a child never sits left of its
+   parent's name. The indent token drives both the padding and the hairline start. */
+.plugin-store-entry {
+  --settings-row-indent: 54px;
+}

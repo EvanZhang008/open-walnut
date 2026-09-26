@@ -5,6 +5,7 @@
   "private": true,
   "files": [
     "manifest.json",
+    "icon.svg",
     "dist",
     "skills",
     "README.md"

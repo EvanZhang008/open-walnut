@@ -33,7 +33,7 @@ export interface AppContribution {
   badge?: AppBadge
   order?: number
   fullBleed?: boolean
-  /** Default 'sidebar', so every plugin written before this field keeps its row. */
+  /** Default 'settings': an App asks for a Sidebar row with 'sidebar'. The person can move it either way. */
   placement?: AppPlacement
 }
 
@@ -131,7 +131,9 @@ export function assertBadge(value: AppBadge): void {
  * the only way the author finds out.
  */
 function resolvePlacement(value: AppPlacement | undefined): AppPlacement {
-  if (value === undefined) return 'sidebar'
+  // Settings unless the plugin asks for the sidebar: the sidebar is the small, expensive
+  // surface, so a row there is an explicit claim, never something an App gets by default.
+  if (value === undefined) return 'settings'
   if (!APP_PLACEMENTS.includes(value)) {
     throw new Error(`App placement must be one of ${APP_PLACEMENTS.join(', ')}`)
   }

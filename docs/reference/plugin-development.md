@@ -109,6 +109,7 @@ Walnut loads built files, never your TypeScript sources. A published plugin pack
 
 - **`id`**: stable lowercase identity matching `/^[a-z0-9][a-z0-9._-]{0,63}$/`. It namespaces registrations, config, storage, secrets, routes, RPC methods, Agents, Commands, App routes, and UI state.
 - **`name`**: the human label Walnut shows.
+- **`icon`**: optional path of an `.svg` file inside your plugin folder, such as `"icon.svg"`. Settings → Plugins draws it on your row's colored tile, in Installed and in Available. It is used as a single-color mark: every visible pixel is painted white on the tile, so draw a line or solid glyph on a transparent background (a 24 by 24 viewBox with `stroke="currentColor"` works well). The file must stay inside the plugin folder (no `..`, no absolute path) and be at most 64 KB. Without an icon, the tile shows the first letter of `name`. `walnut-plugin validate` rejects a bad value, and `publish-check` fails when the file is not in the package.
 - **`version`**: the plugin's release version. `publish-check` requires it to equal `package.json`'s version.
 - **`apiVersion`**: `1` for the unified API. Anything else is rejected by validation.
 - **`engines.walnut`**: required. Walnut checks the range before importing any plugin code.
@@ -118,6 +119,7 @@ Walnut loads built files, never your TypeScript sources. A published plugin pack
 - **`dependencies`**: optional `{ "<pluginId>": "<semver range>" }` matched against the other plugin's manifest `version`. Walnut activates a declared dependency first, and holds this plugin back while one is missing, wrong-version or not running. It is also what permits `walnut.services.get` on that plugin's services.
 - **`build`**: the source entries `walnut-plugin build` compiles, plus an optional `external` list for the server bundle.
 - **`configSchema`** and **`uiHints`**: optional generated Settings form for `plugins.<id>`.
+- **`settingsIn`**: where that form is drawn. `'plugins'` (the default) is the Configure card on your row in Settings → Plugins. `'app'` means your own App renders it through `walnut.ui.views.PluginSettingsView`, and the row's Configure button takes the person to your App instead of opening a second copy of the form, so a plugin whose page is mostly its settings has one home, not two. Draw the view on your page even when it fails to load its own data, or the settings have no way in.
 - **`taskFields`**: optional task fields for a sync integration.
 - **`catalog`**: optional `{ "adds": ["App"], "homepage": "...", "docs": "..." }`, read by the Settings store to describe a plugin in the bundled store before it is installed (see [Bundled store](#bundled-store)). Values of the wrong type are dropped.
 
@@ -556,12 +558,12 @@ Contribution fields:
 - **`badge`**: initial badge, either a non-negative integer, `'dot'`, or `null`.
 - **`order`**: sort weight in the Sidebar. Core Apps occupy 10 to 1000, and plugin Apps default to 500.
 - **`fullBleed`**: whether the App paints its own full surface. Plugin Apps default to `true`.
-- **`placement`**: which surface carries the App's entry row, `'sidebar'` (the default) or `'settings'`. See [Where the App's row lives](#where-the-apps-row-lives).
+- **`placement`**: which surface carries the App's entry row, `'settings'` (the default) or `'sidebar'`. See [Where the App's row lives](#where-the-apps-row-lives).
 
 What the host derives for you, with no second registration:
 
 - **The route**: `/apps/<pluginId>~<appId>`, plus every subpath under it. You never declare a path, and you cannot collide with a Walnut route or another plugin.
-- **The entry row**: icon, title, and badge, in the Sidebar beside the Core Apps, or in the Settings Plugins group when the App asks for `placement: 'settings'`.
+- **The entry row**: icon, title, and badge, in the Settings Plugins group, or in the Sidebar beside the Core Apps when the App asks for `placement: 'sidebar'`.
 - **Deep links**: `/apps/my-plugin~main/history?tab=recent` opens your App with the rest of the URL handed to your component.
 - **A Command Palette entry**: `Open <title>`, refreshed whenever the App list changes.
 - **The badge channel**: `handle.setBadge(...)` updates the row live, on whichever surface it sits.
@@ -621,7 +623,7 @@ A badge is a number, `'dot'`, `{ text }`, or `null`. A number is a count and dra
 
 ### Where the App's row lives
 
-An App declares which surface carries its entry row. The default, `'sidebar'`, puts it in the app sidebar next to Home and Tasks. `'settings'` puts it in Settings under the Plugins group instead, right below the Plugins section that manages every installed plugin, and gives it no sidebar row at all.
+An App declares which surface carries its entry row. The default, `'settings'`, puts it in Settings under the Plugins group, right below the Plugins section that manages every installed plugin, and gives it no sidebar row at all. `'sidebar'` puts it in the app sidebar next to Home and Tasks instead, and an App only gets that by asking.
 
 ```tsx compile=web-placement
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
@@ -633,16 +635,16 @@ export function activate(walnut: WalnutWebApi) {
 
   walnut.ui.app({
     id: 'main',
-    title: 'Weekly Report',
+    title: 'Inbox Zero',
     component: ReportApp,
-    placement: 'settings',
+    placement: 'sidebar',
   })
 }
 ```
 
 Nothing else changes: same route at `/apps/<pluginId>~<appId>`, same deep links, same Command Palette entry, same badge, same owner lifecycle. The Settings row is a real link that navigates to the App's own full-page route, so the App is never squeezed into a settings panel.
 
-Pick by how often the App is opened. The sidebar is for surfaces someone lives in all day and its length is the whole point: every row added there costs every other row a little attention. A report, an audit, an occasional tool belongs in the Settings Plugins group, where people already go looking for the things they configure and inspect. The shipped `walnut-time` example uses `'settings'` for exactly that reason.
+Pick by how often the App is opened. The sidebar is for surfaces someone lives in all day and its length is the whole point: every row added there costs every other row a little attention, which is why an App has to ask for it. A report, an audit, an occasional tool, a plugin whose page is mostly its own settings, all belong in the Settings Plugins group, where people already go looking for the things they configure and inspect. The shipped `walnut-time` example and the bundled `walnut-rhythm` plugin both stay there.
 
 **Your `placement` is the default, not the verdict.** Only the person using the sidebar knows whether your App belongs in it, so your plugin's row in Settings → Plugins lists each of its Apps with a **Move to Settings** / **Move to Sidebar** action. Their choice wins over yours, applies immediately, and survives a reload. Write the declaration as the answer that is right for most people and let the rest move it.
 
@@ -678,7 +680,7 @@ Home, Tasks, Notes, Calendar, Routines, and Settings are the Core Apps. Home's C
 
 ### Stable Views
 
-`walnut.ui.views` hands you host-owned React facades: `CalendarView`, `FileView`, `NoteView`, `TerminalView`, `SessionView`, `TaskView`, and `ChatView`. These are stable contracts, unlike private component imports.
+`walnut.ui.views` hands you host-owned React facades: `CalendarView`, `FileView`, `NoteView`, `TerminalView`, `SessionView`, `TaskView`, `ChatView`, and `PluginSettingsView` (your plugin's generated settings form, for `settingsIn: 'app'`; optional, since an older host does not have it). These are stable contracts, unlike private component imports.
 
 ```tsx compile=web-views
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'

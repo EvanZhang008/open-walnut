@@ -7,7 +7,7 @@
  * (`bare`), or as a group of its own otherwise. Plugins with missing required
  * fields get a warning row naming exactly what to fill in.
  */
-import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment, type ReactNode } from 'react';
 import type { Config } from '@open-walnut/core';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -56,6 +56,12 @@ interface Props {
    * the fields continue that row's group (no nested box).
    */
   bare?: boolean;
+  /**
+   * What to draw while there are no fields yet: still loading, the fetch failed, or no
+   * matching plugin has a form. Absent draws nothing, which suits a list; a form standing
+   * on its own (PluginSettingsForm) says which of the three it is.
+   */
+  renderEmpty?: (why: 'loading' | 'failed' | 'none') => ReactNode;
 }
 
 /** What the server sends instead of a stored secret. Exported so a test cannot drift from it. */
@@ -112,8 +118,9 @@ function HelpText({ text }: { text: string }) {
   );
 }
 
-export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, bare = false }: Props) {
+export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, bare = false, renderEmpty }: Props) {
   const [plugins, setPlugins] = useState<PluginSettingsMeta[]>([]);
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [drafts, setDrafts] = useState<Record<string, Record<string, unknown>>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<{ id: string; message: string } | null>(null);
@@ -134,10 +141,12 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
           // it renders a card that is just a Save button.
           && Object.keys(p.configSchema?.properties ?? {}).length > 0);
         setPlugins(visible);
+        setPhase('ready');
         // Merge: keep in-flight edits, seed fields for newly-appeared plugins
         setDrafts(d => Object.fromEntries(visible.map(p => [p.id, { ...p.values, ...d[p.id] }])));
       })
-      .catch(() => {});
+      // A failed refetch keeps the fields already shown; only a first load can fail.
+      .catch(() => { setPhase((current) => (current === 'ready' ? current : 'failed')); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope]);
 
@@ -190,7 +199,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
     }
   };
 
-  if (plugins.length === 0) return null;
+  if (plugins.length === 0) return renderEmpty ? <>{renderEmpty(phase === 'ready' ? 'none' : phase)}</> : null;
 
   return (
     <>

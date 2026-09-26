@@ -73,11 +73,12 @@ export function FocusCard({ walnut, store, state, run, busy }: FocusCardProps) {
   const blockNumber = focus.phase === 'focus' ? focus.completedInCycle + 1 : focus.completedInCycle
 
   return (
-    <section className="rhythm-card rhythm-focus" data-testid="rhythm-focus-card" data-phase={focus.phase}>
-      <header className="rhythm-card-head">
+    <section className="rhythm-block rhythm-focus" data-testid="rhythm-focus-card" data-phase={focus.phase}>
+      <div className="rhythm-block-head">
         <h2>Focus block</h2>
         <span className="rhythm-pill" data-testid="rhythm-focus-phase">{focusPhaseText(focus.phase, focus.breakKind)}</span>
-      </header>
+      </div>
+      <div className="rhythm-group"><div className="rhythm-body">
 
       {focus.phase === 'idle' && (
         <>
@@ -168,6 +169,7 @@ export function FocusCard({ walnut, store, state, run, busy }: FocusCardProps) {
           </div>
         </div>
       )}
+      </div></div>
     </section>
   )
 }

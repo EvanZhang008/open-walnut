@@ -3,6 +3,7 @@
   "name": "IMAP Mail",
   "description": "Reads mail over IMAP with an app password, and attaches to the mail base as a provider",
   "version": "1.0.0",
+  "icon": "icon.svg",
   "apiVersion": 1,
   "engines": {
     "walnut": ">=0.4.5"

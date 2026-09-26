@@ -43,6 +43,8 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
     readFocus: () => readMacosFocus(),
     shortcutsDir: path.join(walnut.storage.dataDir, 'shortcuts'),
     onChange: () => { emitState() },
+    // Host-owned, so the install watch's sleep ends with the plugin (see deactivate).
+    wait: (ms) => new Promise<void>((resolve) => { walnut.timers.timeout(resolve, ms) }),
   })
   const runtime = new RhythmRuntime({ walnut, macos })
   await runtime.load()
@@ -100,6 +102,7 @@ export async function deactivate(): Promise<void> {
   const runtime = active
   active = null
   if (!runtime) return
+  runtime.macos.dispose()
   try {
     runtime.markDirty()
     await runtime.persist()

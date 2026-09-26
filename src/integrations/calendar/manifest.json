@@ -3,6 +3,7 @@
   "name": "Calendar",
   "description": "Reads and edits the Mac's calendars (every macOS system account: iCloud, Google, Exchange) and serves them to the calendar views and the Personal AI",
   "version": "2.0.0",
+  "icon": "icon.svg",
   "apiVersion": 1,
   "engines": {
     "walnut": ">=0.4.5"

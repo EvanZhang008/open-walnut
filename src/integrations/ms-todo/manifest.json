@@ -8,6 +8,7 @@
   "server": "index.js",
   "description": "Two-way sync with Microsoft To-Do",
   "version": "1.0.0",
+  "icon": "icon.svg",
   "configSchema": {
     "type": "object",
     "properties": {

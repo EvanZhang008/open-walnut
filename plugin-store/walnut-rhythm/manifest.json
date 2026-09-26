@@ -3,12 +3,14 @@
   "name": "Rhythm",
   "description": "Focus blocks and movement breaks: a stand-up reminder that knows when you are at the keyboard, a pomodoro tied to a task, and quiet mode while you focus.",
   "version": "0.1.0",
+  "icon": "icon.svg",
   "apiVersion": 1,
   "engines": {
     "walnut": ">=0.4.0"
   },
   "server": "dist/server.mjs",
   "web": "dist/web.mjs",
+  "settingsIn": "app",
   "build": {
     "server": "src/server.ts",
     "web": "src/web.tsx"

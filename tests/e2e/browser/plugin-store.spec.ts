@@ -38,6 +38,10 @@ import { type Page } from '@playwright/test'
  *      and is NOT loaded; one Install loads it live and writes `enabled: true`; Remove
  *      takes it back to Available and deletes its whole config key. Twice, because the
  *      second Install is the one that proves Remove really forgot it.
+ *   8. A plugin whose App draws its own settings (`settingsIn: 'app'`) has one home for
+ *      them: its row's Configure goes to the App, which lives under Settings because it
+ *      asked for no placement, and a save there lands in config.yaml. When the App never
+ *      registered, the same row falls back to the inline form.
  *
  * Runs against its own server (tests/e2e/browser/plugin-store-server.ts) because the
  * shared :3457 fixture installs no plugins by design.
@@ -260,6 +264,51 @@ test('installing still requires the trust acknowledgement, prefill included', as
   // And unticking takes the ability away again.
   await trust.uncheck()
   await expect(addButton).toBeDisabled()
+})
+
+test('settings that live in the App: Configure goes there, the save lands, and a missing App falls back', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await openPlugins(page)
+
+  // The App asked for no placement, so its row is in the Settings nav, not the Sidebar.
+  await expect(page.getByTestId('settings-nav-app-sigma:main')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('sidebar-app-sigma:main')).toHaveCount(0)
+
+  // One home for the form: Configure navigates instead of expanding a copy here.
+  const sigmaRow = page.getByTestId('plugin-row-sigma')
+  await expect(sigmaRow).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('plugin-configure-sigma')).toHaveCount(0)
+  const toApp = page.getByTestId('plugin-open-settings-sigma')
+  await expect(toApp).toHaveText('Configure')
+  await toApp.click()
+  await expect(page).toHaveURL(/\/apps\/sigma~main$/)
+  await expect(page.getByTestId('sigma-app')).toBeVisible({ timeout: 30_000 })
+  const form = page.getByTestId('plugin-settings-form-sigma')
+  await expect(form).toHaveAttribute('data-state', 'ready', { timeout: 30_000 })
+
+  // Top-level rows here: the label starts at the row edge, not at the nested indent.
+  const row = form.locator('.settings-row').first()
+  await expect(row).toBeVisible({ timeout: 30_000 })
+  expect(await row.evaluate((el) => getComputedStyle(el).paddingLeft)).toBe('14px')
+
+  const field = form.locator('#plugin-sigma-interval_minutes')
+  await field.fill('45')
+  await form.getByTestId('plugin-config-save-sigma').click()
+  await expect.poll(async () => (await configPlugins()).sigma as Record<string, unknown> | undefined, { timeout: 20_000 })
+    .toMatchObject({ interval_minutes: 45 })
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/store-1680-settings-in-app.png` })
+
+  // tau asks for the same, but its web entry failed, so there is no App to send it to:
+  // the row keeps the inline form rather than leaving the settings unreachable.
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await page.getByTestId('settings-nav-plugin-store').click()
+  await expect(page.getByTestId('plugin-row-tau')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('plugin-open-settings-tau')).toHaveCount(0)
+  await page.getByTestId('plugin-configure-tau').click()
+  await expect(page.getByTestId('plugin-config-tau').locator('#plugin-tau-interval_minutes')).toBeVisible({ timeout: 30_000 })
+
+  expect(pageErrors, 'the settings-in-app path must not throw').toEqual([])
 })
 
 test('a bundled plugin installs in one click, and Remove takes it back to Available', async ({ page }) => {

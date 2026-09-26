@@ -51,10 +51,12 @@ Keep `manifest.json` at the package root, set `apiVersion` to `1`, declare an `e
 One `ui.app` call is the entire browser surface:
 
 ```tsx
-const app = walnut.ui.app({ id: 'main', title: 'My Plugin', icon: MyIcon, component: MyApp })
+const app = walnut.ui.app({ id: 'main', title: 'My Plugin', icon: MyIcon, component: MyApp, placement: 'sidebar' })
 ```
 
-The host derives the route `/apps/<pluginId>~<appId>`, the Sidebar entry, deep links into every subpath, the App Command Palette entry, the badge channel, and owner lifecycle. The returned handle carries `path`, `setBadge(value)`, and `dispose()`.
+The host derives the route `/apps/<pluginId>~<appId>`, a nav row, deep links into every subpath, the App Command Palette entry, the badge channel, and owner lifecycle. The returned handle carries `path`, `setBadge(value)`, and `dispose()`.
+
+The row lives under Settings unless the App passes `placement: 'sidebar'`. A plugin someone asked for through Build a plugin passes `'sidebar'`, because that card tells them it appears in their sidebar (the scaffold already does). A plugin whose App is mostly its own settings passes nothing and sets `"settingsIn": "app"` in `manifest.json`, then draws `walnut.ui.views.PluginSettingsView` on its page.
 
 Rules that keep an App correct:
 

@@ -16,7 +16,10 @@ export interface PluginManifest {
   server?: string
   web?: string
   webview?: { title: string; entry?: string; icon?: string }
+  /** Relative `.svg` path inside the plugin folder: the plugin's tile in Settings, Plugins. */
+  icon?: string
   build?: PluginBuildConfig
+  settingsIn?: 'plugins' | 'app'
 }
 
 export interface ValidationResult {
@@ -26,6 +29,8 @@ export interface ValidationResult {
 }
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
+/** The host refuses a larger icon (413) and draws the monogram instead. */
+const ICON_MAX_BYTES = 64 * 1024
 
 export async function readManifest(root = process.cwd()): Promise<PluginManifest> {
   const file = path.join(root, 'manifest.json')
@@ -65,6 +70,31 @@ export async function validatePlugin(root = process.cwd()): Promise<ValidationRe
   }
   if (manifest.webview?.entry && !safeRelativePath(manifest.webview.entry)) {
     errors.push('manifest.webview.entry must be a safe relative path')
+  }
+  if (manifest.settingsIn !== undefined && manifest.settingsIn !== 'plugins' && manifest.settingsIn !== 'app') {
+    errors.push("manifest.settingsIn must be 'plugins' or 'app'")
+  }
+
+  // The same rules the host applies when it serves the icon (validatePluginIconPath and
+  // PLUGIN_ICON_MAX_BYTES in src/core/plugins/plugin-icon.ts), so an icon that passes
+  // here never turns into a silent monogram after install.
+  if (manifest.icon !== undefined) {
+    if (!safeRelativePath(manifest.icon)) {
+      errors.push('manifest.icon must be a path inside the plugin folder, for example "icon.svg"')
+    } else if (/["'<>?#\0]/.test(manifest.icon)) {
+      errors.push('manifest.icon contains characters a file name cannot use here')
+    } else if (!manifest.icon.trim().toLowerCase().endsWith('.svg')) {
+      errors.push('manifest.icon must be an .svg file')
+    } else {
+      try {
+        const stat = await fs.stat(path.join(root, manifest.icon))
+        if (stat.size > ICON_MAX_BYTES) {
+          errors.push(`manifest.icon is ${Math.ceil(stat.size / 1024)} KB; an icon must be at most ${ICON_MAX_BYTES / 1024} KB`)
+        }
+      } catch {
+        errors.push(`manifest.icon file does not exist: ${manifest.icon}`)
+      }
+    }
   }
 
   const sourceEntries = [manifest.build?.server, manifest.build?.web].filter((entry): entry is string => !!entry)

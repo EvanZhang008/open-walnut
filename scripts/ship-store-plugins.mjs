@@ -17,7 +17,8 @@
  *   3. every declared `server`/`web` artifact must exist and be over 1KB (anything
  *      smaller is a stub or a truncated write, and a missing bundle is invisible at
  *      runtime: the row installs and then sits in `failed`), so the build fails HERE;
- *   4. manifest.json, README.md, dist/ and skills/ are copied to dist/plugin-store/<id>/.
+ *   4. manifest.json, README.md, dist/, skills/ and the manifest's `icon` are copied to
+ *      dist/plugin-store/<id>/.
  *
  * `dist/plugin-store` is rebuilt from scratch every run, so a plugin removed from the
  * folder does not linger in the next build. An empty or absent folder is a no-op that
@@ -123,6 +124,16 @@ for (const name of plugins) {
   for (const extra of ['README.md', 'dist', 'skills']) {
     const from = join(source, extra);
     if (existsSync(from)) cpSync(from, join(target, extra), { recursive: true });
+  }
+  // The Settings tile (manifest `icon`): declared means it must ship, like a bundle.
+  if (manifest.icon !== undefined) {
+    const icon = typeof manifest.icon === 'string' ? manifest.icon.replace(/\\/g, '/') : '';
+    if (!icon.toLowerCase().endsWith('.svg') || icon.startsWith('/') || icon.split('/').includes('..')) {
+      fail(`${rel}/manifest.json icon must be a relative .svg path inside the plugin`);
+    }
+    if (!existsSync(join(source, icon))) fail(`${rel} declares icon ${icon}, which does not exist`);
+    mkdirSync(dirname(join(target, icon)), { recursive: true });
+    cpSync(join(source, icon), join(target, icon));
   }
   for (const key of ['server', 'web']) {
     if (manifest[key] !== undefined && !existsSync(join(target, manifest[key]))) {

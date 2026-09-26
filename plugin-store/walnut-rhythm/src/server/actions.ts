@@ -138,10 +138,19 @@ export function status(runtime: RhythmRuntime, args: Record<string, unknown>): P
     const now = runtime.now()
     // `shortcuts list` runs only when someone asks (the App's Check again and its first
     // open) or when the shortcuts are actually in use; a plain status read starts nothing.
-    if (args.refresh === true) await runtime.macos.checkShortcuts(now, true)
-    else if (runtime.config.macosFocusShortcuts) await runtime.macos.checkShortcuts(now)
+    if (args.refresh === true) {
+      await runtime.macos.checkShortcuts(now, true)
+      // Check again after granting Full Disk Access must not wait out the 10 minute backoff.
+      await runtime.macos.pollMirror(now, runtime.config.mirrorMacosFocus, true)
+      await runtime.syncHold()
+    } else if (runtime.config.macosFocusShortcuts) await runtime.macos.checkShortcuts(now)
     return buildPublicState(runtime, runtime.now())
   })
+}
+
+export async function privacyOpen(runtime: RhythmRuntime): Promise<{ message: string }> {
+  await runtime.macos.openPrivacySettings()
+  return { message: 'System Settings is open at Full Disk Access. Turn on the Walnut server there, then click Check again.' }
 }
 
 export async function shortcutsInstall(runtime: RhythmRuntime): Promise<{ message: string; steps: unknown[]; state: RhythmPublicState }> {

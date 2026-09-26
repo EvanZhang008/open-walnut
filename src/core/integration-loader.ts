@@ -62,6 +62,7 @@ import {
 } from './plugins/dependency-gate.js';
 import { validatePluginId } from './plugins/ids.js';
 import { listInstalledBundledDirs, parseManifestCatalog, resolveBundledStoreDir } from './plugins/bundled-store.js';
+import { validatePluginIconPath } from './plugins/plugin-icon.js';
 import { listOwnedSkillDirRecords } from './plugins/skill-registry.js';
 import { CORE_SERVICE_OWNER, removeServicesOf } from './plugins/service-registry.js';
 // Only for the lifecycle announcement inside createPluginManager's onStateChange hook.
@@ -881,6 +882,16 @@ export function getDuplicatePluginIds(): string[] {
   return duplicatePluginIds;
 }
 
+/** The folder a discovered plugin was loaded from, whatever its state (Settings reads its icon there). */
+export function getPluginSourceDir(registry: IntegrationRegistry, pluginId: string): string | undefined {
+  return pluginSources.get(registry)?.get(pluginId)?.dir;
+}
+
+/** The builtin plugin folder this build discovers: `dist/integrations` built, `src/integrations` from source. */
+export function getBuiltinPluginDir(): string {
+  return BUILTIN_DIR;
+}
+
 /** Capability types this Walnut version can load. Everything else is reserved
  *  (`hooks`, `routines`): a manifest declaring only those is recorded as
  *  unsupported and its code is never imported. */
@@ -1440,6 +1451,13 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     : undefined;
   if (invalidEntry) return null;
   const catalog = parseManifestCatalog(obj.catalog);
+  // Lenient like taskFields: a bad icon costs the plugin its tile, never its load.
+  let icon: string | undefined;
+  if (obj.icon !== undefined) {
+    const checked = validatePluginIconPath(obj.icon);
+    if (checked.ok) icon = checked.rel;
+    else log.warn('Manifest icon dropped', { filePath, reason: checked.error });
+  }
 
   return {
     id: obj.id,
@@ -1461,8 +1479,11 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     uiHints: obj.uiHints && typeof obj.uiHints === 'object'
       ? obj.uiHints as Record<string, { label?: string; help?: string }>
       : undefined,
+    // Only the one value that changes anything survives; `'plugins'` and junk both read as the default.
+    ...(obj.settingsIn === 'app' ? { settingsIn: 'app' as const } : {}),
     taskFields,
     ...(catalog ? { catalog } : {}),
+    ...(icon ? { icon } : {}),
   };
 }
 
@@ -1911,6 +1932,7 @@ async function loadPlugin(
     get extIndex() { return builder.collected.extIndex ?? undefined; },
     configSchema: manifest.configSchema,
     uiHints: manifest.uiHints,
+    ...(manifest.settingsIn ? { settingsIn: manifest.settingsIn } : {}),
     taskFields: manifest.taskFields,
     tools: unified || effectiveCapabilities.includes('tools') ? tools : undefined,
     uiApp,

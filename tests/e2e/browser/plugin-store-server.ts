@@ -22,6 +22,8 @@
  *     entry `epsilon` waits for.
  *   - `epsilon`, a plugin inside a source clone that waits on `zeta`, so a blocked row
  *     can offer an install and prove that the offer ASKS first.
+ *   - `sigma`, whose App draws its own settings (`settingsIn: 'app'`), and `tau`, which
+ *     asks for the same but whose web entry fails, so its App never registers.
  *   - a bundled store folder holding `omega` (registers nothing), pointed at through
  *     WALNUT_BUNDLED_STORE_DIR, so the store has a plugin that ships with Walnut, is NOT
  *     loaded, and installs with one click. Without the override this source-run server
@@ -178,6 +180,38 @@ await writeFixturePlugin(
   },
   path.join(tmpBase, 'bundled-store'),
 )
+
+/**
+ * Two plugins whose settings live in their App (manifest `settingsIn: 'app'`). `sigma`'s
+ * App is a hand-written bundle (React comes from the host, like every built plugin's)
+ * that draws the host's PluginSettingsView; `tau`'s web entry throws, so no App exists
+ * and its row must fall back to the inline form. Neither passes `placement`.
+ */
+const settingsInAppManifest = (name: string) => ({
+  name,
+  web: 'dist/web.mjs',
+  settingsIn: 'app',
+  configSchema: {
+    type: 'object',
+    properties: { interval_minutes: { type: 'number', default: 30, minimum: 5, maximum: 240 } },
+  },
+  uiHints: { interval_minutes: { label: 'Interval (minutes)', help: 'Optional. How often it runs.' } },
+})
+await writeFixturePlugin('sigma', settingsInAppManifest('Sigma'))
+await fs.writeFile(path.join(tmpBase, 'plugins', 'sigma', 'dist', 'web.mjs'), `
+export function activate(walnut) {
+  const h = globalThis.__WALNUT_PLUGIN_HOST__.React.createElement
+  function SigmaApp() {
+    const View = walnut.ui.views.PluginSettingsView
+    return h('main', { 'data-testid': 'sigma-app' }, h('h1', null, 'Sigma page'), View ? h(View) : null)
+  }
+  walnut.ui.app({ id: 'main', title: 'Sigma', component: SigmaApp })
+}
+`)
+await writeFixturePlugin('tau', settingsInAppManifest('Tau'))
+await fs.writeFile(path.join(tmpBase, 'plugins', 'tau', 'dist', 'web.mjs'), `
+export function activate() { throw new Error('tau web fixture fails on purpose') }
+`)
 
 // Install walnut-time the documented author way: a symlink in the data home's
 // plugins/ directory, which is exactly what `walnut-plugin link` writes.

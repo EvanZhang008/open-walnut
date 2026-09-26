@@ -1,80 +1,128 @@
 /**
- * The macOS card: whether Walnut follows the Mac's Focus, and whether the two
+ * The macOS block: whether Walnut follows the Mac's Focus, and whether the two
  * shortcuts that drive Do Not Disturb are installed, with the one-click install.
+ *
+ * Install opens the Shortcuts app's Add dialogs; the server then re-lists Shortcuts
+ * every few seconds (`watching`), so the row flips to "installed" on its own once the
+ * person has clicked Add. Check again stays as the manual path.
  */
 import type { RhythmPublicState } from './store'
 
 export interface MacCardProps {
   state: RhythmPublicState
-  run(localOp: string, args?: Record<string, unknown>): void
+  onInstall(): void
+  onOpenPrivacy(): void
   refresh(): void
   busy: boolean
 }
 
-function mirrorText(mirror: RhythmPublicState['macos']['mirror']): string {
-  if (!mirror.enabled) return 'Off. Turn on "Follow macOS Focus" in Settings to use it.'
+type Tone = 'warn' | 'error' | undefined
+
+function mirrorText(mirror: RhythmPublicState['macos']['mirror']): { text: string; tone: Tone } {
+  if (!mirror.enabled) return { text: 'Off. Turn on "Follow macOS Focus" below to use it.', tone: undefined }
   switch (mirror.phase) {
-    case 'active': return `${mirror.focusName ?? 'A Focus'} is on, so Walnut is quiet.`
-    case 'inactive': return 'No macOS Focus is on.'
-    case 'unavailable': return mirror.error ?? 'macOS did not allow reading the Focus state.'
-    default: return 'Starting…'
+    case 'active': return { text: `${mirror.focusName ?? 'A Focus'} is on, so Walnut is quiet.`, tone: undefined }
+    case 'inactive': return { text: 'No macOS Focus is on. Walnut goes quiet when one starts.', tone: undefined }
+    case 'unavailable':
+      if (mirror.needsAccess) {
+        return {
+          text: `macOS keeps the Focus state private. Give the Walnut server Full Disk Access (${mirror.processPath ?? 'its node program'}), then click Check again. Or turn off "Follow macOS Focus" below.`,
+          tone: 'warn',
+        }
+      }
+      return { text: mirror.error ?? 'macOS did not allow reading the Focus state.', tone: 'warn' }
+    default: return { text: 'Checking…', tone: undefined }
   }
 }
 
-function shortcutsText(shortcuts: RhythmPublicState['macos']['shortcuts']): string {
-  if (!shortcuts.checked) return 'Not checked yet.'
-  if (shortcuts.installed === null) return shortcuts.error ?? 'Could not list your Shortcuts.'
-  if (shortcuts.missing.length === 0) return 'Both shortcuts are installed.'
-  return `Missing: ${shortcuts.missing.join(', ')}.`
+function shortcutsText(shortcuts: RhythmPublicState['macos']['shortcuts']): { text: string; tone: Tone } {
+  if (!shortcuts.checked) return { text: 'Not checked yet.', tone: undefined }
+  if (shortcuts.installed === null) return { text: shortcuts.error ?? 'Could not list your Shortcuts.', tone: 'error' }
+  if (shortcuts.missing.length === 0) {
+    return {
+      text: shortcuts.enabled
+        ? 'Both shortcuts are installed. Each focus block turns Do Not Disturb on and off.'
+        : 'Both shortcuts are installed. Turn on "Drive macOS Do Not Disturb" below to use them.',
+      tone: undefined,
+    }
+  }
+  if (shortcuts.watching) {
+    return { text: `Waiting for you to click Add Shortcut in the Shortcuts app (${shortcuts.missing.length} to go).`, tone: undefined }
+  }
+  return { text: `Missing: ${shortcuts.missing.join(', ')}. Install opens each one in Shortcuts, which asks you to add it.`, tone: 'warn' }
 }
 
-export function MacCard({ state, run, refresh, busy }: MacCardProps) {
+export function MacCard({ state, onInstall, onOpenPrivacy, refresh, busy }: MacCardProps) {
   const { macos } = state
   if (!macos.available) {
     return (
-      <section className="rhythm-card" data-testid="rhythm-mac-card">
-        <header className="rhythm-card-head"><h2>macOS</h2></header>
-        <p className="rhythm-muted">Focus mirroring and Do Not Disturb shortcuts work when Walnut runs on a Mac.</p>
+      <section className="rhythm-block" data-testid="rhythm-mac-card">
+        <div className="rhythm-block-head"><h2>macOS</h2></div>
+        <div className="rhythm-group">
+          <div className="rhythm-row">
+            <div className="rhythm-row-copy">
+              <span>Focus and Do Not Disturb</span>
+              <span className="rhythm-row-help">Available when Walnut runs on a Mac.</span>
+            </div>
+          </div>
+        </div>
       </section>
     )
   }
   const { mirror, shortcuts } = macos
+  const mirrorLine = mirrorText(mirror)
+  const shortcutsLine = shortcutsText(shortcuts)
   const lastRun = shortcuts.lastRun
   const installFailed = shortcuts.lastInstall?.steps.filter((step) => !step.ok) ?? []
   return (
-    <section className="rhythm-card" data-testid="rhythm-mac-card">
-      <header className="rhythm-card-head"><h2>macOS</h2></header>
-      <dl className="rhythm-rows">
-        <dt>Follow macOS Focus</dt>
-        <dd data-testid="rhythm-mac-mirror" data-phase={mirror.phase}>{mirrorText(mirror)}</dd>
-        <dt>Do Not Disturb shortcuts</dt>
-        <dd data-testid="rhythm-mac-shortcuts">
-          {shortcutsText(shortcuts)}
-          {!shortcuts.enabled && ' Blocks drive Do Not Disturb only when "Drive macOS Do Not Disturb" is on in Settings.'}
-        </dd>
+    <section className="rhythm-block" data-testid="rhythm-mac-card">
+      <div className="rhythm-block-head"><h2>macOS</h2></div>
+      <div className="rhythm-group">
+        <div className="rhythm-row">
+          <div className="rhythm-row-copy">
+            <span>Follow macOS Focus</span>
+            <span className="rhythm-row-help" data-tone={mirrorLine.tone} data-testid="rhythm-mac-mirror" data-phase={mirror.phase}>{mirrorLine.text}</span>
+          </div>
+          {mirror.phase === 'unavailable' && mirror.needsAccess && (
+            <div className="rhythm-row-actions">
+              <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-privacy-open" onClick={onOpenPrivacy}>Open Privacy settings</button>
+              <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-mirror-check" onClick={refresh}>Check again</button>
+            </div>
+          )}
+        </div>
+        <div className="rhythm-row">
+          <div className="rhythm-row-copy">
+            <span>Do Not Disturb shortcuts</span>
+            <span className="rhythm-row-help" data-tone={shortcutsLine.tone} data-testid="rhythm-mac-shortcuts" data-watching={shortcuts.watching ? 'true' : undefined}>
+              {shortcutsLine.text}
+            </span>
+          </div>
+          <div className="rhythm-row-actions">
+            {shortcuts.missing.length > 0 && (
+              // Stays clickable while watching: a dialog closed by mistake opens again at once.
+              <button type="button" className="rhythm-button rhythm-primary" disabled={busy} data-testid="rhythm-shortcuts-install" onClick={onInstall}>
+                {shortcuts.watching ? 'Open again' : 'Install shortcuts'}
+              </button>
+            )}
+            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-shortcuts-check" onClick={refresh}>Check again</button>
+          </div>
+        </div>
         {lastRun && !lastRun.ok && (
-          <>
-            <dt>Last run</dt>
-            <dd className="rhythm-error">{lastRun.name} failed: {lastRun.error ?? 'unknown error'}</dd>
-          </>
+          <div className="rhythm-row">
+            <div className="rhythm-row-copy">
+              <span>Last run</span>
+              <span className="rhythm-row-help" data-tone="error">{lastRun.name} failed: {lastRun.error ?? 'unknown error'}</span>
+            </div>
+          </div>
         )}
         {installFailed.length > 0 && (
-          <>
-            <dt>Install</dt>
-            <dd className="rhythm-error">{installFailed.map((step) => `${step.name}: ${step.step} failed`).join('; ')}</dd>
-          </>
+          <div className="rhythm-row">
+            <div className="rhythm-row-copy">
+              <span>Install</span>
+              <span className="rhythm-row-help" data-tone="error">{installFailed.map((step) => `${step.name}: ${step.step} failed`).join('; ')}</span>
+            </div>
+          </div>
         )}
-      </dl>
-      <p className="rhythm-muted">
-        Install opens each shortcut in the Shortcuts app, which asks you to add it. Click Add Shortcut once for each.
-      </p>
-      <div className="rhythm-actions">
-        {shortcuts.missing.length > 0 && (
-          <button type="button" className="rhythm-button rhythm-primary" disabled={busy} data-testid="rhythm-shortcuts-install" onClick={() => run('macos_shortcuts_install')}>
-            Install shortcuts
-          </button>
-        )}
-        <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-shortcuts-check" onClick={refresh}>Check again</button>
       </div>
     </section>
   )

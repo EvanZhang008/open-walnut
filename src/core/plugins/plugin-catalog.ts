@@ -155,6 +155,8 @@ export interface InstalledPluginFacts {
   error?: string
   /** True when the manifest declares a configSchema the Configure form can render. */
   configurable?: boolean
+  /** `'app'` when the plugin's own App draws that form (manifest settingsIn). */
+  settingsIn?: 'plugins' | 'app'
   /** The plugin-source slug that installed it (external sources only). */
   sourceSlug?: string
   /** git / npm, for an externally-sourced plugin; `bundled` for one loaded from the
@@ -192,6 +194,8 @@ export interface PluginRegistryRow {
   reason?: string
   error?: string
   configurable: boolean
+  /** `'app'`: the plugin's App renders its settings, so the row's Configure goes to the App. */
+  settingsIn?: 'plugins' | 'app'
   /** True when this id is in the curated catalog (vs discovered only). */
   catalog: boolean
   /** External source slug — what Update/Remove act on. */
@@ -200,6 +204,9 @@ export interface PluginRegistryRow {
   toggleable: boolean
   /** Only when true: the linked scan never reached this row, so its chip reads "not checked". */
   linkedScanSkipped?: boolean
+  /** `/api/plugin-runtime/<id>/icon?v=…`, present only when the manifest's icon exists on this
+   *  machine. Added by the registry route (plugin-icon-route.ts), never by the pure merge. */
+  iconUrl?: string
 }
 
 export interface PluginRegistryResult {
@@ -437,6 +444,7 @@ export function mergePluginRegistry(
       ...(plugin.reason ? { reason: plugin.reason } : {}),
       ...(plugin.error ? { error: plugin.error } : {}),
       configurable: plugin.configurable ?? false,
+      ...(plugin.settingsIn ? { settingsIn: plugin.settingsIn } : {}),
       catalog: !!entry,
       ...(plugin.sourceSlug ? { sourceSlug: plugin.sourceSlug } : {}),
       toggleable: isToggleable(status),

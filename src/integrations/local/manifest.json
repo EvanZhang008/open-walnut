@@ -3,6 +3,7 @@
   "name": "Local",
   "description": "Local-only tasks — no external sync",
   "version": "1.0.0",
+  "icon": "icon.svg",
   "apiVersion": 1,
   "engines": { "walnut": ">=0.3.2" },
   "server": "index.js",

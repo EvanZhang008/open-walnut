@@ -219,6 +219,8 @@ export interface PluginViews {
   TaskView: ComponentType<TaskViewProps>
   ChatView: ComponentType<ChatViewProps>
   AskObjectView: ComponentType<AskObjectViewProps>
+  /** The plugin's own generated Settings form (manifest configSchema + uiHints), as rows. */
+  PluginSettingsView: ComponentType<Record<string, never>>
 }
 
 export interface WalnutWebApiHost {

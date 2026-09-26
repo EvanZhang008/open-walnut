@@ -496,6 +496,8 @@ export interface RegisteredPlugin {
   /** Manifest configSchema/uiHints — drives the data-driven Settings → Integrations form. */
   configSchema?: Record<string, unknown>;
   uiHints?: Record<string, { label?: string; help?: string }>;
+  /** Manifest settingsIn: `'app'` when the plugin's own App draws the generated form. */
+  settingsIn?: PluginSettingsHome;
   /** Manifest taskFields — plugin-declared per-task fields the console renders generically. */
   taskFields?: TaskFieldSpec[];
   /** Tools contributed via registerTool (capability `tools`), names already
@@ -527,6 +529,9 @@ export interface UnconfiguredPlugin {
 }
 
 // ── Manifest: plugin manifest.json schema ──
+
+/** See PluginManifest.settingsIn. */
+export type PluginSettingsHome = 'plugins' | 'app';
 
 export interface PluginManifest {
   id: string;
@@ -560,10 +565,20 @@ export interface PluginManifest {
   capabilities?: Record<string, Record<string, unknown>>;
   configSchema?: Record<string, unknown>;
   uiHints?: Record<string, { label?: string; help?: string }>;
+  /** Where the generated Settings form for `plugins.<id>` is drawn. `'plugins'` (default):
+   *  the Configure card in Settings → Plugins. `'app'`: the plugin's own App renders it
+   *  through `walnut.ui.views.PluginSettingsView`, and the Plugins row's Configure goes to
+   *  that App instead of expanding the form, so a plugin whose page IS its settings has one
+   *  home, not two. */
+  settingsIn?: PluginSettingsHome;
   /** Per-task fields this plugin exposes to the console (see TaskFieldSpec). */
   taskFields?: TaskFieldSpec[];
   /** How the Settings store describes a plugin that ships in the bundled `plugin-store/`
    *  folder: what installing it adds, and where to read about it. Descriptive only;
    *  junk values are dropped (src/core/plugins/bundled-store.ts parseManifestCatalog). */
   catalog?: { adds?: string[]; homepage?: string; docs?: string };
+  /** Relative path of an `.svg` inside the plugin folder, drawn as the plugin's tile in
+   *  Settings → Plugins (src/core/plugins/plugin-icon.ts). An unusable value is dropped
+   *  with a warning; the row then shows a monogram. */
+  icon?: string;
 }

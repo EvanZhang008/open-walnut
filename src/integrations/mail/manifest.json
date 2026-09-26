@@ -3,6 +3,7 @@
   "name": "Mail",
   "description": "The mail base: domain model, local cache and routes that every mail provider plugin attaches to",
   "version": "1.3.0",
+  "icon": "icon.svg",
   "apiVersion": 1,
   "engines": {
     "walnut": ">=0.4.5"

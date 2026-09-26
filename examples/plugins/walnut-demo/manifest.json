@@ -3,6 +3,7 @@
   "name": "Walnut Plugin Demo",
   "description": "Interactive demo of every public Open Walnut Plugin capability, shipped as one native app.",
   "version": "0.1.0",
+  "icon": "icon.svg",
   "apiVersion": 1,
   "engines": {
     "walnut": ">=0.3.2"

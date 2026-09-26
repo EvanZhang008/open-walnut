@@ -62,6 +62,10 @@ export const OP_SPECS: OpSpec[] = [
     name: 'macos_shortcuts_install', title: 'Install the Rhythm shortcuts', readonly: false, remote: 'deny',
     description: 'Prepare the "Walnut Focus On" and "Walnut Focus Off" shortcuts and open each in Shortcuts, which asks the person to add it with one click. Mac only.',
   },
+  {
+    name: 'macos_privacy_open', title: 'Open Full Disk Access settings', readonly: false, remote: 'deny',
+    description: 'Open System Settings at Privacy & Security, Full Disk Access, so the person can let Walnut read the Mac\'s Focus state. Mac only.',
+  },
 ]
 
 function handlers(runtime: RhythmRuntime): Record<string, Handler> {
@@ -74,6 +78,7 @@ function handlers(runtime: RhythmRuntime): Record<string, Handler> {
     break_start: () => actions.breakStart(runtime),
     break_skip: () => actions.breakSkip(runtime),
     macos_shortcuts_install: () => actions.shortcutsInstall(runtime),
+    macos_privacy_open: () => actions.privacyOpen(runtime),
   }
 }
 

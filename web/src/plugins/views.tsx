@@ -6,6 +6,7 @@ import { SessionTerminal } from '@/components/sessions/SessionTerminal'
 import { TaskViewSurface } from '@/components/tasks/TaskViewSurface'
 import { PluginChatView } from '@/components/chat/PluginChatView'
 import { AskObjectDrawer } from '@/components/chat/AskObjectDrawer'
+import { PluginSettingsForm } from '@/components/settings/PluginSettingsForm'
 import type {
   AskObjectViewProps,
   ChatViewProps,
@@ -101,6 +102,11 @@ export function createPluginViews(pluginId: string): PluginViews {
     )
   }
 
+  /** Only ever this plugin's form: the id is bound here, not taken from the caller. */
+  function PluginSettingsView() {
+    return <PluginSettingsForm pluginId={pluginId} />
+  }
+
   return {
     CalendarView,
     FileView,
@@ -110,6 +116,7 @@ export function createPluginViews(pluginId: string): PluginViews {
     TaskView,
     ChatView,
     AskObjectView,
+    PluginSettingsView,
   }
 }
 

@@ -39,7 +39,7 @@ export interface AppContribution {
   badge?: AppBadge
   order?: number
   fullBleed?: boolean
-  /** Default `'sidebar'`. */
+  /** Default `'settings'`. Ask for `'sidebar'` only for a surface someone lives in all day. */
   placement?: AppPlacement
 }
 
@@ -175,6 +175,14 @@ export interface WebUiService {
     TaskView: PluginComponent<TaskViewProps>
     ChatView: PluginComponent<ChatViewProps>
     AskObjectView?: PluginComponent<AskObjectViewProps>
+    /**
+     * Your plugin's generated Settings form (manifest `configSchema` + `uiHints`), the same rows
+     * the Configure card in Settings → Plugins draws, with their Save. Render it inside your own
+     * App when the page IS the settings, and declare `settingsIn: 'app'` in the manifest so the
+     * Plugins row's Configure goes to your App instead of a second copy. Optional on the views
+     * object: feature-detect.
+     */
+    PluginSettingsView?: PluginComponent<Record<string, never>>
   }
 }
 

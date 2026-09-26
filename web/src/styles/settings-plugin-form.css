@@ -1,0 +1,6 @@
+/* A plugin's settings form standing on its own page (PluginSettingsForm). Its rows carry
+   the nested indent they have under a plugin row in Settings -> Plugins; here they are the
+   top level, so labels and hairlines start at the row edge like the page's own rows. */
+.plugin-settings-form {
+  --settings-row-indent: var(--settings-row-pad-x, 14px);
+}
