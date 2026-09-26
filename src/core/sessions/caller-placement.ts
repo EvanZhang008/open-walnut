@@ -24,6 +24,13 @@
  *     conversation too. The board marks it with a Sub pill that leads back to
  *     the parent, and the parent counts it, so work an agent split off stays
  *     visibly attached to the work it came from wherever it lands.
+ *   - tier: where on the board the caller sits (pinned, and its focus tier:
+ *     Focus, Satellite, Backlog, Wait or a custom tier; or unpinned). A worker's
+ *     new task is born in the SAME tier unless the call names `pinned` or a
+ *     `focus_tier`: work split off a Focus task is Focus work, and the user moves
+ *     it later if not (user report 2026-09-25: a Focus task's subtask landed in
+ *     Satellite). The tier follows work into another project too, because a tier
+ *     is board-wide, not a project's structure.
  *   - host + cwd: travel together (a cwd is only meaningful on its host). At
  *     create time the caller's cwd is stamped on the task when it belongs to the
  *     host the task would launch on anyway; at start time a task with no cwd of
@@ -32,7 +39,8 @@
  * Only a WORKER caller (a session running a regular task) is placed from. The
  * Personal AI's own conversations are sessions too, but their tasks live in the
  * `Ask …` projects, and filing the user's work there would bury it: an ask keeps
- * the old defaults for project, folder and cwd and only gets the parent link.
+ * the old defaults for project, folder, tier and cwd and only gets the parent
+ * link (an ask often sits in Wait, which would park the work it files).
  * Humans, external processes and a cloud replica (no session registry) keep the
  * old behaviour entirely.
  */
@@ -49,6 +57,10 @@ export interface CallerTask {
   project: string;
   group_id?: string;
   group_label?: string;
+  /** On the pinned board. Absent = not known (a hand-built caller in a test). */
+  pinned?: boolean;
+  /** The pinned tier; absent on a pinned task = Satellite. */
+  focus_tier?: string;
 }
 
 /** The caller's session, as launch inheritance needs it. '' host = this box. */
@@ -107,6 +119,8 @@ export async function resolveCallerPlacement(callerSid: string | undefined): Pro
     project: task.project ?? '',
     ...(groupId ? { group_id: groupId } : {}),
     ...(label ? { group_label: label } : {}),
+    pinned: Boolean(task.pinned),
+    ...(task.pinned && task.focus_tier ? { focus_tier: task.focus_tier } : {}),
   };
   return { kind: isAskTask(task) ? 'ask' : 'worker', task: callerTask, session };
 }
@@ -115,7 +129,7 @@ export async function resolveCallerPlacement(callerSid: string | undefined): Pro
  * A Personal AI conversation: born `walnut_agent`, or filed under an agent's
  * `Ask …` project (the same two tests the chat drawer uses to list asks).
  */
-function isAskTask(task: { walnut_agent?: boolean; project?: string }): boolean {
+export function isAskTask(task: { walnut_agent?: boolean; project?: string }): boolean {
   return task.walnut_agent === true || /^ask /i.test((task.project ?? '').trim());
 }
 
@@ -169,6 +183,24 @@ export function decidePlacement(req: PlacementRequest, caller: CallerPlacement):
   return caller.task.group_id
     ? { project, group_id: caller.task.group_id, createFolderWithCaller: false, inheritedFrom: caller.task.id, ...parent }
     : { project, createFolderWithCaller: true, inheritedFrom: caller.task.id, ...parent };
+}
+
+/**
+ * The board tier a worker's new task is born in: the caller's own, unless the
+ * create names `pinned` or a `focus_tier` (''/null = not named). Undefined =
+ * nothing inherited, and the route's defaults apply (Satellite for a create).
+ * Only a worker: an ask's tier is where the conversation is parked, not where
+ * the work belongs.
+ */
+export function inheritedTier(
+  req: { pinned?: unknown; focus_tier?: unknown },
+  caller: CallerPlacement,
+): { pinned: boolean; focus_tier?: string } | undefined {
+  if (caller.kind !== 'worker' || typeof caller.task.pinned !== 'boolean') return undefined;
+  if (req.pinned !== undefined) return undefined;
+  if (typeof req.focus_tier === 'string' && req.focus_tier.trim() !== '') return undefined;
+  if (!caller.task.pinned) return { pinned: false };
+  return caller.task.focus_tier ? { pinned: true, focus_tier: caller.task.focus_tier } : { pinned: true };
 }
 
 /**

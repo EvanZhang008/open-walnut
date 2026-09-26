@@ -32,6 +32,12 @@ In both roles work exists because the user asked for it. Work you discover while
 working (a missing test, a leak to chase, a guard to add) is yours to do now,
 where you are, never filed or started as another task.
 
+A coding session splits big work with its own tools first: its todo list,
+subagents, agent teams, or a workflow when the user asked for one. A Walnut task
+is a separate session on the user's board that they open, message and steer, so
+it is the answer only when the user gives a signal for it (see "Your tools or a
+Walnut task" below). How big the work is never decides it.
+
 ## The task is the work
 
 One id covers the whole life of a piece of work: creating it, running it, talking
@@ -97,7 +103,7 @@ the local server (`tools help <op>` prints it), so
 | Is the server up / which version? | `walnut tools call walnut_status '{}'` |
 | What has task `<id>` done? | `walnut tools call task_history '{"id":"<id>"}'` |
 | Is a task running, and where does it stand? | `walnut tools call task_get '{"id":"<id>"}'`: `phase` is the lifecycle, `execution.state` is the run. |
-| Start work the user asked for | New work: `walnut tools call task_create '{"title":"...","message":"..."}'` (it starts too, and from inside a task it lands beside yours: same project, folder, host and directory). Existing task: `walnut tools call task_start '{"id":"<id>","message":"..."}'`; a `409` naming a live run means the work is already going, so `task_send` to it. |
+| Start work the user asked for as a task | New work: `walnut tools call task_create '{"title":"...","message":"..."}'` (it starts too, and from inside a task it lands beside yours: same project, folder, board tier, host and directory). Existing task: `walnut tools call task_start '{"id":"<id>","message":"..."}'`; a `409` naming a live run means the work is already going, so `task_send` to it. |
 | Tell another task something | `walnut tools call task_send '{"to":"<task-id>","text":"..."}'`, never the built-in `SendMessage`/`ListAgents`. Find the target with `task_list '{}'`: from inside a task it already lists your folder (your project when you have no folder); widen with `"scope":"project"`, then `"scope":"all"`. |
 | Did the task I asked answer yet? | Nothing: the reply arrives in your session on its own. Only when you cannot continue, `walnut wait <rq-id>`. |
 | Review the pinned board | `walnut tools call task_list '{"working_set":true}'` returns the WHOLE board (no default limit). Its `board` field carries the server's own per-tier counts: compare your bucketing against them before reporting numbers, and never report a result whose `truncated` is true as the full picture. |
@@ -139,7 +145,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `task_list` | List / query Walnut tasks (read) | completion? (string): Comma list of todo \| in_progress \| complete (in_progress includes NEED_ACTION); phases? (string): Comma list of exact phases: TODO \| IN_PROGRESS \| NEED_ACTION \| COMPLETE; project? (string): Project name (exact, case-insensitive); "" for the Inbox; projects? (string): Comma list of project names; priorities? (string): Comma list of immediate \| important \| backlog \| none; source? (string): Task source (exact), e.g. "local"; sprint? (string): Sprint name (exact); tag? (string): Exact tag match (single); tags_any? (string): Comma list : match tasks carrying ANY of these tags; tags_all? (string): Comma list : match tasks carrying ALL of these tags; pinned? (boolean): Filter pinned/unpinned tasks; focus_tier? (string): Comma list of pin tiers: focus \| satellite \| backlog \| wait \| a custom ct_* id. Only pinned tasks match; satellite = pinned with no stored tier; working_set? (boolean): Shortcut: the WHOLE pinned board (all tiers, completed pins included) sorted by pin_order : no default limit, so the board is never silently cut; unread? (boolean): Tasks with agent output the human has not opened yet; blocked? (boolean): Tasks blocked/unblocked by incomplete dependencies; parent_task_id? (string): Children of this parent task (exact id); group_id? (string): Members of a virtual group (exact id, e.g. "g_xxx"); q? (string): Case-insensitive substring on the task title; ids? (string): Comma list of exact task ids : fetch a specific set in one call; time_basis? (created\|updated\|created_or_updated\|due\|completed): Which timestamp the window filters: created \| updated \| created_or_updated \| due \| completed; last_hours? (integer): Relative window: the last N hours; last_days? (integer): Relative window: the last N days; time_from? (string): Absolute window start (inclusive), ISO-8601 or YYYY-MM-DD; time_until? (string): Absolute window end (exclusive), ISO-8601 or YYYY-MM-DD; sort? (updated_desc\|created_desc\|completed_desc\|priority\|title_asc\|pin_order): Result order (default updated_desc; working_set defaults to pin_order); limit? (integer): Max rows (1-200), applied after sort. Default 50, EXCEPT working_set=true which returns the whole board unless you pass a limit; fields? (list\|full, default "list"): list = slim rows (default); full = every field including note (heavy : combine with ids or a small limit); scope? (folder\|project\|all): How far around the caller to look: folder, project, or all (the whole board). From inside a task the DEFAULT is folder (project when your task has no folder); pass all for the board. Elsewhere the default is the whole board |
 | `task_get` | Get one Walnut task (read) | id (string): Task id or a unique id prefix |
 | `task_get_bulk` | Get many Walnut tasks with chosen fields (read) | ids (array<string>): Task ids (exact, or a unique id prefix) : 1 to 50 per call; fields? (array<string>): Fields to return: title \| phase \| project \| priority \| tags \| start_date \| due_date \| end_date \| created_at \| updated_at \| completed_at \| pinned \| focus_tier \| pin_order \| unread \| blocked_by \| last_session_update \| summary \| note \| progress \| dates. Omit for the triage default (title, phase, project, priority, due_date, updated_at, pinned, focus_tier, unread, summary) |
-| `task_create` | Create and start a task (record_only to defer) (write) | title (string): Task title (required); project? (string): Project name; "" for the Inbox. Omit to use your own task's project (from inside a task) or the Inbox (elsewhere); group_id? (string): Folder id (g_...) inside the target project; "" for no folder. Omit to join your own task's folder (a new one when it has none) when the task lands in your project; priority? (immediate\|important\|backlog\|none): immediate \| important \| backlog \| none; due_date? (string): YYYY-MM-DD or a full ISO-8601 datetime; description? (string): Longer body text (write-only); pinned? (boolean): Join the pinned board (default true). false keeps the task off the board; focus_tier? (string): Pin tier the task is born into (implies pinned): focus \| satellite \| backlog \| wait \| a registered ct_* id. Omit for Satellite; unknown tiers are rejected, not silently downgraded; record_only? (boolean): Explicitly save a placeholder WITHOUT starting work. Default false: create and start; message? (string): Instruction for the task; defaults to its description or title; cwd? (string): Absolute working directory; omit to inherit task/project defaults; host? (string): Execution host alias; omit to inherit task/project defaults; model? (string): Model id or provider model value; mode? (plan\|default\|dontAsk\|accept\|auto\|bypass): Permission mode; engine? (claude\|codex\|gemini\|opencode\|goose\|pi\|dsh\|custom): Coding engine; default claude; expect_reply? (boolean): Report back to the caller; defaults to true for a tracked caller. false opts out; reply_timeout? (integer): Seconds before a no-reply notification (default 3600); start_session? (boolean): Legacy spelling: false means record_only=true; true starts work (already the default); start_message? (string): Legacy spelling of message; do not combine with message |
+| `task_create` | Create and start a task (record_only to defer) (write) | title (string): Task title (required); project? (string): Project name; "" for the Inbox. Omit to use your own task's project (from inside a task) or the Inbox (elsewhere); group_id? (string): Folder id (g_...) inside the target project; "" for no folder. Omit to join your own task's folder (a new one when it has none) when the task lands in your project; priority? (immediate\|important\|backlog\|none): immediate \| important \| backlog \| none; due_date? (string): YYYY-MM-DD or a full ISO-8601 datetime; description? (string): Longer body text (write-only); pinned? (boolean): Join the pinned board. Default: your task's (from inside a task), otherwise true. false keeps the task off the board; focus_tier? (string): Pin tier the task is born into (implies pinned): focus \| satellite \| backlog \| wait \| a registered ct_* id. Omit for your task's tier (from inside a task) or Satellite (elsewhere); unknown tiers are rejected, not silently downgraded; record_only? (boolean): Explicitly save a placeholder WITHOUT starting work. Default false: create and start; message? (string): Instruction for the task; defaults to its description or title; cwd? (string): Absolute working directory; omit to inherit task/project defaults; host? (string): Execution host alias; omit to inherit task/project defaults; model? (string): Model id or provider model value; mode? (plan\|default\|dontAsk\|accept\|auto\|bypass): Permission mode; engine? (claude\|codex\|gemini\|opencode\|goose\|pi\|dsh\|custom): Coding engine; default claude; expect_reply? (boolean): Report back to the caller; defaults to true for a tracked caller. false opts out; reply_timeout? (integer): Seconds before a no-reply notification (default 3600); start_session? (boolean): Legacy spelling: false means record_only=true; true starts work (already the default); start_message? (string): Legacy spelling of message; do not combine with message |
 | `task_update` | Update a Walnut task (write) | id (string): Task id or a unique id prefix; phase? (TODO\|IN_PROGRESS\|NEED_ACTION\|COMPLETE): Task lifecycle phase : the one state field. NEED_ACTION = handed back to the human; priority? (immediate\|important\|backlog\|none); due_date? (string): ISO-8601 date/datetime, or "" to clear; start_date? (string): ISO-8601 date/datetime, or "" to clear; project? (string): Project name; "" = Inbox; title? (string): New title (non-empty, <= 500 chars); description? (string): Replaces the description (write-only); tags? (array<string>): FULL replacement of the task tags |
 | `task_complete` | Complete a Walnut task (write) | id (string): Task id or a unique id prefix |
 | `task_merge` | Merge duplicate Walnut tasks (write, local-only) | survivor_id (string): Task id (or unique prefix) that survives the merge; victim_ids (array<string>): Duplicate task ids to merge into the survivor and delete |
@@ -244,6 +250,33 @@ Example reply after creating a task:
 Do the same after completing one. Only emit the tag in natural-language text,
 never inside a tool argument or a code block.
 
+## Your tools or a Walnut task
+
+From a coding session, most work never becomes a Walnut task, however big it is.
+Split it with your own tools; make a Walnut task only on one of these signals from
+the user:
+
+| The user... | Use |
+|---|---|
+| asks for a task, a ticket, or something on their board | a Walnut task |
+| wants to talk to, review or steer each part themselves ("task 1 frontend, task 2 backend, I'll check each") | one Walnut task per part |
+| needs it to run where this session cannot: another host, later, or after this session ends | a Walnut task |
+| only wants it written down ("note it for next week") | a Walnut task with `record_only: true` |
+| asks for the work and says nothing about tasks ("build a site with a frontend and a backend") | your own tools: subagents or an agent team |
+| wants things checked in parallel ("look into X, Y and Z") | subagents |
+| wants several reviewers or a pipeline ("review it three ways") | subagents, or a workflow if they asked for one |
+| (nobody asked) a follow-up you found: a missing test, a leak | do it yourself, here |
+
+Why the line sits there: a subagent or an agent team lives inside your session,
+shares its context and reports back to you, and costs nothing on the board. A
+Walnut task is another full session with its own conversation, a row on the
+user's board, and a Sub pill under yours. That is worth it exactly when the user
+wants that row. "It is big" is a judgment that goes wrong both ways, so it is
+never the reason on its own.
+
+In Walnut's own chat (the Personal AI) you are the dispatcher: the user asking
+you for work is the signal, and creating the task is how you do it.
+
 ## Recording and starting work (on the user's ask)
 
 The user asked for something to be done or written down. Pick by what they asked
@@ -272,7 +305,7 @@ they are only writing something down.
 
 - Work the user did not ask to track, including follow-ups you discovered
   yourself: no op at all. Do it, however big, where you are.
-- **Where new work lands.** From inside a task, `task_create` puts the new task beside yours: your project, your folder (when your task has no folder, Walnut makes one holding both), and your host and directory. Name `project` to file it elsewhere (`""` = Inbox); a folder never follows work into another project. Pass `group_id` (a `g_…` id from a `task_list` row) to pick another folder of that project, or `""` for none. The result's `placement` says where it landed. Called from Walnut's own chat or a terminal, an omitted project still means Inbox.
+- **Where new work lands.** From inside a task, `task_create` puts the new task beside yours: your project, your folder (when your task has no folder, Walnut makes one holding both), your board tier (a task split off Focus work is born in Focus; pass `focus_tier` or `pinned` to choose), and your host and directory. Name `project` to file it elsewhere (`""` = Inbox); a folder never follows work into another project. Pass `group_id` (a `g_…` id from a `task_list` row) to pick another folder of that project, or `""` for none. The result's `placement` says where it landed. Called from Walnut's own chat or a terminal, an omitted project still means Inbox.
 - cwd and host resolve as a pair: what you pass, then the task's own cwd (its parent chain), then yours when the task is in your project, then the project default. `task_start` follows the same rule.
 - One task runs one thing at a time. Starting a second answers `409` naming the live run: that is not a failure, it means the work is already going, so `task_send` to it instead.
 - Write `to` as the task id (a unique id prefix of 4+ characters works too); legacy session ids, `Title [8hex]` handles, and unique title substrings still resolve, but are not what new calls should use. A task with nothing running answers `409 task_has_no_session`, which is the signal to call `task_start`.
@@ -379,7 +412,7 @@ walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'
 
 - **Read before write.** Search or list first; a duplicate is the most common damage an agent does here.
 - **Report where your task stands.** `task_update phase=NEED_ACTION` when it is done and ready to look at, `COMPLETE` when it is finished. A blocked or parked task stays `TODO`. Any phase may be set by anyone.
-- **Nothing new on the board unprompted.** No task, no start, no hand-off to other work unless the user asked. Your own follow-ups are done where you are.
+- **Nothing new on the board unprompted.** No task, no start, no hand-off to other work without one of the user's signals above. Split big work with your own subagents or agent team instead; your own follow-ups are done where you are.
 - **Never bulk-delete.** Delete only the specific task the user named.
 - **Do not reopen, re-prioritize, or move the user's tasks unprompted.** `phase`, `priority`, and `project` are the user's call.
 - One task per unit of work, titled so a human can scan it later; detail goes in `description`.

@@ -30,7 +30,8 @@ import { PeerThrottle } from '../../../src/core/peers/peer-throttle.js'
 let seq = 0
 async function seedCaller(project: string, opts: { walnutAgent?: boolean } = {}) {
   seq += 1
-  const { task } = await addTask({ title: `Caller ${seq}`, project, ...(opts.walnutAgent ? { walnut_agent: true } : {}) })
+  // Pinned, as every task created from the UI or the API is (newTaskPinDefault).
+  const { task } = await addTask({ title: `Caller ${seq}`, project, pinned: true, ...(opts.walnutAgent ? { walnut_agent: true } : {}) })
   const sid = `22222222-2222-3333-4444-${String(seq).padStart(12, '0')}`
   await createSessionRecord(sid, task.id, project, `/repo/${project}`, { title: task.title })
   return { task: await getTask(task.id), sid }
@@ -62,7 +63,7 @@ describe('through the daemon gateway (what `walnut tools call` in a session does
 
     const created = await call(sid, 'task_create', { title: 'Follow-up the user asked for', record_only: true })
     expect(created.placement).toMatchObject({ project: 'gateway-proj', folder_created: true, inherited_from: caller.id, parent_task_id: caller.id })
-    expect(created.outcome).toMatch(/^Filed in project gateway-proj, folder ".+" \(new, holding your task and this one\), as a subtask of your task\. Placeholder saved/)
+    expect(created.outcome).toMatch(/^Filed in project gateway-proj, folder ".+" \(new, holding your task and this one\), as a subtask of your task, in Satellite like your task\. Placeholder saved/)
     expect(created.task.group_id).toBe(created.placement.group_id)
     expect(created.task.parent_task_id).toBe(caller.id)
 

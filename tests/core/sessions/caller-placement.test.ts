@@ -20,7 +20,7 @@ vi.mock('../../../src/core/fork-title.js', () => ({ summarizeGroupLabel: vi.fn(a
 import { WALNUT_HOME } from '../../../src/constants.js'
 import {
   decidePlacement, resolveCallerPlacement, createTimeCwd, inheritedLaunchPair,
-  joinOrCreateSiblingFolder, type CallerPlacement,
+  joinOrCreateSiblingFolder, inheritedTier, type CallerPlacement,
 } from '../../../src/core/sessions/caller-placement.js'
 import {
   addTask, getTask, createFolder, updateTask, setProjectMetadata, listGroups,
@@ -111,6 +111,44 @@ describe('decidePlacement (the rule table)', () => {
     expect(decidePlacement({ project: '' }, worker('g_f')).parentTaskId).toBe('t-caller')
     // Only a caller with no task of its own has nothing to be the parent.
     for (const c of others) expect(decidePlacement({}, c).parentTaskId).toBeUndefined()
+  })
+})
+
+describe('inheritedTier (a worker\'s new task is born in its board tier)', () => {
+  // User report 2026-09-25: a Focus task's subtask landed in Satellite.
+  const at = (pinned: boolean | undefined, focus_tier?: string): CallerPlacement => ({
+    kind: 'worker',
+    task: { id: 't-caller', title: 'Refactor the fixture', project: 'marina', ...(pinned === undefined ? {} : { pinned }), ...(focus_tier ? { focus_tier } : {}) },
+    session: SESSION,
+  })
+
+  it('takes the caller\'s tier: Focus, a custom tier, Satellite, or off the board', () => {
+    expect(inheritedTier({}, at(true, 'focus'))).toEqual({ pinned: true, focus_tier: 'focus' })
+    expect(inheritedTier({}, at(true, 'ct_launch'))).toEqual({ pinned: true, focus_tier: 'ct_launch' })
+    expect(inheritedTier({}, at(true))).toEqual({ pinned: true })
+    expect(inheritedTier({}, at(false))).toEqual({ pinned: false })
+  })
+
+  it('"" and null focus_tier mean not named, so the caller\'s tier still applies', () => {
+    expect(inheritedTier({ focus_tier: '' }, at(true, 'wait'))).toEqual({ pinned: true, focus_tier: 'wait' })
+    expect(inheritedTier({ focus_tier: '  ' }, at(true, 'wait'))).toEqual({ pinned: true, focus_tier: 'wait' })
+    expect(inheritedTier({ focus_tier: null }, at(true, 'wait'))).toEqual({ pinned: true, focus_tier: 'wait' })
+  })
+
+  it('an explicit pinned or focus_tier wins: nothing is inherited', () => {
+    expect(inheritedTier({ pinned: true }, at(true, 'focus'))).toBeUndefined()
+    expect(inheritedTier({ pinned: false }, at(true, 'focus'))).toBeUndefined()
+    expect(inheritedTier({ focus_tier: 'backlog' }, at(true, 'focus'))).toBeUndefined()
+  })
+
+  it('only a worker: an ask (often parked in Wait), a human, or an unknown caller inherits nothing', () => {
+    const ask: CallerPlacement = { kind: 'ask', task: { id: 't-ask', title: 'Ask', project: 'Ask Walnut', pinned: true, focus_tier: 'wait' }, session: SESSION }
+    expect(inheritedTier({}, ask)).toBeUndefined()
+    expect(inheritedTier({}, { kind: 'human' })).toBeUndefined()
+    expect(inheritedTier({}, { kind: 'external' })).toBeUndefined()
+    expect(inheritedTier({}, { kind: 'untracked', session: SESSION })).toBeUndefined()
+    // A hand-built caller that never read the board says nothing either.
+    expect(inheritedTier({}, at(undefined))).toBeUndefined()
   })
 })
 

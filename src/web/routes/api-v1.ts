@@ -2154,7 +2154,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     // place, and it is the caller's subtask wherever it lands. Only a worker
     // session is placed from; a Personal AI ask gets the parent link alone, and
     // the phone and the web UI send no caller and keep the old defaults.
-    const { resolveCallerPlacement, decidePlacement, createTimeCwd, joinOrCreateSiblingFolder } =
+    const { resolveCallerPlacement, decidePlacement, createTimeCwd, joinOrCreateSiblingFolder, inheritedTier } =
       await import('../../core/sessions/caller-placement.js')
     const rawSid = req.headers['x-walnut-caller-sid']
     const caller = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
@@ -2174,6 +2174,9 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       decision.project = (await getConfig()).defaults?.project ?? ''
     }
     const stampedCwd = await createTimeCwd(placementReq, caller, decision).catch(() => undefined)
+    // A worker's new task is born in the caller's board tier (Focus work stays
+    // Focus) unless the body names `pinned` or a `focus_tier`.
+    const tier = inheritedTier({ pinned, focus_tier: focusTier }, caller)
     try {
       // asyncPush like the web create path: the client renders the task
       // immediately, so don't block the response on an external sync push.
@@ -2188,27 +2191,36 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         ...(startDate !== undefined ? { start_date: normalizeDateField(startDate) } : {}),
         ...(endDate !== undefined ? { end_date: normalizeDateField(endDate) } : {}),
         ...(description !== undefined ? { description } : {}),
-        // Human/AI create surface (phone Quick Add, `walnut add`, the
-        // task_create op) — lands on the board in Satellite unless the caller
-        // passed an explicit `pinned`. See newTaskPinDefault.
-        pinned: newTaskPinDefault(pinned),
-        ...(typeof focusTier === 'string' ? { focus_tier: focusTier } : {}),
         asyncPush: true,
       }
+      // Human/AI create surface (phone Quick Add, `walnut add`, the task_create
+      // op): lands on the board in Satellite unless the caller passed an
+      // explicit `pinned` (see newTaskPinDefault), or a worker's tier is inherited.
+      let tierInput: { pinned: boolean; focus_tier?: string } = tier
+        ? tier
+        : { pinned: newTaskPinDefault(pinned), ...(typeof focusTier === 'string' ? { focus_tier: focusTier } : {}) }
+      let tierWarning: string | undefined
       let folderWarning: string | undefined
       let parentWarning: string | undefined
       // A session's task is its subtask wherever it lands (see caller-placement).
       let parentInput: { parent_task_id?: string } = decision.parentTaskId ? { parent_task_id: decision.parentTaskId } : {}
-      const add = async (folder: { group_id?: string }) => {
+      const add = async (folder: { group_id?: string }): Promise<Awaited<ReturnType<typeof addTask>>['task']> => {
         try {
-          return (await addTask({ ...createInput, ...parentInput, ...folder })).task
+          return (await addTask({ ...createInput, ...tierInput, ...parentInput, ...folder })).task
         } catch (err) {
+          // An INHERITED custom tier deleted since the caller was read: a tier
+          // the body never named must not fail the create; Satellite instead.
+          if (tier?.focus_tier && tierInput.focus_tier && err instanceof InvalidFocusTierError) {
+            tierWarning = err.message
+            tierInput = { pinned: true }
+            return add(folder)
+          }
           // The caller's task deleted since it was read: file the work anyway,
           // just not as a subtask of something that no longer exists.
           if (!parentInput.parent_task_id || !(err instanceof Error && /^Parent task not found/.test(err.message))) throw err
           parentWarning = err.message
           parentInput = {}
-          return (await addTask({ ...createInput, ...folder })).task
+          return add(folder)
         }
       }
       let created
@@ -2261,10 +2273,14 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
           ...(decision.inheritedFrom ? { inherited_from: decision.inheritedFrom } : {}),
           ...(task.parent_task_id ? { parent_task_id: task.parent_task_id } : {}),
           ...(task.cwd ? { cwd: task.cwd } : {}),
-          ...(folderWarning || parentWarning ? {
+          // The board tier taken from the caller: a tier id, 'satellite', or
+          // 'unpinned'. Absent when the body chose, or nothing was inherited.
+          ...(tier && !tierWarning ? { tier: !task.pinned ? 'unpinned' : task.focus_tier || 'satellite' } : {}),
+          ...(folderWarning || parentWarning || tierWarning ? {
             warning: [
               folderWarning ? `The task was created but could not be put in a folder: ${folderWarning}` : '',
               parentWarning ? `The task was created but not as a subtask: ${parentWarning}` : '',
+              tierWarning ? `The task was created in Satellite, not your tier: ${tierWarning}` : '',
             ].filter(Boolean).join(' '),
           } : {}),
         },

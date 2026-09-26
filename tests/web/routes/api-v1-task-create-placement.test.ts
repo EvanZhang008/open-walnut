@@ -45,7 +45,7 @@ vi.mock('../../../src/core/sessions/caller-placement.js', async (orig) => {
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
-import { addTask, getTask, createFolder, addToGroup, updateTaskRaw, listGroups } from '../../../src/core/task-manager.js'
+import { addTask, getTask, createFolder, addToGroup, updateTaskRaw, listGroups, setFocusTier, createCustomTier, deleteCustomTier } from '../../../src/core/task-manager.js'
 import { createSessionRecord } from '../../../src/core/session-tracker.js'
 import { bus, EventNames } from '../../../src/core/event-bus.js'
 
@@ -73,8 +73,10 @@ let seq = 0
 /** A worker: a task in `project` (optionally in a folder) with a live session record. */
 async function seedCaller(project: string, opts: { folder?: string; walnutAgent?: boolean; cwd?: string } = {}) {
   seq += 1
+  // Pinned, as every task created from the UI or the API is (newTaskPinDefault):
+  // the caller's board tier is part of where its work lands.
   const { task } = await addTask({
-    title: `Caller ${seq}`, project, ...(opts.walnutAgent ? { walnut_agent: true } : {}),
+    title: `Caller ${seq}`, project, pinned: true, ...(opts.walnutAgent ? { walnut_agent: true } : {}),
   })
   if (opts.folder) await addToGroup(opts.folder, [task.id])
   const sid = `11111111-2222-3333-4444-${String(seq).padStart(12, '0')}`
@@ -191,7 +193,7 @@ describe('a worker caller', () => {
     const { task: caller, sid } = await seedCaller('marina', { folder: folder.group_id })
     const { json } = await post({ title: 'Release notes', project: 'acme' }, sid)
     expect(json.task.project).toBe('acme')
-    expect(json.placement).toEqual({ project: 'acme', folder_created: false, parent_task_id: caller.id })
+    expect(json.placement).toEqual({ project: 'acme', folder_created: false, parent_task_id: caller.id, tier: 'satellite' })
     const born = await getTask(json.task.id)
     expect(born.cwd).toBeUndefined()
     expect(born.group_id).toBeUndefined()
@@ -314,6 +316,87 @@ describe('a worker caller', () => {
   })
 })
 
+describe('the board tier: a worker\'s new task is born where the caller sits', () => {
+  // User report 2026-09-25: the caller was in Focus, its subtask landed in Satellite.
+  it('a Focus caller: the new task is in Focus, in its project and in another one', async () => {
+    const { task, sid } = await seedCaller('marina')
+    await setFocusTier(task.id, 'focus')
+    const here = await post({ title: 'Split off Focus work' }, sid)
+    expect(here.status).toBe(201)
+    expect(here.json.placement.tier).toBe('focus')
+    const stored = await getTask(here.json.task.id)
+    expect(stored.pinned).toBe(true)
+    expect(stored.focus_tier).toBe('focus')
+    // A tier is board-wide: it follows the work into another project.
+    const there = await post({ title: 'Focus work elsewhere', project: 'lighthouse' }, sid)
+    expect((await getTask(there.json.task.id)).focus_tier).toBe('focus')
+  })
+
+  it('a Satellite caller stays Satellite; an unpinned caller\'s task is off the board too', async () => {
+    const sat = await seedCaller('marina')
+    const a = await post({ title: 'From Satellite' }, sat.sid)
+    expect(a.json.placement.tier).toBe('satellite')
+    const stored = await getTask(a.json.task.id)
+    expect(stored.pinned).toBe(true)
+    expect(stored.focus_tier).toBeUndefined()
+    const off = await seedCaller('marina')
+    await updateTaskRaw(off.task.id, { pinned: false })
+    const b = await post({ title: 'From the backlog' }, off.sid)
+    expect(b.json.placement.tier).toBe('unpinned')
+    expect(Boolean((await getTask(b.json.task.id)).pinned)).toBe(false)
+  })
+
+  it('an explicit focus_tier or pinned wins over the caller\'s tier', async () => {
+    const { task, sid } = await seedCaller('marina')
+    await setFocusTier(task.id, 'focus')
+    const b = await post({ title: 'Parked on purpose', focus_tier: 'backlog' }, sid)
+    expect((await getTask(b.json.task.id)).focus_tier).toBe('backlog')
+    expect(b.json.placement.tier).toBeUndefined()
+    const off = await post({ title: 'Off the board on purpose', pinned: false }, sid)
+    expect(Boolean((await getTask(off.json.task.id)).pinned)).toBe(false)
+  })
+
+  it('a custom tier deleted since the caller was read: created in Satellite with a warning, never a 400', async () => {
+    const { task, sid } = await seedCaller('marina')
+    const { tier } = await createCustomTier('Launch week')
+    await setFocusTier(task.id, tier.id)
+    // The caller was resolved while its tier existed; the tier is gone by the write.
+    rewriteCaller = (c) => c
+    const { resolveCallerPlacement } = await import('../../../src/core/sessions/caller-placement.js')
+    const read = await resolveCallerPlacement(sid)
+    await deleteCustomTier(tier.id)
+    rewriteCaller = () => read
+    try {
+      const r = await post({ title: 'Born in a tier that vanished' }, sid)
+      expect(r.status).toBe(201)
+      expect(r.json.placement.warning).toMatch(/created in Satellite, not your tier/)
+      expect(r.json.placement.tier).toBeUndefined()
+      const stored = await getTask(r.json.task.id)
+      expect(stored.pinned).toBe(true)
+      expect(stored.focus_tier).toBeUndefined()
+    } finally {
+      rewriteCaller = undefined
+    }
+  })
+
+  it('an ask never passes on its tier (asks are often parked in Wait)', async () => {
+    const ask = await seedCaller('Ask Walnut', { walnutAgent: true })
+    await setFocusTier(ask.task.id, 'wait')
+    const r = await post({ title: 'Work asked for in a parked chat', project: 'marina' }, ask.sid)
+    expect(r.status).toBe(201)
+    expect(r.json.placement.tier).toBeUndefined()
+    expect((await getTask(r.json.task.id)).focus_tier).toBeUndefined()
+  })
+
+  it('no caller (the phone, the web UI): Satellite as before', async () => {
+    const r = await post({ title: 'Quick add from the phone' })
+    const stored = await getTask(r.json.task.id)
+    expect(stored.pinned).toBe(true)
+    expect(stored.focus_tier).toBeUndefined()
+    expect(r.json.placement.tier).toBeUndefined()
+  })
+})
+
 describe('GET /api/v1/me', () => {
   it('answers human, external, ask and worker callers', async () => {
     expect(await me()).toEqual({ kind: 'human' })
@@ -324,7 +407,7 @@ describe('GET /api/v1/me', () => {
     const worker = await seedCaller('marina', { folder: folder.group_id, cwd: '/repo/here' })
     expect(await me(worker.sid)).toEqual({
       kind: 'worker',
-      task: { id: worker.task.id, title: worker.task.title, project: 'marina', group_id: folder.group_id, group_label: 'Where I am' },
+      task: { id: worker.task.id, title: worker.task.title, project: 'marina', group_id: folder.group_id, group_label: 'Where I am', pinned: true },
       session: { id: worker.sid, host: '', cwd: '/repo/here' },
     })
   })

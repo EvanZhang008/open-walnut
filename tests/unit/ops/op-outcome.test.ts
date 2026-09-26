@@ -300,6 +300,15 @@ describe('task_create says where the task landed', () => {
     expect(rec(created.task).parent_task_id).toBe('t_caller')
   })
 
+  it('names the board tier the new task took from the caller', async () => {
+    const say = async (tier: string) => (await createRunner({ created: { task: TASK, placement: { ...PLACED, parent_task_id: 't_caller', tier } } })
+      .speak({ title: TASK.title, record_only: true })).outcome as string
+    expect(await say('focus')).toContain('as a subtask of your task, in Focus like your task. Placeholder saved.')
+    expect(await say('satellite')).toContain(', in Satellite like your task.')
+    expect(await say('ct_launch')).toContain(', in tier ct_launch like your task.')
+    expect(await say('unpinned')).toContain(', off the pinned board like your task.')
+  })
+
   it('prefixes a started create too, and a failed start keeps the placement', async () => {
     const started = await createRunner({ created: { task: TASK, placement: { project: '', folder_created: false } } })
       .speak({ title: TASK.title })

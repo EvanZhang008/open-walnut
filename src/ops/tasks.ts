@@ -383,8 +383,12 @@ interface Placement {
   folder_created?: boolean
   inherited_from?: string
   parent_task_id?: string
+  /** The board tier taken from your task: a tier id, 'satellite' or 'unpinned'. */
+  tier?: string
   warning?: string
 }
+
+const TIER_NAMES: Record<string, string> = { focus: 'Focus', satellite: 'Satellite', backlog: 'Backlog', wait: 'Wait' }
 
 /** One sentence naming where the task landed, or '' for a server too old to say. */
 function placementSentence(p: Placement | undefined): string {
@@ -394,17 +398,25 @@ function placementSentence(p: Placement | undefined): string {
     ? `, folder "${p.group_label || p.group_id}"${p.folder_created ? ' (new, holding your task and this one)' : ''}`
     : ''
   const why = p.parent_task_id ? ', as a subtask of your task' : p.inherited_from ? ', beside your task' : ''
+  const tier = !p.tier ? ''
+    : p.tier === 'unpinned' ? ', off the pinned board like your task'
+    : `, in ${TIER_NAMES[p.tier] ?? `tier ${p.tier}`} like your task`
   const warning = p.warning ? ` ${p.warning}.` : ''
-  return `Filed in ${project}${folder}${why}.${warning} `
+  return `Filed in ${project}${folder}${why}${tier}.${warning} `
 }
 
 defineOp({
   name: 'task_create',
   title: 'Create and start a task (record_only to defer)',
   description:
-    'Create a task AND START WORK by default, in one call. Use record_only=true only when the user ' +
-    'wants a placeholder or reminder and nothing should run. Only create work the user asked to ' +
-    'track or start; do your own follow-ups here. Pass message for the instruction and cwd/host ' +
+    'Create a task AND START WORK by default, in one call. A task is a separate session on the user\'s ' +
+    'board that they open, message and steer. From a coding session, create one only on the user\'s signal: ' +
+    'they ask for a task, want to talk to or steer each part themselves, or need it to run where your ' +
+    'session cannot (another host, later, after this session ends); record_only=true when they only want ' +
+    'it written down (a placeholder, nothing runs). Otherwise do the work with your own tools (todo list, ' +
+    'subagents, agent teams) however big it is: size alone is never a reason, and follow-ups you find are ' +
+    'yours to do here. In Walnut\'s own chat, where you dispatch, the user asking for the work is the ' +
+    'signal. Pass message for the instruction and cwd/host ' +
     'to override project defaults. Keep the returned task id: task_send adds context, task_history ' +
     'reads the conversation, task_get reports execution. If starting fails the task still exists; ' +
     'fix the cause and use task_start with that id, never create a duplicate. Placement: called from ' +
@@ -413,8 +425,9 @@ defineOp({
     '("" = Inbox); a folder never follows work into another project. Wherever it lands, the new task is your SUBTASK (Sub on the board), from a Personal AI conversation too. Called from anywhere else, an ' +
     'omitted project means the configured default project (normally the Inbox). A new project name ' +
     'creates its registry row. The result\'s ' +
-    '`placement` says where it landed. Tasks are pinned by default in Satellite; focus_tier changes ' +
-    'their board position, not execution.',
+    '`placement` says where it landed. From inside a task the new task is born in your board tier ' +
+    '(Focus work stays Focus); elsewhere it is pinned in Satellite. pinned or focus_tier override that; ' +
+    'focus_tier changes board position, not execution.',
   input: {
     title: z.string().min(1).describe('Task title (required)'),
     project: z.string().optional().describe('Project name; "" for the Inbox. Omit to use your own task\'s project (from inside a task) or the Inbox (elsewhere)'),
@@ -422,10 +435,10 @@ defineOp({
     priority: PRIORITY.optional().describe('immediate | important | backlog | none'),
     due_date: z.string().optional().describe('YYYY-MM-DD or a full ISO-8601 datetime'),
     description: z.string().optional().describe('Longer body text (write-only)'),
-    pinned: z.boolean().optional().describe('Join the pinned board (default true). false keeps the task off the board'),
+    pinned: z.boolean().optional().describe('Join the pinned board. Default: your task\'s (from inside a task), otherwise true. false keeps the task off the board'),
     // Exact ids only — this rides straight to the server, which validates
     // against the registry. Label tolerance lives in the agent tool.
-    focus_tier: z.string().optional().describe('Pin tier the task is born into (implies pinned): focus | satellite | backlog | wait | a registered ct_* id. Omit for Satellite; unknown tiers are rejected, not silently downgraded'),
+    focus_tier: z.string().optional().describe('Pin tier the task is born into (implies pinned): focus | satellite | backlog | wait | a registered ct_* id. Omit for your task\'s tier (from inside a task) or Satellite (elsewhere); unknown tiers are rejected, not silently downgraded'),
     record_only: z.boolean().optional().describe('Explicitly save a placeholder WITHOUT starting work. Default false: create and start'),
     ...TASK_START_INPUT,
     start_session: z.boolean().optional().describe('Legacy spelling: false means record_only=true; true starts work (already the default)'),

@@ -186,14 +186,31 @@ describe('addTask project registration', () => {
     expect(syncResult.success).toBe(true); // local short-circuit, no push
   });
 
-  it('throws ProjectSourceConflictError when an inherited parent source clashes', async () => {
+  it('a subtask filed into another project takes that project\'s source, not its parent\'s', async () => {
+    // 3f432931: a session files work as its subtask in any project, so a
+    // subtask in another project is that project's kind of task.
     await ensureProject('A-owned', 'plugin-a');
     await ensureProject('B-owned', 'plugin-b');
     const { task: parent } = await addTask({ title: 'Parent', project: 'A-owned' });
     expect(parent.source).toBe('plugin-a');
 
+    const { task: child } = await addTask({ title: 'Child', project: 'B-owned', parent_task_id: parent.id });
+    expect(child.source).toBe('plugin-b');
+    expect(child.parent_task_id).toBe(parent.id);
+  });
+
+  it('throws ProjectSourceConflictError when a subtask beside its parent clashes with the project\'s claim', async () => {
+    // Beside the parent the child takes the parent's source, and that source is
+    // still validated: once the user reserves the project for plugin-b, a child
+    // of a plugin-a task cannot be filed there.
+    await ensureProject('Moved', 'plugin-a');
+    const { task: parent } = await addTask({ title: 'Parent', project: 'Moved' });
+    expect(parent.source).toBe('plugin-a');
+    const config = await getConfig();
+    await saveConfig({ ...config, plugins: { ...(config.plugins ?? {}), 'plugin-b': { project: 'Moved' } } });
+
     await expect(
-      addTask({ title: 'Child', project: 'B-owned', parent_task_id: parent.id }),
+      addTask({ title: 'Child', project: 'Moved', parent_task_id: parent.id }),
     ).rejects.toThrow(ProjectSourceConflictError);
   });
 

@@ -109,18 +109,46 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).toMatch(/your own tools/i)
   })
 
-  it('names what the session never does on its own: create, start, or hand off', async () => {
-    const { systemPrompt } = await buildSessionContext('')
-    expect(systemPrompt).not.toMatch(/create tasks/i)
-    expect(systemPrompt).toMatch(/never create or start a task, or hand work to another task, unless the user asked/i)
-    expect(systemPrompt).toMatch(/follow-up work you find is yours to do here, now/i)
+  it('a worker splits work with its own tools and makes a Walnut task only on the user\'s signal', async () => {
+    // The user's rule (2026-09-25): most work follows the session's native
+    // subagents / agent teams; a Walnut task is for a user who asked for one,
+    // wants to talk to each part, or needs it run elsewhere or later. Size is
+    // never the trigger, because "big" is a judgment a model gets wrong both ways.
+    for (const id of ['', await seedTask('marina')]) {
+      const { systemPrompt } = await buildSessionContext(id)
+      expect(systemPrompt).not.toMatch(/create tasks/i)
+      expect(systemPrompt).toMatch(/split work with your own tools \(todo list, subagents, agent teams\), however big it is/i)
+      expect(systemPrompt).toMatch(/a Walnut task is a separate session the user opens and steers/i)
+      expect(systemPrompt).toMatch(/only when the user asks for a task, wants to talk to each part, or needs it run elsewhere or later/i)
+      expect(systemPrompt).toMatch(/size alone is never a reason/i)
+      expect(systemPrompt).toMatch(/follow-ups you find are yours to do here, now/i)
+      expect(systemPrompt).not.toMatch(/unless the user asked/i)
+    }
+  })
+
+  it('an ask (the Personal AI dispatcher) keeps the plain "only when the user asked" line', async () => {
+    // Asking the dispatcher for work IS the signal; its persona decides, so the
+    // worker's split rule (and its "however big" nudge) must not reach it.
+    for (const seed of [
+      { title: 'Chat', project: 'Ask Walnut', walnut_agent: true },
+      { title: 'Chat with Mentor', project: 'Ask Mentor' },
+    ]) {
+      const { task } = await addTask(seed)
+      const { systemPrompt } = await buildSessionContext(task.id)
+      expect(systemPrompt).toMatch(/never create or start a task, or hand work to another task, unless the user asked/i)
+      expect(systemPrompt).toMatch(/follow-up work you find is yours to do here, now/i)
+      expect(systemPrompt).not.toMatch(/split work with your own tools/i)
+      expect(systemPrompt).not.toMatch(/size alone/i)
+      // An ask's work keeps the old defaults, so it must not be told otherwise.
+      expect(systemPrompt).not.toMatch(/lands beside yours/i)
+    }
   })
 
   it('says where asked-for work lands: beside the caller, a project named only to file it elsewhere', async () => {
     // Without this an agent "helps" by naming a project it guessed, which files
     // the work away from the folder the user put the caller in.
     const { systemPrompt } = await buildSessionContext('')
-    expect(systemPrompt).toMatch(/the new task lands beside yours: same project and folder/i)
+    expect(systemPrompt).toMatch(/a task you create lands beside yours: same project, folder and board tier/i)
     expect(systemPrompt).toMatch(/same host and directory/i)
     expect(systemPrompt).toMatch(/name a project only to file it elsewhere/i)
   })
@@ -141,6 +169,9 @@ describe('buildSessionContext (identity note)', () => {
     // User-supplied titles are preserved; this ceiling guards the fixed preamble.
     // 1200 → 1300 (2026-09-23) for the one placement sentence: where work the
     // user asked for lands is a first-call fact, not manual material.
-    expect(systemPrompt.length).toBeLessThan(1300)
+    // 1300 → 1450 (2026-09-25) for which tool splits the work: native subagents
+    // and agent teams by default, a Walnut task only on the user's signal. A
+    // session decides that before its first split, so it cannot wait for the manual.
+    expect(systemPrompt.length).toBeLessThan(1450)
   })
 })

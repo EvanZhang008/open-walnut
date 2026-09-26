@@ -584,11 +584,16 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   back to the parent), wherever it lands: another project too, and from a
   Personal AI ask as well. A subtask filed into another project takes that
   project's source, not its parent's. No header or an unknown id: the old
-  defaults, unchanged. An ask keeps the old defaults for project, folder and cwd
-  (its own `Ask …` project is never a place for the user's work) and only adds
-  the parent link. `placement` says where the task landed,
-  because ProjectedTask carries no folder; `warning` appears when an inherited
-  folder could not be applied (the task is still created). `group_id` must be a
+  defaults, unchanged. A worker's new task is also born in the caller's board
+  tier (pinned plus its focus tier, or unpinned) unless the body names `pinned`
+  or a `focus_tier`; `placement.tier` then says which (`focus`, `satellite`,
+  `backlog`, `wait`, a custom `ct_*` id, or `unpinned`). An ask keeps the old
+  defaults for project, folder, tier and cwd (its own `Ask …` project is never a
+  place for the user's work) and only adds the parent link. `placement` says
+  where the task landed, because ProjectedTask carries no folder; `warning`
+  appears when an inherited folder, parent or custom tier could not be applied
+  (the task is still created: an inherited tier that no longer exists falls back
+  to Satellite). `group_id` must be a
   folder of the resulting project: malformed, unknown, or another project's
   folder answers `400 bad_request`, as does a relative `launch_cwd`. On a
   REPLICA the caller is never a worker (it has no session registry), and a
