@@ -6,9 +6,9 @@
 
 Since September 2026 those guesses can come from Jev, a decision-only model from TypeSafe AI, instead of a Claude model. On 53 of my own tasks with a known project, Jev picked the wrong project 9 times and Claude Opus 5 picked it wrong 12 times. Jev answered in a median 209 ms against 4,689 ms, and a call cost about $0.00019 against $0.025. Opus got 3 more tasks right, because Jev leaves a field blank when it is not sure.
 
-![Figure 1: typing a new task in Walnut with Jev filling in priority and project](../../assets/blog/jev-small-decisions/fig1-jev-smart-task.gif)
+![Figure 1: four new tasks typed in a row in Walnut, each showing the fields Jev filled in](../../assets/blog/jev-small-decisions/fig1-jev-smart-task.gif)
 
-*Figure 1. A new task typed in Walnut. The dark panel is a recording overlay, not part of Walnut: it shows the one Jev call behind the pills.*
+*Figure 1. Four new tasks typed in a row. Every chip marked ✦ was filled in for you: Jev picks the pinned tier, the priority and the project, and the folder follows the project.*
 
 ## Where these guesses run
 
