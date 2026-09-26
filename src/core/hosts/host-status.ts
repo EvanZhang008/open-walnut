@@ -13,13 +13,18 @@ import type { Config } from '../types.js'
 import type { HostWarmupState } from './host-warmup.js'
 import type { HostReadiness, ReadinessProblem } from './host-readiness.js'
 import {
+  CREDENTIAL_WAIT_KINDS,
+  RETRYABLE,
   classifyHostConnectError,
+  hintForKind,
   connectPhaseNote,
   describeConnectPhase,
   describeConnectSteps,
   type ConnectStep,
   type HostConnectErrorKind,
 } from '../sessions/host-connect-hint.js'
+
+import { OFF_PHASE_LABEL } from './host-problem.js'
 
 export type { HostWarmupState }
 
@@ -29,7 +34,7 @@ export type { HostWarmupState }
  * sequential). Without it a host that the human just asked to connect reads as
  * 'idle' ("Not connected") for the whole time the host before it is installing.
  */
-export type HostStatusPhase = DaemonConnectPhase | 'queued'
+export type HostStatusPhase = DaemonConnectPhase | 'queued' | 'off'
 
 /** The subset of a config.hosts entry this module needs. */
 export interface HostDef {
@@ -61,8 +66,22 @@ export interface HostStatus {
   hint?: string
   /** A plain retry can work with nothing changed (see HostConnectHint.retryable). */
   retryable?: boolean
-  /** ms until an automatic retry is allowed again. */
+  /** ms until the failure cache lets an automatic retry through. NOT a promise of a retry: see retryAt. */
   retryInMs?: number
+  /** Epoch ms of the next attempt Walnut really has scheduled (credential re-dial or standing slow probe). */
+  retryAt?: number
+  /** The reconnect loop's last failure while the phase is still 'reconnecting'. */
+  lastError?: string
+  lastKind?: HostConnectErrorKind
+  lastHint?: string
+  /** When the host dropped (the current reconnect began), epoch ms. */
+  reconnectSince?: number
+  /** When the current connect attempt began, epoch ms. */
+  attemptStartedAt?: number
+  /** When the current connection came up, epoch ms (a readiness answer older than this is stale). */
+  connectedAt?: number
+  /** The server clock when this frame was built (= at): clients correct their skew with it. */
+  serverNow?: number
   warmup?: HostWarmupState
   discovered?: boolean
   /**
@@ -108,6 +127,14 @@ export function connectReadinessProblems(state: Pick<DaemonConnectState, 'daemon
   return out
 }
 
+/** Facts from outside the connection that change what the frame says. */
+export interface HostStatusExtra {
+  /** Remote hosts are off on this server by design (an ephemeral test server). */
+  off?: boolean
+  /** host-warmup's armed credential re-dial for this host (epoch ms). */
+  credentialRetryAt?: number
+}
+
 export function buildHostStatus(
   hostKey: string,
   hostDef: HostDef,
@@ -115,8 +142,10 @@ export function buildHostStatus(
   warmup?: HostWarmupState,
   now: number = Date.now(),
   readiness?: HostReadiness,
+  extra: HostStatusExtra = {},
 ): HostStatus {
   const label = hostDef.label ?? hostKey
+  if (extra.off) return offHostStatus(hostKey, hostDef, now)
   const status: HostStatus = {
     host: hostKey,
     label,
@@ -128,6 +157,7 @@ export function buildHostStatus(
     phaseElapsedMs: state.phaseElapsedMs,
     connectElapsedMs: state.connectElapsedMs,
     at: now,
+    serverNow: now,
   }
   if (hostDef.user) status.user = hostDef.user
   // Waiting in the warmup's line, and the connection itself has nothing newer
@@ -145,15 +175,27 @@ export function buildHostStatus(
   if (state.phase === 'failed' && state.error) {
     status.error = state.error
     // The ssh target as the USER would type it — the hint quotes it back.
-    const sshTargetText = hostDef.user ? `${hostDef.user}@${hostDef.hostname}` : hostDef.hostname
-    const { kind, hint, retryable } = classifyHostConnectError(
-      state.error, sshTargetText, [hostKey, label, hostDef.hostname, hostDef.user ?? ''],
-      { hostname: hostDef.hostname, ...(hostDef.port ? { port: hostDef.port } : {}) },
-    )
+    const c = classifyFor(state.error, hostKey, hostDef, label)
+    // A reconnect's standing cause knows its kind better than its summary does.
+    const kind = (state.kind as HostConnectErrorKind | undefined) ?? c.kind
     status.kind = kind
-    status.hint = hint
-    status.retryable = retryable
+    status.hint = kind === c.kind ? c.hint : hintForKind(kind, sshTargetOf(hostDef), targetOf(hostDef, label))
+    status.retryable = RETRYABLE[kind] ?? c.retryable
+    const retryAt = state.retryAt ?? (CREDENTIAL_WAIT_KINDS.has(kind) ? extra.credentialRetryAt : undefined)
+    if (typeof retryAt === 'number') status.retryAt = retryAt
   }
+  if (state.phase === 'reconnecting' && !state.connected) {
+    if (state.reconnectSince) status.reconnectSince = state.reconnectSince
+    if (state.lastError) {
+      const c = classifyFor(state.lastError, hostKey, hostDef, label)
+      const kind = (state.lastKind as HostConnectErrorKind | undefined) ?? c.kind
+      status.lastError = state.lastError
+      status.lastKind = kind
+      status.lastHint = kind === c.kind ? c.hint : hintForKind(kind, sshTargetOf(hostDef), targetOf(hostDef, label))
+    }
+  } else if (state.reconnectSince && status.error) status.reconnectSince = state.reconnectSince
+  if (state.attemptStartedAt && !state.connected) status.attemptStartedAt = state.attemptStartedAt
+  if (state.connectedAt && state.connected) status.connectedAt = state.connectedAt
   if (state.runtime) status.runtime = state.runtime
   if (state.daemonDir) {
     const d = state.daemonDir
@@ -174,6 +216,28 @@ export function buildHostStatus(
     status.readiness = extra.length ? { ...readiness, problems: [...readiness.problems, ...extra] } : readiness
   }
   return status
+}
+
+function sshTargetOf(def: HostDef): string {
+  return def.user ? `${def.user}@${def.hostname}` : def.hostname
+}
+
+function targetOf(def: HostDef, label: string): { label: string; hostname: string; user?: string; port?: number } {
+  return { label, hostname: def.hostname, ...(def.user ? { user: def.user } : {}), ...(def.port ? { port: def.port } : {}) }
+}
+
+/** The ONE classification call every frame field uses: label, hostname and port all reach the hint. */
+function classifyFor(message: string, hostKey: string, def: HostDef, label: string) {
+  return classifyHostConnectError(message, sshTargetOf(def), [hostKey, label, def.hostname, def.user ?? ''], targetOf(def, label))
+}
+
+/** An ephemeral test server never dials remotes: one quiet grey frame, no error, no hint, no problems. */
+function offHostStatus(hostKey: string, def: HostDef, now: number): HostStatus {
+  return {
+    host: hostKey, label: def.label ?? hostKey, hostname: def.hostname, ...(def.user ? { user: def.user } : {}),
+    connected: false, phase: 'off', phaseLabel: OFF_PHASE_LABEL, steps: describeConnectSteps('idle'),
+    phaseElapsedMs: 0, connectElapsedMs: 0, at: now, serverNow: now,
+  }
 }
 
 /**

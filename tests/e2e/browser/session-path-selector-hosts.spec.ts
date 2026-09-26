@@ -12,9 +12,30 @@
  */
 import { test, expect, type Page, type Route } from '@playwright/test'
 import { openDraft } from './draft-helpers'
+import { resetServerHostFixture } from './host-problems-helpers'
 
 const HOST = 'devbox'
 const HOST_LABEL = 'Big dev box'
+
+// A server host fixture another spec left loaded would push real frames for `devbox`.
+test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
+// A route callback still in flight when the page closes must not fail the test.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
+
+/** Retry now goes through the host's connect route; the answer seeds the status store. */
+async function routeConnect(page: Page, host = HOST, label = HOST_LABEL): Promise<string[]> {
+  const connects: string[] = []
+  await page.route(`**/api/hosts/${host}/connect`, async (route) => {
+    connects.push(host)
+    const at = Date.now()
+    await route.fulfill({ json: { ok: true, status: {
+      host, label, hostname: `${host}.example.test`, connected: true, phase: 'connected', phaseLabel: `Connected to ${label}`,
+      steps: [], phaseElapsedMs: 0, connectElapsedMs: 0, at, serverNow: at, connectedAt: at,
+      readiness: { checkedAt: at, problems: [] },
+    } } })
+  })
+  return connects
+}
 
 const input = (page: Page) => page.locator('.sps-search-input')
 const list = (page: Page) => page.locator('.sps-path-list')
@@ -31,11 +52,18 @@ async function openPicker(page: Page): Promise<void> {
   }
 }
 
-/** Inject one configured remote host into the working-dirs answer (history untouched). */
+/**
+ * Inject one configured remote host into the working-dirs answer. The host has
+ * no history: a session another spec in the same run started on the fixture's
+ * `devbox` would give the tab rows, and the picker pre-warms a host's latest
+ * history folder (`~/work/web`) instead of `~/`, which would take the first
+ * scripted answer.
+ */
 async function injectHost(page: Page): Promise<void> {
   await page.route('**/api/sessions/working-dirs', async (route) => {
     const res = await route.fetch()
-    const body = await res.json() as { dirs: unknown[]; hosts?: unknown[] }
+    const body = await res.json() as { dirs: Array<{ host?: string | null }>; hosts?: unknown[] }
+    body.dirs = body.dirs.filter((d) => d.host !== HOST)
     body.hosts = [...(body.hosts ?? []), { alias: HOST, label: HOST_LABEL }]
     await route.fulfill({ response: res, json: body })
   })
@@ -102,7 +130,7 @@ test('remote host still connecting: the connect step is shown, then the folders 
   await expect(connecting).toContainText('Installing the session daemon runtime on Big dev box')
   // One wait, one indicator: the generic line must not stack on the host row.
   await expect(list(page).locator('.sps-empty', { hasText: 'Loading paths' })).toHaveCount(0)
-  await expect(list(page).locator('.sps-host-down')).toHaveCount(0)
+  await expect(list(page).locator('.sps-host-note-failure')).toHaveCount(0)
 
   // Polling advances through the phases and ends in the real listing.
   await expect(connecting).toContainText('Starting the session daemon on Big dev box')
@@ -113,13 +141,9 @@ test('remote host still connecting: the connect step is shown, then the folders 
   for (const c of remote.calls) expect(c.searchParams.get('pending')).toBe('1')
 })
 
-test('remote host connect failed: cause + next step are readable, Retry clears the failure cache and re-lists', async ({ page }) => {
+test('remote host connect failed: cause + next step are readable, Retry reconnects the host and re-lists', async ({ page }) => {
   await injectHost(page)
-  const retries: string[] = []
-  await page.route('**/api/sessions/host-retry', async (route) => {
-    retries.push(route.request().postDataJSON()?.host)
-    await route.fulfill({ json: { ok: true } })
-  })
+  const connects = await routeConnect(page)
   const remote = scriptRemoteListDirs(page, [
     { kind: 'error', message: 'Permission denied (publickey).', hint: 'Walnut runs `ssh me@devbox.example.test` without a password prompt. Make sure that command works from this machine on its own, then retry.', retryInMs: 58_000 },
     { kind: 'dirs', dirs: ['work'] },
@@ -129,18 +153,21 @@ test('remote host connect failed: cause + next step are readable, Retry clears t
   await page.locator('.sps-host-tab', { hasText: HOST_LABEL }).click()
   await input(page).fill('/home/me/')
 
-  const down = list(page).locator('.sps-host-down')
+  const down = list(page).locator(`.sps-host-note[data-host="${HOST}"]`)
   await expect(down).toBeVisible()
-  await expect(down).toContainText('Could not connect to Big dev box')
-  await expect(down).toContainText('Permission denied (publickey).')
-  await expect(down).toContainText('ssh me@devbox.example.test')
+  await expect(down).toHaveAttribute('data-type', 'connect')
+  await expect(down.locator('.hft-headline')).toHaveText('Could not connect to Big dev box')
+  await expect(down.locator('.hft-hint')).toContainText('ssh me@devbox.example.test')
+  // The raw ssh text sits behind its fold, verbatim.
+  await down.getByRole('button', { name: 'Show SSH output' }).click()
+  await expect(down.locator('pre')).toHaveText('Permission denied (publickey).')
   // Readable, not the old 0.55-opacity whisper.
   expect(await down.evaluate(el => parseFloat(getComputedStyle(el).opacity))).toBe(1)
   expect(await down.evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12)
 
   const callsBefore = remote.calls.length
   await down.getByRole('button', { name: 'Retry' }).click()
-  await expect.poll(() => retries).toEqual([HOST])
+  await expect.poll(() => connects).toEqual([HOST])
   await expect(list(page).locator('.sps-path-item.sps-live', { hasText: 'work' })).toBeVisible()
   await expect(down).toHaveCount(0)
   expect(remote.calls.length).toBeGreaterThan(callsBefore)
@@ -201,11 +228,13 @@ test('All tab, two hosts: Retry on one host re-lists only that host', async ({ p
   const OTHER = 'otherbox'
   await page.route('**/api/sessions/working-dirs', async (route) => {
     const res = await route.fetch()
-    const body = await res.json() as { dirs: unknown[]; hosts?: unknown[] }
+    const body = await res.json() as { dirs: Array<{ host?: string | null }>; hosts?: unknown[] }
+    // No history on either host (a history folder is pre-warmed instead of `~/`, see injectHost).
+    body.dirs = body.dirs.filter((d) => d.host !== HOST && d.host !== OTHER)
     body.hosts = [...(body.hosts ?? []), { alias: HOST, label: HOST_LABEL }, { alias: OTHER, label: 'Other box' }]
     await route.fulfill({ response: res, json: body })
   })
-  await page.route('**/api/sessions/host-retry', (route) => route.fulfill({ json: { ok: true } }))
+  const connects = await routeConnect(page)
   const calls: Array<{ host: string; prefix: string }> = []
   let devboxFailed = false
   await page.route('**/api/sessions/list-dirs**', async (route) => {
@@ -232,11 +261,12 @@ test('All tab, two hosts: Retry on one host re-lists only that host', async ({ p
   await page.getByRole('button', { name: 'All', exact: true }).click()
   await input(page).fill('/srv/')
   await expect(list(page).locator('.sps-path-item.sps-live', { hasText: 'shared' })).toBeVisible()
-  const down = list(page).locator('.sps-host-down')
-  await expect(down).toContainText('Could not connect to Big dev box')
+  const down = list(page).locator(`.sps-host-note[data-host="${HOST}"]`)
+  await expect(down.locator('.hft-headline')).toHaveText('Could not connect to Big dev box')
 
   const otherBefore = calls.filter(c => c.host === OTHER).length
   await down.getByRole('button', { name: 'Retry' }).click()
+  await expect.poll(() => connects).toEqual([HOST])
   await expect(list(page).locator('.sps-path-item.sps-live', { hasText: 'recovered' })).toBeVisible()
   await expect(down).toHaveCount(0)
   // The other host's rows never left, and it was not asked again.

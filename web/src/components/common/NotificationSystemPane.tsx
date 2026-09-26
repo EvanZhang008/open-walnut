@@ -11,6 +11,9 @@ import { memo, useEffect, useState } from 'react';
 import { useSystemHealth, type DaemonHealth } from '@/hooks/useSystemHealth';
 import { useHostStatus } from '@/hooks/useHostStatus';
 import { hostStatusText, isHostConnecting } from '@/utils/host-connect';
+import { firstSentence, hostProblemOf } from '@open-walnut/host-problem';
+import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
+import '@/styles/attention-banner.css';
 import { formatRelative } from '@/contexts/notifications';
 import { visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
@@ -75,21 +78,32 @@ export function searchIndexUnhealthy(status: SearchIndexStatus | null): boolean 
  */
 function DaemonRow({ daemon }: { daemon: DaemonHealth }) {
   const status = useHostStatus(daemon.host);
-  const connecting = !daemon.connected && isHostConnecting(status);
+  // The live frame is the authority when there is one: the health poll lags it
+  // (and knows nothing of a host the pool never dialed), so the two would disagree.
+  const connected = status ? status.connected : daemon.connected;
+  const connecting = !connected && isHostConnecting(status);
+  // Connected is not the same as able to start work: a blocking readiness
+  // problem (old or signed-out Claude Code) rides along, in the shared words.
+  const problem = hostProblemOf(status);
+  const blocking = problem?.type === 'readiness' ? firstSentence(problem.problem.message) : null;
+  const phase = connected ? 'Connected' : connecting ? hostStatusText(status) : 'Disconnected';
+  const label = daemon.label ?? daemon.host;
   return (
-    <div className="notification-detail-row">
-      <span>{daemon.label ?? daemon.host}</span>
+    <div className="notification-detail-row" data-host={daemon.host}>
+      <span className="notification-daemon-name">
+        {daemon.host !== '__local__' && <HostStatusDot host={daemon.host} label={label} />}{label}
+      </span>
       <span
-        className={`notification-detail-value ${daemon.connected ? 'ok' : connecting ? '' : 'muted'}`}
-        title={status ? hostStatusText(status) : undefined}
+        className={`notification-detail-value ${blocking ? 'warn' : connected ? 'ok' : connecting ? '' : 'muted'}`}
+        title={blocking ? `${phase}. ${blocking}` : status ? hostStatusText(status) : undefined}
       >
         {/* 'Idle' used to render for connected:false, hiding real outages. */}
-        {daemon.connected ? 'Connected' : connecting ? hostStatusText(status) : 'Disconnected'}
+        {phase}{blocking ? `. ${blocking}` : ''}
         {/* Cloud-bridge state (phone reachability) — only when a bridge is
             configured AND the host itself is connected: bridge liveness rides
             the daemon connection, so next to 'Disconnected' any ✓/✗ is stale
             and contradictory. */}
-        {daemon.connected && daemon.bridgeConnected != null && (
+        {connected && daemon.bridgeConnected != null && (
           <span className={`notification-detail-value ${daemon.bridgeConnected ? 'ok' : 'warn'}`}>
             {daemon.bridgeConnected ? ' · bridge ✓' : ' · bridge ✗'}
           </span>

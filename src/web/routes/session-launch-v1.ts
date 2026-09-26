@@ -58,8 +58,23 @@ import { log } from '../../logging/index.js'
 export const sessionLaunchV1Router = Router()
 
 // Same frozen error shape as api-v1.ts / session-stream-v1.ts.
-function sendError(res: Response, status: number, code: string, message: string): void {
-  res.status(status).json({ error: { code, message } })
+function sendError(res: Response, status: number, code: string, message: string, extra?: Record<string, unknown>): void {
+  res.status(status).json({ error: { code, message }, ...(extra ?? {}) })
+}
+
+/**
+ * A launch refused by the host gate keeps its whole body (code host_not_ready /
+ * host_unreachable / host_off / host_removed, kind, host, headline, hint,
+ * allowOverride) inside the frozen v1 shape: `error.code` is the gate code and
+ * `error.message` the sentence a v1 client shows as is (docs/reference/api-v1.md).
+ */
+function sendLaunchError(res: Response, err: QuickStartError): void {
+  if (err.body && typeof err.body.code === 'string') {
+    const { error, code, ...rest } = err.body
+    sendError(res, err.statusCode, code, typeof error === 'string' ? error : err.message, rest)
+    return
+  }
+  sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
 }
 
 // ── Cloud relay: phone → cloud → bridge(__local__) → daemon → primary ───────
@@ -131,12 +146,22 @@ function captureJson(real: Response): {
   }
 }
 
-/** errorKind from the relay reply → frozen v1 HTTP status. */
+/** errorKind from the relay reply → frozen v1 HTTP status. A host gate code (host_*) is the gate's 409. */
 function relayErrorStatus(errorKind: string): number {
   if (errorKind === 'not_found') return 404
-  if (errorKind === 'conflict') return 409
+  if (errorKind === 'conflict' || errorKind.startsWith('host_')) return 409
   if (errorKind === 'internal') return 500
   return 400
+}
+
+/** The host gate's fields a relayed refusal carries (kind, host, headline, hint, allowOverride), nothing else. */
+function relayGateDetails(errorKind: string, details: unknown): Record<string, unknown> | undefined {
+  if (!errorKind.startsWith('host_') || !details || typeof details !== 'object') return undefined
+  const d = details as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of ['kind', 'host', 'headline', 'hint']) if (typeof d[key] === 'string') out[key] = d[key]
+  if (d.allowOverride === true) out.allowOverride = true
+  return out
 }
 
 /**
@@ -263,7 +288,7 @@ async function relayLaunchAction(
     return
   }
   const errorKind = typeof reply.errorKind === 'string' ? reply.errorKind : 'bad_request'
-  sendError(res, relayErrorStatus(errorKind), errorKind, reason)
+  sendError(res, relayErrorStatus(errorKind), errorKind, reason, relayGateDetails(errorKind, reply.details))
 }
 
 /**
@@ -386,7 +411,7 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
           res.status(201).json(result)
         } catch (err) {
           if (err instanceof QuickStartError) {
-            sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
+            sendLaunchError(res, err)
             return
           }
           throw err
@@ -402,7 +427,7 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
       res.status(201).json(result)
     } catch (err) {
       if (err instanceof QuickStartError) {
-        sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
+        sendLaunchError(res, err)
         return
       }
       throw err

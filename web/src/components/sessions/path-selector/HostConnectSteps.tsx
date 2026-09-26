@@ -13,7 +13,7 @@
  */
 import { useEffect, useState } from 'react';
 import type { DirListingPending } from '@/api/sessions';
-import { useHostStatus } from '@/hooks/useHostStatus';
+import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
 import { connectNote, connectSteps, elapsedNow, formatElapsed, hostStatusText } from '@/utils/host-connect';
 
 interface Props {
@@ -23,25 +23,42 @@ interface Props {
   label: string;
   /** The list-dirs answer, used when the pushed status has not arrived yet. */
   pending?: DirListingPending;
+  /** 'Last attempt: {headline}' while a reconnect retries after a failure. */
+  lastHeadline?: string;
 }
 
-export function HostConnectSteps({ hostKey, label, pending }: Props) {
+/**
+ * Elapsed times come from SERVER moments (`attemptStartedAt`, `at`) against the
+ * server clock (serverNow), never the moment this row mounted: a laptop waking
+ * from sleep, or a browser clock hours off, must not read 'SSH · 8h'.
+ */
+export function connectElapsed(
+  status: { phaseElapsedMs: number; connectElapsedMs: number; at: number; attemptStartedAt?: number; reconnectSince?: number; phase: string } | undefined,
+  now: number,
+): { phase: number; total: number } {
+  if (!status) return { phase: 0, total: 0 };
+  const started = status.phase === 'reconnecting' ? (status.reconnectSince ?? status.attemptStartedAt) : status.attemptStartedAt;
+  const total = typeof started === 'number' ? Math.max(0, now - started) : elapsedNow(status.connectElapsedMs, status.at, now);
+  const phase = Math.min(elapsedNow(status.phaseElapsedMs, status.at, now), total || Number.POSITIVE_INFINITY);
+  return { phase, total };
+}
+
+export function HostConnectSteps({ hostKey, label, pending, lastHeadline }: Props) {
   const status = useHostStatus(hostKey);
-  // Local 1s tick: the server stamps an elapsed value at `at` and then goes quiet
-  // until the next phase, so without this the row freezes mid-install.
-  const [now, setNow] = useState(() => Date.now());
+  // 1s tick: the server stamps an elapsed value at `at` and then goes quiet until
+  // the next phase, so without this the row freezes mid-install.
+  const [now, setNow] = useState(() => serverNow());
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setNow(serverNow()), 1000);
     return () => clearInterval(timer);
   }, []);
 
   const steps = connectSteps(status, pending?.phase);
   const hasActive = steps.some((s) => s.status === 'active');
   const phaseText = status ? hostStatusText(status) : (pending?.label ?? `Connecting to ${label}`);
-  const phaseElapsed = status
-    ? elapsedNow(status.phaseElapsedMs, status.at, now)
-    : (pending?.elapsedMs ?? 0);
-  const totalElapsed = status ? elapsedNow(status.connectElapsedMs, status.at, now) : 0;
+  const elapsed = connectElapsed(status, now);
+  const phaseElapsed = status ? elapsed.phase : (pending?.elapsedMs ?? 0);
+  const totalElapsed = elapsed.total;
   const note = connectNote(status, steps);
 
   return (
@@ -67,13 +84,14 @@ export function HostConnectSteps({ hostKey, label, pending }: Props) {
               : <span className="sps-host-step-mark" aria-hidden="true">{step.status === 'done' ? '✓' : '○'}</span>}
             <span className="sps-host-step-label">{step.label}</span>
             {step.status === 'active' && (
-              <span className="sps-host-step-elapsed">{formatElapsed(phaseElapsed)}</span>
+              <span className="sps-host-step-elapsed">{` · ${formatElapsed(phaseElapsed)}`}</span>
             )}
           </li>
         ))}
       </ol>
 
       {note && <div className="sps-host-step-note">{note}</div>}
+      {lastHeadline && <div className="sps-host-step-last">{`Last attempt: ${lastHeadline}`}</div>}
       {totalElapsed > 0 && (
         <div className="sps-host-step-total">Connecting for {formatElapsed(totalElapsed)}</div>
       )}

@@ -28,6 +28,9 @@ export default defineConfig({
       // server and READ BACK by the transcript renderer, so the sentinels and
       // their parser must have one owner or a card silently stops matching.
       '@open-walnut/search-transcript': path.resolve(__dirname, '../src/core/task-search-transcript.ts'),
+      // Same reason: a remote host problem must read the SAME sentence on the
+      // banner, the picker, Settings and the server's Start refusal (409 body).
+      '@open-walnut/host-problem': path.resolve(__dirname, '../src/core/hosts/host-problem.ts'),
     },
   },
   server: {

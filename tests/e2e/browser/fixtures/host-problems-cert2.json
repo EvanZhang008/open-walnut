@@ -1,0 +1,51 @@
+{
+  "user": "alice",
+  "floor": {
+    "minVersion": "2.1.280",
+    "model": "Opus 5.5"
+  },
+  "dirs": {
+    "/home/alice": [
+      "work",
+      "notes",
+      ".config"
+    ],
+    "/home/alice/work": [
+      "api",
+      "web",
+      "infra"
+    ],
+    "/home/alice/work/api": [
+      "src",
+      "tests"
+    ],
+    "/home/alice/work/web": [
+      "src"
+    ],
+    "/home/alice/notes": [],
+    "/srv": [
+      "data",
+      "shared"
+    ],
+    "/srv/data": "EACCES",
+    "/srv/shared": [
+      "reports"
+    ]
+  },
+  "hosts": {
+    "certbox": {
+      "label": "Cert box",
+      "hostname": "cert.example.com",
+      "phase": "failed",
+      "retryInSec": 192,
+      "error": "Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired)"
+    },
+    "certbox2": {
+      "label": "Cert box 2",
+      "hostname": "cert2.example.com",
+      "phase": "failed",
+      "retryInSec": 250,
+      "error": "Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired)"
+    }
+  }
+}

@@ -20,7 +20,7 @@ import {
   wireHostReadiness,
   type PreflightConnection,
 } from '../../src/core/hosts/host-readiness.js'
-import { applyClaudeFloor } from '../../src/core/hosts/host-readiness-problems.js'
+import { applyClaudeFloor, claudeMissingMessage, claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
 import { claudeCliFloorFor, claudeVersionAtLeast } from '../../src/core/hosts/claude-version-floor.js'
 
 const INSTALL = 'curl -fsSL https://claude.ai/install.sh | bash'
@@ -57,7 +57,7 @@ describe('parsePreflight + readinessProblems', () => {
 
   it('claude missing', () => {
     const p = parsePreflight({ claude: { found: false }, compiler: { found: true, name: 'cc' }, dtach: { found: false } })!
-    expect(readinessProblems(p)).toEqual([{ kind: 'claude_missing', message: 'Claude Code is not installed on this host.', commands: [INSTALL] }])
+    expect(readinessProblems(p, { hostLabel: 'Build box' })).toEqual([{ kind: 'claude_missing', message: 'Claude Code is not installed on Build box.', commands: [INSTALL] }])
   })
 
   it('a ready host has no problems at all (the UI then shows nothing)', () => {
@@ -71,7 +71,7 @@ describe('parsePreflight + readinessProblems', () => {
 
   it('a claude that is installed but crashes on --version says so', () => {
     const p = parsePreflight({ ...READY, claude: { ...READY.claude, error: 'claude --version exited with code 1: SyntaxError' } })!
-    expect(readinessProblems(p)).toEqual([expect.objectContaining({ kind: 'claude_error', message: 'Claude Code did not start: claude --version exited with code 1: SyntaxError' })])
+    expect(readinessProblems(p, { hostLabel: 'Build box' })).toEqual([expect.objectContaining({ kind: 'claude_error', message: 'Claude Code did not start on Build box: claude --version exited with code 1: SyntaxError' })])
   })
 
   it('drops junk fields and rejects an answer with no claude block', () => {
@@ -289,5 +289,41 @@ describe('claude_outdated and claude_not_logged_in', () => {
     expect(sshTargetText({ hostname: 'devbox.example.test', user: 'dev', port: 2222 }, 'devbox')).toBe('-p 2222 dev@devbox.example.test')
     expect(sshTargetText({ hostname: 'devbox.example.test', port: 22 }, 'devbox')).toBe('devbox.example.test')
     expect(sshTargetText(undefined, 'devbox')).toBe('devbox')
+  })
+})
+
+describe('C74: every remote sentence names its host (no surface ever prefixes it)', () => {
+  const ctx = { hostLabel: 'Build box', sshTarget: 'alice@devbox.example.com', floorModel: 'Opus 5.5' }
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ['claude_missing', { claude: { found: false }, compiler: { found: true }, dtach: { found: true } }],
+    ['claude_needs_node', { claude: { found: true, needsNode: true, nodeFound: false }, compiler: { found: true }, dtach: { found: true } }],
+    ['claude_error', { claude: { found: true, error: 'boom' }, compiler: { found: true }, dtach: { found: true } }],
+    ['claude_outdated', { claude: { found: true, version: '2.1.220', versionOk: false, minVersion: '2.1.280', installMethod: 'other' }, compiler: { found: true }, dtach: { found: true } }],
+    ['claude_not_logged_in', { claude: { found: true, auth: 'not-logged-in' }, compiler: { found: true }, dtach: { found: true } }],
+    ['compiler_missing', { claude: { found: true }, compiler: { found: false }, dtach: { found: false } }],
+  ]
+  it.each(cases)('%s', (kind, raw) => {
+    const lines = readinessProblems(parsePreflight(raw)!, ctx)
+    const line = lines.find((l) => l.kind === kind)!
+    expect(line, kind).toBeDefined()
+    expect(line.message).toContain('Build box')
+    expect(line.message).not.toContain('this host')
+    expect(line.message).not.toContain(' here')
+    // The label is said once; the ssh target only inside a command.
+    expect(line.message.split('Build box').length - 1).toBe(1)
+  })
+  it('dtach (prebuilt shipped) and the sign-in line without an ssh target also name the host', () => {
+    const dtach = readinessProblems(parsePreflight({ claude: { found: true }, compiler: { found: false }, dtach: { found: false } })!, { ...ctx, prebuiltDtach: true })
+    expect(dtach[0]).toMatchObject({ kind: 'dtach_missing', message: expect.stringContaining('Build box') })
+    const noTarget = readinessProblems(parsePreflight({ claude: { found: true, auth: 'not-logged-in' }, compiler: { found: true }, dtach: { found: true } })!, { hostLabel: 'Build box' })
+    expect(noTarget[0].message).toBe('Claude Code on Build box is not signed in. Run `claude` on Build box once and sign in, then Check again.')
+  })
+  it('the spawn gate builders are the exact readiness sentences', () => {
+    const missing = readinessProblems(parsePreflight({ claude: { found: false }, compiler: { found: true }, dtach: { found: true } })!, ctx)
+    expect(missing[0].message).toBe(claudeMissingMessage(ctx))
+    expect(claudeMissingMessage(ctx)).toBe('Claude Code is not installed on Build box.')
+    const node = readinessProblems(parsePreflight({ claude: { found: true, needsNode: true, nodeFound: false }, compiler: { found: true }, dtach: { found: true } })!, ctx)
+    expect(node[0].message).toBe(claudeNeedsNodeMessage(ctx))
+    expect(claudeMissingMessage({ local: true })).toBe('Claude Code is not installed on this computer.')
   })
 })

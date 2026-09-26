@@ -24,6 +24,7 @@ function setup(opts?: {
   state?: Partial<TriggerState>;
   maxOutcomesPerRun?: number;
   maxSessionsPerDay?: number;
+  sessionHost?: string;
 }) {
   const jobId = `wt-${++seq}-${Math.random().toString(36).slice(2, 8)}`;
   const state = { ...emptyTriggerState(T0), ...opts?.state };
@@ -42,6 +43,7 @@ function setup(opts?: {
     maxSessionsPerDay: opts?.maxSessionsPerDay ?? 2,
     project: 'Inbox',
     nowMs: () => T0,
+    ...(opts?.sessionHost ? { sessionHost: opts.sessionHost } : {}),
   }, deps);
   const tool = (name: string) => belt.tools.find((t) => t.name === name)!;
   return { jobId, state, deps, belt, tool };
@@ -233,6 +235,51 @@ describe('trigger_session', () => {
     const { jobId, tool } = setup();
     await tool('trigger_session').execute({ key: 'a', name: '', message: 'go' });
     expect((await loadTriggerState(jobId, T0)).singletons.default).toBe('task-new');
+  });
+});
+
+describe('trigger_session refused by the host gate', () => {
+  // The shape quickStartSession throws for a refused Start (host-start-gate.ts).
+  function gateRefusal(kind = 'cert_expired') {
+    const err = new Error('Could not sign in to Build box. Log in again.') as Error & { statusCode: number; body: Record<string, unknown> };
+    err.name = 'QuickStartError';
+    err.statusCode = 409;
+    err.body = { error: err.message, code: 'host_unreachable', kind, host: 'buildbox' };
+    return err;
+  }
+
+  it('answers a refusal (never throws), notifies once per problem, and starts nothing', async () => {
+    const { jobId, deps, tool } = setup({ maxOutcomesPerRun: 9, sessionHost: 'buildbox' });
+    const session = tool('trigger_session');
+    deps.sendToSingleton.mockRejectedValue(gateRefusal());
+    for (const key of ['a', 'b', 'c']) {
+      expect(await session.execute({ key, name: 'triage', message: 'go' })).toBe('Refused: Could not sign in to Build box. Log in again.');
+    }
+    expect(deps.notify).toHaveBeenCalledTimes(1);
+    expect((deps.notify.mock.calls[0] as unknown[])[0]).toEqual({
+      title: 'Watcher "Mail triage" could not start a session', body: 'Could not sign in to Build box. Log in again.',
+      dedupKey: `${jobId}|buildbox|host_unreachable|cert_expired`, severity: 'warning',
+    });
+    // Nothing was started, so nothing counts against today's cap and no singleton is recorded.
+    const st = await loadTriggerState(jobId, T0);
+    expect(st.day.sessions).toBe(0);
+    expect(st.singletons.triage).toBeUndefined();
+    // A different problem on the same host is news; a start that goes through re-arms the key.
+    deps.sendToSingleton.mockRejectedValueOnce(gateRefusal('auth'));
+    await session.execute({ key: 'd', name: 'triage', message: 'go' });
+    expect(deps.notify).toHaveBeenCalledTimes(2);
+    deps.sendToSingleton.mockResolvedValueOnce({ taskId: 'task-new', startedSession: true });
+    await session.execute({ key: 'e', name: 'triage', message: 'go' });
+    deps.sendToSingleton.mockRejectedValueOnce(gateRefusal());
+    await session.execute({ key: 'f', name: 'reviews', message: 'go' });
+    expect(deps.notify).toHaveBeenCalledTimes(3);
+  });
+
+  it('any other failure still throws as before', async () => {
+    const { deps, tool } = setup();
+    deps.sendToSingleton.mockRejectedValue(new Error('disk full'));
+    await expect(tool('trigger_session').execute({ key: 'a', name: 'triage', message: 'go' })).rejects.toThrow('disk full');
+    expect(deps.notify).not.toHaveBeenCalled();
   });
 });
 

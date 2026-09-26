@@ -1,0 +1,92 @@
+{
+  "user": "alice",
+  "floor": {
+    "minVersion": "2.1.280",
+    "model": "Opus 5.5"
+  },
+  "dirs": {
+    "/home/alice": [
+      "work",
+      "notes",
+      ".config"
+    ],
+    "/home/alice/work": [
+      "api",
+      "web",
+      "infra"
+    ],
+    "/home/alice/work/api": [
+      "src",
+      "tests"
+    ],
+    "/home/alice/work/web": [
+      "src"
+    ],
+    "/home/alice/notes": [],
+    "/srv": [
+      "data",
+      "shared"
+    ],
+    "/srv/data": "EACCES",
+    "/srv/shared": [
+      "reports"
+    ]
+  },
+  "hosts": {
+    "devbox": {
+      "label": "Dev box",
+      "hostname": "devbox.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.281",
+        "auth": "ok",
+        "installMethod": "native"
+      }
+    },
+    "buildbox": {
+      "label": "Build box",
+      "hostname": "build.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.220",
+        "auth": "ok",
+        "installMethod": "other",
+        "path": "/opt/tools/bin/claude"
+      }
+    },
+    "signbox": {
+      "label": "Sign box",
+      "hostname": "sign.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.281",
+        "auth": "not-logged-in",
+        "installMethod": "native"
+      },
+      "extraCommands": {
+        "claude_not_logged_in": [
+          "ssh -t alice@sign.example.com 'claude /login'"
+        ]
+      }
+    },
+    "keybox": {
+      "label": "Key box",
+      "hostname": "key.example.com",
+      "phase": "failed",
+      "error": "Permission denied (publickey)."
+    },
+    "certbox": {
+      "label": "Cert box",
+      "hostname": "cert.example.com",
+      "phase": "failed",
+      "retryInSec": 192,
+      "error": "Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired)"
+    },
+    "netbox": {
+      "label": "Net box",
+      "hostname": "net.example.com",
+      "phase": "failed",
+      "error": "ssh: connect to host net.example.com port 22: No route to host"
+    }
+  }
+}

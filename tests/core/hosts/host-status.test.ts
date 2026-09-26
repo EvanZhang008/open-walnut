@@ -223,3 +223,45 @@ describe('buildHostStatus: first-connect facts (runtime, daemon dir, credential 
     expect(s.hint).toContain("`ssh-keygen -R '[devbox.example.test]:2222'`");
   });
 });
+
+describe('buildHostStatus: the wire contract the banner, picker and Settings read', () => {
+  it('an ephemeral server says off: grey, no error, no hint, no readiness', () => {
+    const s = buildHostStatus('devbox', devbox, state('failed', { error: 'ephemeral server: remote host is off' }), undefined, AT, undefined, { off: true });
+    expect(s).toMatchObject({ phase: 'off', phaseLabel: 'Off on this test server', connected: false, serverNow: AT, at: AT });
+    expect(s.error).toBeUndefined();
+    expect(s.kind).toBeUndefined();
+    expect(s.hint).toBeUndefined();
+    expect(s.readiness).toBeUndefined();
+  });
+
+  it('a failed frame carries retryable, and retryAt only when a re-dial is really scheduled', () => {
+    const cert = buildHostStatus('devbox', devbox, state('failed', { error: 'Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (x)' }),
+      undefined, AT, undefined, { credentialRetryAt: AT + 192_000 });
+    expect(cert).toMatchObject({ kind: 'cert_expired', retryable: false, retryAt: AT + 192_000 });
+    const net = buildHostStatus('devbox', devbox, state('failed', { error: 'ssh: connect to host devbox.example.test port 22: No route to host' }),
+      undefined, AT, undefined, { credentialRetryAt: AT + 1 });
+    expect(net).toMatchObject({ kind: 'unreachable', retryable: true });
+    expect(net.retryAt).toBeUndefined();
+  });
+
+  it('a standing reconnect cause keeps its own kind and slow-probe retryAt', () => {
+    const s = buildHostStatus('devbox', devbox, state('failed', { error: 'Permission denied (publickey).', kind: 'auth', retryAt: AT + 600_000, reconnectSince: AT - 5_000 }), undefined, AT);
+    expect(s).toMatchObject({ kind: 'auth', retryAt: AT + 600_000, reconnectSince: AT - 5_000, retryable: false });
+    expect(s.hint).toContain('ssh builder@devbox.example.test');
+  });
+
+  it('reconnecting carries lastError / lastKind / lastHint and reconnectSince, never an error', () => {
+    const s = buildHostStatus('devbox', devbox, state('reconnecting', { lastError: 'Operation timed out', lastKind: 'timeout', reconnectSince: AT - 60_000, attemptStartedAt: AT - 1_000 }), undefined, AT);
+    expect(s).toMatchObject({ phase: 'reconnecting', lastKind: 'timeout', lastError: 'Operation timed out', reconnectSince: AT - 60_000, attemptStartedAt: AT - 1_000 });
+    expect(s.lastHint).toBeTruthy();
+    expect(s.error).toBeUndefined();
+  });
+
+  it('connected frames carry connectedAt; the host_key hint names the port (C37 connect half)', () => {
+    const c = buildHostStatus('devbox', devbox, state('connected', { connectedAt: AT - 3_000 }), undefined, AT);
+    expect(c.connectedAt).toBe(AT - 3_000);
+    const k = buildHostStatus('devbox', { ...devbox, port: 2222 }, state('failed', { error: 'Host key verification failed.' }), undefined, AT);
+    expect(k.kind).toBe('host_key');
+    expect(k.hint).toContain("'[devbox.example.test]:2222'");
+  });
+});

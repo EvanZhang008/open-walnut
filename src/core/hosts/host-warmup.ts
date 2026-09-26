@@ -1,14 +1,8 @@
 /**
- * Remote-host daemon warmup.
- *
- * Every explicitly configured remote host needs its session daemon connected
- * before anything useful can happen there (list a folder, start a session, read
- * a file). Until this module existed that connect only began when a user opened
- * the folder picker, so the FIRST interaction with a host paid the whole cost:
- * ssh ControlMaster, a runtime install on a fresh box, the daemon upload, the
- * tunnel. Minutes, inside a click.
- *
- * This moves the connect to server startup and keeps it warm.
+ * Remote-host daemon warmup: connect every explicitly configured host at server
+ * startup and keep it warm, so the FIRST interaction with a host (a folder
+ * list, a session) never pays ssh + runtime install + upload + tunnel inside a
+ * click. Before this, that connect began only when the picker opened.
  *
  * Design constraints (the whole point):
  *   - STRICTLY SEQUENTIAL. N hosts at once = N ssh ControlMasters + N deploys
@@ -379,6 +373,7 @@ export class HostWarmup {
         // Should be impossible; loud rather than silently parallel.
         this.logger.warn('host warmup: concurrent connect detected', { host: host.key, inFlight: this.inFlight })
       }
+      const hadCredentialWait = this.credentialWaits.has(host.key)
       try {
         const result = await this.deps.connect(host.key, host.sshTarget)
         if (!resolvedConnected(result)) {
@@ -390,6 +385,7 @@ export class HostWarmup {
         this.clearCredentialWait(host.key, true)
         this.record(host.key, 'done')
         this.logger.info('host warmup: connected', { host: host.key, elapsedMs: this.now() - started })
+        if (hadCredentialWait) this.redialCredentialPeers(host.key)
       } catch (err) {
         const message = errText(err)
         const prior = this.failures.get(host.key)
@@ -462,6 +458,13 @@ export class HostWarmup {
     if (resetAttempts) this.credentialWaits.delete(key)
   }
 
+  /** One login (a certificate, an agent) fixes every host behind it: redial each other waiting host once, now (C59). */
+  private redialCredentialPeers(except: string): void {
+    const peers = [...this.credentialWaits.keys()].filter((k) => k !== except)
+    if (peers.length) this.logger.info('host warmup: a credential wait cleared, redialling the other waiting hosts', { host: except, peers })
+    for (const key of peers) { this.clearCredentialWait(key, false); void this.sweep('credential', key) }
+  }
+
   /** When the host's next credential re-dial fires (ms epoch), if one is armed. */
   credentialRetryAt(hostKey: string): number | undefined {
     return this.credentialWaits.get(hostKey)?.at
@@ -478,8 +481,7 @@ export class HostWarmup {
   }
 }
 
-/** A connect result that says `connected: false` is a failure; anything else is trusted. */
-function resolvedConnected(result: unknown): boolean {
+function resolvedConnected(result: unknown): boolean { // `connected: false` is a failure; anything else is trusted
   if (result && typeof result === 'object' && 'connected' in result) {
     return (result as { connected: unknown }).connected !== false
   }
@@ -490,8 +492,7 @@ function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/** Timers must never hold the process open; typed defensively for DOM lib builds. */
-function unref(timer: unknown): void {
+function unref(timer: unknown): void { // never hold the process open; typed for DOM lib builds
   if (timer && typeof timer === 'object' && 'unref' in timer) {
     (timer as { unref: () => void }).unref()
   }

@@ -772,7 +772,9 @@ function runWnMinimal(argv, stdinText) {
 // in the inherited env, so a node in a system dir or in the server's own shell
 // beat the one the user's rc chose. Keep in sync with daemon-standalone.ts.
 // claudeCheck: host.preflight's sign-in and version-floor answer (claude-check-core.ts,
-// injected as text). Keep in sync with daemon-standalone.ts.
+// injected as text). Keep in sync with daemon-standalone.ts, which also passes
+// spawnPreamble (it spawns through $SHELL); this twin spawns claude directly on
+// the daemon PATH, so the daemon PATH is the whole answer here.
 const hostRuntime = (__CREATE_HOST_RUNTIME__)({
   fs: fs, execFile: execFile, execFileSync: execFileSync, env: process.env, platform: process.platform, arch: process.arch,
   claudeCheck: (__CREATE_CLAUDE_CHECK__)({ fs: fs, execFile: execFile, env: process.env }),
@@ -2797,7 +2799,7 @@ function cmdLaunchRelay(ws, id, cmd) {
 }
 
 function cmdLaunchResult(ws, id, cmd) {
-  var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorKind = cmd.errorKind;
+  var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorKind = cmd.errorKind, details = cmd.details;
   var pending = typeof relayId === 'number' ? launchRelayPending.get(relayId) : undefined;
   if (!pending) {
     // Late result after timeout — ack and drop.
@@ -2809,13 +2811,12 @@ function cmdLaunchResult(ws, id, cmd) {
     logMsg('info', 'session.launch: relay complete', { relayId: relayId });
     sendOk(pending.ws, pending.id, { result: result });
   } else {
-    // Carry errorKind through so the cloud route maps the precise 4xx.
+    // Carry errorKind (and a host gate's details: host, headline, hint,
+    // allowOverride) through so the cloud route maps the precise 4xx. Keep in sync with daemon-standalone.ts.
+    var reply = { id: pending.id, ok: false, error: error || 'launch failed', errorKind: errorKind || 'internal' };
+    if (details && typeof details === 'object') reply.details = details;
     try {
-      pending.ws.send(JSON.stringify({
-        id: pending.id, ok: false,
-        error: error || 'launch failed',
-        errorKind: errorKind || 'internal',
-      }));
+      pending.ws.send(JSON.stringify(reply));
     } catch {}
   }
   sendOk(ws, id, {});

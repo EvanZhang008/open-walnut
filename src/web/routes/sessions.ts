@@ -245,8 +245,9 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response) => {
     res.json(await listSessionDirs(req.query.prefix, host, req.query.depth, { pending, waitMs }))
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    // SSH failures return 400, not 500 (SessionControlError carries 400 too)
-    res.status(400).json({ error: msg })
+    // SSH failures return 400, not 500 (SessionControlError carries 400 too);
+    // an unknown or disabled host is a 404 answered without dialling.
+    res.status(err instanceof SessionControlError && err.statusCode === 404 ? 404 : 400).json({ error: msg })
   }
 })
 
@@ -254,24 +255,17 @@ sessionsRouter.get('/list-dirs', async (req: Request, res: Response) => {
 // host whose connect failed. The 60s failure cache exists to throttle AUTOMATIC
 // reconnects; a person who has just fixed their VPN or SSH key must not wait it
 // out. Clears the cache only; the next list-dirs (or session start) reconnects.
-sessionsRouter.post('/host-retry', async (req: Request, res: Response) => {
-  const host = typeof req.body?.host === 'string' ? req.body.host.trim() : ''
-  if (!host || host === '__local__') {
-    res.status(400).json({ error: 'host is required' })
-    return
+sessionsRouter.post('/host-retry', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    // The SAME server function as POST /api/hosts/:host/connect (C28): enabled
+    // check, failure cache, autofix reset, reconnect backoff, readiness refresh.
+    const host = typeof req.body?.host === 'string' ? req.body.host.trim() : ''
+    const { connectHostNow } = await import('../../core/hosts/host-connect-action.js')
+    const r = await connectHostNow(host)
+    res.status(r.httpStatus).json(r.body)
+  } catch (err) {
+    next(err)
   }
-  const config = await getConfig()
-  if (!config.hosts?.[host]) {
-    res.status(404).json({ error: `Unknown host: ${host}` })
-    return
-  }
-  const { clearDaemonFailureCache } = await import('../../providers/daemon-connection.js')
-  clearDaemonFailureCache(host)
-  // …and start the connect now rather than waiting for the next list-dirs: a
-  // human who hit Retry expects the host to come back on its own.
-  const { getHostWarmup } = await import('../../core/hosts/host-warmup-registry.js')
-  getHostWarmup()?.kick(host).catch(() => { /* kick never rejects */ })
-  res.json({ ok: true })
 })
 
 /**
@@ -301,7 +295,7 @@ function buildFixWalnutMessage(userReport: string): string {
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
-    const { cwd: rawCwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine, walnutAgent, agentId } = req.body as {
+    const { cwd: rawCwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, projectFromFolder, intent, createCwd, engine, walnutAgent, agentId, overrideReadiness } = req.body as {
       cwd: string
       host?: string
       message: string
@@ -342,6 +336,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
        *  Personal AI. Picks persona, project ("Ask <name>") and the task's
        *  agent_id stamp (core/sessions/ask-agent.ts). */
       agentId?: string
+      /** "Start anyway" on the draft's gate bar: skip an overridable readiness refusal. */
+      overrideReadiness?: boolean
     }
 
     const isWalnutAgent = walnutAgent === true
@@ -527,6 +523,16 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       return
     }
 
+    // The host gate runs here, before the images are written and before the cwd
+    // mkdir (ensureCwd dials the host): a refused Start leaves no file and no
+    // remote directory behind. quickStartSession is told it already ran.
+    const { hostStartGate } = await import('../../core/sessions/host-start-gate.js')
+    const refused = await hostStartGate({ host, model, overrideReadiness: overrideReadiness === true, source: 'human' })
+    if (refused) {
+      res.status(409).json(refused)
+      return
+    }
+
     // Process attached images — save to disk and build session-friendly context.
     // Prefix is applied AFTER spill inside quickStartSession (same order as before).
     let messagePrefix: string | undefined
@@ -617,6 +623,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         source: 'quick-start', requestTs,
         engine: effectiveEngine,
         preassignedSessionId,
+        ...(overrideReadiness === true ? { overrideReadiness: true } : {}),
+        hostGate: { checked: true },
         // Client project seed (project-header "+ → Add session"). fixWalnutExtras
         // spreads AFTER so a repair launch always files under 'Walnut' — and a
         // repair also drops the folder-derived flag with it (its project wasn't
@@ -660,7 +668,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       })
     } catch (err) {
       if (err instanceof QuickStartError) {
-        res.status(err.statusCode).json({ error: err.message })
+        // The host gate's 409 carries its whole body (code, host, headline,
+        // hint, allowOverride): the draft's error bar reads it (C3, C54).
+        res.status(err.statusCode).json(err.body && typeof err.body.code === 'string' ? { ...err.body, error: err.message } : { error: err.message })
         return
       }
       throw err

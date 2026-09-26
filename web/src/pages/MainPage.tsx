@@ -37,7 +37,7 @@ import {
   DEFAULT_META, LEGACY_LAUNCHER_PIN_TIER_KEY, freshLauncherMeta, readLastLaunchPath, rememberLaunchPath,
 } from '@/components/sessions/task-meta-constants';
 import { TriagePanel } from '@/components/triage/TriagePanel';
-import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
+import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession, QuickStartGateError } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
 import { adoptAgentSearchSession } from '@/api/agentSearch';
 import { fetchTask, recordSuggestFeedback, updateTask, SUGGEST_RULES_VERSION } from '@/api/tasks';
@@ -57,8 +57,9 @@ import { useUrlSync } from '@/hooks/useUrlSync';
 import { useSessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { FocusDock } from '@/components/dock/FocusDock';
-import { SetupBanner } from '@/components/common/SetupBanner';
-import { HostConnectBanner } from '@/components/common/HostConnectBanner';
+import { AttentionBanner } from '@/components/common/AttentionBanner';
+import type { DraftGateError } from '@/components/sessions/HostGateErrorBar';
+import { placementFor, setHostBannerPlacement } from '@/utils/host-banner-placement';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import {
   type SessionSlot,
@@ -205,6 +206,9 @@ function mapDrafts(prev: DraftColumn[], fn: (d: DraftColumn) => DraftColumn): Dr
   });
   return out ?? prev;
 }
+
+/** What a refused Start brings back: the draft row itself, the composer text, the images. */
+interface GatedRestore { draft: DraftColumn; composerText: string; images?: ImageAttachment[] }
 
 /** The one Quick Start failure notification shape — used by both the retry
  *  path and the initial-launch path so the copy/dedup key can't drift apart. */
@@ -375,6 +379,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Ref mirror so handlers can read the current drafts synchronously without
   // being re-created on every draft edit (same pattern as sessionColumnsRef).
   const draftColumnsRef = useRef(draftColumns);
+  // A Start the host refused (409): the draft came back, and its bar says why.
+  const [draftGateErrors, setDraftGateErrors] = useState<Record<string, DraftGateError>>({});
+  const [draftRestoreImages, setDraftRestoreImages] = useState<Record<string, ImageAttachment[]>>({});
+  const clearDraftGateError = useCallback((draftId: string) => {
+    setDraftGateErrors(prev => {
+      if (!(draftId in prev)) return prev;
+      const next = { ...prev };
+      delete next[draftId];
+      return next;
+    });
+  }, []);
   draftColumnsRef.current = draftColumns;
   // Monotonic suffix: two "+" clicks inside the same millisecond would otherwise
   // mint the SAME id, and forceAddSessionColumn would treat the second as "move
@@ -424,6 +439,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // the leftmost draft column (opening a draft borrows the chat spot, and a
   // launch is exactly when a connecting host matters). Neither: none.
   const hostBannerDraftId = chatVisible ? undefined : sessionColumns.find(s => isDraftColumnId(s.id))?.id;
+  // Neither on screen: the rail's Settings entry wears the warn dot instead.
+  useEffect(() => { setHostBannerPlacement(placementFor(chatVisible, !!hostBannerDraftId)); }, [chatVisible, hostBannerDraftId]);
+  useEffect(() => () => setHostBannerPlacement('none'), []);
   // "The current session" (stores/active-session.ts) must stay inside the open
   // strip: a closed column stops being the target, an empty strip has none.
   useEffect(() => { reconcileActiveSession(sessionColumnIds); }, [sessionColumnIds]);
@@ -1503,11 +1521,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       }
     }).catch((err) => {
       const errMsg = err instanceof Error ? err.message : String(err);
+      // A host refusal (409) created nothing and would refuse a second Retry
+      // too: the panel says why, with no Retry and no failure notification.
+      const gated = err instanceof QuickStartGateError;
       if (pendingQuickStartMetaRef.current?.id === meta.id) {
-        pendingQuickStartMetaRef.current = { ...pendingQuickStartMetaRef.current, httpError: errMsg };
+        pendingQuickStartMetaRef.current = { ...pendingQuickStartMetaRef.current, httpError: errMsg, ...(gated ? { gated: true } : {}) };
       }
       setSessionColumns(prev => [...prev]); // force re-render (identity change)
-      notify(quickStartFailedNotification(meta.host, meta.cwd, errMsg));
+      if (!gated) notify(quickStartFailedNotification(meta.host, meta.cwd, errMsg));
     });
   }, [notify]);
 
@@ -1527,7 +1548,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Quick-start: track pending taskId, auto-open session panel when it starts
   const pendingQuickStartRef = useRef<string | null>(null);
   // Metadata for the pending session panel (cwd, host, etc.)
-  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean } | null>(null);
+  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean; gated?: boolean } | null>(null);
 
   // Fork: pending panel metadata (same pattern as quick-start)
   const pendingForkMetaRef = useRef<{ id: string; cwd: string; host?: string; realTaskId?: string; httpError?: string } | null>(null);
@@ -2091,6 +2112,34 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return created;
   }, [handleCreate, handleFocusTask, notify, tierLabel, deleteTask]);
 
+  /**
+   * The host refused a draft's Start (409 host_not_ready / host_unreachable /
+   * host_off / host_removed): nothing was created, so the pending column goes and
+   * the SAME draft comes back in the same slot with its text, host, folder, model,
+   * images and meta. Its bar says why; no 'Quick Start Failed' notification.
+   */
+  const restoreGatedDraft = useCallback((pendingColId: string, restore: GatedRestore, err: QuickStartGateError) => {
+    const { draft, composerText, images } = restore;
+    // Written BEFORE the commit: ChatInput reads its text at mount.
+    try { localStorage.setItem(draftComposerKey(draft.id), composerText); } catch { /* quota */ }
+    if (pendingQuickStartMetaRef.current?.id === pendingColId) pendingQuickStartMetaRef.current = null;
+    pendingQuickStartRef.current = null;
+    setDraftColumns(prev => (prev.some(d => d.id === draft.id) ? prev : [...prev, draft]));
+    setSessionColumns(prev => {
+      const back = replaceSessionColumn(prev, pendingColId, draft.id);
+      return back !== prev ? back : forceAddSessionColumn(prev, draft.id);
+    });
+    setDraftGateErrors(prev => ({ ...prev, [draft.id]: { code: err.code, body: err.body, at: Date.now() } }));
+    setDraftRestoreImages(prev => {
+      if (!images?.length) { if (!(draft.id in prev)) return prev; const n = { ...prev }; delete n[draft.id]; return n; }
+      return { ...prev, [draft.id]: images };
+    });
+    setFocusDraftId(draft.id);
+    log.info('quick-start', 'start refused by the host gate; draft restored', {
+      draftId: draft.id, host: err.body.host, code: err.code, kind: err.body.kind,
+    });
+  }, []);
+
   // Core quick-start launcher — creates the pending session column and fires the
   // API call. Deliberately does NOT touch chat state/visibility: the todo-panel
   // "+" entry point starts sessions while the chat column stays hidden (the CLI
@@ -2114,6 +2163,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       /** "Ask Walnut": the server owns the cwd and spawns with the Personal AI
        *  profile — engine forced native, no launch-path memory written. */
       walnutAgent?: boolean;
+      /** The draft to bring back when the host refuses the Start (409). */
+      restore?: GatedRestore;
+      /** "Start anyway": skip the outdated / not-signed-in gate. */
+      overrideReadiness?: boolean;
     },
   ) => {
       // Set pending ref BEFORE the async call so WS events that arrive
@@ -2201,6 +2254,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         createCwd: qsp.createCwd,
         taskId: opts?.taskId,
         ...(opts?.walnutAgent ? { walnutAgent: true } : {}),
+        ...(opts?.overrideReadiness ? { overrideReadiness: true } : {}),
       }).then((result) => {
         // Update ref with real taskId (WS events use this to match)
         if (pendingQuickStartRef.current === tempTaskId) {
@@ -2235,6 +2289,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // agent (full model + context) for a one-field decision on every
         // launch — deliberately removed; don't reintroduce it.
       }).catch((err) => {
+        if (err instanceof QuickStartGateError) {
+          if (opts?.restore) { restoreGatedDraft(pendingColId, opts.restore, err); return; }
+          // No draft to bring back: the pending panel says why, with no Retry
+          // (it would only be refused again) and no failure notification.
+          if (pendingQuickStartMetaRef.current?.id === pendingColId) {
+            pendingQuickStartMetaRef.current = { ...pendingQuickStartMetaRef.current, httpError: err.message, gated: true };
+          }
+          setSessionColumns(prev => [...prev]);
+          return;
+        }
         // Keep the pending column visible with error — user can Retry from panel
         const errMsg = err instanceof Error ? err.message : String(err);
         if (pendingQuickStartMetaRef.current?.id === pendingColId) {
@@ -2259,7 +2323,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // round-trip lands (both branches above already handled their own effects —
       // this resolves either way and never rejects).
       return settled.then(() => undefined, () => undefined);
-  }, [notify]);
+  }, [notify, restoreGatedDraft]);
 
   // ── Draft column → session / task ──
 
@@ -2268,11 +2332,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    * ChatInput restores the composer only for a promise resolving false — a sync
    * false takes its other branch and CLEARS the persisted draft, losing the text.
    */
-  const handleDraftStart = useCallback(async (draftId: string, text: string, images?: ImageAttachment[]): Promise<boolean> => {
+  const handleDraftStart = useCallback(async (
+    draftId: string, text: string, images?: ImageAttachment[], startOpts?: { overrideReadiness?: boolean },
+  ): Promise<boolean> => {
     const draft = draftColumnsRef.current.find(d => d.id === draftId);
     // Gone (double-send, closed mid-flight): report success so ChatInput doesn't
     // resurrect text into a composer that no longer exists.
     if (!draft) return true;
+    // A new Start replaces the last refusal (a repeat refusal brings a fresh bar).
+    clearDraftGateError(draftId);
     const { tierKnown: knownTier } = draftParseOptsRef.current;
     // ASK WALNUT draft: no folder to require — the server owns the cwd
     // (WALNUT_HOME) and spawns with the Personal AI profile. Same one-commit
@@ -2368,10 +2436,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         ...(draft.taskId ? { taskId: draft.taskId } : {}),
         // Folder-derived project → the server may stamp a NEW row's default_cwd.
         ...(draft.project && draft.projectSource === 'folder' ? { projectFromFolder: true } : {}),
+        // A host refusal (409) brings this very draft back.
+        restore: { draft, composerText: text, ...(images?.length ? { images } : {}) },
+        ...(startOpts?.overrideReadiness ? { overrideReadiness: true } : {}),
       },
     );
     return true;
-  }, [forgetDraft, launchQuickStart, handleForkPending, handleForkResolved, handleForkFailed]);
+  }, [forgetDraft, launchQuickStart, handleForkPending, handleForkResolved, handleForkFailed, clearDraftGateError]);
 
   /** "◌ Create task for later": the composed text becomes a task, no session. First
    *  line = title, the rest = description. Images are dropped (text-only by design). */
@@ -2762,15 +2833,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSessionReplaced={handleSessionReplaced}
           onOpenForkDraft={handleOpenForkDraft}
           banner={(
-            <>
-              <SetupBanner
-                health={health}
-                loading={healthLoading}
-                onNavigateSettings={handleNavigateSettings}
-                onStartSession={() => openDraftColumn()}
-              />
-              <HostConnectBanner onNavigateSettings={handleNavigateSettings} />
-            </>
+            <AttentionBanner
+              health={health}
+              healthLoading={healthLoading}
+              onNavigateSettings={handleNavigateSettings}
+              onStartSession={() => openDraftColumn()}
+            />
           )}
           inspectorPanel={inspector.isOpen ? (
             /* No ask selected = nothing to describe. The inspector used to GET
@@ -2883,8 +2951,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     // The live host-connect banner, when the chat slot that
                     // normally carries it is hidden (a draft borrows that spot).
                     hostNotice={sid === hostBannerDraftId
-                      ? <HostConnectBanner compact onNavigateSettings={handleNavigateSettings} />
+                      ? <AttentionBanner compact onNavigateSettings={handleNavigateSettings} />
                       : undefined}
+                    gateError={draftGateErrors[sid]}
+                    onGateErrorClear={clearDraftGateError}
+                    restoreImages={draftRestoreImages[sid]}
                   />
                 ) : null
               ) : isPending && pendingMeta ? (
@@ -2896,7 +2967,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   hostLabel={'hostLabel' in pendingMeta ? (pendingMeta as { hostLabel?: string }).hostLabel : undefined}
                   label={isForkPending ? 'Forking session...' : undefined}
                   initialError={'httpError' in pendingMeta ? (pendingMeta as { httpError?: string }).httpError : undefined}
-                  onRetry={!isForkPending ? handleQuickStartRetry : undefined}
+                  onRetry={!isForkPending && !('gated' in pendingMeta && pendingMeta.gated) ? handleQuickStartRetry : undefined}
                   onClose={() => handleCloseSession(sid)}
                 />
               ) : (

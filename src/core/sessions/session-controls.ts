@@ -763,6 +763,8 @@ export type SessionControlAction =
   // walnut-trigger: a check runs on a DAEMON, and only the primary has daemons.
   | 'server.routines.check-test' | 'server.routines.trigger'
   | 'server.list-dirs' | 'server.slash-commands'
+  // Check again from a replica: the primary re-runs the host's readiness probe.
+  | 'server.host-readiness-refresh'
   // Human inbox (letters). Box-level: the letters live on the primary and
   // answering one has to reach the origin session's daemon, which only the
   // primary can do — a replica relays every route here.
@@ -1156,7 +1158,19 @@ export async function handleSessionControlRelay(
         const { listSessionDirs } = await import('./session-extras.js');
         result = await listSessionDirs(
           p.prefix, typeof p.host === 'string' && p.host ? p.host : undefined, p.depth,
+          // The picker's pending mode rides the relay too (a replica's list-dirs).
+          p.pending === true ? { pending: true, ...(typeof p.waitMs === 'number' ? { waitMs: p.waitMs } : {}) } : {},
         ) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.host-readiness-refresh': {
+        const host = typeof p.host === 'string' ? p.host.trim() : '';
+        if (!host || host === '__local__') throw new SessionControlError('host is required', 400);
+        const { checkHostNow, configHostDef, hostStatusFrame } = await import('../hosts/host-connect-action.js');
+        const def = await configHostDef(host);
+        if (!def || def.enabled === false) throw new SessionControlError('unknown host', 404);
+        await checkHostNow(host, { force: true, deadlineMs: 15_000 });
+        result = { status: hostStatusFrame(host, def) as unknown as Record<string, unknown> };
         break;
       }
       case 'server.slash-commands': {

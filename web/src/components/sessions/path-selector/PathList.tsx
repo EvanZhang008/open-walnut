@@ -9,11 +9,14 @@
  * History matches never impersonate live results — each lives under its own
  * section label.
  */
-import { forwardRef, useRef } from 'react';
+import { forwardRef, type ReactNode } from 'react';
+import type { HostDot } from '@open-walnut/host-problem';
 import type { DirListingPending } from '@/api/sessions';
 import type { Section, RankedItem } from './ranking';
 import type { HostLiveState } from './useLiveDirs';
 import { HostConnectSteps } from './HostConnectSteps';
+import { HostStatusDot } from './HostStatusDot';
+import { isMoreRow, moreRowText } from './history-cap';
 
 interface PathParts {
   parent: string;
@@ -61,8 +64,16 @@ interface Props {
   onItemClick: (item: RankedItem) => void;
   onItemHover: (flatIdx: number) => void;
   onCreate: () => void;
-  /** Retry a remote host whose connect failed. */
-  onRetryHost?: (hostKey: string) => void;
+  /** The selected host's note (HostNote), first in the list, before any row. */
+  topNote?: ReactNode;
+  /** A remote host's failure note in the list (HostNote): connect, listing, give-up. */
+  renderHostNote?: (hostKey: string, state: HostLiveState) => ReactNode;
+  /** Hosts whose connecting / failure rows the topNote already speaks for. */
+  noteHosts?: ReadonlySet<string>;
+  /** All tab: the dot a history row's host tag wears, only for hosts with a problem. */
+  rowDots?: ReadonlyMap<string, HostDot>;
+  /** The 'Show N more' row was picked. */
+  onShowMore?: () => void;
 }
 
 type LiveNote =
@@ -73,7 +84,8 @@ type LiveNote =
 export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
   {
     sections, selectedIdx, expandSelected, loading, loadError, hostStates, hostLabels, pathMode,
-    activeHostLabel, createOption, emptyHint, onItemClick, onItemHover, onCreate, onRetryHost,
+    activeHostLabel, createOption, emptyHint, onItemClick, onItemHover, onCreate,
+    topNote, renderHostNote, noteHosts, rowDots, onShowMore,
   },
   ref,
 ) {
@@ -85,6 +97,9 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
   if (pathMode) {
     for (const [hostKey, state] of hostStates) {
       const label = hostKey === '__local__' ? 'Local' : (hostLabels?.get(hostKey) ?? hostKey);
+      // The note on top already says it; a test server's 'off' is one line, drawn once elsewhere.
+      if (noteHosts?.has(hostKey) && state.status !== 'done') continue;
+      if (state.status === 'error' && state.hostError?.kind === 'ephemeral') continue;
       if (state.status === 'error') {
         liveNotes.push({
           key: hostKey, kind: 'down', label,
@@ -107,13 +122,16 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
       incompleteNotes.push({ key: hostKey, label, message: state.incomplete.message });
     }
   }
-  // A host-specific "connecting…" row already says what is loading; the generic
-  // line on top of it would read as two spinners for one wait.
-  const showGenericLoading = loading && totalItems === 0 && !liveNotes.some(n => n.kind === 'connecting');
+  // A host-specific "connecting…" row already says what is loading (in the list,
+  // or the top note's connect steps for the selected host); the generic line on
+  // top of it would read as two spinners for one wait.
+  const noteWaits = [...hostStates].some(([k, s]) => noteHosts?.has(k) && s.status === 'loading' && !!s.pending);
+  const showGenericLoading = loading && totalItems === 0 && !noteWaits && !liveNotes.some(n => n.kind === 'connecting');
 
   let flatIdx = -1;
   return (
     <div className="sps-path-list" ref={ref}>
+      {topNote}
       {showGenericLoading && <div className="sps-empty">Loading paths...</div>}
       {/* A stale history error next to a live "Loading paths..." reads as a
           contradiction (both rendered in the 2026-07-19 freeze incident) —
@@ -127,6 +145,21 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
             flatIdx++;
             const idx = flatIdx;
             const isActive = idx === selectedIdx;
+            if (isMoreRow(item)) {
+              // An option like the rows around it (arrow keys land here); Enter or a click expands.
+              return (
+                <div
+                  key="sps-more-row"
+                  role="option"
+                  aria-selected={isActive}
+                  className={`sps-path-item sps-more-row${isActive ? ' active' : ''}`}
+                  onClick={() => onShowMore?.()}
+                  onMouseEnter={() => onItemHover(idx)}
+                >
+                  <span className="sps-more-row-text">{moreRowText(item.moreCount ?? 0)}</span>
+                </div>
+              );
+            }
             const isLive = item.source === 'live';
             const fullCwd = `${item.cwd}${isLive ? '/' : ''}`;
             const hostLabel = item.host ? (item.hostLabel ?? item.host) : 'local';
@@ -174,8 +207,14 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
                 </div>
                 {(hostLabel || (isLive && item.history)) && (
                   <div className="sps-path-meta">
+                    {item.host && rowDots?.get(item.host) && (
+                      <HostStatusDot dot={rowDots.get(item.host)!} host={item.host} className="sps-row-host-dot" />
+                    )}
                     {hostLabel && (
-                      <span className={`sps-path-host-tag${isLive ? ' sps-tag-live' : ''}`} title={hostLabel}>
+                      <span
+                        className={`sps-path-host-tag${isLive ? ' sps-tag-live' : ''}`}
+                        title={item.host && rowDots?.get(item.host) ? rowDots.get(item.host)!.title : hostLabel}
+                      >
                         {hostLabel.slice(0, 10)}
                       </span>
                     )}
@@ -200,24 +239,8 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
           );
         }
         if (note.kind === 'down') {
-          return (
-            <div key={note.key} className="sps-host-down" role="alert" data-host={note.key}>
-              <div className="sps-host-down-head">
-                <span className="sps-host-down-title">Could not connect to {note.label}</span>
-                {onRetryHost && (
-                  <button
-                    type="button"
-                    className="sps-host-retry"
-                    onClick={(e) => { e.stopPropagation(); onRetryHost(note.key); }}
-                  >
-                    Retry
-                  </button>
-                )}
-              </div>
-              <div className="sps-host-down-message" title={note.message}>{note.message}</div>
-              {note.hint && <div className="sps-host-down-hint">{note.hint}</div>}
-            </div>
-          );
+          const state = hostStates.get(note.key);
+          return state && renderHostNote ? <div key={note.key}>{renderHostNote(note.key, state)}</div> : null;
         }
         return (
           <div key={note.key} className="sps-live-note">

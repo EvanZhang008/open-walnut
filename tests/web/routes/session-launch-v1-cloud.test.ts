@@ -148,6 +148,31 @@ describe('POST /sessions on a REPLICA', () => {
     expect(res.body.error.message).toContain('not found');
   });
 
+  it('a relayed host gate refusal is the same 409 body the primary answers: code, sentence, kind, headline, hint', async () => {
+    const details = { kind: 'claude_outdated', host: 'devbox', headline: 'Claude Code on Dev Box is 2.1.220, but Opus 5.5 needs 2.1.280 or newer.', hint: '', allowOverride: true, stray: 'dropped' };
+    bridgeRequestMock.mockResolvedValue({ ok: false, error: details.headline, errorKind: 'host_not_ready', details });
+    const res = await request(createApp()).post('/api/v1/sessions').send(goodBody);
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: { code: 'host_not_ready', message: details.headline },
+      kind: 'claude_outdated', host: 'devbox', headline: details.headline, hint: '', allowOverride: true,
+    });
+  });
+
+  it.each(['host_unreachable', 'host_off', 'host_removed'])('%s relays as 409 with its code', async (code) => {
+    bridgeRequestMock.mockResolvedValue({ ok: false, error: 'Could not connect to Dev Box', errorKind: code, details: { kind: 'auth', host: 'devbox' } });
+    const res = await request(createApp()).post('/api/v1/sessions').send(goodBody);
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ error: { code, message: 'Could not connect to Dev Box' }, kind: 'auth', host: 'devbox' });
+  });
+
+  it('an older primary that sends a host_* code with no details still answers 409', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: false, error: 'Could not connect to Dev Box', errorKind: 'host_unreachable' });
+    const res = await request(createApp()).post('/api/v1/sessions').send(goodBody);
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: { code: 'host_unreachable', message: 'Could not connect to Dev Box' } });
+  });
+
   it('400 session_launch_needs_upgrade on a pre-session.launch daemon', async () => {
     bridgeRequestMock.mockResolvedValue({ ok: false, error: 'unknown command: session.launch' });
     const res = await request(createApp()).post('/api/v1/sessions').send(goodBody);

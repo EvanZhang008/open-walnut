@@ -212,6 +212,20 @@ export function buildDtachArgs(dtachBin: string, sessionId: string, shell: strin
 const REMOTE_DEFAULT_SHELL = '"${SHELL:-/bin/bash}"'
 
 /**
+ * The `cd` argument for a remote cwd. A leading `~` must stay OUTSIDE the
+ * quotes or the shell looks for a directory literally named `~`:
+ * `~/proj a` becomes `~/'proj a'`, never `'~/proj a'`.
+ */
+export function remoteCdTarget(cwd: string): string {
+  if (cwd === '~') return '~'
+  if (cwd.startsWith('~/')) {
+    const rest = cwd.slice(2)
+    return rest ? `~/${shellQuote(rest)}` : '~/'
+  }
+  return shellQuote(cwd)
+}
+
+/**
  * The remote command run over ssh: ensure the socket dir exists, cd to the
  * session cwd, then exec dtach. The cwd is set by `cd` (a NEW dtach session
  * inherits the launching shell's cwd; on REATTACH dtach keeps the existing
@@ -231,7 +245,7 @@ export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, she
   // `-l` → login shell. `shell` is either our unquoted REMOTE_DEFAULT_SHELL
   // (must expand remotely) or an explicit safe token, so it is NOT re-quoted.
   const dtach = `exec ${shellQuote(dtachBin)} -A ${shellQuote(sock)} -z -E -r winch ${shell} -l`
-  const body = cwd ? `cd ${shellQuote(cwd)} && ${dtach}` : dtach
+  const body = cwd ? `cd ${remoteCdTarget(cwd)} && ${dtach}` : dtach
   return `${mkdir}; ${body}`
 }
 
@@ -242,7 +256,7 @@ export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, she
  */
 export function buildRemotePlainShellCommand(shell: string = REMOTE_DEFAULT_SHELL, cwd?: string): string {
   const exec = `exec ${shell} -l`
-  return cwd ? `cd ${shellQuote(cwd)} && ${exec}` : exec
+  return cwd ? `cd ${remoteCdTarget(cwd)} && ${exec}` : exec
 }
 
 /** Full ssh argv for a remote PLAIN shell (same connection options as dtach). */

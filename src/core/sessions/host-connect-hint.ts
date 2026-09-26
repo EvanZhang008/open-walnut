@@ -48,7 +48,7 @@ export const DAEMON_CONNECT_STEPS: readonly DaemonConnectPhase[] = [
 
 /**
  * A connect is IN FLIGHT: the steps above plus a reconnect. Unlike
- * IN_PROGRESS_PHASES this excludes `idle` — "nothing has tried" is not work in
+ * IN_PROGRESS_PHASES this excludes `idle`: "nothing has tried" is not work in
  * flight, and a warmup that treated it as such would never dial anything.
  */
 export const CONNECT_IN_FLIGHT_PHASES: ReadonlySet<DaemonConnectPhase> = new Set<DaemonConnectPhase>([
@@ -77,7 +77,7 @@ export interface ConnectStep {
  * `done`, the current phase is `active`, the rest are `todo`.
  *
  * `connected` marks every step done. `idle`, `reconnecting` and `failed` return
- * the list with NOTHING active — they are not a position in the sequence, and
+ * the list with NOTHING active: they are not a position in the sequence, and
  * guessing one (e.g. painting 'ssh' active while a host sits idle) is how a
  * progress bar starts lying. The caller decides how to render that.
  */
@@ -147,16 +147,35 @@ export function credentialRetryDelayMs(attempt: number): number {
   return CREDENTIAL_RETRY_STEPS_MS[Math.max(0, Math.floor(attempt))] ?? CREDENTIAL_RETRY_CAP_MS
 }
 
-const RETRYABLE: Record<HostConnectErrorKind, boolean> = {
+/** Whether a plain retry of the same attempt can succeed, per kind (the API's `retryable`). */
+export const RETRYABLE: Record<HostConnectErrorKind, boolean> = {
   auth: false, host_key: false, cert_expired: false, agent_missing: false, proxy: true, shell_noise: false,
   dns: false, unreachable: true, refused: true, timeout: true, runtime: false, daemon: true,
   ephemeral: false, listing: true, unknown: true,
 }
 
-/** Extra facts about the target the hints quote back (the known_hosts key needs the bare hostname and port). */
+/**
+ * Extra facts about the target the hints quote back. The prose calls the host
+ * by its `label` (the name every surface shows; the hostname when there is
+ * none); `user@host` appears only inside a `backticked` command. The
+ * known_hosts key needs the bare hostname and port.
+ */
 export interface HostConnectTarget {
+  label?: string
   hostname?: string
   port?: number
+  user?: string
+}
+
+/** The bare hostname inside an ssh target ("-p 2222 alice@devbox" -> "devbox"). */
+function bareHostOf(sshTarget: string): string {
+  const last = sshTarget.trim().split(/\s+/).pop() ?? ''
+  return last.replace(/^[^@]*@/, '')
+}
+
+/** What the prose calls the host: its label, else its hostname. Never `user@host`. */
+export function hintSubject(sshTarget: string, target: HostConnectTarget = {}): string {
+  return target.label?.trim() || target.hostname?.trim() || bareHostOf(sshTarget) || sshTarget
 }
 
 /**
@@ -164,27 +183,29 @@ export interface HostConnectTarget {
  * port as `[host]:port`, and removing the bare name would leave that entry.
  */
 function knownHostsName(sshTarget: string, target: HostConnectTarget): string {
-  const host = target.hostname || sshTarget.replace(/^[^@]*@/, '')
+  const host = target.hostname || bareHostOf(sshTarget)
   return target.port && target.port !== 22 ? `'[${host}]:${target.port}'` : host
 }
 
 /** The next step for a kind. Exported so a surface holding only the kind can still say it. */
 export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, target: HostConnectTarget = {}): string {
+  const who = hintSubject(sshTarget, target)
+  const hostname = target.hostname?.trim() || bareHostOf(sshTarget) || sshTarget
   switch (kind) {
     case 'ephemeral': return 'This is a throwaway test server: it stays off shared remote hosts and never installs a daemon there. Use the main Walnut server for remote hosts, or start the test server with WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach.'
-    case 'shell_noise': return `SSH works, but the login shell on ${sshTarget} did not run Walnut's command as written (a ForceCommand, or a login shell that is not a shell). Check that \`ssh ${sshTarget} sh -c 'echo ok'\` prints just ok, then retry.`
-    case 'host_key': return `The host key of ${sshTarget} changed since this machine last saw it. If the host was rebuilt, run \`ssh-keygen -R ${knownHostsName(sshTarget, target)}\` and then \`ssh ${sshTarget}\` once to accept the new key; if nothing changed on the host, stop: a changed key can also mean someone is intercepting the connection.`
-    case 'cert_expired': return 'Your SSH certificate expired; run your organisation\'s login command, then Retry. Walnut also retries by itself every few minutes.'
-    case 'agent_missing': return 'Walnut could not reach an SSH agent holding your key (no agent running, or no key loaded). Start your agent or run your organisation\'s login command, then Retry; Walnut also retries by itself every few minutes.'
-    case 'proxy': return `SSH to ${sshTarget} goes through a proxy or jump host (ProxyCommand / ProxyJump), and it closed the connection. Check that \`ssh ${sshTarget}\` works in a terminal (VPN, the jump host, or the proxy's own login), then retry.`
-    case 'auth': return `Walnut runs \`ssh ${sshTarget}\` without a password prompt. Make sure that command works from this machine on its own (an SSH key or ssh-agent, and any VPN or auth step your host needs), then retry.`
-    case 'dns': return `The hostname "${sshTarget}" does not resolve from this machine. Check the host's hostname in Settings › Hosts (or your VPN / SSH config).`
-    case 'refused': return `Nothing is listening for SSH at ${sshTarget}. Check the port and that sshd is running on the host.`
-    case 'unreachable': return `${sshTarget} is not reachable from this machine right now (VPN down, host asleep, or a firewall). Retry once the network is back.`
-    case 'timeout': return `Connecting to ${sshTarget} took too long. The host may be unreachable (VPN?), or a first-time daemon install is still running; retry in a moment.`
-    case 'runtime': return 'The session daemon needs bun or node on the host, and neither could run there. Install one (curl -fsSL https://bun.sh/install | bash, or Node.js from your package manager) and retry.'
+    case 'shell_noise': return `SSH works, but the login shell on ${who} did not run Walnut's command as written (a ForceCommand, or a login shell that is not a shell). Check that \`ssh ${sshTarget} sh -c 'echo ok'\` prints just ok, then Retry.`
+    case 'host_key': return `The host key of ${who} changed since this machine last saw it. If the host was rebuilt, run \`ssh-keygen -R ${knownHostsName(sshTarget, target)}\` and then \`ssh ${sshTarget}\` once to accept the new key; if nothing changed on the host, stop: a changed key can also mean someone is intercepting the connection.`
+    case 'cert_expired': return 'Your SSH certificate expired; run your organisation\'s login command, then Retry.'
+    case 'agent_missing': return 'Walnut could not reach an SSH agent holding your key (no agent running, or no key loaded). Start your agent or run your organisation\'s login command, then Retry.'
+    case 'proxy': return `SSH to ${who} goes through a proxy or jump host (ProxyCommand / ProxyJump), and it closed the connection. Check that \`ssh ${sshTarget}\` works in a terminal (VPN, the jump host, or the proxy's own login), then Retry.`
+    case 'auth': return `Walnut runs \`ssh ${sshTarget}\` without a password prompt. Make sure that command works from this machine on its own (an SSH key or ssh-agent, and any VPN or auth step your host needs), then Retry.`
+    case 'dns': return `The hostname "${hostname}" does not resolve from this machine. Check the hostname in Settings › Remote Hosts (or your VPN / SSH config).`
+    case 'refused': return `Nothing is listening for SSH on ${who}. Check the port and that sshd is running on the host.`
+    case 'unreachable': return `${who} is not reachable from this machine right now (VPN down, host asleep, or a firewall). Retry once the network is back.`
+    case 'timeout': return `Connecting to ${who} took too long. The host may be unreachable (VPN?), or a first-time daemon install is still running; Retry in a moment.`
+    case 'runtime': return 'The session daemon needs bun or node on the host, and neither could run there. Install one (`curl -fsSL https://bun.sh/install | bash`, or Node.js from your package manager), then Retry.'
     case 'daemon': return 'SSH works but the session daemon did not come up. Retry; if it keeps failing, check daemon-start.log in the daemon directory on the host (/tmp/open-walnut, or ~/.cache/open-walnut when /tmp is unusable).'
-    case 'listing': return `${sshTarget} is connected, but this directory could not be listed. Check that the path exists and is readable there, then retry.`
+    case 'listing': return `${who} is connected, but this directory could not be listed. Check that the path exists and is readable there, then Retry.`
     case 'unknown':
     default:
       return `Retry, and if it keeps failing run \`ssh ${sshTarget}\` from a terminal to see what SSH itself says.`
@@ -249,9 +270,9 @@ export function classifyHostConnectError(
 
 /**
  * The host IS connected; listing the directory itself failed (EACCES, a daemon
- * RPC error). Not an SSH problem, so none of the connect hints apply — an
+ * RPC error). Not an SSH problem, so none of the connect hints apply: an
  * "EACCES: permission denied" here used to be read as an SSH key problem.
  */
 export function describeListingError(hostLabel: string): HostConnectHint {
-  return { kind: 'listing', hint: hintForKind('listing', hostLabel), retryable: RETRYABLE.listing }
+  return { kind: 'listing', hint: hintForKind('listing', hostLabel, { label: hostLabel }), retryable: RETRYABLE.listing }
 }

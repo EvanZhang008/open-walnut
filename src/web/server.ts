@@ -1614,6 +1614,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Remote-host connect status (hydrate + deliberate retry); live updates ride
   // the `host:status` WS event, so nothing polls this.
   app.use('/api/hosts', hostsRouter)
+  // Test-only remote-host fixture: mounted solely by the Playwright fixture
+  // server (the flag, AND ephemeral, AND not cloud: hostFixtureRouteAllowed).
+  const { hostFixtureRouteAllowed } = await import('../core/hosts/host-fixture.js')
+  if (hostFixtureRouteAllowed({ env: process.env, ephemeral: IS_EPHEMERAL, cloudMode: CLOUD_MODE })) {
+    const fixture = await import('./routes/test-host-fixture.js')
+    app.use('/api/test/host-fixture', fixture.testHostFixtureRouter)
+    void fixture.preloadHostFixture()
+  }
   // One-click cloud-companion provisioning (Mac-side job engine).
   app.use('/api/cloud-setup', cloudSetupRouter)
   // /api/search-index (canonical) + /api/qmd (legacy alias, one release).
@@ -3003,25 +3011,34 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // every call, while a single connect pushes ~7 phase changes per host — so
     // the emit path reads this map and only config:changed refreshes it.
     let hostDefs: HostDefs = {}
-    const refreshHostDefs = async (): Promise<void> => {
-      try { hostDefs = (await getConfig()).hosts ?? {} } catch { /* config not ready yet */ }
+    const { pushHostFrame, pushHostRemoved } = await import('../core/hosts/host-connect-action.js')
+    const { recomputeHostReadinessFloors } = await import('../core/hosts/host-readiness.js')
+    const shown = (d: HostDefs): Set<string> =>
+      new Set(Object.entries(d).filter(([k, v]) => k !== '__local__' && v.enabled !== false).map(([k]) => k))
+    const refreshHostDefs = async (announce = false): Promise<void> => {
+      try {
+        const before = shown(hostDefs)
+        hostDefs = (await getConfig()).hosts ?? {}
+        // A host that left Settings (removed or disabled) must leave every
+        // surface live: one tombstone on the existing host:status event.
+        if (announce) for (const host of before) if (!shown(hostDefs).has(host)) pushHostRemoved(host)
+      } catch { /* config not ready yet */ }
     }
     await refreshHostDefs()
-    bus.subscribe('host-status-defs', () => { void refreshHostDefs() },
-      { global: true, interest: [EventNames.CONFIG_CHANGED] })
+    bus.subscribe('host-status-defs', () => {
+      void refreshHostDefs(true)
+      // A new model can move the Claude Code floor: reword stored answers, no RPC (C90).
+      void import('../core/hosts/host-fixture.js')
+        .then(({ fixtureFloor }) => recomputeHostReadinessFloors(fixtureFloor() ?? undefined))
+        .catch(() => { /* config unreadable: next change retries */ })
+    }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
 
+    // No sessionId/taskId in the payload: this is about a HOST, so it must also
+    // reach clients that filtered their interest down to one session. Unknown
+    // keys (a `direct:<url>` pool entry) and disabled hosts are never pushed.
     const emitHostStatus = (host: string): void => {
       if (!host || host === '__local__') return
-      // Unknown key: a `direct:<url>` pool entry or a host that just left the
-      // config. Nothing for the browser to render.
-      const def = hostDefs[host]
-      if (!def) return
-      try {
-        const status = buildHostStatus(host, def, getDaemonConnectState(host), hostWarmup?.stateOf(host), Date.now(), getHostReadiness(host))
-        // No sessionId/taskId in the payload — this is about a HOST, so it must
-        // also reach clients that filtered their interest down to one session.
-        bus.emit(EventNames.HOST_STATUS, status, ['web-ui'])
-      } catch { /* a status push must never break a connect */ }
+      pushHostFrame(host, hostDefs[host])
     }
 
     unsubscribeHostPhase?.()
@@ -3061,6 +3078,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
       setHostWarmup(hostWarmup)
       hostWarmup.start()
+    }
+    // Lid opened / network changed: redial failed and reconnecting hosts once (C51).
+    if (!isEphemeral && !process.env.VITEST && process.env.WALNUT_TEST_HOST_FIXTURE_MODE !== '1') {
+      const { startHostWakeRedial } = await import('../core/hosts/host-connect-action.js')
+      // Kept so shutdown stops the 5s / 10s pollers with the rest of the host wiring.
+      const stopWake = await startHostWakeRedial(() => hostDefs)
+      const offHostWiring = unsubscribeHostPhase
+      unsubscribeHostPhase = () => { offHostWiring?.(); stopWake() }
     }
   }
 

@@ -1,0 +1,162 @@
+/*
+ * Host status primitives shared by the banner, the folder picker and Settings:
+ * the status dot shapes (color is never the only signal: at 6px red and amber
+ * are hard to tell apart) and the HostFailureText / HostCommands blocks.
+ * Existing variables only. Overrides the old .sps-host-dot-* rules by
+ * specificity (globals.css is not edited).
+ */
+
+.sps-host-dot.hsd {
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  animation: none;
+}
+.sps-host-dot.hsd[data-kind="connected"] { background: var(--success); }
+.sps-host-dot.hsd[data-kind="failed"] { background: var(--error); }
+/* warn: a square, so it differs from failed by shape as well as color. */
+.sps-host-dot.hsd[data-kind="warn"] { background: var(--warning); border-radius: 1px; }
+/* off: a hollow ring, still (nothing is happening and nothing will). */
+.sps-host-dot.hsd[data-kind="off"] { background: transparent; border-color: var(--fg-muted); }
+.sps-host-dot.hsd[data-kind="connecting"],
+.sps-host-dot.hsd[data-kind="checking"] {
+  background: var(--accent);
+  animation: status-pulse 1s infinite;
+}
+/* unknown: solid muted with a SLOW pulse (an answer is on its way), unlike off. */
+.sps-host-dot.hsd[data-kind="unknown"] {
+  background: var(--fg-muted);
+  animation: status-pulse 2s infinite;
+}
+/* On the active (accent-filled) tab an accent dot would vanish: it takes the tab's text color instead. */
+.sps-host-tab.active .sps-host-dot.hsd[data-kind="connecting"],
+.sps-host-tab.active .sps-host-dot.hsd[data-kind="checking"],
+.sps-host-tab.active .sps-host-dot.hsd[data-kind="unknown"] { background: currentColor; }
+.sps-host-tab.active .sps-host-dot.hsd[data-kind="off"] { border-color: currentColor; }
+@media (prefers-reduced-motion: reduce) {
+  .sps-host-dot.hsd[data-kind] { animation: none; }
+}
+
+/* ── HostFailureText ─────────────────────────────────────────────── */
+.hft {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.hft-headline {
+  font-weight: 600;
+  color: var(--fg);
+  /* Wrap first (the kind sits at the END of the headline), clamp at two lines. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.hft-hint {
+  color: var(--fg-secondary, var(--fg-muted));
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.hft-hint code,
+.hft-summary {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+.hft-hint code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--bg-tertiary, var(--bg-secondary));
+}
+.hft-details {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.hft-details:hover { color: var(--fg); }
+.hft-summary {
+  margin: 0;
+  padding: 6px 8px;
+  /* Six lines, then it scrolls. An integer line box: WebKit floors 11px x 1.4
+     (15.4px) to 15px while Chromium keeps 15.4, so a ratio showed a different
+     number of lines in the Mac app. */
+  line-height: 15px;
+  max-height: calc(6 * 15px + 12px);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+}
+.hft-when {
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── HostCommands ────────────────────────────────────────────────── */
+.hc {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.hc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.hc-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  /* A long command scrolls inside its chip instead of widening the row. */
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  user-select: all;
+}
+.hc .setup-copy-btn { font-size: 11px; flex: none; }
+
+/* A label that never changes its button's width (Retry / Retrying..., Copy / Copied):
+   the longest labels it may show sit hidden in the same grid cell. */
+.hpb-btn-stack { display: inline-grid; }
+.hpb-btn-stack > *,
+.hpb-btn-stack::before,
+.hpb-btn-stack::after { grid-area: 1 / 1; text-align: center; }
+.hpb-btn-stack::before { content: attr(data-r1); visibility: hidden; }
+.hpb-btn-stack::after { content: attr(data-r2); visibility: hidden; }
+.hc-copy-failed { color: var(--error); }
+.hc-other {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.hc-other:hover { color: var(--fg); }
+.hc-other-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

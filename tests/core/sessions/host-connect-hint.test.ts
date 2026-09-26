@@ -5,6 +5,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyHostConnectError,
+  hintForKind,
+  hintSubject,
+  RETRYABLE,
   credentialRetryDelayMs,
   CREDENTIAL_WAIT_KINDS,
   describeConnectPhase,
@@ -65,10 +68,14 @@ describe('classifyHostConnectError', () => {
     expect(hint).toMatch(/without a password prompt/);
   });
 
-  it('the dns hint names the hostname and points at Settings › Hosts', () => {
+  it('C36: the dns hint quotes the bare hostname (never user@host) and points at Settings › Remote Hosts', () => {
     const { hint } = classifyHostConnectError('Could not resolve hostname', T);
-    expect(hint).toContain(T);
-    expect(hint).toMatch(/Settings › Hosts/);
+    expect(hint).toContain('"devbox.example.test"');
+    expect(hint).toMatch(/Settings › Remote Hosts/);
+    const quoted = hint.match(/"([^"]+)"/)![1];
+    expect(quoted).not.toContain('@');
+    const withTarget = classifyHostConnectError('Could not resolve hostname', T, [], { hostname: 'devbox.example.com', label: 'Dev box' });
+    expect(withTarget.hint).toBe('The hostname "devbox.example.com" does not resolve from this machine. Check the hostname in Settings › Remote Hosts (or your VPN / SSH config).');
   });
 
   it('every hint is one actionable sentence, never empty', () => {
@@ -192,5 +199,37 @@ describe('classifyHostConnectError: captured ssh stderr for each new kind', () =
   it('the credential kinds are the ones the warmup re-dials on 1, 2, 5, 10 minutes, then hourly', () => {
     expect([...CREDENTIAL_WAIT_KINDS].sort()).toEqual(['agent_missing', 'cert_expired']);
     expect([0, 1, 2, 3, 4, 9].map(credentialRetryDelayMs)).toEqual([60_000, 120_000, 300_000, 600_000, 3_600_000, 3_600_000]);
+  });
+});
+
+/** Text outside `backticks`: the prose a person reads. */
+const prose = (hint: string) => hint.split('`').filter((_, i) => i % 2 === 0).join(' ');
+
+describe('C87: the hint calls the host by its label; user@host only inside a command', () => {
+  const target = { label: 'Dev box', hostname: 'devbox.example.com', user: 'alice' };
+  const ssh = 'alice@devbox.example.com';
+  it.each(['unreachable', 'timeout', 'proxy', 'refused', 'dns', 'shell_noise', 'host_key', 'auth', 'listing', 'unknown'] as const)('%s', (kind) => {
+    const hint = hintForKind(kind, ssh, target);
+    expect(prose(hint)).not.toContain('@');
+    if (kind !== 'dns' && kind !== 'auth' && kind !== 'unknown') expect(hint).toContain('Dev box');
+  });
+  it('the subject falls back to the hostname when there is no label', () => {
+    expect(hintSubject(ssh, { hostname: 'devbox.example.com' })).toBe('devbox.example.com');
+    expect(hintSubject('-p 2222 alice@devbox.example.com')).toBe('devbox.example.com');
+    const hint = hintForKind('unreachable', ssh, { hostname: 'devbox.example.com' });
+    expect(hint.startsWith('devbox.example.com is not reachable')).toBe(true);
+    expect(prose(hintForKind('timeout', ssh)).includes('@')).toBe(false);
+  });
+  it('the command inside backticks keeps the full ssh target', () => {
+    expect(hintForKind('proxy', ssh, target)).toContain('`ssh alice@devbox.example.com`');
+  });
+  it('C60: no hint promises a retry by itself (the countdown is the promise)', () => {
+    for (const kind of Object.keys(RETRYABLE) as Array<keyof typeof RETRYABLE>) {
+      expect(hintForKind(kind, ssh, target)).not.toMatch(/retries by itself/);
+    }
+  });
+  it('host_key names [host]:port for a non-default port', () => {
+    expect(hintForKind('host_key', ssh, { ...target, port: 2222 })).toContain("`ssh-keygen -R '[devbox.example.com]:2222'`");
+    expect(hintForKind('host_key', ssh, { ...target, port: 22 })).toContain('`ssh-keygen -R devbox.example.com`');
   });
 });

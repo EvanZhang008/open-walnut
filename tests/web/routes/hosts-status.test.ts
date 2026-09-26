@@ -26,7 +26,11 @@ let pooled: Record<string, { hasCapability: (c: string) => boolean; send: Return
 
 vi.mock('../../../src/providers/daemon-connection.js', () => ({
   clearDaemonFailureCache: (host?: string) => clearFailureCache(host),
-  getDaemonConnection,
+  // Wrapped: host-connect-action.ts imports this module at load, before the
+  // vi.fn above is initialized (a bare reference would hit the TDZ).
+  getDaemonConnection: (...args: unknown[]) => (getDaemonConnection as (...a: unknown[]) => unknown)(...args),
+  cancelReconnectBackoff: () => false,
+  reconnectHostNow: () => null,
   getConnectedDaemonConnection: (host: string) => pooled[host] ?? null,
   getDaemonConnectState: (host: string) => ({
     host,
@@ -106,6 +110,7 @@ function installWarmup(snapshot: Record<string, { state: string; at: number }> =
     kick,
     snapshot: () => snapshot,
     stateOf: (key: string) => snapshot[key]?.state,
+    credentialRetryAt: () => undefined,
   } as unknown as HostWarmup);
 }
 
@@ -329,6 +334,7 @@ describe('POST /api/hosts/:host/connect', () => {
       kick: vi.fn(async (host: string) => { snapshot[host] = { state: 'queued', at: Date.now() }; }),
       snapshot: () => snapshot,
       stateOf: (key: string) => snapshot[key]?.state,
+      credentialRetryAt: () => undefined,
     } as unknown as HostWarmup);
     const res = await request(createApp()).post('/api/hosts/marina/connect');
     expect(res.status).toBe(200);

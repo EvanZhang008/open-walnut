@@ -1,5 +1,5 @@
 /**
- * Host connect status — the wire types for "is this exec host reachable, and if
+ * Host connect status: the wire types for "is this exec host reachable, and if
  * it is still connecting, where in the chain is it".
  *
  * Deliberately a file of its own (not part of api/sessions.ts): the status is a
@@ -38,14 +38,43 @@ export interface HostConnectStep {
   status: 'done' | 'active' | 'todo';
 }
 
+/** A readiness problem as the server words it (host-readiness-problems.ts). */
+export interface HostStatusReadinessProblem {
+  kind: string;
+  /** One sentence naming the host; a command inside it is in `backticks`. */
+  message: string;
+  commands: string[];
+  fix?: { action: string; state: 'running' | 'failed'; text: string; needsPassword?: boolean; detail?: string };
+}
+
+/** The daemon's host.preflight answer plus the problems the server derived from it. */
+export interface HostStatusReadiness {
+  claude?: {
+    found?: boolean; path?: string; version?: string; kind?: string; auth?: string;
+    versionOk?: boolean; minVersion?: string; installMethod?: string;
+  };
+  compiler?: { found: boolean; name?: string };
+  dtach?: { found: boolean; path?: string };
+  platform?: string;
+  arch?: string;
+  /** Server epoch ms of the last ask (success or failure). */
+  checkedAt?: number;
+  problems?: HostStatusReadinessProblem[];
+  checkError?: string;
+  /** The automatic fix running on the host right now. */
+  fixing?: { action: string; text: string; startedAt?: number };
+  fixes?: unknown[];
+}
+
 export interface HostStatus {
-  /** Config alias — the key every surface uses. */
+  /** Config alias: the key every surface uses. */
   host: string;
   label: string;
   hostname: string;
   user?: string;
   connected: boolean;
-  phase: DaemonConnectPhase;
+  /** 'off' = a test server that never dials remote hosts (by design). */
+  phase: DaemonConnectPhase | 'off';
   /** Sentence for the UI, e.g. "Installing the session daemon runtime on Big remote host…". */
   phaseLabel: string;
   /** The 7 user-visible steps, in order. */
@@ -57,10 +86,36 @@ export interface HostStatus {
   error?: string;
   kind?: string;
   hint?: string;
+  /** false = retrying cannot help by itself (auth, host key, ...): Walnut waits for the user. */
+  retryable?: boolean;
+  /** Epoch ms (server clock) of the next attempt Walnut really has scheduled. Absent = no promise. */
+  retryAt?: number;
+  /**
+   * @deprecated The 60s failure-cache lifetime, not a retry schedule. Never read
+   * it; `retryAt` is the real countdown.
+   */
   retryInMs?: number;
+  /** The last failure seen while reconnecting (phase stays 'reconnecting'). */
+  lastError?: string;
+  lastKind?: string;
+  lastHint?: string;
+  /** Server epoch ms when the current reconnect began. */
+  reconnectSince?: number;
+  /** Server epoch ms when the current connect attempt began. */
+  attemptStartedAt?: number;
+  /** Server epoch ms when the current connection came up. */
+  connectedAt?: number;
+  /** Server clock when the frame was built (clock-skew correction). */
+  serverNow?: number;
   warmup?: 'queued' | 'running' | 'done' | 'failed' | 'skipped';
   discovered?: boolean;
-  /** Server clock (ms epoch) when this snapshot was built — the ordering key. */
+  readiness?: HostStatusReadiness;
+  /** Informational lines for Settings (never a banner row). */
+  warnings?: string[];
+  daemonDir?: { path: string; display: string; fallback: boolean; reason?: string; freeMb?: number };
+  /** Tombstone on the host:status event: the host left the config (or was disabled). */
+  removed?: true;
+  /** Server clock (ms epoch) when this snapshot was built: the ordering key. */
   at: number;
 }
 
@@ -88,6 +143,23 @@ export async function connectHost(host: string): Promise<HostStatus> {
     `/api/hosts/${encodeURIComponent(host)}/connect`,
     undefined,
     { quietStatuses: [404, 409] },
+  );
+  return res.status;
+}
+
+/**
+ * Re-run the host's readiness check now (the "Check again" button). Answers the
+ * fresh status; the same answer also arrives as a host:status push. On a replica
+ * the server relays the ask to the Mac.
+ *
+ * `background: true` is for a check nobody clicked (the window-focus re-check):
+ * it queues like a GET instead of jumping ahead of what paints the screen.
+ */
+export async function checkHostReadiness(host: string, opts?: { background?: boolean }): Promise<HostStatus> {
+  const res = await apiPost<{ ok?: true; status: HostStatus }>(
+    `/api/hosts/${encodeURIComponent(host)}/check`,
+    undefined,
+    { quietStatuses: [404, 409], ...(opts?.background ? { background: true } : {}) },
   );
   return res.status;
 }

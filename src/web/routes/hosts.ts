@@ -5,7 +5,9 @@
  * and if not, where is the connect and what should the user do?
  *   - GET  /api/hosts/status        hydrate (the live updates arrive as the
  *                                   `host:status` WS event, so nothing polls)
- *   - POST /api/hosts/:host/connect a deliberate human retry
+ *   - POST /api/hosts/:host/connect a deliberate human retry (connectHostNow,
+ *                                   the same function as /api/sessions/host-retry)
+ *   - POST /api/hosts/:host/check   Check again: re-run the readiness probe now
  *
  * On a cloud replica there is no ssh and no daemon of our own: reachability is
  * whether that host's bridge is dialled in, and connecting is the primary's job.
@@ -15,8 +17,7 @@ import { Router } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { getConfig } from '../../core/config-manager.js'
 import { buildHostStatus, listStatusHosts, type HostStatus } from '../../core/hosts/host-status.js'
-import { getHostWarmup } from '../../core/hosts/host-warmup-registry.js'
-import { getHostReadiness, refreshHostReadiness, resetHostAutofixAttempts } from '../../core/hosts/host-readiness.js'
+import { checkHostNow, configHostDef, connectHostNow, hostStatusFrame } from '../../core/hosts/host-connect-action.js'
 import type { DaemonConnectState } from '../../providers/daemon-connection.js'
 
 export const hostsRouter = Router()
@@ -51,11 +52,9 @@ hostsRouter.get('/status', async (_req, res, next) => {
       return
     }
 
-    const { getDaemonConnectState } = await import('../../providers/daemon-connection.js')
-    const warmup = getHostWarmup()?.snapshot() ?? {}
-    for (const { key, def } of entries) {
-      hosts.push(buildHostStatus(key, def, getDaemonConnectState(key), warmup[key]?.state, Date.now(), getHostReadiness(key)))
-    }
+    // Disabled hosts are absent (listStatusHosts); the fixture, the ephemeral
+    // "off" answer and the warmup's credential clock all ride hostStatusFrame.
+    for (const { key, def } of entries) hosts.push(hostStatusFrame(key, def))
     res.json({ hosts })
   } catch (err) {
     next(err)
@@ -63,10 +62,24 @@ hostsRouter.get('/status', async (_req, res, next) => {
 })
 
 // POST /api/hosts/:host/connect — the human just fixed their VPN / ssh key.
-// Clears the 60s failure cache (which exists to throttle AUTOMATIC retries, not
-// a deliberate one) and hands the host to the warmup. Fire-and-forget: the reply
-// is the CURRENT status, and progress arrives over the `host:status` WS event.
+// connectHostNow: enabled check, failure cache cleared, autofix reset, the
+// reconnect backoff cancelled, then the dial (fire-and-forget: progress arrives
+// as `host:status`). The reply is the CURRENT status.
 hostsRouter.post('/:host/connect', async (req, res, next) => {
+  try {
+    const host = typeof req.params.host === 'string' ? req.params.host.trim() : ''
+    const r = await connectHostNow(host)
+    res.status(r.httpStatus).json(r.body)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/hosts/:host/check: Check again. The primary re-runs the host's
+// readiness probe (force) and answers with the fresh frame; a replica relays it
+// to the primary ('server.host-readiness-refresh') and the result comes back as
+// the primary's normal status push.
+hostsRouter.post('/:host/check', async (req, res, next) => {
   try {
     const host = typeof req.params.host === 'string' ? req.params.host.trim() : ''
     if (!host || host === '__local__') {
@@ -74,50 +87,25 @@ hostsRouter.post('/:host/connect', async (req, res, next) => {
       return
     }
     if (CLOUD_MODE) {
-      res.status(409).json({ error: 'a cloud replica cannot connect to hosts; run this on the primary' })
+      const { callPrimaryControl } = await import('./v1-control-relay.js')
+      const r = await callPrimaryControl('server.host-readiness-refresh', '__server__', { host }, CHECK_RELAY_TIMEOUT_MS)
+      if (r.ok) res.json({ ok: true, ...(r.result.status ? { status: r.result.status } : {}) })
+      else res.status(503).json({ error: r.failure.message, code: 'check_failed' })
       return
     }
-    const config = await getConfig()
-    const hosts = config.hosts ?? {}
-    // hasOwn, not `hosts[host]`: `__proto__` / `constructor` are truthy lookups.
-    const def = Object.hasOwn(hosts, host) ? hosts[host] : undefined
-    if (!def) {
-      res.status(404).json({ error: `Unknown host: ${host}` })
+    const def = await configHostDef(host)
+    if (!def || def.enabled === false) {
+      res.status(404).json({ error: 'unknown host' })
       return
     }
-    if (def.enabled === false) {
-      // The warmup would skip it silently and the button would look dead.
-      res.status(409).json({ error: `${host} is disabled; enable it in Settings > Remote hosts first`, code: 'host_disabled' })
-      return
-    }
-
-    const { clearDaemonFailureCache, getDaemonConnection, getDaemonConnectState } =
-      await import('../../providers/daemon-connection.js')
-    clearDaemonFailureCache(host)
-    // A human asked: every automatic fix that already failed on this host may
-    // run once more, whether it is connected now or the handshake comes later.
-    resetHostAutofixAttempts(host)
-    const warmup = getHostWarmup()
-    if (warmup) {
-      // Resolves once the host is QUEUED (listing hosts, no ssh), so the reply
-      // below already says "waiting for its turn" / "connecting" instead of the
-      // 'idle' it was a millisecond ago.
-      await warmup.kick(host).catch(() => { /* kick never rejects; belt and braces */ })
-    } else {
-      // No warmup in this process (WALNUT_HOST_WARMUP=0, sandbox): a deliberate
-      // human connect still has to dial something.
-      getDaemonConnection(host, { hostname: def.hostname, user: def.user, port: def.port })
-        .catch(() => { /* recorded in the failure cache and pushed as host:status */ })
-    }
-
-    // Already connected: the human is asking "is it ready now?" (they just
-    // installed claude or gcc), so re-run the host preflight. Fire-and-forget:
-    // the answer arrives as a host:status push, never delaying this reply.
-    const state = getDaemonConnectState(host)
-    if (state.connected) void refreshHostReadiness(host, { force: true })
-
-    res.json({ ok: true, status: buildHostStatus(host, def, state, warmup?.stateOf(host), Date.now(), getHostReadiness(host)) })
+    await checkHostNow(host, { force: true, deadlineMs: CHECK_DEADLINE_MS })
+    res.json({ ok: true, status: hostStatusFrame(host, def) })
   } catch (err) {
     next(err)
   }
 })
+
+/** The UI's "Check again" waits 15s; the probe caps itself at 14s. */
+const CHECK_DEADLINE_MS = 15_000
+/** The relay hop to the primary, with the probe inside it. */
+export const CHECK_RELAY_TIMEOUT_MS = 20_000

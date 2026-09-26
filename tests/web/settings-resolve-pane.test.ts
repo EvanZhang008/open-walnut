@@ -6,6 +6,7 @@ import {
   resolvePane,
   sectionsForPane,
 } from '../../web/src/components/settings/settings-routing.js'
+import { hostRowId } from '../../web/src/utils/host-settings-nav.js'
 
 describe('resolvePane', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -25,6 +26,21 @@ describe('resolvePane', () => {
     expect(resolvePane('#focus-tiers', [])).toMatchObject({ paneId: 'tasks', targetId: 'focus-tiers' })
     expect(resolvePane('#cloud', [])).toMatchObject({ paneId: 'devices', targetId: 'cloud' })
     expect(resolvePane('#providers', [])).toMatchObject({ paneId: 'advanced', targetId: 'providers' })
+  })
+
+  it('opens Remote Hosts for one host row and targets that row', () => {
+    const owner = NAV_OWNER['remote-hosts']
+    expect(resolvePane('#rh-host-olddev', [])).toEqual({ paneId: owner, targetId: 'rh-host-olddev', known: true })
+    // The alias is URI-encoded in the id; the target is the decoded element id.
+    expect(resolvePane('#rh-host-dev%20box', [])).toEqual({ paneId: owner, targetId: 'rh-host-dev box', known: true })
+    // The prefix matches the row id Open Settings builds.
+    expect(resolvePane(`#${hostRowId('buildbox')}`, [])).toMatchObject({ paneId: owner, targetId: 'rh-host-buildbox' })
+  })
+
+  it('still sends an unknown hash to the default pane', () => {
+    vi.spyOn(log, 'warn').mockImplementation(() => {})
+    expect(resolvePane('#rh-hostx', [])).toEqual({ paneId: 'general', targetId: null, known: false })
+    expect(resolvePane('#no-such-pane', [])).toEqual({ paneId: 'general', targetId: null, known: false })
   })
 
   it('opens a registered plugin panel by its key', () => {

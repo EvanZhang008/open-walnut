@@ -58,6 +58,21 @@ breaking changes).
 
 ### Added
 
+- **One host problem reads the same everywhere: the home banner, the folder picker, Settings and
+  the Start button.** A remote host that cannot be reached, whose Claude Code is outdated or not
+  signed in, or whose daemon fell back to another directory, now appears as one row under the
+  Claude Code line of the home banner (title `Remote hosts need attention` when only hosts have
+  problems), with the host name first, the same sentence Settings shows, and the same action
+  (Retry, Check again, Open Settings). The folder picker marks the host's tab with the same dot and
+  puts the sentence and action at the top of its list; Settings opens on that host's row from any
+  of them. Starting a session on such a host is refused before anything is written (`409`, codes
+  `host_unreachable`, `host_not_ready`, `host_off`, `host_removed`) and the draft comes back with
+  the sentence and, for an outdated or signed-out Claude Code, a `Start anyway`. Healthy hosts,
+  disabled hosts, unsaved drafts and hosts still connecting take no space; a problem that clears
+  disappears live; a dismissal is per host, problem and version, and the row returns when the
+  problem changes. Routines and the phone launch path get the same refusal, deduplicated per host.
+  A test server refuses remote hosts by design and says so in the picker instead of showing red.
+
 - **`open-walnut doctor` prints one paste-ready report for support.** Build and commit (`+dirty`
   for an uncommitted tree), the server's node, port and nice value, which `claude` and `node`
   this machine runs, the login-shell and process PATH, compiler, dtach, SQLite, the provider and
@@ -125,6 +140,10 @@ be re-read from tasks, notes or transcripts.
 Tasks and sessions are indexed on their own events, so an Ask Walnut `Search query: ...` row written
 before this upgrade stays in the index until something touches that task or session, or until a full
 rebuild.
+
+The phone launch route (`POST /api/v1/sessions/launch`) now answers `409` with `code: host_removed`
+for a host that is unknown or disabled, where it answered `400`; the other host refusals
+(`host_unreachable`, `host_not_ready`, `host_off`) are new `409` codes. See the API v1 reference.
 
 ## [0.4.5] - 2026-09-03
 

@@ -28,6 +28,8 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
   isDaemonConnected: () => false,
   getDaemonDisconnectedSince: () => null,
   clearDaemonFailureCache: (host?: string) => clearFailureCache(host),
+  cancelReconnectBackoff: () => false,
+  reconnectHostNow: () => null,
   getDaemonConnection: () => new Promise((resolve, reject) => { connectGate = { resolve, reject }; }),
   getDaemonConnectState: (host: string) => ({ host, connected: false, ...connectState }),
 }));

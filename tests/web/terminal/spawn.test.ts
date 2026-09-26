@@ -6,6 +6,8 @@ import {
   buildDtachArgs,
   buildRemoteDtachCommand,
   buildRemoteSshArgs,
+  buildRemotePlainShellCommand,
+  remoteCdTarget,
   DTACH_SOCKET_DIR,
 } from '../../../src/web/terminal/spawn.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
@@ -136,5 +138,20 @@ describe('buildRemoteSshArgs', () => {
     const args = buildRemoteSshArgs('dtach', 'sid3', target, undefined, '/x', 'devbox');
     expect(args).toContain('ControlMaster=auto');
     expect(args.some((a) => a.includes('walnut-term-ssh-devbox'))).toBe(true);
+  });
+});
+
+describe('remote cd keeps a leading ~ outside the quotes (C40)', () => {
+  it('quotes only the part after ~/', () => {
+    expect(remoteCdTarget('~/proj a')).toBe("~/'proj a'");
+    expect(remoteCdTarget('~')).toBe('~');
+    expect(remoteCdTarget('/abs/dir')).toBe("'/abs/dir'");
+    expect(remoteCdTarget("~/it's")).toBe("~/'it'\\''s'");
+  });
+
+  it('dtach and plain shell commands both emit cd ~/\'rest\'', () => {
+    expect(buildRemoteDtachCommand('dtach', 'sid9', undefined, '~/proj a')).toContain("cd ~/'proj a' && exec");
+    expect(buildRemotePlainShellCommand(undefined, '~/proj a')).toContain("cd ~/'proj a' && exec");
+    expect(buildRemotePlainShellCommand(undefined, '~/proj a')).not.toContain("'~/");
   });
 });

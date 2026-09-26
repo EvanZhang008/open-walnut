@@ -21,6 +21,10 @@ import { VoicePanel } from '@/components/common/VoicePanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
+import { railDotShows, useHostAttentionNeeded, useHostBannerPlacement } from '@/utils/host-banner-placement';
+import { hostSettingsHref } from '@/utils/host-settings-nav';
+import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
+import '@/styles/attention-banner.css';
 
 // Twins of MainPage's keys: localStorage, so the toggles read the same state the
 // page restores after a relaunch (sessionStorage dies with the Mac app's web view).
@@ -53,6 +57,10 @@ export function Sidebar({
   const apps = useAppCatalog();
   const navigate = useNavigate();
   const location = useLocation();
+  // No home banner on screen (slot and draft column both hidden, or another
+  // route): a host problem still shows, as a warn dot on the Settings entry.
+  const hostBannerPlacement = useHostBannerPlacement();
+  const hostAttention = railDotShows(useHostAttentionNeeded(), hostBannerPlacement, location.pathname);
   // overrideLinks: a rail row is an <a> only because SPA routing needs one —
   // "Open Link in New Tab" is not what right-clicking an app icon is for.
   const appMenu = useContextMenu<RegisteredApp>({ overrideLinks: true });
@@ -275,8 +283,10 @@ export function Sidebar({
           // icon is a no-op instead of a reset to an older remembered state.
           const onThisApp = app.path !== '/'
             && (location.pathname === app.path || location.pathname.startsWith(`${app.path}/`));
+          const hostDot = hostAttention && app.kind === 'core' && app.path === '/settings';
           const target = app.path === '/' ? '/'
             : onThisApp ? `${location.pathname}${location.search}${location.hash}`
+            : hostDot ? hostSettingsHref()
             : linkTargetFor(app.path);
           const link = (
             <NavLink
@@ -289,10 +299,15 @@ export function Sidebar({
                 ? `sidebar-core-app-${app.id}`
                 : `sidebar-app-${app.kind === 'webview' ? app.id : app.key}`}
               data-app-kind={app.kind}
+              // The link carries the one name; the dot inside it is decorative.
+              {...(hostDot ? { 'aria-label': `${app.title}: remote hosts need attention` } : {})}
               onContextMenu={(e) => appMenu.open(e, app)}
             >
               {icon}
               <span className="sidebar-label">{app.title}</span>
+              {hostDot && (
+                <HostStatusDot dot={{ kind: 'warn', title: `${app.title}: remote hosts need attention` }} className="sidebar-host-dot" decorative />
+              )}
               {app.badge === 'dot' ? (
                 <span className="notification-badge-dot" />
               ) : typeof app.badge === 'number' && app.badge > 0 ? (

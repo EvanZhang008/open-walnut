@@ -24,6 +24,7 @@ import {
 } from './trigger-state.js';
 import type { WatcherOutcome } from './watcher-contract.js';
 import { log } from '../../logging/index.js';
+import { clearHostGateNotices, noteHostGateRefusal } from './host-gate-notice.js';
 
 export interface WatcherToolContext {
   jobId: string;
@@ -249,14 +250,27 @@ export function createWatcherTools(ctx: WatcherToolContext, deps: WatcherToolDep
           + 'Create a task or send a notification instead.';
       }
 
-      const res = await deps.sendToSingleton({
-        ...(existingTaskId ? { taskId: existingTaskId } : {}),
-        title: `${ctx.jobName} — ${name}`,
-        message,
-        ...(ctx.sessionCwd ? { cwd: ctx.sessionCwd } : {}),
-        ...(ctx.sessionHost ? { host: ctx.sessionHost } : {}),
-        ...(ctx.sessionModel ? { model: ctx.sessionModel } : {}),
-      });
+      let res: { taskId: string; startedSession: boolean };
+      try {
+        res = await deps.sendToSingleton({
+          ...(existingTaskId ? { taskId: existingTaskId } : {}),
+          title: `${ctx.jobName} — ${name}`,
+          message,
+          ...(ctx.sessionCwd ? { cwd: ctx.sessionCwd } : {}),
+          ...(ctx.sessionHost ? { host: ctx.sessionHost } : {}),
+          ...(ctx.sessionModel ? { model: ctx.sessionModel } : {}),
+        });
+      } catch (err) {
+        // The host gate refused the session: a refusal like any other (the run
+        // goes on and is never replayed), and the human hears once per problem.
+        const refused = await noteHostGateRefusal({
+          jobId: ctx.jobId, host: ctx.sessionHost, err, title: `Watcher "${ctx.jobName}" could not start a session`,
+          notify: (n) => deps.notify({ ...n, severity: 'warning' }),
+        });
+        if (refused === null) throw err;
+        return `Refused: ${refused}`;
+      }
+      clearHostGateNotices(ctx.jobId);
 
       const now = ctx.nowMs();
       ctx.state.singletons[name] = res.taskId;

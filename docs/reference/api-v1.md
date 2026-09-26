@@ -44,6 +44,10 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all (e.g. global search needs the primary's semantic index) |
 | `cron_owner` | 409 | `POST /sessions/:id/terminate` refused: the session owns armed recurring crons — delete them first or pass `force: true` |
 | `session_exists` | 409 | `POST /tasks/:id/start` refused: the task already has a live session (`existing_session_id`); message it with `POST /messages` |
+| `host_not_ready` | 409 | `POST /sessions` refused before anything was written: the host is connected but its Claude Code cannot run the session (`kind`: `claude_missing`, `claude_needs_node`, `claude_error`, `claude_outdated`, `claude_not_logged_in`). Extras `kind`, `host`, `headline`, `hint`, and `allowOverride: true` for the two kinds `overrideReadiness` may skip |
+| `host_unreachable` | 409 | `POST /sessions`: a fresh connect attempt to the host just failed; `kind`, `headline` and `hint` describe that attempt |
+| `host_off` | 409 | `POST /sessions`: remote hosts are off on this test server (never dialled) |
+| `host_removed` | 409 | `POST /sessions`: the `host` alias is not an enabled host in Settings (removed, disabled, or never configured) |
 | `task_has_no_session` | 409 | `POST /messages` named a task with nothing running; start one with `POST /tasks/:id/start` |
 | `ambiguous_target` | 400 | `POST /messages` handle matched several sessions/tasks (`candidates`); use a longer id |
 | `unknown_target` | 404 | `POST /messages` handle matched no session, task, or title |
@@ -1183,17 +1187,31 @@ host's SSH daemon). Works on BOTH boxes:
     launcher's suggestions), best first, capped at 30. `host` is `""` for
     local paths.
 - `POST /api/v1/sessions` body `{ "cwd", "host"?, "message"?, "taskId"?,
-  "model"?, "mode"? }` → `201 { "sessionId", "taskId", "title" }`
+  "model"?, "mode"?, "overrideReadiness"? }` → `201 { "sessionId", "taskId", "title" }`
   - `cwd` (required): absolute working path on the chosen host (must start
     with `/`; relative paths are `400 bad_request`).
   - `host`: `""`/absent = the primary box; otherwise an enabled alias from
-    `launch-options` (unknown/disabled → `400 bad_request`).
+    `launch-options` (unknown/disabled → `409 host_removed`, the same answer
+    the web Start gives; servers before 2026-09 answered `400 bad_request`).
   - `message`: optional first turn; empty/absent spawns the CLI idle.
   - `taskId`: link the session to an existing task instead of creating one
     (unknown id → `404 not_found`). Absent: a task is created and
     auto-organized, exactly like a web Quick Start.
   - `model` / `mode`: same accepted values as the web quick-start route
     (`bypass`/`accept`/`default`/`plan`; alias or catalog model ids).
+  - Remote host gate (additive, 2026-09): a launch on a host that cannot run
+    a session is refused BEFORE any task or session is written, with
+    `409 { "error": { "code", "message" }, "kind"?, "host", "headline", "hint", "allowOverride"? }`
+    (the same body through the cloud companion's relay).
+    `error.message` is the one sentence to show; `error.code` is one of
+    `host_not_ready` (a readiness problem such as `claude_outdated`, named by
+    `kind`), `host_unreachable` (a fresh connect attempt just failed; `kind`,
+    `headline` and `hint` come from that attempt), `host_off` (remote hosts
+    are off on this test server) or `host_removed` (the alias left Settings).
+    `allowOverride: true` marks the two kinds an old or signed-out CLI may
+    still survive (`claude_outdated`, `claude_not_logged_in`): send the same
+    body again with `"overrideReadiness": true` to start anyway. Other kinds
+    ignore the flag.
   - `201` means **accepted, not spawned**: the CLI spawn is asynchronous, so
     a typo'd path or an unreachable SSH host still returns 201 and surfaces
     later as session `error` status. The record is pre-seeded, so the

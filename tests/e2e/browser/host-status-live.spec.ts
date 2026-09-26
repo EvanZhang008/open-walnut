@@ -11,6 +11,7 @@
  */
 import { test, expect, type Page, type Route } from '@playwright/test'
 import { openDraft } from './draft-helpers'
+import { resetServerHostFixture } from './host-problems-helpers'
 
 const HOST = 'devbox'
 const HOST_LABEL = 'Big dev box'
@@ -175,9 +176,13 @@ async function openPicker(page: Page): Promise<void> {
   }
 }
 
+// A server host fixture another spec left loaded would push real frames for `devbox`.
+test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
 test.beforeEach(async ({ page }) => {
   await captureWs(page)
 })
+// A route callback still in flight when the page closes must not fail the test.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
 
 test('host tab carries a live status dot: connecting → connected → failed, each from one WS frame', async ({ page }) => {
   await injectHost(page, status('ssh'))
@@ -185,7 +190,13 @@ test('host tab carries a live status dot: connecting → connected → failed, e
 
   const dot = hostTab(page).locator('.sps-host-dot')
   await expect(dot).toHaveClass(/sps-host-dot-connecting/)
-  await expect(dot).toHaveAttribute('title', PHASE_LABEL.ssh)
+  // One tooltip per tab: the button's, '{label}: {status}'; the dot has none of its own.
+  await expect(hostTab(page)).toHaveAttribute('title', `${HOST_LABEL}: Connecting`)
+  // One accessible name too: the tab's; the dot inside it is decorative.
+  await expect(hostTab(page)).toHaveAttribute('aria-label', `${HOST_LABEL}: Connecting`)
+  await expect(dot).toHaveAttribute('aria-hidden', 'true')
+  expect(await dot.getAttribute('aria-label')).toBeNull()
+  expect(await dot.getAttribute('title')).toBeNull()
   // Local and All never get a dot: there is nothing to connect to.
   await expect(page.locator('.sps-host-tab', { hasText: 'Local' }).locator('.sps-host-dot')).toHaveCount(0)
   await expect(page.locator('.sps-host-tab', { hasText: 'All' }).locator('.sps-host-dot')).toHaveCount(0)
@@ -195,7 +206,7 @@ test('host tab carries a live status dot: connecting → connected → failed, e
 
   await pushStatus(page, status('failed', { error: 'Permission denied (publickey).', kind: 'auth', hint: 'Check the key.', retryInMs: 58_000 }))
   await expect(dot).toHaveClass(/sps-host-dot-failed/)
-  await expect(dot).toHaveAttribute('title', /Permission denied/)
+  await expect(hostTab(page)).toHaveAttribute('title', `${HOST_LABEL}: Could not connect to ${HOST_LABEL}`)
 })
 
 test('the app reads host status once at load, so the picker opens with the dots already known', async ({ page }) => {
@@ -269,15 +280,16 @@ test('connecting row shows the step list; a WS frame advances it with no extra l
   for (let i = 1; i < polls.length; i++) expect(polls[i] - polls[i - 1]).toBeGreaterThanOrEqual(4000)
 })
 
-test('failure arrives over WS: the card names the cause and the fix; Retry reconnects and the card clears', async ({ page }) => {
+test('failure arrives over WS: the note names the cause and the fix; Retry reconnects and the note clears', async ({ page }) => {
   await injectHost(page, status('tunnel'))
   const mode = { value: 'pending' as 'pending' | 'dirs' | 'error', dirs: ['work'] }
   const remote = scriptRemoteListDirs(page, mode)
   await remote.install()
-  const retries: string[] = []
-  await page.route('**/api/sessions/host-retry', async (route) => {
-    retries.push(route.request().postDataJSON()?.host)
-    await route.fulfill({ json: { ok: true } })
+  const connects: string[] = []
+  await page.route(`**/api/hosts/${HOST}/connect`, async (route) => {
+    connects.push(route.request().method())
+    // The route answers after the warmup has QUEUED the host (no ssh yet).
+    await route.fulfill({ json: { ok: true, status: status('queued', { phaseElapsedMs: 0, connectElapsedMs: 0, warmup: 'queued' }) } })
   })
   await openPicker(page)
   await hostTab(page).click()
@@ -289,21 +301,23 @@ test('failure arrives over WS: the card names the cause and the fix; Retry recon
     hint: `Walnut runs \`ssh me@${HOSTNAME}\` without a password prompt. Make sure that command works from this machine on its own, then retry.`,
     retryInMs: 58_000,
   }))
-  const down = list(page).locator('.sps-host-down')
-  await expect(down).toBeVisible()
-  await expect(down).toContainText('Could not connect to Big dev box')
-  await expect(down).toContainText('Permission denied (publickey).')
-  await expect(down).toContainText(`ssh me@${HOSTNAME}`)
+  const down = list(page).locator(`.sps-host-note[data-host="${HOST}"]`)
+  await expect(down).toHaveAttribute('data-type', 'connect')
+  await expect(down.locator('.hft-headline')).toHaveText(`Could not connect to ${HOST_LABEL}`)
+  await expect(down.locator('.hft-hint')).toContainText(`ssh me@${HOSTNAME}`)
+  await down.getByRole('button', { name: 'Show SSH output' }).click()
+  await expect(down.locator('pre')).toHaveText('Permission denied (publickey).')
   await expect(list(page).locator('.sps-host-connecting')).toHaveCount(0)
   expect(await down.evaluate(el => parseFloat(getComputedStyle(el).opacity))).toBe(1)
 
-  // Retry: the server is told, and the row goes back to showing progress as
-  // the reconnect walks the steps again; the folders land when it is done.
+  // Retry: the host's connect route (the same one Settings uses), and the row
+  // goes back to showing progress as the reconnect walks the steps again; the
+  // folders land when it is done.
   await down.getByRole('button', { name: 'Retry' }).click()
-  await expect.poll(() => retries).toEqual([HOST])
+  await expect.poll(() => connects).toEqual(['POST'])
   // What the server really pushes next: the cleared failure (idle, no cause),
   // then the warmup taking the host (queued), then the first real step. None of
-  // the first two may bring the failure card back or read as a new failure.
+  // the first two may bring the failure note back or read as a new failure.
   await pushStatus(page, status('idle', { phaseElapsedMs: 0, connectElapsedMs: 0, warmup: 'failed' }))
   await pushStatus(page, status('queued', { phaseElapsedMs: 0, connectElapsedMs: 0, warmup: 'queued' }))
   await expect(list(page).locator('.sps-host-connecting')).toContainText('Waiting for another host')
@@ -311,7 +325,7 @@ test('failure arrives over WS: the card names the cause and the fix; Retry recon
   await expect(down).toHaveCount(0)
   await pushStatus(page, status('ssh', { warmup: 'running' }))
   await expect(list(page).locator('.sps-host-connecting .sps-host-step[data-step="ssh"]')).toHaveAttribute('data-status', 'active')
-  await expect(down).toHaveCount(0)
+  await expect(list(page).locator('.sps-host-note-failure')).toHaveCount(0)
   mode.value = 'dirs'
   await pushStatus(page, status('connected'))
   await expect(list(page).locator('.sps-path-item.sps-live', { hasText: 'work' })).toBeVisible()
@@ -391,10 +405,11 @@ test('Settings › Remote hosts: a live status line per host and a Connect now b
   await page.getByTestId('settings-nav-remote-hosts').click()
   await waitForWs(page)
 
-  const row = page.locator('.rh-status', { hasText: HOST_LABEL }).or(page.locator(`.rh-status[data-host="${HOST}"]`)).first()
+  const row = page.locator(`.rh-status[data-host="${HOST}"]`)
+  const dot = row.locator('.sps-host-dot')
   await expect(row).toBeVisible()
-  await expect(row).toContainText('Checking status')
-  await expect(row.locator('.status-dot')).toHaveClass(/status-dot-testing/)
+  await expect(row).toContainText('Checking...')
+  await expect(dot).toHaveAttribute('data-kind', 'unknown')
   await expect(row).not.toContainText('unknown')
   releaseStatus()
   await expect(row).toContainText(/Not connected/)
@@ -404,7 +419,7 @@ test('Settings › Remote hosts: a live status line per host and a Connect now b
   // (never "Not connected" or a bare failure), and the button stays out of the
   // way while a connect is queued or running.
   await expect(row).toContainText('Waiting for another host')
-  await expect(row.locator('.status-dot')).toHaveClass(/status-dot-testing/)
+  await expect(dot).toHaveAttribute('data-kind', 'connecting')
   await expect(row.locator('.rh-connect-btn')).toBeDisabled()
 
   await pushStatus(page, status('ssh'))
@@ -413,13 +428,17 @@ test('Settings › Remote hosts: a live status line per host and a Connect now b
   await expect(row).toContainText('Installing the session daemon runtime')
   await pushStatus(page, status('connected'))
   await expect(row).toContainText('Connected')
-  await expect(row.locator('.status-dot')).toHaveClass(/status-dot-connected/)
+  await expect(dot).toHaveAttribute('data-kind', 'connected')
   // F25: a connected host offers no connect action.
   await expect(row.locator('.rh-connect-btn')).toHaveCount(0)
 
   await pushStatus(page, status('failed', { error: 'Connection timed out', kind: 'network', hint: 'Check the VPN.' }))
-  await expect(row).toContainText('Connection timed out')
-  await expect(row.locator('.status-dot')).toHaveClass(/status-dot-error/)
+  // The status line stays short; the failure is its own block under it (spec 5.2).
+  await expect(row).toContainText('Not connected')
+  await expect(dot).toHaveAttribute('data-kind', 'failed')
+  const failure = page.locator(`[data-host-alias="${HOST}"] .rh-failure`)
+  await expect(failure.locator('.hft-headline')).toHaveText(`Could not connect to ${HOST_LABEL}`)
+  await expect(failure.locator('.hft-hint')).toHaveText('Check the VPN.')
   await expect(row.locator('.rh-connect-btn')).toHaveText('Retry')
   await expect(row.locator('.rh-connect-btn')).toBeEnabled()
   // Settings re-reads /api/config on its own clock; WebKit tears the page down

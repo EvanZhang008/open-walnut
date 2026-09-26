@@ -8,6 +8,7 @@
  * The wire field is not on the shared HostStatus type yet, hence the local shape.
  */
 import type { HostStatus } from '@/api/hosts';
+import { INFO_ONLY_KINDS } from '@open-walnut/host-problem';
 
 /**
  * Walnut fixing a problem by itself (the server's host autofix): 'running' is
@@ -63,7 +64,37 @@ function readinessOf(status: HostStatus | null | undefined): Record<string, unkn
   return r && typeof r === 'object' ? r as Record<string, unknown> : null;
 }
 
+/**
+ * The lines that ask for action. Informational kinds (daemon_dir_fallback)
+ * are not problems: they read through hostReadinessInfoNotes, with no button.
+ */
 export function hostReadinessProblems(status: HostStatus | null | undefined): HostReadinessProblem[] {
+  return hostReadinessLines(status).filter((p) => !INFO_ONLY_KINDS.includes(p.kind));
+}
+
+/**
+ * Muted explanation lines for Settings: informational readiness kinds (e.g.
+ * 'Using ~/.cache/open-walnut because /tmp is not usable.') and the status'
+ * own `warnings`, verbatim. Never a banner row, never a Check again.
+ */
+export function hostReadinessInfoNotes(status: HostStatus | null | undefined): string[] {
+  const out = hostReadinessLines(status).filter((p) => INFO_ONLY_KINDS.includes(p.kind)).map((p) => p.message);
+  for (const w of Array.isArray(status?.warnings) ? status!.warnings : []) {
+    if (nonEmpty(w) && !out.includes(w)) out.push(w);
+  }
+  return out;
+}
+
+/** The automatic fix running on the host now, with the server time it started (for the elapsed timer). */
+export function hostReadinessFixing(status: HostStatus | null | undefined): { action: string; text: string; startedAt?: number } | null {
+  const f = readinessOf(status)?.fixing;
+  if (!f || typeof f !== 'object') return null;
+  const { action, text, startedAt } = f as Record<string, unknown>;
+  if (!nonEmpty(action) || !nonEmpty(text)) return null;
+  return { action, text, ...(typeof startedAt === 'number' && Number.isFinite(startedAt) ? { startedAt } : {}) };
+}
+
+function hostReadinessLines(status: HostStatus | null | undefined): HostReadinessProblem[] {
   const raw = readinessOf(status)?.problems;
   if (!Array.isArray(raw)) return [];
   const out: HostReadinessProblem[] = [];

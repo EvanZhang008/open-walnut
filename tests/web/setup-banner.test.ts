@@ -43,7 +43,7 @@ describe('setup banner only asks for missing setup', () => {
     // The native build: it needs no Node.js, and it is what the one-click install runs.
     expect(html).toContain('curl -fsSL https://claude.ai/install.sh | bash')
     expect(html).toContain('Open API settings')
-    expect(html).toContain('Dismiss setup banner')
+    expect(html).toContain('Dismiss Claude Code notice')
   })
 })
 
@@ -127,5 +127,38 @@ describe('setup banner for this machine\'s Claude Code', () => {
     expect(splitInlineCode('Run `claude` once')).toEqual([{ code: false, text: 'Run ' }, { code: true, text: 'claude' }, { code: false, text: ' once' }])
     expect(splitInlineCode('a `b')).toEqual([{ code: false, text: 'a ' }, { code: false, text: '`b' }])
     expect(splitInlineCode('plain')).toEqual([{ code: false, text: 'plain' }])
+  })
+})
+
+describe('local notice dismissal keys (C38)', () => {
+  it('keys by kind and version, never one global flag', () => {
+    const minV = { ...local({}).claude, minVersion: '2.1.280' }
+    expect(claudeBannerView({ ...ready, claudeCliAvailable: false, localClaude: local({ claude: { found: false, minVersion: '2.1.280' }, problems: [MISSING] }) }))
+      .toMatchObject({ kind: 'install', dismissKey: 'install:2.1.280' })
+    expect(claudeBannerView({ ...ready, localClaude: local({ claude: { ...minV, versionOk: false }, problems: [OUTDATED] }) }))
+      .toMatchObject({ dismissKey: 'outdated:2.1.280' })
+    expect(claudeBannerView({ ...ready, localClaude: local({ claude: { ...minV, version: '2.1.281', auth: 'not-logged-in' }, problems: [SIGN_IN] }) }))
+      .toMatchObject({ dismissKey: 'sign-in:2.1.281' })
+  })
+
+  it('the section has its own x, named for what it hides', () => {
+    const html = render({ ...ready, localClaude: local({ claude: { ...local({}).claude, auth: 'not-logged-in' }, problems: [SIGN_IN] }) })
+    expect(html).toContain('aria-label="Dismiss Claude Code notice"')
+    expect(html).not.toContain('Dismiss setup banner')
+  })
+
+  it('Tab order (G20): the actions first, the local x last; every button tabbable in WebKit', () => {
+    const cases = [
+      render({ hasReadyProvider: false, claudeCliAvailable: false }),
+      render({ ...ready, localClaude: local({ claude: { ...local({}).claude, auth: 'not-logged-in' }, problems: [SIGN_IN] }) }),
+    ]
+    for (const html of cases) {
+      const buttons = [...html.matchAll(/<button[^>]*>/g)].map((m) => m[0])
+      expect(buttons.length).toBeGreaterThan(1)
+      expect(buttons[buttons.length - 1]).toContain('aria-label="Dismiss Claude Code notice"')
+      for (const b of buttons) expect(b).toContain('tabindex="0"')
+      // The header holds only the title now; the x is not inside it.
+      expect(html.match(/<div class="setup-banner-header">(.*?)<\/div>/)?.[1]).not.toContain('Dismiss')
+    }
   })
 })

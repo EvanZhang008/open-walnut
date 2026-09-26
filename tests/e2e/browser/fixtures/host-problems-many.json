@@ -1,0 +1,146 @@
+{
+  "user": "alice",
+  "floor": {
+    "minVersion": "2.1.280",
+    "model": "Opus 5.5"
+  },
+  "dirs": {
+    "/home/alice": [
+      "work",
+      "notes",
+      ".config"
+    ],
+    "/home/alice/work": [
+      "api",
+      "web",
+      "infra"
+    ],
+    "/home/alice/work/api": [
+      "src",
+      "tests"
+    ],
+    "/home/alice/work/web": [
+      "src"
+    ],
+    "/home/alice/notes": [],
+    "/srv": [
+      "data",
+      "shared"
+    ],
+    "/srv/data": "EACCES",
+    "/srv/shared": [
+      "reports"
+    ]
+  },
+  "hosts": {
+    "box01": {
+      "label": "Box 01",
+      "hostname": "box01.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.281",
+        "auth": "ok",
+        "installMethod": "native"
+      }
+    },
+    "box02": {
+      "label": "Box 02",
+      "hostname": "box02.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.281",
+        "auth": "ok",
+        "installMethod": "native"
+      }
+    },
+    "box03": {
+      "label": "Box 03",
+      "hostname": "box03.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.281",
+        "auth": "ok",
+        "installMethod": "native"
+      }
+    },
+    "box04": {
+      "label": "Box 04",
+      "hostname": "box04.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.281",
+        "auth": "ok",
+        "installMethod": "native"
+      }
+    },
+    "box05": {
+      "label": "Box 05",
+      "hostname": "box05.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.281",
+        "auth": "ok",
+        "installMethod": "native"
+      }
+    },
+    "box06": {
+      "label": "Box 06",
+      "hostname": "box06.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.281",
+        "auth": "ok",
+        "installMethod": "native"
+      }
+    },
+    "box07": {
+      "label": "Box 07",
+      "hostname": "box07.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.281",
+        "auth": "ok",
+        "installMethod": "native"
+      }
+    },
+    "box08": {
+      "label": "Box 08",
+      "hostname": "box08.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.220",
+        "auth": "ok",
+        "installMethod": "other"
+      }
+    },
+    "box09": {
+      "label": "Box 09",
+      "hostname": "box09.example.com",
+      "phase": "connected",
+      "claude": {
+        "version": "2.1.281",
+        "auth": "not-logged-in",
+        "installMethod": "native"
+      }
+    },
+    "box10": {
+      "label": "Box 10",
+      "hostname": "box10.example.com",
+      "phase": "failed",
+      "error": "Permission denied (publickey)."
+    },
+    "box11": {
+      "label": "Box 11",
+      "hostname": "box11.example.com",
+      "phase": "failed",
+      "error": "ssh: connect to host box11.example.com port 22: No route to host"
+    },
+    "box12": {
+      "label": "Box 12",
+      "hostname": "box12.example.com",
+      "phase": "failed",
+      "retryInSec": 300,
+      "error": "Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired)"
+    }
+  }
+}

@@ -4021,7 +4021,8 @@ describe('handleRemoteProcessExit — daemon-reported exit is not always an erro
     expect(errors.map((e) => e.msg)).toContain('remote session process exited with error');
     expect(busErrors).toHaveLength(1);
     // Exit 127 names the missing half with the spawn gate's own sentence.
-    expect(errorOf(busErrors[0])).toContain('Claude Code is not installed on this host. Install it: curl -fsSL https://claude.ai/install.sh | bash');
+    // The install command rides the readiness problem's `commands` (a Copy chip), not the sentence.
+    expect(errorOf(busErrors[0])).toContain('Claude Code is not installed on this host.');
     expect(errorOf(busErrors[0])).toContain('[clouddev]');
   });
 
@@ -4032,8 +4033,8 @@ describe('handleRemoteProcessExit — daemon-reported exit is not always an erro
     exit(session, 127, "/usr/bin/env: 'node': No such file or directory");
 
     const err = errorOf(busErrors[0]);
-    expect(err).toContain('Claude Code on this host is the npm build and needs Node.js');
-    expect(err).toContain('curl -fsSL https://claude.ai/install.sh | bash');
+    expect(err).toContain('Claude Code on this host is the npm build and no working Node.js was found.');
+    expect(err).toContain('Install the native build, which needs no Node.');
     expect(err).not.toContain('Claude CLI not found');
   });
 

@@ -2,8 +2,9 @@
  * Host runtime discovery (src/providers/host-runtime-core.ts): the daemon PATH
  * order, the claude/node spawn gate and the host.preflight answer.
  *
- * Only the fs + exec layer is faked (a map of files, a scripted execFile), so
+ * Only the fs + exec layer is faked (tests/helpers/fake-host-runtime.ts), so
  * the real classification, search order, caching and message text all run.
+ * The spawn shell's second opinion lives in host-runtime-preflight-shell.test.ts.
  * The factory is also re-materialized from its toString(), because that text
  * is what the source-deployed daemon twin actually runs.
  */
@@ -18,83 +19,15 @@ import {
   describeClaudeLaunchFailure,
   HOST_RUNTIME_MESSAGES,
   nodeCandidateDirs,
-  type HostRuntimeDeps,
 } from '../../src/providers/host-runtime-core.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { claudeMissingMessage, claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
+import { spawnGateSentence } from '../../src/core/hosts/host-readiness.js'
+import { ELF, HOME, fakeHost, glibcFail, npmHostFiles } from '../helpers/fake-host-runtime.js'
 
-const HOME = '/home/dev'
-const INSTALL = 'curl -fsSL https://claude.ai/install.sh | bash'
-const NEEDS_NODE = 'Claude Code on this host is the npm build and needs Node.js, but no working node was found'
-  + ' (checked PATH, nvm, fnm, volta, asdf). Install the native build, which needs no Node: ' + INSTALL
-const MISSING = 'Claude Code is not installed on this host. Install it: ' + INSTALL
-
-// ── Fake host ────────────────────────────────────────────────────────────────
-
-interface FakeFile { content: string; exec?: boolean; linkTo?: string }
-type ExecScript = (file: string, args: string[], opts: Record<string, unknown>) => { code: number; stdout?: string; stderr?: string }
-
-function fakeHost(files: Record<string, FakeFile>, script: ExecScript, env: Record<string, string | undefined>) {
-  const calls: Array<{ file: string; args: string[]; timeout: number; env: Record<string, unknown> }> = []
-  const resolve = (p: string): FakeFile | undefined => {
-    let f = files[p]
-    for (let i = 0; f?.linkTo && i < 5; i++) f = files[f.linkTo]
-    return f
-  }
-  const enoent = (p: string) => Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' })
-  const fds = new Map<number, FakeFile>()
-  let nextFd = 3
-  const fakeFs = {
-    constants: fs.constants,
-    existsSync: (p: string) => !!resolve(String(p)) || Object.keys(files).some((k) => k.startsWith(String(p) + '/')),
-    statSync: (p: string) => {
-      const f = resolve(String(p))
-      if (!f) throw enoent(String(p))
-      return { isFile: () => true }
-    },
-    accessSync: (p: string) => { if (!resolve(String(p))?.exec) throw enoent(String(p)) },
-    openSync: (p: string) => {
-      const f = resolve(String(p))
-      if (!f) throw enoent(String(p))
-      fds.set(nextFd, f)
-      return nextFd++
-    },
-    readSync: (fd: number, buf: Buffer) => {
-      const bytes = Buffer.from(fds.get(fd)!.content, 'latin1')
-      bytes.copy(buf, 0, 0, Math.min(bytes.length, buf.length))
-      return Math.min(bytes.length, buf.length)
-    },
-    closeSync: (fd: number) => { fds.delete(fd) },
-    readdirSync: (dir: string) => {
-      const prefix = String(dir).replace(/\/$/, '') + '/'
-      const names = new Set<string>()
-      for (const k of Object.keys(files)) if (k.startsWith(prefix)) names.add(k.slice(prefix.length).split('/')[0])
-      if (!names.size) throw enoent(String(dir))
-      return [...names]
-    },
-  }
-  const execFile: HostRuntimeDeps['execFile'] = (file, args, opts, cb) => {
-    calls.push({ file, args, timeout: Number(opts.timeout), env: opts.env as Record<string, unknown> })
-    const r = script(file, args, opts)
-    const err = r.code === 0 ? null : Object.assign(new Error(`exit ${r.code}`), { code: r.code })
-    queueMicrotask(() => cb(err, r.stdout ?? '', r.stderr ?? ''))
-    return undefined
-  }
-  const deps: HostRuntimeDeps = { fs: fakeFs as unknown as HostRuntimeDeps['fs'], execFile, env }
-  return { deps, calls }
-}
-
-const NPM_CLI = '#!/usr/bin/env node\nimport "./dist/cli.js"\n'
-const ELF = '\x7fELF\x02\x01\x01\x00rest-of-binary'
-const glibcFail = { code: 1, stderr: "node: /lib64/libc.so.6: version `GLIBC_2.28' not found (required by node)" }
-
-/** The fixture a remote user hit: npm claude symlinked into ~/.local/bin, nvm with too-new nodes. */
-function npmHostFiles(extra: Record<string, FakeFile> = {}): Record<string, FakeFile> {
-  return {
-    [`${HOME}/.local/bin/claude`]: { content: '', exec: true, linkTo: `${HOME}/.local/lib/node_modules/@anthropic-ai/claude-code/cli.js` },
-    [`${HOME}/.local/lib/node_modules/@anthropic-ai/claude-code/cli.js`]: { content: NPM_CLI, exec: true },
-    ...extra,
-  }
-}
+// C5: the spawn gate's sentences are the readiness builders' words for "this host".
+const NEEDS_NODE = claudeNeedsNodeMessage({ hostLabel: 'this host' })
+const MISSING = claudeMissingMessage({ hostLabel: 'this host' })
 
 // ── Classification ───────────────────────────────────────────────────────────
 
@@ -359,6 +292,29 @@ describe('preflight', () => {
     const out = await createHostRuntime({ ...deps, claudeCheck: { check: async () => { asked = true; return { auth: 'ok' as const, installMethod: 'npm' as const } } } }).preflight()
     expect(asked).toBe(false)
     expect(out.claude.auth).toBeUndefined()
+  })
+
+  it('C5: the spawn gate sentences equal the readiness builders word for word', async () => {
+    expect(HOST_RUNTIME_MESSAGES.claudeMissing).toBe('Claude Code is not installed on this host.')
+    expect(HOST_RUNTIME_MESSAGES.claudeNeedsNode).toBe(claudeNeedsNodeMessage({ hostLabel: 'this host' }))
+    expect(await spawnGateSentence('claude_missing', null)).toBe(claudeMissingMessage({ local: true }))
+    expect(await spawnGateSentence('claude_needs_node', null)).toBe(claudeNeedsNodeMessage({ local: true }))
+  })
+
+  it('C52: shell_setup from the RPC args runs first, and the claude it puts on PATH is the one probed', async () => {
+    const files = { '/opt/newclaude/bin/claude': { content: ELF, exec: true }, '/usr/bin/gcc': { content: ELF, exec: true } }
+    const { deps, calls } = fakeHost(files, (file, args) => {
+      if (file === '/bin/sh') return { code: 0, stdout: 'noise\n__WALNUT_LOGIN_PATH__=/opt/newclaude/bin:/usr/bin\n' }
+      return args[0] === '--version' ? { code: 0, stdout: '2.1.281 (Claude Code)\n' } : { code: 1 }
+    }, { HOME, PATH: '/usr/bin' })
+    const out = await createHostRuntime(deps).preflight({ shellSetup: 'export PATH=/opt/newclaude/bin:$PATH' })
+    expect(out.claude).toMatchObject({ found: true, path: '/opt/newclaude/bin/claude', version: '2.1.281' })
+    const sh = calls.find((c) => c.file === '/bin/sh')!
+    expect(sh.args[1]).toContain('{ export PATH=/opt/newclaude/bin:$PATH; } >/dev/null 2>&1 || true;')
+    // Without shell_setup nothing extra runs and the daemon PATH answers.
+    const plain = fakeHost(files, () => ({ code: 1 }), { HOME, PATH: '/usr/bin' })
+    expect((await createHostRuntime(plain.deps).preflight()).claude.found).toBe(false)
+    expect(plain.calls.some((c) => c.file === '/bin/sh')).toBe(false)
   })
 
   it('claude missing entirely', async () => {

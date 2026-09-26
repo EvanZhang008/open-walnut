@@ -22,6 +22,22 @@
 import { quickStartSession } from '../../sessions/quick-start.js';
 import { getConfig } from '../../config-manager.js';
 import type { ExecutorDefinition } from '../types.js';
+import { clearHostGateNotices, noteHostGateRefusal, resetHostGateNotices } from '../host-gate-notice.js';
+
+/** How a refused run tells the human (a cron notification by default; a seam for tests). */
+export interface RoutineGateNotify {
+  (input: { title: string; body: string; dedupKey: string }): Promise<void>;
+}
+
+async function defaultGateNotify(input: { title: string; body: string; dedupKey: string }): Promise<void> {
+  const { addNotification } = await import('../../notifications/store.js');
+  await addNotification({ kind: 'cron', severity: 'warning', title: input.title, body: input.body, dedupKey: input.dedupKey });
+}
+
+/** Test seam (the dedupe itself lives in ../host-gate-notice.ts, shared with the watcher and session executors). */
+export function resetRoutineGateNotices(): void {
+  resetHostGateNotices();
+}
 
 /**
  * The private channel an init processor uses to tell this executor how many
@@ -83,7 +99,8 @@ export function renderRoutineTitleTemplate(
   return rendered.trim();
 }
 
-export function createClaudeCodeExecutor(): ExecutorDefinition {
+export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify } = {}): ExecutorDefinition {
+  const notify = opts.notify ?? defaultGateNotify;
   return {
     type: 'claude-code',
     label: 'Claude Code',
@@ -192,25 +209,35 @@ export function createClaudeCodeExecutor(): ExecutorDefinition {
       const count = readTriageCountHint(message);
       const sessionMessage = stripTriageCountHint(message);
 
-      const task = await quickStartSession({
-        message: sessionMessage,
-        cwd: config.cwd,
-        host: config.host,
-        model: config.model,
-        taskTitle: config.titleTemplate
-          ? renderRoutineTitleTemplate(config.titleTemplate, { nowMs: Date.now(), count })
-          : config.taskTitle || `Routine: ${job.name}`,
-        // Routines are background automation: an explicit null keeps every run
-        // OFF the pinned board (a daily job would otherwise add a card a day),
-        // where an omitted pinTier would take the new-task board default.
-        taskMeta: { pinTier: null },
-        project: config.project || 'Routines',
-        source: 'routine',
-        // Engine stays unset on purpose — quickStartSession inherits
-        // config.defaults.engine for it.
-        ...(config.walnutAgent ? { walnutAgent: true } : {}),
-        ...(config.agentId ? { agentId: config.agentId } : {}),
-      });
+      let task;
+      try {
+        task = await quickStartSession({
+          message: sessionMessage,
+          cwd: config.cwd,
+          host: config.host,
+          model: config.model,
+          taskTitle: config.titleTemplate
+            ? renderRoutineTitleTemplate(config.titleTemplate, { nowMs: Date.now(), count })
+            : config.taskTitle || `Routine: ${job.name}`,
+          // Routines are background automation: an explicit null keeps every run
+          // OFF the pinned board (a daily job would otherwise add a card a day),
+          // where an omitted pinTier would take the new-task board default.
+          taskMeta: { pinTier: null },
+          project: config.project || 'Routines',
+          source: 'routine',
+          // Engine stays unset on purpose: quickStartSession inherits
+          // config.defaults.engine for it.
+          ...(config.walnutAgent ? { walnutAgent: true } : {}),
+          ...(config.agentId ? { agentId: config.agentId } : {}),
+        });
+      } catch (err) {
+        // The host gate refused (host-start-gate.ts): the run fails with the
+        // same sentence every other surface shows, and the human hears once.
+        const refused = await noteHostGateRefusal({ jobId: job.id, host: config.host, title: `Routine "${job.name}" could not start`, err, notify });
+        if (refused !== null) return { status: 'error', error: refused };
+        throw err;
+      }
+      clearHostGateNotices(job.id);
 
       // Fire-and-forget by design: the session's lifecycle is observable in the
       // SessionPanel; the routine run is "ok" once the session has been started.

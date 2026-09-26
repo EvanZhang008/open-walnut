@@ -18,6 +18,7 @@ import {
 } from '@/api/sessions';
 import { configChangeMayAffectHosts } from '@/api/working-dirs-cache';
 import { wsClient } from '@/api/ws';
+import { hydrateHostStatus } from '@/hooks/useHostStatus';
 
 export interface WorkingDirsState {
   dirs: WorkingDirEntry[];
@@ -45,7 +46,10 @@ export function useWorkingDirs(open: boolean): WorkingDirsState {
       setHosts(r.hosts);
       setLoading(false);
       setError(null);
-      prewarmWorkingDirs(r);
+      // Pre-warm only once the host statuses are known: prewarmWorkingDirs skips
+      // hosts that are off, connected, connecting, or failed for good, and before
+      // the first answer it would see none of that and dial every host.
+      void hydrateHostStatus().catch(() => {}).then(() => { if (alive) prewarmWorkingDirs(r); });
     };
     const cached = peekWorkingDirs();
     if (cached) apply(cached);

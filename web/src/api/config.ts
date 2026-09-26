@@ -110,8 +110,11 @@ export function fetchCanRevealLocalFiles(): Promise<boolean> {
  * no CLI and no local daemon, so surfaces that would start local work (e.g.
  * "Build a plugin") hide their action and point at the Mac instead. Errors
  * resolve false so the primary console never loses the affordance to a flaky fetch.
+ * `strict: true` rejects instead, for a caller that caches the answer and must
+ * not cache a failure as "not a replica" (useIsCloudReplica).
  */
-export function fetchIsCloudReplica(): Promise<boolean> {
+export function fetchIsCloudReplica(opts?: { strict?: boolean }): Promise<boolean> {
+  if (opts?.strict) return serverFacts().then(f => f.cloud === true);
   return selectFact(f => f.cloud === true, false);
 }
 

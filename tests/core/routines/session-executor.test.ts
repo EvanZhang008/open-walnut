@@ -373,3 +373,46 @@ describe('session executor: one delivery per task at a time', () => {
     await holder;
   });
 });
+
+describe('session executor: a Start the host gate refuses', () => {
+  function gateRefusal(kind = 'claude_outdated') {
+    const err = new Error('Claude Code on Build box is 2.1.220, but Opus 5.5 needs 2.1.280 or newer.') as Error & { statusCode: number; body: Record<string, unknown> };
+    err.name = 'QuickStartError';
+    err.statusCode = 409;
+    err.body = { error: err.message, code: 'host_not_ready', kind, host: 'buildbox' };
+    return err;
+  }
+  const remoteJob = () => job({ id: `job-gate-${Math.random().toString(36).slice(2, 8)}`, check: { run: 'bash check.sh', host: 'buildbox', cwd: '/repo' } });
+
+  it('is a terminal error RESULT (never a throw, so the fire is not replayed), told once per problem', async () => {
+    let refuse = true;
+    const { delivery, calls, launchVisibleWaitMs } = fakeDelivery({
+      getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'TODO' }),
+      startSession: async () => { if (refuse) throw gateRefusal(); return { sessionId: 'minted-1' }; },
+    });
+    const exec = createSessionExecutor({ delivery, launchVisibleWaitMs });
+    const j = remoteJob();
+    for (let i = 0; i < 3; i++) {
+      expect(await exec.run(j, REF as never, FIRE)).toEqual({ status: 'error', error: gateRefusal().message });
+    }
+    expect(calls.notified).toHaveLength(1);
+    expect(calls.notified[0]).toEqual({
+      title: 'Trigger "PR comments" could not start a session', body: gateRefusal().message,
+      dedupKey: `${j.id}|buildbox|host_not_ready|claude_outdated`, taskId: 'task-1',
+    });
+    // The problem clears and a later one comes back: told again.
+    refuse = false;
+    expect((await exec.run(j, REF as never, FIRE)).status).toBe('ok');
+    refuse = true;
+    await exec.run(j, REF as never, FIRE);
+    expect(calls.notified).toHaveLength(2);
+  });
+
+  it('any other launch failure still throws (the registry decides whether to retry it)', async () => {
+    const { delivery, launchVisibleWaitMs } = fakeDelivery({
+      getTask: async () => ({ id: 'task-1', cwd: '/repo', phase: 'TODO' }),
+      startSession: async () => { throw new Error('disk full'); },
+    });
+    await expect(createSessionExecutor({ delivery, launchVisibleWaitMs }).run(remoteJob(), REF as never, FIRE)).rejects.toThrow('disk full');
+  });
+});

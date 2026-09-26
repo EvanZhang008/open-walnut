@@ -40,6 +40,31 @@ const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
 const EXCLUDE_PREFIXES = ['open-walnut-diff-review:', 'open-walnut-file-explorer-selected:'];
 /** Local write timestamps per key — lets boot-merge decide who's newer. */
 const META_KEY = 'open-walnut-ui-prefs-sync-meta';
+
+// The unwrapped Storage methods: this module's own writes (meta, adopted
+// server values) must never be queued back to the server. (Node tests import
+// `syncable` from here and have no Storage.)
+//
+// Captured ONCE per page, on the prototype itself, not once per evaluation of
+// this module: under HMR the module runs again after the prototype is already
+// wrapped, and capturing then took the previous wrapper as "raw", so every
+// write was queued twice and the chain grew by one wrapper per hot reload.
+interface RawStorage { get: Storage['getItem']; set: Storage['setItem']; remove: Storage['removeItem'] }
+const RAW_STORAGE = Symbol.for('open-walnut.ui-prefs-sync.raw-storage');
+const storageProto: Storage | null = typeof Storage === 'undefined' ? null : Storage.prototype;
+function rawStorage(proto: Storage): RawStorage {
+  const holder = proto as unknown as Record<symbol, RawStorage | undefined>;
+  const known = holder[RAW_STORAGE];
+  if (known) return known;
+  const raw: RawStorage = { get: proto.getItem, set: proto.setItem, remove: proto.removeItem };
+  Object.defineProperty(proto, RAW_STORAGE, { value: raw, enumerable: false, configurable: true });
+  return raw;
+}
+const raw: RawStorage | null = storageProto ? rawStorage(storageProto) : null;
+const noop = () => null;
+const rawGet: Storage['getItem'] = raw?.get ?? noop;
+const rawSet: Storage['setItem'] = raw?.set ?? noop;
+const rawRemove: Storage['removeItem'] = raw?.remove ?? noop;
 const FLUSH_DEBOUNCE_MS = 800;
 
 interface PrefEntry { v: string | null; ts: number }
@@ -58,7 +83,7 @@ export function syncable(key: string): boolean {
 
 function readMeta(): Record<string, number> {
   try {
-    const raw = Storage.prototype.getItem.call(localStorage, META_KEY);
+    const raw = rawGet.call(localStorage, META_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') return parsed as Record<string, number>;
@@ -70,7 +95,7 @@ function readMeta(): Record<string, number> {
 let meta: Record<string, number> = {};
 
 function persistMeta() {
-  try { Storage.prototype.setItem.call(localStorage, META_KEY, JSON.stringify(meta)); } catch { /* quota */ }
+  try { rawSet.call(localStorage, META_KEY, JSON.stringify(meta)); } catch { /* quota */ }
 }
 
 let pending = new Map<string, PrefEntry>();
@@ -155,7 +180,7 @@ export async function initUiPrefsSync(): Promise<void> {
     const localOnly: Record<string, PrefEntry> = {};
     for (const [key, entry] of Object.entries(res.prefs ?? {})) {
       if (!syncable(key) || !entry || typeof entry.ts !== 'number') continue;
-      const localVal = Storage.prototype.getItem.call(localStorage, key);
+      const localVal = rawGet.call(localStorage, key);
       const localTs = meta[key];
       // Server wins ONLY when this browser has nothing for the key, or when
       // the server entry is STRICTLY newer than a tracked local write. A local
@@ -166,8 +191,8 @@ export async function initUiPrefsSync(): Promise<void> {
         : localTs !== undefined && entry.ts > localTs;
       if (adoptServer) {
         try {
-          if (entry.v === null) Storage.prototype.removeItem.call(localStorage, key);
-          else if (typeof entry.v === 'string') Storage.prototype.setItem.call(localStorage, key, entry.v);
+          if (entry.v === null) rawRemove.call(localStorage, key);
+          else if (typeof entry.v === 'string') rawSet.call(localStorage, key, entry.v);
           meta[key] = entry.ts;
         } catch { /* quota */ }
       } else if (localVal !== entry.v) {
@@ -182,15 +207,34 @@ export async function initUiPrefsSync(): Promise<void> {
     }
   } catch { /* first boot or offline — keep local values */ }
 
-  const origSet = localStorage.setItem.bind(localStorage);
-  const origRemove = localStorage.removeItem.bind(localStorage);
-  localStorage.setItem = (key: string, value: string) => {
-    origSet(key, value);
-    queue(key, value);
-  };
-  localStorage.removeItem = (key: string) => {
-    origRemove(key);
-    queue(key, null);
-  };
+  wrapLocalStorageWrites();
   window.addEventListener('pagehide', flushKeepalive);
+}
+
+let wrapped = false;
+/**
+ * Mirror every localStorage write from now on. The PROTOTYPE is wrapped, never
+ * the instance: on WebKit (the Mac app) `localStorage.setItem = fn` does not
+ * replace the method, it stores an item named "setItem" holding the function's
+ * source, so no write was ever mirrored there. sessionStorage shares the
+ * prototype, hence the `this === localStorage` check. A second evaluation of
+ * this module (HMR) REPLACES the wrappers rather than stacking on them: both
+ * call the same captured raw methods.
+ */
+export function wrapLocalStorageWrites(): void {
+  if (wrapped || !storageProto) return;
+  wrapped = true;
+  // Items an older bundle wrote by assigning the methods on WebKit.
+  for (const junk of ['setItem', 'removeItem']) {
+    const v = rawGet.call(localStorage, junk);
+    if (v !== null && /=>|function/.test(v)) rawRemove.call(localStorage, junk);
+  }
+  storageProto.setItem = function setItem(this: Storage, key: string, value: string) {
+    rawSet.call(this, key, value);
+    if (this === localStorage) queue(key, value);
+  };
+  storageProto.removeItem = function removeItem(this: Storage, key: string) {
+    rawRemove.call(this, key);
+    if (this === localStorage) queue(key, null);
+  };
 }

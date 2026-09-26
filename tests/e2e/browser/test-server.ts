@@ -44,6 +44,12 @@ process.env.WALNUT_ENGINE_PROBE_ALL = '1'
 // (tests/web/setup-banner.test.ts) and its routes run in tests/e2e/setup-health.test.ts.
 // A manual fixture run may set WALNUT_LOCAL_CLAUDE_PROBE=1 to see that banner for real.
 process.env.WALNUT_LOCAL_CLAUDE_PROBE ??= '0'
+// Remote-host fixture (src/core/hosts/host-fixture.ts): inert until a spec loads
+// one through POST /api/test/host-fixture (or WALNUT_TEST_HOST_FIXTURE=<name>
+// preloads it). Fixture hosts never create a DaemonConnection or dial ssh; their
+// folders and sessions go through the MockDaemon wired below.
+process.env.WALNUT_TEST_HOST_FIXTURE_MODE ??= '1'
+process.env.WALNUT_TEST_HOST_FIXTURE_DIR ??= path.resolve(path.dirname(new URL(import.meta.url).pathname), 'fixtures')
 // Keep host discovery, Claude history, credentials, and child processes inside
 // the fixture. Inheriting the developer's HOME makes browser tests probe real
 // SSH aliases and can even project unrelated ~/.claude journals.
@@ -3282,6 +3288,14 @@ if (!mockDaemon) {
 }
 if (mockDaemon) {
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${mockDaemon.port}`)
+  if (process.env.WALNUT_TEST_HOST_FIXTURE_MODE === '1') {
+    // A fixture host lists folders through this daemon, from the fixture's tree.
+    const { fixtureFsLs, setFixtureSpawnProbe } = await import('../../../src/core/hosts/host-fixture.js')
+    mockDaemon.setFsLsOverride(fixtureFsLs)
+    // GET /api/test/host-fixture/counters reports the sessions a Start really spawned (C46, C79).
+    setFixtureSpawnProbe(() => mockDaemon.getCommandHistoryFor('start').map((c) => String(c.payload.sid ?? '')))
+    process.env.WALNUT_TEST_HOST_FIXTURE_DAEMON_URL = `ws://127.0.0.1:${mockDaemon.port}`
+  }
   // Codex (ACP) sessions: real acp-worker bundle + the scripted mock ACP agent.
   // MockDaemon embeds the real createAcpDaemon module, so quick-start with
   // engine='codex' exercises the full worker/journal path in Playwright specs.

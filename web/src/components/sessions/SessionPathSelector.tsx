@@ -16,17 +16,22 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, typ
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { retryHostConnect, type WorkingDirEntry } from '@/api/sessions';
+import type { WorkingDirEntry } from '@/api/sessions';
 import type { TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { usedEngineIds, type LaunchEngine, type LaunchMemory } from '@/utils/engines';
 import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, liveListingPrefix, type InputState } from './path-selector/input-model';
 import { rankCandidates, buildSections, type Candidate, type RankedItem } from './path-selector/ranking';
 import { useLiveDirs, type HostLiveState } from './path-selector/useLiveDirs';
+import type { HostDot } from '@open-walnut/host-problem';
 import { useWorkingDirs } from './path-selector/useWorkingDirs';
 import { buildHomeFolderSections, homeSearchHostStates } from './path-selector/home-folders';
-import { HostStatusDot } from './path-selector/HostStatusDot';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
+import { openHostSettings } from '@/utils/host-settings-nav';
+import { ALL_TAB, REMOVED_TAB, buildHostTabs, historyForTab, hostOfTab, tabInfersHost, usePickerHostView } from './path-selector/host-tabs';
+import { HostNote, HostTabBar, RemoteOffNote, RemovedHostsNote } from './path-selector/HostNote';
+import { capHistorySections, isMoreRow } from './path-selector/history-cap';
+import { useHistoryCap } from './path-selector/useHistoryCap';
 import { GhostTextInput } from './path-selector/GhostTextInput';
 import { PathList } from './path-selector/PathList';
 import { MetaFooter, withFooterEdits } from './path-selector/MetaFooter';
@@ -231,7 +236,8 @@ export function SessionPathSelector({
   useEffect(() => {
     if (!open) { seededFiltersRef.current.clear(); return; }
     if (loading || editMode || initialPathRef.current?.cwd) return;
-    if (seededFiltersRef.current.has(hostFilter)) return;
+    // Removed hosts exists only for history, and never lists live: seeding ~/ there hid its rows.
+    if (hostFilter === REMOVED_TAB || seededFiltersRef.current.has(hostFilter)) return;
     const hasHistory = dirs.some(d => {
       if (hostFilter === 'all') return true;
       if (hostFilter === '__local__') return !d.host;
@@ -267,13 +273,27 @@ export function SessionPathSelector({
   const activePath = liveListingPrefix(preState);
   const homeWord = preState.kind === 'browse' ? preState.homeWord : undefined;
 
-  const { byHost, anyLoading, retryHost } = useLiveDirs(activePath, hostFilter, configuredHosts);
+  // Host tabs (path-selector/host-tabs.ts): All, Local, each ENABLED host, then
+  // 'Removed hosts' for the history of hosts no longer in Settings. A tombstone
+  // push drops a tab live (hostView.gone).
+  const configuredLabels = useMemo(
+    () => new Map(configuredHosts.map(h => [h.alias, h.label || h.alias] as [string, string])), [configuredHosts]);
+  const hostView = usePickerHostView(open, configuredLabels);
+  const tabsModel = useMemo(
+    () => buildHostTabs({ configured: configuredHosts, dirs, gone: hostView.gone }),
+    [configuredHosts, dirs, hostView.gone]);
+  const hostTabs = tabsModel.tabs;
+  // Never list live for Removed hosts (they cannot start) or a host that is off (a test server).
+  const liveHosts = useMemo(
+    () => tabsModel.liveHosts.filter(h => !hostView.offHosts.has(h.alias)), [tabsModel.liveHosts, hostView.offHosts]);
+  const noLiveTab = hostFilter === REMOVED_TAB || hostView.offHosts.has(hostFilter);
+  const { byHost, anyLoading, retryHost } = useLiveDirs(noLiveTab ? '' : activePath, hostFilter, liveHosts);
 
-  // Human retry of a failed remote host: clear the server's 60s connect failure
-  // cache first (otherwise the re-list fast-fails against it), then re-list.
-  const handleRetryHost = useCallback((hostKey: string) => {
-    retryHostConnect(hostKey).catch(() => {}).then(() => retryHost(hostKey));
-  }, [retryHost]);
+  // A tab that vanished under the picker (host removed or turned off in Settings).
+  useEffect(() => {
+    if (!open || hostTabs.some(t => t.key === hostFilter)) return;
+    setHostFilter(tabsModel.removedHosts.has(hostFilter) ? REMOVED_TAB : ALL_TAB);
+  }, [open, hostTabs, hostFilter, tabsModel.removedHosts]);
 
   // Space-ambiguity: once live children of the base are known, a literal dir
   // named "b keyword" flips scoped-search back to a path interpretation.
@@ -287,7 +307,7 @@ export function SessionPathSelector({
   // ~ → resolved-path rewrite (single-host modes only; in All mode each host
   // expands ~ differently, so the raw ~ must stay in the input).
   useEffect(() => {
-    if (!editMode || hostFilter === 'all') return;
+    if (!editMode || tabInfersHost(hostFilter)) return;
     if (!editingPath.startsWith('~/') && editingPath !== '~') return;
     const key = hostFilter === '__local__' ? '__local__' : hostFilter;
     const state = byHost.get(key);
@@ -302,34 +322,15 @@ export function SessionPathSelector({
     }
   }, [editMode, hostFilter, editingPath, byHost, fillPath]);
 
-  // Host tabs — union of configured hosts (config.hosts, even with zero history)
-  // and any host seen in history (covers hosts removed from config but still in history).
-  const hostTabs = useMemo(() => {
-    const labels = new Map<string, { label: string; rawName?: boolean }>();
-    labels.set('all', { label: 'All' });
-    labels.set('__local__', { label: 'Local' });
-    for (const h of configuredHosts) {
-      if (!labels.has(h.alias)) labels.set(h.alias, { label: h.label, rawName: h.rawName });
-    }
-    for (const d of dirs) {
-      if (d.host && !labels.has(d.host)) labels.set(d.host, { label: d.hostLabel ?? d.host });
-    }
-    return Array.from(labels.entries()).map(([key, v]) => ({ key, label: v.label, rawName: v.rawName }));
-  }, [dirs, configuredHosts]);
-
-  const currentHost = hostFilter !== 'all' && hostFilter !== '__local__' ? hostFilter : null;
+  const currentHost = hostOfTab(hostFilter);
   const currentHostLabel = hostTabs.find(t => t.key === hostFilter)?.label;
   // Alias → label for the per-host rows ("Big remote host", not "clouddev-2").
   const hostLabels = useMemo(() => new Map<string, string>(hostTabs.map(t => [t.key, t.label])), [hostTabs]);
 
   // ── Candidates: live children (+preloaded deep hits) merged with history ──
   const pathMode = inputState.kind !== 'browse';
-  const sections = useMemo(() => {
-    const hostFiltered = dirs.filter(d => {
-      if (hostFilter === '__local__' && d.host) return false;
-      if (hostFilter !== 'all' && hostFilter !== '__local__' && d.host !== hostFilter) return false;
-      return true;
-    });
+  const rawSections = useMemo(() => {
+    const hostFiltered = historyForTab(dirs, hostFilter, tabsModel.removedHosts);
     const historyByKey = new Map<string, WorkingDirEntry>();
     for (const d of hostFiltered) historyByKey.set(`${d.host ?? '__local__'}::${d.cwd}`, d);
 
@@ -404,7 +405,20 @@ export function SessionPathSelector({
       perHost: hostFilter === 'all',
     });
     return home.length ? [...built, ...home] : built;
-  }, [dirs, hostFilter, inputState, pathMode, byHost, hostTabs, homeWord, hostLabels]);
+  }, [dirs, hostFilter, inputState, pathMode, byHost, hostTabs, homeWord, hostLabels, tabsModel.removedHosts]);
+
+  // History cap (path-selector/history-cap.ts): up to 8 rows (as many as fit above
+  // the HOME FOLDERS header, at least 3) + 'Show N more' when home folders follow.
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  useEffect(() => { setHistoryExpanded(false); }, [active, hostFilter]);
+  const historyCap = useHistoryCap(listRef, open && !historyExpanded, rawSections);
+  const sections = useMemo(() => capHistorySections(rawSections, historyExpanded, historyCap), [rawSections, historyExpanded, historyCap]);
+  const showMoreHistory = useCallback(() => {
+    // The more row sits where the 9th history row was: the highlight stays on that index.
+    const at = sections.flatMap(sec => sec.items).findIndex(isMoreRow);
+    setHistoryExpanded(true);
+    if (at >= 0) { manualNavRef.current = true; setSelectionByHover(false); setSelectedIdx(at); }
+  }, [sections]);
 
   const flatItems = useMemo(() => sections.flatMap(s => s.items), [sections]);
 
@@ -438,7 +452,8 @@ export function SessionPathSelector({
   // "Create & start" — path mode with an unambiguous target host (a specific
   // tab, or All when only one host exists), listing settled, exact path missing.
   const createTarget = useMemo(() => {
-    if (hostFilter !== 'all') return hostFilter === '__local__' ? '__local__' : hostFilter;
+    if (hostFilter === REMOVED_TAB) return null;
+    if (hostFilter !== ALL_TAB) return hostFilter === '__local__' ? '__local__' : hostFilter;
     return byHost.size === 1 ? Array.from(byHost.keys())[0] : null;
   }, [hostFilter, byHost]);
 
@@ -520,8 +535,8 @@ export function SessionPathSelector({
     let launch: LaunchMemory | undefined;
     if (editMode) {
       const trimmed = editingPath.replace(/\/+$/, '') || '/';
-      const match = hostFilter === 'all'
-        ? dirs.find(d => d.cwd === trimmed)
+      const match = tabInfersHost(hostFilter)
+        ? historyForTab(dirs, hostFilter, tabsModel.removedHosts).find(d => d.cwd === trimmed)
         : dirs.find(d => d.cwd === trimmed && (d.host ?? null) === currentHost);
       launch = match?.lastLaunch;
     } else {
@@ -529,7 +544,7 @@ export function SessionPathSelector({
     }
     setMeta(m => (m.model === launch?.model && m.engine === launch?.engine)
       ? m : { ...m, model: launch?.model, engine: launch?.engine });
-  }, [open, editMode, editingPath, dirs, hostFilter, currentHost, flatItems, selectedIdx]);
+  }, [open, editMode, editingPath, dirs, hostFilter, currentHost, flatItems, selectedIdx, tabsModel.removedHosts]);
 
   const handleSelect = useCallback((d: RankedItem) => {
     onSelect({
@@ -546,9 +561,9 @@ export function SessionPathSelector({
   const handleConfirm = useCallback((opts?: { createCwd?: boolean }) => {
     if (!editingPath) return;
     const trimmed = editingPath.replace(/\/+$/, '') || '/';
-    const anyTab = hostFilter === 'all';
+    const anyTab = tabInfersHost(hostFilter);
     const match = anyTab
-      ? dirs.find(d => d.cwd === trimmed)
+      ? historyForTab(dirs, hostFilter, tabsModel.removedHosts).find(d => d.cwd === trimmed)
       : dirs.find(d => d.cwd === trimmed && (d.host ?? null) === currentHost);
     onSelect({
       cwd: trimmed,
@@ -556,7 +571,7 @@ export function SessionPathSelector({
       hostLabel: anyTab ? match?.hostLabel : currentHostLabel,
       ...(opts?.createCwd ? { createCwd: true } : {}),
     }, withLaunchMemory(match?.lastLaunch));
-  }, [editingPath, dirs, onSelect, hostFilter, currentHost, currentHostLabel, withLaunchMemory]);
+  }, [editingPath, dirs, onSelect, hostFilter, currentHost, currentHostLabel, withLaunchMemory, tabsModel.removedHosts]);
 
   // "Create & start" row: confirm the missing path with the createCwd flag.
   // Host comes from createTarget (not hostFilter) so All-tab-with-one-host works.
@@ -588,6 +603,7 @@ export function SessionPathSelector({
 
   // Item interaction: live dir → drill deeper (stay in picker); history → fill path.
   const drillOrFill = useCallback((d: RankedItem) => {
+    if (isMoreRow(d)) { showMoreHistory(); return; }
     if (!editMode) {
       setEditMode(true);
       setSelectedIdx(0);
@@ -598,7 +614,7 @@ export function SessionPathSelector({
     } else {
       fillPath(d.cwd);
     }
-  }, [editMode, hostFilter, fillPath]);
+  }, [editMode, hostFilter, fillPath, showMoreHistory]);
 
   // Dismiss by clicking outside / Esc.
   const handleDismiss = useCallback(() => {
@@ -615,6 +631,19 @@ export function SessionPathSelector({
       onClose();
     }
   }, [confirmOnDismiss, editingPath, validity, handleConfirm, onClose]);
+
+  // 'Open Settings' on a host note: close the picker the outside-click way (a
+  // typed path is kept, the composer draft too), then open that host's row.
+  const openSettingsFor = useCallback((alias: string) => {
+    handleDismiss();
+    openHostSettings(navigate, alias);
+  }, [handleDismiss, navigate]);
+  // All tab: a history row's host tag wears its host's dot, only while that host has a problem.
+  const problemDots = useMemo(() => {
+    const out = new Map<string, HostDot>();
+    for (const h of hostView.problemHosts) { const d = hostView.dots.get(h); if (d) out.set(h, d); }
+    return out;
+  }, [hostView.problemHosts, hostView.dots]);
 
   // Keyboard navigation
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -743,6 +772,24 @@ export function SessionPathSelector({
   const visibleHostStates: Map<string, HostLiveState> = pathMode ? byHost
     : homeWord ? homeSearchHostStates(byHost) : new Map();
 
+  // The folder the live listing asked for ('/srv/data' for '/srv/data/' or '/srv/data/x'):
+  // what 'Could not list {path} on {L}' names.
+  const listedDir = activePath
+    ? ((activePath.endsWith('/') ? activePath : activePath.slice(0, activePath.lastIndexOf('/') + 1)).replace(/\/+$/, '') || '/')
+    : undefined;
+  // The note above the list (spec 4.2): the selected host's one note; 'Removed hosts'
+  // says why its rows cannot start; All says once when remote hosts are off.
+  const topNote = currentHost
+    ? <HostNote key={currentHost} hostKey={currentHost} label={currentHostLabel ?? currentHost} live={byHost.get(currentHost)}
+        path={listedDir} dot={hostView.dots.get(currentHost)} onRelist={retryHost} onOpenSettings={openSettingsFor} />
+    : hostFilter === REMOVED_TAB ? <RemovedHostsNote />
+    : hostFilter === ALL_TAB && hostView.offHosts.size > 0 ? <RemoteOffNote />
+    : null;
+  const renderHostNote = (hostKey: string, state: HostLiveState) => (
+    <HostNote hostKey={hostKey} label={hostLabels.get(hostKey) ?? hostKey} live={state} path={listedDir}
+      dot={hostView.dots.get(hostKey)} onRelist={retryHost} onOpenSettings={openSettingsFor} />
+  );
+
   const emptyHint = homeWord
     ? `No history or home folder matches "${homeWord}". Type a path (e.g. ~/projects) to browse.`
     : editMode
@@ -813,26 +860,7 @@ export function SessionPathSelector({
       </div>
 
       {hostTabs.length > 2 && (
-        <div className="sps-host-filter">
-          {hostTabs.map(tab => (
-            <button
-              key={tab.key}
-              className={`sps-host-tab${hostFilter === tab.key ? ' active' : ''}`}
-              onClick={() => setHostFilter(tab.key)}
-              // Crowded tab row — the "give it a name" nudge lives in the tooltip
-              // and in a one-line banner shown only when this tab is active.
-              title={tab.rawName ? 'Auto-discovered from ~/.ssh/config — give it a friendly name in Settings → Remote Hosts' : undefined}
-            >
-              {/* Remote hosts only: 'all' is not a host and local never connects. */}
-              {tab.key !== 'all' && tab.key !== '__local__' && (
-                <HostStatusDot host={tab.key} label={tab.label} />
-              )}
-              {tab.label}
-              {tab.rawName && <span className="sps-host-tab-raw" aria-hidden>✎</span>}
-            </button>
-          ))}
-          <span className="sps-host-hint">Shift+Tab</span>
-        </div>
+        <HostTabBar tabs={hostTabs} selected={hostFilter} dots={hostView.dots} onSelect={setHostFilter} />
       )}
 
       {/* Nudge shown ONLY while a raw auto-discovered host tab is selected — zero
@@ -845,8 +873,7 @@ export function SessionPathSelector({
             href="/settings#remote-hosts"
             onClick={(e) => {
               e.preventDefault();
-              onClose();
-              navigate('/settings#remote-hosts');
+              openSettingsFor(hostFilter);
             }}
           >
             give it a friendly name in Settings
@@ -870,7 +897,11 @@ export function SessionPathSelector({
         onItemClick={drillOrFill}
         onItemHover={(idx) => { setSelectionByHover(true); setSelectedIdx(idx); }}
         onCreate={handleCreate}
-        onRetryHost={handleRetryHost}
+        topNote={topNote}
+        noteHosts={currentHost ? new Set([currentHost]) : undefined}
+        renderHostNote={renderHostNote}
+        rowDots={hostFilter === ALL_TAB ? problemDots : undefined}
+        onShowMore={showMoreHistory}
       />
 
       {/* Key hints live here (not in the placeholder) so the placeholder can say

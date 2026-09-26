@@ -13,8 +13,9 @@
  */
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { ProjectPickerFlyout } from '@/components/tasks/TaskKebabMenu';
-import { useHostStatus } from '@/hooks/useHostStatus';
-import { hostDotKind, hostStatusText } from '@/utils/host-connect';
+import { serverNow, useHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
+import { hostDotOf } from '@open-walnut/host-problem';
+import { HostStatusDot } from './path-selector/HostStatusDot';
 import { hostDisplayLabel, LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 import type { DraftColumn } from './draft-column';
 import type { DraftDecisionMenu } from './DraftDecisionRow';
@@ -39,8 +40,14 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker }
 }) {
   const isFork = !!draft.forkOf;
   const status = useHostStatus(draft.host);
+  const hydration = useHostStatusHydration();
   const host = hostDisplayLabel(draft.host, status?.label, draft.hostLabel);
-  const dot = draft.host ? hostDotKind(status) : 'unknown';
+  // The picker tab's own verdict and sentence (hostDotOf), so the two never disagree.
+  const hostDot = draft.host
+    ? hostDotOf(status, { hydrating: hydration === 'never' || hydration === 'pending', now: serverNow(), label: host })
+    : null;
+  const dot = hostDot?.kind ?? 'unknown';
+  const saysSomething = !!hostDot && ['warn', 'failed', 'off', 'connecting', 'checking'].includes(dot);
   const cls = `session-action-chip draft-folder-pill${pickerOpen ? ' session-action-chip-active' : ''}${ai ? ' session-action-chip-ai' : ''}`;
   let title: string;
   if (isFork) title = `A fork continues the source session, so it runs in its folder: ${draft.cwd}`;
@@ -48,10 +55,9 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker }
   else {
     const alias = draft.host && host !== draft.host ? ` (alias ${draft.host})` : '';
     const lines = [`Folder: ${draft.cwd}`, `Host: ${draft.host ? host : `${LOCAL_HOST_LABEL} (this machine)`}${alias}`];
-    if (dot === 'connecting') lines.push(`Connecting: ${hostStatusText(status)}`);
-    if (dot === 'failed') lines.push(`Last connect failed: ${status?.error || 'Could not connect'}`);
     if (ai) lines.push('Walnut picked this folder from what you typed.');
-    title = lines.join('\n');
+    // A host with something to say: the same one sentence as its picker tab.
+    title = saysSomething ? hostDot!.title : lines.join('\n');
   }
   return (
     // OPEN-only, never a toggle (matches the chat launcher pill): the picker's
@@ -72,9 +78,7 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker }
           <span className="draft-pill-key">Folder/Host:</span>{' '}
           <span className="draft-pill-name">{basename(draft.cwd)}</span>{' '}
           <span className="draft-pill-host">· {host}</span>
-          {(dot === 'connecting' || dot === 'failed') && (
-            <span className={`draft-pill-dot draft-pill-dot-${dot}`} aria-hidden="true" />
-          )}
+          {saysSomething && <HostStatusDot dot={hostDot!} host={draft.host ?? undefined} className="draft-pill-dot" />}
         </>
       ) : 'Choose folder and host…'}
       <AiBadge on={ai} />

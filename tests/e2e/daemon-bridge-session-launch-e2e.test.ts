@@ -239,6 +239,24 @@ describe('session.launch over the cloud bridge (real source daemon)', () => {
     expect(res.errorKind).toBe('bad_request')
   })
 
+  it('carries a host gate refusal back with its code AND its details (kind, host, headline, hint)', async () => {
+    const details = { kind: 'auth', host: 'devbox', headline: 'Could not sign in to Dev Box', hint: 'Check your SSH key.' }
+    const answered = answerNextLaunchRequest(() => ({ error: 'Could not sign in to Dev Box. Check your SSH key.', errorKind: 'host_unreachable', details }))
+    const res = await bridgeRpc(905, 'session.launch', { action: 'launch', params: { cwd: '/home/user/repo', host: 'devbox' } })
+    await answered
+    expect(res.ok).toBe(false)
+    expect(res.errorKind).toBe('host_unreachable')
+    expect(res.details).toEqual(details)
+  })
+
+  it('the binary twin passes details through the same way (it cannot run under node)', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf-8')
+    const start = src.indexOf('function cmdLaunchResult(')
+    const fn = src.slice(start, src.indexOf('\nfunction ', start + 1))
+    expect(fn).toMatch(/const \{ relayId, result, error, errorKind, details \} = cmd/)
+    expect(fn).toMatch(/\.\.\.\(details && typeof details === 'object' \? \{ details \} : \{\}\)/)
+  })
+
   it('rejects a session.launch with no action', async () => {
     const res = await bridgeRpc(904, 'session.launch', {})
     expect(res.ok).not.toBe(true)

@@ -3,6 +3,10 @@ import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogE
 import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
+import type { HostStatus } from './hosts';
+import { fetchIsCloudReplica } from './config';
+import { getAllHostStatus } from '@/hooks/useHostStatus';
+import { NO_PREWARM_KINDS, isConnectingPhaseWire, type HostGateBody, type HostGateCode } from '@open-walnut/host-problem';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
 import { recordFinishedAgentIds } from '@/cache/finished-agents-store';
 import {
@@ -752,9 +756,16 @@ export interface DirListingPending {
 
 export interface DirListingHostError {
   message: string;
+  /**
+   * A host-connect-hint kind ('auth', 'timeout', ...), or 'listing' (the host is
+   * fine, this folder did not list: EACCES and friends), or 'ephemeral' (a test
+   * server that never dials remote hosts).
+   */
   kind: string;
   /** What to do next. */
   hint: string;
+  /** false = retrying cannot help by itself. Absent on older servers. */
+  retryable?: boolean;
 }
 
 export interface DirListing {
@@ -812,11 +823,6 @@ export async function listDirs(prefix: string, host?: string | null, opts?: List
   return listing;
 }
 
-/** Deliberate human retry of a failed remote host: clears the server's connect failure cache. */
-export async function retryHostConnect(host: string): Promise<void> {
-  await apiPost<{ ok: true }>('/api/sessions/host-retry', { host });
-}
-
 // Client-side listing cache — survives popover close/reopen (module-level, 30s TTL).
 // Keyed by host + the RESOLVED parent dir from the server (~ already expanded).
 const _liveDirCache = new Map<string, { listing: DirListing; ts: number }>();
@@ -862,11 +868,53 @@ export function invalidateLiveDirCache(): void { _liveDirCache.clear(); }
 // (added in Settings after page load) is warmed then, and the others are not
 // warmed again.
 const _prewarmedHosts = new Set<string>();
-export function prewarmWorkingDirs(result: WorkingDirsResult): void {
-  for (const [host, cwd] of hostsToPrewarm(result, _prewarmedHosts)) {
-    _prewarmedHosts.add(host);
-    listDirs(cwd, host).catch(() => {});
+
+/**
+ * Which of the candidate hosts opening the picker may dial (pure, pinned by
+ * tests/web/prewarm-targets.test.ts). Never: a host that is off (test server),
+ * already connected, already connecting or reconnecting (the picker JOINS that
+ * attempt), removed or disabled (not in `configured`), or failed with a kind a
+ * redial cannot fix (hardware key taps, agent prompts: NO_PREWARM_KINDS). A
+ * replica never dials ssh, and a server whose remotes are all off dials nothing.
+ */
+export function prewarmTargets(
+  hosts: ReadonlyArray<readonly [host: string, cwd: string]>,
+  statuses: ReadonlyArray<HostStatus> | ReadonlyMap<string, HostStatus>,
+  replica: boolean,
+  configured?: ReadonlySet<string>,
+): Array<[host: string, cwd: string]> {
+  if (replica) return [];
+  const byHost = statuses instanceof Map
+    ? statuses as ReadonlyMap<string, HostStatus>
+    : new Map((statuses as ReadonlyArray<HostStatus>).map((s) => [s.host, s] as const));
+  const all = Array.from(byHost.values());
+  if (all.length > 0 && all.every((s) => s.phase === 'off')) return [];
+  const out: Array<[string, string]> = [];
+  for (const [host, cwd] of hosts) {
+    if (configured && !configured.has(host)) continue;
+    const s = byHost.get(host);
+    if (s) {
+      if (s.removed || s.phase === 'off' || s.connected) continue;
+      if (isConnectingPhaseWire(s.phase)) continue;
+      if (s.phase === 'failed' && s.kind && NO_PREWARM_KINDS.includes(s.kind)) continue;
+    }
+    out.push([host, cwd]);
   }
+  return out;
+}
+
+export function prewarmWorkingDirs(result: WorkingDirsResult, opts?: { replica?: boolean }): void {
+  const candidates = hostsToPrewarm(result, _prewarmedHosts);
+  if (candidates.length === 0) return;
+  const configured = Array.isArray(result.hosts) ? new Set(result.hosts.map((h) => h.alias)) : undefined;
+  const replicaP = opts?.replica !== undefined ? Promise.resolve(opts.replica) : fetchIsCloudReplica().catch(() => false);
+  void replicaP.then((replica) => {
+    for (const [host, cwd] of prewarmTargets(candidates, getAllHostStatus(), replica, configured)) {
+      if (_prewarmedHosts.has(host)) continue;
+      _prewarmedHosts.add(host);
+      listDirs(cwd, host).catch(() => {});
+    }
+  });
 }
 
 export interface QuickStartTaskMeta {
@@ -914,6 +962,8 @@ export async function quickStartSession(opts: {
   /** Coding-agent engine. undefined = the default engine; any other value is an
    *  explicitly picked engine (all ACP-backed and local-only today). */
   engine?: LaunchEngine;
+  /** "Start anyway": skip the outdated / not-signed-in readiness gate (never the hard kinds). */
+  overrideReadiness?: boolean;
   /** `sessionId` is present when the engine takes a preassigned id; an engine
    *  whose provider issues its own id (every ACP engine) omits it. */
 }): Promise<{ taskId: string; task: unknown; sessionId?: string }> {
@@ -954,8 +1004,44 @@ export async function quickStartSession(opts: {
       const recovered = await reconcileQuickStart(clientSessionId);
       if (recovered) return recovered;
     }
-    throw err;
+    throw asQuickStartGateError(err) ?? err;
   }
+}
+
+const GATE_CODES: readonly HostGateCode[] = ['host_not_ready', 'host_unreachable', 'host_off', 'host_removed'];
+
+/**
+ * Start refused by the host gate (409): nothing was created on the server. The
+ * caller restores the draft and shows `body` (headline + hint) instead of a
+ * 'Quick Start Failed' notification.
+ */
+export class QuickStartGateError extends Error {
+  readonly status = 409;
+  readonly code: HostGateCode;
+  readonly body: HostGateBody;
+  constructor(body: HostGateBody) {
+    super(body.error);
+    this.name = 'QuickStartGateError';
+    this.code = body.code;
+    this.body = body;
+  }
+}
+
+/** The gate error for a 409 with a host gate code, else null (every other error is unchanged). */
+export function asQuickStartGateError(err: unknown): QuickStartGateError | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const b = err.body as Partial<HostGateBody> | null | undefined;
+  if (!b || typeof b !== 'object' || !GATE_CODES.includes(b.code as HostGateCode)) return null;
+  const headline = typeof b.headline === 'string' && b.headline ? b.headline : (typeof b.error === 'string' ? b.error : err.message);
+  return new QuickStartGateError({
+    error: typeof b.error === 'string' && b.error ? b.error : headline,
+    code: b.code as HostGateCode,
+    ...(typeof b.kind === 'string' ? { kind: b.kind } : {}),
+    host: typeof b.host === 'string' ? b.host : '',
+    headline,
+    hint: typeof b.hint === 'string' ? b.hint : '',
+    ...(b.allowOverride === true ? { allowOverride: true as const } : {}),
+  });
 }
 
 /** After a quick-start response was lost (client timeout), check whether the

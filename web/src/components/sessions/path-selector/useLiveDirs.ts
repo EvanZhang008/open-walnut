@@ -34,9 +34,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { listDirsCached, type ConfiguredHost, type DirListingHostError, type DirListingIncomplete, type DirListingPending } from '@/api/sessions';
 import { wsClient } from '@/api/ws';
-import { getHostStatus, hasSeenHostStatusPush, subscribeHostStatus, useAllHostStatus } from '@/hooks/useHostStatus';
+import { getHostStatus, hasSeenHostStatusPush, serverNow, subscribeHostStatus, useAllHostStatus } from '@/hooks/useHostStatus';
 import { isHostFailed } from '@/utils/host-connect';
-import { decidePollDelay, isRetriedFailure, mergeHostStateWithStatus, mergeHostStatesWithStore } from './host-status-merge';
+import {
+  connectGaveUp, decidePollDelay, GIVE_UP_HINT, isRetriedFailure, mergeHostStateWithStatus, mergeHostStatesWithStore,
+} from './host-status-merge';
 
 export interface HostLiveState {
   status: 'loading' | 'done' | 'error';
@@ -51,6 +53,8 @@ export interface HostLiveState {
   hostError?: DirListingHostError;
   /** Listed ('done'), but some entries did not answer: `dirs` may be missing some. */
   incomplete?: DirListingIncomplete;
+  /** status 'error': the connect ran past the give-up line (not a failure the server reported). */
+  giveUp?: boolean;
 }
 
 export interface LiveDirsResult {
@@ -82,6 +86,32 @@ interface ConnectTrack {
 
 const LOADING: HostLiveState = { status: 'loading', parent: '', exists: true, dirs: [] };
 
+/** Per errored host: has a frame said "not connected" since the failure? */
+export interface ErrorWatch { sawDown: boolean }
+
+/** A listing state that says the host could not be REACHED (not: this folder did not list). */
+export function isConnectFailureState(state: HostLiveState): boolean {
+  if (state.status !== 'error') return false;
+  if (state.giveUp) return true;
+  const kind = state.hostError?.kind;
+  return !!kind && kind !== 'listing' && kind !== 'ephemeral';
+}
+
+/** The watch starts from the frame at failure time: a host the store already calls down counts as seen down. */
+export function watchFrom(status: { connected?: boolean } | undefined): ErrorWatch {
+  return { sawDown: !status?.connected };
+}
+
+/**
+ * Re-list an errored host on this frame? Only on the way from not connected to
+ * connected. A frame that says down arms the watch (mutated in place); a
+ * connected frame re-lists only once armed.
+ */
+export function shouldRelistAfterError(watch: ErrorWatch, status: { connected?: boolean } | undefined): boolean {
+  if (!status?.connected) { watch.sawDown = true; return false; }
+  return watch.sawDown;
+}
+
 export function useLiveDirs(
   activePath: string,
   hostFilter: string,
@@ -106,10 +136,20 @@ export function useLiveDirs(
   const actedPhaseRef = useRef<Map<string, string>>(new Map());
   // Per host: the `at` of the failure the user already answered with Retry.
   const retrySuppressRef = useRef<Map<string, number>>(new Map());
+  // Hosts whose CONNECT failed or gave up, each with whether a not-connected
+  // frame has been seen since: a later `connected` frame re-lists them (no
+  // give-up card left under a green dot), once, on the transition. A folder that
+  // did not list (EACCES) or a request that failed is not here: its host is up,
+  // and re-listing on every frame of a connected host flickered the note and
+  // sent one list-dirs per frame.
+  const erroredRef = useRef<Map<string, ErrorWatch>>(new Map());
 
   // Stable key for configuredHosts (avoid refiring on referentially-new but equal arrays)
   const hostsKey = configuredHosts.map(h => h.alias).join(',');
-  const requestKey = JSON.stringify([activePath, hostFilter, hostsKey]);
+  // A test server's remote hosts are off by design: never listed (nothing to dial).
+  const allStatuses = useAllHostStatus();
+  const offKey = allStatuses.filter(s => s.phase === 'off').map(s => s.host).sort().join(',');
+  const requestKey = JSON.stringify([activePath, hostFilter, hostsKey, offKey]);
   const byHost = snapshot.key === requestKey ? snapshot.byHost : EMPTY_HOSTS;
 
   const clearPollTimers = () => {
@@ -137,9 +177,16 @@ export function useLiveDirs(
       return;
     }
 
-    const targets: (string | null)[] = hostFilter === 'all'
+    const off = new Set(offKey ? offKey.split(',') : []);
+    const targets: (string | null)[] = (hostFilter === 'all'
       ? [null, ...configuredHosts.map(h => h.alias)]
-      : [hostFilter === '__local__' ? null : hostFilter];
+      : [hostFilter === '__local__' ? null : hostFilter]).filter(t => t === null || !off.has(t));
+    erroredRef.current.clear();
+    if (targets.length === 0) {
+      connectingRef.current.clear();
+      setSnapshot({ key: requestKey, byHost: EMPTY_HOSTS });
+      return;
+    }
     const targetKeys = new Set(targets.map(t => t ?? '__local__'));
     // A host that left the target set is no longer being watched.
     for (const key of connectingRef.current.keys()) {
@@ -163,6 +210,9 @@ export function useLiveDirs(
       if (epoch !== epochRef.current) return;
 
       const update = (key: string, state: HostLiveState) => {
+        if (isConnectFailureState(state)) {
+          if (!erroredRef.current.has(key)) erroredRef.current.set(key, watchFrom(getHostStatus(key)));
+        } else erroredRef.current.delete(key);
         setSnapshot(prev => {
           const next = new Map(prev.key === requestKey ? prev.byHost : EMPTY_HOSTS);
           next.set(key, state);
@@ -185,15 +235,18 @@ export function useLiveDirs(
             }
             if (listing.pending) {
               const startedAt = connectingRef.current.get(key)?.startedAt ?? Date.now();
-              if (Date.now() - startedAt > PENDING_POLL_MAX_MS) {
+              // Give up by the SERVER's attempt clock when the host reports one (a laptop
+              // that slept, or a skewed clock, must not give up at once); the browser's
+              // own clock only for a server that sends no status.
+              const status = target ? getHostStatus(target) : undefined;
+              const gaveUp = status?.attemptStartedAt !== undefined || status?.reconnectSince !== undefined
+                ? connectGaveUp(status, serverNow())
+                : Date.now() - startedAt > PENDING_POLL_MAX_MS;
+              if (gaveUp) {
                 connectingRef.current.delete(key);
                 update(key, {
-                  status: 'error', parent: '', exists: true, dirs: [],
-                  hostError: {
-                    message: 'Still connecting after several minutes',
-                    kind: 'timeout',
-                    hint: 'The host has not finished connecting. Check the server log for this host, then retry.',
-                  },
+                  status: 'error', parent: '', exists: true, dirs: [], giveUp: true,
+                  hostError: { message: 'Still connecting after several minutes', kind: 'timeout', hint: GIVE_UP_HINT },
                 });
                 return;
               }
@@ -235,7 +288,7 @@ export function useLiveDirs(
       clearPollTimers();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePath, hostFilter, hostsKey]);
+  }, [activePath, hostFilter, hostsKey, offKey]);
 
   // React to the pushed host status. Two transitions matter, and both are things
   // the poll could only discover a gap later:
@@ -244,6 +297,21 @@ export function useLiveDirs(
   //     be 5s);
   //   failed → show the failure card immediately and stop polling a dead host.
   useEffect(() => subscribeHostStatus(() => {
+    // A host shown as failed or given up that has since come back (not connected,
+    // then connected): list it again, so the card goes away and the folders
+    // appear without a click. Once per transition, never per frame.
+    for (const [key, watch] of Array.from(erroredRef.current)) {
+      const status = statusFor(key);
+      const batch = batchRef.current;
+      const target = key === '__local__' ? null : key;
+      if (!batch || batch.epoch !== epochRef.current || !batch.targets.includes(target)) continue;
+      // (Asked first: a missing frame is a down frame, and arms the watch.)
+      if (!shouldRelistAfterError(watch, status) || !status) continue;
+      erroredRef.current.delete(key);
+      actedPhaseRef.current.set(key, status.phase);
+      batch.markLoading(key);
+      batch.fetchHost(target);
+    }
     for (const key of Array.from(connectingRef.current.keys())) {
       const status = statusFor(key);
       if (!status) continue;
@@ -282,10 +350,10 @@ export function useLiveDirs(
     batch.fetchHost(target);
   }, []);
 
-  // Re-render on any status push, then fold the store over the listing snapshot:
-  // the phase sentence of a waiting host comes from the push, and a host the store
-  // knows has failed shows its card even before its own request answers.
-  const allStatuses = useAllHostStatus();
+  // Re-render on any status push (allStatuses above), then fold the store over
+  // the listing snapshot: the phase sentence of a waiting host comes from the
+  // push, and a host the store knows has failed shows its card even before its
+  // own request answers.
   const mergedByHost = useMemo(
     () => mergeHostStatesWithStore(byHost, statusFor),
     // allStatuses is the store's change token — the getter it feeds is imperative.

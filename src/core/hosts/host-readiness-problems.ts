@@ -74,6 +74,7 @@ export function parsePreflight(raw: unknown): HostPreflightResult | null {
   if (str(c.minVersion) && VERSION.test(str(c.minVersion)!)) claude.minVersion = str(c.minVersion)
   const installMethod = oneOf(c.installMethod, INSTALL_METHODS)
   if (installMethod) claude.installMethod = installMethod
+  if (!claude.found && str(c.unknown)) claude.unknown = str(c.unknown)!.slice(0, 160)
   const cc = obj(r.compiler)
   const dt = obj(r.dtach)
   return {
@@ -95,8 +96,28 @@ export function applyClaudeFloor(p: HostPreflightResult, floor: ClaudeCliFloor |
   return ok === null ? p : { ...p, claude: { ...p.claude, versionOk: ok, minVersion: floor.minVersion } }
 }
 
+/**
+ * What a sentence calls the machine: 'this computer' locally, else the host's
+ * label (every remote sentence names its host, so no surface ever prefixes it).
+ */
+export function hostWhere(ctx: ProblemContext): string {
+  if (ctx.local) return 'this computer'
+  const bare = ctx.sshTarget?.trim().split(/\s+/).pop()?.replace(/^[^@]*@/, '')
+  return ctx.hostLabel?.trim() || bare || 'the remote host'
+}
+
+/** The claude_missing sentence. The daemon's spawn gate words its refusal with this exact builder. */
+export function claudeMissingMessage(ctx: ProblemContext = {}): string {
+  return `Claude Code is not installed on ${hostWhere(ctx)}.`
+}
+
+/** The claude_needs_node sentence (also the spawn gate's). */
+export function claudeNeedsNodeMessage(ctx: ProblemContext = {}): string {
+  return `Claude Code on ${hostWhere(ctx)} is the npm build and no working Node.js was found. Install the native build, which needs no Node.`
+}
+
 function outdatedProblem(c: HostPreflightResult['claude'], ctx: ProblemContext): ReadinessProblem {
-  const where = ctx.local ? 'this computer' : ctx.hostLabel || 'this host'
+  const where = hostWhere(ctx)
   const who = ctx.floorModel ?? 'Walnut'
   const base = `Claude Code on ${where} is ${c.version ?? 'too old'}, but ${who} needs ${c.minVersion ?? 'a newer one'} or newer.`
   const method = c.installMethod ?? (c.kind === 'npm' ? 'npm' : c.kind === 'native' ? 'native' : 'other')
@@ -118,13 +139,14 @@ function signInProblem(ctx: ProblemContext): ReadinessProblem {
     const command = `ssh -t ${ctx.sshTarget} claude`
     return {
       kind: 'claude_not_logged_in',
-      message: `Claude Code on ${ctx.hostLabel || ctx.sshTarget} is not signed in. Run \`${command}\` once and sign in, then Check again.`,
+      message: `Claude Code on ${hostWhere(ctx)} is not signed in. Run \`${command}\` once and sign in, then Check again.`,
       commands: [command],
     }
   }
+  const where = hostWhere(ctx)
   return {
     kind: 'claude_not_logged_in',
-    message: 'Claude Code on this host is not signed in. Run `claude` there once and sign in, then Check again.',
+    message: `Claude Code on ${where} is not signed in. Run \`claude\` on ${where} once and sign in, then Check again.`,
     commands: ['claude'],
   }
 }
@@ -133,17 +155,17 @@ function signInProblem(ctx: ProblemContext): ReadinessProblem {
 export function readinessProblems(p: HostPreflightResult, ctx: ProblemContext = {}): ReadinessProblem[] {
   const install = HOST_RUNTIME_MESSAGES.install
   const out: ReadinessProblem[] = []
-  if (!p.claude.found) {
-    const where = ctx.local ? 'this computer' : 'this host'
-    out.push({ kind: 'claude_missing', message: `Claude Code is not installed on ${where}.`, commands: [install] })
+  // The probe could not tell (the login shell or shell_setup ran out of time):
+  // saying "not installed" would hard-block a host whose sessions start fine.
+  if (p.claude.unknown) {
+    // no claude line
+  } else if (!p.claude.found) {
+    out.push({ kind: 'claude_missing', message: claudeMissingMessage(ctx), commands: [install] })
   } else if (p.claude.needsNode && p.claude.nodeFound === false) {
-    out.push({
-      kind: 'claude_needs_node',
-      message: 'Claude Code here is the npm build and no working Node.js was found. Install the native build, which needs no Node.',
-      commands: [install],
-    })
+    out.push({ kind: 'claude_needs_node', message: claudeNeedsNodeMessage(ctx), commands: [install] })
   } else if (p.claude.error) {
-    out.push({ kind: 'claude_error', message: `Claude Code did not start: ${p.claude.error}`, commands: [install] })
+    const on = ctx.local ? '' : ` on ${hostWhere(ctx)}`
+    out.push({ kind: 'claude_error', message: `Claude Code did not start${on}: ${p.claude.error}`, commands: [install] })
   } else {
     // Both can hold at once: an old CLI signs in just fine, so neither hides the other.
     if (p.claude.versionOk === false) out.push(outdatedProblem(p.claude, ctx))
@@ -159,13 +181,13 @@ export function readinessProblems(p: HostPreflightResult, ctx: ProblemContext = 
     // installs the prebuilt (or learns it fails and asks for gcc instead).
     out.push({
       kind: 'dtach_missing',
-      message: 'dtach is not installed yet, so terminals on this host will not survive a disconnect until Walnut installs it.',
+      message: `dtach is not installed on ${hostWhere(ctx)} yet, so its terminals will not survive a disconnect until Walnut installs it.`,
       commands: [],
     })
   } else if (!p.compiler.found && !p.dtach.found) {
     out.push({
       kind: 'compiler_missing',
-      message: 'No C compiler, so terminals on this host will not survive a disconnect.',
+      message: `No C compiler on ${hostWhere(ctx)}, so its terminals will not survive a disconnect.`,
       // A Mac's compiler comes with the Command Line Tools, never from yum/apt.
       commands: p.platform === 'darwin' ? ['xcode-select --install'] : ['sudo yum install -y gcc', 'sudo apt-get install -y gcc'],
     })

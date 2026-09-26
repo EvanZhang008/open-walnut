@@ -576,6 +576,8 @@ export interface ListDirsHostError {
   hint: string;
   /** ms until an automatic retry is allowed (the connect failure cache). */
   retryInMs?: number;
+  /** A plain retry can work with nothing changed (host-connect-hint RETRYABLE). */
+  retryable?: boolean;
 }
 
 export interface ListDirsResult {
@@ -642,9 +644,16 @@ export async function listSessionDirs(
   // Remote: resolve host from config and use DaemonConnection.
   const { getConfig } = await import('../config-manager.js');
   const config = await getConfig();
-  const hostDef = config.hosts?.[host];
-  if (!hostDef) throw new SessionControlError(`Unknown host: ${host}`, 400);
+  const hosts = config.hosts ?? {};
+  const hostDef = Object.hasOwn(hosts, host) ? hosts[host] : undefined;
+  // Unknown or disabled: answered without dialling (the picker never offers it).
+  if (!hostDef || hostDef.enabled === false) throw new SessionControlError('unknown host', 404);
   if (!hostDef.hostname) throw new SessionControlError(`Host "${host}" has no hostname`, 400);
+  // Hosts this server must never dial from here: off on a test server, a
+  // replica (relays to the primary), a fixture host (host-fixture.ts).
+  const { listDirsRoute } = await import('../hosts/host-connect-action.js');
+  const route = await listDirsRoute(host, { prefix, depth, pending: opts.pending, waitMs: opts.waitMs });
+  if (route.kind === 'answer') return route.result;
 
   const cacheKey = `${host}::${dir}::${depth}`;
   const cached = dirCache.get(cacheKey);
@@ -652,7 +661,8 @@ export async function listSessionDirs(
     return { dirs: cached.dirs, parent: cached.parent, exists: cached.exists, cached: true };
   }
 
-  const { getDaemonConnection, getDaemonConnectState } = await import('../../providers/daemon-connection.js');
+  const dc = await import('../../providers/daemon-connection.js');
+  const getDaemonConnectState = route.kind === 'fixture' ? route.state : dc.getDaemonConnectState;
   const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port };
   const hostLabel = hostDef.label ?? host;
   const sshTargetText = hostDef.user ? `${hostDef.user}@${hostDef.hostname}` : hostDef.hostname;
@@ -675,7 +685,8 @@ export async function listSessionDirs(
   });
   let conn;
   try {
-    const raced = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
+    const connecting = route.kind === 'fixture' ? route.connect() : dc.getDaemonConnection(host, sshTarget);
+    const raced = await Promise.race([connecting, timeoutPromise])
       .finally(() => clearTimeout(timeoutId!));
     if (raced === STILL_CONNECTING) {
       if (!opts.pending) throw new SessionControlError(`Remote connection to ${host} timed out`, 400);
@@ -691,8 +702,10 @@ export async function listSessionDirs(
     const message = err instanceof Error ? err.message : String(err);
     if (opts.pending) {
       const state = getDaemonConnectState(host);
-      const { kind, hint } = classifyHostConnectError(message, sshTargetText, hostNames);
-      return hostErrorResult({ message: state.error ?? message, kind, hint, retryInMs: state.retryInMs });
+      // Same target facts as the connect path: label, hostname and the port (host_key, C37).
+      const { kind, hint, retryable } = classifyHostConnectError(message, sshTargetText, hostNames,
+        { label: hostLabel, hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port });
+      return hostErrorResult({ message: state.error ?? message, kind, hint, retryable, retryInMs: state.retryInMs });
     }
     // SSH failures are client-visible 400s (matches the web route's contract).
     throw new SessionControlError(message, 400);
@@ -707,8 +720,8 @@ export async function listSessionDirs(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (opts.pending) {
-      const { kind, hint } = describeListingError(hostLabel);
-      return hostErrorResult({ message, kind, hint });
+      const { kind, hint, retryable } = describeListingError(hostLabel);
+      return hostErrorResult({ message, kind, hint, retryable });
     }
     throw new SessionControlError(message, 400);
   }

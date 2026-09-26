@@ -46,6 +46,7 @@ import { quickParseTask, updateTask, fetchTask } from '@/api/tasks';
 import { useQuickParseEnabled, setQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
+import { HostGateErrorBar, useRestoreImages, type DraftGateError } from './HostGateErrorBar';
 import { useModelOptions } from './path-selector/MetaFooter';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import {
@@ -233,7 +234,7 @@ interface Props {
    *  when the text has to be kept: ChatInput's `dispatchSend` restores the draft
    *  only on a PROMISE resolving false — a sync falsy return takes the `else`
    *  branch and CLEARS the persisted draft, losing the user's text. */
-  onStart: (draftId: string, text: string, images?: ImageAttachment[]) => Promise<boolean>;
+  onStart: (draftId: string, text: string, images?: ImageAttachment[], opts?: { overrideReadiness?: boolean }) => Promise<boolean>;
   /** Turn the composed text into a task instead (first line = title). May be
    *  async; the owner handles its own success/failure UI. */
   onSaveAsTask: (draftId: string, text: string) => void | Promise<void>;
@@ -273,14 +274,23 @@ interface Props {
   /** Rendered at the top of the empty body in place of Walnut's starter suggestions: an ask drawer's
    *  quote of the object being asked about (AskObjectDrawer), where "Plan my day" means nothing. */
   intro?: ReactNode;
+  /** The host refused the last Start (409): the draft came back and this says why. */
+  gateError?: DraftGateError;
+  onGateErrorClear?: (draftId: string) => void;
+  /** Images of a refused Start, put back into the composer once on mount. */
+  restoreImages?: ImageAttachment[];
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse, onWalnutToggle,
-  onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro,
+  onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
+  // "Start anyway" rides the ordinary send (so images and the settle rules apply) with one flag.
+  const overrideNextRef = useRef(false);
+  const clearGate = useCallback(() => onGateErrorClear?.(draft.id), [onGateErrorClear, draft.id]);
+  useRestoreImages(rootRef, restoreImages);
   const [pickerOpen, setPickerOpen] = useState(false);
   // One-tap composer seeds for the Ask Walnut tab — ChatInput's prefill contract
   // (replace + focus + caret-to-end, re-appliable via the nonce; never sends).
@@ -510,7 +520,9 @@ export function DraftSessionPanel({
       setPickerOpen(true);
       return false;
     }
-    return onStart(draft.id, body, images);
+    const override = overrideNextRef.current;
+    overrideNextRef.current = false;
+    return onStart(draft.id, body, images, override ? { overrideReadiness: true } : undefined);
   }, [draft.cwd, draft.walnut, draft.id, onStart]);
 
   // "Start" is Enter by another name: click ChatInput's own send button (in THIS
@@ -655,6 +667,15 @@ export function DraftSessionPanel({
         {/* Why the last Start didn't start. Above the launch bar so it sits
             directly over the folder pill that resolves it. */}
         {hostNotice}
+        {gateError && (
+          <HostGateErrorBar
+            gate={gateError}
+            draftHost={draft.host}
+            label={draft.hostLabel || gateError.body.host}
+            onClear={clearGate}
+            onStartAnyway={() => { overrideNextRef.current = true; handleStartClick(); }}
+          />
+        )}
         {needsFolder && !draft.cwd && (
           <div className="draft-needs-folder" role="status" data-testid="draft-needs-folder">
             Pick a folder first — the session runs in it.

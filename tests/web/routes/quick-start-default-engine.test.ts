@@ -28,6 +28,12 @@ import fs from 'node:fs/promises';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-default-engine'));
+// The host Start gate has its own tests (tests/core/sessions/host-start-gate.test.ts);
+// these launches are the ones past it.
+vi.mock('../../../src/core/sessions/host-start-gate.js', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  hostStartGate: async () => null,
+}));
 
 vi.mock('../../../src/utils/session-liveness.js', () => ({
   isSessionProcessAlive: async () => false,

@@ -20,6 +20,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { HOST_RUNTIME_MESSAGES } from '../../src/providers/host-runtime-core.js'
+import { claudeNeedsNodeMessage } from '../../src/core/hosts/host-readiness-problems.js'
 
 let scriptPath = ''
 let root = ''
@@ -145,7 +146,8 @@ describe.each(TWINS)('daemon spawn gate: $name', (t) => {
     const res = await rpc({ id: 1, cmd: 'start', sid: 'gate-npm-1', args: ['claude', '-p'], cwd, message: '' })
     expect(res).toMatchObject({ ok: false, errorKind: 'claude_needs_node', error: HOST_RUNTIME_MESSAGES.claudeNeedsNode })
     expect(String(res.error)).toMatch(/Node\.js/)
-    expect(String(res.error)).toMatch(/claude\.ai\/install\.sh/)
+    // C5: the same words as the readiness line (the install command rides `commands`).
+    expect(res.error).toBe(claudeNeedsNodeMessage({ hostLabel: 'this host' }))
 
     const pre = await rpc({ id: 2, cmd: 'host.preflight' })
     expect(pre.claude).toMatchObject({

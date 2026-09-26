@@ -1,5 +1,5 @@
 /**
- * Pure presentation rules for a host's connect status — no React, no network.
+ * Pure presentation rules for a host's connect status: no React, no network.
  *
  * Shared by the folder picker (tab dot + step row), Settings › Remote hosts and
  * the notification System pane, so all three say the same thing about the same
@@ -7,6 +7,10 @@
  * node test, and the surfaces that need them are in three different trees.
  */
 import type { DaemonConnectPhase, HostConnectStep, HostStatus } from '@/api/hosts';
+import { OFF_PHASE_LABEL } from '@open-walnut/host-problem';
+
+// Host dots and problems come from the shared model (@open-walnut/host-problem);
+// the helpers below are the phase/step sentences a few surfaces still read.
 
 /**
  * The 7 user-visible links in the first-connect chain, in order.
@@ -39,11 +43,17 @@ export function isHostConnecting(status: HostStatus | undefined): boolean {
 
 /** True when the last attempt ended in a failure the user should see. */
 export function isHostFailed(status: HostStatus | undefined): boolean {
-  return !!status && !status.connected && (status.phase === 'failed' || (!!status.error && !isConnectingPhase(status.phase)));
+  if (!status || status.connected || status.phase === 'off') return false;
+  return status.phase === 'failed' || (!!status.error && !isConnectingPhase(status.phase));
+}
+
+/** A test server that never dials remote hosts (by design): nothing to fix, nothing to retry. */
+export function isHostOff(status: HostStatus | undefined): boolean {
+  return status?.phase === 'off';
 }
 
 /**
- * Derive the step list from a bare phase — the fallback when only the list-dirs
+ * Derive the step list from a bare phase: the fallback when only the list-dirs
  * `pending.phase` is known. An unrecognised phase lands on the first step rather
  * than an all-todo list: something IS happening, and a list with no active row
  * reads as "stuck before it started".
@@ -110,7 +120,7 @@ export function hostIndicatorStatus(
  * One line of text for a host, in every surface's voice: the phase sentence while
  * connecting, the cause when it failed, plain words otherwise.
  *
- * Never returns an empty string — a blank status line reads as a rendering bug
+ * Never returns an empty string: a blank status line reads as a rendering bug
  * (the "not responding at 0.55 opacity" report is the same class of miss). And
  * "unknown" is reserved for a server that answered without this host: while the
  * first read is still in flight the honest word is "checking", not "unknown".
@@ -121,6 +131,7 @@ export function hostStatusText(status: HostStatus | undefined, hydration?: HostS
     if (hydration === 'unsupported') return 'Status not available from this server';
     return 'Status unknown';
   }
+  if (isHostOff(status)) return OFF_PHASE_LABEL;
   if (isHostFailed(status)) return status.error || 'Could not connect';
   if (isHostConnecting(status)) return status.phaseLabel || `${activeStepLabel(status)}…`;
   if (status.connected) return 'Connected';
@@ -149,39 +160,11 @@ export function activeStepLabel(status: HostStatus | undefined): string {
 }
 
 /**
- * Tooltip for the tab dot: the cause when failed, the phase sentence otherwise.
- *
- * Deliberately the bare sentence, not "<host>: <sentence>" — the server's phase
- * labels already name the host ("Opening an SSH connection to Big dev box"), so
- * prefixing would say it twice. The accessible name below is where the label
- * earns its place, because a screen reader has no tab text next to the dot.
- */
-export function hostDotTitle(label: string, status: HostStatus | undefined, hydration?: HostStatusHydrationHint): string {
-  if (status) return hostStatusText(status);
-  return isCheckingHostStatus(status, hydration) ? `${label}: checking status…` : `${label}: status unknown`;
-}
-
-/**
- * Accessible name for the tab dot. Deliberately SHORT: the dot sits inside the host
- * tab button, so its name is concatenated into that button's accessible name. The
- * full sentence there would read the host twice ("Big dev box: Connected Big dev
- * box"); "connected Big dev box" is what a person would say.
- */
-export function hostDotAriaLabel(status: HostStatus | undefined, hydration?: HostStatusHydrationHint): string {
-  if (isCheckingHostStatus(status, hydration)) return 'checking status';
-  const kind = hostDotKind(status);
-  return kind === 'connected' ? 'connected'
-    : kind === 'connecting' ? 'connecting'
-    : kind === 'failed' ? 'connect failed'
-    : 'status unknown';
-}
-
-/**
  * Elapsed time to display now, from a server-stamped baseline.
  *
  * The server sends `phaseElapsedMs` measured at `at` (its own clock); the client
  * keeps counting from there so a 40-second install visibly ticks without a poll.
- * Both deltas are clamped at 0 — a client clock behind the server's would
+ * Both deltas are clamped at 0: a client clock behind the server's would
  * otherwise render a countdown.
  */
 export function elapsedNow(baseMs: number, at: number, now: number): number {

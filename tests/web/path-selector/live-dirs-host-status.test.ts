@@ -14,13 +14,14 @@
 import { describe, it, expect } from 'vitest';
 import type { HostStatus } from '@/api/hosts';
 import {
-  decidePollDelay, isRetriedFailure, mergeHostStateWithStatus, mergeHostStatesWithStore,
-  PENDING_POLL_NO_WS_MS, PENDING_POLL_WS_MS,
+  connectGaveUp, decidePollDelay, isRetriedFailure, mergeHostStateWithStatus, mergeHostStatesWithStore,
+  pickerNoteOf, PENDING_POLL_NO_WS_MS, PENDING_POLL_WS_MS, PICKER_GIVE_UP_MS,
 } from '@/components/sessions/path-selector/host-status-merge';
+import { connectElapsed } from '@/components/sessions/path-selector/HostConnectSteps';
 import type { HostLiveState } from '@/components/sessions/path-selector/useLiveDirs';
 import {
   CONNECT_STEPS, FIRST_CONNECT_NOTE, connectNote, connectSteps, elapsedNow, formatElapsed,
-  hostDotAriaLabel, hostDotKind, hostDotTitle, hostIndicatorStatus, hostStatusText,
+  hostDotKind, hostIndicatorStatus, hostStatusText,
   isConnectingPhase, stepsFromPhase,
 } from '@/utils/host-connect';
 
@@ -315,30 +316,15 @@ describe('host verdicts and text', () => {
     expect(hostIndicatorStatus(undefined)).toBe('unknown');
   });
 
-  it('titles the tab dot with the bare phase sentence and names it briefly', () => {
-    const connecting = hostStatus({ host: 'devbox', label: 'Big dev box', phase: 'ssh' });
-    // The server's sentence already names the host, so the tooltip must not prefix it.
-    expect(hostDotTitle('Big dev box', connecting)).toBe('Opening an SSH connection to devbox…');
-    expect(hostDotTitle('Big dev box', undefined)).toContain('Big dev box');
-    // Short name: the dot lives INSIDE the tab button, whose name already has the host.
-    expect(hostDotAriaLabel(connecting)).toBe('connecting');
-    expect(hostDotAriaLabel(hostStatus({ host: 'devbox', connected: true, phase: 'connected' }))).toBe('connected');
-    expect(hostDotAriaLabel(hostStatus({ host: 'devbox', phase: 'failed', error: 'x' }))).toBe('connect failed');
-    expect(hostDotAriaLabel(undefined)).toBe('status unknown');
-  });
-
   it('says "checking" while the first read is in flight, "unknown" only once the server has answered', () => {
     // Settings mounts behind dozens of queued requests; for those seconds a
     // missing status is a pending answer, not a verdict.
     expect(hostStatusText(undefined, 'never')).toBe('Checking status…');
     expect(hostStatusText(undefined, 'pending')).toBe('Checking status…');
     expect(hostIndicatorStatus(undefined, 'pending')).toBe('testing');
-    expect(hostDotTitle('Big dev box', undefined, 'pending')).toBe('Big dev box: checking status…');
-    expect(hostDotAriaLabel(undefined, 'pending')).toBe('checking status');
     // The server answered and this host was not in it.
     expect(hostStatusText(undefined, 'done')).toBe('Status unknown');
     expect(hostIndicatorStatus(undefined, 'done')).toBe('unknown');
-    expect(hostDotAriaLabel(undefined, 'done')).toBe('status unknown');
     // A read that failed outright is unknown too (no false "checking" forever).
     expect(hostStatusText(undefined, 'failed')).toBe('Status unknown');
     // An older server without the route: say so, rather than "unknown".
@@ -380,5 +366,79 @@ describe('elapsed clock', () => {
     expect(formatElapsed(3_600_000)).toBe('1h 00m');
     expect(formatElapsed(3_720_000)).toBe('1h 02m');
     expect(formatElapsed(Number.NaN)).toBe('0s');
+  });
+});
+
+// ── The note above the list (spec 4.2; C2, C22, C26, C33, C89) ──────────────
+
+const failed = (o: Partial<HostStatus> = {}) => hostStatus({
+  host: 'keybox', label: 'Key box', phase: 'failed', error: 'Permission denied (publickey).', kind: 'auth',
+  hint: 'Make sure `ssh alice@key.example.com` works, then Retry.', retryable: false, ...o,
+});
+const outdated = () => hostStatus({
+  host: 'buildbox', label: 'Build box', connected: true, phase: 'connected', connectedAt: AT - 60_000,
+  readiness: {
+    checkedAt: AT - 30_000, claude: { version: '2.1.220', minVersion: '2.1.280', installMethod: 'other' },
+    problems: [{ kind: 'claude_outdated', message: 'Claude Code on Build box is 2.1.220; this model needs 2.1.280 or newer.', commands: [] }],
+  },
+});
+
+describe('pickerNoteOf', () => {
+  const note = (status: HostStatus | undefined, live?: HostLiveState, path?: string) =>
+    pickerNoteOf({ host: status?.host ?? 'devbox', label: status?.label ?? 'Dev box', status, live, path, now: AT });
+
+  it('a connected host with a blocking readiness problem: the problem message, verbatim', () => {
+    const n = note(outdated());
+    expect(n).toMatchObject({ type: 'readiness', problem: { kind: 'claude_outdated' } });
+    if (n?.type === 'readiness') expect(n.problem.message).toBe(outdated().readiness!.problems![0].message);
+  });
+
+  it('a failed host: the shared connect problem (headline by kind, server hint verbatim, retryable)', () => {
+    const n = note(failed());
+    expect(n?.type).toBe('connect');
+    if (n?.type === 'connect') {
+      expect(n.problem.headline).toBe('Could not connect to Key box');
+      expect(n.problem.hint).toBe(failed().hint);
+      expect(n.problem.retryable).toBe(false);
+    }
+  });
+
+  it('a test server: off, from the status phase or from a list-dirs ephemeral answer (no connect card)', () => {
+    expect(note(hostStatus({ host: 'devbox', phase: 'off' }))).toEqual({ type: 'off' });
+    const eph: HostLiveState = { status: 'error', parent: '', exists: true, dirs: [], hostError: { kind: 'ephemeral', message: 'off', hint: '' } };
+    expect(note(undefined, eph)).toEqual({ type: 'off' });
+  });
+
+  it('EACCES on a connected host: "Could not list {path} on {L}", never "Could not connect"', () => {
+    const live: HostLiveState = { status: 'error', parent: '', exists: true, dirs: [], hostError: { kind: 'listing', message: 'EACCES: permission denied', hint: 'Check the folder exists and is readable, then Retry.' } };
+    const n = note(hostStatus({ host: 'devbox', label: 'Dev box', connected: true, phase: 'connected' }), live, '/srv/data/');
+    expect(n?.type).toBe('listing');
+    if (n?.type === 'listing') expect(n.problem.headline).toMatch(/^Could not list \/srv\/data\/? on Dev box$/);
+  });
+
+  it('a reconnect that failed once carries its cause: "Last attempt" headline', () => {
+    const n = note(hostStatus({ host: 'devbox', label: 'Dev box', phase: 'reconnecting', lastKind: 'timeout', lastHint: 'Check the VPN.', reconnectSince: AT - 10_000 }));
+    expect(n).toMatchObject({ type: 'connecting', lastHeadline: 'Connecting to Dev box timed out' });
+  });
+
+  it('a healthy connected host has no note', () => {
+    expect(note(hostStatus({ host: 'devbox', connected: true, phase: 'connected' }))).toBeNull();
+  });
+});
+
+describe('give-up and elapsed on the SERVER clock (C33, C89)', () => {
+  it('gives up only when the server attempt is older than 5 minutes', () => {
+    const s = hostStatus({ host: 'devbox', phase: 'ssh', attemptStartedAt: AT - 4_000 });
+    expect(connectGaveUp(s, AT)).toBe(false);
+    expect(connectGaveUp(s, AT - 4_000 + PICKER_GIVE_UP_MS)).toBe(true);
+    // A new attempt (new attemptStartedAt) restarts the clock.
+    expect(connectGaveUp({ ...s, attemptStartedAt: AT + PICKER_GIVE_UP_MS }, AT + PICKER_GIVE_UP_MS + 1000)).toBe(false);
+  });
+
+  it('SSH elapsed reads from attemptStartedAt, never hours when the browser clock is 8h off', () => {
+    const s = hostStatus({ host: 'devbox', phase: 'ssh', attemptStartedAt: AT - 4_000, phaseElapsedMs: 4_000, at: AT });
+    const e = connectElapsed(s, AT);
+    expect(e.total).toBe(4_000);
+    expect(formatElapsed(e.phase)).toBe('4s');
   });
 });

@@ -1,0 +1,163 @@
+/* The home attention banner (AttentionBanner + HostProblemRows). The card is
+   the setup banner's (.setup-banner in globals.css); existing variables only. */
+
+.attention-banner {
+  position: relative;
+  container-type: inline-size;
+  container-name: attention;
+}
+
+/* Dismiss all is LAST in the DOM (and the Tab order) but sits top-right. */
+.ab-dismiss-all {
+  position: absolute;
+  top: 10px;
+  right: 8px;
+}
+.attention-banner:has(.ab-dismiss-all) .hpb-header,
+.attention-banner:has(.ab-dismiss-all) .hpb-subhead {
+  padding-right: 24px;
+}
+.ab-local-alt { margin-top: 10px; }
+.ab-local + .hpb { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+/* The local x is LAST in its section (Tab order: actions, then the x) but sits
+   at the header's right end. */
+.ab-local { position: relative; }
+.ab-local .setup-banner-header { padding-right: 24px; }
+.ab-local-x { position: absolute; top: 0; right: 0; }
+/* With a Dismiss all in the corner, the local x moves off the corner too. */
+.attention-banner:has(.ab-dismiss-all) .ab-local .setup-banner-header { padding-right: 46px; }
+.attention-banner:has(.ab-dismiss-all) .ab-local .ab-local-x { right: 22px; }
+
+/* ── Host section: at most 40% of the slot, scrolling inside ── */
+.hpb {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(var(--ab-slot-h, 100vh) * 0.4);
+}
+.hpb-header { flex: none; margin-bottom: 6px; }
+.hpb-subhead {
+  flex: none;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.hpb-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.hpb-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* A row: [dot] body [actions] [x]. DOM order is actions, body, x (Tab order). */
+.hpb-row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  grid-template-areas: 'dot body actions x';
+  align-items: start;
+  column-gap: 8px;
+  row-gap: 6px;
+  font-size: 12px;
+  color: var(--fg);
+  max-height: 600px;
+  transition: max-height 150ms ease, opacity 150ms ease;
+}
+.hpb-row.hpb-leaving { max-height: 0; opacity: 0; overflow: hidden; }
+@media (prefers-reduced-motion: reduce) {
+  .hpb-row { transition: none; }
+}
+.hpb-dot { grid-area: dot; display: flex; align-items: center; height: 18px; }
+.hpb-body { grid-area: body; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.hpb-actions { grid-area: actions; display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; }
+.hpb-x { grid-area: x; }
+.hpb-x.setup-banner-dismiss { font-size: 16px; padding: 0 2px; }
+
+@container attention (max-width: 420px) {
+  .hpb-row {
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+    grid-template-areas: 'dot body x' '. actions .';
+  }
+  .hpb-actions { flex-wrap: wrap; }
+}
+
+/* ── Buttons: width never changes with the label (Retry / Retrying...) ── */
+.hpb-btn { flex: none; white-space: nowrap; }
+.hpb-btn:disabled { opacity: 0.6; cursor: default; }
+.hpb-btn:disabled:hover { background: none; color: var(--accent); }
+.hpb-btn-secondary { color: var(--fg-muted); border-color: var(--border); }
+.hpb-btn-secondary:hover { background: var(--bg-tertiary, var(--border)); color: var(--fg); }
+/* .hpb-btn-stack (a label that never changes the button's width) lives in host-status.css. */
+
+/* ── Row bodies ── */
+.hpb-message { line-height: 1.45; overflow-wrap: anywhere; }
+.hpb-message code { font-family: var(--font-mono); font-size: 11px; }
+.hpb-last { color: var(--fg-muted); font-size: 12px; overflow-wrap: anywhere; }
+.hpb-trying, .hpb-fixing {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 18px;
+}
+.hpb-step, .hpb-elapsed { color: var(--fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.hpb-spinner {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: hpb-spin 0.9s linear infinite;
+}
+@keyframes hpb-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .hpb-spinner { animation: none; } }
+.hpb-receipt, .host-connect-retry-msg { color: var(--fg-muted); font-size: 11px; }
+.hpb-ready-text { color: var(--success); font-weight: 500; }
+.hpb-ready .hpb-body { justify-content: center; min-height: 18px; }
+
+.hpb-more {
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.hpb-more:hover { color: var(--fg); }
+
+/* ── compact: the draft column mount ── */
+.attention-banner-compact {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+}
+.attention-banner-compact .hpb-row { font-size: 11px; }
+.attention-banner-compact .ab-dismiss-all { top: 6px; right: 6px; }
+.attention-banner-compact .hpb-rows { padding-right: 18px; }
+
+/* ── The draft's Start refusal (HostGateErrorBar) and the session host bar ── */
+.host-gate-bar { flex-direction: column; align-items: stretch; gap: 8px; margin: 0 0 8px; }
+/* The bar carries the shared host sentence, not a stack trace: the panel is ~600px wide, so the
+   actions sit under the text and the text keeps the session-error font without the 120px scroll clip. */
+.host-gate-bar .session-error-banner-text { font-family: inherit; max-height: none; overflow: visible; }
+.host-gate-body { flex: 0 0 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.host-gate-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.session-host-error { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.session-host-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
+/* NotificationSystemPane DaemonRow: the host's dot before its name. */
+.notification-daemon-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+/* The rail's Settings entry when no banner is on screen (Sidebar). */
+.sidebar-host-dot { margin-left: auto; }
+.sidebar.collapsed .sidebar-host-dot { position: absolute; top: 6px; right: 6px; margin: 0; }

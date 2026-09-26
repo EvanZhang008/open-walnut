@@ -407,9 +407,13 @@ const LOG_FILE = path.join(DAEMON_DIR, `daemon-${DAEMON_INSTANCE_ID}.log`)
 // Node discovery is NOT done here: buildSpawnPreamble() handles it at spawn
 // time, and hostRuntime.ensureClaude() gates the spawn.
 // claudeCheck: host.preflight's sign-in and version-floor answer (claude-check-core.ts).
+// spawnPreamble: this twin spawns through `$SHELL -c "<preamble>; exec claude"`, so
+// preflight asks that shell before calling claude missing, as gateClaudeLaunch does.
+// daemon-source.ts passes none: it spawns claude directly on the daemon PATH.
 const hostRuntime = createHostRuntime({
   fs, execFile, execFileSync, env: process.env, platform: process.platform, arch: process.arch,
   claudeCheck: createClaudeCheck({ fs, execFile, env: process.env }),
+  spawnPreamble: () => buildSpawnPreamble(),
 })
 const bootPath = hostRuntime.computeDaemonPath()
 process.env.PATH = bootPath.path
@@ -1961,8 +1965,8 @@ function cmdLaunchRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 }
 
 function cmdLaunchResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const { relayId, result, error, errorKind } = cmd as {
-    relayId?: number; result?: Record<string, unknown>; error?: string; errorKind?: string
+  const { relayId, result, error, errorKind, details } = cmd as {
+    relayId?: number; result?: Record<string, unknown>; error?: string; errorKind?: string; details?: unknown
   }
   const pending = typeof relayId === 'number' ? launchRelayPending.get(relayId) : undefined
   if (!pending) {
@@ -1975,11 +1979,13 @@ function cmdLaunchResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     logMsg('info', 'session.launch: relay complete', { relayId })
     sendOk(pending.ws, pending.id, { result })
   } else {
-    // Carry errorKind through so the cloud route maps the precise 4xx.
+    // Carry errorKind (and a host gate's details: host, headline, hint,
+    // allowOverride) through so the cloud route maps the precise 4xx. Keep in sync with daemon-source.ts.
     safeSend(pending.ws, JSON.stringify({
       id: pending.id, ok: false,
       error: error ?? 'launch failed',
       errorKind: errorKind ?? 'internal',
+      ...(details && typeof details === 'object' ? { details } : {}),
     }))
   }
   sendOk(ws, id, {})

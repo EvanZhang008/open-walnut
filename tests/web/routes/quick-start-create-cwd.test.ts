@@ -12,6 +12,9 @@ import path from 'node:path';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
+// The host Start gate has its own tests (tests/core/sessions/host-start-gate.test.ts);
+// these launches are the ones past it.
+vi.mock('../../../src/core/sessions/host-start-gate.js', () => ({ hostStartGate: async () => null }));
 
 vi.mock('../../../src/utils/session-liveness.js', () => ({
   isSessionProcessAlive: async () => false,

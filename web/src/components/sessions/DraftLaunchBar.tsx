@@ -57,7 +57,9 @@
 
 import { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import type { WorkingDirEntry } from '@/api/sessions';
-import { useAllHostStatus } from '@/hooks/useHostStatus';
+import { serverNow, useAllHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
+import { hostDotOf, type HostDot } from '@open-walnut/host-problem';
+import { HostStatusDot } from './path-selector/HostStatusDot';
 import { hostDisplayLabel, LOCAL_HOST_LABEL } from '@/utils/host-display-label';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useShowPriorityState } from '@/hooks/useShowPriority';
@@ -208,7 +210,9 @@ export function DraftLaunchBar({
   // No quick chips on a fork draft: the folder is immutable, so a row of other
   // folders would be five inert buttons (or worse, five ways to break the fork).
   // Same for Ask Walnut.
-  const chips = isFork || isWalnut ? [] : quickDirsFor();
+  const chipDot = useQuickChipHostDots();
+  // A host that is off (a test server) never runs a session: its chips would only be refused.
+  const chips = (isFork || isWalnut ? [] : quickDirsFor()).filter((d) => !d.host || chipDot(d.host)?.kind !== 'off');
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
   const chipHostLabel = useQuickChipHostLabels(chips);
   const isAi = (field: DraftAiField) => !!draft.aiFields?.has(field);
@@ -237,6 +241,8 @@ export function DraftLaunchBar({
           <div className="draft-quick-chips" role="group" aria-label="Quick folders">
             {chips.map(d => {
               const active = chipKey({ cwd: d.cwd, host: d.host ?? null }) === currentKey;
+              const dot = d.host ? chipDot(d.host, d.hostLabel) : null;
+              const saysSomething = !!dot && CHIP_DOT_KINDS.includes(dot.kind);
               return (
                 <button
                   key={`${d.host ?? '__local__'}::${d.cwd}`}
@@ -247,10 +253,12 @@ export function DraftLaunchBar({
                   // sets its own colors, so no default disabled dimming shows.
                   disabled={active}
                   onClick={() => pickDir(d)}
-                  title={d.host ? `${d.cwd} (on ${d.hostLabel ?? d.host})` : d.cwd}
+                  // The same one sentence as the host's picker tab when the host has something to say.
+                  title={saysSomething ? dot!.title : d.host ? `${d.cwd} (on ${d.hostLabel ?? d.host})` : d.cwd}
                 >
                   {basename(d.cwd)}
                   {chipHostLabel(d) && <>{' '}<span className="draft-quick-chip-host">· {chipHostLabel(d)}</span></>}
+                  {saysSomething && <HostStatusDot dot={dot!} host={d.host ?? undefined} className="draft-pill-dot" />}
                 </button>
               );
             })}
@@ -381,4 +389,22 @@ function useQuickChipHostLabels(chips: readonly WorkingDirEntry[]): (d: WorkingD
       return d.host ? hostDisplayLabel(d.host, live.get(d.host), d.hostLabel) : LOCAL_HOST_LABEL;
     };
   }, [statuses, chips]);
+}
+
+/** Dots worth drawing on a chip: a healthy host stays quiet (no row of green dots). */
+const CHIP_DOT_KINDS: readonly string[] = ['warn', 'failed', 'off', 'connecting', 'checking'];
+
+/** The picker tab's verdict for a chip's host (hostDotOf), or null for an unknown host. */
+function useQuickChipHostDots(): (host: string, label?: string) => HostDot | null {
+  const statuses = useAllHostStatus();
+  const hydration = useHostStatusHydration();
+  return useMemo(() => {
+    const byHost = new Map(statuses.map((s) => [s.host, s]));
+    const hydrating = hydration === 'never' || hydration === 'pending';
+    return (host: string, label?: string) => {
+      const s = byHost.get(host);
+      if (!s) return null;
+      return hostDotOf(s, { hydrating, now: serverNow(), label: hostDisplayLabel(host, s.label, label) });
+    };
+  }, [statuses, hydration]);
 }

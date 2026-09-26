@@ -5,18 +5,19 @@
  * Regression target (2026-07-19 incident): server-side major-GC pauses froze
  * the event loop, /api/sessions/working-dirs blew the browser's 15s deadline,
  * and PathList rendered the stale TimeoutError next to a live loading state.
- * This spec pins the healthy path end-to-end on a real server + real UI click,
+ * This spec pins the healthy path end-to-end on a real server + real UI clicks,
  * plus the UI-level fix (error suppressed while a load is in flight).
  */
 import { test, expect } from '@playwright/test'
+import { draftCwdPill, openDraft } from './draft-helpers'
 
-test('Quick session button opens the path selector and paths load', async ({ page }) => {
+test('the draft column opens the path selector and paths load', async ({ page }) => {
   await page.goto('/')
 
-  // Real UI click — the home QuickAccessBar pill (never page.goto SPA routes).
-  const pill = page.getByRole('button', { name: /Quick session|\+ Session/i })
-  await expect(pill).toBeVisible({ timeout: 15_000 })
-  await pill.click()
+  // Real UI clicks: the draft column (the one session launcher on Home), then its
+  // folder pill (never page.goto SPA routes).
+  const panel = await openDraft(page)
+  await draftCwdPill(panel).click()
 
   // Selector opens.
   const list = page.locator('.sps-path-list')
@@ -39,7 +40,7 @@ test('Quick session button opens the path selector and paths load', async ({ pag
 
   // Something useful rendered: path items, a live-state note, create row, or empty hint.
   const items = await list.locator('.sps-path-item').count()
-  const notes = await list.locator('.sps-live-note, .sps-host-down, .sps-create-row, .sps-empty').count()
+  const notes = await list.locator('.sps-live-note, .sps-host-note, .sps-create-row, .sps-empty').count()
   expect(items + notes).toBeGreaterThan(0)
 
   await page.screenshot({ path: '/tmp/quick-session-verify/selector-loaded.png' })

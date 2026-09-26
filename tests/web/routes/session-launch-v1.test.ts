@@ -27,7 +27,16 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
   getDaemonDisconnectedSince: () => null,
   clearDaemonFailureCache: () => {},
   getDaemonConnection: async () => ({ send: async () => ({ ok: true }) }),
+  // The Start gate reads the host's frame: an idle host (never dialed) goes ahead.
+  getDaemonConnectState: (host: string) => ({ host, connected: false, phase: 'idle', phaseElapsedMs: 0, connectElapsedMs: 0 }),
+  cancelReconnectBackoff: () => false,
 }));
+// The real gate, with its inputs recorded: a phone launch must carry its own budget.
+const gateInputs = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock('../../../src/core/sessions/host-start-gate.js', async (orig) => {
+  const real = await orig<typeof import('../../../src/core/sessions/host-start-gate.js')>();
+  return { ...real, hostStartGate: (input: Parameters<typeof real.hostStartGate>[0], deps?: Parameters<typeof real.hostStartGate>[1]) => { gateInputs.push(input as never); return real.hostStartGate(input, deps); } };
+});
 vi.mock('../../../src/providers/claude-code-session.js', () => ({
   sessionRunner: null,
 }));
@@ -200,6 +209,8 @@ describe('POST /api/v1/sessions', () => {
       .send({ cwd: '/workplace/x', host: 'devbox', message: '' });
     expect(res.status).toBe(201);
     expect((starts[0].data as Record<string, unknown>).host).toBe('devbox');
+    // A phone request sits behind a relay and a mobile network: the gate gets ~10s, not the web's 25s.
+    expect(gateInputs.at(-1)).toMatchObject({ host: 'devbox', source: 'human', deadlineMs: 10_000 });
   });
 
   it("host '' is the primary box (same as absent)", async () => {
@@ -210,15 +221,28 @@ describe('POST /api/v1/sessions', () => {
     expect((starts[0].data as Record<string, unknown>).host).toBeUndefined();
   });
 
-  it('400 bad_request for an unknown or disabled host', async () => {
+  // Was 400 bad_request before 2026-09: now the gate's own code, same as the web launcher.
+  it('409 host_removed for an unknown or disabled host, with the gate body', async () => {
     await writeHostsConfig();
     for (const host of ['nosuch', 'retired']) {
       const res = await request(createApp())
         .post('/api/v1/sessions')
         .send({ cwd: '/tmp/x', host, message: '' });
-      expect(res.status).toBe(400);
-      expect(res.body.error.code).toBe('bad_request');
+      expect(res.status).toBe(409);
+      expect(res.body.error).toEqual({ code: 'host_removed', message: 'This host is no longer in Settings.' });
+      expect(res.body).toMatchObject({ host, headline: 'This host is no longer in Settings.', hint: '' });
     }
+    expect(starts.length).toBe(0);
+  });
+
+  it('the bridge relay answer for a refused host carries the gate code and its fields (no bare 400 kind)', async () => {
+    await writeHostsConfig();
+    const { handleLaunchRelayRequest } = await import('../../../src/core/sessions/mobile-launch.js');
+    const out = await handleLaunchRelayRequest('launch', { cwd: '/tmp/x', host: 'retired', message: '' });
+    expect(out).toEqual({
+      ok: false, error: 'This host is no longer in Settings.', errorKind: 'host_removed',
+      details: { host: 'retired', headline: 'This host is no longer in Settings.', hint: '' },
+    });
     expect(starts.length).toBe(0);
   });
 

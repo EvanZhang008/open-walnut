@@ -52,6 +52,15 @@ export interface QuickStartParams {
   mode?: string;
   /** Retry mode: reuse this task instead of creating a new one. */
   existingTaskId?: string;
+  /** "Start anyway": skip the host gate's claude_outdated / claude_not_logged_in refusal (host-start-gate.ts). */
+  overrideReadiness?: boolean;
+  /**
+   * The host gate as this caller needs it. `checked`: the caller already ran it
+   * (the web route runs it before images and the cwd mkdir). `deadlineMs`: the
+   * gate's own wait budget. Who started the launch comes from `source`
+   * (hostGateSourceFor): only a person's Start may redial a failed host.
+   */
+  hostGate?: { checked?: boolean; deadlineMs?: number };
   taskMeta?: QuickStartTaskMeta;
   /** Task title; defaults to "Session: <basename(cwd)>". */
   taskTitle?: string;
@@ -115,7 +124,8 @@ export interface QuickStartParams {
 }
 
 export class QuickStartError extends Error {
-  constructor(message: string, public statusCode: number = 400) {
+  /** `body`: the full JSON answer when there is more than a sentence (the host gate's 409). */
+  constructor(message: string, public statusCode: number = 400, public body?: Record<string, unknown>) {
     super(message);
     this.name = 'QuickStartError';
   }
@@ -178,6 +188,17 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     message, messagePrefix, cwd, host, model, mode, existingTaskId, taskMeta,
     source, requestTs = Date.now(), preassignedSessionId, walnutAgent,
   } = params;
+
+  // Host gate FIRST, before any write (existing task, project metadata, addTask,
+  // TASK_CREATED): a refused Start leaves nothing on the board to roll back.
+  if (!params.hostGate?.checked) {
+    const { hostStartGate, hostGateSourceFor } = await import('./host-start-gate.js');
+    const refused = await hostStartGate({
+      host, model, overrideReadiness: params.overrideReadiness, source: hostGateSourceFor(source),
+      ...(params.hostGate?.deadlineMs ? { deadlineMs: params.hostGate.deadlineMs } : {}),
+    });
+    if (refused) throw new QuickStartError(refused.error, 409, { ...refused });
+  }
 
   // Engine, resolved BEFORE anything else reads it: every gate below
   // (`isAcpEngine`) and the SESSION_START payload must see the engine this

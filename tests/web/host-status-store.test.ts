@@ -15,6 +15,7 @@ import type { HostStatus } from '@/api/hosts';
 const hostsApi = vi.hoisted(() => ({
   fetchHostStatus: vi.fn<() => Promise<HostStatus[]>>(),
   connectHost: vi.fn<(host: string) => Promise<HostStatus>>(),
+  checkHostReadiness: vi.fn<(host: string) => Promise<HostStatus>>(),
 }));
 
 // A stand-in for the WS singleton that lets the test BE the server: every
@@ -51,7 +52,9 @@ import {
   hasSeenHostStatusPush,
   hydrateHostStatus,
   seedHostStatus,
+  serverNow,
   subscribeHostStatus,
+  TOMBSTONE_MEMORY_MS,
 } from '@/hooks/useHostStatus';
 
 let clock = 1_800_000_000_000;
@@ -380,5 +383,80 @@ describe('host-status store — snapshot identity', () => {
     ws.emit('host:status', status({ host: 'devbox', phase: 'ssh', at: clock + 10 }));
     expect(getHostStatus('devbox')).toBe(fresh);
     expect(r.notified).toBe(notified + 1);
+  });
+});
+
+describe('host-status store: the map follows the config', () => {
+  it('a hydrate REPLACES the map: a host the server no longer reports is gone', async () => {
+    hostsApi.fetchHostStatus.mockResolvedValue([status({ host: 'devbox' }), status({ host: 'oldbox' })]);
+    await hydrateHostStatus();
+    expect(getAllHostStatus().map((h) => h.host)).toEqual(['devbox', 'oldbox']);
+    hostsApi.fetchHostStatus.mockResolvedValue([status({ host: 'devbox', at: clock + 1 })]);
+    await hydrateHostStatus({ force: true });
+    expect(getAllHostStatus().map((h) => h.host)).toEqual(['devbox']);
+    expect(getHostStatus('oldbox')).toBeUndefined();
+  });
+
+  it('a push that lands while the hydrate is in flight survives it when newer', async () => {
+    const d = deferred<HostStatus[]>();
+    hostsApi.fetchHostStatus.mockReturnValue(d.promise);
+    const p = hydrateHostStatus();
+    ws.emit('host:status', status({ host: 'devbox', phase: 'connected', connected: true, at: clock + 50 }));
+    ws.emit('host:status', status({ host: 'newbox', phase: 'ssh', at: clock + 60 }));
+    d.resolve([status({ host: 'devbox', phase: 'ssh', at: clock })]);
+    await p;
+    expect(getHostStatus('devbox')?.phase).toBe('connected');
+    expect(getHostStatus('newbox')?.phase).toBe('ssh');
+  });
+
+  it('a removed:true tombstone deletes the host everywhere, and an older answer cannot revive it', async () => {
+    hostsApi.fetchHostStatus.mockResolvedValue([status({ host: 'devbox' }), status({ host: 'oldbox' })]);
+    await hydrateHostStatus();
+    const r = reader();
+    const before = r.notified;
+    ws.emit('host:status', { host: 'oldbox', removed: true, at: clock + 5 });
+    expect(getHostStatus('oldbox')).toBeUndefined();
+    expect(r.notified).toBeGreaterThan(before);
+    ws.emit('host:status', { host: 'ghost', removed: true, at: clock + 5 });
+    expect(getAllHostStatus().map((h) => h.host)).toEqual(['devbox']);
+    const d = deferred<HostStatus[]>();
+    hostsApi.fetchHostStatus.mockReturnValue(d.promise);
+    const p = hydrateHostStatus({ force: true });
+    ws.emit('host:status', { host: 'devbox', removed: true, at: clock + 9 });
+    d.resolve([status({ host: 'devbox', at: clock + 1 })]);
+    await p;
+    expect(getHostStatus('devbox')).toBeUndefined();
+  });
+
+  it('a late Retry / Check again answer after the removal does not resurrect the host; a newer frame (re-added) does, and the memory ends after 30s', async () => {
+    hostsApi.fetchHostStatus.mockResolvedValue([status({ host: 'netbox', phase: 'failed', at: clock })]);
+    await hydrateHostStatus();
+    ws.emit('host:status', { host: 'netbox', removed: true, at: clock + 10 });
+    expect(getHostStatus('netbox')).toBeUndefined();
+    // The connect route answered with a frame built before the removal.
+    seedHostStatus(status({ host: 'netbox', phase: 'ssh', at: clock + 5 }));
+    expect(getHostStatus('netbox')).toBeUndefined();
+    // A hydrate that raced the removal cannot bring it back either.
+    hostsApi.fetchHostStatus.mockResolvedValue([status({ host: 'netbox', phase: 'failed', at: clock + 8 })]);
+    await hydrateHostStatus({ force: true });
+    expect(getHostStatus('netbox')).toBeUndefined();
+    // The user adds it again: the server's next frame is newer than the tombstone.
+    seedHostStatus(status({ host: 'netbox', phase: 'ssh', at: clock + 20 }));
+    expect(getHostStatus('netbox')?.phase).toBe('ssh');
+    // After the memory window, an old frame is judged normally again.
+    ws.emit('host:status', { host: 'keybox', removed: true, at: clock + 30 });
+    vi.setSystemTime(clock + TOMBSTONE_MEMORY_MS + 1);
+    seedHostStatus(status({ host: 'keybox', phase: 'failed', at: clock + 1 }));
+    expect(getHostStatus('keybox')?.phase).toBe('failed');
+  });
+
+  it('serverNow follows the frame clock (serverNow, else at)', async () => {
+    ws.emit('host:status', status({ host: 'devbox', at: clock + 1, serverNow: clock + 30_000 }));
+    expect(serverNow()).toBe(clock + 30_000);
+    ws.emit('host:status', status({ host: 'devbox', at: clock - 10_000 + 5 }));
+    // Older frame for the same host is dropped, so the clock is not moved by it.
+    expect(serverNow()).toBe(clock + 30_000);
+    ws.emit('host:status', status({ host: 'marina', at: clock - 10_000 }));
+    expect(serverNow()).toBe(clock - 10_000);
   });
 });

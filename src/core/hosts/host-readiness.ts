@@ -16,40 +16,30 @@
  */
 
 import { log } from '../../logging/index.js'
-import type { HostPreflightResult } from '../../providers/host-runtime-core.js'
 import {
-  autofixDisabledReason, nextFixAction, runHostAutofix, withFixState,
+  autofixDisabledReason, nextFixAction, runHostAutofix,
   type DtachProvisionOutcome, type HostFixAction, type HostFixing, type HostFixRecord,
 } from './host-autofix.js'
-import { applyClaudeFloor, parsePreflight, readinessProblems, type ReadinessProblem } from './host-readiness-problems.js'
+import {
+  applyClaudeFloor, claudeMissingMessage, claudeNeedsNodeMessage, parsePreflight, readinessProblems,
+} from './host-readiness-problems.js'
 import { configuredClaudeCliFloor, type ClaudeCliFloor } from './claude-version-floor.js'
+import {
+  attempted, fixState, getHostReadiness, inFlight, markCheckFailed, notifyReadiness as notify, onHostReadinessChange,
+  prebuiltFor, prebuiltUnusable, problemCtx, readinessProbeSkipped, rounds, setFixState, store, type HostReadiness,
+} from './host-readiness-store.js'
 
 export type { HostFixAction, HostFixing, HostFixRecord }
 export { parsePreflight, readinessProblems }
 export type { ReadinessProblem, ReadinessProblemKind } from './host-readiness-problems.js'
-
-export interface HostReadiness extends HostPreflightResult {
-  /** When the host was last ASKED (success or failure): the UI's "is this answer new" key. */
-  checkedAt: number
-  /** Empty when nothing needs doing: the UI then shows nothing at all. */
-  problems: ReadinessProblem[]
-  /**
-   * The last re-check failed (RPC error or timeout). The other fields are the
-   * previous good answer, kept so the problem lines do not vanish on a blip.
-   */
-  checkError?: string
-  /** The automatic fix running on the host right now (host-autofix.ts). */
-  fixing?: HostFixing
-  /**
-   * Every automatic fix this server ran on the host, oldest first. `ageMs` is
-   * how long ago each finished when this snapshot was taken, so a client times
-   * a fix line against its own clock (server and browser clocks may differ).
-   */
-  fixes: Array<HostFixRecord & { ageMs: number }>
-}
-
-/** What the store keeps: the preflight answer; fix state is merged on read. */
-type StoredReadiness = Omit<HostReadiness, 'fixing' | 'fixes'>
+// The store and the floor judgements live in their own modules; this stays their import path.
+export {
+  clearHostReadiness, getHostReadiness, onHostReadinessChange, resetHostAutofixAttempts, setReadinessProbeSkip,
+  type HostReadiness,
+} from './host-readiness-store.js'
+export {
+  hostReadinessForLaunch, hostReadinessForModel, recomputeHostReadinessFloors, setClaudeFloorOverride, setHostReadinessForTest,
+} from './host-readiness-floor.js'
 
 /** The subset of a daemon connection this module talks to. */
 export interface PreflightConnection {
@@ -74,6 +64,8 @@ export interface HostContext {
   label?: string
   sshTarget?: string
   floor: ClaudeCliFloor | null
+  /** config.hosts[].shell_setup: the preflight runs it first, as a session spawn does. */
+  shellSetup?: string
 }
 
 /** `ssh` arguments as the user would type them: `[-p port] [user@]hostname`. */
@@ -89,92 +81,13 @@ async function defaultHostContext(host: string): Promise<HostContext> {
   try {
     const { getConfig } = await import('../config-manager.js')
     const hosts = (await getConfig()).hosts ?? {}
-    const def = Object.hasOwn(hosts, host) ? hosts[host] as { hostname?: unknown; user?: unknown; port?: unknown; label?: unknown } : undefined
+    const def = Object.hasOwn(hosts, host) ? hosts[host] as { hostname?: unknown; user?: unknown; port?: unknown; label?: unknown; shell_setup?: unknown } : undefined
     const label = typeof def?.label === 'string' && def.label ? def.label : host
-    return { label, sshTarget: sshTargetText(def, host), floor }
+    const shellSetup = typeof def?.shell_setup === 'string' && def.shell_setup.trim() ? def.shell_setup : undefined
+    return { label, sshTarget: sshTargetText(def, host), floor, ...(shellSetup ? { shellSetup } : {}) }
   } catch {
     return { label: host, sshTarget: host, floor }
   }
-}
-
-// ── Per-host store ──
-
-const store = new Map<string, StoredReadiness>()
-const inFlight = new Map<string, Promise<HostReadiness | null>>()
-const listeners = new Set<(host: string) => void>()
-/** Per host: the fix running now and the finished ones (kept across reconnects). */
-const fixState = new Map<string, { fixing?: HostFixing; fixes: HostFixRecord[] }>()
-/** Per host: fixes already tried this server lifetime (the once-per-problem rule). */
-const attempted = new Map<string, Set<HostFixAction>>()
-/** Per host: the autofix round in progress, if any. */
-const rounds = new Map<string, Promise<void>>()
-const MAX_FIX_RECORDS = 20
-/** Per host: a shipped prebuilt dtach matches its platform/arch (last preflight). */
-const prebuiltFor = new Map<string, boolean>()
-/** Hosts where the prebuilt was offered and did not run (an older glibc, say). */
-const prebuiltUnusable = new Set<string>()
-
-/** The stored answer with the fix state merged in, as every surface reads it. */
-export function getHostReadiness(host: string, now: number = Date.now()): HostReadiness | undefined {
-  const base = store.get(host)
-  if (!base) return undefined
-  const fx = fixState.get(host)
-  const fixes = fx?.fixes ?? []
-  const fixing = fx?.fixing
-  const problems = withFixState(base.problems, base, fixing, fixes)
-  return {
-    ...base, problems,
-    fixes: fixes.map((f) => ({ ...f, ageMs: Math.max(0, now - f.finishedAt) })),
-    ...(fixing ? { fixing } : {}),
-  }
-}
-
-/**
- * A human asked again ("Check again" / Connect): every fix may run once more.
- * A round already running keeps its own record and is not restarted.
- */
-export function resetHostAutofixAttempts(host: string): void {
-  attempted.delete(host)
-}
-
-/** Fires when a host's readiness changed (set or cleared). Returns an unsubscribe. */
-export function onHostReadinessChange(cb: (host: string) => void): () => void {
-  listeners.add(cb)
-  return () => { listeners.delete(cb) }
-}
-
-function notify(host: string): void {
-  for (const cb of listeners) {
-    try { cb(host) } catch { /* an observer must never break the probe */ }
-  }
-}
-
-/** Test seam + disconnect-free reset. */
-export function clearHostReadiness(host?: string): void {
-  if (host === undefined) {
-    store.clear(); inFlight.clear(); fixState.clear(); attempted.clear(); rounds.clear()
-    prebuiltFor.clear(); prebuiltUnusable.clear()
-    return
-  }
-  store.delete(host)
-  inFlight.delete(host)
-  fixState.delete(host)
-  attempted.delete(host)
-  rounds.delete(host)
-  prebuiltFor.delete(host)
-  prebuiltUnusable.delete(host)
-}
-
-/**
- * A re-check that failed still answers the human who asked: keep the previous
- * good answer, stamp the attempt and its error, and push. With no previous
- * answer there is nothing on screen to update, so nothing is stored.
- */
-function markCheckFailed(host: string, message: string, at: number): void {
-  const prev = store.get(host)
-  if (!prev) return
-  store.set(host, { ...prev, checkedAt: at, checkError: message.slice(0, 300) })
-  notify(host)
 }
 
 async function defaultConnection(host: string): Promise<PreflightConnection | null> {
@@ -230,14 +143,6 @@ function defaultOnFixed(host: string, action: HostFixAction): void {
   void import('../../web/terminal/dtach-provision.js')
     .then((m) => m.invalidateDtachCache(host))
     .catch(() => { /* no terminal module in this process */ })
-}
-
-function setFixState(host: string, update: (s: { fixing?: HostFixing; fixes: HostFixRecord[] }) => void): void {
-  const s = fixState.get(host) ?? { fixes: [] }
-  update(s)
-  if (s.fixes.length > MAX_FIX_RECORDS) s.fixes.splice(0, s.fixes.length - MAX_FIX_RECORDS)
-  fixState.set(host, s)
-  notify(host)
 }
 
 /**
@@ -335,6 +240,8 @@ export function refreshHostReadiness(
   } = {},
 ): Promise<HostReadiness | null> {
   if (!host || host === '__local__') return Promise.resolve(null)
+  // A fixture host answers from its seeded store entry, never over the wire.
+  if (readinessProbeSkipped(host)) return Promise.resolve(getHostReadiness(host) ?? null)
   const now = opts.now ?? Date.now
   const known = store.get(host)
   if (!opts.force && known && known.problems.length === 0 && now() - known.checkedAt < HEALTHY_RECHECK_MS) {
@@ -351,7 +258,9 @@ export function refreshHostReadiness(
         return null
       }
       const ctx = await (opts.hostContext ?? defaultHostContext)(host)
-      const reply = await conn.send('host.preflight', ctx.floor ? { minClaudeVersion: ctx.floor.minVersion } : {}, PREFLIGHT_TIMEOUT_MS)
+      const params: Record<string, unknown> = ctx.floor ? { minClaudeVersion: ctx.floor.minVersion } : {}
+      if (ctx.shellSetup) params.shellSetup = ctx.shellSetup
+      const reply = await conn.send('host.preflight', params, PREFLIGHT_TIMEOUT_MS)
       const raw = reply.ok ? parsePreflight(reply) : null
       const parsed = raw ? applyClaudeFloor(raw, ctx.floor) : null
       if (!parsed) {
@@ -363,6 +272,7 @@ export function refreshHostReadiness(
       const prebuilt = !parsed.dtach.found && !parsed.compiler.found && !prebuiltUnusable.has(host)
         && !!(await (opts.findPrebuilt ?? defaultFindPrebuilt)(parsed.platform, parsed.arch).catch(() => null))
       prebuiltFor.set(host, prebuilt)
+      problemCtx.set(host, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget })
       store.set(host, {
         ...parsed, checkedAt: now(),
         problems: readinessProblems(parsed, { prebuiltDtach: prebuilt, hostLabel: ctx.label, sshTarget: ctx.sshTarget, floorModel: ctx.floor?.model }),
@@ -405,4 +315,16 @@ export function wireHostReadiness(opts: {
   })
   const offChange = onHostReadinessChange((host) => opts.emit(host))
   return () => { offConnected(); offChange() }
+}
+
+// ── The spawn gate's sentence (C5) ──
+
+/**
+ * The daemon refused a spawn with `claude_missing` / `claude_needs_node`: the
+ * sentence every other surface shows, with the host's label (`host` null = this
+ * computer). Chosen by code, so an older daemon's wording never leaks through.
+ */
+export async function spawnGateSentence(code: 'claude_missing' | 'claude_needs_node', host: string | null): Promise<string> {
+  const ctx = host ? { hostLabel: (await defaultHostContext(host)).label ?? host } : { local: true }
+  return code === 'claude_missing' ? claudeMissingMessage(ctx) : claudeNeedsNodeMessage(ctx)
 }

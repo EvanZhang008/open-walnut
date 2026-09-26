@@ -323,9 +323,16 @@ export class MockDaemon {
   private cmdStart(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
     const sid = cmd.sid as string
     const args = cmd.args as string[] | undefined
-    const cwd = cmd.cwd as string || this.tmpDir
+    const requestedCwd = cmd.cwd as string || this.tmpDir
     const message = cmd.message as string || ''
     const resume = cmd.resume as boolean ?? false
+    // A folder of the virtual tree (the host fixture's remote dirs) runs the mock
+    // CLI in the daemon's own dir; any other missing folder is the real daemon's error.
+    const virtualCwd = !fs.existsSync(requestedCwd) && !!this._fsLsOverride?.(requestedCwd)
+    if (!virtualCwd && !fs.existsSync(requestedCwd)) {
+      return this.sendError(ws, id, `start: cwd does not exist on this host (mock): ${requestedCwd}`)
+    }
+    const cwd = virtualCwd ? this.tmpDir : requestedCwd
 
     // Injected spawn failure. Mirrors the real daemon's cmdStart error replies
     // (missing cwd / mkfifo failed / no pid) — envelope ok:false, no session
@@ -380,6 +387,13 @@ export class MockDaemon {
     })
 
     const pid = proc.pid ?? 0
+    // A spawn that fails (ENOENT) must end this session, never the whole test process.
+    proc.on('error', (err) => {
+      session.exitCode = 1
+      if (session.pollTimer) clearInterval(session.pollTimer)
+      session.pollTimer = null
+      this.sendEvent(ws, 'exit', { sid: session.sid, code: 1, error: err.message })
+    })
 
     // Close file descriptors (process has them now)
     try { fs.closeSync(pipeFd) } catch { /* ignore */ }
@@ -711,8 +725,24 @@ export class MockDaemon {
     }
   }
 
+  /**
+   * A virtual folder tree answered before the real fs (the host-problems
+   * fixture's remote hosts): null = not in the tree, fall through.
+   */
+  private _fsLsOverride: ((dirPath: string) => { entries: Array<{ name: string; type: string }>; resolvedPath: string } | { error: string } | null) | null = null
+
+  setFsLsOverride(fn: typeof this._fsLsOverride): void {
+    this._fsLsOverride = fn
+  }
+
   private cmdFsLs(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
     const dirPath = cmd.path as string
+    const virtual = this._fsLsOverride?.(dirPath) ?? null
+    if (virtual) {
+      if ('error' in virtual) this.sendError(ws, id, virtual.error)
+      else this.sendOk(ws, id, virtual)
+      return
+    }
 
     try {
       const entries = fs.readdirSync(dirPath, { withFileTypes: true })

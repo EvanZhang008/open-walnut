@@ -33,6 +33,7 @@ import {
   findRelativeImageNames,
 } from './session-io.js'
 import type { SshTarget } from './session-io.js'
+import { spawnGateSentence } from '../core/hosts/host-readiness.js'
 import type {
   SessionManager,
   TransportStartOptions,
@@ -253,7 +254,9 @@ export class RemoteSessionManager implements SessionManager {
       // not installed / npm build without node, with the install command): pass
       // it through verbatim instead of burying it in a "start failed" wrapper.
       if (result.errorKind === 'claude_missing' || result.errorKind === 'claude_needs_node') {
-        throw new Error(this.isRemote ? `${String(result.error)} [${this.hostKey}]` : String(result.error))
+        // By code, not the daemon's text: an older daemon words it differently,
+        // and every surface must read the same sentence as Settings and the banner.
+        throw new Error(await spawnGateSentence(result.errorKind, this.isRemote ? this.hostKey : null))
       }
       throw new Error(`Daemon start failed on host "${this.hostKey}": ${result.error}`)
     }

@@ -22,6 +22,8 @@ export interface ErrorContext {
   provider?: string;
   /** Explicit domain hint — prevents cross-domain mismatches */
   domain?: 'session' | 'embedding' | 'git';
+  /** The session's host has a HostProblem: its own error line (SessionHostErrorBar) says what to do. */
+  hostProblem?: boolean;
 }
 
 interface Rule {
@@ -87,7 +89,8 @@ const RULES: Rule[] = [
   // --- Remote session exit (generic) ---
   {
     pattern: /Remote session exited with code/i,
-    guard: (ctx) => !!ctx.host,
+    // A known host problem speaks for itself; a generic "check the config" beside it is noise.
+    guard: (ctx) => !!ctx.host && !ctx.hostProblem,
     suggestion: {
       suggestion: 'Check remote host configuration.',
       settingsHash: 'remote-hosts',

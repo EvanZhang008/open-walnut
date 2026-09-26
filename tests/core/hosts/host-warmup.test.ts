@@ -557,3 +557,42 @@ describe('HostWarmup credential waits', () => {
     expect(calls).toHaveLength(4);
   });
 });
+
+describe('HostWarmup: one credential fix redials every waiting host (C59)', () => {
+  const CERT = 'Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-09-14 08:00)';
+  let warmup: HostWarmup | null = null;
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW); });
+  afterEach(() => { warmup?.stop(); warmup = null; vi.useRealTimers(); });
+
+  it('when A connects after a credential wait, B (also waiting) is redialled once at once, not on its own clock', async () => {
+    let renewed = false;
+    const dials: Array<{ key: string; t: number }> = [];
+    warmup = new HostWarmup({
+      startupDelayMs: 0, paceMs: 0, resweepIntervalMs: 0, log: silent,
+      listHosts: async () => [host('certa'), host('certb')],
+      connect: async (key) => {
+        dials.push({ key, t: Date.now() - NOW });
+        // B's first attempt hangs 30s, so its own re-dial lands at 90s, after A's at 60s.
+        if (key === 'certb' && dials.length === 2) await new Promise((r) => setTimeout(r, 30_000));
+        if (!renewed) throw new Error(CERT);
+      },
+      isConnected: () => false, now: () => Date.now(),
+    });
+    warmup.start();
+    await vi.advanceTimersByTimeAsync(30_010);
+    expect(dials.map((d) => d.key)).toEqual(['certa', 'certb']);
+    const bAt = warmup.credentialRetryAt('certb')!;
+    expect(bAt - Date.now()).toBeGreaterThan(50_000);
+    // The login happens outside Walnut; A's own 1-minute re-dial now succeeds.
+    renewed = true;
+    await vi.advanceTimersByTimeAsync(30_000);
+    const afterA = dials.filter((d) => d.t >= 60_000);
+    expect(afterA.map((d) => d.key)).toEqual(['certa', 'certb']);
+    // B was dialled right after A, well before its own scheduled time.
+    expect(afterA[1].t).toBeLessThan(bAt - NOW);
+    expect(warmup.credentialRetryAt('certb')).toBeUndefined();
+    // Exactly once: nothing else dials B later.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(dials.filter((d) => d.key === 'certb')).toHaveLength(2);
+  });
+});

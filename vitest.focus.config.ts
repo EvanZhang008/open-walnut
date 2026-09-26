@@ -28,6 +28,7 @@ const config = mergeConfig(
         '@': path.resolve(import.meta.dirname, 'web/src'),
         '@open-walnut/core': path.resolve(import.meta.dirname, 'src/core/types.ts'),
         '@open-walnut/task-query': path.resolve(import.meta.dirname, 'src/core/task-query.ts'),
+        '@open-walnut/host-problem': path.resolve(import.meta.dirname, 'src/core/hosts/host-problem.ts'),
       },
     },
     test: {

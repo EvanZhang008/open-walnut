@@ -14,89 +14,27 @@
  *     build one with no deps just to read its pure methods).
  */
 
-import type fsType from 'node:fs'
-import type { ClaudeCheck, ClaudeCheckResult } from './claude-check-core.js'
+import type {
+  ClaudeKind, ClaudeProbe, EnsureClaudeResult, HostPreflightResult, HostRuntimeDeps,
+} from './host-runtime-types.js'
 
-/**
- * Shell twin of `findNode` for the spawn preambles (session-io REMOTE_BASE_PATH
- * and the binary daemon's buildSpawnPreamble). `node -v` EXECUTES node, because
- * an existence check passes a node that crashes on an old glibc. Stdout is
- * suppressed (it can be a JSONL stream) and it always exits 0 so `&&` chains
- * downstream keep running.
- */
-export const NODE_DISCOVERY_SHELL = 'node -v >/dev/null 2>&1 || {'
-  + ' if [ -s "$HOME/.nvm/nvm.sh" ]; then'
-  + '   . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1;'
-  + '   node -v >/dev/null 2>&1 || {'
-  // nvm's default may need a newer glibc than the host has: try each installed
-  // version, newest first, until one runs.
-  + '     for v in $(ls -1r "$NVM_DIR/versions/node/" 2>/dev/null); do'
-  + '       nvm use --delete-prefix "$v" >/dev/null 2>&1 && node -v >/dev/null 2>&1 && break;'
-  + '     done; };'
-  + ' elif [ -x "$HOME/.fnm/fnm" ]; then eval "$("$HOME/.fnm/fnm" env)" >/dev/null 2>&1;'
-  + ' elif [ -d "$HOME/.volta" ]; then export PATH="$HOME/.volta/bin:$PATH";'
-  + ' elif [ -s "$HOME/.asdf/asdf.sh" ]; then . "$HOME/.asdf/asdf.sh" >/dev/null 2>&1;'
-  + ' fi;'
-  + ' true; }'
-
-type ExecCallback = (err: (Error & { code?: unknown; killed?: boolean; signal?: string | null }) | null, stdout: string | Buffer, stderr: string | Buffer) => void
-
-export interface HostRuntimeDeps {
-  fs?: Pick<typeof fsType, 'statSync' | 'accessSync' | 'openSync' | 'readSync' | 'closeSync' | 'readdirSync' | 'existsSync' | 'constants'>
-  execFile?: (file: string, args: string[], opts: Record<string, unknown>, cb: ExecCallback) => unknown
-  execFileSync?: (file: string, args: string[], opts: Record<string, unknown>) => string | Buffer
-  /** Live reference (process.env), so later PATH edits are seen. */
-  env: Record<string, string | undefined>
-  now?: () => number
-  /** process.platform / process.arch of the host, reported by preflight: the
-   *  server plans host.fix and picks a prebuilt dtach by them. */
-  platform?: string
-  arch?: string
-  /** Sign-in, version floor and install method (claude-check-core.ts). Absent = preflight omits them. */
-  claudeCheck?: Pick<ClaudeCheck, 'check'>
-}
-
-export type ClaudeKind = 'native' | 'npm' | 'unknown'
-
-export interface ClaudeProbe {
-  found: boolean
-  path?: string
-  version?: string
-  kind?: ClaudeKind
-  needsNode?: boolean
-  nodeFound?: boolean
-  nodeVersion?: string
-  error?: string
-  /** From claudeCheck (daemons with it only): see claude-check-core.ts for the exact rule. */
-  auth?: ClaudeCheckResult['auth']
-  authDetail?: string
-  versionOk?: boolean
-  minVersion?: string
-  installMethod?: ClaudeCheckResult['installMethod']
-}
-
-export interface HostPreflightResult {
-  claude: ClaudeProbe
-  compiler: { found: boolean; name?: string }
-  dtach: { found: boolean; path?: string }
-  /** process.platform ('linux', 'darwin', ...) and process.arch ('x64', 'arm64');
-   *  absent from older daemons. */
-  platform?: string
-  arch?: string
-}
-
-export type EnsureClaudeResult =
-  | { ok: true; path: string; kind: ClaudeKind; nodeDir?: string }
-  | { ok: false; code: 'claude_missing' | 'claude_needs_node'; message: string; fixedInterpreter?: boolean }
+// Types and the shell snippet live in host-runtime-types.ts; this module stays their import path.
+export { NODE_DISCOVERY_SHELL } from './host-runtime-types.js'
+export type { ClaudeKind, ClaudeProbe, EnsureClaudeResult, HostPreflightResult, HostRuntimeDeps }
 
 /** Self-contained factory: see the file comment before adding any reference outside it. */
 export function createHostRuntime(deps: HostRuntimeDeps) {
   var INSTALL = 'curl -fsSL https://claude.ai/install.sh | bash'
   var messages = {
     install: INSTALL,
-    claudeMissing: 'Claude Code is not installed on this host. Install it: ' + INSTALL,
-    claudeNeedsNode: 'Claude Code on this host is the npm build and needs Node.js, but no working node was found'
-      + ' (checked PATH, nvm, fnm, volta, asdf). Install the native build, which needs no Node: ' + INSTALL,
+    // Word for word what host-readiness-problems.ts claudeMissingMessage /
+    // claudeNeedsNodeMessage say for a host called "this host" (the daemon never
+    // knows the label; the server swaps in the label by code, see
+    // remote-session-manager.ts spawnGateSentence). The install command rides
+    // the readiness problem's `commands`, not the sentence.
+    claudeMissing: 'Claude Code is not installed on this host.',
+    claudeNeedsNode: 'Claude Code on this host is the npm build and no working Node.js was found.'
+      + ' Install the native build, which needs no Node.',
   }
   var LOGIN_MARK = '__WALNUT_LOGIN_PATH__='
   var nodeCache: { key: string; path: string; dir: string | null; version: string } | null = null
@@ -402,67 +340,113 @@ export function createHostRuntime(deps: HostRuntimeDeps) {
    * Second opinion from the spawn shell itself (binary twin only): the CLI runs
    * through `$SHELL -c "<preamble>; exec …"`, whose rc files may reach a claude
    * or node the daemon PATH does not. Never fail a spawn that shell could run.
+   * `cmdPath`: what `command -v` printed (a path, or a bare name for a function).
    */
-  async function shellCanRun(shell: string, preamble: string, command: string): Promise<{ hasCmd: boolean; hasNode: boolean }> {
+  async function shellCanRun(shell: string, preamble: string, command: string, timeoutMs?: number): Promise<{ hasCmd: boolean; hasNode: boolean; cmdPath?: string; timedOut: boolean }> {
     var q = "'" + command.replace(/'/g, "'\\''") + "'"
-    var script = preamble + '; command -v ' + q + ' >/dev/null 2>&1 && echo __WALNUT_HAS_CMD__; node -v >/dev/null 2>&1 && echo __WALNUT_HAS_NODE__; true'
-    var r = await run(shell, ['-c', script], 8000)
-    return { hasCmd: r.stdout.indexOf('__WALNUT_HAS_CMD__') >= 0, hasNode: r.stdout.indexOf('__WALNUT_HAS_NODE__') >= 0 }
+    var script = preamble + '; __wc=$(command -v ' + q + ' 2>/dev/null) && printf "\\n__WALNUT_HAS_CMD__=%s\\n" "$__wc"; node -v >/dev/null 2>&1 && echo __WALNUT_HAS_NODE__; true'
+    var r = await run(shell, ['-c', script], timeoutMs || 8000)
+    var m = /__WALNUT_HAS_CMD__=(.*)$/m.exec(r.stdout)
+    var out: { hasCmd: boolean; hasNode: boolean; cmdPath?: string; timedOut: boolean } = { hasCmd: !!m, hasNode: r.stdout.indexOf('__WALNUT_HAS_NODE__') >= 0, timedOut: r.timedOut }
+    if (m && m[1].trim()) out.cmdPath = m[1].trim()
+    return out
+  }
+
+  /** The user's own shell: sessions run shell_setup there, and it is often bash syntax that /bin/sh (dash) rejects. */
+  function userShell(): string { return deps.env.SHELL && isExecutable(deps.env.SHELL) ? deps.env.SHELL : '/bin/sh' }
+
+  /**
+   * The PATH a session sees after the host's `shell_setup` (config.hosts[].shell_setup),
+   * run the way session-io.ts buildRemotePreamble runs it: `{ setup; } || true`.
+   * Without it a claude that shell_setup puts on PATH reads as missing or old.
+   */
+  async function shellSetupPath(setup: string, timeoutMs: number): Promise<{ path: string; timedOut: boolean }> {
+    var basePath = deps.env.PATH || ''
+    if (!setup) return { path: basePath, timedOut: false }
+    var script = '{ ' + setup + '; } >/dev/null 2>&1 || true; printf "\\n' + LOGIN_MARK + '%s\\n" "$PATH"'
+    var r = await run(userShell(), ['-c', script], timeoutMs)
+    return { path: parseLoginShellPath(r.stdout) || basePath, timedOut: r.timedOut }
+  }
+
+  /** `claude --version` (directly, or through the spawn shell when only that shell reaches claude or its node). */
+  async function claudeVersion(claude: ClaudeProbe, probe: ClaudeProbe & { nodeDir?: string }, viaShell: string, deadline: number): Promise<void> {
+    var left = Math.min(5000, deadline - now())
+    if (left <= 0) return
+    var qp = "'" + String(probe.path).replace(/'/g, "'\\''") + "'"
+    var r = viaShell
+      ? await run(userShell(), ['-c', viaShell + '; exec ' + qp + ' --version'], left)
+      : await run(probe.path as string, ['--version'], left, probe.nodeDir)
+    var m = r.code === 0 ? /\d+\.\d+\.\d+\S*/.exec(r.stdout.trim().split('\n')[0] || '') : null
+    if (m) claude.version = m[0]
+    else if (r.code !== 0 && !r.timedOut) {
+      // The line that names the error (node prints source context first,
+      // the stack after it), else the last line of output.
+      var lines = (r.stderr + '\n' + r.stdout).split('\n').map(function (l) { return l.trim() }).filter(Boolean)
+      var named = lines.filter(function (l) { return /error/i.test(l) })[0]
+      var why = (named || lines[lines.length - 1] || '').slice(0, 200)
+      claude.error = 'claude --version exited with code ' + r.code + (why ? ': ' + why : '')
+    }
+  }
+
+  /** The claude block of host.preflight, asked the way this twin's spawn gate asks. */
+  async function preflightClaude(setup: string, floor: string | undefined, deadline: number): Promise<{ claude: ClaudeProbe; pathStr: string }> {
+    var sp = await shellSetupPath(setup, 5000)
+    var pathStr = sp.path
+    var probe = await probeClaude('claude', pathStr, deadline - 5000)
+    // The spawn preamble plus shell_setup: the environment a session really starts in.
+    var viaShell = deps.spawnPreamble ? deps.spawnPreamble() + (setup ? '; { ' + setup + '; } >/dev/null 2>&1 || true' : '') : ''
+    var shellRuns = false
+    var nodeless = probe.found && probe.needsNode && !probe.nodeFound
+    if (viaShell && (!probe.found || (nodeless && !probe.fixedInterpreter))) {
+      // The spawn gate never refuses what its shell can run: neither may the readiness it feeds.
+      var budget = Math.min(8000, deadline - now() - 4000)
+      var seen = budget > 0 ? await shellCanRun(userShell(), viaShell, 'claude', budget) : null
+      if (!seen || seen.timedOut) return { claude: { found: false, unknown: 'the login shell did not answer in time' }, pathStr: pathStr }
+      if (!probe.found && seen.hasCmd) {
+        // A bare name is a shell function or alias: the shell may run it, but there is nothing to inspect.
+        if (!seen.cmdPath || seen.cmdPath.charAt(0) !== '/') return { claude: { found: false, unknown: 'claude is a shell function or alias' }, pathStr: pathStr }
+        probe = await probeClaude(seen.cmdPath, pathStr, deadline - 5000)
+        shellRuns = probe.found
+      }
+      if (probe.found && probe.needsNode && !probe.nodeFound && seen.hasNode) { probe.nodeFound = true; shellRuns = true }
+    } else if (!probe.found && sp.timedOut) {
+      // A slow shell_setup proves nothing about what it would have put on PATH.
+      return { claude: { found: false, unknown: 'shell_setup did not finish in time' }, pathStr: pathStr }
+    }
+    if (!probe.found) return { claude: { found: false, error: messages.claudeMissing }, pathStr: pathStr }
+    var claude: ClaudeProbe = { found: true, path: probe.path, kind: probe.kind, needsNode: probe.needsNode }
+    if (probe.needsNode) {
+      claude.nodeFound = probe.nodeFound
+      if (probe.nodeVersion) claude.nodeVersion = probe.nodeVersion
+    }
+    if (probe.needsNode && !probe.nodeFound) { claude.error = messages.claudeNeedsNode; return { claude: claude, pathStr: pathStr } }
+    await claudeVersion(claude, probe, shellRuns ? viaShell : '', deadline)
+    // A claude that starts: is it signed in, and new enough for the model?
+    if (deps.claudeCheck && !claude.error) {
+      Object.assign(claude, await deps.claudeCheck.check({
+        path: probe.path as string, version: claude.version, kind: probe.kind, nodeDir: probe.nodeDir, minVersion: floor, deadline: deadline,
+      }))
+    }
+    return { claude: claude, pathStr: pathStr }
   }
 
   /**
    * host.preflight: what this host can run. Each probe ≤ 5s, the whole thing ≤ 12s.
    * `minClaudeVersion`: the floor of the model the server is set to use.
    */
-  async function preflight(args?: { minClaudeVersion?: unknown }): Promise<HostPreflightResult> {
+  async function preflight(args?: { minClaudeVersion?: unknown; shellSetup?: unknown }): Promise<HostPreflightResult> {
     var deadline = now() + 12000
     var floor = args && typeof args.minClaudeVersion === 'string' && /^\d+\.\d+\.\d+$/.test(args.minClaudeVersion) ? args.minClaudeVersion : undefined
-    var pathStr = deps.env.PATH || ''
-    var probe = await probeClaude('claude', pathStr, deadline - 5000)
-    var claude: ClaudeProbe = { found: probe.found }
-    if (probe.found) {
-      claude.path = probe.path
-      claude.kind = probe.kind
-      claude.needsNode = probe.needsNode
-      if (probe.needsNode) {
-        claude.nodeFound = probe.nodeFound
-        if (probe.nodeVersion) claude.nodeVersion = probe.nodeVersion
-      }
-      if (probe.needsNode && !probe.nodeFound) claude.error = messages.claudeNeedsNode
-      else {
-        var left = Math.min(5000, deadline - now())
-        if (left > 0) {
-          var r = await run(probe.path as string, ['--version'], left, probe.nodeDir)
-          if (r.code === 0) {
-            var line = r.stdout.trim().split('\n')[0] || ''
-            var m = /\d+\.\d+\.\d+\S*/.exec(line)
-            if (m) claude.version = m[0]
-          } else if (!r.timedOut) {
-            // The line that names the error (node prints source context first,
-            // the stack after it), else the last line of output.
-            var lines = (r.stderr + '\n' + r.stdout).split('\n').map(function (l) { return l.trim() }).filter(Boolean)
-            var named = lines.filter(function (l) { return /error/i.test(l) })[0]
-            var why = (named || lines[lines.length - 1] || '').slice(0, 200)
-            claude.error = 'claude --version exited with code ' + r.code + (why ? ': ' + why : '')
-          }
-        }
-        // A claude that starts: is it signed in, and new enough for the model?
-        if (deps.claudeCheck && !claude.error) {
-          Object.assign(claude, await deps.claudeCheck.check({
-            path: probe.path as string, version: claude.version, kind: probe.kind, nodeDir: probe.nodeDir, minVersion: floor, deadline: deadline,
-          }))
-        }
-      }
-    } else {
-      claude.error = messages.claudeMissing
-    }
+    var setup = args && typeof args.shellSetup === 'string' ? args.shellSetup.trim() : ''
+    var found = await preflightClaude(setup, floor, deadline)
+    var pathStr = found.pathStr
     var compiler: { found: boolean; name?: string } = { found: false }
     var ccs = ['cc', 'gcc', 'clang']
     for (var i = 0; i < ccs.length; i++) {
       if (resolveOnPath(ccs[i], pathStr)) { compiler = { found: true, name: ccs[i] }; break }
     }
     var dtachPath = isExecutable(home() + '/.local/bin/walnut-dtach') ? home() + '/.local/bin/walnut-dtach' : resolveOnPath('dtach', pathStr)
-    var out: HostPreflightResult = { claude: claude, compiler: compiler, dtach: dtachPath ? { found: true, path: dtachPath } : { found: false } }
+    var out: HostPreflightResult = { claude: found.claude, compiler: compiler, dtach: dtachPath ? { found: true, path: dtachPath } : { found: false } }
     if (deps.platform) out.platform = deps.platform
     if (deps.arch) out.arch = deps.arch
     return out

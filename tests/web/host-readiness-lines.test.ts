@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { HostStatus } from '@/api/hosts';
-import { FIX_NOTE_MS, hostReadinessCheck, hostReadinessNotes, hostReadinessProblems } from '@/utils/host-readiness';
+import { FIX_NOTE_MS, hostReadinessCheck, hostReadinessFixing, hostReadinessInfoNotes, hostReadinessNotes, hostReadinessProblems } from '@/utils/host-readiness';
 
 const base: HostStatus = {
   host: 'devbox', label: 'devbox', hostname: 'devbox.example.test', connected: true, phase: 'connected',
@@ -17,12 +17,12 @@ describe('hostReadinessProblems', () => {
   it('reads the server problems in order, keeping only string commands', () => {
     const status = withReadiness({
       problems: [
-        { kind: 'claude_needs_node', message: 'Claude Code here is the npm build.', commands: ['curl -fsSL https://claude.ai/install.sh | bash'] },
+        { kind: 'claude_needs_node', message: 'Claude Code on devbox is the npm build.', commands: ['curl -fsSL https://claude.ai/install.sh | bash'] },
         { kind: 'compiler_missing', message: 'No C compiler.', commands: ['sudo yum install -y gcc', 7, '', 'sudo apt-get install -y gcc'] },
       ],
     });
     expect(hostReadinessProblems(status)).toEqual([
-      { kind: 'claude_needs_node', message: 'Claude Code here is the npm build.', commands: ['curl -fsSL https://claude.ai/install.sh | bash'] },
+      { kind: 'claude_needs_node', message: 'Claude Code on devbox is the npm build.', commands: ['curl -fsSL https://claude.ai/install.sh | bash'] },
       { kind: 'compiler_missing', message: 'No C compiler.', commands: ['sudo yum install -y gcc', 'sudo apt-get install -y gcc'] },
     ]);
   });
@@ -132,5 +132,29 @@ describe('automatic fixes on the lines', () => {
     ]);
     expect(hostReadinessNotes(withReadiness(readiness, { connected: false, phase: 'failed' }))).toEqual([]);
     expect(hostReadinessNotes(base)).toEqual([]);
+  });
+});
+
+describe('informational lines and the running fix', () => {
+  const fallback = { kind: 'daemon_dir_fallback', message: 'Using ~/.cache/open-walnut because /tmp is not usable.', commands: [] };
+  const outdated = { kind: 'claude_outdated', message: 'Claude Code on devbox is 2.1.220.', commands: [] };
+  it('daemon_dir_fallback is a note, never a problem line with Check again', () => {
+    const status = withReadiness({ problems: [fallback, outdated] });
+    expect(hostReadinessProblems(status).map((p) => p.kind)).toEqual(['claude_outdated']);
+    expect(hostReadinessInfoNotes(status)).toEqual(['Using ~/.cache/open-walnut because /tmp is not usable.']);
+  });
+  it('status.warnings are notes too, verbatim and once each', () => {
+    const status = withReadiness({ problems: [fallback] }, { warnings: ['Disk is almost full on devbox.', '', 'Disk is almost full on devbox.'] });
+    expect(hostReadinessInfoNotes(status)).toEqual([fallback.message, 'Disk is almost full on devbox.']);
+    expect(hostReadinessInfoNotes(undefined)).toEqual([]);
+  });
+  it('reads the running fix with its server start time; junk reads as none', () => {
+    expect(hostReadinessFixing(withReadiness({ fixing: { action: 'update-claude', text: 'Updating Claude Code', startedAt: 123 } })))
+      .toEqual({ action: 'update-claude', text: 'Updating Claude Code', startedAt: 123 });
+    expect(hostReadinessFixing(withReadiness({ fixing: { action: 'update-claude', text: 'Updating Claude Code' } })))
+      .toEqual({ action: 'update-claude', text: 'Updating Claude Code' });
+    expect(hostReadinessFixing(withReadiness({ fixing: { action: '', text: 'x' } }))).toBeNull();
+    expect(hostReadinessFixing(withReadiness({}))).toBeNull();
+    expect(hostReadinessFixing(withReadiness({ fixing: { action: 'a', text: 'b' } }, { connected: false }))).toBeNull();
   });
 });

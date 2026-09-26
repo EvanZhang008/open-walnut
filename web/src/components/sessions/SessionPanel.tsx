@@ -83,6 +83,7 @@ import { SessionRetryButton } from './SessionRetryButton';
 import type { SessionRecord, TaskPhase } from '@/types/session';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
+import { SessionHostErrorText, useSessionHostHasProblem } from './SessionHostErrorBar';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { useResolvedSessionRecord, useSessionStatus } from '@/hooks/useSessionStatus';
 import { applySessionSettings, clearSessionSettings } from '@/stores/session-status-store';
@@ -266,6 +267,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const enabledModes = useEnabledModes();
   const [sessionRecord, setSession] = useState<SessionRecord | null>(null);
   const session = useResolvedSessionRecord(sessionRecord);
+  // The host line explains a known host problem; the generic suggestion then stays quiet.
+  const hostHasProblem = useSessionHostHasProblem(session?.host);
   const liveStatus = useSessionStatus(sessionId);
   const pendingPermission = liveStatus?.pendingPermissionTool === undefined
     ? session?.pendingPermission
@@ -2098,9 +2101,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             <div className={`session-error-banner${spinning ? ' session-error-banner--reconnecting' : provedReachable ? ' session-error-banner--idle' : ''}`}>
               <span className="session-error-banner-icon">{spinning ? '\u21BB' : provedReachable ? '\u2139\uFE0F' : '\u26A0\uFE0F'}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <span className="session-error-banner-text">{bannerText}</span>
+                {isRemote && session?.host && !checking && !provedReachable
+                  ? <SessionHostErrorText host={session.host} label={hostLabel} reconnecting={isReconnecting} fallback={bannerText} />
+                  : <span className="session-error-banner-text">{bannerText}</span>}
                 {!calm && session?.errorMessage && (() => {
-                  const sug = getErrorSuggestion(session.errorMessage, { host: session.host, provider: session.provider });
+                  const sug = getErrorSuggestion(session.errorMessage, { host: session.host, provider: session.provider, hostProblem: hostHasProblem });
                   return sug ? <ErrorSuggestionLink {...sug} /> : null;
                 })()}
               </div>

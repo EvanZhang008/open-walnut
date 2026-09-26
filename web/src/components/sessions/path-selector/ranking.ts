@@ -39,12 +39,15 @@ export interface Candidate {
   cwd: string;
   host: string | null;
   hostLabel?: string;
-  /** live = from a directory listing (confirmed to exist); history = frequent-dirs entry. */
-  source: 'live' | 'history';
+  /** live = from a directory listing (confirmed to exist); history = frequent-dirs entry;
+   *  more = the 'Show N more' row of a capped history group (history-cap.ts), not a folder. */
+  source: 'live' | 'history' | 'more';
   /** Depth relative to the listed parent (1 = direct child). 0 for history-only entries. */
   depth: number;
   /** Set when this cwd is ALSO a history/frequent entry (marker + frecency source). */
   history?: WorkingDirEntry;
+  /** A synthetic 'Show N more' row (history-cap.ts), not a path: N hidden rows. */
+  moreCount?: number;
 }
 
 export interface RankedItem extends Candidate {

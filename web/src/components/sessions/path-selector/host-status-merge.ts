@@ -9,7 +9,12 @@
  * never erase directories that were actually listed.
  */
 import type { HostStatus } from '@/api/hosts';
+import type { DirListingPending } from '@/api/sessions';
 import { activeStepLabel, isHostConnecting, isHostFailed } from '@/utils/host-connect';
+import {
+  hostFailureHeadline, hostProblemOf, isConnectingPhaseWire, listingProblemOf,
+  type HostProblem, type HostReadinessProblemInput,
+} from '@open-walnut/host-problem';
 import type { HostLiveState } from './useLiveDirs';
 
 /** Poll gap while a host answers `pending` and its status is being pushed. */
@@ -107,4 +112,67 @@ export function mergeHostStatesWithStore(
     next.set(key, merged);
   }
   return changed ? next : byHost;
+}
+
+// ── The note at the top of the list (spec 4.2) ───────────────────────────
+
+/** Give up waiting on a connect after this long, measured on the SERVER clock. */
+export const PICKER_GIVE_UP_MS = 5 * 60_000;
+export const GIVE_UP_HINT = 'The host has not finished connecting. Check the server log for this host, then retry.';
+
+type ConnectProblem = Extract<HostProblem, { type: 'connect' }>;
+type ListingProblem = Extract<HostProblem, { type: 'listing' }>;
+
+export type PickerNote =
+  | { type: 'off' }
+  | { type: 'readiness'; problem: HostReadinessProblemInput }
+  | { type: 'connect'; problem: ConnectProblem }
+  | { type: 'listing'; problem: ListingProblem }
+  | { type: 'connecting'; lastHeadline?: string; lastHint?: string; pending?: DirListingPending }
+  | { type: 'giveup'; headline: string; hint: string };
+
+/** A connect failure the listing reported itself (an older server, or before any push). */
+function connectFromListing(state: HostLiveState, host: string, label: string): ConnectProblem {
+  const kind = state.hostError?.kind || 'unknown';
+  return {
+    type: 'connect', kind, headline: hostFailureHeadline(kind, label),
+    hint: state.hostError?.hint ?? '', summary: state.hostError?.message ?? state.error ?? '',
+    retryable: state.hostError?.retryable !== false, dismissKey: `${host}|connect`,
+  };
+}
+
+/** Did this connect attempt run past the give-up line? Server times only (attemptStartedAt vs serverNow). */
+export function connectGaveUp(status: HostStatus | undefined, now: number): boolean {
+  if (!status || status.connected || !isConnectingPhaseWire(status.phase)) return false;
+  const started = status.phase === 'reconnecting' ? (status.reconnectSince ?? status.attemptStartedAt) : status.attemptStartedAt;
+  return typeof started === 'number' && now - started >= PICKER_GIVE_UP_MS;
+}
+
+/**
+ * What the note above the list says for ONE host, or null (healthy, or not
+ * this host's business). `now` is the server clock (useHostStatus serverNow()).
+ * Order: off > listing > give-up > the shared HostProblem > still connecting.
+ */
+export function pickerNoteOf(input: {
+  host: string; label: string; status: HostStatus | undefined; live?: HostLiveState; path?: string; now: number;
+}): PickerNote | null {
+  const { host, label, status, live, path, now } = input;
+  if (status?.phase === 'off' || live?.hostError?.kind === 'ephemeral') return { type: 'off' };
+  if (live?.status === 'error' && live.hostError?.kind === 'listing') {
+    const problem = listingProblemOf(live.hostError, label, path);
+    if (problem?.type === 'listing') return { type: 'listing', problem };
+  }
+  if (connectGaveUp(status, now) || (live?.giveUp && !status?.connected)) {
+    return { type: 'giveup', headline: hostFailureHeadline(undefined, label, { giveUp: true }), hint: GIVE_UP_HINT };
+  }
+  const p = hostProblemOf(status);
+  if (p?.type === 'connect') return { type: 'connect', problem: p };
+  if (p?.type === 'reconnecting') {
+    return { type: 'connecting', ...(p.headline ? { lastHeadline: p.headline, lastHint: p.hint } : {}), pending: live?.pending };
+  }
+  if (p?.type === 'readiness') return { type: 'readiness', problem: p.problem };
+  if (status && !status.connected && isConnectingPhaseWire(status.phase)) return { type: 'connecting', pending: live?.pending };
+  if (live?.status === 'error') return { type: 'connect', problem: connectFromListing(live, host, label) };
+  if (live?.status === 'loading' && live.pending) return { type: 'connecting', pending: live.pending };
+  return null;
 }

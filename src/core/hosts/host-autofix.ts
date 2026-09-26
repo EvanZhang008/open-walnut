@@ -373,16 +373,20 @@ export async function runHostAutofix(first: HostPreflightResult, io: AutofixIo):
     io.onStart({ action, startedAt: io.now(), text: fixingText(action) })
     const outcome = action === 'build-dtach' ? await fixDtach(io, current) : await sendFix(io, action)
     const record = describeFixOutcome(action, outcome, io.now())
-    io.onFinish(record, outcome.result)
     // The host never got to answer, or was busy with another fix: that was no
     // attempt, so the next connect may try again. Stop this round either way.
     if (outcome.transportError || record.error === 'busy') {
+      io.onFinish(record, outcome.result)
       io.tried.delete(action)
       return
     }
     // A compiler that just arrived can build what a failed prebuilt could not.
     if (action === 'install-compiler' && record.ok && !record.skipped) io.tried.delete('build-dtach')
-    const next = await io.preflight()
+    // A fix that worked stays "fixing" until the re-check answers: finishing
+    // first put the old problem back on screen for the whole re-check (up to 14s).
+    const checked = record.ok ? await io.preflight() : null
+    io.onFinish(record, outcome.result)
+    const next = record.ok ? checked : await io.preflight()
     if (!next) return
     current = next
   }

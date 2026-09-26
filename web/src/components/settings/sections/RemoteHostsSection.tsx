@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect } from 'react';
+import { Fragment, useState, useEffect, useRef } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
@@ -8,11 +8,17 @@ import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave';
 import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
-import { RemoteHostReadiness, RemoteHostStatus, RemoteHostUnreachable } from './RemoteHostStatus';
+import { RemoteHostDetail, RemoteHostStatus } from './RemoteHostStatus';
+import { hostRowId, useHostSettingsFocus } from '@/utils/host-settings-nav';
 import { AddLimitRow } from './RemoteHostLimits';
 import { CopyHostDiagnosticsButton, DiagnosticsFallback, useCopyDiagnostics } from '../CopyDiagnostics';
 import { hasStatusHosts } from '../diagnostics-copy';
 import '@/styles/settings-sections-addons.css';
+import '@/styles/host-picker-settings.css';
+
+const FLASH_MS = 1500;
+/** Each 'Open Settings' request flashes its row once, even across remounts. */
+let flashedNonce = 0;
 
 interface HostEntry {
   _key: number; // stable React key
@@ -157,14 +163,36 @@ export function RemoteHostsSection({ config, onSave }: Props) {
     enabled: !midEdit,
   });
 
+  // The row title is the label, the same name the banner and the picker use (G14);
+  // the alias follows it in muted mono, then the hostname (the only part that truncates).
   const hostName = (host: HostEntry, idx: number) =>
-    // FQDN-only entries (alias == hostname) read better label-first.
-    host.alias && host.alias === host.hostname && host.label
-      ? host.label
-      : host.alias || host.hostname || `Host ${idx + 1}`;
-  // The address beside the name, never the label (N3-20): muted mono hostname.
-  const hostSub = (host: HostEntry) =>
-    host.hostname && host.hostname !== hostName(host, 0) ? host.hostname : '';
+    host.label || host.alias || host.hostname || `Host ${idx + 1}`;
+  const hostAlias = (host: HostEntry) => (host.label && host.alias && host.alias !== host.label ? host.alias : '');
+  const hostSub = (host: HostEntry, idx: number) =>
+    host.hostname && host.hostname !== hostName(host, idx) && host.hostname !== host.alias ? host.hostname : '';
+
+  // 'Open Settings' from a banner row, the picker or an error bar: scroll to that
+  // host's row and flash it, on every request (a nonce, not the hash: the same
+  // hash twice fires nothing).
+  const focus = useHostSettingsFocus();
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!focus.alias || focus.nonce <= flashedNonce) return;
+    const nonce = focus.nonce;
+    const raf = requestAnimationFrame(() => {
+      const el = document.getElementById(hostRowId(focus.alias!));
+      if (!el) return;
+      flashedNonce = nonce;
+      el.scrollIntoView({ block: 'nearest' });
+      el.classList.remove('rh-row-flash');
+      void el.offsetWidth; // restart the animation for a second request
+      el.classList.add('rh-row-flash');
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => el.classList.remove('rh-row-flash'), FLASH_MS);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [focus.nonce, focus.alias, hosts.length]);
+  useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
 
   const text = (idx: number, field: 'alias' | 'hostname' | 'user' | 'label', label: string,
     placeholder: string, size: 'short' | 'long', mono = false) => (
@@ -200,32 +228,31 @@ export function RemoteHostsSection({ config, onSave }: Props) {
       actions={<>{hasStatusHosts(config) && <CopyHostDiagnosticsButton copy={hostCopy} />}{addButton}</>}
     >
       <DiagnosticsFallback copy={hostCopy} testId="remote-hosts-diagnostics-fallback" />
-      {hosts.map((host, idx) => host.alias ? (
-        <RemoteHostUnreachable key={`u-${host._key}`} alias={host.alias} name={hostName(host, idx)} />
-      ) : null)}
-      {hosts.map((host, idx) => host.alias ? (
-        <RemoteHostReadiness key={`r-${host._key}`} alias={host.alias} name={hostName(host, idx)} />
-      ) : null)}
       <SettingsGroup heading="Hosts">
         {hosts.length === 0 && (
           <SettingsRow label="No remote hosts yet." control={addButton} />
         )}
         {hosts.map((host, idx) => {
           const open = expanded === idx;
-          const sub = hostSub(host);
+          const sub = hostSub(host, idx);
+          const alias = hostAlias(host);
           return (
             <Fragment key={host._key}>
               <SettingsRow
                 className="rh-host-row"
+                id={host.alias ? hostRowId(host.alias) : undefined}
                 data-host-alias={host.alias || undefined}
                 label={
                   <span className="settings-addons-inline">
-                    <span className="settings-addons-ellipsis" title={hostName(host, idx)}>{hostName(host, idx)}</span>
-                    {sub && <span className="settings-addons-mono settings-addons-muted settings-addons-ellipsis" title={sub}>{sub}</span>}
+                    <span className="rh-host-name" title={hostName(host, idx)}>{hostName(host, idx)}</span>
+                    {alias && <span className="rh-host-alias">{alias}</span>}
+                    {sub && <span className="settings-addons-mono settings-addons-muted settings-addons-ellipsis rh-host-hostname" title={sub}>{sub}</span>}
                     {host.discovered && <SettingsTag>Auto-discovered</SettingsTag>}
                   </span>
                 }
-                help={host.alias ? <RemoteHostStatus alias={host.alias} /> : 'Add an alias and hostname to save this host.'}
+                help={host.alias ? <RemoteHostStatus alias={host.alias} name={hostName(host, idx)} enabled={host.enabled} /> : 'Add an alias and hostname to save this host.'}
+                // The failure and the readiness lines, below the status line (spec 5.2 / 5.3).
+                children={host.alias ? <RemoteHostDetail alias={host.alias} name={hostName(host, idx)} enabled={host.enabled} /> : undefined}
                 // Off: only the name and address fade; Edit, Remove and the
                 // switch that turns it back on stay at full strength (N10).
                 data-host-off={host.enabled ? undefined : 'true'}

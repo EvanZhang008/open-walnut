@@ -11,6 +11,8 @@ import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './co
 import type { FilterEntry } from './settings-filter'
 
 export const DEFAULT_PANE_ID = 'general'
+/** Mirrors HOST_ROW_ID_PREFIX in utils/host-settings-nav.ts (kept local: this file stays import-light). */
+const HOST_ROW_PREFIX = 'rh-host-'
 
 /** Section id -> the visible entry it renders under (itself when visible). */
 export const NAV_OWNER: Readonly<Record<string, string>> = (() => {
@@ -68,6 +70,11 @@ export function resolvePane(
   if (!id) return { paneId: DEFAULT_PANE_ID, targetId: null, known: true }
   const owner = NAV_OWNER[id]
   if (owner) return { paneId: owner, targetId: owner === id ? null : id, known: true }
+  // One host's row inside Remote Hosts (`#rh-host-<alias>`, host-settings-nav.ts):
+  // open the pane that section renders under and scroll to that row.
+  if (id.startsWith(HOST_ROW_PREFIX)) {
+    return { paneId: NAV_OWNER['remote-hosts'] ?? 'remote-hosts', targetId: id, known: true }
+  }
   if (pluginKeys.includes(id)) return { paneId: id, targetId: null, known: true }
   if (!opts.silent) log.warn('settings', 'unknown settings hash', { hash })
   return { paneId: DEFAULT_PANE_ID, targetId: null, known: false }

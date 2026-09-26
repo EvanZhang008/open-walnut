@@ -23,7 +23,7 @@ export interface ClaudeBannerView {
   running?: string;
   /** The last attempt failed: its reason, and the command to run by hand. */
   failed?: { text: string; command?: string };
-  /** Dismissing is remembered per state and required version, so a new problem shows again. */
+  /** Dismissing is remembered per state and version (host-banner-dismiss.ts localDismissKey), so a new problem shows again. */
   dismissKey: string;
 }
 
@@ -51,7 +51,7 @@ export function claudeBannerView(health: SystemHealth): ClaudeBannerView | null 
       ...(install ? { problem: install } : {}),
       fixable: !!install && FIXABLE_INSTALL.has(install.kind),
       ...withFix(install),
-      dismissKey: 'install',
+      dismissKey: `install:${local?.claude?.minVersion ?? ''}`,
     };
   }
   const outdated = problems.find((p) => p.kind === 'claude_outdated');
@@ -66,7 +66,7 @@ export function claudeBannerView(health: SystemHealth): ClaudeBannerView | null 
     };
   }
   const signIn = problems.find((p) => p.kind === 'claude_not_logged_in');
-  if (signIn) return { kind: 'sign-in', problem: signIn, fixable: false, dismissKey: 'sign-in' };
+  if (signIn) return { kind: 'sign-in', problem: signIn, fixable: false, dismissKey: `sign-in:${local?.claude.version ?? ''}` };
   return null;
 }
 

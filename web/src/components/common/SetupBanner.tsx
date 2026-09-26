@@ -1,13 +1,24 @@
-import { useState, useCallback, useEffect } from 'react';
+/**
+ * THIS machine's Claude Code: missing (one-click native install), too old for
+ * the configured model (one-click update), or not signed in (the `claude`
+ * instruction, re-checked every 15s while it shows; it goes away by itself once
+ * sign-in completes). The server does the work and pushes every step on
+ * `system:health`, so this only renders what it gets.
+ *
+ * It is the FIRST section of the home attention banner (AttentionBanner): a
+ * broken local Claude Code silences Walnut itself, so it sits above the remote
+ * hosts. `useLocalClaudeNotice` returns the section without a frame (and its
+ * title, which becomes the card title); `SetupBanner` is the framed standalone.
+ * Dismissal is per state and version (host-banner-dismiss.ts), never global.
+ */
+import { useState, useCallback, useEffect, type ReactNode } from 'react';
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { checkLocalClaude, fixLocalClaude } from '@/api/local-claude';
 import { claudeBannerView, SIGN_IN_RECHECK_MS, type ClaudeBannerView } from '@/utils/local-claude-banner';
+import { clearLocalDismissed, dismissLocal, isLocalDismissed, readLocalDismissed } from '@/utils/host-banner-dismiss';
 import { log } from '@/utils/log';
 import { InlineCodeText } from './InlineCodeText';
-
-const LS_DISMISS_KEY = 'walnut-setup-dismissed';
-/** The outdated and sign-in states remember their own dismissal, per state and required version. */
-const LS_CLAUDE_DISMISS_KEY = 'walnut-setup-dismissed-claude';
+import '@/styles/attention-banner.css';
 
 /** Custom event name dispatched by NotificationPanel to re-show the banner. */
 export const SETUP_SHOW_EVENT = 'setup:show-guide';
@@ -19,6 +30,8 @@ export const CLAUDE_CODE_INSTALL = 'curl -fsSL https://claude.ai/install.sh | ba
 export const SETUP_SKILL_PASTE =
   'Set up Open Walnut for me: read and run the skill at ' +
   'https://github.com/EvanZhang008/open-walnut/blob/main/skills/setup-walnut/SKILL.md';
+
+export const LOCAL_DISMISS_LABEL = 'Dismiss Claude Code notice';
 
 interface SetupBannerProps {
   health: SystemHealth;
@@ -32,44 +45,47 @@ interface SetupBannerProps {
   onStartSession?: () => void;
 }
 
-const readKey = (key: string): string | null => {
-  try { return localStorage.getItem(key); } catch { return null; }
+export interface LocalClaudeNotice {
+  /** The section renders (the host section then gets a 'Remote hosts' subhead). */
+  present: boolean;
+  /** The card title: 'Get Walnut talking' / 'Update Claude Code' / 'Sign in to Claude Code'. */
+  title: string | null;
+  /** The section, without a card frame. */
+  node: ReactNode;
+}
+
+const TITLES: Record<ClaudeBannerView['kind'], string> = {
+  install: 'Get Walnut talking',
+  outdated: 'Update Claude Code',
+  'sign-in': 'Sign in to Claude Code',
 };
 
-/**
- * First-run and upkeep banner for THIS machine's Claude Code: missing (one-click
- * native install), too old for the configured model (one-click update), or not
- * signed in (the `claude` instruction, re-checked every 15s while it shows; it
- * goes away by itself once sign-in completes). The server does the work and
- * pushes every step on `system:health`, so the banner only renders what it gets.
- */
-export function SetupBanner({ health, loading, onNavigateSettings }: SetupBannerProps) {
-  const [dismissed, setDismissed] = useState(() => readKey(LS_DISMISS_KEY) === 'true');
-  const [claudeDismissed, setClaudeDismissed] = useState<string | null>(() => readKey(LS_CLAUDE_DISMISS_KEY));
+const NONE: LocalClaudeNotice = { present: false, title: null, node: null };
+
+/** The local Claude Code section for the attention banner (no frame of its own). */
+export function useLocalClaudeNotice({ health, loading, onNavigateSettings }: SetupBannerProps): LocalClaudeNotice {
+  const [dismissedList, setDismissedList] = useState<string[]>(() => readLocalDismissed());
   const [pending, setPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const known = !loading && health.hasReadyProvider !== undefined;
   const view = known ? claudeBannerView(health) : null;
-  const quiet = view && view.kind !== 'install' ? view : null;
-  const quietHidden = !!quiet && claudeDismissed === quiet.dismissKey;
-  const signInShowing = quiet?.kind === 'sign-in' && !quietHidden;
+  const providerOk = health.hasReadyProvider ?? false;
+  const cliOk = health.claudeCliAvailable ?? true;
+  // No provider at all reads as the install card too (the one thing a default install needs).
+  const kind: ClaudeBannerView['kind'] | null = view?.kind ?? (known && (!providerOk || !cliOk) ? 'install' : null);
+  const dismissKey = view?.dismissKey ?? 'install:';
+  const hidden = !!kind && isLocalDismissed(dismissKey, kind, dismissedList);
+  const signInShowing = kind === 'sign-in' && !hidden;
 
-  const handleDismiss = useCallback(() => {
-    setDismissed(true);
-    try { localStorage.setItem(LS_DISMISS_KEY, 'true'); } catch { /* ignore */ }
-  }, []);
-
-  const dismissClaude = useCallback((key: string) => {
-    setClaudeDismissed(key);
-    try { localStorage.setItem(LS_CLAUDE_DISMISS_KEY, key); } catch { /* ignore */ }
-  }, []);
+  const onDismiss = useCallback(() => {
+    setDismissedList(dismissLocal(dismissKey));
+  }, [dismissKey]);
 
   useEffect(() => {
     const handler = () => {
-      setDismissed(false);
-      setClaudeDismissed(null);
-      try { localStorage.removeItem(LS_CLAUDE_DISMISS_KEY); } catch { /* ignore */ }
+      clearLocalDismissed();
+      setDismissedList([]);
     };
     window.addEventListener(SETUP_SHOW_EVENT, handler);
     return () => window.removeEventListener(SETUP_SHOW_EVENT, handler);
@@ -96,39 +112,69 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
       .finally(() => setPending(false));
   }, []);
 
-  // Render nothing until health has actually loaded. Before the first fetch resolves,
-  // hasReadyProvider is undefined; treating that as "not ready" is what made the
-  // onboarding banner flash on every page refresh even when a provider was configured.
-  if (!known) return null;
-
-  const providerOk = health.hasReadyProvider ?? false;
-  const cliOk = health.claudeCliAvailable ?? true;
-  if (providerOk && cliOk && !view) return null;
-
-  if (quiet) {
-    if (quietHidden) return null;
-    return (
-      <QuietBanner
-        view={quiet}
+  // Render nothing until health has actually loaded: before the first fetch
+  // resolves hasReadyProvider is undefined, and treating that as "not ready" is
+  // what made the onboarding flash on every refresh.
+  if (!kind || hidden) return NONE;
+  const title = TITLES[kind];
+  const header = (
+    <div className="setup-banner-header">
+      <span className="setup-banner-title">{title}</span>
+    </div>
+  );
+  // LAST in the section (Tab order: the actions, then this x; spec G20), drawn in the header's corner.
+  const dismiss = (
+    <button type="button" tabIndex={0} className="setup-banner-dismiss ab-local-x" onClick={onDismiss} aria-label={LOCAL_DISMISS_LABEL}>&times;</button>
+  );
+  if (kind !== 'install' && view) {
+    return {
+      present: true, title,
+      node: (
+        <QuietSection
+          header={header}
+          dismiss={dismiss}
+          view={view}
+          pending={pending}
+          error={actionError}
+          onFix={() => act(() => fixLocalClaude('claude_outdated'), 'update')}
+          onCheck={() => act(() => checkLocalClaude(false), 'check')}
+        />
+      ),
+    };
+  }
+  return {
+    present: true, title,
+    node: (
+      <InstallSection
+        header={header}
+        dismiss={dismiss}
+        view={view}
         pending={pending}
         error={actionError}
-        onDismiss={() => dismissClaude(quiet.dismissKey)}
-        onFix={() => act(() => fixLocalClaude('claude_outdated'), 'update')}
-        onCheck={() => act(() => checkLocalClaude(false), 'check')}
+        onFix={(k) => act(() => fixLocalClaude(k), 'install')}
+        onNavigateSettings={onNavigateSettings}
       />
-    );
-  }
-  if (dismissed) return null;
+    ),
+  };
+}
 
-  // ── Not ready: Claude Code is missing (that is the only thing a default install needs). ──
+/** The framed standalone (tests and any caller that is not the home banner). */
+export function SetupBanner(props: SetupBannerProps) {
+  const notice = useLocalClaudeNotice(props);
+  if (!notice.present) return null;
+  return <div className="setup-banner">{notice.node}</div>;
+}
+
+// ── Not ready: Claude Code is missing (that is the only thing a default install needs). ──
+function InstallSection({ header, dismiss, view, pending, error, onFix, onNavigateSettings }: {
+  header: ReactNode; dismiss: ReactNode; view: ClaudeBannerView | null; pending: boolean; error: string | null;
+  onFix: (kind: string) => void; onNavigateSettings: (hash?: string) => void;
+}) {
   const install = view?.kind === 'install' ? view : null;
   const problem = install?.problem;
   return (
-    <div className="setup-banner" data-testid="setup-banner-install">
-      <div className="setup-banner-header">
-        <span className="setup-banner-title">Get Walnut talking</span>
-        <button className="setup-banner-dismiss" onClick={handleDismiss} aria-label="Dismiss setup banner">&times;</button>
-      </div>
+    <section className="ab-local" data-testid="setup-banner-install">
+      {header}
       {install?.fixable ? (
         <p className="setup-lead">
           Ask Walnut runs on <strong>Claude Code</strong>. {problem && problem.kind !== 'claude_missing'
@@ -140,21 +186,22 @@ export function SetupBanner({ health, loading, onNavigateSettings }: SetupBanner
           Ask Walnut runs on <strong>Claude Code</strong>. {problem && <><InlineCodeText text={problem.message} />{' '}</>}Install it, run <code>claude</code> once to sign in, then reload this page:
         </p>
       )}
-      {install?.fixable && <FixRow view={install} label="Install Claude Code" pending={pending} error={actionError}
-        onFix={() => act(() => fixLocalClaude(problem!.kind), 'install')} />}
+      {install?.fixable && <FixRow view={install} label="Install Claude Code" pending={pending} error={error}
+        onFix={() => onFix(problem!.kind)} />}
       {!install?.failed?.command && (
         <div className="setup-alt">
           {install?.fixable && <span className="text-sm text-muted">Or install it yourself:</span>}
           <CopyCommand command={CLAUDE_CODE_INSTALL} />
         </div>
       )}
-      <div className="setup-alt" style={{ marginTop: 10 }}>
+      <div className="setup-alt ab-local-alt">
         <span className="text-sm text-muted">Prefer an API key or Bedrock credentials instead?</span>
-        <button className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
+        <button type="button" tabIndex={0} className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
           Open API settings
         </button>
       </div>
-    </div>
+      {dismiss}
+    </section>
   );
 }
 
@@ -172,7 +219,7 @@ function FixRow({ view, label, pending, error, onFix }: {
       )}
       {view.failed?.command && <CopyCommand command={view.failed.command} />}
       <div className="setup-alt">
-        <button className="setup-step-btn" disabled={pending} onClick={onFix} data-testid="setup-banner-fix">
+        <button type="button" tabIndex={0} className="setup-step-btn" disabled={pending} onClick={onFix} data-testid="setup-banner-fix">
           {view.failed ? 'Try again' : label}
         </button>
         {error && <span className="text-sm text-muted">{error}</span>}
@@ -181,25 +228,22 @@ function FixRow({ view, label, pending, error, onFix }: {
   );
 }
 
-function QuietBanner({ view, pending, error, onDismiss, onFix, onCheck }: {
-  view: ClaudeBannerView; pending: boolean; error: string | null;
-  onDismiss: () => void; onFix: () => void; onCheck: () => void;
+function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck }: {
+  header: ReactNode; dismiss: ReactNode; view: ClaudeBannerView; pending: boolean; error: string | null;
+  onFix: () => void; onCheck: () => void;
 }) {
   const problem = view.problem!;
   const signIn = view.kind === 'sign-in';
   return (
-    <div className="setup-banner" data-testid={signIn ? 'setup-banner-sign-in' : 'setup-banner-outdated'}>
-      <div className="setup-banner-header">
-        <span className="setup-banner-title">{signIn ? 'Sign in to Claude Code' : 'Update Claude Code'}</span>
-        <button className="setup-banner-dismiss" onClick={onDismiss} aria-label="Dismiss setup banner">&times;</button>
-      </div>
+    <section className="ab-local" data-testid={signIn ? 'setup-banner-sign-in' : 'setup-banner-outdated'}>
+      {header}
       <p className="setup-lead"><InlineCodeText text={problem.message} /></p>
       {signIn ? (
         <>
           <CopyCommand command={problem.commands[0] ?? 'claude'} />
           <div className="setup-alt">
             <span className="text-sm text-muted">Walnut checks again every 15 seconds and hides this once you are signed in.</span>
-            <button className="setup-step-btn" disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check now</button>
+            <button type="button" tabIndex={0} className="setup-step-btn" disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check now</button>
             {error && <span className="text-sm text-muted">{error}</span>}
           </div>
         </>
@@ -208,29 +252,25 @@ function QuietBanner({ view, pending, error, onDismiss, onFix, onCheck }: {
       ) : (
         problem.commands[0] && <CopyCommand command={problem.commands[0]} />
       )}
-    </div>
+      {dismiss}
+    </section>
   );
 }
 
-function CopyCommand({ command, multiline }: { command: string; multiline?: boolean }) {
+function CopyCommand({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
-
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(command).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }).catch(() => { /* clipboard blocked, user can still select the text */ });
   }, [command]);
-
   return (
-    <span className={`setup-copy-wrap${multiline ? ' setup-copy-wrap-multiline' : ''}`}>
-      <code className={`setup-command${multiline ? ' setup-command-multiline' : ''}`} onClick={handleCopy} title="Click to copy">{command}</code>
-      <button className="setup-copy-btn" onClick={handleCopy} aria-label="Copy command">
+    <span className="setup-copy-wrap">
+      <code className="setup-command" onClick={handleCopy} title="Click to copy">{command}</code>
+      <button type="button" tabIndex={0} className="setup-copy-btn" onClick={handleCopy} aria-label="Copy command">
         {copied ? '✓' : '⎘'}
       </button>
     </span>
   );
 }
-
-/** Exported so NotificationPanel can clear the dismiss key. */
-export const SETUP_DISMISS_KEY = LS_DISMISS_KEY;

@@ -28,6 +28,7 @@ import { buildScheduledSessionMessage } from '../trigger-envelope.js';
 import {
   isLiveSessionStatus, pickDeliverySession, type DeliveryPickOptions, type DeliverySessionCandidate,
 } from '../session-target.js';
+import { clearHostGateNotices, noteHostGateRefusal } from '../host-gate-notice.js';
 
 export interface SessionExecutorConfig {
   /** Task the session belongs to. Resolved from `session: 'this'` at create time. */
@@ -293,13 +294,27 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
       ? job.check.host
       : sessions.find((s) => s.host)?.host;
     const cwd = task?.cwd || job.check?.cwd || WALNUT_HOME;
-    const started = await delivery.startSession({
-      message: envelope,
-      taskId,
-      cwd,
-      title: `Trigger: ${job.name}`,
-      ...(host ? { host } : {}),
-    });
+    let started: { sessionId?: string } | void;
+    try {
+      started = await delivery.startSession({
+        message: envelope,
+        taskId,
+        cwd,
+        title: `Trigger: ${job.name}`,
+        ...(host ? { host } : {}),
+      });
+    } catch (err) {
+      // The host gate refused: a terminal error RESULT (a throw is replayed, and
+      // every replay meets the same refusal), told to the human once per problem.
+      const refused = await noteHostGateRefusal({
+        jobId: job.id, host, err, title: `Trigger "${job.name}" could not start a session`,
+        notify: (n) => delivery.notify({ ...n, taskId }),
+      });
+      if (refused === null) throw err;
+      log.cron.warn('trigger session refused by the host gate', { jobId: job.id, taskId, host });
+      return { status: 'error', error: refused };
+    }
+    clearHostGateNotices(job.id);
     // Held until the new session is visible on the task, so the delivery queued
     // behind this one sends to it instead of starting another.
     const sessionId = (started && started.sessionId) || await awaitLaunchedSession(taskId, pickOpts);

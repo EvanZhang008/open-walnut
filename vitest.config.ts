@@ -17,6 +17,7 @@ export default defineConfig({
       '@open-walnut/service-url': path.resolve(import.meta.dirname, 'src/core/service-url.ts'),
       '@open-walnut/compaction-notice': path.resolve(import.meta.dirname, 'src/core/stream/compaction-notice.ts'),
       '@open-walnut/search-transcript': path.resolve(import.meta.dirname, 'src/core/task-search-transcript.ts'),
+      '@open-walnut/host-problem': path.resolve(import.meta.dirname, 'src/core/hosts/host-problem.ts'),
     },
   },
   test: {

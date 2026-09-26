@@ -53,7 +53,7 @@ import { isRecoverableSessionError, isRescuableStoppedRecord } from '../core/ses
 import { isAcpEngine } from '../core/agents/engine-registry.js'
 import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
-import { classifyHostConnectError, CREDENTIAL_WAIT_KINDS, credentialRetryDelayMs } from '../core/sessions/host-connect-hint.js'
+import { classifyHostConnectError, credentialRetryDelayMs } from '../core/sessions/host-connect-hint.js'
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, shq, userShellPathScript } from './remote-sh.js'
 import {
   PROD_REMOTE_DAEMON_DIR, buildDaemonDirProbeScript, chooseDaemonDir, daemonDirEnv, parseDaemonDirProbe,
@@ -64,6 +64,7 @@ import {
   parseBunInstall, parseBunProbe, type RemoteRuntime,
 } from './remote-runtime.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
+import { clearReconnectCause, decideReconnectStep, getReconnectCause, lastHostSignalAt, recordReconnectCause } from './daemon-reconnect-cause.js'
 
 const execFileAsync = promisify(execFileCb)
 
@@ -280,6 +281,10 @@ export class DaemonConnection {
   private pendingCommands = new Map<number, PendingCommand>()
   private eventHandlers: EventHandler[] = []
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /** The reconnect() attempt running now: a concurrent caller joins it instead of starting a second connect(). */
+  private _reconnectInFlight: Promise<void> | null = null
+  /** The backoff delay the pending timer continues from (so an expedited attempt keeps its place in the chain). */
+  private _reconnectChainDelayMs = 0
   private pingTimer: ReturnType<typeof setInterval> | null = null
   /** Timestamp of last pong received — used for stale connection detection. */
   private lastPongAt = 0
@@ -599,6 +604,7 @@ export class DaemonConnection {
       this._disconnectedSince = null
       this._reconnectAttempts = 0
       this._credentialReconnects = 0
+      clearReconnectCause(this.hostKey)
       this.setPhase('connected')
     } else if (changed) {
       this._disconnectedSince = Date.now()
@@ -966,6 +972,10 @@ export class DaemonConnection {
   async connect(): Promise<void> {
     if (this._connected || this._connecting) return
     this._connecting = true
+    // A reconnect timer must never fire under a running connect: its reconnect()
+    // stops the ControlMaster this attempt is building (C12b). A failure below
+    // puts the loop back on its schedule, so cancelling never ends recovery.
+    const resumeLoop = this.cancelReconnectTimer()
     // A real attempt starts here (after the early return), so the whole-attempt
     // clock never counts time spent waiting on somebody else's connect.
     this._connectStartedAt = Date.now()
@@ -1108,6 +1118,7 @@ export class DaemonConnection {
       const annotated = this.sshTarget ? await annotateCredentialFailure(err, this.sshHostString) : err
       this._connecting = false
       this.setPhase('failed')
+      if (resumeLoop) void this.handleReconnectFailure(annotated, this._reconnectChainDelayMs || DaemonConnection.RECONNECT_DELAY_MS, true)
       throw annotated
     }
   }
@@ -1245,7 +1256,7 @@ export class DaemonConnection {
         log.session.warn('DaemonConnection: launch relay refused', {
           host: this.hostKey, relayId, action, error: outcome.error, errorKind: outcome.errorKind,
         })
-        reply = { relayId, error: outcome.error, errorKind: outcome.errorKind }
+        reply = { relayId, error: outcome.error, errorKind: outcome.errorKind, ...(outcome.details ? { details: outcome.details } : {}) }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -1575,6 +1586,7 @@ export class DaemonConnection {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
+    if (this.sshTarget) clearReconnectCause(this.hostKey)
 
     // Stop ping
     if (this.pingTimer) {
@@ -3433,8 +3445,49 @@ export class DaemonConnection {
     this.scheduleReconnect(DaemonConnection.RECONNECT_DELAY_MS)
   }
 
-  private scheduleReconnect(delayMs: number): void {
+  /** The reconnect attempt running now (null between attempts). */
+  get reconnectInFlight(): Promise<void> | null { return this._reconnectInFlight }
+
+  /** A backoff timer is waiting to re-dial. */
+  get reconnectPending(): boolean { return this.reconnectTimer !== null }
+
+  /** A connect() is running on this instance (the pool's connectingPromises holds it). */
+  get connecting(): boolean { return this._connecting }
+
+  /**
+   * Run the reconnect loop's next attempt NOW instead of at its timer (a human's
+   * Connect now, or a caller that needs the host during the backoff wait), and
+   * join an attempt already dialling. A failure reschedules on the loop's own
+   * step, so the loop and its retryAt outlive a failed Connect now.
+   */
+  reconnectNow(): Promise<void> {
+    if (this._reconnectInFlight) return this._reconnectInFlight
+    if (this._connected) return Promise.resolve()
+    if (this._destroyed) return Promise.reject(new Error(`Connection to ${this.hostKey} was closed`))
+    this.cancelReconnectTimer()
+    // A cleared failure ('idle') or a standing one ('failed') reads as trying now.
+    if (this._phase !== 'reconnecting') this.setPhase('reconnecting')
+    return this.runReconnectAttempt(this._reconnectChainDelayMs || DaemonConnection.RECONNECT_DELAY_MS)
+  }
+
+  /** Drop the pending backoff timer (a human's Connect now dials at once instead). */
+  cancelReconnectTimer(): boolean {
+    if (!this.reconnectTimer) return false
+    clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+    return true
+  }
+
+  /** A wake or network change: run the pending re-dial now, keeping its place in the backoff chain. */
+  expediteReconnect(): boolean {
+    if (!this.cancelReconnectTimer()) return false
+    this.scheduleReconnect(0, this._reconnectChainDelayMs || DaemonConnection.RECONNECT_DELAY_MS)
+    return true
+  }
+
+  private scheduleReconnect(delayMs: number, chainDelayMs: number = delayMs): void {
     if (this._destroyed || this._connected || this.reconnectTimer) return
+    this._reconnectChainDelayMs = chainDelayMs
 
     // Auto-reconnect for __local__ is a pool-instance privilege. A __local__
     // connection outside the pool is an orphan from the pre-pool leak (or a
@@ -3451,46 +3504,86 @@ export class DaemonConnection {
       return
     }
 
-    this.reconnectTimer = setTimeout(async () => {
+    this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       if (this._destroyed || this._connected) return
-      this._reconnectAttempts += 1
+      // A connect() owns this instance right now: reconnect() would stop the
+      // ControlMaster it is building (C12b). Wait one more step; a success ends the loop.
+      if (this._connecting) {
+        this.scheduleReconnect(Math.max(chainDelayMs, DaemonConnection.RECONNECT_DELAY_MS), chainDelayMs)
+        return
+      }
+      this.runReconnectAttempt(chainDelayMs).catch(() => { /* the failure already rescheduled the loop */ })
+    }, delayMs)
+  }
+
+  /** One reconnect attempt (the timer's or reconnectNow's). Rejects with the attempt's error after rescheduling. */
+  private runReconnectAttempt(chainDelayMs: number): Promise<void> {
+    this._reconnectAttempts += 1
+    // Each attempt restarts the whole-attempt clock, or attemptStartedAt keeps the first dial's time forever.
+    this._connectStartedAt = Date.now()
+    const run = (async () => {
       try {
         await this.reconnect()
       } catch (rawErr) {
-        // Same local evidence as a first connect: an expired certificate on a
-        // host that WAS connected must read as cert_expired, not plain auth.
-        const err = this.sshTarget ? await annotateCredentialFailure(rawErr, this.sshHostString) : rawErr
-        if (this._destroyed || this._connected) return
-        const msg = err instanceof Error ? err.message : String(err)
-        // Standing failures: retrying every 30s can't fix an expired SSH cert
-        // (needs a login), a changed host key, or a hostname that no longer
-        // resolves. Credential waits follow the warmup's schedule (1, 2, 5, 10
-        // minutes, then hourly) so a login done elsewhere reconnects soon;
-        // the rest back off to a slow probe (RECONNECT_STANDING_FAILURE_DELAY_MS).
-        const kind = this.sshTarget
-          ? classifyHostConnectError(msg, this.sshHostString, [this.hostKey, this.ssh.hostname, this.ssh.user ?? '']).kind
-          : 'unknown'
-        const credentialWait = CREDENTIAL_WAIT_KINDS.has(kind)
-        const standing = credentialWait || kind === 'auth' || kind === 'dns' || kind === 'host_key'
-        const nextDelayMs = credentialWait
-          ? credentialRetryDelayMs(this._credentialReconnects++)
-          : standing
-            ? DaemonConnection.RECONNECT_STANDING_FAILURE_DELAY_MS
-            : Math.min(delayMs * 2, DaemonConnection.RECONNECT_MAX_DELAY_MS)
-        if (!credentialWait) this._credentialReconnects = 0
-        log.session.warn('DaemonConnection: reconnect failed, will retry', {
-          host: this.hostKey,
-          attempt: this._reconnectAttempts,
-          stuckForMs: this._disconnectedSince ? Date.now() - this._disconnectedSince : null,
-          error: msg,
-          standingFailure: standing || undefined,
-          kind,
-          nextDelayMs,
-        })
-        this.scheduleReconnect(nextDelayMs)
+        throw await this.handleReconnectFailure(rawErr, chainDelayMs)
       }
-    }, delayMs)
+    })()
+    const inFlight: Promise<void> = run.finally(() => { if (this._reconnectInFlight === inFlight) this._reconnectInFlight = null })
+    this._reconnectInFlight = inFlight
+    return inFlight
+  }
+
+  /**
+   * A reconnect attempt failed (or a connect() that interrupted the loop did):
+   * record the cause every surface reads and schedule the next attempt. Returns
+   * the error as the local credential evidence explains it.
+   */
+  private async handleReconnectFailure(rawErr: unknown, chainDelayMs: number, annotated = false): Promise<unknown> {
+    // Same local evidence as a first connect: an expired certificate on a
+    // host that WAS connected must read as cert_expired, not plain auth.
+    const err = annotated || !this.sshTarget ? rawErr : await annotateCredentialFailure(rawErr, this.sshHostString)
+    if (this._destroyed || this._connected) return err
+    const msg = err instanceof Error ? err.message : String(err)
+    // Standing failures: retrying every 30s can't fix an expired SSH cert
+    // (needs a login), a changed host key, or a hostname that no longer
+    // resolves. Credential waits follow the warmup's schedule (1, 2, 5, 10
+    // minutes, then hourly) so a login done elsewhere reconnects soon;
+    // the rest back off to a slow probe (RECONNECT_STANDING_FAILURE_DELAY_MS).
+    const kind = this.sshTarget
+      ? classifyHostConnectError(msg, this.sshHostString, [this.hostKey, this.ssh.hostname, this.ssh.user ?? '']).kind
+      : 'unknown'
+    // Which of these, and the cause every surface reads: daemon-reconnect-cause.ts.
+    const now = Date.now()
+    const step = decideReconnectStep({
+      kind, now, delayMs: chainDelayMs, credentialAttempt: this._credentialReconnects, lastSignalAt: lastHostSignalAt(),
+      standingDelayMs: DaemonConnection.RECONNECT_STANDING_FAILURE_DELAY_MS,
+      maxDelayMs: DaemonConnection.RECONNECT_MAX_DELAY_MS, credentialDelayMs: credentialRetryDelayMs,
+    })
+    const { credentialWait, standing, nextDelayMs } = step
+    if (credentialWait) this._credentialReconnects++
+    else this._credentialReconnects = 0
+    recordReconnectCause(this.hostKey, {
+      summary: summarizeConnectFailure(msg), kind, since: this._disconnectedSince ?? now, at: now, standing,
+      ...(step.retryAt ? { retryAt: step.retryAt } : {}),
+    })
+    log.session.warn('DaemonConnection: reconnect failed, will retry', {
+      host: this.hostKey,
+      attempt: this._reconnectAttempts,
+      stuckForMs: this._disconnectedSince ? Date.now() - this._disconnectedSince : null,
+      error: msg,
+      standingFailure: standing || undefined,
+      kind,
+      nextDelayMs,
+    })
+    this.scheduleReconnect(nextDelayMs)
+    // A standing cause reads 'failed' on screen while recovery goes on; a
+    // transient one reads 'reconnecting' (also after a cleared or standing
+    // failure, whose phase would otherwise outlive its cause).
+    if (standing && this._phase !== 'failed') this.setPhase('failed')
+    else if (!standing && this._phase !== 'reconnecting') this.setPhase('reconnecting')
+    else notifyDaemonPhaseChange(this.hostKey)
+    return err
   }
 
   /**
@@ -4314,6 +4407,22 @@ export async function getDaemonConnection(hostKey: string, sshTarget: SshTarget)
   const existing = connectionPool.get(hostKey)
   if (existing?.connected) return existing
 
+  // The reconnect loop owns this instance (dialling, or waiting out its backoff):
+  // join it through reconnectNow. A second connect() on the same instance would
+  // race the reconnect's tunnel and ControlMaster (C12, C12b).
+  if (existing && existing.targetsSame(sshTarget) && (existing.reconnectInFlight || existing.reconnectPending)) {
+    // A standing cause (auth, host key, dns, credential) waits on purpose, so an
+    // automatic caller fails fast with it; only a human's Connect now (reconnectHostNow) expedites it.
+    const cause = existing.reconnectInFlight ? undefined : getReconnectCause(hostKey)
+    if (cause?.standing) {
+      throw new Error(`Connection to ${hostKey} failed ${Math.round((Date.now() - cause.at) / 1000)}s ago: ${cause.summary}`)
+    }
+    return existing.reconnectNow().then(() => {
+      if (!existing.connected) throw new Error(`Connection to ${hostKey} is still reconnecting`)
+      return existing
+    })
+  }
+
   // Check failure cache — avoid retrying a recently-failed host
   const cached = failureCache.get(hostKey)
   if (cached && Date.now() - cached.time < FAILURE_CACHE_TTL_MS) {
@@ -4445,6 +4554,48 @@ export function clearDaemonFailureCache(hostKey?: string): void {
 }
 
 /**
+ * A human asked to connect now: drop the pending reconnect backoff so the next
+ * getDaemonConnection dials at once (C11). True when a timer was cancelled.
+ */
+export function cancelReconnectBackoff(hostKey: string): boolean {
+  return connectionPool.get(hostKey)?.cancelReconnectTimer() ?? false
+}
+
+/**
+ * A human's Connect now for a host whose reconnect loop owns it (waiting on its
+ * backoff or dialling): the loop's attempt runs now and the loop survives a
+ * failure. null = no loop to join (dial with getDaemonConnection instead).
+ */
+export function reconnectHostNow(hostKey: string, sshTarget?: SshTarget | null): Promise<void> | null {
+  const conn = connectionPool.get(hostKey)
+  if (!conn || conn.connected || conn.connecting) return null
+  if (!conn.reconnectPending && !conn.reconnectInFlight) return null
+  // A changed hostname is a new machine: getDaemonConnection replaces the pooled connection.
+  if (sshTarget !== undefined && !conn.targetsSame(sshTarget)) return null
+  return conn.reconnectNow()
+}
+
+/** A wake or network change: run a pending reconnect of this host now. True when one was pending. */
+export function expediteReconnect(hostKey: string): boolean {
+  return connectionPool.get(hostKey)?.expediteReconnect() ?? false
+}
+
+/** Test seam ONLY (@internal): pool a connection built without dialling, or drop it (null). */
+export function setPooledConnectionForTest(hostKey: string, conn: DaemonConnection | null): void {
+  if (conn) connectionPool.set(hostKey, conn)
+  else connectionPool.delete(hostKey)
+}
+
+/** Hosts whose reconnect loop is waiting on a timer or dialling right now. */
+export function reconnectingHosts(): string[] {
+  const out: string[] = []
+  for (const [key, conn] of connectionPool) {
+    if (!key.startsWith('direct:') && !conn.connected && (conn.reconnectPending || conn.reconnectInFlight)) out.push(key)
+  }
+  return out
+}
+
+/**
  * Disconnect all daemon connections. Called on server shutdown.
  */
 export function disconnectAllDaemons(): void {
@@ -4483,6 +4634,19 @@ export interface DaemonConnectState {
   error?: string
   /** ms until the failure cache expires and an automatic retry is allowed. */
   retryInMs?: number
+  /** The failure's kind when the connection knows it better than its summary (a reconnect's standing cause). */
+  kind?: string
+  /** Epoch ms of the next attempt really scheduled (a standing reconnect's slow probe or credential re-dial). */
+  retryAt?: number
+  /** The reconnect loop's last failure, while the phase is still 'reconnecting'. */
+  lastError?: string
+  lastKind?: string
+  /** When the host dropped (the current reconnect began). */
+  reconnectSince?: number
+  /** When the current connect attempt began (epoch ms). */
+  attemptStartedAt?: number
+  /** When the current connection came up (epoch ms). */
+  connectedAt?: number
   /** Which runtime the host's daemon ended up on (after any fallback). */
   runtime?: RemoteRuntime | 'unknown'
   /** Where the daemon keeps its files there, once a probe decided. */
@@ -4513,7 +4677,33 @@ export function getDaemonConnectState(hostKey: string): DaemonConnectState {
     // allowed right now).
     state.error = failure.error
   }
+  foldReconnectCause(state, conn, failure)
   return state
+}
+
+/** The reconnect loop's cause (daemon-reconnect-cause.ts) and the attempt clocks. */
+function foldReconnectCause(state: DaemonConnectState, conn: DaemonConnection | undefined, failure?: { time: number }): void {
+  if (conn?.connectStartedAt && !state.connected) state.attemptStartedAt = conn.connectStartedAt
+  if (conn?.connected && state.phase === 'connected') state.connectedAt = conn.connectPhaseSince
+  if (state.phase === 'reconnecting' && conn?.disconnectedSince) state.reconnectSince = conn.disconnectedSince
+  const cause = getReconnectCause(state.host)
+  if (!cause || state.connected) return
+  if (state.phase === 'reconnecting') {
+    state.lastError = cause.summary
+    state.lastKind = cause.kind
+    state.reconnectSince = cause.since
+  } else if (state.phase === 'failed' && cause.standing) {
+    // A first-connect failure NEWER than the loop's own explains the frame
+    // better. A cache entry is never evicted, so gating on its mere presence hid
+    // the loop's cause (and retryAt) for good after one connect() failure.
+    if (!failure || failure.time <= cause.at) {
+      state.error = cause.summary
+      state.kind = cause.kind
+      state.reconnectSince = cause.since
+    }
+    // retryAt is the loop's armed timer, true whichever text explains the failure.
+    if (cause.retryAt && conn?.reconnectPending) state.retryAt = cause.retryAt
+  }
 }
 
 /**

@@ -48,6 +48,8 @@ export interface MobileLaunchInput {
   model?: string;
   mode?: string;
   engine?: SessionEngine;
+  /** "Start anyway": skip an overridable readiness refusal (claude_outdated / claude_not_logged_in). */
+  overrideReadiness?: boolean;
 }
 
 /** HTTP status → frozen v1 error code (also the relay errorKind vocabulary). */
@@ -66,7 +68,7 @@ export function launchErrorCode(status: number): string {
  */
 function validateLaunchBody(body: unknown): MobileLaunchInput {
   const {
-    cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode,
+    cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode, overrideReadiness,
   } = (body ?? {}) as {
     cwd?: unknown;
     host?: unknown;
@@ -76,6 +78,7 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     project?: unknown;
     model?: unknown;
     mode?: unknown;
+    overrideReadiness?: unknown;
   };
 
   if (typeof cwd !== 'string' || !cwd.trim()) {
@@ -140,6 +143,7 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     project: typeof project === 'string' ? project.trim() : undefined,
     model,
     mode: typeof mode === 'string' ? mode : undefined,
+    ...(overrideReadiness === true ? { overrideReadiness: true } : {}),
   };
 }
 
@@ -218,6 +222,12 @@ export async function computeLaunchOptions(): Promise<LaunchOptionsResult> {
 export interface MobileLaunchResult { sessionId?: string; taskId: string; title: string }
 
 /**
+ * The phone's request dies at 30s and a relayed one also pays up to 8s of
+ * bridge wait, so the host gate gets 10s here instead of its 25s default.
+ */
+export const MOBILE_HOST_GATE_DEADLINE_MS = 10_000;
+
+/**
  * Config host check + the shared quickStartSession core. Throws
  * QuickStartError with an HTTP-ish statusCode on every failure.
  */
@@ -225,15 +235,16 @@ export async function performMobileLaunch(
   input: MobileLaunchInput,
   source: string,
 ): Promise<MobileLaunchResult> {
-  // Host: must be an enabled config.hosts alias — a clear 400 beats a doomed
-  // daemon connect.
+  // Host: must be an enabled config.hosts alias. Refused with the gate's own
+  // host_removed body, so the phone and the web draft answer a gone host alike.
   if (input.host !== undefined) {
     const config = await getConfig();
-    const entry = config.hosts?.[input.host];
+    const hosts = config.hosts ?? {};
+    const entry = Object.hasOwn(hosts, input.host) ? hosts[input.host] : undefined;
     if (!entry || entry.enabled === false) {
-      throw new QuickStartError(
-        `Unknown host: ${input.host}. Use an alias from GET /api/v1/sessions/launch-options`, 400,
-      );
+      const { hostGateBody, HOST_REMOVED_NOTE } = await import('../hosts/host-problem.js');
+      const body = hostGateBody({ code: 'host_removed', host: input.host, headline: HOST_REMOVED_NOTE });
+      throw new QuickStartError(body.error, 409, { ...body });
     }
   }
 
@@ -251,6 +262,8 @@ export async function performMobileLaunch(
     requestTs: Date.now(),
     engine: normalizeEngine(input.engine),
     preassignedSessionId,
+    ...(input.overrideReadiness ? { overrideReadiness: true } : {}),
+    hostGate: { deadlineMs: MOBILE_HOST_GATE_DEADLINE_MS },
   });
   log.web.info(`${source}: session created`, {
     sessionId: preassignedSessionId, taskId: task.id, cwd: input.cwd, host: input.host ?? '',
@@ -272,7 +285,7 @@ export async function performMobileLaunch(
 export async function handleLaunchRelayRequest(
   action: string,
   params: unknown,
-): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; error: string; errorKind: string }> {
+): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; error: string; errorKind: string; details?: Record<string, unknown> }> {
   try {
     if (action === 'options') {
       const result = await computeLaunchOptions();
@@ -288,10 +301,22 @@ export async function handleLaunchRelayRequest(
     return { ok: false, error: `Unknown launch action: ${action}`, errorKind: 'bad_request' };
   } catch (err) {
     if (err instanceof QuickStartError) {
+      // A host gate refusal keeps its code and fields across the bridge, or the
+      // phone gets a bare "conflict" with no host, headline, hint or Start anyway.
+      const gate = hostGateRelayFields(err);
+      if (gate) return { ok: false, error: err.message, errorKind: gate.code, details: gate.details };
       return { ok: false, error: err.message, errorKind: launchErrorCode(err.statusCode) };
     }
     const message = err instanceof Error ? err.message : String(err);
     log.web.error('launch relay failed', { action, error: message });
     return { ok: false, error: message, errorKind: 'internal' };
   }
+}
+
+/** The host gate's 409 body split for the relay reply: `code` rides errorKind, the rest rides `details`. */
+export function hostGateRelayFields(err: QuickStartError): { code: string; details: Record<string, unknown> } | null {
+  const body = err.body;
+  if (err.statusCode !== 409 || !body || typeof body.code !== 'string' || !body.code.startsWith('host_')) return null;
+  const { error: _error, code, ...details } = body;
+  return { code, details };
 }
