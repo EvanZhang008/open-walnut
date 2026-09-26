@@ -408,7 +408,9 @@ describe('draft decision menu controller', () => {
     expect(tier.getAttribute('style')).toMatch(/--i:\s?0/);
     expect(chipEl('priority').getAttribute('style')).toMatch(/--i:\s?0/);
     expect(chipEl('dueDate').getAttribute('style')).toMatch(/--i:\s?1/);
-    expect(chipEl('priority').textContent).toBe('!! Immediate✦');
+    // Key, glyph and value: the chip names its field (edc0876d), then the menu's words.
+    expect(chipEl('priority').textContent).toBe('Priority: !! Immediate✦');
+    expect(chipEl('priority').querySelector('.draft-decision-key')!.textContent).toBe('Priority:');
     await render({ chips: [] });
     expect(doc.body.querySelector('.draft-decision-row')).toBeNull();
   });
