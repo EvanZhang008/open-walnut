@@ -13,10 +13,11 @@
  * pinned by tests/web/routes/api-v1-task-create-placement.test.ts; this spec
  * owns what a human SEES and can click.
  */
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { REAL_PANEL } from './draft-helpers'
+import { seedShortcutBars } from './shortcut-test-fixture'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOT_DIR = '/tmp/subtask-pill'
@@ -31,6 +32,38 @@ async function createTask(title: string, opts: Record<string, unknown>): Promise
   const { task } = await res.json() as { task: { id: string } }
   litter.push(task.id)
   return task.id
+}
+
+/**
+ * Sub and Leader are buttons, so they must look like every other clickable pill
+ * in a title row: the TRIGGER pill's box and type (user report 2026-09-25,
+ * Leader drawn a size larger than TRIGGER beside it). Measured against a real
+ * `.task-trigger-pill` placed next to the pill in the same row, so the check
+ * follows the TRIGGER style instead of copying its numbers.
+ */
+async function expectTriggerShape(pill: Locator): Promise<void> {
+  const [mine, trigger] = await pill.evaluate((el) => {
+    const probe = document.createElement('button')
+    probe.className = 'task-trigger-pill'
+    probe.textContent = 'Probe'
+    el.parentElement!.insertBefore(probe, el.nextSibling)
+    const pick = (n: Element) => {
+      const s = getComputedStyle(n)
+      return {
+        height: Math.round(n.getBoundingClientRect().height * 10) / 10,
+        radius: s.borderTopLeftRadius, borderWidth: s.borderTopWidth, borderStyle: s.borderTopStyle,
+        fontFamily: s.fontFamily, fontSize: s.fontSize, fontWeight: s.fontWeight,
+        letterSpacing: s.letterSpacing, lineHeight: s.lineHeight,
+        paddingLeft: s.paddingLeft, paddingRight: s.paddingRight,
+      }
+    }
+    const out = [pick(el), pick(probe)]
+    probe.remove()
+    return out
+  })
+  expect(mine).toEqual(trigger)
+  // The capitals are CSS only; the DOM text (asserted elsewhere) stays mixed case.
+  expect(await pill.evaluate((el) => getComputedStyle(el).textTransform)).toBe('uppercase')
 }
 
 test.beforeEach(async ({ page }) => {
@@ -71,15 +104,18 @@ test('a subtask shows Sub on its pinned card and its list row; a top-level task 
   await expect(card(pinnedChild).locator('[data-testid="leader-pill"]')).toHaveCount(0)
   await expect(card(loose).locator('[data-testid="leader-pill"]')).toHaveCount(0)
 
-  // Its own violet, not the base pill's grey: the stylesheet loads before
-  // globals.css, so a selector that only ties the base rule loses on order.
+  // Its own violet, not a grey base pill's: the stylesheet loads before
+  // globals.css, so a selector that only ties another rule loses on order.
   // The page runs in the light scheme (emulateMedia before load).
   const paint = await pill.evaluate((el) => {
     const s = getComputedStyle(el)
     return { color: s.color, background: s.backgroundColor }
   })
   expect(paint.color).toBe('rgb(106, 79, 216)')
-  expect(paint.background).toBe('rgba(124, 92, 255, 0.12)')
+  expect(paint.background).toBe('rgba(124, 92, 255, 0.1)')
+  // Both team pills take the TRIGGER pill's shape.
+  await expectTriggerShape(pill)
+  await expectTriggerShape(card(parent).locator('[data-testid="leader-pill"]'))
 
   // The pill never pushes the card past its width: the title ellipsizes first.
   const cardBox = await card(pinnedChild).boundingBox()
@@ -133,6 +169,8 @@ test('a subtask in another project is a top-level row there, and its Sub pill le
   // The parent leads both, across projects.
   const leaderPill = row(parent).locator('[data-testid="leader-pill"]')
   await expect(leaderPill).toHaveText('Leader · 2')
+  await expectTriggerShape(leaderPill)
+  await expectTriggerShape(farPill)
   await expect(row(near).locator('[data-testid="leader-pill"]')).toHaveCount(0)
 
   // Clicking the pill locates the PARENT (selects it), not the row it sits in.
@@ -202,6 +240,7 @@ test('a parent\'s session header carries the Leader pill, and its list leads to 
   const header = panel.locator('.session-panel-title-meta')
   const leader = header.locator('[data-testid="leader-pill"]')
   await expect(leader).toHaveText('Leader · 2')
+  await expectTriggerShape(leader)
   // It has no parent of its own, so no Sub pill in its header.
   await expect(header.locator('[data-testid="subtask-pill"]')).toHaveCount(0)
 
@@ -226,4 +265,70 @@ test('a parent\'s session header carries the Leader pill, and its list leads to 
   await flyout.locator(`[data-testid="leader-sub-row"][data-task-id="${near}"]`).click()
   await expect(flyout).toHaveCount(0)
   await expect(page.locator(`.todo-panel-item[data-task-id="${near}"]`)).toHaveClass(/task-focused/, { timeout: 10_000 })
+})
+
+
+test('a subtask a Focus task\'s session files is born in Focus, not Satellite', async ({ page, browserName }) => {
+  // User report 2026-09-25: the caller sat in Focus and its new subtask landed in
+  // Satellite. The create goes through the same door a session's task_create
+  // uses (POST /api/v1/tasks with the caller's session id), then the board is
+  // read the way the user reads it: the Focus tab, and the Satellite tab by click.
+  test.setTimeout(120_000)
+  const parent = 'pw-task-model-switch'
+  const before = await (await fetch(`${API}/api/tasks/${parent}`)).json() as { task?: { focus_tier?: string; pinned?: boolean } }
+  expect(before.task).toBeTruthy()
+  const wasPinned = Boolean(before.task?.pinned)
+  const restoreTier = before.task?.focus_tier || 'satellite'
+  const put = (tier: string) => fetch(`${API}/api/focus/tasks/${parent}/tier`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tier }),
+  })
+  // A tier only exists on the pinned board, so pin the fixture task first.
+  if (!wasPinned) expect((await fetch(`${API}/api/focus/tasks/${parent}`, { method: 'POST' })).ok).toBe(true)
+  try {
+    expect((await put('focus')).ok).toBe(true)
+    const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+    const res = await fetch(`${API}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': 'pw-model-switch-session' },
+      body: JSON.stringify({ title: `Split off from Focus ${stamp}` }),
+    })
+    expect(res.status).toBe(201)
+    const created = await res.json() as { task: { id: string }; placement: { tier?: string; parent_task_id?: string } }
+    litter.push(created.task.id)
+    expect(created.placement.tier).toBe('focus')
+    expect(created.placement.parent_task_id).toBe(parent)
+    const split = await (await fetch(`${API}/api/focus/tasks`)).json() as { focus_tasks: string[]; satellite_tasks: string[] }
+    expect(split.focus_tasks).toContain(created.task.id)
+    expect(split.satellite_tasks).not.toContain(created.task.id)
+
+    // The tier tabs are an optional bar; turn it on for this page.
+    await seedShortcutBars(page)
+    await presetPanelView(page, { section: 'focus', project: '' })
+    await page.emulateMedia({ colorScheme: 'light' })
+    await page.goto('/')
+    const focusTab = page.locator('.todo-section-tabs [role="tab"]', { hasText: 'Focus' }).first()
+    await expect(focusTab).toHaveAttribute('aria-selected', 'true', { timeout: 90_000 })
+    // A tier tab draws flat cards; the All view draws list rows.
+    const inList = (id: string) => page.locator(`.todo-focus-card[data-task-id="${id}"], .todo-pinned-card[data-task-id="${id}"], .todo-panel-item[data-task-id="${id}"]`).first()
+    await expect(inList(created.task.id)).toBeVisible({ timeout: 30_000 })
+    await expect(inList(created.task.id).locator('[data-testid="subtask-pill"]')).toHaveText('Sub')
+    await expect(inList(parent)).toBeVisible()
+    await expect(inList(parent).locator('[data-testid="leader-pill"]')).toBeVisible()
+    await fs.mkdir(SHOT_DIR, { recursive: true })
+    const panel = (await page.locator('.todo-panel').first().boundingBox())!
+    const row = (await inList(parent).boundingBox())!
+    await page.screenshot({
+      path: `${SHOT_DIR}/${browserName}-focus-tier-subtask.png`,
+      clip: { x: panel.x, y: panel.y, width: panel.width, height: Math.min(panel.height, row.y + row.height - panel.y + 40) },
+    })
+
+    // Not in Satellite: the tier the create used to fall into.
+    const satTab = page.locator('.todo-section-tabs [role="tab"]', { hasText: 'Satellite' }).first()
+    await satTab.click()
+    await expect(satTab).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator(`.todo-panel [data-task-id="${created.task.id}"]`)).toHaveCount(0)
+  } finally {
+    if (wasPinned) await put(restoreTier)
+    else await fetch(`${API}/api/focus/tasks/${parent}`, { method: 'DELETE' })
+  }
 })

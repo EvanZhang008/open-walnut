@@ -42,7 +42,7 @@ export function SubtaskPill({ task, className }: { task: { parent_task_id?: stri
     <span
       role="button"
       tabIndex={0}
-      className={`todo-item-due-pill todo-item-subtask-pill${className ? ` ${className}` : ''}`}
+      className={`task-team-pill todo-item-subtask-pill${className ? ` ${className}` : ''}`}
       title={subtaskPillTitle(parent?.title)}
       data-testid="subtask-pill"
       data-parent-task-id={parent?.id ?? parentId}

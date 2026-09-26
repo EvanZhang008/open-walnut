@@ -88,7 +88,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
       <button
         ref={triggerRef}
         type="button"
-        className={`todo-item-due-pill todo-item-leader-pill${className ? ` ${className}` : ''}`}
+        className={`task-team-pill todo-item-leader-pill${className ? ` ${className}` : ''}`}
         title={leaderPillTitle(subtasks)}
         aria-label={open ? 'Leads subtasks. Hide them' : 'Leads subtasks. List them'}
         aria-haspopup="dialog"

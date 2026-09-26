@@ -1,90 +1,82 @@
-/* Sub pill (SubtaskPill.tsx): informational, quieter than a due date. A soft
-   violet tint keeps it apart from the blue start pill and the grey imported one.
-   flex-shrink 0 so a long title ellipsizes before the pill is squeezed.
-   Every selector pairs both classes: this file is injected BEFORE globals.css
-   (the component module loads first), so a single class ties with the base
-   .todo-item-due-pill and loses on order, which painted the pill grey.
-   The pill is a button (it leads to the parent task), so it takes the pointer
-   cursor and a hover/focus tint the plain due pill does not have.
+/* Sub and Leader pills (SubtaskPill.tsx, LeaderPill.tsx): the team link, a
+   clickable pair. They are BUTTONS, so they take the shape every clickable pill
+   in a title row has, the TRIGGER pill's (.task-trigger-pill in globals.css) and
+   the header CRON pill's: 15px tall, 4px corners, a 1px border, 10px bold
+   capitals. Only the hue differs: violet, so the pair reads as one relation and
+   apart from TRIGGER's blue. The informational pills (due date, start date,
+   Imported) keep the soft rounded .todo-item-due-pill look; a clickable pill
+   dressed like a date is what made Leader look foreign beside TRIGGER.
+   The capitals are CSS only: the DOM text stays "Sub" / "Leader · N", which is
+   what a screen reader says and what tests read.
+   Every selector pairs two classes: this file is injected BEFORE globals.css
+   (the component module loads first), so a single class can lose on order.
    Dark mode follows the app's two switches: an explicit data-theme, or the OS
    preference when no theme is set (same pattern as globals.css). */
-.todo-item-due-pill.todo-item-subtask-pill {
-  background: rgba(124, 92, 255, 0.12);
+.task-team-pill.todo-item-subtask-pill,
+.task-team-pill.todo-item-leader-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 15px;
+  margin: 0;
+  padding: 0 5px;
+  border: 1px solid rgba(124, 92, 255, 0.45);
+  border-radius: 4px;
+  background: rgba(124, 92, 255, 0.1);
   color: #6a4fd8;
-  flex-shrink: 0;
-  cursor: pointer;
-}
-
-.todo-item-due-pill.todo-item-subtask-pill:hover,
-.todo-item-due-pill.todo-item-subtask-pill:focus-visible {
-  background: rgba(124, 92, 255, 0.24);
-  outline: none;
-}
-
-:root[data-theme="dark"] .todo-item-due-pill.todo-item-subtask-pill {
-  background: rgba(160, 140, 255, 0.18);
-  color: #b9a8ff;
-}
-
-:root[data-theme="dark"] .todo-item-due-pill.todo-item-subtask-pill:hover,
-:root[data-theme="dark"] .todo-item-due-pill.todo-item-subtask-pill:focus-visible {
-  background: rgba(160, 140, 255, 0.32);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .todo-item-due-pill.todo-item-subtask-pill {
-    background: rgba(160, 140, 255, 0.18);
-    color: #b9a8ff;
-  }
-  :root:not([data-theme]) .todo-item-due-pill.todo-item-subtask-pill:hover,
-  :root:not([data-theme]) .todo-item-due-pill.todo-item-subtask-pill:focus-visible {
-    background: rgba(160, 140, 255, 0.32);
-  }
-}
-
-/* Leader pill (LeaderPill.tsx): the Sub pill's twin on the parent, same violet
-   so the pair reads as one relation. It is a real <button>, so the browser's
-   button chrome is reset here (the base pill is a span). */
-.todo-item-due-pill.todo-item-leader-pill {
-  background: rgba(124, 92, 255, 0.12);
-  color: #6a4fd8;
-  flex-shrink: 0;
-  cursor: pointer;
-  border: 0;
   font: inherit;
-  font-size: inherit;
-  line-height: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
 }
 
-.todo-item-due-pill.todo-item-leader-pill:hover,
-.todo-item-due-pill.todo-item-leader-pill:focus-visible,
-.todo-item-due-pill.todo-item-leader-pill[aria-expanded="true"] {
-  background: rgba(124, 92, 255, 0.24);
+.task-team-pill.todo-item-subtask-pill:hover,
+.task-team-pill.todo-item-subtask-pill:focus-visible,
+.task-team-pill.todo-item-leader-pill:hover,
+.task-team-pill.todo-item-leader-pill:focus-visible,
+.task-team-pill.todo-item-leader-pill[aria-expanded="true"] {
+  border-color: rgb(124, 92, 255);
+  background: rgba(124, 92, 255, 0.18);
   outline: none;
 }
 
-:root[data-theme="dark"] .todo-item-due-pill.todo-item-leader-pill {
-  background: rgba(160, 140, 255, 0.18);
+:root[data-theme="dark"] .task-team-pill.todo-item-subtask-pill,
+:root[data-theme="dark"] .task-team-pill.todo-item-leader-pill {
+  border-color: rgba(160, 140, 255, 0.5);
+  background: rgba(160, 140, 255, 0.14);
   color: #b9a8ff;
 }
 
-:root[data-theme="dark"] .todo-item-due-pill.todo-item-leader-pill:hover,
-:root[data-theme="dark"] .todo-item-due-pill.todo-item-leader-pill:focus-visible,
-:root[data-theme="dark"] .todo-item-due-pill.todo-item-leader-pill[aria-expanded="true"] {
-  background: rgba(160, 140, 255, 0.32);
+:root[data-theme="dark"] .task-team-pill.todo-item-subtask-pill:hover,
+:root[data-theme="dark"] .task-team-pill.todo-item-subtask-pill:focus-visible,
+:root[data-theme="dark"] .task-team-pill.todo-item-leader-pill:hover,
+:root[data-theme="dark"] .task-team-pill.todo-item-leader-pill:focus-visible,
+:root[data-theme="dark"] .task-team-pill.todo-item-leader-pill[aria-expanded="true"] {
+  border-color: rgb(160, 140, 255);
+  background: rgba(160, 140, 255, 0.26);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .todo-item-due-pill.todo-item-leader-pill {
-    background: rgba(160, 140, 255, 0.18);
+  :root:not([data-theme]) .task-team-pill.todo-item-subtask-pill,
+  :root:not([data-theme]) .task-team-pill.todo-item-leader-pill {
+    border-color: rgba(160, 140, 255, 0.5);
+    background: rgba(160, 140, 255, 0.14);
     color: #b9a8ff;
   }
-  :root:not([data-theme]) .todo-item-due-pill.todo-item-leader-pill:hover,
-  :root:not([data-theme]) .todo-item-due-pill.todo-item-leader-pill:focus-visible,
-  :root:not([data-theme]) .todo-item-due-pill.todo-item-leader-pill[aria-expanded="true"] {
-    background: rgba(160, 140, 255, 0.32);
+  :root:not([data-theme]) .task-team-pill.todo-item-subtask-pill:hover,
+  :root:not([data-theme]) .task-team-pill.todo-item-subtask-pill:focus-visible,
+  :root:not([data-theme]) .task-team-pill.todo-item-leader-pill:hover,
+  :root:not([data-theme]) .task-team-pill.todo-item-leader-pill:focus-visible,
+  :root:not([data-theme]) .task-team-pill.todo-item-leader-pill[aria-expanded="true"] {
+    border-color: rgb(160, 140, 255);
+    background: rgba(160, 140, 255, 0.26);
   }
 }
 
