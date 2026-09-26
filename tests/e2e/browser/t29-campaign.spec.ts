@@ -142,7 +142,7 @@ test('notification panel: Remote Hosts rows say Connected/Disconnected, never Id
   await expect(panel.locator('.notification-card-label', { hasText: 'Data Backup' })).toBeVisible({ timeout: 10_000 })
 
   const hostsCard = panel.locator('.notification-card', {
-    has: page.locator('.notification-card-label', { hasText: 'Remote Hosts' }),
+    has: page.locator('.notification-card-label', { hasText: 'Remote hosts' }),
   })
   if (await hostsCard.count() === 0) {
     // Fixture without configured hosts: the panel must still render cleanly.
@@ -155,7 +155,9 @@ test('notification panel: Remote Hosts rows say Connected/Disconnected, never Id
     expect(rowCount).toBeGreaterThan(0)
     for (let i = 0; i < rowCount; i++) {
       const status = rows.nth(i).locator('.notification-detail-value').first()
-      await expect(status).toContainText(/Connected|Disconnected/)
+      // A state word, a host switched off in Settings ('Disabled', its word there), or the
+      // shared failure sentence ('Could not connect to Key box'), never a bare 'Idle'.
+      await expect(status).toContainText(/Connected|Disconnected|Disabled|Could not connect|Reconnecting|Connecting/)
     }
     // The old bug rendered 'Idle' for connected:false — must be gone.
     await expect(hostsCard).not.toContainText('Idle')

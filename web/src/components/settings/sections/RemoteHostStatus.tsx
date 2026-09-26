@@ -16,7 +16,7 @@
  * Their own components so a status push re-renders one row, not the section
  * (the section owns the auto-saving host editor the user may be typing in).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import {
   hostDotOf, hostProblemOf, isConnectingPhaseWire, OFF_PHASE_LABEL,
 } from '@open-walnut/host-problem';
@@ -29,6 +29,7 @@ import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { RemoteHostReadiness } from './RemoteHostReadiness';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { getHostDismissed, hostHiddenFromBanner, restoreHost, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
 import '@/styles/host-picker-settings.css';
 
 /** Shared status text uses a typographic ellipsis; settings copy uses `...`. */
@@ -108,6 +109,8 @@ export function RemoteHostDetail({ alias, name, enabled = true }: { alias: strin
   const replica = useIsCloudReplica();
   const label = status?.label || name || alias;
   const problem = hostProblemOf(status, { replica });
+  const dismissed = useSyncExternalStore(subscribeHostDismissed, getHostDismissed, getHostDismissed);
+  const hidden = !!status && hostHiddenFromBanner(alias, [status], dismissed);
   // A disabled host says nothing below its status line (a last frame from before
   // it was switched off may still be in the store for a moment).
   if (!enabled) return null;
@@ -132,11 +135,22 @@ export function RemoteHostDetail({ alias, name, enabled = true }: { alias: strin
   const readiness = problem?.type === 'off'
     ? null
     : <RemoteHostReadiness alias={alias} label={label} status={status} actions={actions} replica={replica} />;
-  if (!failure && !status?.connected) return null;
+  if (!failure && !status?.connected && !hidden) return null;
   return (
     <div className="rh-host-detail" data-host={alias}>
       {failure}
       {readiness}
+      {hidden && (
+        // The way back for a row the user hid on the banner (the problem is still there).
+        <div className="rh-readiness-line rh-banner-hidden" data-tone="info">
+          <span className="rh-readiness-note">Hidden from the banner.</span>
+          <span className="rh-readiness-actions">
+            <SettingsButton variant="text" className="rh-show-again-btn" onClick={(e) => { e.preventDefault(); e.stopPropagation(); restoreHost(alias); }}>
+              Show again
+            </SettingsButton>
+          </span>
+        </div>
+      )}
     </div>
   );
 }

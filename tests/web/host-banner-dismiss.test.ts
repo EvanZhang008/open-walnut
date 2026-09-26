@@ -1,9 +1,24 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CONNECT_KEY_CLEAR_MS, HOST_BANNER_DISMISS_KEY, LEGACY_LOCAL_DISMISS_KEY, LEGACY_SETUP_DISMISS_KEY, LOCAL_DISMISS_KEY,
-  __resetHostBannerDismissForTests, addKeys, dismissHostKeys, dismissLocal, getHostDismissed, isLocalDismissed,
-  localDismissKey, pruneHostDismissed, pruneKeys, subscribeHostDismissed,
+  PRUNE_EVERY_MS, __resetHostBannerDismissForTests, addKeys, clearLocalDismissed, dismissHostKeys, dismissLocal,
+  getHostDismissed, getLocalDismissed, hostHiddenFromBanner, isLocalDismissed, localDismissKey, pruneHostDismissed,
+  pruneKeys, restoreHost, startHostDismissPruner, subscribeHostDismissed, subscribeLocalDismissed, undismissHostKeys,
+  undismissLocal,
 } from '../../web/src/utils/host-banner-dismiss'
+
+// The host status store, faked: the pruner only reads statuses, the hydration
+// state and the clock, and listens for frames (no banner is mounted here).
+const fake = vi.hoisted(() => ({
+  statuses: [] as unknown[], hydration: 'never' as string, clock: 0, listeners: new Set<() => void>(),
+}))
+vi.mock('@/hooks/useHostStatus', () => ({
+  getAllHostStatus: () => fake.statuses,
+  getHostStatusHydration: () => fake.hydration,
+  serverNow: () => fake.clock,
+  subscribeHostStatus: (cb: () => void) => { fake.listeners.add(cb); return () => { fake.listeners.delete(cb) } },
+}))
+const frame = () => { for (const l of fake.listeners) l() }
 import type { HostStatusInput } from '../../src/core/hosts/host-problem'
 
 // In-memory localStorage (node test env has none).
@@ -138,5 +153,117 @@ describe('local Claude Code notice dismissal (C38)', () => {
     expect(isLocalDismissed('outdated:2.1.280', 'outdated')).toBe(true)
     localStorage.setItem(LEGACY_LOCAL_DISMISS_KEY, 'sign-in')
     expect(isLocalDismissed('sign-in:2.1.281', 'sign-in')).toBe(true)
+  })
+})
+
+const devbox = (extra: Record<string, unknown>): HostStatusInput =>
+  ({ host: 'devbox', label: 'Dev box', connected: false, phase: 'failed', kind: 'unreachable', at: NOW, ...extra }) as HostStatusInput
+
+describe('the pruner: expiry needs no banner mounted (C47)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    fake.statuses = [devbox({})]
+    fake.hydration = 'done'
+    fake.clock = NOW
+    fake.listeners.clear()
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('is idempotent: a second start returns the same stop and adds no second listener', () => {
+    const stop = startHostDismissPruner()
+    expect(startHostDismissPruner()).toBe(stop)
+    expect(fake.listeners.size).toBe(1)
+    stop()
+    expect(fake.listeners.size).toBe(0)
+    // Stopped: a new start is a real start.
+    const again = startHostDismissPruner()
+    expect(again).not.toBe(stop)
+    again()
+  })
+
+  it('a host frame expires a connect key after 10 connected minutes', () => {
+    dismissHostKeys(['devbox|connect'])
+    startHostDismissPruner()
+    expect(getHostDismissed().has('devbox|connect')).toBe(true)
+    fake.statuses = [devbox({ connected: true, phase: 'connected', connectedAt: NOW - CONNECT_KEY_CLEAR_MS - 60_000 })]
+    frame()
+    expect(getHostDismissed().has('devbox|connect')).toBe(false)
+    expect(JSON.parse(localStorage.getItem(HOST_BANNER_DISMISS_KEY)!)).toEqual([])
+  })
+
+  it('the minute timer expires it with no new frame', () => {
+    dismissHostKeys(['devbox|connect'])
+    fake.statuses = [devbox({ connected: true, phase: 'connected', connectedAt: NOW - CONNECT_KEY_CLEAR_MS + 30_000 })]
+    startHostDismissPruner()
+    expect(getHostDismissed().has('devbox|connect')).toBe(true)
+    fake.clock = NOW + PRUNE_EVERY_MS
+    vi.advanceTimersByTime(PRUNE_EVERY_MS)
+    expect(getHostDismissed().has('devbox|connect')).toBe(false)
+  })
+
+  it('judges nothing before the store has heard from the server', () => {
+    fake.hydration = 'pending'
+    dismissHostKeys(['devbox|connect'])
+    fake.statuses = [devbox({ connected: true, phase: 'connected', connectedAt: NOW - CONNECT_KEY_CLEAR_MS - 60_000 })]
+    startHostDismissPruner()
+    frame()
+    expect(getHostDismissed().has('devbox|connect')).toBe(true)
+  })
+})
+
+describe('Undo, Show again and the Settings line (C55)', () => {
+  const signIn = (connected = true): HostStatusInput => ({
+    host: 'signbox', label: 'Sign box', connected, phase: connected ? 'connected' : 'failed', connectedAt: NOW - 1000, at: NOW,
+    readiness: { checkedAt: NOW - 10, problems: [{ kind: 'claude_not_logged_in', message: 'not signed in', commands: [] }], claude: { version: '2.1.280' } },
+  })
+
+  it('undismissHostKeys takes out only the keys given', () => {
+    dismissHostKeys(['devbox|connect', 'buildbox|connect'])
+    undismissHostKeys(['devbox|connect'])
+    expect([...getHostDismissed()]).toEqual(['buildbox|connect'])
+  })
+
+  it('restoreHost forgets every key of that host and no other', () => {
+    dismissHostKeys(['devbox|connect', 'devbox|claude_not_logged_in|2.1.280', 'buildbox|connect'])
+    restoreHost('devbox')
+    expect([...getHostDismissed()]).toEqual(['buildbox|connect'])
+  })
+
+  it('hidden from the banner only while a dismissed key names a problem the host still has', () => {
+    const none = new Set<string>()
+    expect(hostHiddenFromBanner('devbox', [devbox({})], none)).toBe(false)
+    expect(hostHiddenFromBanner('devbox', [devbox({})], new Set(['devbox|connect']))).toBe(true)
+    expect(hostHiddenFromBanner('devbox', [devbox({ connected: true, phase: 'connected' })], new Set(['devbox|connect']))).toBe(false)
+    expect(hostHiddenFromBanner('devbox', [devbox({})], new Set(['buildbox|connect']))).toBe(false)
+    expect(hostHiddenFromBanner('signbox', [signIn()], new Set(['signbox|claude_not_logged_in|2.1.280']))).toBe(true)
+    expect(hostHiddenFromBanner('signbox', [signIn()], new Set(['signbox|claude_not_logged_in|2.1.200']))).toBe(false)
+    expect(hostHiddenFromBanner('ghost', [], new Set(['ghost|connect']))).toBe(false)
+  })
+})
+
+describe('the local list store (C12)', () => {
+  it('a stable snapshot until the stored value changes; every write notifies', () => {
+    let calls = 0
+    const off = subscribeLocalDismissed(() => { calls++ })
+    const a = getLocalDismissed()
+    expect(getLocalDismissed()).toBe(a)
+    dismissLocal('sign-in:2.1.280')
+    expect(calls).toBe(1)
+    const b = getLocalDismissed()
+    expect(b).not.toBe(a)
+    expect(b).toEqual(['sign-in:2.1.280'])
+    undismissLocal('sign-in:2.1.280')
+    expect(calls).toBe(2)
+    expect(getLocalDismissed()).toEqual([])
+    dismissLocal('install:2.1.280')
+    clearLocalDismissed()
+    expect(calls).toBe(4)
+    expect(getLocalDismissed()).toEqual([])
+    off()
+  })
+
+  it('a write that bypassed the store (ui-prefs sync) still shows on the next read', () => {
+    localStorage.setItem(LOCAL_DISMISS_KEY, JSON.stringify(['sign-in:2.1.281']))
+    expect(getLocalDismissed()).toEqual(['sign-in:2.1.281'])
   })
 })

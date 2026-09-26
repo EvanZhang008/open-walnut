@@ -36,6 +36,9 @@ import { NotificationActionButtons } from './NotificationActionButtons';
 import { QuietToggle } from './QuietToggle';
 import { displayActionsOf } from '@/contexts/notifications/notification-actions';
 import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } from './NotificationSystemPane';
+import { AttentionBannerMount } from './AttentionBannerMount';
+import { ErrorCategoryTitle } from './ErrorCategoryTitle';
+import { useAnyBannerHostProblem } from '@/utils/host-banner-placement';
 import { navigateToTarget } from '@/utils/open-session';
 import { fetchSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { startNotificationFix } from '@/api/notifications';
@@ -62,7 +65,8 @@ interface NotificationPanelProps {
 type RailSection = NotificationSection | 'system';
 
 export function NotificationPanel({ open, onClose, sidebarCollapsed }: NotificationPanelProps) {
-  const { hasIssues } = useSystemHealth();
+  const { hasIssues, health, loading: healthLoading } = useSystemHealth();
+  const anyHostProblem = useAnyBannerHostProblem();
   const { feed, loaded, unreadCount, markAllRead, markLocalRead, dismissFeed } = useNotifications();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [section, setSection] = useState<RailSection>('all');
@@ -377,6 +381,11 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
           </button>
         </div>
 
+        <AttentionBannerMount
+          where="notifications" health={health} healthLoading={healthLoading} onLeave={onClose}
+          singleLineRows={section === 'action' && counts.action > 0}
+        />
+
         {/* Body: rail + detail. The panel is a fixed slide-out (top:0/bottom:0),
             so the body's height is fully determined by the viewport — `flex:1` +
             `min-height:0` is safe here (ViewDropdown needs `flex:0 1 <basis>`
@@ -431,7 +440,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
                 ambient health signals the pane renders (git-sync + the search
                 index). Zero unhealthy but still flagged → the old dot. */}
             <RailButton
-              label="System" count={systemIssues} warn dot={systemUnhealthy}
+              label="System" count={systemIssues} warn dot={systemUnhealthy || anyHostProblem}
               active={section === 'system'} onClick={() => pickSection('system')}
             />
             {/* All is the whole feed — its length is history depth, not a
@@ -477,7 +486,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
                 {errorCauses?.causes.map(cause => (
                   <div key={cause.causeKey} className="nfc-cat-block">
                     <div className="nfc-cat-header nfc-cause-header">
-                      <span className="nfc-cat-name">{cause.label}</span>
+                      <ErrorCategoryTitle causeKey={cause.causeKey} label={cause.label} />
                       <span className="nfc-cat-count">{cause.items.length}</span>
                     </div>
                     <FeedGroups

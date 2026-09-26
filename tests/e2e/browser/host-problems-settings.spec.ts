@@ -26,9 +26,11 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { firstSentence } from '../../../src/core/hosts/host-problem'
 import {
-  HEALTHY, bannerRow, fixtureCounters, fixtureFile, hostFixture, hostRow, hostTab, isolatePrefs, loadApp, loadFixture,
+  HEALTHY, bannerRow, bell, fixtureCounters, fixtureFile, hostFixture, hostRow, hostTab, isolatePrefs, loadApp, loadFixture,
   openPicker, openRemoteHosts, picker, resetServerHostFixture, wireHost,
 } from './host-problems-fixture-helpers'
+import { bareLayout } from './host-problems-helpers'
+import { openRow } from './banner-placement-helpers'
 
 const SHOTS = '/tmp/walnut-host-problems-slice/fix2'
 
@@ -68,6 +70,8 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
     // 1. The banner row (the first row: connect failures lead, in Settings order).
     const row = bannerRow(page, 'keybox')
     await expect(row).toBeVisible({ timeout: 20_000 })
+    // Several rows start closed (dense); opened, the row reads the same words as the picker and Settings.
+    await openRow(row)
     const inBanner = await readFailure(row, wire.error!)
     const bannerButtons = await buttonOrder(row.locator('.hpb-actions'))
     expect(bannerButtons).toEqual(['Retry', 'Open Settings'])
@@ -82,11 +86,14 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
     await picker(page).screenshot({ path: `${SHOTS}/picker-keybox.png` })
 
     // 3. Settings, through the banner's own Open Settings.
-    // A click outside closes the picker (its outside-click path). The open
-    // draft borrowed the slot, so the banner now lives in the draft column.
+    // A click outside closes the picker (its outside-click path). The card
+    // stays in the task panel while a draft is open: still exactly one.
     await expect(page.locator('[data-testid="attention-banner"]')).toHaveCount(1)
+    await expect(page.locator('.todo-panel [data-testid="attention-banner"][data-mount="tasks"]')).toHaveCount(1)
     await page.locator('.todo-panel').click({ position: { x: 5, y: 5 } })
     await expect(picker(page)).toBeHidden()
+    // Several rows start closed (dense): Show details puts the row's Open Settings on screen.
+    await openRow(row)
     await row.getByTestId('hpb-open-settings').click()
     await expect(page).toHaveURL(/\/settings#rh-host-keybox$/)
     const settingsRow = hostRow(page, 'keybox')
@@ -290,12 +297,12 @@ test.describe('where else a host problem shows', () => {
     await expect(panel.locator('.notification-detail-row[data-host="devbox"] .notification-detail-value')).toHaveText('Connected')
   })
 
-  test('slot and draft column both hidden: the rail Settings entry wears the warn dot until nothing needs attention (C67)', async ({ page, request }) => {
+  test('task panel, slot and draft column all hidden: the rail Settings entry and the bell wear the warn dot until nothing needs attention (C67)', async ({ page, request }) => {
     await loadFixture(request, fixtureFile({
       keybox: { label: 'Key box', hostname: 'key.example.com', phase: 'failed', error: 'Permission denied (publickey).' },
       signbox: { label: 'Sign box', hostname: 'sign.example.com', phase: 'connected', claude: { version: '2.1.281', auth: 'not-logged-in', installMethod: 'native' } },
     }))
-    await page.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false'))
+    await bareLayout(page)
     await loadApp(page)
     await expect(page.locator('.main-page-chat [data-testid="ask-walnut-slot"]')).toHaveCount(0)
     await expect(page.locator('.main-page-session-column .draft-session-panel')).toHaveCount(0)
@@ -303,18 +310,29 @@ test.describe('where else a host problem shows', () => {
     const entry = page.getByTestId('sidebar-core-app-settings')
     const dot = entry.locator('.sidebar-host-dot')
     // The link carries the one accessible name; the dot inside it is decorative.
-    await expect(entry).toHaveAttribute('aria-label', 'Settings: remote hosts need attention')
+    await expect(entry).toHaveAttribute('aria-label', 'Settings: remote hosts need attention', { timeout: 20_000 })
     await expect(dot).toHaveAttribute('aria-hidden', 'true')
     await expect(dot).toHaveAttribute('data-kind', 'warn')
+    // The bell speaks for the card too: a dot, no number, the reason in its name.
+    await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications: remote hosts need attention')
+    await expect(bell(page).locator('.notification-badge-dot')).toHaveCount(1)
+    await expect(bell(page).locator('.notification-badge-count')).toHaveCount(0)
     await entry.screenshot({ path: `${SHOTS}/rail-settings-dot.png` })
     await entry.click()
     await expect(page).toHaveURL(/\/settings#remote-hosts$/)
     await expect(page.locator('#remote-hosts')).toBeVisible()
+    // On the Remote hosts pane the rows are in view: neither dot speaks for them.
+    await expect(dot).toHaveCount(0)
+    await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications')
+    await page.getByTestId('settings-nav-sessions').click()
+    await expect(dot).toHaveAttribute('data-kind', 'warn')
     // The fixture clears both problems: the dot stays while one is left, and goes with the last.
     await hostFixture(request, { action: 'set-status', host: 'keybox', phase: 'connected' })
-    await expect(hostRow(page, 'keybox').locator('.rh-status-short')).toHaveText('Connected', { timeout: 10_000 })
+    await expect.poll(async () => (await wireHost(request, 'keybox')).connected, { timeout: 10_000 }).toBe(true)
+    await page.waitForTimeout(500)
     await expect(dot).toHaveAttribute('data-kind', 'warn')
     await hostFixture(request, { action: 'clear-problems', host: 'signbox' })
     await expect(dot).toHaveCount(0, { timeout: 5_000 })
+    await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications', { timeout: 5_000 })
   })
 })

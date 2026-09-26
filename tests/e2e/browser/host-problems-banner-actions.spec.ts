@@ -77,13 +77,22 @@ test.describe('home attention banner: rows never move under the hand', () => {
       await page.waitForTimeout(150)
     }
     await expect(target.getByRole('button', { name: 'Retry' })).toBeVisible({ timeout: 8000 })
-    // Pointer on the card: a new failed host appends at the END, nothing else moves.
+    // Let the Retry's own receipt come and go first (off the task panel, so it is not held).
+    await page.mouse.move(2, 2)
+    await expect(target.getByTestId('hpb-receipt')).toHaveCount(1, { timeout: 12_000 })
+    await expect(target.getByTestId('hpb-receipt')).toHaveCount(0, { timeout: 12_000 })
+    // Pointer on the card: a new failed host never lands above a row under the
+    // hand. In the task panel the whole height change waits for the pointer (at
+    // most 10s, spec 5.5); if it shows early, it is appended at the END.
     await banner(page).hover()
     const ySign = (await row(page, 'signbox').boundingBox())!.y
     await h.push(failed('keybox', 'Key box', 'auth'))
-    await expect(row(page, 'keybox')).toBeVisible()
-    expect(await rows(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))).toEqual(['netbox', 'signbox', 'keybox'])
-    expect((await row(page, 'signbox').boundingBox())!.y).toBe(ySign)
+    for (let i = 0; i < 12; i++) {
+      const order = await rows(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
+      expect([['netbox', 'signbox'], ['netbox', 'signbox', 'keybox']]).toContainEqual(order)
+      expect((await row(page, 'signbox').boundingBox())!.y).toBe(ySign)
+      await page.waitForTimeout(250)
+    }
     // Pointer leaves: the connect failure takes its place in the connect group.
     await page.mouse.move(2, 2)
     await expect.poll(() => rows(page).evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))).toEqual(['netbox', 'keybox', 'signbox'])
@@ -126,18 +135,28 @@ test.describe('home attention banner: buttons and keyboard', () => {
   test('Tab and Enter alone: Retry, Show SSH output, row x; focus lands on the next row x (C44)', async ({ page }) => {
     const h = await setup(page, [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth')])
     h.connectAnswer = (host) => failed(host, 'Net box', 'unreachable')
-    await page.locator('.todo-panel').click({ position: { x: 5, y: 5 } }).catch(() => {})
+    // Start in the task panel's toolbar: the card is the next thing in Tab order.
+    await page.locator('.todo-panel-toolbar').click({ position: { x: 2, y: 2 } }).catch(() => {})
     const first = row(page, 'netbox')
     await tabTo(page, first.getByTestId('hpb-retry'))
     await page.keyboard.press('Enter')
     await expect(first.getByTestId('hpb-receipt')).toHaveText('Tried again just now: same result')
-    await tabTo(page, first.getByRole('button', { name: 'Show SSH output' }))
+    // Two rows start closed (dense): Show details first, by keyboard too. The opened
+    // row's Show SSH output sits just before its Hide details in Tab order.
+    await tabTo(page, first.getByRole('button', { name: 'Show details' }))
+    await page.keyboard.press('Enter')
+    await expect(first.getByRole('button', { name: 'Hide details' })).toBeFocused()
+    await page.keyboard.press('Shift+Tab')
+    await expect(first.getByRole('button', { name: 'Show SSH output' })).toBeFocused()
     await page.keyboard.press('Enter')
     await expect(first.locator('pre.hft-summary')).toBeVisible()
     await tabTo(page, first.getByRole('button', { name: 'Dismiss Net box' }))
     await page.keyboard.press('Enter')
     await expect(first).toHaveCount(0)
-    await expect(row(page, 'keybox').getByRole('button', { name: 'Dismiss Key box' })).toBeFocused()
+    // The x leaves an undo row in its place with focus on Undo; when that row
+    // folds away (5s, the pointer is off the card) focus moves to the next row's x.
+    await expect(banner(page).getByRole('button', { name: 'Undo' })).toBeFocused()
+    await expect(row(page, 'keybox').getByRole('button', { name: 'Dismiss Key box' })).toBeFocused({ timeout: 12_000 })
   })
 
   test('Check again: Checking..., then the ready sentence when the re-check clears it (C55 banner half)', async ({ page }) => {
@@ -146,7 +165,7 @@ test.describe('home attention banner: buttons and keyboard', () => {
     const check = row(page, 'signbox').getByRole('button', { name: 'Check again' })
     await check.click()
     await expect(row(page, 'signbox').getByTestId('hpb-check')).toHaveText('Checking...')
-    await expect(row(page, 'signbox')).toHaveText(/^✓ Sign box is ready \(Claude Code 2\.1\.281\)$/)
+    await expect(row(page, 'signbox')).toHaveText(/^(\u2713 )?Sign box is ready \(Claude Code 2\.1\.281\)$/)
   })
 
   // ('Checked just now: still <version>' is the claude_outdated wording, which takes no banner row.)
@@ -177,20 +196,21 @@ test.describe('home attention banner: buttons and keyboard', () => {
     expect(chips).toEqual(['ssh -t alice@sign.example.com claude', 'ssh alice@sign.example.com claude /login'])
     await h.push(connected('signbox', 'Sign box'))
     const ready = await row(page, 'signbox').innerText()
-    expect(ready.trim()).toMatch(/^✓ .+ is ready( \(Claude Code .+\))?$/)
+    expect(ready.trim()).toMatch(/^(\u2713 )?.+ is ready( \(Claude Code .+\))?$/)
   })
 
   test('Dismiss all hides every host entry, the hidden ones too, and keeps the local section; it is last in Tab order (C76)', async ({ page }) => {
     await setup(page, [
       failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'),
       failed('proxybox', 'Proxy box', 'proxy'), missing('barebox', 'Bare box'), signedOut('signbox', 'Sign box'),
-    ], 'outdated')
+    ], 'sign-in')
     // Two of the five sit behind 'and 2 more'.
     await expect(banner(page).locator('.hpb-more')).toHaveText('and 2 more')
     const all = banner(page).getByRole('button', { name: 'Dismiss all' })
     const lastFocusable = await banner(page).evaluate((el) => {
       const f = Array.from(el.querySelectorAll<HTMLElement>('button, [href], input, [tabindex]:not([tabindex="-1"])'))
-      return f[f.length - 1]?.getAttribute('aria-label')
+      const last = f[f.length - 1]
+      return last ? (last.getAttribute('aria-label') ?? last.textContent ?? '').trim() : null
     })
     expect(lastFocusable).toBe('Dismiss all')
     await all.click()
@@ -198,7 +218,7 @@ test.describe('home attention banner: buttons and keyboard', () => {
     expect(await storedKeys(page)).toEqual(expect.arrayContaining([
       'keybox|connect', 'netbox|connect', 'proxybox|connect', 'barebox|claude_missing|2.1.280', 'signbox|claude_not_logged_in|2.1.280',
     ]))
-    await expect(banner(page).locator('[data-testid="setup-banner-outdated"]')).toBeVisible()
+    await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible()
     await expect(banner(page).getByRole('button', { name: 'Dismiss all' })).toHaveCount(0)
   })
 })
@@ -224,7 +244,7 @@ test.describe('home attention banner: the real routes behind Check again and Ins
     await hostFixture(request, { action: 'set-check-result', host: 'signbox' })
     await r.getByTestId('hpb-check').click()
     await expect(r.getByTestId('hpb-check')).toHaveText('Checking...')
-    await expect(bannerRow(page, 'signbox')).toHaveText(/^✓ Sign box is ready \(Claude Code 2\.1\.281\)$/, { timeout: 10_000 })
+    await expect(bannerRow(page, 'signbox')).toHaveText(/^(\u2713 )?Sign box is ready \(Claude Code 2\.1\.281\)$/, { timeout: 10_000 })
     expect((await fixtureCounters(request)).check.signbox).toBe(1)
   })
 
@@ -243,7 +263,7 @@ test.describe('home attention banner: the real routes behind Check again and Ins
     for (;;) {
       const t = await bannerRow(page, 'fixbox').innerText().catch(() => '')
       samples.push(t)
-      if (/^✓ Fix box is ready/.test(t.trim())) break
+      if (/^(\u2713 )?Fix box is ready/.test(t.trim())) break
       if (Date.now() > deadline) throw new Error(`never ready: ${JSON.stringify(samples.slice(-3))}`)
       await page.waitForTimeout(250)
     }

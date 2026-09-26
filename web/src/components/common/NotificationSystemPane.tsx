@@ -9,9 +9,10 @@
  */
 import { memo, useEffect, useState } from 'react';
 import { useSystemHealth, type DaemonHealth } from '@/hooks/useSystemHealth';
-import { useHostStatus } from '@/hooks/useHostStatus';
+import { useAllHostStatus, useHostStatus } from '@/hooks/useHostStatus';
 import { hostStatusText, isHostConnecting } from '@/utils/host-connect';
-import { firstSentence, hostProblemOf } from '@open-walnut/host-problem';
+import { BANNER_READINESS_KINDS, firstSentence, hostProblemOf } from '@open-walnut/host-problem';
+import { fetchConfig } from '@/api/config';
 import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
 import '@/styles/attention-banner.css';
 import { formatRelative } from '@/contexts/notifications';
@@ -76,7 +77,10 @@ export function searchIndexUnhealthy(status: SearchIndexStatus | null): boolean 
  * "Disconnected" during the 40-second first-connect install reads as a dead host,
  * and this pane is where people look to decide whether to go fix something.
  */
-function DaemonRow({ daemon }: { daemon: DaemonHealth }) {
+/** Settings' word for a host switched off there (RemoteHostStatus DISABLED_TEXT). */
+const DISABLED_TEXT = 'Disabled';
+
+function DaemonRow({ daemon, disabled }: { daemon: DaemonHealth; disabled: boolean }) {
   const status = useHostStatus(daemon.host);
   // The live frame is the authority when there is one: the health poll lags it
   // (and knows nothing of a host the pool never dialed), so the two would disagree.
@@ -86,20 +90,30 @@ function DaemonRow({ daemon }: { daemon: DaemonHealth }) {
   // problem (old or signed-out Claude Code) rides along, in the shared words.
   const problem = hostProblemOf(status);
   const blocking = problem?.type === 'readiness' ? firstSentence(problem.problem.message) : null;
-  const phase = connected ? 'Connected' : connecting ? hostStatusText(status) : 'Disconnected';
+  // A failed connect says why, in the card's own sentence ('Could not connect to Cert box:
+  // SSH certificate expired'), not a bare 'Disconnected' under the card that said it (N14).
+  const failure = !disabled && !connected && !connecting && (problem?.type === 'connect' || problem?.type === 'reconnecting')
+    ? problem.type === 'connect' ? problem.headline : `Reconnecting to ${status?.label ?? daemon.label ?? daemon.host}`
+    : null;
+  const phase = disabled ? DISABLED_TEXT : connected ? 'Connected' : connecting ? hostStatusText(status) : failure ?? 'Disconnected';
   const label = daemon.label ?? daemon.host;
+  // Only a banner problem wears the warn colour; a version floor for one model is a quiet
+  // note (the user's rule, N14). A failed connect's words take its red dot's tone (N3-15).
+  const bannerKind = problem?.type === 'readiness' && BANNER_READINESS_KINDS.includes(problem.problem.kind);
+  const tone = disabled ? 'muted' : blocking ? (bannerKind ? 'warn' : '') : connected ? 'ok' : connecting ? '' : failure ? 'error' : 'muted';
   return (
-    <div className="notification-detail-row" data-host={daemon.host}>
-      <span className="notification-daemon-name">
-        {daemon.host !== '__local__' && <HostStatusDot host={daemon.host} label={label} />}{label}
+    <div className="notification-detail-row nfc-daemon-row" data-host={daemon.host}>
+      <span className="notification-daemon-name" title={label}>
+        {daemon.host !== '__local__' && <HostStatusDot host={daemon.host} label={label} />}
+        <span className="nfc-daemon-label">{label}</span>
       </span>
       <span
-        className={`notification-detail-value ${blocking ? 'warn' : connected ? 'ok' : connecting ? '' : 'muted'}`}
+        className={`notification-detail-value nfc-daemon-status ${tone}`}
         title={blocking ? `${phase}. ${blocking}` : status ? hostStatusText(status) : undefined}
       >
         {/* 'Idle' used to render for connected:false, hiding real outages. */}
-        {phase}{blocking ? `. ${blocking}` : ''}
-        {/* Cloud-bridge state (phone reachability) — only when a bridge is
+        {phase}{blocking && !disabled ? `. ${blocking}` : ''}
+        {/* Cloud-bridge state (phone reachability): only when a bridge is
             configured AND the host itself is connected: bridge liveness rides
             the daemon connection, so next to 'Disconnected' any ✓/✗ is stale
             and contradictory. */}
@@ -111,6 +125,22 @@ function DaemonRow({ daemon }: { daemon: DaemonHealth }) {
       </span>
     </div>
   );
+}
+
+/** Hosts switched off in Settings (the health list carries no such flag); one read per pane mount. */
+function useDisabledHosts(): ReadonlySet<string> {
+  const [off, setOff] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => {
+    let live = true;
+    fetchConfig()
+      .then((c) => {
+        const hosts = (c as { hosts?: Record<string, { enabled?: boolean }> }).hosts ?? {};
+        if (live) setOff(new Set(Object.entries(hosts).filter(([, h]) => h?.enabled === false).map(([a]) => a)));
+      })
+      .catch((err) => log.warn('notifications', 'host config read failed', { error: String(err) }));
+    return () => { live = false; };
+  }, []);
+  return off;
 }
 
 /** One kind's indexed-document row. */
@@ -127,6 +157,8 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
   { indexStatus }: { indexStatus: SearchIndexStatus | null },
 ) {
   const { health, gitSync, loading } = useSystemHealth();
+  const statuses = useAllHostStatus();
+  const disabled = useDisabledHosts();
 
   if (loading) {
     return (
@@ -142,22 +174,28 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
   return (
     <>
       {/* Remote daemons status */}
-      {health.daemons && health.daemons.length > 0 && (
-        <div className={`notification-card ${health.daemons.some(d => d.connected) ? 'ok' : 'neutral'}`}>
+      {health.daemons && health.daemons.length > 0 && (() => {
+        // Any host with a banner problem (a failed connect, a banner readiness kind) warns the card.
+        const warn = health.daemons.some((d) => !disabled.has(d.host)
+          && ['connect', 'readiness'].includes(hostProblemOf(statuses.find((x) => x.host === d.host), { surface: 'banner' })?.type ?? ''));
+        const tone = warn ? 'warn' : health.daemons.some((d) => d.connected) ? 'ok' : 'neutral';
+        return (
+        <div className={`notification-card ${tone}`} data-testid="nfc-remote-hosts">
           <div className="notification-card-row">
-            <span className={`notification-card-icon ${health.daemons.some(d => d.connected) ? 'ok' : 'neutral'}`}>
-              {health.daemons.some(d => d.connected) ? '✓' : '○'}
+            <span className={`notification-card-icon ${tone}`}>
+              {tone === 'warn' ? '⚠' : tone === 'ok' ? '✓' : '○'}
             </span>
-            <span className="notification-card-label">Remote Hosts</span>
+            <span className="notification-card-label">Remote hosts</span>
           </div>
 
           <div className="notification-card-details">
             {health.daemons.map((d) => (
-              <DaemonRow key={d.host} daemon={d} />
+              <DaemonRow key={d.host} daemon={d} disabled={disabled.has(d.host)} />
             ))}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Git backup status */}
       <div className={`notification-card ${gitOk ? 'ok' : 'warn'}`}>

@@ -548,6 +548,9 @@ select {
   background: transparent;
 }
 
+/* The panel takes focus when it opens (useDialogFocus); the panel itself draws no ring. */
+.notification-panel:focus { outline: none; }
+
 .notification-panel {
   position: fixed;
   top: 0;

@@ -177,10 +177,10 @@ describe('classifyHostConnectError: captured ssh stderr for each new kind', () =
     expect(ported.hint).toContain("`ssh-keygen -R '[devbox.example.test]:2222'`");
   });
 
-  it('the cert_expired hint names no product, only "your organisation\'s login command"', () => {
+  it('the cert_expired hint names no product, only "your organization\'s login command"', () => {
     const { hint } = classifyHostConnectError('walnut-ssh-evidence: cert-expired (x)', T);
     expect(hint).toMatch(/SSH certificate expired/);
-    expect(hint).toMatch(/organisation's login command/);
+    expect(hint).toMatch(/organization's login command/);
     expect(hint).toMatch(/Retry/);
   });
 

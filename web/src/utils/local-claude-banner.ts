@@ -10,6 +10,7 @@
  */
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import type { LocalClaudeProblem } from '@/api/local-claude';
+import { isLocalDismissed } from '@/utils/host-banner-dismiss';
 
 export type ClaudeBannerKind = 'install' | 'outdated' | 'sign-in';
 
@@ -68,6 +69,23 @@ export function claudeBannerView(health: SystemHealth): ClaudeBannerView | null 
   const signIn = problems.find((p) => p.kind === 'claude_not_logged_in');
   if (signIn) return { kind: 'sign-in', problem: signIn, fixable: false, dismissKey: `sign-in:${local?.claude.version ?? ''}` };
   return null;
+}
+
+/**
+ * Does the local Claude Code section render right now, and as what? The one
+ * rule the card and the bell dot share (so they never drift): the twin of
+ * useLocalClaudeNotice's kind + hidden rules. Unknown health says nothing; no
+ * provider or no CLI reads as install. 'outdated' (a model's version floor)
+ * never takes a banner section, the same rule as a remote host's.
+ */
+export function localNoticeShows(health: SystemHealth | undefined, dismissedList: readonly string[], loading = false): 'install' | 'sign-in' | null {
+  if (!health || loading || health.hasReadyProvider === undefined) return null;
+  const view = claudeBannerView(health);
+  const providerOk = health.hasReadyProvider ?? false;
+  const cliOk = health.claudeCliAvailable ?? true;
+  const kind = view?.kind ?? (!providerOk || !cliOk ? 'install' : null);
+  if (!kind || kind === 'outdated') return null;
+  return isLocalDismissed(view?.dismissKey ?? 'install:', kind, dismissedList) ? null : kind;
 }
 
 /** "Run `claude` once" → text and code runs, for rendering a server line. */

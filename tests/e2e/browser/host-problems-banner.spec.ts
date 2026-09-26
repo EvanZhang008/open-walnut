@@ -5,6 +5,10 @@
  * Buttons, keyboard order and rows that hold their place live in
  * host-problems-banner-actions.spec.ts.
  *
+ * The card lives in the task panel (data-mount="tasks") in the default layout;
+ * the slot variants (C65, C43, C64) hide the task panel first (slotLayout), so
+ * the card falls back to the Ask Walnut slot.
+ *
  * Readiness rows are only the kinds in BANNER_READINESS_KINDS (signed out,
  * missing, needs Node, broken): a Claude Code that is merely too old for one
  * model (claude_outdated) takes no banner row. It still shows in the picker
@@ -23,12 +27,12 @@
  * Run: PW_TEST_PORT=35991 npx playwright test host-problems-banner --project=chromium --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35991 npx playwright test host-problems-banner --project=webkit --workers=1
  */
-import { test, expect } from '@playwright/test'
+import { test, expect, type Locator } from '@playwright/test'
 import {
-  DISMISS_KEY, Hosts, SHOTS, banner, base, connected, connecting, failed, loadHome, now, outdated,
-  reconnecting, resetServerHostFixture, routeHealth, row, rows, setup, signedOut, storedKeys, type HS,
+  DISMISS_KEY, Hosts, SHOTS, banner, base, connected, connecting, failed, isolatePrefs, loadHome, now, outdated,
+  reconnecting, resetServerHostFixture, routeHealth, row, rows, setup, signedOut, slotLayout, storedKeys, type HS,
 } from './host-problems-helpers'
-import { bannerRow, isolatePrefs, loadApp, loadFixture, wireHost } from './host-problems-fixture-helpers'
+import { bannerRow, loadApp, loadFixture, openBell, panelBanner, slotBanner, wireHost } from './host-problems-fixture-helpers'
 
 test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
 
@@ -69,13 +73,14 @@ test.describe('home attention banner: which hosts, which title', () => {
     await banner(page).screenshot({ path: `${SHOTS}/banner-host-only.png` })
   })
 
-  test('local outdated + host problems: one card, local title, Remote hosts subhead after the local section (C14)', async ({ page }) => {
-    await setup(page, [signedOut('signbox', 'Sign box')], 'outdated')
+  // (This machine's claude_outdated takes no section, the same rule as a host's: BP-C50.)
+  test('local sign-in + host problems: one card, local title, Remote hosts subhead after the local section (C14)', async ({ page }) => {
+    await setup(page, [signedOut('signbox', 'Sign box')], 'sign-in')
     await expect(banner(page)).toHaveCount(1)
-    await expect(banner(page).locator('.setup-banner-title').first()).toHaveText('Update Claude Code')
+    await expect(banner(page).locator('.setup-banner-title').first()).toHaveText('Sign in to Claude Code')
     await expect(banner(page).locator('.hpb-subhead')).toHaveText('Remote hosts')
     const order = await banner(page).evaluate((el) => {
-      const local = el.querySelector('[data-testid="setup-banner-outdated"]')!
+      const local = el.querySelector('[data-testid="setup-banner-sign-in"]')!
       const hosts = el.querySelector('[data-testid="host-problems"]')!
       return !!(local.compareDocumentPosition(hosts) & Node.DOCUMENT_POSITION_FOLLOWING)
     })
@@ -107,7 +112,7 @@ test.describe('home attention banner: which hosts, which title', () => {
     await expect(rows(page)).toHaveCount(1)
     await expect(banner(page).locator('.setup-banner-title')).toHaveText('Sign box needs attention')
     await h.push(connected('signbox', 'Sign box'))
-    await expect(row(page, 'signbox')).toHaveText(/^✓ Sign box is ready \(Claude Code 2\.1\.281\)$/)
+    await expect(row(page, 'signbox')).toHaveText(/^(\u2713 )?Sign box is ready \(Claude Code 2\.1\.281\)$/)
     await expect(banner(page).locator('.setup-banner-title')).toHaveCount(0)
     await expect(banner(page)).toHaveCount(0, { timeout: 6000 })
   })
@@ -119,6 +124,8 @@ test.describe('home attention banner: dismissal and live clearing', () => {
     await row(page, 'signbox').getByRole('button', { name: 'Dismiss Sign box' }).click()
     await expect(row(page, 'signbox')).toHaveCount(0)
     expect(await storedKeys(page)).toContain('signbox|claude_not_logged_in|2.1.280')
+    // Off the task panel: a card height change waits while the pointer is over the list.
+    await page.mouse.move(2, 2)
     await page.evaluate(() => sessionStorage.setItem('hp-keep', '1'))
     await page.reload()
     await loadHome(page)
@@ -131,7 +138,7 @@ test.describe('home attention banner: dismissal and live clearing', () => {
     // (Pointer off the card first: a row under the hand waits for it to leave.)
     await page.mouse.move(2, 2)
     await h.push(connected('signbox', 'Sign box'))
-    await expect(row(page, 'signbox')).toHaveText(/^✓ Sign box is ready \(Claude Code /)
+    await expect(row(page, 'signbox')).toHaveText(/^(\u2713 )?Sign box is ready \(Claude Code /)
     await expect(row(page, 'signbox')).toHaveCount(0, { timeout: 6000 })
     expect((await storedKeys(page)).filter((k) => k.startsWith('signbox|'))).toEqual([])
   })
@@ -173,6 +180,7 @@ test.describe('home attention banner: dismissal and live clearing', () => {
     const h = await setup(page, [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')])
     await row(page, 'netbox').getByRole('button', { name: 'Dismiss Net box' }).click()
     await expect(row(page, 'netbox')).toHaveCount(0)
+    await page.mouse.move(2, 2)
     for (const kind of ['timeout', 'unreachable', 'timeout']) {
       await h.push(failed('netbox', 'Net box', kind))
       await page.waitForTimeout(150)
@@ -210,52 +218,93 @@ test.describe('home attention banner: reconnects, size, sync', () => {
   })
 
   test('900px high window: the host section stays within 40% of the slot and scrolls inside; rows 2+ start collapsed (C65)', async ({ page }) => {
+    // The slot's own cap: the task panel hidden, so the card falls back to the slot.
     await page.setViewportSize({ width: 1280, height: 900 })
+    await slotLayout(page)
     await setup(page, [
       failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth'), failed('proxybox', 'Proxy box', 'proxy'),
-    ], 'outdated')
-    const section = banner(page).locator('[data-testid="host-problems"]')
-    await expect(rows(page)).toHaveCount(3)
+    ], 'sign-in')
+    const card = slotBanner(page)
+    const slotRow = (host: string) => card.locator(`li.hpb-row[data-host="${host}"]`)
+    await expect(card).toHaveAttribute('data-mount', 'slot')
+    const section = card.locator('[data-testid="host-problems"]')
+    await expect(card.locator('li.hpb-row[data-host]')).toHaveCount(3)
     const slotH = await page.locator('.main-page-chat').evaluate((el) => el.getBoundingClientRect().height)
     const secH = (await section.boundingBox())!.height
     expect(secH).toBeLessThanOrEqual(slotH * 0.4 + 1)
     for (const host of ['keybox', 'proxybox']) {
+      await expect(slotRow(host).locator('.hft-hint')).toHaveCount(0)
+      await expect(slotRow(host).getByRole('button', { name: 'Show details' })).toBeVisible()
+    }
+    await slotRow('keybox').getByRole('button', { name: 'Show details' }).click()
+    await expect(slotRow('keybox').locator('.hft-hint')).toBeVisible()
+    await section.locator('.hpb-scroll').evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await expect(card.getByRole('button', { name: 'Dismiss all' })).toBeInViewport()
+    await expect(card.locator('.setup-banner-title').first()).toBeInViewport()
+    await card.screenshot({ path: `${SHOTS}/banner-900h-local-plus-3.png` })
+  })
+
+  test('900px high window, task panel: the whole card stays within max(40% of the task panel, 132px) and the host section scrolls (C65 tasks)', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await setup(page, [
+      failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth'), failed('proxybox', 'Proxy box', 'proxy'),
+    ], 'sign-in')
+    const section = banner(page).locator('[data-testid="host-problems"]')
+    await expect(rows(page)).toHaveCount(3)
+    const panelH = await page.locator('.todo-panel').evaluate((el) => el.getBoundingClientRect().height)
+    const cap = Math.max(panelH * 0.4, 132) + 1
+    expect((await banner(page).boundingBox())!.height).toBeLessThanOrEqual(cap)
+    expect((await section.boundingBox())!.height).toBeLessThanOrEqual(cap)
+    for (const host of ['keybox', 'proxybox']) {
       await expect(row(page, host).locator('.hft-hint')).toHaveCount(0)
       await expect(row(page, host).getByRole('button', { name: 'Show details' })).toBeVisible()
     }
-    await row(page, 'keybox').getByRole('button', { name: 'Show details' }).click()
-    await expect(row(page, 'keybox').locator('.hft-hint')).toBeVisible()
-    const scroller = section.locator('.hpb-scroll')
-    await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await section.locator('.hpb-scroll').evaluate((el) => { el.scrollTop = el.scrollHeight })
     await expect(banner(page).getByRole('button', { name: 'Dismiss all' })).toBeInViewport()
     await expect(banner(page).locator('.setup-banner-title').first()).toBeInViewport()
-    await banner(page).screenshot({ path: `${SHOTS}/banner-900h-local-plus-3.png` })
+    await banner(page).screenshot({ path: `${SHOTS}/banner-900h-tasks-local-plus-3.png` })
   })
+
+  /** Actions under the body, the headline in at most 2 whole lines, no sideways scroll. */
+  async function expectNarrowLayout(card: Locator, shot: string): Promise<void> {
+    expect(await card.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
+    const r = card.locator('li.hpb-row[data-host="certbox"]')
+    const head = r.locator('.hft-headline')
+    await expect(head).toHaveText('Could not connect to Cert box: SSH certificate expired')
+    const lines = await head.evaluate((el) => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight || '16')))
+    expect(lines).toBeLessThanOrEqual(2)
+    expect(await head.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true)
+    const headBox = (await head.boundingBox())!
+    const btnTop = (await r.getByTestId('hpb-retry').boundingBox())!.y
+    expect(btnTop).toBeGreaterThanOrEqual(headBox.y + headBox.height - 1)
+    for (const scheme of ['dark', 'light'] as const) {
+      await card.page().emulateMedia({ colorScheme: scheme })
+      await card.screenshot({ path: `${SHOTS}/${shot}-${scheme}.png` })
+    }
+  }
 
   test('narrow slot: actions sit under the body, the headline wraps to 2 lines whole, no sideways scroll (C43, C64)', async ({ page }) => {
     await page.setViewportSize({ width: 960, height: 900 })
+    await slotLayout(page)
     await setup(page, [
       failed('certbox', 'Cert box', 'cert_expired', { retryAt: now() + 192_000 }), signedOut('signbox', 'Sign box'),
     ])
     // The slot at 380px, the width a narrow window leaves it (pinned: the
     // default split at 960px depends on the saved panel widths).
     await page.addStyleTag({ content: '.main-page-chat { flex: 0 0 380px !important; width: 380px !important; min-width: 0 !important; max-width: 380px !important; }' })
-    const card = banner(page)
     await expect.poll(() => page.locator('.main-page-chat').evaluate((el) => Math.round(el.getBoundingClientRect().width))).toBe(380)
-    expect(await card.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
-    const r = row(page, 'certbox')
-    const head = r.locator('.hft-headline')
-    await expect(head).toHaveText('Could not connect to Cert box: SSH certificate expired')
-    const lines = await head.evaluate((el) => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight || '16')))
-    expect(lines).toBeLessThanOrEqual(2)
-    expect(await head.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true)
-    const headBottom = (await head.boundingBox())!.y + (await head.boundingBox())!.height
-    const btnTop = (await r.getByTestId('hpb-retry').boundingBox())!.y
-    expect(btnTop).toBeGreaterThanOrEqual(headBottom - 1)
-    for (const scheme of ['dark', 'light'] as const) {
-      await page.emulateMedia({ colorScheme: scheme })
-      await card.screenshot({ path: `${SHOTS}/banner-narrow-${scheme}.png` })
-    }
+    await expect(slotBanner(page)).toHaveAttribute('data-mount', 'slot')
+    await expectNarrowLayout(slotBanner(page), 'banner-narrow')
+  })
+
+  test('narrow task panel (300px in a 980px window): the same narrow layout in the task panel (C43, C64 tasks)', async ({ page }) => {
+    await page.setViewportSize({ width: 980, height: 800 })
+    await setup(page, [
+      failed('certbox', 'Cert box', 'cert_expired', { retryAt: now() + 192_000 }), signedOut('signbox', 'Sign box'),
+    ])
+    await page.addStyleTag({ content: '.main-page-todo { flex: 0 0 300px !important; width: 300px !important; min-width: 0 !important; max-width: 300px !important; }' })
+    await expect.poll(() => page.locator('.todo-panel').evaluate((el) => Math.round(el.getBoundingClientRect().width))).toBeLessThanOrEqual(300)
+    await expectNarrowLayout(banner(page), 'banner-narrow-tasks')
   })
 
   test('a dismissal made here is hidden in a second browser too (ui-prefs sync) (C92)', async ({ page, browser }) => {
@@ -283,6 +332,33 @@ test.describe('home attention banner: reconnects, size, sync', () => {
       await other.close()
     }
   })
+
+  test('a dismissal made in the notification panel is hidden in a second browser too (C92 panel)', async ({ page, browser }) => {
+    await setup(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')], undefined, { serverPrefs: true })
+    const synced = page.waitForResponse((r) => r.url().includes('/api/ui-prefs') && r.request().method() === 'PUT'
+      && (r.request().postData() ?? '').includes(DISMISS_KEY), { timeout: 10_000 })
+    await openBell(page)
+    await panelBanner(page).locator('li.hpb-row[data-host="signbox"]').getByRole('button', { name: 'Dismiss Sign box' }).click()
+    await synced
+    await page.keyboard.press('Escape')
+    await expect(row(page, 'netbox')).toBeVisible()
+    await expect(row(page, 'signbox')).toHaveCount(0)
+    const other = await browser.newContext()
+    const page2 = await other.newPage()
+    try {
+      const h2 = new Hosts(page2)
+      await h2.install([signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')])
+      await routeHealth(page2)
+      await loadHome(page2)
+      await expect(row(page2, 'netbox')).toBeVisible()
+      await expect(row(page2, 'signbox')).toHaveCount(0)
+    } finally {
+      const cleared = page.waitForResponse((r) => r.url().includes('/api/ui-prefs') && r.request().method() === 'PUT', { timeout: 10_000 }).catch(() => {})
+      await page.evaluate((k) => localStorage.removeItem(k), DISMISS_KEY)
+      await cleared
+      await other.close()
+    }
+  })
 })
 
 /**
@@ -296,7 +372,7 @@ test.describe('home attention banner: a version floor takes no row (server fixtu
   test('Build box (claude_outdated) has no row while /api/hosts/status still reports it; the four banner problems all show, no "and N more"', async ({ page, request }) => {
     await loadFixture(request, 'host-problems')
     await loadApp(page)
-    const hostsOf = () => page.locator('.main-page-chat [data-testid="attention-banner"] li.hpb-row')
+    const hostsOf = () => banner(page).locator('li.hpb-row[data-host]')
       .evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
     // Connect failures in Settings order, then the signed-out host.
     await expect.poll(hostsOf, { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])

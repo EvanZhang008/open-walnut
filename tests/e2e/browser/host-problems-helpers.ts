@@ -49,7 +49,7 @@ export const HINTS: Record<string, string> = {
   unreachable: 'Check the network or VPN, then Retry.',
   timeout: 'The host did not answer in time. Check the VPN, then Retry.',
   auth: 'SSH refused the key. Check the key for this host in Remote Hosts, then Retry.',
-  cert_expired: "Your SSH certificate expired; run your organisation's login command, then Retry.",
+  cert_expired: "Your SSH certificate expired; run your organization's login command, then Retry.",
   proxy: 'A proxy closed the connection. Check the proxy settings, then Retry.',
 }
 export const failed = (host: string, label: string, kind: string, extra: Partial<HS> = {}): HS => ({
@@ -81,6 +81,12 @@ export class Hosts {
   connectAnswer: (host: string) => HS | null = () => null
   checkAnswer: (host: string) => HS | null = () => null
   connectDelayMs = 0
+  /** Hold the /api/hosts/status hydrate this long (a slow first answer). */
+  hydrateDelayMs = 0
+  /** POST /api/hosts/<alias>/connect requests answered so far, per alias. */
+  readonly connects = new Map<string, number>()
+  /** The routed local health (set by setup()). */
+  health?: HealthControl
   constructor(private page: Page) {}
 
   async install(initial: HS[]): Promise<void> {
@@ -96,9 +102,13 @@ export class Hosts {
         }
       } as typeof WebSocket
     })
-    await this.page.route('**/api/hosts/status', (route) => route.fulfill({ json: { hosts: [...this.map.values()] } }))
+    await this.page.route('**/api/hosts/status', async (route) => {
+      if (this.hydrateDelayMs) await new Promise((r) => setTimeout(r, this.hydrateDelayMs))
+      await route.fulfill({ json: { hosts: [...this.map.values()] } })
+    })
     await this.page.route('**/api/hosts/*/connect', async (route: Route) => {
       const host = decodeURIComponent(new URL(route.request().url()).pathname.split('/')[3])
+      this.connects.set(host, (this.connects.get(host) ?? 0) + 1)
       if (this.connectDelayMs) await new Promise((r) => setTimeout(r, this.connectDelayMs))
       const next = this.connectAnswer(host) ?? this.map.get(host)!
       const s = stamp(next)
@@ -128,63 +138,146 @@ export class Hosts {
   }
 }
 
-/** This machine's Claude Code as /api/system/health reports it (ready by default). */
-export async function routeHealth(page: Page, local?: 'outdated'): Promise<void> {
-  await page.route('**/api/system/health', async (route) => {
-    const res = await route.fetch()
-    const body = await res.json() as Record<string, unknown>
-    body.hasReadyProvider = true
-    body.claudeCliAvailable = true
-    body.localClaude = local === 'outdated' ? {
-      checkedAt: now(),
-      claude: { found: true, version: '2.1.258', minVersion: '2.1.280', versionOk: false, kind: 'native', auth: 'ok', installMethod: 'other' },
-      problems: [{ kind: 'claude_outdated', message: 'Claude Code on this computer is 2.1.258, but the default model needs 2.1.280 or newer.', commands: ['claude update'] }],
-    } : { checkedAt: now(), claude: { found: true, version: '2.1.281', versionOk: true, kind: 'native', auth: 'ok' }, problems: [] }
-    await route.fulfill({ response: res, json: body })
+/** This machine's Claude Code states a routed /api/system/health can report. */
+export type LocalState = 'ready' | 'outdated' | 'sign-in'
+
+export function localClaudeBody(state: LocalState): Record<string, unknown> {
+  if (state === 'outdated') return {
+    checkedAt: now(),
+    claude: { found: true, version: '2.1.258', minVersion: '2.1.280', versionOk: false, kind: 'native', auth: 'ok', installMethod: 'other' },
+    problems: [{ kind: 'claude_outdated', message: 'Claude Code on this computer is 2.1.258, but the default model needs 2.1.280 or newer.', commands: ['claude update'] }],
+  }
+  if (state === 'sign-in') return {
+    checkedAt: now(),
+    claude: { found: true, version: '2.1.281', minVersion: '2.1.280', versionOk: true, kind: 'native', auth: 'not-logged-in', installMethod: 'native' },
+    problems: [{ kind: 'claude_not_logged_in', message: 'Claude Code on this computer is not signed in. Run `claude` in a terminal and sign in.', commands: ['claude'] }],
+  }
+  return { checkedAt: now(), claude: { found: true, version: '2.1.281', minVersion: '2.1.280', versionOk: true, kind: 'native', auth: 'ok' }, problems: [] }
+}
+
+/** The routed health: flip the local state mid-test; count the sign-in re-checks the page sends. */
+export interface HealthControl {
+  state: LocalState
+  /** POST /api/system/local-claude/check requests seen so far. */
+  rechecks: number
+  /** Change the local state and push it as a system:health frame (the server's own push shape). */
+  set(state: LocalState): Promise<void>
+}
+
+/**
+ * This machine's Claude Code as /api/system/health reports it (ready by default).
+ * The real server's own system:health pushes are dropped on the page, so the
+ * routed state holds; the re-check route answers the current state and pushes it.
+ */
+export async function routeHealth(page: Page, local: LocalState = 'ready'): Promise<HealthControl> {
+  let baseBody: Record<string, unknown> = {}
+  const bodyFor = (state: LocalState) => ({ ...baseBody, hasReadyProvider: true, claudeCliAvailable: true, localClaude: localClaudeBody(state) })
+  const pushHealth = (state: LocalState) => page.evaluate((data) => {
+    const w = window as unknown as { __hpHealthWs?: WebSocket }
+    if (!w.__hpHealthWs) return
+    w.__hpHealthWs.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: 'system:health', data, seq: Date.now(), __hp: true }) }))
+  }, bodyFor(state)).catch(() => {})
+  const control: HealthControl = {
+    state: local,
+    rechecks: 0,
+    async set(state) { control.state = state; await pushHealth(state) },
+  }
+  await page.addInitScript(() => {
+    const original = window.WebSocket
+    window.WebSocket = class HostProblemsHealthWs extends original {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols)
+        const u = new URL(String(url), window.location.href)
+        const w = window as unknown as { __hpHealthWs?: WebSocket }
+        if (u.pathname !== '/ws') return
+        if (!w.__hpHealthWs) w.__hpHealthWs = this
+        // Registered before the app's own listener: a real system:health push never reaches it.
+        this.addEventListener('message', (e: MessageEvent) => {
+          if (typeof e.data !== 'string' || !e.data.includes('"system:health"')) return
+          try {
+            const msg = JSON.parse(e.data) as { name?: string; __hp?: boolean }
+            if (msg.name === 'system:health' && !msg.__hp) e.stopImmediatePropagation()
+          } catch { /* not JSON: leave it */ }
+        })
+      }
+    } as typeof WebSocket
   })
+  await page.route('**/api/system/health', async (route) => {
+    try {
+      const res = await route.fetch()
+      baseBody = await res.json() as Record<string, unknown>
+      await route.fulfill({ response: res, json: bodyFor(control.state) })
+    } catch { /* the page closed mid-request (the test ended): nothing to answer */ }
+  })
+  await page.route('**/api/system/local-claude/check', async (route) => {
+    control.rechecks += 1
+    await route.fulfill({ json: { localClaude: localClaudeBody(control.state) } })
+    await pushHealth(control.state)
+  })
+  return control
+}
+
+export const TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible'
+export const CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible'
+
+/** Home is up: the task panel when it is shown, else the rail's bell (a hidden task panel is collapsed). */
+export async function waitForHome(page: Page): Promise<void> {
+  const todoShown = await page.evaluate((k) => localStorage.getItem(k) !== 'false', TODO_VISIBLE_KEY)
+  if (todoShown) await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
+  else await expect(page.locator('.sidebar-notification-btn')).toBeVisible({ timeout: 30_000 })
+}
+
+/** The slot-only layout: the task panel hidden, the Ask Walnut slot shown (call before the first load). */
+export async function slotLayout(page: Page): Promise<void> {
+  await page.addInitScript(([t, c]) => { localStorage.setItem(t, 'false'); localStorage.setItem(c, 'true') }, [TODO_VISIBLE_KEY, CHAT_VISIBLE_KEY])
+}
+
+/** No page mount at all: the task panel and the slot both hidden (call before the first load). */
+export async function bareLayout(page: Page): Promise<void> {
+  await page.addInitScript(([t, c]) => { localStorage.setItem(t, 'false'); localStorage.setItem(c, 'false') }, [TODO_VISIBLE_KEY, CHAT_VISIBLE_KEY])
+}
+
+/**
+ * ui-prefs never leave this page (a dismissal or a panel flag must not reach
+ * the shared fixture server and change the next test), and the boot read is
+ * the first-boot shape. Install it in every context.
+ */
+export async function isolatePrefs(page: Page): Promise<void> {
+  await page.route('**/api/ui-prefs', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}',
+  }))
 }
 
 export async function loadHome(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
+  await waitForHome(page)
   await page.waitForFunction(() => {
     const ws = (window as unknown as { __hpWs?: WebSocket }).__hpWs
     return !!ws && ws.readyState === WebSocket.OPEN
   }, null, { timeout: 20_000 })
 }
 
-export async function setup(page: Page, hosts: HS[], local?: 'outdated', opts: { serverPrefs?: boolean } = {}): Promise<Hosts> {
+export async function setup(page: Page, hosts: HS[], local?: LocalState, opts: { serverPrefs?: boolean } = {}): Promise<Hosts> {
   await page.addInitScript((key) => { if (!sessionStorage.getItem('hp-keep')) localStorage.removeItem(key) }, DISMISS_KEY)
-  // Dismissals sync to the fixture server (ui-prefs); one test's must not hide another's rows.
-  // Both ways: the boot read never sees another test's dismissals, and this
-  // test's own never reach the server (a later serverPrefs test reads them).
-  if (!opts.serverPrefs) {
-    await page.route('**/api/ui-prefs', async (route) => {
-      const req = route.request()
-      if (req.method() === 'PUT') {
-        const body = (req.postDataJSON() ?? {}) as { prefs?: Record<string, unknown> }
-        if (!body.prefs || !(DISMISS_KEY in body.prefs)) return route.fallback()
-        delete body.prefs[DISMISS_KEY]
-        if (Object.keys(body.prefs).length === 0) return route.fulfill({ json: { ok: true } })
-        return route.fallback({ postData: JSON.stringify(body) })
-      }
-      if (req.method() !== 'GET') return route.fallback()
-      const res = await route.fetch()
-      const body = await res.json() as { prefs?: Record<string, unknown> }
-      if (body.prefs) delete body.prefs[DISMISS_KEY]
-      await route.fulfill({ response: res, json: body })
-    })
-  }
+  // Dismissals and panel flags sync to the fixture server (ui-prefs); one
+  // test's must not change another's, so none leaves the page. serverPrefs
+  // keeps the real sync for the test that pins it (C92).
+  if (!opts.serverPrefs) await isolatePrefs(page)
   const h = new Hosts(page)
   await h.install(hosts)
-  await routeHealth(page, local)
+  h.health = await routeHealth(page, local)
   await loadHome(page)
   return h
 }
 
-export const banner = (page: Page): Locator => page.locator('.main-page-chat [data-testid="attention-banner"]')
-export const rows = (page: Page): Locator => banner(page).locator('li.hpb-row')
+/** THE card on Home: the task panel mount (the default layout shows the task panel). */
+export const banner = (page: Page): Locator => page.locator('[data-testid="attention-banner"][data-mount="tasks"]')
+/** Every attention banner on the page, wherever it is mounted. */
+export const anyBanner = (page: Page): Locator => page.locator('[data-testid="attention-banner"]')
+/** Host rows only (an undo row in a dismissed row's place carries no data-host). */
+export const rows = (page: Page): Locator => banner(page).locator('li.hpb-row[data-host]')
 export const row = (page: Page, host: string): Locator => banner(page).locator(`li.hpb-row[data-host="${host}"]`)
 export const storedKeys = (page: Page): Promise<string[]> =>
   page.evaluate((k) => JSON.parse(localStorage.getItem(k) ?? '[]') as string[], DISMISS_KEY)
@@ -208,3 +301,20 @@ export async function resetServerHostFixture(request: APIRequestContext): Promis
   if (res.status() !== 404) expect(res.ok(), `host fixture reset: ${res.status()}`).toBe(true)
 }
 
+
+/** The rail's task panel toggle (the toolbar has its own Hide task panel button). */
+export const railTodoToggle = (page: Page): Locator => page.locator('.sidebar-home-panels .app-task-panel-toggle')
+
+/** Hide the task panel with a real click on the rail toggle. */
+export async function hideTaskPanel(page: Page): Promise<void> {
+  await railTodoToggle(page).click()
+  await expect(railTodoToggle(page)).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.locator('.main-page-todo')).toHaveClass(/collapsed/)
+}
+
+/** Show the task panel again with a real click on the rail toggle. */
+export async function showTaskPanel(page: Page): Promise<void> {
+  await railTodoToggle(page).click()
+  await expect(railTodoToggle(page)).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.locator('.todo-panel')).toBeVisible()
+}

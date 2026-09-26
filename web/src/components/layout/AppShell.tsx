@@ -13,6 +13,8 @@ import { perf } from '@/utils/perf-logger';
 import { installTimeTracker } from '@/utils/time-tracking';
 import { useAppCatalog } from '@/apps/hooks';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
+import { startHostDismissPruner } from '@/utils/host-banner-dismiss';
+import { HostBannerAnnouncer } from '../common/HostBannerAnnouncer';
 
 interface AppShellProps {
   children: ReactNode;
@@ -102,8 +104,12 @@ function AppShellInner({ children }: AppShellProps) {
     return () => clearTimeout(timer);
   }, []);
 
+  // Banner dismissals expire on host frames whether or not a card is mounted
+  // (the user may sit on /notes the whole time).
+  useEffect(() => startHostDismissPruner(), []);
+
   // Human time tracking: ONE set of document listeners for the whole app
-  // lifetime (AppShell wraps every route). Installed once — the pathname is
+  // lifetime (AppShell wraps every route). Installed once: the pathname is
   // read through a ref so the tracker never captures a stale route.
   const pathnameRef = useRef(location.pathname);
   pathnameRef.current = location.pathname;
@@ -216,6 +222,7 @@ function AppShellInner({ children }: AppShellProps) {
       </main>
       <NotificationToaster />
       <OperationErrorBridge />
+      <HostBannerAnnouncer />
     </div>
   );
 }

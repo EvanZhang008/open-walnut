@@ -1,9 +1,11 @@
 /**
  * THIS machine's Claude Code: missing (one-click native install), too old for
  * the configured model (one-click update), or not signed in (the `claude`
- * instruction, re-checked every 15s while it shows; it goes away by itself once
- * sign-in completes). The server does the work and pushes every step on
- * `system:health`, so this only renders what it gets.
+ * instruction; the always-mounted re-check in local-claude-recheck.ts asks
+ * again every 15s, and each card mount asks once at once). The server does
+ * the work and pushes every step on `system:health`, so this only renders
+ * what it gets. A version floor alone ('outdated') never takes a banner
+ * section (localNoticeShows), the same rule as a remote host's.
  *
  * It is the FIRST section of the home attention banner (AttentionBanner): a
  * broken local Claude Code silences Walnut itself, so it sits above the remote
@@ -11,14 +13,17 @@
  * title, which becomes the card title); `SetupBanner` is the framed standalone.
  * Dismissal is per state and version (host-banner-dismiss.ts), never global.
  */
-import { useState, useCallback, useEffect, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { checkLocalClaude, fixLocalClaude } from '@/api/local-claude';
-import { claudeBannerView, SIGN_IN_RECHECK_MS, type ClaudeBannerView } from '@/utils/local-claude-banner';
-import { clearLocalDismissed, dismissLocal, isLocalDismissed, readLocalDismissed } from '@/utils/host-banner-dismiss';
+import { claudeBannerView, localNoticeShows, type ClaudeBannerView } from '@/utils/local-claude-banner';
+import { clearLocalDismissed, dismissLocal, useLocalDismissed } from '@/utils/host-banner-dismiss';
+import { recheckLocalClaudeNow } from '@/utils/local-claude-recheck';
 import { log } from '@/utils/log';
+import { firstSentence } from '@open-walnut/host-problem';
 import { InlineCodeText } from './InlineCodeText';
 import '@/styles/attention-banner.css';
+import '@/styles/host-status.css';
 
 /** Custom event name dispatched by NotificationPanel to re-show the banner. */
 export const SETUP_SHOW_EVENT = 'setup:show-guide';
@@ -43,6 +48,8 @@ interface SetupBannerProps {
   /** Kept for API compatibility with the callers; the banner no longer offers a
    *  "start a session" side path, since sessions and the main agent now share one login. */
   onStartSession?: () => void;
+  /** The local x wrote this key (the card turns the section into an undo line). */
+  onDismissed?: (key: string) => void;
 }
 
 export interface LocalClaudeNotice {
@@ -52,6 +59,8 @@ export interface LocalClaudeNotice {
   title: string | null;
   /** The section, without a card frame. */
   node: ReactNode;
+  /** Which notice renders (null: none). */
+  kind: 'install' | 'sign-in' | null;
 }
 
 const TITLES: Record<ClaudeBannerView['kind'], string> = {
@@ -60,46 +69,38 @@ const TITLES: Record<ClaudeBannerView['kind'], string> = {
   'sign-in': 'Sign in to Claude Code',
 };
 
-const NONE: LocalClaudeNotice = { present: false, title: null, node: null };
+const NONE: LocalClaudeNotice = { present: false, title: null, node: null, kind: null };
 
 /** The local Claude Code section for the attention banner (no frame of its own). */
-export function useLocalClaudeNotice({ health, loading, onNavigateSettings }: SetupBannerProps): LocalClaudeNotice {
-  const [dismissedList, setDismissedList] = useState<string[]>(() => readLocalDismissed());
+export function useLocalClaudeNotice({ health, loading, onNavigateSettings, onDismissed }: SetupBannerProps): LocalClaudeNotice {
+  const dismissedList = useLocalDismissed();
   const [pending, setPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const known = !loading && health.hasReadyProvider !== undefined;
-  const view = known ? claudeBannerView(health) : null;
-  const providerOk = health.hasReadyProvider ?? false;
-  const cliOk = health.claudeCliAvailable ?? true;
-  // No provider at all reads as the install card too (the one thing a default install needs).
-  const kind: ClaudeBannerView['kind'] | null = view?.kind ?? (known && (!providerOk || !cliOk) ? 'install' : null);
+  // The one rule the card and the bell dot share: install or sign-in, never outdated.
+  const kind = localNoticeShows(health, dismissedList, loading);
+  const view = kind ? claudeBannerView(health) : null;
   const dismissKey = view?.dismissKey ?? 'install:';
-  const hidden = !!kind && isLocalDismissed(dismissKey, kind, dismissedList);
-  const signInShowing = kind === 'sign-in' && !hidden;
 
   const onDismiss = useCallback(() => {
-    setDismissedList(dismissLocal(dismissKey));
-  }, [dismissKey]);
+    dismissLocal(dismissKey);
+    onDismissed?.(dismissKey);
+  }, [dismissKey, onDismissed]);
 
   useEffect(() => {
-    const handler = () => {
-      clearLocalDismissed();
-      setDismissedList([]);
-    };
-    window.addEventListener(SETUP_SHOW_EVENT, handler);
-    return () => window.removeEventListener(SETUP_SHOW_EVENT, handler);
+    window.addEventListener(SETUP_SHOW_EVENT, clearLocalDismissed);
+    return () => window.removeEventListener(SETUP_SHOW_EVENT, clearLocalDismissed);
   }, []);
 
-  // Signing in happens in a terminal, out of Walnut's sight: ask again every 15s
-  // while the banner shows. The answer arrives as a system:health push.
+  // Signing in happens in a terminal: a card that mounts on the sign-in notice
+  // asks once right away (the 15s interval lives in local-claude-recheck.ts).
+  const signIn = kind === 'sign-in';
+  const askedOnMount = useRef(false);
   useEffect(() => {
-    if (!signInShowing) return;
-    const timer = setInterval(() => {
-      checkLocalClaude(true).catch((err) => log.warn('setup-banner', 'sign-in re-check failed', { error: String(err) }));
-    }, SIGN_IN_RECHECK_MS);
-    return () => clearInterval(timer);
-  }, [signInShowing]);
+    if (!signIn || askedOnMount.current) return;
+    askedOnMount.current = true;
+    void recheckLocalClaudeNow();
+  }, [signIn]);
 
   const act = useCallback((run: () => Promise<unknown>, what: string) => {
     setPending(true);
@@ -115,20 +116,22 @@ export function useLocalClaudeNotice({ health, loading, onNavigateSettings }: Se
   // Render nothing until health has actually loaded: before the first fetch
   // resolves hasReadyProvider is undefined, and treating that as "not ready" is
   // what made the onboarding flash on every refresh.
-  if (!kind || hidden) return NONE;
+  if (!kind) return NONE;
   const title = TITLES[kind];
   const header = (
     <div className="setup-banner-header">
       <span className="setup-banner-title">{title}</span>
     </div>
   );
-  // LAST in the section (Tab order: the actions, then this x; spec G20), drawn in the header's corner.
+  // LAST in the section (Tab order: the actions, then this x; spec G20), at the end of
+  // the section's last line: never in the card's top-right corner (spec 5.1, C53).
   const dismiss = (
-    <button type="button" tabIndex={0} className="setup-banner-dismiss ab-local-x" onClick={onDismiss} aria-label={LOCAL_DISMISS_LABEL}>&times;</button>
+    <button type="button" tabIndex={0} className="setup-banner-dismiss ab-local-x" onClick={onDismiss}
+      aria-label={LOCAL_DISMISS_LABEL} title={LOCAL_DISMISS_LABEL}>&times;</button>
   );
   if (kind !== 'install' && view) {
     return {
-      present: true, title,
+      present: true, title, kind,
       node: (
         <QuietSection
           header={header}
@@ -143,7 +146,7 @@ export function useLocalClaudeNotice({ health, loading, onNavigateSettings }: Se
     };
   }
   return {
-    present: true, title,
+    present: true, title, kind,
     node: (
       <InstallSection
         header={header}
@@ -199,8 +202,8 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
         <button type="button" tabIndex={0} className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
           Open API settings
         </button>
+        {dismiss}
       </div>
-      {dismiss}
     </section>
   );
 }
@@ -237,14 +240,15 @@ function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck }:
   return (
     <section className="ab-local" data-testid={signIn ? 'setup-banner-sign-in' : 'setup-banner-outdated'}>
       {header}
-      <p className="setup-lead"><InlineCodeText text={problem.message} /></p>
+      <LeadText message={problem.message} />
       {signIn ? (
         <>
           <CopyCommand command={problem.commands[0] ?? 'claude'} />
           <div className="setup-alt">
             <span className="text-sm text-muted">Walnut checks again every 15 seconds and hides this once you are signed in.</span>
-            <button type="button" tabIndex={0} className="setup-step-btn" disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check now</button>
+            <button type="button" tabIndex={0} className="setup-step-btn" disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check again</button>
             {error && <span className="text-sm text-muted">{error}</span>}
+            {dismiss}
           </div>
         </>
       ) : view.fixable ? (
@@ -252,11 +256,29 @@ function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck }:
       ) : (
         problem.commands[0] && <CopyCommand command={problem.commands[0]} />
       )}
-      {dismiss}
+      {!signIn && dismiss}
     </section>
   );
 }
 
+/**
+ * The lead in two parts: the state ('... is not signed in.') repeats the title,
+ * so a card that also lists hosts hides it (.ab-both) and keeps the fix whole
+ * ('Run `claude` in a terminal and sign in.'), never a clipped sentence (N2).
+ */
+function LeadText({ message }: { message: string }) {
+  const state = firstSentence(message).trim();
+  const fix = message.slice(state.length).trim();
+  if (!state || !fix) return <p className="setup-lead"><InlineCodeText text={message} /></p>;
+  return (
+    <p className="setup-lead">
+      <span className="setup-lead-state"><InlineCodeText text={state} /> </span>
+      <span className="setup-lead-fix"><InlineCodeText text={fix} /></span>
+    </p>
+  );
+}
+
+/** The command chip and the same text Copy / Copied button the host rows use (one copy control per card). */
 function CopyCommand({ command }: { command: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(() => {
@@ -265,11 +287,14 @@ function CopyCommand({ command }: { command: string }) {
       setTimeout(() => setCopied(false), 2000);
     }).catch(() => { /* clipboard blocked, user can still select the text */ });
   }, [command]);
+  const label = copied ? 'Copied' : 'Copy';
   return (
     <span className="setup-copy-wrap">
       <code className="setup-command" onClick={handleCopy} title="Click to copy">{command}</code>
-      <button type="button" tabIndex={0} className="setup-copy-btn" onClick={handleCopy} aria-label="Copy command">
-        {copied ? '✓' : '⎘'}
+      <button type="button" tabIndex={0} className="setup-copy-btn ab-copy-btn" onClick={handleCopy}
+        aria-label={copied ? label : 'Copy command'} title={copied ? label : 'Copy command'}>
+        {/* Copy and Copied share one width (the flip happens under the pointer). */}
+        <span className="hpb-btn-stack" data-r1="Copied" data-r2="Copy"><span>{label}</span></span>
       </button>
     </span>
   );

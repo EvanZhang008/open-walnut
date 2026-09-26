@@ -1,0 +1,84 @@
+/* The attention card's one-line host rows, for two cases the two-line dense
+   rows cannot fit:
+     .ab-fit-rows  a short mount with the local section and host rows (a 600px
+                   window with the local sign-in) where even one two-line row
+                   does not fit: the whole card keeps its cap (N3-3); .ab-fit
+                   alone only drops the local command chip;
+     <= 200px wide a task panel dragged close to its minimum: no sideways
+                   overflow, no one-letter lines (N3-10).
+   A folded row is its dot, the host's name, its first action and its x. The
+   headline stays the name's tooltip; an opened row is the full row as always. */
+.ab-fit-rows .hpb-row:not(.hpb-open) > .hpb-body {
+  grid-column: 2;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ab-fit-rows .hpb-row:not(.hpb-open) > .hpb-body > .hft { display: contents; }
+.ab-fit-rows .hpb-row:not(.hpb-open) > .hpb-body::before {
+  content: attr(data-label);
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  font-weight: 500;
+}
+.ab-fit-rows .hpb-row[data-type="trying"]:not(.hpb-open) > .hpb-body::before { content: none; }
+.ab-fit-rows .hpb-row:not(.hpb-open) :is(.hft-headline, .hpb-headline, .hft-when, .hpb-last, .hpb-receipt, .hft-details, .hft-hint) { display: none; }
+.ab-fit-rows .hpb-row:not(.hpb-open) .hpb-actions { flex: none; flex-wrap: nowrap; margin: 0; }
+.ab-fit-rows .hpb-row:not(.hpb-open) .hpb-actions > :not(:first-child) { display: none; }
+.ab-fit-rows .hpb-row:not(.hpb-open) > .hpb-x { grid-column: 3; align-self: center; }
+.ab-fit-rows .hpb-row:not(.hpb-open) { min-height: 28px; }
+/* The local section keeps its title, sentence and action; the command chip is in the sentence already. */
+.ab-fit .ab-local .setup-copy-wrap { display: none; }
+.ab-fit .ab-local-alt { margin-top: 6px; }
+.ab-fit.ab-both .ab-local + .hpb { margin-top: 8px; padding-top: 8px; }
+
+/* The same one-line rows in a card 150px wide or less inside (a task panel dragged
+   near its minimum, N3-10): nothing wider than the card, no one-letter lines. */
+@container attention (max-width: 150px) {
+  .attention-banner .hpb-row:not(.hpb-open) > .hpb-body {
+    grid-column: 2;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .attention-banner .hpb-row:not(.hpb-open) > .hpb-body > .hft { display: contents; }
+  .attention-banner .hpb-row:not(.hpb-open) > .hpb-body::before {
+    content: attr(data-label);
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .attention-banner .hpb-row[data-type="trying"]:not(.hpb-open) > .hpb-body::before { content: none; }
+  .attention-banner .hpb-row:not(.hpb-open) :is(.hft-headline, .hpb-headline, .hft-when, .hpb-last, .hpb-receipt, .hft-details, .hft-hint) { display: none; }
+  .attention-banner .hpb-row:not(.hpb-open) .hpb-actions { flex: none; flex-wrap: nowrap; margin: 0; }
+  .attention-banner .hpb-row:not(.hpb-open) .hpb-actions > :not(:first-child) { display: none; }
+  .attention-banner .hpb-row:not(.hpb-open) > .hpb-x { grid-column: 3; align-self: center; }
+  .attention-banner .hpb-row:not(.hpb-open) { min-height: 28px; }
+  /* Below ~130px even the button does not fit beside the name: it goes under it. */
+  .attention-banner .hpb-header { flex-wrap: wrap; row-gap: 2px; min-width: 0; }
+  .attention-banner .hpb-header .setup-banner-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attention-banner .hpb-foot { flex-wrap: wrap; row-gap: 4px; }
+}
+@container attention (max-width: 130px) {
+  .attention-banner .hpb-row:not(.hpb-open) > .hpb-body { flex-wrap: wrap; }
+  .attention-banner .hpb-row:not(.hpb-open) > .hpb-body::before { flex-basis: 100%; }
+  .attention-banner .hpb-row:not(.hpb-open) > .hpb-x { align-self: start; }
+  .attention-banner .hpb-row:not(.hpb-open) .hpb-actions { max-width: 100%; min-width: 0; }
+  .attention-banner .hpb-row:not(.hpb-open) .hpb-actions .hpb-btn { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}

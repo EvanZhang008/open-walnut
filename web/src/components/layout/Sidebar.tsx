@@ -21,10 +21,13 @@ import { VoicePanel } from '@/components/common/VoicePanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
-import { railDotShows, useHostAttentionNeeded, useHostBannerPlacement } from '@/utils/host-banner-placement';
+import { bellPresentation, setNotificationsOpen } from '@/utils/host-banner-placement';
+import { useAttentionDots } from '@/hooks/useAttentionDots';
+import { useLocalClaudeRecheck } from '@/utils/local-claude-recheck';
 import { hostSettingsHref } from '@/utils/host-settings-nav';
 import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
 import '@/styles/attention-banner.css';
+import '@/styles/bell-dot.css';
 
 // Twins of MainPage's keys: localStorage, so the toggles read the same state the
 // page restores after a relaunch (sessionStorage dies with the Mac app's web view).
@@ -53,21 +56,26 @@ export function Sidebar({
   onToggleCollapse,
 }: SidebarProps) {
   const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`;
-  const { hasIssues } = useSystemHealth();
+  const { hasIssues, health, loading: healthLoading } = useSystemHealth();
   const apps = useAppCatalog();
   const navigate = useNavigate();
   const location = useLocation();
-  // No home banner on screen (slot and draft column both hidden, or another
-  // route): a host problem still shows, as a warn dot on the Settings entry.
-  const hostBannerPlacement = useHostBannerPlacement();
-  const hostAttention = railDotShows(useHostAttentionNeeded(), hostBannerPlacement, location.pathname);
-  // overrideLinks: a rail row is an <a> only because SPA routing needs one —
+  // No banner on the page (task panel, slot and draft column all hidden, or
+  // another route): a host problem still shows, as a warn dot on the Settings
+  // entry, and the bell carries a dot for hosts or the local Claude Code.
+  const { railSettingsDot: hostAttention, bellReason } = useAttentionDots({ pathname: location.pathname, hash: location.hash, health, healthLoading });
+  // The sign-in re-check lives here, not in a card: it runs whichever surface is on screen.
+  useLocalClaudeRecheck(health, healthLoading);
+  // overrideLinks: a rail row is an <a> only because SPA routing needs one:
   // "Open Link in New Tab" is not what right-clicking an app icon is for.
   const appMenu = useContextMenu<RegisteredApp>({ overrideLinks: true });
   const audio = useAudioCapture();
   const { notify, attentionCount, quiet } = useNotifications();
   const quietNow = effectiveQuiet(quiet).active;
-  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifOpen, setNotifOpenState] = useState(false);
+  // The banner owner store flips in the SAME handler as the panel state (one commit, never two cards).
+  const setNotifOpen = (next: boolean) => { setNotificationsOpen(next); setNotifOpenState(next); };
+  const bell = bellPresentation({ reason: bellReason, attentionCount, hasIssues, quiet: quietNow, quietLabel: quietNow ? quietLabel(quiet) : '', collapsed });
   const [voiceOpen, setVoiceOpen] = useState(false);
   // Live voice status (transcribing spinner / failure dot) from any MicButton.
   const [voiceStatus, setVoiceStatusState] = useState<VoiceStatus>(getVoiceStatus());
@@ -115,7 +123,7 @@ export function Sidebar({
       setScratchpadVisible((e as CustomEvent).detail?.visible ?? false);
     };
     // Clicking a persistent toast's body opens the notification center.
-    const handleOpenCenter = () => setNotifOpen(true);
+    const handleOpenCenter = () => { setNotificationsOpen(true); setNotifOpenState(true); };
     window.addEventListener('main:chat-visible', handleChatVisible);
     window.addEventListener('main:todo-visible', handleTodoVisible);
     window.addEventListener('main:calendar-visible', handleCalendarVisible);
@@ -352,21 +360,23 @@ export function Sidebar({
           onClick={() => setNotifOpen(!notifOpen)}
           // Quiet mode: the one visible trace is a moon on the bell and a
           // tooltip naming who holds quiet; the badge keeps counting as usual.
-          title={quietNow ? quietLabel(quiet) : collapsed ? 'Notifications' : undefined}
-          aria-label="Notifications"
+          title={bell.title}
+          aria-label={bell.ariaLabel}
           {...(quietNow ? { 'data-quiet': 'true' } : {})}
         >
           <BellIcon />
           {quietNow && <span className="quiet-moon" aria-hidden="true">☾</span>}
           <span className="sidebar-label">Notifications</span>
           {/* Amber count = things waiting on the human (asks + unread letters).
-              Errors never badge a number — they read as a diagnosis inside the
+              Errors never badge a number: they read as a diagnosis inside the
               panel, not a permanent red counter on the bell. */}
-          {attentionCount > 0 ? (
+          {attentionCount > 0 && (
             <span className="notification-badge-count notification-badge-attention">{attentionCount > 99 ? '99+' : attentionCount}</span>
-          ) : hasIssues ? (
-            <span className="notification-badge-dot" />
-          ) : null}
+          )}
+          {/* A host or Claude Code reason wears the rail Settings entry's warn look; the older system dot keeps its own. */}
+          {(bell.dot || bell.cornerDot) && (
+            <span className={`notification-badge-dot${bell.cornerDot ? ' is-corner' : ''}${bell.dotKind === 'attention' ? ' is-host-warn' : ''}`} />
+          )}
         </button>
       </div>
 

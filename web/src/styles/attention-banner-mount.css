@@ -1,0 +1,63 @@
+/* Attention banner mounts (AttentionBannerMount): the task panel wrapper, the
+   notification panel wrapper, the grow-on-enter row, and the reserve box.
+   Existing tokens only; the card itself is styled by attention-banner.css. */
+
+.ab-mount {
+  flex-shrink: 0;
+  min-width: 0;
+  outline: none;
+}
+
+/* Grow on enter: the row goes 0fr to 1fr, the content keeps its natural height
+   (that is what the mount measures). Empty means zero height either way. */
+.ab-mount-anim {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 150ms ease-out;
+}
+.ab-mount-anim[data-phase="opening"] {
+  grid-template-rows: 1fr;
+}
+.ab-mount-anim-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+/* Grown: a plain block, so the height always follows the card (and focus rings are not clipped). */
+.ab-mount-anim[data-phase="settled"] {
+  display: block;
+}
+.ab-mount-anim[data-phase="settled"] > .ab-mount-anim-inner {
+  overflow: visible;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ab-mount-anim {
+    transition: none;
+  }
+}
+
+.ab-mount-reserve {
+  /* Same outer box as the card it stands in for (.setup-banner margin). */
+  margin: 10px 12px;
+  pointer-events: none;
+}
+
+/* Task panel: the toolbar floats (position absolute) and the first element
+   after it takes the 42px offset (globals.css), so the mount holds it whether
+   or not it has a card, and whatever follows sits right under it. An empty
+   mount lets the pinned wrapper (the tabs-hidden case) climb back under the
+   glass toolbar, exactly as it did with no mount. */
+.todo-panel > .ab-mount[data-empty="true"] + .todo-pinned-wrapper {
+  margin-top: -42px;
+  padding-top: 46px;
+}
+
+/* Errors view: a root-cause block heading with the quiet "Shown above" line. */
+.nfc-cat-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.nfc-cat-shown {
+  font-size: 11px;
+  color: var(--fg-muted);
+}

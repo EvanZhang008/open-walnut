@@ -1,0 +1,12 @@
+/* The bell's reason dot next to the amber count: the same dot, moved to the
+   count's top right corner so both read at once (no new colour). */
+.notification-badge-dot.is-corner {
+  top: -2px;
+  right: 0;
+  z-index: 1;
+}
+
+.sidebar.collapsed .notification-badge-dot.is-corner {
+  top: -2px;
+  right: 4px;
+}

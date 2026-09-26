@@ -11,7 +11,8 @@
  *                  sentence (C69); off hosts: no chips, an off ring, host_off (C79)
  *   the gate bar   follows the host live and per 2.2 (C80); a removed host's
  *                  history row is refused host_removed (C73)
- *   slot hidden    the compact banner in the draft column (C66), without the gate bar's host
+ *   slot hidden    the compact banner in the draft column (C66) once the task panel and the
+ *                  slot are both hidden, without the gate bar's host
  *                  (a signed-out Sign box: an outdated Build box takes no banner row at all)
  *   session        the error bar names the host and the last cause (C70)
  *
@@ -27,8 +28,9 @@ import { test, expect, type Page } from '@playwright/test'
 import { draftCwdPill, draftQuickChips, openDraft } from './draft-helpers'
 import {
   HEALTHY, fixtureCounters, fixtureFile, gateBar, hostFixture, hostTab, isolatePrefs, loadApp, loadFixture, openPicker,
-  pickFolder, picker, resetServerHostFixture, slotBanner, start, startOnHost, wireHost,
+  pickFolder, picker, resetServerHostFixture, start, startOnHost, tasksBanner, wireHost,
 } from './host-problems-fixture-helpers'
+import { hideTaskPanel } from './host-problems-helpers'
 
 const SHOTS = '/tmp/walnut-host-problems-slice/fix2'
 const REMOTE_OFF = 'Remote hosts are off on this test server.'
@@ -247,13 +249,13 @@ function fiveBannerProblems(): Record<string, unknown> {
 test.describe('the Ask Walnut slot hidden', () => {
   test.beforeAll(async ({ request }) => { await loadFixture(request, fiveBannerProblems()) })
 
-  test('the draft column carries the compact banner with the slot\'s rows; no second banner exists (C66)', async ({ page, browser }) => {
-    test.setTimeout(90_000) // two app loads (slot shown, slot hidden) in one test
+  test('the draft column carries the compact banner with the task panel\'s rows; no second banner exists (C66)', async ({ page, browser }) => {
+    test.setTimeout(90_000) // two app loads (task panel shown, then hidden) in one test
     await loadApp(page)
-    const slotRows = slotBanner(page).locator('li.hpb-row')
-    await expect(slotRows.first()).toBeVisible({ timeout: 20_000 })
+    const tasksRows = tasksBanner(page).locator('li.hpb-row[data-host]')
+    await expect(tasksRows.first()).toBeVisible({ timeout: 20_000 })
     const rowsOf = (els: Element[]) => els.map((e) => `${e.getAttribute('data-host')}|${e.getAttribute('data-type')}|${e.getAttribute('data-kind')}`)
-    const inSlot = await slotRows.evaluateAll(rowsOf)
+    const inTasks = await tasksRows.evaluateAll(rowsOf)
 
     const ctx = await browser.newContext()
     const hidden = await ctx.newPage()
@@ -261,14 +263,16 @@ test.describe('the Ask Walnut slot hidden', () => {
       await isolatePrefs(hidden)
       await hidden.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false'))
       await loadApp(hidden)
-      await expect(hidden.locator('[data-testid="attention-banner"]')).toHaveCount(0)
+      // A draft from the toolbar, then the task panel hidden: the draft column is the one mount left.
       const draft = await openDraft(hidden)
+      await hideTaskPanel(hidden)
       const compact = draft.locator('[data-testid="attention-banner"].attention-banner-compact')
       await expect(compact).toBeVisible({ timeout: 10_000 })
+      await expect(compact).toHaveAttribute('data-mount', 'draft')
       await expect(hidden.locator('[data-testid="attention-banner"]')).toHaveCount(1)
       await expect(compact.locator('.setup-banner-title')).toHaveCount(0)
-      expect(await compact.locator('li.hpb-row').evaluateAll(rowsOf)).toEqual(inSlot)
-      await expect(compact.locator('.hpb-more')).toHaveText(await slotBanner(page).locator('.hpb-more').innerText())
+      expect(await compact.locator('li.hpb-row[data-host]').evaluateAll(rowsOf)).toEqual(inTasks)
+      await expect(compact.locator('.hpb-more')).toHaveText(await tasksBanner(page).locator('.hpb-more').innerText())
       await expect(hidden.locator('.host-connect-banner')).toHaveCount(0)
       await draft.screenshot({ path: `${SHOTS}/draft-compact-banner.png` })
     } finally {
@@ -297,11 +301,17 @@ test.describe('the Ask Walnut slot hidden', () => {
       await isolatePrefs(hidden)
       await hidden.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false'))
       await loadApp(hidden)
-      const panel = await openPicker(hidden)
+      // Task panel and slot hidden with a draft open: the compact card in the draft column.
+      const panel = await openDraft(hidden)
+      await hideTaskPanel(hidden)
+      await draftCwdPill(panel).click()
+      await expect(picker(hidden)).toBeVisible({ timeout: 10_000 })
+      await expect(hostTab(hidden, 'devbox')).toBeVisible({ timeout: 20_000 })
       const compact = panel.locator('[data-testid="attention-banner"].attention-banner-compact')
-      const hostsIn = () => compact.locator('li.hpb-row').evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
+      const hostsIn = () => compact.locator('li.hpb-row[data-host]').evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
       // Five banner problems: three rows and 'and 2 more' (Sign box is one of the two).
       await expect(compact.locator('.hpb-more')).toHaveText('and 2 more', { timeout: 20_000 })
+      await expect(hidden.locator('[data-testid="attention-banner"]')).toHaveCount(1)
       expect(await hostsIn()).not.toContain('signbox')
       expect(await hostsIn()).not.toContain('buildbox')
       await pickFolder(hidden, panel, 'signbox', '~/work/api')
@@ -311,10 +321,11 @@ test.describe('the Ask Walnut slot hidden', () => {
       await expect(gateBar(panel)).toHaveAttribute('data-host', 'signbox')
       // Sign box speaks once, in the bar; the four others fit without 'and N more'.
       await expect(compact.locator('.hpb-more')).toHaveCount(0)
-      await expect(compact.locator('li.hpb-row')).toHaveCount(4)
+      await expect(compact.locator('li.hpb-row[data-host]')).toHaveCount(4)
       expect(await hostsIn()).not.toContain('signbox')
       await expect(compact.locator('li.hpb-row[data-host="lanbox"]')).toBeVisible()
       await expect(compact.locator('li.hpb-row[data-host="keybox"]')).toBeVisible()
+      await expect(hidden.locator('[data-testid="attention-banner"]')).toHaveCount(1)
       await panel.screenshot({ path: `${SHOTS}/draft-compact-banner-gate.png` })
     } finally {
       await ctx.close()

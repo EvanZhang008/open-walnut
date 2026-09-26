@@ -1,10 +1,18 @@
-import { describe, expect, it } from 'vitest'
-import { createElement } from '../../web/node_modules/react/index.js'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { parseHTML } from 'linkedom'
+import { createElement, act } from '../../web/node_modules/react/index.js'
+import { createRoot } from '../../web/node_modules/react-dom/client.js'
 import { renderToStaticMarkup } from '../../web/node_modules/react-dom/server.node.js'
-import { SetupBanner } from '../../web/src/components/common/SetupBanner'
+import { SetupBanner, SETUP_SHOW_EVENT } from '../../web/src/components/common/SetupBanner'
+import { __resetHostBannerDismissForTests, dismissLocal, readLocalDismissed } from '../../web/src/utils/host-banner-dismiss'
+
+// The always-mounted re-check owns the interval; a card mount asks once (spec 3, C49).
+const recheck = vi.hoisted(() => ({ recheckLocalClaudeNow: vi.fn(async () => {}) }))
+vi.mock('@/utils/local-claude-recheck', () => recheck)
+vi.mock('@/utils/log', () => ({ log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }))
 import type { SystemHealth } from '../../web/src/hooks/useSystemHealth'
 import type { LocalClaudeStatus } from '../../web/src/api/local-claude'
-import { claudeBannerView, splitInlineCode } from '../../web/src/utils/local-claude-banner'
+import { claudeBannerView, localNoticeShows, splitInlineCode } from '../../web/src/utils/local-claude-banner'
 
 const render = (health: SystemHealth, loading = false) => renderToStaticMarkup(
   createElement(SetupBanner, { health, loading, onNavigateSettings: () => {} }),
@@ -86,18 +94,16 @@ describe('setup banner for this machine\'s Claude Code', () => {
     expect(failed.split(INSTALL.replace(/\|/g, '|')).length - 1).toBe(1)
   })
 
-  it('too old: names both versions and offers the one-click update; an install Walnut must not touch only gets its command', () => {
-    const html = render({ ...ready, localClaude: local({ claude: { ...local({}).claude, version: '2.1.258', versionOk: false, minVersion: '2.1.280' }, problems: [OUTDATED] }) })
-    expect(html).toContain('data-testid="setup-banner-outdated"')
-    expect(text(html)).toContain('Update Claude Code')
-    expect(text(html)).toContain('Claude Code on this computer is 2.1.258, but Opus 5.5 needs 2.1.280 or newer.')
-    expect(html).toContain('data-testid="setup-banner-fix"')
-    const brew = render({ ...ready, localClaude: local({
+  it('too old (a version floor alone, C50): no banner section, the same rule as a remote host; claudeBannerView still says outdated', () => {
+    const health = { ...ready, localClaude: local({ claude: { ...local({}).claude, version: '2.1.258', versionOk: false, minVersion: '2.1.280' }, problems: [OUTDATED] }) }
+    expect(render(health)).toBe('')
+    expect(claudeBannerView(health)).toMatchObject({ kind: 'outdated' })
+    expect(localNoticeShows(health, [])).toBeNull()
+    const brew = { ...ready, localClaude: local({
       claude: { found: true, version: '2.1.258', versionOk: false, minVersion: '2.1.280', installMethod: 'homebrew' },
       problems: [{ ...OUTDATED, commands: ['brew upgrade claude-code'] }],
-    }) })
-    expect(brew).not.toContain('data-testid="setup-banner-fix"')
-    expect(text(brew)).toContain('brew upgrade claude-code')
+    }) }
+    expect(render(brew)).toBe('')
   })
 
   it('not signed in: the `claude` instruction as code, Check now, and the 15s promise', () => {
@@ -160,5 +166,84 @@ describe('local notice dismissal keys (C38)', () => {
       // The header holds only the title now; the x is not inside it.
       expect(html.match(/<div class="setup-banner-header">(.*?)<\/div>/)?.[1]).not.toContain('Dismiss')
     }
+  })
+})
+
+// ── Mounted for real (linkedom + the web app's own React) ──
+
+class MemStorage {
+  private m = new Map<string, string>()
+  getItem(k: string) { return this.m.has(k) ? this.m.get(k)! : null }
+  setItem(k: string, v: string) { this.m.set(k, String(v)) }
+  removeItem(k: string) { this.m.delete(k) }
+  clear() { this.m.clear() }
+}
+
+describe('the local section mounted', () => {
+  let win: Window & typeof globalThis
+  let host: HTMLElement
+  let root: { render: (n: unknown) => void; unmount: () => void } | null = null
+  const signIn = { ...ready, localClaude: local({ claude: { ...local({}).claude, version: '2.1.281', auth: 'not-logged-in' }, problems: [SIGN_IN] }) }
+  const mount = async (health: SystemHealth, onDismissed?: (key: string) => void) => {
+    await act(async () => { root!.render(createElement(SetupBanner, { health, onNavigateSettings: () => {}, onDismissed })) })
+  }
+
+  beforeAll(() => {
+    const dom = parseHTML('<!DOCTYPE html><html><head></head><body></body></html>')
+    const g = globalThis as unknown as Record<string, unknown>
+    g.window = dom.window
+    g.document = dom.document
+    g.IS_REACT_ACT_ENVIRONMENT = true
+    win = dom.window as unknown as Window & typeof globalThis
+  })
+  beforeEach(() => {
+    ;(globalThis as { localStorage?: unknown }).localStorage = new MemStorage()
+    __resetHostBannerDismissForTests()
+    recheck.recheckLocalClaudeNow.mockClear()
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+  })
+  afterEach(async () => {
+    if (root) { await act(async () => { root!.unmount() }); root = null }
+    document.body.innerHTML = ''
+  })
+
+  it('a mount on the sign-in notice asks for a re-check exactly once, and has no interval of its own (C49)', async () => {
+    const setInt = vi.spyOn(globalThis, 'setInterval')
+    await mount(signIn)
+    await mount(signIn)
+    expect(recheck.recheckLocalClaudeNow).toHaveBeenCalledTimes(1)
+    expect(setInt).not.toHaveBeenCalled()
+    setInt.mockRestore()
+  })
+
+  it('an install notice does not ask', async () => {
+    await mount({ hasReadyProvider: false, claudeCliAvailable: false })
+    expect(host.querySelector('[data-testid="setup-banner-install"]')).not.toBeNull()
+    expect(recheck.recheckLocalClaudeNow).not.toHaveBeenCalled()
+  })
+
+  it('the x: title equals its label, it ends the last line (not the header), and hands the key to the card', async () => {
+    const got: string[] = []
+    await mount(signIn, (k) => got.push(k))
+    const x = host.querySelector<HTMLButtonElement>('.ab-local-x')!
+    expect(x.getAttribute('title')).toBe(x.getAttribute('aria-label'))
+    expect(x.getAttribute('aria-label')).toBe('Dismiss Claude Code notice')
+    expect(x.closest('.setup-banner-header')).toBeNull()
+    expect(x.parentElement?.classList.contains('setup-alt')).toBe(true)
+    await act(async () => { x.dispatchEvent(new win.Event('click', { bubbles: true })) })
+    expect(got).toEqual(['sign-in:2.1.281'])
+    expect(readLocalDismissed()).toContain('sign-in:2.1.281')
+    expect(host.querySelector('[data-testid="setup-banner-sign-in"]')).toBeNull()
+  })
+
+  it('a dismissal from ANOTHER mount (the shared store) hides it here too, and Show setup guide brings it back', async () => {
+    await mount(signIn)
+    expect(host.querySelector('[data-testid="setup-banner-sign-in"]')).not.toBeNull()
+    await act(async () => { dismissLocal('sign-in:2.1.281') })
+    expect(host.querySelector('[data-testid="setup-banner-sign-in"]')).toBeNull()
+    await act(async () => { window.dispatchEvent(new win.Event(SETUP_SHOW_EVENT)) })
+    expect(host.querySelector('[data-testid="setup-banner-sign-in"]')).not.toBeNull()
   })
 })

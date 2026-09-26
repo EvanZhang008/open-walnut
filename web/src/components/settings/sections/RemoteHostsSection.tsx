@@ -9,7 +9,9 @@ import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave';
 import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
 import { hydrateHostStatus } from '@/hooks/useHostStatus';
 import { RemoteHostDetail, RemoteHostStatus } from './RemoteHostStatus';
-import { hostRowId, useHostSettingsFocus } from '@/utils/host-settings-nav';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { flashHostsOf, hostRowId, useHostSettingsFocus } from '@/utils/host-settings-nav';
+import { landOnRow } from '@/utils/scroll-land';
 import { AddLimitRow } from './RemoteHostLimits';
 import { CopyHostDiagnosticsButton, DiagnosticsFallback, useCopyDiagnostics } from '../CopyDiagnostics';
 import { hasStatusHosts } from '../diagnostics-copy';
@@ -176,6 +178,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   // hash twice fires nothing).
   const focus = useHostSettingsFocus();
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const landRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!focus.alias || focus.nonce <= flashedNonce) return;
     const nonce = focus.nonce;
@@ -183,7 +186,9 @@ export function RemoteHostsSection({ config, onSave }: Props) {
       const el = document.getElementById(hostRowId(focus.alias!));
       if (!el) return;
       flashedNonce = nonce;
-      el.scrollIntoView({ block: 'nearest' });
+      // Upper part of the pane, held through late layout, focus on the row (N3-2).
+      landRef.current?.();
+      landRef.current = landOnRow(el);
       el.classList.remove('rh-row-flash');
       void el.offsetWidth; // restart the animation for a second request
       el.classList.add('rh-row-flash');
@@ -192,7 +197,30 @@ export function RemoteHostsSection({ config, onSave }: Props) {
     });
     return () => cancelAnimationFrame(raf);
   }, [focus.nonce, focus.alias, hosts.length]);
-  useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
+  useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); landRef.current?.(); }, []);
+
+  // 'and N more' on the banner: the rows its cap hid each flash once (same class
+  // and length), the first scrolls into view. The state is used once, then
+  // replaced away, so a reload does not flash again.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const flashKey = flashHostsOf(location.state).join('\n');
+  useEffect(() => {
+    if (!flashKey || hosts.length === 0) return;
+    const raf = requestAnimationFrame(() => {
+      const els = flashKey.split('\n').map((a) => document.getElementById(hostRowId(a))).filter((el): el is HTMLElement => !!el);
+      if (els[0]) { landRef.current?.(); landRef.current = landOnRow(els[0], { focus: false }); }
+      for (const el of els) {
+        el.classList.remove('rh-row-flash');
+        void el.offsetWidth; // restart the animation for a second request
+        el.classList.add('rh-row-flash');
+        setTimeout(() => el.classList.remove('rh-row-flash'), FLASH_MS);
+      }
+      navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { replace: true, state: null });
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flashKey, hosts.length]);
 
   const text = (idx: number, field: 'alias' | 'hostname' | 'user' | 'label', label: string,
     placeholder: string, size: 'short' | 'long', mono = false) => (

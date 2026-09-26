@@ -281,3 +281,55 @@ describe('attention banner model: rows over time', () => {
     expect(b.view).toEqual(a.view)
   })
 })
+
+describe("attention banner model: 'and N more' names its hosts (output only)", () => {
+  const five = (): S[] => [
+    failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'),
+    failed('proxybox', 'Proxy box', 'proxy'), missing('barebox', 'Bare box'), signedOut('signbox', 'Sign box'),
+  ]
+  it('moreHosts lists the aliases of the rows the cap hides, in display order; empty when nothing is hidden', () => {
+    const { view } = run([input(five())])
+    const shown = new Set(view.rows.flatMap((r) => r.hosts))
+    expect(view.moreHosts).toHaveLength(2)
+    for (const h of view.moreHosts) expect(shown.has(h)).toBe(false)
+    const all = five().map((s) => s.host)
+    expect(new Set([...shown, ...view.moreHosts])).toEqual(new Set(all))
+    expect(run([input(five().slice(0, 4))]).view.moreHosts).toEqual([])
+  })
+
+  it('a merged credential row behind the cap names every member', () => {
+    const statuses = [
+      failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth'), failed('proxybox', 'Proxy box', 'proxy'),
+      missing('barebox', 'Bare box'),
+      failed('certbox', 'Cert box', 'cert_expired'), failed('certbox2', 'Cert box 2', 'cert_expired'),
+    ]
+    const { view } = run([input(statuses)])
+    const hidden = view.moreHosts
+    expect(view.more).toBe(2)
+    expect(hidden).toHaveLength(3)
+    expect(hidden).toEqual(expect.arrayContaining(['certbox', 'certbox2']))
+  })
+})
+
+describe('attention banner model: replica parity (C45)', () => {
+  // The rules did not change with this slice: the same input gives the same rows on a replica,
+  // and the only new field is the moreHosts output.
+  it.each([false, true])('replica=%s: the same rows, order, actions and keys as before; moreHosts is the one addition', (replica) => {
+    const statuses = [
+      failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box'), outdated('buildbox', 'Build box'),
+      connected('devbox', 'Dev box'), failed('keybox', 'Key box', 'auth'),
+    ]
+    const { view } = run([input(statuses, { replica })])
+    expect(Object.keys(view).sort()).toEqual(['allKeys', 'more', 'moreHosts', 'rows', 'subhead', 'title', 'wakeAt'])
+    // Connect failures first, readiness second, Settings order inside (unchanged).
+    expect(view.rows.map((r) => r.id)).toEqual(['host:netbox', 'host:keybox', 'host:signbox'])
+    for (const r of view.rows) {
+      const s = statuses.find((x) => x.host === r.hosts[0])!
+      const p = hostProblemOf(s, { replica, surface: 'banner' })
+      expect(p).not.toBeNull()
+      expect(r.dismissKeys).toEqual([p!.dismissKey])
+    }
+    expect(view.rows.some((r) => r.hosts.includes('buildbox'))).toBe(false)
+    expect(view.moreHosts).toEqual([])
+  })
+})

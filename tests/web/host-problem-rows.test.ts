@@ -40,7 +40,9 @@ const ws = vi.hoisted(() => {
 })
 vi.mock('@/api/ws', () => ({ wsClient: ws.wsClient }))
 
-const { SingleHostRow, GroupRow } = await import('../../web/src/components/common/HostProblemRows')
+const { SingleHostRow, GroupRow, ReadyRow, readySentenceText } = await import('../../web/src/components/common/HostProblemRows')
+const { __resetBannerSessionForTests, getRowExpanded } = await import('../../web/src/utils/attention-banner-session')
+const { __resetHostActionStoreForTests } = await import('../../web/src/utils/host-action-store')
 const { __resetHostStatusForTests } = await import('../../web/src/hooks/useHostStatus')
 const { getUserRetryingHosts, __resetUserRetryForTests } = await import('../../web/src/utils/host-user-retrying')
 
@@ -62,6 +64,8 @@ beforeAll(() => {
 beforeEach(() => {
   __resetHostStatusForTests()
   __resetUserRetryForTests()
+  __resetBannerSessionForTests()
+  __resetHostActionStoreForTests()
   server.clear()
   api.connectHost.mockReset()
   api.checkHostReadiness.mockReset()
@@ -92,7 +96,7 @@ const readinessRow = (id = 'host:buildbox'): BannerRow => ({
 })
 
 describe('a row promoted to the top opens', () => {
-  it('a readiness row below the first starts behind Show details; at index 0 its command shows, with no toggle', async () => {
+  it('a readiness row below the first starts behind Show details; at index 0 its command shows, with Hide details', async () => {
     const row = readinessRow('host:promote-a')
     await render(createElement(SingleHostRow, { row, defaultExpanded: false, onDismiss: noop, onOpenSettings: noop }))
     expect(host.querySelector('.hc-chip')).toBeNull()
@@ -101,6 +105,7 @@ describe('a row promoted to the top opens', () => {
     await render(createElement(SingleHostRow, { row, defaultExpanded: true, onDismiss: noop, onOpenSettings: noop }))
     expect(host.querySelector('.hc-chip')?.textContent).toBe('ssh -t alice@build.example.com claude')
     expect(byText('Show details')).toBeUndefined()
+    expect(byText('Hide details')?.getAttribute('aria-expanded')).toBe('true')
     // Moved back down: the user never opened it, so it folds again, with its toggle.
     await render(createElement(SingleHostRow, { row, defaultExpanded: false, onDismiss: noop, onOpenSettings: noop }))
     expect(host.querySelector('.hc-chip')).toBeNull()
@@ -178,5 +183,99 @@ describe('the autofix verb', () => {
     await render(createElement(SingleHostRow, { row, defaultExpanded: true, onDismiss: noop, onOpenSettings: noop }))
     await click(byText('Install')!)
     expect(host.querySelector('[data-testid="hpb-fixing"]')?.textContent).toContain('Installing Claude Code on Build box...')
+  })
+})
+
+const connectRow = (host = 'netbox', label = 'Net box'): BannerRow => ({
+  id: `host:${host}`, type: 'connect', group: 'connect', hosts: [host], labels: [label], kind: 'unreachable',
+  headline: `Could not connect to ${label}`, hint: `${label} is not reachable from this machine.`, summary: 'ssh: no route',
+  retryable: true, dismissKeys: [`${host}|connect`], actions: ['retry', 'openSettings'],
+})
+
+describe('the expanded flag lives in the banner session (C48, second half)', () => {
+  it('row 2 opened and row 1 folded by the user survive an unmount and a remount elsewhere', async () => {
+    const r1 = connectRow('netbox', 'Net box')
+    const r2 = connectRow('keybox', 'Key box')
+    const rowsEl = (a: boolean) => createElement('ul', null,
+      createElement(SingleHostRow, { key: 'a', row: r1, defaultExpanded: a, onDismiss: noop, onOpenSettings: noop }),
+      createElement(SingleHostRow, { key: 'b', row: r2, defaultExpanded: false, onDismiss: noop, onOpenSettings: noop }))
+    await render(rowsEl(true))
+    const li = (id: string) => host.querySelector(`li[data-row-id="${id}"]`)!
+    expect(li(r1.id).querySelector('.hft-hint')).not.toBeNull()
+    expect(li(r2.id).querySelector('.hft-hint')).toBeNull()
+    await click(Array.from(li(r1.id).querySelectorAll('button')).find((b) => b.textContent === 'Hide details')!)
+    await click(Array.from(li(r2.id).querySelectorAll('button')).find((b) => b.textContent === 'Show details')!)
+    expect(getRowExpanded(r1.id)).toBe(false)
+    expect(getRowExpanded(r2.id)).toBe(true)
+    // The owner switches: this mount goes away, another renders the same rows.
+    await act(async () => { root!.unmount() })
+    root = createRoot(host)
+    await render(rowsEl(true))
+    expect(li(r1.id).querySelector('.hft-hint')).toBeNull()
+    expect(li(r2.id).querySelector('.hft-hint')?.textContent).toBe('Key box is not reachable from this machine.')
+    expect(li(r1.id).classList.contains('hpb-open')).toBe(false)
+    expect(li(r2.id).classList.contains('hpb-open')).toBe(true)
+  })
+})
+
+describe('one-line rows (the notification panel over pending asks, C62)', () => {
+  it('only the primary action, not opened by position, and Show details still opens it', async () => {
+    const row = connectRow()
+    await render(createElement(SingleHostRow, { row, defaultExpanded: false, singleLine: true, onDismiss: noop, onOpenSettings: noop }))
+    const li = host.querySelector('li.hpb-row')!
+    expect(li.classList.contains('hpb-single')).toBe(true)
+    expect(Array.from(li.querySelectorAll('.hpb-actions button')).map((b) => b.textContent)).toEqual(['Retry'])
+    expect(li.querySelector('.hft-hint')).toBeNull()
+    await click(byText('Show details')!)
+    expect(li.querySelector('.hft-hint')).not.toBeNull()
+    expect(li.classList.contains('hpb-open')).toBe(true)
+  })
+})
+
+describe('the row x and the success sentence', () => {
+  it('every x has a title equal to its aria-label (C53)', async () => {
+    await render(createElement(SingleHostRow, { row: connectRow(), defaultExpanded: true, onDismiss: noop, onOpenSettings: noop }))
+    const x = host.querySelector('.hpb-x')!
+    expect(x.getAttribute('aria-label')).toBe('Dismiss Net box')
+    expect(x.getAttribute('title')).toBe('Dismiss Net box')
+  })
+
+  it('a success row reads the sentence without its leading check mark; the ok dot carries the state (C67)', async () => {
+    const sentence = '\u2713 Build box is ready (Claude Code 2.1.281)'
+    expect(readySentenceText(sentence)).toBe('Build box is ready (Claude Code 2.1.281)')
+    expect(readySentenceText('Build box is ready')).toBe('Build box is ready')
+    const row: BannerRow = { id: 'ready:buildbox', type: 'ready', group: 'readiness', hosts: ['buildbox'], labels: ['Build box'], dismissKeys: [], actions: [], sentence }
+    await render(createElement(ReadyRow, { row }))
+    expect(host.querySelector('.hpb-ready-text')?.textContent).toBe('Build box is ready (Claude Code 2.1.281)')
+    expect(host.textContent).not.toContain('\u2713')
+    expect(host.querySelector('.hpb-dot')).not.toBeNull()
+  })
+})
+
+describe('Retry reads the attempt at once, and one attempt is shared across mounts (C22, C48)', () => {
+  it("'Connecting to Net box...' with a disabled Retrying... before any frame; a remount reads the same attempt; one POST", async () => {
+    // The last frame is from before the click (a frame within 1s of it would count as its answer).
+    await push(frame({ host: 'netbox', label: 'Net box', kind: 'unreachable', at: at - 10_000 }))
+    let answer: (f: HostStatus) => void = () => {}
+    api.connectHost.mockImplementation(() => new Promise<HostStatus>((r) => { answer = r }))
+    const row = connectRow()
+    const el = () => createElement(SingleHostRow, { row, defaultExpanded: true, onDismiss: noop, onOpenSettings: noop })
+    await render(el())
+    await click(byText('Retry')!)
+    expect(host.querySelector('.hpb-trying-text')?.textContent).toBe('Connecting to Net box...')
+    expect(byText('Retrying...')?.disabled).toBe(true)
+    // The owner switches mid-attempt (the bell opened): the new mount reads the same attempt.
+    await act(async () => { root!.unmount() })
+    root = createRoot(host)
+    await render(el())
+    expect(host.querySelector('.hpb-trying-text')?.textContent).toBe('Connecting to Net box...')
+    expect(byText('Retrying...')?.disabled).toBe(true)
+    expect(api.connectHost).toHaveBeenCalledTimes(1)
+    // The same failure comes back: the row is a failure again with the store's receipt.
+    await act(async () => { answer(frame({ host: 'netbox', label: 'Net box', kind: 'unreachable' })) })
+    await push(frame({ host: 'netbox', label: 'Net box', kind: 'unreachable' }))
+    expect(host.querySelector('.hpb-trying-text')).toBeNull()
+    expect(byText('Retry')?.disabled).toBe(false)
+    expect(host.querySelector('[data-testid="hpb-receipt"]')?.textContent).toBe('Tried again just now: same result')
   })
 })

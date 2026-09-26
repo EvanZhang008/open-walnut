@@ -11,13 +11,18 @@
  *   rail         the rail's boolean runs the banner's own model: dismissed rows,
  *                young reconnects and unengaged discovered hosts light nothing;
  *                off the home route the banner is never on screen
+ *   placement    the task panel first, then the slot, then the draft column;
+ *                with the task panel hidden, every answer is the old one
+ *   owner        the open notification panel owns the card on every route
  */
 import { describe, expect, it } from 'vitest'
 import {
   EMPTY_BANNER_STATE, READY_HOLD_MS, activeHiddenIds, capRows, dismissFocusIndex, nextBanner, rowHasDismiss,
   type BannerInput, type BannerRow, type BannerState,
 } from '../../web/src/utils/attention-banner-model'
-import { hostAttentionOf, railDotShows } from '../../web/src/utils/host-banner-placement'
+import {
+  hostAttentionOf, ownerFor, placementFor, railDotShows, type HostBannerPlacement,
+} from '../../web/src/utils/host-banner-placement'
 import type { HostStatusInput } from '../../src/core/hosts/host-problem'
 
 const NOW = 1_000_000_000
@@ -152,5 +157,40 @@ describe('the rail dot', () => {
     // MainPage stays mounted (hidden) on other routes, so its placement says 'slot' there.
     expect(railDotShows(true, 'slot', '/settings')).toBe(true)
     expect(railDotShows(false, 'none', '/settings')).toBe(false)
+  })
+})
+
+describe('placement and owner (task panel first, then the old fallbacks)', () => {
+  const bools = [false, true]
+  it('with the task panel hidden, the 3-argument rule reads exactly as the old 2-argument one', () => {
+    const old = (chat: boolean, draft: boolean): HostBannerPlacement => (chat ? 'slot' : draft ? 'draft' : 'none')
+    for (const chat of bools) for (const draft of bools) {
+      expect(placementFor(false, chat, draft)).toBe(old(chat, draft))
+      // The two-argument call a caller mid-migration still makes.
+      expect(placementFor(chat, draft)).toBe(old(chat, draft))
+    }
+  })
+
+  it('a visible task panel always owns the in-page card', () => {
+    for (const chat of bools) for (const draft of bools) expect(placementFor(true, chat, draft)).toBe('tasks')
+  })
+
+  it('ownerFor: 4 placements x panel open or closed x home or another route', () => {
+    const places: HostBannerPlacement[] = ['tasks', 'slot', 'draft', 'none']
+    for (const where of places) {
+      expect(ownerFor(where, true, '/')).toBe('notifications')
+      expect(ownerFor(where, true, '/notes')).toBe('notifications')
+      expect(ownerFor(where, false, '/')).toBe(where)
+      expect(ownerFor(where, false, '/notes')).toBe('none')
+    }
+  })
+
+  it('the rail dot: a task panel card covers it on Home; the remote hosts pane silences it', () => {
+    expect(railDotShows(true, 'tasks', '/')).toBe(false)
+    expect(railDotShows(true, 'tasks', '/notes')).toBe(true)
+    expect(railDotShows(true, 'none', '/settings', '#remote-hosts')).toBe(false)
+    expect(railDotShows(true, 'none', '/settings', '#rh-host-netbox')).toBe(false)
+    expect(railDotShows(true, 'none', '/settings', '#engines')).toBe(true)
+    expect(railDotShows(true, 'tasks', '/settings')).toBe(true)
   })
 })

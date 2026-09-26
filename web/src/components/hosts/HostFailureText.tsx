@@ -9,7 +9,7 @@
  *   .hft-details   'Show SSH output' (or 'Show details') -> pre.hft-summary
  *   .hft-when      'Walnut tries again in 3m 12s', only for a real schedule
  */
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { DETAILS_NOT_SSH_KINDS, retryCountdownText } from '@open-walnut/host-problem';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { serverNow } from '@/hooks/useHostStatus';
@@ -28,6 +28,8 @@ export interface HostFailureTextProps {
   /** Headline only; hint and summary behind 'Show details' (banner rows after the first). */
   collapsed?: boolean;
   testId?: string;
+  /** Rendered right after the headline (the banner row's buttons: the host is named before Retry). */
+  afterHeadline?: ReactNode;
 }
 
 /** The toggle's words: SSH output for ssh kinds, details for filesystem / daemon kinds and collapsed rows. */
@@ -48,7 +50,7 @@ function RetryWhen({ retryAt, lastFrameAt }: { retryAt: number; lastFrameAt?: nu
   return <div className="hft-when" aria-hidden="true">{text}</div>;
 }
 
-export function HostFailureText({ headline, hint, summary, kind, retryAt, lastFrameAt, collapsed, testId }: HostFailureTextProps) {
+export function HostFailureText({ headline, hint, summary, kind, retryAt, lastFrameAt, collapsed, testId, afterHeadline }: HostFailureTextProps) {
   const [expanded, setExpanded] = useState(false);
   const detailsId = useId();
   const cleanHint = hint?.trim() ?? '';
@@ -57,6 +59,7 @@ export function HostFailureText({ headline, hint, summary, kind, retryAt, lastFr
   return (
     <div className="hft" data-testid={testId} {...(kind ? { 'data-kind': kind } : {})}>
       <div className="hft-headline" title={headline}>{headline}</div>
+      {afterHeadline}
       {!collapsed && cleanHint && <div className="hft-hint"><InlineCodeText text={cleanHint} /></div>}
       {typeof retryAt === 'number' && <RetryWhen retryAt={retryAt} lastFrameAt={lastFrameAt} />}
       {hidden && (

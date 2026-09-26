@@ -8,9 +8,9 @@
  */
 import { expect, type APIRequestContext, type Locator, type Page, type Response } from '@playwright/test'
 import { draftComposer, draftCwdPill, openDraft } from './draft-helpers'
-import { hostFixture, resetServerHostFixture } from './host-problems-helpers'
+import { hostFixture, isolatePrefs, resetServerHostFixture, waitForHome } from './host-problems-helpers'
 
-export { hostFixture, resetServerHostFixture }
+export { hostFixture, isolatePrefs, resetServerHostFixture }
 
 export interface WireHost {
   host: string; label: string; connected: boolean; phase: string; phaseLabel?: string
@@ -61,23 +61,11 @@ export function fixtureFile(hosts: Record<string, Record<string, unknown>>, extr
 
 export const HEALTHY = { version: '2.1.281', auth: 'ok', installMethod: 'native' }
 
-/**
- * ui-prefs never leave this page (a dismissal or a panel flag must not reach
- * the shared fixture server and change the next test), and the boot read is
- * the first-boot shape.
- */
-export async function isolatePrefs(page: Page): Promise<void> {
-  await page.route('**/api/ui-prefs', (route) => route.fulfill({
-    status: 200, contentType: 'application/json',
-    body: route.request().method() === 'GET' ? '{"prefs":{}}' : '{"ok":true}',
-  }))
-}
-
 /** The first load (the only page.goto): Home, or Settings. */
 export async function loadApp(page: Page, path: '/' | '/settings' = '/'): Promise<void> {
   await page.goto(path)
   await page.waitForLoadState('networkidle')
-  if (path === '/') await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
+  if (path === '/') await waitForHome(page)
   else await expect(page.getByTestId('settings-nav-remote-hosts')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -89,7 +77,24 @@ export async function openRemoteHosts(page: Page): Promise<void> {
 }
 
 export const hostRow = (page: Page, alias: string): Locator => page.locator(`#rh-host-${alias}`)
+/** The Ask Walnut slot's card: only under slotLayout (the task panel hidden, the slot shown). */
 export const slotBanner = (page: Page): Locator => page.locator('.main-page-chat [data-testid="attention-banner"]')
+/** The task panel's card (the default layout). */
+export const tasksBanner = (page: Page): Locator => page.locator('.todo-panel [data-testid="attention-banner"][data-mount="tasks"]')
+/** The notification panel's card (any route, while the panel is open). */
+export const panelBanner = (page: Page): Locator => page.locator('.notification-panel [data-testid="attention-banner"][data-mount="notifications"]')
+/** The rail's bell (the notification panel's opener and its dot). */
+export const bell = (page: Page): Locator => page.locator('.sidebar-notification-btn')
+
+/** Open the notification panel with a real click on the bell. */
+export async function openBell(page: Page): Promise<Locator> {
+  // A phone keeps the rail behind the menu button: a user opens it first, then taps the bell.
+  if (!(await bell(page).isVisible())) await page.getByRole('button', { name: 'Toggle sidebar' }).click()
+  await bell(page).click()
+  const panel = page.locator('.notification-panel')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
+  return panel
+}
 /** A host's row in THE banner, wherever it is mounted (the slot, or the draft column while a draft borrows the slot). */
 export const bannerRow = (page: Page, host: string): Locator => page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${host}"]`)
 export const picker = (page: Page): Locator => page.locator('.session-path-selector')

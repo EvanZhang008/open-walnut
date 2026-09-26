@@ -5,35 +5,53 @@
   position: relative;
   container-type: inline-size;
   container-name: attention;
+  /* The WHOLE card is at most max(40% of its mount's container, 132px) (--ab-cap,
+     set by AttentionBanner). The card itself never scrolls: the host list is the
+     one scroll region and takes what the cap leaves (--hpb-max, useScrollBudget),
+     so the local section and the footer always show whole (N2). */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-/* Dismiss all is LAST in the DOM (and the Tab order) but sits top-right. */
-.ab-dismiss-all {
-  position: absolute;
-  top: 10px;
-  right: 8px;
-}
-.attention-banner:has(.ab-dismiss-all) .hpb-header,
-.attention-banner:has(.ab-dismiss-all) .hpb-subhead {
-  padding-right: 24px;
-}
+.ab-local { flex: none; }
 .ab-local-alt { margin-top: 10px; }
-.ab-local + .hpb { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
-/* The local x is LAST in its section (Tab order: actions, then the x) but sits
-   at the header's right end. */
-.ab-local { position: relative; }
-.ab-local .setup-banner-header { padding-right: 24px; }
-.ab-local-x { position: absolute; top: 0; right: 0; }
-/* With a Dismiss all in the corner, the local x moves off the corner too. */
-.attention-banner:has(.ab-dismiss-all) .ab-local .setup-banner-header { padding-right: 46px; }
-.attention-banner:has(.ab-dismiss-all) .ab-local .ab-local-x { right: 22px; }
+.ab-local + .hpb,
+.hpb-undo-row + .hpb { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+/* The local x is LAST in its section (Tab order: actions, then the x) and ends
+   the section's last line: never in the card's top-right corner (spec 5.1). */
+.ab-local-x { margin-left: auto; }
 
-/* ── Host section: at most 40% of the slot, scrolling inside ── */
+/* Every x: a 20px box with its title; rows tall enough that two x boxes are 24px apart. */
+.ab-local-x,
+.hpb-x.setup-banner-dismiss {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 20px;
+  text-align: center;
+}
+
+/* Dismiss all: a text button after 'and N more', last in the Tab order. */
+.hpb-foot {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 6px;
+  margin-top: 6px;
+}
+
+/* ── Host section: takes what the local section leaves, scrolling inside ── */
 .hpb {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  max-height: calc(var(--ab-slot-h, 100vh) * 0.4);
+  flex: 1 1 auto;
+  /* Shrinks before the local section, but always shows its first line. */
+  min-height: 56px;
 }
 .hpb-header { flex: none; margin-bottom: 6px; }
 .hpb-subhead {
@@ -41,33 +59,85 @@
   margin-bottom: 6px;
   font-size: 11px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--fg-muted);
 }
+.hpb-subhead-row { flex: none; display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.hpb-subhead-row > .hpb-subhead { margin-bottom: 0; }
+/* How many hosts need attention (shown, scrolled or behind 'and N more'). */
+.hpb-count { font-size: 11px; font-weight: 400; color: var(--fg-muted); white-space: nowrap; }
+.hpb-header .hpb-count { margin-left: auto; padding-left: 8px; }
 .hpb-scroll {
   flex: 1 1 auto;
-  min-height: 0;
+  /* The scrollbar sits in the card's own padding, 8px clear of the x and Show
+     details; the rows keep the same right edge as the rest of the card (N3-9). */
+  margin-right: -8px;
+  padding-right: 8px;
+  /* The first row's headline and buttons always fit (--hpb-first, measured). */
+  min-height: var(--hpb-first, 0px);
+  max-height: var(--hpb-max, none);
   overflow-y: auto;
   overflow-x: hidden;
+  /* A row changing in place (a result line, a success line) never scrolls the list. */
+  overflow-anchor: none;
 }
+/* More rows below the visible part (data-more-below): the list ends on a row or
+   line boundary (useScrollBudget) and the footer's 'N more below' says so. No fade:
+   a fade over the last whole line made a live headline or button look disabled (N9). */
+/* 'N more below': a text button that brings the next row up. */
+.hpb-below {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  min-height: 24px;
+}
+.hpb-below:hover { color: var(--fg); text-decoration: underline; }
+/* The cue's kept place while the list is scrolled to its end (N8). */
+.hpb-below-slot { visibility: hidden; display: inline-flex; align-items: center; }
+/* Dismiss all: quieter than any fix (a muted text button, like Show details), after
+   the cue and 'and N more', far from the row x column (24px rule, C53) (N16). */
+.ab-dismiss-all {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  min-height: 24px;
+}
+.ab-dismiss-all:hover { color: var(--fg); text-decoration: underline; }
+
+/* Local section + host rows in one card: the local section keeps to its title,
+   its whole lead (it is the fix) and its controls; the host list scrolls. */
+.ab-both .ab-local { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.ab-both .ab-local > .setup-banner-header,
+.ab-both .ab-local > .setup-lead { flex: 0 0 100%; margin: 0; }
+.ab-both .ab-local .setup-alt { margin-top: 0; gap: 6px 8px; flex: 1 1 auto; }
+/* The helper sentence that opens a controls line goes; an action's error text stays. */
+.ab-both .ab-local .setup-alt > .text-muted:first-child { display: none; }
+.ab-both .ab-local + .hpb,
+.ab-both .hpb-undo-row + .hpb { margin-top: 8px; padding-top: 8px; }
+.ab-both .hpb-subhead-row { margin-bottom: 4px; }
 .hpb-rows {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-/* A row: [dot] body [actions] [x]. DOM order is actions, body, x (Tab order). */
+/* A row: [dot] body [x]. The body reads headline, the row's buttons right under
+   it (always in view with the headline), then the details; DOM order is the
+   reading and Tab order, the x sits at the end of the headline's line. */
 .hpb-row {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto auto;
-  grid-template-areas: 'dot body actions x';
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-areas: 'dot body x';
   align-items: start;
   column-gap: 8px;
-  row-gap: 6px;
   font-size: 12px;
   color: var(--fg);
   max-height: 600px;
@@ -79,17 +149,29 @@
 }
 .hpb-dot { grid-area: dot; display: flex; align-items: center; height: 18px; }
 .hpb-body { grid-area: body; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.hpb-actions { grid-area: actions; display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; }
+.hpb-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 2px 0; }
 .hpb-x { grid-area: x; }
-.hpb-x.setup-banner-dismiss { font-size: 16px; padding: 0 2px; }
-
-@container attention (max-width: 420px) {
-  .hpb-row {
-    grid-template-columns: 10px minmax(0, 1fr) auto;
-    grid-template-areas: 'dot body x' '. actions .';
-  }
-  .hpb-actions { flex-wrap: wrap; }
+/* A row with an x is at least 34px tall: with the 10px gap, two x boxes (20px) sit 24px apart. */
+.hpb-row:has(> .hpb-x) { min-height: 34px; }
+/* Readiness: the first sentence is the bold headline (two lines at most), the rest is detail. */
+.hpb-headline {
+  font-weight: 600;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
 }
+.hpb-rest { color: var(--fg-secondary, var(--fg-muted)); line-height: 1.45; }
+/* Words break between words; a command or a host name never splits mid-token
+   unless it cannot fit a line on its own. */
+.attention-banner .hft-hint,
+.attention-banner .hft-headline,
+.attention-banner .hpb-message,
+.attention-banner .hpb-rest,
+.attention-banner .hpb-last { overflow-wrap: break-word; }
+.attention-banner code,
+.attention-banner .setup-command { overflow-wrap: normal; word-break: normal; }
 
 /* ── Buttons: width never changes with the label (Retry / Retrying...) ── */
 .hpb-btn { flex: none; white-space: nowrap; }
@@ -100,9 +182,9 @@
 /* .hpb-btn-stack (a label that never changes the button's width) lives in host-status.css. */
 
 /* ── Row bodies ── */
-.hpb-message { line-height: 1.45; overflow-wrap: anywhere; }
+.hpb-message { line-height: 1.45; }
 .hpb-message code { font-family: var(--font-mono); font-size: 11px; }
-.hpb-last { color: var(--fg-muted); font-size: 12px; overflow-wrap: anywhere; }
+.hpb-last { color: var(--fg-muted); font-size: 12px; }
 .hpb-trying, .hpb-fixing {
   display: flex;
   align-items: center;
@@ -127,7 +209,6 @@
 .hpb-ready .hpb-body { justify-content: center; min-height: 18px; }
 
 .hpb-more {
-  margin-top: 6px;
   padding: 0;
   border: none;
   background: none;
@@ -144,8 +225,72 @@
   padding: 8px 10px;
 }
 .attention-banner-compact .hpb-row { font-size: 11px; }
-.attention-banner-compact .ab-dismiss-all { top: 6px; right: 6px; }
-.attention-banner-compact .hpb-rows { padding-right: 18px; }
+
+/* ── Undo lines: a dismissed entry's place, same height, words first then Undo ── */
+.hpb-undo-row {
+  display: flex;
+  /* The held line reads in the middle of its old space (N3-13). */
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--fg-muted);
+  max-height: 600px;
+  transition: min-height 150ms ease, max-height 150ms ease, opacity 150ms ease;
+}
+.hpb-undo-row.hpb-undo-collapsing { min-height: 0 !important; max-height: 0; opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .hpb-undo-row { transition: none; } }
+.hpb-undo-text { min-width: 0; }
+.hpb-undo {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.hpb-undo:hover { color: var(--fg); }
+
+/* ── One-line rows (the notification panel over pending asks) ── */
+.hpb-single:not(.hpb-open) .hpb-body,
+.hpb-single:not(.hpb-open) .hft { flex-direction: row; align-items: center; gap: 8px; }
+.hpb-single:not(.hpb-open) .hft { flex: 1 1 auto; min-width: 0; }
+.hpb-single:not(.hpb-open) .hft-headline,
+.hpb-single:not(.hpb-open) .hpb-message { flex: 1 1 auto; min-width: 0; }
+.hpb-single:not(.hpb-open) .hft-headline,
+.hpb-single:not(.hpb-open) .hpb-message {
+  display: block;
+  -webkit-line-clamp: unset;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hpb-single:not(.hpb-open) .hpb-actions { flex: none; flex-wrap: nowrap; margin: 0; }
+.hpb-single:not(.hpb-open) .hpb-last,
+.hpb-single:not(.hpb-open) .hpb-receipt,
+.hpb-single:not(.hpb-open) .hft-when { display: none; }
+.hpb-single:not(.hpb-open) .hft-details { flex: none; }
+/* A narrow one-line row (a phone's task band) wraps its headline to two lines
+   instead of cutting it: the host's name is never the part that disappears. */
+@container attention (max-width: 420px) {
+  .hpb-single:not(.hpb-open) .hft-headline,
+  .hpb-single:not(.hpb-open) .hpb-message {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    text-overflow: clip;
+  }
+  /* Narrow (spec 4.1): the actions drop under the headline, which takes the whole line (N3-11). */
+  .hpb-single:not(.hpb-open) .hpb-body,
+  .hpb-single:not(.hpb-open) .hft { flex-wrap: wrap; row-gap: 4px; }
+  .hpb-single:not(.hpb-open) .hft-headline,
+  .hpb-single:not(.hpb-open) .hpb-message { flex: 0 0 100%; }
+}
 
 /* ── The draft's Start refusal (HostGateErrorBar) and the session host bar ── */
 .host-gate-bar { flex-direction: column; align-items: stretch; gap: 8px; margin: 0 0 8px; }
@@ -156,8 +301,38 @@
 .host-gate-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .session-host-error { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .session-host-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
-/* NotificationSystemPane DaemonRow: the host's dot before its name. */
-.notification-daemon-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+/* NotificationSystemPane DaemonRow: the host's dot and name on one line, the status sentence under it. */
+.notification-daemon-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.nfc-daemon-row { flex-direction: column; align-items: flex-start; gap: 2px; }
+.nfc-daemon-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nfc-daemon-status { padding-left: 16px; font-weight: 400; }
 /* The rail's Settings entry when no banner is on screen (Sidebar). */
 .sidebar-host-dot { margin-left: auto; }
+/* The bell's dot for the same reason wears the same warn colour (N3-14). */
+.notification-badge-dot.is-host-warn { background: var(--warning); }
+/* System pane host lines take their dot's tone: red for a failed connect, warn for readiness (N3-15). */
+.notification-detail-value.nfc-daemon-status.error { color: var(--error); }
+/* The Ask Walnut slot is wide: rows keep their x near their words (N3-22). */
+.attention-banner[data-mount="slot"] { max-width: 720px; }
 .sidebar.collapsed .sidebar-host-dot { position: absolute; top: 6px; right: 6px; margin: 0; }
+/* HostBannerAnnouncer: read by screen readers, never seen. */
+.hb-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+/* The bell's dot for a host or Claude Code reason is the bell's one existing dot
+   (.notification-badge-dot, globals.css): no new shape or colour, and when git sync
+   is also failing the same dot speaks for both (N12). `.is-host-warn` only names it. */
+/* One copy control in the card (local section and host rows): the text Copy /
+   Copied button, a 24px hit target. */
+.attention-banner .setup-copy-btn { min-height: 24px; font-size: 11px; display: inline-flex; align-items: center; }
+/* A row held to its height through an attempt (HostProblemRows useHeightLock): no animation, nothing spills. */
+.hpb-row.hpb-locked { transition: none; overflow: hidden; }

@@ -1,81 +1,138 @@
 /**
- * The ONE home banner for "something needs you": this machine's Claude Code
- * first (it silences Walnut itself), then the remote hosts that cannot run a
- * session (connect failures and readiness problems). A single card, so there
- * are never two host banners, two titles and two x buttons.
+ * The ONE card for "something needs you": this machine's Claude Code first
+ * (it silences Walnut itself), then the remote hosts that cannot run a
+ * session (connect failures and readiness problems). One card, so there are
+ * never two host banners, two titles and two sets of x buttons.
  *
- * Rows come from the pure model (utils/attention-banner-model.ts); this file
- * owns the live inputs (host store, dismissed keys, pointer inside, a timer
- * for the next time-based change) and the interactions: row x with a 150ms
- * collapse and focus to the next row's x, Dismiss all (last in Tab order),
- * 'and N more' and Open Settings through openHostSettings.
+ * It renders wherever the owner rule puts it (`mount`: the task panel, the
+ * notification panel, the Ask Walnut slot, or compact in the draft column);
+ * the wrapper and its reserve belong to AttentionBannerMount. Rows come from
+ * the pure model (utils/attention-banner-model.ts); the frame state, the
+ * Dismiss all hidden rows and each row's expanded flag live in the page
+ * session (utils/attention-banner-session.ts), so a remount elsewhere
+ * continues from the last frame. This file owns the interactions: a row x,
+ * the local x and Dismiss all turn into undo lines (banner-undo.tsx),
+ * 'and N more' and Open Settings leave through onLeave + openHostSettings.
  *
- * `compact` is the draft-column mount used while the Ask Walnut slot is
- * hidden: the same rows, keys and cap, without the card title or the local
- * section, and without the hosts a refused-Start bar below it already speaks for.
+ * `draft` is the compact variant: the same rows, keys and cap, without the
+ * card title or the local section, and without the hosts a refused-Start bar
+ * below it already speaks for. Dismiss all is the same quiet text button at the
+ * end of the list on every mount (a corner x sat 5px from a row x, N3).
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useAllHostStatus, useHostStatusHydration } from '@/hooks/useHostStatus';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
 import { openHostSettings } from '@/utils/host-settings-nav';
+import { HOST_SUBHEAD, HOST_TITLE, READY_HOLD_MS, activeHiddenIds, nextBanner, type BannerRow } from '@/utils/attention-banner-model';
 import {
-  EMPTY_BANNER_STATE, READY_HOLD_MS, activeHiddenIds, dismissFocusIndex, nextBanner, rowHasDismiss,
-  type BannerRow, type BannerState,
-} from '@/utils/attention-banner-model';
-import { dismissHostKeys, getHostDismissed, pruneHostDismissed, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
+  dismissHostKeys, getHostDismissed, subscribeHostDismissed, undismissHostKeys, undismissLocal,
+} from '@/utils/host-banner-dismiss';
+import { setBannerRowsDeferred, type BannerMount } from '@/utils/host-banner-placement';
+import {
+  cardMounted, getBannerState, isResumingAfterGap, setBannerState, withoutReplayedReady,
+} from '@/utils/attention-banner-session';
 import { useUserEngagedHosts, useUserRetryingHosts } from '@/utils/host-user-retrying';
 import { useGateBarHosts } from '@/utils/host-gate-shown';
 import { useLocalClaudeNotice } from './SetupBanner';
 import { GroupRow, ReadyRow, SingleHostRow } from './HostProblemRows';
+import { UNDO_ALL_TEXT, UNDO_ROW_TEXT, UndoLine, undoAllText, undoRowText, useBannerUndo, withUndoSlots, type UndoEntry } from './banner-undo';
+import {
+  CARD_MIN_CAP_PX, cardCapPx, focusAfter, prefersReducedMotion, useHeldLayout, useHiddenReady, useMountHeight, usePointerFocus, useWakeAt, verticalMarginPx,
+} from './attention-banner-hooks';
+import { fitsTight, keepRowInView, nextCompact, scrollRowIntoView, undoLinePx, useFirstRowMin, useScrollBudget, useScrollCue } from './banner-scroll';
 import { log } from '@/utils/log';
 import '@/styles/attention-banner.css';
+import '@/styles/attention-banner-dense.css';
+import '@/styles/attention-banner-fit.css';
 
 export const DISMISS_ALL_LABEL = 'Dismiss all';
-const COLLAPSE_MS = 150;
-/** A pending "focus the next x" that did not land by then is dropped (it must never steal focus later). */
-const FOCUS_NEXT_TTL_MS = COLLAPSE_MS + 1_000;
-/** A connected host's connect dismissal can expire with no new frame: look again this often. */
-const PRUNE_EVERY_MS = 60_000;
 
-interface AttentionBannerProps {
+export interface AttentionBannerProps {
+  mount: BannerMount;
   health?: SystemHealth;
   healthLoading?: boolean;
   onNavigateSettings: (hash?: string) => void;
   onStartSession?: () => void;
-  /** The draft-column mount (Ask Walnut slot hidden): no title, no local section. */
-  compact?: boolean;
+  /** Called BEFORE any navigation away (Open Settings, 'and N more', the local Settings link). */
+  onLeave?: () => void;
+  /** Focus target when an undo line with focus inside collapses and no row x follows it. */
+  focusOnLeave?: () => void;
+  /** Queue height changes (at most 10s from the first) while the pointer is where they would land. */
+  holdLayout?: boolean;
+  /** Each host row is one line: headline, the primary action, the x; row 1 not auto-expanded. */
+  singleLineRows?: boolean;
 }
 
-const prefersReducedMotion = (): boolean =>
-  typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-
-/** The first focusable element after `el` in document order (the composer, usually). */
-function focusAfter(el: HTMLElement | null): void {
-  if (!el) return;
-  const all = Array.from(document.querySelectorAll<HTMLElement>('button, [href], input, textarea, select, [contenteditable="true"], [tabindex]:not([tabindex="-1"])'));
-  const next = all.find((c) => !el.contains(c) && (el.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING) && c.getClientRects().length > 0);
-  next?.focus();
+/** How many hosts need attention, shown or not (rows on screen, scrolled, behind 'and N more'). */
+export function hostCount(rows: readonly BannerRow[], moreHosts: readonly string[]): number {
+  const hosts = new Set<string>();
+  for (const r of rows) if (r.type !== 'ready') for (const h of r.hosts) hosts.add(h);
+  for (const h of moreHosts) hosts.add(h);
+  return hosts.size;
 }
 
-/** The slot's height as a CSS variable: the host section caps itself at 40% of it. */
-function useSlotHeight(el: HTMLDivElement | null, compact?: boolean): number | null {
-  const [h, setH] = useState<number | null>(null);
-  useLayoutEffect(() => {
-    const slot = el?.closest<HTMLElement>(compact ? '.main-page-session-column, .draft-session-panel' : '.main-page-chat');
-    if (!slot || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => setH(slot.getBoundingClientRect().height));
-    ro.observe(slot);
-    setH(slot.getBoundingClientRect().height);
-    return () => ro.disconnect();
-  }, [el, compact]);
-  return h;
+/** '4 hosts' after the card title. */
+export function hostCountText(rows: readonly BannerRow[], moreHosts: readonly string[]): string {
+  const n = hostCount(rows, moreHosts);
+  return n ? `${n} host${n === 1 ? '' : 's'}` : '';
 }
 
-export function AttentionBanner({ health, healthLoading, onNavigateSettings, onStartSession, compact }: AttentionBannerProps) {
-  const local = useLocalClaudeNotice({ health: health ?? {}, loading: healthLoading || !health, onNavigateSettings, onStartSession });
-  const localPresent = !compact && local.present;
+/** '(4)' after the 'Remote hosts' subhead, which already says hosts (N15). */
+export function subheadCountText(rows: readonly BannerRow[], moreHosts: readonly string[]): string {
+  const n = hostCount(rows, moreHosts);
+  return n ? `(${n})` : '';
+}
+
+interface CardLayout {
+  rows: BannerRow[];
+  more: number;
+  moreHosts: string[];
+  title: string | null;
+  subhead: string | null;
+  localNode: ReactNode;
+  undo: UndoEntry[];
+}
+
+/** What changes the card's height: the held layout compares these. */
+function layoutSignature(l: CardLayout, localKind: string | null): string {
+  return [
+    `local:${localKind ?? ''}`, l.title ? 'title' : '', l.subhead ?? '', `more:${l.more}`,
+    ...l.rows.map((r) => r.id), ...l.undo.map((e) => `${e.id}${e.collapsing ? '~' : ''}`),
+  ].join('|');
+}
+
+export function AttentionBanner({
+  mount, health, healthLoading, onNavigateSettings, onStartSession, onLeave, focusOnLeave, holdLayout, singleLineRows: singleProp,
+}: AttentionBannerProps) {
+  const compact = mount === 'draft';
+  const navigate = useNavigate();
+  const [el, setEl] = useState<HTMLDivElement | null>(null);
+  const { pointerInside, focusInside, handlers } = usePointerFocus(el);
+  const leaveToSettings = useCallback((hash?: string) => { onLeave?.(); onNavigateSettings(hash); }, [onLeave, onNavigateSettings]);
+  // Set further down (it needs the undo store); the local section calls it on its x.
+  const localDismissedRef = useRef<(key: string) => void>(() => {});
+  const onLocalDismissed = useCallback((key: string) => localDismissedRef.current(key), []);
+  const local = useLocalClaudeNotice({
+    health: health ?? {}, loading: healthLoading || !health, onNavigateSettings: leaveToSettings, onStartSession,
+    onDismissed: onLocalDismissed,
+  });
+
+  // An undo line leaving with focus inside: the next row's x, else the mount's named target.
+  const onUndoGone = useCallback((entry: UndoEntry, hadFocus: boolean) => {
+    if (!hadFocus || !el) return;
+    const node = el.querySelector(`[data-undo-id="${entry.id}"]`);
+    const xs = Array.from(el.querySelectorAll<HTMLElement>('li.hpb-row:not(.hpb-leaving) .hpb-x'));
+    const next = node ? xs.find((x) => node.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING) : undefined;
+    if (next) next.focus();
+    else if (focusOnLeave) focusOnLeave();
+    else focusAfter(el);
+  }, [el, focusOnLeave]);
+  const undo = useBannerUndo({ pointerInside, reducedMotion: prefersReducedMotion, onGone: onUndoGone, root: el });
+  const localUndoLive = undo.entries.some((e) => e.kind === 'local');
+  const localPresent = !compact && (local.present || localUndoLive);
+
   const allStatuses = useAllHostStatus();
   const hydration = useHostStatusHydration();
   const dismissed = useSyncExternalStore(subscribeHostDismissed, getHostDismissed);
@@ -83,154 +140,291 @@ export function AttentionBanner({ health, healthLoading, onNavigateSettings, onS
   const userRetrying = useUserRetryingHosts();
   const engaged = useUserEngagedHosts();
   const gateHosts = useGateBarHosts();
-  // The draft column's compact banner leaves out a host its own gate bar speaks for.
+  // The draft column's compact card leaves out a host its own gate bar speaks for.
   const statuses = compact && gateHosts.size ? allStatuses.filter((s) => !gateHosts.has(s.host)) : allStatuses;
-  const navigate = useNavigate();
-  const [el, setEl] = useState<HTMLDivElement | null>(null);
-  const slotH = useSlotHeight(el, compact);
-  const [pointerInside, setPointerInside] = useState(false);
-  const [focusInside, setFocusInside] = useState(false);
-  // Success rows hidden by Dismiss all -> the server time their 3s would end.
-  const [hidden, setHidden] = useState<ReadonlyMap<string, number>>(() => new Map());
-  const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set());
-  const [, setWake] = useState(0);
-  const stateRef = useRef<BannerState>(EMPTY_BANNER_STATE);
-  const focusNextRef = useRef<{ index: number; until: number } | null>(null);
+  const mountH = useMountHeight(el, mount);
+  const marginY = verticalMarginPx(el);
+  // A cap at its 132px floor (a phone's task band, a very short panel) cannot hold
+  // an opened row plus its buttons, so every row is one line there: headline + first action.
+  const singleLineRows = !!singleProp || (mountH != null && cardCapPx(mountH, marginY) <= CARD_MIN_CAP_PX);
+  // The task panel's card box itself is at most max(40%, 132px) (spec 4.1, C28, C61): its margin
+  // is outside that box. Elsewhere the margin stays inside the cap (the panel body keeps 60%, C29).
+  const capMargin = mount === 'tasks' ? 0 : marginY;
+  const [hidden, setHidden] = useHiddenReady();
 
   // Hydration not done: no host section at all (never a flash of 'unknown').
   const hydrated = hydration === 'done' || hydration === 'unsupported' || hydration === 'failed';
   const now = serverNow();
-  const { view, state } = nextBanner({
+  const prev = getBannerState();
+  let frame = nextBanner({
     statuses: hydrated ? statuses : [], dismissed, now, replica,
     pointerInside: pointerInside || focusInside, localPresent, hiddenIds: activeHiddenIds(hidden, now),
     userRetrying, engaged,
-  }, stateRef.current);
-  // Derived state from the previous frame (idempotent for the same input, so a double render is safe).
-  stateRef.current = state;
+  }, prev);
+  // Back after a while with no card anywhere: a heal that happened meanwhile is not replayed.
+  if (isResumingAfterGap()) frame = withoutReplayedReady(frame, prev);
+  // The session keeps the frame (idempotent for the same input, so a double render is safe).
+  setBannerState(frame.state);
+  const { view } = frame;
+  useWakeAt(view.wakeAt);
+  useLayoutEffect(() => cardMounted(), []);
 
-  // A time-based change with no new frame (3s success hold, 2-minute reconnect, deferral cap).
-  useEffect(() => {
-    if (view.wakeAt === null) return;
-    const t = setTimeout(() => setWake((n) => n + 1), Math.max(0, view.wakeAt - serverNow()) + 30);
-    return () => clearTimeout(t);
-  }, [view.wakeAt]);
+  const live: CardLayout = {
+    rows: view.rows, more: view.more, moreHosts: view.moreHosts, title: view.title, subhead: view.subhead,
+    localNode: !compact && local.present ? local.node : null, undo: undo.entries,
+  };
+  const readySeenRef = useRef(new Map<string, BannerRow>());
+  const held = useHeldLayout(live, layoutSignature(live, !compact && local.present ? local.kind : null), !!holdLayout);
+  const shown = held.value;
+  // Held structure, live contents: a row still in the model renders its latest frame.
+  // A host that healed while the layout is held shows its success line in its row's
+  // place at once (same height, nothing moves), and keeps it until the hold ends,
+  // even past the model's 3s: never its stale failure again (C22).
+  const liveById = new Map(view.rows.map((r) => [r.id, r]));
+  const readySeen = readySeenRef.current;
+  for (const r of view.rows) if (r.type === 'ready') readySeen.set(r.hosts[0], r);
+  if (shown === live) {
+    for (const h of Array.from(readySeen.keys())) if (!liveById.has(`ready:${h}`)) readySeen.delete(h);
+  }
+  const rows = shown.rows.map((r) => liveById.get(r.id)
+    ?? (r.type !== 'ready' && r.hosts.length === 1 ? readySeen.get(r.hosts[0]) : undefined)
+    ?? r);
+  // A new host row held back under a resting pointer: the bell says it until it lands (spec 5.5).
+  const shownIds = new Set(shown.rows.map((r) => r.id));
+  const deferredNew = view.rows.some((r) => r.type !== 'ready' && !shownIds.has(r.id));
+  useLayoutEffect(() => { setBannerRowsDeferred(deferredNew); }, [deferredNew]);
+  useLayoutEffect(() => () => setBannerRowsDeferred(false), []);
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const rowsKey = `${rows.map((r) => r.id).join('|')}#${shown.undo.length}`;
+  const { below, above, clamped } = useScrollCue(scrollEl, rowsKey);
+  useFirstRowMin(scrollEl, rowsKey);
+  // Inside the fitted form: one-line rows only when one two-line row does not fit (N3-3).
+  const [compactRows, setCompactRows] = useState(false);
+  const denseHead = useRef(0);
+  const marginRef = useRef(0);
+  marginRef.current = capMargin;
+  const tightRef = useRef(false);
+  const onRoom = useCallback((room: number, firstRow: number) => setCompactRows((prev) => {
+    // Only the fitted card's own chrome counts (before it applies, the local chip still shows).
+    if (!tightRef.current) return false;
+    if (!prev && firstRow > 0) denseHead.current = firstRow;
+    // Judged against the spec's own cap, max(40% of the mount, 132px) for the card's box (the
+    // budget above also keeps the card's margin inside it), plus the head's 2px of slack.
+    return nextCompact(prev, room + marginRef.current + 2, denseHead.current || undefined);
+  }), []);
+  useScrollBudget(el, scrollEl, mountH ? cardCapPx(mountH, capMargin) : null, rowsKey, onRoom);
 
-  // Expire dismissals the frames answer (a cleared problem, 10 connected minutes).
-  // Judged on every host, the gate-bar ones included.
-  useEffect(() => {
-    if (!hydrated) return;
-    pruneHostDismissed(allStatuses, serverNow());
-    if (dismissed.size === 0) return;
-    const t = setInterval(() => pruneHostDismissed(allStatuses, serverNow()), PRUNE_EVERY_MS);
-    return () => clearInterval(t);
-  }, [allStatuses, hydrated, dismissed.size]);
+  const rowHeight = (sel: string): number => el?.querySelector<HTMLElement>(sel)?.getBoundingClientRect().height ?? 0;
 
-  // A hidden success row is forgotten when its own 3s would have ended, so the
-  // same host healing again later shows its success row.
-  useEffect(() => {
-    if (hidden.size === 0) return;
-    const next = Math.min(...hidden.values());
-    const t = setTimeout(() => {
-      setHidden((m) => {
-        const at = serverNow();
-        const kept = new Map([...m].filter(([, until]) => until > at));
-        return kept.size === m.size ? m : kept;
-      });
-    }, Math.max(0, next - serverNow()) + 30);
-    return () => clearTimeout(t);
-  }, [hidden]);
-
-  const hostEntries = view.rows.some((r) => r.type !== 'ready') || view.more > 0;
-
-  const commitDismiss = useCallback((row: BannerRow) => {
-    setLeaving((s) => { const n = new Set(s); n.delete(row.id); return n; });
+  const onDismissRow = (row: BannerRow) => {
+    const slots = withUndoSlots(rows, undo.entries);
+    const index = slots.findIndex((s) => 'row' in s && s.row.id === row.id);
+    const before = getBannerState();
+    const at = before.order.findIndex((r) => r.id === row.id);
+    const stored = at >= 0 ? before.order[at] : row;
+    const height = undoLinePx(el?.querySelector<HTMLElement>(`li.hpb-row[data-row-id="${row.id}"]`));
+    held.flush();
     dismissHostKeys(row.dismissKeys);
-    log.info('attention-banner', 'row dismissed', { row: row.id, keys: row.dismissKeys.join(',') });
-  }, []);
+    undo.add({
+      id: `row:${row.id}`, kind: 'row', index: Math.max(0, index), height, text: undoRowText(row.labels),
+      restore: () => {
+        held.flush();
+        // Back where it stood: the next frame keeps a row that is already in the order in its place.
+        const cur = getBannerState();
+        if (!cur.order.some((r) => r.id === stored.id)) {
+          const order = [...cur.order];
+          order.splice(Math.min(Math.max(0, at), order.length), 0, stored);
+          setBannerState({ ...cur, order });
+        }
+        undismissHostKeys(row.dismissKeys);
+        log.info('attention-banner', 'row dismiss undone', { row: row.id, mount });
+      },
+    });
+    log.info('attention-banner', 'row dismissed', { row: row.id, keys: row.dismissKeys.join(','), mount });
+  };
 
-  const onDismissRow = useCallback((row: BannerRow) => {
-    // Counted among the rows that draw an x: the same list the focus effect queries.
-    focusNextRef.current = { index: dismissFocusIndex(view.rows, row.id), until: Date.now() + FOCUS_NEXT_TTL_MS };
-    if (prefersReducedMotion()) { commitDismiss(row); return; }
-    setLeaving((s) => new Set(s).add(row.id));
-    setTimeout(() => commitDismiss(row), COLLAPSE_MS);
-  }, [view.rows, commitDismiss]);
-
-  const onDismissAll = useCallback(() => {
-    dismissHostKeys(view.allKeys);
+  const onDismissAll = () => {
+    const keys = view.allKeys;
+    const readyIds = view.rows.filter((r) => r.type === 'ready').map((r) => r.id);
+    const before = getBannerState();
+    // The host list's whole space (rows + foot) holds until the line collapses, so the
+    // card shrinks once, not twice (N3-12).
+    const scrollTop = el?.querySelector<HTMLElement>('.hpb-scroll')?.getBoundingClientRect().top;
+    const hpbBottom = el?.querySelector<HTMLElement>('.hpb')?.getBoundingClientRect().bottom;
+    const height = scrollTop != null && hpbBottom != null ? Math.max(0, Math.round(hpbBottom - scrollTop))
+      : undoLinePx(el?.querySelector<HTMLElement>('li.hpb-row'));
+    const problemRows = view.rows.filter((r) => r.type !== 'ready');
+    const allText = undoAllText(hostCount(view.rows, view.moreHosts), problemRows.length === 1 && problemRows[0].labels.length === 1 ? problemRows[0].labels[0] : undefined);
+    held.flush();
+    dismissHostKeys(keys);
     const at = serverNow();
-    const ready = stateRef.current.ready;
     setHidden((m) => {
       const next = new Map(m);
-      for (const r of view.rows) if (r.type === 'ready') next.set(r.id, ready[r.id] ?? at + READY_HOLD_MS);
+      for (const id of readyIds) next.set(id, before.ready[id] ?? at + READY_HOLD_MS);
       return next;
     });
-    log.info('attention-banner', 'dismissed all host rows', { count: view.allKeys.length });
-    requestAnimationFrame(() => focusAfter(el));
-  }, [view.allKeys, view.rows, el]);
+    log.info('attention-banner', 'dismissed all host rows', { count: keys.length, mount });
+    if (compact) { requestAnimationFrame(() => focusAfter(el)); return; }
+    undo.add({
+      id: 'all', kind: 'all', index: 0, height, text: allText,
+      restore: () => {
+        held.flush();
+        const saved = before.order.filter((r) => r.type !== 'ready');
+        const savedIds = new Set(saved.map((r) => r.id));
+        const cur = getBannerState();
+        setBannerState({ ...cur, order: [...saved, ...cur.order.filter((r) => !savedIds.has(r.id))] });
+        undismissHostKeys(keys);
+        setHidden((m) => { const next = new Map(m); for (const id of readyIds) next.delete(id); return next; });
+        log.info('attention-banner', 'dismiss all undone', { count: keys.length, mount });
+      },
+    });
+  };
 
-  // After a row x: focus moves to the next row's x (else past the card). The
-  // intent expires: if the rows never settle into the expected shape (a new
-  // row arrived, a deferral held one), it is dropped rather than firing later.
-  useLayoutEffect(() => {
-    const pendingFocus = focusNextRef.current;
-    if (pendingFocus === null || !el) return;
-    if (Date.now() > pendingFocus.until) { focusNextRef.current = null; return; }
-    const xs = Array.from(el.querySelectorAll<HTMLButtonElement>('li.hpb-row:not(.hpb-leaving) .hpb-x'));
-    if (xs.length === view.rows.filter(rowHasDismiss).length && !leaving.size) {
-      focusNextRef.current = null;
-      const i = pendingFocus.index;
-      if (i >= 0 && xs[i]) xs[i].focus();
-      else focusAfter(el);
-    }
-  });
-  useEffect(() => () => { focusNextRef.current = null; }, []);
+  localDismissedRef.current = (key: string) => {
+    const height = rowHeight('.ab-local');
+    held.flush();
+    undo.add({
+      id: 'local', kind: 'local', index: 0, height,
+      restore: () => { held.flush(); undismissLocal(key); log.info('attention-banner', 'local notice dismiss undone', { key, mount }); },
+    });
+    log.info('attention-banner', 'local notice dismissed', { key, mount });
+  };
 
-  const onOpenSettings = useCallback((alias?: string) => openHostSettings(navigate, alias), [navigate]);
+  const onOpenSettings = useCallback((alias?: string) => {
+    onLeave?.();
+    openHostSettings(navigate, alias);
+  }, [navigate, onLeave]);
+  const onMore = () => {
+    onLeave?.();
+    openHostSettings(navigate, undefined, { flashHosts: shown.moreHosts });
+  };
 
-  if (!localPresent && view.rows.length === 0) return null;
-  const style = slotH ? ({ '--ab-slot-h': `${Math.round(slotH)}px` } as CSSProperties) : undefined;
+  const localUndo = shown.undo.find((e) => e.kind === 'local');
+  const allUndo = shown.undo.find((e) => e.kind === 'all');
+  const slots = withUndoSlots(rows, shown.undo);
+  const hostEntries = rows.some((r) => r.type !== 'ready') || shown.more > 0;
+  if (!shown.localNode && !localUndo && !allUndo && slots.length === 0) return null;
+  const style = mountH
+    ? ({ '--ab-slot-h': `${Math.round(mountH)}px`, '--ab-cap': `${cardCapPx(mountH, capMargin)}px` } as CSSProperties)
+    : undefined;
+  const localShown = !!shown.localNode || !!localUndo;
+  // More than one entry: every row starts as its headline and its primary action,
+  // so all of them read at a glance (row 1 does not open and fill the list, N1).
+  const dense = !singleLineRows && (slots.filter((s) => 'undo' in s || s.row.type !== 'ready').length > 1 || shown.more > 0);
+  // One count format for the title and the subhead: '(4)' (N3-17; the words already say hosts, N15).
+  const count = subheadCountText(rows, shown.moreHosts);
+  const both = localShown && (slots.length > 0 || !!allUndo);
+  // A short mount with both sections (a 600px window, N3-3): the fitted form keeps the whole card under its cap.
+  const tight = !singleLineRows && fitsTight(mountH ? cardCapPx(mountH, capMargin) : null, both);
+  tightRef.current = tight;
+  const cls = `setup-banner attention-banner${compact ? ' attention-banner-compact' : ''}${singleLineRows ? ' attention-banner-single' : ''}${both ? ' ab-both' : ''}${tight ? ' ab-fit' : ''}${tight && compactRows ? ' ab-fit-rows' : ''}`;
+  const hostHeader = !compact && !localShown && (
+    <div className="setup-banner-header hpb-header">
+      <span className="setup-banner-title">{shown.title ?? HOST_TITLE}</span>
+      {count && <span className="hpb-count">{count}</span>}
+    </div>
+  );
+  const subCount = subheadCountText(rows, shown.moreHosts);
+  const subhead = shown.subhead && (
+    <div className="hpb-subhead-row">
+      <div className="hpb-subhead">{shown.subhead}</div>
+      {subCount && <span className="hpb-count">{subCount}</span>}
+    </div>
+  );
   return (
     <div
       ref={setEl}
-      className={`setup-banner attention-banner${compact ? ' attention-banner-compact' : ''}`}
+      className={cls}
       data-testid="attention-banner"
+      data-mount={mount}
       style={style}
-      onPointerEnter={() => setPointerInside(true)}
-      onPointerLeave={() => setPointerInside(false)}
-      // Keyboard focus holds rows in place like the pointer does; the focus a
-      // mouse click leaves on a button does not (the pointer already said where it is).
-      onFocus={(e) => setFocusInside(!!(e.target as HTMLElement).matches?.(':focus-visible'))}
-      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocusInside(false); }}
+      {...handlers}
     >
-      {localPresent && local.node}
-      {view.rows.length > 0 && (
-        <section className="hpb" data-testid="host-problems" role="status" aria-live="polite" aria-label="Remote hosts">
-          {!compact && !localPresent && view.title && (
-            <div className="setup-banner-header hpb-header"><span className="setup-banner-title">{view.title}</span></div>
+      {localUndo ? <UndoLine as="div" entry={localUndo} text={UNDO_ROW_TEXT} onUndo={undo.undo} /> : shown.localNode}
+      {allUndo ? (
+        <section className="hpb" data-testid="host-problems" aria-label="Remote hosts">
+          {!compact && !localShown && (
+            // Nothing asks for attention while everything is hidden: the plain section name (N3-12).
+            <div className="setup-banner-header hpb-header"><span className="setup-banner-title">{HOST_SUBHEAD}</span></div>
           )}
-          {view.subhead && <div className="hpb-subhead">{view.subhead}</div>}
-          <div className="hpb-scroll">
-            <ul className="hpb-rows">
-              {view.rows.map((row, i) => {
-                const props = { row, defaultExpanded: i === 0, leaving: leaving.has(row.id), onDismiss: onDismissRow, onOpenSettings };
-                if (row.type === 'ready') return <ReadyRow key={row.id} row={row} leaving={props.leaving} />;
+          {shown.subhead && <div className="hpb-subhead-row"><div className="hpb-subhead">{shown.subhead}</div></div>}
+          <UndoLine as="div" entry={allUndo} text={UNDO_ALL_TEXT} onUndo={undo.undo} />
+        </section>
+      ) : slots.length > 0 && (
+        <section className="hpb" data-testid="host-problems" aria-label="Remote hosts">
+          {hostHeader}
+          {subhead}
+          <div
+            ref={setScrollEl}
+            className="hpb-scroll"
+            data-more-below={below > 0 ? 'true' : 'false'}
+            onFocus={(e) => {
+              const sc = e.currentTarget;
+              const t = e.target as HTMLElement;
+              // Keyboard focus only: scrolling under a mouse press would move the
+              // button before its mouseup (WebKit focuses buttons on press), losing the click.
+              if (!t.matches?.(':focus-visible')) return;
+              keepRowInView(sc, t);
+              // Again after the browser's own focus scrolling has run.
+              requestAnimationFrame(() => keepRowInView(sc, t));
+            }}
+          >
+            <ul className={`hpb-rows${dense ? ' hpb-rows-dense' : ''}`}>
+              {slots.map((slot, i) => {
+                if ('undo' in slot) return <UndoLine key={slot.undo.id} entry={slot.undo} text={UNDO_ROW_TEXT} onUndo={undo.undo} />;
+                const { row } = slot;
+                // Row 1 opens by position; an undo line in the first place opens nothing (no jump beside it).
+                const props = {
+                  row, defaultExpanded: i === 0 && !singleLineRows && !dense && !tight, singleLine: !!singleLineRows, dense,
+                  onDismiss: onDismissRow, onOpenSettings,
+                };
+                if (row.type === 'ready') return <ReadyRow key={row.id} row={row} />;
                 if (row.id.startsWith('cred:')) return <GroupRow key={row.id} {...props} />;
                 return <SingleHostRow key={row.id} {...props} />;
               })}
             </ul>
-            {view.more > 0 && (
-              <button type="button" tabIndex={0} className="hpb-more" onClick={() => onOpenSettings()}>
-                and {view.more} more
-              </button>
-            )}
           </div>
+          {(shown.more > 0 || below > 0 || hostEntries) && (
+            <div className="hpb-foot">
+              {shown.more === 0 && below > 0 && (
+                // One phrase per meaning: rows past the fold here; rows the cap hid are 'and N more' (N4).
+                <button type="button" tabIndex={0} className="hpb-below" data-testid="hpb-below"
+                  onClick={() => {
+                    const next = Array.from(scrollEl?.querySelectorAll<HTMLElement>('li.hpb-row') ?? [])
+                      .find((li) => li.getBoundingClientRect().bottom > (scrollEl?.getBoundingClientRect().bottom ?? 0) + 1);
+                    if (next && scrollEl) scrollRowIntoView(scrollEl, next);
+                  }}>
+                  {below} more below
+                </button>
+              )}
+              {shown.more === 0 && below === 0 && clamped && above > 0 && (
+                // Scrolled to the end: the cue turns round in the same place (N8, N3-8).
+                <button type="button" tabIndex={0} className="hpb-below" data-testid="hpb-above"
+                  onClick={() => {
+                    const rowsAbove = Array.from(scrollEl?.querySelectorAll<HTMLElement>('li.hpb-row') ?? [])
+                      .filter((li) => li.getBoundingClientRect().top < (scrollEl?.getBoundingClientRect().top ?? 0) - 1);
+                    const prev = rowsAbove[rowsAbove.length - 1];
+                    if (prev && scrollEl) scrollRowIntoView(scrollEl, prev);
+                  }}>
+                  {above} more above
+                </button>
+              )}
+              {shown.more === 0 && below === 0 && clamped && above === 0 && (
+                // The cue's place stays, so Dismiss all does not jump left (N8).
+                <span className="hpb-below hpb-below-slot" aria-hidden="true">1 more below</span>
+              )}
+              {shown.more > 0 && (
+                <button type="button" tabIndex={0} className="hpb-more" onClick={onMore}>and {shown.more} more</button>
+              )}
+              {hostEntries && (
+                // A quiet text button at the end, the same on every mount (no corner x beside a row x, N3, N16).
+                <button type="button" tabIndex={0} className="ab-dismiss-all" onClick={onDismissAll}>
+                  {DISMISS_ALL_LABEL}
+                </button>
+              )}
+            </div>
+          )}
         </section>
-      )}
-      {hostEntries && (
-        <button type="button" tabIndex={0} className="setup-banner-dismiss ab-dismiss-all" aria-label={DISMISS_ALL_LABEL} onClick={onDismissAll}>
-          &times;
-        </button>
       )}
     </div>
   );

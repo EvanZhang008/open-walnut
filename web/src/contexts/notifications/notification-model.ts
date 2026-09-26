@@ -416,12 +416,28 @@ export function categoryOf(n: Notification): string {
  * returns null on purpose: a raw `foo:bar` as a heading is worse than no
  * grouping at all, so the caller leaves those cards alone.
  */
-export function causeLabelOf(causeKey: string): string | null {
-  if (causeKey.startsWith('host:')) {
-    const host = causeKey.slice('host:'.length).trim();
-    if (host) return `Can't reach ${host}`;
-  }
+export function causeLabelOf(causeKey: string, labelOf: HostLabelOf | null = registeredHostLabelOf): string | null {
+  const host = hostOfCauseKey(causeKey);
+  if (host) return `Can't reach ${labelOf?.(host)?.trim() || host}`;
   return null;
+}
+
+/** The host alias a `host:` cause key names, or null for any other shape. */
+export function hostOfCauseKey(causeKey: string): string | null {
+  if (!causeKey.startsWith('host:')) return null;
+  return causeKey.slice('host:'.length).trim() || null;
+}
+
+/**
+ * A host alias to its display label ("devbox" to "Dev box"). The model stays
+ * pure: the UI registers the host store's reader (ErrorCategoryTitle does, at
+ * import), and without one the alias itself is the name.
+ */
+export type HostLabelOf = (alias: string) => string | undefined;
+let registeredHostLabelOf: HostLabelOf | null = null;
+
+export function setCauseHostLabelResolver(fn: HostLabelOf | null): void {
+  registeredHostLabelOf = fn;
 }
 
 export interface ErrorCauseGroup {

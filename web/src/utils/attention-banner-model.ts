@@ -95,6 +95,8 @@ export interface BannerView {
   rows: BannerRow[];
   /** Rows behind 'and N more'. */
   more: number;
+  /** The aliases those rows name, in display order ('and N more' flashes them in Settings). */
+  moreHosts: string[];
   /** Every host dismissal key of every problem row (Dismiss all hides the hidden ones too). */
   allKeys: string[];
   /** Server time of the next change that needs no new frame (a timer wakes the banner). */
@@ -366,6 +368,12 @@ function wakeAtOf(input: BannerInput, ready: Record<string, number>, deferSince:
   return future.length ? Math.min(...future) : null;
 }
 
+/** Hosts of the problem rows the cap leaves off screen (output only, no rule). */
+function moreHostsOf(attention: readonly BannerRow[], shown: readonly BannerRow[]): string[] {
+  const on = new Set(shown.map((r) => r.id));
+  return [...new Set(attention.filter((r) => !on.has(r.id)).flatMap((r) => r.hosts))];
+}
+
 /** The banner for this frame, and the state the next frame starts from. */
 export function nextBanner(input: BannerInput, prev: BannerState = EMPTY_BANNER_STATE): { view: BannerView; state: BannerState } {
   const { now } = input;
@@ -396,6 +404,7 @@ export function nextBanner(input: BannerInput, prev: BannerState = EMPTY_BANNER_
     subhead: input.localPresent && order.length > 0 ? HOST_SUBHEAD : null,
     rows: capped.rows,
     more: capped.more,
+    moreHosts: moreHostsOf(attention, capped.rows),
     allKeys: [...new Set(attention.flatMap((r) => r.dismissKeys))],
     wakeAt: wakeAtOf(input, keptReady, deferSince),
   };

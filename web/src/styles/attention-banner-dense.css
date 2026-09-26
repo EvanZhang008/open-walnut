@@ -1,0 +1,77 @@
+/* Dense host rows (AttentionBanner `dense`, more than one entry): until the
+   user opens a row, it is its headline on one line, then its primary action
+   and the details toggle on the next, so every problem reads at a glance
+   (N1). A result line ('Tried again just now: same result') takes the toggle's
+   place on that same line, so the row keeps its height (N13). */
+.hpb-dense:not(.hpb-open) .hpb-body {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 6px;
+  /* 2px: a two-line headline (N3-5) keeps four rows whole in a 1280x800 task panel (BP-R3-N1). */
+  row-gap: 2px;
+}
+.hpb-dense:not(.hpb-open) .hft-details { white-space: nowrap; align-self: center; }
+.hpb-dense:not(.hpb-open) .hpb-body > .hft { display: contents; }
+.hpb-dense:not(.hpb-open) .hft-headline,
+.hpb-dense:not(.hpb-open) .hpb-headline,
+.hpb-dense:not(.hpb-open) .hpb-trying,
+.hpb-dense:not(.hpb-open) .hpb-fixing { flex: 0 0 100%; min-width: 0; }
+/* Two whole-word lines, never a one-line ellipsis: the cause at the end of the
+   headline ('SSH certificate expired', 'not signed in') stays readable (N3-5). */
+.hpb-dense:not(.hpb-open) .hft-headline,
+.hpb-dense:not(.hpb-open) .hpb-headline {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: clip;
+}
+.hpb-dense:not(.hpb-open) .hpb-actions { flex: none; margin: 0; flex-wrap: nowrap; }
+/* One button height in the whole card, folded or opened (N3-7). */
+.attention-banner .hpb-actions .hpb-btn { padding-top: 2px; padding-bottom: 2px; min-height: 24px; }
+.hpb-dense:not(.hpb-open) .hft-details,
+.hpb-dense:not(.hpb-open) .hpb-receipt,
+.hpb-dense:not(.hpb-open) .host-connect-retry-msg { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+/* Basis 0: in a wrapping line a long result would wrap to a line of its own
+   before it shrank; it takes the rest of the button's line instead (N13). */
+.hpb-dense:not(.hpb-open) .hpb-receipt,
+.hpb-dense:not(.hpb-open) .host-connect-retry-msg { flex: 1 1 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hpb-dense.hpb-has-receipt:not(.hpb-open) .hft-details,
+.hpb-dense:not(.hpb-open) .hft-when,
+.hpb-dense:not(.hpb-open) .hpb-last { display: none; }
+/* The row's second line runs under the x (the x sits on the headline's line). */
+.hpb-dense:not(.hpb-open) > .hpb-body { grid-column: 2 / 4; grid-row: 1; }
+.hpb-dense:not(.hpb-open) > .hpb-x { grid-column: 3; grid-row: 1; align-self: start; position: relative; z-index: 1; }
+.hpb-dense:not(.hpb-open) .hft-headline,
+.hpb-dense:not(.hpb-open) .hpb-headline,
+.hpb-dense:not(.hpb-open) .hpb-trying,
+.hpb-dense:not(.hpb-open) .hpb-fixing { flex-basis: calc(100% - 28px); margin-right: 28px; }
+/* A narrow card (a 980px window): the headline takes two lines on whole words,
+   so the host's name, at its end, still shows. */
+@container attention (max-width: 220px) {
+  .hpb-dense:not(.hpb-open) .hft-headline,
+  .hpb-dense:not(.hpb-open) .hpb-headline {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    text-overflow: clip;
+  }
+}
+/* A task panel dragged to its minimum: the whole headline wraps and the line
+   under it wraps too, never scrolling sideways (N10). */
+@container attention (max-width: 170px) {
+  .hpb-dense:not(.hpb-open) .hft-headline,
+  .hpb-dense:not(.hpb-open) .hpb-headline { display: block; -webkit-line-clamp: unset; line-clamp: none; overflow: visible; }
+  .hpb-dense:not(.hpb-open) .hpb-receipt,
+  .hpb-dense:not(.hpb-open) .host-connect-retry-msg { white-space: normal; }
+}
+/* Two x boxes stay 24px apart: a dense row is 44px or more, so 6px between rows keeps that. */
+.hpb-rows.hpb-rows-dense { gap: 6px; }
+/* Local section beside host rows: its title already says the state, so only the fix shows. */
+.ab-both .ab-local .setup-lead-state { display: none; }

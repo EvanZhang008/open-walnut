@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, Fragment } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
@@ -57,7 +57,8 @@ import { useUrlSync } from '@/hooks/useUrlSync';
 import { useSessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { FocusDock } from '@/components/dock/FocusDock';
-import { AttentionBanner } from '@/components/common/AttentionBanner';
+import { AttentionBannerMount } from '@/components/common/AttentionBannerMount';
+import { publishBannerHealth } from '@/components/common/banner-mount-hooks';
 import type { DraftGateError } from '@/components/sessions/HostGateErrorBar';
 import { placementFor, setHostBannerPlacement } from '@/utils/host-banner-placement';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
@@ -435,13 +436,24 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   });
   // String[] projection for URL sync (doesn't need lock state — URL carries ids only).
   const sessionColumnIds = useMemo(() => sessionColumns.map(c => c.id), [sessionColumns]);
-  // ONE host-connect banner on the page: in the chat slot when it shows, else on
-  // the leftmost draft column (opening a draft borrows the chat spot, and a
-  // launch is exactly when a connecting host matters). Neither: none.
-  const hostBannerDraftId = chatVisible ? undefined : sessionColumns.find(s => isDraftColumnId(s.id))?.id;
-  // Neither on screen: the rail's Settings entry wears the warn dot instead.
-  useEffect(() => { setHostBannerPlacement(placementFor(chatVisible, !!hostBannerDraftId)); }, [chatVisible, hostBannerDraftId]);
+  // ONE attention banner on the page: in the task panel when it shows, else in
+  // the chat slot, else on the leftmost draft column (opening a draft borrows the
+  // chat spot, and a launch is exactly when a connecting host matters). None of
+  // them: the rail's Settings entry and the bell wear the warn dot instead.
+  // A layout effect, so hiding the task panel never paints one frame with the
+  // card in both places (or in neither).
+  const hostBannerDraftId = todoVisible || chatVisible ? undefined : sessionColumns.find(s => isDraftColumnId(s.id))?.id;
+  useLayoutEffect(() => {
+    setHostBannerPlacement(placementFor(todoVisible, chatVisible, !!hostBannerDraftId));
+  }, [todoVisible, chatVisible, hostBannerDraftId]);
   useEffect(() => () => setHostBannerPlacement('none'), []);
+  // The task panel's banner reads health from this channel, so a health frame
+  // never changes the (memo) TodoPanel's props.
+  useLayoutEffect(() => { publishBannerHealth(health, healthLoading); }, [health, healthLoading]);
+  const startDraftFromBanner = useCallback(() => { openDraftColumnRef.current(); }, []);
+  const tasksBanner = useMemo(() => (
+    <AttentionBannerMount where="tasks" onNavigateSettings={handleNavigateSettings} onStartSession={startDraftFromBanner} />
+  ), [handleNavigateSettings, startDraftFromBanner]);
   // "The current session" (stores/active-session.ts) must stay inside the open
   // strip: a closed column stops being the target, an empty strip has none.
   useEffect(() => { reconcileActiveSession(sessionColumnIds); }, [sessionColumnIds]);
@@ -2753,6 +2765,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOpenLauncherForProject={handleOpenLauncherForProject}
           onOpenLauncherForTier={handleOpenLauncherForTier}
           onOpenSearchSession={handleOpenSearchSession}
+          banner={tasksBanner}
         />
         {/* The todo-anchored launcher popover (Session | Task tabs) is GONE — the
             toolbar "+" now grows a draft session column in the sessions strip
@@ -2833,11 +2846,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSessionReplaced={handleSessionReplaced}
           onOpenForkDraft={handleOpenForkDraft}
           banner={(
-            <AttentionBanner
+            <AttentionBannerMount
+              where="slot"
               health={health}
               healthLoading={healthLoading}
               onNavigateSettings={handleNavigateSettings}
-              onStartSession={() => openDraftColumn()}
+              onStartSession={startDraftFromBanner}
             />
           )}
           inspectorPanel={inspector.isOpen ? (
@@ -2951,7 +2965,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     // The live host-connect banner, when the chat slot that
                     // normally carries it is hidden (a draft borrows that spot).
                     hostNotice={sid === hostBannerDraftId
-                      ? <AttentionBanner compact onNavigateSettings={handleNavigateSettings} />
+                      ? <AttentionBannerMount where="draft" onNavigateSettings={handleNavigateSettings} />
                       : undefined}
                     gateError={draftGateErrors[sid]}
                     onGateErrorClear={clearDraftGateError}
