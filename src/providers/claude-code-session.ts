@@ -2231,6 +2231,7 @@ export class ClaudeCodeSession {
       ...(opts?.markers ? { markers: opts.markers } : {}),
       resume: isResume,
       fork: forkSession,
+      ...(this.taskId ? { taskId: this.taskId } : {}),
       spillFile,
       mode: this._mode,
       onOutput: (event) => this.handleStreamLine(event.line, event.v),

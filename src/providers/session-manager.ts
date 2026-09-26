@@ -84,6 +84,8 @@ export interface TransportStartOptions {
   resume?: boolean
   /** True when forking a session (--fork-session) */
   fork?: boolean
+  /** The Walnut task this spawn serves, for the daemon's spawn journal. */
+  taskId?: string
   /** Callback for each JSONL line from the output stream */
   onOutput: (event: OutputEvent) => void
   /** Callback when the Claude process exits. stderr is included for remote sessions (read from .jsonl.err on the remote host). */

@@ -17,6 +17,7 @@ import { SESSION_STREAMS_DIR, CLAUDE_HOME } from '../constants.js'
 import type { SessionRecord } from './types.js'
 import { isEnvironmentSession } from './session-tracker.js'
 import { sweepRecoverableStreamFiles } from './stream-retention.js'
+import { spawnJournalPath } from '../providers/external-session-scan-core.js'
 
 const REAP_INTERVAL_MS = 60 * 60 * 1000          // every hour
 const INITIAL_DELAY_MS = 60 * 1000               // 60s after server start
@@ -95,9 +96,9 @@ export class SessionReaper {
     )
     const walnutTmp = path.join(os.homedir(), '.open-walnut', 'tmp')
     const claudeProjectsDir = path.join(CLAUDE_HOME, 'projects')
-    const spawnLedgerDir = path.join(walnutTmp, 'spawned-sessions')
+    const spawnJournal = spawnJournalPath(os.homedir())
     for (const streamsDir of [path.join(walnutTmp, 'streams'), SESSION_STREAMS_DIR]) {
-      await sweepRecoverableStreamFiles({ streamsDir, claudeProjectsDir, activeIds, spawnLedgerDir })
+      await sweepRecoverableStreamFiles({ streamsDir, claudeProjectsDir, activeIds, spawnJournal })
     }
 
     // Find reapable sessions

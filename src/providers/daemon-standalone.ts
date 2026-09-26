@@ -199,24 +199,112 @@ const IS_PROD_DAEMON_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON
 const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR
   || (IS_PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
 
-// ── Spawn ledger ────────────────────────────────────────────────────────────
-// One empty file per CLI session ANY daemon on this host has ever started,
-// named by session id, under the HOME whose ~/.claude the spawned CLI writes
-// its transcripts into. The external-session scan reads this dir (plus the
-// streams dir, which reaches back before the ledger existed) to tell Walnut's
-// own sessions from outside ones BY ID — a session whose record lives in some
-// other Walnut instance's DB (dev server, ephemeral test server) is still
-// never imported. Anchored to the CLI's HOME env, NOT to STREAMS_DIR or
-// DAEMON_DIR: isolated test daemons override those, but their CLIs inherit
-// process.env and keep writing the real ~/.claude. Keep in sync with
-// daemon-source.ts and walnutSpawnedIds in external-session-scan-core.ts.
-const SPAWN_LEDGER_DIR = path.join(process.env.HOME || HOME_DIR, '.open-walnut', 'tmp', 'spawned-sessions')
-function recordSpawnLedger(sid: string): void {
-  if (!sid || sid.includes('/') || sid.includes('.')) return
+// ── Spawn journal ───────────────────────────────────────────────────────────
+// Append-only record of every CLI session ANY Walnut daemon on this host
+// started: one JSON line per session id, under the HOME whose ~/.claude the CLI
+// writes its transcripts into. The external-session scan reads it to tell
+// Walnut's own sessions from outside ones BY ID, so a session whose record lives
+// in another Walnut instance's DB (a dev server, an ephemeral test server whose
+// data dir is gone) is never imported. Anchored to the CLI's HOME, NOT to
+// STREAMS_DIR or DAEMON_DIR: isolated test daemons override those, but their
+// CLIs inherit process.env and keep writing the real ~/.claude.
+//
+// Line: {v, sid, at, kind: new|fork|resume|backfill, parent?, cwd?, home?, task?}
+// (home + task = which Walnut data dir asked, for which task). The id is the
+// CLI's own: the args when they name it (--session-id, --resume), else the init
+// line's session_id. Each line is ONE O_APPEND write of at most 4KB, so
+// concurrent daemons never interleave; readers skip a torn tail. It grows by one
+// line per session ever started (~200 bytes), which is the record itself, so
+// there is nothing to compact. WALNUT_SPAWN_JOURNAL relocates it: the test
+// harness points it at a temp file so mock spawns stay out of the real one.
+// Keep in sync with daemon-source.ts and readSpawnJournal in
+// external-session-scan-core.ts.
+const SPAWN_JOURNAL = process.env.WALNUT_SPAWN_JOURNAL
+  || path.join(process.env.HOME || HOME_DIR, '.open-walnut', 'local', 'spawn-journal.jsonl')
+// Before the journal: one empty file per session id (2026-09-23 to 09-26).
+const LEGACY_SPAWN_LEDGER_DIR = path.join(process.env.HOME || HOME_DIR, '.open-walnut', 'tmp', 'spawned-sessions')
+const SPAWN_JOURNAL_LINE_MAX = 4096
+interface SpawnInfo { kind: 'new' | 'fork' | 'resume'; parent?: string; cwd?: string; home?: string; task?: string }
+let journaledSids: Set<string> | null = null
+// A crashed writer can leave a torn last line with no newline; the first append
+// then starts a fresh line instead of gluing its record onto the torn one.
+let journalTornTail = false
+
+function isJournalSid(sid: unknown): sid is string {
+  return typeof sid === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(sid)
+}
+
+function journaledIds(): Set<string> {
+  if (journaledSids) return journaledSids
+  const ids = new Set<string>()
+  let text = ''
+  try { text = fs.readFileSync(SPAWN_JOURNAL, 'utf8') } catch { /* no journal yet */ }
+  journalTornTail = text.length > 0 && !text.endsWith('\n')
+  for (const line of text.split('\n')) {
+    if (!line) continue
+    try {
+      const rec = JSON.parse(line)
+      if (isJournalSid(rec?.sid)) ids.add(rec.sid)
+    } catch { /* torn tail from a crashed writer */ }
+  }
+  journaledSids = ids
+  return ids
+}
+
+function appendSpawnJournal(sid: unknown, rec: Record<string, unknown>): void {
+  if (!isJournalSid(sid)) return
+  const ids = journaledIds()
+  if (ids.has(sid)) return
+  const at = new Date().toISOString()
+  let line = JSON.stringify({ v: 1, sid, at, ...rec }) + '\n'
+  if (Buffer.byteLength(line) > SPAWN_JOURNAL_LINE_MAX) line = JSON.stringify({ v: 1, sid, at, kind: rec.kind }) + '\n'
   try {
-    fs.mkdirSync(SPAWN_LEDGER_DIR, { recursive: true })
-    fs.writeFileSync(path.join(SPAWN_LEDGER_DIR, sid), '')
-  } catch { /* best-effort: the scan also consults the streams dir */ }
+    fs.mkdirSync(path.dirname(SPAWN_JOURNAL), { recursive: true })
+    fs.appendFileSync(SPAWN_JOURNAL, (journalTornTail ? '\n' : '') + line, { mode: 0o600 })
+    journalTornTail = false
+    ids.add(sid)
+  } catch { /* best effort: the scan also consults the streams dir */ }
+}
+
+function argValue(args: string[], flag: string): string | undefined {
+  const i = args.indexOf(flag)
+  return i >= 0 && typeof args[i + 1] === 'string' ? args[i + 1] : undefined
+}
+
+function spawnInfoFor(args: string[], cwd: string, resume: boolean, origin: unknown): SpawnInfo {
+  const fork = args.includes('--fork-session')
+  const o = origin && typeof origin === 'object' ? origin as Record<string, unknown> : {}
+  const text = (x: unknown, max: number) => (typeof x === 'string' && x && x.length <= max ? x : undefined)
+  return {
+    kind: fork ? 'fork' : resume ? 'resume' : 'new',
+    parent: fork ? argValue(args, '--resume') : undefined,
+    cwd,
+    home: text(o.home, 1024),
+    task: text(o.task, 128),
+  }
+}
+
+/** The CLI session id the args already name; a fork's own id is only known from init. */
+function namedSessionId(args: string[]): string | undefined {
+  if (args.includes('--fork-session')) return undefined
+  return argValue(args, '--session-id') ?? argValue(args, '--resume')
+}
+
+// Fold the per-id marker files (then remove them) and this daemon's streams
+// captures into the journal, so it alone answers for everything already started.
+// The marker dir belongs to the DEFAULT journal only: a relocated journal (a test
+// daemon under the real HOME) must never swallow and delete the real markers.
+function backfillSpawnJournal(): void {
+  const list = (dir: string) => { try { return fs.readdirSync(dir) } catch { return [] as string[] } }
+  const legacy = process.env.WALNUT_SPAWN_JOURNAL ? [] : list(LEGACY_SPAWN_LEDGER_DIR)
+  for (const name of legacy) appendSpawnJournal(name, { kind: 'backfill', from: 'ledger' })
+  for (const name of list(STREAMS_DIR)) {
+    if (name.endsWith('.jsonl')) appendSpawnJournal(name.slice(0, -6), { kind: 'backfill', from: 'streams' })
+  }
+  const ids = journaledIds()
+  if (legacy.length > 0 && legacy.every((name) => !isJournalSid(name) || ids.has(name))) {
+    try { fs.rmSync(LEGACY_SPAWN_LEDGER_DIR, { recursive: true, force: true }) } catch { /* retried next start */ }
+  }
 }
 
 const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port')
@@ -493,6 +581,7 @@ interface SessionData {
   snapshotTimer?: ReturnType<typeof setTimeout> | null
   spawnTs?: number   // latency instrumentation: CLI spawn ts
   sawInit?: boolean  // latency instrumentation: first init line seen
+  spawnInfo?: SpawnInfo  // what the spawn journal records once init names the id
   // Scheduled-task (CLI cron) fire detection — see daemon-core detectCronFires.
   // Dedup map `${taskId}:${lastFiredAt}` → detectedAtMs; in-memory only.
   cronWarned?: Record<string, number>
@@ -2819,7 +2908,10 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   }
 
   fs.mkdirSync(STREAMS_DIR, { recursive: true })
-  recordSpawnLedger(sid)
+  // Journal the id now when the args name it; a new or forked session's id is
+  // journaled from its init line (the tailer below).
+  const spawnInfo = spawnInfoFor(args, cwd, !!resume, (cmd as Record<string, unknown>).origin)
+  appendSpawnJournal(namedSessionId(args), spawnInfo)
 
   const pipePath = path.join(STREAMS_DIR, sid + '.pipe')
   const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
@@ -3041,6 +3133,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     cronMetadataLoaded: !resume,
     spawnTs: Date.now(),     // latency instrumentation: CLI spawn → first init line
     sawInit: false,
+    spawnInfo,
   }
 
   proc.on('exit', (code) => {
@@ -4230,6 +4323,7 @@ function ensureWatcher(sid: string) {
         if (!s.sawInit && line.includes('"type":"system"') && line.includes('"init"')) {
           try {
             const init = JSON.parse(line)
+            if (init.type === 'system' && init.subtype === 'init') appendSpawnJournal(init.session_id, s.spawnInfo ?? { kind: 'new' })
             if (init.type === 'system' && init.subtype === 'init' && typeof init.claude_code_version === 'string') {
               s.cliVersion = init.claude_code_version
               if (SERVICE_MODE) persistRegistry()
@@ -5009,8 +5103,6 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
     session.jsonlPath = newBase + '.jsonl'
     session.pipePath = newBase + '.pipe'
     session.pgidPath = newBase + '.pgid'
-    // A fresh spawn's tmp id was ledgered at spawn; the real id must be too.
-    recordSpawnLedger(newSid)
 
     // The session-bound watcher's pollTimer closure captured the OLD sid and
     // looks up sessions.get(oldSid) each tick. After the re-key below, that
@@ -7467,6 +7559,9 @@ if (action === '--start' || SERVICE_MODE) {
   // that were never registered (e.g. half-spawned sessions from E13 window).
   cleanupOrphanedProcessGroups()
   for (const [sid] of sessions) ensureWatcher(sid)
+  try { backfillSpawnJournal() } catch (err) {
+    logMsg('warn', 'spawn journal backfill failed', { error: (err as Error).message })
+  }
   logMsg('info', 'startup: complete — sessions ready', {
     totalSessions: sessions.size,
     sids: [...sessions.keys()],

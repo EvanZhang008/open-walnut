@@ -23,14 +23,15 @@
  *
  * The capture's NAME is also load-bearing: walnutSpawnedIds() (external-session
  * scan) reads the streams dir to tell Walnut's own sessions from outside ones,
- * for sessions older than the spawn ledger (which only exists since 2026-09-23).
- * So before unlinking, the session id is backfilled into the ledger — an empty
- * file preserves the classification; if that write fails the capture is kept.
+ * for sessions older than the spawn journal. So before unlinking, the session id
+ * is appended to the journal (unless it is already there); if that write fails
+ * the capture is kept.
  */
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { log } from '../logging/index.js'
+import { parseSpawnJournal } from '../providers/external-session-scan-core.js'
 
 export const STREAM_RETENTION_MS = 7 * 24 * 3600_000
 
@@ -42,12 +43,11 @@ export interface StreamRetentionOptions {
   /** Claude session ids that still have a live session record. */
   activeIds: ReadonlySet<string>
   /**
-   * Spawn-ledger dir (~/.open-walnut/tmp/spawned-sessions). When set, each
-   * session id is recorded there BEFORE its capture is unlinked, so the
-   * external-session scan keeps classifying it as walnut-spawned. A failed
-   * ledger write keeps the capture.
+   * Spawn journal file (spawnJournalPath). When set, each session id is
+   * appended there BEFORE its capture is unlinked, so the external-session scan
+   * keeps classifying it as walnut-spawned. A failed append keeps the capture.
    */
-  spawnLedgerDir?: string
+  spawnJournal?: string
   retentionMs?: number
   now?: number
 }
@@ -100,6 +100,10 @@ export async function sweepRecoverableStreamFiles(opts: StreamRetentionOptions):
 
   const canonical = await canonicalTranscriptNames(claudeProjectsDir)
   if (canonical.size === 0) return deleted
+  const journalText = opts.spawnJournal ? await fs.readFile(opts.spawnJournal, 'utf8').catch(() => '') : ''
+  const journaled = opts.spawnJournal ? parseSpawnJournal(journalText) : null
+  // A torn last line (a writer died mid-append) must not swallow the next record.
+  let tornTail = journalText.length > 0 && !journalText.endsWith('\n')
 
   for (const name of candidates) {
     if (!canonical.has(name)) continue // unrecoverable: the capture is the only copy
@@ -109,12 +113,15 @@ export async function sweepRecoverableStreamFiles(opts: StreamRetentionOptions):
     try {
       const st = await fs.stat(file)
       if (!st.isFile() || now - st.mtimeMs < retentionMs) continue
-      if (opts.spawnLedgerDir) {
-        // Same id guard as the daemon's recordSpawnLedger; ledger first, unlink
-        // second, so a crash in between never loses the walnut-spawned marker.
-        if (sessionId.includes('/') || sessionId.includes('.')) continue
-        await fs.mkdir(opts.spawnLedgerDir, { recursive: true })
-        await fs.writeFile(path.join(opts.spawnLedgerDir, sessionId), '')
+      if (opts.spawnJournal && journaled && !journaled.has(sessionId)) {
+        // Same id guard and line shape as the daemon's appendSpawnJournal;
+        // journal first, unlink second, so a crash in between never loses it.
+        if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) continue
+        const line = JSON.stringify({ v: 1, sid: sessionId, at: new Date(now).toISOString(), kind: 'backfill', from: 'retention' }) + '\n'
+        await fs.mkdir(path.dirname(opts.spawnJournal), { recursive: true })
+        await fs.appendFile(opts.spawnJournal, (tornTail ? '\n' : '') + line, { mode: 0o600 })
+        tornTail = false
+        journaled.set(sessionId, { kind: 'backfill' })
       }
       await fs.unlink(file)
       deleted.push(file)

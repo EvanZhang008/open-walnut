@@ -88,6 +88,7 @@ export async function setup(): Promise<void> {
   // test server at the production /tmp/open-walnut/. Done before the early-return
   // below so a caller-supplied OPEN_WALNUT_HOME still gets runtime isolation.
   isolateRuntimeDir();
+  isolateSpawnJournal();
   sweepRuntimeDirs();
 
   // If WALNUT_HOME is already set to a safe (non-production) path, keep it
@@ -128,6 +129,20 @@ function isolateRuntimeDir(): void {
   const testRuntime = path.join(os.tmpdir(), `${RUNTIME_DIR_PREFIX}${process.pid}`);
   fs.mkdirSync(testRuntime, { recursive: true });
   process.env.WALNUT_DAEMON_DIR = testRuntime;
+}
+
+/**
+ * Session daemons journal every CLI they start into ~/.open-walnut/local (see
+ * SPAWN_JOURNAL in daemon-standalone.ts). Test daemons run under the real HOME,
+ * and a mock spawn has no transcript in ~/.claude, so its line is pure noise in
+ * the real journal. Unconditional (unlike isolateRuntimeDir): a caller that
+ * already chose a runtime dir still gets its journal kept out of the real one.
+ * Workers re-point it per pid in runtime-dir-isolation.ts; configs without that
+ * setupFile inherit this runner-wide file.
+ */
+function isolateSpawnJournal(): void {
+  if (process.env.WALNUT_SPAWN_JOURNAL) return;
+  process.env.WALNUT_SPAWN_JOURNAL = path.join(os.tmpdir(), `${RUNTIME_DIR_PREFIX}${process.pid}`, 'spawn-journal.jsonl');
 }
 
 /** Shared with tests/setup/runtime-dir-isolation.ts (workers) — one name, one sweep rule. */

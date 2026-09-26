@@ -605,7 +605,7 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
 
   const idsByHost = new Map<string, string[]>();
   for (const p of pending) idsByHost.set(p.host, [...(idsByHost.get(p.host) ?? []), p.sessionId]);
-  const verdicts = new Map<string, string>();
+  const verdicts = new Map<string, { reason: string; spawnedBy?: unknown }>();
   for (const [host, ids] of idsByHost) {
     const answer = await describeHost(host, ids, false);
     if (!answer) continue;
@@ -618,14 +618,15 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
       if (c && c.notExternal === undefined) continue;
       auditedSessions.add(p.sessionId);
       auditedTasks.add(p.task.id);
-      if (c?.notExternal) verdicts.set(p.sessionId, c.notExternal);
+      if (c?.notExternal) verdicts.set(p.sessionId, { reason: c.notExternal, spawnedBy: c.spawnedBy });
     }
   }
 
   let removed = 0;
   for (const { task, sessionId } of pending) {
-    const reason = verdicts.get(sessionId);
-    if (!reason) continue;
+    const verdict = verdicts.get(sessionId);
+    if (!verdict) continue;
+    const { reason } = verdict;
     try {
       // Re-read: a message sent meanwhile adopted it, and then it stays.
       const current = await getTask(task.id).catch(() => null);
@@ -635,6 +636,8 @@ async function auditImports(imports: Task[], limit: number): Promise<number> {
       if (res.deleted.length) removed++;
       log.session.info('removed an import that was not an outside session', {
         taskId: task.id, sessionId, reason, title: task.title,
+        // Which Walnut started it (data dir, task, fork parent), from the host's spawn journal.
+        ...(verdict.spawnedBy ? { spawnedBy: verdict.spawnedBy } : {}),
       });
     } catch (err) {
       log.session.warn('external import audit removal failed', {

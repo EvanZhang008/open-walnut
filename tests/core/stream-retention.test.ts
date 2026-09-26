@@ -130,26 +130,35 @@ describe('sweepRecoverableStreamFiles', () => {
     expect(fs.existsSync(kept)).toBe(true)
   })
 
-  it('backfills the spawn ledger BEFORE deleting, so the scan still sees the session as ours', async () => {
-    const ledger = path.join(streams, 'ledger') // any empty dir; created on demand
+  it('journals the id BEFORE deleting, so the scan still sees the session as ours', async () => {
+    const journal = path.join(streams, 'local', 'spawn-journal.jsonl') // dir created on demand
+    fs.mkdirSync(path.dirname(journal), { recursive: true })
+    fs.writeFileSync(journal, JSON.stringify({ v: 1, sid: 'ccc', kind: 'new', home: '/h' }) + '\n')
     const old = capture('aaa.jsonl', 8 * DAY)
+    const known = capture('ccc.jsonl', 8 * DAY)
     canonical('aaa.jsonl')
+    canonical('ccc.jsonl')
 
     const deleted = await sweepRecoverableStreamFiles({
       streamsDir: streams,
       claudeProjectsDir: projects,
       activeIds: new Set(),
-      spawnLedgerDir: ledger,
+      spawnJournal: journal,
       now: NOW,
     })
 
-    expect(deleted).toEqual([old])
-    expect(fs.existsSync(path.join(ledger, 'aaa'))).toBe(true)
+    expect(deleted.sort()).toEqual([old, known].sort())
+    const { readSpawnJournal } = await import('../../src/providers/external-session-scan-core.js')
+    const entries = readSpawnJournal(journal)
+    expect(entries.get('aaa')).toMatchObject({ kind: 'backfill' })
+    // An id already journaled keeps its original line and gains no second one.
+    expect(entries.get('ccc')).toEqual({ kind: 'new', home: '/h' })
+    expect(fs.readFileSync(journal, 'utf8').trim().split('\n')).toHaveLength(2)
   })
 
-  it('keeps the capture when the ledger write fails (a file where the ledger dir should be)', async () => {
-    const ledgerAsFile = path.join(streams, 'ledger-blocked')
-    fs.writeFileSync(ledgerAsFile, 'not a dir')
+  it('keeps the capture when the journal write fails (a file where its dir should be)', async () => {
+    const blocked = path.join(streams, 'journal-blocked')
+    fs.writeFileSync(blocked, 'not a dir')
     const old = capture('bbb.jsonl', 8 * DAY)
     canonical('bbb.jsonl')
 
@@ -157,7 +166,7 @@ describe('sweepRecoverableStreamFiles', () => {
       streamsDir: streams,
       claudeProjectsDir: projects,
       activeIds: new Set(),
-      spawnLedgerDir: ledgerAsFile,
+      spawnJournal: path.join(blocked, 'spawn-journal.jsonl'),
       now: NOW,
     })
 

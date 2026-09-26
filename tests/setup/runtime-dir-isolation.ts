@@ -83,6 +83,15 @@ if (pointsAtProduction || inheritedFromRunner) {
   })
 }
 
+// Session daemons journal every CLI they start into ~/.open-walnut/local (see
+// SPAWN_JOURNAL in daemon-standalone.ts), and test daemons inherit this env. A
+// mock spawn has no transcript in ~/.claude, so its line is pure noise there:
+// keep it in this worker's runtime dir, which the sweeps above reclaim. Re-point
+// an inherited value too, so workers never share one file.
+if (!process.env.WALNUT_SPAWN_JOURNAL || !process.env.WALNUT_SPAWN_JOURNAL.includes(ours)) {
+  process.env.WALNUT_SPAWN_JOURNAL = path.join(os.tmpdir(), ours, 'spawn-journal.jsonl')
+}
+
 // Search v2 is default-ON (2026-08-26 cutover), and its semantic lane spawns an
 // embed worker whose first query tries to LOAD (and, on a fresh temp
 // WALNUT_HOME, download — ~600MB) the embedding model. No test needs that:

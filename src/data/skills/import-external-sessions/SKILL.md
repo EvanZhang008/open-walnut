@@ -39,7 +39,7 @@ Existing installs converge on their own: old imports without a folder are filed
 into their cwd folder (at most 300 per tick), placeholder titles are re-read by
 id (`sessions.describeExternal`, so a transcript older than the scan window is
 still fixed) until a real title exists, imports an older scanner took in by
-mistake (Walnut's own sessions per the spawn ledger, forks, reply-less probes)
+mistake (Walnut's own sessions per the spawn journal, forks, reply-less probes)
 are removed together with their session row (each import is re-read once per server start, at most 100 per
 tick, open tasks first), and idle imports are swept.
 
@@ -81,7 +81,7 @@ If it's missing after an import run, the usual reasons:
 | Terminal `claude` / Claude Desktop | Yes, unless a directory rule excludes it |
 | codex TUI / Codex Desktop | Yes, unless a directory rule excludes it |
 | Other SDK apps | Yes, when the cwd is a real directory and no rule excludes it |
-| Walnut's own sessions | Never — answered by id, not by guessing. The daemon on each host writes a **spawn ledger** (one marker file per session it ever started, `~/.open-walnut/tmp/spawned-sessions/`, with the streams dir covering spawns older than the ledger), so a session started by ANY Walnut instance on that host — prod, a dev server, an ephemeral test server whose own database is gone — is skipped even when this server holds no record of it. Text rules back the ledger up for transcripts spawned by daemons older than it: a programmatic fork (its first message predates earlier lines — copied history), or a Walnut envelope in a user turn (the side-thread cache warm-up, the output-mode reminder) |
+| Walnut's own sessions | Never. It is answered by id, not by guessing. The daemon on each host keeps a **spawn journal**, `~/.open-walnut/local/spawn-journal.jsonl`: one append-only JSON line per session it ever started, under the CLI's own session id, saying how (`new`, `fork` with its `parent`, `resume`) and for whom (the asking Walnut's data dir as `home`, and the `task`). So a session started by ANY Walnut instance on that host (prod, a dev server, an ephemeral test server whose own database is gone) is skipped even when this server holds no record of it, and a removal names who started it. The file stays on its host (git-sync ignores `local/`); at startup the daemon folds older records into it (the per-id marker files it replaced, and its streams captures). Text rules back it up for transcripts older than any record: a programmatic fork (its first message predates earlier lines, copied history), or a Walnut envelope in a user turn (the side-thread cache warm-up, the output-mode reminder) |
 | Sessions with no real reply | Never, when the whole transcript was read: a probe or a first turn that only errored has nothing to adopt |
 | Subagent sidechains | Never |
 | SDK runs under temp directories | Never; a `cli` run in a temp dir needs an explicit rule |

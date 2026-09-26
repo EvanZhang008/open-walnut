@@ -17,7 +17,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { REMOTE_IMAGES_DIR } from '../constants.js'
+import { REMOTE_IMAGES_DIR, WALNUT_HOME } from '../constants.js'
 import {
   writeMirrorSidecar, backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored,
   fetchRecentlyMissing, noteFetchMissing, noteFetchFound, isNotFoundReply,
@@ -230,6 +230,9 @@ export class RemoteSessionManager implements SessionManager {
       // queued batch). Spread so an absent uuid leaves the payload byte-identical
       // to what every older daemon has always received.
       ...(opts.uuid ? { uuid: opts.uuid } : {}),
+      // Which Walnut asked, for which task: recorded in the host's spawn journal
+      // (daemon-standalone.ts). Older daemons ignore the key.
+      origin: { home: WALNUT_HOME, ...(opts.taskId ? { task: opts.taskId } : {}) },
     }
 
     let result: Record<string, unknown>

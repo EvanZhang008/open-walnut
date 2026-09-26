@@ -23,6 +23,8 @@ import zlib from 'node:zlib'
 const tmpBase = path.join(os.tmpdir(), `walnut-pw-${Date.now()}`)
 process.env.OPEN_WALNUT_HOME = tmpBase
 process.env.WALNUT_DAEMON_DIR = path.join(tmpBase, 'daemon')
+// Mock CLIs leave no transcript in ~/.claude; keep their spawn-journal lines here.
+process.env.WALNUT_SPAWN_JOURNAL = path.join(tmpBase, 'spawn-journal.jsonl')
 process.env.WALNUT_STREAMS_DIR = path.join(tmpBase, 'daemon-streams')
 process.env.WALNUT_DISABLE_SEARCH = '1'
 // No unprompted model calls (auto-organize, project summaries) from the

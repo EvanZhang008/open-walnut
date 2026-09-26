@@ -661,6 +661,10 @@ session-requests.json
 # Quiet mode holds (src/core/quiet/quiet-state.ts): machine-local runtime state.
 # An LWW echo of another box's older holds would silence notifications here.
 quiet.json
+# Per-host records (src/providers/daemon-standalone.ts spawn journal: which
+# sessions THIS host's Walnut started). Each box keeps its own; an LWW merge of
+# another box's copy would drop this host's lines.
+/local/
 *.lock/
 *.lock
 
@@ -867,6 +871,8 @@ const EXTRA_IGNORE_PATTERNS = [
   'memory/**/*.bak.*', 'tmp/', 'time-tracking/outside/', '*.conflicted-*', '*.corrupt-*',
   // quiet.json: machine-local runtime state (see GITIGNORE_CONTENT), new in 2026-09.
   'quiet.json',
+  // /local/: per-host records such as the spawn journal (see GITIGNORE_CONTENT), new in 2026-09.
+  '/local/',
 ];
 
 /**

@@ -61,10 +61,24 @@ export interface ExternalSessionCandidate {
    * answer without the key comes from a scanner that predates the rule.
    */
   notExternal?: NotExternalReason | null
+  /** Set by describe with 'walnut-spawned': the spawn journal's line for it. */
+  spawnedBy?: SpawnJournalEntry
+}
+
+/** What the reader keeps of one spawn-journal line (daemon appendSpawnJournal). */
+export interface SpawnJournalEntry {
+  /** new | fork | resume | backfill (an id folded in from an older record). */
+  kind?: string
+  at?: string
+  /** A fork's source session. */
+  parent?: string
+  /** The asking Walnut's data dir: prod, a dev server, an ephemeral test server. */
+  home?: string
+  task?: string
 }
 
 /**
- * 'walnut-spawned': the id is in this host's spawn ledger — a daemon on this
+ * 'walnut-spawned': the id is in this host's spawn journal — a daemon on this
  * host started that CLI for some Walnut instance (prod, dev, or a test server
  * whose own DB is gone), so no transcript reading is needed at all.
  * 'fork': a programmatic fork (btw side thread, standby prewarm, chat-lane or
@@ -85,6 +99,8 @@ export interface ScanExternalSessionsOptions {
   excludedCwds?: string[]
   /** Test seam: override ~. */
   homeDir?: string
+  /** Test seam: override the spawn journal path. */
+  spawnJournal?: string
 }
 
 export interface ScanExternalSessionsResult {
@@ -140,18 +156,58 @@ export function isWalnutEnvelopeText(text: string): boolean {
 }
 
 /**
- * Session ids some Walnut instance on this host STARTED, read from two
- * daemon-written places under the scanned HOME (the HOME whose ~/.claude the
- * CLI writes into): the spawn ledger (one empty <sid> file per spawn,
- * daemon-core/standalone/source recordSpawnLedger) and the streams dir, whose
- * <sid>.jsonl files date back to before the ledger existed. This is the
- * authoritative "is it ours" answer — knownSessionIds only covers the ASKING
- * server's DB, while the ledger covers every instance that shares the host.
- * The text heuristics below it stay as the fallback for transcripts spawned
- * by daemons older than the ledger.
+ * Where this host's daemons journal every session they start: under the HOME
+ * whose ~/.claude the CLI writes into. WALNUT_SPAWN_JOURNAL relocates it (the
+ * test harness does). Keep in sync with SPAWN_JOURNAL in both daemon twins.
  */
-export function walnutSpawnedIds(homeDir: string): Set<string> {
-  const out = new Set<string>()
+export function spawnJournalPath(homeDir: string): string {
+  return process.env.WALNUT_SPAWN_JOURNAL || path.join(homeDir, '.open-walnut', 'local', 'spawn-journal.jsonl')
+}
+
+const JOURNAL_SID = /^[A-Za-z0-9_-]{1,128}$/
+
+/** Read and parse a spawn journal; a missing file is an empty map. */
+export function readSpawnJournal(file: string): Map<string, SpawnJournalEntry> {
+  let text = ''
+  try { text = fs.readFileSync(file, 'utf8') } catch { /* no journal yet */ }
+  return parseSpawnJournal(text)
+}
+
+/**
+ * One JSON line per session. The first line for an id wins (the original
+ * spawn); a torn or foreign line is skipped.
+ */
+export function parseSpawnJournal(text: string): Map<string, SpawnJournalEntry> {
+  const out = new Map<string, SpawnJournalEntry>()
+  const pick = (x: unknown) => (typeof x === 'string' && x ? x : undefined)
+  for (const line of text.split('\n')) {
+    if (!line) continue
+    let rec: Record<string, unknown>
+    try { rec = JSON.parse(line) } catch { continue }
+    const sid = rec && rec.sid
+    if (typeof sid !== 'string' || !JOURNAL_SID.test(sid) || out.has(sid)) continue
+    const entry: SpawnJournalEntry = {}
+    for (const key of ['kind', 'at', 'parent', 'home', 'task'] as const) {
+      const value = pick(rec[key])
+      if (value) entry[key] = value
+    }
+    out.set(sid, entry)
+  }
+  return out
+}
+
+/**
+ * Session ids some Walnut instance on this host STARTED, keyed to what the
+ * spawn journal says about each. This is the authoritative "is it ours"
+ * answer: knownSessionIds only covers the ASKING server's DB, while the
+ * journal covers every instance that shares the host. Two older records are
+ * read as a fallback, for a daemon that has not folded them in yet: the
+ * per-id marker files the journal replaced, and the streams dir, whose
+ * <sid>.jsonl captures predate both. The text heuristics below stay as the
+ * fallback for transcripts spawned before any of these existed.
+ */
+export function walnutSpawnedIds(homeDir: string, journalFile = spawnJournalPath(homeDir)): Map<string, SpawnJournalEntry> {
+  const out = readSpawnJournal(journalFile)
   const dirs = [
     path.join(homeDir, '.open-walnut', 'tmp', 'spawned-sessions'),
     path.join(homeDir, '.open-walnut', 'tmp', 'streams'),
@@ -160,10 +216,10 @@ export function walnutSpawnedIds(homeDir: string): Set<string> {
     let names: string[] = []
     try { names = fs.readdirSync(dir) } catch { continue }
     for (const name of names) {
-      // Ledger entries are bare ids; streams hold <sid>.jsonl plus .pipe/.pgid/
+      // Markers are bare ids; streams hold <sid>.jsonl plus .pipe/.pgid/
       // .jsonl.err siblings, which the dot filter drops.
-      if (name.endsWith('.jsonl')) out.add(name.slice(0, -6))
-      else if (!name.includes('.')) out.add(name)
+      const sid = name.endsWith('.jsonl') ? name.slice(0, -6) : name.includes('.') ? '' : name
+      if (sid && !out.has(sid)) out.set(sid, { kind: 'backfill' })
     }
   }
   return out
@@ -726,6 +782,8 @@ export interface DescribeExternalSessionsOptions {
   activityOnly?: boolean
   /** Test seam: override ~. */
   homeDir?: string
+  /** Test seam: override the spawn journal path. */
+  spawnJournal?: string
 }
 
 /** One located transcript's last activity (activityOnly answers). */
@@ -796,7 +854,7 @@ export function describeExternalSessions(
   const candidates: ExternalSessionCandidate[] = []
   const activity: ExternalSessionActivity[] = []
   if (ids.length === 0) return { candidates, activity }
-  const spawned = walnutSpawnedIds(homeDir)
+  const spawned = walnutSpawnedIds(homeDir, options.spawnJournal)
   for (const [sessionId, hit] of locateTranscripts(homeDir, ids)) {
     if (options.activityOnly) {
       activity.push({ sessionId, lastActiveAt: new Date(hit.file.mtimeMs).toISOString() })
@@ -809,10 +867,12 @@ export function describeExternalSessions(
       try { stat = fs.statSync(hit.file.filePath) } catch { continue }
       const candidate = claudeCandidate(sessionId, hit.file.filePath, stat, head)
       candidate.notExternal = spawned.has(sessionId) ? 'walnut-spawned' : (claudeNotExternal(head) ?? null)
+      if (spawned.has(sessionId)) candidate.spawnedBy = spawned.get(sessionId)
       candidates.push(candidate)
     } else {
       const candidate = codexCandidate(sessionId, hit.file, parseCodexHead(hit.file.filePath, hit.file.size))
       candidate.notExternal = spawned.has(sessionId) ? 'walnut-spawned' : null
+      if (spawned.has(sessionId)) candidate.spawnedBy = spawned.get(sessionId)
       candidates.push(candidate)
     }
   }
@@ -829,7 +889,7 @@ export function scanExternalSessions(
   const homeDir = options.homeDir ?? os.homedir()
   const cutoff = Date.now() - Math.max(0, options.sinceMs)
   const known = new Set(options.knownSessionIds ?? [])
-  for (const sid of walnutSpawnedIds(homeDir)) known.add(sid)
+  for (const sid of walnutSpawnedIds(homeDir, options.spawnJournal).keys()) known.add(sid)
   const candidates: ExternalSessionCandidate[] = []
 
   let scanned = 0

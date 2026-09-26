@@ -661,7 +661,31 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     expect(byId).toEqual({ 'fork-2': 'walnut-driven', 'probe-2': 'no-reply', 'real-2': null })
   })
 
-  it('skips any id in the spawn ledger or the streams dir, whatever the transcript says', () => {
+  it('skips any id in the spawn journal and says which Walnut started it', () => {
+    const journal = path.join(home, 'journal', 'spawn-journal.jsonl')
+    fs.mkdirSync(path.dirname(journal), { recursive: true })
+    fs.writeFileSync(journal, [
+      JSON.stringify({ v: 1, sid: 'jr-1', at: '2026-09-26T00:00:00.000Z', kind: 'fork', parent: 'p-1', cwd: '/w', home: '/tmp/eph', task: 't-1' }),
+      // A later line for the same id never overwrites the original spawn.
+      JSON.stringify({ v: 1, sid: 'jr-1', kind: 'backfill' }),
+      'not json',
+      JSON.stringify({ v: 1, sid: '../escape', kind: 'new' }),
+      // A torn tail from a writer that died mid-line.
+      '{"v":1,"sid":"jr-2","ki',
+    ].join('\n'))
+    writeJsonl(file('jr-1'), [user('jr-1', 'fix the login bug', { entrypoint: 'cli' }), reply()])
+    writeJsonl(file('jr-2'), [user('jr-2', 'add retries', { entrypoint: 'cli' }), reply()])
+    expect(scan({ spawnJournal: journal }).candidates.map((c) => c.sessionId))
+      .toEqual(['jr-2'])
+    const byId = Object.fromEntries(describeExternalSessions({ sessionIds: ['jr-1', 'jr-2'], homeDir: home, spawnJournal: journal })
+      .candidates.map((c) => [c.sessionId, [c.notExternal, c.spawnedBy]]))
+    expect(byId).toEqual({
+      'jr-1': ['walnut-spawned', { kind: 'fork', at: '2026-09-26T00:00:00.000Z', parent: 'p-1', home: '/tmp/eph', task: 't-1' }],
+      'jr-2': [null, undefined],
+    })
+  })
+
+  it('skips any id in the legacy marker dir or the streams dir, whatever the transcript says', () => {
     // A daemon on this host started these CLIs for SOME Walnut instance —
     // maybe not the asking server (dev/test server, records gone).
     fs.mkdirSync(path.join(home, '.open-walnut', 'tmp', 'spawned-sessions'), { recursive: true })
