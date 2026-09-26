@@ -33,7 +33,7 @@ import { computeContentHash } from '../../utils/file-ops.js'
 import { sendV1Error } from './v1-control-relay.js'
 // ONE source of truth for which extensions ride the raw byte lane (see the
 // note next to its use below — a copied table drifted and corrupted bytes).
-import { RAW_INLINE_MIME } from './file-content.js'
+import { RAW_INLINE_MIME, rawTextMime } from './file-content.js'
 
 /** Primary box's daemon always registers under this bridge alias. */
 const PRIMARY_BRIDGE_ALIAS = '__local__'
@@ -298,9 +298,7 @@ export async function serveCloudFileContent(req: Request, res: Response): Promis
       res.end(buf)
       return
     }
-    const ctype = ext === 'htm' || ext === 'html' ? 'text/html; charset=utf-8'
-      : ext === 'svg' ? 'image/svg+xml'
-      : 'text/plain; charset=utf-8'
+    const ctype = rawTextMime(ext)
     res.type(ctype).send(buf.toString('utf-8'))
     return
   }

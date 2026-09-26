@@ -205,3 +205,23 @@ test('navigation the click handler cannot see (a script) offers a way back and a
   await explorer.getByRole('button', { name: 'Back to the previously viewed file' }).click()
   await expect(selectedRow(explorer, 'summary.html')).toHaveCount(1, { timeout: 10_000 })
 })
+
+test('a page styled by relatively linked CSS and scripts renders styled, not as bare HTML', async ({ page }) => {
+  // The 2026-09-26 report: a design page linking shared/base.css showed up as
+  // unstyled HTML, because the route answered .css and .js as text/plain and the
+  // browser drops a stylesheet of that type (a module script fails outright).
+  const panel = await openSessionPanel(page)
+  const explorer = await openFiles(panel)
+  await openSummary(page, explorer)
+  const styledRow = explorer.locator('.sfe-name', { hasText: 'styled.html' })
+  await expect(styledRow).toBeVisible({ timeout: 10_000 })
+  await styledRow.click()
+  const inner = page.frameLocator('iframe.fv-html-preview')
+  await expect(inner.locator('h1')).toHaveText('Styled report', { timeout: 10_000 })
+  // Both stylesheets, the classic script and the module script all took effect.
+  await expect(inner.locator('h1')).toHaveCSS('color', 'rgb(200, 30, 90)')
+  await expect(inner.locator('body')).toHaveCSS('background-color', 'rgb(225, 240, 255)')
+  await expect(inner.locator('html')).toHaveAttribute('data-classic', 'ran')
+  await expect(inner.locator('html')).toHaveAttribute('data-module', 'ran')
+  await page.screenshot({ path: shot('styled-report') })
+})

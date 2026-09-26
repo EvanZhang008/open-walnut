@@ -1394,6 +1394,28 @@ await fs.writeFile(
       '',
     ].join('\n'),
   )
+  // A page whose look lives in RELATIVELY linked files (the 2026-09-26 report: the
+  // route answered .css/.js as text/plain, so the browser dropped the stylesheet
+  // and the page rendered as bare HTML). One asset per shape a real page uses:
+  // two stylesheets, a classic script and a module script.
+  await fs.mkdir(path.join(reportDir, 'assets'), { recursive: true })
+  await fs.writeFile(path.join(reportDir, 'assets', 'report.css'), 'h1 { color: rgb(200, 30, 90); }\n')
+  await fs.writeFile(path.join(reportDir, 'assets', 'theme.css'), 'body { background-color: rgb(225, 240, 255); }\n')
+  await fs.writeFile(path.join(reportDir, 'assets', 'report.js'), "document.documentElement.dataset.classic = 'ran';\n")
+  await fs.writeFile(path.join(reportDir, 'assets', 'mod.mjs'), "document.documentElement.dataset.module = 'ran';\n")
+  await fs.writeFile(
+    path.join(reportDir, 'styled.html'),
+    [
+      '<!doctype html>',
+      '<html><head><title>Styled report</title>',
+      '<link rel="stylesheet" href="assets/report.css">',
+      '<link rel="stylesheet" href="./assets/theme.css">',
+      '<script src="assets/report.js"></script>',
+      '<script type="module" src="assets/mod.mjs"></script>',
+      '</head><body><h1>Styled report</h1></body></html>',
+      '',
+    ].join('\n'),
+  )
 }
 // PDF fixture (file-preview-kinds.spec.ts): a minimal but STRUCTURALLY VALID
 // one-page PDF, so the browser's built-in viewer actually renders it instead of

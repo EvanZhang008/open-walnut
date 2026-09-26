@@ -46,7 +46,20 @@ beforeEach(async () => {
   await fs.writeFile(path.join(tmp, 'proj', 'img', 'diagram.png'), png)
   await fs.writeFile(path.join(tmp, 'shared.png'), png)
   await fs.writeFile(path.join(tmp, 'proj', 'odd name #1.txt'), 'odd\n')
+  // The assets a real design page links relatively (the 2026-09-26 report: a
+  // previewed page rendered as bare HTML because its stylesheet came back as
+  // text/plain and the browser dropped it).
+  await fs.mkdir(path.join(tmp, 'proj', 'shared'), { recursive: true })
+  await fs.writeFile(path.join(tmp, 'proj', 'shared', 'base.css'), 'body { color: rgb(1, 2, 3); }\n')
+  await fs.writeFile(path.join(tmp, 'proj', 'shared', 'engine.js'), 'window.ENGINE = 1;\n')
+  await fs.writeFile(path.join(tmp, 'proj', 'shared', 'mod.mjs'), 'export const x = 1;\n')
+  await fs.writeFile(path.join(tmp, 'proj', 'shared', 'data.json'), '{"a":1}\n')
+  await fs.writeFile(path.join(tmp, 'proj', 'shared', 'types.ts'), 'export type A = 1;\n')
+  await fs.writeFile(path.join(tmp, 'proj', 'shared', 'font.woff2'), WOFF2)
 })
+
+// A woff2 header plus bytes that are invalid UTF-8, so a text decode would mangle them.
+const WOFF2 = Buffer.from([0x77, 0x4f, 0x46, 0x32, 0x00, 0x01, 0x00, 0x00, 0xff, 0xfe, 0xc3, 0x28, 0x80])
 
 afterEach(async () => {
   await fs.rm(tmp, { recursive: true, force: true })
@@ -112,6 +125,35 @@ describe('GET /api/file-raw', () => {
     const { assertPathAllowed } = await import('../../../src/web/routes/file-content.js')
     expect(() => assertPathAllowed(pathFromRemainder('../etc/passwd'), undefined, 'read')).toThrow()
     expect(() => assertPathAllowed(pathFromRemainder('Users/../etc/passwd'), undefined, 'read')).toThrow()
+  })
+
+  it.each([
+    ['base.css', /^text\/css/],
+    ['engine.js', /^text\/javascript/],
+    ['mod.mjs', /^text\/javascript/],
+    ['data.json', /^application\/json/],
+  ])('serves a relatively linked %s with a type the browser will load', async (name, type) => {
+    // A browser drops a <link rel=stylesheet> answered with text/plain, and a
+    // <script type=module> fails outright on it.
+    const res = await request(createApp()).get(rawUrl(path.join(tmp, 'proj', 'shared', name)))
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toMatch(type)
+  })
+
+  it('leaves other source text as text/plain (.ts is TypeScript here, never video)', async () => {
+    const res = await request(createApp()).get(rawUrl(path.join(tmp, 'proj', 'shared', 'types.ts')))
+    expect(res.headers['content-type']).toMatch(/^text\/plain/)
+    expect(res.text).toBe('export type A = 1;\n')
+  })
+
+  it('serves a web font byte-exact, not through the text decoder', async () => {
+    const res = await request(createApp())
+      .get(rawUrl(path.join(tmp, 'proj', 'shared', 'font.woff2')))
+      .buffer(true)
+      .parse((r, cb) => { const chunks: Buffer[] = []; r.on('data', (c) => chunks.push(c)); r.on('end', () => cb(null, Buffer.concat(chunks))) })
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toMatch(/^font\/woff2/)
+    expect(res.body as Buffer).toEqual(WOFF2)
   })
 
   it('download=1 forces an attachment', async () => {

@@ -49,7 +49,9 @@ describe('office preview MIME parity', () => {
     const bridge = fs.readFileSync(
       path.join(ROOT, 'src/web/routes/file-content-bridge.ts'), 'utf-8',
     )
-    expect(bridge).toMatch(/import \{ RAW_INLINE_MIME \} from '\.\/file-content\.js'/)
+    expect(bridge).toMatch(/import \{ RAW_INLINE_MIME, rawTextMime \} from '\.\/file-content\.js'/)
     expect(bridge).not.toMatch(/const RAW_INLINE_MIME/)
+    // Same for the text types: a copied ternary kept serving CSS as text/plain.
+    expect(bridge).not.toMatch(/text\/plain; charset=utf-8'\s*\n\s*res\.type/)
   })
 })

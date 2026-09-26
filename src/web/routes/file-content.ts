@@ -123,6 +123,35 @@ export const RAW_INLINE_MIME: Record<string, string> = {
   heic: 'image/heic',
   tiff: 'image/tiff',
   tif: 'image/tiff',
+  // Web fonts a previewed page links relatively; a text decode would mangle them.
+  woff2: 'font/woff2',
+  woff: 'font/woff',
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+}
+
+/**
+ * Content types for the TEXT a previewed HTML page links relatively. Anything else
+ * is text/plain, and a browser drops a stylesheet served as text/plain (a module
+ * script fails on it outright): a design page linking `shared/base.css` rendered as
+ * bare HTML in the Files preview (2026-09-26). `.ts` is deliberately absent, since
+ * here it is TypeScript, not an MPEG transport stream.
+ */
+const RAW_TEXT_MIME: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  htm: 'text/html; charset=utf-8',
+  svg: 'image/svg+xml',
+  css: 'text/css; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  cjs: 'text/javascript; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  map: 'application/json; charset=utf-8',
+}
+
+/** Shared with the cloud bridge relay so both edges answer the same type. */
+export function rawTextMime(ext: string): string {
+  return Object.hasOwn(RAW_TEXT_MIME, ext) ? RAW_TEXT_MIME[ext]! : 'text/plain; charset=utf-8'
 }
 
 /** Per-write chunk when streaming remote bytes (matches DaemonFileReader.CHUNK_SIZE —
@@ -893,9 +922,7 @@ export async function serveRawFileContent(
     res.status(404).type('text/plain').send('File not found')
     return
   }
-  const ctype = ext === 'htm' || ext === 'html' ? 'text/html; charset=utf-8'
-    : ext === 'svg' ? 'image/svg+xml'
-    : 'text/plain; charset=utf-8'
+  const ctype = rawTextMime(ext)
   // The doc runs with the server's origin (web: iframe sandbox allow-scripts +
   // allow-same-origin; iOS: WKWebView on a non-persistent data store). Acceptable
   // for a personal tool serving files the user explicitly opened; no
