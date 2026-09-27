@@ -31,7 +31,17 @@ async function openWorkflow(page: Page, sessionId = SESSION_ID, taskId = TASK_ID
   await expect(panel.locator('.wf-card-count')).toContainText('106/107 agents done', { timeout: 30_000 })
   await panel.locator('.wf-card-fullscreen').click()
   await expect(panel.locator('.wf-card')).toHaveClass(/open-walnut-fullscreen/)
+  await expectSheetInsideWindow(page, panel.locator('.wf-card'))
   return panel
+}
+
+/** A fullscreen sheet sits 2.5vh from the top and ends inside the window. */
+async function expectSheetInsideWindow(page: Page, sheet: ReturnType<Page['locator']>) {
+  const vh = page.viewportSize()!.height
+  await expect.poll(async () => {
+    const box = (await sheet.boundingBox())!
+    return Math.abs(box.y - vh * 0.025) <= 2 && box.y + box.height <= vh + 0.5
+  }, { message: 'fullscreen sheet inside the window' }).toBe(true)
 }
 
 /** Keep a handle on the app's /ws socket so a test can deliver a live ledger event. */
@@ -61,6 +71,9 @@ function shellTask(i: number, status: string) {
 
 test.describe('Workflow overview at real fan-out density', () => {
   test.setTimeout(120_000)
+  // The fixture server outlives a test (repeat runs reuse it): leave its disk as found.
+  const writtenFiles: string[] = []
+  test.afterEach(async () => { await Promise.all(writtenFiles.splice(0).map(f => fs.rm(f, { force: true }))) })
 
   test('the real manifest identifies the failure without a 107-cell diagram', async ({ page, request }) => {
     const response = await request.get(`/api/sessions/${SESSION_ID}/workflow`)
@@ -126,6 +139,15 @@ test.describe('Workflow overview at real fan-out density', () => {
     const titleBox = await narrowTitle.boundingBox()
     const headerBox = await card.locator('.wf-card-header').boundingBox()
     expect(titleBox && headerBox && titleBox.x + titleBox.width <= headerBox.x + headerBox.width).toBe(true)
+    // A two-column layout leaves the card ~300px: the name keeps its room, the
+    // header tallies drop their optional parts before the counts are cut.
+    await card.evaluate(el => { (el as HTMLElement).style.width = '300px' })
+    await expect.poll(() => visibleText(card.locator('.wf-card-title'))).toBe('deep-research')
+    await expect.poll(() => visibleText(card.locator('.wf-script-toggle'))).toBe('Script')
+    await expect(card.locator('.wf-card-failed')).toBeVisible()
+    await expectNothingClipped(card.locator('.wf-card-header-meta'), 'workflow header at 300px')
+    await card.evaluate(el => { (el as HTMLElement).style.width = '' })
+    await expect.poll(() => visibleText(card.locator('.wf-card-title'))).toBe('Workflow: deep-research')
     await page.reload()
     const reopened = page.locator(PANEL)
     await expect.poll(() => visibleText(reopened.locator('.wf-card-count')), { timeout: 30_000 }).toBe('106/107 agents done · 1 failed')
@@ -134,6 +156,7 @@ test.describe('Workflow overview at real fan-out density', () => {
     await expect(reopened.locator('.wf-card-header .wf-card-count')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
     await reopened.locator('.wf-card-fullscreen').click()
     await expect(reopened.locator('.wf-gnode-failed')).toHaveCount(1)
+    await expectSheetInsideWindow(page, reopened.locator('.wf-card'))
     await page.evaluate(() => {
       localStorage.setItem('open-walnut-theme', 'dark')
       document.documentElement.setAttribute('data-theme', 'dark')
@@ -160,7 +183,9 @@ test.describe('Workflow overview at real fan-out density', () => {
     const fixtureHome = path.dirname(path.dirname(session.cwd))
     expect(path.basename(fixtureHome)).toMatch(/^walnut-pw-\d+$/)
     const dir = path.join(fixtureHome, '.claude', 'projects', session.cwd.replace(/[^a-zA-Z0-9]/g, '-'), sessionId, 'workflows')
-    await fs.writeFile(path.join(dir, 'wf_follow-up-run.json'), JSON.stringify({
+    const followUp = path.join(dir, 'wf_follow-up-run.json')
+    writtenFiles.push(followUp)
+    await fs.writeFile(followUp, JSON.stringify({
       runId: 'wf_follow-up-run', workflowName: 'follow-up-review', summary: 'Check the last unresolved item.',
       script: 'export const meta = { name: "follow-up-review" }', startTime: Date.now() + 1_000,
       workflowProgress: [
@@ -214,7 +239,28 @@ async function expectOneTidyLine(bar: ReturnType<Page['locator']>) {
   expect(open.cls).toBe('wf-card-open')
   expect(geometry.right - open.right).toBeGreaterThanOrEqual(10)
   expect(geometry.right - open.right).toBeLessThanOrEqual(14)
+  // Whatever is still shown keeps the fixed left-to-right order.
+  const canonical = ['wf-card-state', 'wf-card-title', 'wf-card-count', 'wf-card-meter', 'wf-card-tokens', 'wf-card-open']
+  const order = geometry.parts.map(p => p.cls.split(' ')[0])
+  expect(order.filter(c => canonical.includes(c))).toEqual(canonical.filter(c => order.includes(c)))
+  for (const required of ['wf-card-state', 'wf-card-title', 'wf-card-count', 'wf-card-open']) expect(order).toContain(required)
   return geometry
+}
+
+/** Nothing the user reads is cut: the title, the running and failed counts, and the tally. */
+async function expectNothingClipped(root: ReturnType<Page['locator']>, label: string) {
+  const clipped = await root.evaluate(el => {
+    const count = el.querySelector('.wf-card-count') as HTMLElement
+    const c = count.getBoundingClientRect()
+    return ['.wf-card-title', '.wf-card-running', '.wf-card-failed', '.wf-card-count-done', '.wf-card-count-short'].flatMap(sel => {
+      const part = el.querySelector(sel) as HTMLElement | null
+      if (!part || part.getClientRects().length === 0) return []
+      const r = part.getBoundingClientRect()
+      const cut = part.scrollWidth > part.clientWidth + 1 || (sel !== '.wf-card-title' && r.right > c.right + 0.5)
+      return cut ? [sel] : []
+    })
+  })
+  expect(clipped, label).toEqual([])
 }
 
 async function shootBar(page: Page, bar: ReturnType<Page['locator']>, name: string) {
@@ -275,14 +321,34 @@ test.describe('Background bar', () => {
     await expect(bar.locator('.wf-card-tokens')).toHaveText('61k tok')
     await expect(bar.locator('.wf-card-failed')).toContainText('1 failed')
     await expect(bar.locator('.wf-card-failed')).toHaveCSS('color', await bar.locator('.wf-card-meter-failed').evaluate(el => getComputedStyle(el).backgroundColor))
+    await expectOneTidyLine(bar)
+    await expectNothingClipped(bar, 'mixed at column width')
+    // Wide enough to show every part, the meter carries the failed share next to the tokens.
+    await bar.evaluate(el => { (el as HTMLElement).style.width = '760px' })
+    await expect(bar.locator('.wf-card-meter')).toBeVisible()
     const mixed = await expectOneTidyLine(bar)
-    const order = mixed.parts.map(p => p.cls.split(' ')[0])
-    expect(order).toEqual(['wf-card-state', 'wf-card-title', 'wf-card-count', 'wf-card-meter', 'wf-card-tokens', 'wf-card-open'])
-    const meter = mixed.parts[3], tokens = mixed.parts[4]
+    const meter = mixed.parts.find(p => p.cls === 'wf-card-meter')!, tokens = mixed.parts.find(p => p.cls === 'wf-card-tokens')!
     expect(tokens.left - meter.right).toBeLessThanOrEqual(12)
     const failedShare = await bar.locator('.wf-card-meter-failed').evaluate(el => el.getBoundingClientRect().width / el.parentElement!.getBoundingClientRect().width)
     expect(failedShare).toBeCloseTo(1 / 5, 2)
     await shootBar(page, bar, 'background-bar-mixed')
+    await bar.evaluate(el => { (el as HTMLElement).style.width = '' })
+
+    // The reported density: 2 agents beside 150 commands, one failed. The optional
+    // parts give way before the tally is cut.
+    await emitBackgroundTasks(page, {
+      sessionId, inFlight: 3, phases: [], agents: [],
+      tasks: [
+        { taskId: 'agent-a', taskType: 'local_agent', status: 'running', description: 'Map every caller', tokens: 96_200 },
+        { taskId: 'agent-b', taskType: 'local_agent', status: 'running', description: 'Draft the notes', tokens: 94_100 },
+        ...Array.from({ length: 150 }, (_, i) => shellTask(i, i === 40 ? 'failed' : i === 149 ? 'running' : 'completed')),
+      ],
+    })
+    await expect.poll(() => visibleText(bar.locator('.wf-card-running')), { timeout: 30_000 }).toBe('· 3 running')
+    await expect(bar.locator('.wf-card-failed')).toBeVisible()
+    await expectOneTidyLine(bar)
+    await expectNothingClipped(bar, 'dense at column width')
+    await shootBar(page, bar, 'background-bar-dense')
 
     // Everything settles: a check, no pulse, the full meter.
     await emitBackgroundTasks(page, {
@@ -325,17 +391,11 @@ test.describe('Background bar', () => {
     await expect(bar.locator('.wf-card-title')).toHaveCSS('color', darkInk.color)
     await shootBar(page, bar, 'background-bar-dark')
 
-    // Narrow column: the meter and token count yield first; the title and the
-    // running and failed counts never truncate, and the line never wraps.
-    // Widths are the bar's border box; the container query thresholds read its
-    // content box (24px padding + 2px border narrower).
-    const narrowText: Record<number, [string, string]> = {
-      640: ['Agents 0/1 · Tasks 1/2 · 1 running · 1 failed', 'View all ›'],
-      440: ['1/3 done · 1 running · 1 failed', 'View all ›'],
-      380: ['1/3 · 1 running · 1 failed', '›'],
-      300: ['1/3 · 1 running · 1 failed', '›'],
-    }
-    for (const width of [640, 440, 380, 300]) {
+    // Narrowing column: detail goes in one order (meter, tokens, per-kind tally,
+    // words) and never comes back as the bar narrows; the title and the running
+    // and failed counts never truncate, and the line never wraps.
+    let previousLevel = -1
+    for (const width of [760, 640, 440, 380, 300]) {
       await bar.evaluate((el, width) => { (el as HTMLElement).style.width = `${width}px` }, width)
       await emitBackgroundTasks(page, {
         sessionId, inFlight: 1, phases: [], agents: [],
@@ -345,26 +405,44 @@ test.describe('Background bar', () => {
         ],
       })
       await expect(bar.locator('.wf-card-failed')).toBeVisible()
-      await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe(narrowText[width][0])
-      await expect.poll(() => visibleText(bar.locator('.wf-card-open')), { timeout: 30_000 }).toBe(narrowText[width][1])
-      if (width <= 480) {
-        await expect(bar.locator('.wf-card-meter')).toBeHidden()
-        await expect(bar.locator('.wf-card-tokens')).toBeHidden()
-      } else {
-        await expect(bar.locator('.wf-card-meter')).toBeVisible()
-        await expect(bar.locator('.wf-card-tokens')).toBeVisible()
-      }
-      const clipped = await bar.evaluate(el => ['.wf-card-title', '.wf-card-running', '.wf-card-failed'].map(sel => {
-        const part = el.querySelector(sel) as HTMLElement
-        const count = el.querySelector('.wf-card-count') as HTMLElement
-        const r = part.getBoundingClientRect(), c = count.getBoundingClientRect()
-        const cut = part.scrollWidth > part.clientWidth + 1 || (sel !== '.wf-card-title' && r.right > c.right + 0.5)
-        return cut ? sel : null
-      }).filter(Boolean))
-      expect(clipped, `clipped at ${width}px`).toEqual([])
+      await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toMatch(/^(Agents 0\/1 · Tasks 1\/2|1\/3 done|1\/3) · 1 running · 1 failed$/)
+      const level = Number(await bar.getAttribute('data-shed'))
+      expect(level, `shed level at ${width}px`).toBeGreaterThanOrEqual(previousLevel)
+      previousLevel = level
+      await expect(bar.locator('.wf-card-meter')).toBeVisible({ visible: level < 1 })
+      await expect(bar.locator('.wf-card-tokens')).toBeVisible({ visible: level < 2 })
+      await expect(bar.locator('.wf-card-open-label')).toBeVisible({ visible: level < 4 })
+      await expectNothingClipped(bar, `at ${width}px`)
       await expectOneTidyLine(bar)
       await shootBar(page, bar, `background-bar-${width}px`)
     }
+    expect(Number(await bar.getAttribute('data-shed')), 'the narrowest bar sheds everything optional').toBe(4)
+    await expect.poll(() => visibleText(bar.locator('.wf-card-count'))).toBe('1/3 · 1 running · 1 failed')
+
+    // The reported density at 300px: even '148/152' does not fit beside the running
+    // and failed counts, so the total goes and they keep the line, uncut.
+    await emitBackgroundTasks(page, {
+      sessionId, inFlight: 3, phases: [], agents: [],
+      tasks: [
+        { taskId: 'agent-a', taskType: 'local_agent', status: 'running', description: 'Map every caller', tokens: 96_200 },
+        { taskId: 'agent-b', taskType: 'local_agent', status: 'running', description: 'Draft the notes', tokens: 94_100 },
+        ...Array.from({ length: 150 }, (_, i) => shellTask(i, i === 40 ? 'failed' : i === 149 ? 'running' : 'completed')),
+      ],
+    })
+    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('3 running · 1 failed')
+    expect(await bar.getAttribute('data-shed')).toBe('5')
+    await expectNothingClipped(bar, 'dense at 300px')
+    await expectOneTidyLine(bar)
+    await shootBar(page, bar, 'background-bar-dense-300px')
+    // With nothing running or failed the total is all the line says, so it stays.
+    await emitBackgroundTasks(page, {
+      sessionId, inFlight: 0, phases: [], agents: [],
+      tasks: Array.from({ length: 150 }, (_, i) => shellTask(i, 'completed')),
+    })
+    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toMatch(/^150\/150( tasks done| done)?$/)
+    await expectNothingClipped(bar, 'all done at 300px')
+    await bar.evaluate(el => { (el as HTMLElement).style.width = '760px' })
+    await expect.poll(() => bar.getAttribute('data-shed'), { message: 'widening brings the detail back' }).toBe('0')
     expect(wide.width).toBeGreaterThan(420)
     expect(errors).toEqual([])
   })

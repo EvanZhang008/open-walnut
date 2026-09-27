@@ -14,6 +14,7 @@ import { WorkflowTranscriptModal, type TranscriptTarget } from './WorkflowTransc
 import { openBackgroundPanel } from '@/stores/background-panel-store';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { ICON_EXPAND, ICON_COLLAPSE } from '../common/Icons';
+import { useShedToFit } from './shed-to-fit';
 
 export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { sessionId: string }) {
   const { workflowName, workflowDescription, scriptSource, inFlight, tasks, phases, agents } = useBackgroundTasks(sessionId);
@@ -29,6 +30,11 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
   const [transcriptTarget, setTranscriptTarget] = useState<TranscriptTarget | null>(null);
   // Fullscreen keeps the same panel mounted so selection and scrolling survive.
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
+  // The bar and the header tallies drop meter, tokens, words, then the total until they fit.
+  const [barEl, setBarEl] = useState<HTMLElement | null>(null);
+  const [metaEl, setMetaEl] = useState<HTMLElement | null>(null);
+  useShedToFit(barEl, 5);
+  useShedToFit(metaEl, 5);
 
   const isWorkflow = agents.length > 0;
   const workflowKey = `${sessionId}:${workflowName ?? ''}:${scriptSource ?? ''}`;
@@ -65,9 +71,9 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
     : tasks.reduce((s, t) => s + (t.tokens ?? 0), 0);
 
   const counts = (
-    <span className="wf-card-count">
+    <span className="wf-card-count" data-shed-watch>
       {/* Only the completion tally may be cut short; running and failed always show. */}
-      <span className="wf-card-count-done">
+      <span className="wf-card-count-done" data-shed-watch>
         {isWorkflow || agentTasks.length === 0 || plainTasks.length === 0 ? (
           <>{done}/{total}{isWorkflow || agentTasks.length > 0 ? ' agents' : ' tasks'} done</>
         ) : (
@@ -79,9 +85,12 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
           </>
         )}
       </span>
-      <span className="wf-card-count-short">{done}/{total}<span className="wf-card-count-word"> done</span></span>
-      {running > 0 && <span className="wf-card-running"> · {running} running</span>}
-      {failed > 0 && <span className="wf-card-failed"> · {failed} failed</span>}
+      {/* Last to go, and only when a running or failed count is left to carry the line. */}
+      <span className={`wf-card-count-short${running > 0 || failed > 0 ? ' wf-card-count-short--optional' : ''}`} data-shed-watch>
+        {done}/{total}<span className="wf-card-count-word"> done</span>
+      </span>
+      {running > 0 && <span className="wf-card-running"><span className="wf-card-sep"> · </span>{running} running</span>}
+      {failed > 0 && <span className="wf-card-failed"><span className="wf-card-sep"> · </span>{failed} failed</span>}
     </span>
   );
   const state = running > 0 ? 'running' : failed > 0 ? 'failed' : done === total ? 'done' : 'pending';
@@ -102,6 +111,7 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
     // caret, no in-place list — the panel is where agents and commands are read.
     return (
       <button
+        ref={setBarEl}
         className={`wf-card wf-card--bar wf-card--${state}`}
         onClick={() => openBackgroundPanel(sessionId)}
         title="Open background tasks"
@@ -134,18 +144,19 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
           <span className="wf-card-caret">{collapsed ? '▸' : '▾'}</span>
           {stateIcon}
           <span className="wf-card-title" title={workflowDescription}>
-            {workflowName ? `Workflow: ${workflowName}` : 'Background'}
+            {workflowName ? <><span className="wf-card-title-kind">Workflow: </span>{workflowName}</> : 'Background'}
           </span>
         </button>
-        <div className="wf-card-header-meta">
+        <div className="wf-card-header-meta" ref={setMetaEl}>
           {counts}
           {meter}
           {totalTokens > 0 && <span className="wf-card-tokens">{fmtTokens(totalTokens)} tok</span>}
         </div>
         <div className="wf-card-header-actions">
           {scriptSource && (
-            <button className="wf-script-toggle" onClick={() => setShowScript(s => !s)} title="View the generated workflow script">
-              {showScript ? 'Hide script' : 'View script'}
+            <button className="wf-script-toggle" onClick={() => setShowScript(s => !s)} title="View the generated workflow script" aria-pressed={showScript}>
+              <span className="wf-script-label">{showScript ? 'Hide script' : 'View script'}</span>
+              <span className="wf-script-label-short">Script</span>
             </button>
           )}
           <button

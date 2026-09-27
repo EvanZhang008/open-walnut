@@ -3717,15 +3717,17 @@ select {
 .wf-card-failed { color: var(--warning); }
 .wf-card-tokens { flex: none; font-size: 11px; color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wf-card--bar .wf-card-title { flex: none; }
-/* Narrow columns shed detail in a fixed order: meter and tokens, then the
-   per-kind tally, then the words; the running and failed counts always stay. */
-@container (max-width: 480px) {
-  .wf-card--bar .wf-card-meter, .wf-card--bar .wf-card-tokens, .wf-card--bar .wf-card-count-done { display: none; }
-  .wf-card--bar .wf-card-count-short { display: block; }
-}
-@container (max-width: 360px) {
-  .wf-card--bar .wf-card-count-word, .wf-card--bar .wf-card-open-label { display: none; }
-}
+/* When the line does not fit, detail goes in a fixed order (useShedToFit sets
+   the level): 1 the meter, 2 the tokens, 3 the per-kind tally becomes one
+   total, 4 the words, 5 the total itself when a running or failed count is
+   left. The running and failed counts always stay. */
+:is(.wf-card--bar, .wf-card-header-meta):is([data-shed="1"], [data-shed="2"], [data-shed="3"], [data-shed="4"], [data-shed="5"]) > .wf-card-meter,
+:is(.wf-card--bar, .wf-card-header-meta):is([data-shed="2"], [data-shed="3"], [data-shed="4"], [data-shed="5"]) > .wf-card-tokens,
+:is(.wf-card--bar, .wf-card-header-meta):is([data-shed="3"], [data-shed="4"], [data-shed="5"]) .wf-card-count-done,
+:is(.wf-card--bar, .wf-card-header-meta):is([data-shed="4"], [data-shed="5"]) :is(.wf-card-count-word, .wf-card-open-label) { display: none; }
+:is(.wf-card--bar, .wf-card-header-meta):is([data-shed="3"], [data-shed="4"]) .wf-card-count-short,
+:is(.wf-card--bar, .wf-card-header-meta)[data-shed="5"] .wf-card-count-short:not(.wf-card-count-short--optional) { display: block; }
+:is(.wf-card--bar, .wf-card-header-meta)[data-shed="5"] .wf-card-count-short--optional + * > .wf-card-sep { display: none; }
 /* Full-screen toggle — small icon button, mirrors the session panel's expand. */
 .wf-card-fullscreen {
   display: flex;
@@ -3753,6 +3755,11 @@ select {
   .wf-card-header .wf-card-title { overflow: hidden; text-overflow: ellipsis; }
   .wf-card-header-actions { grid-column: 2; grid-row: 1; }
   .wf-card-header-meta { grid-column: 1 / -1; grid-row: 2; }
+}
+.wf-script-label-short { display: none; }
+@container (max-width: 420px) {
+  .wf-card-title-kind, .wf-script-label { display: none; }
+  .wf-script-label-short { display: inline; }
 }
 
 /* Full-screen panel: fill the promoted 95vw x 95vh container; the task list must
@@ -9338,7 +9345,10 @@ body.walnut-dragging {
   top: 2.5vh;
   left: 0;
   right: 0;
-  margin: 0 auto;
+  /* A promoted element keeps its flow rules; a sheet must drop their margins
+     (the panel body pushes its first child below the header, which shoved a
+     fullscreen workflow card down and off the bottom of the window). */
+  margin: 0 auto !important;
   width: 95vw;
   height: 95vh;
   max-width: 1400px;
