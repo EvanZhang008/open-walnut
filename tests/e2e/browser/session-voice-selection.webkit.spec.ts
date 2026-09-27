@@ -7,8 +7,8 @@
  * sent from the page exactly as the composer sends it, followed by the focus move that
  * collapses the selection. What is pinned is the pill's LIFECYCLE around that:
  *
- *  · it survives the collapse, painted, with Ask still working — and Ask, not the
- *    landing, is what makes the "asking about" chip;
+ *  · it survives the collapse, painted, with Ask still working, and Ask, not the
+ *    landing, is what opens the question page;
  *  · it lets go on Escape, on a press elsewhere in the timeline, on a press into
  *    ANOTHER panel's composer, and on a new selection (which it follows);
  *  · it does NOT let go on a press into this panel's composer (writing the question)
@@ -23,8 +23,8 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import {
-  PHRASE, PHRASE2, SESSION_ID, heldPainted, highlightsSupported, openSession, requestHoldFromPage,
-  selectPassage, selectedText, shot, stubSttStatus, wheel,
+  PHRASE, PHRASE2, SESSION_ID, heldPainted, highlightsSupported, openSession, questionPage, questionQuote,
+  requestHoldFromPage, selectPassage, selectedText, shot, stubSttStatus, wheel,
 } from './voice-selection-helpers'
 
 test.use({ browserName: 'webkit' })
@@ -43,13 +43,12 @@ async function focusComposer(page: Page): Promise<void> {
 }
 
 test.describe('the held pill in the Mac app engine', () => {
-  test('a held passage survives the focus move, and Ask makes the chip', async ({ page }) => {
+  test('a held passage survives the focus move, and Ask opens the question', async ({ page }) => {
     test.setTimeout(90_000)
     await stubSttStatus(page)
     await page.goto('/')
     const panel = await openSession(page)
     const textarea = panel.locator('.chat-input-textarea').first()
-    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
     const pill = await selectPassage(page, panel)
     const painted = await highlightsSupported(page)
 
@@ -58,11 +57,11 @@ test.describe('the held pill in the Mac app engine', () => {
     await expect.poll(() => selectedText(page), 'focus collapsed the selection').toBe('')
     await expect.poll(() => page.evaluate(() => document.activeElement?.className ?? '')).toContain('chat-input-textarea')
 
-    // Held: still up, still painted, still offering Ask — and no chip was made for the user.
+    // Held: still up, still painted, still offering Ask, and no question was opened for the user.
     await expect(pill).toBeVisible()
     await expect(pill.locator('[data-testid="quote-ask-btn"]')).toBeVisible()
     if (painted) expect(await heldPainted(page), 'the passage is painted').toBe(true)
-    await expect(chip).toHaveCount(0)
+    await expect(questionPage(panel)).toHaveCount(0)
     await shot(page, 'wk-01-held-after-focus-move')
 
     // Writing the question keeps the hold; a keystroke also re-runs the pill's
@@ -71,15 +70,18 @@ test.describe('the held pill in the Mac app engine', () => {
     await expect(pill).toBeVisible()
     if (painted) expect(await heldPainted(page)).toBe(true)
 
+    // Ask opens the question page; its composer is its own (empty) draft, and the
+    // words typed at the top level wait there. Esc on the empty page goes back.
     await pill.locator('[data-testid="quote-ask-btn"]').click()
-    await expect(chip).toBeVisible()
-    await expect(chip).toContainText('rewrites the index')
+    await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
+    await expect(questionQuote(panel)).toContainText('rewrites the index')
     await expect(pill).toHaveCount(0)
     if (painted) expect(await heldPainted(page)).toBe(false)
+    await expect(textarea).toHaveValue('')
+    await shot(page, 'wk-02-ask-opened-the-question')
+    await page.keyboard.press('Escape')
+    await expect(questionPage(panel)).toHaveCount(0)
     await expect(textarea).toHaveValue('so what does')
-    await shot(page, 'wk-02-ask-made-the-chip')
-    await chip.locator('.thread-anchor-chip-clear').click()
-    await expect(chip).toHaveCount(0)
   })
 
   test('Escape lets go of a held passage', async ({ page }) => {
@@ -94,7 +96,7 @@ test.describe('the held pill in the Mac app engine', () => {
     await page.keyboard.press('Escape')
     await expect(pill).toHaveCount(0)
     expect(await heldPainted(page)).toBe(false)
-    await expect(panel.locator('[data-testid="thread-anchor-chip"]')).toHaveCount(0)
+    await expect(questionPage(panel)).toHaveCount(0)
   })
 
   test('a press elsewhere in the timeline lets go; a press into the composer or on the mic does not', async ({ page }) => {
@@ -148,9 +150,9 @@ test.describe('the held pill in the Mac app engine', () => {
     expect(await heldPainted(page)).toBe(false)
     expect(await selectedText(page)).toBe(PHRASE2)
     await pill.locator('[data-testid="quote-ask-btn"]').click()
-    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
-    await expect(chip).toContainText('only verifies checksums')
-    await chip.locator('.thread-anchor-chip-clear').click()
+    await expect(questionQuote(panel)).toContainText('only verifies checksums')
+    await page.keyboard.press('Escape')
+    await expect(questionPage(panel)).toHaveCount(0)
   })
 
   test('a scroll while held moves the pill with the words, and lets go once they leave the scroller', async ({ page }) => {
@@ -166,8 +168,16 @@ test.describe('the held pill in the Mac app engine', () => {
 
     // A short scroll: the passage is still on screen, so the pill follows it (this is
     // the held branch of the scroll handler, which has no live selection to read and
-    // must use the held Range instead).
-    await wheel(page, panel, -120)
+    // must use the held Range instead). Sized from the passage's room below it: the
+    // timeline is parked at its end, so the phrase can sit ~60px above the box's
+    // bottom edge, and a fixed 120px would carry it out (the dismiss case below).
+    const room = await page.evaluate((sid) => {
+      const box = document.querySelector(`.session-panel[data-session-id="${sid}"] .session-history`)!.getBoundingClientRect()
+      const hl = (CSS as unknown as { highlights?: Map<string, Iterable<Range>> }).highlights?.get('walnut-held-quote')
+      const r = hl ? [...hl][0]?.getBoundingClientRect() : undefined
+      return r ? Math.floor(box.bottom - r.bottom) : 120
+    }, SESSION_ID)
+    await wheel(page, panel, -Math.max(16, Math.min(120, room - 24)))
     await expect.poll(async () => (await pill.boundingBox())?.y ?? before.y).not.toBe(before.y)
     await expect(pill).toBeVisible()
     expect(await heldPainted(page)).toBe(true)

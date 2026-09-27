@@ -1030,7 +1030,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   useEffect(() => {
     if (!refState) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); closeReferences(); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeReferences(); }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);

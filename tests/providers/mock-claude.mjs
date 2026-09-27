@@ -40,6 +40,38 @@ function persistMockTurn(sessionId, prompt, answer) {
   transcriptParent = assistantId;
 }
 
+/**
+ * Opt-in per session (MOCK_CLAUDE_PERSIST_SESSIONS, comma list): a plain turn is
+ * appended to the session's EXISTING transcript under MOCK_CLAUDE_PERSIST_DIR
+ * (searched one level deep, so a realpath'd cwd cannot miss it), chained onto
+ * its last line, with the user line's pre-assigned uuid the way the real CLI
+ * files it. Lets a browser spec reload and find what it sent (N37).
+ */
+let lastInputUserUuid = null;
+function persistPlainTurn(sid, prompt, assistantEvent) {
+  const root = process.env.MOCK_CLAUDE_PERSIST_DIR;
+  const allow = (process.env.MOCK_CLAUDE_PERSIST_SESSIONS ?? '').split(',').filter(Boolean);
+  if (!root || !sid || !allow.includes(sid)) return;
+  let file = null;
+  try {
+    for (const d of fs.readdirSync(root)) {
+      const f = path.join(root, d, `${sid}.jsonl`);
+      if (fs.existsSync(f)) { file = f; break; }
+    }
+  } catch { return; }
+  if (!file) return;
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  let parent = null;
+  try { parent = JSON.parse(lines[lines.length - 1]).uuid ?? null; } catch { /* torn tail */ }
+  const userId = lastInputUserUuid || randomUUID();
+  const assistantId = randomUUID();
+  const shared = { sessionId: sid, cwd: process.cwd(), timestamp: new Date().toISOString(), isSidechain: false };
+  fs.appendFileSync(file, [
+    { ...shared, type: 'user', uuid: userId, parentUuid: parent, message: { role: 'user', content: prompt } },
+    { ...shared, type: 'assistant', uuid: assistantId, parentUuid: userId, message: assistantEvent.message },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+}
+
 // Parse flags
 let sessionId = null;
 let resume = false;
@@ -148,6 +180,7 @@ if (inputFormat === 'stream-json') {
         const parsed = JSON.parse(line);
         if (!adoptedFirstMessage && parsed.message?.content) {
           adoptedFirstMessage = true;
+          lastInputUserUuid = parsed.uuid ?? null;
           message = typeof parsed.message.content === 'string'
             ? parsed.message.content
             : JSON.stringify(parsed.message.content);
@@ -247,6 +280,7 @@ if (inputFormat === 'stream-json') {
         } else if (parsed.type === 'control_response' && onControlResponse) {
           onControlResponse(parsed.response);
         } else if (parsed.type === 'user' && parsed.message?.content !== undefined && pendingUserResolve) {
+          lastInputUserUuid = parsed.uuid ?? null;
           const c = parsed.message.content;
           const resolve = pendingUserResolve;
           pendingUserResolve = null;
@@ -1480,6 +1514,7 @@ if (outputFormat === 'stream-json') {
       session_id: outputSessionId,
     };
     process.stdout.write(JSON.stringify(assistantEvent) + '\n');
+    persistPlainTurn(outputSessionId, message, assistantEvent);
 
     // 4. Final result event
     const resultEvent = {

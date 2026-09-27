@@ -23,7 +23,7 @@ const PIN_KEY_SEP = '\u0000';
  * ⚠️ A quote pin with NO `id` still has to get its own key. This client always
  * mints one, but `pinned_messages` is a plain PATCH field, so anything else that
  * writes the session record (a script, a plugin, an older or future client) can
- * store a passage without an id — and the server accepts it. Falling through to
+ * store a passage without an id, and the server accepts it. Falling through to
  * msgId there made every passage on one message share the whole-message pin's
  * key: measured on the fixture session, two id-less passages produced duplicate
  * React keys, only ONE of the two got painted, and removing either outline row
@@ -52,11 +52,11 @@ function sameQuote(a: SessionPinnedMessage, msgId: string, quote: SessionPinnedQ
 /**
  * Should the record's copy of the pin list replace ours?
  *
- * Before our first local write, always — the record is the only source there is.
+ * Before our first local write, always: the record is the only source there is.
  * After it, only when the incoming list still contains every pin we confirmed. The
  * panel's fetch queue routinely holds tens of requests, so a `GET /api/sessions/:id`
  * issued before a pin resolves after it and arrives WITHOUT that pin; adopting it
- * emptied the outline in front of the user (measured — the pins were on disk the
+ * emptied the outline in front of the user (measured: the pins were on disk the
  * whole time and came back on reload). A list that ADDS pins (another tab, another
  * device) is still adopted; one that only removes them waits for a reload, because
  * deleting what the user just made is the worse of the two errors.
@@ -98,7 +98,7 @@ function newPinId(): string {
  *  - once we HAVE written, only adopt a list that still contains every pin we
  *    confirmed. The panel's fetch queue routinely holds tens of requests, so a
  *    `GET /api/sessions/:id` issued before a pin can resolve well after it and
- *    arrive missing that pin — measured: the outline emptied itself in front of the
+ *    arrive missing that pin (measured): the outline emptied itself in front of the
  *    user (the pins were on disk the whole time and came back on reload). A list
  *    that ADDS pins (another tab, another device) is still adopted; one that only
  *    removes them waits for a reload rather than deleting what the user just made.
@@ -107,7 +107,7 @@ function newPinId(): string {
  * render: a `pins` value captured in a closure would make the second write
  * overwrite the first.
  */
-export function useSessionPins(sessionId: string, serverPins?: SessionPinnedMessage[]): SessionPinsApi {
+export function useSessionPins(sessionId: string, serverPins?: SessionPinnedMessage[]): SessionPinsStore {
   const [pins, setPins] = useState<SessionPinnedMessage[]>(serverPins ?? []);
   const listRef = useRef<SessionPinnedMessage[]>(serverPins ?? []);
   const confirmed = useRef<SessionPinnedMessage[]>(serverPins ?? []);
@@ -150,7 +150,7 @@ export function useSessionPins(sessionId: string, serverPins?: SessionPinnedMess
     updateSession(sessionId, { pinned_messages: next })
       .then(() => { confirmed.current = next; })
       .catch((err) => {
-        log.warn('session', 'pin save failed — reverting', { sessionId, error: String(err) });
+        log.warn('session', 'pin save failed, reverting', { sessionId, error: String(err) });
         adopt(confirmed.current);
       })
       .finally(() => { inFlight.current = Math.max(0, inFlight.current - 1); });
@@ -208,15 +208,54 @@ export function useSessionPins(sessionId: string, serverPins?: SessionPinnedMess
     persist([...current, entry]);
   }, [persist, sessionId]);
 
-  const unpin = useCallback((pinKey: string) => {
+  // Where each removed pin sat, so its Undo puts it back in the same slot.
+  const removedAt = useRef(new Map<string, number>());
+
+  /** Remove one pin; returns the removed object (the Undo toast keeps it). */
+  const unpin = useCallback((pinKey: string): SessionPinnedMessage | undefined => {
     const current = listRef.current;
-    if (!current.some((p) => pinKeyOf(p) === pinKey)) return;
+    const at = current.findIndex((p) => pinKeyOf(p) === pinKey);
+    if (at < 0) return undefined;
+    const removed = current[at];
+    removedAt.current.set(pinKey, at);
     persist(current.filter((p) => pinKeyOf(p) !== pinKey));
+    return removed;
   }, [persist]);
 
-  return useMemo(
-    // canPinQuote: this hook IS the real store — a session record to PATCH exists.
-    () => ({ pins, isPinned, toggle, pinQuote, unpin, canPinQuote: true }),
-    [pins, isPinned, toggle, pinQuote, unpin],
+  /** Undo of `unpin`: ONE PATCH puts the very same object back (same id, same
+   *  pinnedAt), in the slot it left. A pin already back is a no-op. */
+  const restorePin = useCallback((pin: SessionPinnedMessage) => {
+    const key = pinKeyOf(pin);
+    const current = listRef.current;
+    if (current.some((p) => pinKeyOf(p) === key)) return;
+    const at = removedAt.current.get(key);
+    removedAt.current.delete(key);
+    log.info('session', 'pin restored', { sessionId, msgId: pin.msgId, ...(pin.id ? { pinId: pin.id } : {}) });
+    persist(restoreInto(current, pin, at));
+  }, [persist, sessionId]);
+
+  return useMemo<SessionPinsStore>(
+    // canPinQuote: this hook IS the real store: a session record to PATCH exists.
+    () => ({ pins, isPinned, toggle, pinQuote, unpin, restorePin, canPinQuote: true }),
+    [pins, isPinned, toggle, pinQuote, unpin, restorePin],
   );
+}
+
+/** The real store adds pin Undo on top of the shared api (stub providers do
+ *  not have it; `canRestorePins` tells them apart). */
+export interface SessionPinsStore extends SessionPinsApi {
+  unpin: (pinKey: string) => SessionPinnedMessage | undefined;
+  restorePin: (pin: SessionPinnedMessage) => void;
+}
+
+export function canRestorePins(api: SessionPinsApi): api is SessionPinsStore {
+  return typeof (api as Partial<SessionPinsStore>).restorePin === 'function';
+}
+
+/** Put `pin` back into `list` at `at` (clamped); unchanged when it is already there. */
+export function restoreInto(list: readonly SessionPinnedMessage[], pin: SessionPinnedMessage, at?: number): SessionPinnedMessage[] {
+  const key = pinKeyOf(pin);
+  if (list.some((p) => pinKeyOf(p) === key)) return [...list];
+  const i = Math.min(at ?? list.length, list.length);
+  return [...list.slice(0, i), pin, ...list.slice(i)];
 }

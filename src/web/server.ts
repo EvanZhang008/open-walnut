@@ -564,6 +564,7 @@ let sendQueueFlushHandle: { stop: () => void } | null = null
 /** Cloud box only: hands self-answered chat turns to the primary (core/cloud-chat-outbox.ts). */
 let cloudChatOutboxFlushHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
+let threadAiHandles: Array<{ stop: () => void }> = []
 /** Primary box only: re-resumes sessions whose host/daemon died under them. */
 let autoRecoverHandle: { stop: () => void } | null = null
 /** Primary box only: daily retirement of completed pins (core/task-pin-retirement.ts). */
@@ -2302,6 +2303,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         error: err instanceof Error ? err.message : String(err),
       })
     }
+  }
+
+  // Conversation questions: name each one at send, refine once at its first
+  // answer, write the Done takeaway (thread-title.ts / thread-takeaway.ts).
+  // Both subscribe to session:result and to the thread meta write listener;
+  // fire-and-forget, gated like every background title call. Runs on ephemeral
+  // servers too (they own an isolated data copy, and the browser suite proves
+  // naming end to end there); never on the replica, which proxies sessions.
+  if (!CLOUD_MODE) {
+    const { startThreadTitler } = await import('../core/sessions/thread-title.js')
+    const { startThreadTakeaways } = await import('../core/sessions/thread-takeaway.js')
+    for (const h of threadAiHandles) h.stop()
+    threadAiHandles = [startThreadTitler(), startThreadTakeaways()]
   }
 
   // -- Git auto-commit polling (30s interval) --
@@ -5422,6 +5436,8 @@ export async function stopServer(): Promise<void> {
     pinRetirementHandle.stop()
     pinRetirementHandle = null
   }
+  for (const h of threadAiHandles) h.stop()
+  threadAiHandles = []
   if (autoContinueHandle) {
     autoContinueHandle.stop()
     autoContinueHandle = null

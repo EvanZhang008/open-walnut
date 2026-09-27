@@ -1,7 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from 'react';
 import { updateSession } from '@/api/sessions';
-import type { SessionThreadAnchor } from '@/types/session';
-import type { ComposerThreadAnchor } from '@/utils/thread-tree';
+import type { ImageAttachment } from '@/api/chat';
+import type { SessionPinnedMessage, SessionThreadAnchor, SessionThreadMeta, SessionThreadMetaPatch } from '@/types/session';
+import {
+  EMPTY_DERIVED, type SessionThreadsApi, type ThreadDerived,
+} from '@/contexts/SessionThreadsContext';
+import type { ThreadMetaStore, ThreadToastApi } from '@/components/sessions/thread-ui-contract';
+import { keepCommandFirst } from '@/components/chat/leading-command';
+import { useSessionThreadMeta } from '@/hooks/useSessionThreadMeta';
+import { useThreadActions } from '@/hooks/useThreadActions';
+import { useThreadStack, type ComposerProbe, type ThreadStackHandle } from '@/hooks/useThreadStack';
+import {
+  ROOT_THREAD_KEY, composeAnchoredText, composeOrientedText, emptyThreadTree, newUserUuid, threadKeyOf, type ThreadTree,
+} from '@/utils/thread-tree';
+import { displayTitleOf, hiddenKeysOf, statusOf } from '@/utils/thread-meta';
+import { counts as threadCounts, type ThreadCounts } from '@/utils/thread-meta-counts';
+import { composerDraftKey, unreadKeysOf } from '@/utils/thread-stack-state';
 import { log } from '@/utils/log';
 
 /** One anchor per user message, so the msgId IS the row identity. */
@@ -29,6 +43,11 @@ export function shouldAdoptServerAnchors(
   return confirmed.every((a) => keys.has(anchorKeyOf(a)));
 }
 
+/** The list with `anchor` recorded (one anchor per user row). */
+function withAnchor(list: SessionThreadAnchor[], anchor: SessionThreadAnchor): SessionThreadAnchor[] {
+  return [...list.filter((a) => a.msgId !== anchor.msgId), anchor];
+}
+
 /** Same list, entry for entry. O(n) over a few hundred small records, instead of
  *  two JSON.stringify passes on every record refetch. */
 export function sameAnchorList(a: SessionThreadAnchor[], b: SessionThreadAnchor[]): boolean {
@@ -44,12 +63,24 @@ export function sameAnchorList(a: SessionThreadAnchor[], b: SessionThreadAnchor[
   return true;
 }
 
+/** One send's anchor write, staged so the send can carry it in the SAME PATCH
+ *  as the question's meta (spec 7.2: one request, both fields). */
+export interface ThreadAnchorStage {
+  body: { thread_anchors: SessionThreadAnchor[] };
+  /** The PATCH answered 2xx. */
+  confirm: () => void;
+  /** The PATCH failed: the anchor list goes back to the confirmed copy. */
+  rollback: () => void;
+}
+
 export interface SessionThreadsStore {
   anchors: SessionThreadAnchor[];
   /** Record (or replace) the anchor for one user message. */
   add: (anchor: SessionThreadAnchor) => void;
   /** Drop the anchor for one user message — that turn returns to the top level. */
   remove: (msgId: string) => void;
+  /** Optimistically add `anchor` now; the caller sends `body` and settles it. */
+  stage: (anchor: SessionThreadAnchor) => ThreadAnchorStage;
 }
 
 /**
@@ -102,24 +133,40 @@ export function useSessionThreads(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionId only labels the log line
   }, [serverAnchors, adopt]);
 
-  const persist = useCallback((next: SessionThreadAnchor[]) => {
+  /** Optimistic write of a whole list; the caller sends and settles it. */
+  const stageList = useCallback((next: SessionThreadAnchor[]): ThreadAnchorStage => {
     adopt(next);
     wroteLocally.current = true;
     inFlight.current += 1;
-    updateSession(sessionId, { thread_anchors: next })
-      .then(() => { confirmed.current = next; })
-      .catch((err) => {
-        log.warn('session', 'thread anchor save failed — reverting', { sessionId, error: String(err) });
+    let settled = false;
+    const done = () => {
+      if (settled) return false;
+      settled = true;
+      inFlight.current = Math.max(0, inFlight.current - 1);
+      return true;
+    };
+    return {
+      body: { thread_anchors: next },
+      confirm: () => { if (done()) confirmed.current = next; },
+      rollback: () => {
+        if (!done()) return;
+        log.warn('threads', 'thread anchor save failed, reverting', { sessionId });
         adopt(confirmed.current);
-      })
-      .finally(() => { inFlight.current = Math.max(0, inFlight.current - 1); });
+      },
+    };
   }, [sessionId, adopt]);
+
+  const persist = useCallback((next: SessionThreadAnchor[]) => {
+    const staged = stageList(next);
+    updateSession(sessionId, staged.body).then(staged.confirm, staged.rollback);
+  }, [sessionId, stageList]);
 
   const add = useCallback((anchor: SessionThreadAnchor) => {
     if (!anchor.msgId || !anchor.parent) return;
-    const current = listRef.current;
-    persist([...current.filter((a) => a.msgId !== anchor.msgId), anchor]);
+    persist(withAnchor(listRef.current, anchor));
   }, [persist]);
+
+  const stage = useCallback((anchor: SessionThreadAnchor) => stageList(withAnchor(listRef.current, anchor)), [stageList]);
 
   const remove = useCallback((msgId: string) => {
     const current = listRef.current;
@@ -127,65 +174,25 @@ export function useSessionThreads(
     persist(current.filter((a) => a.msgId !== msgId));
   }, [persist]);
 
-  return useMemo(() => ({ anchors, add, remove }), [anchors, add, remove]);
+  return useMemo(() => ({ anchors, add, remove, stage }), [anchors, add, remove, stage]);
 }
 
-/** sessionStorage key for the composer's sticky anchor. Per TAB, deliberately:
- *  "what I am currently asking about" is a property of this window's composer,
- *  not of the account, and it must not leak into a second tab's draft. */
-function composerAnchorKey(sessionId: string): string {
-  return `walnut:thread-anchor:${sessionId}`;
-}
+/** 'stack' (the question pages, default) or 'linear' (Show all in order). */
+export type SessionViewMode = 'stack' | 'linear';
 
-function readComposerAnchor(sessionId: string): ComposerThreadAnchor | null {
-  try {
-    const raw = sessionStorage.getItem(composerAnchorKey(sessionId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as ComposerThreadAnchor;
-    if (!parsed || typeof parsed.parent !== 'string' || !parsed.parent) return null;
-    return parsed;
-  } catch { return null; }
-}
-
-/**
- * The composer's sticky anchor, remembered per session for this tab: a reload
- * mid-question must not silently drop the thread and send the follow-up to the
- * top level.
- */
-export function useComposerThreadAnchor(sessionId: string): {
-  composerAnchor: ComposerThreadAnchor | null;
-  setComposerAnchor: (anchor: ComposerThreadAnchor | null) => void;
-} {
-  const [composerAnchor, setState] = useState<ComposerThreadAnchor | null>(() => readComposerAnchor(sessionId));
-
-  // Session switch: load THAT session's anchor (never carry one across).
-  useEffect(() => { setState(readComposerAnchor(sessionId)); }, [sessionId]);
-
-  const setComposerAnchor = useCallback((anchor: ComposerThreadAnchor | null) => {
-    setState(anchor);
-    try {
-      if (anchor) sessionStorage.setItem(composerAnchorKey(sessionId), JSON.stringify(anchor));
-      else sessionStorage.removeItem(composerAnchorKey(sessionId));
-    } catch { /* private browsing — the chip just forgets on reload */ }
-  }, [sessionId]);
-
-  return { composerAnchor, setComposerAnchor };
-}
-
-export type SessionViewMode = 'linear' | 'tree';
-
-function viewModeKey(sessionId: string): string {
-  return `walnut:session-view:${sessionId}`;
+/** v2 key: the old 'linear' / 'tree' choice is never read (every session opens
+ *  as a stack once after the upgrade) and never deleted (rollback stays safe). */
+export function viewModeKey(sessionId: string): string {
+  return `walnut:session-view.v2:${sessionId}`;
 }
 
 function readViewMode(sessionId: string): SessionViewMode {
   try {
-    return localStorage.getItem(viewModeKey(sessionId)) === 'tree' ? 'tree' : 'linear';
-  } catch { return 'linear'; }
+    return localStorage.getItem(viewModeKey(sessionId)) === 'linear' ? 'linear' : 'stack';
+  } catch { return 'stack'; }
 }
 
-/** Linear (the timeline) vs tree (the node view), remembered per session across
- *  reloads — a per-session reading preference, not a global mode. */
+/** Stack vs Show all in order, remembered per session across reloads. */
 export function useSessionViewMode(sessionId: string): {
   viewMode: SessionViewMode;
   setViewMode: (mode: SessionViewMode) => void;
@@ -201,4 +208,236 @@ export function useSessionViewMode(sessionId: string): {
   }, [sessionId]);
 
   return { viewMode, setViewMode };
+}
+
+// ── The panel's question wiring (SessionPanel calls this once) ──
+
+type Dispatch = (sessionId: string, message: string, images?: ImageAttachment[], opts?: { userUuid?: string }) => Promise<boolean>;
+
+export interface UsePanelThreadsArgs {
+  sessionId: string;
+  serverAnchors?: SessionThreadAnchor[];
+  serverMeta?: SessionThreadMeta[];
+  pins: SessionPinnedMessage[];
+  panelRef: RefObject<HTMLElement | null>;
+  /** An anchor needs the engine to persist the uuid we pre-assign (not ACP). */
+  canAsk: boolean;
+  send: Dispatch;
+  interruptSend: Dispatch;
+  composer: ComposerProbe;
+  focusComposer: () => void;
+}
+
+export interface PanelThreads {
+  api: SessionThreadsApi;
+  stack: ThreadStackHandle;
+  meta: ThreadMetaStore;
+  counts: ThreadCounts;
+  /** The session has questions: the toggle, drawer and root menu exist. */
+  hasQuestions: boolean;
+  hiddenCount: number;
+  toast: ThreadToastApi;
+  /** Filled by <ThreadToastBridge> inside the panel's toast provider. */
+  toastRef: MutableRefObject<ThreadToastApi | null>;
+  sendAnchored: (message: string, images: ImageAttachment[] | undefined, interrupt: boolean) => Promise<boolean>;
+  composerPlaceholder?: string;
+  draftKey: string;
+}
+
+export const ASK_PLACEHOLDER = 'Ask about this passage…';
+export const FOLLOW_UP_PLACEHOLDER = 'Follow up on this question…';
+
+/** The composer on a question page names the question it posts into (N35,
+ *  prototype 01's `Replying in <title>`): `Reply in “<title>”…`, the title cut
+ *  to 40 characters so a narrow column still shows the verb. */
+export function followUpPlaceholder(title: string | undefined): string {
+  const t = (title ?? '').trim();
+  if (!t) return FOLLOW_UP_PLACEHOLDER;
+  const short = t.length > 40 ? `${t.slice(0, 39).trimEnd()}…` : t;
+  return `Reply in “${short}”…`;
+}
+
+export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
+  const { sessionId } = args;
+  const store = useSessionThreads(sessionId, args.serverAnchors);
+  const meta = useSessionThreadMeta(sessionId, args.serverMeta, args.serverAnchors);
+  const { viewMode, setViewMode } = useSessionViewMode(sessionId);
+  const [tree, setTreeState] = useState<ThreadTree>(emptyThreadTree);
+  const [historyComplete, setHistoryComplete] = useState(false);
+  const setTree = useCallback((next: ThreadTree, complete?: boolean) => {
+    setTreeState(next);
+    setHistoryComplete(complete ?? true);
+  }, []);
+  const [derived, setDerived] = useState<ThreadDerived>(EMPTY_DERIVED);
+  const [pinJump, setPinJump] = useState<{ pinKey: string; seq: number } | null>(null);
+  useEffect(() => {
+    setTreeState(emptyThreadTree()); setHistoryComplete(false); setDerived(EMPTY_DERIVED); setPinJump(null);
+  }, [sessionId]);
+  const hiddenKeys = useMemo(() => hiddenKeysOf(tree, meta.index), [tree, meta.index]);
+
+  // The toast lives INSIDE the panel (its provider wraps this panel's markup),
+  // so the actions reach it through a ref the bridge fills.
+  const toastRef = useRef<ThreadToastApi | null>(null);
+  const toast = useMemo<ThreadToastApi>(() => ({
+    show: (t) => toastRef.current?.show(t),
+    dismiss: () => toastRef.current?.dismiss(),
+  }), []);
+
+  const stack = useThreadStack({
+    sessionId, tree, anchors: store.anchors, hiddenKeys, metaIndex: meta.index, panelRef: args.panelRef,
+    stackView: viewMode === 'stack', composer: args.composer, toast, focusComposer: args.focusComposer,
+    historyComplete,
+  });
+  const actions = useThreadActions({
+    sessionId, tree, meta, toast, nav: stack.bridge,
+    lastAnswerOf: (key) => derived.lastAnswer.get(key),
+    answeringKeys: derived.answering,
+  });
+
+  const refs = useRef({ tree, stack, meta, derived, store, args });
+  refs.current = { tree, stack, meta, derived, store, args };
+  const titleOfKey = useCallback((key: string) =>
+    displayTitleOf(refs.current.tree.byKey.get(key), refs.current.meta.index).title, []);
+
+  /** Stage the anchor (and meta), send ONE PATCH for both, settle both. */
+  const persistAnchor = useCallback((anchor: SessionThreadAnchor, metaEntries: SessionThreadMetaPatch[]) => {
+    const r = refs.current;
+    const a = r.store.stage(anchor);
+    const m = metaEntries.length > 0 ? r.meta.stage(metaEntries) : null;
+    updateSession(sessionId, { ...a.body, ...(m ? m.body : {}) }).then(
+      (record) => { a.confirm(); m?.confirm(record); },
+      (err) => {
+        log.warn('threads', 'question write failed, rolling back', { sessionId, headId: anchor.msgId, error: String(err) });
+        a.rollback();
+        m?.rollback();
+      },
+    );
+  }, [sessionId]);
+
+  /**
+   * One send path for the composer (spec 5.4, 7.2).
+   *  - Root page: a plain send; when the newest turn is in a question, the text
+   *    leads with `(Back to the main conversation)` (composeOrientedText).
+   *  - Pending page (the first send of an Ask): a pre-assigned uuid names the
+   *    row before it exists, the text quotes the passage (composeAnchoredText),
+   *    the anchor and the question's meta go out in ONE PATCH, and the page
+   *    becomes the question in place.
+   *  - Question page: a follow-up under the same anchor, oriented by title when
+   *    the newest turn is elsewhere.
+   * Without `crypto.randomUUID` the message still goes, without an anchor.
+   */
+  const sendAnchored = useCallback(async (
+    message: string, images: ImageAttachment[] | undefined, interrupt: boolean,
+  ): Promise<boolean> => {
+    const r = refs.current;
+    const dispatch = interrupt ? r.args.interruptSend : r.args.send;
+    const s = r.stack.api;
+    const live = r.stack.enabled;
+    const key = live ? s.currentKey : ROOT_THREAD_KEY;
+    const pending = live && s.pending?.pageKey === key ? s.pending : undefined;
+    const latestKey = r.tree.latestKey;
+    if (key === ROOT_THREAD_KEY) {
+      const text = keepCommandFirst(message, (t) => composeOrientedText(t, { latestKey, currentKey: ROOT_THREAD_KEY, titleOfKey }));
+      // A pre-assigned uuid files the optimistic row on root in the tree at
+      // once, so the NEXT send (a follow-up on a question page, another root
+      // send) is oriented against this turn before history catches up (C58).
+      const userUuid = live ? newUserUuid() : undefined;
+      return userUuid ? dispatch(sessionId, text, images, { userUuid }) : dispatch(sessionId, text, images);
+    }
+    const node = pending ? undefined : r.tree.byKey.get(key);
+    const parent = pending?.parentMsgId ?? node?.parent;
+    const quote = pending ? pending.quote : node?.quote;
+    const userUuid = newUserUuid();
+    if (!userUuid || !parent) {
+      log.warn('threads', 'sending without a question anchor', { sessionId, hasUuid: !!userUuid });
+      return dispatch(sessionId, message, images);
+    }
+    const at = new Date().toISOString();
+    const anchor: SessionThreadAnchor = {
+      msgId: userUuid, parent, ...(quote ? { quote } : {}), source: pending ? 'selection' : 'manual', at,
+    };
+    let text: string;
+    const metaEntries: SessionThreadMetaPatch[] = [];
+    if (pending) {
+      text = keepCommandFirst(message, (t) => composeAnchoredText(t, { parent, ...(quote ? { quote } : {}), source: 'selection', label: pending.title }, latestKey));
+      metaEntries.push({ headId: userUuid, status: 'open', titleState: 'pending', question: message.slice(0, 400) });
+    } else {
+      text = keepCommandFirst(message, (t) => composeOrientedText(t, { latestKey, currentKey: key, titleOfKey }));
+      if (node && statusOf(node, r.meta.index) === 'older') metaEntries.push({ headId: node.headId, status: 'open' });
+    }
+    persistAnchor(anchor, metaEntries);
+    if (pending) r.stack.promotePending(threadKeyOf(anchor));
+    log.info('threads', pending ? 'question sent' : 'follow-up sent', { sessionId, headId: pending ? userUuid : node?.headId, rowId: userUuid });
+    return dispatch(sessionId, text, images, { userUuid });
+  }, [sessionId, titleOfKey, persistAnchor]);
+
+  /** Retry (spec 5.10): the unanswered question again, same anchor, new uuid. */
+  const retry = useCallback((key: string) => {
+    const r = refs.current;
+    const node = r.tree.byKey.get(key);
+    const text = r.derived.lastQuestion.get(key);
+    const userUuid = newUserUuid();
+    if (!node?.parent || !text || !userUuid) return;
+    persistAnchor({
+      msgId: userUuid, parent: node.parent, ...(node.quote ? { quote: node.quote } : {}), source: 'manual', at: new Date().toISOString(),
+    }, []);
+    log.info('threads', 'retry', { sessionId, headId: node.headId, rowId: userUuid });
+    void r.args.send(sessionId, text, undefined, { userUuid });
+  }, [sessionId, persistAnchor]);
+
+  const requestPinJump = useCallback((pinKey: string, threadKey: string) => {
+    const s = refs.current.stack.api;
+    if (threadKey !== s.currentKey) s.pushTo(threadKey, 'pin');
+    setPinJump((prev) => ({ pinKey, seq: (prev?.seq ?? 0) + 1 }));
+  }, []);
+
+  const unreadKeys = useMemo(
+    () => unreadKeysOf(tree, derived.answeredAt, stack.lastViewedAt, stack.api.currentKey),
+    [tree, derived.answeredAt, stack.lastViewedAt, stack.api.currentKey],
+  );
+
+  const api = useMemo<SessionThreadsApi>(() => ({
+    anchors: store.anchors,
+    add: store.add,
+    remove: store.remove,
+    tree,
+    setTree,
+    viewMode,
+    setViewMode,
+    currentThreadKey: stack.enabled ? stack.api.currentKey : ROOT_THREAD_KEY,
+    stack: stack.api,
+    metaIndex: meta.index,
+    hiddenKeys,
+    actions,
+    derived,
+    publishDerived: setDerived,
+    unreadKeys,
+    openDrawer: stack.drawer.open,
+    revealInTree: stack.drawer.reveal,
+    retry,
+    pinJump,
+    requestPinJump,
+    canAsk: args.canAsk,
+  }), [store.anchors, store.add, store.remove, tree, viewMode, setViewMode, stack.enabled, stack.api, meta.index,
+    hiddenKeys, actions, derived, unreadKeys, stack.drawer.open, stack.drawer.reveal, retry, pinJump, requestPinJump, args.canAsk]);
+
+  // The drawer and its toggle need a real question; a draft-only session keeps
+  // its draft row on the page it was asked from (SessionChatHistory).
+  const hasQuestions = tree.threads.length > 1;
+  const threadCount = useMemo(() => threadCounts(tree, meta.index, args.pins, derived.live, hiddenKeys),
+    [tree, meta.index, args.pins, derived.live, hiddenKeys]);
+  const hiddenCount = useMemo(() => {
+    const heads = new Set(tree.threads.map((n) => n.headId));
+    return meta.list.filter((m) => m.hidden && heads.has(m.headId)).length;
+  }, [tree, meta.list]);
+  const pageKey = stack.enabled ? stack.api.currentKey : ROOT_THREAD_KEY;
+  const composerPlaceholder = !stack.enabled || pageKey === ROOT_THREAD_KEY ? undefined
+    : stack.api.pending?.pageKey === pageKey ? ASK_PLACEHOLDER
+      : followUpPlaceholder(displayTitleOf(tree.byKey.get(pageKey), meta.index).title);
+
+  return {
+    api, stack, meta, counts: threadCount, hasQuestions, hiddenCount, toast, toastRef, sendAnchored,
+    ...(composerPlaceholder ? { composerPlaceholder } : {}),
+    draftKey: composerDraftKey(sessionId, pageKey, tree),
+  };
 }

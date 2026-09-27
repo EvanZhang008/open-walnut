@@ -1,79 +1,173 @@
 import { createContext, useContext } from 'react';
-import type { SessionThreadAnchor } from '@/types/session';
-import {
-  emptyThreadTree, type ComposerThreadAnchor, type ThreadTree,
-} from '@/utils/thread-tree';
+import type { SessionPinnedQuote, SessionThreadAnchor } from '@/types/session';
+import { emptyThreadTree, type ThreadTree } from '@/utils/thread-tree';
 import type { SessionViewMode } from '@/hooks/useSessionThreads';
+import type {
+  ThreadActions, ThreadDraftRow, ThreadDrawerFilter, ThreadLiveState, ThreadMetaIndex, ThreadNavVia, ThreadPendingPage,
+} from '@/components/sessions/thread-ui-contract';
+import type { PageLanding } from '@/utils/thread-stack-state';
+
+/** One navigation, as the timeline's landing reads it (nonce'd by `seq`). */
+export interface ThreadStackNav {
+  seq: number;
+  from: string;
+  to: string;
+  direction: 'push' | 'pop' | 'none';
+  via: ThreadNavVia;
+  /** Pages popped, deepest first: the landing lands on the passage the
+   *  shallowest of them came from. */
+  popped: string[];
+  /** First time this page is entered (scroll to its top). */
+  firstEntry: boolean;
+}
 
 /**
- * Conversation threads for the open session: the anchors, the tree derived from
- * them, and the composer's sticky anchor.
+ * The question stack of one panel (useThreadStack). Only the page on screen is
+ * rendered; its ancestors are the sliver.
+ */
+export interface ThreadStackApi {
+  /** Root first, the page on screen last. */
+  path: string[];
+  currentKey: string;
+  depth: number;
+  pending?: ThreadPendingPage;
+  nav: ThreadStackNav | null;
+  pushTo: (key: string, via: ThreadNavVia) => void;
+  popTo: (key: string, via: ThreadNavVia) => void;
+  /** One level up (the back button, Esc). */
+  back: (via: ThreadNavVia) => void;
+  /** Ask on a passage: a pending page, or the question already about it. */
+  ask: (target: { msgId: string; quote: SessionPinnedQuote }) => void;
+  /** Where each page was left (page key), shared with the timeline's landing. */
+  landings: Map<string, PageLanding>;
+  /** The timeline records the page it is leaving (scrollTop + passage top)
+   *  right before a navigation changes the rows. */
+  setCapture: (fn: ((from: string, to: string, pending?: ThreadPendingPage) => void) | null) => void;
+  /** Page key showing `You already asked about this passage.` */
+  samePassageKey: string | null;
+  /** Pending pages left with text (`New question (draft)`). */
+  drafts: ThreadDraftRow[];
+  /** The same drafts with their passage (the Asked-from list places them). */
+  draftPages: ThreadPendingPage[];
+  /** Open a draft row's pending page again. */
+  openDraft: (pageKey: string) => void;
+  /** Write the stack (path, landings, last viewed) to sessionStorage now. */
+  persist: () => void;
+}
+
+/** Derived from the loaded transcript by the timeline, published up. */
+export interface ThreadDerived {
+  live: ReadonlyMap<string, ThreadLiveState>;
+  /** Thread key to when its newest answer landed (ms). */
+  answeredAt: ReadonlyMap<string, number>;
+  /** Thread key to its newest answer's markdown (the fallback takeaway). */
+  lastAnswer: ReadonlyMap<string, string>;
+  /** Thread key to its newest question's text (Retry sends it again). */
+  lastQuestion: ReadonlyMap<string, string>;
+  /** Keys whose answer is streaming right now. */
+  answering: ReadonlySet<string>;
+}
+
+/**
+ * Questions for the open session: the anchors, the tree derived from them, the
+ * stack on screen, meta and the actions.
  *
- * Context rather than props for the same reason `SessionPinsContext` exists — the
- * surfaces that read this (the timeline's row wrapper, the outline rail, the
- * composer chip) sit on opposite sides of a memoized message tree.
+ * Context rather than props for the same reason `SessionPinsContext` exists: the
+ * surfaces that read this (the timeline, the outline rail, the Asked-from rows)
+ * sit on opposite sides of a memoized message tree.
  *
- * The TREE is computed where the loaded transcript lives (SessionChatHistory) and
- * published back up through `setTree`, because the anchors live on the session
- * record (SessionPanel) while the rows they point at live in the history hook.
- * One owner for the state, one owner for the computation.
+ * The TREE is computed where the loaded transcript lives (SessionChatHistory)
+ * and published back up through `setTree`, because the anchors live on the
+ * session record (SessionPanel) while the rows they point at live in the
+ * history hook. One owner for the state, one owner for the computation.
  */
 export interface SessionThreadsApi {
   anchors: SessionThreadAnchor[];
   /** Record (or replace) the anchor for one user message. */
   add: (anchor: SessionThreadAnchor) => void;
-  /** Drop one user message's anchor — that turn returns to the top level. */
+  /** Drop one user message's anchor. */
   remove: (msgId: string) => void;
   /** Derived structure. Empty until the timeline publishes one. */
   tree: ThreadTree;
-  /** Publish a freshly derived tree (timeline → panel). */
-  setTree: (tree: ThreadTree) => void;
-  /** What the NEXT send hangs off. null = top level. */
-  composerAnchor: ComposerThreadAnchor | null;
-  setComposerAnchor: (anchor: ComposerThreadAnchor | null) => void;
-  /** Thread the pointer is over in the outline — tints that thread's rows. */
-  hoverThreadKey: string | null;
-  setHoverThreadKey: (key: string | null) => void;
-  /** Timeline or node view, per session. */
+  /** `complete`: the tree was built from the WHOLE transcript (not phase 1 or a
+   *  windowed tail), so a page head it lacks is really gone. */
+  setTree: (tree: ThreadTree, complete?: boolean) => void;
   viewMode: SessionViewMode;
   setViewMode: (mode: SessionViewMode) => void;
-  /**
-   * The thread the NODE VIEW is showing ('' = top level). Meaningless in linear
-   * mode, where every thread is on screen at once.
-   *
-   * State here rather than in the timeline that navigates, because in tree mode the
-   * composer's anchor is DERIVED from this key (see SessionPanel's
-   * `effectiveAnchor`): the chip, the send path and the back-reference line must
-   * read one value, or they disagree about where a message is going — which is the
-   * one thing the node view exists to make obvious.
-   */
+  /** The page on screen ('' = the main conversation). */
   currentThreadKey: string;
-  setCurrentThreadKey: (key: string) => void;
+  stack: ThreadStackApi;
+  metaIndex: ThreadMetaIndex;
+  hiddenKeys: ReadonlySet<string>;
+  actions: ThreadActions | null;
+  derived: ThreadDerived;
+  publishDerived: (d: ThreadDerived) => void;
+  /** Questions answered since their page was last viewed. */
+  unreadKeys: ReadonlySet<string>;
+  openDrawer: (filter?: ThreadDrawerFilter) => void;
+  /** `Show in tree`: open the drawer on the current row, ancestors expanded. */
+  revealInTree: () => void;
+  /** Resend the unanswered question of `key` under the same anchor. */
+  retry: (key: string) => void;
+  /** A pin jump waiting for its page (drawer pin row, off-page rail pin). */
+  pinJump: { pinKey: string; seq: number } | null;
+  /** Go to the pin's page (through the stack), then land on the pin + flash. */
+  requestPinJump: (pinKey: string, threadKey: string) => void;
   /**
    * Is a real store behind this api? FALSE for the stub, and the gate for every
-   * Ask affordance.
-   *
-   * Same contract as `canPinQuote`: a timeline mounted without a session record to
-   * PATCH (the side-question drawer) must not offer an "Ask" that silently
-   * records nothing.
+   * Ask affordance: a timeline mounted without a session record to PATCH (the
+   * side-question drawer) must not offer an Ask that silently records nothing.
    */
   canAsk: boolean;
 }
 
+const NOOP = () => {};
+const EMPTY_MAP: ReadonlyMap<string, never> = new Map<string, never>();
+const EMPTY_SET: ReadonlySet<string> = new Set<string>();
+
+export const EMPTY_DERIVED: ThreadDerived = {
+  live: EMPTY_MAP, answeredAt: EMPTY_MAP, lastAnswer: EMPTY_MAP, lastQuestion: EMPTY_MAP, answering: EMPTY_SET,
+};
+
+export const NO_STACK: ThreadStackApi = {
+  path: [''],
+  currentKey: '',
+  depth: 0,
+  nav: null,
+  pushTo: NOOP,
+  popTo: NOOP,
+  back: NOOP,
+  ask: NOOP,
+  landings: new Map(),
+  setCapture: NOOP,
+  samePassageKey: null,
+  drafts: [],
+  draftPages: [],
+  openDraft: NOOP,
+  persist: NOOP,
+};
+
 const EMPTY: SessionThreadsApi = {
   anchors: [],
-  add: () => {},
-  remove: () => {},
+  add: NOOP,
+  remove: NOOP,
   tree: emptyThreadTree(),
-  setTree: () => {},
-  composerAnchor: null,
-  setComposerAnchor: () => {},
-  hoverThreadKey: null,
-  setHoverThreadKey: () => {},
+  setTree: NOOP,
   viewMode: 'linear',
-  setViewMode: () => {},
+  setViewMode: NOOP,
   currentThreadKey: '',
-  setCurrentThreadKey: () => {},
+  stack: NO_STACK,
+  metaIndex: new Map(),
+  hiddenKeys: EMPTY_SET,
+  actions: null,
+  derived: EMPTY_DERIVED,
+  publishDerived: NOOP,
+  unreadKeys: EMPTY_SET,
+  openDrawer: NOOP,
+  revealInTree: NOOP,
+  retry: NOOP,
+  pinJump: null,
+  requestPinJump: NOOP,
   canAsk: false,
 };
 
@@ -81,10 +175,9 @@ export const SessionThreadsContext = createContext<SessionThreadsApi>(EMPTY);
 
 /**
  * The inert api, for a timeline mounted INSIDE a panel that owns a different
- * session's threads (the side-question drawer). Without it that timeline would read
- * the parent's anchors, publish its own tree over the parent's, and — in tree mode —
- * filter its rows by the parent's current thread while writing that key back.
- * Same role as `SessionPinsContext`'s stub, for the same reason.
+ * session's questions (the side-question drawer). Without it that timeline would
+ * read the parent's anchors, publish its own tree over the parent's, and filter
+ * its rows by the parent's page. Same role as `SessionPinsContext`'s stub.
  */
 export const NO_THREADS: SessionThreadsApi = EMPTY;
 

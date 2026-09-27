@@ -1,0 +1,393 @@
+/* owner P3 */
+/*
+ * Tree drawer + stack chrome (P4): the drawer toggle, the left-edge band, the
+ * drawer overlay, tree rows, the stack row (back, crumbs, title, Done, More),
+ * the thread menus and the resolved / suggested strip. Imported by
+ * thread-stack.css; tokens from globals.css and the --thread-* foundation.
+ * Contrast: titles use --fg (resolved: --fg-secondary) over the OPAQUE
+ * --bg-elevated body, >= 4.5:1 in light and dark (C37).
+ */
+:root {
+  --thread-row-hover: rgba(0, 0, 0, 0.04);
+  --thread-drawer-shadow: 0 12px 32px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.08);
+  --thread-chip-on: #ffffff; --thread-chip-on-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+:root[data-theme="dark"] {
+  --thread-row-hover: rgba(255, 255, 255, 0.06);
+  --thread-drawer-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --thread-chip-on: var(--bg-tertiary); --thread-chip-on-shadow: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --thread-row-hover: rgba(255, 255, 255, 0.06);
+    --thread-drawer-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+    --thread-chip-on: var(--bg-tertiary);
+    --thread-chip-on-shadow: none;
+  }
+}
+
+/* ── Drawer toggle (session header slot). min-width per tier: no jitter (C75). ── */
+.thread-drawer-toggle {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; height: 24px;
+  min-width: calc(9ch + 34px); padding: 0 8px; border: 1px solid var(--border); border-radius: 7px;
+  background: transparent; color: var(--fg-secondary); font: inherit; font-size: 12px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer;
+}
+.thread-drawer-toggle[data-tier="answered"] { min-width: calc(26ch + 34px); }
+.thread-drawer-toggle[data-tier="narrow-answered"] { min-width: calc(11ch + 34px); }
+.thread-drawer-toggle:hover { background: var(--bg-hover); color: var(--fg); }
+.thread-drawer-toggle[aria-expanded="true"] { background: var(--accent-subtle); color: var(--accent-text); border-color: transparent; }
+.thread-drawer-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-drawer-toggle:focus:not(:focus-visible) { outline: none; }
+/* WebKit: a keyboard close returns focus programmatically (no :focus-visible). */
+.thread-drawer-toggle[data-kb-focus="true"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-drawer-toggle-count { display: inline-block; border-radius: 6px; padding: 0 3px; }
+.thread-drawer-toggle[data-all-done] .thread-drawer-toggle-count {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: color-mix(in srgb, var(--success) 70%, var(--fg)); padding: 0 6px;
+}
+.thread-drawer-toggle-count--bump { animation: thread-count-bump 200ms ease-out; }
+@keyframes thread-count-bump {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+
+/* ── Left-edge band: no layout width, no pointer events (geometry only). ── */
+.thread-drawer-edge {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 8px; z-index: 20; pointer-events: none;
+}
+.thread-drawer-edge::after {
+  content: ''; position: absolute; left: 2px; top: 50%; width: 3px; height: 28px; border-radius: 2px;
+  background: var(--fg-muted); opacity: 0; transform: translateY(-50%);
+  transition: opacity 120ms ease, height 160ms ease, background-color 120ms ease;
+}
+.thread-drawer-edge[data-armed="true"]::after { opacity: 0.9; height: 64px; background: var(--accent); }
+
+/* ── Drawer overlay (spec 6.2): absolute inside the panel, opaque body, glass
+   only on the 12px band around it. Never touches the transcript's box (C7). ── */
+.thread-drawer {
+  position: absolute; top: 6px; left: 6px; bottom: 6px; width: min(300px, calc(100% - 56px)); z-index: 40;
+  isolation: isolate; border-radius: 12px; box-shadow: var(--thread-drawer-shadow);
+  animation: thread-drawer-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.thread-drawer[data-narrow="true"] { width: calc(100% - 24px); }
+.thread-drawer[data-state="closing"] {
+  animation: thread-drawer-out 160ms ease-in forwards; pointer-events: none;
+}
+.thread-drawer::before {
+  content: ''; position: absolute; inset: -12px; z-index: -1; border-radius: 24px; pointer-events: none;
+  -webkit-backdrop-filter: blur(6px) saturate(1.4); backdrop-filter: blur(6px) saturate(1.4);
+}
+@keyframes thread-drawer-in {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes thread-drawer-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateX(-12px); }
+}
+.thread-drawer-body {
+  position: relative; display: flex; flex-direction: column; height: 100%; overflow: hidden;
+  border-radius: 12px; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--fg);
+  font-size: 13px;
+}
+.thread-drawer-head {
+  display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 6px 2px 12px;
+}
+.thread-drawer-summary {
+  flex: 1; min-width: 0; overflow: hidden; white-space: normal; line-height: 16px;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  color: var(--fg-secondary); font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.thread-drawer-summary-seg { white-space: nowrap; }
+.thread-drawer-close {
+  display: inline-grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--fg-secondary); cursor: pointer;
+}
+.thread-drawer-close:hover { background: var(--bg-hover); color: var(--fg); }
+.thread-drawer-older {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 12px 4px; color: var(--fg-muted);
+  font-size: 12px;
+}
+.thread-drawer-search {
+  position: relative; display: flex; align-items: center; gap: 6px; margin: 4px 10px 6px; padding: 0 8px;
+  height: 28px; border-radius: 8px; background: var(--bg-secondary); color: var(--fg-muted);
+}
+.thread-drawer-search:focus-within { box-shadow: 0 0 0 2px var(--accent-subtle), inset 0 0 0 1px var(--accent); }
+.thread-drawer-search-input {
+  flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 13px;
+  outline: none; -webkit-appearance: none; appearance: none;
+}
+.thread-drawer-search-input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
+.thread-drawer-search-input::placeholder { color: var(--fg-muted); }
+/* The container draws the one ring (N25): the input's own UA focus glow goes. */
+.thread-drawer-search-input:focus, .thread-drawer-search-input:focus-visible { outline: none; box-shadow: none; }
+.thread-drawer-search-clear {
+  border: 0; background: transparent; color: var(--fg-secondary); font: inherit; font-size: 11.5px;
+  padding: 2px 4px; border-radius: 5px; cursor: pointer;
+}
+.thread-drawer-search-clear:hover { color: var(--fg); background: var(--bg-hover); }
+.thread-drawer-chips {
+  display: flex; gap: 2px; margin: 0 10px 6px; padding: 2px; border-radius: 8px;
+  background: var(--bg-secondary);
+}
+.thread-drawer-chip {
+  flex: 1; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-secondary);
+  font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer;
+}
+.thread-drawer-chip[aria-pressed="true"] { background: var(--thread-chip-on); color: var(--fg); box-shadow: var(--thread-chip-on-shadow); }
+.thread-drawer-chip-count { color: var(--fg-muted); }
+.thread-drawer-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 4px 8px; }
+.thread-drawer-close:focus-visible,
+.thread-drawer-chip:focus-visible,
+.thread-drawer-search-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-drawer-close:focus:not(:focus-visible),
+.thread-drawer-chip:focus:not(:focus-visible) { outline: none; }
+
+/* ── Tree rows (spec 6.4): 44px two-line, 30px single-line, 16px indent per
+   depth with one 1px guide per level. ── */
+.thread-tree { display: flex; flex-direction: column; outline: none; }
+.thread-tree-row {
+  position: relative; display: flex; align-items: center; gap: 6px; height: 44px; flex: none;
+  padding: 0 6px 0 calc(6px + var(--depth, 0) * 16px); border-radius: 8px; color: var(--fg); cursor: pointer;
+  outline: none; user-select: none; -webkit-user-select: none;
+}
+.thread-tree-row[data-lines="1"] { height: 30px; }
+.thread-tree-row:hover { background: var(--thread-row-hover); }
+.thread-tree-row[aria-selected="true"] { background: var(--accent-subtle); }
+.thread-tree-row:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.thread-tree-row:focus:not(:focus-visible) { box-shadow: none; }
+/* Keyboard cursor in WebKit: rows are focused programmatically from the search
+   box or a sibling row, which WebKit never counts as :focus-visible (N5). */
+.thread-drawer[data-kb="true"] .thread-tree-row:focus { box-shadow: inset 0 0 0 2px var(--accent); }
+.thread-tree-row[data-ancestor-only="true"] { opacity: 0.55; }
+/* A context row (dimmed ancestor of a hit) is not an action surface (N27). */
+.thread-tree-row[data-ancestor-only="true"] :is(.thread-tree-actions, .thread-tree-text-btn) { display: none !important; }
+.thread-tree-row[data-settled="true"] { opacity: 0.6; }
+.thread-tree-row[data-pulse="true"] { animation: thread-row-pulse 1.2s ease-out; }
+@keyframes thread-row-pulse {
+  0%, 30% { box-shadow: inset 0 0 0 2px var(--accent); }
+  100% { box-shadow: inset 0 0 0 2px transparent; }
+}
+.thread-tree-guide {
+  position: absolute; top: 0; bottom: 0; left: calc(6px + var(--level, 0) * 16px + 6.5px); width: 1px;
+  background: var(--thread-guide); pointer-events: none;
+}
+.thread-tree-disclosure {
+  display: inline-grid; place-items: center; flex: none; width: 14px; height: 14px; border-radius: 4px;
+  color: var(--fg-secondary);
+}
+.thread-tree-disclosure svg { fill: currentColor; }
+.thread-tree-row:hover .thread-tree-disclosure { color: var(--fg); }
+.thread-tree-disclosure svg { transition: transform 120ms ease; }
+.thread-tree-disclosure[data-open="true"] svg { transform: rotate(90deg); }
+/* Under a filter or a search the tree cannot fold, but its triangles still say
+   where a question has follow-ups: dimmed, never below 3:1 (N26). */
+.thread-tree-disclosure[data-disabled="true"] { opacity: 0.75; cursor: default; }
+.thread-tree-row .thread-status-dot, .thread-tree-pin-icon { flex: none; }
+.thread-tree-pin-icon { color: var(--fg-secondary); }
+/* A pin reads as a quoted passage, a question as a title (N24). */
+.thread-tree-row[data-kind="pin"] .thread-tree-title { color: var(--fg-secondary); font-style: italic; font-weight: 400; }
+.thread-tree-row[data-kind="pin"] .thread-tree-title::before { content: '\201C'; }
+.thread-tree-row[data-kind="pin"] .thread-tree-title::after { content: '\201D'; }
+.thread-tree-text { display: flex; flex: 1; min-width: 0; flex-direction: column; justify-content: center; gap: 1px; }
+.thread-tree-title-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.thread-tree-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500;
+  line-height: 17px;
+}
+.thread-tree-row[data-status="resolved"] .thread-tree-title { color: var(--fg-secondary); }
+.thread-tree-row[data-kind="root"] .thread-tree-title { font-weight: 600; }
+.thread-tree-row[data-kind="done-group"] .thread-tree-title,
+.thread-tree-row[data-kind="pending"] .thread-tree-title,
+.thread-tree-row[data-kind="draft"] .thread-tree-title { color: var(--fg-secondary); font-weight: 400; }
+.thread-tree-row[data-kind="pending"] .thread-tree-title,
+.thread-tree-row[data-kind="draft"] .thread-tree-title { font-style: italic; }
+.thread-naming { flex: none; color: var(--fg-muted); font-weight: 400; font-size: 0.92em; white-space: nowrap; }
+.thread-tree-secondary {
+  display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--fg-muted); font-size: 11.5px; line-height: 15px;
+}
+.thread-tree-secondary > span { overflow: hidden; text-overflow: ellipsis; }
+.thread-tree-secondary-text { display: block; flex: 1 1 auto; min-width: 0; white-space: nowrap; }
+.thread-tree-secondary-text > :is(span, mark) { overflow: visible; }
+.thread-tree-hit { background: transparent; color: inherit; font-weight: 650; }
+.thread-tree-trailing { display: flex; flex: none; align-items: center; gap: 2px; }
+.thread-tree-pill {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--bg-secondary);
+  color: var(--fg-secondary); font-size: 11px; line-height: 18px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.thread-tree-pill[data-folded="true"] { background: color-mix(in srgb, var(--fg) 16%, transparent); color: var(--fg); }
+.thread-tree-actions { display: none; align-items: center; gap: 1px; }
+.thread-tree-row:is(:hover, :focus-visible) .thread-tree-actions { display: flex; }
+.thread-tree-row:is(:hover, :focus-visible) .thread-tree-pill { display: none; }
+.thread-drawer[data-kb="true"] .thread-tree-row:focus .thread-tree-actions { display: flex; }
+.thread-drawer[data-kb="true"] .thread-tree-row:focus .thread-tree-pill { display: none; }
+.thread-tree-action {
+  display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg-secondary); cursor: pointer;
+}
+.thread-tree-action:hover { background: var(--bg-hover); color: var(--fg); }
+.thread-tree-action--danger:hover { color: var(--error); }
+.thread-tree-text-btn {
+  flex: none; border: 0; padding: 1px 5px; border-radius: 5px; background: transparent;
+  color: var(--accent-text); font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.thread-tree-text-btn:hover { background: var(--accent-subtle); }
+.thread-tree-text-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-tree-secondary--suggested { color: var(--fg-secondary); overflow: visible; }
+/* The verdict label stays whole (N11); its Mark done / Not yet are the row's
+   hover / cursor icon buttons, never text that could be clipped. */
+.thread-tree-secondary--suggested > .thread-tree-verdict { flex: none; overflow: visible; white-space: nowrap; }
+.thread-tree-row--removed {
+  gap: 4px; height: 44px; cursor: default; color: var(--fg-muted); font-size: 12px;
+  border: 1px dashed var(--border);
+}
+.thread-tree-row--removed[data-of="pin"] { height: 30px; }
+.thread-tree-row--removed:hover { background: transparent; }
+.thread-tree-removed-sep { color: var(--fg-muted); }
+.thread-tree-group-label {
+  margin: 10px 8px 2px; color: var(--fg-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.thread-tree-row[data-kind="hidden"] { opacity: 0.8; }
+.thread-tree-empty {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 12px;
+  color: var(--fg-secondary); font-size: 12.5px;
+}
+.thread-tree-skeleton {
+  height: 30px; margin: 4px 6px; border-radius: 8px; background: var(--bg-secondary);
+  animation: thread-skeleton 1.2s ease-in-out infinite alternate;
+}
+.thread-tree-skeleton:nth-child(2) { width: 80%; margin-left: 22px; }
+.thread-tree-skeleton:nth-child(3) { width: 65%; margin-left: 38px; }
+@keyframes thread-skeleton { from { opacity: 0.55; } to { opacity: 1; } }
+.thread-tree-unread { margin-left: -4px; }
+.thread-inline-rename {
+  width: 100%; min-width: 0; height: 22px; padding: 0 6px; border: 1px solid var(--accent);
+  border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; outline: none;
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+/* ── Stack row (spec 5.2): 36px + a 20px subtitle only >= 600px; the divider is
+   a box-shadow so the chrome stays <= 56px (C70). ── */
+.thread-stack-header { flex: none; padding: 0 8px 0 6px; background: var(--bg); box-shadow: inset 0 -1px 0 var(--border); }
+.thread-stack-row { display: flex; align-items: center; gap: 6px; height: 36px; min-width: 0; }
+.thread-stack-back {
+  display: inline-flex; align-items: center; gap: 3px; flex: 0 1 auto; min-width: 26px; max-width: 34%;
+  height: 26px; padding: 0 7px 0 5px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--accent-text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.thread-stack-back[data-icon-only="true"] { flex: none; justify-content: center; width: 26px; padding: 0; }
+/* Narrow: a short iOS style back label (N7), never wider than 28% or 110px. */
+.thread-stack-back[data-narrow="true"] { max-width: min(28%, 110px); padding: 0 5px 0 3px; }
+.thread-stack-back-text, .thread-stack-crumb-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-icon--back { transform: rotate(180deg); flex: none; }
+.thread-icon--down { transform: rotate(90deg); }
+/* The page's own title answers "where am I" and wins (N6): the path shrinks
+   first (a huge flex-shrink) and the title block keeps a readable floor. */
+.thread-stack-crumbs { display: flex; align-items: center; flex: 0 1000 auto; min-width: 0; max-width: 46%; overflow: hidden; }
+.thread-stack-crumb-slot { display: inline-flex; align-items: center; min-width: 0; }
+.thread-stack-crumb {
+  display: inline-flex; min-width: 0; padding: 2px 4px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--fg-secondary); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.thread-stack-crumb--fold { flex: none; }
+.thread-stack-crumb-sep { flex: none; padding: 0 1px; color: var(--fg-muted); }
+.thread-stack-title-block { flex: 1 1 0; min-width: min(34%, 200px); }
+.thread-stack-title-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.thread-stack-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg);
+  font-size: 13.5px; font-weight: 650;
+}
+.thread-stack-subtitle {
+  height: 20px; padding-left: 38px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--fg-muted); font-size: 12px; line-height: 18px;
+}
+.thread-stack-done-split, .thread-stack-suggested { display: inline-flex; flex: none; align-items: center; gap: 0; }
+.thread-stack-suggested { gap: 6px; }
+.thread-stack-suggested-label { color: var(--thread-amber); font-size: 12px; white-space: nowrap; }
+.thread-stack-done, .thread-stack-reopen, .thread-stack-not-yet, .thread-stack-done-caret {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; height: 26px; padding: 0 9px;
+  border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--fg);
+  font: inherit; font-size: 12.5px; white-space: nowrap; cursor: pointer;
+}
+.thread-stack-done-split[data-split="true"] .thread-stack-done { border-radius: 7px 0 0 7px; }
+.thread-stack-done-caret { width: 20px; padding: 0; justify-content: center; border-left: 0; border-radius: 0 7px 7px 0; color: var(--fg-secondary); }
+.thread-stack-done:hover, .thread-stack-reopen:hover, .thread-stack-not-yet:hover, .thread-stack-done-caret:hover,
+.thread-stack-back:hover, .thread-stack-crumb:hover, .thread-stack-more:hover { background: var(--bg-hover); }
+.thread-stack-more {
+  display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; border: 0;
+  border-radius: 7px; background: transparent; color: var(--fg-secondary); cursor: pointer;
+}
+.thread-stack-more-slot { display: inline-block; flex: none; width: 26px; height: 26px; }
+/* In the session header the root menu (and its blank slot) are born with the
+   first question: they must not grow the 22px title row (N15, the page dropped
+   4px on the first send). Negative block margins keep them centred, 18px tall
+   to layout. */
+.session-panel-title-meta > :is(.thread-stack-more, .thread-stack-more-slot) { margin-block: -4px; }
+.thread-stack-more[aria-expanded="true"] { background: var(--accent-subtle); color: var(--accent-text); }
+.thread-stack-title-input { height: 24px; font-weight: 600; }
+:is(.thread-stack-back, .thread-stack-crumb, .thread-stack-done, .thread-stack-reopen, .thread-stack-not-yet,
+  .thread-stack-done-caret, .thread-stack-more):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+:is(.thread-stack-back, .thread-stack-crumb, .thread-stack-done, .thread-stack-reopen, .thread-stack-not-yet,
+  .thread-stack-done-caret, .thread-stack-more):focus:not(:focus-visible) { outline: none; }
+
+/* ── Thread menus (More, crumb fold, path, Done options): portalled, fixed,
+   placed by useMenuPlacement (inline top/right/maxHeight). ── */
+.thread-menu {
+  min-width: 190px; max-width: 320px; padding: 4px; overflow-y: auto; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--bg-elevated); box-shadow: var(--thread-drawer-shadow);
+  color: var(--fg); font-size: 13px;
+}
+.thread-menu-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 10px 0 8px; border: 0;
+  border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left;
+  cursor: pointer;
+}
+.thread-menu-item:hover, .thread-menu-item:focus-visible { background: var(--bg-hover); outline: none; }
+.thread-menu-item:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.thread-menu-item--danger { color: var(--error); }
+.thread-menu-icon { display: inline-grid; place-items: center; flex: none; width: 14px; }
+.thread-menu-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-path-menu .thread-menu-icon { display: none; }
+
+/* ── Resolved / suggested strip (spec 4 item 5, 5.7, 7.6) ── */
+.thread-strip {
+  display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; padding: 8px 12px; border-radius: 10px;
+  background: var(--bg-secondary); color: var(--fg); font-size: 13px;
+}
+.thread-strip--suggested { background: color-mix(in srgb, var(--thread-amber) 12%, var(--bg-secondary)); }
+.thread-strip-label {
+  flex: none; color: var(--fg-secondary); font-size: 11.5px; font-weight: 600; letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.thread-strip--suggested .thread-strip-label { text-transform: none; letter-spacing: 0; font-size: 12.5px; }
+.thread-strip--failed { background: color-mix(in srgb, var(--error) 9%, var(--bg-secondary)); }
+.thread-strip--failed .thread-strip-label { color: var(--error); text-transform: none; letter-spacing: 0; font-size: 12.5px; }
+.thread-strip--failed .thread-strip-waiting { flex: 1; min-width: 0; }
+.thread-strip-text {
+  flex: 1; min-width: 0; padding: 2px 4px; border: 0; border-radius: 5px; background: transparent;
+  color: var(--fg); font: inherit; text-align: left; cursor: text;
+}
+.thread-strip-text:hover { background: var(--bg-hover); }
+.thread-strip-waiting { color: var(--fg-muted); font-style: italic; }
+.thread-strip-input { flex: 1; }
+.thread-strip-btn {
+  height: 24px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg);
+  color: var(--fg); font: inherit; font-size: 12.5px; cursor: pointer;
+}
+.thread-strip-btn--primary { border-color: transparent; background: var(--accent); color: #fff; }
+.thread-strip-btn:focus-visible, .thread-strip-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── Reduced motion: no movement, no breathing, opacity only (C44, C48). ── */
+@media (prefers-reduced-motion: reduce) {
+  .thread-drawer { animation: thread-drawer-fade-in 120ms linear; }
+  .thread-drawer[data-state="closing"] { animation: thread-drawer-fade-out 120ms linear forwards; }
+  .thread-drawer-toggle-count--bump, .thread-tree-row[data-pulse="true"], .thread-tree-skeleton { animation: none; }
+  .thread-tree-disclosure svg, .thread-drawer-edge::after { transition: none; }
+}
+@keyframes thread-drawer-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes thread-drawer-fade-out { from { opacity: 1; } to { opacity: 0; } }

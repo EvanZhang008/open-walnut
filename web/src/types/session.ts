@@ -47,6 +47,32 @@ export interface SessionThreadAnchor {
   at: string;
 }
 
+/** Persisted question status. Mirrors SessionThreadStatus in src/core/types.ts. */
+export type SessionThreadStatus = 'open' | 'suggested' | 'resolved' | 'older';
+
+/** Per-question metadata keyed by the head user row msgId. Mirrors
+ *  SessionThreadMeta in src/core/types.ts (see there for field limits). */
+export interface SessionThreadMeta {
+  headId: string;
+  status: SessionThreadStatus;
+  title?: string;
+  titleSource?: 'ai' | 'user';
+  titleState?: 'pending' | 'done' | 'failed' | 'unavailable';
+  question?: string;
+  takeaway?: string;
+  takeawaySource?: 'fallback' | 'user' | 'ai';
+  takeawayState?: 'pending' | 'done' | 'failed';
+  hidden?: boolean;
+  suggestDismissed?: boolean;
+  refinedAt?: string;
+  updatedAt: string;
+}
+
+type NullableFields<T> = { [K in keyof T]?: T[K] | null };
+
+/** One upsert entry: listed fields overwrite, `null` clears, unlisted stay. */
+export type SessionThreadMetaPatch = { headId: string } & NullableFields<Omit<SessionThreadMeta, 'headId'>>;
+
 /** One pin. Mirrors SessionPinnedMessage in src/core/types.ts. */
 export interface SessionPinnedMessage {
   /** Stable message id (SessionHistoryMessage.msgId) — identity, not position. */
@@ -102,6 +128,8 @@ export interface SessionRecord {
   pinnedMessages?: SessionPinnedMessage[];
   /** Question→reply anchors — the navigation tree over this linear transcript. */
   threadAnchors?: SessionThreadAnchor[];
+  /** Per-question metadata keyed by head msgId (merged by headId on write). */
+  threadMeta?: SessionThreadMeta[];
   /** Set on a session born from a rewind: the parent message uuid its spawn
    *  resumed at. Labels the boundary divider as a rewind, not a plain fork. */
   rewoundAtMessageUuid?: string;

@@ -187,7 +187,7 @@ sessionLifecycleV1Router.get('/sessions/:id', async (req: Request, res: Response
   }
 })
 
-// PATCH /api/v1/sessions/:id { title? | archived? | mode? | human_note? | output_mode? } → { session }
+// PATCH /api/v1/sessions/:id { title? | archived? | mode? | human_note? | output_mode? | thread_anchors? | thread_meta? } → { session }
 sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = validSid(req, res)
@@ -199,15 +199,20 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
       ...(body.mode !== undefined ? { mode: body.mode } : {}),
       ...(body.human_note !== undefined ? { human_note: body.human_note } : {}),
       ...(body.output_mode !== undefined ? { output_mode: body.output_mode } : {}),
+      // Thread navigation metadata, same core as PATCH /api/sessions/:id (the
+      // web route passes the body through), so both routes validate alike.
+      ...(body.thread_anchors !== undefined ? { thread_anchors: body.thread_anchors } : {}),
+      ...(body.thread_meta !== undefined ? { thread_meta: body.thread_meta } : {}),
     }
     // The core tolerates an empty patch; the route requires at least one field
     // so a client bug (empty body) fails loudly instead of no-opping.
     if (Object.keys(patch).length === 0) {
-      sendError(res, 400, 'bad_request', 'At least one of title, archived, mode, human_note, output_mode is required')
+      sendError(res, 400, 'bad_request', 'At least one of title, archived, mode, human_note, output_mode, thread_anchors, thread_meta is required')
       return
     }
     if (CLOUD_MODE) {
-      // Metadata-only patches (title/archived/human_note/output_mode) FAST-ACCEPT when the
+      // Metadata-only patches (title/archived/human_note/output_mode/thread_anchors/
+      // thread_meta; meta is an upsert, so a late replay is safe) FAST-ACCEPT when the
       // bridge is down: persist the intent in the durable control queue and
       // answer 200 with the optimistic row — mirroring the durable
       // session.message relay. `mode` is EXCLUDED: it reconfigures the live
@@ -255,6 +260,21 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
     }
     const { patchSession } = await import('../../core/sessions/session-lifecycle.js')
     await runLocal(res, next, 200, async () => ({ session: await patchSession(sessionId, patch) }))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/v1/sessions/:id/thread-ai-calls → { calls: { <headId>: n } }. TEST-ONLY:
+// exists only while WALNUT_THREAD_AI_STUB is set (browser specs assert the
+// "at most two model calls per question" budget); 404 on every real install.
+sessionLifecycleV1Router.get('/sessions/:id/thread-ai-calls', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { THREAD_AI_STUB_ENV, threadAiCallCounts } = await import('../../core/sessions/thread-ai-stub.js')
+    if (!process.env[THREAD_AI_STUB_ENV]) { next(); return }
+    const sessionId = validSid(req, res)
+    if (!sessionId) return
+    res.json({ calls: threadAiCallCounts(sessionId) })
   } catch (err) {
     next(err)
   }

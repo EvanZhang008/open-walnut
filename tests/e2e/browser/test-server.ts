@@ -14,6 +14,10 @@ import os from 'node:os'
 import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import zlib from 'node:zlib'
+// Question stack + tree drawer fixtures (slice 1): pure data, see threads-fixture.ts.
+import {
+  allThreadsFixtures, fixtureJsonl, fixtureParkedQueues, fixtureRecord, fixtureTask, RELOAD_SESSION, THREAD_AI_STUB_PREFIX,
+} from './threads-fixture'
 
 // Set WALNUT_HOME to temp dir BEFORE importing server modules.
 // Ephemeral identity is argv-based (see IS_EPHEMERAL in src/constants.ts) — the
@@ -62,6 +66,8 @@ process.env.USERPROFILE = tmpBase
 // parks at `provision` instead of deploying anything. See providers/fake.ts.
 process.env.WALNUT_CLOUD_SETUP_FAKE = '1'
 process.argv.push('--_ephemeral-child')
+// The server's question-naming AI stub answers for these sessions (tests only).
+process.env.WALNUT_THREAD_AI_STUB = THREAD_AI_STUB_PREFIX
 
 /** Local `YYYY-MM-DD` N days from now — for fixtures that must stay in the future. */
 function futureDay(days: number): string {
@@ -540,6 +546,9 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       },
+      // Question stack + tree drawer fixtures (threads-fixture.ts): dense, AI, failed, rewritten.
+      // (Date.now(), not sessionFixtureNow: that const is declared further down.)
+      ...allThreadsFixtures(Date.now()).map((s) => fixtureTask(s, new Date().toISOString())),
       {
         // Outline-window fixture (session-outline-window.spec.ts): a 460-row
         // transcript, longer than the panel's lazy tail, so a pin can sit on a
@@ -1895,6 +1904,22 @@ await fs.mkdir(serviceFixtureRoot, { recursive: true })
   await fs.writeFile(path.join(jsonlDir, 'pw-quote-session.jsonl'), pinsTranscript('pw-quote-session', '0199cc'))
   await fs.writeFile(path.join(jsonlDir, 'pw-threads-session.jsonl'), pinsTranscript('pw-threads-session', '0199bb'))
   await fs.writeFile(path.join(jsonlDir, 'pw-threads-send-session.jsonl'), pinsTranscript('pw-threads-send-session', '0199bc'))
+  // Question stack + tree drawer fixtures: transcripts, plus the parked follow-up
+  // of the failed session (the only writer of the queue file in this fixture).
+  {
+    const threadsV2 = allThreadsFixtures(sessionFixtureNow)
+    for (const s of threadsV2) await fs.writeFile(path.join(jsonlDir, `${s.sessionId}.jsonl`), fixtureJsonl(s, sessionFixtureNow))
+    // The reload fixture (N37): the mock CLI appends each plain turn it answers
+    // to THIS session's transcript, with the uuid Walnut pre-assigned to the
+    // user line, the way the real CLI does. Only this session: every other
+    // fixture transcript stays byte-identical across a run.
+    process.env.MOCK_CLAUDE_PERSIST_DIR = path.join(tmpBase, '.claude', 'projects')
+    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = RELOAD_SESSION
+    await fs.writeFile(
+      path.join(tmpBase, 'session-message-queue.json'),
+      JSON.stringify({ version: 1, queues: fixtureParkedQueues(threadsV2, sessionFixtureNow) }),
+    )
+  }
   await fs.writeFile(path.join(jsonlDir, 'pw-stream-select-session.jsonl'), pinsTranscript('pw-stream-select-session', '0199dd'))
   await fs.writeFile(path.join(jsonlDir, 'pw-streamsel2-session.jsonl'), pinsTranscript('pw-streamsel2-session', '0199de'))
   await fs.writeFile(path.join(jsonlDir, 'pw-streamsel3-session.jsonl'), pinsTranscript('pw-streamsel3-session', '0199df'))
@@ -2406,6 +2431,9 @@ await fs.writeFile(
         cwd: vscodeFixtureRoot,
         title: 'Threads send fixture session',
       },
+      // Question stack + tree drawer fixtures (threads-fixture.ts), with their
+      // seeded anchors, meta and pins on the record.
+      ...allThreadsFixtures(sessionFixtureNow).map((s) => fixtureRecord(s, sessionFixtureNow, vscodeFixtureRoot)),
       {
         claudeSessionId: 'pw-outline-window-session',
         taskId: 'pw-task-outline-window',

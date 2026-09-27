@@ -5,11 +5,11 @@
  * The sort lives in SessionChatHistory (it needs the loaded messages array), so
  * the ordering rule is re-stated here against the same algorithm. What it pins:
  * the outline reads in CONVERSATION order, and a pin whose message isn't loaded
- * yet is still listed (last) rather than dropped — a pin the user made must never
+ * yet is still listed (last) rather than dropped: a pin the user made must never
  * silently disappear from the outline.
  */
 import { describe, it, expect } from 'vitest';
-import { pinKeyOf, pinLabelFor, shouldAdoptServerPins } from '@/hooks/useSessionPins';
+import { canRestorePins, pinKeyOf, pinLabelFor, restoreInto, shouldAdoptServerPins } from '@/hooks/useSessionPins';
 import type { SessionPinnedMessage } from '@/types/session';
 
 /** The same ordering SessionChatHistory's tocEntries memo applies. */
@@ -103,7 +103,7 @@ describe('pinKeyOf', () => {
   it('still separates them when the quote pins carry NO id', () => {
     // `pinned_messages` is a plain PATCH field, so a script/plugin/other client can
     // store a passage without an id and the server accepts it. Falling back to the
-    // msgId there gave all three pins ONE key — measured on the fixture session:
+    // msgId there gave all three pins ONE key, measured on the fixture session:
     // duplicate React keys in the outline, only one of two passages painted, and
     // removing either outline row deleted every pin on that message.
     const msg = pin('m1', '2026-08-28T10:00:00Z');
@@ -153,5 +153,38 @@ describe('outline ordering', () => {
     const pins = [pin('wm-1', '2026-08-28T10:00:00Z'), pin('a', '2026-08-28T10:00:01Z')];
     const messages = [{ msgId: 'a' }, { walnutMessageId: 'wm-1' }];
     expect(orderPins(pins, messages)).toEqual(['a', 'wm-1']);
+  });
+});
+
+describe('pin Undo (restoreInto / canRestorePins)', () => {
+  const quotePin = (id: string, msgId: string): SessionPinnedMessage => ({
+    id, msgId, label: id, role: 'assistant', pinnedAt: '2026-09-26T10:00:00Z', quote: { exact: `passage ${id}` },
+  });
+
+  it('puts the very same object back in the slot it left', () => {
+    const a = quotePin('a', 'm1');
+    const b = quotePin('b', 'm2');
+    const c = quotePin('c', 'm3');
+    const next = restoreInto([a, c], b, 1);
+    expect(next.map(pinKeyOf)).toEqual(['a', 'b', 'c']);
+    expect(next[1]).toBe(b);
+  });
+
+  it('appends when the slot is unknown and clamps a stale slot', () => {
+    const a = quotePin('a', 'm1');
+    const b = quotePin('b', 'm2');
+    expect(restoreInto([a], b).map(pinKeyOf)).toEqual(['a', 'b']);
+    expect(restoreInto([a], b, 9).map(pinKeyOf)).toEqual(['a', 'b']);
+  });
+
+  it('is a no-op for a pin that is already back (a double Undo)', () => {
+    const a = quotePin('a', 'm1');
+    expect(restoreInto([a], a).map(pinKeyOf)).toEqual(['a']);
+  });
+
+  it('tells the real store from a stub provider', () => {
+    const stub = { pins: [], isPinned: () => false, toggle: () => {}, pinQuote: () => {}, unpin: () => {}, canPinQuote: false };
+    expect(canRestorePins(stub)).toBe(false);
+    expect(canRestorePins({ ...stub, restorePin: () => {} } as never)).toBe(true);
   });
 });

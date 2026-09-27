@@ -534,9 +534,11 @@ export function ModelPicker({
 
   // Close on Escape key
   React.useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    // document, not window: it must run BEFORE the panel key router (window) so
+    // its preventDefault tells the router this Esc is taken.
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); onClose(); } };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
 
   // ── POPOUT (anchorRef callers): portal to <body>, placed by useMenuPlacement
@@ -714,7 +716,7 @@ export function ModelPicker({
                   onKeyDown={(e) => {
                     // Escape clears the query first; a second Escape (empty
                     // query → not handled here) closes the picker as usual.
-                    if (e.key === 'Escape' && acpQuery) { setAcpQuery(''); e.stopPropagation(); }
+                    if (e.key === 'Escape' && acpQuery) { e.preventDefault(); setAcpQuery(''); e.stopPropagation(); }
                     else if (e.key !== 'Escape') e.stopPropagation();
                   }}
                   spellCheck={false}

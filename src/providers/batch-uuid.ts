@@ -21,3 +21,38 @@ export function pickBatchUuid(rows: ReadonlyArray<{ userUuid?: string }>): strin
   }
   return undefined;
 }
+
+/**
+ * splitBatchAtUuid: the part of a pending run that may go out as ONE turn.
+ *
+ * A pre-assigned uuid is a question's head row (a thread anchor is keyed by it),
+ * so it must become its own transcript line and its own turn: batched with other
+ * rows, only one uuid would survive (pickBatchUuid) and the other question's
+ * anchor would point at nothing; batched with a plain row, the head line would
+ * carry someone else's text and the answer would cover both. So a uuid row at the
+ * head goes alone, and a plain run stops before the first uuid row. Rows without
+ * a uuid anywhere: the whole run, exactly today's batching.
+ */
+export function splitBatchAtUuid<T extends { userUuid?: string }>(rows: readonly T[]): T[] {
+  if (rows.length === 0) return [];
+  if (rows[0]?.userUuid) return [rows[0]];
+  const firstUuid = rows.findIndex((r) => !!r.userUuid);
+  return firstUuid < 0 ? [...rows] : rows.slice(0, firstUuid);
+}
+
+/**
+ * The uuid of the user line the CURRENT turn answers, per session: set when a
+ * batch is delivered (undefined for a plain batch), read at `session:result` by
+ * the thread titler to prove a result belongs to a question. With the split
+ * rule above a turn carries at most one uuid, so this is exact, never a guess.
+ */
+const turnUuids = new Map<string, string | undefined>();
+
+export function noteTurnUserUuid(sessionId: string, uuid: string | undefined): void {
+  if (uuid) turnUuids.set(sessionId, uuid);
+  else turnUuids.delete(sessionId);
+}
+
+export function turnUserUuid(sessionId: string): string | undefined {
+  return turnUuids.get(sessionId);
+}

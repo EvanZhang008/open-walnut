@@ -381,7 +381,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       if (sendMenuOpen && sendGroupRef.current && !sendGroupRef.current.contains(t)) setSendMenuOpen(false);
     };
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') { setPlusOpen(false); setSendMenuOpen(false); }
+      if (e.key === 'Escape') { e.preventDefault(); setPlusOpen(false); setSendMenuOpen(false); }
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);

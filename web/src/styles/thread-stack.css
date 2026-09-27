@@ -1,0 +1,245 @@
+@import './thread-stack-page.css';
+@import './thread-stack-chrome.css';
+/*
+ * Question stack + tree drawer: the single stylesheet entry (C43). The page
+ * partial belongs to the stack page, the chrome partial to the drawer and the
+ * header controls; this file holds the shared foundation: per-depth hue
+ * lightness, status dots, the panel toast, the confirm layer, icon sizing,
+ * focus rings and reduced motion. Tokens only from globals.css variables.
+ */
+
+/* ── Per-depth hue lightness (spec 5.1). One branch = one hue, so depth is told
+   apart by lightness: light 45/55/65/75, dark reversed 75/65/55/45. ── */
+:root {
+  --thread-l-1: 45%;
+  --thread-l-2: 55%;
+  --thread-l-3: 65%;
+  --thread-l-4: 75%;
+  --thread-sat: 65%;
+  --thread-alpha: 0.8;
+  --thread-root-bar: color-mix(in srgb, var(--fg-muted) 35%, transparent);
+  --thread-guide: rgba(60, 60, 67, 0.12);
+  --thread-amber: var(--warning);
+}
+:root[data-theme="dark"] {
+  --thread-l-1: 75%;
+  --thread-l-2: 65%;
+  --thread-l-3: 55%;
+  --thread-l-4: 45%;
+  --thread-sat: 55%;
+  --thread-alpha: 0.85;
+  --thread-guide: rgba(235, 235, 245, 0.1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --thread-l-1: 75%;
+    --thread-l-2: 65%;
+    --thread-l-3: 55%;
+    --thread-l-4: 45%;
+    --thread-sat: 55%;
+    --thread-alpha: 0.85;
+    --thread-guide: rgba(235, 235, 245, 0.1);
+  }
+}
+
+/* Any element carrying a depth level resolves --thread-l; set --thread-hue on
+   it (or an ancestor) and read --thread-color / --thread-color-solid. */
+[data-thread-level], .thread-status-dot {
+  --thread-l: var(--thread-l-1);
+  --thread-color: hsl(var(--thread-hue, 280) var(--thread-sat) var(--thread-l) / var(--thread-alpha));
+  --thread-color-solid: hsl(var(--thread-hue, 280) var(--thread-sat) var(--thread-l));
+}
+[data-thread-level="2"], .thread-status-dot[data-depth="2"] { --thread-l: var(--thread-l-2); }
+[data-thread-level="3"], .thread-status-dot[data-depth="3"] { --thread-l: var(--thread-l-3); }
+[data-thread-level="4"], .thread-status-dot[data-depth="4"] { --thread-l: var(--thread-l-4); }
+
+/* ── Icons: inline SVG, baseline-aligned in both engines ── */
+.thread-icon {
+  display: inline-block;
+  flex: none;
+  vertical-align: -2px;
+  overflow: visible;
+}
+
+/* ── Status dot, 8px (spec 6.4) ── */
+.thread-status-dot {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+  background: var(--thread-color-solid);
+  border: 1.5px solid var(--thread-color-solid);
+}
+.thread-status-dot[data-status="answering"] {
+  background: transparent;
+  animation: thread-dot-breathe 1s ease-in-out infinite alternate;
+}
+.thread-status-dot[data-status="resolved"] {
+  background: color-mix(in srgb, var(--success) 55%, transparent);
+  border-color: transparent;
+}
+.thread-status-dot[data-status="suggested"] {
+  background: var(--thread-amber);
+  border-color: var(--thread-amber);
+}
+.thread-status-dot[data-status="queued"] {
+  background: transparent;
+  border-style: dashed;
+}
+.thread-status-dot[data-status="failed"] { background: transparent; }
+.thread-status-dot-error {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--error);
+}
+.thread-status-dot[data-status="older"] {
+  background: transparent;
+  border-color: var(--fg-muted);
+}
+.thread-status-dot[data-status="pending"] {
+  background: transparent;
+  opacity: 0.6;
+}
+.thread-status-dot[data-status="draft"] {
+  background: transparent;
+  border-color: var(--fg-muted);
+  border-style: dashed;
+}
+.thread-status-dot--unread,
+.thread-status-dot[data-status="unread"] {
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border: none;
+}
+@keyframes thread-dot-breathe {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0.45; transform: scale(0.85); }
+}
+
+/* ── Panel toast (spec 6.8): inside the acting panel, above its composer ── */
+.thread-toast {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 8px 10px 8px 14px;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
+  font-size: 13px;
+  line-height: 18px;
+  pointer-events: auto;
+  animation: thread-toast-in 160ms ease-out;
+}
+.thread-toast-text {
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+.thread-toast-action {
+  flex: none;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.thread-toast-action:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+@keyframes thread-toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ── Confirm layer (portal, placed by useMenuPlacement) ── */
+.thread-confirm {
+  position: fixed;
+  z-index: 10000;
+  box-sizing: border-box;
+  width: 300px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.08);
+  font-size: 13px;
+  line-height: 18px;
+}
+.thread-confirm-title { font-weight: 650; }
+.thread-confirm-body { margin-top: 6px; color: var(--fg-secondary); }
+.thread-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.thread-confirm-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.thread-confirm-btn:hover { background: var(--bg-tertiary); }
+.thread-confirm-btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.thread-confirm-btn--primary:hover { background: var(--accent); filter: brightness(1.06); }
+.thread-confirm-btn--danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+}
+.thread-confirm-btn--danger:hover { background: var(--error); filter: brightness(1.06); }
+
+/* ── Focus: keyboard rings only, visible in WebKit too ── */
+.thread-toast-action:focus-visible,
+.thread-confirm-btn:focus-visible,
+[data-thread-focus-ring]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.thread-toast-action:focus:not(:focus-visible),
+.thread-confirm-btn:focus:not(:focus-visible) { outline: none; }
+/* After the rule above on purpose: the confirm's default button keeps its ring
+   while it holds focus, keyboard or not (N46, WebKit). */
+.thread-confirm .thread-confirm-btn[data-default="true"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── Reduced motion: no breathing, no slides ── */
+@media (prefers-reduced-motion: reduce) {
+  .thread-status-dot[data-status="answering"] { animation: none; }
+  .thread-toast { animation: thread-toast-fade 120ms linear; }
+}
+@keyframes thread-toast-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

@@ -13,6 +13,7 @@ import type {
   SessionProvider,
   ConversationMeta,
   SessionStatusSnapshot,
+  SessionThreadMeta,
 } from './types.js';
 
 // ── Task events ──
@@ -374,6 +375,10 @@ export interface SessionStatusChangedEvent extends SessionStatusSnapshot {
   forkedFromSessionId?: string;
   /** Present when an ACP provider replaces its externally visible session ID. */
   previousSessionId?: string;
+  /** Present when the background AI wrote question meta (a title, a verdict, a
+   *  takeaway): the whole stored list, so an open panel adopts it without a
+   *  record refetch (it refetches only on result, error and reconnect). */
+  threadMeta?: SessionThreadMeta[];
 }
 
 export interface SessionMessagesDeliveredEvent {

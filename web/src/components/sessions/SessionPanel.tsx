@@ -13,17 +13,15 @@ import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNote
 import { OutputModePill } from './OutputModePill';
 import { useSessionPins } from '@/hooks/useSessionPins';
 import { SessionPinsContext } from '@/contexts/SessionPinsContext';
-import { useComposerThreadAnchor, useSessionThreads, useSessionViewMode } from '@/hooks/useSessionThreads';
-import { SessionThreadsContext, type SessionThreadsApi } from '@/contexts/SessionThreadsContext';
-import {
-  ROOT_THREAD_KEY, composeAnchoredText, emptyThreadTree, hueForAnchor, newUserUuid,
-  threadKeyOf, type ComposerThreadAnchor, type ThreadTree,
-} from '@/utils/thread-tree';
-import { pinLabelFor } from '@/hooks/useSessionPins';
+import { usePanelThreads } from '@/hooks/useSessionThreads';
+import { SessionThreadsContext } from '@/contexts/SessionThreadsContext';
 import { releaseSelectionHold, requestSelectionHold } from '@/utils/selection-hold';
-import { ThreadAnchorChip } from './ThreadAnchorChip';
 import { SessionRecapTip } from './SessionRecapTip';
-import { SessionViewToggle } from './SessionThreadNav';
+import { ThreadToastProvider } from './ThreadPanelToast';
+import { ThreadToastBridge } from './ThreadStackFrame';
+import { ThreadDrawerToggle } from './ThreadDrawerToggle';
+import { ThreadTreeDrawer } from './ThreadTreeDrawer';
+import { ThreadStackMenu } from './ThreadStackMenu';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
 import { SessionRewindDialog } from './SessionRewindDialog';
 import { SessionFileExplorer } from './SessionFileExplorer';
@@ -81,7 +79,7 @@ import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
 import { SessionRetryButton } from './SessionRetryButton';
-import type { SessionRecord, TaskPhase } from '@/types/session';
+import type { SessionRecord, SessionThreadMeta, TaskPhase } from '@/types/session';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { SessionHostErrorText, useSessionHostHasProblem } from './SessionHostErrorBar';
@@ -537,8 +535,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   }, [sessionId]);
 
   useEvent('session:status-changed', (data) => {
-    const d = data as { sessionId?: string };
+    const d = data as { sessionId?: string; threadMeta?: SessionThreadMeta[] };
     if (d.sessionId === sessionId) {
+      // The background AI named a question, judged it answered or wrote its
+      // takeaway: the event carries the stored list, adopt it in place (the
+      // record is refetched only on result, error and reconnect).
+      if (Array.isArray(d.threadMeta)) {
+        const meta = d.threadMeta;
+        setSession(prev => prev ? { ...prev, threadMeta: meta } : prev);
+      }
       // Model backfill for idle launches (todo-launcher quick start): quick-start
       // pre-seeds the record model-less (Auto) and returns before the CLI's init
       // event writes the real model onto it. The status snapshot doesn't carry
@@ -633,26 +638,27 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // Pinned messages (the timeline outline) + the rewind entry point. Both reach
   // the memoized transcript rows through context, never props.
   const pinsApi = useSessionPins(sessionId, session?.pinnedMessages);
-  // ── Conversation threads ──
-  // The anchors are record state (here); the TREE needs the loaded transcript, so
-  // the timeline derives it and publishes it back through the context. This panel
-  // needs it for the composer chip and for the one question the send path asks:
-  // "is the anchored thread where the model currently is?"
-  const threadsStore = useSessionThreads(sessionId, session?.threadAnchors);
-  const { composerAnchor, setComposerAnchor } = useComposerThreadAnchor(sessionId);
-  const { viewMode, setViewMode } = useSessionViewMode(sessionId);
-  const [hoverThreadKey, setHoverThreadKey] = useState<string | null>(null);
-  const [threadTree, setThreadTree] = useState<ThreadTree>(emptyThreadTree);
-  const threadTreeRef = useRef(threadTree);
-  threadTreeRef.current = threadTree;
-  // The node view's current thread. It lives HERE, not in the timeline that
-  // navigates, because the composer's anchor is derived from it (see
-  // `effectiveAnchor`) — one value read by the chip, the send path and the
-  // back-reference line.
-  const [currentThreadKey, setCurrentThreadKey] = useState<string>(ROOT_THREAD_KEY);
-  // Session switch: never carry a thread key across (its labels belong to another
-  // transcript). The remounted timeline re-derives where to land.
-  useEffect(() => { setCurrentThreadKey(ROOT_THREAD_KEY); }, [sessionId]);
+  // ── Questions (conversation threads): wired by usePanelThreads below. The
+  // composer's text and focus feed the stack's Esc rule and its draft flush.
+  const composerTextRef = useRef('');
+  const composerWrapRef = useRef<HTMLDivElement>(null);
+  const composerProbe = useMemo(() => ({
+    focused: () => {
+      const el = document.activeElement;
+      return !!el && !!composerWrapRef.current?.contains(el) && el.tagName === 'TEXTAREA';
+    },
+    text: () => {
+      // An EMPTY live box wins over the mirror: ChatInput writes the mirror in a
+      // passive effect, so an Esc pressed right after Enter could still read the
+      // sent words and refuse to pop (seen under machine load). Reference chips
+      // sit outside the box, so a chips-only draft still reads through the mirror.
+      const wrap = composerWrapRef.current;
+      const box = wrap?.querySelector<HTMLTextAreaElement>('textarea.chat-input-textarea');
+      if (box && box.value.trim() === '' && !wrap?.querySelector('.composer-refs')) return '';
+      return composerTextRef.current;
+    },
+  }), []);
+  const handleComposerValue = useCallback((text: string) => { composerTextRef.current = text; }, []);
   // Focus-only composer request (Ask about a passage / Ask here). Separate from
   // prefillNonce on purpose: the quote must NOT be written into the draft — it
   // rides the chip and is composed at send time — so the user's typed text stays.
@@ -681,56 +687,23 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     composerFocusedOnMount.current = true;
     requestComposerFocus({ keepTimelinePosition: true });
   }, [focusComposer, requestComposerFocus]);
-  /**
-   * The anchor the NEXT send actually uses — and the only anchor any surface reads.
-   *
-   * LINEAR mode: the stored sticky chip, unchanged (it is the user's standing
-   * answer to "what am I asking about", and it survives scrolling anywhere).
-   *
-   * TREE mode: a VIEW of the node on screen. The screen already says which thread
-   * you are in, so storing a second, independently mutable answer is how the chip
-   * and the view come to disagree (2026-09-04: the view was inside a thread and the
-   * composer showed no chip at all, making the send target ambiguous — the one
-   * thing the node view exists to remove). Nothing writes the stored anchor on
-   * entering tree mode or on navigating; `×` on the chip navigates to the top
-   * level, which IS "clear" here.
-   *
-   * The one exception: an Ask that has not been sent yet. Its passage lives in the
-   * gesture, not in the tree, and it is what will CREATE the child thread — so
-   * while it is pending for exactly the thread on screen, it wins.
-   */
-  const effectiveAnchor = useMemo<ComposerThreadAnchor | null>(() => {
-    if (viewMode !== 'tree') return composerAnchor;
-    if (composerAnchor?.source === 'selection'
-      && threadKeyOf(composerAnchor) === currentThreadKey
-      && !threadTree.byKey.has(currentThreadKey)) {
-      return composerAnchor;
-    }
-    if (currentThreadKey === ROOT_THREAD_KEY) return null;
-    const node = threadTree.byKey.get(currentThreadKey);
-    if (node?.parent) {
-      return {
-        parent: node.parent,
-        ...(node.quote ? { quote: node.quote } : {}),
-        source: 'manual',
-        label: node.quoteLabel ?? node.label,
-      };
-    }
-    // A thread whose first question has not persisted yet: the anchor recorded at
-    // send time is still what names it.
-    const recorded = threadsStore.anchors.find(
-      (a) => a?.msgId && a.parent && threadKeyOf(a) === currentThreadKey,
-    );
-    if (!recorded) return null;
-    return {
-      parent: recorded.parent,
-      ...(recorded.quote ? { quote: recorded.quote } : {}),
-      source: 'manual',
-      label: pinLabelFor(recorded.quote?.exact, 'this thread'),
-    };
-  }, [viewMode, composerAnchor, currentThreadKey, threadTree, threadsStore.anchors]);
-  const effectiveAnchorRef = useRef(effectiveAnchor);
-  effectiveAnchorRef.current = effectiveAnchor;
+  const focusComposerKeep = useCallback(() => requestComposerFocus({ keepTimelinePosition: true }), [requestComposerFocus]);
+  const threads = usePanelThreads({
+    sessionId,
+    serverAnchors: session?.threadAnchors,
+    serverMeta: session?.threadMeta,
+    pins: pinsApi.pins,
+    panelRef,
+    // An anchor is only meaningful where the engine persists the uuid we
+    // pre-assign for the user line (the stream-json contract); ACP does not.
+    canAsk: !!sessionId && !engineUi.isAcp,
+    send,
+    interruptSend,
+    composer: composerProbe,
+    focusComposer: focusComposerKeep,
+  });
+  const threadsApi = threads.api;
+  const threadTree = threadsApi.tree;
 
   /**
    * Dictated text is about to take focus in the composer, which collapses the page's
@@ -759,37 +732,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     }
   }, [sessionId]);
 
-  /** `×` on the chip. In tree mode "no anchor" and "top level" are the same state,
-   *  so clearing navigates there; the stored selection Ask is dropped either way. */
-  const clearComposerAnchor = useCallback(() => {
-    setComposerAnchor(null);
-    if (viewMode === 'tree') setCurrentThreadKey(ROOT_THREAD_KEY);
-  }, [setComposerAnchor, viewMode]);
-
-  const threadsApi = useMemo<SessionThreadsApi>(() => ({
-    anchors: threadsStore.anchors,
-    add: threadsStore.add,
-    remove: threadsStore.remove,
-    tree: threadTree,
-    setTree: setThreadTree,
-    composerAnchor,
-    setComposerAnchor,
-    hoverThreadKey,
-    setHoverThreadKey,
-    viewMode,
-    setViewMode,
-    currentThreadKey,
-    setCurrentThreadKey,
-    // This panel HAS a session record to PATCH — but an anchor is only meaningful
-    // where the engine persists the uuid we pre-assign for the user line (the
-    // stream-json contract). An ACP worker does not, so every anchor there would
-    // point at nothing: no Ask button rather than a button that quietly fails.
-    canAsk: !!sessionId && !engineUi.isAcp,
-  }), [
-    threadsStore.anchors, threadsStore.add, threadsStore.remove, threadTree,
-    composerAnchor, setComposerAnchor, hoverThreadKey, viewMode, setViewMode,
-    currentThreadKey, sessionId, engineUi.isAcp,
-  ]);
   const [rewindTarget, setRewindTarget] = useState<{ msgId: string; label?: string } | null>(null);
   // Bumped after an IN-PLACE rewind: the transcript was truncated under the
   // same session id, so the timeline (SessionChatHistory) is remounted via its
@@ -807,7 +749,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
    * it at that number.
    */
   const rewindOtherThreads = useMemo(() => {
-    if (viewMode !== 'tree' || !rewindTarget) return 0;
+    if (!threads.stack.enabled || !rewindTarget) return 0;
     const rowIdOf = (m: { msgId?: string; walnutMessageId?: string }) => m.msgId ?? m.walnutMessageId;
     const at = historyMessages.findIndex((m) => rowIdOf(m) === rewindTarget.msgId);
     if (at < 0) return 0;
@@ -820,7 +762,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       if (key !== undefined && key !== targetKey) other++;
     }
     return other;
-  }, [viewMode, rewindTarget, historyMessages, threadTree]);
+  }, [threads.stack.enabled, rewindTarget, historyMessages, threadTree]);
   const rewindApi = useMemo<SessionRewindApi>(() => ({
     // Rewind needs the engine's own checkpointing (--resume-session-at +
     // rewind_files); engines without it hide the button instead of failing on
@@ -1395,73 +1337,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     }
   });
 
-  /**
-   * One send path for the composer, thread anchor included.
-   *
-   * With no chip this is byte-identical to a plain send. With one:
-   *
-   *  1. a v4 uuid is minted for the user line and handed to the CLI through the
-   *     RPC (`userUuid`), so the anchor can name the transcript row before it
-   *     exists — no text matching, ever;
-   *  2. the outbound text gets whatever the MODEL needs to follow along (the
-   *     quoted passage, or one line naming the thread being returned to), all of
-   *     it visible in the bubble;
-   *  3. the anchor is recorded optimistically and KEPT if the send fails: the failed
-   *     bubble still carries the uuid, Retry re-sends under it (useSessionSend), and
-   *     an anchor whose row never materialises is invisible by definition, whereas
-   *     removing it would file the retried message at the top level while the chip
-   *     still promised a thread;
-   *  4. the send CONSUMES the stored chip. One Ask, one anchored message: the next
-   *     message is the user's to aim again (the pill's Ask, an outline row), never
-   *     filed under a passage by a chip left over from the last question. Until
-   *     2026-09-18 linear mode flipped the chip to 'sticky' instead and kept it,
-   *     and the user asked for it to be "automatically de-selected" after asking —
-   *     the same rule as the quote pill's (a residual state is not a request). It
-   *     is dropped only on SUCCESS, so a failed send still shows what it was about
-   *     and Retry has the same anchor. In TREE mode the anchor is derived from the
-   *     thread on screen (`effectiveAnchor`), so the composer stays pointed at the
-   *     thread you are reading; what the send consumes there is the pending Ask,
-   *     whose passage must not be quoted a second time.
-   *
-   * The anchor read here is ALWAYS `effectiveAnchor`: the composed text (including
-   * the "(Back to the earlier thread …)" line, which still applies whenever the
-   * anchored thread is not `tree.latestKey`) has to be the one the chip promised.
-   *
-   * Without `crypto.randomUUID` (a plain-http host) we send WITHOUT a uuid and
-   * record no anchor: the message must still go, and a made-up id would only
-   * produce an anchor that points at nothing.
-   */
+  /** One send path for the composer. The question wiring (pre-assigned uuid,
+   *  anchor + meta in ONE PATCH, the orientation line) is usePanelThreads'. */
+  const threadSend = threads.sendAnchored;
   const sendAnchored = useCallback(async (
     message: string, images: ImageAttachment[] | undefined, interrupt: boolean,
   ): Promise<boolean> => {
     // A passage the quote pill held through dictation has served its purpose once
-    // the user sends: with Ask it is the chip below; without, they chose not to.
+    // the user sends.
     releaseSelectionHold(panelRef.current);
-    const anchor = effectiveAnchorRef.current;
-    const dispatch = interrupt ? interruptSend : send;
-    if (!anchor) return dispatch(sessionId, message, images);
-    const userUuid = newUserUuid();
-    // A leading `/name` stays the first word (the engine runs it only there).
-    const text = keepCommandFirst(message, (t) => composeAnchoredText(t, anchor, threadTreeRef.current.latestKey));
-    if (userUuid) {
-      threadsStore.add({
-        msgId: userUuid,
-        parent: anchor.parent,
-        ...(anchor.quote ? { quote: anchor.quote } : {}),
-        source: anchor.source,
-        at: new Date().toISOString(),
-      });
-    } else {
-      log.warn('session-panel', 'no crypto.randomUUID — sending without a thread anchor', { sessionId });
-    }
-    // The stored chip is dropped on success (point 4 above: quoted exactly once,
-    // and the next message is not filed anywhere by a leftover) and KEPT on failure
-    // so Retry still has it. In tree mode the composer stays pointed at the thread
-    // on screen through the derived anchor, which nothing here touches.
-    const ok = await dispatch(sessionId, text, images, userUuid ? { userUuid } : undefined);
-    if (ok && composerAnchor) setComposerAnchor(null);
-    return ok;
-  }, [composerAnchor, interruptSend, send, sessionId, setComposerAnchor, threadsStore]);
+    return threadSend(message, images, interrupt);
+  }, [threadSend]);
 
   // Every send goes to THIS session. An "@" reference in the text is a pill the
   // agent receives (plus a server-appended reference card); the composer never
@@ -1693,6 +1579,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           (the .session-panel root) so the `.open-walnut-fullscreen.is-changed-open`
           rule that drops the 1400px cap actually matches — otherwise the split
           view stays guttered at 1400px in this slide-out. */}
+      <ThreadToastProvider panelRef={panelRef} composerRef={composerWrapRef}>
       <div
         className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}`}
         data-session-id={sessionId}
@@ -1952,13 +1839,39 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 : <span className="session-panel-title text-muted">Untitled session</span>
               }
             </div>
+            {/* The questions drawer's button: a FIXED slot right after the flex:1
+                title, so it never moves close / fullscreen; it fades in when the
+                record's questions arrive. Absent for a session without questions. */}
+            {threads.hasQuestions && (
+              <div className="thread-drawer-toggle-slot">
+                <ThreadDrawerToggle
+                  counts={threads.counts}
+                  expanded={threads.stack.drawer.mode !== 'closed'}
+                  narrow={threads.stack.panelWidth > 0 && threads.stack.panelWidth < 560}
+                  onToggle={() => threads.stack.drawer.setMode(threads.stack.drawer.mode === 'closed' ? 'open' : 'closed')}
+                />
+              </div>
+            )}
             <div className="session-panel-title-meta">
-              {/* Linear ⇄ Tree. Only offered once the conversation HAS a branch —
-                  a session with no threads has nothing for the node view to show,
-                  so the control would be a switch to an identical screen. Stays
-                  visible while tree mode is on, or it could not be turned off. */}
-              {!loading && (threadTree.threads.length > 1 || viewMode === 'tree') && (
-                <SessionViewToggle mode={viewMode} onChange={setViewMode} />
+              {/* The root page's question menu (Show all in order / hidden
+                  questions), where the view toggle used to be. Only with questions. */}
+              {/* Below the root the menu gives way to a same-size blank slot, so the
+                  drawer toggle and the pills beside it never shift between depths. */}
+              {!loading && threads.hasQuestions && threads.stack.api.depth > 0 && threadsApi.actions && (
+                <span className="thread-stack-more-slot" aria-hidden="true" />
+              )}
+              {!loading && threads.hasQuestions && threads.stack.api.depth === 0 && threadsApi.actions && (
+                <ThreadStackMenu
+                  variant="root"
+                  visibleDescendants={0}
+                  hiddenCount={threads.hiddenCount}
+                  viewMode={threadsApi.viewMode}
+                  actions={threadsApi.actions}
+                  onShowInTree={threadsApi.revealInTree}
+                  onShowAllInOrder={() => threadsApi.setViewMode('linear')}
+                  onBackToQuestions={() => threadsApi.setViewMode('stack')}
+                  onShowHidden={() => { threads.stack.drawer.setShowHidden(true); threads.stack.drawer.open('all'); }}
+                />
               )}
               {!loading && session?.provider === 'embedded' && (
                 <span
@@ -2311,7 +2224,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           />
         </div>
 
-        <div className="session-panel-input">
+        <div className="session-panel-input" ref={composerWrapRef}>
           {/* Sticky-note bar — always visible once a note exists (also hosts the
               editor when opened from the pill/kebab while empty). Docked in the
               composer block, above the input card. */}
@@ -2330,17 +2243,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               so the user re-orients on a long session without re-reading the
               transcript. Hidden while streaming (live output makes it redundant). */}
           <SessionRecapTip sessionId={sessionId} session={session} hidden={isStreaming} />
-          {/* Thread anchor — the one visible answer to "where will this message
-              go?". In the composer block (like the notes bar), outside ChatInput,
-              which owns only the input card itself. */}
-          {effectiveAnchor && (
-            <ThreadAnchorChip
-              anchor={effectiveAnchor}
-              hue={hueForAnchor(threadTree, effectiveAnchor)}
-              onClear={clearComposerAnchor}
-              sticky={viewMode === 'tree'}
-            />
-          )}
           <ChatInput
             focusNonce={composerFocusNonce}
             // Dictating into this box takes focus and so collapses the page's
@@ -2353,7 +2255,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onInterruptSend={handleInterruptSend}
             onStop={handleStopTurn}
             isStreaming={isStreaming}
-            placeholder="Send a message to this session... (/ for commands)"
+            placeholder={threads.composerPlaceholder ?? 'Send a message to this session... (/ for commands)'}
+            onValueChange={handleComposerValue}
             showCommands={false}
             sessionCommands={slashCommands}
             searchSessionCommands={searchSlashCommands}
@@ -2366,7 +2269,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             plusMenuActions={engineSettingsEntry.plusMenuActions}
             enableEntityMention
             sessionMentionSelfId={sessionId}
-            draftKey={`draft:session:${sessionId}`}
+            // Per page: the root keeps `draft:session:<id>` (old drafts survive),
+            // a question page and a pending Ask each have their own.
+            draftKey={threads.draftKey}
             prefillText={prefillText}
             prefillNonce={prefillNonce}
             prefillMode={prefillMode}
@@ -2387,7 +2292,40 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           </div>{/* .session-panel-chat-col */}
         </div>{/* .session-panel-split */}
         {engineSettingsEntry.popover}
+        {/* The questions drawer: an overlay inside this panel (never widens or
+            pads the transcript), for a session with questions. */}
+        {threads.hasQuestions && threadsApi.actions && (
+          <ThreadTreeDrawer
+            sessionId={sessionId}
+            panelRef={panelRef}
+            tree={threadTree}
+            index={threadsApi.metaIndex}
+            meta={threads.meta}
+            pins={pinsApi.pins}
+            pinsApi={pinsApi}
+            live={threadsApi.derived.live}
+            drafts={threads.stack.api.drafts}
+            {...(threads.stack.api.pending ? { pending: threads.stack.api.pending } : {})}
+            currentKey={threadsApi.currentThreadKey}
+            unreadKeys={threadsApi.unreadKeys}
+            answeredAt={threadsApi.derived.answeredAt}
+            mode={threads.stack.drawer.mode}
+            setMode={threads.stack.drawer.setMode}
+            revealNonce={threads.stack.drawer.revealNonce}
+            showHidden={threads.stack.drawer.showHidden}
+            setShowHidden={threads.stack.drawer.setShowHidden}
+            actions={threadsApi.actions}
+            onNavigate={(key, via) => {
+              if (threadsApi.viewMode !== 'stack') threadsApi.setViewMode('stack');
+              threads.stack.api.pushTo(key, via);
+            }}
+            onJumpPin={(pinKey, threadKey) => threadsApi.requestPinJump(pinKey, threadKey)}
+            {...(threads.stack.drawer.filter ? { initialFilter: threads.stack.drawer.filter } : {})}
+          />
+        )}
+        <ThreadToastBridge apiRef={threads.toastRef} />
       </div>
+      </ThreadToastProvider>
     </SessionPanelErrorBoundary>
     </SessionRewindContext.Provider>
     </SessionThreadsContext.Provider>

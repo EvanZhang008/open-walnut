@@ -166,7 +166,7 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     expect(stillOnScreen.top).toBeLessThan(stillOnScreen.boxBottom)
     await shot(page, '03-pill-survived-turn-end')
 
-    // Ask still works after all that, and lands the composer chip on the passage.
+    // Ask still works after all that, and opens a question page on the passage.
     //
     // Pressed the way a HAND presses it: mouse down, a beat, mouse up. Playwright's
     // .click() sends down+up with no frame in between, which hides the real defect
@@ -180,10 +180,12 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     await page.mouse.down()
     await page.waitForTimeout(180)
     await page.mouse.up()
-    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
-    await expect(chip).toBeVisible()
-    await expect(chip).toContainText('never blocks')
-    await shot(page, '04-composer-chip-from-live-reply')
+    await expect(panel.locator('.thread-stack:not([data-thread-depth="0"])')).toHaveAttribute('data-thread-depth', '1')
+    await expect(panel.locator('.thread-stack .thread-quote-head')).toContainText('never blocks')
+    await shot(page, '04-question-page-from-live-reply')
+    // Esc on the unsent, empty page goes back to the reply (nothing is saved).
+    await page.keyboard.press('Escape')
+    await expect(panel.locator('.thread-stack:not([data-thread-depth="0"])')).toHaveCount(0)
 
     // Ask clears the selection, so the freeze releases and the frozen block
     // collapses into its persisted twin. Content alone would prove nothing here
@@ -261,9 +263,8 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     await page.waitForTimeout(220)
     await page.mouse.up()
 
-    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
-    await expect(chip).toBeVisible()
-    await expect(chip).toContainText('never blocks')
+    await expect(panel.locator('.thread-stack:not([data-thread-depth="0"])')).toHaveAttribute('data-thread-depth', '1')
+    await expect(panel.locator('.thread-stack .thread-quote-head')).toContainText('never blocks')
     await shot(page, '06-ask-pressed-mid-answer')
   })
 })

@@ -31,6 +31,7 @@ import { withFileLock } from '../utils/file-lock.js';
 import { readJsonFile, updateJsonFile } from '../utils/fs.js';
 import { SESSION_QUEUE_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
+import { splitBatchAtUuid } from '../providers/batch-uuid.js';
 
 // ── Types ──
 
@@ -324,11 +325,23 @@ export async function sendMessageToSession(
 }
 
 /**
- * Mark all 'pending' messages for a session as 'processing'.
+ * Mark the next deliverable run of 'pending' messages for a session as 'processing'.
  * Returns the messages that were marked (the batch to send to Claude).
  * Returns empty array if no pending messages.
+ *
+ * A row carrying a pre-assigned `userUuid` (a question's head row) is never
+ * batched: at the head it goes alone, otherwise the run stops before it
+ * (splitBatchAtUuid), so every turn carries at most one uuid row. `midTurn`
+ * marks NOTHING while any pending row carries a uuid: a question must start its
+ * own turn, never ride inside the answer to another one; processNext picks it
+ * up when the current turn ends.
  */
-export async function markProcessing(sessionId: string, stopFence?: string | null): Promise<QueuedMessage[]> {
+export async function markProcessing(
+  sessionId: string,
+  stopFence?: string | null,
+  opts?: { midTurn?: boolean },
+): Promise<QueuedMessage[]> {
+  let deferredForQuestion = false;
   const pending = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return [];
@@ -340,12 +353,20 @@ export async function markProcessing(sessionId: string, stopFence?: string | nul
         message.parkedReason = 'Session stopped by user; retry explicitly to send';
       }
     }
-    const batch = queue.filter((m) => m.status === 'pending');
+    const pendingRows = queue.filter((m) => m.status === 'pending');
+    if (opts?.midTurn && pendingRows.some((m) => m.userUuid)) {
+      deferredForQuestion = true;
+      return [];
+    }
+    const batch = splitBatchAtUuid(pendingRows);
     for (const m of batch) {
       m.status = 'processing';
     }
     return batch;
   }, stopFence !== undefined);
+  if (deferredForQuestion) {
+    log.session.info('mid-turn injection deferred: a question row starts its own turn', { sessionId });
+  }
   if (pending.length === 0) return [];
   log.session.info('messages batched for delivery', { sessionId, count: pending.length });
   return pending;

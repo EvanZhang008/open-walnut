@@ -170,3 +170,17 @@ export function requestHoldFromPage(page: Page, sid: string): Promise<boolean> {
     return detail.held
   }, sid)
 }
+
+/** The question page the pill's Ask opens: the stack frame at depth 1 or more. At
+ *  the top level the frame is `.thread-stack-off` (no questions yet) or
+ *  `.thread-stack[data-thread-depth="0"]` (a session that has questions), so both
+ *  count as "no page". Ask used to put an "asking about" chip on the composer; since
+ *  the stack view it opens this page. */
+export function questionPage(panel: Locator): Locator {
+  return panel.locator('.thread-stack:not([data-thread-depth="0"])')
+}
+
+/** The passage the page on screen asks about (its quote head). */
+export function questionQuote(panel: Locator): Locator {
+  return panel.locator('.thread-stack .thread-quote-head')
+}

@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ROOT_THREAD_KEY, THREAD_HUES, buildThreadTree, composeAnchoredText, hueForAnchor,
   pathToRoot, quoteBlockOf, siblingsOf, threadKeyOf, withPendingUserRows,
+  composeOrientedText, findSamePassageThread, normalizePassage, BACK_TO_MAIN_LINE,
 } from '@/utils/thread-tree';
 import type { SessionThreadAnchor } from '@/types/session';
 import type { ThreadTreeMessage } from '@/utils/thread-tree';
@@ -416,5 +417,59 @@ describe('withPendingUserRows', () => {
       { msgId: 'new-uuid', parent: 'r1', source: 'selection', at: 't' } as SessionThreadAnchor,
     ]);
     expect(tree.byKey.get(tree.latestKey)?.turnIds).toEqual(['new-uuid']);
+  });
+});
+
+describe('the head row leads with its quote block (the page hides it in CSS)', () => {
+  it('a composed question starts with the markdown quote of its passage', () => {
+    const quote = { exact: 'line one\n\nline two' };
+    const sent = composeAnchoredText('What does this mean?', { parent: 'r1', quote, source: 'selection', label: 'x' }, ROOT_THREAD_KEY);
+    expect(sent.startsWith(quoteBlockOf(quote))).toBe(true);
+  });
+});
+
+describe('composeOrientedText (C58)', () => {
+  const titleOfKey = (k: string) => (k === 'k-deep' ? 'Cache eviction order' : 'Other');
+  it('root send after a deep question leads with the back-to-main line', () => {
+    const out = composeOrientedText('Next step?', { latestKey: 'k-deep', currentKey: ROOT_THREAD_KEY, titleOfKey });
+    expect(out.startsWith(BACK_TO_MAIN_LINE)).toBe(true);
+    expect(out).toBe('(Back to the main conversation)\n\nNext step?');
+  });
+  it('a page whose question is not the newest names it by display title', () => {
+    const out = composeOrientedText('And the tail?', { latestKey: 'k-other', currentKey: 'k-deep', titleOfKey });
+    expect(out).toBe('(Back to the earlier question about “Cache eviction order”)\n\nAnd the tail?');
+  });
+  it('adds nothing when the newest turn is on this page (root or question)', () => {
+    expect(composeOrientedText('x', { latestKey: 'k-deep', currentKey: 'k-deep', titleOfKey })).toBe('x');
+    expect(composeOrientedText('x', { latestKey: ROOT_THREAD_KEY, currentKey: ROOT_THREAD_KEY, titleOfKey })).toBe('x');
+  });
+  it('never uses the old thread wording', () => {
+    const out = composeOrientedText('x', { latestKey: 'k-other', currentKey: 'k-deep', titleOfKey });
+    expect(out).not.toMatch(/thread/i);
+  });
+});
+
+describe('findSamePassageThread (plan A)', () => {
+  const messages = [user('u0'), reply('r0', 'alpha beta gamma delta'), user('u1'), reply('r1'), user('u2'), reply('r2')];
+  const anchors = [
+    anchor('u1', 'r0', { quote: { exact: 'alpha beta' } }),
+    anchor('u2', 'r0', { quote: { exact: 'gamma delta' } }),
+  ];
+  const tree = buildThreadTree(messages, anchors);
+  const k1 = threadKeyOf(anchors[0]);
+  it('finds the visible question on the same passage, whitespace-insensitive', () => {
+    expect(findSamePassageThread(tree, anchors, new Set(), { parent: 'r0', quote: { exact: '  alpha\nbeta ' } })).toBe(k1);
+  });
+  it('partial overlap, another reply, or a whole-reply target open a new question', () => {
+    expect(findSamePassageThread(tree, anchors, new Set(), { parent: 'r0', quote: { exact: 'alpha' } })).toBeNull();
+    expect(findSamePassageThread(tree, anchors, new Set(), { parent: 'r1', quote: { exact: 'alpha beta' } })).toBeNull();
+    expect(findSamePassageThread(tree, anchors, new Set(), { parent: 'r0' })).toBeNull();
+  });
+  it('a hidden question never matches', () => {
+    expect(findSamePassageThread(tree, anchors, new Set([k1]), { parent: 'r0', quote: { exact: 'alpha beta' } })).toBeNull();
+  });
+  it('normalizePassage folds width and whitespace', () => {
+    // Full-width A and B (test data as escapes).
+    expect(normalizePassage('\uFF21\uFF22  c\n')).toBe('AB c');
   });
 });

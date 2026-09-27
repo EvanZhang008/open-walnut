@@ -4,6 +4,8 @@ import type { ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { hasActiveModalOverlay, lockScroll, unlockScroll } from './useModalOverlay';
 import { traceInteraction } from '@/utils/interaction-timer';
+import { keyTargetClaimsEscape } from './usePanelKeyRouter';
+import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 
 /** Window event every live fullscreen sheet exits on. Fired by `yieldFullscreen`. */
 export const FULLSCREEN_YIELD_EVENT = 'fullscreen:yield';
@@ -91,8 +93,10 @@ export function useFullscreen() {
     if (!isFullscreen) return;
     lockScroll();
     const handleKeyDown = (e: KeyboardEvent) => {
-      // An open modal over the sheet (a transcript reader) closes first.
-      if (e.key === 'Escape' && !hasActiveModalOverlay()) {
+      // A consumer that used the Esc (palette, picker, confirm) prevented it, and a
+      // question page or open drawer in the target panel claims it first: one Esc
+      // closes one layer, fullscreen exits only at the root with nothing open.
+      if (e.key === 'Escape' && !hasActiveModalOverlay() && !escapeWasConsumedByOthers(e) && !keyTargetClaimsEscape()) {
         e.stopPropagation();
         setIsFullscreen(false);
       }

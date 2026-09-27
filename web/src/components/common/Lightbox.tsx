@@ -9,7 +9,7 @@ interface LightboxProps {
 
 export function Lightbox({ src, alt, onClose }: LightboxProps) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'Escape') onClose();
+    if (e.key === 'Escape') { e.preventDefault(); onClose(); }
   }, [onClose]);
 
   useEffect(() => {

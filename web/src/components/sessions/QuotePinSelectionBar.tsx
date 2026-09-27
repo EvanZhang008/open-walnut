@@ -55,6 +55,15 @@ import { ICON_PIN } from './MessageActionIcons';
 import { rangePoint, sameBoundaries, useHeldPassage, type HeldPoint } from './useHeldPassage';
 import { log } from '@/utils/log';
 
+/** A speech bubble with a question mark: Ask opens a question page. */
+const ICON_ASK = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
+    <path d="M6.6 5.6a1.5 1.5 0 1 1 2 1.4c-.4.2-.6.5-.6.9" />
+    <path d="M8 9.3v.01" />
+  </svg>
+);
+
 export interface QuotePinTarget {
   msgId: string;
   role: 'user' | 'assistant' | 'system';
@@ -169,6 +178,9 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
    * did nothing at all (measured). Self-clearing: any press elsewhere sets it back.
    */
   const pressedPill = useRef(false);
+  /** The primary button is down on something other than the pill: a selection
+   *  may be being dragged, so no pill until it is released. */
+  const selectingRef = useRef(false);
   /** The capture behind the pill, for the listeners: the scroll handler must
    *  re-anchor an existing pill without ever conjuring one, and a held passage is
    *  re-located from this. A ref so the one listener set never has to be torn
@@ -235,6 +247,11 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
       if (stillHeld) { held.repair(); return; }
       held.clearHold();
     }
+    // A drag in progress is not a selection yet. A pill shown now sits under the
+    // moving pointer, and WebKit then extends the selection ONTO the pill (a node
+    // outside the transcript), so the drag ends selecting to the end of the page
+    // with no pill at all. An earlier pill goes; the new one comes at the release.
+    if (selectingRef.current) { setState(null); return; }
     const live = readLiveSelection(container, selection);
     if (!live) { setState(null); return; }
     setState((prev) => {
@@ -256,7 +273,10 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
       raf = requestAnimationFrame(evaluate);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { dismiss(); return; }
+      // An evaluate still queued from before the Esc (a late selectionchange or
+      // scroll) would read the selection that is still there and put the pill
+      // straight back: cancel it with the dismissal.
+      if (e.key === 'Escape') { cancelAnimationFrame(raf); dismiss(); return; }
       schedule();
     };
     // A scroll used to DISMISS the pill outright, which made it unusable for the
@@ -312,6 +332,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     // before anything can move the DOM out from under the target.
     const onPointerDown = (e: PointerEvent) => {
       pressedPill.current = !!pillRef.current?.contains(e.target as Node);
+      selectingRef.current = e.button === 0 && !pressedPill.current;
       if (!held.heldRef.current || pressedPill.current) return;
       // A held pill has no selection left for the guard in main.tsx to clear, so it
       // decides for itself, by that guard's rules: a right/middle press is the
@@ -339,7 +360,14 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
       if (!addressedHere(e) || !held.heldRef.current) return;
       dismiss();
     };
+    // The release ends the drag before `mouseup` (which follows it) evaluates, so
+    // the pill appears where the mouse let go. A release the page never sees (the
+    // window lost focus mid-drag) must not leave the pill off for good.
+    const endSelecting = () => { selectingRef.current = false; };
     document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('pointerup', endSelecting, true);
+    document.addEventListener('pointercancel', endSelecting, true);
+    window.addEventListener('blur', endSelecting);
     document.addEventListener('selectionchange', schedule);
     document.addEventListener('mouseup', schedule);
     document.addEventListener('keyup', onKey);
@@ -349,6 +377,9 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     return () => {
       cancelAnimationFrame(raf);
       document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('pointerup', endSelecting, true);
+      document.removeEventListener('pointercancel', endSelecting, true);
+      window.removeEventListener('blur', endSelecting);
       document.removeEventListener('selectionchange', schedule);
       document.removeEventListener('mouseup', schedule);
       document.removeEventListener('keyup', onKey);
@@ -388,7 +419,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
       quote: state.quote,
     });
     // Same gesture-time capture as Pin (the quote is already in `state`); the
-    // selection goes so the only mark left is the composer chip.
+    // selection goes: the page the Ask opens carries the passage as its quote head.
     window.getSelection()?.removeAllRanges();
     dismiss();
   }, [onAsk, sessionId, state, dismiss]);
@@ -397,6 +428,21 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
     if (state?.text.trim()) void copyTextRobust(state.text);
     dismiss();
   }, [state, dismiss]);
+
+  // While the pill is up, Esc belongs to it (dismissed on keyup above): claim the
+  // keydown so neither the question stack's Esc (the window router) nor
+  // fullscreen's (a document listener that skips a prevented Esc) also acts. The
+  // CAPTURE phase, because fullscreen's bubble listener was registered first and
+  // would otherwise run before this one. One Esc closes one layer.
+  const shown = !!state;
+  useEffect(() => {
+    if (!shown) return;
+    const onDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.isComposing && e.keyCode !== 229) e.preventDefault();
+    };
+    document.addEventListener('keydown', onDown, true);
+    return () => document.removeEventListener('keydown', onDown, true);
+  }, [shown]);
 
   if (!state) return null;
 
@@ -442,9 +488,9 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk }: 
           data-testid="quote-ask-btn"
           onMouseDown={(e) => e.preventDefault()}
           onClick={ask}
-          title="Ask about this passage (starts a thread)"
+          title="Ask about this passage (opens a question page)"
         >
-          <span aria-hidden="true">↳</span>
+          {ICON_ASK}
           <span>Ask</span>
         </button>
       )}

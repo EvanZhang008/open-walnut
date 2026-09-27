@@ -186,7 +186,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     setSendError(null);
 
     if (activeSessionId) {
-      wsClient.sendRpc<{ messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string; parkedReason?: string }> }>(
+      wsClient.sendRpc<{ messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string; parkedReason?: string; userUuid?: string }> }>(
         'session:get-queue',
         { sessionId: activeSessionId }
       ).then((res) => {
@@ -221,6 +221,10 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
                   status: (m.status === 'processing' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
                   ...(parked ? { parked: true, failedError: m.parkedReason } : {}),
                   ...(display !== historyBasis ? { dedupText: historyBasis } : {}),
+                  // The pre-assigned CLI uuid: a question's follow-up keeps its
+                  // place in the question tree across a reload (its own page,
+                  // and a parked one marks the question failed).
+                  ...(m.userUuid ? { userUuid: m.userUuid } : {}),
                 };
               });
             return [...prev, ...newMsgs];

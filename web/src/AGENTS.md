@@ -148,19 +148,42 @@ show inline after the open ones, other completed hits that show the query fold i
   persists the user line under exactly that uuid, its own stream-json contract), and names the
   reply it hangs off by that row's msgId (an API `msg_…` id on real transcripts, so never gate a
   parent on the v4 shape). Everything else is derived: `utils/thread-tree.ts` is the only model
-  (thread key = parent + passage; a follow-up filed in the same thread, from the node view or an
-  outline row's click, copies the anchor verbatim, which is what keeps it in the same thread), the
-  rail / gutter / `↳` tag in linear mode and the node view in tree mode are two renderers of that
-  tree. Tree mode FILTERS the existing timeline items inside `SessionChatHistory` by row thread;
-  it must never grow a second row renderer or history/stream pipeline. Anything the send adds for
-  the model (the quoted passage, the one-line "Back to the earlier thread about …"
-  re-orientation) is composed into the visible message text (`composeAnchoredText`), never a
-  hidden side channel. **The composer chip is consumed by the send** (one Ask, one anchored
-  message; 2026-09-18 user call, the same "a leftover state is not a request" rule as the quote
-  pill), and in the node view it is DERIVED from the thread on screen, never stored. **Every mark
-  a thread paints is also the way back to its passage**: the `↳` tag is a button and the gutter
-  bar's strip is clickable (`jumpToThreadOrigin`), landing where the outline's thread row lands.
-  Ratchets: `tests/web/thread-tree.test.ts`, `tests/e2e/browser/session-threads.spec.ts`.
+  (thread key = parent + passage). The UI calls them **questions**; the word "thread" never
+  appears in visible text or an aria-label (code identifiers keep it).
+  **The Stack is the only page renderer.** A question page is the SAME timeline scroll box in
+  `SessionChatHistory`, filtered to one question's turns (`partThreadKey === currentKey`) and
+  decorated by `ThreadStackFrame` (sliver of ancestor bars, the P4 stack header, the quote head,
+  "Asked from this answer" rows). Never add a second row renderer or history/stream pipeline, and
+  never remount the scroll box on a push or pop (the frame is always mounted, `display: contents`
+  when off). Navigation is `useThreadStack` (path, per-page drafts, Esc through
+  `usePanelKeyRouter`, `data-thread-depth` on the panel root, sessionStorage
+  `thread-stack.v1:<sid>` plus the `t<n>` URL leaf); landing on a pop is `useThreadLanding`
+  (restore scroll, correct once, flash the passage, `armBack: false` so a pop never arms the
+  outline's Back). The pure rules live in `utils/thread-stack-state.ts` and are unit tested.
+  **Asking opens a page before anything is written**: a pending page (`pending:<parent>:<hash>`)
+  holds the quote head and an empty composer; the first send does ONE PATCH carrying
+  `thread_anchors` + `thread_meta` together, and the text the model sees is composed into the
+  visible message (`composeAnchoredText` / `composeOrientedText`), never a hidden side channel.
+  The same passage asked twice goes to the existing page (one passage, one mark, one page).
+  **Live blocks belong to the page of the turn that wrote them.** A queued question never claims
+  the running answer, and a FINISHED turn's blocks stay on its page until the transcript absorbs
+  them (`recordTurnSegments` / `blockPageKey`: a turn is matched to the oldest delivery not yet
+  matched; the main conversation's key is `''`, a real owner, so "unknown" is `null`). Without
+  this, three Asks sent during one answer pulled that answer onto the last question's page.
+  **Every mark a question paints is also the way back to it**: a mark in an answer (CSS Custom
+  Highlight, hit-tested by caret position in `utils/thread-mark-hit.ts`) pushes its page, the
+  quote head and the sliver pop to the passage, and in "Show all in order" the 3px gutter bar
+  jumps to the origin (`jumpToThreadOrigin`). "Show all in order" is the plain linear transcript
+  (view key `walnut:session-view.v2:<sid>`, default stack; the old key is never read).
+  Ratchets: `tests/web/thread-tree.test.ts`, `tests/web/thread-stack-state.test.ts`,
+  `tests/e2e/browser/session-threads*.spec.ts`.
+- **Side question vs Ask: two features, pick by context.** A side question (`SideQuestionDrawer`,
+  the btw fork) runs in an ISOLATED context: a one-off aside whose answer must not enter the main
+  conversation, so the main session never sees it. Ask (select a passage, then Ask) is a
+  question IN the main conversation: every follow-up goes into the one transcript the main
+  session reads, and the Stack only changes what is on screen. Use a side question when you do
+  not want to spend or steer the main context; use Ask to dig into a sentence of the main
+  conversation. Do not merge them, and do not label either with the other's words.
 - **The outline reads in transcript order, and the loaded history is a TAIL window.** A pin
   whose message is not loaded is almost always OLDER than every loaded row, so it is placed by
   its message's timestamp (`components/sessions/outline-order.ts`: half a step before the first

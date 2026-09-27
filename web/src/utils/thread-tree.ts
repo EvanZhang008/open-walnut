@@ -109,8 +109,8 @@ export interface ThreadTreeMessage {
    * The uuid this user line was PRE-ASSIGNED at send time (the harness's own
    * stream-json contract), carried by the optimistic row until the transcript
    * catches up. It is the id the anchor was recorded under, so a row holding it
-   * is already a member of its thread — the `↳` tag and the gutter bar appear in
-   * the same frame as the send instead of one history fetch later.
+   * is already a member of its thread: the question shows on its own stack page
+   * in the same frame as the send instead of one history fetch later.
    */
   userUuid?: string;
   walnutMessageId?: string;
@@ -421,4 +421,57 @@ export function newUserUuid(): string | undefined {
   const c = typeof crypto !== 'undefined' ? crypto : undefined;
   if (c && typeof c.randomUUID === 'function') return c.randomUUID();
   return undefined;
+}
+
+/** First line of the text the model reads when the subject changes. */
+export const BACK_TO_MAIN_LINE = '(Back to the main conversation)';
+
+/**
+ * Re-orientation for a send from a stack page (spec 5.4). The model reads ONE
+ * linear context, so when the newest turn is elsewhere the message leads with a
+ * visible line naming where it goes back to:
+ *  - root page, newest turn in a question: `(Back to the main conversation)`;
+ *  - a question page, newest turn elsewhere: `(Back to the earlier question
+ *    about “<title>”)` with the page's display title;
+ *  - the newest turn is on this page: the message as typed.
+ */
+export function composeOrientedText(
+  message: string,
+  opts: { latestKey: string; currentKey: string; titleOfKey: (key: string) => string },
+): string {
+  if (opts.latestKey === opts.currentKey) return message;
+  if (opts.currentKey === ROOT_THREAD_KEY) return `${BACK_TO_MAIN_LINE}\n\n${message}`;
+  return `(Back to the earlier question about “${opts.titleOfKey(opts.currentKey)}”)\n\n${message}`;
+}
+
+/** Whitespace-collapsed NFKC form: two selections of one passage compare equal
+ *  even when one picked up a trailing space or a soft line break. */
+export function normalizePassage(text: string | undefined): string {
+  return (text ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Ask on a passage that already has a visible question under the same reply:
+ * return that question's key (plan A: one passage, one mark, one question), so
+ * the stack pushes to it instead of opening a second question. Partial overlap,
+ * a whole-reply question, or a hidden question never match.
+ */
+export function findSamePassageThread(
+  tree: ThreadTree,
+  anchors: readonly SessionThreadAnchor[] | undefined,
+  hiddenKeys: ReadonlySet<string>,
+  target: { parent: string; quote?: SessionPinnedQuote },
+): string | null {
+  const want = normalizePassage(target.quote?.exact);
+  if (!want || !target.parent) return null;
+  for (const node of tree.threads) {
+    if (node.key === ROOT_THREAD_KEY || hiddenKeys.has(node.key)) continue;
+    if (node.parent === target.parent && normalizePassage(node.quote?.exact) === want) return node.key;
+  }
+  for (const a of anchors ?? []) {
+    if (a.parent !== target.parent || normalizePassage(a.quote?.exact) !== want) continue;
+    const key = threadKeyOf(a);
+    if (tree.byKey.has(key) && !hiddenKeys.has(key)) return key;
+  }
+  return null;
 }

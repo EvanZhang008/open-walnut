@@ -1322,6 +1322,21 @@ an id outside `[A-Za-z0-9_-]`.
   required. Archiving clears the owning task's session slots; archiving a
   terminal-state session is tolerated; a live mode switch that the CLI rejects
   → `409 conflict`.
+  - Optional (additive, 2026-09): `"thread_anchors"` (the whole anchor list,
+    same rules as `PATCH /api/sessions/:id`) and `"thread_meta"`, a list of
+    per-question entries `{ "headId", "status"?, "title"?, "titleSource"?,
+    "titleState"?, "question"?, "takeaway"?, "takeawaySource"?,
+    "takeawayState"?, "hidden"?, "suggestDismissed"?, "refinedAt"? }`.
+    `thread_meta` is an UPSERT by `headId`, not a replace: listed fields
+    overwrite, `null` clears a field, entries and fields you leave out stay as
+    they are, and the server stamps `updatedAt` on every entry it changes.
+    Limits: `headId` 1 to 128 chars, `status` one of
+    `open|suggested|resolved|older`, `title` at most 120 chars, `takeaway` at
+    most 280, at most 500 entries per body; `question` is cut to 400 chars
+    without an error. Any other shape, an unknown enum value, `status: null`,
+    or `thread_meta` together with `mode` answers `400 bad_request` and stores
+    nothing. When anchors and meta ride one body, the anchors apply first. An
+    entry whose `headId` has no anchor is dropped once it is 10 minutes old.
 - `POST /api/v1/sessions/:id/terminate` body `{ "force"? }` →
   `200 { "status": "terminated", "sessionId", "tookMs"? }` — kills the running
   CLI, no respawn, pending queue preserved. If the session owns armed

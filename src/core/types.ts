@@ -1958,6 +1958,45 @@ export interface SessionThreadAnchor {
   at: string;
 }
 
+/** Persisted question status. `older` = a question created before meta existed
+ *  (or lazily titled later): shown, never counted as open. */
+export type SessionThreadStatus = 'open' | 'suggested' | 'resolved' | 'older';
+
+/**
+ * Per-question navigation metadata, keyed by the question's HEAD user row msgId
+ * (the anchor's `msgId`). Walnut-owned, merged by headId on every PATCH (upsert,
+ * never a whole-list replace), so a server AI title and a client Done can write
+ * the same entry concurrently without one erasing the other.
+ */
+export interface SessionThreadMeta {
+  /** The question's first user row msgId (= that anchor's msgId), <= 128 chars. */
+  headId: string;
+  status: SessionThreadStatus;
+  /** <= 120 chars. */
+  title?: string;
+  titleSource?: 'ai' | 'user';
+  titleState?: 'pending' | 'done' | 'failed' | 'unavailable';
+  /** First 400 chars of the head question as typed, without the quote block. */
+  question?: string;
+  /** <= 280 chars. */
+  takeaway?: string;
+  takeawaySource?: 'fallback' | 'user' | 'ai';
+  takeawayState?: 'pending' | 'done' | 'failed';
+  /** Hides this question AND its subtree from the stack and the tree. */
+  hidden?: boolean;
+  /** The user clicked Not yet: never suggest this one as answered again. */
+  suggestDismissed?: boolean;
+  /** ISO; the one refine call on the first answer already ran. */
+  refinedAt?: string;
+  /** ISO, stamped by the server on every write to this entry. */
+  updatedAt: string;
+}
+
+type Nullable<T> = { [K in keyof T]?: T[K] | null };
+
+/** One upsert entry: listed fields overwrite, `null` clears, unlisted stay. */
+export type SessionThreadMetaPatch = { headId: string } & Nullable<Omit<SessionThreadMeta, 'headId'>>;
+
 /** Stable subset of ACP initialize capabilities used by routes and UI guards. */
 export interface AcpSessionCapabilities {
   loadSession: boolean;
@@ -2105,6 +2144,9 @@ export interface SessionRecord {
    *  order they were recorded. Pure navigation metadata: the client builds the
    *  tree, the server only validates and stores (see SessionThreadAnchor). */
   threadAnchors?: SessionThreadAnchor[];
+  /** Per-question metadata (status, title, takeaway, hidden), keyed by head
+   *  msgId and merged by headId on write (see SessionThreadMeta). */
+  threadMeta?: SessionThreadMeta[];
   /**
    * Git commit SHAs this session produced (extracted from `git commit` tool
    * results by the session indexer, in commit order). The structured half of

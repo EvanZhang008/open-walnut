@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 import { MAX_PANELS } from '@/hooks/useSessionPanelMode';
 import { projectToUrl, projectFromUrl } from '@/components/tasks/task-tabs';
 import { isPlaceholderColumnId } from '@/utils/column-ids';
+import { getThreadLeaves, subscribeThreadLeaves, threadParamsFor } from '@/utils/thread-stack-persist';
 
 // `?proj=` <-> internal tab id mapping lives in components/tasks/task-tabs.ts,
 // next to the sentinel definitions it encodes (and unit-testable without this
@@ -50,6 +51,9 @@ function buildSearch(params: {
   // nothing on reload, and a shared link must not carry them).
   const sessions = params.sessionColumns.filter(s => !isPlaceholderColumnId(s));
   sessions.slice(0, MAX_URL_SESSIONS).forEach((id, i) => sp.set(SESSION_PARAMS[i], id));
+  // A column on a question page carries its leaf head id beside it (`t<n>`), so a
+  // reload lands on the same page (thread-stack-persist.ts).
+  for (const [name, head] of threadParamsFor(sessions.slice(0, MAX_URL_SESSIONS), getThreadLeaves())) sp.set(name, head);
   if (params.focusedTaskId) sp.set('task', params.focusedTaskId);
   if (params.activeProject) sp.set('proj', projectToUrl(params.activeProject));
   const str = sp.toString();
@@ -77,6 +81,10 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
   // Debounce timer ref
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // A panel moving to another question page changes `t<n>`: re-run the write.
+  const [leafTick, setLeafTick] = useState(0);
+  useEffect(() => subscribeThreadLeaves(() => setLeafTick((n) => n + 1)), []);
+
   // State → URL (debounced replaceState)
   useEffect(() => {
     if (!visible) return;
@@ -98,7 +106,7 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [focusedTaskId, sessionColumns, activeProject, visible, pending]);
+  }, [focusedTaskId, sessionColumns, activeProject, visible, pending, leafTick]);
 
   // Popstate listener — browser back/forward (rare on SPA, but handle gracefully)
   useEffect(() => {

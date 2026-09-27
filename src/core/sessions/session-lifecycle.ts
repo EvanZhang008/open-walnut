@@ -16,6 +16,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { SessionControlError } from './session-controls.js';
+import { normalizeThreadMeta, writeThreadFieldsAsClient } from './thread-meta.js';
 import { bus, EventNames } from '../event-bus.js';
 import { safeKillProcessGroup } from '../process-group-kill.js';
 import { log } from '../../logging/index.js';
@@ -246,6 +247,9 @@ export interface SessionPatchInput {
    *  order). Same handling as `pinned_messages`: validate or 400, never a
    *  silent drop. */
   thread_anchors?: unknown;
+  /** Per-question metadata UPSERT entries keyed by headId (thread-meta.ts):
+   *  listed fields overwrite, `null` clears, unlisted entries stay. */
+  thread_meta?: unknown;
 }
 
 /** Hard caps for the pin list. A pin is a navigation aid, not storage: the whole
@@ -456,7 +460,7 @@ export function normalizeThreadAnchors(value: unknown): import('../types.js').Se
 export async function patchSession(sessionId: string, input: SessionPatchInput): Promise<SessionRecord> {
   const {
     title, activity, human_note, archived, archive_reason, mode, output_mode,
-    pinned_messages, thread_anchors,
+    pinned_messages, thread_anchors, thread_meta,
   } = input;
 
   if (title !== undefined && (typeof title !== 'string' || title.length > 500)) {
@@ -479,6 +483,10 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
   }
   if (output_mode !== undefined && !SESSION_OUTPUT_MODE_IDS.includes(output_mode as SessionOutputMode)) {
     throw new SessionControlError(`output_mode must be one of: ${SESSION_OUTPUT_MODE_IDS.join(', ')}`, 400);
+  }
+  const metaPatches = thread_meta !== undefined ? normalizeThreadMeta(thread_meta) : undefined;
+  if (metaPatches && mode !== undefined) {
+    throw new SessionControlError('thread_meta cannot be combined with mode', 400);
   }
   // NOTE: an empty patch is tolerated (no-op update) — the web PATCH has always
   // accepted it. The v1 route layers its own at-least-one-field 400 on top.
@@ -520,6 +528,10 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
       log.session.warn('live permission mode change rejected', { sessionId, mode, error: message });
       throw new SessionControlError(message, 409);
     }
+  } else if (metaPatches || updates.threadAnchors) {
+    // Anchors, then the meta upsert + follow-up reopen, then prune: ONE record
+    // write inside the per-session thread chain (listeners notified after it).
+    updated = await writeThreadFieldsAsClient(sessionId, updates, metaPatches, (u) => updateSessionRecord(sessionId, u));
   } else {
     updated = await updateSessionRecord(sessionId, updates);
   }

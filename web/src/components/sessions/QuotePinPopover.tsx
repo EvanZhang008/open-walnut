@@ -21,6 +21,7 @@ import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { pinKeyOf, pinLabelFor } from '@/hooks/useSessionPins';
 import type { SessionPinnedMessage } from '@/types/session';
+import { isPressClaimed } from '@/utils/thread-mark-hit';
 
 interface QuotePinPopoverProps {
   containerRef: React.RefObject<HTMLElement | null>;
@@ -28,6 +29,10 @@ interface QuotePinPopoverProps {
   /** Painted passages to hit-test (from useQuotePinPaint). */
   paintedRanges: () => Array<{ pinKey: string; range: Range }>;
   onUnpin: (pinKey: string) => void;
+  /** Changes when the page under the popover changes (a question page push or
+   *  pop): a popover of the old page closes, because its Unpin would act on a
+   *  passage that is no longer on screen (N38). */
+  resetKey?: string;
 }
 
 interface OpenState {
@@ -83,8 +88,9 @@ function caretAtPoint(x: number, y: number): { node: Node; offset: number } | nu
   return null;
 }
 
-export function QuotePinPopover({ containerRef, pins, paintedRanges, onUnpin }: QuotePinPopoverProps) {
+export function QuotePinPopover({ containerRef, pins, paintedRanges, onUnpin, resetKey }: QuotePinPopoverProps) {
   const [open, setOpen] = useState<OpenState | null>(null);
+  useEffect(() => { setOpen(null); }, [resetKey]);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const noTrigger = useRef<HTMLElement | null>(null);
   const placement = useMenuPlacement(!!open, noTrigger, menuRef, {
@@ -132,6 +138,8 @@ export function QuotePinPopover({ containerRef, pins, paintedRanges, onUnpin }: 
       const container = containerRef.current;
       if (!container || !target || !container.contains(target)) return;
       if (target.closest(INTERACTIVE)) return;
+      // A question mark on this passage took the press (it opens the question).
+      if (isPressClaimed(e)) { setOpen(null); return; }
       // A drag that ends here leaves its selection standing: that press was the
       // user selecting text (the pill's job), not aiming at a pin.
       const selection = window.getSelection();

@@ -1,0 +1,299 @@
+.thread-stack > .session-history { min-height: 0; }
+/* Depth >= 1: the scroll box gives the sliver its room on the left. */
+.thread-stack[data-sliver] > .session-history {
+  padding-left: calc(clamp(24px, 4%, 40px) + var(--thread-sliver-room, 0px));
+}
+/* The sliver hugs the content column; the outline rail moves out past it. */
+.thread-stack[data-sliver] > .session-history > .session-toc {
+  margin-left: calc(-1 * clamp(16px, 3%, 30px) - var(--thread-sliver-room, 0px));
+}
+
+/* ── The sliver: one bar per ancestor page ── */
+.thread-sliver {
+  position: absolute;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  gap: 1px;
+  pointer-events: auto;
+}
+.thread-sliver-bar {
+  position: relative;
+  flex: none;
+  width: var(--sliver-bar, 10px);
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: var(--thread-color);
+  cursor: pointer;
+  transition: filter 0.12s ease;
+}
+.thread-sliver-bar[data-root] { background: var(--thread-root-bar); }
+/* The hit zone grows to 16px per bar on hover (the bar itself does not move). */
+.thread-sliver-bar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+/* Hover must read on a 35% grey root bar too (N33): a plain brightness filter
+   did not; the bar gains an accent inner edge and full opacity colour. */
+.thread-sliver-bar:hover { filter: brightness(1.25) saturate(1.3); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 45%, transparent); z-index: 1; }
+.thread-sliver-bar[data-root]:hover { background: color-mix(in srgb, var(--fg-secondary) 70%, transparent); }
+.thread-sliver-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-sliver-bar:focus:not(:focus-visible) { outline: none; }
+
+/* A tooltip at the pointer (sliver bars, marks). Portalled, placed fixed. */
+.thread-hover-tip {
+  position: fixed;
+  z-index: 9990;
+  max-width: min(360px, 80vw);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #1d1d1f;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Quote head: the passage this page was asked about ── */
+.thread-quote-head-wrap { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; }
+.thread-quote-head {
+  display: block;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  border-left: 3px solid var(--thread-color-solid);
+  border-radius: 0 8px 8px 0;
+  background: hsl(var(--thread-hue, 214) 70% 50% / 0.06);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+.thread-quote-head:hover { background: hsl(var(--thread-hue, 214) 70% 50% / 0.11); }
+.thread-quote-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-quote-head:focus:not(:focus-visible) { outline: none; }
+.thread-quote-context { color: var(--fg-muted); }
+.thread-quote-exact { color: var(--fg); }
+.thread-same-passage { color: var(--fg-muted); font-size: 12px; }
+
+/* ── Show all in order: the banner above the linear timeline ── */
+.thread-linear-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 10px 4px 14px;
+  background: var(--bg-secondary);
+  box-shadow: inset 0 -1px 0 var(--border);
+  font-size: 12px;
+}
+.thread-linear-banner-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thread-linear-banner-back {
+  flex: none;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+.thread-linear-banner-back:hover { background: var(--accent-subtle); }
+.thread-linear-banner-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ── Asked from this answer ── */
+.thread-asked-from { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 12px; }
+.thread-asked-heading {
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.thread-asked-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 10px 6px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  cursor: pointer;
+  font-size: 13px;
+}
+.thread-asked-row:hover { border-color: var(--border-strong); background: var(--bg-secondary); }
+.thread-asked-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-asked-row:focus:not(:focus-visible) { outline: none; }
+.thread-asked-unread-slot { flex: none; width: 6px; }
+.thread-asked-row > .thread-status-dot { flex: none; }
+.thread-asked-bar {
+  flex: none;
+  align-self: stretch;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--thread-color-solid);
+}
+.thread-asked-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.thread-asked-title-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.thread-asked-title {
+  min-width: 0;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thread-asked-takeaway {
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thread-asked-row.is-draft .thread-asked-title { color: var(--fg-muted); font-style: italic; font-weight: 400; }
+.thread-asked-row.is-resolved .thread-asked-title { color: var(--fg-muted); font-weight: 450; }
+.thread-asked-state {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.thread-asked-state--failed { color: var(--error); }
+.thread-asked-done { color: var(--success); font-weight: 600; }
+.thread-asked-inline-btn {
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+.thread-asked-inline-btn:hover { background: var(--accent-subtle); }
+.thread-asked-inline-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-asked-chevron { flex: none; color: var(--fg-muted); }
+
+/* The page's quote head already shows the passage: the head row hides the quote
+   block its text starts with (display only; the transcript is unchanged). */
+.thread-stack [data-thread-head] .markdown-body > blockquote:first-child { display: none; }
+
+/* A question sent while another is answering waits its turn. */
+.thread-queue-note { margin-top: 2px; color: var(--fg-muted); font-size: 11.5px; text-align: right; }
+
+/* The drawer toggle's fixed slot in the session header. */
+/* Zero layout height, centred on the row: the 24px toggle appearing on the first
+   send must not grow the session header (N15: the stack row dropped 4px). */
+.thread-drawer-toggle-slot { flex: none; display: inline-flex; align-items: center; align-self: center; height: 0; overflow: visible; }
+
+/* ── Marks: passages in an answer that have a question behind them ──
+   CSS Custom Highlights (useThreadMarks.ts), one name per hue and state. A fill
+   plus a hue underline: the fill alone was about 1.1:1 on a dark page (N18), and
+   the underline is the cue that reads in both themes (Chromium and WebKit both
+   paint text-decoration in ::highlight). Resolved marks stay quieter, not gone:
+   a GREY fill (the hue drained) and a dotted underline, so open and resolved
+   differ by more than alpha in an engine that draws no ::highlight underline
+   (N48, WebKit). */
+::highlight(thread-mark-280) { background-color: hsl(280 70% 60% / 0.22); text-decoration: underline 2px hsl(280 75% 55% / 0.9); text-underline-offset: 3px; }
+::highlight(thread-mark-152) { background-color: hsl(152 70% 60% / 0.22); text-decoration: underline 2px hsl(152 75% 55% / 0.9); text-underline-offset: 3px; }
+::highlight(thread-mark-28) { background-color: hsl(28 70% 60% / 0.22); text-decoration: underline 2px hsl(28 75% 55% / 0.9); text-underline-offset: 3px; }
+::highlight(thread-mark-330) { background-color: hsl(330 70% 60% / 0.22); text-decoration: underline 2px hsl(330 75% 55% / 0.9); text-underline-offset: 3px; }
+::highlight(thread-mark-188) { background-color: hsl(188 70% 60% / 0.22); text-decoration: underline 2px hsl(188 75% 55% / 0.9); text-underline-offset: 3px; }
+::highlight(thread-mark-214) { background-color: hsl(214 70% 60% / 0.22); text-decoration: underline 2px hsl(214 75% 55% / 0.9); text-underline-offset: 3px; }
+::highlight(thread-mark-done-280) { background-color: hsl(280 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(280 45% 50% / 0.75); text-underline-offset: 3px; }
+::highlight(thread-mark-done-152) { background-color: hsl(152 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(152 45% 50% / 0.75); text-underline-offset: 3px; }
+::highlight(thread-mark-done-28) { background-color: hsl(28 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(28 45% 50% / 0.75); text-underline-offset: 3px; }
+::highlight(thread-mark-done-330) { background-color: hsl(330 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(330 45% 50% / 0.75); text-underline-offset: 3px; }
+::highlight(thread-mark-done-188) { background-color: hsl(188 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(188 45% 50% / 0.75); text-underline-offset: 3px; }
+::highlight(thread-mark-done-214) { background-color: hsl(214 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(214 45% 50% / 0.75); text-underline-offset: 3px; }
+[data-theme="dark"] ::highlight(thread-mark-280) { background-color: hsl(280 70% 62% / 0.34); text-decoration-color: hsl(280 85% 70%); }
+[data-theme="dark"] ::highlight(thread-mark-done-280) { background-color: hsl(280 10% 68% / 0.2); text-decoration-color: hsl(280 40% 68% / 0.8); }
+[data-theme="dark"] ::highlight(thread-mark-152) { background-color: hsl(152 70% 62% / 0.34); text-decoration-color: hsl(152 85% 70%); }
+[data-theme="dark"] ::highlight(thread-mark-done-152) { background-color: hsl(152 10% 68% / 0.2); text-decoration-color: hsl(152 40% 68% / 0.8); }
+[data-theme="dark"] ::highlight(thread-mark-28) { background-color: hsl(28 70% 62% / 0.34); text-decoration-color: hsl(28 85% 70%); }
+[data-theme="dark"] ::highlight(thread-mark-done-28) { background-color: hsl(28 10% 68% / 0.2); text-decoration-color: hsl(28 40% 68% / 0.8); }
+[data-theme="dark"] ::highlight(thread-mark-330) { background-color: hsl(330 70% 62% / 0.34); text-decoration-color: hsl(330 85% 70%); }
+[data-theme="dark"] ::highlight(thread-mark-done-330) { background-color: hsl(330 10% 68% / 0.2); text-decoration-color: hsl(330 40% 68% / 0.8); }
+[data-theme="dark"] ::highlight(thread-mark-188) { background-color: hsl(188 70% 62% / 0.34); text-decoration-color: hsl(188 85% 70%); }
+[data-theme="dark"] ::highlight(thread-mark-done-188) { background-color: hsl(188 10% 68% / 0.2); text-decoration-color: hsl(188 40% 68% / 0.8); }
+[data-theme="dark"] ::highlight(thread-mark-214) { background-color: hsl(214 70% 62% / 0.34); text-decoration-color: hsl(214 85% 70%); }
+[data-theme="dark"] ::highlight(thread-mark-done-214) { background-color: hsl(214 10% 68% / 0.2); text-decoration-color: hsl(214 40% 68% / 0.8); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(thread-mark-280) { background-color: hsl(280 70% 62% / 0.34); text-decoration-color: hsl(280 85% 70%); }
+  :root:not([data-theme]) ::highlight(thread-mark-done-280) { background-color: hsl(280 10% 68% / 0.2); text-decoration-color: hsl(280 40% 68% / 0.8); }
+  :root:not([data-theme]) ::highlight(thread-mark-152) { background-color: hsl(152 70% 62% / 0.34); text-decoration-color: hsl(152 85% 70%); }
+  :root:not([data-theme]) ::highlight(thread-mark-done-152) { background-color: hsl(152 10% 68% / 0.2); text-decoration-color: hsl(152 40% 68% / 0.8); }
+  :root:not([data-theme]) ::highlight(thread-mark-28) { background-color: hsl(28 70% 62% / 0.34); text-decoration-color: hsl(28 85% 70%); }
+  :root:not([data-theme]) ::highlight(thread-mark-done-28) { background-color: hsl(28 10% 68% / 0.2); text-decoration-color: hsl(28 40% 68% / 0.8); }
+  :root:not([data-theme]) ::highlight(thread-mark-330) { background-color: hsl(330 70% 62% / 0.34); text-decoration-color: hsl(330 85% 70%); }
+  :root:not([data-theme]) ::highlight(thread-mark-done-330) { background-color: hsl(330 10% 68% / 0.2); text-decoration-color: hsl(330 40% 68% / 0.8); }
+  :root:not([data-theme]) ::highlight(thread-mark-188) { background-color: hsl(188 70% 62% / 0.34); text-decoration-color: hsl(188 85% 70%); }
+  :root:not([data-theme]) ::highlight(thread-mark-done-188) { background-color: hsl(188 10% 68% / 0.2); text-decoration-color: hsl(188 40% 68% / 0.8); }
+  :root:not([data-theme]) ::highlight(thread-mark-214) { background-color: hsl(214 70% 62% / 0.34); text-decoration-color: hsl(214 85% 70%); }
+  :root:not([data-theme]) ::highlight(thread-mark-done-214) { background-color: hsl(214 10% 68% / 0.2); text-decoration-color: hsl(214 40% 68% / 0.8); }
+}
+[data-thread-mark-hover] { cursor: pointer; }
+
+/* ── The outline rail: pins on other question pages ── */
+.session-toc-tick--more { width: 7px; background: var(--fg-muted); opacity: 0.45; }
+.session-toc-more {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  padding: 5px 6px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.session-toc-more:hover { color: var(--fg); background: var(--bg-hover); }
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-sliver-bar { transition: none; }
+}
+
+/* The quote head's source line (N35): which answer the passage came from. */
+.thread-quote-from {
+  margin: 0 0 3px 2px; overflow: hidden; color: var(--fg-muted); font-size: 11.5px; line-height: 15px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.thread-quote-from-title { color: var(--fg-secondary); font-weight: 550; }
+
+/* Show all in order (N22): the outline rail floats over the left gutter where
+   each question's 3px bar runs, and a bar used to run straight through the
+   ticks. In that view the rail gets an opaque backing and dims its ticks rather
+   than itself, so a bar passes UNDER the rail. */
+.session-history:has(.session-msg--threaded) .session-toc-rail {
+  opacity: 1; background: var(--bg); border-radius: 0 6px 6px 0;
+}
+.session-history:has(.session-msg--threaded) .session-toc-rail .session-toc-tick { opacity: 0.55; }
+.session-history:has(.session-msg--threaded) .session-toc:hover .session-toc-rail,
+.session-history:has(.session-msg--threaded) .session-toc.is-open .session-toc-rail { opacity: 0; }

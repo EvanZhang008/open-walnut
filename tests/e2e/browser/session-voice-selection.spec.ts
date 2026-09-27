@@ -22,8 +22,9 @@
  * Reported 2026-09-16 with a screenshot: the reader had dragged over one word while
  * reading, dictated a question about something else, and got a chip nobody asked for;
  * sent as-is, the turn would have been filed under that reply with the word quoted
- * above the question. The chip is the pill's Ask button's to create, and the stray-
- * word test below is that report, pinned.
+ * above the question. Opening a question is the pill's Ask button's job (since the
+ * stack view, Ask opens a question page; there is no composer chip any more), and the
+ * stray-word test below is that report, pinned.
  *
  * Which test runs where, and why:
  *  · the PRESS test runs in both engines, because a selection's fate around focus
@@ -53,8 +54,8 @@
  */
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import {
-  PHRASE, PHRASE2, WORD, centreRow, heldPainted, openSession, selectPassage, selectedText,
-  shot, stubSttStatus, threadAnchorsOf, wheel,
+  PHRASE, PHRASE2, WORD, centreRow, heldPainted, openSession, questionPage, questionQuote,
+  selectPassage, selectedText, shot, stubSttStatus, threadAnchorsOf, wheel,
 } from './voice-selection-helpers'
 import { dragPhrase, selectionAnchorNodeType } from './selection-helpers'
 
@@ -181,7 +182,7 @@ test.describe('Voice input keeps the selected passage', () => {
     // project too — this describe never runs there, and WebKit ignores the args.
     test.skip(({ browserName }) => browserName !== 'chromium', 'needs a fake audio capture device')
 
-    test('dictated words land in the composer, the pill holds the passage, and Ask is what makes the chip', async ({ page }) => {
+    test('dictated words land in the composer, the pill holds the passage, and Ask is what opens the question', async ({ page }) => {
       test.setTimeout(120_000)
       await page.context().grantPermissions(['microphone'])
       await stubSttStatus(page)
@@ -241,13 +242,12 @@ test.describe('Voice input keeps the selected passage', () => {
 
       // The passage is not lost, and it is not INFERRED either. The document selection
       // did collapse (focus took it) — but the pill is still up on the passage, the
-      // words are still painted, and there is no chip: nobody pressed Ask.
-      const chip = panel.locator('[data-testid="thread-anchor-chip"]')
+      // words are still painted, and no question page opened: nobody pressed Ask.
       expect(await selectedText(page), 'focus collapsed the selection, as it must').toBe('')
       await expect(pill).toBeVisible()
       await expect(pill.locator('[data-testid="quote-ask-btn"]')).toBeVisible()
       expect(await heldPainted(page), 'the held passage is painted').toBe(true)
-      await expect(chip, 'a selection is not a request — no chip until Ask').toHaveCount(0)
+      await expect(questionPage(panel), 'a selection is not a request: no page until Ask').toHaveCount(0)
       await shot(page, '04-dictation-landed-pill-holds-the-passage')
 
       // Typing into the composer is writing the question, not moving on: the pill
@@ -257,20 +257,21 @@ test.describe('Voice input keeps the selected passage', () => {
       await expect(pill).toBeVisible()
       expect(await heldPainted(page)).toBe(true)
 
-      // Ask is the request. It makes the chip, named by the words that were selected,
-      // and the pill and its paint go because the chip is now the passage's mark.
+      // Ask is the request. It opens a question page headed by the words that were
+      // selected, and the pill and its paint go. The page has its own draft, so the
+      // new composer is empty and the dictated words wait in the top level's draft.
       await pill.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(chip).toBeVisible()
-      await expect(chip).toContainText('rewrites the index')
+      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
+      await expect(questionQuote(panel)).toContainText('rewrites the index')
       await expect(pill).toHaveCount(0)
       expect(await heldPainted(page)).toBe(false)
-      await expect(textarea).toHaveValue(/why does phase.* exactly/)
-      await shot(page, '04b-ask-made-the-chip')
+      await expect(textarea).toHaveValue('')
+      await shot(page, '04b-ask-opened-the-question')
 
-      // Not a one-way door: the chip's × puts the composer back to talking to the
-      // session, with the dictated text untouched.
-      await chip.locator('.thread-anchor-chip-clear').click()
-      await expect(chip).toHaveCount(0)
+      // Not a one-way door: Esc on the unsent, empty page goes back to the top level,
+      // with the dictated text untouched.
+      await page.keyboard.press('Escape')
+      await expect(questionPage(panel)).toHaveCount(0)
       await expect(textarea).toHaveValue(/why does phase.* exactly/)
     })
 
@@ -284,7 +285,7 @@ test.describe('Voice input keeps the selected passage', () => {
       await page.goto('/')
       const panel = await openSession(page, STRAY_SESSION_ID, STRAY_TASK_ID)
       const textarea = panel.locator('.chat-input-textarea').first()
-      const chip = panel.locator('[data-testid="thread-anchor-chip"]')
+      const asked = questionPage(panel)
       expect(await threadAnchorsOf(page, STRAY_SESSION_ID)).toEqual([])
 
       // The 2026-09-16 report: one word selected — a drag the reader did not think of
@@ -296,9 +297,9 @@ test.describe('Voice input keeps the selected passage', () => {
         .toContain('chat-input-textarea')
       // The pill holds the word (harmless, and Ask is one click away if it WAS meant)…
       await expect(pill).toBeVisible()
-      // …and nothing was decided for the user.
-      await expect(chip).toHaveCount(0)
-      await shot(page, '11-stray-word-no-chip')
+      // …and nothing was decided for the user: no question page opened.
+      await expect(asked).toHaveCount(0)
+      await shot(page, '11-stray-word-no-question')
 
       // Enter, the way a dictated question is sent. It goes where the user was
       // talking: the top level, with nothing quoted above it, and the record keeps
@@ -311,12 +312,12 @@ test.describe('Voice input keeps the selected passage', () => {
       expect((await sent.textContent()) ?? '', 'no quoted passage above the question').not.toContain(WORD)
       await expect(pill).toHaveCount(0)
       expect(await heldPainted(page)).toBe(false)
-      await expect(chip).toHaveCount(0)
+      await expect(asked).toHaveCount(0)
       await expect.poll(() => threadAnchorsOf(page, STRAY_SESSION_ID), { timeout: 10_000 }).toEqual([])
       await shot(page, '12-stray-word-sent-at-the-top-level')
     })
 
-    test('dictation does not touch an anchor the user aimed themselves; Ask on the held pill re-aims it', async ({ page }) => {
+    test('dictation keeps the question page the user opened; Ask on a held pill opens the next one', async ({ page }) => {
       test.setTimeout(150_000)
       await page.context().grantPermissions(['microphone'])
       await stubSttStatus(page)
@@ -326,32 +327,35 @@ test.describe('Voice input keeps the selected passage', () => {
       const panel = await openSession(page)
       const pill = await selectPassage(page, panel)
 
-      // Ask about the FIRST passage explicitly — the user's own aim.
+      // Ask about the FIRST passage explicitly: the user's own aim.
       await pill.locator('[data-testid="quote-ask-btn"]').click()
-      const chip = panel.locator('[data-testid="thread-anchor-chip"]')
-      await expect(chip).toBeVisible()
-      expect((await chip.textContent()) ?? '').toContain('rewrites the index')
+      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
+      await expect(questionQuote(panel)).toContainText('rewrites the index')
 
-      // Now select something else and dictate. The chip must not be rewritten under
-      // them — dictation decides nothing about anchors — while the pill holds the
-      // second passage in case they DO want to ask about it.
-      const held = await selectPassage(page, panel, PHRASE2)
+      // Dictate on that page. The words land in its composer and the page stays put:
+      // dictation decides nothing about where a question goes.
       const textarea = panel.locator('.chat-input-textarea').first()
       await dictate(page, panel)
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
-      await expect(chip).toBeVisible()
-      expect((await chip.textContent()) ?? '').toContain('rewrites the index')
-      await expect(held).toBeVisible()
-      await shot(page, '05-existing-anchor-untouched')
+      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
+      await expect(questionQuote(panel)).toContainText('rewrites the index')
+      await shot(page, '05-existing-question-untouched')
 
-      // Re-aiming is the user's move: Ask on the held pill replaces the chip with the
-      // second passage. Without this half, the test above would pass just as well if
-      // the pill had simply died with the selection.
+      // Back to the top level (the page keeps its draft), then a second passage,
+      // dictated. A highlight is not a request: no page opens, and the held pill
+      // offers the move. Without this half, the test above would pass just as well
+      // if the pill had simply died with the selection.
+      await panel.locator('.thread-stack-back').click()
+      await expect(questionPage(panel)).toHaveCount(0)
+      const held = await selectPassage(page, panel, PHRASE2)
+      await dictate(page, panel)
+      await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
+      await expect(questionPage(panel)).toHaveCount(0)
+      await expect(held).toBeVisible()
       await held.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(chip).toBeVisible()
-      await expect(chip).toContainText('only verifies checksums')
+      await expect(questionQuote(panel)).toContainText('only verifies checksums')
       await expect(held).toHaveCount(0)
-      await shot(page, '05b-ask-on-the-held-pill-re-aimed-the-chip')
+      await shot(page, '05b-ask-on-the-held-pill-opened-the-next')
     })
 
     test('a passage the reader scrolled away from is not adopted', async ({ page }) => {
@@ -383,9 +387,9 @@ test.describe('Voice input keeps the selected passage', () => {
       await expect(pill, 'a press on the mic does not revive a pill for a passage out of sight').toHaveCount(0)
       await mic.click()
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
-      // Words landed, no chip, and nothing held either: there was no pill to hold, so
-      // dictating after scrolling away is a plain message.
-      await expect(panel.locator('[data-testid="thread-anchor-chip"]')).toHaveCount(0)
+      // Words landed, no question page, and nothing held either: there was no pill to
+      // hold, so dictating after scrolling away is a plain message.
+      await expect(questionPage(panel)).toHaveCount(0)
       await expect(pill).toHaveCount(0)
       expect(await heldPainted(page)).toBe(false)
       await shot(page, '08-scrolled-away-passage-not-adopted')
@@ -416,65 +420,54 @@ test.describe('Voice input keeps the selected passage', () => {
       await expect.poll(() => selectedText(page), { timeout: 30_000 }).toBe('')
       await expect(pill).toHaveCount(0)
       // Nothing was inferred from a recording that produced nothing.
-      await expect(panel.locator('[data-testid="thread-anchor-chip"]')).toHaveCount(0)
+      await expect(questionPage(panel)).toHaveCount(0)
       await expect(panel.locator('.chat-input-textarea').first()).toHaveValue('')
       await shot(page, '09-empty-recording-released-the-selection')
     })
 
-    test('tree mode: dictation leaves the view\'s aim alone, and the pill holds the passage there too', async ({ page }) => {
+    test('on a question page: dictation leaves the page alone, and the pill holds the passage there too', async ({ page }) => {
       test.setTimeout(180_000)
       await page.context().grantPermissions(['microphone'])
       await stubSttStatus(page)
       await stubDictation(page)
 
-      // Own session, and it has to EARN the node view: the Linear/Tree toggle only
-      // appears once the conversation has a branch, so this test asks about a passage
-      // and sends, exactly as a user would before switching views.
+      // Own session, and it has to EARN a question page with an answer on it: this
+      // test asks about a passage and sends, exactly as a user would.
       await page.goto('/')
       const panel = await openSession(page, TREE_SESSION_ID, TREE_TASK_ID)
       const textarea = panel.locator('.chat-input-textarea').first()
-      const chip = panel.locator('[data-testid="thread-anchor-chip"]')
       const pill = await selectPassage(page, panel, PHRASE, TREE_SESSION_ID)
       await pill.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(chip).toBeVisible()
+      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
       await textarea.click()
       await textarea.fill('and what does that cost')
       await textarea.press('Enter')
       await expect(textarea).toHaveValue('')
 
-      // In the node view the composer's target is DERIVED from the thread on screen,
-      // which the user picked. A highlight must not quietly re-aim it (dictation never
-      // re-aims anything now, in either view); the pill's Ask — the only path that can
-      // open a branch properly here — stays the way to do that, and the pill holds
+      // The answer renders on the question's own page, and that page is the aim the
+      // user picked. A highlight must not quietly re-aim it (dictation never re-aims
+      // anything); the pill's Ask stays the way to do that, and the pill holds
       // through the landing so it is still there to press.
-      await panel.getByRole('button', { name: 'Tree', exact: true }).click()
-      // The node view opens INSIDE the branch that was just created (it follows the
-      // conversation), and it collapses the earlier turns — so the passage to select
-      // here comes from the reply on screen, not from the seeded paragraph.
       const history = panel.locator('.session-history')
       await expect(history).toContainText(REPLY_PHRASE, { timeout: 20_000 })
-      // Whatever the view landed on is the baseline: inside a thread the chip names
-      // THAT thread, at the top level there is none. Either way dictation must not
-      // change it. (Asserting "no chip" would fail for the unrelated reason that a
-      // thread's own chip is correct.)
-      const before = (await chip.count()) ? ((await chip.textContent()) ?? '') : ''
+      await expect(questionQuote(panel)).toContainText('rewrites the index')
 
       await centreRow(page, panel, REPLY_PHRASE)
       await dragPhrase(page, `.session-panel[data-session-id="${TREE_SESSION_ID}"] .session-history`, REPLY_PHRASE)
       expect(await selectedText(page)).toBe(REPLY_PHRASE)
-      const treePill = page.locator('[data-testid="quote-pin-pill"]')
-      await expect(treePill).toBeVisible()
+      const pagePill = page.locator('[data-testid="quote-pin-pill"]')
+      await expect(pagePill).toBeVisible()
       await dictate(page, panel)
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
-      const after = (await chip.count()) ? ((await chip.textContent()) ?? '') : ''
-      expect(after, 'the node view keeps aiming where the user pointed it').toBe(before)
-      expect(after).not.toContain(REPLY_PHRASE)
-      await expect(treePill, 'the pill holds in the node view as well').toBeVisible()
+      await expect(questionPage(panel), 'the page keeps aiming where the user pointed it').toHaveAttribute('data-thread-depth', '1')
+      await expect(questionQuote(panel)).toContainText('rewrites the index')
+      await expect(questionQuote(panel)).not.toContainText(REPLY_PHRASE)
+      await expect(pagePill, 'the pill holds on a question page as well').toBeVisible()
       expect(await heldPainted(page)).toBe(true)
-      await shot(page, '10-tree-mode-stands-down')
+      await shot(page, '10-question-page-stands-down')
     })
 
-    test('a send consumes the chip; dictation brings none back; Ask on the held pill is what makes the next one', async ({ page }) => {
+    test('a send files the question on its page; dictation opens none; Ask on the held pill opens the next one', async ({ page }) => {
       test.setTimeout(150_000)
       await page.context().grantPermissions(['microphone'])
       await stubSttStatus(page)
@@ -485,36 +478,35 @@ test.describe('Voice input keeps the selected passage', () => {
       await page.goto('/')
       const panel = await openSession(page, SEND_SESSION_ID, SEND_TASK_ID)
       const textarea = panel.locator('.chat-input-textarea').first()
-      const chip = panel.locator('[data-testid="thread-anchor-chip"]')
 
-      // Ask about passage one, send it. The send CONSUMES the chip (2026-09-18: "after
-      // I ask the question I want it automatically de-selected") — until then linear
-      // mode flipped it to sticky and the NEXT message went into the thread too. The
-      // anchor itself was recorded: the message is filed, the composer is free.
+      // Ask about passage one, send it. The message is filed under its passage and
+      // the answer lands on the question's own page (the composer chip a send used
+      // to consume is gone: the page is the aim). The anchor was recorded.
       const pill = await selectPassage(page, panel, PHRASE, SEND_SESSION_ID)
       await pill.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(chip).toBeVisible()
+      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
       await textarea.click()
       await textarea.fill('and what does that cost')
       await textarea.press('Enter')
       await expect(textarea).toHaveValue('')
-      await expect(chip, 'the send consumed the chip').toHaveCount(0)
       await expect.poll(async () => (await threadAnchorsOf(page, SEND_SESSION_ID)).length).toBe(1)
       // Let the reply land first: rows arriving under a drag move the words out from
       // under the mouse (a run selected from the row above down to mid-paragraph).
       await expect(panel.locator('.session-history')).toContainText(REPLY_PHRASE, { timeout: 30_000 })
-      await expect(chip, 'and nothing brought it back at turn end').toHaveCount(0)
 
-      // A second passage, dictated. A highlight is not a request: the composer stays
-      // un-aimed, the held pill offers the move, and Ask is the move.
+      // Back to the top level, then a second passage, dictated. A highlight is not a
+      // request: no page opens, the held pill offers the move, and Ask is the move.
+      await panel.locator('.thread-stack-back').click()
+      await expect(questionPage(panel)).toHaveCount(0)
       const held = await selectPassage(page, panel, PHRASE2, SEND_SESSION_ID)
       await dictate(page, panel)
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
-      await expect(chip, 'dictation made no chip').toHaveCount(0)
+      await expect(questionPage(panel), 'dictation opened no page').toHaveCount(0)
       await expect(held).toBeVisible()
       await held.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(chip).toContainText('only verifies checksums')
-      await shot(page, '07-chip-consumed-by-send-remade-only-by-ask')
+      await expect(questionQuote(panel)).toContainText('only verifies checksums')
+      expect((await threadAnchorsOf(page, SEND_SESSION_ID)).length, 'an unsent page writes nothing').toBe(1)
+      await shot(page, '07-send-filed-the-question-ask-opens-the-next')
     })
 
     test('a selection held inside a LIVE reply survives dictation, and the reply catches up after', async ({ page }) => {
@@ -555,11 +547,10 @@ test.describe('Voice input keeps the selected passage', () => {
       await mic.click()
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
 
-      // No chip — dictation does not ask. The freeze released with the selection, so
+      // No question page: dictation does not ask. The freeze released with the selection, so
       // the held-back deltas land and the turn's later sentences appear — exactly once
       // each (a frozen copy left beside its persisted twin would show two).
-      const chip = panel.locator('[data-testid="thread-anchor-chip"]')
-      await expect(chip).toHaveCount(0)
+      await expect(questionPage(panel)).toHaveCount(0)
       await expect(history).toContainText('flips the read path over', { timeout: 30_000 })
       await expect.poll(async () => page.evaluate(({ needle, sid }) => {
         const text = document.querySelector(`.session-panel[data-session-id="${sid}"] .session-history`)?.textContent ?? ''
@@ -583,8 +574,8 @@ test.describe('Voice input keeps the selected passage', () => {
       expect(passageBox).not.toBeNull()
       expect(Math.abs(pillBox.y + pillBox.height - passageBox!.top), 'pill hangs just above its passage').toBeLessThan(60)
       await pill.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(chip).toBeVisible()
-      await expect(chip).toContainText('never blocks')
+      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
+      await expect(questionQuote(panel)).toContainText('never blocks')
       await shot(page, '06-live-reply-caught-up-after-dictation')
     })
   })

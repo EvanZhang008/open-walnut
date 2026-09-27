@@ -420,4 +420,37 @@ test.describe('Quote pins', () => {
     await page.keyboard.press('Escape')
     await expect(pill).toHaveCount(0)
   })
+
+  // The pill hangs just above the line under the pointer, which is where an upward
+  // drag goes next. Shown mid-drag, WebKit extended the selection onto the pill (a
+  // node outside the transcript): the drag selected to the end of the page and no
+  // pill came at all (3 in 4 runs of the test above, WebKit only).
+  test('no pill while the button is still down: it comes at the release, and the drag selects only the words', async ({ page }) => {
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openSession(page)
+    const paragraph = panel.locator('.session-msg', { hasText: PARAGRAPH }).first()
+    await centreRow(page, panel, paragraph)
+    const clause = 'Phase two rewrites the index in place, which is the part worth watching closely'
+    const { rects } = await phraseGeometry(page, clause)
+    const first = rects[0]
+    const last = rects[rects.length - 1]
+    await page.mouse.move(last.right - 1, last.top + last.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(first.left + 1, first.top + first.height / 2, { steps: 8 })
+    // Several frames with the button held.
+    await page.waitForTimeout(400)
+    const pill = page.locator('[data-testid="quote-pin-pill"]')
+    await expect(pill).toHaveCount(0)
+    await page.mouse.up()
+    await expect(pill).toBeVisible()
+    const selected = await panel.locator('.session-history').evaluate((history) => {
+      const s = window.getSelection()!
+      return { text: s.toString(), inReply: !!s.focusNode && history.contains(s.focusNode) }
+    })
+    expect(selected.inReply, 'the selection ends inside the reply').toBe(true)
+    expect(selected.text.replace(/\s+/g, ' ').trim()).toBe(clause)
+    await page.keyboard.press('Escape')
+    await expect(pill).toHaveCount(0)
+  })
 })

@@ -1,881 +1,414 @@
 /**
- * Conversation threads: a navigation tree over ONE linear session.
+ * Question stack, core (spec slice 1, section 5.1 and 5.4): a question page is the
+ * SAME timeline scroll box filtered to one question, with a sliver of ancestor bars
+ * on the content column's left edge.
  *
- * The feature has two renderers over the same data (`session.threadAnchors`), and
- * this spec covers both plus the gesture that creates an anchor:
+ * Covers C1, C2 (Ask opens a pending page at once, Esc before sending writes
+ * nothing), C5 and C79 (sliver bars, shades, gaps, geometry, drag vs click), C6
+ * (one scroll box at every depth), C8 and C83 (no arrows, dashes or the old word),
+ * C9 and C10 (a session without questions renders as before, the old UI is gone),
+ * C18 (Esc layering), C61 (the slash palette and the model picker keep their Esc)
+ * and C50 (fullscreen: pops first, then it exits). Landing, send and view specs
+ * live beside this file.
  *
- *  · B (light) — the timeline is untouched; an anchored turn gains a gutter bar
- *    (`.session-msg--threaded[data-thread-depth]`) and a `↳ <passage>` tag — both
- *    of them the turn's way BACK to the passage it is about — and the outline rail
- *    gains one indented row per thread. Asserted from PATCHed anchors rather than
- *    from a send: the anchors are the input to the renderers. The one test that
- *    does send (Ask → send → tag) has its own fixture session, because the mock
- *    CLI's reply lands in the stream file and would shift every count here;
- *  · the Ask pill → composer chip → `×` loop, which is the only way a person makes
- *    an anchor. Driven with a REAL mouse drag, the way `session-quote-pin.spec.ts`
- *    does: the quote is captured when the SELECTION CHANGES (main.tsx clears the
- *    range on the mousedown that presses the pill), so a synthetic Range that never
- *    fires the listeners would assert nothing about the path that ships;
- *  · A (tree mode) — the same anchors, second renderer: toggle, breadcrumb,
- *    collapsed ancestors, child cards, keyboard navigation, and the per-session
- *    memory of the mode.
- *
- * Two properties of the ANCHORS matter for every assertion below and are easy to
- * break while editing them: an anchor's `parent` row must PRECEDE its `msgId` row
- * (`buildThreadTree` treats a forward reference as dangling, so the thread would
- * silently not exist), and two turns sharing `parent` + `quote.exact` are ONE
- * thread — that is what makes a sticky follow-up land where the user is typing.
- *
- * Every row used here sits inside the initial 30-row render window (the fixture
- * holds 53 messages, so indices 23+ are rendered), which is why no "Show earlier"
- * dance is needed. The window matters for tree mode too: a thread whose head is
- * above the window would render as an empty view.
+ * The dense fixture (threads-fixture.ts) is read only here: pushes and pops live
+ * in sessionStorage, never on the server, so no reset is needed between tests.
  */
-import { expect, test, type Page, type Locator, type APIRequestContext } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
+import {
+  centreInHistory, AI_SESSION, DENSE_SESSION, NO_THREAD_SESSION, findBannedGlyphs, openThreadsSession, passageRects,
+  readRecord, resetThreadsFixture, selectPassage,
+} from './threads-helpers'
+import { AI_PASSAGE } from './threads-fixture'
 
-/** Own fixture record (test-server.ts): the outline transcript, re-written under a
- *  second session id and uuid prefix, so this spec's pin reset + anchors never race
- *  session-outline-rewind.spec.ts on the shared `pw-pins-session` record. */
-const SESSION_ID = 'pw-threads-session'
-const TASK_ID = 'pw-task-threads'
-
-/** Last row of the fixture's filler, inside the initial window — the "history has
- *  landed" signal, same as the outline spec's. */
-const LAST_REPLY = 'outline filler reply 24'
-/** The fixture's tail paragraph: the one message long enough to drag a phrase out
- *  of the middle of. */
-const PARAGRAPH = 'The migration runs in three phases'
-/** Selected in test 2 — appears exactly once in the whole transcript. */
-const PHRASE = 'rewrites the index in place'
-
-/**
- * Fixture transcript uuids (test-server.ts). Filler pair `n` (1-based, n = 1..24)
- * is `outline filler ask n` / `outline filler reply n`, written under
- * `0199bb02-…-<i>` / `0199bb03-…-<i>` with i = n - 1.
- */
-const askUuid = (n: number) => `0199bb02-0000-4aaa-8bbb-${String(n - 1).padStart(12, '0')}`
-const replyUuid = (n: number) => `0199bb03-0000-4aaa-8bbb-${String(n - 1).padStart(12, '0')}`
-
-/** Passages the two threads hang off. Substrings of the real reply text, so a quote
- *  the product would have captured from a selection — not a synthetic string. */
-const QUOTE_A = 'filler reply 20'
-const QUOTE_B = 'filler reply 21'
-
-/**
- * Three anchors, two threads:
- *
- *  · ask 21 asks about a passage of reply 20  → thread A, depth 1
- *  · ask 22 repeats the SAME parent + passage → sticky follow-up, same thread A
- *  · ask 23 asks about a passage of reply 21, which is INSIDE thread A → thread B,
- *    depth 2
- *
- * ask 24 is left unanchored: it is the control row (never threaded) and, in tree
- * mode, the top-level row that must NOT be in the DOM while a thread is open.
- */
-const ANCHORS = [
-  {
-    msgId: askUuid(21),
-    parent: replyUuid(20),
-    quote: { exact: QUOTE_A },
-    source: 'selection',
-    at: new Date(Date.now() - 30_000).toISOString(),
-  },
-  {
-    msgId: askUuid(22),
-    parent: replyUuid(20),
-    quote: { exact: QUOTE_A },
-    source: 'sticky',
-    at: new Date(Date.now() - 20_000).toISOString(),
-  },
-  {
-    msgId: askUuid(23),
-    parent: replyUuid(21),
-    quote: { exact: QUOTE_B },
-    source: 'selection',
-    at: new Date(Date.now() - 10_000).toISOString(),
-  },
-]
-
-/** Per-engine, so a WebKit run does not overwrite the chromium evidence (the two
- *  engines are the point of running this twice). */
-function shotsDir(): string {
-  return `/tmp/threads/e2e/${test.info().project.name}`
-}
+const DENSE_TASK = 'pw-task-threads-dense'
+const AI_TASK = 'pw-task-threads-ai'
+const NO_THREAD_TASK = 'pw-task-outline-window'
+/** The last root turn of the dense fixture: its root page has loaded. */
+const DENSE_READY = 'Walk me through part 6 of the storage notes.'
+/** The fixture's own titles say "Threads ... fixture": data, not UI text. */
+const FIXTURE_TITLE = /fixture (session|task)/i
+/** The question UI inside a panel: stack row, sliver, quote head, Asked-from rows,
+ *  linear banner, drawer and its toggle, resolved strip, rail, queued note. */
+const NEW_UI = [
+  '.thread-stack-header', '.thread-sliver', '.thread-quote-head-wrap', '.thread-asked-from', '.thread-linear-banner',
+  '.thread-drawer', '.thread-drawer-toggle', '.thread-strip', '.session-toc', '.thread-queue-note', '.thread-stack-more',
+].join(', ')
 
 async function shot(page: Page, name: string): Promise<void> {
-  const dir = shotsDir()
+  const dir = `/tmp/threads-p3/e2e/${test.info().project.name}`
   await fs.mkdir(dir, { recursive: true })
   await page.screenshot({ path: `${dir}/${name}.png` })
 }
 
-async function patchAnchors(request: APIRequestContext, anchors: unknown[]): Promise<void> {
-  const res = await request.patch(`/api/sessions/${SESSION_ID}`, { data: { thread_anchors: anchors } })
-  expect(res.ok(), `PATCH thread_anchors: ${res.status()} ${await res.text()}`).toBe(true)
+async function boot(page: Page): Promise<void> {
+  page.on('pageerror', (e) => console.log('PAGEERROR', e.message, (e.stack ?? '').slice(0, 1500)))
+  page.on('console', (m) => { if (m.type() === 'error') console.log('CONSOLEERR', m.text().slice(0, 1500)) })
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
 }
 
-/** Open the session column (idempotent: open columns are persisted, so clicking the
- *  kebab row again after a reload would TOGGLE it shut). */
-async function revealPanel(page: Page): Promise<Locator> {
-  const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
-  if (await panel.count() === 0) {
-    await page.locator('.todo-search-input').fill(SESSION_ID)
-    const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
-    await expect(task).toBeVisible()
-    // Click the row's title: the task menu has no open-session row.
-    await task.locator('.todo-item-title').click()
-  }
-  await expect(panel).toBeVisible()
-  return panel
+function frame(panel: Locator): Locator {
+  return panel.locator('.thread-stack')
 }
 
-async function openSession(page: Page, ready = LAST_REPLY): Promise<Locator> {
-  const panel = await revealPanel(page)
-  await expect(panel.locator('.session-history')).toContainText(ready, { timeout: 20000 })
-  return panel
+async function expectDepth(panel: Locator, depth: number): Promise<void> {
+  await expect(frame(panel)).toHaveAttribute('data-thread-depth', String(depth), { timeout: 15_000 })
 }
 
-/** Scroll the timeline with a REAL wheel gesture: the timeline follows the bottom,
- *  and a programmatic scrollTop write is snapped straight back to the end. */
-async function wheel(page: Page, panel: Locator, dy: number): Promise<void> {
-  const box = (await panel.locator('.session-history').boundingBox())!
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-  await page.mouse.wheel(0, dy)
-  await page.waitForTimeout(140)
+/** Scroll the timeline with REAL wheel steps until `target` sits mid-box (a
+ *  programmatic scrollTop write can be snapped back by bottom follow). */
+async function centre(page: Page, panel: Locator, target: Locator): Promise<void> {
+  await centreInHistory(page, panel, target, { tolerance: 60, capRow: true })
 }
 
-/** Park a row in the middle of the timeline: under the sticky header or behind the
- *  composer it can be neither dragged over nor clicked. */
-async function centreRow(page: Page, panel: Locator, target: Locator): Promise<void> {
-  const history = panel.locator('.session-history')
-  let lastTop = -1
-  for (let i = 0; i < 30; i++) {
-    const delta = await target.evaluate((el) => {
-      const r = el.getBoundingClientRect()
-      const h = (el.closest('.session-history') as HTMLElement).getBoundingClientRect()
-      return (r.y + r.height / 2) - (h.y + h.height / 2)
-    })
-    if (Math.abs(delta) < 40) return
-    await wheel(page, panel, Math.max(-500, Math.min(500, Math.round(delta))))
-    // Both ends of the transcript can't be centred; stop when scrolling stops.
-    const top = await history.evaluate((el) => el.scrollTop)
-    if (top === lastTop) return
-    lastTop = top
-  }
+/** Open an "Asked from this answer" row by its text (the real click path). */
+async function openAsked(page: Page, panel: Locator, text: string | RegExp, depth: number): Promise<void> {
+  const row = panel.locator('.thread-asked-row', { hasText: text }).first()
+  await expect(row).toBeVisible()
+  await centre(page, panel, row)
+  await row.click()
+  await expectDepth(panel, depth)
 }
 
-/** Viewport geometry of a phrase inside a rendered message — the only way to aim a
- *  real mouse drag at specific words. */
-async function phraseRects(page: Page, phrase: string) {
-  const rects = await page.evaluate((needle) => {
-    const bodies = Array.from(
-      document.querySelectorAll('.session-history [data-message-id] .session-msg-content'),
-    )
-    for (const body of bodies) {
-      const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
-      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-        const text = n as Text
-        const at = text.data.indexOf(needle)
-        if (at === -1) continue
-        const range = document.createRange()
-        range.setStart(text, at)
-        range.setEnd(text, at + needle.length)
-        return Array.from(range.getClientRects()).map((r) => ({
-          left: r.left, right: r.right, top: r.top, height: r.height,
-        }))
-      }
-    }
-    return null
-  }, phrase)
-  expect(rects, `phrase "${phrase}" is not rendered`).not.toBeNull()
-  expect(rects!.length).toBeGreaterThan(0)
-  return rects!
-}
-
-/** Drag-select `phrase` with the mouse, exactly as a person would. The pill's quote
- *  is captured from these selection events, so the gesture is the test. */
-async function dragSelect(page: Page, phrase: string): Promise<string> {
-  const rects = await phraseRects(page, phrase)
-  const first = rects[0]
-  const last = rects[rects.length - 1]
-  const startX = first.left + 1
-  const startY = first.top + first.height / 2
-  const endX = last.right - 1
-  const endY = last.top + last.height / 2
-  await page.mouse.move(startX, startY)
-  await page.mouse.down()
-  await page.mouse.move((startX + endX) / 2, (startY + endY) / 2, { steps: 5 })
-  await page.mouse.move(endX, endY, { steps: 5 })
-  await page.mouse.up()
-  const selected = await page.evaluate(() => window.getSelection()?.toString() ?? '')
-  expect(selected.trim().length).toBeGreaterThan(0)
-  return selected
-}
-
-/** The wrapper div carrying a row's thread decoration. `.session-msg` is the INNER
- *  element (SessionMessage's own root), so the gutter class and depth live one level
- *  up, on the element that also holds `data-message-id`. */
-function rowWrap(panel: Locator, uuid: string): Locator {
-  return panel.locator(`.session-history [data-message-id="${uuid}"]`)
-}
-
-function paddingLeftOf(locator: Locator): Promise<number> {
-  return locator.evaluate((el) => parseFloat(getComputedStyle(el).paddingLeft))
-}
-
-test.describe('Conversation threads', () => {
-  // Serial: anchors are SERVER state on ONE shared fixture session, and the project
-  // runs fullyParallel — concurrent tests would reset each other's threads
-  // mid-assertion (it presents as "the thread I just opened vanished").
+test.describe('Question stack', () => {
   test.describe.configure({ mode: 'serial' })
-  // Each test does a full page load, opens the panel, wheel-scrolls a row into
-  // place and drags across it. Comfortably inside 30s idle, comfortably outside it
-  // when something else is building (a cold fixture boot alone is ~20s idle, ~70s
-  // at load 130).
-  test.setTimeout(90_000)
+  test.setTimeout(240_000)
 
-  // Both lists, every time: pins and anchors share the rail, and a pin left behind
-  // by an earlier test in this file would add rail rows the next one counts.
   test.beforeEach(async ({ request }) => {
-    const reset = await request.patch(`/api/sessions/${SESSION_ID}`, {
-      data: { pinned_messages: [], thread_anchors: [] },
-    })
-    expect(reset.ok()).toBe(true)
+    await resetThreadsFixture(request, DENSE_SESSION)
+    await resetThreadsFixture(request, AI_SESSION)
   })
 
-  test('anchored turns wear their thread, and the rail shows the shape', async ({ page, request }) => {
-    await patchAnchors(request, ANCHORS)
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    const panel = await openSession(page)
-
-    // 1. The two turns sharing one parent + passage are ONE thread at depth 1 — the
-    //    sticky follow-up (ask 22) is not a second branch.
-    for (const uuid of [askUuid(21), askUuid(22)]) {
-      await expect(rowWrap(panel, uuid)).toHaveClass(/session-msg--threaded/)
-      await expect(rowWrap(panel, uuid)).toHaveAttribute('data-thread-depth', '1')
-    }
-
-    // 2. A question about a reply INSIDE that thread nests one level deeper.
-    await expect(rowWrap(panel, askUuid(23))).toHaveAttribute('data-thread-depth', '2')
-
-    // 3. An unanchored turn is untouched. Asserted as a COUNT of the decorated
-    //    selector rather than not.toHaveClass: a top-level row carries no class
-    //    attribute at all, which is the point (the transcript reads identically
-    //    with and without threads).
-    await expect(rowWrap(panel, askUuid(24))).toBeVisible()
-    await expect(panel.locator(`[data-message-id="${askUuid(24)}"].session-msg--threaded`)).toHaveCount(0)
-    // …and the row it hangs off is not decorated either — only the QUESTION's turn
-    // belongs to the thread, not the reply it is about.
-    await expect(panel.locator(`[data-message-id="${replyUuid(20)}"].session-msg--threaded`)).toHaveCount(0)
-
-    // 4. The tag above the user bubble names the PASSAGE (pinLabelFor of
-    //    quote.exact), so the reader can tell two threads on one reply apart.
-    await expect(rowWrap(panel, askUuid(21)).locator('.session-msg-thread-tag')).toContainText(QUOTE_A)
-    await expect(rowWrap(panel, askUuid(23)).locator('.session-msg-thread-tag')).toContainText(QUOTE_B)
-    // The nested thread's tag must not read as the parent thread's.
-    await expect(rowWrap(panel, askUuid(23)).locator('.session-msg-thread-tag')).not.toContainText(QUOTE_A)
-
-    // 5. The rail exists on threads ALONE (no pins in this session) — one row per
-    //    thread, indented by depth. 12px per level, from `--thread-indent`.
-    const toc = panel.locator('.session-toc')
-    await expect(toc.locator('.session-toc-tick')).toHaveCount(2)
-    await toc.locator('.session-toc-rail').hover()
-    const threadRows = toc.locator('.session-toc-row--thread')
-    await expect(threadRows).toHaveCount(2)
-    // Transcript order: thread A's head (ask 21) precedes thread B's (ask 23).
-    await expect(threadRows.nth(0)).toContainText(QUOTE_A)
-    await expect(threadRows.nth(1)).toContainText(QUOTE_B)
-    const indent1 = await paddingLeftOf(threadRows.nth(0))
-    const indent2 = await paddingLeftOf(threadRows.nth(1))
-    expect(indent1).toBe(12)
-    expect(indent2).toBe(24)
-    // The dash is the thread-coloured variant, not a pin tick.
-    await expect(threadRows.nth(0).locator('.session-toc-dash--thread')).toHaveCount(1)
-
-    // 6. Hovering a thread row tints that thread's turns — the rail's answer to
-    //    "which parts of this conversation are that thread?". There is deliberately
-    //    NO separate "Ask here" button: a map is for navigating, and the row's own
-    //    click both goes there and points the composer at the thread.
-    await threadRows.nth(0).hover()
-    await expect(rowWrap(panel, askUuid(21))).toHaveClass(/is-thread-hover/)
-    await expect(threadRows.nth(0).locator('.session-toc-ask')).toHaveCount(0)
-    await shot(page, '01-light-view-rail-open')
-
-    // 7. Clicking the row points the composer at that thread, so the next question
-    //    lands in it without another selection.
-    await threadRows.nth(0).click()
-    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
-    await expect(chip).toBeVisible()
-    await expect(chip).toContainText(QUOTE_A)
-  })
-
-  test('Ask on a selection sets the composer chip, and × clears it', async ({ page }) => {
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    const panel = await openSession(page, PARAGRAPH)
-
-    await centreRow(page, panel, panel.locator('.session-msg', { hasText: PARAGRAPH }).first())
-    const selected = await dragSelect(page, PHRASE)
-    expect(selected).toContain(PHRASE)
-
-    // 1. The pill offers Ask next to Pin — on a REPLY, which is what "ask about
-    //    this" means.
-    const pill = page.locator('[data-testid="quote-pin-pill"]')
-    await expect(pill).toBeVisible()
-    const askBtn = pill.locator('[data-testid="quote-ask-btn"]')
-    await expect(askBtn).toBeVisible()
-    await shot(page, '02-pill-with-ask')
-
-    await askBtn.click()
-    await expect(pill).toHaveCount(0)
-
-    // 2. The chip is the one visible answer to "where will this message go?": the
-    //    passage in the label, the whole passage in the title (the label is one
-    //    clipped line, and the user must be able to check WHICH passage).
-    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
-    await expect(chip).toBeVisible()
-    await expect(chip).toContainText(PHRASE)
-    expect(await chip.getAttribute('title')).toContain(PHRASE)
-
-    // 3. Focus followed the gesture into the composer — Ask is the start of typing
-    //    a question, not a bookmark.
-    await expect(panel.locator('.chat-input-textarea')).toBeFocused()
-    await shot(page, '03-composer-chip')
-
-    // 4. Nothing was written to the record yet. An anchor names a user message that
-    //    does not exist until the send, so Ask is composer state ONLY — a write
-    //    here would leave a permanently dangling anchor if the user changed
-    //    their mind.
-    const stored = await page.request.get(`/api/sessions/${SESSION_ID}`)
-    expect(stored.ok()).toBe(true)
-    expect((await stored.json()).session.threadAnchors ?? []).toHaveLength(0)
-
-    // 5. `×` goes back to the top level.
-    await chip.locator('[data-testid="thread-anchor-clear"]').click()
-    await expect(chip).toHaveCount(0)
-
-    // 6. No Ask on a USER row. Asking about your own message has no reply to hang
-    //    off, so the pill offers Pin and Copy and nothing else.
-    const userRow = panel.locator('.session-msg', { hasText: 'outline filler ask 22' }).first()
-    await centreRow(page, panel, userRow)
-    await dragSelect(page, 'filler ask 22')
-    await expect(pill).toBeVisible()
-    await expect(pill.getByRole('button', { name: 'Pin' })).toBeVisible()
-    await expect(pill.locator('[data-testid="quote-ask-btn"]')).toHaveCount(0)
-    await shot(page, '04-user-row-pill-no-ask')
-  })
-
-  /**
-   * The map row's DESTINATION, which was wrong once (2026-09-04): it pointed at the
-   * thread's head — the question you typed — so clicking "the part about X" landed
-   * on your own follow-up and you still had to scroll up to find X. A pin jumps to
-   * the pinned passage; a thread row is the same kind of place.
-   *
-   * Its own anchor set, because the shared ANCHORS hang each thread off the reply
-   * DIRECTLY above the question: adjacent rows can't tell the two targets apart.
-   * Here the passage (reply 5, transcript index 13) sits ~37 rows above the question
-   * (ask 24, index 50), which also drags the jump through the render-window
-   * expansion — reply 5 is outside the initial 30-row tail.
-   */
-  test('a map row jumps to the passage the thread hangs off, not to the question', async ({ page, request }) => {
-    const FAR_QUOTE = 'filler reply 5'
-    await patchAnchors(request, [{
-      msgId: askUuid(24),
-      parent: replyUuid(5),
-      quote: { exact: FAR_QUOTE },
-      source: 'selection',
-      at: new Date(Date.now() - 10_000).toISOString(),
-    }])
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    const panel = await openSession(page)
+  test('a session without questions renders exactly as before; the old question UI is gone', async ({ page }) => {
+    await boot(page)
+    const panel = await openThreadsSession(page, NO_THREAD_SESSION, NO_THREAD_TASK, 'outline filler reply 230')
+    // C10: no drawer button, no sliver, no edge hot zone, no question menu, and the
+    // frame adds nothing (display: contents), so the box is the one it always was.
+    await expect(panel.locator('.thread-drawer-toggle')).toHaveCount(0)
+    await expect(panel.locator('.thread-sliver')).toHaveCount(0)
+    await expect(panel.locator('.thread-drawer-edge, .thread-drawer')).toHaveCount(0)
+    await expect(panel.locator('.thread-stack-more')).toHaveCount(0)
+    await expect(frame(panel)).toHaveCount(0)
+    const off = panel.locator('.thread-stack-off')
+    await expect(off).toHaveCount(1)
+    expect(await off.evaluate((el) => getComputedStyle(el).display)).toBe('contents')
     const history = panel.locator('.session-history')
-
-    const toc = panel.locator('.session-toc')
-    await toc.locator('.session-toc-rail').hover()
-    const row = toc.locator('.session-toc-row--thread')
-    await expect(row).toHaveCount(1)
-    // The row is LABELLED by the passage and SORTED at it: an outline is a table of
-    // contents of the transcript, so a question asked at the bottom about paragraph
-    // 5 belongs next to paragraph 5.
-    await expect(row).toContainText(FAR_QUOTE)
-
-    await row.click()
-    // Smooth scroll + the two frames the jump waits for the widened window to mount.
-    await page.waitForTimeout(1200)
-
-    const seen = await history.evaluate((el, ids) => {
-      const box = el.getBoundingClientRect()
-      const centre = box.top + box.height / 2
-      const distance = (id: string): number | null => {
-        const node = el.querySelector(`[data-message-id="${id}"]`)
-        if (!node) return null
-        const r = node.getBoundingClientRect()
-        return Math.abs((r.top + r.height / 2) - centre)
-      }
-      return { parent: distance(ids[0]), question: distance(ids[1]), height: box.height }
-    }, [replyUuid(5), askUuid(24)])
-
-    // The passage's reply is what got centred.
-    expect(seen.parent, 'the anchored reply did not render after the jump').not.toBeNull()
-    expect(seen.parent!).toBeLessThan(seen.height / 2)
-    // …and the question is nowhere near the middle. It may not even be rendered any
-    // more (the window slid), which is just as good an answer.
-    expect(seen.question === null || seen.question > seen.height).toBe(true)
-    await shot(page, '08-map-jump-to-passage')
-  })
-
-  test('the chip is sticky across a reload', async ({ page }) => {
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    let panel = await openSession(page, PARAGRAPH)
-
-    await centreRow(page, panel, panel.locator('.session-msg', { hasText: PARAGRAPH }).first())
-    await dragSelect(page, PHRASE)
-    await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    await expect(panel.locator('[data-testid="thread-anchor-chip"]')).toBeVisible()
-
-    // A real reload: a half-typed question must not silently be re-aimed at the top
-    // level, so the anchor is remembered per tab (sessionStorage).
-    await page.reload()
-    await page.waitForLoadState('networkidle')
-    panel = await openSession(page, PARAGRAPH)
-
-    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
-    await expect(chip).toBeVisible({ timeout: 20000 })
-    await expect(chip).toContainText(PHRASE)
-  })
-
-  test('tree mode renders one thread at a time and navigates', async ({ page, request }) => {
-    await patchAnchors(request, ANCHORS)
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    const panel = await openSession(page)
-    const history = panel.locator('.session-history')
-
-    // 1. The toggle appears because this session HAS threads (test 5 pins the
-    //    other half of that rule).
-    const toggle = panel.locator('.session-view-toggle')
-    await expect(toggle).toBeVisible()
-    await toggle.locator('.session-view-toggle-btn[data-view="tree"]').click()
-    await expect(history).toHaveAttribute('data-view-mode', 'tree')
-
-    // 2. Opens at the top level — where the newest message is. The root crumb's key
-    //    is the EMPTY STRING, which is why every key check in this feature has to
-    //    compare against undefined rather than test truthiness.
-    const crumbs = panel.locator('.thread-crumb')
-    await expect(crumbs).toHaveCount(1)
-    await expect(crumbs.first()).toHaveAttribute('data-thread-key', '')
-    await expect(crumbs.first()).toHaveClass(/is-current/)
-    await expect(crumbs.first()).toHaveText('Top level')
-
-    // 3. The branch leaving the top level is offered as a card labelled by its
-    //    passage. Only the top-level thread — the nested one belongs to ITS parent.
-    const cards = panel.locator('.thread-child-card')
-    await expect(cards).toHaveCount(1)
-    await expect(cards.first().locator('.thread-child-card-label')).toHaveText(QUOTE_A)
-    await shot(page, '05-tree-root')
-
-    await cards.first().click()
-
-    // 4. Inside thread A: two crumbs, the thread is current, and its own turns are
-    //    on screen.
-    await expect(panel.locator('.thread-crumb')).toHaveCount(2)
-    await expect(panel.locator('.thread-crumb.is-current')).toHaveText(QUOTE_A)
-    await expect(rowWrap(panel, askUuid(21))).toBeVisible()
-    await expect(rowWrap(panel, askUuid(22))).toBeVisible()
-
-    // 5. …and an unrelated TOP-LEVEL turn is not merely scrolled away, it is out of
-    //    the DOM. That is the whole difference between tree mode and the timeline.
-    await expect(history).not.toContainText('outline filler ask 24')
-    await expect(panel.locator(`[data-message-id="${askUuid(24)}"]`)).toHaveCount(0)
-
-    // 6. The context above is collapsed to one line per turn, expandable in place.
-    const ancestors = panel.locator('.thread-ancestor-turn')
-    expect(await ancestors.count()).toBeGreaterThanOrEqual(1)
-    const boundary = ancestors.last()
-    await expect(boundary).toHaveAttribute('aria-expanded', 'false')
-    await boundary.click()
-    await expect(boundary).toHaveAttribute('aria-expanded', 'true')
-    // The expanded turn renders the REAL rows, through the same renderer the
-    // timeline uses — the reply this thread hangs off is now readable in full.
-    await expect(rowWrap(panel, replyUuid(20))).toBeVisible()
-
-    // 7. Navigating also points the composer at the thread: the node view needs no
-    //    send logic of its own.
-    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
-    await expect(chip).toBeVisible()
-    await expect(chip).toContainText(QUOTE_A)
-
-    // 8. The map marks where you are. In tree mode the map replaces the hover rail
-    //    (same corner, same rows), so "where am I" is answered by the thing that is
-    //    already on screen — the timeline view has no current thread at all.
-    await expect(panel.locator('.session-toc')).toHaveCount(0)
-    const mapCurrent = panel.locator('.thread-map-row.is-current')
-    await expect(mapCurrent).toHaveCount(1)
-    await expect(mapCurrent).toContainText(QUOTE_A)
-    await shot(page, '06-tree-thread-a')
-
-    // 9. The nested thread is offered from here, and ↓ walks into it.
-    await expect(panel.locator('.thread-child-card-label')).toHaveText(QUOTE_B)
-    await history.focus()
-    await page.keyboard.press('ArrowDown')
-    await expect(panel.locator('.thread-crumb')).toHaveCount(3)
-    await expect(panel.locator('.thread-crumb.is-current')).toHaveText(QUOTE_B)
-    // A leaf thread says how to make the next branch instead of showing an empty
-    // card row.
-    await expect(panel.locator('.thread-child-hint')).toBeVisible()
-    await shot(page, '07-tree-thread-b')
-
-    // 10. ⌘/Ctrl+↑ is the way out from any depth, and the top level has no anchor.
-    await history.focus()
-    await page.keyboard.press('ControlOrMeta+ArrowUp')
-    await expect(panel.locator('.thread-crumb')).toHaveCount(1)
-    await expect(panel.locator('.thread-crumb.is-current')).toHaveText('Top level')
-    await expect(panel.locator('[data-testid="thread-anchor-chip"]')).toHaveCount(0)
-
-    // 11. Back to the timeline: everything is in the DOM again.
-    await toggle.locator('.session-view-toggle-btn[data-view="linear"]').click()
     await expect(history).toHaveAttribute('data-view-mode', 'linear')
-    await expect(history).toContainText('outline filler ask 24')
-
-    // 12. The mode is a per-session reading preference, so it survives a reload.
-    await toggle.locator('.session-view-toggle-btn[data-view="tree"]').click()
-    await expect(history).toHaveAttribute('data-view-mode', 'tree')
-    await page.reload()
-    await page.waitForLoadState('networkidle')
-    const reopened = await revealPanel(page)
-    await expect(reopened.locator('.session-history'))
-      .toHaveAttribute('data-view-mode', 'tree', { timeout: 20000 })
-    await expect(reopened.locator('.thread-crumb').first()).toHaveText('Top level')
-  })
-
-  test('no threads, no toggle', async ({ page }) => {
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    const panel = await openSession(page)
-
-    // An unused feature shows nothing: no toggle, no rail, no decorated rows.
-    await expect(panel.locator('.session-view-toggle')).toHaveCount(0)
-    await expect(panel.locator('.session-toc')).toHaveCount(0)
-    await expect(panel.locator('.session-msg--threaded')).toHaveCount(0)
-    await expect(panel.locator('.session-msg-thread-tag')).toHaveCount(0)
-    await expect(panel.locator('.session-history')).toHaveAttribute('data-view-mode', 'linear')
-    await expect(panel.locator('.thread-map')).toHaveCount(0)
-  })
-
-  /**
-   * The node view's permanent Map. It replaces the hover rail there rather than
-   * joining it: both park in the timeline's top-left corner and read the same rows,
-   * so two of them would be the same list drawn twice on top of itself.
-   */
-  test('tree mode shows a permanent map that navigates, and the rail steps aside', async ({ page, request }) => {
-    await patchAnchors(request, ANCHORS)
-    // Wide enough for the map to hold its expanded shape: a ~400px session column
-    // would leave too little for a turn, so under 520px it collapses to ticks.
-    await page.setViewportSize({ width: 1600, height: 900 })
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    const panel = await openSession(page)
-    const history = panel.locator('.session-history')
-
-    // Linear mode: the rail, and NO map. (`.session-toc` is a zero-height sticky
-    // wrapper, so the RAIL is the visible thing to assert on.)
-    await expect(panel.locator('.session-toc-rail')).toBeVisible()
-    await expect(panel.locator('.thread-map')).toHaveCount(0)
-    // The outline is a list of places, not of actions: the old "Ask here" button is
-    // gone, and the row click carries what it used to do.
-    await panel.locator('.session-toc-rail').hover()
-    await expect(panel.locator('.session-toc-ask')).toHaveCount(0)
-    await page.mouse.move(4, 4)
-
-    await panel.locator('.session-view-toggle-btn[data-view="tree"]').click()
-    await expect(history).toHaveAttribute('data-view-mode', 'tree')
-
-    // Tree mode: the map is open without being hovered, and the rail is not there.
-    const map = panel.locator('.thread-map')
-    await expect(map).toHaveClass(/is-wide/)
-    const mapPanel = map.locator('.thread-map-panel')
-    await expect(mapPanel).toBeVisible()
-    await expect(panel.locator('.session-toc')).toHaveCount(0)
-    // The gutter the map sits in is reserved, so no turn hides underneath it.
-    await expect(history).toHaveAttribute('data-thread-map', 'panel')
-
-    // Root row first, counting the branches; then one row per place, indented.
-    const rows = mapPanel.locator('.thread-map-row')
-    await expect(rows.first()).toHaveClass(/thread-map-row--root/)
-    await expect(rows.first()).toContainText('Top level')
-    // ONE top-level branch: thread B is nested inside A, so it is not a branch OF
-    // the top level. The count names the tree's width at this node, not its size.
-    await expect(rows.first()).toContainText('1 branch')
-    await expect(rows.first()).toHaveClass(/is-current/)
-    const threadRows = mapPanel.locator('.thread-map-row--thread')
-    await expect(threadRows).toHaveCount(2)
-    // Thread A holds the sticky follow-up, so it is TWO turns; the nested one is one.
-    await expect(threadRows.first()).toContainText(QUOTE_A)
-    await expect(threadRows.first()).toContainText('2 turns')
-    await expect(threadRows.nth(1)).toContainText('1 turn')
-    // Nesting is visible, not just implied.
-    const indents = await threadRows.evaluateAll((els) =>
-      els.map((el) => parseFloat(getComputedStyle(el).paddingLeft)))
-    expect(indents[1]).toBeGreaterThan(indents[0])
-    await shot(page, '09-tree-map')
-
-    // A map row is a destination: clicking it opens that thread and marks itself.
-    await threadRows.first().click()
-    await expect(panel.locator('.thread-crumb.is-current')).toHaveText(QUOTE_A)
-    await expect(mapPanel.locator('.thread-map-row--thread').first()).toHaveClass(/is-current/)
-    await expect(mapPanel.locator('.thread-map-row--root')).not.toHaveClass(/is-current/)
-    // …and the composer follows, so the next question lands where you are reading.
-    await expect(panel.locator('[data-testid="thread-anchor-chip"]')).toContainText(QUOTE_A)
-    await shot(page, '10-tree-map-inside-thread')
-
-    // Back to the top level through the root row.
-    await mapPanel.locator('.thread-map-row--root').click()
-    await expect(panel.locator('.thread-crumb')).toHaveCount(1)
-    await expect(mapPanel.locator('.thread-map-row--root')).toHaveClass(/is-current/)
-
-    // Leaving tree mode releases the gutter, or the timeline would keep the map's
-    // padding with nothing in it.
-    await panel.locator('.session-view-toggle-btn[data-view="linear"]').click()
-    await expect(history).toHaveAttribute('data-view-mode', 'linear')
-    await expect(history).not.toHaveAttribute('data-thread-map', 'panel')
-    await expect(panel.locator('.session-toc-rail')).toBeVisible()
-  })
-
-  /**
-   * The turn's OWN way back to where its thread branches from. Reported 2026-09-18
-   * with a screenshot of a `↳ ExternalName` tag: "this can't be clicked — if it
-   * branches out from a place, it needs to be clickable". The tag and the gutter
-   * bar now both go to the passage the thread hangs off, exactly where the
-   * outline's thread row goes; the message content inside the bar does not.
-   *
-   * Same far anchor as the map-row test: the passage (reply 5) sits ~37 rows above
-   * the question (ask 24), outside the initial render window, so a jump that only
-   * pretended to move would be caught.
-   */
-  test('the ↳ tag and the gutter bar on a question jump to the passage it is about; its content does not', async ({ page, request }) => {
-    const FAR_QUOTE = 'filler reply 5'
-    await patchAnchors(request, [{
-      msgId: askUuid(24),
-      parent: replyUuid(5),
-      quote: { exact: FAR_QUOTE },
-      source: 'selection',
-      at: new Date(Date.now() - 10_000).toISOString(),
-    }])
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    const panel = await openSession(page)
-    const history = panel.locator('.session-history')
-    const question = rowWrap(panel, askUuid(24))
-
-    /** How far each row's centre is from the timeline's centre (null = not rendered). */
-    const centred = () => history.evaluate((el, ids) => {
-      const box = el.getBoundingClientRect()
-      const centre = box.top + box.height / 2
-      const distance = (id: string): number | null => {
-        const node = el.querySelector(`[data-message-id="${id}"]`)
-        if (!node) return null
-        const r = node.getBoundingClientRect()
-        return Math.abs((r.top + r.height / 2) - centre)
+    const pad = await history.evaluate((el) => getComputedStyle(el).paddingLeft)
+    expect(parseFloat(pad)).toBeLessThanOrEqual(40)
+    // C9: the map, the chip, the Linear/Tree toggle and the reply-arrow tags are gone.
+    await expect(page.locator('.session-view-toggle, .thread-map, [data-testid="thread-anchor-chip"]')).toHaveCount(0)
+    await expect(page.locator('.session-msg-thread-tag, .thread-breadcrumb, .thread-child-card')).toHaveCount(0)
+    const mapRule = await page.evaluate(() => {
+      for (const sheet of Array.from(document.styleSheets)) {
+        let rules: CSSRuleList
+        try { rules = sheet.cssRules } catch { continue }
+        for (const r of Array.from(rules)) {
+          if (r.cssText.includes('data-thread-map') || r.cssText.includes('176px + 24px')) return r.cssText
+        }
       }
-      return { parent: distance(ids[0]), question: distance(ids[1]), height: box.height, top: el.scrollTop }
-    }, [replyUuid(5), askUuid(24)])
-    /** The timeline is parked at the bottom, so the question row is on screen. */
-    const backToTheQuestion = async () => {
-      for (let i = 0; i < 12; i++) {
-        if (await question.isVisible()) break
-        await wheel(page, panel, 4000)
-      }
-      await expect(question).toBeVisible()
-      await page.waitForTimeout(300)
-    }
-
-    // 1. The tag is a BUTTON that says what it does and names the whole passage:
-    //    an affordance, not a caption.
-    const tag = question.locator('.session-msg-thread-tag')
-    await expect(tag).toBeVisible()
-    expect(await tag.evaluate((el) => el.tagName)).toBe('BUTTON')
-    expect(await tag.getAttribute('title')).toContain(FAR_QUOTE)
-    expect(await tag.getAttribute('title')).toMatch(/passage/i)
-    expect(await tag.evaluate((el) => getComputedStyle(el).cursor)).toBe('pointer')
-
-    // 2. Clicking the message CONTENT of a threaded turn is not a jump: the bar and
-    //    the tag are the affordance, the bubble keeps its own clicks (links, images,
-    //    the selection pill).
-    const before = await centred()
-    await question.locator('.session-msg-content').first().click()
-    await page.waitForTimeout(700)
-    const untouched = await centred()
-    // Not byte-equal: hovering a row reveals its action strip, which in WebKit
-    // takes a line of layout and nudges a bottom-parked timeline by ~22px. A jump
-    // here would be ~2000px.
-    expect(Math.abs(untouched.top - before.top), 'a click on the bubble is not a jump').toBeLessThan(80)
-    expect(untouched.parent === null || untouched.parent > untouched.height).toBe(true)
-    await expect(question).toBeVisible()
-
-    // 3. The tag jumps to the PASSAGE (reply 5), not to the question.
-    await tag.click()
-    await page.waitForTimeout(1200)
-    const afterTag = await centred()
-    expect(afterTag.parent, 'the anchored reply rendered after the jump').not.toBeNull()
-    expect(afterTag.parent!).toBeLessThan(afterTag.height / 2)
-    expect(afterTag.question === null || afterTag.question > afterTag.height).toBe(true)
-    await shot(page, '11-tag-jump-to-passage')
-
-    // 4. The gutter bar is the same way back. Pressed on the strip itself (bar +
-    //    padding, left of the content), at the bubble's height.
-    await backToTheQuestion()
-    const box = (await question.boundingBox())!
-    expect(await question.evaluate((el) => getComputedStyle(el, '::before').cursor)).toBe('pointer')
-    await page.mouse.click(box.x + 5, box.y + box.height / 2)
-    await page.waitForTimeout(1200)
-    const afterBar = await centred()
-    expect(afterBar.parent, 'the anchored reply rendered after the bar click').not.toBeNull()
-    expect(afterBar.parent!).toBeLessThan(afterBar.height / 2)
-    expect(afterBar.question === null || afterBar.question > afterBar.height).toBe(true)
-    await shot(page, '12-bar-jump-to-passage')
-  })
-
-  /**
-   * The same tag in the node view. There the passage lives in the PARENT thread
-   * (the turns on screen are the child's), so the click is a navigation first and a
-   * jump second: the view goes back to the parent and lands on the passage.
-   */
-  test('in tree mode the ↳ tag returns to the parent thread and lands on the passage', async ({ page, request }) => {
-    const FAR_QUOTE = 'filler reply 5'
-    await patchAnchors(request, [{
-      msgId: askUuid(24),
-      parent: replyUuid(5),
-      quote: { exact: FAR_QUOTE },
-      source: 'selection',
-      at: new Date(Date.now() - 10_000).toISOString(),
-    }])
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    const panel = await openSession(page)
-    const history = panel.locator('.session-history')
-
-    await panel.locator('.session-view-toggle-btn[data-view="tree"]').click()
-    await expect(history).toHaveAttribute('data-view-mode', 'tree')
-    // The node view follows the newest message, which is the thread's own question.
-    await expect(panel.locator('.thread-crumb')).toHaveCount(2)
-    await expect(panel.locator('.thread-crumb.is-current')).toHaveText(FAR_QUOTE)
-    const tag = rowWrap(panel, askUuid(24)).locator('.session-msg-thread-tag')
-    await expect(tag).toBeVisible()
-
-    await tag.click()
-    // Back at the top level (the parent thread)…
-    await expect(panel.locator('.thread-crumb')).toHaveCount(1)
-    await expect(panel.locator('.thread-crumb.is-current')).toHaveText('Top level')
-    await page.waitForTimeout(1200)
-    // …centred on the passage, with the question's turn out of the DOM (it belongs
-    // to the child thread).
-    const seen = await history.evaluate((el, ids) => {
-      const box = el.getBoundingClientRect()
-      const centre = box.top + box.height / 2
-      const distance = (id: string): number | null => {
-        const node = el.querySelector(`[data-message-id="${id}"]`)
-        if (!node) return null
-        const r = node.getBoundingClientRect()
-        return Math.abs((r.top + r.height / 2) - centre)
-      }
-      return { parent: distance(ids[0]), question: distance(ids[1]), height: box.height }
-    }, [replyUuid(5), askUuid(24)])
-    expect(seen.parent, 'the anchored reply rendered in the parent thread').not.toBeNull()
-    expect(seen.parent!).toBeLessThan(seen.height / 2)
-    expect(seen.question).toBeNull()
-    await shot(page, '13-tree-tag-back-to-parent')
-  })
-
-  /**
-   * The whole loop through a REAL send (own fixture session: the mock CLI's reply is
-   * appended to the stream file and would shift every count above). Reported
-   * 2026-09-18: "after I ask the question I want it automatically de-selected" —
-   * the chip used to flip to sticky after the send, and the next message went into
-   * the thread whether or not it was about the passage.
-   */
-  test('Ask → send: the chip is consumed, the bubble wears a tag that leads back, and the next message is top level', async ({ page, request }) => {
-    const SEND_SESSION = 'pw-threads-send-session'
-    const SEND_TASK = 'pw-task-threads-send'
-    const reset = await request.patch(`/api/sessions/${SEND_SESSION}`, {
-      data: { pinned_messages: [], thread_anchors: [] },
+      return null
     })
-    expect(reset.ok()).toBe(true)
-    const anchorsOf = async () => {
-      const res = await request.get(`/api/sessions/${SEND_SESSION}`)
-      expect(res.ok()).toBe(true)
-      return ((await res.json()).session.threadAnchors ?? []) as unknown[]
-    }
+    expect(mapRule, 'the map gutter rule is deleted').toBeNull()
+    // Pixel check against the DOM the old build rendered (no wrapper at all): lift
+    // the wrapper's children into its parent and shoot again. Same pixels = the
+    // wrapper adds nothing. Last step of the test (React never sees this DOM again).
+    const dir = `/tmp/threads-p3/e2e/${test.info().project.name}`
+    await fs.mkdir(dir, { recursive: true })
+    // Both shots with transitions off: a moved node restarts its fades (the row
+    // actions' hover fade), which is timing, not layout.
+    await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' })
+    await page.mouse.move(2, 2)
+    await page.waitForTimeout(1000)
+    const withFrame = await panel.screenshot({ path: `${dir}/c10-no-questions.png`, animations: 'disabled', mask: [panel.locator('.session-msg-actions')] })
+    await off.evaluate((el) => {
+      // Moving a node resets its scroll offset: carry every offset across.
+      const scrolled = Array.from(el.querySelectorAll<HTMLElement>('*')).filter((n) => n.scrollTop > 0)
+        .map((n) => [n, n.scrollTop] as const)
+      const parent = el.parentElement!
+      while (el.firstChild) parent.insertBefore(el.firstChild, el)
+      el.remove()
+      for (const [n, top] of scrolled) n.scrollTop = top
+    })
+    // Each row's action strip (copy, pin, relative time) is masked in both shots:
+    // its fade follows hover and the clock, which a moved node re-evaluates. Moved nodes restart their transitions (the hover fade of a row's actions):
+    // let them settle before the second shot.
+    await page.waitForTimeout(1000)
+    const unwrapped = await panel.screenshot({ path: `${dir}/c10-no-questions-unwrapped.png`, animations: 'disabled', mask: [panel.locator('.session-msg-actions')] })
+    expect(withFrame.equals(unwrapped), 'the panel is pixel-identical without the wrapper').toBe(true)
+  })
 
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    const panel = page.locator(`.session-panel[data-session-id="${SEND_SESSION}"]`)
-    await page.locator('.todo-search-input').fill(SEND_SESSION)
-    const task = page.locator(`.todo-panel-item[data-task-id="${SEND_TASK}"]`)
-    await expect(task).toBeVisible()
-    await task.locator('.todo-item-title').click()
-    await expect(panel).toBeVisible()
-    const history = panel.locator('.session-history')
-    await expect(history).toContainText(PARAGRAPH, { timeout: 20000 })
+  test('Ask opens a question page in the same frame; Esc before sending writes nothing', async ({ page, request }) => {
+    await boot(page)
+    const panel = await openThreadsSession(page, AI_SESSION, AI_TASK, 'How should the reader treat stale copies?')
+    const passage = AI_PASSAGE.slice(0, 44)
+    await centre(page, panel, panel.locator('.session-msg-content', { hasText: passage }).first())
+    await passageRects(panel, passage)
+    await selectPassage(page, panel, passage)
+    const ask = page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]')
+    await expect(ask).toBeVisible()
+    // Sample the DOM one animation frame after the click that asks.
+    await page.evaluate(() => {
+      const w = window as unknown as { __askFrame?: string | null }
+      w.__askFrame = null
+      document.addEventListener('click', (e) => {
+        if (!(e.target as Element).closest?.('[data-testid="quote-ask-btn"]')) return
+        requestAnimationFrame(() => {
+          const f = document.querySelector('.thread-stack')
+          w.__askFrame = `${f?.getAttribute('data-thread-depth') ?? 'none'}:${f?.querySelectorAll('.thread-quote-head').length ?? 0}`
+        })
+      }, { capture: true, once: true })
+    })
+    await ask.click()
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __askFrame?: string | null }).__askFrame)).toBe('1:1')
+    // C1: a depth-1 page, the passage in its quote head, the composer focused and
+    // empty, no chip anywhere.
+    await expectDepth(panel, 1)
+    await expect(panel.locator('.thread-quote-head')).toContainText(passage)
     const textarea = panel.locator('.chat-input-textarea').first()
-    const chip = panel.locator('[data-testid="thread-anchor-chip"]')
-    const tags = panel.locator('.session-msg-thread-tag')
-
-    // 1. Ask about a passage, type, send.
-    await centreRow(page, panel, panel.locator('.session-msg', { hasText: PARAGRAPH }).first())
-    await dragSelect(page, PHRASE)
-    await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    await expect(chip).toBeVisible()
-    await textarea.click()
-    await textarea.fill('and what does that cost')
-    await textarea.press('Enter')
+    await expect(textarea).toBeFocused()
     await expect(textarea).toHaveValue('')
+    await expect(textarea).toHaveAttribute('placeholder', 'Ask about this passage…')
+    await expect(page.locator('[data-testid="thread-anchor-chip"], .thread-anchor-chip')).toHaveCount(0)
+    // The stack row names the page without repeating the quote head below it (N17).
+    await expect(panel.locator('.thread-stack-header .thread-stack-title')).toHaveText('New question')
+    await shot(page, 'c1-pending-page')
+    // C2: Esc on the unsent page returns to root and writes nothing.
+    await page.keyboard.press('Escape')
+    await expect(frame(panel)).toHaveCount(0)
+    await expect(panel.locator('.thread-quote-head')).toHaveCount(0)
+    const record = await readRecord(request, AI_SESSION)
+    expect(record.threadAnchors ?? []).toHaveLength(0)
+    expect(record.threadMeta ?? []).toHaveLength(0)
+  })
 
-    // 2. The send consumed the chip; the anchor is recorded; the bubble wears the
-    //    tag in the same frame (its pre-assigned uuid is the anchor's key).
-    await expect(chip, 'the send consumed the chip').toHaveCount(0)
-    // The anchor PATCH is optimistic and rides its own request.
-    await expect.poll(async () => (await anchorsOf()).length).toBe(1)
-    await expect(tags).toHaveCount(1)
-    await expect(tags.first()).toContainText('rewrites the index')
-    await shot(page, '14-sent-chip-gone-tag-on')
+  test('the sliver: one bar per ancestor, distinct shades, 1px gaps; the outermost bar pops to root', async ({ page }) => {
+    await boot(page)
+    const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
+    const history = panel.locator('.session-history')
+    // C6: tag the scroll box; every depth must render into this same element.
+    await history.evaluate((el) => { (el as unknown as { __probe: number }).__probe = 7 })
+    const bars = panel.locator('.thread-sliver-bar')
+    await openAsked(page, panel, 'Late flush risk', 1)
+    await expect(bars).toHaveCount(1)
+    await openAsked(page, panel, 'Reader skip cost', 2)
+    await expect(bars).toHaveCount(2)
+    expect(await panel.locator('.session-history').count(), 'one timeline scroll box').toBe(1)
+    expect(await history.evaluate((el) => (el as unknown as { __probe?: number }).__probe)).toBe(7)
+    await openAsked(page, panel, /point 24/i, 3)
+    await openAsked(page, panel, /point 28/i, 4)
+    await expect(bars).toHaveCount(4)
+    expect(await history.evaluate((el) => (el as unknown as { __probe?: number }).__probe)).toBe(7)
+    await expect(bars.first()).toHaveAttribute('data-root', '')
 
-    // 3. The reply lands; history absorbs the bubble; still ONE tag (the persisted
-    //    row's, replacing the optimistic one — never both).
-    await expect(history).toContainText('processed your message', { timeout: 30_000 })
-    await expect(tags).toHaveCount(1)
+    const geometry = () => bars.evaluateAll((els) => els.map((el) => {
+      const r = el.getBoundingClientRect()
+      return { left: r.left, right: r.right, width: r.width, color: getComputedStyle(el).backgroundColor }
+    }))
+    const light = await geometry()
+    // C5: each level its own shade, a 1px transparent gap between bars.
+    expect(new Set(light.map((b) => b.color)).size, JSON.stringify(light)).toBe(4)
+    for (let i = 1; i < light.length; i++) expect(Math.round(light[i].left - light[i - 1].right)).toBe(1)
+    for (const b of light) expect([8, 10]).toContain(Math.round(b.width))
+    await shot(page, 'c5-sliver-light')
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'dark' })
+    const dark = await geometry()
+    expect(new Set(dark.map((b) => b.color)).size, JSON.stringify(dark)).toBe(4)
+    expect(dark.map((b) => b.color)).not.toEqual(light.map((b) => b.color))
+    await shot(page, 'c5-sliver-dark')
+    await page.evaluate(() => { delete document.documentElement.dataset.theme })
 
-    // 4. A follow-up with no selection is a TOP-LEVEL message: no chip, no new
-    //    anchor, no second tag. (Before: filed under the passage by the sticky chip.)
+    // The outermost bar pops straight to root and flashes ONE landing.
+    await page.evaluate(() => {
+      const w = window as unknown as { __flashes: string[] }
+      w.__flashes = []
+      const tick = () => {
+        const hl = (CSS as unknown as { highlights?: Map<string, Set<Range>> }).highlights?.get('walnut-pin-flash')
+        for (const r of hl ?? []) if (!w.__flashes.includes(r.toString())) w.__flashes.push(r.toString())
+        if (w.__flashes.length < 5) requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
+    await bars.first().click()
+    await expectDepth(panel, 0)
+    await expect(bars).toHaveCount(0)
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __flashes: string[] }).__flashes.length)).toBeGreaterThan(0)
+    await page.waitForTimeout(900)
+    const flashes = await page.evaluate(() => (window as unknown as { __flashes: string[] }).__flashes)
+    expect(flashes, 'only the final landing flashes').toHaveLength(1)
+    expect(flashes[0]).toContain('Point 6:')
+  })
+
+  test('sliver geometry: beside the content column; a drag does not pop; hover names the level', async ({ page }) => {
+    await boot(page)
+    const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
+    await openAsked(page, panel, 'Late flush risk', 1)
+    await openAsked(page, panel, 'Reader skip cost', 2)
+    const bars = panel.locator('.thread-sliver-bar')
+    await expect(bars).toHaveCount(2)
+    // C79: the last bar's right edge is within 12px of the content column (read
+    // once the push slide, a translateX on the scroll box, has finished).
+    await expect.poll(() => panel.locator('.session-history').evaluate((el) => el.getAnimations().length)).toBe(0)
+    const gap = await panel.evaluate((root) => {
+      const bar = Array.from(root.querySelectorAll('.thread-sliver-bar')).pop()!.getBoundingClientRect()
+      const row = root.querySelector('.session-history .thread-quote-head')!
+      return row.getBoundingClientRect().left - bar.right
+    })
+    expect(gap).toBeGreaterThanOrEqual(0)
+    expect(gap).toBeLessThanOrEqual(12)
+    // Rail and sliver never overlap.
+    const overlap = await panel.evaluate((root) => {
+      const rail = root.querySelector('.session-toc-rail')?.getBoundingClientRect()
+      const first = root.querySelector('.thread-sliver-bar')!.getBoundingClientRect()
+      return rail ? rail.right > first.left && rail.left < first.right + 20 && rail.width > 0 : false
+    })
+    expect(overlap).toBe(false)
+    // A 10px drag that starts on a bar is not a click.
+    const box = (await bars.last().boundingBox())!
+    await page.mouse.move(box.x + box.width / 2, box.y + 200)
+    await page.mouse.down()
+    await page.mouse.move(box.x + box.width / 2 + 10, box.y + 200, { steps: 4 })
+    await page.mouse.up()
+    await page.waitForTimeout(300)
+    await expectDepth(panel, 2)
+    // Hover: the hit zone is 16px wide and the tooltip names the level.
+    const zone = await bars.last().evaluate((el) => {
+      const s = getComputedStyle(el, '::before')
+      return el.getBoundingClientRect().width - parseFloat(s.left) - parseFloat(s.right)
+    })
+    expect(Math.round(zone)).toBe(Math.round(box.width) + 6)
+    expect(Math.round(zone)).toBeGreaterThanOrEqual(14)
+    await page.mouse.move(box.x + box.width / 2, box.y + 240)
+    await page.mouse.move(box.x + box.width / 2, box.y + 246)
+    const tip = page.locator('.thread-hover-tip')
+    await expect(tip).toHaveText('Back to Late flush risk')
+    await expect(bars.last()).toHaveCSS('cursor', 'pointer')
+    await shot(page, 'c79-sliver-hover')
+    // A still click pops exactly one level.
+    await page.mouse.click(box.x + box.width / 2, box.y + 246)
+    await expectDepth(panel, 1)
+  })
+
+  test('no reply arrows, dashes, hamburger or check glyphs, and never the old word, in the question UI', async ({ page }) => {
+    await boot(page)
+    const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
+    const scan = async (where: string) => {
+      // Every surface this slice adds (the rest of the panel is older UI).
+      const scopes = [
+        panel.locator(NEW_UI), page.locator('.thread-menu'), page.locator('.thread-hover-tip'), page.locator('.thread-toast'),
+      ]
+      for (const scope of scopes) {
+        if (await scope.count() === 0) continue
+        for (let i = 0; i < await scope.count(); i++) {
+          const hits = (await findBannedGlyphs(page, scope.nth(i))).filter((h) => !FIXTURE_TITLE.test(h.value))
+          expect(hits, `${where}: ${JSON.stringify(hits)}`).toEqual([])
+          const glyphs = await scope.nth(i).evaluate((el) => {
+            const out: string[] = []
+            const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+            for (let n = w.nextNode(); n; n = w.nextNode()) {
+              if (n.parentElement?.closest('.session-msg-content')) continue
+              if (/[☰✓✔]/.test(n.textContent ?? '')) out.push((n.textContent ?? '').trim())
+            }
+            return out
+          })
+          expect(glyphs, `${where}: hamburger / check glyphs`).toEqual([])
+        }
+      }
+    }
+    await scan('root page')
+    await openAsked(page, panel, 'Late flush risk', 1)
+    await openAsked(page, panel, 'Reader skip cost', 2)
+    await scan('depth 2')
+    await panel.locator('.thread-stack-header .thread-stack-more').click()
+    await expect(page.locator('.thread-menu')).toBeVisible()
+    await scan('page menu')
+    await page.keyboard.press('Escape')
+    await panel.locator('.thread-drawer-toggle').click()
+    await expect(panel.locator('.thread-drawer')).toBeVisible()
+    await scan('drawer open')
+    await shot(page, 'c8-drawer-depth2')
+  })
+
+  test('Esc is layered: menu, then drawer; typed text and IME composition never pop', async ({ page }) => {
+    await boot(page)
+    const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
+    await openAsked(page, panel, 'Late flush risk', 1)
+    // A menu open: Esc closes only the menu.
+    await panel.locator('.thread-stack-header .thread-stack-more').click()
+    await expect(page.locator('.thread-menu')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.thread-menu')).toHaveCount(0)
+    await expectDepth(panel, 1)
+    // The drawer open: Esc closes only the drawer.
+    await panel.locator('.thread-drawer-toggle').click()
+    const drawer = panel.locator('.thread-drawer')
+    await expect(drawer).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(drawer).toBeHidden()
+    await expectDepth(panel, 1)
+    // Text in the composer: Esc keeps the page.
+    const textarea = panel.locator('.chat-input-textarea').first()
     await textarea.click()
-    await textarea.fill('and one more thing')
-    await textarea.press('Enter')
-    await expect(textarea).toHaveValue('')
-    await expect(chip).toHaveCount(0)
-    await expect(history).toContainText('and one more thing')
-    expect(await anchorsOf()).toHaveLength(1)
-    await expect(tags).toHaveCount(1)
+    await textarea.fill('half a follow up')
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(300)
+    await expectDepth(panel, 1)
+    await expect(textarea).toHaveValue('half a follow up')
+    // IME composition: an Esc that ends composing is not a pop.
+    await textarea.fill('')
+    await textarea.evaluate((el) => {
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', isComposing: true, bubbles: true, cancelable: true }))
+    })
+    await page.waitForTimeout(300)
+    await expectDepth(panel, 1)
+    // Empty composer, nothing open: Esc pops.
+    await page.keyboard.press('Escape')
+    await expectDepth(panel, 0)
+  })
 
-    // 5. The tag on the persisted bubble leads back to the passage: the paragraph
-    //    is scrolled to the middle and the view moved to get there.
-    await expect(history).toContainText('processed your message', { timeout: 30_000 })
-    const before = await history.evaluate((el) => el.scrollTop)
-    await tags.first().click()
-    await page.waitForTimeout(1200)
-    const seen = await history.evaluate((el, needle) => {
-      const box = el.getBoundingClientRect()
-      const centre = box.top + box.height / 2
-      const row = Array.from(el.querySelectorAll('[data-message-id] .session-msg-content'))
-        .find((n) => (n.textContent ?? '').includes(needle))?.closest('[data-message-id]')
-      if (!row) return null
-      const r = row.getBoundingClientRect()
-      return { distance: Math.abs((r.top + r.height / 2) - centre), height: box.height, top: el.scrollTop }
-    }, PARAGRAPH)
-    expect(seen, 'the paragraph is rendered').not.toBeNull()
-    expect(seen!.distance).toBeLessThan(seen!.height / 2)
-    expect(seen!.top).not.toBe(before)
-    await shot(page, '15-tag-leads-back-after-send')
+  test('the composer overlays and fullscreen keep their Esc; the page pops only between them', async ({ page }) => {
+    await boot(page)
+    const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
+    await openAsked(page, panel, 'Late flush risk', 1)
+    await openAsked(page, panel, 'Reader skip cost', 2)
+    const textarea = panel.locator('.chat-input-textarea').first()
+    // C61: the slash palette takes its Esc; the page stays.
+    await textarea.click()
+    await textarea.fill('/')
+    const palette = panel.locator('.command-palette')
+    await expect(palette).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(palette).toHaveCount(0)
+    await expectDepth(panel, 2)
+    await textarea.fill('')
+    // The model picker takes its Esc too.
+    const pill = panel.locator('.composer-controls-bar [data-control-id="model"] button').first()
+    if (await pill.isVisible()) await pill.click()
+    else {
+      await panel.getByTestId('composer-overflow-btn').click()
+      await page.getByTestId('composer-overflow-item-model').click()
+    }
+    const picker = page.locator('.model-picker').first()
+    await expect(picker).toBeVisible({ timeout: 10_000 })
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.model-picker')).toHaveCount(0)
+    await expectDepth(panel, 2)
+
+    // C50: fullscreen at depth 2: two Esc pop, only the third leaves fullscreen.
+    await panel.locator('button[title="Expand to full screen"]').click()
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    await textarea.click()
+    await page.keyboard.press('Escape')
+    await expectDepth(panel, 1)
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    await page.keyboard.press('Escape')
+    await expectDepth(panel, 0)
+    await page.waitForTimeout(300)
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    await shot(page, 'c50-fullscreen-root')
+    await page.keyboard.press('Escape')
+    await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
   })
 })

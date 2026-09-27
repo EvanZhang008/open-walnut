@@ -132,7 +132,6 @@ export async function geometry(panel: Locator): Promise<Geometry> {
         ['notes bar', '.session-notes'],
         ['send error', '.session-panel-input > .text-xs'],
         ['recap tip', '.session-recap-tip'],
-        ['thread chip', '.session-panel-input .thread-anchor-chip'],
         ['image strip', '.session-panel-input .chat-image-previews'],
         ['queue bar', '.session-panel-input .chat-queue-indicator'],
         ['input card', '.session-panel-input .chat-input-box'],

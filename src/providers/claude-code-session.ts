@@ -48,7 +48,7 @@ import {
   getAllSessionsWithPending,
 } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
-import { pickBatchUuid } from './batch-uuid.js'
+import { noteTurnUserUuid, pickBatchUuid } from './batch-uuid.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
 import { matchesRetryExhaustion } from '../core/session-auto-continue.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
@@ -10247,8 +10247,10 @@ export class SessionRunner {
       await new Promise(r => setTimeout(r, 200))
     }
 
-    // Atomically move pending messages to processing state
-    const newMsgs = await markProcessing(sessionId, stopFence)
+    // Atomically move pending messages to processing state. `midTurn` leaves the
+    // whole queue to processNext while any row carries a pre-assigned uuid: a
+    // question's head row must start its own turn (session-message-queue.ts).
+    const newMsgs = await markProcessing(sessionId, stopFence, { midTurn: true })
     if (newMsgs.length === 0) return
 
     const combined = newMsgs.map((m) => m.message).join('\n\n')
@@ -10270,6 +10272,10 @@ export class SessionRunner {
       // includes these messages when the turn eventually completes
       this.batchCounts.set(sessionId, (this.batchCounts.get(sessionId) ?? 0) + newMsgs.length)
       this.batchMessageIds.set(sessionId, [...(this.batchMessageIds.get(sessionId) ?? []), ...newMsgs.map((m) => m.id)])
+      // The running turn now answers these plain rows too, so its result no longer
+      // provably belongs to one question: the thread titler must not read it as
+      // that question's answer (batch-uuid.ts turnUserUuid; better none than wrong).
+      noteTurnUserUuid(sessionId, undefined)
       // Echo-claim: the CLI re-logs this send as a canonical user line; bind its
       // uuid to these qm ids at the next history parse (exact-id dedup upstream).
       // Use the transport's PREPARED text — remote sessions rewrite local image
@@ -10872,6 +10878,9 @@ export class SessionRunner {
     // (batch-uuid.ts). Rides BOTH delivery paths below: the live FIFO write and
     // the cold `--resume` spawn's initial-message envelope.
     const batchUuid = pickBatchUuid(msgs)
+    // The uuid this turn answers (undefined for a plain batch): the thread titler
+    // reads it at session:result to prove which question a result belongs to.
+    noteTurnUserUuid(sessionId, batchUuid)
     // Set once a FIFO write has been ATTEMPTED for this batch. The CLI dedups an
     // inbound uuid against the transcript on disk and silently runs NO turn for a
     // repeat (print.ts `Skipping duplicate user message`), so a --resume that
