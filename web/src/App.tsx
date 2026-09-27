@@ -12,6 +12,7 @@ import { parseSessionInboxTarget } from './components/inbox/session-inbox-link';
 import { AppShell } from './components/layout/AppShell';
 import { DebugCrashProbe } from './components/common/AppErrorBoundary';
 import { StaleBuildPill } from './components/common/StaleBuildPill';
+import { UnpairedNotice } from './components/common/UnpairedNotice';
 import { PluginBoundary } from './components/common/PluginBoundary';
 import { LoadingSpinner } from './components/common/LoadingSpinner';
 import { usePluginUi, useWebPluginRuntime } from './plugins/hooks';
@@ -82,6 +83,7 @@ export function App() {
     <AppShell>
       <DebugCrashProbe />
       <StaleBuildPill />
+      <UnpairedNotice />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>
         <StableMainPage visible={isHome} navigateRef={navigateRef} />
       </div>

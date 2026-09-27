@@ -148,7 +148,7 @@ class WsClient {
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     // Cloud-mode auth: browsers can't set an Authorization header on a
     // WebSocket, so the device token (when stored) rides a query param.
-    // Trusted LAN → no token stored → bare /ws, unchanged.
+    // On the server's own machine no token is stored → bare /ws.
     const deviceToken = getDeviceToken();
     const url = `${proto}://${window.location.host}/ws${deviceToken ? `?token=${encodeURIComponent(deviceToken)}` : ''}`;
     log.info('ws', 'connecting', { url: `${proto}://${window.location.host}/ws` });

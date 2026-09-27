@@ -38,10 +38,10 @@ export interface PairingTarget {
  * over VPN/virtual interfaces (`utun*`, `bridge*`) — a VPN address is routable
  * for us but not for a phone on the house Wi-Fi.
  *
- * Only RFC1918 ranges qualify: those are exactly the addresses the auth
- * middleware's private-network bypass trusts, so pairing over them works
- * without a token round-trip. Carrier-grade NAT (100.64/10) and link-local
- * (169.254/16) are deliberately excluded — neither is a home LAN.
+ * Only RFC1918 ranges qualify: a home or office LAN. Carrier-grade NAT
+ * (100.64/10) and link-local (169.254/16) are deliberately excluded. The
+ * address grants nothing by itself: every request from it still needs the
+ * device token the QR carries.
  */
 export function detectLanAddress(): string | null {
   const candidates: Array<{ name: string; address: string }> = []

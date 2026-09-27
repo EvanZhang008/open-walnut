@@ -1,0 +1,33 @@
+/* UnpairedNotice: nothing on the page works until the device is paired, so the
+   card sits over the app, above the composer, under dialogs (9500) and menus. */
+.unpaired-notice {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9300;
+  width: min(460px, calc(100vw - 32px));
+  padding: 14px 16px;
+  color: var(--fg-secondary);
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.unpaired-notice-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.unpaired-notice-body {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.unpaired-notice-body code {
+  font-size: 12px;
+  white-space: nowrap;
+}

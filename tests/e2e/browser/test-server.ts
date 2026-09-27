@@ -3523,6 +3523,7 @@ if (!builtSpa) {
   }
   const apiTarget = `http://127.0.0.1:${apiAddress.port}`
   const { createServer: createViteServer } = await import('vite')
+  const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
   viteServer = await createViteServer({
     root: path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../web'),
     server: {
@@ -3530,8 +3531,9 @@ if (!builtSpa) {
       port: testPort,
       strictPort: true,
       proxy: {
-        '/api': { target: apiTarget, changeOrigin: true },
-        '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true },
+        // restateOwnOrigin: the server trusts only its own Origin (web/dev-proxy-origin.ts).
+        '/api': { target: apiTarget, changeOrigin: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
+        '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
       },
     },
     logLevel: 'warn',

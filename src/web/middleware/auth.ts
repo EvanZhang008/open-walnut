@@ -1,10 +1,13 @@
 /**
  * API authentication middleware.
  *
- * Trusted-LAN mode (default, Mac at home):
- * - Requests from localhost/private networks skip auth (backward compat with web SPA).
- * - Remote requests require `Authorization: Bearer <key>` matching a key in config.yaml.
- * - Keys are stored in config.yaml under `api_keys[]`.
+ * Primary mode (default, the user's Mac):
+ * - Requests from THIS machine skip auth: a direct loopback socket with a
+ *   loopback Host and Origin (see local-trust.ts for why all three matter).
+ * - Every other caller, private networks included, sends
+ *   `Authorization: Bearer <credential>`: a device token (the pairing QR
+ *   carries one) or a config.yaml `api_keys[]` key. Daemon machine tokens
+ *   are refused here, as everywhere outside /bridge.
  *
  * Cloud mode (WALNUT_CLOUD_MODE=1, public EC2 box):
  * - The private-network bypass is DISABLED — every request must present a
@@ -21,9 +24,8 @@ import { getConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { verifyDeviceToken } from '../../core/device-auth.js'
 import { recordAuthFailure, isAuthRateLimited } from './auth-rate-limit.js'
+import { classifyLocalRequest, isCrossSiteRefusal } from './local-trust.js'
 import { log } from '../../logging/index.js'
-
-const LOCALHOST_ADDRS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost'])
 
 // Paths (relative to the /api mount) that stay public in cloud mode:
 // - /v1/setup/*: first-boot claim flow — must work before any token exists.
@@ -34,27 +36,6 @@ const CLOUD_EXEMPT_PATHS = new Set(['/system/health'])
 function isCloudExemptPath(mountRelativePath: string): boolean {
   if (CLOUD_EXEMPT_PATHS.has(mountRelativePath)) return true
   return CLOUD_EXEMPT_PREFIXES.some((p) => mountRelativePath.startsWith(p))
-}
-
-// Walnut is a personal tool that runs on a home/office LAN. Devices on the same
-// private network (phones, tablets) need API access without API keys; only
-// requests arriving from the public internet require Bearer auth.
-// NOTE: this bypass is disabled entirely in cloud mode.
-function isPrivateNetwork(ip: string): boolean {
-  // Strip ::ffff: prefix for IPv4-mapped IPv6
-  const v4 = ip.startsWith('::ffff:') ? ip.slice(7) : ip
-  if (LOCALHOST_ADDRS.has(ip)) return true
-  // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-  const parts = v4.split('.').map(Number)
-  if (parts.length !== 4) return false
-  return parts[0] === 10
-    || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
-    || (parts[0] === 192 && parts[1] === 168)
-}
-
-function isLocalhost(req: Request): boolean {
-  const ip = req.ip ?? req.socket.remoteAddress ?? ''
-  return isPrivateNetwork(ip)
 }
 
 function requestIp(req: Request): string {
@@ -84,46 +65,59 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     return
   }
 
-  // Localhost/private-LAN requests always pass through (backward compat with web SPA)
-  if (isLocalhost(req)) {
-    // Still IDENTIFY a device that bothered to present a token. The bypass only
-    // waives the requirement to authenticate — it must not erase who the caller
-    // is, or routes keyed on device identity (POST /api/v1/devices/self) break
-    // for exactly the LAN phones the bypass was meant to help.
-    const header = req.headers.authorization
-    if (header?.startsWith('Bearer ')) {
+  const trust = classifyLocalRequest(req)
+  const header = req.headers.authorization
+  const bearer = header?.startsWith('Bearer ') ? header.slice(7) : ''
+
+  if (trust.trusted) {
+    // Still IDENTIFY a device that bothered to present a token. The waiver only
+    // drops the requirement to authenticate; it must not erase who the caller
+    // is, or routes keyed on device identity (POST /api/v1/devices/self) break.
+    if (bearer) {
       try {
-        const cred = await validateBearerCredential(header.slice(7))
+        const cred = await validateBearerCredential(bearer)
         if (cred) {
           ;(req as Request & { apiKeyName?: string }).apiKeyName = cred.name
           ;(req as Request & { deviceName?: string }).deviceName = cred.kind === 'device' ? cred.name : undefined
         }
-      } catch { /* identification is best-effort here; the bypass still applies */ }
+      } catch { /* identification is best-effort here; the waiver still applies */ }
     }
     next()
     return
   }
 
-  const authHeader = req.headers.authorization
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Authentication required. Use Authorization: Bearer <api_key>' })
+  const ip = requestIp(req)
+  if (!bearer) {
+    if (isCrossSiteRefusal(trust)) {
+      // A page on another site (or a DNS-rebound name) driving this machine's
+      // browser. Say so: "authentication required" would send a developer
+      // hunting for a token they do not need from their own origin.
+      log.web.warn('auth: cross-site request refused', { reason: trust.reason, origin: req.headers.origin, host: req.headers.host, path: req.path })
+      res.status(403).json({ error: 'Refused: this request came from another site. Open Walnut at http://localhost instead.' })
+      return
+    }
+    // `code` lets the web console tell "this browser is not paired" apart from
+    // any other 401 (web/src/api/unpaired.ts).
+    res.status(401).json({ error: 'Authentication required. Pair this device in the Walnut console (Settings > Phones & Cloud) or with `walnut device add <name>`, and send Authorization: Bearer <token>', code: 'not_paired' })
     return
   }
 
-  const token = authHeader.slice(7) // strip "Bearer "
-  try {
-    const config = await getConfig()
-    const keys = config.api_keys ?? []
-    const match = keys.find((k) => k.key === token)
+  if (isAuthRateLimited(ip)) {
+    log.web.warn('auth: rate limited', { ip })
+    res.status(429).json({ error: 'Too many authentication failures. Try again later.' })
+    return
+  }
 
-    if (!match) {
-      log.web.warn('auth: invalid API key', { ip: req.ip })
-      res.status(403).json({ error: 'Invalid API key' })
+  try {
+    const cred = await validateBearerCredential(bearer)
+    if (!cred || cred.kind === 'machine') {
+      recordAuthFailure(ip)
+      log.web.warn('auth: invalid credential', { ip, machine: cred?.kind === 'machine' })
+      res.status(401).json({ error: 'Invalid or revoked token', code: 'token_refused' })
       return
     }
-
-    // Attach key info to request for downstream use
-    ;(req as Request & { apiKeyName?: string }).apiKeyName = match.name
+    ;(req as Request & { apiKeyName?: string }).apiKeyName = cred.name
+    ;(req as Request & { deviceName?: string }).deviceName = cred.kind === 'device' ? cred.name : undefined
     next()
   } catch (err) {
     log.web.error('auth middleware error', { error: err instanceof Error ? err.message : String(err) })

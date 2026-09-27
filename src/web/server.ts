@@ -1181,9 +1181,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use(['/api/v1/human-inbox', '/api/human-inbox'], inboxPayloadTooLargeHandler)
   app.use(['/api/v1/stt/draft', '/api/stt/draft'], express.json({ limit: '6mb' }))
   app.use(express.json({ limit: '15mb' }))
-  // Paste spill-over (>200K chars from the web UI) — needs req.body, so must
-  // mount AFTER the json parser above.
-  app.use('/api/pastes', pastesRouter)
   // Default API responses to no-store so the browser HTTP cache never
   // revalidates/synthesizes them (see the etag note above — same incident).
   // Routes that WANT caching (images, media, timeline …) set their own
@@ -1192,8 +1189,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     res.setHeader('Cache-Control', 'no-store')
     next()
   })
-  // Auth middleware: localhost passthrough, remote requires Bearer token
+  // Auth middleware: this machine passes, every other caller needs a Bearer credential
   app.use('/api', authMiddleware)
+  // Paste spill-over (>200K chars from the web UI): needs req.body, so it
+  // mounts after the json parser, and writes to disk, so after auth too.
+  app.use('/api/pastes', pastesRouter)
   app.use('/api', requestLogger)
   // Disk-full guard: when the data disk crosses the critical watermark,
   // mutating routes answer a clear 507 instead of crashing mid-write with

@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import { restateOwnOrigin } from './dev-proxy-origin';
 
 export default defineConfig({
   plugins: [react()],
@@ -36,13 +37,16 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // restateOwnOrigin: the server trusts only its own Origin (see the module).
       '/api': {
         target: 'http://localhost:3456',
         changeOrigin: true,
+        configure: (proxy) => restateOwnOrigin(proxy, 'http://localhost:3456'),
       },
       '/ws': {
         target: 'ws://localhost:3456',
         ws: true,
+        configure: (proxy) => restateOwnOrigin(proxy, 'ws://localhost:3456'),
       },
     },
   },

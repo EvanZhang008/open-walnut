@@ -272,6 +272,43 @@ async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{
   return cred
 }
 
+function ignoreSocketError(): void { /* see the upgrade handler */ }
+
+/**
+ * Primary-mode (non-cloud) WS upgrade gate. /ws carries terminal:open and
+ * session:start, so it gets the HTTP middleware's rule (local-trust.ts): this
+ * machine's own pages connect freely; a WebSocket is never stopped by CORS, so
+ * a page on another site is refused by its Origin; every other caller sends a
+ * device token (`?token=`, as the SPA does, or an Authorization header).
+ */
+async function verifyPrimaryUpgrade(url: URL, request: IncomingMessage): Promise<'ok' | 401 | 403 | 429> {
+  const { classifyLocalRequest, isCrossSiteRefusal } = await import('../middleware/local-trust.js')
+  const trust = classifyLocalRequest(request)
+  if (trust.trusted) return 'ok'
+  const header = request.headers.authorization
+  const token = url.searchParams.get('token')
+    ?? (header?.startsWith('Bearer ') ? header.slice(7) : null)
+  const ip = request.socket.remoteAddress ?? 'unknown'
+  if (!token) {
+    log.ws.warn('ws upgrade refused: no credential', { ip, reason: trust.reason, origin: request.headers.origin, host: request.headers.host })
+    return isCrossSiteRefusal(trust) ? 403 : 401
+  }
+  const { isAuthRateLimited, recordAuthFailure } = await import('../middleware/auth-rate-limit.js')
+  if (isAuthRateLimited(ip)) {
+    log.ws.warn('ws upgrade: rate limited', { ip })
+    return 429
+  }
+  const { validateBearerCredential } = await import('../middleware/auth.js')
+  const cred = await validateBearerCredential(token)
+  // Machine tokens are bridge-only: a daemon credential must not open the RPC surface.
+  if (!cred || cred.kind === 'machine') {
+    recordAuthFailure(ip)
+    log.ws.warn('ws upgrade refused: invalid credential', { ip, machine: cred?.kind === 'machine' })
+    return 401
+  }
+  return 'ok'
+}
+
 /**
  * Attach the WebSocket server to an existing HTTP server via upgrade.
  */
@@ -293,7 +330,19 @@ export function attachWss(server: HttpServer): WebSocketServer {
   registerSetInterest()
 
   server.on('upgrade', (request: IncomingMessage, socket, head) => {
-    const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+    // Node removes its own socket error listener before emitting 'upgrade', and
+    // ws attaches one only inside handleUpgrade. Every gate below awaits first
+    // (a token check reads auth.json), so a peer that resets the connection in
+    // that gap raised an unhandled 'error' and took the whole server down.
+    // Once ws owns the socket this no-op changes nothing.
+    socket.on('error', ignoreSocketError)
+    let url: URL
+    try {
+      url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+    } catch {
+      socket.destroy() // a malformed Host or path; `new URL` throwing here was uncaught too
+      return
+    }
 
     // /bridge (cloud mode only): a remote daemon dialing in. Requires a
     // machine token; the connection goes to the bridge registry, NOT the
@@ -325,8 +374,8 @@ export function attachWss(server: HttpServer): WebSocketServer {
     // WebSocket API can't set an Authorization header, so the token rides a
     // `?token=` query param (chosen over Sec-WebSocket-Protocol — the SPA's
     // WsClient only needs to append one query param; a subprotocol would also
-    // change the server's protocol negotiation). Trusted-LAN mode: unchanged,
-    // no gate (the WS `auth` RPC remains available for remote API-key clients).
+    // change the server's protocol negotiation). Primary mode: the same rule
+    // as the HTTP middleware, see verifyPrimaryUpgrade.
     if (CLOUD_MODE) {
       verifyCloudUpgrade(url, request).then((cred) => {
         // Machine tokens are bridge-only — a daemon credential must not open
@@ -344,9 +393,16 @@ export function attachWss(server: HttpServer): WebSocketServer {
       return
     }
 
-    wss!.handleUpgrade(request, socket, head, (ws) => {
-      wss!.emit('connection', ws, request)
-    })
+    verifyPrimaryUpgrade(url, request).then((status) => {
+      if (status !== 'ok') {
+        socket.write(`HTTP/1.1 ${status === 403 ? '403 Forbidden' : status === 429 ? '429 Too Many Requests' : '401 Unauthorized'}\r\nConnection: close\r\n\r\n`)
+        socket.destroy()
+        return
+      }
+      wss!.handleUpgrade(request, socket, head, (ws) => {
+        wss!.emit('connection', ws, request)
+      })
+    }).catch(() => socket.destroy())
   })
 
   wss.on('connection', (ws: WebSocket) => {

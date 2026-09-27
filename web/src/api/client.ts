@@ -1,4 +1,5 @@
 import { getDeviceToken } from './device-token';
+import { noteAuthRefusal } from './unpaired';
 
 class ApiError extends Error {
   constructor(
@@ -208,8 +209,8 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     ? AbortSignal.any([extra.signal, timeoutSignal])
     : timeoutSignal;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  // Cloud-mode auth: attach the stored device token when one exists.
-  // On a trusted LAN no token is stored → header omitted → behavior unchanged.
+  // Attach the stored device token when one exists (a cloud replica, or a
+  // browser on another device). On the server's own machine none is needed.
   const deviceToken = getDeviceToken();
   if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
   const opts: RequestInit = {
@@ -257,6 +258,7 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     // 503 "feature disabled") — warn keeps them out of the error-log audit.
     const quiet = extra?.quietStatuses?.includes(res.status) ?? false;
     (quiet ? console.warn : console.error)(`[api] ${method} ${path} → ${res.status} in ${elapsed}ms: ${message}`);
+    if (res.status === 401) noteAuthRefusal(errBody);
     throw new ApiError(res.status, message, errBody);
   }
   if (res.status === 204) return undefined as T;

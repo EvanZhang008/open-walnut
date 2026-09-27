@@ -10,15 +10,27 @@ status codes, and SSE event names never change meaning or disappear.
 
 ## Authentication
 
-All endpoints require `Authorization: Bearer <token>` unless the server runs in
-trusted-LAN mode and the request comes from a private network (in which case
-auth is bypassed — same policy as the rest of `/api`).
+All endpoints require `Authorization: Bearer <token>`, with one exception: on
+a primary (non-cloud) server, a request from the same machine needs none. "Same
+machine" means a direct loopback connection with no proxy header
+(`X-Forwarded-For`, `Forwarded`, `X-Real-IP`, `X-Forwarded-Host`,
+`X-Forwarded-Proto`, `Via`), a loopback `Host`, and either no `Origin` or the
+server's own (a loopback name on the port the request arrived on). A page from
+another site or another local port gets `403`. Private-network callers are not
+exempt: a phone on the same Wi-Fi sends the device token its pairing QR carried.
+Same policy as the rest of `/api` and the `/ws` upgrade. A reverse proxy in
+front of the server must send `X-Forwarded-For`; one that adds no proxy header
+looks like a local client.
+
+Primary-mode refusals carry a `code`: `not_paired` (no credential) or
+`token_refused` (a credential that is wrong, revoked, or a daemon machine token).
 
 - **Cloud mode** (`WALNUT_CLOUD_MODE=1`): a **device token** obtained through the
   one-time claim flow. See the claim endpoints (implemented in `src/web/routes/setup.ts`):
   - `GET /api/v1/setup/status` → `{ claimed: boolean }` (public)
   - `POST /api/v1/setup/claim` `{ setupToken, deviceName }` → `{ deviceName, token }` (public, one-shot)
-- **LAN mode**: a config.yaml `api_keys[]` entry works for non-private-network callers.
+- **Primary mode**: a device token minted on this machine (Settings > Phones &
+  Cloud, or `walnut device add <name>`) or a config.yaml `api_keys[]` entry.
 
 Auth failures return `401`; repeated failures are rate-limited per IP (`429`).
 

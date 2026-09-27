@@ -4,8 +4,9 @@
  * After connecting to /ws, remote clients send:
  *   { type: "req", id: "...", method: "auth", payload: { key: "wlnt_sk_..." } }
  *
- * This validates the key and marks the WS client as authenticated.
- * Localhost clients are auto-authenticated (no auth RPC needed).
+ * This validates the key. It gates nothing: the /ws upgrade itself already
+ * refused any caller that is neither this machine nor holding a credential
+ * (verifyPrimaryUpgrade / verifyCloudUpgrade in ws/handler.ts).
  */
 
 import { registerMethod } from '../ws/handler.js'
