@@ -6,6 +6,22 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-27
+
+### Security
+
+- **Only the machine Walnut runs on skips auth.** The server listens on every interface and used
+  to waive auth for any private-network address, and its `/ws` WebSocket (which can open a
+  terminal and start sessions) had no gate outside cloud mode. Anyone on the same Wi-Fi could
+  open a terminal on the host, and any web page you opened could do the same through a
+  WebSocket. Now a request needs no credential only when it comes straight from this machine: a
+  loopback connection with no proxy header, a loopback `Host`, and no `Origin` or the server's
+  own. Everyone else, private networks included, sends a device token or a config API key; a
+  page from another site gets `403`. `/ws` follows the same rule, and `POST /api/pastes` moved
+  behind auth. A paired phone already sends its token, so it keeps working.
+- A client that reset its connection while the `/ws` check was still running, or sent a
+  malformed `Host`, could crash the server. Both are handled now.
+
 ### Fixed
 
 - **A Mac needs no compiler for a persistent terminal: the package ships a prebuilt dtach.** The
@@ -123,6 +139,12 @@ breaking changes).
   tier the sort used is published as `coveredTermHits` on every row now.
 
 ### Upgrade notes
+
+A browser, script or phone on another device that relied on the old private-network waiver now
+gets `401 {code: "not_paired"}`. Pair it in Settings > Phones & Cloud (or `walnut device add
+<name>`) and send `Authorization: Bearer <token>`; from another computer's browser, forward the
+port over SSH (`ssh -L 3456:localhost:3456 <host>`) and open `http://localhost:3456`. A reverse
+proxy in front of Walnut must send `X-Forwarded-For`.
 
 The passage layout is versioned, so the first launch after upgrading clears the stored vectors and
 re-embeds every document in the background. `search.sqlite` keeps its documents, so nothing has to
