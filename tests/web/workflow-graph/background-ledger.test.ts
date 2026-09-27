@@ -129,12 +129,21 @@ describe('buildAgentMeta — segment order and omissions', () => {
   });
 });
 
-describe('fmtTokens — unchanged behavior (moved here from WorkflowGraph)', () => {
+describe('fmtTokens', () => {
   it('compacts thousands and drops a zero/absent count', () => {
     expect(fmtTokens(undefined)).toBe('');
     expect(fmtTokens(0)).toBe('');
     expect(fmtTokens(999)).toBe('999');
     expect(fmtTokens(1_200)).toBe('1k');
     expect(fmtTokens(64_500)).toBe('65k');
+    expect(fmtTokens(999_499)).toBe('999k');
+  });
+
+  it('switches to millions instead of printing thousands of k', () => {
+    expect(fmtTokens(999_500)).toBe('1.0M');
+    expect(fmtTokens(8_649_000)).toBe('8.6M');
+    expect(fmtTokens(9_949_999)).toBe('9.9M');
+    expect(fmtTokens(9_950_000)).toBe('10M');
+    expect(fmtTokens(123_400_000)).toBe('123M');
   });
 });

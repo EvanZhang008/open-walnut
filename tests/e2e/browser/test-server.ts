@@ -647,6 +647,47 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        id: 'pw-task-workflow',
+        title: 'Workflow fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-workflow-session'],
+        active_session_ids: [],
+        session_id: 'pw-workflow-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      ...['chromium', 'webkit'].flatMap(browser => [
+        { id: `pw-switch-workflow-task-${browser}`, session: `pw-workflow-switch-${browser}`, title: `Workflow switch fixture ${browser}` },
+        { id: `pw-bgbar-task-${browser}`, session: `pw-background-bar-${browser}`, title: `Background bar fixture ${browser}` },
+      ]).map(({ id, session, title }) => ({
+        id,
+        title,
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: [session],
+        active_session_ids: [],
+        session_id: session,
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      })),
+      {
         id: 'pw-task-changed',
         title: 'Changed fixture task',
         status: 'in_progress',
@@ -1197,6 +1238,70 @@ await Promise.all([
   fs.writeFile(codexColdDetailJournalPath, seededCodexJournal),
 ])
 const sessionFixtureNow = Date.now()
+const workflowFixtureRoot = path.join(tmpBase, 'projects', 'workflow-fixture')
+const workflowSessionId = 'pw-workflow-session'
+const workflowDir = path.join(
+  tmpBase, '.claude', 'projects',
+  workflowFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-'),
+  workflowSessionId,
+)
+await fs.mkdir(path.join(workflowDir, 'workflows'), { recursive: true })
+await fs.mkdir(path.join(workflowDir, 'subagents', 'workflows', 'wf_fixture-run'), { recursive: true })
+const workflowPhaseNames = ['Scope', 'Search', 'Fetch', 'Verify', 'Synthesize']
+const workflowAgentCounts = [1, 5, 25, 75, 1]
+const workflowProgress = workflowPhaseNames.flatMap((title, phase) => [
+  { type: 'workflow_phase', index: phase + 1, title },
+  ...Array.from({ length: workflowAgentCounts[phase] }, (_, i) => {
+    const failed = phase === 2 && i === 7
+    const label = phase === 2 && i === 7
+      ? 'Fetch the long-form source with complete citations and a fallback archive'
+      : `${title} source ${String(i + 1).padStart(2, '0')} and compare its supporting claims`
+    return {
+      type: 'workflow_agent', index: workflowAgentCounts.slice(0, phase).reduce((a, b) => a + b, 0) + i,
+      phaseIndex: phase + 1, agentId: `wf-fixture-agent-${phase}-${i}`, label,
+      state: failed ? 'error' : 'done',
+      model: 'claude-opus-5-5', tokens: 52_000 + i * 1_000, durationMs: 36_000 + i * 1_000,
+      promptPreview: `Read source ${i + 1} in full. Preserve every citation and report discrepancies.`,
+      ...(failed ? {} : { resultPreview: `Source ${i + 1} checked with citations and cross references.` }),
+    }
+  }),
+])
+await fs.writeFile(
+  path.join(tmpBase, '.claude', 'projects', workflowFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-'), `${workflowSessionId}.jsonl`),
+  [
+    JSON.stringify({ type: 'user', sessionId: workflowSessionId, uuid: 'workflow-user', parentUuid: null, timestamp: new Date(sessionFixtureNow - 180_000).toISOString(), message: { role: 'user', content: 'Gather the sources and verify claims.' } }),
+    JSON.stringify({ type: 'assistant', sessionId: workflowSessionId, uuid: 'workflow-assistant', parentUuid: 'workflow-user', timestamp: new Date(sessionFixtureNow - 175_000).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'The source review is in progress.' }] } }),
+    '',
+  ].join('\n'),
+)
+const workflowManifest = {
+  runId: 'wf_fixture-run', workflowName: 'deep-research',
+  summary: 'Gather sources, check claims, and write a cited report.',
+  script: 'export const meta = { name: "deep-research" };\n',
+  startTime: sessionFixtureNow - 180_000, workflowProgress,
+}
+await fs.writeFile(path.join(workflowDir, 'workflows', 'wf_fixture-run.json'), JSON.stringify(workflowManifest))
+for (const sessionId of ['chromium', 'webkit'].flatMap(b => [`pw-workflow-switch-${b}`, `pw-background-bar-${b}`])) {
+  const projectDir = path.join(tmpBase, '.claude', 'projects', workflowFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-'))
+  // The background-bar sessions have no workflow manifest: their ledger is live-only.
+  if (sessionId.startsWith('pw-workflow-switch-')) {
+    await fs.mkdir(path.join(projectDir, sessionId, 'workflows'), { recursive: true })
+    await fs.writeFile(path.join(projectDir, sessionId, 'workflows', 'wf_fixture-run.json'), JSON.stringify(workflowManifest))
+  }
+  await fs.writeFile(path.join(projectDir, `${sessionId}.jsonl`), [
+    JSON.stringify({ type: 'user', sessionId, uuid: `${sessionId}-user`, parentUuid: null, timestamp: new Date(sessionFixtureNow - 180_000).toISOString(), message: { role: 'user', content: 'Gather sources and review the outcome.' } }),
+    JSON.stringify({ type: 'assistant', sessionId, uuid: `${sessionId}-assistant`, parentUuid: `${sessionId}-user`, timestamp: new Date(sessionFixtureNow - 175_000).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'Review underway.' }] } }),
+    '',
+  ].join('\n'))
+}
+await fs.writeFile(
+  path.join(workflowDir, 'subagents', 'workflows', 'wf_fixture-run', 'agent-wf-fixture-agent-2-7.jsonl'),
+  [
+    JSON.stringify({ type: 'user', agentId: 'wf-fixture-agent-2-7', uuid: 'wf-fixture-user', timestamp: new Date(sessionFixtureNow - 60_000).toISOString(), message: { role: 'user', content: 'Fetch the long-form source and cite it.' } }),
+    JSON.stringify({ type: 'assistant', agentId: 'wf-fixture-agent-2-7', uuid: 'wf-fixture-assistant', timestamp: new Date(sessionFixtureNow - 59_000).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'The source returned an error after the retry.' }] } }),
+    '',
+  ].join('\n'),
+)
 
 /** Peer title for the session-envelope fixture: longer than the 80 chars the
  *  envelope prints, so the provenance card can be asserted to show it in FULL.
@@ -2462,6 +2567,35 @@ await fs.writeFile(
         title: 'Plan: incomplete session',
         planCompleted: false,
       },
+      {
+        claudeSessionId: 'pw-workflow-session',
+        taskId: 'pw-task-workflow',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 180_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 60_000).toISOString(),
+        messageCount: 2,
+        cwd: workflowFixtureRoot,
+        title: 'Workflow fixture session',
+      },
+      ...['chromium', 'webkit'].flatMap(browser => [
+        { sid: `pw-workflow-switch-${browser}`, taskId: `pw-switch-workflow-task-${browser}`, title: `Workflow switch fixture ${browser}` },
+        { sid: `pw-background-bar-${browser}`, taskId: `pw-bgbar-task-${browser}`, title: `Background bar fixture ${browser}` },
+      ]).map(({ sid, taskId, title }) => ({
+        claudeSessionId: sid,
+        taskId,
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 180_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 60_000).toISOString(),
+        messageCount: 2,
+        cwd: workflowFixtureRoot,
+        title,
+      })),
       {
         claudeSessionId: 'pw-normal-session',
         taskId: 'pw-task-001',

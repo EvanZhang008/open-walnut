@@ -1,14 +1,9 @@
 /**
- * Unit tests for WorkflowGraph's pure layout logic (workflow-layout.ts).
- *
- * The CLI gives us "ordered phases × a bag of agents" with NO agent→agent edges.
- * buildLayout() normalizes that into ordered phases each holding its agents, infers
- * barrier-vs-pipeline from start/finish timestamps, and never drops an orphan agent.
- * These are the correctness guarantees the flow-graph panel depends on.
+ * Workflow grouping and status totals over sparse and dense phase lists.
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildLayout, phaseCounts, DENSITY_THRESHOLD } from '@/components/sessions/workflow-layout';
+import { buildLayout, phaseCounts, preferredPhase, visibleWorkflowAgents } from '@/components/sessions/workflow-layout';
 import type { WorkflowAgent, WorkflowPhase } from '@/hooks/useBackgroundTasks';
 
 function agent(p: Partial<WorkflowAgent> & { agentId: string }): WorkflowAgent {
@@ -109,44 +104,45 @@ describe('buildLayout — orphan handling (sparse/out-of-order snapshots)', () =
   });
 });
 
-describe('buildLayout — barrier vs pipeline inference', () => {
-  it('non-overlapping phases (phase 2 starts after phase 1 finishes) → barrier=true', () => {
-    const phases: WorkflowPhase[] = [{ index: 0, title: 'scan' }, { index: 1, title: 'synth' }];
-    const agents: WorkflowAgent[] = [
-      agent({ agentId: 'a1', phaseIndex: 0, startedAt: 1000, durationMs: 500 }), // finishes 1500
-      agent({ agentId: 'a2', phaseIndex: 1, startedAt: 1600, durationMs: 300 }), // starts after 1500
-    ];
+describe('workflow overview selection and filtering', () => {
+  const phases: WorkflowPhase[] = [
+    { index: 1, title: 'Search' },
+    { index: 2, title: 'Fetch' },
+    { index: 3, title: 'Verify' },
+  ];
+  const agents: WorkflowAgent[] = [
+    agent({ agentId: 'a1', phaseIndex: 1, index: 0, label: 'Search sources' }),
+    agent({ agentId: 'a2', phaseIndex: 2, index: 1, status: 'completed', label: 'Fetch first source' }),
+    agent({ agentId: 'a3', phaseIndex: 2, index: 2, status: 'failed', label: 'Fetch broken source' }),
+    agent({ agentId: 'a4', phaseIndex: 2, index: 3, status: 'running', label: 'Fetch current source' }),
+    agent({ agentId: 'a5', phaseIndex: 3, index: 4, label: 'Verify sources', promptPreview: 'Check citations and Unicode 符号' }),
+  ];
+
+  it('opens a failed phase and puts the failed agent first without changing the phase totals', () => {
     const layout = buildLayout(phases, agents);
-    expect(layout[1].barrierFromPrev).toBe(true);
+    expect(preferredPhase(layout)?.title).toBe('Fetch');
+    expect(visibleWorkflowAgents(layout, 2, '').map(a => a.agentId)).toEqual(['a3', 'a4', 'a2']);
+    expect(phaseCounts(layout[1].agents)).toMatchObject({ done: 1, running: 1, failed: 1, total: 3 });
   });
 
-  it('overlapping phases (phase 2 starts before phase 1 finishes) → barrier=false (pipeline)', () => {
-    const phases: WorkflowPhase[] = [{ index: 0, title: 'a' }, { index: 1, title: 'b' }];
-    const agents: WorkflowAgent[] = [
-      agent({ agentId: 'a1', phaseIndex: 0, startedAt: 1000, durationMs: 5000 }), // finishes 6000
-      agent({ agentId: 'a2', phaseIndex: 1, startedAt: 2000, durationMs: 300 }),  // starts during phase 1
-    ];
-    const layout = buildLayout(phases, agents);
-    expect(layout[1].barrierFromPrev).toBe(false);
+  it('opens the running phase when nothing has failed, otherwise the last phase', () => {
+    const withoutFailure = buildLayout(phases, agents.filter(a => a.agentId !== 'a3'));
+    expect(preferredPhase(withoutFailure)?.title).toBe('Fetch');
+    const completed = buildLayout(phases, agents.map(a => ({ ...a, status: 'completed' })));
+    expect(preferredPhase(completed)?.title).toBe('Verify');
   });
 
-  it('defaults to barrier=true when timestamps are missing (safe fan-out/synthesize default)', () => {
-    const phases: WorkflowPhase[] = [{ index: 0, title: 'a' }, { index: 1, title: 'b' }];
-    const agents: WorkflowAgent[] = [
-      agent({ agentId: 'a1', phaseIndex: 0 }), // no startedAt/durationMs
-      agent({ agentId: 'a2', phaseIndex: 1 }),
-    ];
+  it('searches all phases by name, id, prompt and result without mutating the source order', () => {
     const layout = buildLayout(phases, agents);
-    expect(layout[1].barrierFromPrev).toBe(true);
-  });
-
-  it('first phase always has barrierFromPrev=true (nothing precedes it)', () => {
-    const layout = buildLayout([{ index: 0, title: 'only' }], [agent({ agentId: 'a1', phaseIndex: 0 })]);
-    expect(layout[0].barrierFromPrev).toBe(true);
+    expect(visibleWorkflowAgents(layout, 2, 'CITATIONS AND UNICODE 符号').map(a => a.agentId)).toEqual(['a5']);
+    expect(visibleWorkflowAgents(layout, 3, 'a3').map(a => a.agentId)).toEqual(['a3']);
+    expect(visibleWorkflowAgents(layout, 3, 'no match')).toEqual([]);
+    expect(visibleWorkflowAgents(layout, 2, '').map(a => a.agentId)).toEqual(['a3', 'a4', 'a2']);
+    expect(layout[1].agents.map(a => a.agentId)).toEqual(['a2', 'a3', 'a4']);
   });
 });
 
-describe('phaseCounts + density threshold', () => {
+describe('phaseCounts and dense fan-out', () => {
   it('tallies done/running/failed/tokens correctly', () => {
     const agents: WorkflowAgent[] = [
       agent({ agentId: 'a1', status: 'completed', tokens: 100 }),
@@ -162,11 +158,11 @@ describe('phaseCounts + density threshold', () => {
     expect(c.tokens).toBe(180);
   });
 
-  it('a fan-out larger than the density threshold is detectable for folding', () => {
-    const agents: WorkflowAgent[] = Array.from({ length: DENSITY_THRESHOLD + 10 }, (_, i) =>
+  it('keeps all agents in a dense phase in their original order', () => {
+    const agents: WorkflowAgent[] = Array.from({ length: 107 }, (_, i) =>
       agent({ agentId: `a${i}`, index: i, phaseIndex: 0 }),
     );
     const layout = buildLayout([{ index: 0, title: 'review' }], agents);
-    expect(layout[0].agents.length).toBeGreaterThan(DENSITY_THRESHOLD);
+    expect(layout[0].agents.map(a => a.agentId)).toEqual(agents.map(a => a.agentId));
   });
 });

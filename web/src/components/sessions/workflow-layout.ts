@@ -1,11 +1,6 @@
 /**
- * workflow-layout — pure layout logic for WorkflowGraph (no React, unit-testable).
- *
- * The CLI gives us "ordered phases × a bag of agents per phase" with NO agent→agent
- * dependency edges. This module normalizes that into ordered phases each holding its
- * agents, and infers whether each phase is a parallel() barrier or a pipeline()-style
- * overlapping flow from agent start/finish timestamps. Rendering lives in
- * WorkflowGraph.tsx; this file is intentionally pure so it can be tested in isolation.
+ * Group workflow agents by their recorded phase and count their statuses.
+ * The CLI reports phases and agents, not agent-to-agent dependencies.
  */
 
 import type { WorkflowPhase, WorkflowAgent, BackgroundTask } from '@/hooks/useBackgroundTasks';
@@ -22,8 +17,6 @@ export function isAgentTask(t: BackgroundTask): boolean {
   return !!t.subagentType;
 }
 
-/** Above this many agents in a phase, collapse to a density bar (Level-of-Detail). */
-export const DENSITY_THRESHOLD = 6;
 /** Terminal statuses (count toward "done"). */
 export const TERMINAL = new Set(['completed', 'failed', 'stopped', 'killed', 'cancelled']);
 /** Sentinel for an agent with no phaseIndex (mirrors WorkflowProgress's original). */
@@ -33,10 +26,6 @@ export interface LaidOutPhase {
   index: number;
   title: string;
   agents: WorkflowAgent[];
-  /** True when this phase appears to start only AFTER the previous phase finished
-   *  (a parallel() barrier). False = overlapping start times → pipeline()-style flow.
-   *  Inferred from startedAt/durationMs; defaults true (the fan-out/synthesize case). */
-  barrierFromPrev: boolean;
 }
 
 /** Normalize (phases, agents) into ordered phases each holding its agents.
@@ -49,7 +38,6 @@ export function buildLayout(phases: WorkflowPhase[], agents: WorkflowAgent[]): L
     index: p.index,
     title: p.title,
     agents: agents.filter(a => (a.phaseIndex ?? NO_PHASE) === p.index).sort((a, b) => a.index - b.index),
-    barrierFromPrev: true,
   }));
 
   // Orphans: agents whose phaseIndex isn't among the known phases (or no phases at all).
@@ -67,29 +55,31 @@ export function buildLayout(phases: WorkflowPhase[], agents: WorkflowAgent[]): L
       index: groups.length ? Number.MAX_SAFE_INTEGER : 0,
       title: '',
       agents: orphans,
-      barrierFromPrev: groups.length > 0,
     });
   }
 
-  // Infer barrier vs pipeline from start/finish overlap. A phase is a barrier if its
-  // earliest agent started no earlier than the previous phase's latest finish. This is
-  // purely a DISPLAY hint (solid vs dashed connector) — the data carries no explicit
-  // parallel()/pipeline() flag, so we infer it. MAX_SAFE_INTEGER here is the min-reduce
-  // identity ("no real start seen"), distinct from its orphan-index role above.
-  // Caveat: a still-RUNNING prev agent has durationMs undefined→0, so prevFinish
-  // understates to its startedAt and a mid-run pipeline can momentarily read as a
-  // barrier; it self-corrects once durations land. Harmless (display-only, default true).
-  for (let i = 1; i < groups.length; i++) {
-    const prev = groups[i - 1].agents;
-    const cur = groups[i].agents;
-    const prevFinish = prev.reduce((m, a) => Math.max(m, (a.startedAt ?? 0) + (a.durationMs ?? 0)), 0);
-    const curStart = cur.reduce((m, a) => Math.min(m, a.startedAt ?? Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER);
-    // Only override the default when BOTH timestamps are real; else keep barrier=true.
-    if (prevFinish > 0 && curStart < Number.MAX_SAFE_INTEGER) {
-      groups[i].barrierFromPrev = curStart >= prevFinish;
-    }
-  }
   return groups.filter(g => g.agents.length > 0);
+}
+
+export function preferredPhase(layout: LaidOutPhase[]): LaidOutPhase | undefined {
+  return layout.find(phase => phase.agents.some(agent => agent.status === 'failed'))
+    ?? layout.find(phase => phase.agents.some(agent => agent.status === 'running' || agent.status === 'paused'))
+    ?? layout[layout.length - 1];
+}
+
+export function visibleWorkflowAgents(layout: LaidOutPhase[], phaseIndex: number | undefined, query: string): WorkflowAgent[] {
+  const needle = query.trim().toLocaleLowerCase();
+  const matching = needle
+    ? layout.flatMap(phase => phase.agents.filter(agent => [agent.label, agent.agentId, agent.promptPreview, agent.resultPreview]
+      .some(value => value?.toLocaleLowerCase().includes(needle))))
+    : layout.find(phase => phase.index === phaseIndex)?.agents ?? [];
+  const priority = (status: string) => {
+    if (status === 'failed') return 0;
+    if (status === 'running' || status === 'paused') return 1;
+    if (status === 'pending') return 2;
+    return 3;
+  };
+  return [...matching].sort((a, b) => priority(a.status) - priority(b.status) || a.index - b.index);
 }
 
 export function phaseCounts(agents: WorkflowAgent[]) {

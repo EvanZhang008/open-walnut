@@ -14,9 +14,10 @@
 
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
 
-/** Compact token count ("1200" → "1k"). Shared with WorkflowGraph's agent meta. */
+/** Compact token count ("1200" → "1k", "8649000" → "8.6M"). Shared with WorkflowGraph's agent meta. */
 export function fmtTokens(n?: number): string {
   if (!n) return '';
+  if (n >= 999_500) return `${(n / 1_000_000).toFixed(n >= 9_950_000 ? 0 : 1)}M`;
   if (n >= 1000) return `${Math.round(n / 1000)}k`;
   return String(n);
 }

@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
-import { lockScroll, unlockScroll } from './useModalOverlay';
+import { hasActiveModalOverlay, lockScroll, unlockScroll } from './useModalOverlay';
 import { traceInteraction } from '@/utils/interaction-timer';
 
 /** Window event every live fullscreen sheet exits on. Fired by `yieldFullscreen`. */
@@ -91,7 +91,8 @@ export function useFullscreen() {
     if (!isFullscreen) return;
     lockScroll();
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      // An open modal over the sheet (a transcript reader) closes first.
+      if (e.key === 'Escape' && !hasActiveModalOverlay()) {
         e.stopPropagation();
         setIsFullscreen(false);
       }

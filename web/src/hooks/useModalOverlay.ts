@@ -7,6 +7,11 @@ import { useEffect, useCallback } from 'react';
  * in the same ref-count instead of directly writing body.style.overflow.
  */
 let scrollLockCount = 0;
+let activeModalCount = 0;
+
+export function hasActiveModalOverlay(): boolean {
+  return activeModalCount > 0;
+}
 
 export function lockScroll() {
   scrollLockCount++;
@@ -47,10 +52,12 @@ export function useModalOverlay(onClose: () => void) {
   }, [onClose]);
 
   useEffect(() => {
+    activeModalCount++;
     document.addEventListener('keydown', handleKeyDown);
     lockScroll();
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
+      activeModalCount--;
       unlockScroll();
     };
   }, [handleKeyDown]);
