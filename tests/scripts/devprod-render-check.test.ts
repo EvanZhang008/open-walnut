@@ -27,7 +27,41 @@ const shell = (body: string) => `<!doctype html><html><body><div id="root">${bod
 
 // One page per verdict. The "boundary" page reproduces what AppErrorBoundary
 // does on a render crash: the console line AND the on-screen banner.
+function sessionPage(broken: boolean, crash = false): string {
+  return shell(`<main class="main-page">
+    <style>
+      .session-panel { height: 500px; display: flex; flex-direction: column; }
+      .session-panel-body { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+      .session-history { flex: 1; min-height: 0; overflow-y: auto; }
+      .session-panel-input { height: 80px; flex: none; }
+      ${broken ? '' : '.thread-stack-off { display: contents; }'}
+    </style>
+    <script>
+      const sid = new URLSearchParams(location.search).get('s1');
+      if (sid) {
+        fetch('/api/sessions/' + sid + '/history').then(r => r.json()).then(data => {
+          const panel = document.createElement('section');
+          panel.className = 'session-panel';
+          panel.dataset.sessionId = sid;
+          panel.innerHTML = '<div class="session-panel-body"><div class="thread-stack-off"><div class="session-history"></div></div></div><div class="session-panel-input">Composer</div>';
+          for (const message of data.messages) {
+            const row = document.createElement('p');
+            row.textContent = message.text;
+            row.style.height = '100px';
+            panel.querySelector('.session-history').append(row);
+          }
+          document.querySelector('main').append(panel);
+          ${crash ? "console.error('[error-boundary] render crash caught in the session panel');" : ''}
+        });
+      }
+    </script>
+  </main>`);
+}
+
 const PAGES: Record<string, string> = {
+  '/scrollable': sessionPage(false),
+  '/clipped': sessionPage(true),
+  '/session-crash': sessionPage(false, true),
   '/healthy': shell('<nav>Walnut</nav><main>home</main>'),
   '/boundary': `<!doctype html><html><body><div id="root"><div>Something went wrong rendering the page.</div></div>
     <script>console.error('[error-boundary] render crash — tree recovered by boundary', { error: 'ReferenceError: groupBy is not defined' })</script>
@@ -41,7 +75,7 @@ let base = '';
 
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const html = PAGES[req.url ?? ''];
+    const html = PAGES[new URL(req.url ?? '/', 'http://localhost').pathname];
     if (!html) { res.statusCode = 404; res.end('nope'); return; }
     res.setHeader('content-type', 'text/html; charset=utf-8');
     res.end(html);
@@ -87,6 +121,24 @@ describe.skipIf(!hasChromium)('devprod-render-check.mjs verdicts', () => {
     const r = await run(`${base}/healthy`);
     expect(r.out).toContain('render-check OK');
     expect(r.code).toBe(0);
+  });
+
+  it('0: a long session scrolls in both directions and ends above the composer', async () => {
+    const r = await run(`${base}/scrollable`);
+    expect(r.out).toContain('session scroll OK');
+    expect(r.code).toBe(0);
+  });
+
+  it('1: a missing wrapper style clips a mounted session and fails the gate', async () => {
+    const r = await run(`${base}/clipped`);
+    expect(r.out).toContain('session scroll FAILED');
+    expect(r.code).toBe(1);
+  });
+
+  it('1: an error boundary firing inside the opened session fails the gate', async () => {
+    const r = await run(`${base}/session-crash`);
+    expect(r.out).toContain('session panel crashed');
+    expect(r.code).toBe(1);
   });
 
   it('1: the React error boundary firing is a DEFINITIVE crash', async () => {

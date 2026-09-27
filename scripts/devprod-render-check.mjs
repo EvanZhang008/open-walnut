@@ -27,6 +27,7 @@
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { checkSessionScroll } from './devprod-session-scroll.mjs';
 
 const args = process.argv.slice(2);
 const url = args.find((a) => !a.startsWith('--'));
@@ -123,8 +124,13 @@ try {
       console.warn(`render-check WARN: ${pageErrors.length} uncaught page exception(s) (app still mounted; --strict fails on these)`);
       for (const e of pageErrors.slice(0, 3)) console.warn('  pageerror:', e);
     }
-    console.log(`render-check OK: ${browserName} mounted ${url} (${rootChildren} root child, ${Date.now() - started}ms)`);
     verdict = 0;
+    if (await page.locator('.main-page').count()) {
+      const scroll = await checkSessionScroll(browser, url, timeoutMs, strict);
+      console.log(scroll.message);
+      verdict = scroll.code;
+    }
+    if (verdict === 0) console.log(`render-check OK: ${browserName} mounted ${url} (${rootChildren} root child, ${Date.now() - started}ms)`);
   }
 } finally {
   await browser.close().catch(() => {});

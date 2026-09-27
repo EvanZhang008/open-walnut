@@ -9752,6 +9752,17 @@ body.walnut-dragging {
   flex-direction: column;
 }
 
+/* The frame must preserve the scroll boundary even on a session without questions. */
+.thread-stack-off { display: contents; }
+.thread-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
 .session-panel-body .session-history {
   flex: 1;
   overflow-y: auto;
@@ -29035,10 +29046,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    card) sit in normal flow at the panel top — push the first one below the
    glass header and drop the history's compensating padding (the history's
    top edge is then below them; content can't slide under the header). */
-.session-panel-body > :first-child:not(.session-history) {
+.session-panel-body > :first-child:not(.session-history, .thread-stack-off) {
   margin-top: calc(var(--sp-header-h, 76px) + 4px);
 }
-.session-panel-body:has(> :first-child:not(.session-history)) .session-history {
+.session-panel-body:has(> :first-child:not(.session-history, .thread-stack-off)) .session-history {
   padding-top: 12px;
 }
 
@@ -29052,7 +29063,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .session-panel-split.is-changed-open .session-history {
   padding-top: 12px;
 }
-.session-panel-split.is-changed-open .session-panel-body > :first-child:not(.session-history) {
+.session-panel-split.is-changed-open .session-panel-body > :first-child:not(.session-history, .thread-stack-off) {
   margin-top: 4px;
 }
 
@@ -29068,7 +29079,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-body .session-history {
   padding-top: 12px;
 }
-.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-body > :first-child:not(.session-history) {
+.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-body > :first-child:not(.session-history, .thread-stack-off) {
   margin-top: 4px;
 }
 
