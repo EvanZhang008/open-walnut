@@ -1,4 +1,4 @@
-# Open Walnut - Your Personal AI
+# Open Walnut
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/EvanZhang008/open-walnut/actions/workflows/ci.yml/badge.svg)](https://github.com/EvanZhang008/open-walnut/actions)
@@ -8,15 +8,17 @@
 
 [![Open Walnut demo](docs/assets/demo-video-thumb.png)](https://youtu.be/uN4WCZ-n2mw)
 
-<p align="center"><b><a href="https://youtu.be/uN4WCZ-n2mw">Watch the 3-minute demo</a></b></p>
+<p align="center"><b><a href="https://youtu.be/uN4WCZ-n2mw">Watch the demo (6 min)</a></b></p>
 
-Open Walnut is a self-hosted home for your AI work. It brings your personal AI, Claude
-Code sessions, tasks, notes, and long-term memory into one web app.
+Open Walnut runs Claude Code on your laptop and on your remote dev boxes, and shows
+every session in one web page. A small daemon on each host owns the `claude`
+processes, so a session on a dev box keeps working when your SSH connection drops or
+your laptop sleeps. No tmux. Walnut installs that daemon over SSH for you, and each session gets
+its own diff of every file it changed.
 
-Use Walnut to plan work, organize tasks, find context in your notes and memory, and
-start coding sessions. Run Claude Code on your laptop or remote SSH hosts, follow
-multiple sessions from one browser, and review every file they change. Open Walnut is
-local-first, self-hosted, and has no telemetry.
+Next to the sessions sit your tasks, notes, and long-term memory, and a personal AI
+that can plan work, find context, and start sessions for you. Open Walnut is
+self-hosted, local-first, and has no telemetry.
 
 ## What Open Walnut Does
 
@@ -236,14 +238,20 @@ Read [Plugin development](docs/reference/plugin-development.md) for the full gui
 ## iOS Companion
 
 The beta SwiftUI app provides access to tasks, notes, and live sessions from an iPhone.
-It pairs with the web app by QR code. An optional self-hosted cloud companion can
-connect the phone to your machines when you are away from your local network.
+It is not on the App Store yet: build it with Xcode from [`ios-native/`](ios-native/README.md).
+It pairs with the web app by QR code, and the QR carries the device token every
+request from the phone sends. An optional self-hosted cloud companion can connect the
+phone to your machines when you are away from your local network.
 
 See [Cloud sync](docs/reference/cloud-sync.md) for the architecture and setup.
 
 ## Data and Privacy
 
 - Core app data is stored locally under `~/.open-walnut/`.
+- The server answers without a credential only to the machine it runs on. Any other
+  device, including one on the same Wi-Fi, needs a paired device token. From another
+  computer, forward the port over SSH (`ssh -L 3456:localhost:3456 <host>`). A reverse
+  proxy in front of Walnut must send `X-Forwarded-For`.
 - Open Walnut does not include telemetry or require an Open Walnut account.
 - Model prompts are sent only to the provider you configure.
 - Remote sessions connect only to hosts you configure.
@@ -362,6 +370,10 @@ npm run web:dev
 
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a
 pull request.
+
+## Friend Links
+
+[LINUX DO](https://linux.do)
 
 ## License
 

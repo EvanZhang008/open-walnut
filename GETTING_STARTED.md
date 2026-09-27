@@ -37,7 +37,7 @@ npm start
 
 Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat and the agent should reply. You're done!
 
-> **First start is slower**: The BGE-M3 embedding model (~1.16 GB) downloads automatically on first launch. This is a one-time download that can take 5-30 minutes depending on your connection. The server starts and is usable while the download happens in the background.
+> **First start is slower**: The Qwen3-Embedding-0.6B embedding model (~640 MB) downloads automatically on first launch. This is a one-time download that can take 5-30 minutes depending on your connection. The server starts and is usable while the download happens in the background.
 
 > **Want coding sessions too?** Run `claude` once in your terminal to complete the Claude Code CLI auth flow. This is separate from the API key above.
 
@@ -74,7 +74,7 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 | **Node.js** | >= 22 | [nodejs.org](https://nodejs.org/) or `nvm install 22` | Runtime for the server and frontend build |
 | **npm** | (comes with Node.js) | — | Package manager for dependencies |
 | **Claude Code CLI** | Latest | `npm install -g @anthropic-ai/claude-code` | Every AI turn is a `claude` session: the home page chat, coding sessions, scheduled routines, and the agents a session hook dispatches |
-| **Disk space** | ~2 GB free | — | For the embedding model (~1.16 GB) and search index |
+| **Disk space** | ~2 GB free | — | For the embedding model (~640 MB) and search index |
 
 > **Native modules**: Open Walnut uses `better-sqlite3` (for search index) and `sharp` (for image processing). Both ship prebuilt binaries for macOS, Linux, and Windows — no compiler needed in most cases. If prebuilds fail on your platform, you may need Python 3 and a C++ compiler (`xcode-select --install` on macOS, `build-essential` on Ubuntu).
 
@@ -110,7 +110,7 @@ export PATH="$HOME/.local/node22/bin:$PATH"   # add to your shell profile too
 |---|---|---|---|
 | **Git** | macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`, or [git-scm.com](https://git-scm.com/) | Cloning the repo, and auto-backup of `~/.open-walnut/` every 30 seconds | The npm install route needs no git. Data is still saved locally, just not version-controlled. |
 | **Provider key** | See [Provider Configuration](#provider-configuration) | Sends the small background single calls (session titles, summaries, voice cleanup, quick parses) to Anthropic, Bedrock, or another provider instead of your Claude Code login | Those calls go through Claude Code, which is the default. Chat, coding sessions, and routines never read a key. |
-| **Bun** | [bun.sh](https://bun.sh/) | Prebuilt session-daemon binaries (faster deploys to remote hosts) and the ACP worker bundle | Claude Code sessions still work: the daemon deploys from source instead, and `npm start` says so and carries on. Non-Claude providers that go over ACP need the worker bundle, so install Bun and re-run `npm run build:daemon` before using those. Not needed at all with the npm install route, which ships the bundle prebuilt. |
+| **Bun** | [bun.sh](https://bun.sh/) | Prebuilt session-daemon binaries (faster deploys to remote hosts) and the ACP worker bundle | Claude Code sessions still work: the daemon deploys from source instead, and `npm start` says so and carries on. Non-Claude engines (Codex, Gemini, OpenCode, Goose) run through the prebuilt daemon, so install Bun and re-run `npm run build:daemon` before using those. The npm package does not ship the daemon binaries yet, so on the npm install route those engines are not available; use the checkout route with Bun for them. |
 
 ### One AI login: Claude Code
 
@@ -210,7 +210,7 @@ On first launch, Open Walnut:
 2. **Seeds `config.yaml`** — with default model settings and available models
 3. **Initializes directories** — `tasks/`, `memory/`, `sessions/`, and more
 4. **Builds the frontend** — compiles the React SPA (takes ~10 seconds the first time)
-5. **Downloads the embedding model** — BGE-M3 (~1.16 GB) for semantic search. This is a one-time download that can take 5-30 minutes depending on your connection. The server is usable while the download runs in the background.
+5. **Downloads the embedding model** — Qwen3-Embedding-0.6B (~640 MB) for semantic search. This is a one-time download that can take 5-30 minutes depending on your connection. The server is usable while the download runs in the background.
 6. **Starts the server** on [http://localhost:3456](http://localhost:3456)
 
 The data directory structure:
