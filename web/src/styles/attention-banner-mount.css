@@ -51,13 +51,34 @@
   padding-top: 46px;
 }
 
-/* Errors view: a root-cause block heading with the quiet "Shown above" line. */
+/* Errors view: a root-cause block heading with the quiet "Shown in System" link. */
 .nfc-cat-title {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   min-width: 0;
 }
 .nfc-cat-shown {
   font-size: 11px;
   color: var(--fg-muted);
+}
+.nfc-cat-shown-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+.nfc-cat-shown-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+
+/* Notification panel: the card is the first block of the System section, so it
+   takes the pane's own gutter (the detail pads 12px) instead of the header-row margins. */
+.ab-mount[data-mount="notifications"] .setup-banner,
+.ab-mount[data-mount="notifications"] .ab-mount-reserve {
+  margin: 0 0 12px;
 }

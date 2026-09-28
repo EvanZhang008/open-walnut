@@ -107,7 +107,7 @@ const inside = (p: LastPointer, r: DOMRect): boolean =>
 /**
  * Pure read of the hold rule, from the mount element and the last pointer
  * position: the rest of the task panel below its toolbar (the card's own
- * pointer-inside rule covers the card), a task drag, or the panel body.
+ * pointer-inside rule covers the card), a task drag, or the System section below the card.
  */
 export function holdLayoutNow(where: BannerMount, el: HTMLElement | null, p: LastPointer | null, pointerOut: boolean): boolean {
   if (!el) return false;
@@ -126,8 +126,11 @@ export function holdLayoutNow(where: BannerMount, el: HTMLElement | null, p: Las
   }
   if (where === 'notifications') {
     if (!p || pointerOut) return false;
-    const body = el.closest('.notification-panel')?.querySelector<HTMLElement>('.nfc-body');
-    return !!body && inside(p, body.getBoundingClientRect());
+    // The card heads the System section: what moves is the section below it
+    // (the rail never does), and over the card its own rule decides.
+    if (inside(p, el.getBoundingClientRect())) return false;
+    const detail = el.closest<HTMLElement>('.nfc-detail');
+    return !!detail && inside(p, detail.getBoundingClientRect());
   }
   return false;
 }
@@ -237,7 +240,7 @@ export function useClickGuard(wrapper: HTMLElement | null, containerSelector: st
 
 /**
  * `skip`: the card should appear at full height at once: the notification
- * panel's first paint (the panel itself is the entrance), and the task panel
+ * panel's System section showing (the section itself is the entrance), and the task panel
  * taking the card back from its reserve (same height, nothing to grow).
  * `minHeight`: while the card taking the reserve's place back has no measured
  * height yet, the mount keeps the reserve's outer height, so the list below

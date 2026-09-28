@@ -21,7 +21,7 @@ import { VoicePanel } from '@/components/common/VoicePanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
-import { bellPresentation, setNotificationsOpen } from '@/utils/host-banner-placement';
+import { bellPresentation, setNotificationsCardShown } from '@/utils/host-banner-placement';
 import { useAttentionDots } from '@/hooks/useAttentionDots';
 import { useLocalClaudeRecheck } from '@/utils/local-claude-recheck';
 import { hostSettingsHref } from '@/utils/host-settings-nav';
@@ -73,8 +73,9 @@ export function Sidebar({
   const { notify, attentionCount, quiet } = useNotifications();
   const quietNow = effectiveQuiet(quiet).active;
   const [notifOpen, setNotifOpenState] = useState(false);
-  // The banner owner store flips in the SAME handler as the panel state (one commit, never two cards).
-  const setNotifOpen = (next: boolean) => { setNotificationsOpen(next); setNotifOpenState(next); };
+  // Closing hands the card back in the SAME handler as the panel state (one commit, never two
+  // cards); opening leaves it to the panel, which holds the card only on its System section.
+  const setNotifOpen = (next: boolean) => { if (!next) setNotificationsCardShown(false); setNotifOpenState(next); };
   const bell = bellPresentation({ reason: bellReason, attentionCount, hasIssues, quiet: quietNow, quietLabel: quietNow ? quietLabel(quiet) : '', collapsed });
   const [voiceOpen, setVoiceOpen] = useState(false);
   // Live voice status (transcribing spinner / failure dot) from any MicButton.
@@ -123,7 +124,7 @@ export function Sidebar({
       setScratchpadVisible((e as CustomEvent).detail?.visible ?? false);
     };
     // Clicking a persistent toast's body opens the notification center.
-    const handleOpenCenter = () => { setNotificationsOpen(true); setNotifOpenState(true); };
+    const handleOpenCenter = () => { setNotifOpenState(true); };
     window.addEventListener('main:chat-visible', handleChatVisible);
     window.addEventListener('main:todo-visible', handleTodoVisible);
     window.addEventListener('main:calendar-visible', handleCalendarVisible);
@@ -394,6 +395,7 @@ export function Sidebar({
         open={notifOpen}
         onClose={() => setNotifOpen(false)}
         sidebarCollapsed={collapsed}
+        bellReason={bellReason}
       />
       <VoicePanel
         open={voiceOpen}

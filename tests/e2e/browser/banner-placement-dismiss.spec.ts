@@ -55,7 +55,7 @@ test.describe('one dismiss store behind both cards', () => {
     await expect(cardRow(card, 'certbox')).toHaveCount(0)
   })
 
-  test('BP-C11: Dismiss all in the panel hides every host row in both cards, keeps the local section; focus ends on Needs Action', async ({ page }) => {
+  test('BP-C11: Dismiss all in the panel hides every host row in both cards, keeps the local section; focus ends on the System rail entry', async ({ page }) => {
     await bpSetup(page, { local: 'sign-in' })
     await expectTasksCard(page)
     const card = await openPanelCard(page)
@@ -66,7 +66,9 @@ test.describe('one dismiss store behind both cards', () => {
     // Off the card and off the panel body (the header): the undo line folds after 5s.
     await page.locator('.notification-panel-title').hover()
     await expect(card.getByText('Hidden until they change.')).toHaveCount(0, { timeout: 12_000 })
-    await expect(railButton(page, 'Needs Action')).toBeFocused()
+    // The rail entry the user is on (aria-current), not the first one.
+    await expect(railButton(page, 'System')).toBeFocused()
+    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
     await closePanel(page, 'escape')
     await expect(banner(page)).toHaveCount(1)
     await expect(banner(page).locator('li.hpb-row[data-host]')).toHaveCount(0)
@@ -105,7 +107,9 @@ test.describe('expiry, undo and the way back', () => {
     await h.push(failed('netbox', 'Net box', 'unreachable'))
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications: remote hosts need attention', { timeout: 10_000 })
     await expect(bellDot(page)).toHaveCount(1)
+    // Nothing on /notes covers it: the bell opens straight on System, where the card is.
     await openBell(page)
+    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
     await expect(cardRow(panelBanner(page), 'netbox')).toBeVisible()
     expect(await storedKeys(page)).not.toContain('netbox|connect')
   })

@@ -11,7 +11,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { banner, connected, failed, isolatePrefs, resetServerHostFixture, routeHealth, row, signedOut } from './host-problems-helpers'
 import { loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bellDot, bpSetup, cardRow, openPanelCard, openRow, railButton, settingsDot, toolbarHide,
+  BP_SHOTS, bellDot, bpSetup, cardRow, openPanelCard, openRow, pickRail, railButton, settingsDot, toolbarHide,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -150,9 +150,12 @@ test.describe('C22 in the panel with the pointer resting in it', () => {
     h.connectAnswer = (host) => connected(host, 'Net box')
     const card = await openPanelCard(page)
     await cardRow(card, 'netbox').getByTestId('hpb-retry').click()
-    // The pointer rests in the panel body, below the card (the layout hold is on).
-    const body = await box(page.locator('.notification-panel .nfc-body'))
-    await page.mouse.move(body.x + body.width / 2, body.y + body.height - 40, { steps: 4 })
+    // The pointer rests in the System section, below the card (the layout hold is on there, never over the rail).
+    const detail = await box(page.locator('.notification-panel .nfc-detail'))
+    const cb = await box(card)
+    const y = detail.y + detail.height - 40
+    expect(y).toBeGreaterThan(cb.y + cb.height)
+    await page.mouse.move(detail.x + detail.width / 2, y, { steps: 4 })
     const net = card.locator('li.hpb-row[data-host="netbox"]')
     await expect(net).toContainText('Net box is ready', { timeout: 10_000 })
     for (let i = 0; i < 6; i++) {
@@ -288,11 +291,14 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
     expect((await box(slot)).width).toBeLessThanOrEqual(721)
   })
 
-  test('BP-R4-C42: the panel is a dialog through the card mount (its own file untouched); Tab walks every rail button, WebKit included', async ({ page }) => {
+  test('BP-R4-C42: the panel is a dialog on every section, with the card (System) or without it (All); Tab walks every rail button, WebKit included', async ({ page }) => {
     await bpSetup(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    await openPanelCard(page)
+    await openBell(page)
     const panel = page.locator('.notification-panel')
+    // All: no card in the panel, the dialog contract still on its root.
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    await expect(panelBanner(page)).toHaveCount(0)
     await expect(panel).toHaveAttribute('role', 'dialog')
     await expect(panel).toHaveAttribute('aria-modal', 'true')
     await railButton(page, 'Needs Action').focus()
@@ -301,6 +307,14 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
     await expect(railButton(page, 'Inbox')).toBeFocused()
     await page.keyboard.press('Shift+Tab')
     await expect(railButton(page, 'Needs Action')).toBeFocused()
+    // System: the card arrives, the contract is the same.
+    await pickRail(page, 'System')
+    await expect(panelBanner(page)).toHaveCount(1)
+    await expect(panel).toHaveAttribute('role', 'dialog')
+    await expect(panel).toHaveAttribute('aria-modal', 'true')
+    await railButton(page, 'Needs Action').focus()
+    await page.keyboard.press('Tab')
+    await expect(railButton(page, 'Inbox')).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(panel).toHaveCount(0)
   })

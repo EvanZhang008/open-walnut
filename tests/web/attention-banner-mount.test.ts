@@ -112,13 +112,18 @@ describe('holdLayoutNow', () => {
     expect(holdLayoutNow('tasks', dragging, pt(900, 900), true)).toBe(true)
   })
 
-  it('holds in the notification panel only over its rail and detail body', () => {
-    const body = fakeEl({ left: 200, top: 300, right: 760, bottom: 800 })
-    const nPanel = fakeEl({ left: 200, top: 0, right: 760, bottom: 800 }, { children: { '.nfc-body': body } })
-    const mount = fakeEl({ left: 200, top: 60, right: 760, bottom: 280 }, { parents: { '.notification-panel': nPanel } })
-    expect(holdLayoutNow('notifications', mount, pt(400, 500), false)).toBe(true)
-    expect(holdLayoutNow('notifications', mount, pt(400, 100), false)).toBe(false)
-    expect(holdLayoutNow('notifications', mount, pt(400, 500), true)).toBe(false)
+  it('holds in the notification panel only over the System section below the card', () => {
+    // The rail is x 200..360; the section (detail) x 360..760 holds the card at its top.
+    const detail = fakeEl({ left: 360, top: 60, right: 760, bottom: 800 })
+    const mount = fakeEl({ left: 372, top: 72, right: 748, bottom: 280 }, { parents: { '.nfc-detail': detail } })
+    expect(holdLayoutNow('notifications', mount, pt(500, 500), false)).toBe(true)
+    // Over the card itself: its own rule answers (a Retry answers in place).
+    expect(holdLayoutNow('notifications', mount, pt(500, 150), false)).toBe(false)
+    // The rail and the header never move.
+    expect(holdLayoutNow('notifications', mount, pt(250, 500), false)).toBe(false)
+    expect(holdLayoutNow('notifications', mount, pt(500, 30), false)).toBe(false)
+    expect(holdLayoutNow('notifications', mount, pt(500, 500), true)).toBe(false)
+    expect(holdLayoutNow('notifications', mount, null, false)).toBe(false)
   })
 
   it('never holds the slot or draft mounts, or a mount outside its panel', () => {

@@ -3,14 +3,14 @@
  * panel, Ask Walnut slot, draft column). The owner rule (host-banner-placement)
  * picks the ONE mount that renders the card; every other mount unmounts it
  * entirely, so there is never a second card, a second dismiss list or a second
- * focus intent. The notification panel only renders while open, so its mount
- * always renders the card. Live inputs live in banner-mount-hooks.ts.
+ * focus intent. The notification panel's mount sits in its System section and
+ * renders only while that section shows, so it always renders the card. Live
+ * inputs live in banner-mount-hooks.ts.
  */
 import { useCallback, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { useHostBannerOwner, type BannerMount, type HostBannerOwner } from '@/utils/host-banner-placement';
-import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { AttentionBanner } from './AttentionBanner';
 import {
   useBannerHealth, useClickGuard, useFinalWidthDuringOpen, useGrowPhase, useHoldLayout, useInstantAppear, useMeasuredHeight,
@@ -19,6 +19,8 @@ import {
 import '@/styles/attention-banner-mount.css';
 
 const TASKS_FOCUS = '.todo-section-tabs-list [role="tab"][aria-selected="true"]';
+/** The card left the System section: focus goes to the rail entry the user is on. */
+const NOTIFICATIONS_FOCUS = '.nfc-rail button[aria-current="true"]';
 
 export interface AttentionBannerMountProps {
   where: BannerMount;
@@ -64,10 +66,11 @@ function Card({ where, health, healthLoading, onNavigateSettings, onStartSession
 }
 
 /**
- * Task panel and notification panel: an always-present wrapper (the task
- * panel's is a zero-height focus target when empty), a 0fr-to-1fr grow on
- * enter, the reserve box while the panel borrows the card, the hold while the
- * pointer is over what would move, and the click guard after a height change.
+ * Task panel and the notification panel's System section: an always-present
+ * wrapper (the task panel's is a zero-height focus target when empty), a
+ * 0fr-to-1fr grow on enter, the reserve box while the panel borrows the card,
+ * the hold while the pointer is over what would move, and the click guard
+ * after a height change (inside the section only: the rail never moves).
  */
 function PanelMount(props: AttentionBannerMountProps & { owner: HostBannerOwner }): ReactNode {
   const { where, owner } = props;
@@ -83,13 +86,12 @@ function PanelMount(props: AttentionBannerMountProps & { owner: HostBannerOwner 
   const phase = useGrowPhase(h > 0 || skipEnter, skipEnter || instant);
   const finalWidth = useFinalWidthDuringOpen(where === 'tasks' ? el : null, showCard);
   const hold = useHoldLayout(where, el);
-  useClickGuard(el, where === 'tasks' ? '.todo-panel' : '.notification-panel');
-  // The notification panel's keyboard contract (focus in, Tab kept inside, back to the bell, N5, C25).
-  useDialogFocus(where === 'notifications' ? el?.closest<HTMLElement>('.notification-panel') ?? null : null, 'Notifications');
+  useClickGuard(el, where === 'tasks' ? '.todo-panel' : '.nfc-detail');
   const focusOnLeave = useCallback((): void => {
     const target = where === 'tasks'
       ? document.querySelector<HTMLElement>(TASKS_FOCUS) ?? el
-      : el?.closest('.notification-panel')?.querySelector<HTMLElement>('.nfc-rail button');
+      : el?.closest('.notification-panel')?.querySelector<HTMLElement>(NOTIFICATIONS_FOCUS)
+        ?? el?.closest('.notification-panel')?.querySelector<HTMLElement>('.nfc-rail button');
     target?.focus({ preventScroll: true });
   }, [where, el]);
   // Not empty while the card takes its reserve's place back (its height is not measured yet).

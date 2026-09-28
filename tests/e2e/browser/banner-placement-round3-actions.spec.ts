@@ -1,6 +1,7 @@
 /**
  * The third nitpick round on the attention card, actions and words
- * (BP-R3-N<n>, BP-R3-C<n>): the notification panel takes focus like a dialog,
+ * (BP-R3-N<n>, BP-R3-C<n>): the notification panel takes focus like a dialog
+ * on every section (header, rail, then the section; the card leads System),
  * an undo line is about one row, search keeps the rows, the bell keeps its one
  * dot look, a Retry result keeps the row's height, the System pane says why,
  * one verb for re-checking, and a Retry settles on its own answer only (C23, C48).
@@ -31,23 +32,37 @@ const where = (page: Page): Promise<string> => page.evaluate(() => {
 })
 
 test.describe('the notification panel is a dialog for the keyboard (N5)', () => {
-  test('BP-R3-N5: Enter on the bell moves focus into the panel; Tab reaches the card after the header and never leaves; Escape returns to the bell', async ({ page, browserName }) => {
+  test('BP-R3-N5: Enter on the bell moves focus into the panel (All, no card); Tab goes header, then the rail; Enter on System, then Tab past All reaches the card; it never leaves; Escape returns to the bell', async ({ page, browserName }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await bell(page).focus()
     await page.keyboard.press('Enter')
     const panel = page.locator('.notification-panel')
+    // The dialog contract sits on the panel itself: it holds on All, where there is no card.
     await expect(panel).toHaveAttribute('role', 'dialog')
     await expect(panel).toHaveAttribute('aria-modal', 'true')
     await expect(panel).toHaveAttribute('aria-label', 'Notifications')
-    await expect(panelBanner(page).locator('li.hpb-row')).toHaveCount(4, { timeout: 10_000 })
-    expect(await where(page)).toMatch(/^panel:/)
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    await expect(panelBanner(page)).toHaveCount(0)
+    await expect.poll(() => where(page)).toMatch(/^panel:/)
     const stops: string[] = []
     for (let i = 0; i < 6; i++) { await page.keyboard.press(TAB(browserName)); stops.push(await where(page)) }
-    // Header first (Clear All when the feed has items, Quiet, Close), then the card's first row.
+    // Header first (Clear All when the feed has items, Quiet, Close), then the rail from its first entry.
     expect(stops.every((s) => s.startsWith('panel:')), JSON.stringify(stops)).toBe(true)
-    expect(stops.indexOf('panel:Close')).toBeGreaterThanOrEqual(0)
-    expect(stops[stops.indexOf('panel:Close') + 1]).toBe('panel:Retry')
+    const close = stops.indexOf('panel:Close')
+    expect(close, JSON.stringify(stops)).toBeGreaterThanOrEqual(0)
+    expect(stops[close + 1], JSON.stringify(stops)).toMatch(/^panel:Needs Action/)
+    // On along the rail to System, and into it by keyboard.
+    for (let i = 0; i < 12 && !(await where(page)).startsWith('panel:System'); i++) await page.keyboard.press(TAB(browserName))
+    await expect(railButton(page, 'System')).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
+    await expect(panelBanner(page).locator('li.hpb-row')).toHaveCount(4, { timeout: 10_000 })
+    await page.keyboard.press(TAB(browserName))
+    expect(await where(page)).toMatch(/^panel:All/)
+    await page.keyboard.press(TAB(browserName))
+    expect(await where(page)).toBe('panel:Retry')
+    expect(await page.evaluate(() => !!document.activeElement?.closest('[data-testid="attention-banner"][data-mount="notifications"]'))).toBe(true)
     // Around the end and back: Tab never lands under the overlay.
     for (let i = 0; i < 60; i++) {
       await page.keyboard.press(TAB(browserName))
@@ -191,7 +206,7 @@ test.describe('a Retry settles on its own answer (C23, C48)', () => {
     }
   })
 
-  test('BP-R3-C48: connect held 2s, Retry in the task panel, bell at 300ms: the panel row is pending, one request, and the receipt lands there', async ({ page }) => {
+  test('BP-R3-C48: connect held 2s, Retry in the task panel, bell and System at 300ms: the panel row is pending, one request, and the receipt lands there', async ({ page }) => {
     const h = await bpSetup(page, { hosts: fixtureHosts() })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     h.connectDelayMs = 2_000
@@ -200,7 +215,7 @@ test.describe('a Retry settles on its own answer (C23, C48)', () => {
     await page.mouse.move(2, 2)
     await row(page, 'certbox').getByTestId('hpb-retry').click()
     await page.waitForTimeout(300)
-    await openBell(page)
+    await openPanelCard(page)
     const pr = cardRow(panelBanner(page), 'certbox')
     const retry = pr.getByTestId('hpb-retry')
     await expect(retry).toHaveText('Retrying...')

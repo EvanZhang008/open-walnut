@@ -1,7 +1,7 @@
 /**
  * A modal panel's keyboard contract (the notification panel, N5): on open,
  * focus moves into the panel (the panel itself, so the next Tab reaches its
- * first control: the header, then the attention card, then the rail); Tab
+ * first control: the header, then the rail, then the section); Tab
  * and Shift+Tab stay inside while it is open; on close, focus goes back to
  * whatever had it before (the bell). Another layer that owns focus (a reader
  * portal) is left alone: the trap acts only while focus is in the panel or lost.
@@ -49,9 +49,8 @@ export function nextTabStop(stops: readonly HTMLElement[], current: Element | nu
 /**
  * The dialog contract on `panel` while it is in the DOM: role=dialog +
  * aria-modal + its label, focus moved in on open, every Tab kept inside, focus
- * back to what had it (the bell) when it goes. Applied from the attention
- * card's mount inside the notification panel (the panel's own file stays as it
- * was, C42), the same closest() pattern as the mount's click guard.
+ * back to what had it (the bell) when it goes. The notification panel applies
+ * it to its own root.
  */
 export function useDialogFocus(panel: HTMLElement | null, label: string): void {
   const returnTo = useRef<HTMLElement | null>(null);

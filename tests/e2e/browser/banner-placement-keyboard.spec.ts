@@ -1,7 +1,9 @@
 /**
  * The card by keyboard in its two full mounts (slice spec 5.1 to 5.3): where
- * Tab enters and leaves, where focus goes when the last row folds away, that
- * Escape still closes the panel, and that no two dismiss controls sit close.
+ * Tab enters and leaves (in the notification panel: the header, then the
+ * rail, then the System section with the card first), where focus goes when
+ * the last row folds away, that Escape still closes the panel, and that no two
+ * dismiss controls sit close.
  * Host frames and local health are routed client-side.
  *
  * Run: PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-keyboard --project=chromium --workers=1
@@ -57,20 +59,28 @@ test.describe('Tab order around the task panel card', () => {
     expect(where).toEqual({ body: false, inCard: false, inToolbar: false, inPanel: true })
   })
 
-  test('BP-C25: in the panel Tab goes Close, then into the card, and from its last stop to Needs Action', async ({ page, browserName }) => {
+  test('BP-C25: in the panel Tab goes Close, then the rail from Needs Action to All, then the System card\'s first control', async ({ page, browserName }) => {
     // WebKit on macOS moves Tab through every button only with Option held (the Safari default).
     const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')], local: 'sign-in' })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const card = await openPanelCard(page)
+    const s = await stops(card)
     await page.locator('.notification-panel .notification-panel-close').focus()
     await page.keyboard.press(TAB)
-    expect(await activeIn(page, '[data-testid="attention-banner"][data-mount="notifications"]')).toBe(true)
-    const s = await stops(card)
-    await card.getByRole('button', { name: s.last! }).last().focus()
-    await page.keyboard.press(TAB)
+    // No card between the header and the rail any more: Close hands over to the first rail entry.
+    await expect(railButton(page, 'Needs Action')).toBeFocused()
+    const rail: string[] = []
+    for (let i = 0; i < 12 && await activeIn(page, '.nfc-rail'); i++) {
+      rail.push((await activeName(page)) ?? '')
+      await page.keyboard.press(TAB)
+    }
+    expect(rail[0], JSON.stringify(rail)).toMatch(/^Needs Action/)
+    expect(rail[rail.length - 1], JSON.stringify(rail)).toMatch(/^All/)
+    expect(rail.some((r) => /^System/.test(r)), JSON.stringify(rail)).toBe(true)
     const now = await activeName(page)
-    await expect(railButton(page, 'Needs Action'), `after the card's last stop (${s.last}) focus is on: ${now}`).toBeFocused()
+    expect(await activeIn(page, '[data-testid="attention-banner"][data-mount="notifications"]'), `after All focus is on: ${now}`).toBe(true)
+    expect(now).toBe(s.first)
   })
 })
 

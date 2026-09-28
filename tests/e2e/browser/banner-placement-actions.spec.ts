@@ -1,8 +1,9 @@
 /**
  * The card's buttons in its new places (slice spec 5.1, 5.3, 2.1): Open
  * Settings and 'and N more' leave the panel first, Retry keeps it open, one
- * attempt is shared by every mount, the Needs Action landing keeps host rows
- * to one line, and the success sentence drops its check mark in the card.
+ * attempt is shared by every mount, the Needs Action landing carries no card
+ * (the System section does, and its badge counts the hosts), and the success
+ * sentence drops its check mark in the card.
  * Host frames and local health are routed client-side; the Settings checks
  * (BP-C20, BP-C66) use the server's host fixture so Settings lists the hosts.
  *
@@ -16,9 +17,10 @@ import { hostReadySentence } from '../../../src/core/hosts/host-problem'
 import {
   anyBanner, banner, connected, failed, isolatePrefs, resetServerHostFixture, routeHealth, row, signedOut, storedKeys,
 } from './host-problems-helpers'
-import { hostRow, loadApp, loadFixture } from './host-problems-fixture-helpers'
+import { hostRow, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, askRecord, bpSetup, cardRow, closePanel, expectTasksCard, healthyGitSync, hostsOf, openPanelCard, openRow, railButton,
+  BP_SHOTS, askRecord, bpSetup, cardRow, closePanel, expectTasksCard, healthyGitSync, hostsOf, openPanelCard, openRow, panelMount,
+  pickRail, railButton, reserve, systemBadge,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -152,36 +154,38 @@ test.describe('one attempt, one state, whichever mount shows it', () => {
 })
 
 test.describe('landing, the named cap, and the success sentence', () => {
-  test('BP-C62: two asks and four host problems: the bell lands on Needs Action, host rows stay one line, the first ask is in the top 60%', async ({ page }) => {
+  test('BP-C62: two asks and four host problems: the bell lands on Needs Action with no card there; the System badge counts the four hosts; System shows the card in its dense form', async ({ page }) => {
     await bpSetup(page, {
       hosts: [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'), failed('certbox', 'Cert box', 'cert_expired'), signedOut('signbox', 'Sign box')],
       feed: [askRecord(1), askRecord(2)],
     })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    const card = await openPanelCard(page)
+    await openBell(page)
     await expect(railButton(page, 'Needs Action')).toHaveAttribute('aria-current', 'true')
-    const rowsIn = card.locator('li.hpb-row[data-host]')
-    await expect(rowsIn).toHaveCount(4)
-    for (const r of await rowsIn.all()) {
-      const one = await r.evaluate((el) => {
-        const head = el.querySelector<HTMLElement>('.hft-headline')
-        const lh = head ? parseFloat(getComputedStyle(head).lineHeight) || 18 : 18
-        const btn = el.querySelector<HTMLElement>('button')
-        return { headLines: head ? Math.round(head.getBoundingClientRect().height / lh) : 0, rowH: el.getBoundingClientRect().height, lh, btnH: btn?.getBoundingClientRect().height ?? 0 }
-      })
-      expect(one.headLines).toBeLessThanOrEqual(1)
-      expect(one.rowH).toBeLessThanOrEqual(Math.max(one.lh, one.btnH) + 16)
-    }
-    await expect(cardRow(card, 'keybox').locator('.hft-hint')).toHaveCount(0)
+    // Needs Action is the asks alone: no card and no mount; the task panel keeps its card, no reserve.
+    await expect(page.locator('.notification-panel .nfc-perm-card')).toHaveCount(2)
+    await expect(panelMount(page)).toHaveCount(0)
+    await expect(panelBanner(page)).toHaveCount(0)
+    await expect(banner(page)).toHaveCount(1)
+    await expect(anyBanner(page)).toHaveCount(1)
+    await expect(reserve(page)).toHaveCount(0)
     const panelBox = (await page.locator('.notification-panel').boundingBox())!
-    const ask = page.locator('.notification-panel .nfc-perm-card').first()
-    const askTop = (await ask.boundingBox())!.y
+    const askTop = (await page.locator('.notification-panel .nfc-perm-card').first().boundingBox())!.y
     expect(askTop - panelBox.y).toBeLessThanOrEqual(panelBox.height * 0.6)
+    // The System rail counts what its section lists as wrong: the four hosts (git sync healthy, this machine ready).
+    await expect(systemBadge(page)).toHaveText('4')
     await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c62-needs-action-landing.png` })
-    // Off Needs Action the rows leave the one-line form (dense: headline, then the primary action).
-    await railButton(page, 'All').click()
-    await expect(cardRow(card, 'keybox')).not.toHaveClass(/hpb-single/)
+    await pickRail(page, 'System')
+    const card = panelBanner(page)
+    await expect(card).toHaveCount(1)
+    await expect(banner(page)).toHaveCount(0)
+    await expect(card.locator('li.hpb-row[data-host]')).toHaveCount(4)
+    await expect(systemBadge(page)).toHaveText('4')
+    // Never the one-line form in the panel any more (dense: headline, then the primary action).
+    for (const r of await card.locator('li.hpb-row[data-host]').all()) await expect(r).not.toHaveClass(/hpb-single/)
+    await expect(card).not.toHaveClass(/attention-banner-single/)
     await expect(cardRow(card, 'keybox').getByTestId('hpb-retry')).toBeVisible()
+    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c62-system-card.png` })
   })
 
   test('BP-C66: "and 2 more" flashes exactly the two capped rows in Settings, once; a reload does not flash again', async ({ page, request }) => {

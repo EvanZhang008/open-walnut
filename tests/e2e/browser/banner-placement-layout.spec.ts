@@ -1,9 +1,10 @@
 /**
- * The card's size and motion in the task panel and the notification panel
- * (slice spec 4.1, 4.2, 5.5): the 40% cap, narrow and phone widths, themes,
- * loading, search, section switches, scroll positions, drags, the reserve,
- * height changes that wait for the pointer, the Errors group and the
- * screen-reader announcer.
+ * The card's size and motion in the task panel and the notification panel's
+ * System section (slice spec 4.1, 4.2, 5.5): the 40% cap, narrow and phone
+ * widths, themes, loading, search, section switches (the reserve holds the
+ * task list still while System has the card), scroll positions, drags,
+ * height changes that wait for the pointer, the Errors group's Shown in
+ * System link and the screen-reader announcer.
  * Host frames and local health are routed client-side. BP-C63 is WebKit only.
  *
  * Run: PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-layout --project=chromium --workers=1
@@ -19,7 +20,7 @@ import {
 import { openBell, panelBanner, slotBanner } from './host-problems-fixture-helpers'
 import {
   BP_SHOTS, bpSetup, cardRow, closePanel, healthyGitSync, hostErrorRecord, hostsOf, openPanelCard,
-  railButton, reserve,
+  pickRail, railButton, reserve,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -54,17 +55,24 @@ test.describe('the 40% cap', () => {
     await banner(page).screenshot({ path: `${BP_SHOTS}/c28-tasks-cap.png` })
   })
 
-  test('BP-C29: the same in the notification panel: within max(40% of the panel, 132px); the body keeps at least 60%', async ({ page }) => {
+  test('BP-C29: the same in the System section: within max(40% of the panel, 132px); the System pane below starts inside the top 60% of the panel', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 })
     await bpSetup(page, { hosts: six(), local: 'sign-in' })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const card = await openPanelCard(page)
-    const panelH = await height(page.locator('.notification-panel'))
-    const headerH = await height(page.locator('.notification-panel-header'))
-    const cap = Math.max(panelH * 0.4, 132) + 1
-    expect(await height(page.locator('.notification-panel .attention-banner'))).toBeLessThanOrEqual(cap)
+    const panel = (await page.locator('.notification-panel').boundingBox())!
+    const cap = Math.max(panel.height * 0.4, 132) + 1
+    const cardBox = (await page.locator('.notification-panel .attention-banner').boundingBox())!
+    expect(cardBox.height).toBeLessThanOrEqual(cap)
     expect(await height(card.locator('.hpb').first())).toBeLessThanOrEqual(cap)
-    expect(await height(page.locator('.notification-panel .nfc-body'))).toBeGreaterThanOrEqual(panelH * 0.6 - headerH)
+    // The rail beside it keeps the whole panel height (the card sits in the section, not above the sections).
+    const rail = (await page.locator('.notification-panel .nfc-rail').boundingBox())!
+    expect(rail.y).toBeLessThanOrEqual(cardBox.y)
+    expect(rail.y + rail.height).toBeGreaterThanOrEqual(cardBox.y + cardBox.height)
+    const pane = (await page.locator('.notification-panel .nfc-detail .notification-card').first().boundingBox())!
+    expect(pane.y).toBeGreaterThanOrEqual(cardBox.y + cardBox.height - 1)
+    expect(pane.y - panel.y).toBeLessThanOrEqual(panel.height * 0.6)
+    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c29-system-cap.png` })
   })
 
   test('BP-C61: 1280x600, a local sign-in and three hosts: the whole card within the cap, the local section whole, the host section scrolls', async ({ page }) => {
@@ -100,7 +108,7 @@ test.describe('narrow, phone, themes, loading', () => {
     await card.screenshot({ path: `${BP_SHOTS}/c30-narrow-300.png` })
   })
 
-  test('BP-C31: a 390x844 phone: the first headline and one button show in the task panel band; the panel card spans the sheet', async ({ page }) => {
+  test('BP-C31: a 390x844 phone: the first headline and one button show in the task panel band; the System card spans the sheet', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')] })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
@@ -118,7 +126,7 @@ test.describe('narrow, phone, themes, loading', () => {
     })
     expect(seen).toEqual({ headline: true, button: true })
     await page.screenshot({ path: `${BP_SHOTS}/c31-phone-tasks.png` })
-    await openBell(page)
+    await openPanelCard(page)
     const pb = (await page.locator('.notification-panel').boundingBox())!
     const cb = (await page.locator('.notification-panel .attention-banner').boundingBox())!
     expect(cb.x).toBeGreaterThanOrEqual(pb.x - 1)
@@ -135,7 +143,7 @@ test.describe('narrow, phone, themes, loading', () => {
     const bg = (l: Locator) => l.evaluate((el) => getComputedStyle(el).backgroundColor)
     const tasksBg = await bg(page.locator('.todo-panel .attention-banner'))
     await page.locator('.todo-panel .attention-banner').screenshot({ path: `${BP_SHOTS}/c32-dark-tasks.png` })
-    await openBell(page)
+    await openPanelCard(page)
     const panelBg = await bg(page.locator('.notification-panel .attention-banner'))
     await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c32-dark-panel.png` })
     const ctx = await browser.newContext()
@@ -203,14 +211,29 @@ test.describe('the card holds still around it', () => {
     expect((await lane.boundingBox())!.y).toBeCloseTo(laneTop, 0)
   })
 
-  test('BP-C36: switching through all six panel sections never remounts the card', async ({ page }) => {
-    await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')] })
+  test('BP-C36: switching in and out of System moves no task row: System swaps the card for a same-height reserve, every other section gives it back in place', async ({ page }) => {
+    await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')], allTasks: true })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    const card = await openPanelCard(page)
-    await card.evaluate((el) => el.setAttribute('data-bp-mark', '1'))
-    for (const label of ['Needs Action', 'Inbox', 'Errors', 'Automation', 'System', 'All']) {
-      await railButton(page, label).click()
-      await expect(page.locator('.notification-panel [data-testid="attention-banner"][data-bp-mark="1"]'), label).toHaveCount(1)
+    const first = page.locator('.todo-panel .todo-panel-item').first()
+    await expect(first).toBeVisible({ timeout: 20_000 }).catch(() => {})
+    test.skip(await first.count() === 0, 'the fixture has no task rows')
+    await page.mouse.move(2, 2)
+    const cardBox = (await banner(page).boundingBox())!
+    const y0 = (await first.boundingBox())!.y
+    await openBell(page)
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    for (const label of ['System', 'Needs Action', 'System', 'Inbox', 'System', 'Errors', 'System', 'Automation', 'System', 'All']) {
+      await pickRail(page, label)
+      if (label === 'System') {
+        await expect(reserve(page), label).toHaveCount(1)
+        expect(Math.abs((await reserve(page).boundingBox())!.height - cardBox.height), label).toBeLessThanOrEqual(1)
+      } else {
+        await expect(banner(page), label).toHaveCount(1)
+        const back = (await banner(page).boundingBox())!
+        expect(Math.abs(back.y - cardBox.y), label).toBeLessThanOrEqual(1)
+        expect(Math.abs(back.height - cardBox.height), label).toBeLessThanOrEqual(1)
+      }
+      expect(Math.abs((await first.boundingBox())!.y - y0), `${label}: the first task row`).toBeLessThanOrEqual(1)
     }
   })
 
@@ -255,7 +278,7 @@ test.describe('the card holds still around it', () => {
     expect(await tasks()).toEqual(before)
   })
 
-  test('BP-C46: a 1600px window with an 800px task panel: opening the bell leaves the first visible task row where it was', async ({ page }) => {
+  test('BP-C46: a 1600px window with an 800px task panel: opening the bell, then System, leaves the first visible task row where it was', async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 900 })
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')], allTasks: true })
     await page.addStyleTag({ content: '.main-page-todo { flex: 0 0 800px !important; width: 800px !important; max-width: 800px !important; }' })
@@ -264,7 +287,12 @@ test.describe('the card holds still around it', () => {
     await expect(first).toBeVisible({ timeout: 20_000 }).catch(() => {})
     test.skip(await first.count() === 0, 'the fixture has no task rows')
     const y0 = (await first.boundingBox())!.y
-    await openPanelCard(page)
+    // The bell lands on All: the card stays in the task panel.
+    await openBell(page)
+    await expect(banner(page)).toHaveCount(1)
+    expect(Math.abs((await first.boundingBox())!.y - y0)).toBeLessThanOrEqual(1)
+    // System takes the card: the reserve keeps its place.
+    await pickRail(page, 'System')
     await expect(reserve(page)).toHaveCount(1)
     expect(Math.abs((await first.boundingBox())!.y - y0)).toBeLessThanOrEqual(1)
   })
@@ -295,25 +323,41 @@ test.describe('height changes wait for the pointer; Errors; the announcer', () =
     expect(reduced.split(',').every((d) => parseFloat(d) === 0)).toBe(true)
   })
 
-  test('BP-C57: the Errors group for Dev box uses its label and says Shown above while the card has its row', async ({ page }) => {
+  test('BP-C57: the Errors group for Dev box uses its label, with a quiet Shown in System link under it; Enter on the link opens System; a dismissed row drops the link', async ({ page }) => {
     await bpSetup(page, {
       hosts: [failed('devbox', 'Dev box', 'cert_expired'), signedOut('signbox', 'Sign box')],
       feed: [hostErrorRecord('devbox', 1), hostErrorRecord('devbox', 2)],
     })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    const card = await openPanelCard(page)
-    await railButton(page, 'Errors').click()
+    await openBell(page)
+    await pickRail(page, 'Errors')
     const header = page.locator('.notification-panel .nfc-cause-header')
-    await expect(header.locator('.nfc-cat-name')).toHaveText("Can't reach Dev box")
-    const shownAbove = page.locator('.notification-panel .nfc-body').getByText('Shown above', { exact: true })
-    await expect(shownAbove).toHaveCount(1)
-    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c57-errors-shown-above.png` })
+    const name = header.locator('.nfc-cat-name')
+    await expect(name).toHaveText("Can't reach Dev box")
+    const link = page.locator('.notification-panel .nfc-body').getByRole('button', { name: 'Shown in System', exact: true })
+    await expect(link).toHaveCount(1)
+    await expect(link).toHaveClass(/nfc-cat-shown-link/)
+    // Under the name, flush with its left edge, in the quiet 11px type.
+    const nb = (await name.boundingBox())!
+    const lb = (await link.boundingBox())!
+    expect(lb.y).toBeGreaterThanOrEqual(nb.y + nb.height - 1)
+    expect(Math.abs(lb.x - nb.x)).toBeLessThanOrEqual(1)
+    expect(await link.evaluate((el) => getComputedStyle(el).fontSize)).toBe('11px')
+    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c57-errors-shown-in-system.png` })
+    // By keyboard: the link is a real button.
+    await link.focus()
+    await page.keyboard.press('Enter')
+    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
+    const card = panelBanner(page)
+    await expect(card).toHaveCount(1)
     await cardRow(card, 'devbox').getByRole('button', { name: 'Dismiss Dev box' }).click()
+    await pickRail(page, 'Errors')
     await expect(header).toHaveCount(1)
-    await expect(shownAbove).toHaveCount(0)
+    await expect(link).toHaveCount(0)
+    await expect(header.locator('.nfc-cat-shown')).toHaveCount(0)
   })
 
-  test('BP-C63: WebKit: the card remounts under a still pointer after a backdrop click; a removed row 1 waits for the pointer', async ({ page, browserName }) => {
+  test('BP-C63: WebKit: the card remounts from System under a still pointer after a backdrop click; a removed row 1 waits for the pointer', async ({ page, browserName }) => {
     test.skip(browserName !== 'webkit', 'WebKit only: the Mac app engine')
     await page.setViewportSize({ width: 1600, height: 900 })
     const h = await bpSetup(page, { hosts: three() })
@@ -321,7 +365,8 @@ test.describe('height changes wait for the pointer; Errors; the announcer', () =
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'netbox', 'proxybox'])
     const r2y = (await row(page, 'netbox').boundingBox())!.y
     const cardBox = (await banner(page).boundingBox())!
-    await openBell(page)
+    // System takes the card, so the backdrop click below puts it back in the task panel under the pointer.
+    await openPanelCard(page)
     const pb = (await page.locator('.notification-panel').boundingBox())!
     // A backdrop point over the card's right part, clear of the panel.
     const x = Math.round(Math.min(cardBox.x + cardBox.width - 20, Math.max(pb.x + pb.width + 20, cardBox.x + 20)))

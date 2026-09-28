@@ -18,8 +18,8 @@ import {
 } from './host-problems-helpers'
 import { loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bellDot, bpSetup, cardRow, closePanel, fixtureHosts, goRail, hostErrorRecord, hostsOf, openPanelCard, openRow, railButton,
-  toolbarHide,
+  BP_SHOTS, bellDot, bpSetup, cardRow, closePanel, fixtureHosts, goRail, hostErrorRecord, hostsOf, openPanelCard, openRow, pickRail,
+  railButton, toolbarHide,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -334,7 +334,7 @@ test.describe('undo lines (N7, N8)', () => {
     expect(Math.abs((await banner(page).boundingBox())!.height - h0)).toBeLessThanOrEqual(1)
   })
 
-  test('BP-N8: an undo line from the notification panel moves with the card to the task panel and still undoes', async ({ page }) => {
+  test('BP-N8: an undo line from the panel\'s System section moves with the card to the task panel and still undoes', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     const card = await openPanelCard(page)
@@ -438,15 +438,28 @@ test.describe('the rail and the bell (N16; N9 moved to BP-R3-N12)', () => {
 })
 
 test.describe('the System pane and panel keyboard (N14, C25; N17 moved to BP-R3-N11)', () => {
-  test('BP-C25: with a feed item, Tab from the card\'s last stop reaches the rail\'s Needs Action (WebKit too)', async ({ page, browserName }) => {
+  test('BP-C25: with a feed item on All (no card in the panel), Tab from Close reaches Needs Action and Tab from All the first feed item; in System, Tab from All enters the card (WebKit too)', async ({ page, browserName }) => {
     const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
     await bpSetup(page, { hosts: fixtureHosts(), feed: [hostErrorRecord('devbox', 1)] })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
-    const card = await openPanelCard(page)
-    await expect(page.locator('.notification-panel .notification-feed-item').first()).toBeVisible({ timeout: 10_000 })
-    await card.getByRole('button', { name: 'Dismiss all' }).focus()
+    await openBell(page)
+    // The task card covers the hosts: the panel opens on All, with only the feed in its section.
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    await expect(panelBanner(page)).toHaveCount(0)
+    const item = page.locator('.notification-panel .notification-feed-item').first()
+    await expect(item).toBeVisible({ timeout: 10_000 })
+    await page.locator('.notification-panel .notification-panel-close').focus()
     await page.keyboard.press(TAB)
     await expect(railButton(page, 'Needs Action')).toBeFocused()
+    await railButton(page, 'All').focus()
+    await page.keyboard.press(TAB)
+    await expect(item).toBeFocused()
+    // System: the same step from All lands on the card's first row (its Retry).
+    await pickRail(page, 'System')
+    await expect(panelBanner(page)).toHaveCount(1)
+    await railButton(page, 'All').focus()
+    await page.keyboard.press(TAB)
+    await expect(cardRow(panelBanner(page), 'keybox').getByTestId('hpb-retry')).toBeFocused()
   })
 
   test('BP-N14: System: host names on one line with the status under them, a warn header, outdated not in warn colour, Disabled as in Settings', async ({ page, request }) => {

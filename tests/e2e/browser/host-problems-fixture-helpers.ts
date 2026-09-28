@@ -81,7 +81,7 @@ export const hostRow = (page: Page, alias: string): Locator => page.locator(`#rh
 export const slotBanner = (page: Page): Locator => page.locator('.main-page-chat [data-testid="attention-banner"]')
 /** The task panel's card (the default layout). */
 export const tasksBanner = (page: Page): Locator => page.locator('.todo-panel [data-testid="attention-banner"][data-mount="tasks"]')
-/** The notification panel's card (any route, while the panel is open). */
+/** The notification panel's card (any route, while the panel shows its System section). */
 export const panelBanner = (page: Page): Locator => page.locator('.notification-panel [data-testid="attention-banner"][data-mount="notifications"]')
 /** The rail's bell (the notification panel's opener and its dot). */
 export const bell = (page: Page): Locator => page.locator('.sidebar-notification-btn')

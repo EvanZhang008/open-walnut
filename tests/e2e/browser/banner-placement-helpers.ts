@@ -1,10 +1,15 @@
 /**
  * Shared helpers for the banner-placement specs (BP-C<n>): the attention card
  * lives in the task panel on Home (data-mount="tasks"), in the notification
- * panel on any route (data-mount="notifications"), and falls back to the slot
- * or the draft column only while the task panel is hidden. Host frames and
- * local health are routed client-side (host-problems-helpers.ts), so no
- * remote host is dialed and nothing reaches a real server beyond the fixture.
+ * panel's System section on any route (data-mount="notifications", the first
+ * block of `.nfc-detail`, above the pane's cards), and falls back to the slot
+ * or the draft column only while the task panel is hidden. The panel owns the
+ * card only while its System section shows: on any other section the in-page
+ * card stays where it is. The bell opens the panel on Needs Action when an ask
+ * waits, else on System when no in-page card covers the problem (/notes, a
+ * hidden task panel), else on All. Host frames and local health are routed
+ * client-side (host-problems-helpers.ts), so no remote host is dialed and
+ * nothing reaches a real server beyond the fixture.
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import { expect, type Locator, type Page } from '@playwright/test'
@@ -42,6 +47,10 @@ export const reserve = (page: Page): Locator => page.locator('.ab-mount-reserve'
 export const toolbarHide = (page: Page): Locator => page.locator('.todo-panel-toolbar .todo-panel-hide')
 export const railButton = (page: Page, label: string): Locator =>
   page.locator('.notification-panel .nfc-rail .nfc-rail-btn', { has: page.locator('.nfc-rail-name', { hasText: new RegExp(`^${label}$`) }) })
+/** The System rail entry's count (git sync, the search index, each problem host, the local notice). */
+export const systemBadge = (page: Page): Locator => railButton(page, 'System').locator('.nfc-rail-badge')
+/** Any attention mount inside the notification panel (only its System section renders one). */
+export const panelMount = (page: Page): Locator => page.locator('.notification-panel .ab-mount')
 export const settingsEntry = (page: Page): Locator => page.getByTestId('sidebar-core-app-settings')
 export const settingsDot = (page: Page): Locator => settingsEntry(page).locator('.sidebar-host-dot')
 export const bellDot = (page: Page): Locator => bell(page).locator('.notification-badge-dot')
@@ -165,9 +174,21 @@ export async function expectTasksCard(page: Page, order: string[] = FIXTURE_ORDE
   await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(order)
 }
 
-/** Open the bell; the card is in the panel, the only one on the page. */
+/** Pick a rail section with a real click and wait until it is the current one. */
+export async function pickRail(page: Page, label: string): Promise<void> {
+  await railButton(page, label).click()
+  await expect(railButton(page, label)).toHaveAttribute('aria-current', 'true')
+}
+
+/**
+ * Open the bell, then the System section with a real click unless the panel
+ * already landed there; the card is in the panel, the only one on the page.
+ */
 export async function openPanelCard(page: Page): Promise<Locator> {
   await openBell(page)
+  const system = railButton(page, 'System')
+  if (await system.getAttribute('aria-current') !== 'true') await system.click()
+  await expect(system).toHaveAttribute('aria-current', 'true')
   await expect(panelBanner(page)).toHaveCount(1)
   await expect(anyBanner(page)).toHaveCount(1)
   return panelBanner(page)

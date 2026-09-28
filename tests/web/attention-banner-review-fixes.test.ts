@@ -175,7 +175,7 @@ describe('placement and owner (task panel first, then the old fallbacks)', () =>
     for (const chat of bools) for (const draft of bools) expect(placementFor(true, chat, draft)).toBe('tasks')
   })
 
-  it('ownerFor: 4 placements x panel open or closed x home or another route', () => {
+  it('ownerFor: 4 placements x the panel on System or not x home or another route', () => {
     const places: HostBannerPlacement[] = ['tasks', 'slot', 'draft', 'none']
     for (const where of places) {
       expect(ownerFor(where, true, '/')).toBe('notifications')

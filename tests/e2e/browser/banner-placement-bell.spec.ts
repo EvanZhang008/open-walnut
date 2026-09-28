@@ -2,8 +2,8 @@
  * Who speaks when no card is on the page (slice spec 3): the rail Settings dot
  * and the bell. The bell's number stays for human decisions (asks); a host or
  * local reason is a dot (a corner dot next to a number), named in its
- * accessible name and title. Also the System rail (4.2) and the sign-in
- * re-check that runs with no card mounted.
+ * accessible name and title. Also the System rail (4.2: it counts each
+ * problem host) and the sign-in re-check that runs with no card mounted.
  * Host frames and local health are routed client-side; BP-C58 uses the
  * server's host fixture (the System pane lists the server's hosts).
  *
@@ -19,7 +19,7 @@ import {
 import { bell, fixtureFile, HEALTHY, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
   BP_SHOTS, askRecord, bellCount, bellDot, bpSetup, closePanel, expectTasksCard, goRail, healthyGitSync, openPanelCard,
-  openRow, railButton, reserve, settingsDot, settingsEntry,
+  openRow, panelMount, pickRail, railButton, reserve, settingsDot, settingsEntry, systemBadge,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -103,14 +103,18 @@ test.describe('local Claude Code: the re-check and the version floor', () => {
     expect(src).not.toMatch(/setInterval\([^)]*checkLocalClaude/)
   })
 
-  test('BP-C50: this machine only outdated: no card anywhere, no bell dot; outdated plus a signed-out host: the host section only', async ({ page, browser }) => {
+  test('BP-C50: this machine only outdated: no card anywhere (System included), no bell dot, no System count; outdated plus a signed-out host: the host section only', async ({ page, browser }) => {
     await bpSetup(page, { hosts: [connected('devbox', 'Dev box')], local: 'outdated' })
     await page.waitForTimeout(1500)
     await expect(anyBanner(page)).toHaveCount(0)
     await expect(bellDot(page)).toHaveCount(0)
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications')
     await openBell(page)
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
     await expect(panelBanner(page)).toHaveCount(0)
+    await pickRail(page, 'System')
+    await expect(panelBanner(page)).toHaveCount(0)
+    await expect(systemBadge(page)).toHaveCount(0)
     const ctx = await browser.newContext()
     const page2 = await ctx.newPage()
     try {
@@ -128,20 +132,25 @@ test.describe('local Claude Code: the re-check and the version floor', () => {
 test.describe('the System rail (server fixture)', () => {
   test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 
-  test('BP-C58: an unreachable host lights the System rail dot with no number; an outdated host alone does not, but is listed', async ({ page, browser, request }) => {
+  test('BP-C58: an unreachable host counts 1 on the System rail, and its card is in System; an outdated host alone counts nothing, but is listed', async ({ page, browser, request }) => {
     await loadFixture(request, fixtureFile({
       devbox: { label: 'Dev box', hostname: 'dev.example.com', phase: 'connected', claude: HEALTHY },
       netbox: { label: 'Net box', hostname: 'net.example.com', phase: 'failed', error: 'ssh: connect to host net.example.com port 22: Network is unreachable' },
     }))
     await isolatePrefs(page)
     await healthyGitSync(page)
+    // This machine ready: the count is the hosts alone.
+    await routeHealth(page)
     await loadApp(page)
+    await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     const system = railButton(page, 'System')
-    await expect(system.locator('.nfc-rail-dot')).toHaveCount(1, { timeout: 20_000 })
-    await expect(system.locator('.nfc-rail-badge')).toHaveCount(0)
-    await system.click()
+    await expect(systemBadge(page)).toHaveText('1', { timeout: 20_000 })
+    await expect(system.locator('.nfc-rail-dot')).toHaveCount(0)
+    await pickRail(page, 'System')
     await expect(page.locator('.notification-panel .notification-card-label', { hasText: /^Remote hosts$/ })).toHaveCount(1)
+    await expect(panelBanner(page).locator('li.hpb-row[data-host="netbox"]')).toBeVisible()
+    await expect(systemBadge(page)).toHaveText('1')
     await loadFixture(request, fixtureFile({
       devbox: { label: 'Dev box', hostname: 'dev.example.com', phase: 'connected', claude: HEALTHY },
       buildbox: { label: 'Build box', hostname: 'build.example.com', phase: 'connected', claude: { version: '2.1.220', auth: 'ok', installMethod: 'other' } },
@@ -151,12 +160,15 @@ test.describe('the System rail (server fixture)', () => {
     try {
       await isolatePrefs(page2)
       await healthyGitSync(page2)
+      await routeHealth(page2)
       await loadApp(page2)
       await openBell(page2)
       const system2 = railButton(page2, 'System')
       await system2.click()
       await expect(page2.locator('.notification-detail-row[data-host="buildbox"]')).toBeVisible({ timeout: 20_000 })
       await expect(system2.locator('.nfc-rail-dot')).toHaveCount(0)
+      await expect(systemBadge(page2)).toHaveCount(0)
+      await expect(panelMount(page2).locator('[data-testid="attention-banner"]')).toHaveCount(0)
       await page2.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c58-system-outdated-only.png` })
     } finally {
       await ctx.close()

@@ -555,6 +555,14 @@ describe('systemIssueCount', () => {
     expect(systemIssueCount({ gitSyncFailing: true })).toBe(1);
     expect(systemIssueCount({ gitSyncFailing: true, indexUnhealthy: true })).toBe(2);
   });
+
+  it('adds the attention card the System pane carries: each problem host and the local Claude Code notice', () => {
+    expect(systemIssueCount({ hostProblems: 3 })).toBe(3);
+    expect(systemIssueCount({ gitSyncFailing: true, hostProblems: 3 })).toBe(4);
+    expect(systemIssueCount({ localClaude: true })).toBe(1);
+    expect(systemIssueCount({ gitSyncFailing: true, indexUnhealthy: true, hostProblems: 2, localClaude: true })).toBe(5);
+    expect(systemIssueCount({ hostProblems: -1 })).toBe(0);
+  });
 });
 
 /**

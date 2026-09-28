@@ -4,9 +4,10 @@
  * Placement is the IN-PAGE position MainPage publishes: the task panel when it
  * shows (the primary mount), else the Ask Walnut slot, else the leftmost draft
  * column, else nowhere. The owner is the one mount that renders the card right
- * now: the notification panel while it is open (any route), else the in-page
- * placement on the home route, else none (MainPage stays mounted, hidden, on
- * every other route, so its placement says nothing there).
+ * now: the notification panel while its System section is showing (any route;
+ * the card lives inside that section, never above the sections), else the
+ * in-page placement on the home route, else none (MainPage stays mounted,
+ * hidden, on every other route, so its placement says nothing there).
  *
  * The rail Settings dot and the bell dot read the PAGE rule only (placement +
  * pathname), never whether the panel is open: the panel is a passing overlay
@@ -25,7 +26,7 @@ export type HostBannerOwner = HostBannerPlacement | 'notifications';
 export type BannerMount = Exclude<HostBannerOwner, 'none'>;
 
 let placement: HostBannerPlacement = 'slot';
-let notificationsOpen = false;
+let notificationsCard = false;
 const listeners = new Set<() => void>();
 const notify = (): void => { for (const l of listeners) l(); };
 
@@ -39,15 +40,19 @@ export function getHostBannerPlacement(): HostBannerPlacement {
   return placement;
 }
 
-/** Synchronous, called in the SAME handler as the Sidebar's setNotifOpen (one commit, never two cards). */
-export function setNotificationsOpen(open: boolean): void {
-  if (open === notificationsOpen) return;
-  notificationsOpen = open;
+/**
+ * The notification panel is open on its System section, which holds the card.
+ * Synchronous: the panel calls it in the same handler as its section change,
+ * and the Sidebar in the same handler as the close (one commit, never two cards).
+ */
+export function setNotificationsCardShown(on: boolean): void {
+  if (on === notificationsCard) return;
+  notificationsCard = on;
   notify();
 }
 
-export function getNotificationsOpen(): boolean {
-  return notificationsOpen;
+export function getNotificationsCardShown(): boolean {
+  return notificationsCard;
 }
 
 function subscribe(cb: () => void): () => void {
@@ -55,15 +60,15 @@ function subscribe(cb: () => void): () => void {
   return () => { listeners.delete(cb); };
 }
 
-/** Placement and panel-open changes (the owner's two store inputs). */
+/** Placement and System-section changes (the owner's two store inputs). */
 export const subscribeHostBannerOwner = subscribe;
 
 export function useHostBannerPlacement(): HostBannerPlacement {
   return useSyncExternalStore(subscribe, getHostBannerPlacement, getHostBannerPlacement);
 }
 
-export function useNotificationsOpen(): boolean {
-  return useSyncExternalStore(subscribe, getNotificationsOpen, getNotificationsOpen);
+export function useNotificationsCardShown(): boolean {
+  return useSyncExternalStore(subscribe, getNotificationsCardShown, getNotificationsCardShown);
 }
 
 // A new host row the card on screen is holding back (the pointer rests where it
@@ -94,16 +99,16 @@ export function placementFor(todoVisible: boolean, chatVisible: boolean, hasDraf
   return todoVisible ? 'tasks' : chatVisible ? 'slot' : hasDraftColumn ? 'draft' : 'none';
 }
 
-/** Which mount renders the card: the open panel, else the in-page placement on Home, else none. */
-export function ownerFor(where: HostBannerPlacement, open: boolean, pathname: string): HostBannerOwner {
-  return open ? 'notifications' : pathname === '/' ? where : 'none';
+/** Which mount renders the card: the panel's System section, else the in-page placement on Home, else none. */
+export function ownerFor(where: HostBannerPlacement, systemShown: boolean, pathname: string): HostBannerOwner {
+  return systemShown ? 'notifications' : pathname === '/' ? where : 'none';
 }
 
 export function useHostBannerOwner(): HostBannerOwner {
   const where = useHostBannerPlacement();
-  const open = useNotificationsOpen();
+  const systemShown = useNotificationsCardShown();
   const { pathname } = useLocation();
-  return ownerFor(where, open, pathname);
+  return ownerFor(where, systemShown, pathname);
 }
 
 /** Settings > Remote hosts (or one host's row there): the user is looking at those rows. */
@@ -198,7 +203,7 @@ export function hostAttentionOf(input: AttentionInput): { on: boolean; wakeAt: n
   return { on: view.rows.some((r) => r.type !== 'ready') || view.more > 0, wakeAt: view.wakeAt };
 }
 
-/** The hosts the model gives a problem row (behind 'and N more' too), sorted: the Errors 'Shown above' line. */
+/** The hosts the model gives a problem row (behind 'and N more' too), sorted: the Errors 'Shown in System' link. */
 export function bannerAliasesOf(input: AttentionInput): string[] {
   const { state } = nextBanner(input);
   return [...new Set(state.order.filter((r) => r.type !== 'ready').flatMap((r) => r.hosts))].sort();
@@ -250,22 +255,33 @@ export function useBannerHostAliases(): ReadonlySet<string> {
 }
 
 /**
- * Any host with a connect failure or a banner readiness problem
+ * Hosts with a connect failure or a banner readiness problem
  * (BANNER_READINESS_KINDS: claude_outdated never counts), dismissals ignored:
- * the System rail dot, which follows what the System pane lists.
+ * the System rail badge, which follows what the System pane lists.
  */
-export function useAnyBannerHostProblem(): boolean {
+export function useBannerHostProblemCount(): number {
   const statuses = useAllHostStatus();
-  return useMemo(() => statuses.some((s) => {
+  return useMemo(() => statuses.filter((s) => {
     const p = hostProblemOf(s, { surface: 'banner' });
     return p?.type === 'connect' || p?.type === 'readiness';
-  }), [statuses]);
+  }).length, [statuses]);
+}
+
+/**
+ * The section the notification panel opens on: Needs Action while a human
+ * decision waits, else System when the bell carries the attention reason (no
+ * card on the page says it, so the user is opening the panel to find it),
+ * else All.
+ */
+export function landingSectionFor(actionCount: number, bellReason: BellReason): 'action' | 'system' | 'all' {
+  if (actionCount > 0) return 'action';
+  return bellReason !== null ? 'system' : 'all';
 }
 
 /** Test hook. */
 export function __resetHostBannerPlacementForTests(): void {
   placement = 'slot';
-  notificationsOpen = false;
+  notificationsCard = false;
   deferredRows = false;
   listeners.clear();
 }

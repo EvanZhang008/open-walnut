@@ -1,7 +1,8 @@
 /**
  * The attention banner's owner store and the dots that speak when no card on
  * the page does (banner placement slice, spec 2.1 + 3; C40, C50, C60):
- *   store      placement and panel-open writes are synchronous and notify
+ *   store      placement and System-section writes are synchronous and notify
+ *   landing    the panel opens on Needs Action, else System for a bell reason, else All
  *   bell       bellDotReason + bellPresentation over every input the bell reads
  *   local      localNoticeShows is the card's own rule; outdated never shows
  *   pane       the remote hosts pane silences the host reason
@@ -9,8 +10,8 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  __resetHostBannerPlacementForTests, bellDotReason, bellPresentation, getHostBannerPlacement, getNotificationsOpen,
-  onRemoteHostsPane, setHostBannerPlacement, setNotificationsOpen, subscribeHostBannerOwner, type BellReason,
+  __resetHostBannerPlacementForTests, bellDotReason, bellPresentation, getHostBannerPlacement, getNotificationsCardShown,
+  landingSectionFor, onRemoteHostsPane, setHostBannerPlacement, setNotificationsCardShown, subscribeHostBannerOwner, type BellReason,
 } from '../../web/src/utils/host-banner-placement'
 import { localNoticeShows } from '../../web/src/utils/local-claude-banner'
 import { attentionDotsOf } from '../../web/src/hooks/useAttentionDots'
@@ -20,23 +21,34 @@ import type { LocalClaudeStatus } from '../../web/src/api/local-claude'
 beforeEach(() => { __resetHostBannerPlacementForTests() })
 
 describe('owner store', () => {
-  it('starts at the slot with the panel closed; writes notify synchronously, repeats do not', () => {
+  it('starts at the slot with no card in the panel; writes notify synchronously, repeats do not', () => {
     expect(getHostBannerPlacement()).toBe('slot')
-    expect(getNotificationsOpen()).toBe(false)
+    expect(getNotificationsCardShown()).toBe(false)
     let calls = 0
     const stop = subscribeHostBannerOwner(() => { calls++ })
     setHostBannerPlacement('tasks')
     expect(calls).toBe(1)
     expect(getHostBannerPlacement()).toBe('tasks')
-    setNotificationsOpen(true)
+    setNotificationsCardShown(true)
     expect(calls).toBe(2)
-    expect(getNotificationsOpen()).toBe(true)
-    setNotificationsOpen(true)
+    expect(getNotificationsCardShown()).toBe(true)
+    setNotificationsCardShown(true)
     setHostBannerPlacement('tasks')
     expect(calls).toBe(2)
     stop()
-    setNotificationsOpen(false)
+    setNotificationsCardShown(false)
     expect(calls).toBe(2)
+  })
+})
+
+describe('landing section', () => {
+  it('Needs Action wins; a bell reason opens System; otherwise All', () => {
+    const reasons: BellReason[] = [null, 'hosts', 'local', 'both']
+    for (const reason of reasons) {
+      expect(landingSectionFor(1, reason)).toBe('action')
+      expect(landingSectionFor(3, reason)).toBe('action')
+      expect(landingSectionFor(0, reason)).toBe(reason === null ? 'all' : 'system')
+    }
   })
 })
 

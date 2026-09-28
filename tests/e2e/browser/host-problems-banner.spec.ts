@@ -32,7 +32,8 @@ import {
   DISMISS_KEY, Hosts, SHOTS, banner, base, connected, connecting, failed, isolatePrefs, loadHome, now, outdated,
   reconnecting, resetServerHostFixture, routeHealth, row, rows, setup, signedOut, slotLayout, storedKeys, type HS,
 } from './host-problems-helpers'
-import { bannerRow, loadApp, loadFixture, openBell, panelBanner, slotBanner, wireHost } from './host-problems-fixture-helpers'
+import { bannerRow, loadApp, loadFixture, panelBanner, slotBanner, wireHost } from './host-problems-fixture-helpers'
+import { openPanelCard } from './banner-placement-helpers'
 
 test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
 
@@ -333,11 +334,12 @@ test.describe('home attention banner: reconnects, size, sync', () => {
     }
   })
 
-  test('a dismissal made in the notification panel is hidden in a second browser too (C92 panel)', async ({ page, browser }) => {
+  test('a dismissal made in the notification panel\'s System section is hidden in a second browser too (C92 panel)', async ({ page, browser }) => {
     await setup(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')], undefined, { serverPrefs: true })
     const synced = page.waitForResponse((r) => r.url().includes('/api/ui-prefs') && r.request().method() === 'PUT'
       && (r.request().postData() ?? '').includes(DISMISS_KEY), { timeout: 10_000 })
-    await openBell(page)
+    // The bell, then System (the card lives there; on Home the bell lands on All while the task card shows).
+    await openPanelCard(page)
     await panelBanner(page).locator('li.hpb-row[data-host="signbox"]').getByRole('button', { name: 'Dismiss Sign box' }).click()
     await synced
     await page.keyboard.press('Escape')
