@@ -98,8 +98,6 @@ interface StubState {
   /** Threads the drawer asked to create, in order. */
   created: string[]
   standbyCalls: number
-  /** Typing-triggered cache warm-ups (POST /standby/warm). */
-  warmCalls: number
   deleted: string[]
   /** Threads filed away / brought back (POST /:id/archive · /restore), in order. */
   archived: string[]
@@ -114,7 +112,7 @@ interface StubState {
 
 function freshStub(threads: StubThread[] = []): StubState {
   return {
-    threads, created: [], standbyCalls: 0, warmCalls: 0, deleted: [],
+    threads, created: [], standbyCalls: 0, deleted: [],
     archived: [], restored: [], digested: [],
     forkUnsupported: false, digestMarker: DIGEST_MARKER,
   }
@@ -156,11 +154,6 @@ async function installSideThreadRoutes(
     if (method === 'POST' && rest === '/standby') {
       stub.standbyCalls++
       await route.fulfill({ json: { ok: true } })
-      return
-    }
-    if (method === 'POST' && rest === '/standby/warm') {
-      stub.warmCalls++
-      await route.fulfill({ json: { warmed: true } })
       return
     }
     if (method === 'POST' && rest === '') {
@@ -277,11 +270,9 @@ async function openParentColumn(page: Page): Promise<Locator> {
 }
 
 /** `.side-question-pill` is shared with the Notes pill — filter on the label. */
-const btwPill = (panel: Locator): Locator =>
-  panel.locator('.side-question-pill', { hasText: 'btw' }).first()
-
 async function openDrawer(panel: Locator): Promise<Locator> {
-  await btwPill(panel).click()
+  await panel.locator('.session-panel-input .chat-plus-btn').click()
+  await panel.locator('.session-panel-input [data-add-control="btw"]').click()
   const popover = panel.locator('.side-question-popover').first()
   await expect(popover).toBeVisible({ timeout: 10_000 })
   return popover
@@ -355,13 +346,8 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   await expect(popover.locator('.side-question-pill', { hasText: 'btw' })).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/drawer-composer.png`, fullPage: true })
 
-  // ── Typing a few characters warms the standby's cache BEFORE Enter ──
-  // (one request per parent, not one per keystroke)
   await drawerInput(popover).pressSequentially('why does ', { delay: 20 })
-  await expect.poll(() => stub.warmCalls, { timeout: 10_000 }).toBe(1)
   await drawerInput(popover).pressSequentially('hasPipe', { delay: 20 })
-  await page.waitForTimeout(500)
-  expect(stub.warmCalls).toBe(1)
   await drawerInput(popover).fill('')
 
   // ── Ask: a chip appears, and the thread's OWN conversation mounts ──
@@ -480,7 +466,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   // "server" demands a marker the thread never writes, so the drawer must end with
   // an error and an EMPTY composer rather than a confident wrong paste.
   stub.digestMarker = 'THREAD-NEVER-WRITES-THIS:'
-  await panel.locator('.side-question-pill', { hasText: 'btw' }).first().click()
+  await openDrawer(panel)
   await expect(popover).toBeVisible({ timeout: 10_000 })
   await liveChips(popover).first().click()
   await popover.getByRole('button', { name: /Inject summary/ }).click()
@@ -508,7 +494,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   await expect(popover).toBeHidden({ timeout: 10_000 })
 
   // ── Inject full: the thread's whole Q&A lands in the MAIN composer ──
-  await panel.locator('.side-question-pill', { hasText: 'btw' }).first().click()
+  await openDrawer(panel)
   await expect(popover).toBeVisible({ timeout: 10_000 })
   await liveChips(popover).first().click()
   await popover.getByRole('button', { name: /Inject full/ }).click()

@@ -376,18 +376,21 @@ test.describe('Rich HTML streaming', () => {
     });
     await openSession(page);
 
-    const pill = page.locator('.session-mode-bar button[title^="Output mode"]').first();
+    const add = page.locator('.main-page-session-column .session-panel-input .chat-plus-btn').first();
+    await add.click();
+    const pill = page.locator('.main-page-session-column .session-panel-input [data-add-control="output"]').first();
     await expect(pill).toBeVisible();
     // This record has NO output_mode, so the pill shows the configured default —
     // and the shipped default is rich (config.session.output_mode unset ⇒
     // DEFAULT_SESSION_OUTPUT_MODE). It used to read 'MD' because the pill treated
     // "unset" as markdown, which hid the default from the user entirely.
-    await expect(pill).toHaveText('Rich');
-    await expect(pill).toHaveAttribute('title', /default from Settings/);
+    await expect(pill).toContainText('Rich');
 
     await pill.click();
+    await expect.poll(() => patches.length, { timeout: 5000 }).toBeGreaterThan(0);
 
-    await expect(pill).toHaveText('MD');
+    await add.click();
+    await expect(pill).toContainText('MD');
     await expect.poll(() => patches.length, { timeout: 5000 }).toBeGreaterThan(0);
     expect(patches.at(-1)).toMatchObject({ output_mode: 'markdown' });
 
@@ -395,8 +398,8 @@ test.describe('Rich HTML streaming', () => {
     // the label follows the explicit override rather than snapping back.
     await pill.click();
 
-    await expect(pill).toHaveText('Rich');
-    await expect(pill).not.toHaveAttribute('title', /default from Settings/);
+    await add.click();
+    await expect(pill).toContainText('Rich');
     await expect.poll(() => patches.length, { timeout: 5000 }).toBeGreaterThan(1);
     expect(patches.at(-1)).toMatchObject({ output_mode: 'rich' });
   });

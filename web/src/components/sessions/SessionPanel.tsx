@@ -70,7 +70,7 @@ import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
 import { ComposerModelPill } from './ComposerModelPill';
-import { ComposerControlsBar, type ComposerControl } from '@/components/chat/ComposerControlsBar';
+import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -642,6 +642,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // composer's text and focus feed the stack's Esc rule and its draft flush.
   const composerTextRef = useRef('');
   const composerWrapRef = useRef<HTMLDivElement>(null);
+  const composerControlsRef = useRef<ComposerControlsBarHandle>(null);
+  const planComposerControlsRef = useRef<ComposerControlsBarHandle>(null);
   const composerProbe = useMemo(() => ({
     focused: () => {
       const el = document.activeElement;
@@ -1476,6 +1478,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         id: 'output',
         name: 'Reply style',
         priority: 3,
+        inAddMenu: true,
         node: (
           <OutputModePill
             sessionId={session.claudeSessionId}
@@ -1488,7 +1491,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         id: 'btw',
         name: 'Side thread',
         priority: 4,
-        anchored: true,
+        inAddMenu: true,
         node: (
           <SideQuestionDrawer
             sessionId={session.claudeSessionId}
@@ -1507,6 +1510,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         id: 'note',
         name: 'Note',
         priority: 5,
+        inAddMenu: true,
         node: (
           <SessionNotesPill
             noteState={noteState}
@@ -1685,8 +1689,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             // Same rule in the plan popup's composer: dictation keeps the passage.
             onDictationInsert={holdDictationSelection}
             plusMenuActions={engineSettingsEntry.plusMenuActions}
+            addMenuControls={{ handleRef: planComposerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
             controlsSlot={session ? (
-              <ComposerControlsBar className="session-mode-bar" controls={composerControls()} />
+              <ComposerControlsBar className="session-mode-bar" controls={composerControls()} handleRef={planComposerControlsRef} />
             ) : undefined}
                           onSend={handleSend}
                           onInterruptSend={handleInterruptSend}
@@ -2249,8 +2254,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             // selection: let the quote pill hold the passage first (holdDictationSelection).
             onDictationInsert={holdDictationSelection}
             controlsSlot={session ? (
-              <ComposerControlsBar className="session-mode-bar" controls={composerControls({ openNonce: modelPickerRequest })} />
+              <ComposerControlsBar className="session-mode-bar" controls={composerControls({ openNonce: modelPickerRequest })} handleRef={composerControlsRef} />
             ) : undefined}
+            addMenuControls={{ handleRef: composerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}
             onSend={handleSend}
             onInterruptSend={handleInterruptSend}
             onStop={handleStopTurn}

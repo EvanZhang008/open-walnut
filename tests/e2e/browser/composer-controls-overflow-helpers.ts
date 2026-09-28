@@ -1,41 +1,17 @@
-/**
- * The session composer's controls row and its "..." overflow menu.
- *
- * Reported (2026-09-19, Mac app screenshot): in a narrow session column the five
- * pills (mode, reply style, btw, note, model) wrapped onto four rows and pushed
- * the composer up the panel. The user picked the overflow shape: keep the
- * most-used controls on one row, put the rest behind one button, and leave a wide
- * column exactly as it is.
- *
- * Scenario matrix (both engines — the Mac app is a WKWebView):
- *  1. wide column: every pill on ONE row, no "..." button (today's look);
- *  2. narrow column: ONE row, the mode pill still there, a "..." button, and the
- *     row is no taller than a single pill;
- *  3. the menu lists the hidden controls, each row naming its control and
- *     carrying the live pill's own state text, and stays inside the viewport;
- *  4. a plain row (reply style) acts on the real control: the pill's own label
- *     flips, which proves the click reached the pill and not a copy of it;
- *  5. an anchored row (model) pins its pill onto the row and opens its picker
- *     against it;
- *  6. Escape and an outside click close the menu;
- *  7. widening the column brings every pill back and removes the button, and
- *     narrowing it again collapses (no oscillation, no stacking at any width);
- *  8. a control whose picker is open is not hidden out from under it;
- *  9. with the fit function bypassed the row still STAYS INSIDE the composer: the
- *     pre-measurement frame stacks, it never paints over the mic/send cluster.
- */
+// Shared fixture and measurements for the composer controls in Chromium and WebKit.
 import { expect, type Locator, type Page } from '@playwright/test';
 import fs from 'node:fs/promises';
 
 export const CTRL_SESSION = 'pw-composer-controls';
 export const CTRL_FILLER = 'pw-composer-controls-filler';
-export const SHOT_DIR = process.env.CTRL_SHOT_DIR ?? '/tmp/composer-controls';
+export const SHOT_DIR = process.env.CTRL_SHOT_DIR ?? '/tmp/composer-plus';
 
-function rows(prefix: string, n: number) {
+function rows(prefix: string, n: number, inputTokens = 90_000) {
   return Array.from({ length: n }, (_, i) => ({
     role: i % 2 === 0 ? 'user' : 'assistant',
     msgId: `${prefix}-m${i}`,
     text: i % 2 === 0 ? `Question ${i}` : `Answer ${i}.`,
+    ...(i === n - 1 && inputTokens > 0 ? { model: 'claude-fable-5-1', usage: { input_tokens: inputTokens } } : {}),
     timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(),
   }));
 }
@@ -44,8 +20,8 @@ function rows(prefix: string, n: number) {
 export interface SettingsWrites { body: Record<string, unknown>[] }
 
 /** One idle session whose composer shows every control. */
-export async function mockControlsSession(page: Page, id: string, writes?: SettingsWrites): Promise<void> {
-  const messages = rows(id, 6);
+export async function mockControlsSession(page: Page, id: string, writes?: SettingsWrites, inputTokens = 90_000): Promise<void> {
+  const messages = rows(id, 6, inputTokens);
   await page.route(`**/api/sessions/${id}/history**`, (route) => route.fulfill({
     json: { messages, total: messages.length, cursor: messages.length, delta: false },
   }));

@@ -1,68 +1,116 @@
-/**
- * The composer controls row's overflow menu in WEBKIT — the engine the report
- * came from (the Mac app is a WKWebView). A subset of the Chromium matrix:
- * the two widths, the menu's labels, and one click through a proxy row.
- * Helpers: composer-controls-overflow-helpers.ts.
- */
 import { test, expect } from '@playwright/test';
 import {
   CTRL_SESSION, CTRL_FILLER, mockControlsSession, openControlsSession,
   overflowBtn, controlOf, rowState, expectSingleRow, shootComposer,
-  expectMenuNamesHidden, CTRL_NAMES, type SettingsWrites,
+  type SettingsWrites,
 } from './composer-controls-overflow-helpers';
+import { openDraft } from './draft-helpers';
 
 test.use({ browserName: 'webkit' });
 
-test('really runs in WebKit', async ({ browserName }) => {
+test('WebKit wide composer leaves full model and Bypass inline while the add menu lists other controls', async ({ page, browserName }) => {
   expect(browserName).toBe('webkit');
-});
-
-test('a wide column keeps every control on one row, with no overflow button', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   const panel = await openControlsSession(page, { narrow: false });
-  expect((await rowState(panel)).visible).toEqual(['mode', 'model', 'output', 'btw', 'note']);
-  await expect(overflowBtn(panel)).toHaveCount(0);
+  expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
   await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeVisible();
-  await expect(controlOf(panel, 'output').locator('.mode-toggle-pill-label')).toHaveText('Rich');
+  await expect(controlOf(panel, 'model').locator('button')).toContainText('Fable');
+  await expect(overflowBtn(panel)).toHaveCount(0);
   await expectSingleRow(panel);
-  await shootComposer(panel, 'wide');
+  await panel.locator('.session-panel-input .chat-plus-btn').click();
+  const menu = panel.locator('.session-panel-input .chat-plus-menu');
+  for (const id of ['output', 'btw', 'note']) await expect(menu.locator(`[data-add-control="${id}"]`)).toBeVisible();
+  await expect(menu.locator('[data-add-control="note"]')).toHaveText('Note');
+  expect(await menu.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe('rgb(255, 255, 255)');
+  await expect.poll(() => menu.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+  await shootComposer(panel, 'wide-add-menu', 420);
 });
 
-test('a narrow column collapses to one row and the menu names the hidden controls', async ({ page }) => {
-  await mockControlsSession(page, CTRL_SESSION);
-  await mockControlsSession(page, CTRL_FILLER);
-  const panel = await openControlsSession(page, { narrow: true });
-  await expect(overflowBtn(panel)).toBeVisible();
-  const state = await rowState(panel);
-  expect(state.visible).toEqual(['mode', 'output']);
-  expect(state.hidden).toEqual(['model', 'btw', 'note']);
-  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeHidden();
-  expect(await controlOf(panel, 'output').locator('button').evaluate((button) => getComputedStyle(button, '::after').content)).toBe('"R"');
-  expect(state.height).toBeLessThanOrEqual(26);
-  await expectSingleRow(panel);
-  await shootComposer(panel, 'narrow');
-
-  await overflowBtn(panel).click();
-  const menu = page.getByTestId('composer-overflow-menu');
-  await expect(menu).toBeVisible();
-  await expect(menu.locator('.composer-overflow-item')).toHaveCount(state.hidden.length);
-  await expectMenuNamesHidden(panel, state.hidden, CTRL_NAMES);
-  const box = await menu.boundingBox();
-  const vp = page.viewportSize()!;
-  expect(box!.x).toBeGreaterThanOrEqual(0);
-  expect(box!.y + box!.height).toBeLessThanOrEqual(vp.height);
-  await shootComposer(panel, 'narrow-menu-open', 260);
-});
-
-test('the condensed reply-style control acts on the real session setting', async ({ page }) => {
+test('WebKit narrow composer shows Bypass and the real percentage, then switches Rich to MD in the add menu', async ({ page }) => {
   const writes: SettingsWrites = { body: [] };
   await mockControlsSession(page, CTRL_SESSION, writes);
   await mockControlsSession(page, CTRL_FILLER);
   const panel = await openControlsSession(page, { narrow: true });
-  const button = controlOf(panel, 'output').locator('button');
-  await expect(button).toHaveAttribute('aria-label', 'Output mode: Rich');
-  await button.click();
-  await expect(button).toHaveAttribute('aria-label', 'Output mode: MD');
-  expect(await button.evaluate((el) => getComputedStyle(el, '::after').content)).toBe('"M"');
-  await expect.poll(() => writes.body.some((b) => b.output_mode === 'markdown')).toBe(true);
+  expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
+  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeHidden();
+  await expect(controlOf(panel, 'model').locator('.session-detail-context-pct')).toContainText('45%');
+  expect(await controlOf(panel, 'model').locator('button').evaluate((el) => getComputedStyle(el).fontSize)).toBe('0px');
+  expect(await controlOf(panel, 'model').locator('.session-detail-context-pct').evaluate((el) => getComputedStyle(el).fontSize)).toBe('11px');
+  await expect(overflowBtn(panel)).toHaveCount(0);
+  await expectSingleRow(panel);
+  await shootComposer(panel, 'narrow');
+  await panel.locator('.session-panel-input .chat-plus-btn').click();
+  const output = panel.locator('.session-panel-input [data-add-control="output"]');
+  await expect(output).toContainText('Rich');
+  const menu = panel.locator('.session-panel-input .chat-plus-menu');
+  await expect.poll(() => menu.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+  const menuBox = await menu.boundingBox();
+  const vp = page.viewportSize()!;
+  expect(menuBox).toBeTruthy();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.y).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(vp.width);
+  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(vp.height);
+  const addBox = await panel.locator('.session-panel-input .chat-plus-btn').boundingBox();
+  expect(Math.abs(menuBox!.x - addBox!.x), JSON.stringify({ menuBox, addBox })).toBeLessThanOrEqual(12);
+  expect(menuBox!.width).toBeLessThan(300);
+  const menuHit = await menu.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    return document.elementFromPoint(rect.left + 80, rect.top + 20)?.closest('.chat-plus-menu') === el;
+  });
+  expect(menuHit, 'another element covers the open add menu').toBe(true);
+  await shootComposer(panel, 'narrow-add-menu', 420);
+  await output.click();
+  await expect.poll(() => writes.body.some((body) => body.output_mode === 'markdown')).toBe(true);
+  await panel.locator('.session-panel-input .chat-plus-btn').click();
+  await expect(output).toContainText('MD');
+});
+
+test('WebKit short viewport keeps the note row reachable in the add menu', async ({ page }) => {
+  await mockControlsSession(page, CTRL_SESSION);
+  const panel = await openControlsSession(page, { narrow: false });
+  await page.setViewportSize({ width: 1200, height: 420 });
+  await panel.locator('.session-panel-input .chat-plus-btn').click();
+  const menu = panel.locator('.session-panel-input .chat-plus-menu');
+  const box = await menu.boundingBox();
+  expect(box).toBeTruthy();
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(420);
+  const note = menu.locator('[data-add-control="note"]');
+  await note.scrollIntoViewIfNeeded();
+  await note.click();
+  await expect(panel.locator('.session-panel-input .session-notes-editor')).toBeVisible();
+});
+
+test('WebKit draft add menu remains aligned, scrollable and dismissible', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 500 });
+  await page.goto('/');
+  const draft = await openDraft(page);
+  const add = draft.locator('.chat-plus-btn');
+  await add.click();
+  const menu = draft.locator('.chat-plus-menu');
+  await expect(menu.getByRole('menuitem', { name: 'Attach image' })).toBeVisible();
+  const box = await menu.boundingBox();
+  const addBox = await add.boundingBox();
+  expect(box).toBeTruthy();
+  expect(Math.abs(box!.x - addBox!.x)).toBeLessThanOrEqual(12);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(500);
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+});
+
+test('WebKit side thread and note open from add menu and stay usable', async ({ page }) => {
+  await mockControlsSession(page, CTRL_SESSION);
+  await mockControlsSession(page, CTRL_FILLER);
+  const panel = await openControlsSession(page, { narrow: true });
+  const add = panel.locator('.session-panel-input .chat-plus-btn');
+  await add.click();
+  await panel.locator('.session-panel-input [data-add-control="btw"]').click();
+  await expect(panel.locator('.session-panel-input .side-question-popover--threads')).toBeVisible();
+  await expect(panel.locator('.session-panel-input .side-question-composer textarea')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await add.click();
+  await panel.locator('.session-panel-input [data-add-control="note"]').click();
+  await expect(panel.locator('.session-panel-input .session-notes-editor')).toBeVisible();
 });

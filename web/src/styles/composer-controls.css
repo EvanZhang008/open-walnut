@@ -31,20 +31,71 @@
   min-width: 0;
 }
 
-.composer-control[data-hidden='true'] {
+.composer-control[data-hidden='true']:not([data-add-menu='true']) {
   display: none;
 }
 
-.composer-controls-bar.is-condensed [data-control-id='mode'] .mode-toggle-pill-shortcut,
-.composer-controls-bar.is-condensed [data-control-id='output'] .mode-toggle-pill-label {
+.composer-control[data-add-menu='true'],
+.composer-control[data-add-menu='true'] > .side-question-root {
+  display: contents;
+}
+
+.composer-control[data-add-menu='true'] > .mode-toggle-pill,
+.composer-control[data-add-menu='true'] > .session-notes-pill,
+.composer-control[data-add-menu='true'] > .side-question-root > .side-question-pill {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.composer-control[data-add-menu='true'] .side-question-popover {
+  pointer-events: auto;
+}
+
+.composer-controls-bar.is-condensed [data-control-id='mode'] .mode-toggle-pill-shortcut {
   display: none;
 }
 
-.composer-controls-bar.is-condensed [data-control-id='output'] .mode-toggle-pill::after {
-  content: attr(data-compact-label);
-  font-family: 'SF Mono', Menlo, monospace;
+.composer-controls-bar.is-condensed [data-control-id='model'] .composer-model-pill {
+  max-width: 50px;
+  padding-inline: 4px;
+}
+
+.composer-controls-bar.is-condensed:has([data-control-id='model'] .session-detail-context-pct)
+  [data-control-id='model'] .composer-model-pill {
+  font-size: 0;
+}
+
+.composer-controls-bar.is-condensed:has([data-control-id='model'] .session-detail-context-pct)
+  [data-control-id='model'] .session-detail-context-pct {
   font-size: 11px;
-  font-weight: 500;
+}
+
+.session-panel-input .chat-plus-menu {
+  background: var(--bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.chat-plus-group > .chat-plus-menu {
+  width: max-content;
+  max-width: min(260px, calc(100vw - 16px));
+  min-width: 180px;
+  left: auto;
+  bottom: auto;
+  overflow-y: auto;
+  height: fit-content;
+}
+
+.chat-plus-menu-control-value {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: 11px;
 }
 
 .composer-overflow-btn {

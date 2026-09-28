@@ -54,30 +54,31 @@ async function editorText(locator: import('@playwright/test').Locator): Promise<
   })
 }
 
-test('empty → pill next to btw; saving a note swaps to the always-visible bar', async ({ page }) => {
+test('empty note opens from add menu; saving swaps to the always-visible bar', async ({ page }) => {
   // Reset the seeded session's note so the test is idempotent across runs
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
 
   const panel = await openSeededSessionOnHome(page)
 
-  // (1) empty note → pill visible next to btw, NO bar
   const pill = panel.locator('.session-notes-pill')
-  await expect(pill).toBeVisible({ timeout: 5000 })
+  await expect(pill).toBeHidden()
   await expect(panel.locator('.session-notes')).toHaveCount(0)
-  const btwPill = panel.locator('.side-question-pill', { hasText: 'btw' })
-  await expect(btwPill).toBeVisible()
-  const pillBox = await pill.boundingBox()
-  const btwBox = await btwPill.boundingBox()
-  expect(Math.abs(pillBox!.y - btwBox!.y)).toBeLessThan(8) // same row as btw
+  const add = panel.locator('.session-panel-input .chat-plus-btn')
+  await add.click()
+  await expect(panel.locator('.session-panel-input [data-add-control="btw"]')).toBeVisible()
+  const noteAction = panel.locator('.session-panel-input [data-add-control="note"]')
+  await expect(noteAction).toBeVisible()
 
-  // (2) click pill → bar appears in edit mode; type a note (autosave after 1s debounce)
-  await pill.click()
+  await noteAction.click()
   const bar = panel.locator('.session-notes')
   await expect(bar).toBeVisible()
   const textarea = bar.locator('.session-notes-textarea')
   await expect(textarea).toBeVisible()
   await textarea.fill('remember: deploy after AREX confirms')
-  await expect(bar.locator('.session-notes-status-saved')).toBeVisible({ timeout: 5000 })
+  await expect.poll(async () => {
+    const response = await page.request.get('/api/sessions/pw-normal-session')
+    return (await response.json()).session?.human_note
+  }).toBe('remember: deploy after AREX confirms')
 
   // (3) note exists → card carries the has-note state; pill disappears
   await expect(bar).toHaveClass(/session-notes--has-note/)
@@ -104,19 +105,24 @@ test('empty → pill next to btw; saving a note swaps to the always-visible bar'
   await expect(bar2.locator('.session-notes-preview')).toHaveText(/remember: deploy after AREX confirms/)
   await expect(panel2.locator('.session-notes-pill')).toHaveCount(0)
 
-  // Clearing the note swaps back: open editor, clear, blur → row unmounts, pill returns
+  // Clearing the note swaps back: open editor, clear, blur → row unmounts, add menu returns
   await bar2.locator('.session-notes-toggle').click()
   await bar2.locator('.session-notes-textarea').fill('')
-  await expect(bar2.locator('.session-notes-status-saved')).toBeVisible({ timeout: 5000 })
+  await expect.poll(async () => {
+    const response = await page.request.get('/api/sessions/pw-normal-session')
+    return (await response.json()).session?.human_note
+  }).toBe('')
   await panel2.locator('.session-panel-body').click()
   await expect(panel2.locator('.session-notes')).toHaveCount(0)
-  await expect(panel2.locator('.session-notes-pill')).toBeVisible()
+  await expect(panel2.locator('.session-notes-pill')).toBeHidden()
+  await panel2.locator('.session-panel-input .chat-plus-btn').click()
+  await expect(panel2.locator('.session-panel-input [data-add-control="note"]')).toBeVisible()
 
   // Cleanup
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
 })
 
-test('homepage session panel: bar when note exists, pill when empty', async ({ page }) => {
+test('homepage session panel: bar when note exists, add menu when empty', async ({ page }) => {
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: 'home panel note' } })
 
   const panel = await openSeededSessionOnHome(page)
@@ -141,15 +147,17 @@ test('homepage session panel: bar when note exists, pill when empty', async ({ p
   const textarea = bar.locator('.session-notes-textarea')
   expect(await editorText(textarea)).toBe('home panel note')
   await textarea.fill('')
-  await expect(bar.locator('.session-notes-status-saved')).toBeVisible({ timeout: 5000 })
+  await expect.poll(async () => {
+    const response = await page.request.get('/api/sessions/pw-normal-session')
+    return (await response.json()).session?.human_note
+  }).toBe('')
   await panel.locator('.session-panel-body').click()
   await expect(panel.locator('.session-notes')).toHaveCount(0)
   const pill = panel.locator('.session-notes-pill')
-  await expect(pill).toBeVisible()
-  const btwPill = panel.locator('.side-question-pill', { hasText: 'btw' })
-  const pillBox = await pill.boundingBox()
-  const btwBox = await btwPill.boundingBox()
-  expect(Math.abs(pillBox!.y - btwBox!.y)).toBeLessThan(8)
+  await expect(pill).toBeHidden()
+  await panel.locator('.session-panel-input .chat-plus-btn').click()
+  await expect(panel.locator('.session-panel-input [data-add-control="note"]')).toBeVisible()
+  await expect(panel.locator('.session-panel-input [data-add-control="btw"]')).toBeVisible()
 
   await page.request.patch('/api/sessions/pw-normal-session', { data: { human_note: '' } })
 })

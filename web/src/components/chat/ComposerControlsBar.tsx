@@ -1,43 +1,12 @@
-/**
- * ComposerControlsBar — the composer's controls row, with an overflow menu.
- *
- * In a wide column this renders exactly what it always did: the pills in a row,
- * left of the mic/send cluster. In a narrow one the row keeps the most-used
- * controls and moves the rest behind a "..." button (the user picked this shape
- * on 2026-09-19 over merging the pills into one status pill, because a wide
- * column then stays byte-for-byte what it is today).
- *
- * The pills NEVER move in the DOM. They stay mounted in this row and are hidden
- * with CSS, and the menu lists PROXY ROWS labelled by each hidden control's own
- * text. Three reasons, each one a rule of this codebase:
- *
- *  - A menu must cap its height and scroll (useMenuPlacement's contract), so a
- *    control that opens its own popover — the model picker, the "btw" drawer —
- *    would be clipped inside it. "Unbounded content never inlines into a menu."
- *  - Those popovers anchor to their trigger. A trigger living inside a menu that
- *    closes takes its popover with it: the side-thread drawer's open state lives
- *    in a store, but its DOM is inside the pill, so unmounting the pill blanks a
- *    drawer the store still calls open.
- *  - Reading each row's label from the live pill (`textContent`) means the menu
- *    cannot drift from the pill: "Rich"/"MD", the model name, the context
- *    percentage and the thread count are whatever the pill currently says.
- *
- * A proxy row activates its control by clicking the real element. For a control
- * that opens an anchored surface (`anchored: true`) the row first pins it onto
- * the row — an anchored popover needs a visible anchor — and closes the menu;
- * the pin is released as soon as the column is wide enough to hold everything.
- *
- * Each row reads "<name> <what the pill currently says>", and drops the second
- * half when the pill only repeats the name (the note pill says "Note").
- */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+// Controls stay mounted so the add menu can activate their existing handlers and popovers.
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { pickVisibleControls, type ControlFitInput } from './composer-controls-fit';
 import '@/styles/composer-controls.css';
 
 export interface ComposerControl {
-  /** Stable id — also the measurement key, so keep it constant across renders. */
+  /** Stable id, also the measurement key. */
   id: string;
   /** What this control IS, for its overflow row ("Reply style", "Model"). A pill
    *  reads by position on the row; a menu row has to name itself. Static on
@@ -49,21 +18,30 @@ export interface ComposerControl {
   /** Clicking this control opens a surface anchored to it, so the overflow row
    *  pins it onto the row before clicking (model picker, side-thread drawer). */
   anchored?: boolean;
+  inAddMenu?: boolean;
   /** Falsy renders nothing and takes no width (a pill the session hides). */
   node: ReactNode;
+}
+
+export interface ComposerControlsBarHandle {
+  activate: (id: string) => void;
+  state: (id: string) => string;
 }
 
 interface ComposerControlsBarProps {
   controls: ComposerControl[];
   /** Extra classes for the row (callers keep `.session-mode-bar` styling). */
   className?: string;
+  /** Lets the add menu activate the mounted control without duplicating its logic. */
+  handleRef?: RefObject<ComposerControlsBarHandle | null>;
 }
 
 /** Gap between pills — mirrors `.session-mode-bar { gap: 4px }`. */
 const ROW_GAP = 4;
 
-export function ComposerControlsBar({ controls, className }: ComposerControlsBarProps) {
+export function ComposerControlsBar({ controls, className, handleRef }: ComposerControlsBarProps) {
   const present = useMemo(() => controls.filter((c) => !!c.node), [controls]);
+  const inline = useMemo(() => present.filter((c) => !c.inAddMenu), [present]);
   const ids = useMemo(() => present.map((c) => c.id).join('|'), [present]);
   const barRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -89,15 +67,18 @@ export function ComposerControlsBar({ controls, className }: ComposerControlsBar
     }
     const spacer = bar.parentElement?.querySelector<HTMLElement>('.chat-input-controls-spacer');
     const available = bar.getBoundingClientRect().width + (spacer?.getBoundingClientRect().width ?? 0);
-    const compact = available < 220;
+    const naturalWidth = inline.reduce((total, control) => total + (widths.current.get(control.id) ?? 64), 0)
+      + Math.max(0, inline.length - 1) * ROW_GAP;
+    const compact = available < Math.max(220, naturalWidth);
     setCondensed((prev) => prev === compact ? prev : compact);
     const buttonWidth = buttonRef.current?.getBoundingClientRect().width || 22;
-    const input: ControlFitInput[] = present.map((c) => ({
+    const input: ControlFitInput[] = inline.map((c) => ({
       id: c.id,
-      priority: pinned === c.id ? 0 : compact && c.id === 'output' ? 2 : compact && c.id === 'model' ? 3 : c.priority,
-      width: compact && c.id === 'output' ? 28
-        : compact && c.id === 'mode' && bar.querySelector('[data-control-id="mode"] .mode-toggle-pill-shortcut')
-          ? Math.max(40, (widths.current.get(c.id) ?? 80) - 28)
+      priority: pinned === c.id ? 0 : c.priority,
+      width: compact && c.id === 'mode' && bar.querySelector('[data-control-id="mode"] .mode-toggle-pill-shortcut')
+        ? Math.max(40, (widths.current.get(c.id) ?? 80) - 28)
+        : compact && c.id === 'model'
+          ? 50
           : widths.current.get(c.id),
     }));
     const next = pickVisibleControls(input, available, { gap: ROW_GAP, overflowButtonWidth: buttonWidth });
@@ -106,7 +87,7 @@ export function ComposerControlsBar({ controls, className }: ComposerControlsBar
     // Everything fits again: drop the pin, so a column that grew goes back to
     // the plain priority order instead of remembering one menu click forever.
     if (next.overflow.length === 0) setPinned((p) => (p === null ? p : null));
-  }, [present, pinned, condensed]);
+  }, [inline, pinned, condensed]);
 
   useLayoutEffect(() => {
     measure();
@@ -149,17 +130,26 @@ export function ComposerControlsBar({ controls, className }: ComposerControlsBar
   const activate = useCallback((control: ComposerControl) => {
     const click = () => {
       const el = barRef.current?.querySelector<HTMLElement>(`[data-control-id="${control.id}"]`);
-      // The control renders its own trigger; click that, not the wrapper, so the
-      // pill's handler runs exactly as it does on the row.
       (el?.querySelector<HTMLElement>('button, [role="button"]') ?? el)?.click();
     };
+    if (control.inAddMenu) { click(); return; }
     if (!control.anchored) { click(); return; }
-    // Pin first: an anchored popover placed against a `display: none` trigger
-    // reads a zero rect and lands in the viewport's corner.
     setPinned(control.id);
     setOpen(false);
     requestAnimationFrame(() => requestAnimationFrame(click));
   }, []);
+
+  useImperativeHandle(handleRef, () => ({
+    activate: (id) => {
+      const control = present.find((c) => c.id === id);
+      if (control) activate(control);
+    },
+    state: (id) => {
+      const button = barRef.current?.querySelector<HTMLElement>(`[data-control-id="${id}"] button`);
+      const ariaLabel = button?.getAttribute('aria-label');
+      return id === 'output' ? ariaLabel?.replace(/^Output mode: /, '') ?? '' : ariaLabel ?? button?.textContent?.trim() ?? '';
+    },
+  }), [present, activate]);
 
   const hidden = new Set(overflow);
   return (
@@ -174,7 +164,8 @@ export function ComposerControlsBar({ controls, className }: ComposerControlsBar
             key={c.id}
             className="composer-control"
             data-control-id={c.id}
-            data-hidden={hidden.has(c.id) ? 'true' : 'false'}
+            data-hidden={hidden.has(c.id) || c.inAddMenu ? 'true' : 'false'}
+            data-add-menu={c.inAddMenu ? 'true' : undefined}
           >
             {c.node}
           </span>

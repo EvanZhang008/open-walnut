@@ -60,6 +60,7 @@ let sharedDefault: SessionOutputMode = DEFAULT_SESSION_OUTPUT_MODE;
 let loaded = false;
 let inflight: Promise<void> | null = null;
 const subscribers = new Set<(mode: SessionOutputMode) => void>();
+const pendingWrites = new Map<string, { tail: Promise<void>; confirmed: SessionOutputMode; sequence: number }>();
 
 function loadSharedDefault(force = false): Promise<void> {
   if (inflight) return inflight;
@@ -103,9 +104,20 @@ export function OutputModePill({
   const toggle = () => {
     onOptimistic(next);
     if (pending || !sessionId) return;
-    updateSession(sessionId, { output_mode: next }).catch((err: Error) => {
-      onOptimistic(current); // revert
+    const previous = pendingWrites.get(sessionId);
+    const entry = previous ?? { tail: Promise.resolve(), confirmed: current, sequence: 0 };
+    const sequence = ++entry.sequence;
+    pendingWrites.set(sessionId, entry);
+    const write = () => updateSession(sessionId, { output_mode: next }).then(() => {
+      entry.confirmed = next;
+      if (entry.sequence === sequence) onOptimistic(next);
+    }).catch((err: Error) => {
+      if (entry.sequence === sequence) onOptimistic(entry.confirmed);
       log.warn('session', 'output mode toggle failed', { sessionId, next, error: err.message });
+    });
+    entry.tail = previous ? previous.tail.then(write) : write();
+    void entry.tail.finally(() => {
+      if (pendingWrites.get(sessionId) === entry && entry.sequence === sequence) pendingWrites.delete(sessionId);
     });
   };
 

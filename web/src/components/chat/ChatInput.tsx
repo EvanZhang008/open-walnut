@@ -1,4 +1,5 @@
-import { useState, useRef, useCallback, useEffect, type KeyboardEvent, type DragEvent, type ClipboardEvent, useLayoutEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, type KeyboardEvent, type DragEvent, type ClipboardEvent, type RefObject, useLayoutEffect } from 'react';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { searchCommands, getCommand } from '@/commands/index';
 import type { SlashCommand } from '@/commands/types';
 import type { ImageAttachment } from '@/api/chat';
@@ -23,6 +24,7 @@ import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-
 import { PlusMenuActionRows } from './PlusMenuActionRows';
 import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
 import { withLeadingCommand } from './leading-command';
+import type { ComposerControlsBarHandle } from './ComposerControlsBar';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_IMAGES = 5;
@@ -145,6 +147,11 @@ interface ChatInputProps {
   /** Extra controls rendered in the card's bottom row, between the "+" and the
    *  mic/send cluster (e.g. the session's Bypass / btw / Note text buttons). */
   controlsSlot?: React.ReactNode;
+  /** Mounted session controls that the add menu activates without copying state. */
+  addMenuControls?: {
+    handleRef: RefObject<ComposerControlsBarHandle | null>;
+    ids: string[];
+  };
   /** READ-ONLY mirror of the composed text, for `controlsSlot` controls that need
    *  to react to it (e.g. enabling a "save as task" button once something is typed).
    *  This does NOT make the input controlled — it only reports. Fired from an effect
@@ -192,7 +199,7 @@ interface ChatInputProps {
   plusMenuActions?: PlusMenuAction[];
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, onValueChange, plusMenuToggles, plusMenuActions }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -248,11 +255,15 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const [plusOpen, setPlusOpen] = useState(false);
   const [sendMenuOpen, setSendMenuOpen] = useState(false);
   const plusGroupRef = useRef<HTMLDivElement>(null);
-  // The "+" button itself: handed to a caller-defined action as its anchor.
   const plusBtnRef = useRef<HTMLButtonElement>(null);
+  const plusMenuRef = useRef<HTMLDivElement>(null);
+  const plusPlacement = useMenuPlacement(plusOpen, plusBtnRef, plusMenuRef, {
+    align: 'start', preferSide: 'up', edgeOverflow: 'clamp', minHeight: 120,
+    onAnchorLost: () => setPlusOpen(false),
+  });
   const sendGroupRef = useRef<HTMLDivElement>(null);
   // The "+" button promises only an attachment until the caller adds rows.
-  const hasCallerRows = !!plusMenuActions?.length || !!plusMenuToggles?.length;
+  const hasCallerRows = !!plusMenuActions?.length || !!plusMenuToggles?.length || !!addMenuControls?.ids.length;
   const plusLabel = plusButtonLabel(hasCallerRows);
 
   // Draft persistence: debounce save to localStorage
@@ -1461,7 +1472,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             </svg>
           </button>
           {plusOpen && (
-            <div className="chat-plus-menu" role="menu">
+            <div ref={plusMenuRef} className="chat-plus-menu" role="menu" style={menuPlacementStyle(plusPlacement)}>
               <button
                 className="chat-plus-menu-item"
                 onClick={handleAttachClick}
@@ -1557,6 +1568,30 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                   action, plusBtnRef.current, () => setPlusOpen(false), plusBtnRef.current?.closest<HTMLElement>('.chat-input-box'),
                 )}
               />
+              {!!addMenuControls?.ids.length && (
+                <>
+                  <div className="chat-plus-menu-divider" role="separator" />
+                  {addMenuControls.ids.map((id) => {
+                    const label = addMenuControls.handleRef.current?.state(id) ?? '';
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        className="chat-plus-menu-item"
+                        role="menuitem"
+                        data-add-control={id}
+                        onClick={() => {
+                          setPlusOpen(false);
+                          addMenuControls.handleRef.current?.activate(id);
+                        }}
+                      >
+                        <span>{id === 'output' ? 'Reply style' : id === 'btw' ? 'Side thread' : 'Note'}</span>
+                        {label && (id !== 'note' || label !== 'Note') && <span className="chat-plus-menu-control-value">{label}</span>}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
               {/* On/off rows. `menuitemcheckbox` + aria-checked is the role a
                   toggle has in a menu; a native checkbox is banned here (its
                   macOS popup swallows pointerup — see web/src/AGENTS.md). The
