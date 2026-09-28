@@ -31,9 +31,10 @@ breaking changes).
   after a daemon restart there too. They still run on this machine only.
 - **A page reached through a port forward to another local port is this machine.** Behind
   `ssh -L 8080:localhost:3456`, or any forward that changes the port, the browser's `Origin` names
-  the forwarded port rather than the server's, so 0.5.0 refused every API call and the WebSocket
-  with `403`. An `Origin` that matches the `Host` the browser addressed now counts as the server's
-  own. A page from any other origin is still refused.
+  the forwarded port rather than the server's, so 0.5.0 answered every write and the WebSocket with
+  `403`: the page loaded and listed your tasks, but completing one silently did nothing, and
+  nothing updated live. An `Origin` that matches the `Host` the browser addressed now counts as the
+  server's own. A page from any other origin is still refused.
 - **On Linux, an SSH login refused because a certificate expired is reported as that.** 0.5.0 ran
   `ssh-keygen -f /dev/stdin`, which fails with `ENXIO` on Linux when stdin is a socket (how Node
   hands a child its input), so the check that tells an expired certificate from a missing agent
