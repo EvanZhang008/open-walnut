@@ -21,8 +21,8 @@ const { peek } = vi.hoisted(() => ({ peek: vi.fn<() => WorkingDirsResult | null>
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: peek }));
 
 const {
-  applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick, folderClaim, suggestDiff, restoreMetaAfterWalnut,
-  followProjectRegistryChange,
+  applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick, suggestDiff, restoreMetaAfterWalnut,
+  followProjectRegistryChange, refreshFolderProject,
 } = await import('@/components/sessions/draft-column');
 type DraftColumn = import('@/components/sessions/draft-column').DraftColumn;
 
@@ -371,109 +371,126 @@ describe('clearAiFields — a user edit drops the badge, not the authority', () 
 
 describe('projectForFolderPick — a folder is a project unless somebody said otherwise', () => {
   /** Registry lookup: only /home/walnut is declared (by "Walnut"). Exact-match on
-   *  a slash-stripped path, mirroring MainPage's projectsForDir. */
-  const registry = (cwd: string) => (cwd === '/home/walnut' ? ['Walnut'] : []);
+   *  a slash-stripped path, mirroring MainPage's projectForDir. */
+  const registry = (cwd: string) => (cwd === '/home/walnut' ? 'Walnut' : '');
+  /** Project names that exist, case-insensitively (the registry's isKnownProject). */
+  const takenOf = (...names: string[]) => (name: string) => names.some((n) => n.toLowerCase() === name.toLowerCase());
+  const none = takenOf();
+  const pick = (d: Parameters<typeof projectForFolderPick>[0], cwd: string, host: string | null = null, taken = none) =>
+    projectForFolderPick(d, cwd, host, registry, taken);
 
   it('a declared folder resolves to its registry owner, over any earlier value', () => {
-    expect(projectForFolderPick(draft(), '/home/walnut', registry)).toBe('Walnut');
+    expect(pick(draft(), '/home/walnut')).toBe('Walnut');
     // Trailing slashes are normalized before the registry lookup.
-    expect(projectForFolderPick(draft(), '/home/walnut//', registry)).toBe('Walnut');
+    expect(pick(draft(), '/home/walnut//')).toBe('Walnut');
     // The mapping is user-configured fact — it outranks even an explicit pick.
     const userPicked = draft({ project: 'Other', projectSource: 'user' });
-    expect(projectForFolderPick(userPicked, '/home/walnut', registry)).toBe('Walnut');
+    expect(pick(userPicked, '/home/walnut')).toBe('Walnut');
   });
 
-  it('a folder INSIDE a declared checkout resolves to that project, not a junk basename', () => {
-    // Picking repo/web inside the checkout must not mint a "web" project.
-    expect(projectForFolderPick(draft(), '/home/walnut/web/src', registry)).toBe('Walnut');
+  it("a folder INSIDE a declared folder is its own new project, never the parent's", () => {
+    // 2026-09-28: a team folder inside a shared checkout landed in the checkout's project.
+    expect(pick(draft(), '/home/walnut/web/src')).toBe('src');
+    expect(pick(draft(), '/home/walnut/teams/marina')).toBe('marina');
   });
 
   it('re-picking the folder of the CURRENT project still returns it — the caller must latch ownership', () => {
     // Same value, but the source may be 'ai': returning null would leave the AI
     // free to move the project off a folder the user just explicitly picked.
     const aiSame = draft({ project: 'Walnut', projectSource: 'ai' });
-    expect(projectForFolderPick(aiSame, '/home/walnut', registry)).toBe('Walnut');
+    expect(pick(aiSame, '/home/walnut')).toBe('Walnut');
   });
 
   it('an undeclared folder defaults to its basename (the project the launch creates)', () => {
-    expect(projectForFolderPick(draft(), '/repos/tidepool', registry)).toBe('tidepool');
+    expect(pick(draft(), '/repos/tidepool')).toBe('tidepool');
     // Trailing slashes don't leak into the name.
-    expect(projectForFolderPick(draft(), '/repos/tidepool///', registry)).toBe('tidepool');
+    expect(pick(draft(), '/repos/tidepool///')).toBe('tidepool');
+  });
+
+  it('a name another project already has grows: parent folder, then host, then a number', () => {
+    // Taken by any project, whatever its case and whether or not it has a folder.
+    expect(pick(draft(), '/repos/acme/tidepool', null, takenOf('Tidepool'))).toBe('acme-tidepool');
+    // The host joins only for a remote folder, after the parent.
+    expect(pick(draft(), '/repos/acme/tidepool', 'devbox', takenOf('tidepool', 'acme-tidepool'))).toBe('acme-tidepool (devbox)');
+    // Still taken → a number on the longest form.
+    expect(pick(draft(), '/repos/acme/tidepool', 'devbox', takenOf('tidepool', 'acme-tidepool', 'acme-tidepool (devbox)')))
+      .toBe('acme-tidepool (devbox) 2');
+    expect(pick(draft(), '/repos/acme/tidepool', null, takenOf('tidepool', 'acme-tidepool', 'acme-tidepool 2')))
+      .toBe('acme-tidepool 3');
+    // A local folder never carries a host, including the local sentinel.
+    expect(pick(draft(), '/repos/acme/tidepool', '__local__', takenOf('tidepool', 'acme-tidepool'))).toBe('acme-tidepool 2');
+    // A folder at the root has no parent to add.
+    expect(pick(draft(), '/tidepool', null, takenOf('tidepool'))).toBe('tidepool 2');
   });
 
   it('the basename DEFAULT never overwrites an explicit user/seed project — including Inbox', () => {
-    expect(projectForFolderPick(draft({ project: 'Chosen', projectSource: 'user' }), '/repos/x', registry)).toBeNull();
-    expect(projectForFolderPick(draft({ project: 'Seeded', projectSource: 'seed' }), '/repos/x', registry)).toBeNull();
+    expect(pick(draft({ project: 'Chosen', projectSource: 'user' }), '/repos/x')).toBeNull();
+    expect(pick(draft({ project: 'Seeded', projectSource: 'seed' }), '/repos/x')).toBeNull();
     // Explicit "Inbox" pick ('' with source 'user') is a choice too.
-    expect(projectForFolderPick(draft({ project: '', projectSource: 'user' }), '/repos/x', registry)).toBeNull();
+    expect(pick(draft({ project: '', projectSource: 'user' }), '/repos/x')).toBeNull();
   });
 
   it('the basename default DOES replace an AI guess and an earlier folder derivation', () => {
-    expect(projectForFolderPick(draft({ project: 'AiGuess', projectSource: 'ai' }), '/repos/x', registry)).toBe('x');
+    expect(pick(draft({ project: 'AiGuess', projectSource: 'ai' }), '/repos/x')).toBe('x');
     // Second folder pick re-derives: the previous 'folder' value follows the new folder.
-    expect(projectForFolderPick(draft({ project: 'x', projectSource: 'folder' }), '/repos/y', registry)).toBe('y');
+    expect(pick(draft({ project: 'x', projectSource: 'folder' }), '/repos/y')).toBe('y');
   });
 
   it('bound and fork drafts are never reseeded — their task already has a project', () => {
-    expect(projectForFolderPick(draft({ taskId: 't1' }), '/repos/x', registry)).toBeNull();
-    expect(projectForFolderPick(draft({ forkOf: { sessionId: 's1' } }), '/repos/x', registry)).toBeNull();
+    expect(pick(draft({ taskId: 't1' }), '/repos/x')).toBeNull();
+    expect(pick(draft({ forkOf: { sessionId: 's1' } }), '/repos/x')).toBeNull();
   });
 
   it("never derives a name the server's registry gate would reject", () => {
     // Leading '.' (hidden dirs), '..' runs, backslashes: each would 400 the
     // launch AFTER the draft is gone — better to leave the project alone.
-    expect(projectForFolderPick(draft(), '/home/.claude', registry)).toBeNull();
-    expect(projectForFolderPick(draft(), '/tags/v1..v2', registry)).toBeNull();
-    expect(projectForFolderPick(draft(), '/weird/back\\slash', registry)).toBeNull();
+    expect(pick(draft(), '/home/.claude')).toBeNull();
+    expect(pick(draft(), '/tags/v1..v2')).toBeNull();
+    expect(pick(draft(), '/weird/back\\slash')).toBeNull();
+    // A dot-folder parent is skipped rather than blocking the name.
+    expect(pick(draft(), '/home/.config/tidepool', null, takenOf('tidepool'))).toBe('tidepool 2');
   });
 
   it('no-ops on an empty cwd and the filesystem root', () => {
-    expect(projectForFolderPick(draft(), '', registry)).toBeNull();
-    expect(projectForFolderPick(draft(), '/', registry)).toBeNull();
+    expect(pick(draft(), '')).toBeNull();
+    expect(pick(draft(), '/')).toBeNull();
   });
 });
 
-describe('folderClaim — which project a folder names, and when it cannot say', () => {
-  /** A shared checkout two projects declare, one team folder inside it that a
-   *  third project owns, and a solo repo (mirrors the 2026-09-28 registry). */
-  const DECLARED: Record<string, readonly string[]> = {
-    '/work/hub/context': ['Context Agent', 'Hub Review'],
-    '/work/hub/context/teams/marina': ['Marina Team'],
-    '/work/solo': ['Solo'],
-    '/work': ['Everything'],
-  };
-  const lookup = (cwd: string) => DECLARED[cwd] ?? [];
+describe('refreshFolderProject — a folder-set pill follows the registry', () => {
+  const owns = (map: Record<string, string>) => (cwd: string) => map[cwd] ?? '';
+  const takenOf = (...names: string[]) => (name: string) => names.some((n) => n.toLowerCase() === name.toLowerCase());
+  const folderDraft = (over: Partial<DraftColumn> = {}) =>
+    draft({ cwd: '/b/reef/tidepool', project: 'tidepool', projectSource: 'folder', ...over });
 
-  it('names the folder itself as the owner when it declares one project', () => {
-    expect(folderClaim('/work/solo', lookup)).toEqual({ kind: 'owned', project: 'Solo', folder: '/work/solo', inherited: false });
-    expect(folderClaim('/work/solo///', lookup)).toMatchObject({ kind: 'owned', inherited: false });
+  it('grows the name once another folder took it', () => {
+    const d = folderDraft();
+    const next = refreshFolderProject(d, owns({ '/a/acme/tidepool': 'tidepool' }), takenOf('tidepool'));
+    expect(next.project).toBe('reef-tidepool');
+    expect(next.projectSource).toBe('folder');
   });
 
-  it('a subfolder inherits the nearest single owner, and says so', () => {
-    expect(folderClaim('/work/solo/web/src', lookup)).toEqual({ kind: 'owned', project: 'Solo', folder: '/work/solo', inherited: true });
-    // Nearest wins over a farther owner.
-    expect(folderClaim('/work/hub/context/teams/marina/pkg', lookup)).toMatchObject({ project: 'Marina Team', inherited: true });
+  it('adopts a project that now declares the folder', () => {
+    const next = refreshFolderProject(folderDraft(), owns({ '/b/reef/tidepool': 'Reef Pool' }), takenOf('Reef Pool'));
+    expect(next.project).toBe('Reef Pool');
   });
 
-  it('two projects on the nearest folder is ambiguous, and the walk stops there', () => {
-    const at = folderClaim('/work/hub/context', lookup);
-    expect(at).toEqual({ kind: 'ambiguous', projects: ['Context Agent', 'Hub Review'], folder: '/work/hub/context' });
-    // The incident: a team folder with no owner of its own under the shared
-    // checkout. "Everything" at /work is farther than the conflict, not an answer.
-    expect(folderClaim('/work/hub/context/teams/tidepool', lookup)).toMatchObject({ kind: 'ambiguous', folder: '/work/hub/context' });
+  it('returns the same row when nothing moved, or when the folder did not set the project', () => {
+    const d = folderDraft();
+    expect(refreshFolderProject(d, owns({}), takenOf())).toBe(d);
+    for (const projectSource of ['user', 'seed', 'ai'] as const) {
+      const other = folderDraft({ projectSource });
+      expect(refreshFolderProject(other, owns({}), takenOf('tidepool'))).toBe(other);
+    }
+    const bound = folderDraft({ taskId: 't1' });
+    expect(refreshFolderProject(bound, owns({}), takenOf('tidepool'))).toBe(bound);
   });
 
-  it('nothing declared anywhere up the path is none', () => {
-    expect(folderClaim('/elsewhere/repo', lookup)).toEqual({ kind: 'none' });
-    expect(folderClaim('', lookup)).toEqual({ kind: 'none' });
-  });
-
-  it('projectForFolderPick: an ambiguous folder sets no project, not even the basename', () => {
-    expect(projectForFolderPick(draft(), '/work/hub/context/teams/tidepool', lookup)).toBeNull();
-    expect(projectForFolderPick(draft({ project: 'Context Agent', projectSource: 'folder' }), '/work/hub/context', lookup)).toBeNull();
-    // A single owner still wins as before, inherited or not.
-    expect(projectForFolderPick(draft(), '/work/hub/context/teams/marina', lookup)).toBe('Marina Team');
-    expect(projectForFolderPick(draft(), '/work/solo/web', lookup)).toBe('Solo');
+  it('a folder that can no longer name a project goes back to the Inbox', () => {
+    const d = folderDraft({ cwd: '/home/.claude', project: 'old' });
+    const next = refreshFolderProject(d, owns({}), takenOf());
+    expect(next.project).toBe('');
+    expect(next.projectSource).toBeUndefined();
   });
 });
 

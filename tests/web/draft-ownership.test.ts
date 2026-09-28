@@ -346,14 +346,15 @@ describe("returnFieldToWalnut: \"Use Walnut's pick\"", () => {
 
 describe('applyDraftPathPick: the picker footer rebases per field', () => {
   const path = { cwd: '/work/acme', host: null };
-  const none = () => [];
+  const none = () => '';
+  const free = () => false;
 
   it('a field changed in the footer becomes the user\'s; an unchanged one keeps the CURRENT row value', () => {
     const opened = draft().meta;
     // A parse landed while the picker was open: the row now has an AI due.
     const row = applyDraftParse(draft(), { due_date: '2026-08-14', legs: OK }, noDefaults);
     const returned = { ...opened, pinTier: 'backlog' };
-    const out = own.applyDraftPathPick(row, path, returned, opened, none);
+    const out = own.applyDraftPathPick(row, path, returned, opened, none, free);
     expect(out.meta.pinTier).toBe('backlog');
     expect(out.fieldOwner).toEqual({ pinTier: 'user' });
     expect(out.meta.dueDate).toBe('2026-08-14');
@@ -366,7 +367,7 @@ describe('applyDraftPathPick: the picker footer rebases per field', () => {
   it('a changed End takes over start and end together', () => {
     const row = applyDraftParse(draft(), { start_date: '2026-08-14T15:00', end_date: '2026-08-14T17:00' }, noDefaults);
     const opened = row.meta;
-    const out = own.applyDraftPathPick(row, path, { ...opened, endDate: '2026-08-14T18:00' }, opened, none);
+    const out = own.applyDraftPathPick(row, path, { ...opened, endDate: '2026-08-14T18:00' }, opened, none, free);
     expect(out.meta.startDate).toBe('2026-08-14T15:00');
     expect(out.meta.endDate).toBe('2026-08-14T18:00');
     expect(out.fieldOwner).toEqual({ startDate: 'user' });
@@ -379,7 +380,7 @@ describe('applyDraftPathPick: the picker footer rebases per field', () => {
   it('C57: a quick folder chip (no openedMeta) takes only model/engine; the AI tier and ✦ survive', () => {
     const stale = draft().meta;   // render-time snapshot, from before the parse landed
     const row = applyDraftParse(draft(), { pinTier: 'satellite', due_date: '2026-08-14', legs: OK }, noDefaults);
-    const out = own.applyDraftPathPick(row, path, { ...stale, model: 'sonnet' }, undefined, none);
+    const out = own.applyDraftPathPick(row, path, { ...stale, model: 'sonnet' }, undefined, none, free);
     expect(out.meta.pinTier).toBe('satellite');
     expect(out.meta.model).toBe('sonnet');
     expect(aiOf(out)).toEqual(['dueDate', 'pinTier']);
@@ -390,21 +391,21 @@ describe('applyDraftPathPick: the picker footer rebases per field', () => {
 
   it('the folder derives the project and drops the AI folder/project ✦', () => {
     const row = applyDraftParse(draft(), { project: 'Marina' }, () => ({ cwd: '/work/marina', host: null }));
-    const out = own.applyDraftPathPick(row, path, row.meta, undefined, none);
+    const out = own.applyDraftPathPick(row, path, row.meta, undefined, none, free);
     expect(out.project).toBe('acme');
     expect(out.projectSource).toBe('folder');
     expect(aiOf(out)).toEqual([]);
   });
 
   it("the previous folder's project does not follow into a folder that has none", () => {
-    const first = own.applyDraftPathPick(draft(), path, draft().meta, undefined, none);
+    const first = own.applyDraftPathPick(draft(), path, draft().meta, undefined, none, free);
     expect(first.project).toBe('acme');
-    const dot = own.applyDraftPathPick(first, { cwd: '/work/.dotted', host: null }, first.meta, undefined, none);
+    const dot = own.applyDraftPathPick(first, { cwd: '/work/.dotted', host: null }, first.meta, undefined, none, free);
     expect(dot.project).toBe('');
     expect(dot.projectSource).toBeUndefined();
     // A pick the user made stays put.
     const mine = { ...first, project: 'Marina', projectSource: 'user' as const };
-    expect(own.applyDraftPathPick(mine, { cwd: '/work/.dotted', host: null }, mine.meta, undefined, none).project).toBe('Marina');
+    expect(own.applyDraftPathPick(mine, { cwd: '/work/.dotted', host: null }, mine.meta, undefined, none, free).project).toBe('Marina');
   });
 });
 

@@ -341,43 +341,52 @@ function lastUsedMs(d: WorkingDirEntry): number {
  *  (`useProjectRegistry().projectDefaults`). */
 export type ProjectDefaultLookup = (project: string) => { cwd: string; host: string | null } | undefined;
 
+const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 /** Mirror of the server's project-name gate (task-manager's
- *  assertValidProjectName) for the parts a folder BASENAME can violate: leading
- *  '.', a '..' run, a backslash, NUL. Deriving a name the launch would 400 on
- *  turns Start into a dead end (the draft is already gone by then), so an
- *  underivable folder simply doesn't seed a project. */
-function isDerivableProjectName(name: string): boolean {
-  return !!name && !name.startsWith('.') && !name.includes('..')
-    && !name.includes('\\') && !name.includes('\0');
+ *  assertValidProjectName), on the trimmed name: empty, more than 200
+ *  characters, a reserved object key, leading '.', a '..' run, a slash or
+ *  backslash, NUL. Deriving a name the launch would 400 on turns Start into a
+ *  dead end (the draft is already gone by then), so an underivable folder
+ *  simply doesn't seed a project. */
+function isDerivableProjectName(raw: string): boolean {
+  const name = raw.trim();
+  return !!name && name.length <= 200 && !RESERVED_OBJECT_KEYS.has(name.toLowerCase())
+    && !name.startsWith('.') && !name.includes('..')
+    && !name.includes('/') && !name.includes('\\') && !name.includes('\0');
 }
 
-/** Every project declaring exactly this folder as its `default_cwd`
- *  (`useProjectRegistry().projectsByCwd`, slash-stripped key). */
-export type ProjectsForDir = (cwd: string) => readonly string[];
-
 /**
- * What the registry says about a folder, from the NEAREST declared folder up:
- *  · 'owned': exactly one project declares it. `inherited` when that is a
- *    parent of the picked folder rather than the folder itself.
- *  · 'ambiguous': two or more projects declare the same nearest folder, so the
- *    folder cannot say which. The walk stops there: a farther owner is not a
- *    better answer than the conflict right above the pick.
- *  · 'none': nothing declares it or any parent.
+ * The name a folder's NEW project gets: the folder's name, and when another
+ * project already has it, the parent folder's name in front, then the host
+ * after it (remote folders only), then a number. Each step keeps the previous
+ * one: `marina` → `acme-marina` → `acme-marina (devbox)` → `acme-marina (devbox) 2`.
+ * Twin of the server's folderProjectName (src/core/sessions/folder-project.ts),
+ * which makes the final call at launch; tests/web/folder-project-parity.test.ts
+ * holds the two together.
  */
-export type FolderClaim =
-  | { kind: 'owned'; project: string; folder: string; inherited: boolean }
-  | { kind: 'ambiguous'; projects: readonly string[]; folder: string }
-  | { kind: 'none' };
-
-export function folderClaim(cwd: string, projectsForDir: ProjectsForDir): FolderClaim {
-  const clean = cwd.replace(/\/+$/, '');
-  // Nearest declared folder first: /a/b/c, /a/b, /a.
-  for (let p = clean; p && p !== '/'; p = p.slice(0, p.lastIndexOf('/')) || '/') {
-    const owners = projectsForDir(p);
-    if (owners.length === 1) return { kind: 'owned', project: owners[0], folder: p, inherited: p !== clean };
-    if (owners.length > 1) return { kind: 'ambiguous', projects: owners, folder: p };
+export function newProjectNameForFolder(
+  cwd: string,
+  host: string | null,
+  isTaken: (name: string) => boolean,
+): string | null {
+  const parts = cwd.replace(/\/+$/, '').split('/').filter(Boolean);
+  // Trimmed: the registry trims names, so ' kelp ' would land on 'kelp'.
+  const base = (parts[parts.length - 1] ?? '').trim();
+  if (!isDerivableProjectName(base)) return null;
+  const candidates = [base];
+  const parent = parts[parts.length - 2]?.trim();
+  if (parent && isDerivableProjectName(`${parent}-${base}`)) candidates.push(`${parent}-${base}`);
+  const remote = host && host !== '__local__' ? host : '';
+  const withHost = `${candidates[candidates.length - 1]} (${remote})`;
+  if (remote && isDerivableProjectName(withHost)) candidates.push(withHost);
+  for (const name of candidates) if (!isTaken(name)) return name;
+  const last = candidates[candidates.length - 1];
+  for (let n = 2; ; n++) {
+    const name = `${last} ${n}`;
+    if (!isDerivableProjectName(name)) return null;
+    if (!isTaken(name)) return name;
   }
-  return { kind: 'none' };
 }
 
 /**
@@ -385,24 +394,18 @@ export function folderClaim(cwd: string, projectsForDir: ProjectsForDir): Folder
  * unless somebody explicitly said otherwise. Returns the project name to set
  * (caller marks it `projectSource: 'folder'`), or null to leave the row alone.
  *
- *  1. ONE registry project DECLARES this folder — or an ANCESTOR of it — as its
- *     `default_cwd` → that project, always: the mapping is user-configured fact,
- *     so it outranks any earlier value on the row. Nearest ancestor wins, so
- *     picking `repo/web` inside the checkout `repo` declares still files under
- *     the repo's project instead of minting a junk `web` project. An inherited
- *     project is only a default at launch: quick-start lets auto-organize move
- *     the task when the message fits another project better.
- *  2. Two or more projects declare the nearest folder → no project from the
- *     folder at all, not even the basename (the folder sits inside claimed
- *     ground, where a basename project is exactly the junk rule 1 prevents).
- *     What the user types (the draft parse) or auto-organize decides.
- *  3. No owner anywhere up the path → the folder's basename, as the project this
- *     launch will auto-create (quick-start stamps the new row's `default_cwd`, so
- *     the next pick of this folder resolves via rule 1). This is only a DEFAULT,
- *     so it never overwrites an explicit 'user'/'seed' project — including an
- *     explicit "Inbox" pick ('' with source 'user') — only unclaimed/'ai'/
- *     'folder' rows, and never derives a name the server's registry gate rejects.
- *  4. Bound and fork drafts are skipped entirely: their task already has a
+ *  1. A registry project DECLARES exactly this folder as its `default_cwd` →
+ *     that project, always: the mapping is user-configured fact, so it outranks
+ *     any earlier value on the row. A PARENT folder's project is not inherited
+ *     (a team folder inside a shared checkout used to land in the checkout's
+ *     project, 2026-09-28).
+ *  2. Otherwise a new project named after the folder (newProjectNameForFolder),
+ *     which the launch creates and stamps with this folder, so the next pick
+ *     resolves via rule 1. This is only a DEFAULT, so it never overwrites an
+ *     explicit 'user'/'seed' project — including an explicit "Inbox" pick ('' with
+ *     source 'user') — only unclaimed/'ai'/'folder' rows, and never derives a
+ *     name the server's registry gate rejects.
+ *  3. Bound and fork drafts are skipped entirely: their task already has a
  *     project, and the launch reuses it — reseeding the pill would make it lie.
  *
  * The resolved name is returned even when it EQUALS the row's current project:
@@ -413,17 +416,35 @@ export function folderClaim(cwd: string, projectsForDir: ProjectsForDir): Folder
 export function projectForFolderPick(
   draft: Pick<DraftColumn, 'project' | 'projectSource' | 'taskId' | 'forkOf'>,
   cwd: string,
-  projectsForDir: ProjectsForDir,
+  host: string | null,
+  projectForDir: (cwd: string) => string,
+  isTaken: (name: string) => boolean,
 ): string | null {
   if (!cwd || draft.taskId || draft.forkOf) return null;
   const clean = cwd.replace(/\/+$/, '');
   if (!clean) return null;
-  const claim = folderClaim(clean, projectsForDir);
-  if (claim.kind === 'owned') return claim.project;
-  if (claim.kind === 'ambiguous') return null;
+  const owned = projectForDir(clean);
+  if (owned) return owned;
   if (draft.projectSource === 'user' || draft.projectSource === 'seed') return null;
-  const name = clean.split('/').pop() ?? '';
-  return isDerivableProjectName(name) ? name : null;
+  return newProjectNameForFolder(clean, host, isTaken);
+}
+
+/**
+ * Re-decide a folder-set project after the registry changed: since the pick,
+ * another folder may have taken the name (two drafts on two `tidepool` folders,
+ * the first one started), the folder may have got a project of its own, or the
+ * registry only loaded now. Only rows whose project the FOLDER set; a person's,
+ * a seed's or the AI's pick stays. The same row back when nothing moved.
+ */
+export function refreshFolderProject<T extends Pick<DraftColumn, 'project' | 'projectSource' | 'taskId' | 'forkOf' | 'cwd' | 'host'>>(
+  draft: T,
+  projectForDir: (cwd: string) => string,
+  isTaken: (name: string) => boolean,
+): T {
+  if (draft.projectSource !== 'folder' || !draft.cwd || draft.taskId || draft.forkOf) return draft;
+  const next = projectForFolderPick(draft, draft.cwd, draft.host, projectForDir, isTaken) ?? '';
+  if (next === (draft.project ?? '')) return draft;
+  return next ? { ...draft, project: next } : { ...draft, project: '', projectSource: undefined };
 }
 
 /**

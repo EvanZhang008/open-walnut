@@ -24,9 +24,8 @@ import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
   applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, followProjectRegistryChange,
-  withDirLaunchMemory, suggestDiff,
+  refreshFolderProject, withDirLaunchMemory, suggestDiff,
   type DraftColumn, type DraftParseInput, type DraftParseKind, type DraftTaskField, type DraftTaskFieldPatch,
-  type ProjectsForDir,
 } from '@/components/sessions/draft-column';
 import {
   applyDraftPathPick, applyDraftTaskFieldEdit, applyTierSeed, enterWalnutDraft, launchMetaFor, leaveWalnutDraft,
@@ -39,7 +38,7 @@ import {
 } from '@/components/sessions/task-meta-constants';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession, QuickStartGateError } from '@/api/sessions';
-import { fetchProjectDetail } from '@/api/projects';
+import { fetchProjectDetail, saveProjectMetadata } from '@/api/projects';
 import { adoptAgentSearchSession } from '@/api/agentSearch';
 import { fetchTask, recordSuggestFeedback, updateTask, SUGGEST_RULES_VERSION } from '@/api/tasks';
 import { isBuiltinTier } from '@/api/focus';
@@ -267,7 +266,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return custom ? custom.label : `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
   }, [focusBar.customTiers]);
   const projectRegistry = useProjectRegistry();
-  const { projectsByCwd, projectDefaults } = projectRegistry;
+  const { projectByCwd, projectDefaults } = projectRegistry;
   const ordering = useOrdering();
   // Configured task defaults (platform/project) for quick-add capture. Fetched once;
   // refreshed on config:changed. Quick-add ("Add to Focus") routes to these instead of
@@ -1146,10 +1145,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     forgetDraft(draftId);
   }, [forgetDraft]);
 
-  /** Ref mirror of `projectsForDir` (defined below, on the registry's projectsByCwd)
-   *  so the []-dep handleDraftPathChange reads the LIVE registry, not a mount-time
-   *  snapshot — same pattern as projectDefaultsRef. */
-  const projectsForDirRef = useRef<ProjectsForDir>(() => []);
+  /** Ref mirror of `projectForDir` (defined below, on the registry's projectByCwd)
+   *  and of the registry's name check, so the []-dep handleDraftPathChange reads
+   *  the LIVE registry, not a mount-time snapshot — same pattern as
+   *  projectDefaultsRef. */
+  const projectForDirRef = useRef<(cwd: string) => string>(() => '');
+  const projectTakenRef = useRef<(name: string) => boolean>(() => false);
 
   /**
    * A cwd/host pick landed on this draft (folder picker, or a quick folder chip).
@@ -1172,7 +1173,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // Task fields rebase per field against `openedMeta` (applyDraftPathPick), so a
     // parse that landed while the picker was open survives, and a quick folder
     // chip (no `openedMeta`) takes only model/engine from its render-time meta.
-    setDraftColumns(prev => mapDraft(prev, draftId, (d) => applyDraftPathPick(d, path, meta, openedMeta, projectsForDirRef.current)));
+    setDraftColumns(prev => mapDraft(prev, draftId, (d) => applyDraftPathPick(d, path, meta, openedMeta, projectForDirRef.current, projectTakenRef.current)));
   }, []);
 
   /** Project pill / quick-access chip → an EXPLICIT project choice. `projectSource:
@@ -1253,17 +1254,23 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (was && !quickParseOn) setDraftColumns(prev => mapDrafts(prev, (d) => revertAiTaskFields(d)));
   }, [quickParseOn]);
 
-  /** Which registry projects declare this folder (their `default_cwd`), so a
-   *  draft's folder pick sets folder + project in one gesture. [] = none —
-   *  projectForFolderPick then walks the ancestors and finally derives the
-   *  folder's basename as the default; two or more = the folder can't say which
-   *  (see its doc). Reads the already-loaded registry — no fetch, which the draft
-   *  path requires. */
-  const projectsForDir = useCallback<ProjectsForDir>(
-    (cwd) => projectsByCwd.get(cwd.replace(/\/+$/, '')) ?? [],
-    [projectsByCwd],
+  /** Which registry project OWNS this folder (its `default_cwd`), so a draft's
+   *  folder pick sets folder + project in one gesture. '' = no project declares
+   *  it — projectForFolderPick then names a new project after the folder, made
+   *  unique against the registry (see its doc). Reads the already-loaded
+   *  registry — no fetch, which the draft path requires. */
+  const projectForDir = useCallback(
+    (cwd: string) => projectByCwd.get(cwd.replace(/\/+$/, '')) ?? '',
+    [projectByCwd],
   );
-  projectsForDirRef.current = projectsForDir;
+  projectForDirRef.current = projectForDir;
+  projectTakenRef.current = projectRegistry.isKnownProject;
+  // A folder-set project follows the registry, so the pill says what Start does.
+  // Not before the registry loaded: an empty one would rename every owned folder's pill.
+  useEffect(() => {
+    if (!projectRegistry.loaded) return;
+    setDraftColumns(prev => mapDrafts(prev, (d) => refreshFolderProject(d, projectForDir, projectRegistry.isKnownProject)));
+  }, [projectForDir, projectRegistry.isKnownProject, projectRegistry.loaded]);
 
   /** Registry membership for the launch bar's "new" badge — reports everything as
    *  known until the registry has actually LOADED, so a seeded draft rendered in
@@ -2468,6 +2475,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const description = rest.join('\n').trim();
     const { tierKnown: knownTier } = draftParseOptsRef.current;
     const meta = draft ? launchMetaFor(draft, knownTier) : undefined;
+    // A project named after the draft's folder that this create makes becomes that
+    // folder's, as quick-start stamps it for a Start; unstamped, the next pick of
+    // the folder would find the name taken and name a second project after it.
+    const folderProject = draft?.projectSource === 'folder' && draft.project && draft.cwd
+      && !projectTakenRef.current(draft.project) ? draft.project : '';
     // Same ledger as Start: the task exit carries the same suggested pills, so its
     // accuracy is measured the same way (surface tells the two apart).
     if (draft) {
@@ -2512,6 +2524,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         setFocusDraftId(draft.id);
       }
       return;
+    }
+    if (folderProject && draft) {
+      // Only a project still without a folder: another window may have made the
+      // name for its own folder since this registry snapshot, and that folder stays.
+      fetchProjectDetail(folderProject).then((detail) => (detail.metadata?.default_cwd ? undefined : saveProjectMetadata(folderProject, {
+        default_cwd: draft.cwd.replace(/\/+$/, '') || draft.cwd,
+        ...(draft.host ? { default_host: draft.host } : {}),
+      }))).catch((err) => {
+        log.warn('draft', 'create task for later: folder project stamp failed', {
+          project: folderProject, cwd: draft.cwd, error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
     // `Starts unread` rides a PATCH after the create (the POST contract has no
     // unread). A failure is logged, never rolled back: the task exists, and a

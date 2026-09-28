@@ -52,20 +52,18 @@ export interface UseProjectRegistryReturn {
   /** lowercased names of favorited projects (server folds config.favorites.projects in). */
   favoriteByName: Set<string>;
   /**
-   * A `default_cwd` → EVERY project declaring it, in registry (name-sorted)
-   * order. Answers "which project is this folder?", which is what lets a folder
-   * pick set the project in the same click (the draft column's quick-access
-   * chips, via `folderClaim`).
+   * A project's `default_cwd` → its canonical name. Answers "which project is
+   * this folder?", which is what lets a folder pick set the project in the same
+   * click (the draft column's quick-access chips).
    *
-   * All of them, not the first: two projects declaring one folder means the
-   * folder cannot say which, and taking the alphabetically first one filed a
-   * team-folder task under an unrelated project that happened to share the
-   * parent folder (2026-09-28). PATHS ARE CASE-SENSITIVE (unlike project
-   * identity), so this is keyed verbatim — only trailing slashes are normalised.
+   * PATHS ARE CASE-SENSITIVE (unlike project identity), so this is keyed
+   * verbatim — only trailing slashes are normalised away. First writer wins when
+   * two projects declare the same folder: the list arrives name-sorted, so the
+   * mapping is at least stable rather than render-order dependent.
    */
-  projectsByCwd: Map<string, readonly string[]>;
+  projectByCwd: Map<string, string>;
   /**
-   * The INVERSE of `projectsByCwd`: lowercased project name → the folder it
+   * The INVERSE of `projectByCwd`: lowercased project name → the folder it
    * declares (`default_cwd` + `default_host`). Answers "where does this project
    * run?" WITHOUT a fetch, which is what lets a draft column follow an
    * AI-suggested project to its folder while the user is still typing (the
@@ -103,7 +101,7 @@ interface Snapshot {
   lowerSet: Set<string>;
   sourceByName: Map<string, string>;
   favoriteByName: Set<string>;
-  projectsByCwd: Map<string, readonly string[]>;
+  projectByCwd: Map<string, string>;
   projectDefaults: Map<string, { cwd: string; host: string | null }>;
 }
 
@@ -168,7 +166,7 @@ function derive(rows: readonly ProjectRegistryRow[], loaded: boolean): Snapshot 
   const lowerSet = new Set<string>();
   const sourceByName = new Map<string, string>();
   const favoriteByName = new Set<string>();
-  const projectsByCwd = new Map<string, string[]>();
+  const projectByCwd = new Map<string, string>();
   const projectDefaults = new Map<string, { cwd: string; host: string | null }>();
   for (const r of rows) {
     const lower = r.name.toLowerCase();
@@ -178,12 +176,10 @@ function derive(rows: readonly ProjectRegistryRow[], loaded: boolean): Snapshot 
     if (r.favorite) favoriteByName.add(lower);
     const cwd = r.defaultCwd?.replace(/\/+$/, '');
     if (!cwd) continue;
-    const owners = projectsByCwd.get(cwd);
-    if (owners) owners.push(r.name);
-    else projectsByCwd.set(cwd, [r.name]);
+    if (!projectByCwd.has(cwd)) projectByCwd.set(cwd, r.name);
     projectDefaults.set(lower, { cwd, host: r.defaultHost ?? null });
   }
-  return { rows, loaded, projectNames, lowerSet, sourceByName, favoriteByName, projectsByCwd, projectDefaults };
+  return { rows, loaded, projectNames, lowerSet, sourceByName, favoriteByName, projectByCwd, projectDefaults };
 }
 
 let snapshot: Snapshot = derive([], false);
@@ -480,7 +476,7 @@ export function useProjectRegistry(): UseProjectRegistryReturn {
     isKnownProject,
     sourceByName: snap.sourceByName,
     favoriteByName: snap.favoriteByName,
-    projectsByCwd: snap.projectsByCwd,
+    projectByCwd: snap.projectByCwd,
     projectDefaults: snap.projectDefaults,
     loaded: snap.loaded,
     refresh: refreshProjectRegistry,

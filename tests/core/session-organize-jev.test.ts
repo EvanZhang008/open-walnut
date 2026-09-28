@@ -163,25 +163,3 @@ describe('suggestSessionPlacement with Jev', () => {
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
   });
 });
-
-describe('Jev placement for a task sitting in its folder default', () => {
-  it('tells Jev where the task sits and turns "nothing fits" into "leave it where it is"', async () => {
-    const decide = vi.fn().mockResolvedValue(choiceAnswer('__inbox__', 0.9));
-    getJevClientMock.mockReturnValue({ decide });
-
-    expect(await suggestSessionPlacement({ ...INPUT, currentProject: 'walnut' })).toEqual({});
-    const [state, questions] = decide.mock.calls[0] as [string, Record<string, { criteria: Record<string, string> }>];
-    expect(state).toContain('currently filed under "walnut" only because its working directory is inside');
-    expect(questions.project.criteria.__inbox__).toBe('No listed project fits this session better than "walnut"; leave it where it is.');
-  });
-
-  it('an unfiled task keeps the plain wording', async () => {
-    const decide = vi.fn().mockResolvedValue(choiceAnswer('walnut', 0.9));
-    getJevClientMock.mockReturnValue({ decide });
-
-    await suggestSessionPlacement(INPUT);
-    const [state, questions] = decide.mock.calls[0] as [string, Record<string, { criteria: Record<string, string> }>];
-    expect(state).not.toContain('currently filed under');
-    expect(questions.project.criteria.__inbox__).toBe('No listed project plausibly fits this session; leave it unfiled.');
-  });
-});

@@ -24,6 +24,7 @@ import { registry } from './integration-registry.js';
 import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
 import { migrateProjectMemoryDirs } from './memory-dir-migration.js';
+import { folderProjectFor, trimDir } from './sessions/folder-project.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
 import { recordRemoteLink, findLiveClaimants } from './task-remote-links.js';
 import {
@@ -1121,6 +1122,8 @@ function ensureProjectRowLocked(
   name: string,
   source: TaskSource,
   writer = 'ensureProject',
+  /** Settings a NEW row is born with (never written onto an existing row). */
+  metadata?: Record<string, unknown>,
 ): { name: string; source: TaskSource; created: boolean; redirectedFrom?: string; blocked?: boolean } {
   const trimmed = (name ?? '').trim();
   if (!trimmed) return { name: '', source: 'local', created: false };
@@ -1157,8 +1160,8 @@ function ensureProjectRowLocked(
     .prepare('SELECT COALESCE(MAX(order_index), -1) + 1 AS next FROM task_projects')
     .get() as { next: number }).next;
   db.prepare(
-    'INSERT INTO task_projects (name, source, order_index) VALUES (?, ?, ?) ON CONFLICT(name) DO NOTHING',
-  ).run(effective, source, nextOrder);
+    'INSERT INTO task_projects (name, source, order_index, metadata) VALUES (?, ?, ?, ?) ON CONFLICT(name) DO NOTHING',
+  ).run(effective, source, nextOrder, metadata && Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : null);
   log.task.info('project created', { project: effective, source });
   return { name: effective, source, created: true, ...redirect };
 }
@@ -1225,6 +1228,37 @@ export async function ensureProject(
   });
   if (result.created) emitProjectCreated(result.name, result.source);
   return result;
+}
+
+function isValidProjectName(name: string): boolean {
+  try { assertValidProjectName(name); return true; } catch { return false; }
+}
+
+/**
+ * The project a launch from `cwd` on `host` files under (the rule is in
+ * sessions/folder-project.ts), decided and, when new, created with the folder
+ * stamped on it in ONE locked step: two launches from two folders of the same
+ * name cannot both take the free name, and no reader sees the new project
+ * before it owns its folder. A deleted name gives the Inbox (`name: ''`) and a
+ * renamed one its survivor, as for every writer.
+ */
+export async function ensureFolderProject(
+  cwd: string,
+  host: string | null | undefined,
+  writer = 'ensureFolderProject',
+): Promise<{ name: string; created: boolean }> {
+  await ensureInit();
+  const result = await withWriteLock(async () => {
+    const store = await readStore();
+    const name = folderProjectFor(store.projects ?? {}, cwd, host, isValidProjectName);
+    if (!name) return { name: '', source: 'local' as TaskSource, created: false };
+    return ensureProjectRowLocked(name, 'local', writer, {
+      default_cwd: trimDir(cwd),
+      ...(host ? { default_host: host } : {}),
+    });
+  });
+  if (result.created) emitProjectCreated(result.name, result.source);
+  return { name: result.name, created: result.created };
 }
 
 /**

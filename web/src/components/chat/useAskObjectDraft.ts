@@ -6,11 +6,11 @@
  * a project pick, the model pill, and the More menu's task fields. No background parse: the object's
  * context already says what the task is about.
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
-import type { DraftColumn, ProjectsForDir } from '@/components/sessions/draft-column';
-import { clearAiFields } from '@/components/sessions/draft-column';
+import type { DraftColumn } from '@/components/sessions/draft-column';
+import { clearAiFields, refreshFolderProject } from '@/components/sessions/draft-column';
 import {
   applyDraftPathPick, applyDraftTaskFieldEdit, enterWalnutDraft, leaveWalnutDraft, makeTierKnown,
   returnFieldToWalnut,
@@ -41,9 +41,18 @@ export function useAskObjectDraft(draftId: string): AskObjectDraft {
   draftRef.current = draft;
 
   const registry = useProjectRegistry();
-  // Which registry project owns a folder, read live by the []-dep folder handler.
-  const projectsForDirRef = useRef<ProjectsForDir>(() => []);
-  projectsForDirRef.current = (cwd) => registry.projectsByCwd.get(cwd.replace(/\/+$/, '')) ?? [];
+  // Which registry project owns a folder, and which names are taken, read live
+  // by the []-dep folder handler.
+  const projectForDirRef = useRef<(cwd: string) => string>(() => '');
+  projectForDirRef.current = (cwd: string) => registry.projectByCwd.get(cwd.replace(/\/+$/, '')) ?? '';
+  const projectTakenRef = useRef<(name: string) => boolean>(() => false);
+  projectTakenRef.current = registry.isKnownProject;
+  // A folder-set project follows the registry, so the pill says what Start does.
+  // Not before the registry loaded: an empty one would rename every owned folder's pill.
+  useEffect(() => {
+    if (!registry.loaded) return;
+    setDraft((d) => refreshFolderProject(d, projectForDirRef.current, registry.isKnownProject));
+  }, [registry.projectByCwd, registry.isKnownProject, registry.loaded]);
   const isKnownProject = useCallback(
     (name: string) => !registry.loaded || registry.isKnownProject(name),
     [registry.loaded, registry.isKnownProject],
@@ -64,7 +73,7 @@ export function useAskObjectDraft(draftId: string): AskObjectDraft {
   const onPathChange = useCallback((
     _id: string, path: QuickStartPath, meta: QuickStartTaskMeta, openedMeta?: QuickStartTaskMeta,
   ) => {
-    setDraft((d) => applyDraftPathPick(d, path, meta, openedMeta, projectsForDirRef.current));
+    setDraft((d) => applyDraftPathPick(d, path, meta, openedMeta, projectForDirRef.current, projectTakenRef.current));
   }, []);
   const onProjectChange = useCallback((_id: string, project: string) => {
     setDraft((d) => ({ ...clearAiFields(d, ['project']), project, projectSource: 'user' as const, userTouched: true }));

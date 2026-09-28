@@ -7,7 +7,7 @@
  * and the change control lives in More. A project Start will create is said in
  * so many words ("New project: x"), because creating one is a write.
  */
-import type { DraftColumn, FolderClaim } from './draft-column';
+import type { DraftColumn } from './draft-column';
 
 type ChipDraft = Pick<DraftColumn, 'project' | 'projectSource' | 'taskId' | 'forkOf' | 'walnut' | 'cwd' | 'aiFields'>;
 
@@ -31,24 +31,10 @@ export interface DraftProjectCtx {
   isKnownProject: (name: string) => boolean;
   /** The draft shows More (and so the Project section lives there). */
   hasMenu: boolean;
-  /** What the registry says about a folder (draft-column's folderClaim). Lets
-   *  the copy name the folder that actually set the project. */
-  claimFor?: (cwd: string) => FolderClaim;
 }
 
 function folderName(cwd: string): string {
   return cwd.replace(/\/+$/, '').split('/').pop() || cwd;
-}
-
-/** The PARENT folder a folder-set project came from, or null when the picked
- *  folder declares it itself (or the claim no longer matches the row). Saying
- *  "Set by the folder x" for a project x's parent declared is what made a
- *  subfolder's task look deliberately filed somewhere unrelated. */
-function inheritedFrom(draft: ChipDraft, claimFor: DraftProjectCtx['claimFor']): string | null {
-  if (draft.projectSource !== 'folder' || !draft.project || !draft.cwd || !claimFor) return null;
-  const claim = claimFor(draft.cwd);
-  if (claim.kind !== 'owned' || !claim.inherited) return null;
-  return claim.project.toLowerCase() === draft.project.toLowerCase() ? claim.folder : null;
 }
 
 /** Start will create this project (same rule the old pill's "new" badge used). */
@@ -93,10 +79,7 @@ export function draftProjectChip(draft: ChipDraft, ctx: DraftProjectCtx): DraftP
   } else if (draft.projectSource === 'seed') {
     title = `${isNew ? `${create} ` : ''}Set when this draft opened. ${where}`;
   } else {
-    const parent = inheritedFrom(draft, ctx.claimFor);
-    title = isNew ? `${create} ${where}`
-      : parent ? `Tasks in ${folderName(parent)} and the folders inside it file under ${name}. ${where}`
-      : `Tasks from this folder file under ${name}. ${where}`;
+    title = isNew ? `${create} ${where}` : `Tasks from this folder file under ${name}. ${where}`;
   }
   return {
     key: isNew ? 'New project:' : 'Project:', name, isNew, ai,
@@ -105,11 +88,7 @@ export function draftProjectChip(draft: ChipDraft, ctx: DraftProjectCtx): DraftP
 }
 
 /** The More menu's one-line "why this project" under the Project row. */
-export function draftProjectProvenance(
-  draft: ChipDraft,
-  isKnownProject: (name: string) => boolean,
-  claimFor?: DraftProjectCtx['claimFor'],
-): string {
+export function draftProjectProvenance(draft: ChipDraft, isKnownProject: (name: string) => boolean): string {
   const isNew = draftProjectIsNew(draft, isKnownProject);
   if (draft.aiFields?.has('project')) {
     return isNew ? "Walnut's pick from what you typed, created when you start" : "Walnut's pick from what you typed";
@@ -117,14 +96,10 @@ export function draftProjectProvenance(
   if (draft.projectSource === 'user') return draft.project ? 'Your pick' : 'Your pick: no project';
   if (draft.projectSource === 'seed') return 'Set when this draft opened';
   if (draft.project && draft.projectSource === 'folder') {
-    if (isNew) return 'New, created when you start (named after the folder)';
-    const parent = inheritedFrom(draft, claimFor);
-    return parent ? `Set by the parent folder ${folderName(parent)}` : `Set by the folder ${folderName(draft.cwd)}`;
+    return isNew
+      ? 'New, created when you start (named after the folder)'
+      : `Set by the folder ${folderName(draft.cwd)}`;
   }
   if (draft.project) return isNew ? 'New, created when you start' : '';
-  // A folder two projects declare sets none; say why instead of implying no
-  // folder was picked.
-  const claim = draft.cwd && claimFor ? claimFor(draft.cwd) : undefined;
-  if (claim?.kind === 'ambiguous') return `Inbox: ${claim.projects.length} projects use the folder ${folderName(claim.folder)}`;
   return 'Inbox until you pick a folder or a project';
 }

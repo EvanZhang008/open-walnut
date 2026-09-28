@@ -7,8 +7,7 @@
  * one-field decision. This module replaces that with the same fast-model
  * strict-JSON recipe as quick-task-parse.ts: buildProjectDigest() for
  * context, canonicalMatch whitelist so a hallucinated name can never land,
- * never-throw. No match → the task stays where the launch put it: the Inbox,
- * or the project it took from its folder (folderDefaultKind).
+ * never-throw. No match → the task stays in Inbox.
  *
  * NOTE: unlike the quick-task parser, this background pass may only pick an
  * EXISTING project — it never proposes a new name. A human confirms new
@@ -31,58 +30,6 @@ Bias: coding sessions usually belong with the project whose example titles menti
 
 export interface OrganizeSuggestion {
   project?: string;
-}
-
-interface PlacementInput {
-  cwd: string;
-  message?: string;
-  /** The project the task already sits in only because its folder is inside
-   *  that project's declared folder (folderDefaultKind 'inherited'). */
-  currentProject?: string;
-}
-
-/** Tells the model the current project is a default it may overturn — and that
- *  keeping it is the safe answer, since a wrong move is worse than no move. */
-function inheritedNote(project: string): string {
-  return `The task is currently filed under "${project}" only because its working directory is inside that project's folder. Keep "${project}" unless another project clearly fits the request better.`;
-}
-
-const trimSlashes = (dir: unknown): string => (typeof dir === 'string' ? dir.replace(/\/+$/, '') : '');
-
-/**
- * How much a folder-derived project is worth, judged by the NEAREST folder at or
- * above `cwd` that any project declares as its `default_cwd`:
- *  · 'final': that folder is `cwd` itself and `project` alone declares it. The
- *    folder's own answer; never refiled.
- *  · 'inherited': `project` alone declares a PARENT folder, or nothing up the
- *    path is declared (the project is named after the folder). A default the
- *    model may overturn, told that keeping it is the safe answer.
- *  · 'shared': the nearest declared folder belongs to several projects, or to a
- *    different one. The launch's pick was not evidence (an older client takes
- *    the first by name), so the model gets no hint toward it.
- * Server twin of the draft column's folderClaim
- * (web/src/components/sessions/draft-column.ts): the same nearest-first walk,
- * paths compared verbatim minus trailing slashes, names case-insensitively.
- */
-export function folderDefaultKind(
-  projects: Record<string, { metadata?: Record<string, unknown> }>,
-  project: string,
-  cwd: string,
-): 'final' | 'shared' | 'inherited' {
-  const byDir = new Map<string, string[]>();
-  for (const [name, record] of Object.entries(projects)) {
-    const dir = trimSlashes(record.metadata?.default_cwd);
-    if (dir) byDir.set(dir, [...(byDir.get(dir) ?? []), name.toLowerCase()]);
-  }
-  const clean = trimSlashes(cwd);
-  const wanted = project.trim().toLowerCase();
-  for (let p = clean; p && p !== '/'; p = p.slice(0, p.lastIndexOf('/')) || '/') {
-    const declarers = byDir.get(p);
-    if (!declarers) continue;
-    if (declarers.length > 1 || declarers[0] !== wanted) return 'shared';
-    return p === clean ? 'final' : 'inherited';
-  }
-  return 'inherited';
 }
 
 function stripJsonFence(value: string): string {
@@ -114,14 +61,12 @@ const JEV_INBOX = '__inbox__';
 async function placeViaJev(
   jev: JevClient,
   digest: { digest: string; projects: string[]; summaries?: Record<string, string> },
-  input: PlacementInput,
+  input: { cwd: string; message?: string },
   opts: { timeoutMs?: number; taskId?: string } = {},
 ): Promise<OrganizeSuggestion | undefined> {
   try {
     const criteria: Record<string, string> = {
-      [JEV_INBOX]: input.currentProject
-        ? `No listed project fits this session better than "${input.currentProject}"; leave it where it is.`
-        : 'No listed project plausibly fits this session; leave it unfiled.',
+      [JEV_INBOX]: 'No listed project plausibly fits this session; leave it unfiled.',
     };
     for (const name of digest.projects) {
       // A real project can't be allowed to shadow the sentinel key.
@@ -136,7 +81,6 @@ async function placeViaJev(
     const state = [
       'A new coding session just started and its task needs a project.',
       `Session working directory: ${input.cwd}`,
-      ...(input.currentProject ? [inheritedNote(input.currentProject)] : []),
       input.message?.trim()
         ? `User's request (opening message): ${input.message.trim().slice(0, 800)}`
         : '(No opening message — the session was started on the directory alone.)',
@@ -185,7 +129,7 @@ async function placeViaJev(
  * empty suggestion means "leave it where it is".
  */
 export async function suggestSessionPlacement(
-  input: PlacementInput,
+  input: { cwd: string; message?: string },
   opts: { timeoutMs?: number; modelOverride?: string; taskId?: string } = {},
 ): Promise<OrganizeSuggestion> {
   try {
@@ -220,7 +164,6 @@ export async function suggestSessionPlacement(
       digest.digest,
       '',
       `Session working directory: ${input.cwd}`,
-      ...(input.currentProject ? [inheritedNote(input.currentProject)] : []),
       ...(input.message?.trim()
         ? [`User's request (opening message):\n${input.message.trim().slice(0, 800)}`]
         : ['(No opening message — the session was started on the directory alone.)']),
@@ -265,17 +208,9 @@ export async function suggestSessionPlacement(
  * Fire-and-forget placement for a quick-start task. Re-reads the task before
  * writing so a user/Personal AI move that happened while the model was thinking
  * always wins (same guard shape as session-auto-title).
- *
- * `folderProject`: the project the launch took from its FOLDER (the draft's
- * "a folder is a project" default). When the folder is not that project's own
- * declared folder (folderDefaultKind), the project is a default and this pass
- * may move the task off it: a team subfolder of a shared checkout used to land
- * in whichever project declared the checkout, whatever the message said
- * (2026-09-28).
  */
 export async function organizeQuickStartTask(
   taskId: string, cwd: string, message?: string,
-  opts: { folderProject?: string } = {},
 ): Promise<void> {
   // The whole-feature switch (Settings › Tasks › Smart task creation). Checked
   // before the digest build: that walks every task, and a pass the user turned
@@ -283,35 +218,15 @@ export async function organizeQuickStartTask(
   const { getConfig } = await import('./config-manager.js');
   if ((await getConfig()).agent?.session_organize === false) return;
 
-  const { getTask, updateTask, getStoreProjects } = await import('./task-manager.js');
-  const folderProject = opts.folderProject?.trim() ?? '';
-  const kind = folderProject ? folderDefaultKind(await getStoreProjects(), folderProject, cwd) : undefined;
-  if (kind === 'final') return;
-
-  const suggestion = await suggestSessionPlacement(
-    { cwd, message, ...(kind === 'inherited' ? { currentProject: folderProject } : {}) },
-    { taskId },
-  );
-  // A kept folder default is the answer to "why is my task in X?", so it is
-  // said out loud; a no-fit Inbox launch stays as quiet as before.
-  if (folderProject && (!suggestion.project || suggestion.project.toLowerCase() === folderProject.toLowerCase())) {
-    log.web.info('session-auto-organize: kept the folder default project', {
-      taskId, project: folderProject, kind, suggestion: suggestion.project ?? null,
-    });
-  }
+  const suggestion = await suggestSessionPlacement({ cwd, message }, { taskId });
   if (!suggestion.project) return;
 
+  const { getTask, updateTask } = await import('./task-manager.js');
   const current = await getTask(taskId);
   if (!current) return;
-  const from = current.project ?? '';
-  // Only move while the task is where the launch put it: unfiled, or still in
-  // its folder's default project and in none of its folders (a launch files into
-  // no folder, so a group_id means someone placed it there while the model was
-  // thinking, and a project move would drop it). Anything else means a human or
+  // Only move while the task is still unfiled — anything else means a human or
   // the Personal AI already placed it.
-  if (from !== '' && (!folderProject || from.toLowerCase() !== folderProject.toLowerCase())) return;
-  if (from !== '' && current.group_id) return;
-  if (from.toLowerCase() === suggestion.project.toLowerCase()) return;
+  if ((current.project ?? '') !== '') return;
 
   // No claim guard needed anymore: updateTask keeps a LOCAL task local on a
   // move into a provider-claimed project (the project is just a folder; nothing
@@ -326,6 +241,6 @@ export async function organizeQuickStartTask(
 
   const placed = await getTask(taskId);
   log.web.info('session-auto-organize: placed quick-start task', {
-    taskId, project: suggestion.project, from: from || 'Inbox', source: placed?.source,
+    taskId, project: suggestion.project, source: placed?.source,
   });
 }

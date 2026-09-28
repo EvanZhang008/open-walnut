@@ -32,7 +32,7 @@ function body(draft: DraftColumn, agentId = 'general') {
 }
 
 function inFolder(draft: DraftColumn, cwd: string, host: string | null = null): DraftColumn {
-  return applyDraftPathPick(draft, { cwd, host }, draft.meta, undefined, () => []);
+  return applyDraftPathPick(draft, { cwd, host }, draft.meta, undefined, () => '', () => false);
 }
 
 describe('the row a drawer opens on', () => {

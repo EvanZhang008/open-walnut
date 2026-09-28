@@ -17,7 +17,7 @@ import {
   ASK_WALNUT_PROJECT, applyDraftParse, clearAiFields, launchDivergesFromDirMemory,
   projectForFolderPick, restoreMetaAfterWalnut,
   type ApplyDraftParseOpts, type DraftAiField, type DraftColumn, type DraftFieldOwner, type DraftOwnedField,
-  type DraftTaskField, type DraftTaskFieldPatch, type ProjectDefaultLookup, type ProjectsForDir,
+  type DraftTaskField, type DraftTaskFieldPatch, type ProjectDefaultLookup,
 } from './draft-column';
 import { DRAFT_TASK_FIELDS, builtinTierKnown, resetTaskField, taskFieldValue } from './draft-parse-rules';
 
@@ -130,7 +130,7 @@ export function returnFieldToWalnut(draft: DraftColumn, field: DraftTaskField): 
  * MainPage's handleDraftPathChange.
  *
  * Folder + project: the folder becomes the user's (`cwdPinned`, ✦ dropped), and the
- * project follows it (projectForFolderPick: registry owner, else the basename,
+ * project follows it (projectForFolderPick: registry owner, else a new project named after the folder,
  * never over a user/seed pick). `createCwd` is rewritten, never merged.
  *
  * Meta, rebased PER FIELD so a parse that landed while the picker was open is not
@@ -149,9 +149,10 @@ export function applyDraftPathPick(
   path: QuickStartPath,
   meta: QuickStartTaskMeta,
   openedMeta: QuickStartTaskMeta | undefined,
-  projectsForDir: ProjectsForDir,
+  projectForDir: (cwd: string) => string,
+  isTaken: (name: string) => boolean,
 ): DraftColumn {
-  const project = projectForFolderPick(draft, path.cwd, projectsForDir);
+  const project = projectForFolderPick(draft, path.cwd, path.host, projectForDir, isTaken);
   const base = clearAiFields(draft, project !== null ? ['cwd', 'project'] : ['cwd']);
   const nextMeta: QuickStartTaskMeta = { ...draft.meta, model: meta.model, engine: meta.engine };
   let owners = draft.fieldOwner;
@@ -183,7 +184,7 @@ export function applyDraftPathPick(
     metaTouched: draft.metaTouched || launchDivergesFromDirMemory(meta, path.cwd, path.host),
     ...(project !== null ? { project, projectSource: 'folder' as const }
       // The previous folder's project does not follow into a folder that has
-      // none of its own (a dot-folder, or one two projects declare): it would read "Set by the folder x"
+      // none of its own (a dot-folder, say): it would read "Set by the folder x"
       // for a folder that set nothing. Back to Inbox; a user/seed/AI pick stays.
       : draft.projectSource === 'folder' ? { project: '', projectSource: undefined } : {}),
   });

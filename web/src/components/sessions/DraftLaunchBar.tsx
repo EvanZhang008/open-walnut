@@ -65,10 +65,9 @@ import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useShowPriorityState } from '@/hooks/useShowPriority';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from './SessionPathSelector';
 import {
-  applyLaunchMemory, folderClaim, quickDirsFor,
+  applyLaunchMemory, quickDirsFor,
   type DraftAiField, type DraftColumn, type DraftTaskField, type DraftTaskFieldPatch,
 } from './draft-column';
-import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import {
   customTierLabelLookup, draftDecisionChips, draftDecisionsKeyVisible, draftSuggestionLabel, draftWalnutPicks,
   type DraftDecisionCtx,
@@ -197,14 +196,7 @@ export function DraftLaunchBar({
   // Ask Walnut: folder and project are server-owned facts (WALNUT_HOME /
   // 'Walnut'), so the pills render read-only, the same treatment as a fork.
   const isWalnut = !!draft.walnut;
-  // The registry's folder claims, so the chip and More name the folder that
-  // actually set the project (a parent, or two projects sharing one folder).
-  const { projectsByCwd } = useProjectRegistry();
-  const claimFor = useCallback(
-    (cwd: string) => folderClaim(cwd, (p) => projectsByCwd.get(p) ?? []),
-    [projectsByCwd],
-  );
-  const projectChip = draftProjectChip(draft, { isKnownProject, hasMenu: decisionsOn, claimFor });
+  const projectChip = draftProjectChip(draft, { isKnownProject, hasMenu: decisionsOn });
   const pickProject = useCallback((project: string) => {
     if (draft.taskId) onBoundProjectMove?.(project);
     else onProjectChange(draft.id, project);
@@ -212,7 +204,7 @@ export function DraftLaunchBar({
   const menuProject = decisionsOn && !isWalnut ? {
     value: draft.project ?? '',
     isNew: draftProjectIsNew(draft, isKnownProject),
-    why: draftProjectProvenance(draft, isKnownProject, claimFor),
+    why: draftProjectProvenance(draft, isKnownProject),
     onPick: (project: string) => onProjectChange(draft.id, project),
   } : undefined;
   // No quick chips on a fork draft: the folder is immutable, so a row of other
