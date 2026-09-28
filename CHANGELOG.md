@@ -6,6 +6,8 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-28
+
 ### Changed
 
 - **Host problems read the same on Home and in the notifications panel, and appear once.** The
@@ -18,6 +20,24 @@ breaking changes).
   the problem hosts, the bell opens on System when no card on the page shows the problem (another
   route, or the task panel hidden), and a pending ask still opens Needs Action. In Errors, a host's
   failures link to its row with `Shown in System`.
+
+### Fixed
+
+- **Codex, Gemini, OpenCode, Goose and Pi run on an npm install.** The npm package ships no
+  compiled daemon, so a machine that installed Walnut from npm runs the Node daemon instead, and
+  that daemon answered every non-Claude session with "ACP sessions are not supported on this host
+  yet". It now loads the same ACP supervisor the compiled daemon uses (`acp-daemon-core.cjs`,
+  shipped in the package), so those engines start, stream, answer permission prompts and resume
+  after a daemon restart there too. They still run on this machine only.
+- **A page reached through a port forward to another local port is this machine.** Behind
+  `ssh -L 8080:localhost:3456`, or any forward that changes the port, the browser's `Origin` names
+  the forwarded port rather than the server's, so 0.5.0 refused every API call and the WebSocket
+  with `403`. An `Origin` that matches the `Host` the browser addressed now counts as the server's
+  own. A page from any other origin is still refused.
+- **On Linux, an SSH login refused because a certificate expired is reported as that.** 0.5.0 ran
+  `ssh-keygen -f /dev/stdin`, which fails with `ENXIO` on Linux when stdin is a socket (how Node
+  hands a child its input), so the check that tells an expired certificate from a missing agent
+  found nothing there and the failure read as a plain auth error. Both calls read from `-` now.
 
 ## [0.5.0] - 2026-09-27
 
