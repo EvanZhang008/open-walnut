@@ -1,6 +1,6 @@
-/* Attention banner mounts (AttentionBannerMount): the task panel wrapper, the
-   notification panel wrapper, the grow-on-enter row, and the reserve box.
-   Existing tokens only; the card itself is styled by attention-banner.css. */
+/* Attention banner mounts (AttentionBannerMount): the task panel wrapper and
+   its grow-on-enter row. Existing tokens only; the card itself is styled by
+   attention-banner.css. */
 
 .ab-mount {
   flex-shrink: 0;
@@ -33,12 +33,6 @@
   .ab-mount-anim {
     transition: none;
   }
-}
-
-.ab-mount-reserve {
-  /* Same outer box as the card it stands in for (.setup-banner margin). */
-  margin: 10px 12px;
-  pointer-events: none;
 }
 
 /* Task panel: the toolbar floats (position absolute) and the first element
@@ -74,11 +68,4 @@
 .nfc-cat-shown-link:hover {
   color: var(--accent-text);
   text-decoration: underline;
-}
-
-/* Notification panel: the card is the first block of the System section, so it
-   takes the pane's own gutter (the detail pads 12px) instead of the header-row margins. */
-.ab-mount[data-mount="notifications"] .setup-banner,
-.ab-mount[data-mount="notifications"] .ab-mount-reserve {
-  margin: 0 0 12px;
 }

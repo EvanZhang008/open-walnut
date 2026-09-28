@@ -1,10 +1,11 @@
 /**
- * The nitpick round on the task panel and notification panel card (BP-N<n>,
+ * The nitpick round on the task panel card and the System host list (BP-N<n>,
  * plus the failed checklist items C25, C30, C31): the first host row always
  * shows its headline and one button, the rows name their host first, counts
  * and cues for clipped rows, result lines in place, no entrance motion when
- * the card only changed place, undo lines that follow the card, one look for
- * one alert on the rail and the bell, and the System pane's host list.
+ * the card only changed place, undo lines that hold through a panel open, one
+ * look for one alert on the rail and the bell, and the System pane's host list
+ * (each host once: a problem host is its card row, every other a status line).
  * Host frames and local health are routed client-side (host-problems-helpers.ts).
  *
  * Run: PW_TEST_PORT=35981 PW_IGNORE_LOAD=1 npx playwright test banner-placement-fixes --project=chromium --workers=1
@@ -18,8 +19,8 @@ import {
 } from './host-problems-helpers'
 import { loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bellDot, bpSetup, cardRow, closePanel, fixtureHosts, goRail, hostErrorRecord, hostsOf, openPanelCard, openRow, pickRail,
-  railButton, toolbarHide,
+  BP_SHOTS, bellDot, bpSetup, closePanel, expectHomeCardStill, fixtureHosts, goRail, hostErrorRecord, hostsOf, markHomeCard, openRow,
+  openSystemHosts, pickRail, railButton, systemHostRow, systemHosts, systemRowHosts, toolbarHide,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -334,14 +335,18 @@ test.describe('undo lines (N7, N8)', () => {
     expect(Math.abs((await banner(page).boundingBox())!.height - h0)).toBeLessThanOrEqual(1)
   })
 
-  test('BP-N8: an undo line from the panel\'s System section moves with the card to the task panel and still undoes', async ({ page }) => {
+  test('BP-N8: an undo line on the Home card holds through a panel open on System (the card never remounts) and still undoes; System lists the host throughout', async ({ page }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
-    const card = await openPanelCard(page)
-    await cardRow(card, 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
-    await expect(card.getByTestId('hpb-undo-row')).toBeVisible()
+    await row(page, 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
+    await expect(banner(page).getByTestId('hpb-undo-row')).toBeVisible()
+    const place = await markHomeCard(page)
+    await openSystemHosts(page)
+    await expect(systemHostRow(page, 'certbox')).toBeVisible()
+    await expect(systemHosts(page).getByTestId('hpb-undo-row')).toHaveCount(0)
     await page.waitForTimeout(500)
     await closePanel(page, 'escape')
+    await expectHomeCardStill(page, place, 'after the panel')
     await expect(banner(page).getByTestId('hpb-undo-row')).toHaveText(/hidden until it changes\./i)
     await banner(page).getByRole('button', { name: 'Undo' }).click()
     await expect.poll(() => hostsOf(banner(page))).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
@@ -438,7 +443,7 @@ test.describe('the rail and the bell (N16; N9 moved to BP-R3-N12)', () => {
 })
 
 test.describe('the System pane and panel keyboard (N14, C25; N17 moved to BP-R3-N11)', () => {
-  test('BP-C25: with a feed item on All (no card in the panel), Tab from Close reaches Needs Action and Tab from All the first feed item; in System, Tab from All enters the card (WebKit too)', async ({ page, browserName }) => {
+  test('BP-C25: with a feed item on All (no card in the panel), Tab from Close reaches Needs Action and Tab from All the first feed item; in System, Tab from All lands on the first problem row (WebKit too)', async ({ page, browserName }) => {
     const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
     await bpSetup(page, { hosts: fixtureHosts(), feed: [hostErrorRecord('devbox', 1)] })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
@@ -454,23 +459,30 @@ test.describe('the System pane and panel keyboard (N14, C25; N17 moved to BP-R3-
     await railButton(page, 'All').focus()
     await page.keyboard.press(TAB)
     await expect(item).toBeFocused()
-    // System: the same step from All lands on the card's first row (its Retry).
+    // System: the same step from All lands on the first problem row's first control. The list is
+    // in Settings order (Dev box and Build box are plain lines), so that is Sign box's Check again.
     await pickRail(page, 'System')
-    await expect(panelBanner(page)).toHaveCount(1)
+    await expect(panelBanner(page)).toHaveCount(0)
+    await expect.poll(() => systemRowHosts(page)).toEqual(['signbox', 'keybox', 'certbox', 'netbox'])
     await railButton(page, 'All').focus()
     await page.keyboard.press(TAB)
-    await expect(cardRow(panelBanner(page), 'keybox').getByTestId('hpb-retry')).toBeFocused()
+    await expect(systemHostRow(page, 'signbox').getByTestId('hpb-check')).toBeFocused()
   })
 
-  test('BP-N14: System: host names on one line with the status under them, a warn header, outdated not in warn colour, Disabled as in Settings', async ({ page, request }) => {
+  test('BP-N14: System: plain lines put the host name on one line with the status under it, a warn header, outdated not in warn colour, Disabled as in Settings; each problem host is its card row', async ({ page, request }) => {
     await isolatePrefs(page)
     await loadFixture(request, 'host-problems')
     await loadApp(page)
     await openBell(page)
     await railButton(page, 'System').click()
-    const hosts = page.locator('[data-testid="nfc-remote-hosts"]')
+    const hosts = systemHosts(page)
     await expect(hosts).toBeVisible({ timeout: 20_000 })
-    await expect(hosts.locator('.nfc-daemon-row[data-host="signbox"] .nfc-daemon-status')).toContainText('Connected', { timeout: 20_000 })
+    // The four banner problems are rows (dense, as on the Home card); the rest are status lines.
+    await expect.poll(() => systemRowHosts(page), { timeout: 20_000 }).toEqual(['signbox', 'keybox', 'certbox', 'netbox'])
+    for (const host of ['signbox', 'keybox', 'certbox', 'netbox']) await expect(hosts.locator(`.nfc-daemon-row[data-host="${host}"]`), host).toHaveCount(0)
+    // The Home card's own words for it (the card sits behind the panel on Home).
+    await expect(systemHostRow(page, 'signbox').locator('.hpb-headline')).toHaveText(await row(page, 'signbox').locator('.hpb-headline').innerText())
+    await expect(hosts.locator('.nfc-daemon-row[data-host="devbox"] .nfc-daemon-status')).toHaveText('Connected')
     await expect(hosts).toHaveClass(/\bwarn\b/)
     await expect(hosts.locator('.notification-card-icon')).toHaveText('⚠')
     const rows = await hosts.locator('.nfc-daemon-row').evaluateAll((els) => els.map((el) => {
@@ -485,7 +497,6 @@ test.describe('the System pane and panel keyboard (N14, C25; N17 moved to BP-R3-
     }))
     for (const r of rows) expect(r, r.host!).toMatchObject({ oneLine: true, below: true })
     expect(rows.find((r) => r.host === 'buildbox')?.warn).toBe(false)
-    expect(rows.find((r) => r.host === 'signbox')?.warn).toBe(true)
     expect(rows.find((r) => r.host === 'fixture-remote')?.text).toBe('Disabled')
     await hosts.screenshot({ path: `${BP_SHOTS}/n14-system-hosts.png` })
   })

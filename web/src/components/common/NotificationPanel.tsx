@@ -7,8 +7,9 @@
  *   Inbox        — letters agents wrote to the human (read in the LetterReader)
  *   Errors       — operation errors (with the server's ×N occurrence folding)
  *   Automation   — cron / skill / hook receipts
- *   System       — ambient health (remote hosts, data backup, embedding search),
- *                  with the attention card (hosts, local Claude Code) on top
+ *   System       — ambient health (this machine's Claude Code while its notice
+ *                  shows, remote hosts, data backup, embedding search); a host
+ *                  with a problem is its Home card row, each host listed once
  *   All          — the whole feed, newest first
  * A flat single list buried the one entry that blocks a session under twenty
  * receipts, which is why permissions used to need a session round-trip.
@@ -18,7 +19,7 @@
  * (one cron job's runs, one session's permissions) still collapse into an
  * expandable group, and a collapsed group never hides a pending ask.
  */
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
@@ -36,12 +37,13 @@ import { PermissionAnswerForm } from './PermissionAnswerForm';
 import { NotificationActionButtons } from './NotificationActionButtons';
 import { QuietToggle } from './QuietToggle';
 import { displayActionsOf } from '@/contexts/notifications/notification-actions';
-import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } from './NotificationSystemPane';
-import { AttentionBannerMount } from './AttentionBannerMount';
-import { ErrorCategoryTitle } from './ErrorCategoryTitle';
 import {
-  landingSectionFor, setNotificationsCardShown, useBannerHostProblemCount, type BellReason,
-} from '@/utils/host-banner-placement';
+  NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy, type SystemOpenHost,
+} from './NotificationSystemPane';
+import { ErrorCategoryTitle } from './ErrorCategoryTitle';
+import { landingSectionFor, useBannerHostProblemCount, type BellReason } from '@/utils/host-banner-placement';
+import { bannerHostRowId } from '@/utils/attention-banner-model';
+import { setRowExpanded } from '@/utils/attention-banner-session';
 import { useLocalDismissed } from '@/utils/host-banner-dismiss';
 import { localNoticeShows } from '@/utils/local-claude-banner';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
@@ -87,8 +89,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
   // ask answered while the panel is open must not yank the user back to an empty
   // Needs Action, and a new ask arriving must not steal the section they're reading.
   // Chosen DURING the render that opens the panel, so the first commit already
-  // has it: an effect would commit the last open's section first, and a System
-  // left over from then would hand the card to the panel for one commit.
+  // has it: an effect would paint the last open's section for one frame first.
   const [openSeen, setOpenSeen] = useState(false);
   if (openSeen !== open) {
     setOpenSeen(open);
@@ -101,6 +102,9 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
   // a string = just that family. Owned here (not in the section union) because it
   // is a refinement of one section, not a sibling of the others.
   const [errorCategory, setErrorCategory] = useState<string | null>(null);
+  // The host row System opens and brings into view ("Shown in System" in Errors). Cleared
+  // when the user picks a section themselves and when the panel closes.
+  const [openHost, setOpenHost] = useState<SystemOpenHost | null>(null);
   const navigate = useNavigate();
   const indexStatus = useSearchIndexStatus(open, section === 'system');
 
@@ -313,8 +317,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
 
   const pickSection = useCallback((next: RailSection) => {
     userPickedSection.current = true;
-    // The card moves in the same handler as the section (one commit, never two cards).
-    setNotificationsCardShown(next === 'system');
+    setOpenHost(null);
     setSection(next);
     // Entering Errors through the SECTION button always lands on every category
     // ("all" is the natural landing); a specific family is only reached through
@@ -324,14 +327,25 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
 
   const pickErrorCategory = useCallback((category: string) => {
     userPickedSection.current = true;
-    setNotificationsCardShown(false);
+    setOpenHost(null);
     setSection('errors');
     setErrorCategory(category);
   }, []);
 
   useEffect(() => {
     if (open) setErrorCategory(null);
+    else setOpenHost(null);
   }, [open]);
+
+  // "Shown in System" on a host's root-cause block: System, with that host's row in view and its
+  // details open (the row's own expanded flag, the one the Home card's row shares).
+  const openHostNonce = useRef(0);
+  const showHostInSystem = useCallback((alias: string) => {
+    setRowExpanded(bannerHostRowId(alias), true);
+    pickSection('system');
+    openHostNonce.current += 1;
+    setOpenHost({ alias, nonce: openHostNonce.current });
+  }, [pickSection]);
 
   // …but on the FIRST open the initial GET may still be in flight, so the feed is
   // empty-so-far and the choice above lands on All even with pending permissions
@@ -342,13 +356,6 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
     setSection(landingSectionFor(sectionCounts(feed).action, bellReason));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loaded-transition only
   }, [open, loaded]);
-
-  // The owner store follows the section for every change that is not a click
-  // (the landing, the re-choose above, the panel closing). Before paint, so a
-  // card handed over here is never on screen twice.
-  const cardShown = open && section === 'system';
-  useLayoutEffect(() => { setNotificationsCardShown(cardShown); }, [cardShown]);
-  useLayoutEffect(() => () => setNotificationsCardShown(false), []);
 
   // The dialog contract (focus in, Tab kept inside, back to the bell on close).
   const [panelEl, setPanelEl] = useState<HTMLDivElement | null>(null);
@@ -466,8 +473,8 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
               active={section === 'automation'} onClick={() => pickSection('automation')}
             />
             {/* System has no feed entries, so its number comes from what the
-                pane renders as wrong (git sync, the search index, the attention
-                card's hosts and local Claude Code). Zero but still flagged → the old dot. */}
+                pane renders as wrong (git sync, the search index, each problem
+                host and local Claude Code). Zero but still flagged → the old dot. */}
             <RailButton
               label="System" count={systemIssues} warn dot={systemUnhealthy}
               active={section === 'system'} onClick={() => pickSection('system')}
@@ -482,13 +489,10 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
 
           <div className="nfc-detail">
             {section === 'system' ? (
-              /* The attention card first (what needs a hand now), then ambient
-                 health (daemons / backup / embedding search) — its own component
-                 so the search-index poll only runs while this tab is showing. */
-              <>
-                <AttentionBannerMount where="notifications" health={health} healthLoading={healthLoading} onLeave={onClose} />
-                <NotificationSystemPane indexStatus={indexStatus} />
-              </>
+              /* Ambient health (local Claude Code, hosts, backup, embedding
+                 search): its own component so the search-index poll only runs
+                 while this tab is showing. */
+              <NotificationSystemPane indexStatus={indexStatus} openHost={openHost} onLeave={onClose} />
             ) : section === 'inbox' ? (
               <InboxPane
                 letters={inboxRows}
@@ -519,7 +523,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
                 {errorCauses?.causes.map(cause => (
                   <div key={cause.causeKey} className="nfc-cat-block">
                     <div className="nfc-cat-header nfc-cause-header">
-                      <ErrorCategoryTitle causeKey={cause.causeKey} label={cause.label} onShowSystem={() => pickSection('system')} />
+                      <ErrorCategoryTitle causeKey={cause.causeKey} label={cause.label} onShowSystem={showHostInSystem} />
                       <span className="nfc-cat-count">{cause.items.length}</span>
                     </div>
                     <FeedGroups

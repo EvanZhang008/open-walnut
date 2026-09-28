@@ -1,7 +1,7 @@
 /**
  * The attention banner's owner store and the dots that speak when no card on
  * the page does (banner placement slice, spec 2.1 + 3; C40, C50, C60):
- *   store      placement and System-section writes are synchronous and notify
+ *   store      placement writes are synchronous and notify (the panel never holds the card)
  *   landing    the panel opens on Needs Action, else System for a bell reason, else All
  *   bell       bellDotReason + bellPresentation over every input the bell reads
  *   local      localNoticeShows is the card's own rule; outdated never shows
@@ -10,8 +10,8 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  __resetHostBannerPlacementForTests, bellDotReason, bellPresentation, getHostBannerPlacement, getNotificationsCardShown,
-  landingSectionFor, onRemoteHostsPane, setHostBannerPlacement, setNotificationsCardShown, subscribeHostBannerOwner, type BellReason,
+  __resetHostBannerPlacementForTests, bellDotReason, bellPresentation, getHostBannerPlacement,
+  landingSectionFor, onRemoteHostsPane, setHostBannerPlacement, subscribeHostBannerOwner, type BellReason,
 } from '../../web/src/utils/host-banner-placement'
 import { localNoticeShows } from '../../web/src/utils/local-claude-banner'
 import { attentionDotsOf } from '../../web/src/hooks/useAttentionDots'
@@ -21,22 +21,19 @@ import type { LocalClaudeStatus } from '../../web/src/api/local-claude'
 beforeEach(() => { __resetHostBannerPlacementForTests() })
 
 describe('owner store', () => {
-  it('starts at the slot with no card in the panel; writes notify synchronously, repeats do not', () => {
+  it('starts at the slot; writes notify synchronously, repeats do not', () => {
     expect(getHostBannerPlacement()).toBe('slot')
-    expect(getNotificationsCardShown()).toBe(false)
     let calls = 0
     const stop = subscribeHostBannerOwner(() => { calls++ })
     setHostBannerPlacement('tasks')
     expect(calls).toBe(1)
     expect(getHostBannerPlacement()).toBe('tasks')
-    setNotificationsCardShown(true)
-    expect(calls).toBe(2)
-    expect(getNotificationsCardShown()).toBe(true)
-    setNotificationsCardShown(true)
     setHostBannerPlacement('tasks')
+    expect(calls).toBe(1)
+    setHostBannerPlacement('draft')
     expect(calls).toBe(2)
     stop()
-    setNotificationsCardShown(false)
+    setHostBannerPlacement('none')
     expect(calls).toBe(2)
   })
 })

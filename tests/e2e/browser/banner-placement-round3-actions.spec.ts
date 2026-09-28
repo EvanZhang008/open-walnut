@@ -1,7 +1,8 @@
 /**
  * The third nitpick round on the attention card, actions and words
  * (BP-R3-N<n>, BP-R3-C<n>): the notification panel takes focus like a dialog
- * on every section (header, rail, then the section; the card leads System),
+ * on every section (header, rail, then the section; in System the first
+ * problem row's control; the panel never holds the card),
  * an undo line is about one row, search keeps the rows, the bell keeps its one
  * dot look, a Retry result keeps the row's height, the System pane says why,
  * one verb for re-checking, and a Retry settles on its own answer only (C23, C48).
@@ -12,10 +13,12 @@
  */
 import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
-import { bareLayout, banner, failed, isolatePrefs, resetServerHostFixture, routeHealth, row } from './host-problems-helpers'
+import {
+  bareLayout, banner, failed, hideTaskPanel, isolatePrefs, resetServerHostFixture, routeHealth, row, showTaskPanel,
+} from './host-problems-helpers'
 import { bell, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bellDot, bpSetup, cardRow, closePanel, fixtureHosts, healthyGitSync, hostsOf, openPanelCard, railButton, settingsDot,
+  BP_SHOTS, bellDot, bpSetup, fixtureHosts, healthyGitSync, hostsOf, openSystemHosts, railButton, settingsDot, systemHostRow, systemHosts,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -32,7 +35,7 @@ const where = (page: Page): Promise<string> => page.evaluate(() => {
 })
 
 test.describe('the notification panel is a dialog for the keyboard (N5)', () => {
-  test('BP-R3-N5: Enter on the bell moves focus into the panel (All, no card); Tab goes header, then the rail; Enter on System, then Tab past All reaches the card; it never leaves; Escape returns to the bell', async ({ page, browserName }) => {
+  test('BP-R3-N5: Enter on the bell moves focus into the panel (All, no card); Tab goes header, then the rail; Enter on System, then Tab past All reaches the first problem row; it never leaves; Escape returns to the bell', async ({ page, browserName }) => {
     await bpSetup(page, { hosts: fixtureHosts() })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await bell(page).focus()
@@ -57,12 +60,14 @@ test.describe('the notification panel is a dialog for the keyboard (N5)', () => 
     await expect(railButton(page, 'System')).toBeFocused()
     await page.keyboard.press('Enter')
     await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
-    await expect(panelBanner(page).locator('li.hpb-row')).toHaveCount(4, { timeout: 10_000 })
+    await expect(systemHosts(page).locator('li.hpb-row')).toHaveCount(4, { timeout: 10_000 })
+    await expect(panelBanner(page)).toHaveCount(0)
     await page.keyboard.press(TAB(browserName))
     expect(await where(page)).toMatch(/^panel:All/)
+    // Settings order: Dev box and Build box are plain lines; Sign box is the first row (Check again).
     await page.keyboard.press(TAB(browserName))
-    expect(await where(page)).toBe('panel:Retry')
-    expect(await page.evaluate(() => !!document.activeElement?.closest('[data-testid="attention-banner"][data-mount="notifications"]'))).toBe(true)
+    expect(await where(page)).toBe('panel:Check again')
+    expect(await page.evaluate(() => !!document.activeElement?.closest('[data-testid="nfc-remote-hosts"] li.hpb-row[data-host="signbox"]'))).toBe(true)
     // Around the end and back: Tab never lands under the overlay.
     for (let i = 0; i < 60; i++) {
       await page.keyboard.press(TAB(browserName))
@@ -133,9 +138,10 @@ test.describe('one look, one sentence, one verb (N12, N13, N14, N15)', () => {
     expect(shape(await lookOf('.notification-badge-dot'))).toBe(shape(plain))
     const warn = await settingsDot(page).evaluate((e) => getComputedStyle(e.querySelector<HTMLElement>('.hsd') ?? e).backgroundColor)
     expect((await lookOf('.notification-badge-dot')).split('|')[0]).toBe(warn)
-    const card = await openPanelCard(page)
-    await card.getByRole('button', { name: 'Dismiss all' }).click()
-    await closePanel(page, 'escape')
+    // System has no Dismiss all: the hosts are dismissed on the Home card (the task panel shown for it).
+    await showTaskPanel(page)
+    await banner(page).getByRole('button', { name: 'Dismiss all' }).click()
+    await hideTaskPanel(page)
     // Hosts dismissed, git sync still failing: the same dot, the same look, and its name no longer says hosts.
     await expect(bellDot(page)).toHaveCount(1)
     expect(await lookOf('.notification-badge-dot')).toBe(plain)
@@ -158,7 +164,7 @@ test.describe('one look, one sentence, one verb (N12, N13, N14, N15)', () => {
     expect(heights.every((x) => Math.abs(x - before) <= 1), `${before} ${JSON.stringify(heights)}`).toBe(true)
   })
 
-  test('BP-R3-N14: the System pane names each failed host in the card\'s own sentence, not a bare Disconnected', async ({ page, request }) => {
+  test('BP-R3-N14: the System pane lists each failed host as its card row, in the card\'s own sentence, not a bare Disconnected', async ({ page, request }) => {
     // The server fixture: the pane's host list comes from the real health answer.
     await loadFixture(request, 'host-problems')
     await isolatePrefs(page)
@@ -168,13 +174,12 @@ test.describe('one look, one sentence, one verb (N12, N13, N14, N15)', () => {
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     await railButton(page, 'System').click()
-    const pane = page.locator('.notification-panel')
     for (const [host, text] of [['keybox', 'Could not connect to Key box'], ['certbox', 'Could not connect to Cert box: SSH certificate expired'], ['netbox', 'Could not connect to Net box']]) {
-      const r = pane.locator(`.nfc-daemon-row[data-host="${host}"]`)
-      await expect(r, host).toContainText(text, { timeout: 10_000 })
+      const r = systemHostRow(page, host)
+      await expect(r.locator('.hft-headline'), host).toHaveText(text, { timeout: 10_000 })
       await expect(r, host).not.toContainText('Disconnected')
-      // The card above says the same words for the same host.
-      await expect(cardRow(panelBanner(page), host).locator('.hft-headline')).toHaveText(text)
+      // The Home card (behind the panel) says the same words for the same host.
+      await expect(row(page, host).locator('.hft-headline')).toHaveText(text)
     }
   })
 
@@ -206,7 +211,7 @@ test.describe('a Retry settles on its own answer (C23, C48)', () => {
     }
   })
 
-  test('BP-R3-C48: connect held 2s, Retry in the task panel, bell and System at 300ms: the panel row is pending, one request, and the receipt lands there', async ({ page }) => {
+  test('BP-R3-C48: connect held 2s, Retry in the task panel, bell and System at 300ms: the System row is pending, one request, and the receipt lands there', async ({ page }) => {
     const h = await bpSetup(page, { hosts: fixtureHosts() })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     h.connectDelayMs = 2_000
@@ -215,8 +220,8 @@ test.describe('a Retry settles on its own answer (C23, C48)', () => {
     await page.mouse.move(2, 2)
     await row(page, 'certbox').getByTestId('hpb-retry').click()
     await page.waitForTimeout(300)
-    await openPanelCard(page)
-    const pr = cardRow(panelBanner(page), 'certbox')
+    await openSystemHosts(page)
+    const pr = systemHostRow(page, 'certbox')
     const retry = pr.getByTestId('hpb-retry')
     await expect(retry).toHaveText('Retrying...')
     await expect(retry).toBeDisabled()

@@ -1,8 +1,8 @@
 /**
  * The attention card's live inputs, kept out of AttentionBanner.tsx: the
  * height cap by mount, pointer and keyboard focus inside the card (answered
- * at mount too, since WebKit sends no pointerenter to an element mounted
- * under a static pointer), the time-based wake, the Dismiss all hidden
+ * at mount too, and again when an overlay over the card goes away, since
+ * WebKit sends no pointerenter under a static pointer), the time-based wake, the Dismiss all hidden
  * success rows (session-backed), and the layout hold (spec 5.5).
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent } from 'react';
@@ -20,7 +20,6 @@ export const HOLD_MAX_MS = 10_000;
 /** The container each mount measures its cap against. */
 export const MOUNT_CONTAINER: Record<BannerMount, string> = {
   tasks: '.todo-panel',
-  notifications: '.notification-panel',
   slot: '.main-page-chat',
   draft: '.main-page-session-column, .draft-session-panel',
 };
@@ -102,6 +101,20 @@ export function usePointerFocus(el: HTMLElement | null) {
       document.removeEventListener('pointermove', onMove, true);
       document.removeEventListener('mouseout', onOut, true);
     };
+  }, [el, pointerInside]);
+  // An overlay over the card going away (the notification panel and its backdrop,
+  // portalled to <body>) leaves the pointer resting on the card with no pointerenter:
+  // WebKit sends none until the pointer moves, and the card stayed mounted, so the
+  // mount-time ask above never runs again. Ask again after the body's children change.
+  useEffect(() => {
+    if (!el || pointerInside || typeof MutationObserver === 'undefined' || !document.body) return;
+    let raf = 0;
+    const mo = new MutationObserver(() => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; if (isPointerOver(el)) setPointerInside(true); });
+    });
+    mo.observe(document.body, { childList: true });
+    return () => { mo.disconnect(); if (raf) cancelAnimationFrame(raf); };
   }, [el, pointerInside]);
   const handlers = {
     onPointerEnter: () => setPointerInside(true),

@@ -1,9 +1,9 @@
 /**
- * The card's buttons in its new places (slice spec 5.1, 5.3, 2.1): Open
- * Settings and 'and N more' leave the panel first, Retry keeps it open, one
- * attempt is shared by every mount, the Needs Action landing carries no card
- * (the System section does, and its badge counts the hosts), and the success
- * sentence drops its check mark in the card.
+ * The card's buttons and the System section's host rows (slice spec 5.1, 5.3,
+ * 2.1): Open Settings in a System row leaves the panel first, Retry there keeps
+ * it open, one attempt is shared by the Home card and System, the Needs Action
+ * landing carries no card (System lists the problem hosts, and its badge counts
+ * them), and the success sentence drops its check mark in the card.
  * Host frames and local health are routed client-side; the Settings checks
  * (BP-C20, BP-C66) use the server's host fixture so Settings lists the hosts.
  *
@@ -19,8 +19,8 @@ import {
 } from './host-problems-helpers'
 import { hostRow, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, askRecord, bpSetup, cardRow, closePanel, expectTasksCard, healthyGitSync, hostsOf, openPanelCard, openRow, panelMount,
-  pickRail, railButton, reserve, systemBadge,
+  BP_SHOTS, askRecord, bpSetup, closePanel, expectTasksCard, healthyGitSync, hostsOf, openRow, openSystemHosts, panelMount,
+  pickRail, railButton, systemBadge, systemHostLine, systemHostRow, systemHosts, systemListHosts, systemRowHosts,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -36,7 +36,7 @@ const five = () => [
   failed('lanbox', 'Lan box', 'unreachable'), signedOut('signbox', 'Sign box'),
 ]
 
-test.describe('the card in the task panel and in the panel', () => {
+test.describe('the card in the task panel, the rows in System', () => {
   test('BP-C19: local sign-in plus hosts in the task panel: local section first, the Remote hosts subhead, the sign-in title', async ({ page }) => {
     await bpSetup(page, { local: 'sign-in' })
     await expectTasksCard(page)
@@ -51,49 +51,50 @@ test.describe('the card in the task panel and in the panel', () => {
     await banner(page).screenshot({ path: `${BP_SHOTS}/c19-local-plus-hosts.png` })
   })
 
-  test('BP-C20: Open Settings in the panel card closes the panel and lands on the host row; no card on the page after', async ({ page, request }) => {
+  test('BP-C20: Open Settings in a System row closes the panel and lands on the host row; no card on the page after', async ({ page, request }) => {
     await loadFixture(request, 'host-problems')
     await isolatePrefs(page)
     await healthyGitSync(page)
     await routeHealth(page)
     await loadApp(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    const card = await openPanelCard(page)
-    await openRow(cardRow(card, 'keybox'))
-    await cardRow(card, 'keybox').getByTestId('hpb-open-settings').click()
+    await openSystemHosts(page)
+    await openRow(systemHostRow(page, 'keybox'))
+    await systemHostRow(page, 'keybox').getByTestId('hpb-open-settings').click()
     await expect(page.locator('.notification-panel')).toHaveCount(0)
     await expect(page).toHaveURL(/\/settings#rh-host-keybox$/)
     await expect(hostRow(page, 'keybox')).toBeVisible({ timeout: 20_000 })
     await expect(page.locator('[data-testid="attention-banner"]:visible')).toHaveCount(0)
   })
 
-  test('BP-C21: five problems in the panel: 3 rows and "and 2 more"; it closes the panel and opens Remote hosts', async ({ page }) => {
+  test('BP-C21: five problems: the Home card caps at 3 rows and "and 2 more"; System lists all five once each, with no "more" link', async ({ page }) => {
     await bpSetup(page, { hosts: five() })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    const card = await openPanelCard(page)
-    await expect(card.locator('li.hpb-row[data-host]')).toHaveCount(3)
-    await expect(card.locator('.hpb-more')).toHaveText('and 2 more')
-    await card.locator('.hpb-more').click()
-    await expect(page.locator('.notification-panel')).toHaveCount(0)
-    await expect(page).toHaveURL(/\/settings#remote-hosts$/)
+    await expect(banner(page).locator('li.hpb-row[data-host]')).toHaveCount(3)
+    await expect(banner(page).locator('.hpb-more')).toHaveText('and 2 more')
+    await openSystemHosts(page)
+    // A status list has no cap: every host, in the order given, each once.
+    await expect.poll(() => systemListHosts(page)).toEqual(['keybox', 'netbox', 'proxybox', 'lanbox', 'signbox'])
+    expect(await systemRowHosts(page)).toEqual(['keybox', 'netbox', 'proxybox', 'lanbox', 'signbox'])
+    await expect(systemHosts(page).locator('.hpb-more')).toHaveCount(0)
   })
 
-  test('BP-C22: Retry in the panel keeps it open, holds the row height, reads the success sentence, then the row leaves', async ({ page }) => {
+  test('BP-C22: Retry in a System row keeps the panel open and holds the row height while it tries; the host then reads Connected there, and the Home card says it is ready', async ({ page }) => {
     const h = await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')] })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     h.connectDelayMs = 1500
     h.connectAnswer = (host) => connected(host, 'Net box')
-    const card = await openPanelCard(page)
-    const target = cardRow(card, 'netbox')
+    await openSystemHosts(page)
+    const target = systemHostRow(page, 'netbox')
     const before = (await target.boundingBox())!.height
     await target.getByTestId('hpb-retry').click()
     await expect(target).toContainText('Connecting to Net box...')
     expect(Math.abs((await target.boundingBox())!.height - before)).toBeLessThanOrEqual(1)
     await expect(page.locator('.notification-panel')).toBeVisible()
-    await expect(target).toContainText('Net box is ready', { timeout: 10_000 })
-    // Off the card (the panel header): the success row leaves about 3s later.
-    await page.locator('.notification-panel-title').hover()
-    await expect(target).toHaveCount(0, { timeout: 8_000 })
+    // A healthy host is a plain line in the status list; the success sentence is the card's.
+    await expect(systemHostLine(page, 'netbox').locator('.nfc-daemon-status')).toHaveText('Connected', { timeout: 10_000 })
+    await expect(target).toHaveCount(0)
+    await expect(row(page, 'netbox')).toContainText('Net box is ready')
     await expect(page.locator('.notification-panel')).toBeVisible()
   })
 
@@ -117,20 +118,23 @@ test.describe('one attempt, one state, whichever mount shows it', () => {
     h.connectAnswer = (host) => failed(host, 'Net box', 'unreachable')
     await row(page, 'netbox').getByTestId('hpb-retry').click()
     await page.waitForTimeout(300)
-    const card = await openPanelCard(page)
-    await expect(cardRow(card, 'netbox')).toContainText('Connecting to Net box...')
-    await expect(cardRow(card, 'netbox').getByTestId('hpb-retry')).toBeDisabled()
+    await openSystemHosts(page)
+    await expect(systemHostRow(page, 'netbox')).toContainText('Connecting to Net box...')
+    await expect(systemHostRow(page, 'netbox').getByTestId('hpb-retry')).toBeDisabled()
     await closePanel(page, 'escape')
     await expect(row(page, 'netbox')).toContainText('Connecting to Net box...')
     await expect(row(page, 'netbox').getByTestId('hpb-receipt')).toHaveText('Tried again just now: same result', { timeout: 10_000 })
     expect(h.connects.get('netbox')).toBe(1)
-    // Expanded and folded rows keep their state and order across a panel open.
+    // Expanded and folded rows keep their state and order across a panel open; System
+    // shares the card's flag by row id, so it shows the same rows open and folded.
     const r2 = row(page, 'keybox')
     await r2.getByRole('button', { name: 'Show details' }).click()
     const r1Hide = row(page, 'netbox').getByRole('button', { name: 'Hide details' })
     if (await r1Hide.count()) await r1Hide.click()
     const order = await hostsOf(banner(page))
-    await openPanelCard(page)
+    await openSystemHosts(page)
+    await expect(systemHostRow(page, 'keybox')).toHaveClass(/hpb-open/)
+    await expect(systemHostRow(page, 'netbox')).not.toHaveClass(/hpb-open/)
     await closePanel(page, 'escape')
     expect(await hostsOf(banner(page))).toEqual(order)
     await expect(r2.getByRole('button', { name: 'Hide details' })).toBeVisible()
@@ -154,7 +158,7 @@ test.describe('one attempt, one state, whichever mount shows it', () => {
 })
 
 test.describe('landing, the named cap, and the success sentence', () => {
-  test('BP-C62: two asks and four host problems: the bell lands on Needs Action with no card there; the System badge counts the four hosts; System shows the card in its dense form', async ({ page }) => {
+  test('BP-C62: two asks and four host problems: the bell lands on Needs Action with no card there; the System badge counts the four hosts; System lists them as dense card rows', async ({ page }) => {
     await bpSetup(page, {
       hosts: [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'), failed('certbox', 'Cert box', 'cert_expired'), signedOut('signbox', 'Sign box')],
       feed: [askRecord(1), askRecord(2)],
@@ -162,13 +166,12 @@ test.describe('landing, the named cap, and the success sentence', () => {
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     await expect(railButton(page, 'Needs Action')).toHaveAttribute('aria-current', 'true')
-    // Needs Action is the asks alone: no card and no mount; the task panel keeps its card, no reserve.
+    // Needs Action is the asks alone: no card and no mount; the task panel keeps its card.
     await expect(page.locator('.notification-panel .nfc-perm-card')).toHaveCount(2)
     await expect(panelMount(page)).toHaveCount(0)
     await expect(panelBanner(page)).toHaveCount(0)
     await expect(banner(page)).toHaveCount(1)
     await expect(anyBanner(page)).toHaveCount(1)
-    await expect(reserve(page)).toHaveCount(0)
     const panelBox = (await page.locator('.notification-panel').boundingBox())!
     const askTop = (await page.locator('.notification-panel .nfc-perm-card').first().boundingBox())!.y
     expect(askTop - panelBox.y).toBeLessThanOrEqual(panelBox.height * 0.6)
@@ -176,16 +179,19 @@ test.describe('landing, the named cap, and the success sentence', () => {
     await expect(systemBadge(page)).toHaveText('4')
     await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c62-needs-action-landing.png` })
     await pickRail(page, 'System')
-    const card = panelBanner(page)
-    await expect(card).toHaveCount(1)
-    await expect(banner(page)).toHaveCount(0)
-    await expect(card.locator('li.hpb-row[data-host]')).toHaveCount(4)
+    const hosts = systemHosts(page)
+    await expect(hosts).toBeVisible()
+    await expect(panelBanner(page)).toHaveCount(0)
+    await expect(banner(page)).toHaveCount(1)
+    await expect(hosts.locator('li.hpb-row[data-host]')).toHaveCount(4)
     await expect(systemBadge(page)).toHaveText('4')
-    // Never the one-line form in the panel any more (dense: headline, then the primary action).
-    for (const r of await card.locator('li.hpb-row[data-host]').all()) await expect(r).not.toHaveClass(/hpb-single/)
-    await expect(card).not.toHaveClass(/attention-banner-single/)
-    await expect(cardRow(card, 'keybox').getByTestId('hpb-retry')).toBeVisible()
-    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c62-system-card.png` })
+    // Never the one-line form in System (dense: headline, then the primary action).
+    for (const r of await hosts.locator('li.hpb-row[data-host]').all()) {
+      await expect(r).toHaveClass(/hpb-dense/)
+      await expect(r).not.toHaveClass(/hpb-single/)
+    }
+    await expect(systemHostRow(page, 'keybox').getByTestId('hpb-retry')).toBeVisible()
+    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c62-system-rows.png` })
   })
 
   test('BP-C66: "and 2 more" flashes exactly the two capped rows in Settings, once; a reload does not flash again', async ({ page, request }) => {

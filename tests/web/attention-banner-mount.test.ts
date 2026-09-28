@@ -1,7 +1,6 @@
 /**
  * AttentionBannerMount's pure rules (banner placement slice, 2.3, 4.2, 5.5):
- *   reserve    only tasks -> notifications on Home keeps a box; any route change drops it (C5, C6, C68)
- *   hold       pointer below the task panel toolbar, a task drag, or the pointer over the panel body (C51)
+ *   hold       pointer below the task panel toolbar, or a task drag; only the task panel holds (C51)
  *   guard      a click right after a height change with an unmoved pointer is swallowed (5.5)
  *   health     the home page's health channel notifies once per change (the task panel prop stays stable)
  *   errors     a host cause names the host's label, the alias when unknown (C57)
@@ -11,35 +10,10 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } }))
 
 import {
-  CLICK_GUARD_MS, CLICK_GUARD_PX, holdLayoutNow, nextReserve, publishBannerHealth, shouldSwallowClick, type GuardInput,
+  CLICK_GUARD_MS, CLICK_GUARD_PX, holdLayoutNow, publishBannerHealth, shouldSwallowClick, type GuardInput,
 } from '../../web/src/components/common/banner-mount-hooks'
 import { causeLabelOf, hostOfCauseKey, partitionErrorsByCause, setCauseHostLabelResolver } from '../../web/src/contexts/notifications/notification-model'
 import type { Notification } from '../../web/src/contexts/notifications/types'
-
-describe('nextReserve', () => {
-  const at = (owner: 'tasks' | 'notifications' | 'slot' | 'draft' | 'none', pathname = '/') => ({ owner, pathname })
-
-  it('keeps the card height when the panel borrows the card from the task panel on Home', () => {
-    expect(nextReserve('tasks', at('tasks'), at('notifications'), 212)).toBe(212)
-  })
-
-  it('never makes a box when the card had no height (the empty state keeps zero)', () => {
-    expect(nextReserve('tasks', at('tasks'), at('notifications'), 0)).toBeNull()
-  })
-
-  it('drops the box when the card comes back, and never keeps one on another route', () => {
-    expect(nextReserve('tasks', at('notifications'), at('tasks'), 212)).toBeNull()
-    expect(nextReserve('tasks', at('notifications'), at('none', '/settings'), 212)).toBeNull()
-    expect(nextReserve('tasks', at('none', '/notes'), at('notifications', '/notes'), 212)).toBeNull()
-    expect(nextReserve('tasks', at('tasks'), at('notifications', '/settings'), 212)).toBeNull()
-  })
-
-  it('only the task panel mount reserves (the slot hides under nothing)', () => {
-    expect(nextReserve('slot', at('slot'), at('notifications'), 212)).toBeNull()
-    expect(nextReserve('draft', at('draft'), at('notifications'), 212)).toBeNull()
-    expect(nextReserve('tasks', at('slot'), at('notifications'), 212)).toBeNull()
-  })
-})
 
 describe('shouldSwallowClick', () => {
   const base: GuardInput = {
@@ -110,20 +84,6 @@ describe('holdLayoutNow', () => {
     const dragging = tasksMount(panel(['is-task-dragging']))
     expect(holdLayoutNow('tasks', dragging, null, false)).toBe(true)
     expect(holdLayoutNow('tasks', dragging, pt(900, 900), true)).toBe(true)
-  })
-
-  it('holds in the notification panel only over the System section below the card', () => {
-    // The rail is x 200..360; the section (detail) x 360..760 holds the card at its top.
-    const detail = fakeEl({ left: 360, top: 60, right: 760, bottom: 800 })
-    const mount = fakeEl({ left: 372, top: 72, right: 748, bottom: 280 }, { parents: { '.nfc-detail': detail } })
-    expect(holdLayoutNow('notifications', mount, pt(500, 500), false)).toBe(true)
-    // Over the card itself: its own rule answers (a Retry answers in place).
-    expect(holdLayoutNow('notifications', mount, pt(500, 150), false)).toBe(false)
-    // The rail and the header never move.
-    expect(holdLayoutNow('notifications', mount, pt(250, 500), false)).toBe(false)
-    expect(holdLayoutNow('notifications', mount, pt(500, 30), false)).toBe(false)
-    expect(holdLayoutNow('notifications', mount, pt(500, 500), true)).toBe(false)
-    expect(holdLayoutNow('notifications', mount, null, false)).toBe(false)
   })
 
   it('never holds the slot or draft mounts, or a mount outside its panel', () => {

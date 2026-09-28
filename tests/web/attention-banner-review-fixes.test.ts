@@ -13,7 +13,8 @@
  *                off the home route the banner is never on screen
  *   placement    the task panel first, then the slot, then the draft column;
  *                with the task panel hidden, every answer is the old one
- *   owner        the open notification panel owns the card on every route
+ *   owner        the in-page placement on Home, none elsewhere (the notification
+ *                panel never holds the card: its System list shows each host once)
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -175,13 +176,12 @@ describe('placement and owner (task panel first, then the old fallbacks)', () =>
     for (const chat of bools) for (const draft of bools) expect(placementFor(true, chat, draft)).toBe('tasks')
   })
 
-  it('ownerFor: 4 placements x the panel on System or not x home or another route', () => {
+  it('ownerFor: 4 placements x home or another route (the notification panel never owns the card)', () => {
     const places: HostBannerPlacement[] = ['tasks', 'slot', 'draft', 'none']
     for (const where of places) {
-      expect(ownerFor(where, true, '/')).toBe('notifications')
-      expect(ownerFor(where, true, '/notes')).toBe('notifications')
-      expect(ownerFor(where, false, '/')).toBe(where)
-      expect(ownerFor(where, false, '/notes')).toBe('none')
+      expect(ownerFor(where, '/')).toBe(where)
+      expect(ownerFor(where, '/notes')).toBe('none')
+      expect(ownerFor(where, '/settings')).toBe('none')
     }
   })
 

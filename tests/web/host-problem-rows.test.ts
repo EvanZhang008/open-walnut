@@ -125,6 +125,22 @@ describe('a row promoted to the top opens', () => {
   })
 })
 
+describe('a row in the System host list (statusList)', () => {
+  it('draws no x even with dismiss keys, and none without an onDismiss; the rest of the row is the card\'s', async () => {
+    const row = readinessRow('host:list-a')
+    await render(createElement(SingleHostRow, { row, defaultExpanded: false, dense: true, onDismiss: noop, onOpenSettings: noop }))
+    expect(host.querySelector('.hpb-x')).not.toBeNull()
+    await render(createElement(SingleHostRow, { row, defaultExpanded: false, dense: true, statusList: true, onDismiss: noop, onOpenSettings: noop }))
+    expect(host.querySelector('.hpb-x')).toBeNull()
+    await render(createElement(SingleHostRow, { row, defaultExpanded: false, dense: true, onOpenSettings: noop }))
+    expect(host.querySelector('.hpb-x')).toBeNull()
+    // Dense and folded: the headline, the primary button, Show details.
+    expect(host.querySelector('.hpb-headline')?.textContent).toBe('Claude Code on Build box is not signed in.')
+    expect(Array.from(host.querySelectorAll('.hpb-actions button')).map((b) => b.textContent)).toEqual(['Check again'])
+    expect(byText('Show details')?.getAttribute('aria-expanded')).toBe('false')
+  })
+})
+
 describe('Retry all on the merged credential row', () => {
   const members = ['certbox', 'certbox2']
   const failedRow: BannerRow = {

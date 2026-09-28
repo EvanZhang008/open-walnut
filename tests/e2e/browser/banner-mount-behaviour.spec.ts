@@ -1,11 +1,12 @@
 /**
- * How the attention card behaves in its two panel mounts (banner placement
- * slice, 4.1, 4.2, 5.2, 5.3, 5.5): keyboard order and focus after the card
- * leaves, clicks inside the card never close the panel, the card lives in the
- * System section only (every other section leaves it to the task panel), the
- * list keeps its scroll, the card never starts a task drag, the card waits
- * while the pointer is over what would move, the Errors group heading and its
- * Shown in System link, and the System rail count.
+ * How the attention card behaves around the notification panel (banner
+ * placement slice, 4.1, 4.2, 5.2, 5.3, 5.5): the card stays in the task panel
+ * on every section (the panel holds no card, its System section lists each
+ * host once), keyboard order in System and focus after the card leaves,
+ * clicks inside System never close the panel, the list keeps its scroll, the
+ * card never starts a task drag, the card waits while the pointer is over
+ * what would move, the Errors group heading and its Shown in System link, and
+ * the System rail count.
  * Host frames and local health are routed client-side; page.goto only loads
  * the app, every other step is a real click, key or pointer move.
  *
@@ -14,11 +15,11 @@
  */
 import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
-import { anyBanner, banner, connected, failed, outdated, resetServerHostFixture } from './host-problems-helpers'
+import { banner, connected, failed, outdated, resetServerHostFixture, row } from './host-problems-helpers'
 import { openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bpSetup, closePanel, expectTasksCard, hostErrorRecord, maxCards, openPanelCard, panelMount,
-  pickRail, railButton, reserve, systemBadge,
+  BP_SHOTS, bpSetup, closePanel, expectHomeCardStill, expectTasksCard, hostErrorRecord, markHomeCard, maxCards, openSystemHosts,
+  panelMount, pickRail, railButton, systemBadge, systemHostRow, systemHosts,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -40,82 +41,76 @@ const activeDescr = (page: Page): Promise<string> => page.evaluate(() => {
 const inCard = (page: Page, sel: string): Promise<boolean> =>
   page.evaluate((s) => !!document.activeElement?.closest(s), sel)
 
-test.describe('the notification panel mount', () => {
-  test('C6 bell spot: a click where the bell is, with the panel open, closes it and the card returns', async ({ page }) => {
+test.describe('the notification panel holds no card', () => {
+  test('C6 bell spot: a click where the bell is, with System open, closes the panel; the Home card never left', async ({ page }) => {
     await bpSetup(page)
     await expectTasksCard(page)
-    await openPanelCard(page)
+    const place = await markHomeCard(page)
+    await openSystemHosts(page)
     // The panel's full-window backdrop sits over the bell: the second click lands on it and closes the panel.
     const box = (await page.locator('.sidebar-notification-btn').boundingBox())!
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
     await expect(page.locator('.notification-panel')).toHaveCount(0)
-    await expect(banner(page)).toHaveCount(1)
-    await expect(reserve(page)).toHaveCount(0)
+    await expectHomeCardStill(page, place, 'after the bell spot')
   })
 
-  test('C25: in System, Shift+Tab from the card\'s first control lands on the All rail button; Tab past its last control stays in the panel, off the card', async ({ page, browserName }) => {
+  test('C25: in System, Tab from the All rail button lands on the first problem row\'s first control; Shift+Tab goes back; Tab past the list stays in the panel', async ({ page, browserName }) => {
     // WebKit on macOS moves Tab through buttons with Option held (the Safari default).
     const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
-    const CARD = '.notification-panel [data-testid="attention-banner"]'
+    const LIST = '.notification-panel [data-testid="nfc-remote-hosts"]'
     await bpSetup(page)
     await expectTasksCard(page)
-    const card = await openPanelCard(page)
-    // Tab order: header, the rail (Needs Action ... All), then the section: the card comes first there.
+    const hosts = await openSystemHosts(page)
+    // Tab order: header, the rail (Needs Action ... All), then the section. The list is in
+    // Settings order: Dev box and Build box are plain lines, Sign box is the first problem row.
+    const first = systemHostRow(page, 'signbox').locator('.hpb-actions button').first()
     await railButton(page, 'All').focus()
     await page.keyboard.press(TAB)
-    expect(await inCard(page, CARD), await activeDescr(page)).toBe(true)
+    await expect(first, await activeDescr(page)).toBeFocused()
     await page.keyboard.press(browserName === 'webkit' ? 'Alt+Shift+Tab' : 'Shift+Tab')
     await expect(railButton(page, 'All')).toBeFocused()
     await page.keyboard.press(TAB)
-    const inside = await card.evaluate((el) => el.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])').length)
-    for (let i = 0; i < inside + 5 && await inCard(page, CARD); i++) await page.keyboard.press(TAB)
+    const inside = await hosts.evaluate((el) => el.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])').length)
+    for (let i = 0; i < inside + 5 && await inCard(page, LIST); i++) await page.keyboard.press(TAB)
     const after = await page.evaluate((sel) => {
       const a = document.activeElement
-      return { inPanel: !!a?.closest('.notification-panel'), inCard: !!a?.closest(sel), body: a === document.body }
-    }, CARD)
-    expect(after, await activeDescr(page)).toEqual({ inPanel: true, inCard: false, body: false })
+      return { inPanel: !!a?.closest('.notification-panel'), inList: !!a?.closest(sel), body: a === document.body }
+    }, LIST)
+    expect(after, await activeDescr(page)).toEqual({ inPanel: true, inList: false, body: false })
   })
 
-  test('C27: clicks on the card text and subhead keep the panel open; Escape with focus in the card closes it', async ({ page }) => {
+  test('C27: clicks on a System row\'s text and on the Remote hosts label keep the panel open; Escape with focus in a row closes it', async ({ page }) => {
     await bpSetup(page, { local: 'sign-in' })
     await expectTasksCard(page)
-    const card = await openPanelCard(page)
-    const box = (await card.boundingBox())!
-    // A point on the card's own surface (its top-left padding), not on a control.
-    await page.mouse.click(box.x + 4, box.y + 4)
+    const hosts = await openSystemHosts(page)
+    await hosts.locator('.notification-card-label').click()
     await expect(page.locator('.notification-panel')).toHaveCount(1)
-    const subhead = card.locator('.hpb-subhead').first()
-    await expect(subhead).toHaveText('Remote hosts')
-    await subhead.click({ position: { x: 2, y: 2 } })
+    await systemHostRow(page, 'keybox').locator('.hft-headline').click()
     await expect(page.locator('.notification-panel')).toHaveCount(1)
-    await card.locator('li.hpb-row[data-host] button').first().focus()
-    expect(await inCard(page, '.notification-panel [data-testid="attention-banner"]')).toBe(true)
+    await systemHostRow(page, 'keybox').getByTestId('hpb-retry').focus()
+    expect(await inCard(page, '.notification-panel li.hpb-row[data-host="keybox"]')).toBe(true)
     await page.keyboard.press('Escape')
     await expect(page.locator('.notification-panel')).toHaveCount(0)
     await expect(banner(page)).toHaveCount(1)
   })
 
-  test('C36: only System holds the card: every other section leaves it in the task panel; a second System click keeps the same card', async ({ page }) => {
+  test('C36: no section holds a card: the Home card never moves or remounts while the panel is open on any section; a second System click keeps the same list', async ({ page }) => {
     await bpSetup(page, { probe: true })
     await expectTasksCard(page)
-    const card = await openPanelCard(page)
-    await card.evaluate((el) => { el.setAttribute('data-bp-mark', 'kept') })
-    // Picking System again is no change: the card is not remounted.
+    const place = await markHomeCard(page)
+    await openSystemHosts(page)
+    await systemHosts(page).evaluate((el) => { el.setAttribute('data-bp-mark', 'kept') })
+    // Picking System again is no change: the list is not remounted.
     await railButton(page, 'System').click()
-    await expect(panelBanner(page)).toHaveAttribute('data-bp-mark', 'kept')
+    await expect(systemHosts(page)).toHaveAttribute('data-bp-mark', 'kept')
     for (const label of ['Needs Action', 'Inbox', 'Errors', 'Automation', 'System', 'All']) {
       await pickRail(page, label)
-      await expect(anyBanner(page), label).toHaveCount(1)
-      if (label === 'System') {
-        await expect(panelBanner(page), label).toHaveCount(1)
-        await expect(banner(page), label).toHaveCount(0)
-        await expect(reserve(page), label).toHaveCount(1)
-      } else {
-        await expect(panelMount(page), label).toHaveCount(0)
-        await expect(banner(page), label).toHaveCount(1)
-        await expect(reserve(page), label).toHaveCount(0)
-      }
+      await expect(panelMount(page), label).toHaveCount(0)
+      await expect(panelBanner(page), label).toHaveCount(0)
+      await expectHomeCardStill(page, place, label)
     }
+    await closePanel(page, 'escape')
+    await expectHomeCardStill(page, place, 'after Escape')
     expect(await maxCards(page)).toBe(1)
   })
 })
@@ -218,9 +213,9 @@ test.describe('the task panel mount holds the list still', () => {
     expect(scroller, 'a scrollable task list').not.toBe('')
     const target = await page.locator(scroller).evaluate((el) => { el.scrollTop = 400; return el.scrollTop })
     expect(target).toBeGreaterThanOrEqual(60)
-    await openPanelCard(page)
+    await openSystemHosts(page)
     expect(Math.abs(await page.locator(scroller).evaluate((el) => el.scrollTop) - target)).toBeLessThanOrEqual(1)
-    // Off System the card comes back in place of its reserve: the list keeps its scroll there too.
+    // The card never leaves the task panel: the list keeps its scroll on every section.
     await pickRail(page, 'All')
     await expect(banner(page)).toHaveCount(1)
     expect(Math.abs(await page.locator(scroller).evaluate((el) => el.scrollTop) - target)).toBeLessThanOrEqual(1)
@@ -253,7 +248,7 @@ test.describe('the task panel mount holds the list still', () => {
     expect(await order()).toEqual(before)
   })
 
-  test('C46: a wide task panel does not move under the panel\'s System section (the reserve holds the card height)', async ({ page }) => {
+  test('C46: a wide task panel does not move under the panel\'s System section (the card stays, same node, same height)', async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 900 })
     await bpSetup(page)
     await expectTasksCard(page)
@@ -275,11 +270,12 @@ test.describe('the task panel mount holds the list still', () => {
     }, { intervals: [400], timeout: 20_000 }).toBeGreaterThanOrEqual(3)
     const rowSel = await firstRow(page)
     const before = await topOf(page, rowSel)
-    await openPanelCard(page)
-    await expect(reserve(page)).toHaveCount(1)
-    expect(Math.abs((await reserve(page).boundingBox())!.height - cardH)).toBeLessThanOrEqual(1)
+    const place = await markHomeCard(page)
+    expect(Math.abs(place.height - cardH)).toBeLessThanOrEqual(1)
+    await openSystemHosts(page)
+    await expectHomeCardStill(page, place, 'System open')
     expect(Math.abs(await topOf(page, rowSel) - before)).toBeLessThanOrEqual(1)
-    await page.screenshot({ path: `${BP_SHOTS}/p3-c46-wide-panel-reserve.png` })
+    await page.screenshot({ path: `${BP_SHOTS}/p3-c46-wide-panel-system.png` })
   })
 })
 
@@ -331,15 +327,15 @@ test.describe('the card waits for the pointer (5.5)', () => {
 })
 
 test.describe('the Errors group and the System rail', () => {
-  test('C57: a host cause group is named by the host label with a "Shown in System" link that opens System; dismissing the card row there keeps the group and drops the link', async ({ page }) => {
-    await bpSetup(page, {
+  test('C57: a host cause group is named by the host label with a "Shown in System" link that opens System on the host\'s row, open; a Home card dismissal keeps the link; the host recovering drops it, never the group', async ({ page }) => {
+    const h = await bpSetup(page, {
       hosts: [connected('devbox', 'Dev box'), failed('certbox', 'Cert box', 'cert_expired')],
       feed: [hostErrorRecord('certbox', 1), hostErrorRecord('certbox', 2)],
     })
     await expectTasksCard(page, ['certbox'])
     await openBell(page)
     await pickRail(page, 'Errors')
-    // Off System the card stays in the task panel; the Errors view points at where it will be.
+    // No section holds the card; the Errors view points at the host's row in System.
     await expect(panelBanner(page)).toHaveCount(0)
     const title = page.locator('.notification-panel .nfc-cause-header .nfc-cat-title[data-cause-key="host:certbox"]')
     await expect(title.locator('.nfc-cat-name')).toHaveText("Can't reach Cert box")
@@ -349,10 +345,23 @@ test.describe('the Errors group and the System rail', () => {
     await page.screenshot({ path: `${BP_SHOTS}/p3-c57-errors-group.png` })
     await link.click()
     await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
-    const card = panelBanner(page)
-    await expect(card).toHaveCount(1)
-    await expect(card.locator('li.hpb-row[data-host="certbox"]')).toBeVisible()
-    await card.getByRole('button', { name: 'Dismiss Cert box' }).click()
+    const r = systemHostRow(page, 'certbox')
+    await expect(r).toBeVisible()
+    await expect(r).toHaveClass(/hpb-open/)
+    await expect(r.locator('.hft-hint')).toBeVisible()
+    await expect(systemHosts(page).getByRole('button', { name: 'Dismiss Cert box' })).toHaveCount(0)
+    await closePanel(page, 'escape')
+    // The Home card's x hides the card row; the System list is a status list and keeps it.
+    await row(page, 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
+    await expect(row(page, 'certbox')).toHaveCount(0)
+    await openBell(page)
+    await pickRail(page, 'Errors')
+    await expect(link).toHaveCount(1)
+    await pickRail(page, 'System')
+    await expect(systemHostRow(page, 'certbox')).toBeVisible()
+    // Recovered: the list shows a plain Connected line, so the link goes; the group stays.
+    await h.push(connected('certbox', 'Cert box'))
+    await expect(systemHostRow(page, 'certbox')).toHaveCount(0, { timeout: 10_000 })
     await pickRail(page, 'Errors')
     await expect(title.locator('.nfc-cat-name')).toHaveText("Can't reach Cert box")
     await expect(title.locator('.nfc-cat-shown')).toHaveCount(0)

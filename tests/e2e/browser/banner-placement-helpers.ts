@@ -1,15 +1,16 @@
 /**
  * Shared helpers for the banner-placement specs (BP-C<n>): the attention card
- * lives in the task panel on Home (data-mount="tasks"), in the notification
- * panel's System section on any route (data-mount="notifications", the first
- * block of `.nfc-detail`, above the pane's cards), and falls back to the slot
- * or the draft column only while the task panel is hidden. The panel owns the
- * card only while its System section shows: on any other section the in-page
- * card stays where it is. The bell opens the panel on Needs Action when an ask
+ * lives in the task panel on Home (data-mount="tasks") and falls back to the
+ * slot or the draft column only while the task panel is hidden. The
+ * notification panel never holds the card: its System section lists every
+ * host once (the Remote hosts block), a problem host as the Home card's own
+ * row (dense, same headline, buttons and Show details, no x), every other host
+ * as a plain status line. The bell opens the panel on Needs Action when an ask
  * waits, else on System when no in-page card covers the problem (/notes, a
  * hidden task panel), else on All. Host frames and local health are routed
  * client-side (host-problems-helpers.ts), so no remote host is dialed and
- * nothing reaches a real server beyond the fixture.
+ * nothing reaches a real server beyond the fixture; bpSetup lists the routed
+ * hosts in the health, as the server lists its configured ones.
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import { expect, type Locator, type Page } from '@playwright/test'
@@ -43,13 +44,25 @@ export function triples(card: Locator): Promise<string[]> {
 export const hostsOf = (card: Locator): Promise<Array<string | null>> =>
   card.locator('li.hpb-row[data-host]').evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
 export const cardRow = (card: Locator, host: string): Locator => card.locator(`li.hpb-row[data-host="${host}"]`)
-export const reserve = (page: Page): Locator => page.locator('.ab-mount-reserve')
+/** The System section's Remote hosts block (every configured host once). */
+export const systemHosts = (page: Page): Locator => page.locator('.notification-panel [data-testid="nfc-remote-hosts"]')
+/** A problem host's row in the System list: the Home card's row for that host. */
+export const systemHostRow = (page: Page, host: string): Locator => systemHosts(page).locator(`li.hpb-row[data-host="${host}"]`)
+/** A host's plain status line in the System list (healthy, disabled, off, connecting, a version floor). */
+export const systemHostLine = (page: Page, host: string): Locator => systemHosts(page).locator(`li.nfc-daemon-row[data-host="${host}"]`)
+/** Every host the System list names, in its order, row or line. */
+export const systemListHosts = (page: Page): Promise<Array<string | null>> =>
+  systemHosts(page).locator('ul.nfc-host-list > li[data-host]').evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
+/** The hosts the System list gives a row (a problem), in its order. */
+export const systemRowHosts = (page: Page): Promise<Array<string | null>> => hostsOf(systemHosts(page))
+/** This machine's Claude Code notice at the top of System (only while the local notice shows). */
+export const systemLocalCard = (page: Page): Locator => page.locator('.notification-panel [data-testid="nfc-local-claude"]')
 export const toolbarHide = (page: Page): Locator => page.locator('.todo-panel-toolbar .todo-panel-hide')
 export const railButton = (page: Page, label: string): Locator =>
   page.locator('.notification-panel .nfc-rail .nfc-rail-btn', { has: page.locator('.nfc-rail-name', { hasText: new RegExp(`^${label}$`) }) })
 /** The System rail entry's count (git sync, the search index, each problem host, the local notice). */
 export const systemBadge = (page: Page): Locator => railButton(page, 'System').locator('.nfc-rail-badge')
-/** Any attention mount inside the notification panel (only its System section renders one). */
+/** Any attention mount inside the notification panel: there is none on any section. */
 export const panelMount = (page: Page): Locator => page.locator('.notification-panel .ab-mount')
 export const settingsEntry = (page: Page): Locator => page.getByTestId('sidebar-core-app-settings')
 export const settingsDot = (page: Page): Locator => settingsEntry(page).locator('.sidebar-host-dot')
@@ -149,6 +162,8 @@ export interface BpOptions {
   before?: (page: Page) => Promise<void>
   /** Open the All section and the All project, so task rows (.todo-panel-item) exist. */
   allTasks?: boolean
+  /** List the routed hosts in the health, so System names them (default true). */
+  listHosts?: boolean
 }
 
 /** git-sync reads healthy, so the bell's older system dot (hasIssues) never mixes into a host or local reason. */
@@ -163,7 +178,7 @@ export async function bpSetup(page: Page, opts: BpOptions = {}): Promise<Hosts> 
   if (opts.feed) await seedFeed(page, opts.feed)
   if (opts.allTasks) await presetPanelView(page)
   if (opts.before) await opts.before(page)
-  const h = await setup(page, opts.hosts ?? fixtureHosts(), opts.local)
+  const h = await setup(page, opts.hosts ?? fixtureHosts(), opts.local, { listHosts: opts.listHosts ?? true })
   return h
 }
 
@@ -182,16 +197,33 @@ export async function pickRail(page: Page, label: string): Promise<void> {
 
 /**
  * Open the bell, then the System section with a real click unless the panel
- * already landed there; the card is in the panel, the only one on the page.
+ * already landed there; returns its Remote hosts block. No card in the panel.
  */
-export async function openPanelCard(page: Page): Promise<Locator> {
+export async function openSystemHosts(page: Page): Promise<Locator> {
   await openBell(page)
   const system = railButton(page, 'System')
   if (await system.getAttribute('aria-current') !== 'true') await system.click()
   await expect(system).toHaveAttribute('aria-current', 'true')
-  await expect(panelBanner(page)).toHaveCount(1)
-  await expect(anyBanner(page)).toHaveCount(1)
-  return panelBanner(page)
+  await expect(systemHosts(page)).toBeVisible({ timeout: 20_000 })
+  await expect(panelBanner(page)).toHaveCount(0)
+  return systemHosts(page)
+}
+
+export interface CardPlace { y: number; height: number }
+/** Mark the Home card's node (a remount is a new node and loses the mark); returns its place. */
+export async function markHomeCard(page: Page): Promise<CardPlace> {
+  await banner(page).evaluate((el) => { el.setAttribute('data-bp-mark', 'kept') })
+  const b = (await banner(page).boundingBox())!
+  return { y: b.y, height: b.height }
+}
+/** The Home card is the node markHomeCard marked, in the same place at the same height. */
+export async function expectHomeCardStill(page: Page, before: CardPlace, label = ''): Promise<void> {
+  await expect(banner(page), `${label}: the Home card`).toHaveCount(1)
+  await expect(banner(page), `${label}: the same node`).toHaveAttribute('data-bp-mark', 'kept')
+  await expect(anyBanner(page), `${label}: one card`).toHaveCount(1)
+  const b = (await banner(page).boundingBox())!
+  expect(Math.abs(b.y - before.y), `${label}: card top`).toBeLessThanOrEqual(1)
+  expect(Math.abs(b.height - before.height), `${label}: card height`).toBeLessThanOrEqual(1)
 }
 
 /** Box gap between two elements (0 when they touch or overlap). */

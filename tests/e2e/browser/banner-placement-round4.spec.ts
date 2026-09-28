@@ -11,7 +11,8 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { banner, connected, failed, isolatePrefs, resetServerHostFixture, routeHealth, row, signedOut } from './host-problems-helpers'
 import { loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bellDot, bpSetup, cardRow, openPanelCard, openRow, pickRail, railButton, settingsDot, toolbarHide,
+  BP_SHOTS, bellDot, bpSetup, expectHomeCardStill, markHomeCard, openRow, openSystemHosts, pickRail, railButton, settingsDot,
+  systemHostLine, systemHostRow, systemHosts, toolbarHide,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -26,15 +27,18 @@ const dismissed = (page: Page): Promise<string[]> => page.evaluate(() => {
 })
 
 test.describe('undo lines (N3-1, N3-12, N3-13)', () => {
-  test('BP-R4-N3-1: a row hidden in the panel keeps its height in the task panel card; the pointer coming back moves nothing; Dismiss all dismisses', async ({ page }) => {
+  test('BP-R4-N3-1: a Home card row hidden before a panel open keeps its height through it (System lists the host all along); the pointer coming back moves nothing; Dismiss all dismisses', async ({ page }) => {
     await bpSetup(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    const card = await openPanelCard(page)
-    const rowH = (await box(cardRow(card, 'certbox'))).height
-    await card.getByRole('button', { name: 'Dismiss Cert box' }).click()
+    const rowH = (await box(row(page, 'certbox'))).height
+    await banner(page).getByRole('button', { name: 'Dismiss Cert box' }).click()
     await page.waitForTimeout(450)
+    const place = await markHomeCard(page)
+    await openSystemHosts(page)
+    await expect(systemHostRow(page, 'certbox')).toBeVisible()
     await page.locator('.notification-panel-close').click()
-    await expect(panelBanner(page)).toHaveCount(0)
+    await expect(page.locator('.notification-panel')).toHaveCount(0)
+    await expectHomeCardStill(page, place, 'after the panel')
     const undo = banner(page).getByTestId('hpb-undo-row')
     await expect(undo).toHaveCount(1)
     await expect(undo).toContainText('Cert box hidden until it changes.')
@@ -142,26 +146,27 @@ test.describe('landing and the cap (N3-2, N3-3, N3-18, N3-21)', () => {
   })
 })
 
-test.describe('C22 in the panel with the pointer resting in it', () => {
-  test('BP-R4-C22: the success line replaces the row at once and never shows the old failure again', async ({ page }) => {
+test.describe('C22 in System with the pointer resting in it', () => {
+  test('BP-R4-C22: after a Retry that works the System entry reads Connected at once and never shows the old failure again; the Home card shows the success line', async ({ page }) => {
     const h = await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')] })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     h.connectDelayMs = 1500
     h.connectAnswer = (host) => connected(host, 'Net box')
-    const card = await openPanelCard(page)
-    await cardRow(card, 'netbox').getByTestId('hpb-retry').click()
-    // The pointer rests in the System section, below the card (the layout hold is on there, never over the rail).
+    await openSystemHosts(page)
+    await systemHostRow(page, 'netbox').getByTestId('hpb-retry').click()
+    // The pointer rests in the System section, below the host list.
     const detail = await box(page.locator('.notification-panel .nfc-detail'))
-    const cb = await box(card)
-    const y = detail.y + detail.height - 40
-    expect(y).toBeGreaterThan(cb.y + cb.height)
+    const lb = await box(systemHosts(page))
+    const y = Math.min(detail.y + detail.height - 40, lb.y + lb.height + 20)
+    expect(y).toBeGreaterThan(lb.y + lb.height)
     await page.mouse.move(detail.x + detail.width / 2, y, { steps: 4 })
-    const net = card.locator('li.hpb-row[data-host="netbox"]')
-    await expect(net).toContainText('Net box is ready', { timeout: 10_000 })
+    const net = systemHosts(page).locator('li[data-host="netbox"]')
+    await expect(systemHostLine(page, 'netbox').locator('.nfc-daemon-status')).toHaveText('Connected', { timeout: 10_000 })
+    await expect(row(page, 'netbox')).toContainText('Net box is ready')
     for (let i = 0; i < 6; i++) {
       await page.waitForTimeout(700)
-      const text = await net.count() ? await net.innerText() : ''
-      expect(text).not.toContain('Could not connect')
+      await expect(net).toHaveCount(1)
+      expect(await net.innerText()).not.toContain('Could not connect')
     }
   })
 })
@@ -266,20 +271,24 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
     expect(await colour(bellDot(page))).toBe(await colour(settingsDot(page)))
   })
 
-  test('BP-R4-N3-15: System pane: a failed connect reads in its red dot tone, a sign-in problem in warn, the outdated host stays quiet', async ({ page, request }) => {
+  test('BP-R4-N3-15: System pane: a failed connect and a sign-in problem are their card rows, with the Home card\'s own dot and headline tone; the outdated host stays a quiet line', async ({ page, request }) => {
     await isolatePrefs(page)
     await loadFixture(request, 'host-problems')
     await loadApp(page)
+    await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     await railButton(page, 'System').click()
-    const status = (host: string) => page.locator(`.nfc-daemon-row[data-host="${host}"] .nfc-daemon-status`)
-    await expect(status('certbox')).toHaveClass(/\berror\b/, { timeout: 20_000 })
-    await expect(status('signbox')).toHaveClass(/\bwarn\b/)
-    await expect(status('buildbox')).not.toHaveClass(/\b(warn|error)\b/)
-    const [dot, text] = await page.locator('.nfc-daemon-row[data-host="certbox"]').evaluate((el) => [
-      getComputedStyle(el.querySelector<HTMLElement>('.hsd')!).backgroundColor, getComputedStyle(el.querySelector<HTMLElement>('.nfc-daemon-status')!).color,
-    ])
-    expect(text).toBe(dot)
+    const look = (r: Locator) => r.evaluate((el) => {
+      const dot = el.querySelector<HTMLElement>('.hpb-dot .hsd')!
+      const head = el.querySelector<HTMLElement>('.hft-headline, .hpb-headline')!
+      return { kind: dot.getAttribute('data-kind'), dot: getComputedStyle(dot).backgroundColor, head: getComputedStyle(head).color }
+    })
+    for (const host of ['certbox', 'signbox']) {
+      await expect(systemHostRow(page, host), host).toBeVisible({ timeout: 20_000 })
+      expect(await look(systemHostRow(page, host)), host).toEqual(await look(row(page, host)))
+    }
+    expect((await look(systemHostRow(page, 'certbox'))).kind).not.toBe((await look(systemHostRow(page, 'signbox'))).kind)
+    await expect(systemHostLine(page, 'buildbox').locator('.nfc-daemon-status')).not.toHaveClass(/\b(warn|error)\b/)
   })
 
   test('BP-R4-N3-22: with the task panel hidden, the slot card keeps its rows near their words (at most 720px)', async ({ page }) => {
@@ -291,7 +300,7 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
     expect((await box(slot)).width).toBeLessThanOrEqual(721)
   })
 
-  test('BP-R4-C42: the panel is a dialog on every section, with the card (System) or without it (All); Tab walks every rail button, WebKit included', async ({ page }) => {
+  test('BP-R4-C42: the panel is a dialog on every section, with host rows (System) or without them (All), never a card; Tab walks every rail button, WebKit included', async ({ page }) => {
     await bpSetup(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
@@ -307,9 +316,10 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
     await expect(railButton(page, 'Inbox')).toBeFocused()
     await page.keyboard.press('Shift+Tab')
     await expect(railButton(page, 'Needs Action')).toBeFocused()
-    // System: the card arrives, the contract is the same.
+    // System: the host rows arrive (no card), the contract is the same.
     await pickRail(page, 'System')
-    await expect(panelBanner(page)).toHaveCount(1)
+    await expect(systemHosts(page).locator('li.hpb-row')).toHaveCount(4)
+    await expect(panelBanner(page)).toHaveCount(0)
     await expect(panel).toHaveAttribute('role', 'dialog')
     await expect(panel).toHaveAttribute('aria-modal', 'true')
     await railButton(page, 'Needs Action').focus()

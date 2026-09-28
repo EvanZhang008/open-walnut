@@ -81,8 +81,12 @@ export const hostRow = (page: Page, alias: string): Locator => page.locator(`#rh
 export const slotBanner = (page: Page): Locator => page.locator('.main-page-chat [data-testid="attention-banner"]')
 /** The task panel's card (the default layout). */
 export const tasksBanner = (page: Page): Locator => page.locator('.todo-panel [data-testid="attention-banner"][data-mount="tasks"]')
-/** The notification panel's card (any route, while the panel shows its System section). */
-export const panelBanner = (page: Page): Locator => page.locator('.notification-panel [data-testid="attention-banner"][data-mount="notifications"]')
+/**
+ * Any attention card inside the notification panel. There is none, on any
+ * section: System lists each host once instead (its Remote hosts block), so
+ * specs assert this count stays 0.
+ */
+export const panelBanner = (page: Page): Locator => page.locator('.notification-panel [data-testid="attention-banner"]')
 /** The rail's bell (the notification panel's opener and its dot). */
 export const bell = (page: Page): Locator => page.locator('.sidebar-notification-btn')
 

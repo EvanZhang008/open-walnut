@@ -1,5 +1,6 @@
 /**
- * One row of the home banner's host section (li.hpb-row). The sentences come
+ * One row of the home banner's host section (li.hpb-row), and of the
+ * notification panel's System host list (`statusList`: no x). The sentences come
  * from the shared model (@open-walnut/host-problem) and the server verbatim;
  * the buttons are hostActionsFor(surface 'banner') and run through
  * useHostActions, the same implementation Settings and the picker use.
@@ -38,7 +39,13 @@ export interface HostRowProps {
   /** Several rows: until opened, the headline on one line, then the primary action and the details toggle. */
   dense?: boolean;
   leaving?: boolean;
-  onDismiss: (row: BannerRow) => void;
+  /** The row x. Absent: no x (the System list is a status list). */
+  onDismiss?: (row: BannerRow) => void;
+  /**
+   * A row of the notification panel's System host list: never an x, and its
+   * height is not the card's (the card's success line takes the CARD row's height).
+   */
+  statusList?: boolean;
   onOpenSettings: (alias?: string) => void;
 }
 
@@ -167,14 +174,16 @@ function Receipts({ actions }: { actions: HostActions }) {
 /** The last height of each host's problem row: its success line takes the same height (nothing below moves). */
 const lastRowHeight = new Map<string, number>();
 
-function RowFrame({ row, lockRef, minHeight, maxHeight, leaving, body, onDismiss, dot, singleLine, dense, open, receipt }: {
+function RowFrame({ row, lockRef, minHeight, maxHeight, leaving, body, onDismiss, dot, singleLine, dense, open, receipt, statusList }: {
   row: BannerRow; lockRef: React.RefObject<HTMLLIElement | null>; minHeight?: number; maxHeight?: number; leaving?: boolean;
   body: ReactNode; onDismiss?: () => void; dot: ReactNode; singleLine?: boolean; dense?: boolean; open?: boolean; receipt?: boolean;
+  statusList?: boolean;
 }) {
   const label = row.labels.join(', ');
   const dismissLabel = `Dismiss ${label}`;
   // The height before any attempt (a locked row may have grown while trying).
   useLayoutEffect(() => {
+    if (statusList) return;
     const h = lockRef.current?.getBoundingClientRect().height;
     if (h && !leaving && minHeight === undefined) lastRowHeight.set(row.hosts[0], h);
   });
@@ -238,7 +247,7 @@ export function splitReadinessMessage(message: string): { head: string; rest: st
 }
 
 /** A row for ONE host: connect failure, reconnect with a cause, readiness, or an attempt in flight. */
-export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving, onDismiss, onOpenSettings }: HostRowProps) {
+export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving, onDismiss, statusList, onOpenSettings }: HostRowProps) {
   const alias = row.hosts[0];
   const label = row.labels[0];
   const status = useHostStatus(alias);
@@ -314,9 +323,9 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
     <RowFrame
       row={row} lockRef={ref} minHeight={minHeight} maxHeight={maxHeight} leaving={leaving}
       body={body} receipt={hasReceipt}
-      onDismiss={row.dismissKeys.length ? () => onDismiss(row) : undefined}
+      onDismiss={!statusList && onDismiss && row.dismissKeys.length ? () => onDismiss(row) : undefined}
       dot={<HostStatusDot host={alias} label={label} decorative />}
-      singleLine={singleLine} dense={dense} open={expanded}
+      singleLine={singleLine} dense={dense} open={expanded} statusList={statusList}
     />
   );
 }
@@ -390,7 +399,7 @@ export function GroupRow({ row, defaultExpanded, singleLine, dense, leaving, onD
     <RowFrame
       row={row} lockRef={ref} minHeight={minHeight} maxHeight={maxHeight} leaving={leaving}
       body={body}
-      onDismiss={() => onDismiss(row)}
+      onDismiss={onDismiss ? () => onDismiss(row) : undefined}
       dot={<HostStatusDot dot={{ kind: row.type === 'trying' || pending ? 'connecting' : 'failed', title: row.headline ?? '' }} decorative />}
       singleLine={singleLine} dense={dense} open={expanded}
     />

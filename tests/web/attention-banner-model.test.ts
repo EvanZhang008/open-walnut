@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  EMPTY_BANNER_STATE, HOST_TITLE, READY_HOLD_MS, nextBanner, visibleCount,
+  EMPTY_BANNER_STATE, HOST_TITLE, READY_HOLD_MS, bannerHostRowId, hostRowFor, nextBanner, visibleCount,
   type BannerInput, type BannerState,
 } from '../../web/src/utils/attention-banner-model'
 import { BANNER_READINESS_KINDS, hostProblemOf, type HostStatusInput } from '../../src/core/hosts/host-problem'
@@ -331,5 +331,64 @@ describe('attention banner model: replica parity (C45)', () => {
     }
     expect(view.rows.some((r) => r.hosts.includes('buildbox'))).toBe(false)
     expect(view.moreHosts).toEqual([])
+  })
+})
+
+describe('attention banner model: one host alone (hostRowFor, the System list)', () => {
+  // The fixtures/host-problems.json set, in Settings order.
+  const fixture = (): S[] => [
+    connected('devbox', 'Dev box'), outdated('buildbox', 'Build box'), signedOut('signbox', 'Sign box'),
+    failed('keybox', 'Key box', 'auth'), failed('certbox', 'Cert box', 'cert_expired', { retryAt: NOW + 192_000 }),
+    failed('netbox', 'Net box', 'unreachable'),
+  ]
+
+  it.each([false, true])('replica=%s: every host the card gives its own row gets the SAME row (id, type, words, buttons, keys)', (replica) => {
+    const statuses = fixture()
+    const card = run([input(statuses, { replica })]).view.rows
+    for (const r of card.filter((x) => x.id.startsWith('host:'))) {
+      const s = statuses.find((x) => x.host === r.hosts[0])!
+      expect(hostRowFor(s, { now: NOW, replica }), r.id).toEqual(r)
+      expect(r.id).toBe(bannerHostRowId(s.host))
+    }
+    // The card's own rows here: keybox, netbox, signbox alone; certbox waits on a login (a cred row).
+    expect(card.map((r) => r.id)).toEqual(['host:keybox', 'cred:cert_expired', 'host:netbox', 'host:signbox'])
+  })
+
+  it('a host waiting on a login keeps its own row (never grouped), with the card\'s words and buttons for it', () => {
+    const statuses = [...fixture(), failed('certbox2', 'Cert box 2', 'cert_expired')]
+    const cred = run([input(statuses)]).view.rows.find((r) => r.id === 'cred:cert_expired')!
+    expect(cred.hosts).toEqual(['certbox', 'certbox2'])
+    for (const host of ['certbox', 'certbox2']) {
+      const s = statuses.find((x) => x.host === host)!
+      const row = hostRowFor(s, { now: NOW })!
+      expect(row).toMatchObject({ id: `host:${host}`, type: 'connect', hosts: [host], labels: [s.label], kind: 'cert_expired', actions: cred.actions })
+      expect(row.headline).toBe(`Could not connect to ${s.label}: SSH certificate expired`)
+    }
+  })
+
+  it('no row: a healthy host, a version floor, a host connecting, a young reconnect, a removed host', () => {
+    expect(hostRowFor(connected('devbox', 'Dev box'), { now: NOW })).toBeNull()
+    expect(hostRowFor(outdated('buildbox', 'Build box'), { now: NOW })).toBeNull()
+    expect(hostRowFor(connecting('netbox', 'Net box'), { now: NOW })).toBeNull()
+    const young: S = { host: 'netbox', label: 'Net box', connected: false, phase: 'reconnecting', reconnectSince: NOW - 30_000, lastKind: 'unreachable', at: NOW }
+    expect(hostRowFor(young, { now: NOW })).toBeNull()
+    // Two minutes on, with a cause: the card's reconnect row, with Connect now.
+    expect(hostRowFor({ ...young, reconnectSince: NOW - 180_000 }, { now: NOW })).toMatchObject({ type: 'reconnecting', actions: ['connectNow'] })
+    expect(hostRowFor({ ...failed('keybox', 'Key box', 'auth'), removed: true }, { now: NOW })).toBeNull()
+  })
+
+  it('dismissals never matter: a dismissed host still has its row', () => {
+    const statuses = fixture()
+    const dismissed = new Set(['keybox|connect'])
+    expect(run([input(statuses, { dismissed })]).view.rows.map((r) => r.id)).not.toContain('host:keybox')
+    expect(hostRowFor(statuses.find((x) => x.host === 'keybox')!, { now: NOW })?.id).toBe('host:keybox')
+  })
+
+  it('a row on screen stays through an attempt (G9): the user\'s own reads as theirs; healed, it goes', () => {
+    const shown = hostRowFor(failed('keybox', 'Key box', 'auth'), { now: NOW })!
+    const attempt = hostRowFor(connecting('keybox', 'Key box'), { now: NOW, userRetrying: new Set(['keybox']) }, shown)
+    expect(attempt).toMatchObject({ id: 'host:keybox', type: 'trying', by: 'user', actions: [] })
+    expect(hostRowFor(connecting('keybox', 'Key box'), { now: NOW }, shown)).toMatchObject({ type: 'trying', by: 'auto' })
+    expect(hostRowFor(connected('keybox', 'Key box'), { now: NOW }, attempt)).toBeNull()
   })
 })

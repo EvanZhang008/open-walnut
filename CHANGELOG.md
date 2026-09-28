@@ -8,13 +8,16 @@ breaking changes).
 
 ### Changed
 
-- **Host problems sit inside a section, not above them.** The attention card (a remote host that
-  cannot be reached, or a Claude Code that is missing or not signed in) stays at the top of the
-  task panel on Home. In the notifications panel it is now the first block of the System section
-  instead of a strip between the header and every section, and the System badge counts each problem
-  host. The bell opens on System when no card on the page shows the problem (another route, or the
-  task panel hidden); a pending ask still opens Needs Action. In Errors, a host's failures link to it
-  with `Shown in System`.
+- **Host problems read the same on Home and in the notifications panel, and appear once.** The
+  attention card (a remote host that cannot be reached, or a Claude Code that is missing or not
+  signed in) stays at the top of the task panel on Home. The notifications panel no longer shows a
+  second copy of it above its sections: the System section's `Remote hosts` list names every host
+  once, and a host with a problem is the same row as on Home (the sentence, the Retry or Check again
+  button, `Show details` for the reason and Open Settings), without the dismiss button. This
+  machine's Claude Code gets its own block there while it needs attention. The System badge counts
+  the problem hosts, the bell opens on System when no card on the page shows the problem (another
+  route, or the task panel hidden), and a pending ask still opens Needs Action. In Errors, a host's
+  failures link to its row with `Shown in System`.
 
 ## [0.5.0] - 2026-09-27
 

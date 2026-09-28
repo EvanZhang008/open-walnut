@@ -3,7 +3,8 @@
  * and the bell. The bell's number stays for human decisions (asks); a host or
  * local reason is a dot (a corner dot next to a number), named in its
  * accessible name and title. Also the System rail (4.2: it counts each
- * problem host) and the sign-in re-check that runs with no card mounted.
+ * problem host, and System lists each host once) and the sign-in re-check
+ * that runs with no card mounted.
  * Host frames and local health are routed client-side; BP-C58 uses the
  * server's host fixture (the System pane lists the server's hosts).
  *
@@ -18,8 +19,8 @@ import {
 } from './host-problems-helpers'
 import { bell, fixtureFile, HEALTHY, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, askRecord, bellCount, bellDot, bpSetup, closePanel, expectTasksCard, goRail, healthyGitSync, openPanelCard,
-  openRow, panelMount, pickRail, railButton, reserve, settingsDot, settingsEntry, systemBadge,
+  BP_SHOTS, askRecord, bellCount, bellDot, bpSetup, closePanel, expectTasksCard, goRail, healthyGitSync, openRow, openSystemHosts,
+  pickRail, railButton, settingsDot, settingsEntry, systemBadge, systemHostRow, systemLocalCard,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -84,13 +85,14 @@ test.describe('the rail and the bell speak when no card is on the page', () => {
 })
 
 test.describe('local Claude Code: the re-check and the version floor', () => {
-  test('BP-C49: on /notes the sign-in re-check runs with no card mounted; opening the panel asks once; signing in clears the dot', async ({ page }) => {
+  test('BP-C49: on /notes the sign-in re-check runs with no card mounted; System\'s Claude Code card asks once; signing in clears the dot', async ({ page }) => {
     const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box')], local: 'sign-in' })
     await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible({ timeout: 20_000 })
     await goRail(page, 'notes')
     await expect(bell(page)).toHaveAttribute('aria-label', LOCAL_REASON)
     const n0 = h.health!.rechecks
-    await openPanelCard(page)
+    await openSystemHosts(page)
+    await expect(systemLocalCard(page)).toBeVisible()
     await page.waitForTimeout(1500)
     expect(h.health!.rechecks - n0).toBe(1)
     await closePanel(page, 'escape')
@@ -114,6 +116,8 @@ test.describe('local Claude Code: the re-check and the version floor', () => {
     await expect(panelBanner(page)).toHaveCount(0)
     await pickRail(page, 'System')
     await expect(panelBanner(page)).toHaveCount(0)
+    // An old Claude Code here is never a notice: no Claude Code card in System either.
+    await expect(systemLocalCard(page)).toHaveCount(0)
     await expect(systemBadge(page)).toHaveCount(0)
     const ctx = await browser.newContext()
     const page2 = await ctx.newPage()
@@ -132,7 +136,7 @@ test.describe('local Claude Code: the re-check and the version floor', () => {
 test.describe('the System rail (server fixture)', () => {
   test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 
-  test('BP-C58: an unreachable host counts 1 on the System rail, and its card is in System; an outdated host alone counts nothing, but is listed', async ({ page, browser, request }) => {
+  test('BP-C58: an unreachable host counts 1 on the System rail, and its row is in System; an outdated host alone counts nothing, but is listed', async ({ page, browser, request }) => {
     await loadFixture(request, fixtureFile({
       devbox: { label: 'Dev box', hostname: 'dev.example.com', phase: 'connected', claude: HEALTHY },
       netbox: { label: 'Net box', hostname: 'net.example.com', phase: 'failed', error: 'ssh: connect to host net.example.com port 22: Network is unreachable' },
@@ -149,7 +153,8 @@ test.describe('the System rail (server fixture)', () => {
     await expect(system.locator('.nfc-rail-dot')).toHaveCount(0)
     await pickRail(page, 'System')
     await expect(page.locator('.notification-panel .notification-card-label', { hasText: /^Remote hosts$/ })).toHaveCount(1)
-    await expect(panelBanner(page).locator('li.hpb-row[data-host="netbox"]')).toBeVisible()
+    await expect(systemHostRow(page, 'netbox')).toBeVisible()
+    await expect(panelBanner(page)).toHaveCount(0)
     await expect(systemBadge(page)).toHaveText('1')
     await loadFixture(request, fixtureFile({
       devbox: { label: 'Dev box', hostname: 'dev.example.com', phase: 'connected', claude: HEALTHY },
@@ -168,7 +173,8 @@ test.describe('the System rail (server fixture)', () => {
       await expect(page2.locator('.notification-detail-row[data-host="buildbox"]')).toBeVisible({ timeout: 20_000 })
       await expect(system2.locator('.nfc-rail-dot')).toHaveCount(0)
       await expect(systemBadge(page2)).toHaveCount(0)
-      await expect(panelMount(page2).locator('[data-testid="attention-banner"]')).toHaveCount(0)
+      await expect(panelBanner(page2)).toHaveCount(0)
+      await expect(page2.locator('.notification-panel li.hpb-row')).toHaveCount(0)
       await page2.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c58-system-outdated-only.png` })
     } finally {
       await ctx.close()
@@ -229,10 +235,10 @@ test.describe('the bell names its reason word for word', () => {
   })
 })
 
-test.describe('the reserve and the Remote hosts pane', () => {
+test.describe('Open Settings from System and the Remote hosts pane', () => {
   test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 
-  test('BP-C68: no reserve off Home or after Open Settings; on the Remote hosts pane neither dot speaks, on another pane both do', async ({ page, request }) => {
+  test('BP-C68: the Home card is back after /notes and after Open Settings from System; on the Remote hosts pane neither dot speaks, on another pane both do', async ({ page, request }) => {
     // The server's fixture: Settings lists these hosts, so #rh-host-netbox is a real row.
     await loadFixture(request, 'host-problems')
     await isolatePrefs(page)
@@ -242,14 +248,14 @@ test.describe('the reserve and the Remote hosts pane', () => {
     await expectTasksCard(page)
     await goRail(page, 'notes')
     await openBell(page)
-    await expect(reserve(page)).toHaveCount(0)
+    await expect(panelBanner(page)).toHaveCount(0)
     await closePanel(page, 'escape')
     await goRail(page, 'home')
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    const card = await openPanelCard(page)
-    // Several rows start closed (dense): Show details puts the row's Open Settings on screen.
-    await openRow(card.locator('li.hpb-row[data-host="keybox"]'))
-    await card.locator('li.hpb-row[data-host="keybox"]').getByTestId('hpb-open-settings').click()
+    await openSystemHosts(page)
+    // Rows start closed (dense): Show details puts the row's Open Settings on screen.
+    await openRow(systemHostRow(page, 'keybox'))
+    await systemHostRow(page, 'keybox').getByTestId('hpb-open-settings').click()
     await expect(page).toHaveURL(/\/settings#rh-host-keybox$/)
     await expect(page.locator('.notification-panel')).toHaveCount(0)
     await expect(settingsDot(page)).toHaveCount(0)
@@ -263,6 +269,6 @@ test.describe('the reserve and the Remote hosts pane', () => {
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications')
     await goRail(page, 'home')
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    await expect(reserve(page)).toHaveCount(0)
+    await expect(anyBanner(page)).toHaveCount(1)
   })
 })

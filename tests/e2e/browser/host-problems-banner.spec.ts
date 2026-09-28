@@ -33,7 +33,7 @@ import {
   reconnecting, resetServerHostFixture, routeHealth, row, rows, setup, signedOut, slotLayout, storedKeys, type HS,
 } from './host-problems-helpers'
 import { bannerRow, loadApp, loadFixture, panelBanner, slotBanner, wireHost } from './host-problems-fixture-helpers'
-import { openPanelCard } from './banner-placement-helpers'
+import { openSystemHosts, systemHostRow } from './banner-placement-helpers'
 
 test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
 
@@ -334,26 +334,30 @@ test.describe('home attention banner: reconnects, size, sync', () => {
     }
   })
 
-  test('a dismissal made in the notification panel\'s System section is hidden in a second browser too (C92 panel)', async ({ page, browser }) => {
-    await setup(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')], undefined, { serverPrefs: true })
+  test('a synced dismissal hides the row on the second browser\'s card while its System section still lists the host, with no x (C92 panel)', async ({ page, browser }) => {
+    const hosts = () => [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')]
+    await setup(page, hosts(), undefined, { serverPrefs: true })
     const synced = page.waitForResponse((r) => r.url().includes('/api/ui-prefs') && r.request().method() === 'PUT'
       && (r.request().postData() ?? '').includes(DISMISS_KEY), { timeout: 10_000 })
-    // The bell, then System (the card lives there; on Home the bell lands on All while the task card shows).
-    await openPanelCard(page)
-    await panelBanner(page).locator('li.hpb-row[data-host="signbox"]').getByRole('button', { name: 'Dismiss Sign box' }).click()
+    // The notification panel has no x: a dismissal is the card's.
+    await row(page, 'signbox').getByRole('button', { name: 'Dismiss Sign box' }).click()
     await synced
-    await page.keyboard.press('Escape')
     await expect(row(page, 'netbox')).toBeVisible()
     await expect(row(page, 'signbox')).toHaveCount(0)
     const other = await browser.newContext()
     const page2 = await other.newPage()
     try {
       const h2 = new Hosts(page2)
-      await h2.install([signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')])
-      await routeHealth(page2)
+      await h2.install(hosts())
+      await routeHealth(page2, 'ready', { daemons: () => hosts().map((s) => ({ host: s.host, label: s.label, connected: s.connected })) })
       await loadHome(page2)
       await expect(row(page2, 'netbox')).toBeVisible()
       await expect(row(page2, 'signbox')).toHaveCount(0)
+      // System is a status list: dismissals never hide a host there.
+      await openSystemHosts(page2)
+      await expect(systemHostRow(page2, 'signbox')).toBeVisible()
+      await expect(systemHostRow(page2, 'signbox').getByRole('button', { name: 'Dismiss Sign box' })).toHaveCount(0)
+      await expect(panelBanner(page2)).toHaveCount(0)
     } finally {
       const cleared = page.waitForResponse((r) => r.url().includes('/api/ui-prefs') && r.request().method() === 'PUT', { timeout: 10_000 }).catch(() => {})
       await page.evaluate((k) => localStorage.removeItem(k), DISMISS_KEY)

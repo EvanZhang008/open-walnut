@@ -164,14 +164,22 @@ export interface HealthControl {
   set(state: LocalState): Promise<void>
 }
 
+/** One configured host as /api/system/health lists it (the System section's host list). */
+export interface HealthDaemon { host: string; label?: string; connected: boolean }
+
 /**
  * This machine's Claude Code as /api/system/health reports it (ready by default).
  * The real server's own system:health pushes are dropped on the page, so the
  * routed state holds; the re-check route answers the current state and pushes it.
+ * `daemons`: the configured hosts the health lists (the server lists its config's
+ * hosts, which routed frames are not), read on every answer.
  */
-export async function routeHealth(page: Page, local: LocalState = 'ready'): Promise<HealthControl> {
+export async function routeHealth(page: Page, local: LocalState = 'ready', opts: { daemons?: () => HealthDaemon[] } = {}): Promise<HealthControl> {
   let baseBody: Record<string, unknown> = {}
-  const bodyFor = (state: LocalState) => ({ ...baseBody, hasReadyProvider: true, claudeCliAvailable: true, localClaude: localClaudeBody(state) })
+  const bodyFor = (state: LocalState) => ({
+    ...baseBody, hasReadyProvider: true, claudeCliAvailable: true, localClaude: localClaudeBody(state),
+    ...(opts.daemons ? { daemons: opts.daemons() } : {}),
+  })
   const pushHealth = (state: LocalState) => page.evaluate((data) => {
     const w = window as unknown as { __hpHealthWs?: WebSocket }
     if (!w.__hpHealthWs) return
@@ -259,7 +267,11 @@ export async function loadHome(page: Page): Promise<void> {
   }, null, { timeout: 20_000 })
 }
 
-export async function setup(page: Page, hosts: HS[], local?: LocalState, opts: { serverPrefs?: boolean } = {}): Promise<Hosts> {
+/**
+ * `listHosts`: the health lists the routed hosts as configured ones, so the
+ * notification panel's System section names them (in the order given).
+ */
+export async function setup(page: Page, hosts: HS[], local?: LocalState, opts: { serverPrefs?: boolean; listHosts?: boolean } = {}): Promise<Hosts> {
   await page.addInitScript((key) => { if (!sessionStorage.getItem('hp-keep')) localStorage.removeItem(key) }, DISMISS_KEY)
   // Dismissals and panel flags sync to the fixture server (ui-prefs); one
   // test's must not change another's, so none leaves the page. serverPrefs
@@ -267,7 +279,8 @@ export async function setup(page: Page, hosts: HS[], local?: LocalState, opts: {
   if (!opts.serverPrefs) await isolatePrefs(page)
   const h = new Hosts(page)
   await h.install(hosts)
-  h.health = await routeHealth(page, local)
+  const daemons = () => [...h.map.values()].map((s) => ({ host: s.host, label: s.label, connected: s.connected }))
+  h.health = await routeHealth(page, local, opts.listHosts ? { daemons } : {})
   await loadHome(page)
   return h
 }

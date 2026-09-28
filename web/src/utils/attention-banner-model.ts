@@ -165,9 +165,17 @@ function healthy(s: HostStatusInput, now: number): boolean {
 
 interface Candidate { row: BannerRow; settingsIndex: number }
 
-function problemRow(s: HostStatusInput, p: HostProblem, input: BannerInput): BannerRow | null {
+/** What a one-host row reads from the frame's input (the System list passes just these). */
+type RowInput = Pick<BannerInput, 'now' | 'replica' | 'userRetrying'>;
+
+/** A single host's row id (`host:<alias>`): the key of its expanded flag in the page session. */
+export function bannerHostRowId(alias: string): string {
+  return `host:${alias}`;
+}
+
+function problemRow(s: HostStatusInput, p: HostProblem, input: RowInput): BannerRow | null {
   const label = labelOf(s);
-  const base = { id: `host:${s.host}`, hosts: [s.host], labels: [label], frameAt: s.serverNow ?? s.at };
+  const base = { id: bannerHostRowId(s.host), hosts: [s.host], labels: [label], frameAt: s.serverNow ?? s.at };
   if (p.type === 'connect') {
     return {
       ...base, type: 'connect', group: 'connect', kind: p.kind, headline: p.headline, hint: p.hint,
@@ -195,9 +203,9 @@ function problemRow(s: HostStatusInput, p: HostProblem, input: BannerInput): Ban
   return null;
 }
 
-function tryingRow(s: HostStatusInput, prevRow: BannerRow, input: BannerInput): BannerRow {
+function tryingRow(s: HostStatusInput, prevRow: BannerRow, input: RowInput): BannerRow {
   return {
-    id: `host:${s.host}`, type: 'trying', group: prevRow.group, hosts: [s.host], labels: [labelOf(s)],
+    id: bannerHostRowId(s.host), type: 'trying', group: prevRow.group, hosts: [s.host], labels: [labelOf(s)],
     // The keys of the failure it is retrying: its x (and Dismiss all) still hide it.
     dismissKeys: prevRow.dismissKeys.filter((k) => k.startsWith(`${s.host}|`)),
     actions: [], by: input.userRetrying?.has(s.host) ? 'user' : 'auto',
@@ -209,6 +217,25 @@ function readyRow(s: HostStatusInput, group: BannerGroup): BannerRow {
     id: `ready:${s.host}`, type: 'ready', group, hosts: [s.host], labels: [labelOf(s)],
     dismissKeys: [], actions: [], sentence: hostReadySentence(labelOf(s), s.readiness?.claude?.version),
   };
+}
+
+/**
+ * One host's card row on its own: the notification panel's System list, which
+ * shows every host once. The card's own builders (problemRow, tryingRow), so
+ * the words and buttons cannot drift from the card; dismissals are ignored (a
+ * status list shows what IS) and hosts are never grouped (a cert_expired host
+ * keeps its own row). `prev` is the row this host showed last in that list:
+ * while an attempt runs it stays, reading the attempt, as on the card (G9).
+ * Null: the host takes a plain status line (healthy, connecting, off, a young
+ * reconnect, a version floor).
+ */
+export function hostRowFor(s: HostStatusInput, input: RowInput, prev: BannerRow | null = null): BannerRow | null {
+  if (s.removed) return null;
+  const p = hostProblemOf(s, { replica: input.replica, surface: 'banner' });
+  const row = p ? problemRow(s, p, input) : null;
+  if (row) return row;
+  if (prev && prev.type !== 'ready' && (inFlight(s, input.now) || p?.type === 'reconnecting')) return tryingRow(s, prev, input);
+  return null;
 }
 
 /** One row for every host waiting on the same login kind; the earliest real retry wins. */

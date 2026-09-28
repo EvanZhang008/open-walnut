@@ -169,7 +169,7 @@ describe('the height cap (C28, C29, C61)', () => {
     expect(hooks.cardCapPx(900, 20)).toBe(340)
     expect(hooks.cardCapPx(360, 20)).toBe(132)
     expect(hooks.MOUNT_CONTAINER).toEqual({
-      tasks: '.todo-panel', notifications: '.notification-panel', slot: '.main-page-chat',
+      tasks: '.todo-panel', slot: '.main-page-chat',
       draft: '.main-page-session-column, .draft-session-panel',
     })
   })
@@ -252,8 +252,8 @@ describe('the card mounted', async () => {
   })
 
   it('carries data-mount, and has no live region of its own (the announcer speaks, C64)', async () => {
-    await mount({ mount: 'notifications' })
-    expect(card()?.getAttribute('data-mount')).toBe('notifications')
+    await mount({ mount: 'slot' })
+    expect(card()?.getAttribute('data-mount')).toBe('slot')
     expect(card()?.querySelector('[aria-live]')).toBeNull()
     expect(card()?.querySelector('[role="status"]')).toBeNull()
     expect(rowIds()).toEqual(['netbox', 'keybox', 'proxybox'])
@@ -271,8 +271,8 @@ describe('the card mounted', async () => {
     expect(undo.querySelector('.hpb-undo')?.textContent).toBe('Undo')
     expect(dismiss.getHostDismissed().has('keybox|connect')).toBe(true)
     expect(logs.find((l) => l.msg === 'row dismissed')?.data).toMatchObject({ row: 'host:keybox', mount: 'tasks' })
-    // Dismissed in one place, dismissed in all: the notification panel's card has no keybox row (C9, C10).
-    await remount({ mount: 'notifications' })
+    // Dismissed in one place, dismissed in all: the slot's card has no keybox row (C9, C10).
+    await remount({ mount: 'slot' })
     expect(rowIds()).not.toContain('keybox')
     expect(rowIds()).toEqual(['netbox', 'proxybox', 'barebox', 'farbox'])
   })
@@ -331,14 +331,14 @@ describe('the card mounted', async () => {
 
   it("'and N more' and Open Settings call onLeave first, then open Settings (flashing the hidden hosts)", async () => {
     const onLeave = () => { nav.order.push('leave') }
-    await mount({ mount: 'notifications', onLeave })
+    await mount({ mount: 'slot', onLeave })
     await click(button('and 2 more'))
     expect(nav.order).toEqual(['leave', 'open::{"flashHosts":["barebox","farbox"]}'])
     nav.order.length = 0
     // An auth failure offers Open Settings (the fix lives there).
     api.statuses = [{ ...wire('keybox', 'Key box'), kind: 'auth', retryable: false }]
     await hostStore.hydrateHostStatus({ force: true })
-    await remount({ mount: 'notifications', onLeave })
+    await remount({ mount: 'slot', onLeave })
     nav.order.length = 0
     const settings = host.querySelector('li[data-host="keybox"] [data-testid="hpb-open-settings"]')
     expect(settings).not.toBeNull()
@@ -356,7 +356,7 @@ describe('the card mounted', async () => {
     await click(toggle('keybox', 'Show details'))
     await click(toggle('netbox', 'Show details'))
     await click(toggle('netbox', 'Hide details'))
-    await remount({ mount: 'notifications' })
+    await remount({ mount: 'slot' })
     expect(rowIds()).toEqual(['netbox', 'keybox', 'proxybox'])
     expect(li('netbox').classList.contains('hpb-open')).toBe(false)
     expect(li('keybox').classList.contains('hpb-open')).toBe(true)
@@ -373,8 +373,13 @@ describe('the card mounted', async () => {
     expect(rowIds()).toEqual(['netbox', 'keybox'])
   })
 
-  it('singleLineRows: row 1 is not opened by position; each row shows one action', async () => {
-    await mount({ mount: 'notifications', singleLineRows: true })
+  it('a mount whose cap is at its 132px floor: one-line rows, row 1 not opened by position, one action each', async () => {
+    // The slot's container, measured at 0px here (linkedom has no layout): its cap is the 132px floor.
+    const chat = document.createElement('div')
+    chat.className = 'main-page-chat'
+    document.body.appendChild(chat)
+    chat.appendChild(host)
+    await mount({ mount: 'slot' })
     const first = host.querySelector('li[data-host="netbox"]')!
     expect(first.classList.contains('hpb-single')).toBe(true)
     expect(first.classList.contains('hpb-open')).toBe(false)
@@ -417,7 +422,7 @@ describe('the card mounted', async () => {
     api.statuses = [healthyWire('netbox', 'Net box'), healthyWire('keybox', 'Key box')]
     await act(async () => { await hostStore.hydrateHostStatus({ force: true }) })
     expect(host.querySelector('li[data-type="ready"]')?.getAttribute('data-host')).toBe('keybox')
-    await remount({ mount: 'notifications' })
+    await remount({ mount: 'slot' })
     expect(host.querySelector('li[data-type="ready"]')?.getAttribute('data-host')).toBe('keybox')
   })
 

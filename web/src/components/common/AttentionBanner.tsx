@@ -5,8 +5,9 @@
  * never two host banners, two titles and two sets of x buttons.
  *
  * It renders wherever the owner rule puts it (`mount`: the task panel, the
- * notification panel, the Ask Walnut slot, or compact in the draft column);
- * the wrapper and its reserve belong to AttentionBannerMount. Rows come from
+ * Ask Walnut slot, or compact in the draft column); the task panel's wrapper
+ * belongs to AttentionBannerMount. The notification panel never holds it: its
+ * System section lists each host once (NotificationHostRow). Rows come from
  * the pure model (utils/attention-banner-model.ts); the frame state, the
  * Dismiss all hidden rows and each row's expanded flag live in the page
  * session (utils/attention-banner-session.ts), so a remount elsewhere
@@ -61,8 +62,6 @@ export interface AttentionBannerProps {
   focusOnLeave?: () => void;
   /** Queue height changes (at most 10s from the first) while the pointer is where they would land. */
   holdLayout?: boolean;
-  /** Each host row is one line: headline, the primary action, the x; row 1 not auto-expanded. */
-  singleLineRows?: boolean;
 }
 
 /** How many hosts need attention, shown or not (rows on screen, scrolled, behind 'and N more'). */
@@ -104,7 +103,7 @@ function layoutSignature(l: CardLayout, localKind: string | null): string {
 }
 
 export function AttentionBanner({
-  mount, health, healthLoading, onNavigateSettings, onStartSession, onLeave, focusOnLeave, holdLayout, singleLineRows: singleProp,
+  mount, health, healthLoading, onNavigateSettings, onStartSession, onLeave, focusOnLeave, holdLayout,
 }: AttentionBannerProps) {
   const compact = mount === 'draft';
   const navigate = useNavigate();
@@ -146,7 +145,7 @@ export function AttentionBanner({
   const marginY = verticalMarginPx(el);
   // A cap at its 132px floor (a phone's task band, a very short panel) cannot hold
   // an opened row plus its buttons, so every row is one line there: headline + first action.
-  const singleLineRows = !!singleProp || (mountH != null && cardCapPx(mountH, marginY) <= CARD_MIN_CAP_PX);
+  const singleLineRows = mountH != null && cardCapPx(mountH, marginY) <= CARD_MIN_CAP_PX;
   // The task panel's card box itself is at most max(40%, 132px) (spec 4.1, C28, C61): its margin
   // is outside that box. Elsewhere the margin stays inside the cap (the panel body keeps 60%, C29).
   const capMargin = mount === 'tasks' ? 0 : marginY;

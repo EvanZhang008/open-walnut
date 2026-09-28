@@ -169,9 +169,16 @@
 .attention-banner .hft-headline,
 .attention-banner .hpb-message,
 .attention-banner .hpb-rest,
-.attention-banner .hpb-last { overflow-wrap: break-word; }
+.attention-banner .hpb-last,
+.nfc-host-list .hft-hint,
+.nfc-host-list .hft-headline,
+.nfc-host-list .hpb-message,
+.nfc-host-list .hpb-rest,
+.nfc-host-list .hpb-last { overflow-wrap: break-word; }
 .attention-banner code,
-.attention-banner .setup-command { overflow-wrap: normal; word-break: normal; }
+.attention-banner .setup-command,
+.nfc-host-list code,
+.nfc-local-claude .setup-command { overflow-wrap: normal; word-break: normal; }
 
 /* ── Buttons: width never changes with the label (Retry / Retrying...) ── */
 .hpb-btn { flex: none; white-space: nowrap; }
@@ -254,7 +261,7 @@
 }
 .hpb-undo:hover { color: var(--fg); }
 
-/* ── One-line rows (the notification panel over pending asks) ── */
+/* ── One-line rows (a mount whose cap is at its 132px floor: a phone's task band) ── */
 .hpb-single:not(.hpb-open) .hpb-body,
 .hpb-single:not(.hpb-open) .hft { flex-direction: row; align-items: center; gap: 8px; }
 .hpb-single:not(.hpb-open) .hft { flex: 1 1 auto; min-width: 0; }
@@ -301,7 +308,17 @@
 .host-gate-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .session-host-error { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .session-host-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }
-/* NotificationSystemPane DaemonRow: the host's dot and name on one line, the status sentence under it. */
+/* The notification panel's System host list (NotificationHostRow): one list, each host once.
+   A plain line is the host's dot and name, the status sentence under it; a problem host is
+   the Home card's own row (li.hpb-row, dense, no x). */
+.nfc-host-list { list-style: none; margin: 0; padding: 0; gap: 6px; }
+/* No x in this list: the headline takes the whole first line (the card keeps 28px for its x). */
+.nfc-host-list .hpb-dense:not(.hpb-open) .hft-headline,
+.nfc-host-list .hpb-dense:not(.hpb-open) .hpb-headline,
+.nfc-host-list .hpb-dense:not(.hpb-open) .hpb-trying,
+.nfc-host-list .hpb-dense:not(.hpb-open) .hpb-fixing { flex-basis: 100%; margin-right: 0; }
+/* This machine's Claude Code in System: the card label says 'Claude Code', so the section's own title goes. */
+.nfc-local-claude .ab-local > .setup-banner-header { display: none; }
 .notification-daemon-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .nfc-daemon-row { flex-direction: column; align-items: flex-start; gap: 2px; }
 .nfc-daemon-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -333,6 +350,8 @@
    is also failing the same dot speaks for both (N12). `.is-host-warn` only names it. */
 /* One copy control in the card (local section and host rows): the text Copy /
    Copied button, a 24px hit target. */
-.attention-banner .setup-copy-btn { min-height: 24px; font-size: 11px; display: inline-flex; align-items: center; }
+.attention-banner .setup-copy-btn,
+.nfc-host-list .setup-copy-btn,
+.nfc-local-claude .setup-copy-btn { min-height: 24px; font-size: 11px; display: inline-flex; align-items: center; }
 /* A row held to its height through an attempt (HostProblemRows useHeightLock): no animation, nothing spills. */
 .hpb-row.hpb-locked { transition: none; overflow: hidden; }

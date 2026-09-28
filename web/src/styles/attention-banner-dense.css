@@ -31,8 +31,9 @@
   text-overflow: clip;
 }
 .hpb-dense:not(.hpb-open) .hpb-actions { flex: none; margin: 0; flex-wrap: nowrap; }
-/* One button height in the whole card, folded or opened (N3-7). */
-.attention-banner .hpb-actions .hpb-btn { padding-top: 2px; padding-bottom: 2px; min-height: 24px; }
+/* One button height in the whole card, folded or opened (N3-7), and in the System host list. */
+.attention-banner .hpb-actions .hpb-btn,
+.nfc-host-list .hpb-actions .hpb-btn { padding-top: 2px; padding-bottom: 2px; min-height: 24px; }
 .hpb-dense:not(.hpb-open) .hft-details,
 .hpb-dense:not(.hpb-open) .hpb-receipt,
 .hpb-dense:not(.hpb-open) .host-connect-retry-msg { flex: 0 1 auto; min-width: 0; max-width: 100%; }

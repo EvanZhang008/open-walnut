@@ -1,8 +1,9 @@
 /**
- * Dismiss in one place, hidden in every place (slice spec 2.1, 5.1, 7): the
- * task panel card and the notification panel card read one dismiss store;
- * a row x leaves an undo row; expiry runs without any card mounted; Settings
- * can bring a hidden row back.
+ * Dismiss on the card, hidden on every card (slice spec 2.1, 5.1, 7): the task
+ * panel card and the slot and draft fallbacks read one dismiss store; the
+ * notification panel's System section is a status list with no x and no
+ * Dismiss all, and ignores dismissals; a row x leaves an undo row; expiry
+ * runs without any card mounted; Settings can bring a hidden row back.
  * Host frames and local health are routed client-side (BP-C55 uses the
  * server's host fixture, since Settings lists the server's hosts).
  *
@@ -17,7 +18,7 @@ import {
 import { bell, hostRow, loadApp, loadFixture, openBell, openRemoteHosts, panelBanner, tasksBanner } from './host-problems-fixture-helpers'
 import {
   BP_SHOTS, bellDot, bpSetup, cardRow, closePanel, countInFirstFrameAfterClick, expectTasksCard, goRail, hostsOf,
-  openPanelCard, railButton,
+  openSystemHosts, railButton, systemHostRow, systemHosts, systemLocalCard, systemRowHosts,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -27,17 +28,19 @@ test.beforeAll(async ({ request }) => {
   await resetServerHostFixture(request)
 })
 
-test.describe('one dismiss store behind both cards', () => {
-  test('BP-C9: a row x in the panel hides the row in the task panel too, is stored, and survives a reload', async ({ page }) => {
+test.describe('one dismiss store behind the card; System ignores it', () => {
+  test('BP-C9: a Home card row x is stored and survives a reload; System keeps listing the host as its row, with no x', async ({ page }) => {
     await bpSetup(page)
     await expectTasksCard(page)
-    const card = await openPanelCard(page)
-    await cardRow(card, 'netbox').getByRole('button', { name: 'Dismiss Net box' }).click()
-    await expect(cardRow(card, 'netbox')).toHaveCount(0)
+    await row(page, 'netbox').getByRole('button', { name: 'Dismiss Net box' }).click()
+    await expect(row(page, 'netbox')).toHaveCount(0)
+    expect(await storedKeys(page)).toContain('netbox|connect')
+    await openSystemHosts(page)
+    await expect(systemHostRow(page, 'netbox')).toBeVisible()
+    await expect(systemHostRow(page, 'netbox').getByRole('button', { name: 'Dismiss Net box' })).toHaveCount(0)
     await closePanel(page, 'escape')
     await expect(banner(page)).toHaveCount(1)
     await expect(row(page, 'netbox')).toHaveCount(0)
-    expect(await storedKeys(page)).toContain('netbox|connect')
     await page.evaluate(() => sessionStorage.setItem('hp-keep', '1'))
     await page.reload()
     await loadHome(page)
@@ -45,45 +48,49 @@ test.describe('one dismiss store behind both cards', () => {
     await expect(row(page, 'netbox')).toHaveCount(0)
   })
 
-  test('BP-C10: a row x in the task panel is hidden in the panel card', async ({ page }) => {
+  test('BP-C10: a row x in the task panel leaves System as it was: every problem host keeps its row there', async ({ page }) => {
     await bpSetup(page)
     await expectTasksCard(page)
     await row(page, 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
     await expect(row(page, 'certbox')).toHaveCount(0)
-    const card = await openPanelCard(page)
-    await expect(cardRow(card, 'keybox')).toBeVisible()
-    await expect(cardRow(card, 'certbox')).toHaveCount(0)
+    await openSystemHosts(page)
+    // Settings order, dismissals ignored.
+    await expect.poll(() => systemRowHosts(page)).toEqual(['signbox', 'keybox', 'certbox', 'netbox'])
+    await expect(systemHostRow(page, 'certbox')).toBeVisible()
   })
 
-  test('BP-C11: Dismiss all in the panel hides every host row in both cards, keeps the local section; focus ends on the System rail entry', async ({ page }) => {
+  test('BP-C11: System has no x and no Dismiss all; Dismiss all on the Home card hides its host rows and keeps the local section, while System still lists every problem host and the Claude Code card', async ({ page }) => {
     await bpSetup(page, { local: 'sign-in' })
     await expectTasksCard(page)
-    const card = await openPanelCard(page)
-    await card.getByRole('button', { name: 'Dismiss all' }).click()
-    await expect(card.locator('li.hpb-row[data-host]')).toHaveCount(0)
-    await expect(card.locator('[data-testid="setup-banner-sign-in"]')).toBeVisible()
-    await expect(card.getByText('Hidden until they change.')).toBeVisible()
-    // Off the card and off the panel body (the header): the undo line folds after 5s.
-    await page.locator('.notification-panel-title').hover()
-    await expect(card.getByText('Hidden until they change.')).toHaveCount(0, { timeout: 12_000 })
-    // The rail entry the user is on (aria-current), not the first one.
-    await expect(railButton(page, 'System')).toBeFocused()
-    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
+    await openSystemHosts(page)
+    const panel = page.locator('.notification-panel')
+    await expect(panel.getByRole('button', { name: 'Dismiss all' })).toHaveCount(0)
+    await expect(panel.locator('.hpb-x')).toHaveCount(0)
+    await closePanel(page, 'escape')
+    await banner(page).getByRole('button', { name: 'Dismiss all' }).click()
+    await expect(banner(page).locator('li.hpb-row[data-host]')).toHaveCount(0)
+    await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible()
+    await expect(banner(page).getByText('Hidden until they change.')).toBeVisible()
+    await openSystemHosts(page)
+    await expect.poll(() => systemRowHosts(page)).toEqual(['signbox', 'keybox', 'certbox', 'netbox'])
+    await expect(systemLocalCard(page)).toBeVisible()
+    await expect(systemHosts(page).locator('.hpb-undo-row, [data-testid="hpb-undo-row"]')).toHaveCount(0)
     await closePanel(page, 'escape')
     await expect(banner(page)).toHaveCount(1)
     await expect(banner(page).locator('li.hpb-row[data-host]')).toHaveCount(0)
     await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible()
   })
 
-  test('BP-C12: Dismiss Claude Code notice in the panel on /notes: the bell dot goes in the next frame; Home shows no local section', async ({ page }) => {
+  test('BP-C12: Dismiss Claude Code notice in System\'s Claude Code card on /notes: the bell dot goes in the next frame, the card leaves System; Home shows no local section', async ({ page }) => {
     await bpSetup(page, { hosts: [connected('devbox', 'Dev box')], local: 'sign-in' })
     await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible({ timeout: 20_000 })
     await goRail(page, 'notes')
     await expect(bellDot(page)).toHaveCount(1)
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications: Claude Code needs attention')
-    const card = await openPanelCard(page)
-    const x = card.getByRole('button', { name: 'Dismiss Claude Code notice' })
+    await openSystemHosts(page)
+    const x = systemLocalCard(page).getByRole('button', { name: 'Dismiss Claude Code notice' })
     expect(await countInFirstFrameAfterClick(page, x, '.sidebar-notification-btn .notification-badge-dot')).toBe(0)
+    await expect(systemLocalCard(page)).toHaveCount(0)
     await closePanel(page, 'escape')
     await goRail(page, 'home')
     await page.mouse.move(2, 2)
@@ -107,10 +114,11 @@ test.describe('expiry, undo and the way back', () => {
     await h.push(failed('netbox', 'Net box', 'unreachable'))
     await expect(bell(page)).toHaveAttribute('aria-label', 'Notifications: remote hosts need attention', { timeout: 10_000 })
     await expect(bellDot(page)).toHaveCount(1)
-    // Nothing on /notes covers it: the bell opens straight on System, where the card is.
+    // Nothing on /notes covers it: the bell opens straight on System, where its row is.
     await openBell(page)
     await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
-    await expect(cardRow(panelBanner(page), 'netbox')).toBeVisible()
+    await expect(systemHostRow(page, 'netbox')).toBeVisible()
+    await expect(panelBanner(page)).toHaveCount(0)
     expect(await storedKeys(page)).not.toContain('netbox|connect')
   })
 

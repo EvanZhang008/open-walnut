@@ -1,11 +1,12 @@
 /**
  * The attention card's memory for the page session, outside any one mount.
  * Only one card is on screen at a time (the owner rule), but the owner moves:
- * the task panel yields to the notification panel and back, the slot takes
- * over while the task panel is hidden. A remount continues from the last
- * frame instead of starting over, so row order, the success hold, the
- * deferral clock, Dismiss all's hidden success rows and every row's
- * expanded flag survive an owner switch.
+ * the slot takes over while the task panel is hidden, the draft column while
+ * both are. A remount continues from the last frame instead of starting
+ * over, so row order, the success hold, the deferral clock, Dismiss all's
+ * hidden success rows and every row's expanded flag survive an owner switch.
+ * The expanded flag is also the notification panel's System list's: a host
+ * row there is the card's row, by the same id.
  *
  * One exception: a success that completed while NO card was mounted is not
  * replayed. A host that healed while the user sat on /notes must not greet

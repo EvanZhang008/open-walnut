@@ -16,6 +16,7 @@ import { serverNow } from '@/hooks/useHostStatus';
 import '@/styles/host-status.css';
 
 export interface HostFailureTextProps {
+  /** Empty: no headline line (the System pane's host row already says it on its own line). */
   headline: string;
   hint?: string;
   /** The raw error (ssh output, a daemon log line): behind a toggle, never inline. */
@@ -58,7 +59,7 @@ export function HostFailureText({ headline, hint, summary, kind, retryAt, lastFr
   const hidden = collapsed ? (cleanHint || cleanSummary) : cleanSummary;
   return (
     <div className="hft" data-testid={testId} {...(kind ? { 'data-kind': kind } : {})}>
-      <div className="hft-headline" title={headline}>{headline}</div>
+      {headline && <div className="hft-headline" title={headline}>{headline}</div>}
       {afterHeadline}
       {!collapsed && cleanHint && <div className="hft-hint"><InlineCodeText text={cleanHint} /></div>}
       {typeof retryAt === 'number' && <RetryWhen retryAt={retryAt} lastFrameAt={lastFrameAt} />}

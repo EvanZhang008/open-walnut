@@ -8,7 +8,7 @@
  * pointer leaving the card, 10s at most. Undo takes the stored keys out again.
  *
  * The entries live in this module, not in the card: the card moving to
- * another mount (the notification panel closing) keeps a live undo line.
+ * another mount (the task panel hidden or shown again) keeps a live undo line.
  * A line keeps the dismissed entry's height until it collapses, in every
  * mount: holding it only under the pointer made the line grow when the
  * pointer came back after an owner switch, and moved Dismiss all away from

@@ -69,6 +69,13 @@ describe('HostFailureText', () => {
     expect(text(html)).toContain('Show details')
   })
 
+  it('an empty headline draws no headline line (the System host row says it on its own line)', () => {
+    const html = render({ headline: '', kind: 'auth', hint: 'Check the key, then Retry.', summary: 'Permission denied (publickey).' })
+    expect(html).not.toContain('hft-headline')
+    expect(text(html)).toContain('Check the key, then Retry.')
+    expect(text(html)).toContain('Show SSH output')
+  })
+
   it('toggle words', () => {
     expect(detailsToggleLabel('auth', false)).toBe('Show SSH output')
     expect(detailsToggleLabel('auth', true)).toBe('Hide SSH output')
