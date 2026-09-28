@@ -684,9 +684,13 @@ describe('sweeps', () => {
     await settle()
 
     expect(mocks.terminateSession).toHaveBeenCalledWith(orphan, { force: true })
-    const record = await getSessionByClaudeId(orphan!)
-    expect(record?.archived).toBe(true)
-    expect(record?.archive_reason).toBe('side_thread_standby_orphan')
+    // The archive is a real store write after the terminate: on a slow runner it
+    // lands after settle()'s microtask rounds, so wait for the record itself.
+    await vi.waitFor(async () => {
+      const record = await getSessionByClaudeId(orphan!)
+      expect(record?.archived).toBe(true)
+      expect(record?.archive_reason).toBe('side_thread_standby_orphan')
+    }, { timeout: 10_000, interval: 50 })
   })
 
   it('terminates (never archives) a thread idle past 30 minutes', async () => {

@@ -491,14 +491,16 @@ describe('through a real server, an ambient mailbox is simply there', () => {
       }
     }, { global: true, interest: ['plugin:mail:'] });
     // A long poll interval on purpose: the only thing that can poll the adopted account inside
-    // this file is adoption's own kick.
+    // this file is adoption's own kick. Retention is wide open because the fixture's message is
+    // dated January 2026: past the default 180 days, the sweep at the end of the adoption tick
+    // deletes the row before the test reads it.
     await fsp.writeFile(
       CONFIG_FILE,
       yaml.dump({
         version: 1,
         user: { name: 'test' },
         defaults: { priority: 'none' },
-        plugins: { mail: { poll_interval_seconds: 600 } },
+        plugins: { mail: { poll_interval_seconds: 600, retention_days: 3650 } },
       }),
       'utf-8',
     );

@@ -85,7 +85,9 @@ export function expectSpawnNamesNodeAndNativeInstall(o: SpawnOutcome, gated: boo
     expect(o.kind, `expected the start to be refused, got ${JSON.stringify(o)}`).toBe('refused')
     const text = (o as { text: string }).text
     expect(text).toMatch(/Node\.js/)
-    expect(text).toMatch(/claude\.ai\/install\.sh/)
+    // The sentence names the fix; the install command itself rides the readiness
+    // problem's `commands` (host-readiness-problems.ts), never the sentence.
+    expect(text).toMatch(/native build/)
     return
   }
   // Legacy: the daemon spawns the npm build, the kernel cannot find node, env exits

@@ -177,8 +177,11 @@ export async function gatherSshCredentialEvidence(sshTarget: string, deps: Evide
   let anyValid = false
   let ownExpired = false
   const certKeyPrints = new Set<string>()
+  // `-f -`, never `-f /dev/stdin`: Node hands a child its stdin as a socketpair, and on Linux
+  // opening /dev/stdin (/proc/self/fd/0) on a socket fails with ENXIO, so every read came back
+  // empty there. macOS opens it fine, which is why only Linux CI saw it.
   for (const cert of certs) {
-    const report = await run('ssh-keygen', ['-L', '-f', '/dev/stdin'], cert.line + '\n')
+    const report = await run('ssh-keygen', ['-L', '-f', '-'], cert.line + '\n')
     const until = certValidUntil(report.stdout)
     const print = fingerprintOf(report.stdout, true)
     if (print) certKeyPrints.add(print)
@@ -192,7 +195,7 @@ export async function gatherSshCredentialEvidence(sshTarget: string, deps: Evide
   if (!anyValid && Number.isFinite(latestExpired)) {
     // A key that is not some certificate's own key was offered too, and refused.
     const prints = await Promise.all([...agentKeys, ...fileKeys].map(async (key) =>
-      fingerprintOf((await run('ssh-keygen', ['-l', '-f', '/dev/stdin'], key + '\n')).stdout)))
+      fingerprintOf((await run('ssh-keygen', ['-l', '-f', '-'], key + '\n')).stdout)))
     const otherKey = prints.some((p) => !p || !certKeyPrints.has(p))
     if (ownExpired || !otherKey) return { tag: 'cert-expired', detail: `SSH certificate expired at ${fmt(latestExpired)}` }
     return null
