@@ -17,8 +17,15 @@ Replaces the Expo app in `../ios/` (kept as reference until this one is fully ve
 cd ios-native
 xcodegen generate        # project.yml → Walnut.xcodeproj
 xcodebuild -project Walnut.xcodeproj -scheme Walnut \
-  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' build
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+  -derivedDataPath DerivedData build
 ```
+
+Always pass `-derivedDataPath DerivedData` (gitignored) from the command line.
+Without it Xcode writes to `~/Library/Developer/Xcode/DerivedData/Walnut-<hash>`,
+where the hash comes from the checkout path, so every temporary copy or worktree
+leaves its own 70-500MB folder there that nothing ever removes (203 of them,
+7.6GB, on 2026-09-28). A checkout-local path is deleted along with the checkout.
 
 Or open `Walnut.xcodeproj` in Xcode and run.
 
@@ -32,7 +39,7 @@ cd ios-native
 # unit + rendering-perf gates (no pairing needed)
 xcodebuild test -project Walnut.xcodeproj -scheme Walnut \
   -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
-  -only-testing:WalnutTests
+  -derivedDataPath DerivedData -only-testing:WalnutTests
 
 # the XCUITest layer — use the script, see the note below
 tests/ui/run-ui-tests.sh
