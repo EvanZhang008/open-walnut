@@ -161,6 +161,15 @@ echo "$VERSION" > "$OUTDIR/daemon-darwin-arm64.version"
   src/providers/acp-worker/worker-main.ts
 echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 
+# ACP supervision sidecar — the same acp-daemon.ts the binary compiles in, as a
+# CJS bundle for the source template. The npm package ships no daemon binaries,
+# so without this the local daemon of an npm install answered every acp*
+# command with acp_unsupported and Codex, Gemini, OpenCode, Goose and Pi could
+# not start. local-daemon.ts copies it next to daemon.cjs.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/acp-daemon-core.cjs" \
+  src/providers/acp-daemon.ts
+
 # Session-changes sidecar — a plain CJS bundle of session-changes-core.ts.
 # Source-template daemons (bun deploys) can't import modules, so deploySource
 # ships this next to daemon.cjs and the template require()s it lazily; the

@@ -937,7 +937,9 @@ export class LocalDaemon {
     // advertises the matching capability only when the load succeeds.
     // Best-effort per file: an absent bundle (published npm package) just means
     // the server keeps its own fallback for that feature.
-    for (const sidecarFile of ['changes-core.cjs', 'path-resolve-core.cjs', 'transcript-rewind-core.cjs', 'trigger-check-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs']) {
+    // acp-daemon-core.cjs is local-only on purpose: ACP engines never run on a
+    // remote host, so daemon-connection's remote deploy list leaves it out.
+    for (const sidecarFile of ['changes-core.cjs', 'path-resolve-core.cjs', 'transcript-rewind-core.cjs', 'trigger-check-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'acp-daemon-core.cjs']) {
       try {
         const sidecarSrc = path.join(DAEMON_BINARIES_DIR, sidecarFile)
         const sidecarDst = path.join(this.daemonDir, sidecarFile)

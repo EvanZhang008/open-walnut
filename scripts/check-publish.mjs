@@ -28,6 +28,9 @@ const required = [
   'dist/integrations/walnut-time/manifest.json',
   'dist/integrations/walnut-time/dist/web.mjs',
   'dist/daemon-binaries/acp-worker.js',
+  // The npm install's local daemon is the source twin; this sidecar is what lets
+  // it run Codex, Gemini, OpenCode, Goose and Pi (see daemon-source.ts).
+  'dist/daemon-binaries/acp-daemon-core.cjs',
   'dist/daemon-binaries/pi-acp.js',
   'dist/daemon-binaries/pi-acp.LICENSE',
   'dist/daemon-binaries/daemon-cron-runtime.cjs',
@@ -107,6 +110,7 @@ const files = pack.files.map((f) => f.path);
 const mustInclude = [
   'dist/cli.js', 'dist/web/static/index.html', 'scripts/postinstall.mjs', 'dist/build-info.json',
   'dist/daemon-binaries/pi-acp.js', 'dist/daemon-binaries/pi-acp.LICENSE',
+  'dist/daemon-binaries/acp-worker.js', 'dist/daemon-binaries/acp-daemon-core.cjs',
   'dist/daemon-binaries/daemon-cron-runtime.cjs',
   'dist/daemon-binaries/daemon-instance-lock.cjs',
   'dist/daemon-binaries/daemon-service-cli.cjs',

@@ -2602,27 +2602,25 @@ function dispatchCommand(ws, id, cmd) {
     // server pushes slim mobile feed events DOWN, the daemon relays them to
     // the cloud bridge (see cmdMobileEvent).
     case 'mobile-event': return cmdMobileEvent(ws, id, cmd);
-    // ACP worker commands: not implemented in the source-template daemon yet
-    // (MVP = local Mac binary daemon only). Answer with a structured errorKind
-    // so walnut can distinguish "host can't do ACP" from a transient failure.
+    // ACP worker commands. A local daemon runs them through the acp-daemon-core.cjs
+    // sidecar (the same acp-daemon.ts the binary twin compiles in); a daemon without
+    // it (every remote source deploy) answers with a structured errorKind so walnut
+    // can tell "host can't do ACP" from a transient failure.
     // Keep this case list in sync with daemon-standalone.ts + daemon-capabilities.ts.
-    case 'acpStart':
-    case 'acpSend':
-    case 'acpSteer':
-    case 'acpCancel':
-    case 'acpRespond':
-    case 'acpSetConfigOption':
-    case 'acpState':
-    case 'acpNewSession':
-    case 'acpStop':
-    case 'acpSubscribe': {
-      try { ws.send(JSON.stringify({ id, ok: false, error: 'ACP sessions are not supported on this host yet', errorKind: 'acp_unsupported' })); } catch {}
-      return;
-    }
+    case 'acpStart': return acp ? cmdAcpStart(ws, id, cmd) : acpUnsupported(ws, id);
+    case 'acpSend': return acp ? cmdAcpOp(ws, id, cmd, 'prompt') : acpUnsupported(ws, id);
+    case 'acpSteer': return acp ? cmdAcpOp(ws, id, cmd, 'steer') : acpUnsupported(ws, id);
+    case 'acpCancel': return acp ? cmdAcpOp(ws, id, cmd, 'cancel') : acpUnsupported(ws, id);
+    case 'acpRespond': return acp ? cmdAcpOp(ws, id, cmd, 'permissionResponse') : acpUnsupported(ws, id);
+    case 'acpSetConfigOption': return acp ? cmdAcpOp(ws, id, cmd, 'setConfigOption') : acpUnsupported(ws, id);
+    case 'acpState': return acp ? cmdAcpOp(ws, id, cmd, 'getState') : acpUnsupported(ws, id);
+    case 'acpNewSession': return acp ? cmdAcpOp(ws, id, cmd, 'newSession') : acpUnsupported(ws, id);
+    case 'acpStop': return acp ? cmdAcpStop(ws, id, cmd) : acpUnsupported(ws, id);
+    case 'acpSubscribe': return acp ? cmdAcpSubscribe(ws, id, cmd) : acpUnsupported(ws, id);
     // Unified agent.* family (agent-commands-v1): one namespace, engine-routed
     // onto the legacy per-engine handlers (see resolveAgentCommand above).
-    // Codex-routed ops land on the acp* cases above and get the structured
-    // acp_unsupported reply — the desired degradation on a source daemon.
+    // Codex-routed ops land on the acp* cases above: the ACP sidecar when this
+    // daemon has one, the structured acp_unsupported reply when it does not.
     // SECURITY: the re-dispatch bypasses the bridge allowlist check (it runs
     // BEFORE dispatch), so no 'agent.*' name may ever join
     // BRIDGE_ALLOWED_COMMANDS. Pinned by test.
@@ -2668,8 +2666,8 @@ async function cmdServiceHandover(ws, id, cmd) {
     || typeof cmd.stateDir !== 'string' || cmd.instanceId !== DAEMON_INSTANCE_ID) {
     return sendError(ws, id, 'service.handover: daemon mode or instance does not match the requested operation');
   }
-  if ([sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending].some(function (pending) { return pending.size; })) {
-    return sendError(ws, id, 'service.handover: active relay requests must finish first');
+  if ((acp && acp.workers.size) || [sttRelayPending, launchRelayPending, controlRelayPending, messageRelayPending, gatewayRelayPending].some(function (pending) { return pending.size; })) {
+    return sendError(ws, id, 'service.handover: active ACP workers or relay requests must finish first');
   }
   if (process.platform !== 'linux' && process.platform !== 'darwin') return sendError(ws, id, 'service.handover: unsupported platform');
   // Pause before the first await so the handover RPC does not count itself in the wait set.
@@ -3179,7 +3177,9 @@ function handleGatewayLine(line, respond) {
   var parsed = parseGatewayLine(line);
   if (parsed.ok !== true) return respond(parsed);
   var req = parsed.request;
-  var callerSid = resolveCallerSid(req.sid);
+  // ACP sessions live in the acp worker map, not in sessions; their sid is the
+  // runtimeId, stable for the worker's life (twin of daemon-standalone.ts).
+  var callerSid = resolveCallerSid(req.sid) || (acp && acp.hasWorker(req.sid) ? req.sid : null);
   if (!callerSid) {
     // Unknown sid (CLI adopted from before a daemon restart) — refuse locally,
     // the request never leaves this host. A respawn self-heals.
@@ -3463,6 +3463,56 @@ function cmdMobileEvent(ws, id, cmd) {
   sendOk(ws, id, { relayed: true });
 }
 
+// ACP worker supervision through the acp-daemon-core.cjs sidecar. Twin of the
+// cmdAcp* handlers in daemon-standalone.ts. sid is the Walnut runtimeId; the
+// journal is STREAMS_DIR/<sid>.acp.jsonl.
+function acpUnsupported(ws, id) {
+  try { ws.send(JSON.stringify({ id, ok: false, error: 'ACP sessions are not supported on this host yet', errorKind: 'acp_unsupported' })); } catch {}
+}
+
+function cmdAcpStart(ws, id, cmd) {
+  const params = cmd;
+  if (!params.sid || !params.cwd) return sendError(ws, id, 'acpStart: missing sid/cwd');
+  // Agent gateway: the same wiring a native claude spawn gets (the socket, and
+  // the walnut shim on PATH), because ACP workers never go through cmdStart.
+  params.env = Object.assign({}, params.env, {
+    WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
+    PATH: (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR,
+  });
+  return sessionStartGate.run(params.sid, async function () {
+    if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
+    const resp = await acp.acpStart(ws, params);
+    if (resp.ok) sendOk(ws, id, resp.result || {});
+    else { try { ws.send(JSON.stringify({ id, ok: false, error: resp.error, errorKind: resp.errorKind })); } catch {} }
+  });
+}
+
+function cmdAcpOp(ws, id, cmd, op) {
+  const sid = cmd.sid;
+  if (!sid) return sendError(ws, id, op + ': missing sid');
+  const params = Object.assign({}, cmd);
+  delete params.sid; delete params.cmd; delete params.id; delete params.traceId;
+  return acp.acpOp(sid, op, params).then(function (resp) {
+    if (resp.ok) sendOk(ws, id, { result: resp.result });
+    else {
+      const e = resp.error || {};
+      try { ws.send(JSON.stringify({ id, ok: false, error: e.message || 'acp op failed', errorKind: e.kind })); } catch {}
+    }
+  });
+}
+
+function cmdAcpStop(ws, id, cmd) {
+  if (!cmd.sid) return sendError(ws, id, 'acpStop: missing sid');
+  return acp.acpStop(cmd.sid).then(function () { sendOk(ws, id, { stopped: true }); });
+}
+
+function cmdAcpSubscribe(ws, id, cmd) {
+  if (!cmd.sid) return sendError(ws, id, 'acpSubscribe: missing sid');
+  const ok = acp.subscribe(ws, cmd.sid, typeof cmd.fromOffset === 'number' ? cmd.fromOffset : 0);
+  if (ok) return sendOk(ws, id, { subscribed: true });
+  try { ws.send(JSON.stringify({ id, ok: false, error: 'no live ACP worker for ' + cmd.sid, errorKind: 'no_worker' })); } catch {}
+}
+
 function cancelledStartPath(sid) {
   return path.join(DAEMON_DIR, 'cancelled-starts', Buffer.from(sid).toString('hex'));
 }
@@ -3471,6 +3521,7 @@ async function cmdCancelPendingStart(ws, id, cmd) {
   const sid = cmd.sid;
   if (typeof sid !== 'string' || !/^[A-Za-z0-9-]{1,80}$/.test(sid)) return sendError(ws, id, 'cancelPendingStart: invalid sid');
   return sessionStartGate.run(sid, async function () {
+    if (acp && acp.hasWorker(sid)) return sendOk(ws, id, { cancelled: false, alive: true });
     const session = sessions.get(sid);
     if (session && session.state === 'running' && session.pid) {
       try {
@@ -7616,6 +7667,26 @@ try { transcriptRewindCore = require(path.join(__dirname, 'transcript-rewind-cor
 let triggerCheckCore = null;
 try { triggerCheckCore = require(path.join(__dirname, 'trigger-check-core.cjs')); } catch (err) { triggerCheckCore = null; }
 
+// ACP supervision sidecar (acp-daemon-core.cjs): the same acp-daemon.ts the binary
+// twin compiles in. Only a local daemon gets it (local-daemon.ts copies it; remote
+// deploys leave it out, ACP engines are local-only). Without it the npm package,
+// which ships no daemon binary, could not start Codex, Gemini, OpenCode, Goose or
+// Pi at all: every acp* command answered acp_unsupported.
+let acp = null;
+try {
+  const acpDaemonCore = require(path.join(__dirname, 'acp-daemon-core.cjs'));
+  acp = acpDaemonCore.createAcpDaemon({
+    streamsDir: STREAMS_DIR,
+    daemonDir: DAEMON_DIR,
+    sendEvent: sendEvent,
+    isWsOpen: function (ws) { return ws.readyState === 1; },
+    log: logMsg,
+  });
+} catch (err) {
+  acp = null;
+  if (!err || err.code !== 'MODULE_NOT_FOUND') logMsg('error', 'acp sidecar failed to load', { error: err && err.message });
+}
+
 // Cron supervision + kernel instance lock sidecars. --service REFUSES to start
 // without them (below); a plain --start without them keeps the legacy pid-file
 // guard and never advertises supervision.
@@ -8781,6 +8852,15 @@ async function startDaemon() {
     sids: [...sessions.keys()],
   });
 
+  // ACP startup repair (twin of daemon-standalone.ts): workers from a previous
+  // daemon life are dead by definition. Sweep stragglers and close un-ended turns
+  // and un-answered permissions in every ACP journal so no spinner stays stuck.
+  if (acp) {
+    try { acp.startupRepair(); } catch (err) {
+      logMsg('error', 'acp startupRepair failed', { error: err && err.message });
+    }
+  }
+
   // Legacy fallback: pgid-file-based adoption for pre-registry sessions
   cleanupOrphanedProcessGroups();
   for (const [sid] of sessions) ensureWatcher(sid);
@@ -8849,6 +8929,7 @@ async function startDaemon() {
     ws.on('close', () => {
       wsClients.delete(ws);
       clearInterval(pingTimer);
+      if (acp) acp.removeSubscriber(ws);
 
       // Remove this ws from every session's subscribers. The watcher (file
       // tailer) stays alive — it's session-bound, not ws-bound. The next ws

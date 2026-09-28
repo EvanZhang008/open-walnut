@@ -121,7 +121,7 @@ const dependencyEvents: Array<{ pluginId: string; dependencyId: string; action: 
 const lifecycleEvents: Array<{ pluginId: string; state: string }> = [];
 
 beforeEach(async () => {
-  await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+  await fsp.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   await fsp.mkdir(path.dirname(TASKS_FILE), { recursive: true });
   await fsp.writeFile(TASKS_FILE, JSON.stringify({ version: 1, tasks: [] }));
   await writeConfig();
@@ -155,7 +155,9 @@ afterEach(async () => {
   bus.unsubscribe('p01-observer');
   delete (globalThis as unknown as { __p01?: Markers }).__p01;
   for (const one of loadedRegistries.splice(0)) await disposeLoadedPlugins(one);
-  await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+  // LOG_DIR lives in this home too, and the logger's 2s flush can recreate `logs/`
+  // while rm walks the tree (ENOTEMPTY on the final rmdir). Retrying the walk takes it.
+  await fsp.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
 describe('dependency-ordered loading', () => {

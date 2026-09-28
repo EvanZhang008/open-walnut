@@ -47,9 +47,10 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
   'bridge.configure',
   'bridgeResume',
   'stt',
-  // ACP worker command family (in-process ACP host worker per session; MVP =
-  // local Mac daemon only — daemon-source answers these with a structured
-  // acp_unsupported error until the remote deploy phase lands).
+  // ACP worker command family (in-process ACP host worker per session). Local
+  // daemons only: the binary, or the source twin with its acp-daemon-core.cjs
+  // sidecar. A daemon without the sidecar (remote source deploys) answers these
+  // with a structured acp_unsupported error.
   'acpStart',
   'acpSend',
   'acpCancel',

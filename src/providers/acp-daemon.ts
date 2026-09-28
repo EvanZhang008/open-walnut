@@ -361,6 +361,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
         if (pending) {
           entry.pendingRpc.delete(msg.id)
           clearTimeout(pending.timer)
+          entry.lastActivity = Date.now()
           pending.resolve(msg as WorkerRpcResponse)
         }
       }
@@ -533,6 +534,9 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     const now = Date.now()
     for (const [sid, entry] of workers) {
       if (entry.state !== 'running') continue
+      // Waiting on the worker's own reply is not idle (a slow session/load, or
+      // acpStart's handshake). OP_TIMEOUT_MS bounds how long a reply can hold it.
+      if (entry.pendingRpc.size > 0) continue
       // An open turn/control prompt (e.g. waiting on a permission answer) is
       // NOT idle even with zero traffic — hold it to the 24h ceiling instead.
       const turnOpen = entry.activeCommandId !== null || entry.activeControlCommandId !== null

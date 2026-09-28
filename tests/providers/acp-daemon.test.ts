@@ -596,6 +596,20 @@ describe('lifecycle + repair', () => {
     await waitFor(() => !acp.hasWorker('sid-8'), 10_000)
   })
 
+  it('a worker waiting on its own reply is not idle-killed, and goes idle after it', async () => {
+    for (const t of intervals) clearInterval(t)
+    intervals = []
+    acp = makeAcp(300)
+    // session/load outlasts the idle limit several sweeps over; the start must still land.
+    const start = await acp.acpStart(makeWs(), startParams('sid-slow-load', {
+      providerSessionId: 'mock-session-slow-load',
+      env: { MOCK_ACP_LOAD_DELAY_MS: '1200' },
+    }))
+    expect(start.ok).toBe(true)
+    expect(acp.hasWorker('sid-slow-load')).toBe(true)
+    await waitFor(() => !acp.hasWorker('sid-slow-load'), 10_000)
+  })
+
   it('a turn parked on a permission request is NOT idle-killed', async () => {
     for (const t of intervals) clearInterval(t)
     intervals = []
