@@ -44,7 +44,8 @@ export type WalnutCliParsed =
   | { kind: 'help'; topic: 'root' | 'tools' }
   | { kind: 'usage-error'; message: string }
   | { kind: 'guide' }
-  | { kind: 'wait'; id: string; timeoutSecs: number; json: boolean }
+  // `ids`/`mode` only when more than one id was named: the one-id shape is unchanged.
+  | { kind: 'wait'; id: string; ids?: string[]; mode?: WaitMode; timeoutSecs: number; json: boolean }
   | { kind: 'tools.list'; json: boolean }
   | { kind: 'tools.help'; name: string }
   | { kind: 'tools.call'; name: string; rawJson: string | undefined }
@@ -53,6 +54,10 @@ export type WalnutCliParsed =
 export const WAIT_POLL_INTERVAL_MS = 5_000
 export const WAIT_DEFAULT_TIMEOUT_SECS = 1_800
 export const WAIT_MAX_TIMEOUT_SECS = 24 * 60 * 60
+/** Most ids one `walnut wait` watches; each unsettled one costs a read per tick. */
+export const WAIT_MAX_IDS = 20
+/** Several ids: return when ALL have settled (default) or when ANY has. */
+export type WaitMode = 'all' | 'any'
 
 export function parseWalnutCliArgs(argv: string[]): WalnutCliParsed {
   const [head, ...rest] = argv
@@ -75,21 +80,25 @@ export function parseWalnutCliArgs(argv: string[]): WalnutCliParsed {
   if (head === 'wait') {
     let json = false
     let timeoutSecs = WAIT_DEFAULT_TIMEOUT_SECS
-    let id: string | undefined
+    let mode: WaitMode = 'all'
+    const ids: string[] = []
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i]
       if (a === '--json') json = true
       else if (a === '--help' || a === '-h') return { kind: 'help', topic: 'root' }
+      else if (a === '--any') mode = 'any'
+      else if (a === '--all') mode = 'all'
       else if (a === '--timeout') {
         const v = Number(rest[++i])
         if (!Number.isFinite(v) || v <= 0) return { kind: 'usage-error', message: '--timeout needs seconds > 0' }
         timeoutSecs = Math.min(v, WAIT_MAX_TIMEOUT_SECS)
       } else if (a.startsWith('--')) return { kind: 'usage-error', message: `unknown flag: ${a}` }
-      else if (id === undefined) id = a
-      else return { kind: 'usage-error', message: `unexpected argument: ${a}` }
+      else if (!ids.includes(a)) ids.push(a)
     }
-    if (!id) return { kind: 'usage-error', message: 'wait requires <task-id | rq-id>' }
-    return { kind: 'wait', id, timeoutSecs, json }
+    if (ids.length === 0) return { kind: 'usage-error', message: 'wait requires <task-id | rq-id> [...]' }
+    if (ids.length > WAIT_MAX_IDS) return { kind: 'usage-error', message: `wait takes at most ${WAIT_MAX_IDS} ids` }
+    if (ids.length === 1) return { kind: 'wait', id: ids[0], timeoutSecs, json }
+    return { kind: 'wait', id: ids[0], ids, mode, timeoutSecs, json }
   }
   return { kind: 'usage-error', message: `unknown command: ${head}` }
 }
@@ -190,7 +199,7 @@ const HELP_ROOT = `walnut — the Walnut CLI
 USAGE
   walnut guide                              print the full Walnut manual (recipes + safety rules)
   walnut tools list|help|call ...           call Walnut operations (see \`walnut tools --help\`)
-  walnut wait <id> [--timeout secs] [--json]   block until a task settles or a reply request resolves
+  walnut wait <id> [<id>...] [--any] [--timeout secs] [--json]   block until tasks settle or reply requests resolve
   walnut --help | walnut tools --help
 
 THE MODEL (one identity: the task)
@@ -220,6 +229,7 @@ THE VERBS (keep it simple)
 WAIT
   walnut wait <task-id>   returns when the task reaches NEED_ACTION / COMPLETE
   walnut wait <rq-id>     returns when the reply request leaves pending
+  walnut wait <id> <id>   several ids (up to 20): returns when ALL settled; --any returns at the first
   --timeout secs          default 1800, max 86400; exit 7 on timeout
 
 ENVIRONMENT
@@ -545,7 +555,9 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     }
   }
 
-  if (parsed.kind === 'wait') return runWait(socketPath, sid, parsed)
+  if (parsed.kind === 'wait') {
+    return parsed.ids ? runWaitMany(socketPath, sid, { ...parsed, ids: parsed.ids, mode: parsed.mode ?? 'all' }) : runWait(socketPath, sid, parsed)
+  }
 
   // tools.help renders from the hub's tools.list (the schema lives hub-side);
   // guide rides tools.call → skill_read so it needs no protocol change.
@@ -653,6 +665,29 @@ export function evaluateWaitResult(
   }
 }
 
+/**
+ * Where a several-id wait stands: every id's latest summary (with its own
+ * `done`), how many have settled, and whether that ends the wait. A settled id
+ * stays settled: a task someone reopens after it finished still finished once,
+ * and the caller asked when it would. Pure, shared with the hub's `wait`.
+ */
+export function waitManyVerdict(
+  ids: string[],
+  latest: ReadonlyMap<string, Record<string, unknown>>,
+  settled: ReadonlySet<string>,
+  mode: WaitMode,
+): { done: boolean; body: Record<string, unknown> } {
+  const count = ids.filter((id) => settled.has(id)).length
+  const done = mode === 'any' ? count > 0 : count === ids.length
+  return {
+    done,
+    body: {
+      done, mode, settled: count, of: ids.length,
+      results: ids.map((id) => ({ ...(latest.get(id) ?? (id.startsWith('rq-') ? { request: id } : { task: id })), done: settled.has(id) })),
+    },
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -695,4 +730,47 @@ async function runWait(
   }
   await writeStdout(JSON.stringify({ done: false, timeout: true, waitedSecs: parsed.timeoutSecs, ...last }, null, parsed.json ? 0 : 2) + '\n')
   return 7
+}
+
+/** `walnut wait <id> <id> ...`: one read per unsettled id per tick. */
+async function runWaitMany(
+  socketPath: string,
+  sid: string,
+  parsed: { ids: string[]; mode: WaitMode; timeoutSecs: number; json: boolean },
+): Promise<number> {
+  const deadline = Date.now() + parsed.timeoutSecs * 1000
+  const latest = new Map<string, Record<string, unknown>>()
+  const settled = new Set<string>()
+  for (;;) {
+    for (const id of parsed.ids) {
+      if (settled.has(id)) continue
+      let resp: GatewayResponse
+      try {
+        resp = await requestOverSocket(socketPath, {
+          v: 1, op: 'tools.call', sid, args: { name: id.startsWith('rq-') ? 'request_get' : 'task_get', args: { id } },
+        })
+      } catch (err) {
+        // Transient, as in the one-id wait: keep polling until the budget runs out.
+        latest.set(id, { ...(latest.get(id) ?? {}), transportError: err instanceof Error ? err.message : String(err) })
+        continue
+      }
+      if (!resp.ok) {
+        process.stderr.write(`walnut: wait ${id}:\n` + formatErrorLines(resp.error).join('\n') + '\n')
+        return errorToExitCode(resp.error.code)
+      }
+      const { done, summary } = evaluateWaitResult(id, resp.result)
+      latest.set(id, summary)
+      if (done) settled.add(id)
+    }
+    const verdict = waitManyVerdict(parsed.ids, latest, settled, parsed.mode)
+    if (verdict.done) {
+      await writeStdout(JSON.stringify(verdict.body, null, parsed.json ? 0 : 2) + '\n')
+      return 0
+    }
+    if (Date.now() >= deadline) {
+      await writeStdout(JSON.stringify({ ...verdict.body, timeout: true, waitedSecs: parsed.timeoutSecs }, null, parsed.json ? 0 : 2) + '\n')
+      return 7
+    }
+    await sleep(WAIT_POLL_INTERVAL_MS)
+  }
 }

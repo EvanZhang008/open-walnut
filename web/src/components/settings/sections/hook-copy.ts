@@ -17,7 +17,7 @@ export const HOOK_COPY: Record<string, { name: string; help: string }> = {
   'session-auto-title-turn-complete': { name: 'Name sessions started elsewhere', help: 'Names a session after its first turn when it was started from a phone.' },
   'session-error-notify': { name: 'Record session errors', help: 'Writes session errors to the log.' },
   'cwd-rename-detector': { name: 'Follow a renamed working folder', help: "Updates the task's folder when a session renames the one it works in." },
-  'session-request-watch': { name: 'Chase unanswered requests', help: 'Tells a session when the one it asked ends its turn without replying.' },
+  'session-request-watch': { name: 'Chase unanswered requests', help: 'Tells a session when the one it asked ends its turn or closes its task without replying, quoting its last message.' },
   'askuserquestion-p-mode-correction': { name: 'Fix questions asked in background sessions', help: 'Tells the model to write its question as text, since no one can answer the pop-up.' },
   'session-auto-continue': { name: 'Continue after repeated errors', help: 'Sends one delayed "continue" when a turn gives up after retrying.' },
   'auto-deny-stale-permissions': { name: 'Decline old permission prompts', help: 'A new message declines prompts left from the last turn, so the turn can go on.' },

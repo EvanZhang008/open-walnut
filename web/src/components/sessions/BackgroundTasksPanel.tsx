@@ -30,6 +30,7 @@ import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
 import { isAgentTask, isCommandTask } from './workflow-layout';
 import { buildAgentMeta, fmtElapsed, rowElapsedMs } from './background-ledger';
 import { StatusDot } from './WorkflowGraph';
+import { BackgroundTaskStopButton } from './BackgroundTaskStopButton';
 import { agentModelLabel } from './SessionMessage';
 import { TranscriptBody } from './WorkflowTranscriptModal';
 import { ICON_CLOSE } from '../common/Icons';
@@ -372,6 +373,10 @@ export function BackgroundTasksPanel({
                 {detailLive && <span className="wf-modal-live" title="Agent still running — this is its live output">{'●'}</span>}
                 {/* The pill already names a command's kind; the meta keeps only the timing. */}
                 <span className="wf-modal-meta">{rowMeta(selected, now).slice(selected.isAgent ? 0 : 1).join(' · ')}</span>
+                {selected.task && RUNNING.has(selected.status) && (
+                  <BackgroundTaskStopButton key={selected.task.taskId} sessionId={sessionId} taskId={selected.task.taskId}
+                    noun={selected.isAgent ? 'agent' : selected.isCommand ? 'command' : selected.task.taskType === 'local_workflow' ? 'workflow' : 'task'} />
+                )}
               </div>
             )}
             <div className="bg-tasks-detail-body">

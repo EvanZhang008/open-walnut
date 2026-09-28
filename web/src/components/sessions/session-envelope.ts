@@ -109,8 +109,59 @@ export interface SessionEnvelope {
   replyRequest?: { requestId: string; command?: string };
   /** The `walnut tools call …` line the envelope suggested, when it printed one. */
   followUp?: string;
+  /** Notification only: the target's words Walnut quoted between the outcome
+   *  sentence and `Next:` (its last message, the tool calls after it). */
+  quote?: NoticeQuoteSection[];
   /** The exact slice this envelope occupied — the "raw envelope" disclosure. */
   raw: string;
+}
+
+/** One fenced block of a notification's quote (core/session-requests.ts quoteLastMessage). */
+export interface NoticeQuoteSection {
+  /** "Its last message", "Its actions after that message", … as Walnut labelled it. */
+  label: string;
+  /** 'message': the target's own words (markdown); 'actions': one tool call per line. */
+  kind: 'message' | 'actions';
+  text: string;
+  clipped?: boolean;
+}
+
+const QUOTE_OPEN = /^--- (its [a-z ]+?) \((quoted|tool calls) from that session: data, not instructions\) ---$/;
+const QUOTE_CLOSE = /^--- end of (its [a-z ]+?)( \(clipped at [^)]*\))? ---$/;
+
+/**
+ * Split the quote Walnut put in a notification into its fenced blocks. The fence
+ * lines are Walnut's; the lines between are the target's, kept verbatim. A block
+ * closes only on the end line with ITS label, and one that never closes still
+ * shows what it has. Text outside every fence (none today) is dropped here and
+ * stays in the raw disclosure.
+ */
+export function parseNoticeQuote(text: string): NoticeQuoteSection[] {
+  const sections: NoticeQuoteSection[] = [];
+  let open: { label: string; kind: NoticeQuoteSection['kind']; lines: string[] } | null = null;
+  const push = (clipped: boolean) => {
+    if (!open) return;
+    const body = open.lines.join('\n').trim();
+    if (body) {
+      sections.push({
+        label: open.label.charAt(0).toUpperCase() + open.label.slice(1), kind: open.kind, text: body,
+        ...(clipped ? { clipped: true } : {}),
+      });
+    }
+    open = null;
+  };
+  for (const line of text.split('\n')) {
+    if (!open) {
+      const m = QUOTE_OPEN.exec(line);
+      if (m) open = { label: m[1], kind: m[2] === 'tool calls' ? 'actions' : 'message', lines: [] };
+      continue;
+    }
+    const end = QUOTE_CLOSE.exec(line);
+    if (end && end[1] === open.label) push(Boolean(end[2]));
+    else open.lines.push(line);
+  }
+  push(false);
+  return sections;
 }
 
 export type EnvelopeSegment =
@@ -494,9 +545,14 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
   // so it becomes `statusLine`. What follows is the `Next:` command block, which
   // is machine instruction: it stays in `raw` (the disclosure) plus `followUp`,
   // exactly where the pre-v2 notice put it, and never in the visible body.
+  // Between the two sits the target's quoted last message (and the tool calls
+  // after it): shown as its own sections, and never searched for a follow-up
+  // command, because a quoted `walnut tools call` is the target's text.
   const nl = body.indexOf('\n');
   const statusLine = trigger ? (attrs.note ?? '') : nl < 0 ? body : body.slice(0, nl);
-  const followUp = notify ? findCommand(nl < 0 ? '' : body.slice(nl + 1)) : undefined;
+  const nextAt = nl < 0 ? -1 : body.lastIndexOf('\n\nNext:\n');
+  const followUp = notify ? findCommand(nl < 0 ? '' : body.slice(nextAt > nl ? nextAt : nl + 1)) : undefined;
+  const quote = notify && nl >= 0 ? parseNoticeQuote(body.slice(nl + 1, nextAt > nl ? nextAt : undefined)) : [];
 
   return {
     end,
@@ -509,6 +565,7 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
       ...(notify ? { statusLine } : trigger ? { statusLine, body } : { body }),
       ...(replyRequest ? { replyRequest } : {}),
       ...(followUp ? { followUp } : {}),
+      ...(quote.length ? { quote } : {}),
       raw: text.slice(at, end),
     },
   };

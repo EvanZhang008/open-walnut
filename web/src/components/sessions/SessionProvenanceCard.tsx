@@ -32,6 +32,7 @@ import {
   envelopeDirectionGlyph,
   envelopeDirectionLabel,
   type EnvelopeSegment,
+  type NoticeQuoteSection,
   type SessionEnvelope,
   type SessionEnvelopePeer,
   type SessionEnvelopeSource,
@@ -46,6 +47,7 @@ import { sessionStatusStore } from '@/stores/session-status-store';
 import { useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
 import { copyTextRobust } from '@/utils/clipboard';
 import { log } from '@/utils/log';
+import '@/styles/provenance-quote.css';
 
 /** '__local__' is the wire value; the envelope prints 'local'. */
 function hostLabel(host: string | undefined): string | undefined {
@@ -186,6 +188,31 @@ function PeerChips({ peer, resolved }: { peer: SessionEnvelopePeer; resolved: Re
   );
 }
 
+/**
+ * A block a Walnut notification quoted from the session it is about: its last
+ * message (rendered like any other session's words) or the tool calls it made
+ * after it (plain lines, never markdown: they are command summaries).
+ */
+function NoticeQuote({ section, sessionCwd }: { section: NoticeQuoteSection; sessionCwd?: string }) {
+  return (
+    <div className="provenance-quote" data-quote-kind={section.kind}>
+      <div className="provenance-quote-label">
+        {section.label}
+        {section.clipped && <span className="provenance-quote-note"> (clipped; the rest is in its history)</span>}
+      </div>
+      {section.kind === 'message'
+        ? <EnvelopeBody body={section.text} sessionCwd={sessionCwd} />
+        : (
+          <ul className="provenance-actions">
+            {section.text.split('\n').filter((line) => line.trim()).map((line, i) => (
+              <li key={i} title={line}><code>{line}</code></li>
+            ))}
+          </ul>
+        )}
+    </div>
+  );
+}
+
 /** The other session's own words. Quoted, never presented as the user's. */
 function EnvelopeBody({ body, sessionCwd }: { body: string; sessionCwd?: string }) {
   const html = useRenderedMarkdown(body, sessionCwd);
@@ -285,6 +312,9 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
         </div>
       )}
       {envelope.statusLine && <div className="provenance-status">{envelope.statusLine}</div>}
+      {envelope.quote?.map((section, i) => (
+        <NoticeQuote key={i} section={section} sessionCwd={sessionCwd} />
+      ))}
       {envelope.body !== undefined && <EnvelopeBody body={envelope.body} sessionCwd={sessionCwd} />}
       {envelope.replyRequest && (
         <div className="provenance-reply-request">

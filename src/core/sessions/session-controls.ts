@@ -733,6 +733,8 @@ export async function forkSessionToTask(
  */
 export type SessionControlAction =
   | 'model' | 'effort' | 'fork' | 'model-options'
+  // One background task of a session (core/sessions/background-task-stop.ts).
+  | 'background-task.stop'
   // Wave 1 lifecycle family (2026-08):
   | 'patch' | 'terminate' | 'restart' | 'retry' | 'recheck' | 'permission'
   | 'execute-continue' | 'changes' | 'history' | 'detail'
@@ -957,6 +959,11 @@ export async function handleSessionControlRelay(
       case 'model-options':
         result = await computeModelOptions(sessionId) as unknown as Record<string, unknown>;
         break;
+      case 'background-task.stop': {
+        const { stopSessionBackgroundTask } = await import('./background-task-stop.js');
+        result = await stopSessionBackgroundTask(sessionId, p.taskId) as unknown as Record<string, unknown>;
+        break;
+      }
       // ── Wave 1 lifecycle family — same shared core the web routes use ──
       case 'patch': {
         const { patchSession } = await import('./session-lifecycle.js');

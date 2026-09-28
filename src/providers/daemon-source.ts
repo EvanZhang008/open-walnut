@@ -583,6 +583,8 @@ function runWnMinimal(argv, stdinText) {
       var wa = rest.shift();
       if (wa === '--timeout') { waitTimeoutSecs = Number(rest.shift()); }
       else if (wa === '--json') { json = true; }
+      // The full CLI (wn-cli.ts) waits on several ids; this minimal copy takes one.
+      else if (wa.indexOf('--') !== 0) { errOut('walnut: this host runs the minimal walnut CLI, whose wait takes one id: run one wait per id'); return exitWn(2); }
       else { errOut('walnut: unexpected argument: ' + wa); return exitWn(2); }
     }
     if (!waitId) { errOut('walnut: wait requires <task-id | rq-id>'); return exitWn(2); }

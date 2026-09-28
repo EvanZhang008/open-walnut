@@ -53,6 +53,23 @@ function alreadyStarted(task: Task, sid: string): SessionExistsError {
     `Task "${task.title}" is already started or starting. Continue with task_send {"to":"${task.id}","text":"..."}.`, sid);
 }
 
+/**
+ * A worker session may run only so many subtasks at once (subtask-limits.ts).
+ * Returns the admission's release, or throws SubtaskLimitError; the human's
+ * starts and a Personal AI ask's are never limited, and a caller that cannot be
+ * resolved is not either (fail open: the limit is a brake on runaway fan-out,
+ * not an access check).
+ */
+export async function admitStartWithinLimits(task: Task, callerSid: string | undefined): Promise<() => void> {
+  const open = () => {};
+  if (!callerSid) return open;
+  const { resolveCallerPlacement } = await import('./caller-placement.js');
+  const caller = await resolveCallerPlacement(callerSid).catch(() => ({ kind: 'unknown' as const }));
+  if (caller.kind !== 'worker') return open;
+  const { admitSubtaskStart } = await import('./subtask-limits.js');
+  return admitSubtaskStart(caller.task.id, task.id, caller.task.title);
+}
+
 export async function startSessionForTask(params: SessionStartParams): Promise<SessionStartResult> {
   let task: Task;
   try {
@@ -71,7 +88,9 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
   // Take the slot as soon as the task id is normalized; waiting on the disk or the runner must not allow a duplicate start.
   pendingStarts.set(task.id, sid ?? '');
   let releaseOnReturn = true;
+  let releaseAdmission = () => {};
   try {
+    releaseAdmission = await admitStartWithinLimits(task, params.callerSid);
     const records = await getSessionsForTask(task.id);
     const live = records.find((s) => !s.archived && LIVE_STATUSES.has(s.process_status));
     if (live && live.status_reason !== 'awaiting_spawn') throw alreadyStarted(task, live.claudeSessionId);
@@ -169,6 +188,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
         throw new QuickStartError(`Task ${task.id} could not start: ${message}. Fix the cause and retry task_start with the same id.`, 502);
       } finally {
         pendingStarts.delete(task.id);
+        releaseAdmission();
       }
     })();
     releaseOnReturn = false;
@@ -184,7 +204,10 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       if (timer) clearTimeout(timer);
     }
   } finally {
-    if (releaseOnReturn) pendingStarts.delete(task.id);
+    if (releaseOnReturn) {
+      pendingStarts.delete(task.id);
+      releaseAdmission();
+    }
   }
 }
 

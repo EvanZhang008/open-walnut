@@ -1,0 +1,66 @@
+/* The Stop control in the Background tasks reader's header
+   (BackgroundTaskStopButton.tsx). It sits last in the header row, pushed to the
+   right edge. Selectors carry the header class so they win over any base
+   button rule regardless of stylesheet order. */
+.bg-tasks-detail-head .bg-task-stop-wrap {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: none;
+  max-width: 55%;
+}
+.bg-tasks-detail-head .bg-task-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  flex: none;
+}
+.bg-tasks-detail-head .bg-task-stop:hover:not(:disabled) {
+  color: var(--error);
+  border-color: var(--error);
+}
+.bg-tasks-detail-head .bg-task-stop--armed {
+  color: #fff;
+  background: var(--error);
+  border-color: var(--error);
+}
+.bg-tasks-detail-head .bg-task-stop--armed:hover:not(:disabled) { color: #fff; }
+.bg-tasks-detail-head .bg-task-stop--stopping {
+  cursor: default;
+  opacity: 0.7;
+}
+.bg-tasks-detail-head .bg-task-stop:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.bg-tasks-detail-head .bg-task-stop-error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--error);
+}
+/* With the control in the row, the timing line gives way on ONE line (ellipsis,
+   full text in the row it came from) instead of wrapping the header taller. */
+.bg-tasks-detail-head:has(.bg-task-stop-wrap) .wf-modal-meta {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

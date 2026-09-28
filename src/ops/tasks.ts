@@ -494,6 +494,17 @@ defineOp({
       )
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
+      // The server's running-subtask cap (subtask-limits.ts): a definite "no",
+      // not an unconfirmed start, so the task is a placeholder until one finishes.
+      if (error.includes('(too_many_running_subtasks)')) {
+        return withOutcome(
+          withRef({ ...view, execution: { state: 'not_started', error } }, {
+            ...extra, execution: { state: 'not_started', error }, start_error: error,
+          }),
+          `${where}Task ${id} was created but NOT started: ${error}`,
+          `Start it after one of the running subtasks finishes: walnut tools call task_start '{"id":"${id}"}'`,
+        )
+      }
       return withOutcome(
         withRef({ ...view, execution: { state: 'unconfirmed', error } }, {
           ...extra, execution: { state: 'unconfirmed', error }, start_error: error,

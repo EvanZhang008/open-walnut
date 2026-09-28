@@ -2067,10 +2067,16 @@ await fs.mkdir(serviceFixtureRoot, { recursive: true })
       // ② the reply the asker reads
       buildReplyDeliveryText(rq, peerSender, 'Both blockers cleared. ENVELOPE_REPLY_BODY'),
       // ③ the Walnut status notice
+      //   (a child that closed its own task: its last words + the calls after them)
       buildRequestNotification(rq, 'completed', {
         title: ENVELOPE_PEER_TITLE,
         sessionId: 'pw-envelope-peer-session',
         taskId: 'pw-task-001',
+        phase: 'COMPLETE',
+        lastMessage: {
+          text: 'Both proxies are **green** now. ENVELOPE_NOTICE_QUOTE',
+          actions: ['Write: /repo/marina/NOTES.md', `Bash: ${'run the long verification suite '.repeat(8).trim()}`],
+        },
       }),
       // ④ an UNIDENTIFIED sender: no tracked session, so never a clickable chip
       buildPeerWrapper('cron finished on the box. ENVELOPE_ANON_BODY', {

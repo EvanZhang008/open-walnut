@@ -16,7 +16,9 @@ import {
   formatToolsTable,
   helpText,
   WAIT_DEFAULT_TIMEOUT_SECS,
+  WAIT_MAX_IDS,
   WAIT_MAX_TIMEOUT_SECS,
+  waitManyVerdict,
 } from '../../../src/providers/wn-cli.js';
 
 describe('parseWalnutCliArgs — retired peers surface', () => {
@@ -140,16 +142,63 @@ describe('parseWalnutCliArgs — wait', () => {
     }
   });
 
-  it('rejects unknown flags and a second positional argument', () => {
+  it('rejects unknown flags', () => {
     expect(parseWalnutCliArgs(['wait', 't-1', '--verbose']).kind).toBe('usage-error');
-    const extra = parseWalnutCliArgs(['wait', 't-1', 't-2']);
-    expect(extra.kind).toBe('usage-error');
-    if (extra.kind === 'usage-error') expect(extra.message).toContain('unexpected argument');
+  });
+
+  it('takes several ids: all by default, --any for the first, duplicates folded', () => {
+    expect(parseWalnutCliArgs(['wait', 't-1', 't-2', 'rq-3'])).toEqual({
+      kind: 'wait', id: 't-1', ids: ['t-1', 't-2', 'rq-3'], mode: 'all', timeoutSecs: WAIT_DEFAULT_TIMEOUT_SECS, json: false,
+    });
+    expect(parseWalnutCliArgs(['wait', '--any', 't-1', 't-2', '--timeout', '90', '--json'])).toEqual({
+      kind: 'wait', id: 't-1', ids: ['t-1', 't-2'], mode: 'any', timeoutSecs: 90, json: true,
+    });
+    expect(parseWalnutCliArgs(['wait', 't-1', 't-2', '--any', '--all'])).toMatchObject({ mode: 'all' });
+    // One id after folding keeps the one-id shape (no ids/mode keys), --any or not.
+    expect(parseWalnutCliArgs(['wait', 't-1', 't-1', '--any'])).toEqual({
+      kind: 'wait', id: 't-1', timeoutSecs: WAIT_DEFAULT_TIMEOUT_SECS, json: false,
+    });
+  });
+
+  it('caps the number of ids', () => {
+    const many = Array.from({ length: WAIT_MAX_IDS + 1 }, (_, i) => `t-${i}`);
+    const res = parseWalnutCliArgs(['wait', ...many]);
+    expect(res.kind).toBe('usage-error');
+    if (res.kind === 'usage-error') expect(res.message).toBe(`wait takes at most ${WAIT_MAX_IDS} ids`);
+    expect(parseWalnutCliArgs(['wait', ...many.slice(0, WAIT_MAX_IDS)]).kind).toBe('wait');
   });
 
   it('treats --help inside wait as the root help', () => {
     expect(parseWalnutCliArgs(['wait', '--help'])).toEqual({ kind: 'help', topic: 'root' });
     expect(parseWalnutCliArgs(['wait', 't-1', '-h'])).toEqual({ kind: 'help', topic: 'root' });
+  });
+});
+
+describe('waitManyVerdict', () => {
+  const ids = ['t-1', 't-2', 'rq-3'];
+  const latest = new Map<string, Record<string, unknown>>([
+    ['t-1', { task: 't-1', title: 'Menu', phase: 'COMPLETE' }],
+    ['t-2', { task: 't-2', title: 'Contact', phase: 'IN_PROGRESS' }],
+  ]);
+
+  it('all: done only when every id settled; each result says its own done', () => {
+    const some = waitManyVerdict(ids, latest, new Set(['t-1']), 'all');
+    expect(some.done).toBe(false);
+    expect(some.body).toEqual({
+      done: false, mode: 'all', settled: 1, of: 3,
+      results: [
+        { task: 't-1', title: 'Menu', phase: 'COMPLETE', done: true },
+        { task: 't-2', title: 'Contact', phase: 'IN_PROGRESS', done: false },
+        // Not read yet: the bare handle, of the right kind.
+        { request: 'rq-3', done: false },
+      ],
+    });
+    expect(waitManyVerdict(ids, latest, new Set(ids), 'all')).toMatchObject({ done: true, body: { settled: 3, of: 3 } });
+  });
+
+  it('any: done at the first settled id', () => {
+    expect(waitManyVerdict(ids, latest, new Set(), 'any').done).toBe(false);
+    expect(waitManyVerdict(ids, latest, new Set(['t-1']), 'any')).toMatchObject({ done: true, body: { mode: 'any', settled: 1 } });
   });
 });
 
@@ -283,7 +332,8 @@ describe('helpText', () => {
     const h = helpText('root');
     expect(h).toContain('walnut guide');
     expect(h).toContain('walnut tools list|help|call ...');
-    expect(h).toContain('walnut wait <id> [--timeout secs] [--json]');
+    expect(h).toContain('walnut wait <id> [<id>...] [--any] [--timeout secs] [--json]');
+    expect(h).toContain('several ids (up to 20): returns when ALL settled; --any returns at the first');
     // The retired peers commands must not come back into the advertised surface.
     expect(h).not.toContain('walnut peers list');
     expect(h).not.toContain('walnut peers send');

@@ -2166,6 +2166,17 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       ...(typeof launchHost === 'string' ? { launch_host: launchHost } : {}),
     }
     const decision = decidePlacement(placementReq, caller)
+    if (decision.parentTaskId) {
+      // A session's subtask chain has a depth cap in the server (subtask-limits.ts).
+      const { assertSubtaskDepth, SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
+      try {
+        await assertSubtaskDepth(decision.parentTaskId, 'task' in caller ? caller.task.title : undefined)
+      } catch (err) {
+        if (!(err instanceof SubtaskLimitError)) throw err
+        sendError(res, err.statusCode, err.code, err.message)
+        return
+      }
+    }
     if (caller.kind === 'ask' && decision.project === undefined) {
       // An ask's own project is `Ask …`, never a place for the user's work. With
       // a parent set, addTask would inherit the parent's project, so the default

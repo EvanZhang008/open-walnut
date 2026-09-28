@@ -1799,44 +1799,77 @@ export const cwdRenameDetectorHook: SessionHookDefinition = {
 /**
  * session-request-watch — the turn-end edge of the expect_reply loop.
  *
- * When a task lands NEED_ACTION (turn end, error, or awaiting-human all
- * project there) and a pending session-request targets that task/session, the
- * target finished its turn WITHOUT replying — it never will on this turn, so
- * tell the asker now instead of making it wait for the deadline sweeper.
+ * A pending session-request means the target still owes its asker an answer.
+ * Two edges prove it never will on this turn, so tell the asker now instead of
+ * making it wait for the deadline sweeper:
+ *
+ *  - the task lands NEED_ACTION (turn end, error and awaiting-human all project
+ *    there);
+ *  - the task lands COMPLETE. COMPLETE is terminal, so no later NEED_ACTION edge
+ *    will ever speak for it (before 2026-09-28 a child that closed its own task
+ *    without replying left its parent waiting the full 1h/6h deadline). A child
+ *    sets COMPLETE from INSIDE its turn, and completing a task completes its
+ *    session, which ends that turn on the spot. So while the target is still
+ *    mid-turn the edge only defers: the turn's end (onTurnComplete /
+ *    onTurnError, both fire for that cut turn) notifies, quoting the turn's
+ *    final text or, when it has none, the transcript's last message and the
+ *    calls after it; a reply sent before the turn ends still wins. A turn the
+ *    user stops fires neither, and the sweeper remains the guarantee.
+ *
  * Exactly-once lives in the request row's atomic settle (notifyRequesterFallback);
- * a reply racing this edge wins the settle and this hook stays silent.
+ * a reply racing either edge wins the settle and this hook stays silent.
  */
 export const sessionRequestWatchHook: SessionHookDefinition = {
   id: 'session-request-watch',
   name: 'Session Request Watch',
-  description: 'Notifies the asking session when a session that owes a reply ends its turn without replying.',
-  hooks: ['onTaskPhaseChanged'],
+  description: 'Notifies the asking session when a session that owes a reply ends its turn or closes its task without replying.',
+  hooks: ['onTaskPhaseChanged', 'onTurnComplete', 'onTurnError'],
   priority: 60,
   source: 'builtin',
   enabled: true,
-  filter: { phases: ['NEED_ACTION'] },
+  // Not a `phases` filter: that dimension also gates the session-domain turn
+  // edges (on the task's phase at dispatch), which the handler reads fresh itself.
+  filter: {
+    predicate: (ctx) => !('domain' in ctx && ctx.domain === 'task')
+      || ['NEED_ACTION', 'COMPLETE'].includes((ctx as TaskHookContext).newPhase ?? ''),
+  },
   handler: async (payload) => {
+    const isPhaseEdge = 'domain' in payload && (payload as unknown as TaskHookContext).domain === 'task';
     const ctx = payload as unknown as TaskHookContext;
-    const sessionId = ctx.sessionId ?? ctx.task?.session_id;
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
     const { pendingRequestsForTarget } = await import('../session-requests.js');
-    const pending = await pendingRequestsForTarget({ sessionId, taskId: ctx.taskId });
+    const sessionId = ctx.sessionId ?? ctx.task?.session_id ?? undefined;
+    let taskId: string | undefined = ctx.taskId;
+    let phase: string | undefined = isPhaseEdge ? ctx.newPhase : undefined;
+    let lastMessage: string | undefined;
+    const record = sessionId ? await getSessionByClaudeId(sessionId).catch(() => undefined) : undefined;
+
+    if (!isPhaseEdge) {
+      // A turn edge speaks only for a CLOSED task: a live one gets its
+      // NEED_ACTION phase edge, which is what always handled it.
+      taskId ??= record?.taskId;
+      if (!taskId) return;
+      const { listTasksByIds } = await import('../task-manager.js');
+      phase = (await listTasksByIds([taskId]).catch(() => []))[0]?.phase;
+      if (phase !== 'COMPLETE') return;
+      lastMessage = (payload as unknown as Partial<OnTurnCompletePayload>).result || undefined;
+    } else if (phase === 'COMPLETE' && record?.process_status === 'running') {
+      return; // mid-turn: its turn end notifies, with the final text
+    }
+
+    const pending = await pendingRequestsForTarget({ sessionId, taskId });
     if (pending.length === 0) return;
 
     // Outcome from the target session's live state — eventSource strings are
     // caller tags, not triggers, so the record is the honest signal.
     let outcome: 'completed' | 'error' | 'awaiting_human' = 'completed';
-    if (sessionId) {
-      try {
-        const { getSessionByClaudeId } = await import('../session-tracker.js');
-        const record = await getSessionByClaudeId(sessionId);
-        if (record?.pendingPermission) outcome = 'awaiting_human';
-        else if (record?.process_status === 'error') outcome = 'error';
-      } catch { /* completed stands */ }
-    }
+    if ('error' in payload && !isPhaseEdge) outcome = 'error';
+    else if (record?.pendingPermission) outcome = 'awaiting_human';
+    else if (record?.process_status === 'error') outcome = 'error';
 
     const { notifyRequesterFallback } = await import('../sessions/session-request-notify.js');
     for (const request of pending) {
-      await notifyRequesterFallback(request, outcome);
+      await notifyRequesterFallback(request, outcome, { phase, lastMessage });
     }
   },
 };

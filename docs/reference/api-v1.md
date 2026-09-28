@@ -56,6 +56,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all (e.g. global search needs the primary's semantic index) |
 | `cron_owner` | 409 | `POST /sessions/:id/terminate` refused: the session owns armed recurring crons — delete them first or pass `force: true` |
 | `session_exists` | 409 | `POST /tasks/:id/start` refused: the task already has a live session (`existing_session_id`); message it with `POST /messages` |
+| `subtask_too_deep` | 409 | `POST /tasks` from a session: the new task would be its subtask more than 3 levels below a top-level task. Nothing is created |
+| `too_many_running_subtasks` | 409 | `POST /tasks/:id/start` from a worker session that already has 8 subtasks running (IN_PROGRESS or starting). Nothing is started |
 | `host_not_ready` | 409 | `POST /sessions` refused before anything was written: the host is connected but its Claude Code cannot run the session (`kind`: `claude_missing`, `claude_needs_node`, `claude_error`, `claude_outdated`, `claude_not_logged_in`). Extras `kind`, `host`, `headline`, `hint`, and `allowOverride: true` for the two kinds `overrideReadiness` may skip |
 | `host_unreachable` | 409 | `POST /sessions`: a fresh connect attempt to the host just failed; `kind`, `headline` and `hint` describe that attempt |
 | `host_off` | 409 | `POST /sessions`: remote hosts are off on this test server (never dialled) |
@@ -90,6 +92,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | POST | `/api/v1/sessions/:id/model` | Switch the session's model (cloud relays to the primary) |
 | POST | `/api/v1/sessions/:id/effort` | Switch the session's reasoning effort (cloud relays to the primary) |
 | POST | `/api/v1/sessions/:id/fork` | Fork a session to another/new task (cloud relays to the primary) |
+| POST | `/api/v1/sessions/:id/background-tasks/:taskId/stop` | Stop one background agent / command / workflow; the turn keeps running (cloud relays to the primary) |
 | GET | `/api/v1/events` | SSE live feed of slim task + session updates (snapshot frame on connect) |
 | GET | `/api/v1/notes` | Notes file tree |
 | GET | `/api/v1/notes/content/*path` | Read a note |
@@ -611,6 +614,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   REPLICA the caller is never a worker (it has no session registry), and a
   non-empty `group_id` answers `501 not_supported_cloud`.
   Implementation: `src/core/sessions/caller-placement.ts`.
+  Depth limit (additive, 2026-09-28): a session's subtask sits at most 3 levels
+  below a top-level task; a create that would go deeper answers
+  `409 subtask_too_deep` and files nothing (`src/core/sessions/subtask-limits.ts`).
+  Creates with no caller (the board, the phone, the CLI) are never limited.
   `priority` one of `immediate|important|backlog|none` (default from config).
   `start_date` / `end_date` (additive, 2026-08) let a client create a task
   already scheduled on the calendar (tapping a day, dragging a time range);
@@ -724,7 +731,11 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   (`x-walnut-caller-sid`) and returns its `requestId`. When that caller is a
   worker session and the task belongs to its project, has no cwd of its own and
   the body names neither `cwd` nor `host`, the session starts on the caller's
-  host in the caller's cwd, as one pair (additive, 2026-09-23). `202` means ACCEPTED,
+  host in the caller's cwd, as one pair (additive, 2026-09-23). A worker caller
+  that already has 8 subtasks running (IN_PROGRESS or starting, the task being
+  started excluded) answers `409 too_many_running_subtasks` and nothing starts
+  (additive, 2026-09-28); the human and a Personal AI ask are never limited.
+  `202` means ACCEPTED,
   not spawned (the spawn is async in session-runner), same as `POST /sessions`.
   Class C: `501 not_supported_cloud` on a REPLICA (no session-runner there);
   use `POST /api/v1/sessions`, which relays over the bridge.
@@ -1312,6 +1323,18 @@ BOTH boxes:
     no cwd/task), `404 not_found` (unknown source session / target task),
     `409 conflict` (target task already has a session — the response carries
     `existing_session_id`; or a Codex source session, which cannot fork).
+- `POST /api/v1/sessions/:id/background-tasks/:taskId/stop` (additive,
+  2026-09-28) → `200 { "sessionId", "taskId", "stopped", "status" }`: stop ONE
+  background task (agent, shell command or workflow) through the CLI's
+  `stop_task` control request. The turn and the session's other tasks keep
+  running; the ledger row turns `stopped` through the usual
+  `session:background-tasks` event, not this reply. `stopped: false` = the task
+  had already ended (`status` says how; nothing was sent). Only an id in this
+  session's own ledger is sent (task ids are unique per CLI process). Errors:
+  `400 bad_request` (malformed id), `404 not_found` (unknown session, or no such
+  task in its ledger), `409 conflict` (the session is not running, or the CLI
+  refused or did not answer; the message carries its reason). A REPLICA relays
+  it to the primary as the `background-task.stop` control action.
 
 ### Session lifecycle (additive, Wave 1 2026-08) — detail / patch / terminate / restart / retry / recheck / permission / execute-continue / changes / history
 

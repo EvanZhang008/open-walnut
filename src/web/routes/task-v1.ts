@@ -259,6 +259,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
     const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid ?? '').trim() || undefined
     const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
     const { QuickStartError } = await import('../../core/sessions/quick-start.js')
+    const { SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
     const { launchErrorCode } = await import('../../core/sessions/mobile-launch.js')
     try {
       res.status(202).json(await startSessionForTask({
@@ -283,6 +284,10 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
       }
       if (err instanceof QuickStartError) {
         sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
+        return
+      }
+      if (err instanceof SubtaskLimitError) {
+        sendError(res, err.statusCode, err.code, err.message)
         return
       }
       throw err

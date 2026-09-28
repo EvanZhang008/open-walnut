@@ -13,6 +13,11 @@
  *   1. WHO opened it (Walnut) and WHERE Walnut sits: the layer above the
  *      session, holding the user's board, work, memory, notes, history.
  *   2. WHAT it is working on (task title + project) when there is a task.
+ *   2b. WHO asked, for a subtask: its parent task. A parent's instruction
+ *      reaches the child as its first message, indistinguishable from the
+ *      user's, so the line says which messages are the parent's and that their
+ *      named reply is the way back (a child that answers only in its own chat
+ *      leaves the parent reading a fallback notice instead of an answer).
  *   3. WHO the session is in that picture: the run of one task, doing the work
  *      with its own tools. This is the ONE place that says a session is how a
  *      task runs; everywhere else the work is addressed by its TASK id. The
@@ -64,6 +69,15 @@ export async function buildSessionContext(
       const task = await getTask(taskId)
       const project = task.project ? `project "${task.project}"` : 'the Inbox (no project)'
       taskLine = `You are working on the task "${task.title}" (id ${task.id}, ${project}).\n\n`
+      if (task.parent_task_id) {
+        // Who asked (see 2b above). A missing parent just drops the line.
+        const parent = await getTask(task.parent_task_id).catch(() => null)
+        if (parent) {
+          taskLine += `Your task is a subtask of "${parent.title}" (id ${parent.id}). A message `
+            + 'ending in "Reply when done" comes from that task\'s session, and the reply it '
+            + 'names is how your result gets back to it.\n\n'
+        }
+      }
       const { isAskTask } = await import('./caller-placement.js')
       ask = isAskTask(task)
     } catch { /* unknown task — identity + tooling lines still apply */ }

@@ -521,6 +521,19 @@ export async function setSessionModel(
   return apiPost(`/api/sessions/${sessionId}/model`, { model });
 }
 
+/**
+ * Stop ONE background task (agent, shell command or workflow) of a session; the
+ * turn and the other tasks keep running. `stopped:false` = it had already ended.
+ * The ledger row turns `stopped` through the usual live event, not this reply.
+ * Throws ApiError: 404 no such task in the session, 409 not running / CLI refused.
+ */
+export async function stopBackgroundTask(
+  sessionId: string,
+  taskId: string,
+): Promise<{ sessionId: string; taskId: string; stopped: boolean; status: string }> {
+  return apiPost(`/api/v1/sessions/${encodeURIComponent(sessionId)}/background-tasks/${encodeURIComponent(taskId)}/stop`, {}, { timeoutMs: 20_000 });
+}
+
 /** A model row an ACP provider advertised at session start. */
 export interface CodexModelInfo {
   modelId: string;

@@ -245,6 +245,36 @@ sessionControlV1Router.post('/sessions/:id/fork', async (req: Request, res: Resp
   }
 })
 
+// POST /api/v1/sessions/:id/background-tasks/:taskId/stop → 200 { sessionId,
+// taskId, stopped, status }. Stops ONE background agent / command / workflow;
+// the turn keeps running. `stopped:false` = it had already ended. 404 when the
+// session's ledger has no such task, 409 when the session is not running or the
+// CLI refused. Core: core/sessions/background-task-stop.ts.
+sessionControlV1Router.post('/sessions/:id/background-tasks/:taskId/stop', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = validSid(req, res)
+    if (!sessionId) return
+    const taskId = String(req.params.taskId ?? '')
+    if (CLOUD_MODE) {
+      await relayControlAction(res, 'background-task.stop', sessionId, { taskId }, 200)
+      return
+    }
+    const { stopSessionBackgroundTask } = await import('../../core/sessions/background-task-stop.js')
+    const { SessionControlError } = await import('../../core/sessions/session-controls.js')
+    try {
+      res.json(await stopSessionBackgroundTask(sessionId, taskId))
+    } catch (err) {
+      if (err instanceof SessionControlError) {
+        sendError(res, err.statusCode, v1ErrorCode(err.statusCode), err.message, err.extra)
+        return
+      }
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
 /** HTTP status → frozen v1 error code (same vocabulary as session-launch-v1). */
 function v1ErrorCode(status: number): string {
   if (status === 404) return 'not_found'

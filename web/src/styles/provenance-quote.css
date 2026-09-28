@@ -1,0 +1,45 @@
+/*
+ * The target's words a Walnut notification quoted (SessionProvenanceCard.tsx
+ * NoticeQuote): its last message and the tool calls it made after it. A small
+ * label in the "You asked" voice, then the words in the card's usual quote rail.
+ */
+.provenance-quote {
+  margin-top: 8px;
+}
+
+.provenance-quote-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.provenance-quote-note {
+  font-weight: 400;
+}
+
+.provenance-quote .provenance-body.markdown-body {
+  margin-top: 4px;
+}
+
+/* One tool call per row, never wrapped: the full line is one hover away. */
+.provenance-actions {
+  margin: 4px 0 0;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--border-strong);
+  list-style: none;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.provenance-actions li {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 18px;
+}
+
+.provenance-actions code {
+  font-family: var(--font-mono);
+  background: transparent;
+  padding: 0;
+}

@@ -1406,6 +1406,30 @@ export class ClaudeCodeSession {
     }
   }
 
+  /**
+   * Stop ONE background task (an agent, shell command or workflow) via the CLI's
+   * `stop_task` control request, the same call the Agent SDK's `stopTask` makes.
+   * The turn and every other task keep running; the task's own terminal
+   * notification then updates the ledger through the usual events.
+   *
+   * Only an id this session's ledger lists is sent: task ids are unique per CLI
+   * process, so an id from another session (or a stale tab) must never reach it.
+   * An id that already ended answers without a round trip. strict=true: a stop
+   * the CLI did not confirm is reported as an error, never as stopped.
+   */
+  async stopBackgroundTask(taskId: string, timeoutMs = 10_000): Promise<{ stopped: boolean; status: string }> {
+    const row = this._bgTasks.get(taskId)
+    if (!row) throw new Error(`No background task ${taskId} in this session`)
+    if (!['running', 'paused', 'pending'].includes(row.status)) return { stopped: false, status: row.status }
+    await this.readControlPayloadWithRequest(
+      `stp-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      { subtype: 'stop_task', task_id: taskId }, timeoutMs, true)
+    log.session.info('background task stop confirmed by the CLI', {
+      sessionId: this.claudeSessionId, taskId: this.taskId, backgroundTaskId: taskId, taskType: row.taskType,
+    })
+    return { stopped: true, status: row.status }
+  }
+
   /** Broadcast the current background-task set so the UI can render workflow progress. */
   private _emitBackgroundTasksUpdate(sessionId: string): void {
     bus.emit(EventNames.SESSION_BACKGROUND_TASKS, {

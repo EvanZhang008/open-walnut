@@ -42,9 +42,12 @@ test.beforeAll(async () => {
 async function openSession(page: Page): Promise<Locator> {
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   if (await panel.count() === 0) {
-    await page.locator('.todo-search-input').fill(TASK_ID)
     const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
-    await expect(task).toBeVisible({ timeout: 15_000 })
+    // A fill that lands while the board is still hydrating can be reset; type again until it holds.
+    await expect(async () => {
+      await page.locator('.todo-search-input').fill(TASK_ID)
+      await expect(task).toBeVisible({ timeout: 3_000 })
+    }).toPass({ timeout: 30_000 })
     // Click the row's title: the task menu has no open-session row.
     await task.locator('.todo-item-title').click()
   }
@@ -80,23 +83,41 @@ function anonPeerNote(panel: Locator): Locator {
 }
 
 /**
- * Screenshot a card for human review.
+ * Bring a card inside the timeline's scroller.
  *
- * An element screenshot is useless here: the timeline follows its bottom, so
- * Playwright's scroll-into-view is snapped straight back and the capture lands on
- * empty space (measured — the first attempt produced a blank PNG). A REAL wheel
- * gesture is what tells the component the reader left the tail, so scroll with
- * one until the card is inside the scroller, then clip the PAGE to its box.
+ * The timeline follows its bottom, so Playwright's scroll-into-view is snapped
+ * straight back (measured: the first screenshot attempt produced a blank PNG,
+ * and a click on a card above the fold never lands). A REAL wheel gesture is
+ * what tells the component the reader left the tail, so wheel until the card is
+ * in view. Headless WebKit honours only the first synthetic wheel, so once that
+ * one has released the tail, finish by setting the scroller's scrollTop.
  */
-async function shotCard(page: Page, panel: Locator, target: Locator, file: string): Promise<void> {
-  const view = (await panel.locator('.session-history').boundingBox())!
-  await page.mouse.move(view.x + view.width / 2, view.y + view.height / 2)
-  for (let i = 0; i < 20; i++) {
+async function revealCard(page: Page, panel: Locator, target: Locator): Promise<void> {
+  const scroller = panel.locator('.session-history')
+  const view = (await scroller.boundingBox())!
+  const inView = async () => {
     const box = await target.boundingBox()
-    if (box && box.y >= view.y && box.y + box.height <= view.y + view.height) break
+    return Boolean(box && box.y >= view.y && box.y + box.height <= view.y + view.height)
+  }
+  await page.mouse.move(view.x + view.width / 2, view.y + view.height / 2)
+  for (let i = 0; i < 20 && !(await inView()); i++) {
+    const box = await target.boundingBox()
     await page.mouse.wheel(0, box && box.y < view.y ? -160 : 160)
     await page.waitForTimeout(120)
   }
+  if (await inView()) return
+  await target.evaluate((el) => {
+    const history = el.closest('.session-history')
+    if (!history) return
+    const offset = el.getBoundingClientRect().top - history.getBoundingClientRect().top
+    history.scrollTop += offset - 8
+  })
+  await expect.poll(inView, { timeout: 5_000 }).toBe(true)
+}
+
+/** Screenshot a card for human review: reveal it, then clip the PAGE to its box. */
+async function shotCard(page: Page, panel: Locator, target: Locator, file: string): Promise<void> {
+  await revealCard(page, panel, target).catch(() => {})
   const box = await target.boundingBox()
   if (box) await page.screenshot({ path: file, clip: box })
   else await panel.screenshot({ path: file })
@@ -145,7 +166,25 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
 
   const notice = card(panel, 'notification')
   await expect(notice.locator('.provenance-label')).toHaveText('Walnut notification')
-  await expect(notice.locator('.provenance-status')).not.toHaveText('')
+  await expect(notice.locator('.provenance-status')).toHaveText('It marked its task COMPLETE WITHOUT an explicit reply '
+    + 'to your request. Its last message and the actions after it are quoted below.')
+  // "Quoted below" is true on screen: the child's words (markdown), then the calls
+  // after them as plain one-line rows; the Next: commands stay in the disclosure.
+  const quotes = notice.locator('.provenance-quote')
+  await expect(quotes).toHaveCount(2)
+  await expect(quotes.nth(0).locator('.provenance-quote-label')).toHaveText('Its last message')
+  await expect(quotes.nth(0).locator('.provenance-body strong')).toHaveText('green')
+  await expect(quotes.nth(0).locator('.provenance-body')).toContainText('ENVELOPE_NOTICE_QUOTE')
+  await expect(quotes.nth(1).locator('.provenance-quote-label')).toHaveText('Its actions after that message')
+  const actions = quotes.nth(1).locator('.provenance-actions li')
+  await expect(actions).toHaveText(['Write: /repo/marina/NOTES.md', /^Bash: run the long verification suite/])
+  // A long call stays one row (ellipsis) inside the card; its full text is the row's title.
+  const cardBox = (await notice.boundingBox())!
+  const longRow = actions.nth(1)
+  const rowBox = (await longRow.boundingBox())!
+  expect(rowBox.height).toBeLessThanOrEqual(20)
+  expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 0.5)
+  await expect(longRow).toHaveAttribute('title', /run the long verification suite$/)
 
   // A walnut-trigger fire comes from a routine, not a session: the card names the
   // routine, shows the daemon's "fired …, N new items" line, keeps the delivery
@@ -165,6 +204,7 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
   await page.setViewportSize({ width: 1280, height: 900 })
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/cards-all-shapes.png` })
   await shotCard(page, panel, fire, `${SCREENSHOT_DIR}/card-trigger-fire.png`)
+  await shotCard(page, panel, notice, `${SCREENSHOT_DIR}/card-notification-quote.png`)
 })
 
 test('the short id resolves to a chip that opens that session; the task is a pill', async ({ page }) => {
@@ -216,6 +256,8 @@ test('machine framing hides behind the disclosure and the body stays the content
   expect(folded).not.toContain('user authorization')
   expect(folded).not.toContain('walnut tools call')
 
+  // The first card sits above the fold once the cards below it are tall.
+  await revealCard(page, panel, peerNote.locator('.provenance-details > summary'))
   await peerNote.locator('.provenance-details > summary').click()
   await expect(raw).toBeVisible()
   await expect(raw).toContainText('<walnut-message kind="peer-note"')
@@ -239,6 +281,7 @@ test('the legacy prose envelope folds its fence away just the same', async ({ pa
   expect(folded).not.toContain('---peer-note-')
   expect(folded).not.toContain('user authorization')
 
+  await revealCard(page, panel, legacy.locator('.provenance-details > summary'))
   await legacy.locator('.provenance-details > summary').click()
   await expect(raw).toBeVisible()
   await expect(raw).toContainText('---peer-note-')
@@ -279,6 +322,7 @@ test("Claude Code's own cross-session message cards, framing folded, no context 
   // A CLI `[ref]` is not a Walnut id: no chip can be minted from it.
   await expect(native.locator('a.provenance-chip-session')).toHaveCount(0)
   // The framing prose is recoverable behind the disclosure and nowhere else.
+  await revealCard(page, panel, native.locator('.provenance-details > summary'))
   await native.locator('.provenance-details > summary').click()
   await expect(native.locator('.provenance-raw')).toContainText('Another Claude session sent a message')
   await expect(native.locator('.provenance-raw')).toContainText('permission laundering')
@@ -337,6 +381,7 @@ test('this session messaging another one cards too, mirroring the inbound card',
   const raw = outbound.locator('.provenance-raw').first()
   await expect(raw).toBeHidden()
   expect(await outbound.innerText()).not.toContain('walnut tools call')
+  await revealCard(page, panel, outbound.locator('.provenance-details > summary'))
   await outbound.locator('.provenance-details > summary').click()
   await expect(raw).toContainText('walnut tools call session_send')
   await expect(outbound.locator('.provenance-raw').last()).toContainText('"delivery":"queued"')

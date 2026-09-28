@@ -60,12 +60,13 @@ export function registerCommands(program: Command): void {
     });
 
   program
-    .command('wait <id>')
-    .description('Block until a task settles (NEED_ACTION/COMPLETE) or a reply request (rq-…) resolves')
+    .command('wait <ids...>')
+    .description('Block until tasks settle (NEED_ACTION/COMPLETE) or reply requests (rq-…) resolve; several ids wait for all')
+    .option('--any', 'With several ids, return when the first one settles')
     .option('--timeout <secs>', 'Give up after this many seconds (default 1800; exit code 7)')
-    .action(async (id: string, options: Record<string, unknown>, cmd: Command) => {
+    .action(async (ids: string[], options: Record<string, unknown>, cmd: Command) => {
       const { runWait } = await import('./wait.js');
-      await runWait(id, options, cmd.optsWithGlobals());
+      await runWait(ids, options, cmd.optsWithGlobals());
     });
 
   program
