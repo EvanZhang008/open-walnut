@@ -30,24 +30,3 @@ export function keepCommandFirst(message: string, compose: (text: string) => str
   const composed = compose(lead.rest);
   return composed === lead.rest ? message : `${lead.command} \n${composed}`;
 }
-
-/**
- * Put a slash command at the start of the composer text.
- *
- * A "+" menu row that arms a skill cannot insert at the caret the way `@` does:
- * text the user already typed becomes the command's argument instead. Choosing
- * the row twice leaves the text alone. The caret lands at the end, where the
- * user keeps typing what the command is about.
- */
-export function withLeadingCommand(value: string, command: string): { value: string; caret: number } {
-  const rest = value.replace(/^\s+/, '');
-  const after = rest.slice(command.length);
-  if (rest.startsWith(command) && /^\s/.test(after)) {
-    if (after.startsWith(' ')) return { value, caret: value.length };
-    // Already there but followed by a newline or tab: add the space the CLI splits on.
-    const next = `${command} ${after}`;
-    return { value: next, caret: next.length };
-  }
-  const next = rest && rest !== command ? `${command} ${rest}` : `${command} `;
-  return { value: next, caret: next.length };
-}

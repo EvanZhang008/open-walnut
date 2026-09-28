@@ -1,6 +1,9 @@
 import { test, expect, type Page } from '@playwright/test'
 import { build } from 'esbuild'
+import fs from 'node:fs/promises'
 import path from 'node:path'
+import { discoverFixtureRoot, loadHome, openDraftOnCwd } from './draft-helpers'
+import { startSessionAt, openPanels, openPlusMenu, composerTextarea } from './engine-settings-popover-helpers'
 
 let script = ''
 
@@ -22,7 +25,12 @@ test.beforeAll(async () => {
           revision++;
           for (const callback of listeners) callback();
         }, true);
-        const commands = [{name: 'review', description: 'Review changes', source: 'cli'}];
+        const commands = [
+          {name: 'review', description: 'Review changes', source: 'project', kind: 'command'},
+          {name: 'deploy', description: 'Ship changes', source: 'skill', kind: 'skill'},
+          {name: 'project-helper', description: 'Help with the project', source: 'project', kind: 'skill'},
+          {name: 'compact', description: 'Compact context', source: 'built-in', kind: 'command'},
+        ];
         const searchCommands = query => commands.filter(command => command.name.startsWith(query));
         function App() {
           const tick = useSyncExternalStore(subscribe, snapshot);
@@ -39,7 +47,8 @@ test.beforeAll(async () => {
               setPrefill({nonce: prefill.nonce + 1, mode, text: 'Prefill '})}>{mode}</button>)}
             <div>{Array.from({length: 200}, (_, i) => <span key={i}>{tick + i} </span>)}</div>
             <ChatInput draftKey={'input-state:' + draft} onValueChange={setMirror}
-              mentionCwd="/fixture" enableEntityMention
+              mentionCwd={new URLSearchParams(location.search).get('cwd') || '/fixture'}
+              mentionHost={new URLSearchParams(location.search).get('host') || undefined} enableEntityMention
               prefillNonce={prefill.nonce} prefillText={prefill.text} prefillMode={prefill.mode}
               sessionCommands={commands}
               searchSessionCommands={searchCommands}
@@ -76,8 +85,8 @@ test.beforeAll(async () => {
   expect(script).toContain('createRoot')
 })
 
-async function openComposer(page: Page) {
-  await page.route('**/__composer-input-test', route => route.fulfill({
+async function openComposer(page: Page, cwd = '/fixture', host?: string) {
+  await page.route(/\/__composer-input-test(?:\?|$)/, route => route.fulfill({
     contentType: 'text/html',
     body: '<!doctype html><meta charset="utf-8"><div id="root"></div><script src="/__composer-input-test.js"></script>',
   }))
@@ -95,7 +104,7 @@ async function openComposer(page: Page) {
   await page.route('**/api/search?**', route => route.fulfill({ json: { results: [] } }))
   await page.setContent('<a href="/">Open composer</a>')
   await page.getByRole('link').evaluate((el, url) => { (el as HTMLAnchorElement).href = url },
-    `http://localhost:${process.env.PW_TEST_PORT ?? 3457}/__composer-input-test`)
+    `http://localhost:${process.env.PW_TEST_PORT ?? 3457}/__composer-input-test?cwd=${encodeURIComponent(cwd)}${host ? `&host=${encodeURIComponent(host)}` : ''}`)
   const loaded = page.waitForResponse('**/__composer-input-test.js')
   await page.getByRole('link').click()
   expect((await loaded).status()).toBe(200)
@@ -175,18 +184,220 @@ test('normalization, prefills and command insertion preserve state', async ({ pa
   await expect(page.getByTestId('mirror')).toHaveText('/review')
 })
 
-test('deleting an inserted shortcut clears the draft and prevents an empty send', async ({ page }) => {
+test('the Skills shortcut shows skills first without hiding commands when slash is typed', async ({ page }) => {
   const input = await openComposer(page)
   await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
-  await page.getByRole('menuitem', { name: /Commands$/ }).click()
+  await page.getByRole('menuitem', { name: '/Skills' }).click()
   await expect(input).toHaveValue('/')
-  await expect(page.getByTestId('mirror')).toHaveText('/')
+  const palette = page.locator('.command-palette')
+  await expect(palette.locator('.command-palette-name')).toHaveText(['/deploy', '/project-helper'])
+  await input.press('Escape')
+  await input.fill('')
+  await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
+  await page.getByRole('menuitem', { name: '/Skills' }).click()
+  await expect(palette.locator('.command-palette-name')).toHaveText(['/deploy', '/project-helper'])
+  await input.press('Escape')
+  await input.fill('')
+  await input.click()
+  await input.pressSequentially('/r')
+  await expect(palette.locator('.command-palette-name')).toHaveText(['/review'])
   await input.press('Backspace')
-  await expect(input).toHaveValue('')
-  await expect(page.getByTestId('mirror')).toHaveText('')
+  await expect(palette.locator('.command-palette-name')).toHaveText(['/review', '/deploy', '/project-helper', '/compact'])
+  await input.press('Escape')
+  await input.fill('')
   await input.press('Enter')
   await expect(page.getByTestId('sent')).toHaveText('[]')
   await expect.poll(() => page.evaluate(() => localStorage.getItem('input-state:a'))).toBeNull()
+})
+
+test('the schedule shortcut preserves a draft and asks which timing fits', async ({ page }) => {
+  const input = await openComposer(page)
+  await input.fill('Send me a summary when it is ready')
+  await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Set up a trigger or cron job' }).click()
+  await expect(input).toHaveValue('Set up a trigger or cron job: Send me a summary when it is ready')
+  await expect(page.getByTestId('sent')).toHaveText('[]')
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('input-state:a')))
+    .toBe('Set up a trigger or cron job: Send me a summary when it is ready')
+})
+
+test('Find a folder searches recent and nearby directories without replacing the draft', async ({ page }) => {
+  const paths = Array.from({ length: 260 }, (_, i) => `/fixture/work/projects/module-${i}`)
+  paths.push('/fixture/work/projects/DeltaService', '/fixture/work/notes/weekly-reports')
+  const listings: string[] = []
+  await page.route('**/api/files/recent-dirs', route => route.fulfill({ json: {
+    dirs: [{ cwd: '/fixture/old/DeltaArchive', host: null }, { cwd: '/other-host/DeltaService', host: 'remote' }],
+  } }))
+  await page.route('**/api/sessions/list-dirs?**', route => {
+    const params = new URL(route.request().url()).searchParams
+    const prefix = params.get('prefix') ?? ''
+    listings.push(`${prefix}:${params.get('depth')}`)
+    return route.fulfill({ json: { dirs: prefix === '/fixture/work/' ? paths : ['/fixture/work', '/fixture/sibling'], parent: prefix, exists: true } })
+  })
+  const input = await openComposer(page, '/fixture/work/')
+  await input.fill('Review ')
+  await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
+  await page.getByRole('menuitem', { name: /Find a folder$/ }).click()
+  const picker = page.locator('.file-mention-popup')
+  await expect(picker.locator('.fmp-recent-path')).toHaveText(['/fixture/old/DeltaArchive'])
+  await expect(input).toHaveValue('Review @?')
+  await input.pressSequentially('dlsrv')
+  await expect(picker.locator('.fmp-recent-item', { hasText: '/fixture/work/projects/DeltaService' })).toBeVisible()
+  await expect(picker.locator('.fmp-recent-path').first()).toHaveText('/fixture/work/projects/DeltaService')
+  await expect(picker.locator('.fmp-recent-item', { hasText: '/other-host/DeltaService' })).toHaveCount(0)
+  expect(await picker.locator('.fmp-recent-path').count()).toBeLessThanOrEqual(40)
+  await picker.locator('.fmp-recent-item', { hasText: '/fixture/work/projects/DeltaService' }).getByRole('button', { name: 'Select' }).click()
+  await expect(input).toHaveValue('Review @/fixture/work/projects/DeltaService ')
+  await expect(page.getByTestId('sent')).toHaveText('[]')
+  expect(listings.sort()).toEqual(['/fixture/:1', '/fixture/work/:3'])
+})
+
+test('folder search ignores old responses, shows failures, and retries without losing the query', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  let release: (() => void) | undefined
+  let attempts = 0
+  await page.route('**/api/files/recent-dirs', route => route.fulfill({ json: { dirs: [] } }))
+  await page.route('**/api/sessions/list-dirs?**', async route => {
+    const prefix = new URL(route.request().url()).searchParams.get('prefix')
+    if (prefix !== '/fixture/') return route.fulfill({ json: { dirs: [], parent: prefix, exists: true } })
+    attempts++
+    if (attempts === 1) {
+      await new Promise<void>(resolve => { release = resolve })
+      await route.fulfill({ json: { dirs: ['/fixture/old/MarinaArchive'], parent: '/fixture/', exists: true } }).catch(() => {})
+    } else if (attempts === 2) {
+      await route.fulfill({ status: 503, body: 'Host unavailable' })
+    } else {
+      await route.fulfill({ json: { dirs: ['/fixture/private/MarinaProject'], parent: '/fixture/', exists: true } })
+    }
+  })
+  const input = await openComposer(page, '/fixture/')
+  try {
+    await page.getByRole('button', { name: 'Add attachment', exact: true }).click()
+    await page.getByRole('menuitem', { name: /Find a folder$/ }).click()
+    await input.pressSequentially('marina')
+    await expect.poll(() => attempts).toBe(1)
+    await input.press('Escape')
+    await expect(page.locator('.file-mention-popup')).toHaveCount(0)
+    await input.fill('Keep this draft @?marina')
+    await expect(page.locator('.file-mention-popup .fmp-error')).toBeVisible()
+    release?.()
+    await expect(page.locator('.fmp-recent-item', { hasText: 'MarinaArchive' })).toHaveCount(0)
+    await page.locator('.file-mention-popup').getByRole('button', { name: 'Retry' }).click()
+    await expect(page.locator('.fmp-recent-path')).toHaveText(['/fixture/private/MarinaProject'])
+    await expect(input).toHaveValue('Keep this draft @?marina')
+    expect(errors).toEqual([])
+  } finally {
+    release?.()
+  }
+})
+
+test('pending folder listings recover without losing the query', async ({ page }) => {
+  let attempts = 0
+  await page.route('**/api/files/recent-dirs', route => route.fulfill({ json: { dirs: [] } }))
+  await page.route('**/api/sessions/list-dirs?**', route => {
+    const params = new URL(route.request().url()).searchParams
+    expect(params.get('host')).toBe('test-host')
+    expect(params.get('pending')).toBe('1')
+    expect(params.get('wait')).toBe('500')
+    const prefix = params.get('prefix')
+    if (prefix !== '/fixture/') return route.fulfill({ json: { dirs: [], parent: prefix, exists: true } })
+    attempts++
+    return route.fulfill({ json: attempts === 1
+      ? { dirs: [], parent: '/fixture/', exists: true, pending: { phase: 'connecting', label: 'Connecting', elapsedMs: 100 } }
+      : { dirs: ['/fixture/RecoveredFolder'], parent: '/fixture/', exists: true },
+    })
+  })
+  const input = await openComposer(page, '/fixture/', 'test-host')
+  await input.fill('@?recovered')
+  const picker = page.locator('.file-mention-popup')
+  await expect(picker.locator('.fmp-empty')).toContainText('Searching nearby folders')
+  await expect(picker.locator('.fmp-error')).toHaveCount(0)
+  await expect(picker.locator('.fmp-recent-path')).toHaveText(['/fixture/RecoveredFolder'], { timeout: 10_000 })
+  await expect(input).toHaveValue('@?recovered')
+  expect(attempts).toBe(2)
+})
+
+test('incomplete folder listings keep their matches visible and offer retry', async ({ page }) => {
+  let attempts = 0
+  let release: (() => void) | undefined
+  await page.route('**/api/files/recent-dirs', route => route.fulfill({ json: { dirs: [] } }))
+  await page.route('**/api/sessions/list-dirs?**', async route => {
+    const prefix = new URL(route.request().url()).searchParams.get('prefix')
+    if (prefix !== '/fixture/') return route.fulfill({ json: { dirs: [], parent: prefix, exists: true } })
+    attempts++
+    if (attempts === 2) await new Promise<void>(resolve => { release = resolve })
+    return route.fulfill({ json: {
+      dirs: attempts === 1 ? ['/fixture/PartialMatch'] : ['/fixture/PartialMatch', '/fixture/CompleteMatch'],
+      parent: '/fixture/', exists: true,
+      ...(attempts === 1 ? { incomplete: { unanswered: 1, message: 'listing incomplete' } } : {}),
+    } })
+  })
+  const input = await openComposer(page, '/fixture/')
+  await input.fill('@?match')
+  const picker = page.locator('.file-mention-popup')
+  await expect(picker.locator('.fmp-recent-item', { hasText: 'PartialMatch' })).toBeVisible()
+  await expect(picker.locator('.fmp-error')).toContainText('incomplete')
+  try {
+    await picker.getByRole('button', { name: 'Retry' }).click()
+    await expect.poll(() => attempts).toBe(2)
+    await expect(picker.locator('.fmp-recent-item', { hasText: 'PartialMatch' })).toBeVisible()
+    release?.()
+    await expect(picker.locator('.fmp-recent-item', { hasText: 'CompleteMatch' })).toBeVisible()
+    await expect(picker.locator('.fmp-error')).toHaveCount(0)
+  } finally {
+    release?.()
+  }
+})
+
+test('Find a folder works in a real session and keeps its draft in a short viewport', async ({ page, request }) => {
+  const root = await discoverFixtureRoot()
+  const cwd = `${root}/projects/walnut`
+  const sibling = `${root}/projects/zmarinax`
+  const nearbyDir = `${cwd}/web`
+  const deepDir = `${cwd}/search-target/level/two`
+  await fs.mkdir(deepDir, { recursive: true })
+  const sid = await startSessionAt(request, cwd)
+  await page.setViewportSize({ width: 960, height: 560 })
+  const [panel] = await openPanels(page, [sid])
+  const input = composerTextarea(panel)
+  await input.fill('Review ')
+  const menu = await openPlusMenu(panel)
+  await expect(menu.getByRole('menuitem', { name: /Find a folder$/ })).toBeVisible()
+  await menu.getByRole('menuitem', { name: /Find a folder$/ }).click()
+  const picker = panel.locator('.file-mention-popup')
+  await expect(picker).toBeVisible()
+  await input.pressSequentially('zmarinax')
+  await expect(picker.locator('.fmp-recent-item', { hasText: sibling })).toBeVisible({ timeout: 20_000 })
+  await input.fill('Review @?two')
+  await expect(picker.locator('.fmp-recent-item', { hasText: deepDir })).toBeVisible({ timeout: 20_000 })
+  await input.fill('Review @?web')
+  await expect(picker.locator('.fmp-recent-item', { hasText: nearbyDir })).toBeVisible({ timeout: 20_000 })
+  const popupBox = await picker.boundingBox()
+  expect(popupBox).toBeTruthy()
+  expect(popupBox!.y).toBeGreaterThanOrEqual(0)
+  expect(popupBox!.y + popupBox!.height).toBeLessThanOrEqual(560)
+  await fs.mkdir('/tmp/folder-search-v3', { recursive: true })
+  await picker.screenshot({ path: `/tmp/folder-search-v3/real-session-${test.info().project.name}.png`, animations: 'disabled' })
+  await picker.locator('.fmp-recent-item', { hasText: nearbyDir }).getByRole('button', { name: 'Select' }).click()
+  await expect(input).toHaveValue(`Review @${nearbyDir} `)
+  await expect(picker).toBeHidden()
+})
+
+test('Find a folder also searches from a draft column', async ({ page }) => {
+  const root = await discoverFixtureRoot()
+  const cwd = `${root}/projects/walnut`
+  await loadHome(page)
+  const panel = await openDraftOnCwd(page, cwd)
+  const input = composerTextarea(panel)
+  await input.fill('Check ')
+  await openPlusMenu(panel)
+  await panel.getByRole('menuitem', { name: /Find a folder$/ }).click()
+  const picker = panel.locator('.file-mention-popup')
+  await input.pressSequentially('web')
+  await expect(picker.locator('.fmp-recent-item', { hasText: `${cwd}/web` })).toBeVisible({ timeout: 20_000 })
+  await input.press('Escape')
+  await expect(input).toHaveValue('Check @?web')
 })
 
 test('file navigation, reference selection and removal keep prose and payload aligned', async ({ page }) => {

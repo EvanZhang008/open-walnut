@@ -42,6 +42,8 @@ export interface SlashCommandItem {
   name: string
   description: string
   source: 'skill' | 'open-walnut' | 'claude-root' | 'project' | 'built-in'
+  /** Project paths can contain both skills and commands; source alone cannot distinguish them. */
+  kind?: 'skill'
   /** For a skill bundled in a Claude Code plugin: the plugin's short name (no
    *  `@marketplace`). The CLI addresses these as `<plugin>:<skill>`, which is
    *  how the CLI-sourced palette lists them. */
@@ -172,7 +174,7 @@ async function scanProjectSkillsDir(dir: string): Promise<SlashCommandItem[]> {
     try {
       const raw = await fsp.readFile(path.join(dir, entry, 'SKILL.md'), 'utf-8')
       const meta = parseSkillMeta(raw)
-      items.push({ name: entry, description: meta.description ?? meta.name ?? '', source: 'project' })
+      items.push({ name: entry, description: meta.description ?? meta.name ?? '', source: 'project', kind: 'skill' })
     } catch {
       // Not a skill dir (no SKILL.md) — skip
     }
@@ -221,6 +223,7 @@ function pluginSkillItem(s: { dirName: string; description?: string; name?: stri
     name: s.dirName,
     description: withPluginLabel(s.plugin, s.description || s.name || ''),
     source: 'skill',
+    kind: 'skill',
     ...(plugin ? { plugin } : {}),
   }
 }
@@ -241,7 +244,7 @@ async function localWalnutCommands(): Promise<SlashCommandItem[]> {
 async function scanLocalItems(cwd?: string): Promise<SlashCommandItem[]> {
   const [skills, pluginSkills, openWalnutCmds, rootCmds, projectCmds, projectSkills] = await Promise.all([
     listAvailableSkills().then((all) =>
-      all.map((s): SlashCommandItem => ({ name: s.dirName, description: s.description ?? s.name, source: 'skill' })),
+      all.map((s): SlashCommandItem => ({ name: s.dirName, description: s.description ?? s.name, source: 'skill', kind: 'skill' })),
     ),
     listPluginSkills().then((all) => all.map(pluginSkillItem)),
     localWalnutCommands(),
@@ -290,7 +293,7 @@ async function scanRemoteItems(host: string, cwd?: string): Promise<SlashCommand
       : Promise.resolve([]),
     cwd
       ? listRemoteProjectSkills(conn, cwd).then((all) =>
-          all.map((s): SlashCommandItem => ({ name: s.dirName, description: s.description, source: 'project' })),
+          all.map((s): SlashCommandItem => ({ name: s.dirName, description: s.description, source: 'project', kind: 'skill' })),
         )
       : Promise.resolve([]),
     localWalnutCommands(),

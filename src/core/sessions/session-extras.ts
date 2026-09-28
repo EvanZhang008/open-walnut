@@ -621,8 +621,7 @@ export async function listSessionDirs(
   const depth = Math.min(Number(rawDepth) || 2, 4); // preload depth, default 2, max 4
 
   if (prefix.length > 4096) throw new SessionControlError('prefix too long', 400);
-  // Sanitize: no shell metacharacters allowed in prefix.
-  if (/[;&|`$(){}!<>]/.test(prefix)) throw new SessionControlError('invalid characters in prefix', 400);
+  if (prefix.includes('\0')) throw new SessionControlError('invalid characters in prefix', 400);
 
   // Expand ~ to home directory (local only — the daemon's fs.ls expands remotely).
   let expandedPrefix = prefix;

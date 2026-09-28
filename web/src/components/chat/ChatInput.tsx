@@ -23,7 +23,7 @@ import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { PlusMenuActionRows } from './PlusMenuActionRows';
 import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
-import { withLeadingCommand } from './leading-command';
+import { keepCommandFirst } from './leading-command';
 import type { ComposerControlsBarHandle } from './ComposerControlsBar';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -420,6 +420,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
   // Slash command state
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const skillsOnlyRef = useRef(false);
   const [paletteResults, setPaletteResults] = useState<PaletteItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -503,8 +504,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // twice. ONE function for both the typing path and the list-refresh reflow —
   // they used to differ, and a refresh landing on an open palette silently
   // dropped the control row.
-  const sessionPaletteResults = useCallback((query: string): PaletteItem[] => {
+  const sessionPaletteResults = useCallback((query: string, onlySkills = skillsOnlyRef.current): PaletteItem[] => {
     const results: PaletteItem[] = searchSessionCommands ? searchSessionCommands(query) : [];
+    if (onlySkills) return results.filter((item) => item.kind === 'skill');
     if (onControlCommand && 'model'.startsWith(query.toLowerCase())) {
       return [
         { name: 'model', description: 'Switch model (opus / sonnet / haiku / fable)', source: 'control' },
@@ -746,6 +748,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const closePalette = useCallback(() => {
+    skillsOnlyRef.current = false;
     setPaletteOpen(false);
     setPaletteResults([]);
     setSelectedIndex(0);
@@ -1050,11 +1053,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const slashCaret = textareaRef.current?.selectionStart ?? newValue.length;
     const s = enablePalette ? detectSlashCommand(newValue, slashCaret) : null;
     if (s && s.slashIndex !== slashDismissedAtRef.current) {
+      const onlySkills = skillsOnlyRef.current && s.slashIndex === slashIndexRef.current;
+      if (!onlySkills) skillsOnlyRef.current = false;
       slashDismissedAtRef.current = -1; // a live "/" — clear any stale dismissal
       slashIndexRef.current = s.slashIndex;
       slashEndRef.current = slashCaret;
       const query = s.query;
-      const results: PaletteItem[] = isSessionMode ? sessionPaletteResults(query) : searchCommands(query);
+      const results: PaletteItem[] = isSessionMode ? sessionPaletteResults(query, onlySkills) : searchCommands(query).filter((item) => !onlySkills || item.source === 'skill');
       const open = results.length > 0;
       setPaletteResults(results);
       setPaletteOpen(open);
@@ -1203,10 +1208,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     fileInputRef.current?.click();
   };
 
-  // "+" menu Shortcuts: insert a special-command trigger and run the same
-  // detection typing it would. setRangeText mutates the DOM value + caret
-  // first, so handleChange (which reads selectionStart) sees the real caret.
-  const insertShortcut = (trigger: string, opts?: { fileMention?: boolean }) => {
+  // setRangeText updates the caret before the input event detects the inserted shortcut.
+  const insertShortcut = (trigger: string, opts?: { fileMention?: boolean; skills?: boolean }) => {
     setPlusOpen(false);
     const el = textareaRef.current;
     if (!el) return;
@@ -1221,26 +1224,27 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // otherwise lead with the entity groups.
     const atIndex = caret + (needSpace ? 1 : 0);
     mentionOrderOverrideRef.current = opts?.fileMention ? { at: atIndex, order: 'files-first' } : null;
+    if (opts?.skills) {
+      skillsOnlyRef.current = true;
+      slashIndexRef.current = caret + (needSpace ? 1 : 0);
+    }
     el.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
-  // "+" menu "Set up a trigger": the skill runs only as the message's leading
-  // command, so it goes at the start and what the user typed becomes its argument.
-  const insertLeadingCommand = (command: string) => {
+  const insertSchedulePrompt = () => {
     setPlusOpen(false);
     const el = textareaRef.current;
     if (!el) return;
     el.focus();
-    const next = withLeadingCommand(el.value, command);
-    // The text moved right (or left, when leading blanks were dropped): a
-    // dictation in flight keeps replacing ITS words, not the ones now there.
-    const shift = next.value.length - el.value.length;
+    const prefix = 'Set up a trigger or cron job: ';
+    const next = keepCommandFirst(el.value, (text) => text.trimStart().startsWith(prefix) ? text : `${prefix}${text}`);
+    const shift = next.length - el.value.length;
     const span = dictationSpanRef.current;
     if (span && shift) dictationSpanRef.current = { ...span, start: Math.max(0, span.start + shift) };
     const last = lastDictationRef.current;
     if (last && shift) lastDictationRef.current = { ...last, start: Math.max(0, last.start + shift) };
-    if (next.value !== el.value) el.setRangeText(next.value, 0, el.value.length, 'end');
-    el.setSelectionRange(next.caret, next.caret);
+    if (next !== el.value) el.setRangeText(next, 0, el.value.length, 'end');
+    el.setSelectionRange(el.value.length, el.value.length);
     el.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
@@ -1521,31 +1525,31 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                       onClick={() => insertShortcut('@?', { fileMention: true })}
                       type="button"
                       role="menuitem"
-                      title="Type @? to fuzzy-search recently opened folders"
+                      title="Show recent folders or search folders near this session"
                     >
                       <span className="chat-plus-menu-key">@?</span>
-                      <span>Recent folders</span>
+                      <span>Find a folder</span>
                     </button>
                   )}
                   {(showCommands || isSessionMode) && (
                     <button
                       className="chat-plus-menu-item"
-                      onClick={() => insertShortcut('/')}
+                      onClick={() => insertShortcut('/', { skills: true })}
                       type="button"
                       role="menuitem"
-                      title="Type / to browse commands and skills"
+                      title="Browse available skills"
                     >
                       <span className="chat-plus-menu-key">/</span>
-                      <span>Commands</span>
+                      <span>Skills</span>
                     </button>
                   )}
                   {isSessionMode && (
                     <button
                       className="chat-plus-menu-item"
-                      onClick={() => insertLeadingCommand('/walnut-trigger')}
+                      onClick={() => insertSchedulePrompt()}
                       type="button"
                       role="menuitem"
-                      title="Starts the message with /walnut-trigger: say what to watch, and the agent sets up a check that runs every few minutes and messages this session when it changes"
+                      title="Describe what to watch or run and when; choose a change-based trigger or a scheduled cron job"
                     >
                       <span className="chat-plus-menu-key" aria-hidden="true">
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -1553,7 +1557,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                           <path d="M13.73 21a2 2 0 0 1-3.46 0" />
                         </svg>
                       </span>
-                      <span>Set up a trigger</span>
+                      <span>Set up a trigger or cron job</span>
                     </button>
                   )}
                 </>

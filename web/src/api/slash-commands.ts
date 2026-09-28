@@ -4,6 +4,7 @@ export interface SlashCommandItem {
   name: string;
   description: string;
   source: 'skill' | 'open-walnut' | 'walnut' | 'claude-root' | 'project' | 'built-in';
+  kind?: 'skill';
 }
 
 export interface SlashCommandsResult {

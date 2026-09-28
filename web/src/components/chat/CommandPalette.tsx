@@ -6,6 +6,7 @@ export interface PaletteItem {
   name: string;
   description: string;
   source?: string;
+  kind?: 'skill';
 }
 
 interface CommandPaletteProps<T extends PaletteItem = SlashCommand> {

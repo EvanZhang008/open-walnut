@@ -24,6 +24,8 @@ import {
   forwardRef,
 } from 'react';
 import { fetchDirList, type DirEntry } from '@/api/files';
+import { apiGet } from '@/api/client';
+import { getHostStatus, subscribeHostStatus } from '@/hooks/useHostStatus';
 import { FileContentView } from '@/components/common/FileContentView';
 import { formatSize } from '@/utils/format';
 import { log } from '@/utils/log';
@@ -139,12 +141,8 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
     // segment filters. When typing crosses a "/" (e.g. "src/" → "src/web"), the
     // target dir changes and we load it. Compare against browseDir so we only fetch
     // when the resolved directory actually moves (typing the filter part is free).
-    // "@?" recents mode: a fuzzy search over folders the user has opened before —
-    // any depth, not limited to the current cwd. Recents come from the shared,
-    // server-persisted UNION of session working dirs (frequent-dirs) + "@"-browsed
-    // folders (mention-dirs) — scoped to THIS session's host (you can't reference a
-    // folder on another machine over this transport). Folders under the current cwd
-    // are boosted to the top but never excluded. The text after "?" is the fuzzy query.
+    // "@?" searches recent folders across this host plus a bounded live listing
+    // under the current cwd; it never lists the entire host.
     const recentsMode = query.startsWith('?');
     const recentQuery = recentsMode ? query.slice(1) : '';
 
@@ -160,17 +158,116 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [targetDir, recentsMode]);
     const [allRecents, setAllRecents] = useState<RecentFolder[]>([]);
+    const [nearby, setNearby] = useState<{ dir: string; host?: string; folders: RecentFolder[] } | null>(null);
+    const [searchError, setSearchError] = useState(false);
+    const [searching, setSearching] = useState(false);
+    const [retrySearch, setRetrySearch] = useState(0);
+    const searchActive = !!recentQuery.trim();
+    const searchDir = rootPath.endsWith('/') ? rootPath : `${rootPath}/`;
+    const requestedSearch = useRef<{ dir: string; host?: string; retry: number } | null>(null);
     useEffect(() => {
       if (!recentsMode) return;
       let cancelled = false;
-      // Scoped to this session's host — a remote session won't list local folders.
-      getRecentFolders(host).then((r) => { if (!cancelled) setAllRecents(r); }).catch(() => {});
+      setAllRecents([]);
+      getRecentFolders(host).then((r) => { if (!cancelled) setAllRecents(r); });
       return () => { cancelled = true; };
     }, [recentsMode, host]);
-    const recentMatches = useMemo(
-      () => (recentsMode ? fuzzyMatchRecents(recentQuery, allRecents, { cwd: rootPath }) : []),
-      [recentsMode, recentQuery, allRecents, rootPath],
-    );
+    useEffect(() => {
+      if (!recentsMode || !searchActive || !cwd) {
+        requestedSearch.current = null;
+        setSearching(false);
+        setSearchError(false);
+        setNearby(null);
+        return;
+      }
+      if (requestedSearch.current?.dir === searchDir && requestedSearch.current.host === host
+        && requestedSearch.current.retry === retrySearch) return;
+      requestedSearch.current = { dir: searchDir, host, retry: retrySearch };
+      let cancelled = false;
+      setSearching(true);
+      setSearchError(false);
+      setNearby((current) => current?.dir === searchDir && current.host === host ? current : null);
+      let poll: ReturnType<typeof setTimeout> | undefined;
+      let attempts = 0;
+      let inFlight = false;
+      let incomplete = false;
+      const siblingDir = parentPath(searchDir);
+      const roots = [
+        { dir: searchDir, depth: '3' },
+        ...(siblingDir !== '/' && siblingDir !== (searchDir.replace(/\/+$/, '') || '/')
+          ? [{ dir: siblingDir.endsWith('/') ? siblingDir : `${siblingDir}/`, depth: '1' }]
+          : []),
+      ];
+      let pendingRoots = roots;
+      const previousPaths = nearby?.dir === searchDir && nearby.host === host
+        ? nearby.folders.map((folder) => folder.path) : [];
+      const previousByRoot = new Map(roots.map((root) => [root.dir,
+        previousPaths.filter((path) => path.startsWith(root.dir)
+          && (root.dir === searchDir || !path.slice(root.dir.length).includes('/'))),
+      ]));
+      const found = new Map<string, string[]>();
+      const loadNearby = () => {
+        poll = undefined;
+        if (inFlight) return;
+        inFlight = true;
+        Promise.all(pendingRoots.map(async (root) => {
+          const params = new URLSearchParams({ prefix: root.dir, depth: root.depth });
+          if (host) { params.set('host', host); params.set('pending', '1'); params.set('wait', '500'); }
+          try {
+            const listing = await apiGet<{ dirs: string[]; exists: boolean; pending?: object; hostError?: object; incomplete?: object }>(
+              `/api/sessions/list-dirs?${params}`,
+            );
+            return { root, listing };
+          } catch (err) {
+            log.error('file-mention', 'failed to search folders', { cwd, host, dir: root.dir, error: String(err) });
+            return { root, listing: null };
+          }
+        })).then((results) => {
+          if (cancelled) return;
+          pendingRoots = [];
+          for (const { root, listing } of results) {
+            if (listing?.pending) { pendingRoots.push(root); continue; }
+            if (!listing || listing.hostError || !listing.exists) { incomplete = true; continue; }
+            found.set(root.dir, listing.dirs);
+            if (listing.incomplete) incomplete = true;
+          }
+          const retained = roots.flatMap((root) => found.has(root.dir) ? [] : previousByRoot.get(root.dir) ?? []);
+          const paths = new Set([...retained, ...Array.from(found.values()).flat()]);
+          setNearby({ dir: searchDir, host, folders: Array.from(paths, (path) => ({ path, host })) });
+          if (pendingRoots.length && ++attempts < 6) {
+            poll = setTimeout(loadNearby, 1500);
+          } else {
+            setSearching(false);
+          }
+          setSearchError(incomplete || (pendingRoots.length > 0 && attempts >= 6));
+        }).finally(() => { inFlight = false; });
+      };
+      const timer = setTimeout(loadNearby, 150);
+      const unsubscribe = host ? subscribeHostStatus(() => {
+        if (getHostStatus(host)?.connected && poll) {
+          clearTimeout(poll);
+          poll = undefined;
+          loadNearby();
+        }
+      }) : undefined;
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+        clearTimeout(poll);
+        unsubscribe?.();
+        if (requestedSearch.current?.dir === searchDir && requestedSearch.current.host === host
+          && requestedSearch.current.retry === retrySearch) requestedSearch.current = null;
+      };
+    }, [recentsMode, searchActive, searchDir, cwd, host, retrySearch]);
+    const nearbyFolders = nearby?.dir === searchDir && nearby.host === host ? nearby.folders : [];
+
+    const recentMatches = useMemo(() => {
+      if (!recentsMode) return [];
+      if (!searchActive) return fuzzyMatchRecents('', allRecents, { cwd: rootPath }).slice(0, 40);
+      const seen = new Set(allRecents.map((r) => r.path));
+      const candidates = [...allRecents, ...nearbyFolders.filter((r) => !seen.has(r.path))];
+      return fuzzyMatchRecents(recentQuery, candidates, { cwd: rootPath }).slice(0, 40);
+    }, [recentsMode, recentQuery, searchActive, allRecents, nearby, rootPath]);
 
     // Filter the current dir by the trailing path segment (case-insensitive,
     // prefix matches rank before substring matches).
@@ -217,9 +314,9 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
     useEffect(() => {
       const list = listRef.current;
       if (!list) return;
-      const el = list.children[selectedIndex] as HTMLElement | undefined;
+      const el = list.querySelector('.file-mention-item.selected');
       el?.scrollIntoView({ block: 'nearest' });
-    }, [selectedIndex]);
+    }, [selectedIndex, recentMatches]);
 
     const enterDir = useCallback(
       (dirPath: string) => {
@@ -348,10 +445,13 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
 
         <div className="file-mention-body">
           {recentsMode ? (
-            /* "@?" recents mode: a single full-width list of recently-opened folders. */
             <div className="file-mention-list file-mention-list-recents" ref={listRef}>
-              {recentMatches.length === 0 && (
-                <div className="fmp-empty">No recent folders yet — browse some with @ first</div>
+              {searchError && (
+                <div className="fmp-error">Nearby results may be incomplete. <button type="button" onMouseDown={(e) => { e.preventDefault(); setRetrySearch((n) => n + 1); }}>Retry</button></div>
+              )}
+              {searching && recentMatches.length > 0 && <div className="fmp-loading">Searching nearby folders…</div>}
+              {recentMatches.length === 0 && !searchError && (
+                <div className="fmp-empty">{searching ? 'Searching nearby folders…' : recentQuery.trim() ? 'No folders match here. Type @/path to browse elsewhere.' : 'No recent folders yet. Type a name to search nearby folders.'}</div>
               )}
               {recentMatches.map((r, i) => {
                 const name = r.path.slice(r.path.lastIndexOf('/') + 1) || r.path;
@@ -363,7 +463,7 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
                     onMouseDown={(e) => { e.preventDefault(); chooseRecent(r); }}
                     title={`${r.path}${r.host ? ` (on ${r.host})` : ''}`}
                   >
-                    <span className="fmp-icon">🕘</span>
+                    <span className="fmp-icon">{allRecents.some((recent) => recent.path === r.path) ? '🕘' : '📁'}</span>
                     <span className="fmp-recent">
                       <span className="fmp-recent-name">{name}</span>
                       <span className="fmp-recent-path">{r.path}</span>
@@ -447,7 +547,7 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
               <span>→/⏎ open dir</span>
               <span>← parent</span>
               <span>⌘⏎ select</span>
-              <span>@? recents</span>
+              <span>@? find folders</span>
               <span>esc close</span>
             </>
           )}

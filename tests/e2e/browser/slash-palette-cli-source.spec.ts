@@ -17,7 +17,8 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { discoverFixtureRoot, draftComposer, draftCwdPill, openDraftOnCwd } from './draft-helpers'
+import fs from 'node:fs/promises'
+import { discoverFixtureRoot, draftComposer, draftCwdPill, openDraftOnCwd, loadHome, seedColumns } from './draft-helpers'
 
 const SCREENSHOT_DIR = process.env.SLASH_SHOT_DIR ?? '/tmp/slash-palette-cli'
 
@@ -26,6 +27,33 @@ test.beforeAll(async () => { fixtureRoot = await discoverFixtureRoot() })
 
 // A real (mock) CLI spawn plus the fixture's health-monitor stalls.
 test.setTimeout(150_000)
+
+test('the Skills shortcut on a real session lists skills without replacing the slash-command palette', async ({ page }) => {
+  const sid = 'pw-workflow-session'
+  const items = [
+    { name: 'compact', description: 'Compact context', source: 'built-in' },
+    { name: 'review', description: 'Review changes', source: 'project' },
+    { name: 'project-helper', description: 'Help with the project', source: 'project', kind: 'skill' },
+    { name: 'walnut-trigger', description: 'Watch changes', source: 'skill', kind: 'skill' },
+  ]
+  await page.route(`**/api/sessions/${sid}/slash-commands?**`, (route) => route.fulfill({ json: { items, source: 'cli', degraded: false } }))
+  await seedColumns(page, [sid])
+  await loadHome(page)
+  const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)
+  const input = panel.locator('.session-panel-input .chat-input-textarea')
+  await panel.locator('.session-panel-input .chat-plus-btn').click()
+  await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
+  await panel.locator('.session-panel-input .chat-plus-menu').screenshot({ path: `${SCREENSHOT_DIR}/skills-menu-${test.info().project.name}.png`, animations: 'disabled' })
+  await panel.getByRole('menuitem', { name: /Skills$/ }).click()
+  const palette = panel.locator('.command-palette')
+  await expect(palette.locator('.command-palette-name')).toHaveText(['/project-helper', '/walnut-trigger'])
+  await input.press('ArrowDown')
+  await input.press('Enter')
+  await expect(input).toHaveValue('/walnut-trigger ')
+  await input.fill('')
+  await input.pressSequentially('/r')
+  await expect(palette.locator('.command-palette-name')).toHaveText(['/review', '/project-helper', '/walnut-trigger'])
+})
 
 test('a live session palette lists the CLI-advertised commands, hides terminal-only + internal ones, and drops scan-only skills', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })

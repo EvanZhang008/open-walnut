@@ -115,6 +115,22 @@ describe('buildSessionSlashCommandItems', () => {
     expect(res.items.map((i) => i.name)).toEqual(expect.arrayContaining(['walnut-only', 'deploy', 'compact']))
   })
 
+  it('marks project skills separately from project commands for the Skills shortcut', async () => {
+    const cwd = path.join(WALNUT_HOME, 'project')
+    const skillsDir = path.join(cwd, '.claude', 'skills', 'project-helper')
+    const commandsDir = path.join(cwd, '.claude', 'commands')
+    await fs.mkdir(skillsDir, { recursive: true })
+    await fs.mkdir(commandsDir, { recursive: true })
+    await fs.writeFile(path.join(skillsDir, 'SKILL.md'), '---\nname: project-helper\ndescription: Help with the project\n---\n')
+    await fs.writeFile(path.join(commandsDir, 'review.md'), '---\ndescription: Review changes\n---\n')
+    getSessionByClaudeId.mockResolvedValue({ claudeSessionId: 's-project', cwd })
+    findByClaudeId.mockReturnValue({ cliSlashCommands: { names: ['project-helper', 'review'], at: Date.now() } })
+    const result = await buildSessionSlashCommandItems({ sessionId: 's-project' })
+    expect(result.items.find((item) => item.name === 'project-helper')).toMatchObject({ source: 'project', kind: 'skill' })
+    expect(result.items.find((item) => item.name === 'review')).toMatchObject({ source: 'project' })
+    expect(result.items.find((item) => item.name === 'review')).not.toHaveProperty('kind')
+  })
+
   it('post-restart: recovers the CLI list from the stream tail and seeds the live instance', async () => {
     getSessionByClaudeId.mockResolvedValue({ claudeSessionId: 's4', cwd: WALNUT_HOME, host: 'box' })
     const seed = vi.fn()

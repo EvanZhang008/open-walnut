@@ -116,10 +116,20 @@ describe('GET /api/sessions/list-dirs — local', () => {
     expect(res.body.dirs).toContain(path.join(root, 'projects/alpha'));
   });
 
-  it('rejects shell metacharacters with 400', async () => {
+  it('lists a directory whose name contains shell characters without executing them', async () => {
+    const app = createApp();
+    const named = path.join(root, 'projects', 'Model (2026) $draft');
+    await fs.mkdir(path.join(named, 'subdir'), { recursive: true });
+    const res = await request(app).get('/api/sessions/list-dirs')
+      .query({ prefix: named + '/' });
+    expect(res.status).toBe(200);
+    expect(res.body.dirs).toContain(path.join(named, 'subdir'));
+  });
+
+  it('rejects NUL characters before passing a path to the filesystem', async () => {
     const app = createApp();
     const res = await request(app).get('/api/sessions/list-dirs')
-      .query({ prefix: '/tmp/$(rm -rf)' });
+      .query({ prefix: '/tmp/a\0b/' });
     expect(res.status).toBe(400);
   });
 
