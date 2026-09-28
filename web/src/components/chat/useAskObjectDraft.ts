@@ -9,7 +9,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
-import type { DraftColumn } from '@/components/sessions/draft-column';
+import type { DraftColumn, ProjectsForDir } from '@/components/sessions/draft-column';
 import { clearAiFields } from '@/components/sessions/draft-column';
 import {
   applyDraftPathPick, applyDraftTaskFieldEdit, enterWalnutDraft, leaveWalnutDraft, makeTierKnown,
@@ -42,8 +42,8 @@ export function useAskObjectDraft(draftId: string): AskObjectDraft {
 
   const registry = useProjectRegistry();
   // Which registry project owns a folder, read live by the []-dep folder handler.
-  const projectForDirRef = useRef<(cwd: string) => string>(() => '');
-  projectForDirRef.current = (cwd: string) => registry.projectByCwd.get(cwd.replace(/\/+$/, '')) ?? '';
+  const projectsForDirRef = useRef<ProjectsForDir>(() => []);
+  projectsForDirRef.current = (cwd) => registry.projectsByCwd.get(cwd.replace(/\/+$/, '')) ?? [];
   const isKnownProject = useCallback(
     (name: string) => !registry.loaded || registry.isKnownProject(name),
     [registry.loaded, registry.isKnownProject],
@@ -64,7 +64,7 @@ export function useAskObjectDraft(draftId: string): AskObjectDraft {
   const onPathChange = useCallback((
     _id: string, path: QuickStartPath, meta: QuickStartTaskMeta, openedMeta?: QuickStartTaskMeta,
   ) => {
-    setDraft((d) => applyDraftPathPick(d, path, meta, openedMeta, projectForDirRef.current));
+    setDraft((d) => applyDraftPathPick(d, path, meta, openedMeta, projectsForDirRef.current));
   }, []);
   const onProjectChange = useCallback((_id: string, project: string) => {
     setDraft((d) => ({ ...clearAiFields(d, ['project']), project, projectSource: 'user' as const, userTouched: true }));

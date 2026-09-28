@@ -346,7 +346,7 @@ describe("returnFieldToWalnut: \"Use Walnut's pick\"", () => {
 
 describe('applyDraftPathPick: the picker footer rebases per field', () => {
   const path = { cwd: '/work/acme', host: null };
-  const none = () => '';
+  const none = () => [];
 
   it('a field changed in the footer becomes the user\'s; an unchanged one keeps the CURRENT row value', () => {
     const opened = draft().meta;

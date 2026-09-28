@@ -351,23 +351,58 @@ function isDerivableProjectName(name: string): boolean {
     && !name.includes('\\') && !name.includes('\0');
 }
 
+/** Every project declaring exactly this folder as its `default_cwd`
+ *  (`useProjectRegistry().projectsByCwd`, slash-stripped key). */
+export type ProjectsForDir = (cwd: string) => readonly string[];
+
+/**
+ * What the registry says about a folder, from the NEAREST declared folder up:
+ *  · 'owned': exactly one project declares it. `inherited` when that is a
+ *    parent of the picked folder rather than the folder itself.
+ *  · 'ambiguous': two or more projects declare the same nearest folder, so the
+ *    folder cannot say which. The walk stops there: a farther owner is not a
+ *    better answer than the conflict right above the pick.
+ *  · 'none': nothing declares it or any parent.
+ */
+export type FolderClaim =
+  | { kind: 'owned'; project: string; folder: string; inherited: boolean }
+  | { kind: 'ambiguous'; projects: readonly string[]; folder: string }
+  | { kind: 'none' };
+
+export function folderClaim(cwd: string, projectsForDir: ProjectsForDir): FolderClaim {
+  const clean = cwd.replace(/\/+$/, '');
+  // Nearest declared folder first: /a/b/c, /a/b, /a.
+  for (let p = clean; p && p !== '/'; p = p.slice(0, p.lastIndexOf('/')) || '/') {
+    const owners = projectsForDir(p);
+    if (owners.length === 1) return { kind: 'owned', project: owners[0], folder: p, inherited: p !== clean };
+    if (owners.length > 1) return { kind: 'ambiguous', projects: owners, folder: p };
+  }
+  return { kind: 'none' };
+}
+
 /**
  * The project a FOLDER PICK should put on the draft — "a folder is a project"
  * unless somebody explicitly said otherwise. Returns the project name to set
  * (caller marks it `projectSource: 'folder'`), or null to leave the row alone.
  *
- *  1. A registry project DECLARES this folder — or an ANCESTOR of it — as its
+ *  1. ONE registry project DECLARES this folder — or an ANCESTOR of it — as its
  *     `default_cwd` → that project, always: the mapping is user-configured fact,
  *     so it outranks any earlier value on the row. Nearest ancestor wins, so
  *     picking `repo/web` inside the checkout `repo` declares still files under
- *     the repo's project instead of minting a junk `web` project.
- *  2. No owner anywhere up the path → the folder's basename, as the project this
+ *     the repo's project instead of minting a junk `web` project. An inherited
+ *     project is only a default at launch: quick-start lets auto-organize move
+ *     the task when the message fits another project better.
+ *  2. Two or more projects declare the nearest folder → no project from the
+ *     folder at all, not even the basename (the folder sits inside claimed
+ *     ground, where a basename project is exactly the junk rule 1 prevents).
+ *     What the user types (the draft parse) or auto-organize decides.
+ *  3. No owner anywhere up the path → the folder's basename, as the project this
  *     launch will auto-create (quick-start stamps the new row's `default_cwd`, so
  *     the next pick of this folder resolves via rule 1). This is only a DEFAULT,
  *     so it never overwrites an explicit 'user'/'seed' project — including an
  *     explicit "Inbox" pick ('' with source 'user') — only unclaimed/'ai'/
  *     'folder' rows, and never derives a name the server's registry gate rejects.
- *  3. Bound and fork drafts are skipped entirely: their task already has a
+ *  4. Bound and fork drafts are skipped entirely: their task already has a
  *     project, and the launch reuses it — reseeding the pill would make it lie.
  *
  * The resolved name is returned even when it EQUALS the row's current project:
@@ -378,16 +413,14 @@ function isDerivableProjectName(name: string): boolean {
 export function projectForFolderPick(
   draft: Pick<DraftColumn, 'project' | 'projectSource' | 'taskId' | 'forkOf'>,
   cwd: string,
-  projectForDir: (cwd: string) => string,
+  projectsForDir: ProjectsForDir,
 ): string | null {
   if (!cwd || draft.taskId || draft.forkOf) return null;
   const clean = cwd.replace(/\/+$/, '');
   if (!clean) return null;
-  // Rule 1, nearest declared ancestor first: /a/b/c, /a/b, /a.
-  for (let p = clean; p && p !== '/'; p = p.slice(0, p.lastIndexOf('/')) || '/') {
-    const owned = projectForDir(p);
-    if (owned) return owned;
-  }
+  const claim = folderClaim(clean, projectsForDir);
+  if (claim.kind === 'owned') return claim.project;
+  if (claim.kind === 'ambiguous') return null;
   if (draft.projectSource === 'user' || draft.projectSource === 'seed') return null;
   const name = clean.split('/').pop() ?? '';
   return isDerivableProjectName(name) ? name : null;

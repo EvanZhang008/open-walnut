@@ -26,6 +26,7 @@ import {
   applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, followProjectRegistryChange,
   withDirLaunchMemory, suggestDiff,
   type DraftColumn, type DraftParseInput, type DraftParseKind, type DraftTaskField, type DraftTaskFieldPatch,
+  type ProjectsForDir,
 } from '@/components/sessions/draft-column';
 import {
   applyDraftPathPick, applyDraftTaskFieldEdit, applyTierSeed, enterWalnutDraft, launchMetaFor, leaveWalnutDraft,
@@ -266,7 +267,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return custom ? custom.label : `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
   }, [focusBar.customTiers]);
   const projectRegistry = useProjectRegistry();
-  const { projectByCwd, projectDefaults } = projectRegistry;
+  const { projectsByCwd, projectDefaults } = projectRegistry;
   const ordering = useOrdering();
   // Configured task defaults (platform/project) for quick-add capture. Fetched once;
   // refreshed on config:changed. Quick-add ("Add to Focus") routes to these instead of
@@ -1145,10 +1146,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     forgetDraft(draftId);
   }, [forgetDraft]);
 
-  /** Ref mirror of `projectForDir` (defined below, on the registry's projectByCwd)
+  /** Ref mirror of `projectsForDir` (defined below, on the registry's projectsByCwd)
    *  so the []-dep handleDraftPathChange reads the LIVE registry, not a mount-time
    *  snapshot — same pattern as projectDefaultsRef. */
-  const projectForDirRef = useRef<(cwd: string) => string>(() => '');
+  const projectsForDirRef = useRef<ProjectsForDir>(() => []);
 
   /**
    * A cwd/host pick landed on this draft (folder picker, or a quick folder chip).
@@ -1171,7 +1172,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // Task fields rebase per field against `openedMeta` (applyDraftPathPick), so a
     // parse that landed while the picker was open survives, and a quick folder
     // chip (no `openedMeta`) takes only model/engine from its render-time meta.
-    setDraftColumns(prev => mapDraft(prev, draftId, (d) => applyDraftPathPick(d, path, meta, openedMeta, projectForDirRef.current)));
+    setDraftColumns(prev => mapDraft(prev, draftId, (d) => applyDraftPathPick(d, path, meta, openedMeta, projectsForDirRef.current)));
   }, []);
 
   /** Project pill / quick-access chip → an EXPLICIT project choice. `projectSource:
@@ -1252,16 +1253,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (was && !quickParseOn) setDraftColumns(prev => mapDrafts(prev, (d) => revertAiTaskFields(d)));
   }, [quickParseOn]);
 
-  /** Which registry project OWNS this folder (its `default_cwd`), so a draft's
-   *  folder pick sets folder + project in one gesture. '' = no project declares
-   *  it — projectForFolderPick then walks the ancestors and finally derives the
-   *  folder's basename as the default (see its doc). Reads the already-loaded
-   *  registry — no fetch, which the draft path requires. */
-  const projectForDir = useCallback(
-    (cwd: string) => projectByCwd.get(cwd.replace(/\/+$/, '')) ?? '',
-    [projectByCwd],
+  /** Which registry projects declare this folder (their `default_cwd`), so a
+   *  draft's folder pick sets folder + project in one gesture. [] = none —
+   *  projectForFolderPick then walks the ancestors and finally derives the
+   *  folder's basename as the default; two or more = the folder can't say which
+   *  (see its doc). Reads the already-loaded registry — no fetch, which the draft
+   *  path requires. */
+  const projectsForDir = useCallback<ProjectsForDir>(
+    (cwd) => projectsByCwd.get(cwd.replace(/\/+$/, '')) ?? [],
+    [projectsByCwd],
   );
-  projectForDirRef.current = projectForDir;
+  projectsForDirRef.current = projectsForDir;
 
   /** Registry membership for the launch bar's "new" badge — reports everything as
    *  known until the registry has actually LOADED, so a seeded draft rendered in

@@ -279,6 +279,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // gate for the auto-organize pass at the end. Reading task.project later
   // would race the pass's own write on a retry.
   const callerSuppliedProject = project !== '';
+  // The EXISTING project a folder pick resolved to (see projectFromFolder). It
+  // is only a default when the launch folder is not that project's own folder,
+  // so auto-organize still runs for it and decides (organizeQuickStartTask).
+  let folderDefaultProject = '';
 
   // Spill-to-disk: messages above the inline limit are saved to a temp file and
   // replaced with a short pointer prompt so Claude reads the full context via the Read tool.
@@ -362,7 +366,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // Folder → default project: when THIS launch creates the registry row (the
     // draft's folder-derived default, typically the folder's basename), the
     // launch folder becomes the new project's default_cwd/default_host, so the
-    // next pick of that folder resolves straight to it (projectByCwd). Gated on
+    // next pick of that folder resolves straight to it (projectsByCwd). Gated on
     // projectFromFolder — only a folder-derived pick may bind a folder — and on
     // `created`: an EXISTING row's mapping is the user's, never rewritten. The
     // row does get created moments before addTask would have anyway; a rare
@@ -396,6 +400,9 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
         if (err instanceof InvalidProjectNameError) throw new QuickStartError(err.message, 400);
         throw err;
       }
+      // A project this launch creates is the folder's own from now on (stamped
+      // below), and the user saw "New project:" before starting.
+      if (!projectIsNew) folderDefaultProject = project;
     }
     // Pin decision, made BEFORE the create so the task is born pinned in one
     // write: `null` = the caller explicitly opted out (the launcher's unpin
@@ -587,13 +594,16 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // AUTO-ORGANIZE: fast-model project placement, replacing the old client-side
   // "[Quick Start] …move the task" wake-up of the Personal AI agent. Only for
   // tasks the caller left unfiled — a caller that supplied a project
-  // (fix-walnut, routines) placed the task deliberately; retries were already
-  // organized (or deliberately left) on the original launch. Gated off in
-  // test servers (real ~/.aws → live Bedrock calls + mid-assertion task moves).
+  // (fix-walnut, routines) placed the task deliberately — or filed under a
+  // project it only took from the folder; retries were already organized (or
+  // deliberately left) on the original launch. Gated off in test servers
+  // (real ~/.aws → live Bedrock calls + mid-assertion task moves).
   const { backgroundAiDisabled } = await import('../cheap-model.js');
-  if (!existingTaskId && !backgroundAiDisabled() && !callerSuppliedProject) {
+  if (!existingTaskId && !backgroundAiDisabled() && (!callerSuppliedProject || folderDefaultProject)) {
     import('../session-organize.js')
-      .then(({ organizeQuickStartTask }) => organizeQuickStartTask(updatedTask.id, cwd, message))
+      .then(({ organizeQuickStartTask }) => organizeQuickStartTask(
+        updatedTask.id, cwd, message, folderDefaultProject ? { folderProject: folderDefaultProject } : {},
+      ))
       .catch((err) => log.web.warn(`${source}: auto-organize failed`, {
         taskId: updatedTask.id, error: err instanceof Error ? err.message : String(err),
       }));

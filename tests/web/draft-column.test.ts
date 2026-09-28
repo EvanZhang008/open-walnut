@@ -21,7 +21,7 @@ const { peek } = vi.hoisted(() => ({ peek: vi.fn<() => WorkingDirsResult | null>
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: peek }));
 
 const {
-  applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick, suggestDiff, restoreMetaAfterWalnut,
+  applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick, folderClaim, suggestDiff, restoreMetaAfterWalnut,
   followProjectRegistryChange,
 } = await import('@/components/sessions/draft-column');
 type DraftColumn = import('@/components/sessions/draft-column').DraftColumn;
@@ -371,8 +371,8 @@ describe('clearAiFields — a user edit drops the badge, not the authority', () 
 
 describe('projectForFolderPick — a folder is a project unless somebody said otherwise', () => {
   /** Registry lookup: only /home/walnut is declared (by "Walnut"). Exact-match on
-   *  a slash-stripped path, mirroring MainPage's projectForDir. */
-  const registry = (cwd: string) => (cwd === '/home/walnut' ? 'Walnut' : '');
+   *  a slash-stripped path, mirroring MainPage's projectsForDir. */
+  const registry = (cwd: string) => (cwd === '/home/walnut' ? ['Walnut'] : []);
 
   it('a declared folder resolves to its registry owner, over any earlier value', () => {
     expect(projectForFolderPick(draft(), '/home/walnut', registry)).toBe('Walnut');
@@ -430,6 +430,50 @@ describe('projectForFolderPick — a folder is a project unless somebody said ot
   it('no-ops on an empty cwd and the filesystem root', () => {
     expect(projectForFolderPick(draft(), '', registry)).toBeNull();
     expect(projectForFolderPick(draft(), '/', registry)).toBeNull();
+  });
+});
+
+describe('folderClaim — which project a folder names, and when it cannot say', () => {
+  /** A shared checkout two projects declare, one team folder inside it that a
+   *  third project owns, and a solo repo (mirrors the 2026-09-28 registry). */
+  const DECLARED: Record<string, readonly string[]> = {
+    '/work/hub/context': ['Context Agent', 'Hub Review'],
+    '/work/hub/context/teams/marina': ['Marina Team'],
+    '/work/solo': ['Solo'],
+    '/work': ['Everything'],
+  };
+  const lookup = (cwd: string) => DECLARED[cwd] ?? [];
+
+  it('names the folder itself as the owner when it declares one project', () => {
+    expect(folderClaim('/work/solo', lookup)).toEqual({ kind: 'owned', project: 'Solo', folder: '/work/solo', inherited: false });
+    expect(folderClaim('/work/solo///', lookup)).toMatchObject({ kind: 'owned', inherited: false });
+  });
+
+  it('a subfolder inherits the nearest single owner, and says so', () => {
+    expect(folderClaim('/work/solo/web/src', lookup)).toEqual({ kind: 'owned', project: 'Solo', folder: '/work/solo', inherited: true });
+    // Nearest wins over a farther owner.
+    expect(folderClaim('/work/hub/context/teams/marina/pkg', lookup)).toMatchObject({ project: 'Marina Team', inherited: true });
+  });
+
+  it('two projects on the nearest folder is ambiguous, and the walk stops there', () => {
+    const at = folderClaim('/work/hub/context', lookup);
+    expect(at).toEqual({ kind: 'ambiguous', projects: ['Context Agent', 'Hub Review'], folder: '/work/hub/context' });
+    // The incident: a team folder with no owner of its own under the shared
+    // checkout. "Everything" at /work is farther than the conflict, not an answer.
+    expect(folderClaim('/work/hub/context/teams/tidepool', lookup)).toMatchObject({ kind: 'ambiguous', folder: '/work/hub/context' });
+  });
+
+  it('nothing declared anywhere up the path is none', () => {
+    expect(folderClaim('/elsewhere/repo', lookup)).toEqual({ kind: 'none' });
+    expect(folderClaim('', lookup)).toEqual({ kind: 'none' });
+  });
+
+  it('projectForFolderPick: an ambiguous folder sets no project, not even the basename', () => {
+    expect(projectForFolderPick(draft(), '/work/hub/context/teams/tidepool', lookup)).toBeNull();
+    expect(projectForFolderPick(draft({ project: 'Context Agent', projectSource: 'folder' }), '/work/hub/context', lookup)).toBeNull();
+    // A single owner still wins as before, inherited or not.
+    expect(projectForFolderPick(draft(), '/work/hub/context/teams/marina', lookup)).toBe('Marina Team');
+    expect(projectForFolderPick(draft(), '/work/solo/web', lookup)).toBe('Solo');
   });
 });
 

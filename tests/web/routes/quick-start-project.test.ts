@@ -138,7 +138,7 @@ describe('POST /api/sessions/quick-start — project param', () => {
 
     expect(res.status).toBe(200);
     const meta = await getProjectMetadata('tidepool');
-    // Trailing slash normalized away — projectByCwd on the web side keys verbatim
+    // Trailing slash normalized away — projectsByCwd on the web side keys verbatim
     // minus trailing slashes, so the stamp must match that shape.
     expect(meta?.default_cwd).toBe('/repos/tidepool');
     expect(meta?.default_host).toBeUndefined();
