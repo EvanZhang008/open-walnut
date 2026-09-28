@@ -146,6 +146,11 @@ export async function listHostModelCatalogs(): Promise<Record<string, HostModelC
   return { ...store };
 }
 
+/** Test hook: resolves once every write queued so far has reached the file. */
+export function _flushHostModelCatalogWrites(): Promise<void> {
+  return writeChain;
+}
+
 /** Test hook: drop in-memory state so a fresh file is re-read. */
 export function _resetHostModelCatalogCache(): void {
   cache = null;

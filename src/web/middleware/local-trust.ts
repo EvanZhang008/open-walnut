@@ -15,6 +15,11 @@
  *     a dev server on another local port, or a service the session web view
  *     frames at http://127.0.0.1:<forwarded port>, is a different site. The Vite
  *     dev proxy restates its own pages' Origin as its target's (web/dev-proxy-origin.ts).
+ *     "Arrived on" is either port: the socket's, or the one in Host, which is the
+ *     port the browser addressed. They differ behind a port forward
+ *     (`ssh -L 8080:localhost:3456`): the page is http://localhost:8080 and every
+ *     request it makes says so in both Origin and Host. A page on another port
+ *     still names that other port in Origin, so it matches neither.
  *
  * Everyone else, private networks included, presents a credential: a device
  * token minted on this machine (the pairing QR carries one) or a config.yaml
@@ -58,6 +63,14 @@ function hostHeaderName(host: string): string {
   return colon > 0 ? host.slice(0, colon) : host
 }
 
+/** Port part of a Host header; a bare name means the http default. */
+function hostHeaderPort(host: string): number | undefined {
+  const rest = host.slice(hostHeaderName(host).length)
+  if (rest === '') return 80
+  const port = Number(rest.slice(1))
+  return rest.startsWith(':') && Number.isInteger(port) && port > 0 ? port : undefined
+}
+
 /**
  * No Origin (curl, the CLI, native apps, same-origin GETs), or this server's
  * own: a loopback name on `ownPort`. Without a known port only the name counts.
@@ -96,7 +109,10 @@ export function classifyLocalRequest(req: RequestLike): LocalTrust {
     return { trusted: false, reason: 'foreign-host' }
   }
   const origin = typeof h.origin === 'string' ? h.origin : undefined
-  if (!isOwnOrigin(origin, req.socket?.localPort)) return { trusted: false, reason: 'foreign-origin' }
+  const addressedPort = typeof h.host === 'string' ? hostHeaderPort(h.host) : undefined
+  const own = isOwnOrigin(origin, req.socket?.localPort)
+    || (addressedPort !== undefined && isOwnOrigin(origin, addressedPort))
+  if (!own) return { trusted: false, reason: 'foreign-origin' }
   return { trusted: true }
 }
 

@@ -41,11 +41,11 @@ function privateIpv4(): string | null {
 const LAN_IP = privateIpv4()
 
 /** Send a raw WebSocket upgrade; resolves 101 on success, else the refusal status. */
-function upgrade(from: string, opts: { path?: string; headers?: Record<string, string> } = {}): Promise<number> {
+function upgrade(from: string, opts: { path?: string; headers?: Record<string, string>; port?: number } = {}): Promise<number> {
   return new Promise((resolve, reject) => {
     const req = http.request({
       host: from,
-      port,
+      port: opts.port ?? port,
       path: opts.path ?? '/ws',
       localAddress: from,
       headers: {
@@ -66,11 +66,11 @@ function upgrade(from: string, opts: { path?: string; headers?: Record<string, s
   })
 }
 
-function post(from: string, path: string, body: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
+function post(from: string, path: string, body: unknown, headers: Record<string, string> = {}, toPort = port): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body)
     const req = http.request({
-      host: from, port, path, method: 'POST', localAddress: from,
+      host: from, port: toPort, path, method: 'POST', localAddress: from,
       headers: { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(data)), ...headers },
     }, (res) => {
       let text = ''
@@ -160,6 +160,48 @@ describe('/ws upgrade from this machine', () => {
     expect(await upgrade('127.0.0.1', { headers: { Origin: 'null' } })).toBe(403)
     expect(await upgrade('127.0.0.1', { headers: { Host: `evil.example:${port}`, Origin: `http://evil.example:${port}` } })).toBe(403)
     expect(await upgrade('127.0.0.1', { headers: { Host: `0.0.0.0:${port}` } })).toBe(403)
+  })
+
+  // `ssh -L 8080:localhost:3456` from another computer, reproduced with a plain TCP
+  // forwarder: the server sees a loopback socket on its own port, while the browser
+  // page is http://localhost:<forward port> and says so in Origin and Host.
+  it('behind a port forward to another local port: the forwarded page connects, writes, and round-trips', async () => {
+    const net = await import('node:net')
+    const open = new Set<import('node:net').Socket>()
+    const forwarder = net.createServer((client) => {
+      const upstream = net.connect({ host: '127.0.0.1', port })
+      open.add(client); open.add(upstream)
+      client.pipe(upstream).pipe(client)
+      const drop = () => { client.destroy(); upstream.destroy() }
+      client.on('error', drop); upstream.on('error', drop)
+      client.on('close', drop); upstream.on('close', drop)
+    })
+    await new Promise<void>((resolve) => forwarder.listen(0, '127.0.0.1', () => resolve()))
+    const fport = (forwarder.address() as { port: number }).port
+    try {
+      const page = `http://localhost:${fport}`
+      const host = `localhost:${fport}`
+      expect(await upgrade('127.0.0.1', { port: fport, headers: { Host: host, Origin: page } })).toBe(101)
+      expect((await post('127.0.0.1', '/api/pastes', { text: 'through the forward' }, { Host: host, Origin: page }, fport)).status).toBe(200)
+      // Another page in the same browser is still a foreign site.
+      expect(await upgrade('127.0.0.1', { port: fport, headers: { Host: host, Origin: 'http://localhost:5173' } })).toBe(403)
+      expect((await post('127.0.0.1', '/api/pastes', { text: 'x' }, { Host: host, Origin: 'http://localhost:5173' }, fport)).status).toBe(403)
+
+      const ws = new WebSocket(`ws://localhost:${fport}/ws`, { origin: page })
+      await new Promise<void>((resolve, reject) => { ws.once('open', () => resolve()); ws.once('error', reject) })
+      const reply = new Promise<Record<string, unknown>>((resolve) => {
+        ws.on('message', (d) => {
+          const f = JSON.parse(d.toString()) as Record<string, unknown>
+          if (f.type === 'res' && f.id === 'fwd-1') resolve(f)
+        })
+      })
+      ws.send(JSON.stringify({ type: 'req', id: 'fwd-1', method: 'no-such-method', payload: {} }))
+      expect((await reply).type).toBe('res')
+      ws.close()
+    } finally {
+      for (const s of open) s.destroy() // keep-alive sockets would hold close() open
+      await new Promise<void>((resolve) => forwarder.close(() => resolve()))
+    }
   })
 
   it('a local proxy or tunnel (X-Forwarded-For) needs a token', async () => {

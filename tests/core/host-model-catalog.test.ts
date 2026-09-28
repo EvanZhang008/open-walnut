@@ -15,6 +15,7 @@ import {
   listHostModelCatalogs,
   hostCatalogKey,
   _resetHostModelCatalogCache,
+  _flushHostModelCatalogWrites,
   LOCAL_HOST_KEY,
 } from '../../src/core/host-model-catalog.js';
 import { HOST_MODEL_CATALOG_FILE } from '../../src/constants.js';
@@ -27,16 +28,16 @@ const MODELS = [
   },
 ];
 
-// Flush the store's internal write chain by waiting for the file to appear.
+// Wait until every queued write has landed. Waiting for the file to EXIST was not
+// enough: it exists from the first test on, so an earlier test's tmp+rename could
+// still land later and replace the corrupt file the last test writes (Linux CI).
 async function waitForFile(): Promise<void> {
-  for (let i = 0; i < 50; i++) {
-    try { await fsp.access(HOST_MODEL_CATALOG_FILE); return; } catch { /* not yet */ }
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  throw new Error('catalog file never appeared');
+  await _flushHostModelCatalogWrites();
+  await fsp.access(HOST_MODEL_CATALOG_FILE);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await _flushHostModelCatalogWrites();
   _resetHostModelCatalogCache();
 });
 
