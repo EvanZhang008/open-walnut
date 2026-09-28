@@ -67,35 +67,42 @@ export async function listLocalDirs(dir: string, depth: number): Promise<DirList
 
   const entries: string[] = []
   const deadline = Date.now() + LOCAL_BFS_BUDGET_MS
-  const walk = async (d: string, currentDepth: number) => {
-    if (currentDepth > depth || entries.length >= DIR_LIST_MAX_ENTRIES || Date.now() >= deadline) return
-    let dirents
-    try {
-      dirents = await fsp.readdir(d, { withFileTypes: true })
-    } catch {
-      return // unreadable — skip subtree
-    }
-    // A symlink to a directory is a directory to the user (~/work → a volume,
-    // /tmp → /private/tmp on macOS): list it, but never walk through it — a
-    // link cycle would otherwise eat the whole entry budget. readdir has lstat
-    // semantics, so links need one stat() each; they run together, bounded.
-    const linkIsDir = new Map<string, boolean>()
-    await Promise.all(dirents.filter(e => e.isSymbolicLink()).map(async e => {
-      linkIsDir.set(e.name, await symlinkPointsToDir(path.join(d, e.name)))
-    }))
-    for (const dirent of dirents) {
+  // Level by level, like listRemoteDirs: every direct child is listed before any
+  // grandchild, so a wide first subtree cannot spend the budget and hide a sibling.
+  // Depth-first, `/` on Linux listed 500 entries from /dev and /etc and no /usr.
+  let level = [dir]
+  for (let currentDepth = 1; currentDepth <= depth && level.length > 0; currentDepth++) {
+    const next: string[] = []
+    for (const d of level) {
       if (entries.length >= DIR_LIST_MAX_ENTRIES || Date.now() >= deadline) break
-      const full = path.join(d, dirent.name)
-      const isLink = dirent.isSymbolicLink()
-      if (isLink ? !linkIsDir.get(dirent.name) : !dirent.isDirectory()) continue
-      const hidden = dirent.name.startsWith('.')
-      // Hidden dirs: emit at depth 1 only, never recurse into them.
-      if (hidden && currentDepth > 1) continue
-      entries.push(full)
-      if (!hidden && !isLink && currentDepth < depth) await walk(full, currentDepth + 1)
+      let dirents
+      try {
+        dirents = await fsp.readdir(d, { withFileTypes: true })
+      } catch {
+        continue // unreadable — skip subtree
+      }
+      // A symlink to a directory is a directory to the user (~/work → a volume,
+      // /tmp → /private/tmp on macOS): list it, but never walk through it — a
+      // link cycle would otherwise eat the whole entry budget. readdir has lstat
+      // semantics, so links need one stat() each; they run together, bounded.
+      const linkIsDir = new Map<string, boolean>()
+      await Promise.all(dirents.filter(e => e.isSymbolicLink()).map(async e => {
+        linkIsDir.set(e.name, await symlinkPointsToDir(path.join(d, e.name)))
+      }))
+      for (const dirent of dirents) {
+        if (entries.length >= DIR_LIST_MAX_ENTRIES || Date.now() >= deadline) break
+        const full = path.join(d, dirent.name)
+        const isLink = dirent.isSymbolicLink()
+        if (isLink ? !linkIsDir.get(dirent.name) : !dirent.isDirectory()) continue
+        const hidden = dirent.name.startsWith('.')
+        // Hidden dirs: emit at depth 1 only, never recurse into them.
+        if (hidden && currentDepth > 1) continue
+        entries.push(full)
+        if (!hidden && !isLink) next.push(full)
+      }
     }
+    level = next
   }
-  await walk(dir, 1)
   return { dirs: entries, parent: dir, exists: true }
 }
 

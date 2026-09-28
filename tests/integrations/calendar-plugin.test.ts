@@ -161,7 +161,9 @@ describe('calendar plugin lifecycle over a real server', () => {
     // then put a mock back BEFORE reading: a real read here compiles the Swift helper and
     // returns the developer's own calendars (32s of swiftc, the first time this was
     // written that way).
-    expect(getCalendarService().refreshLoopActive()).toBe(true);
+    // Off macOS the host's EventKit source reports itself unavailable and init() arms no
+    // poll (nothing to poll), so the expectation follows the platform the suite runs on.
+    expect(getCalendarService().refreshLoopActive()).toBe(process.platform === 'darwin');
     // The mock that goes in here is deliberately NOT initialized, so it has no timer of its
     // own: `_setCalendarServiceForTest` stops the instance it displaces, but nothing stops
     // this one, and an armed poll on a hand-built service would outlive stopServer.

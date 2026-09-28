@@ -495,7 +495,9 @@ describe('scanExternalSessions — title rule (CLI parity)', () => {
  * never classifies (the ids are ones Walnut already owns).
  */
 describe('describeExternalSessions — by id, regardless of age', () => {
-  const YEAR_AGO = Date.now() - 400 * 24 * 60 * 60 * 1000
+  // A whole second: utimes takes seconds as a double, and on Linux a millisecond
+  // fraction can come back as 122.999999ms, which toISOString reads one ms early.
+  const YEAR_AGO = Math.floor((Date.now() - 400 * 24 * 60 * 60 * 1000) / 1000) * 1000
 
   it('finds a claude transcript by id in any project dir even when the scan window misses it', () => {
     claudeSession({ sid: 'old-1', entrypoint: 'cli', firstUserText: 'old but gold', mtimeMs: YEAR_AGO, encodedDir: '-Users-dev-somewhere' })

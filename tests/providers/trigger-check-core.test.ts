@@ -4,6 +4,9 @@
  * the whole pipeline. Real `/bin/sh` for the runner; everything else is pure.
  */
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   parseCheckStdout, decideCheck, applyCheckOutcome, applyCheckError, ackFire, emptyHostState,
   coerceHostState, buildCheckStdin, runCheckProcess, checkErrorOf, validateTriggerDef, pruneSeen,
@@ -332,10 +335,16 @@ describe('runCheckProcess (real /bin/sh)', () => {
   // The skill's bash template, byte for byte: `set -euo pipefail` + `read -r`.
   // Without the trailing newline on stdin, `read` returns 1 at EOF and `set -e`
   // ends the script before it prints anything (verified: exit 1, empty stdout).
+  // Run the way the skill arms it, `bash <file>`: `pipefail` is not POSIX, and dash
+  // (Ubuntu's /bin/sh) rejects it with exit 2 when the text goes straight to `sh -c`.
   it("runs the skill's bash template: read -r under set -e survives the stdin the daemon writes", async () => {
     const template = 'set -euo pipefail\nread -r STDIN\necho "stdin was: $STDIN" >&2\n'
       + 'echo \'{"fire": false, "state": {"cursor": 1}}\'';
-    const r = await runCheckProcess({ run: template }, buildCheckStdin(emptyHostState(NOW), NOW));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-trigger-template-'));
+    const file = path.join(dir, 'check.sh');
+    fs.writeFileSync(file, template);
+    const r = await runCheckProcess({ run: `bash ${file}` }, buildCheckStdin(emptyHostState(NOW), NOW))
+      .finally(() => fs.rmSync(dir, { recursive: true, force: true }));
     expect(r.exitCode).toBe(0);
     expect(r.stderrTail).toContain('stdin was: {"state":null');
     expect(parsedOk(r.stdout).output.state).toEqual({ cursor: 1 });
@@ -344,7 +353,8 @@ describe('runCheckProcess (real /bin/sh)', () => {
   it('decodes a multi-byte character split across two stdout chunks', async () => {
     // A 3-byte character written in two halves with a flush in between: per-chunk
     // decoding would yield U+FFFD and the JSON line would not parse.
-    const run = 'printf \'{"fire": true, "items": [{"id": "\\xe4\\xb8\'; sleep 0.2; printf \'\\xad"}]}\\n\'';
+    // Octal escapes: `\x` is a bash extension that dash (Ubuntu's /bin/sh) prints literally.
+    const run = 'printf \'{"fire": true, "items": [{"id": "\\344\\270\'; sleep 0.2; printf \'\\255"}]}\\n\'';
     const r = await runCheckProcess({ run, timeoutSeconds: 5 }, '{}\n');
     expect(r.exitCode).toBe(0);
     expect(parsedOk(r.stdout).output.items?.[0].id).toBe('中');

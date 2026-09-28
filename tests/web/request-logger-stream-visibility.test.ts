@@ -89,7 +89,8 @@ describe('a response nobody ends is still logged', () => {
     const req = start({ contentType: 'text/event-stream' });
     req.close();
     expect(infoLines).toHaveLength(1);
-    expect(infoLines[0].message).toBe('GET /api/v1/events → 200 (0ms)');
+    // The duration is wall-clock: 0ms on a fast machine, 1ms on a loaded CI runner.
+    expect(infoLines[0].message).toMatch(/^GET \/api\/v1\/events → 200 \(\d+ms\)$/);
   });
 
   it('says the connection went away rather than the response ending', () => {

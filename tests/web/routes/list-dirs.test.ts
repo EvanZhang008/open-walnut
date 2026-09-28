@@ -149,6 +149,26 @@ describe('GET /api/sessions/list-dirs — local', () => {
     }
   });
 
+  // The Linux CI shape of the "/" test above: a first child wide enough to spend the
+  // whole 500-entry budget. Walked depth-first, the siblings after it never appeared
+  // (Ubuntu's "/" listed 500 entries from /dev and /etc and no /usr).
+  it('every direct child is listed before a wide first child spends the entry budget', async () => {
+    const wide = path.join(root, 'wide');
+    await Promise.all(Array.from({ length: 520 }, (_, i) =>
+      fs.mkdir(path.join(wide, 'a-first', `d${String(i).padStart(3, '0')}`), { recursive: true })));
+    await fs.mkdir(path.join(wide, 'm-middle'), { recursive: true });
+    await fs.mkdir(path.join(wide, 'z-last'), { recursive: true });
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/list-dirs')
+      .query({ prefix: wide + '/', depth: 2 });
+    expect(res.status).toBe(200);
+    const dirs = res.body.dirs as string[];
+    expect(dirs.slice(0, 3)).toEqual(expect.arrayContaining(
+      ['a-first', 'm-middle', 'z-last'].map(n => path.join(wide, n))));
+    expect(dirs).toHaveLength(500); // the budget still holds; the grandchildren fill the rest
+    expect(dirs.filter(d => d.startsWith(path.join(wide, 'a-first') + '/')).length).toBe(497);
+  });
+
   it('a symlink to a directory is listed (not recursed into); a symlink to a file is not', async () => {
     await fs.mkdir(path.join(root, 'links/target/inner'), { recursive: true });
     await fs.symlink(path.join(root, 'links/target'), path.join(root, 'links/dirlink'));

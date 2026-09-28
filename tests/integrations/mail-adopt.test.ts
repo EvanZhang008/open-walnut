@@ -535,10 +535,14 @@ describe('through a real server, an ambient mailbox is simply there', () => {
       () => marks().polls.filter((one) => one.accountId === AMBIENT).length,
       { timeout: 30_000 },
     ).toBeGreaterThan(0);
-    const messages = await getJson<{ messages: Array<{ subject: string }> }>(
-      `/messages?account=${encodeURIComponent(AMBIENT)}&mailbox=INBOX`,
-    );
-    expect(messages.body.messages.map((one) => one.subject)).toEqual(['It was already here']);
+    // The provider records the poll before it returns, and the mirror writes after, so on a
+    // slow runner the first read can land between the two: wait for the row itself.
+    await expect.poll(async () => {
+      const messages = await getJson<{ messages: Array<{ subject: string }> }>(
+        `/messages?account=${encodeURIComponent(AMBIENT)}&mailbox=INBOX`,
+      );
+      return messages.body.messages.map((one) => one.subject);
+    }, { timeout: 30_000 }).toEqual(['It was already here']);
 
     // The provider that never answers was asked, and its plugin activated anyway.
     expect(marks().listed).toContain('stuck');
