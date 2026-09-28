@@ -140,9 +140,13 @@ describe('maybeRefreshForTask', () => {
       }
       expect(sendMessageMock).not.toHaveBeenCalled(); // nothing during the burst
 
-      await vi.waitFor(() => expect(sendMessageMock).toHaveBeenCalledOnce(), { timeout: 3_000 });
-      const meta = await getProjectMetadata('walnut');
-      expect(meta?.summary_task_count).toBe(5); // final count, not any mid-burst size
+      // Wait for the stored count, not the model call: the metadata write lands after
+      // the call resolves, and a read in between sees nothing on a slow runner.
+      await vi.waitFor(async () => {
+        const meta = await getProjectMetadata('walnut');
+        expect(meta?.summary_task_count).toBe(5); // final count, not any mid-burst size
+      }, { timeout: 3_000 });
+      expect(sendMessageMock).toHaveBeenCalledOnce();
 
       // The quiet window elapsing again must not double-fire.
       await new Promise((r) => setTimeout(r, 150));
