@@ -1354,6 +1354,88 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    // 2a.8b. "workflow-test-live[:unitMs]": a five-phase workflow on a real clock,
+    //        shaped like a real deep-research run, so the stage graph is watched
+    //        LIVE: Scope splits into 5 searches; each search hands 3 pages to Fetch
+    //        the moment it finishes (a stream, with one fetch failing, and a gap
+    //        where every fetch is done while the last search still runs); Verify
+    //        waits for all 15 fetches, then checks 20 claims 8 at a time (queued
+    //        ones are ghosts until they start, as in the CLI); Synthesize merges.
+    //        Fields and clocks are the CLI's (epoch ms queuedAt/startedAt,
+    //        durationMs, state start/done/error). One unit defaults to 400 ms
+    //        (~9s run); `workflow-test-live:1000` slows it down for a recording.
+    if (/^workflow-test-live(:\d+)?$/.test(effectiveMessage)) {
+      function emitWf(line) { process.stdout.write(JSON.stringify(line) + '\n'); }
+      const sid = outputSessionId;
+      const UNIT = Number(effectiveMessage.split(':')[1]) || 400;
+      const PHASES = ['Scope', 'Search', 'Fetch', 'Verify', 'Synthesize'];
+      const MODEL = 'global.anthropic.claude-sonnet-4-6';
+      // Each agent: phase, label, queued / started / duration in units.
+      const plan = [{ phase: 1, label: 'scope the question', q: 0, s: 0, d: 3 }];
+      const searchD = [3, 4, 5, 6, 12];
+      searchD.forEach((d, i) => plan.push({ phase: 2, label: `search angle ${i + 1}`, q: 3, s: 3, d }));
+      searchD.forEach((d, i) => {
+        for (let j = 0; j < 3; j++) {
+          plan.push({ phase: 3, label: `fetch page ${i + 1}.${j + 1}`, q: 3 + d, s: 3 + d, d: 2 + j * 0.75, fail: i === 1 && j === 2 });
+        }
+      });
+      const endOf = (phase) => Math.max(...plan.filter(a => a.phase === phase).map(a => a.s + a.d));
+      const vq = endOf(3) + 0.5;
+      for (let k = 0; k < 20; k++) plan.push({ phase: 4, label: `verify claim ${k + 1}`, q: vq, s: vq + Math.floor(k / 8) * 1.5, d: 1.5 });
+      const sq = endOf(4) + 0.5;
+      plan.push({ phase: 5, label: 'write the report', q: sq, s: sq, d: 3 });
+      const t0 = Date.now();
+      const at = (u) => t0 + Math.round(u * UNIT);
+      plan.forEach((a, i) => { a.index = i + 1; a.agentId = `wfl-${String(i + 1).padStart(2, '0')}`; });
+      const phaseRows = PHASES.map((title, i) => ({ type: 'workflow_phase', index: i + 1, title }));
+      const base = (a) => ({ type: 'workflow_agent', index: a.index, label: a.label, phaseIndex: a.phase, phaseTitle: PHASES[a.phase - 1] });
+      const TOOLS = ['WebSearch', 'WebFetch', 'Read'];
+      let tokens = 0;
+
+      // Every change at one instant rides one task_progress snapshot, like the CLI's.
+      const events = new Map();
+      const on = (u, entry) => { const list = events.get(u) ?? []; list.push(entry); events.set(u, list); };
+      for (const a of plan) {
+        if (a.s > a.q) on(a.q, () => ({ ...base(a), state: 'start' })); // ghost: queued, no id yet
+        on(a.s, () => ({ ...base(a), agentId: a.agentId, model: MODEL, state: 'start', queuedAt: at(a.q), startedAt: at(a.s), attempt: 1, promptPreview: `Task: ${a.label}` }));
+        for (let u = a.s + 1; u < a.s + a.d; u++) {
+          on(u, () => ({ ...base(a), agentId: a.agentId, state: 'start', toolCalls: Math.round(u - a.s), lastToolName: TOOLS[(a.index + Math.round(u)) % TOOLS.length], lastProgressAt: at(u) }));
+        }
+        on(a.s + a.d, () => {
+          const used = 1800 + a.index * 37;
+          tokens += used;
+          return a.fail
+            ? { ...base(a), agentId: a.agentId, state: 'error', durationMs: Math.round(a.d * UNIT), tokens: used, toolCalls: Math.ceil(a.d), error: 'Fetch failed: the page answered 403 Forbidden' }
+            : { ...base(a), agentId: a.agentId, state: 'done', durationMs: Math.round(a.d * UNIT), tokens: used, toolCalls: Math.ceil(a.d) + 1, lastToolName: 'StructuredOutput', resultPreview: `Finished: ${a.label}` };
+        });
+      }
+
+      emitWf({ type: 'assistant', message: { id: 'msg_wf_live', type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: 'Research workflow launched in background' }], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 30 } }, session_id: sid });
+      emitWf({
+        type: 'system', subtype: 'task_started', session_id: sid, task_id: 'wf-live',
+        task_type: 'local_workflow', workflow_name: 'deep-research',
+        description: 'Research a question: search, fetch, verify, then write it up',
+        prompt: "export const meta = { name: 'deep-research', phases: [{title:'Scope'},{title:'Search'},{title:'Fetch'},{title:'Verify'},{title:'Synthesize'}] }",
+      });
+      emitWf({ type: 'result', subtype: 'success', is_error: false, duration_ms: 200, num_turns: 1, result: 'Research workflow launched in background', session_id: sid, total_cost_usd: 0.002, usage: { input_tokens: 100, output_tokens: 30 } });
+
+      const times = [...events.keys()].sort((x, y) => x - y);
+      for (const u of times) {
+        setTimeout(() => {
+          const entries = events.get(u).map(make => make());
+          emitWf({ type: 'system', subtype: 'task_progress', session_id: sid, task_id: 'wf-live', summary: 'Running', usage: { total_tokens: tokens }, workflow_progress: [...phaseRows, ...entries] });
+        }, 150 + Math.round(u * UNIT));
+      }
+      const last = 150 + Math.round(times[times.length - 1] * UNIT);
+      setTimeout(() => {
+        emitWf({ type: 'system', subtype: 'task_notification', session_id: sid, task_id: 'wf-live', status: 'completed' });
+      }, last + 100);
+      setTimeout(() => {
+        emitWf({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+      }, last + 250);
+      return;
+    }
+
     // 2a.9. "backgrounded-test" — reproduce incident 07fffbe5: a turn spawns a
     //        local_bash task, the CLI detaches it via task_updated{is_backgrounded:true}
     //        and then ends the turn (result + idle) WITHOUT ever emitting a terminal

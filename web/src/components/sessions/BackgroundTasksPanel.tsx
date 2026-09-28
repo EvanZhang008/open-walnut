@@ -1,11 +1,14 @@
 /**
  * BackgroundTasksPanel — the "Background tasks" reader, Claude Code desktop style.
  *
- * Two columns. Left: every background job of the session, split into Running and
- * Finished, one row per job (title, subagent type, `Agent · elapsed · tokens · tool
- * uses · what it is doing`). Right: the selected agent's transcript, live-refreshing
- * while it runs. Clicking a row switches the right column; the first running agent
- * is selected on open unless the caller names one.
+ * Two columns. Left: every background job of the session. Agents and shell commands
+ * are different things, so they get their own tabs (Agents, Commands, and Other for
+ * any other kind; the tabs appear only when more than one kind is present), each
+ * split into Running and Finished. An agent row is a card (title, subagent type,
+ * `Agent · elapsed · tokens · tool uses · what it is doing`); a command row is one
+ * dense line (title, elapsed), since a session can run hundreds. Right: the selected
+ * job's transcript or command output, live while it runs. Each tab keeps its own
+ * selection; a tab opens on its first running row unless the caller names one.
  *
  * The chat never shows individual agents: its `N running tasks` chip
  * (BackgroundTasksChip) opens this panel, and so does the pinned Background bar's
@@ -20,11 +23,11 @@
  * is gone still lists its agents from history, with their transcripts readable.
  */
 
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
-import { isAgentTask } from './workflow-layout';
+import { isAgentTask, isCommandTask } from './workflow-layout';
 import { buildAgentMeta, fmtElapsed, rowElapsedMs } from './background-ledger';
 import { StatusDot } from './WorkflowGraph';
 import { agentModelLabel } from './SessionMessage';
@@ -72,7 +75,14 @@ interface Row {
 }
 
 const RUNNING = new Set(['running', 'paused', 'pending']);
-const SHELL_TASK_TYPES = new Set(['local_bash', 'local_shell']);
+
+/** The panel's tabs, in order. `other` holds whatever is neither (rare CLI task kinds). */
+type Kind = 'agents' | 'commands' | 'other';
+const KINDS: Kind[] = ['agents', 'commands', 'other'];
+const KIND_LABEL: Record<Kind, string> = { agents: 'Agents', commands: 'Commands', other: 'Other' };
+const kindOf = (r: Row): Kind => (r.isAgent ? 'agents' : r.isCommand ? 'commands' : 'other');
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const KIND_NOUN: Record<Kind, string> = { agents: 'agent', commands: 'command', other: 'other task' };
 
 /** Union of ledger tasks and conversation-known agents, keyed by toolUseId / agentId. */
 function buildRows(tasks: readonly BackgroundTask[], known: KnownAgent[]): Row[] {
@@ -90,7 +100,7 @@ function buildRows(tasks: readonly BackgroundTask[], known: KnownAgent[]): Row[]
       subagentType: t.subagentType || k?.subagentType,
       status: t.status,
       isAgent,
-      isCommand: !isAgent && !!t.taskType && SHELL_TASK_TYPES.has(t.taskType),
+      isCommand: isCommandTask(t),
       task: t,
       known: k,
       agentId: isAgent ? t.taskId : undefined,
@@ -114,8 +124,8 @@ function buildRows(tasks: readonly BackgroundTask[], known: KnownAgent[]): Row[]
   return rows;
 }
 
-/** The pill that tells the two kinds of row apart at a glance: an agent wears its
- *  subagent type (accent), a shell command wears `Command` (amber). */
+/** The pill the reader's header wears: an agent's subagent type (accent), `Command`
+ *  (amber) for a shell command. List rows need it only for agents: the tab names the rest. */
 function KindPill({ row }: { row: Row }) {
   if (row.isCommand) return <span className="bg-task-kind bg-task-kind--command" title="Background shell command">Command</span>;
   if (row.isAgent && row.subagentType) return <span className="task-group-agent-type" title="Subagent type">{row.subagentType}</span>;
@@ -179,6 +189,23 @@ function rowMeta(row: Row, now: number): string[] {
 const TaskListRow = memo(function TaskListRow({
   row, now, selected, onSelect,
 }: { row: Row; now: number; selected: boolean; onSelect: (key: string) => void }) {
+  if (!row.isAgent) {
+    // A command (or other job) is one line: the tab already names its kind, and a
+    // session can run hundreds, so the list must stay scannable.
+    const elapsed = row.task ? fmtElapsed(rowElapsedMs(row.task, now)) : '';
+    return (
+      <button
+        className={`bg-task-row bg-task-row--compact bg-task-row-${row.status} ${selected ? 'bg-task-row--selected' : ''}`}
+        onClick={() => onSelect(row.key)}
+        aria-pressed={selected}
+        title={row.task?.summary && RUNNING.has(row.status) ? `${row.title}\n${row.task.summary}` : row.title}
+      >
+        <StatusDot status={row.status} />
+        <span className="bg-task-row-name">{row.title}</span>
+        {elapsed && <span className="bg-task-row-time">{elapsed}</span>}
+      </button>
+    );
+  }
   const meta = rowMeta(row, now);
   return (
     <button
@@ -193,13 +220,27 @@ const TaskListRow = memo(function TaskListRow({
       </div>
       <div className="bg-task-row-meta">
         {meta.map((seg, i) => <span key={i} className="wf-agent-row-meta-item">{seg}</span>)}
-        {!row.isAgent && row.task?.summary && row.status === 'running' && (
-          <span className="wf-agent-row-meta-item">{row.task.summary.slice(0, 80)}</span>
-        )}
       </div>
     </button>
   );
 });
+
+/** `RUNNING 3` / `FINISHED 38 · 2 failed`, then its rows: agent cards as they are,
+ *  one-line rows inside one bordered group. */
+function TaskSection({ title, count, failed = 0, compact, children }: {
+  title: string; count: number; failed?: number; compact: boolean; children: ReactNode;
+}) {
+  return (
+    <>
+      <div className="bg-tasks-section">
+        <span className="bg-tasks-section-title">{title}</span>
+        <span className="bg-tasks-section-count">{count}</span>
+        {failed > 0 && <span className="bg-tasks-section-failed">{failed} failed</span>}
+      </div>
+      {compact ? <div className="bg-task-group">{children}</div> : children}
+    </>
+  );
+}
 
 export function BackgroundTasksPanel({
   sessionId, knownAgents, initialKey, onClose,
@@ -215,22 +256,33 @@ export function BackgroundTasksPanel({
   const lanes = useLiveLanes(sessionId);
   const source = useToolSource(sessionId);
   const rows = useMemo(() => buildRows(tasks, knownAgents ?? []), [tasks, knownAgents]);
-  // Agents first inside each section: a fan-out's agents are what the reader came
-  // for; the CLI's background shell commands follow, in ledger order.
-  const byKind = (a: Row, b: Row) => Number(b.isAgent) - Number(a.isAgent);
-  const running = rows.filter(r => RUNNING.has(r.status)).sort(byKind);
-  const finished = rows.filter(r => !RUNNING.has(r.status)).sort(byKind);
-  const now = useSecondTick(running.some(r => r.task != null));
+  const groups = useMemo(() => {
+    const out: Record<Kind, Row[]> = { agents: [], commands: [], other: [] };
+    for (const r of rows) out[kindOf(r)].push(r);
+    return out;
+  }, [rows]);
+  const present = KINDS.filter(k => groups[k].length > 0);
+  const allRunning = rows.filter(r => RUNNING.has(r.status)).length;
+  const now = useSecondTick(rows.some(r => r.task != null && RUNNING.has(r.status)));
 
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const resolveInitial = (): string | null => {
-    if (initialKey) {
-      const hit = rows.find(r => r.key === initialKey || r.task?.toolUseId === initialKey || r.known?.toolUseId === initialKey || r.agentId === initialKey);
-      if (hit) return hit.key;
-    }
-    return (running.find(r => r.isAgent) ?? rows.find(r => r.isAgent) ?? rows[0])?.key ?? null;
-  };
-  const selected = rows.find(r => r.key === selectedKey) ?? rows.find(r => r.key === resolveInitial());
+  // The tab: the user's choice, else the kind of the row the caller named, else the
+  // first kind present (agents before commands). Each tab remembers its own selection.
+  const [chosenTab, setChosenTab] = useState<Kind | null>(null);
+  const [picked, setPicked] = useState<Partial<Record<Kind, string>>>({});
+  const initialRow = initialKey
+    ? rows.find(r => r.key === initialKey || r.task?.toolUseId === initialKey || r.known?.toolUseId === initialKey || r.agentId === initialKey)
+    : undefined;
+  const tab: Kind = chosenTab && groups[chosenTab].length > 0
+    ? chosenTab
+    : initialRow ? kindOf(initialRow) : present[0] ?? 'agents';
+  const tabRows = groups[tab];
+  const running = tabRows.filter(r => RUNNING.has(r.status));
+  const finished = tabRows.filter(r => !RUNNING.has(r.status));
+  const finishedFailed = finished.filter(r => r.status === 'failed').length;
+  const selected = tabRows.find(r => r.key === picked[tab])
+    ?? (initialRow && kindOf(initialRow) === tab ? initialRow : undefined)
+    ?? running[0] ?? tabRows[0];
+  const select = (key: string) => setPicked(p => ({ ...p, [tab]: key }));
 
   // A running agent whose lane is in the stream buffer reads from there (it IS the
   // live stream: nothing to fetch, nothing to poll). Otherwise the transcript is
@@ -267,25 +319,49 @@ export function BackgroundTasksPanel({
         <div className="wf-modal-header">
           <span className="wf-modal-title">Background tasks</span>
           <span className="wf-modal-meta">
-            {running.length > 0 ? `${running.length} running` : ''}
-            {running.length > 0 && finished.length > 0 ? ' · ' : ''}
-            {finished.length > 0 ? `${finished.length} finished` : ''}
+            {[...present.map(k => plural(groups[k].length, KIND_NOUN[k])), allRunning > 0 && `${allRunning} running`].filter(Boolean).join(' · ')}
           </span>
           <button className="wf-modal-close" onClick={onClose} aria-label="Close background tasks" title="Close (Esc)">
             {ICON_CLOSE}
           </button>
         </div>
         <div className="bg-tasks-body">
-          <div className="bg-tasks-list">
-            {rows.length === 0 && <div className="wf-modal-loading">No background tasks yet</div>}
-            {running.length > 0 && <div className="bg-tasks-section">Running</div>}
-            {running.map(r => (
-              <TaskListRow key={r.key} row={r} now={now} selected={r.key === selected?.key} onSelect={setSelectedKey} />
-            ))}
-            {finished.length > 0 && <div className="bg-tasks-section">Finished</div>}
-            {finished.map(r => (
-              <TaskListRow key={r.key} row={r} now={now} selected={r.key === selected?.key} onSelect={setSelectedKey} />
-            ))}
+          <div className="bg-tasks-side">
+            {present.length > 1 && (
+              <div className="bg-tasks-tabs" role="tablist" aria-label="Kind of background task">
+                {present.map(k => {
+                  const live = groups[k].filter(r => RUNNING.has(r.status)).length;
+                  return (
+                    <button
+                      key={k}
+                      role="tab"
+                      aria-selected={k === tab}
+                      data-kind={k}
+                      className={`bg-tasks-tab${k === tab ? ' bg-tasks-tab--active' : ''}`}
+                      onClick={() => setChosenTab(k)}
+                      title={live > 0 ? `${plural(groups[k].length, KIND_NOUN[k])}, ${live} running` : plural(groups[k].length, KIND_NOUN[k])}
+                    >
+                      {live > 0 && <span className="bg-tasks-tab-live" aria-hidden="true"><span className="task-group-streaming-dot" /></span>}
+                      <span className="bg-tasks-tab-label">{KIND_LABEL[k]}</span>
+                      <span className="bg-tasks-tab-count">{groups[k].length}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <div className="bg-tasks-list" role={present.length > 1 ? 'tabpanel' : undefined} data-kind={tab}>
+              {rows.length === 0 && <div className="wf-modal-loading">No background tasks yet</div>}
+              {running.length > 0 && (
+                <TaskSection title="Running" count={running.length} compact={tab !== 'agents'}>
+                  {running.map(r => <TaskListRow key={r.key} row={r} now={now} selected={r.key === selected?.key} onSelect={select} />)}
+                </TaskSection>
+              )}
+              {finished.length > 0 && (
+                <TaskSection title="Finished" count={finished.length} failed={finishedFailed} compact={tab !== 'agents'}>
+                  {finished.map(r => <TaskListRow key={r.key} row={r} now={now} selected={r.key === selected?.key} onSelect={select} />)}
+                </TaskSection>
+              )}
+            </div>
           </div>
           <div className="bg-tasks-detail">
             {selected && (
@@ -294,8 +370,8 @@ export function BackgroundTasksPanel({
                 <span className="bg-tasks-detail-title">{selected.title}</span>
                 <KindPill row={selected} />
                 {detailLive && <span className="wf-modal-live" title="Agent still running — this is its live output">{'●'}</span>}
-                {/* The pill already says Command; the meta keeps only the timing. */}
-                <span className="wf-modal-meta">{rowMeta(selected, now).slice(selected.isCommand ? 1 : 0).join(' · ')}</span>
+                {/* The pill already names a command's kind; the meta keeps only the timing. */}
+                <span className="wf-modal-meta">{rowMeta(selected, now).slice(selected.isAgent ? 0 : 1).join(' · ')}</span>
               </div>
             )}
             <div className="bg-tasks-detail-body">

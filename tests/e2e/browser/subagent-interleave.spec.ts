@@ -198,7 +198,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toHaveClass(/bg-task-row--selected/);
     await expect(rows.first().locator('.bg-task-row-name')).toHaveText('explore pricing');
-    await expect(panel.locator('.bg-tasks-section')).toHaveText(['Running']);
+    await expect(panel.locator('.bg-tasks-section-title')).toHaveText(['Running']);
     await expect(panel.locator('.bg-tasks-detail-title')).toHaveText('explore pricing');
     const detail = panel.locator('.bg-tasks-detail');
     await expect(detail).toContainText('Now I have the two distinct enums.');
@@ -414,7 +414,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     // Reopen: the finished agent is listed under Finished, and its reader is now the
     // persisted transcript (the canonical record), not the stream lane.
     await chip.click();
-    await expect(panel.locator('.bg-tasks-section')).toHaveText(['Finished']);
+    await expect(panel.locator('.bg-tasks-section-title')).toHaveText(['Finished']);
     await expect(panel.locator('.bg-tasks-live-lane')).toHaveCount(0);
     await expect(panel.locator('.bg-tasks-detail')).toContainText('Transcript line from the running agent.');
     await expect(panel.locator('.bg-tasks-detail-head .wf-modal-live')).toHaveCount(0);
@@ -479,7 +479,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     // The sync explorer's result lands: the chip counts down and the panel moves it to Finished.
     await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: 'toolu_fan_2', result: 'done' });
     await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('2 running · 1 done');
-    await expect(panel.locator('.bg-tasks-section')).toHaveText(['Running', 'Finished']);
+    await expect(panel.locator('.bg-tasks-section-title')).toHaveText(['Running', 'Finished']);
     await page.keyboard.press('Escape');
     await expect(panel).toHaveCount(0);
   });
@@ -544,7 +544,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(panel).toHaveCount(1);
     await expect(rows).toHaveCount(2);
     await expect(panel.locator('.bg-tasks-detail-title')).toHaveText('explorer 1');
-    await expect(panel.locator('.bg-tasks-section')).toHaveText(['Running', 'Finished']);
+    await expect(panel.locator('.bg-tasks-section-title')).toHaveText(['Running', 'Finished']);
     // Explorer 0's result reads from its settled tool_result.
     await rows.filter({ hasText: 'explorer 0' }).click();
     await expect(panel.locator('.bg-tasks-detail')).toContainText('Explorer 0 report.');
@@ -552,7 +552,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(panel).toHaveCount(0);
   });
 
-  test('a background shell command is its own kind of row: Command pill, and a reader that shows the command and its output', async ({ page }) => {
+  test('a background shell command is its own kind of row: its own tab, and a reader that shows the command and its output', async ({ page }) => {
     const base = [
       { role: 'user', text: 'Run the tests in the background', timestamp: '2026-01-01T00:00:00.000Z' },
       { role: 'assistant', text: 'Kicking off the tests and an explorer.', timestamp: '2026-01-01T00:00:01.000Z' },
@@ -597,17 +597,22 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await page.locator('.wf-card').click();
     const panel = page.locator('.wf-modal--tasks');
     const rows = panel.locator('.bg-task-row');
-    await expect(rows).toHaveCount(2);
-    // Agents first, then commands; each kind wears its own pill.
+    // Agents and commands are two tabs; the agent's opens first.
+    const tabs = panel.locator('.bg-tasks-tab');
+    await expect(tabs.locator('.bg-tasks-tab-label')).toHaveText(['Agents', 'Commands']);
+    await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true');
+    await expect(rows).toHaveCount(1);
     await expect(rows.nth(0).locator('.task-group-agent-type')).toHaveText('explore');
     await expect(rows.nth(0).locator('.bg-task-kind')).toHaveCount(0);
-    await expect(rows.nth(1).locator('.bg-task-kind--command')).toHaveText('Command');
-    await expect(rows.nth(1).locator('.task-group-agent-type')).toHaveCount(0);
-    await expect(rows.nth(1).locator('.bg-task-row-meta')).toContainText('Command');
+    await tabs.nth(1).click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0)).toHaveClass(/bg-task-row--compact/);
+    await expect(rows.nth(0).locator('.bg-task-row-name')).toHaveText('Run the web unit tier');
+    await expect(rows.nth(0).locator('.task-group-agent-type')).toHaveCount(0);
 
     // The command's reader: what it ran, and (while it runs, launch note only) that
     // it is still running — never the launch note as if it were output.
-    await rows.nth(1).click();
+    await expect(rows.nth(0)).toHaveClass(/bg-task-row--selected/);
     const detail = panel.locator('.bg-tasks-detail');
     await expect(detail.locator('.bg-tasks-detail-head .bg-task-kind--command')).toHaveText('Command');
     await expect(detail.locator('.bg-tasks-command .bash-tool-pre').nth(0)).toContainText('$ npm test -- --run tests/web');
@@ -630,7 +635,8 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
       ],
     });
     await expect(detail.locator('.bg-tasks-command .bash-tool-pre').nth(1)).toContainText('Tests 15 passed (15)');
-    await expect(panel.locator('.bg-tasks-section')).toHaveText(['Running', 'Finished']);
+    await expect(panel.locator('.bg-tasks-section-title')).toHaveText(['Finished']);
+    await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Escape');
   });
 

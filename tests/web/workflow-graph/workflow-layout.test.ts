@@ -132,6 +132,16 @@ describe('workflow overview selection and filtering', () => {
     expect(preferredPhase(completed)?.title).toBe('Verify');
   });
 
+  it('follows the front of a live run past an earlier failure, and returns to the failure once it is over', () => {
+    const live = agents.map(a => a.agentId === 'a4' ? { ...a, status: 'completed' } : a.agentId === 'a5' ? { ...a, status: 'running' } : a);
+    expect(preferredPhase(buildLayout(phases, live))?.title).toBe('Verify');
+    // Two phases running at once (a stream): the later one is the front.
+    const streaming = agents.map(a => a.agentId === 'a1' || a.agentId === 'a5' ? { ...a, status: 'running' } : a);
+    expect(preferredPhase(buildLayout(phases, streaming))?.title).toBe('Verify');
+    const over = live.map(a => a.agentId === 'a5' ? { ...a, status: 'completed' } : a);
+    expect(preferredPhase(buildLayout(phases, over))?.title).toBe('Fetch');
+  });
+
   it('searches all phases by name, id, prompt and result without mutating the source order', () => {
     const layout = buildLayout(phases, agents);
     expect(visibleWorkflowAgents(layout, 2, 'CITATIONS AND UNICODE 符号').map(a => a.agentId)).toEqual(['a5']);

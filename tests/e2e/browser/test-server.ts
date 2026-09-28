@@ -1258,6 +1258,13 @@ await fs.mkdir(path.join(workflowDir, 'workflows'), { recursive: true })
 await fs.mkdir(path.join(workflowDir, 'subagents', 'workflows', 'wf_fixture-run'), { recursive: true })
 const workflowPhaseNames = ['Scope', 'Search', 'Fetch', 'Verify', 'Synthesize']
 const workflowAgentCounts = [1, 5, 25, 75, 1]
+// The clocks of a real deep-research run with this exact shape (seconds from its start;
+// [phaseIndex, queued, started, duration, state]), so the stage graph reads the real
+// relationships: splits into 5, starts as each finishes, after all 25, merges 75 into 1.
+const realWorkflowClocks = (JSON.parse(await fs.readFile(
+  path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../web/workflow-graph/fixtures/real-workflow-timings.json'), 'utf8',
+)) as Record<string, { agents: [number, number, number, number, string][] }>)['deep-research'].agents
+const workflowRunStart = sessionFixtureNow - 1_200_000
 const workflowProgress = workflowPhaseNames.flatMap((title, phase) => [
   { type: 'workflow_phase', index: phase + 1, title },
   ...Array.from({ length: workflowAgentCounts[phase] }, (_, i) => {
@@ -1265,11 +1272,13 @@ const workflowProgress = workflowPhaseNames.flatMap((title, phase) => [
     const label = phase === 2 && i === 7
       ? 'Fetch the long-form source with complete citations and a fallback archive'
       : `${title} source ${String(i + 1).padStart(2, '0')} and compare its supporting claims`
+    const [, q, s, d] = realWorkflowClocks.filter(c => c[0] === phase + 1)[i]
     return {
       type: 'workflow_agent', index: workflowAgentCounts.slice(0, phase).reduce((a, b) => a + b, 0) + i,
       phaseIndex: phase + 1, agentId: `wf-fixture-agent-${phase}-${i}`, label,
       state: failed ? 'error' : 'done',
-      model: 'claude-opus-5-5', tokens: 52_000 + i * 1_000, durationMs: 36_000 + i * 1_000,
+      queuedAt: workflowRunStart + Math.round(q * 1000), startedAt: workflowRunStart + Math.round(s * 1000),
+      model: 'claude-opus-5-5', tokens: 52_000 + i * 1_000, durationMs: Math.round(d * 1000),
       promptPreview: `Read source ${i + 1} in full. Preserve every citation and report discrepancies.`,
       ...(failed ? {} : { resultPreview: `Source ${i + 1} checked with citations and cross references.` }),
     }

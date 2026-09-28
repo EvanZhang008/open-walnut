@@ -58,6 +58,10 @@ export interface WorkflowAgent {
   toolCalls?: number;
   durationMs?: number;
   startedAt?: number;
+  /** CLI clock when the agent was handed its work (see workflow-stages.ts). */
+  queuedAt?: number;
+  /** Why a failed agent failed. */
+  error?: string;
 }
 
 export interface BackgroundTasksState {

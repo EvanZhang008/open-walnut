@@ -565,6 +565,11 @@ export interface WorkflowAgentInfo {
   toolCalls?: number;
   durationMs?: number;
   startedAt?: number;
+  /** CLI clock when the agent was handed its work. With startedAt/durationMs it tells
+   *  a stage that waited for the one before it from one that started as each finished. */
+  queuedAt?: number;
+  /** Why a failed agent failed (the CLI's `error` field). */
+  error?: string;
 }
 
 /** Snapshot of a session's in-flight background tasks (dynamic workflows / subagents).

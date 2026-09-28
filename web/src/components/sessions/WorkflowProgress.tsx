@@ -9,7 +9,7 @@ import { memo, useEffect, useState } from 'react';
 import { useBackgroundTasks, type BackgroundTask, type WorkflowAgent } from '@/hooks/useBackgroundTasks';
 import { publishLiveAgents } from '@/stores/background-agents-store';
 import { WorkflowGraph, fmtTokens, agentMeta } from './WorkflowGraph';
-import { phaseCounts, isAgentTask } from './workflow-layout';
+import { phaseCounts, isAgentTask, isCommandTask } from './workflow-layout';
 import { WorkflowTranscriptModal, type TranscriptTarget } from './WorkflowTranscriptModal';
 import { openBackgroundPanel } from '@/stores/background-panel-store';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -62,6 +62,8 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
   const isDone = (t: BackgroundTask) => t.status !== 'running' && t.status !== 'pending' && t.status !== 'paused' && t.status !== 'failed';
   const agentTasks = isWorkflow ? [] : tasks.filter(isAgentTask);
   const plainTasks = isWorkflow ? [] : tasks.filter(t => !isAgentTask(t));
+  // Shell commands are named as such; a set that holds anything else stays "tasks".
+  const plainWord = plainTasks.length > 0 && plainTasks.every(isCommandTask) ? 'commands' : 'tasks';
   const total = isWorkflow ? wfCounts.total : tasks.length;
   const done = isWorkflow ? wfCounts.done : tasks.filter(isDone).length;
   const running = isWorkflow ? wfCounts.running : inFlight;
@@ -75,13 +77,13 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
       {/* Only the completion tally may be cut short; running and failed always show. */}
       <span className="wf-card-count-done" data-shed-watch>
         {isWorkflow || agentTasks.length === 0 || plainTasks.length === 0 ? (
-          <>{done}/{total}{isWorkflow || agentTasks.length > 0 ? ' agents' : ' tasks'} done</>
+          <>{done}/{total}{isWorkflow || agentTasks.length > 0 ? ' agents' : ` ${plainWord}`} done</>
         ) : (
           // Mixed set: count agents and plain tasks separately.
           <>
             Agents {agentTasks.filter(isDone).length}/{agentTasks.length}
             {' · '}
-            Tasks {plainTasks.filter(isDone).length}/{plainTasks.length}
+            {plainWord === 'commands' ? 'Commands' : 'Tasks'} {plainTasks.filter(isDone).length}/{plainTasks.length}
           </>
         )}
       </span>
@@ -177,6 +179,7 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
           <WorkflowGraph
             phases={phases}
             agents={agents}
+            finished={inFlight === 0 && running === 0}
             chosenPhase={chosenPhase}
             onChoosePhase={setChosenPhase}
             query={query}

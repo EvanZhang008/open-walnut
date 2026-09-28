@@ -16,6 +16,11 @@ export function isAgentTask(t: BackgroundTask): boolean {
   if (t.taskType) return AGENT_TASK_TYPES.has(t.taskType);
   return !!t.subagentType;
 }
+/** A shell command the CLI runs in the background: a different thing from an agent. */
+const SHELL_TASK_TYPES = new Set(['local_bash', 'local_shell']);
+export function isCommandTask(t: BackgroundTask): boolean {
+  return !isAgentTask(t) && !!t.taskType && SHELL_TASK_TYPES.has(t.taskType);
+}
 
 /** Terminal statuses (count toward "done"). */
 export const TERMINAL = new Set(['completed', 'failed', 'stopped', 'killed', 'cancelled']);
@@ -31,7 +36,7 @@ export interface LaidOutPhase {
 /** Normalize (phases, agents) into ordered phases each holding its agents.
  *  An agent whose phaseIndex matches no known phase is attached to a synthetic
  *  trailing group (happens with sparse/out-of-order snapshots), never dropped. */
-export function buildLayout(phases: WorkflowPhase[], agents: WorkflowAgent[]): LaidOutPhase[] {
+export function buildLayout(phases: WorkflowPhase[], agents: WorkflowAgent[], opts: { keepEmpty?: boolean } = {}): LaidOutPhase[] {
   const sortedPhases = [...phases].sort((a, b) => a.index - b.index);
   const known = new Set(sortedPhases.map(p => p.index));
   const groups: LaidOutPhase[] = sortedPhases.map(p => ({
@@ -58,12 +63,18 @@ export function buildLayout(phases: WorkflowPhase[], agents: WorkflowAgent[]): L
     });
   }
 
-  return groups.filter(g => g.agents.length > 0);
+  // The stage graph keeps declared phases that have no agents yet: they are "next".
+  return opts.keepEmpty ? groups : groups.filter(g => g.agents.length > 0);
 }
 
+/** `chosenPhase` value for "the user closed every phase" (narrow layout only). */
+export const NO_PHASE_OPEN = Number.MIN_SAFE_INTEGER;
+
 export function preferredPhase(layout: LaidOutPhase[]): LaidOutPhase | undefined {
-  return layout.find(phase => phase.agents.some(agent => agent.status === 'failed'))
-    ?? layout.find(phase => phase.agents.some(agent => agent.status === 'running' || agent.status === 'paused'))
+  // While the run is live, follow its front (the latest phase with a running agent);
+  // a failure behind it already shows on its card. Once nothing runs, the failure.
+  return [...layout].reverse().find(phase => phase.agents.some(agent => agent.status === 'running' || agent.status === 'paused'))
+    ?? layout.find(phase => phase.agents.some(agent => agent.status === 'failed'))
     ?? layout[layout.length - 1];
 }
 

@@ -1,6 +1,8 @@
-import { memo, useMemo } from 'react';
+import { memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { WorkflowPhase, WorkflowAgent } from '@/hooks/useBackgroundTasks';
-import { buildLayout, phaseCounts, preferredPhase, visibleWorkflowAgents } from './workflow-layout';
+import { buildLayout, NO_PHASE_OPEN, preferredPhase, visibleWorkflowAgents } from './workflow-layout';
+import { buildStages } from './workflow-stages';
+import { StageColumn, StageStrip } from './WorkflowStageGraph';
 import { fmtTokens } from './background-ledger';
 
 export { fmtTokens };
@@ -70,6 +72,12 @@ const AgentRow = memo(function AgentRow({ agent, expanded, onToggle, onOpenTrans
               <div className="wf-agent-prompt">{agent.promptPreview}</div>
             </div>
           )}
+          {agent.error && (
+            <div className="wf-agent-block">
+              <div className="wf-agent-block-label">Error</div>
+              <div className="wf-agent-result wf-agent-error">{agent.error}</div>
+            </div>
+          )}
           <div className="wf-agent-block">
             <div className="wf-agent-block-label">Result</div>
             {agent.resultPreview
@@ -83,9 +91,30 @@ const AgentRow = memo(function AgentRow({ agent, expanded, onToggle, onOpenTrans
   );
 });
 
-export const WorkflowGraph = memo(function WorkflowGraph({ phases, agents, chosenPhase, onChoosePhase, query, onQueryChange, expandedAgent, onToggleAgent, onOpenTranscript }: {
+/** True when the overview is wide enough to read the stages left to right. */
+function useIsWide(ref: RefObject<HTMLElement | null>, min: number): boolean {
+  const [wide, setWide] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setWide(el.clientWidth > min);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref, min]);
+  return wide;
+}
+
+/** Wider than this, the stages read left to right with the list below them. */
+const WIDE_MIN_PX = 620;
+
+export const WorkflowGraph = memo(function WorkflowGraph({ phases, agents, finished, chosenPhase, onChoosePhase, query, onQueryChange, expandedAgent, onToggleAgent, onOpenTranscript }: {
   phases: WorkflowPhase[];
   agents: WorkflowAgent[];
+  /** The whole run is over: a stage fed one by one can no longer get more agents. */
+  finished: boolean;
+  /** null = follow the phase that needs attention; NO_PHASE_OPEN = the user closed it. */
   chosenPhase: number | null;
   onChoosePhase: (index: number) => void;
   query: string;
@@ -94,46 +123,62 @@ export const WorkflowGraph = memo(function WorkflowGraph({ phases, agents, chose
   onToggleAgent: (id: string) => void;
   onOpenTranscript: (agent: WorkflowAgent) => void;
 }) {
-  const layout = useMemo(() => buildLayout(phases, agents), [phases, agents]);
-  const selected = layout.find(phase => phase.index === chosenPhase) ?? preferredPhase(layout);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const wide = useIsWide(rootRef, WIDE_MIN_PX);
+  const all = useMemo(() => buildLayout(phases, agents, { keepEmpty: true }), [phases, agents]);
+  const layout = useMemo(() => all.filter(phase => phase.agents.length > 0), [all]);
+  const stages = useMemo(() => buildStages(all, finished), [all, finished]);
+  const auto = preferredPhase(layout)?.index;
+  // The wide layout always shows one phase's list; the narrow one may have none open.
+  const openIndex = chosenPhase === NO_PHASE_OPEN ? (wide ? auto : undefined) : (chosenPhase ?? auto);
   const searching = query.trim().length > 0;
-  const visible = visibleWorkflowAgents(layout, selected?.index, query);
-  const counts = selected ? phaseCounts(selected.agents) : null;
+  const choose = (index: number) => {
+    onQueryChange('');
+    onChoosePhase(!wide && index === openIndex ? NO_PHASE_OPEN : index);
+  };
+  const stagePhase = (index: number | undefined) => stages.flatMap(s => s.phases).find(p => p.index === index);
+  const linkInto = (index: number | undefined) => stages.find(s => s.phases.some(p => p.index === index))?.link;
+
+  const list = (agentsShown: WorkflowAgent[], empty: string) => (
+    <div className="wf-overview-list">
+      {agentsShown.length ? agentsShown.map(agent => (
+        <AgentRow key={agent.agentId} agent={agent} expanded={expandedAgent === agent.agentId}
+          onToggle={() => onToggleAgent(agent.agentId)} onOpenTranscript={onOpenTranscript} />
+      )) : <div className="wf-empty">{empty}</div>}
+    </div>
+  );
+  const results = visibleWorkflowAgents(layout, undefined, query);
+  const openPhase = stagePhase(openIndex);
+  const openLink = linkInto(openIndex);
 
   return (
-    <div className="wf-overview">
-      <nav className="wf-phase-nav" aria-label="Workflow phases">
-        {layout.map((phase, order) => {
-          const count = phaseCounts(phase.agents);
-          const active = !searching && selected?.index === phase.index;
-          return (
-            <button key={phase.index} className={`wf-phase-link ${active ? 'wf-phase-link-active' : ''}`}
-              onClick={() => { onChoosePhase(phase.index); onQueryChange(''); }} aria-current={active ? 'step' : undefined}>
-              <span className="wf-phase-order">{String(order + 1).padStart(2, '0')}</span>
-              <span className="wf-phase-label">{phase.title || 'Other'}</span>
-              <span className="wf-phase-count">{count.done}/{count.total}</span>
-              {count.failed > 0 && <span className="wf-phase-failed">{count.failed} failed</span>}
-              {count.running > 0 && <span className="wf-phase-running">{count.running} running</span>}
-            </button>
-          );
-        })}
-      </nav>
-      <div className="wf-overview-main">
-        <div className="wf-overview-tools">
-          <div className="wf-overview-heading">
-            <span className="wf-overview-title">{searching ? 'Search results' : selected?.title || 'Other'}</span>
-            <span className="wf-overview-count">{searching ? `${visible.length} matches` : `${counts?.total ?? 0} agents`}</span>
-          </div>
-          <input className="wf-search" type="search" value={query} onChange={event => onQueryChange(event.target.value)}
-            aria-label="Find agents" placeholder="Find agents in this workflow…" />
-        </div>
-        <div className="wf-overview-list">
-          {visible.length ? visible.map(agent => (
-            <AgentRow key={agent.agentId} agent={agent} expanded={expandedAgent === agent.agentId}
-              onToggle={() => onToggleAgent(agent.agentId)} onOpenTranscript={onOpenTranscript} />
-          )) : <div className="wf-empty">{searching ? 'No matching agents' : 'No agents in this phase'}</div>}
-        </div>
+    <div ref={rootRef} className={`wf-overview ${wide ? 'wf-overview--wide' : 'wf-overview--narrow'}`}>
+      <div className="wf-overview-tools">
+        <input className="wf-search" type="search" value={query} onChange={event => onQueryChange(event.target.value)}
+          aria-label="Find agents" placeholder="Find agents in this workflow…" />
       </div>
+      {wide && <StageStrip stages={stages} openIndex={searching ? undefined : openIndex} onChoose={choose} />}
+      {searching ? (
+        <div className="wf-overview-main">
+          <div className="wf-overview-heading">
+            <span className="wf-overview-title">Search results</span>
+            <span className="wf-overview-count">{results.length} matches</span>
+          </div>
+          {list(results, 'No matching agents')}
+        </div>
+      ) : wide ? (
+        <div className="wf-overview-main">
+          <div className="wf-overview-heading">
+            <span className="wf-overview-title">{openPhase?.title || 'Other'}</span>
+            <span className="wf-overview-count">{openPhase?.total ?? 0} agents</span>
+            {openLink && openLink.kind !== 'next' && <span className="wf-overview-link">{openLink.long}</span>}
+          </div>
+          {list(visibleWorkflowAgents(layout, openIndex, ''), 'No agents yet: they appear when this phase starts')}
+        </div>
+      ) : (
+        <StageColumn stages={stages} openIndex={openIndex} onChoose={choose}
+          renderList={phase => list(visibleWorkflowAgents(layout, phase.index, ''), 'No agents yet: they appear when this phase starts')} />
+      )}
     </div>
   );
 });

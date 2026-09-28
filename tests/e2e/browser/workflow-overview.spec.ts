@@ -98,11 +98,27 @@ test.describe('Workflow overview at real fan-out density', () => {
     await page.screenshot({ path: `${dir}/dense-overview.png`, scale: 'css' })
     await expect(card.locator('.wf-graph-horizontal')).toHaveCount(0)
     await expect(card.locator('.wf-density-cell')).toHaveCount(0)
-    await expect(card.locator('.wf-phase-nav')).toContainText('Fetch')
-    await expect(card.locator('.wf-phase-nav')).toContainText('Verify')
+    // Fullscreen reads the stages left to right, one row, with the relationship
+    // the clocks prove written on each connector.
+    const strip = card.locator('.wf-stage-graph--strip')
+    await expect(strip).toBeVisible()
+    await expect(strip.locator('.wf-stage-card-title')).toHaveText(['Scope', 'Search', 'Fetch', 'Verify', 'Synthesize'])
+    await expect(strip.locator('.wf-stage-link')).toHaveCount(4)
+    expect(await strip.locator('.wf-stage-link').evaluateAll(els => els.map(el => el.getAttribute('data-link-kind')))).toEqual(['split', 'stream', 'after', 'merge'])
+    await expect(strip.locator('.wf-stage-link-verb')).toHaveText(['splits', 'streams', 'after all', 'merges'])
+    await expect(strip.locator('.wf-stage-link-counts')).toHaveText(['1 → 5', '5 → 25', '25 → 75', '75 → 1'])
+    await expect(strip.locator('.wf-stage-link').nth(1)).toHaveAttribute('title', 'starts as each finishes (5 → 25)')
+    const cardTops = await strip.locator('.wf-stage-card').evaluateAll(els => els.map(el => Math.round(el.getBoundingClientRect().top)))
+    expect(new Set(cardTops).size, 'the five stages share one row').toBe(1)
+    expect(await strip.locator('.wf-stage-card').evaluateAll(els => els.map(el => [...el.classList].find(c => /--(done|failed|running|waiting|future)$/.test(c)))))
+      .toEqual(['wf-stage-card--done', 'wf-stage-card--done', 'wf-stage-card--failed', 'wf-stage-card--done', 'wf-stage-card--done'])
+    await expect(strip.locator('.wf-stage-card--open .wf-stage-card-title')).toHaveText('Fetch')
+    await expect(strip.locator('.wf-stage-card--failed .wf-stage-card-sub')).toHaveText(/^1 failed · \d+m \d+s$/)
+    await expect(strip.locator('.wf-stage-card').first().locator('.wf-stage-card-sub')).toHaveText('Done in 32s')
+    await expect(strip.locator('.wf-stage-card--failed .wf-stage-card-count')).toHaveText('25/25')
+    await expect(card.locator('.wf-overview-heading .wf-overview-link')).toHaveText('starts as each finishes (5 → 25)')
     await expect(card.locator('.wf-gnode-failed .wf-gnode-name')).toHaveText('Fetch the long-form source with complete citations and a fallback archive')
     await expect(card.locator('.wf-gnode-head')).toHaveCount(25)
-    await expect(card.locator('.wf-phase-failed')).toHaveText('1 failed')
     const firstName = await card.locator('.wf-gnode-name').first().textContent()
     expect(firstName).toBe('Fetch the long-form source with complete citations and a fallback archive')
     await card.locator('.wf-gnode-failed .wf-gnode-head').click()
@@ -111,9 +127,11 @@ test.describe('Workflow overview at real fan-out density', () => {
     await expect(page.locator('.wf-modal-body')).toContainText('The source returned an error after the retry.')
     await page.keyboard.press('Escape')
     await expect(page.locator('.wf-modal-body')).toHaveCount(0)
-    await card.locator('.wf-phase-nav').getByRole('button', { name: /Verify/ }).click()
+    await card.locator('.wf-stage-card', { hasText: 'Verify' }).click()
+    await expect(card.locator('.wf-stage-card--open .wf-stage-card-title')).toHaveText('Verify')
     await expect(card.locator('.wf-gnode-head')).toHaveCount(75)
     await expect(card.locator('.wf-overview-count')).toHaveText('75 agents')
+    await expect(card.locator('.wf-overview-heading .wf-overview-link')).toHaveText('after all 25, fans out to 75')
     await card.locator('.wf-search').fill('source 75')
     await expect(card.locator('.wf-gnode-head')).toHaveCount(1)
     await expect(card.locator('.wf-gnode-name')).toContainText('Verify source 75')
@@ -132,6 +150,25 @@ test.describe('Workflow overview at real fan-out density', () => {
     await expect(card).not.toHaveClass(/open-walnut-fullscreen/)
     await card.locator('.wf-card-collapse').click()
     await expect(card.locator('.wf-overview')).toBeVisible()
+    // The session column stacks the stages top to bottom; the chosen phase's
+    // agents open right under its card, and the sentence sits on each connector.
+    const column = card.locator('.wf-stage-graph--column')
+    await expect(column).toBeVisible()
+    await expect(card.locator('.wf-stage-graph--strip')).toHaveCount(0)
+    await expect(column.locator('.wf-stage-link-label')).toHaveText(['splits into 5', 'starts as each finishes (5 → 25)', 'after all 25, fans out to 75', 'merges 75 into 1'])
+    const verifyStage = column.locator('.wf-stage', { has: page.locator('.wf-stage-card--open') })
+    await expect(verifyStage.locator('.wf-stage-card-title')).toHaveText('Verify')
+    await expect(verifyStage.locator('.wf-stage-list .wf-gnode-head')).toHaveCount(75)
+    const columnCards = await column.locator('.wf-stage-card').evaluateAll(els => els.map(el => el.getBoundingClientRect().top))
+    expect(columnCards.every((top, i) => i === 0 || top > columnCards[i - 1]), 'stages read top to bottom').toBe(true)
+    const listBox = (await verifyStage.locator('.wf-stage-list .wf-overview-list').boundingBox())!
+    expect(listBox.height, 'a 75-agent phase scrolls inside its own box').toBeLessThanOrEqual(265)
+    await page.waitForTimeout(220)
+    await page.screenshot({ path: `${dir}/narrow-stage-column.png`, scale: 'css' })
+    // Clicking the open card closes its list; clicking it again brings it back.
+    await verifyStage.locator('.wf-stage-card').click()
+    await expect(column.locator('.wf-stage-list')).toHaveCount(0)
+    await column.locator('.wf-stage-card', { hasText: 'Verify' }).click()
     await expect(card.locator('.wf-gnode-head')).toHaveCount(75)
 
     await page.screenshot({ path: `${dir}/narrow-after-reopen.png`, scale: 'css' })
@@ -173,7 +210,7 @@ test.describe('Workflow overview at real fan-out density', () => {
     await captureSocket(page)
     const panel = await openWorkflow(page, sessionId, taskId)
     const card = panel.locator('.wf-card')
-    await card.locator('.wf-phase-nav').getByRole('button', { name: /Verify/ }).click()
+    await card.locator('.wf-stage-card', { hasText: 'Verify' }).click()
     await card.locator('.wf-search').fill('source 75')
     await expect(card.locator('.wf-gnode-head')).toHaveCount(1)
     await page.waitForFunction(() => (window as any).__workflowSocket?.readyState === WebSocket.OPEN)
@@ -204,7 +241,8 @@ test.describe('Workflow overview at real fan-out density', () => {
     })
     await expect(card.locator('.wf-card-title')).toHaveText('Workflow: follow-up-review')
     await expect(card.locator('.wf-search')).toHaveValue('')
-    await expect(card.locator('.wf-phase-nav')).toContainText('Review')
+    await expect(card.locator('.wf-stage-card-title')).toHaveText(['Review'])
+    await expect(card.locator('.wf-stage-card--running .wf-stage-card-sub')).toHaveText('1 running')
     await expect(card.locator('.wf-gnode-name')).toHaveText('Review final result')
     await expect(card.locator('.wf-gnode-running')).toHaveCount(1)
     await card.locator('.wf-card-fullscreen').click()
@@ -292,7 +330,7 @@ test.describe('Background bar', () => {
       sessionId, inFlight: 1, phases: [], agents: [],
       tasks: [0, 1, 2, 3, 4].map(i => shellTask(i, 'completed')).concat(shellTask(5, 'running')),
     })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('5/6 tasks done · 1 running')
+    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('5/6 commands done · 1 running')
     await expect(bar.locator('.wf-card-state--running .task-group-streaming-dot')).toHaveCount(1)
     await expect(bar.locator('.wf-card-open')).toHaveText('View all ›')
     await expect(bar.locator('.wf-card-count')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
@@ -317,7 +355,7 @@ test.describe('Background bar', () => {
         shellTask(0, 'completed'), shellTask(1, 'completed'), shellTask(2, 'completed'), shellTask(3, 'failed'),
       ],
     })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('Agents 0/1 · Tasks 3/4 · 1 running · 1 failed')
+    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('Agents 0/1 · Commands 3/4 · 1 running · 1 failed')
     await expect(bar.locator('.wf-card-tokens')).toHaveText('61k tok')
     await expect(bar.locator('.wf-card-failed')).toContainText('1 failed')
     await expect(bar.locator('.wf-card-failed')).toHaveCSS('color', await bar.locator('.wf-card-meter-failed').evaluate(el => getComputedStyle(el).backgroundColor))
@@ -355,7 +393,7 @@ test.describe('Background bar', () => {
       sessionId, inFlight: 0, phases: [], agents: [],
       tasks: [0, 1, 2, 3, 4, 5].map(i => shellTask(i, 'completed')),
     })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('6/6 tasks done')
+    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('6/6 commands done')
     await expect(bar.locator('.wf-card-state--done')).toHaveText('✓')
     await expect(bar.locator('.task-group-streaming-dot')).toHaveCount(0)
     await expectOneTidyLine(bar)
@@ -375,7 +413,7 @@ test.describe('Background bar', () => {
       sessionId, inFlight: 1, phases: [], agents: [],
       tasks: [0, 1, 2, 3, 4].map(i => shellTask(i, 'completed')).concat(shellTask(5, 'running')),
     })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('5/6 tasks done · 1 running')
+    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('5/6 commands done · 1 running')
     // Focus is back on the bar after Esc closed the panel, as it is for a real user.
     await page.mouse.move(0, 0)
     // Dark surfaces come from the dark tokens, never a light native button face.
@@ -405,7 +443,7 @@ test.describe('Background bar', () => {
         ],
       })
       await expect(bar.locator('.wf-card-failed')).toBeVisible()
-      await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toMatch(/^(Agents 0\/1 · Tasks 1\/2|1\/3 done|1\/3) · 1 running · 1 failed$/)
+      await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toMatch(/^(Agents 0\/1 · Commands 1\/2|1\/3 done|1\/3) · 1 running · 1 failed$/)
       const level = Number(await bar.getAttribute('data-shed'))
       expect(level, `shed level at ${width}px`).toBeGreaterThanOrEqual(previousLevel)
       previousLevel = level
@@ -439,11 +477,116 @@ test.describe('Background bar', () => {
       sessionId, inFlight: 0, phases: [], agents: [],
       tasks: Array.from({ length: 150 }, (_, i) => shellTask(i, 'completed')),
     })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toMatch(/^150\/150( tasks done| done)?$/)
+    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toMatch(/^150\/150( commands done| done)?$/)
     await expectNothingClipped(bar, 'all done at 300px')
     await bar.evaluate(el => { (el as HTMLElement).style.width = '760px' })
     await expect.poll(() => bar.getAttribute('data-shed'), { message: 'widening brings the detail back' }).toBe('0')
     expect(wide.width).toBeGreaterThan(420)
+    expect(errors).toEqual([])
+  })
+
+  test('the panel keeps agents and commands apart: one tab each, commands one line apiece', async ({ page }) => {
+    const project = test.info().project.name
+    const sessionId = `pw-background-bar-${project}`
+    const errors: string[] = []
+    page.on('pageerror', error => errors.push(error.message))
+    await captureSocket(page)
+    const panel = await openTaskSession(page, sessionId, `pw-bgbar-task-${project}`)
+    await expect(panel).toContainText('Review underway.', { timeout: 30_000 })
+    // The reported density: 2 agents, 150 commands (one failed, one running), and a
+    // job of no known kind, the "bgpq669i Task" row from the report.
+    await emitBackgroundTasks(page, {
+      sessionId, inFlight: 2, phases: [], agents: [],
+      tasks: [
+        ...Array.from({ length: 150 }, (_, i) => ({ ...shellTask(i, i === 40 ? 'failed' : i === 149 ? 'running' : 'completed'), startedAt: Date.now() - 60_000, ...(i === 149 ? {} : { endedAt: Date.now() - 60_000 + 3_000 + i * 100 }) })),
+        { taskId: 'agent-a', taskType: 'local_agent', subagentType: 'general-purpose', status: 'running', description: '/code-review', tokens: 96_200, toolUses: 40, startedAt: Date.now() - 580_000 },
+        { taskId: 'agent-b', taskType: 'local_agent', subagentType: 'general-purpose', status: 'completed', description: '/code-review', tokens: 94_100, toolUses: 12, startedAt: Date.now() - 120_000, endedAt: Date.now() - 67_000 },
+        { taskId: 'bgpq669i', status: 'completed' },
+      ],
+    })
+    const bar = panel.locator('.wf-card--bar')
+    await expect.poll(() => visibleText(bar.locator('.wf-card-running')), { timeout: 30_000 }).toBe('· 2 running')
+    await bar.click()
+    const tasksPanel = page.locator('.wf-modal--tasks')
+    await expect(tasksPanel.locator('.wf-modal-meta').first()).toHaveText('2 agents · 150 commands · 1 other task · 2 running')
+
+    // Agents come first; their tab lists only the two agents, as cards.
+    const tabs = tasksPanel.locator('.bg-tasks-tab')
+    await expect(tabs.locator('.bg-tasks-tab-label')).toHaveText(['Agents', 'Commands', 'Other'])
+    await expect(tabs.locator('.bg-tasks-tab-count')).toHaveText(['2', '150', '1'])
+    await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true')
+    await expect(tabs.nth(0).locator('.bg-tasks-tab-live')).toHaveCount(1)
+    await expect(tabs.nth(1).locator('.bg-tasks-tab-live')).toHaveCount(1)
+    await expect(tabs.nth(2).locator('.bg-tasks-tab-live')).toHaveCount(0)
+    const list = tasksPanel.locator('.bg-tasks-list')
+    await expect(list.locator('.bg-task-row')).toHaveCount(2)
+    await expect(list.locator('.bg-task-row--compact')).toHaveCount(0)
+    await expect(list.locator('.bg-tasks-section-title')).toHaveText(['Running', 'Finished'])
+    await expect(list.locator('.bg-task-row').first()).toHaveClass(/bg-task-row--selected/)
+    await expect(list.locator('.task-group-agent-type')).toHaveText(['general-purpose', 'general-purpose'])
+    const dir = `/tmp/workflow-overview/${project}`
+    await fs.mkdir(dir, { recursive: true })
+    await page.waitForTimeout(220)
+    await page.screenshot({ path: `${dir}/background-panel-agents.png`, scale: 'css' })
+
+    // Commands: 150 dense rows, the running one first and selected, the failure counted.
+    await tabs.nth(1).click()
+    await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true')
+    const rows = list.locator('.bg-task-row--compact')
+    await expect(rows).toHaveCount(150)
+    await expect(list.locator('.bg-tasks-section')).toHaveText(['Running1', 'Finished1491 failed'])
+    await expect(list.locator('.bg-tasks-section-failed')).toHaveText('1 failed')
+    await expect(rows.first()).toHaveClass(/bg-task-row-running/)
+    await expect(rows.first()).toHaveClass(/bg-task-row--selected/)
+    await expect(list.locator('.bg-task-kind')).toHaveCount(0)
+    await expect(tasksPanel.locator('.bg-tasks-detail-title')).toHaveText('Run the fixture check number 150')
+    await expect(tasksPanel.locator('.bg-tasks-detail-head .bg-task-kind--command')).toHaveText('Command')
+    const heights = await rows.evaluateAll(els => els.slice(0, 20).map(el => el.getBoundingClientRect().height))
+    for (const h of heights) expect(h, 'a command is one line').toBeLessThanOrEqual(34)
+    await expect(rows.nth(1).locator('.bg-task-row-time')).toHaveText('3s')
+    await page.waitForTimeout(220)
+    await page.screenshot({ path: `${dir}/background-panel-commands.png`, scale: 'css' })
+
+    // Each tab keeps its own selection.
+    await rows.nth(41).click()
+    await expect(tasksPanel.locator('.bg-tasks-detail-title')).toHaveText('Run the fixture check number 41')
+    await expect(rows.nth(41)).toHaveClass(/bg-task-row-failed/)
+    await list.locator('.bg-task-row--compact.bg-task-row-failed').click()
+    await expect(tasksPanel.locator('.bg-tasks-detail-title')).toHaveText('Run the fixture check number 41')
+    await tabs.nth(0).click()
+    await list.locator('.bg-task-row').nth(1).click()
+    await expect(list.locator('.bg-task-row').nth(1)).toHaveClass(/bg-task-row--selected/)
+    await tabs.nth(1).click()
+    await expect(tasksPanel.locator('.bg-tasks-detail-title')).toHaveText('Run the fixture check number 41')
+    await tabs.nth(0).click()
+    await expect(list.locator('.bg-task-row').nth(1)).toHaveClass(/bg-task-row--selected/)
+    await tabs.nth(2).click()
+    await expect(list.locator('.bg-task-row--compact .bg-task-row-name')).toHaveText(['bgpq669i'])
+
+    // A live update keeps the chosen tab and row.
+    await tabs.nth(1).click()
+    await emitBackgroundTasks(page, {
+      sessionId, inFlight: 1, phases: [], agents: [],
+      tasks: [
+        ...Array.from({ length: 150 }, (_, i) => ({ ...shellTask(i, i === 40 ? 'failed' : 'completed'), startedAt: Date.now() - 60_000, endedAt: Date.now() - 60_000 + 3_000 + i * 100 })),
+        { taskId: 'agent-a', taskType: 'local_agent', subagentType: 'general-purpose', status: 'running', description: '/code-review', tokens: 99_000, toolUses: 44, startedAt: Date.now() - 590_000 },
+        { taskId: 'agent-b', taskType: 'local_agent', subagentType: 'general-purpose', status: 'completed', description: '/code-review', tokens: 94_100, toolUses: 12, startedAt: Date.now() - 120_000, endedAt: Date.now() - 67_000 },
+        { taskId: 'bgpq669i', status: 'completed' },
+      ],
+    })
+    await expect(list.locator('.bg-tasks-section-title')).toHaveText(['Finished'])
+    await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true')
+    await expect(tabs.nth(1).locator('.bg-tasks-tab-live')).toHaveCount(0)
+    await expect(tasksPanel.locator('.bg-tasks-detail-title')).toHaveText('Run the fixture check number 41')
+
+    await page.evaluate(() => {
+      localStorage.setItem('open-walnut-theme', 'dark')
+      document.documentElement.setAttribute('data-theme', 'dark')
+    })
+    await page.waitForTimeout(220)
+    await page.screenshot({ path: `${dir}/background-panel-commands-dark.png`, scale: 'css' })
+    await page.keyboard.press('Escape')
+    await expect(tasksPanel).toHaveCount(0)
     expect(errors).toEqual([])
   })
 })

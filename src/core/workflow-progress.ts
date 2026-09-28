@@ -86,6 +86,8 @@ export function accumulateWorkflowProgress(
         toolCalls: (e.toolCalls as number | undefined) ?? prev?.toolCalls,
         durationMs: (e.durationMs as number | undefined) ?? prev?.durationMs,
         startedAt: (e.startedAt as number | undefined) ?? prev?.startedAt,
+        queuedAt: (typeof e.queuedAt === 'number' ? e.queuedAt : undefined) ?? prev?.queuedAt,
+        error: (typeof e.error === 'string' ? e.error : undefined) ?? prev?.error,
       });
     }
   }

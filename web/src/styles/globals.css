@@ -3778,7 +3778,7 @@ select {
 .wf-card-tasks {
   display: flex;
   flex-direction: column;
-  max-height: 320px;
+  max-height: min(480px, 60vh);
   overflow-y: auto;
 }
 .wf-task-dot { font-size: 10px; line-height: 1; flex: none; }
@@ -3920,56 +3920,13 @@ select {
 }
 .wf-transcript-toggle:hover { background: var(--bg); }
 
-/* Workflow overview: status first, then phase, then individual agent. */
-.wf-overview { display: flex; min-height: 0; flex: 1; background: var(--bg-secondary); }
-.wf-phase-nav {
-  display: flex;
-  flex-direction: column;
-  width: 208px;
-  flex: none;
-  padding: 12px 8px;
-  gap: 3px;
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-}
-.wf-phase-link {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 5px;
-  width: 100%;
-  padding: 9px 10px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.wf-phase-link:hover { background: var(--bg-tertiary); }
-.wf-phase-link-active { background: var(--bg); box-shadow: inset 2px 0 var(--accent); }
-.wf-phase-order { color: var(--fg-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
-.wf-phase-label { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wf-phase-count { color: var(--fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.wf-phase-failed, .wf-phase-running { grid-column: 2 / -1; font-size: 11px; }
-.wf-phase-failed { color: var(--warning); }
-.wf-phase-running { color: var(--accent); }
-.wf-overview-main { display: flex; flex: 1; min-width: 0; flex-direction: column; }
-.wf-overview-tools {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 12px 20px;
-  border-bottom: 1px solid var(--border);
-}
-.wf-overview-heading { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
-.wf-overview-title { color: var(--fg); font-size: 15px; font-weight: 650; }
-.wf-overview-count { color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+/* Workflow overview: the stage graph (WorkflowStageGraph), then the chosen phase's agents. */
+.wf-overview { display: flex; min-height: 0; flex: 1; flex-direction: column; background: var(--bg-secondary); }
+.wf-overview-tools { display: flex; padding: 10px 12px 0; }
+.wf-overview--wide .wf-overview-tools { padding: 12px 20px 0; }
 .wf-search {
-  margin-left: auto;
-  width: min(260px, 45%);
-  min-width: 125px;
+  width: 100%;
+  min-width: 0;
   padding: 7px 10px;
   font: inherit;
   font-size: 12px;
@@ -3978,9 +3935,107 @@ select {
   border: 1px solid var(--border);
   border-radius: 6px;
 }
+.wf-overview--wide .wf-search { max-width: 340px; }
 .wf-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.wf-overview-list { flex: 1; min-height: 0; overflow-y: auto; }
+.wf-overview-main { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+.wf-overview-heading { display: flex; align-items: baseline; gap: 9px; min-width: 0; padding: 12px 20px 8px; }
+.wf-overview--narrow .wf-overview-heading { padding: 10px 12px 6px; }
+.wf-overview-title { color: var(--fg); font-size: 15px; font-weight: 650; }
+.wf-overview-count { color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+.wf-overview-link { margin-left: auto; min-width: 0; color: var(--fg-muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-overview-list { flex: 1; min-height: 0; overflow-y: auto; border-top: 1px solid var(--border); }
 .wf-empty { padding: 28px 20px; color: var(--fg-muted); font-size: 12px; }
+
+/* One card per phase; phases that ran side by side share a row (or a stack). */
+.wf-stage-graph--column { display: flex; flex-direction: column; padding: 10px 12px 12px; }
+.wf-stage-row { display: flex; gap: 8px; }
+.wf-stage-card {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.wf-stage-card:hover { border-color: var(--border-strong, var(--fg-muted)); }
+.wf-stage-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wf-stage-card--open, .wf-stage-card--open:hover { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
+.wf-stage-card--future { color: var(--fg-muted); background: transparent; border-style: dashed; }
+.wf-stage-card-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.wf-stage-card-title { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-stage-card--future .wf-stage-card-title { font-weight: 500; }
+.wf-stage-card-count { flex: none; color: var(--fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.wf-stage-card-sub { color: var(--fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wf-stage-card-sub--failed { color: var(--warning); }
+.wf-stage-icon { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; font-size: 9.5px; font-weight: 700; line-height: 1; }
+.wf-stage-icon--done { color: #34c759; font-size: 12px; }
+.wf-stage-icon--failed { color: var(--bg); background: var(--warning); }
+.wf-stage-icon--running .task-group-streaming-dot { margin: 0; }
+.wf-stage-icon--waiting { width: 11px; height: 11px; border: 1.5px solid var(--accent); }
+.wf-stage-icon--future { width: 11px; height: 11px; border: 1.5px dashed var(--fg-muted); opacity: 0.7; }
+.wf-stage-meter { display: flex; height: 4px; overflow: hidden; border-radius: 2px; background: var(--border); }
+.wf-stage-meter > span { display: block; height: 100%; }
+.wf-stage-meter-done { background: #34c759; }
+.wf-stage-meter-failed { background: var(--warning); }
+.wf-stage-meter-running {
+  background: repeating-linear-gradient(-45deg, var(--accent) 0 4px, color-mix(in srgb, var(--accent) 55%, var(--bg)) 4px 8px);
+  background-size: 11.3px 11.3px;
+  animation: wf-stage-slide 1s linear infinite;
+}
+.wf-stage-meter-pending { background: color-mix(in srgb, var(--accent) 22%, var(--bg)); }
+@keyframes wf-stage-slide { to { background-position: 11.3px 0; } }
+
+/* Connectors: the lines fan out or in; a stream's lines flow; the words say which. */
+.wf-stage-link--v { position: relative; height: 32px; }
+.wf-stage-link-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.wf-stage-link path { fill: none; stroke: var(--fg-muted); stroke-width: 1.3; opacity: 0.55; }
+.wf-stage-link--stream path, .wf-stage-link--loop path { stroke: var(--accent); opacity: 0.85; stroke-dasharray: 4 3; animation: wf-stage-flow 0.8s linear infinite; }
+.wf-stage-link--next path { stroke-dasharray: 2 3; opacity: 0.4; }
+.wf-stage-link path.wf-stage-link-head { stroke-dasharray: none; animation: none; }
+@keyframes wf-stage-flow { to { stroke-dashoffset: -7; } }
+.wf-stage-link-label {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  max-width: calc(100% - 24px);
+  padding: 3px 8px;
+  color: var(--fg);
+  background: var(--bg-tertiary);
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translateY(-50%);
+}
+.wf-stage-link--stream .wf-stage-link-label, .wf-stage-link--loop .wf-stage-link-label { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, var(--bg)); }
+.wf-stage-graph--strip { display: flex; flex-wrap: wrap; align-items: center; row-gap: 12px; padding: 12px 20px; }
+.wf-stage-graph--strip .wf-stage { display: flex; align-items: center; }
+.wf-stage-stack { display: flex; flex-direction: column; gap: 6px; width: 164px; }
+.wf-stage-link--h { display: flex; flex: none; flex-direction: column; align-items: center; gap: 2px; width: 84px; padding: 0 6px; }
+.wf-stage-link-verb { min-height: 13px; color: var(--fg); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.wf-stage-link--stream .wf-stage-link-verb, .wf-stage-link--loop .wf-stage-link-verb { color: var(--accent); }
+.wf-stage-link-arrow { width: 100%; height: 10px; overflow: visible; }
+.wf-stage-link-counts { min-height: 12px; color: var(--fg-muted); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) {
+  .wf-stage-meter-running, .wf-stage-link path { animation: none; }
+}
+/* Narrow: the open phase's agents sit right under its card. */
+.wf-stage-list { margin-top: 6px; overflow: hidden; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; }
+.wf-stage-list .wf-overview-list { max-height: 264px; border-top: 0; }
+.wf-overview--narrow .wf-gnode-head { padding: 9px 12px; }
+.wf-overview--narrow .wf-gnode .wf-agent-detail { padding-left: 38px; }
+.wf-agent-error { color: var(--warning); }
 .wf-gnode { border-bottom: 1px solid var(--border-subtle, var(--border)); }
 .wf-gnode-head {
   display: flex;
@@ -3996,7 +4051,7 @@ select {
   width: 100%;
 }
 .wf-gnode-head:hover, .wf-gnode-expanded { background: var(--bg); }
-.wf-gnode-head:focus-visible, .wf-phase-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wf-gnode-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .wf-gnode-head .wf-task-dot { width: 15px; padding-top: 3px; font-size: 12px; }
 .wf-gnode-main { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
 .wf-gnode-name { color: var(--fg); font-size: 12px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
@@ -4005,28 +4060,6 @@ select {
 .wf-gnode-failed .wf-gnode-name { font-weight: 650; }
 .wf-gnode-completed .wf-gnode-name { color: var(--fg-muted); }
 .wf-gnode .wf-agent-detail { padding: 0 20px 14px 46px; }
-
-@container (max-width: 620px) {
-  .wf-overview { flex-direction: column; }
-  .wf-phase-nav {
-    flex-direction: row;
-    width: auto;
-    padding: 6px 8px;
-    gap: 3px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-  .wf-phase-link { display: flex; width: auto; flex: none; white-space: nowrap; padding: 6px 9px; }
-  .wf-phase-link-active { box-shadow: inset 0 -2px var(--accent); }
-  .wf-phase-order { display: none; }
-  .wf-phase-failed, .wf-phase-running { font-size: 10px; }
-  .wf-overview-tools { flex-wrap: wrap; gap: 6px; padding: 8px 12px; }
-  .wf-search { width: 100%; margin: 0; }
-  .wf-gnode-head { padding: 9px 12px; }
-  .wf-gnode .wf-agent-detail { padding-left: 38px; }
-}
 
 /* ── Full-screen subagent transcript reader (WorkflowTranscriptModal) ── */
 .wf-modal-overlay {
@@ -4187,21 +4220,81 @@ select {
   display: grid;
   grid-template-columns: minmax(260px, 34%) 1fr;
 }
-.bg-tasks-list {
+.bg-tasks-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   min-height: 0;
-  overflow-y: auto;
-  padding: 10px;
   border-right: 1px solid var(--border);
   background: var(--bg-tertiary);
 }
+/* Agents | Commands | Other: a segmented control, each segment with its count and a
+   live dot while something in it runs. */
+.bg-tasks-tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  margin: 10px 10px 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.bg-tasks-tab {
+  display: inline-flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 8px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.bg-tasks-tab:hover { color: var(--fg); }
+.bg-tasks-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.bg-tasks-tab--active {
+  color: var(--fg);
+  background: var(--bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 1px var(--border);
+}
+.bg-tasks-tab-count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.bg-tasks-tab-live { display: inline-flex; }
+.bg-tasks-tab-live .task-group-streaming-dot { margin: 0; }
+.bg-tasks-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 10px 10px;
+}
 .bg-tasks-section {
-  padding: 10px 6px 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 10px 6px 5px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--fg-muted);
 }
+.bg-tasks-section-count { font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.bg-tasks-section-failed { margin-left: auto; color: var(--error); font-weight: 500; letter-spacing: 0; text-transform: none; }
 .bg-task-row {
   display: flex;
   flex-direction: column;
@@ -4244,6 +4337,40 @@ select {
   font-size: 11px;
   color: var(--fg-muted);
   padding-left: 17px;
+}
+/* Commands: one line each, hairlines between them inside one bordered group. */
+.bg-task-group {
+  margin-bottom: 6px;
+  overflow: hidden;
+  background: var(--card-bg, var(--bg-secondary));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.bg-task-row--compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 7px 10px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  font-size: 12.5px;
+}
+.bg-task-row--compact:last-child { border-bottom: 0; }
+.bg-task-row--compact:hover { background: color-mix(in srgb, var(--fg) 4%, transparent); }
+.bg-task-row--compact.bg-task-row--selected,
+.bg-task-row--compact.bg-task-row--selected:hover {
+  background: var(--accent-subtle, rgba(0, 122, 255, 0.06));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.bg-task-row--compact .bg-task-row-name { flex: 1; }
+.bg-task-row-time {
+  flex: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 /* Two kinds of row, two pills: an agent wears its subagent type in the accent
    tint (.task-group-agent-type); a background shell command wears `Command` in
