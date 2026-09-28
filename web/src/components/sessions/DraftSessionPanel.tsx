@@ -3,7 +3,7 @@
  *
  * Nothing exists server-side yet (0 bytes): column, cwd/host, project, launch
  * meta and text are pure client state until Start (→ `pending:` → real session)
- * or "Create task for later" (→ a task); closing leaves no trace. Same chrome
+ * or "Create task placeholder without running" (→ a task); closing leaves no trace. Same chrome
  * classes as SessionPanel/PendingSessionPanel. Imported normally (never
  * React.lazy): instant-open cannot wait on a chunk fetch.
  *
@@ -758,7 +758,7 @@ export function DraftSessionPanel({
                   onClick={() => { void onSaveAsTask(draft.id, text); }}
                   title="Creates a task from this text — first line becomes the title. No session starts."
                 >
-                  ◌ Create task for later
+                  ◌&nbsp;Create task placeholder without running
                 </button>
               )}
               {/* Enabled even with an empty composer: spawn-and-idle is legal —

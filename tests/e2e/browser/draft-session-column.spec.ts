@@ -4,8 +4,9 @@
  * Every "+" in the app (todo toolbar, project header, pin-tier header, the Ask Walnut slot's "+ Session" chip,
  * `/session`, ⌘⇧Enter) now grows an EMPTY session column instead of opening a
  * launcher popover. The column is pure client state until the user commits:
- * "Start ↵" morphs it `draft:` → `pending:` → a real session, "◌ Create task for
- * later" turns the composed text into a task, and closing it leaves NO trace anywhere.
+ * "Start ↵" morphs it `draft:` → `pending:` → a real session, "◌ Create task
+ * placeholder without running" turns the composed text into a task, and closing it
+ * leaves NO trace anywhere.
  *
  * SHAPE (the approved v4 layout — everything stacked UP from the composer):
  *   header             title + Draft badge + (bound task) + ✕
@@ -304,9 +305,9 @@ test('closing a draft leaves no trace: no task, no persisted column, no draft ke
   expect(residue.draftKeys, 'the draft composer key is cleared on close').toEqual([])
 })
 
-// ── 5. "Create task for later" — one click, first line is the title ─────────
+// ── 5. "Create task placeholder" — one click, first line is the title ───────
 
-test('Create task for later turns the draft into a task: first line = title, rest = description', async ({ page }) => {
+test('Create task placeholder turns the draft into a task: first line = title, rest = description', async ({ page }) => {
   await loadHome(page)
   const stamp = Date.now()
   const title = `Fix the login bug ${stamp}`
@@ -315,10 +316,11 @@ test('Create task for later turns the draft into a task: first line = title, res
   const panel = await openDraft(page)
   await draftComposer(page).fill(`${title}\n\n${description}`)
   // The label is the whole affordance: it has to promise a TASK and deny a
-  // session in the words the user chose ("Save for later" read like a draft
-  // autosave), so it is asserted, not just clicked.
+  // run in the words the user chose ("Save for later" read like a draft
+  // autosave, "Create task for later" did not say nothing runs), so it is
+  // asserted, not just clicked.
   const later = panel.locator('.draft-later-btn')
-  await expect(later).toContainText('Create task for later')
+  await expect(later).toContainText('Create task placeholder without running')
   // ONE click, no dialog — that is the whole point of this control.
   await later.click()
 
@@ -352,7 +354,7 @@ test('Create task for later turns the draft into a task: first line = title, res
 
 // ── 6. Project header "+" seeds the project (R7: one click, no menu) ────────
 
-test('project header "+" pre-fills the project pill, and Create task for later files the task there', async ({ page }) => {
+test('project header "+" pre-fills the project pill, and Create task placeholder files the task there', async ({ page }) => {
   // Both panel axes open (stacked sections + the All project chip) so the project
   // group headers — and their "+" — render.
   await presetPanelView(page, { section: 'all', project: '' })

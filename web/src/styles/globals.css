@@ -22659,6 +22659,14 @@ td.usage-share-col {
   background: var(--accent-subtle);
   color: var(--accent);
   font-weight: 600;
+  /* The label ("Create task placeholder without running") is ~250px on one line,
+     wider than the controls bar of a ~300px column. A nowrap pill spilled out of
+     the column and under the mic/send cluster, so here it may shrink and wrap
+     its words instead; a column wide enough keeps it on one line. */
+  flex-shrink: 1;
+  white-space: normal;
+  line-height: 1.3;
+  text-align: left;
 }
 .draft-later-btn:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
