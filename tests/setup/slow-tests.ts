@@ -92,6 +92,7 @@ export const SLOW_TEST_FILES = [
   // ── Real timers / pollers / plugin discovery ───────────────────────────────
   'tests/unit/subagent-poller.test.ts', // 15s
   'tests/core/session-hooks-triage-debounce.test.ts', // 9s
+  'tests/core/stt-mlx-daemon-health.test.ts', // 11s: fake mlx daemons on real ports, slow-probe timings
   'tests/core/plugin-sources.test.ts', // 3s
   'tests/core/stt-daemon-source-stdin.test.ts', // 3s: spawns fake python daemons on real ports
 ] as const

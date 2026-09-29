@@ -18,6 +18,25 @@ breaking changes).
   long-running status: its `Remote hosts` list still names every host once (dismissed ones
   included), and its badge no longer counts hosts. A pending ask still opens Needs Action first.
 
+### Fixed
+
+- **A failed dictation no longer loses the end of what you said.** When the final pass of a
+  dictation failed after its live draft was already in the text box, the error was dropped because a
+  draft existed, and the rest of the recording was gone: no message, no Retry, no entry in the voice
+  history. The box now keeps the draft, the mic says `Only part was transcribed` with a Retry that
+  swaps in the complete words (or adds them, if the draft was edited or sent meanwhile), and the clip
+  is stored in the voice history either way. The final pass also gets the two minutes a Retry gets
+  instead of a preview's 20 seconds, so an engine still loading its model no longer fails the stop
+  with `signal timed out`, and failures read as what went wrong (`Transcription timed out`, `The
+  transcription engine stopped responding`) rather than the request plumbing.
+- **A slow local transcription engine is no longer mistaken for a dead one.** Under heavy load a
+  2 second health probe to the mlx or whisper-server engine could time out while the engine was
+  fine. Walnut then shut it down, adopted it again on its way out and failed the dictation with
+  `fetch failed`, and the next one waited out a cold model load. A missed probe now gets a patient
+  second look, a real restart waits for the old engine to exit first, a request whose connection
+  drops is retried once on a fresh engine, and a live preview the browser already dropped no longer
+  takes a turn on the model ahead of the words you are waiting for.
+
 ## [0.5.1] - 2026-09-28
 
 ### Changed

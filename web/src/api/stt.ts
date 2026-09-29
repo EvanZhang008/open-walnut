@@ -88,10 +88,15 @@ export interface AutoConfigResult {
 }
 
 /**
- * Transcribe audio via server STT engine.
- * Uses a 120s timeout (longer than the default 15s) because
- * local engines may need time for first-load model init.
+ * Budget for any pass whose text the user is waiting on: the stop's final
+ * pass, a Retry, a Redo from history. Far above the 20s a live PREVIEW gets,
+ * because a local engine may be loading its model (measured 54s under load on
+ * 2026-09-28, and that stop failed with "signal timed out" at 20s while the
+ * server went on to transcribe it anyway).
  */
+export const FINAL_PASS_TIMEOUT_MS = 120_000;
+
+/** Transcribe audio via server STT engine (authoritative, stored server-side). */
 export async function transcribeAudio(
   audioBase64: string,
   format: string,
@@ -103,7 +108,7 @@ export async function transcribeAudio(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ audio: audioBase64, format, language, model }),
-    signal: AbortSignal.timeout(120_000), // longer timeout for retry with slower models
+    signal: AbortSignal.timeout(FINAL_PASS_TIMEOUT_MS),
   });
   if (!res.ok) {
     let message = res.statusText;
@@ -155,6 +160,26 @@ export function isRetryableDraftFailure(err: unknown): boolean {
 }
 
 /**
+ * The words a failed transcription shows the user. The raw messages name the
+ * mechanism, not the problem: "signal timed out" is an AbortSignal's, and
+ * "draft transcription failed: 500: fetch failed" is two layers of plumbing
+ * around "the engine went away".
+ */
+export function sttFailureMessage(err: unknown): string {
+  const name = err instanceof Error ? err.name : '';
+  const msg = err instanceof Error ? err.message : String(err);
+  // The browser's own timeout, or the server's call to the engine timing out
+  // (Node's words for it, relayed as the error text).
+  if (name === 'TimeoutError' || /timed out|aborted due to timeout/i.test(msg)) return 'Transcription timed out';
+  // Chromium says "Failed to fetch", WebKit "Load failed": the server never answered.
+  if (name === 'TypeError' && /failed to fetch|load failed|networkerror/i.test(msg)) return "Couldn't reach Walnut to transcribe";
+  // The server's own call to the local engine failed at the connection level.
+  const detail = err instanceof SttDraftError ? msg.replace(/^draft transcription failed: \d+:?\s*/, '') : msg;
+  if (!detail || /fetch failed|connection lost/i.test(detail)) return 'The transcription engine stopped responding';
+  return detail;
+}
+
+/**
  * Live-draft transcription of the audio captured so far (recording still in
  * progress). Cheap fire-and-forget preview: no recording saved server-side.
  * Rejections arrive as SttDraftError so the caller can retire the lane instead
@@ -201,11 +226,13 @@ export async function saveRecording(
   format: string,
   text: string,
   language?: string,
+  /** The final pass failed: stored beside the audio so history can say why. */
+  error?: string,
 ): Promise<{ recordingId: string; debugAudioPath: string }> {
   const res = await fetch('/api/stt/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ audio: audioBase64, format, text, language }),
+    body: JSON.stringify({ audio: audioBase64, format, text, language, ...(error ? { error } : {}) }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) throw new Error(`save recording failed: ${res.status}`);
@@ -234,7 +261,11 @@ export function fetchRecordings(limit = 20): Promise<{ recordings: VoiceRecordin
 
 /** Re-transcribe a stored recording server-side (audio read from disk). */
 export function retranscribeRecording(id: string, language?: string): Promise<TranscribeResult> {
-  return apiPost<TranscribeResult>(`/api/stt/recordings/${encodeURIComponent(id)}/transcribe`, { language });
+  return apiPost<TranscribeResult>(
+    `/api/stt/recordings/${encodeURIComponent(id)}/transcribe`,
+    { language },
+    { timeoutMs: FINAL_PASS_TIMEOUT_MS },
+  );
 }
 
 export function fetchSttDetection(): Promise<DetectionResult> {

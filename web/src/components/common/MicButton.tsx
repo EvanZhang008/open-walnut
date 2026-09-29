@@ -6,7 +6,7 @@
  * Clicking it opens a dropdown with: retry models, vocabulary, copy audio path.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { SttDiffModal } from '@/components/common/SttDiffModal';
@@ -29,9 +29,10 @@ interface MicButtonProps {
   /**
    * When the user stops mid-sentence the draft is handed to onTranscribe straight
    * away so it is usable, and this is called with the authoritative text a moment
-   * later. Apply it only if `provisional` is still sitting there untouched.
+   * later. Apply it only if `provisional` is still sitting there untouched, and
+   * return true when the box now holds `finalText` in its place.
    */
-  onRefine?: (finalText: string, provisional: string) => void;
+  onRefine?: (finalText: string, provisional: string) => boolean | void;
   /**
    * Receives a stop-and-throw-away handle for the live recording. Call it when the
    * user acts on the dictated text themselves (sends it), so a transcription
@@ -95,7 +96,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
     onTranscribe: (text) => { delivered.current = true; onTranscribe(text); },
     ...(onDraft ? { onDraft } : {}),
     ...(onRefine
-      ? { onRefine: (final: string, provisional: string) => { delivered.current = true; onRefine(final, provisional); } }
+      ? { onRefine: (final: string, provisional: string) => { delivered.current = true; return onRefine(final, provisional); } }
       : {}),
     ...(language ? { language } : {}),
   };
@@ -158,6 +159,25 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   // Error bubble dismissal — re-arm whenever a new error arrives.
   const [errorDismissed, setErrorDismissed] = useState(false);
   useEffect(() => { setErrorDismissed(false); }, [error]);
+  // Hidden while the history menu is open: it opens in the same spot, and the
+  // menu is the fuller recovery surface (Redo, Insert) for the same clip.
+  const showErrorBubble = !!error && !isRecording && !isTranscribing && !errorDismissed && !dropdownOpen;
+
+  // The bubble stays up while the user edits the words it is about, so it must
+  // not sit on the text box. A host whose mic lives UNDER its field (the chat
+  // composer) marks the field `data-mic-bubble-anchor`, and the bubble rises
+  // above it, following the field as it grows.
+  const [bubbleLift, setBubbleLift] = useState(0);
+  useLayoutEffect(() => {
+    const wrapper = wrapperRef.current;
+    const field = wrapper?.closest<HTMLElement>('[data-mic-bubble-anchor]');
+    if (!showErrorBubble || !wrapper || !field) { setBubbleLift(0); return; }
+    const measure = () => setBubbleLift(Math.max(0, wrapper.getBoundingClientRect().top - field.getBoundingClientRect().top));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(field);
+    return () => ro.disconnect();
+  }, [showErrorBubble]);
 
   // Register this input as the sidebar Voice panel's insert target. Last mount
   // wins (the composer the user is looking at); onTranscribe already knows how
@@ -484,8 +504,12 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
       {/* Transcription failure — visible bubble (title-attr tooltips are undiscoverable).
           Offers Retry when the audio is still held; dismissed by starting a new recording
           (toggleRecording clears error) or clicking ✕. */}
-      {error && !isRecording && !isTranscribing && !errorDismissed && (
-        <div className="mic-silence-warning mic-error-bubble" role="alert">
+      {showErrorBubble && (
+        <div
+          className="mic-silence-warning mic-error-bubble"
+          role="alert"
+          style={bubbleLift ? { bottom: `calc(100% + ${bubbleLift + 6}px)` } : undefined}
+        >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="10" />
             <line x1="12" y1="8" x2="12" y2="12" />
@@ -579,6 +603,10 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                 const time = rec.timestamp ? new Date(rec.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                 const text = rec.result?.text ?? '';
                 const failed = !text;
+                // Text AND an error: the final pass failed after the draft was
+                // kept, so this is only the start of what was said. Redo gets the rest.
+                const partial = !failed && !!rec.error;
+                const shown = partial ? `Partial: ${text}` : text;
                 const expanded = expandedId === rec.id;
                 return (
                   <div key={rec.id} className={`mic-history-item${failed ? ' mic-history-failed' : ''}${expanded ? ' mic-history-open' : ''}`}>
@@ -589,8 +617,8 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                       <span className={`mic-history-caret${expanded ? ' mic-history-caret-open' : ''}`}>▸</span>
                       <span className="mic-history-time">{time}</span>
                       {!expanded && (
-                        <span className="mic-history-text" title={failed ? (rec.error ?? 'No transcription') : text}>
-                          {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : text}
+                        <span className="mic-history-text" title={failed ? (rec.error ?? 'No transcription') : partial ? `Only part was transcribed. ${rec.error}` : text}>
+                          {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : shown}
                         </span>
                       )}
                     </div>
@@ -638,7 +666,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                             )}
                           </div>
                           <div className={`mic-history-full-text${failed ? ' mic-history-alt-error' : ''}`}>
-                            {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : text}
+                            {failed ? (rec.error ? `Failed: ${rec.error}` : 'No transcription') : shown}
                           </div>
                         </div>
                         {rec.secondary ? (

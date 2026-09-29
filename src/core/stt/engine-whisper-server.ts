@@ -28,6 +28,7 @@ import { dirname } from 'node:path';
 import { log } from '../../logging/index.js';
 import { sttSpawnEnv } from './spawn-env.js';
 import { isFfmpegAvailable } from './audio-convert.js';
+import { probeDaemonPatiently, waitForPortReleased } from './daemon-health.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -152,16 +153,28 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
     // Already running? Quick health check
     if (serverProcess && serverPort) {
       const probed = serverProcess;
-      try {
-        const res = await fetch(`http://127.0.0.1:${serverPort}/`, { signal: AbortSignal.timeout(2000) });
-        if (res.ok) {
-          resetIdleTimer();
-          return serverPort;
-        }
-      } catch {
-        // Server died, restart below
-        log.stt.warn('whisper-server health check failed — restarting');
-        killServer(probed);
+      const port = serverPort;
+      // A missed quick probe is not a death (see daemon-health.ts): only a
+      // refused connection, or silence through a patient second look, is.
+      const health = await probeDaemonPatiently(port, {
+        onSlow: () => log.stt.info('whisper-server slow to answer its health probe — looking again before restarting'),
+      });
+      if (health === 'ok') {
+        resetIdleTimer();
+        return port;
+      }
+      // Someone else began (or finished) a restart while we were probing.
+      if (startingPromise) return startingPromise;
+      if (serverProcess !== probed) return ensureServerRunning();
+      log.stt.warn(`whisper-server health check failed (${health}) — restarting`);
+      killServer(probed);
+      // A fixed port is only free once the old server has exited (SIGKILL
+      // follows 3s after SIGTERM); a new one spawned before that fails the bind.
+      if (cfg.port) {
+        startingPromise = waitForPortReleased(port, 5_000)
+          .then(startServer)
+          .finally(() => { startingPromise = null; });
+        return startingPromise;
       }
     }
 
@@ -300,6 +313,8 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
     async transcribe(req: SttRequest): Promise<SttResult> {
       const t0 = Date.now();
       const port = await ensureServerRunning();
+      // Nobody is waiting for a dropped live draft; do not queue it.
+      req.signal?.throwIfAborted();
 
       // Build multipart form data directly from base64 — no temp file needed
       const audioBuffer = Buffer.from(req.audio, 'base64');
@@ -322,6 +337,7 @@ export function createWhisperServerEngine(cfg: WhisperServerConfig): SttEngine {
       const res = await fetch(`http://127.0.0.1:${port}/inference`, {
         method: 'POST',
         body: form,
+        ...(req.signal ? { signal: req.signal } : {}),
       });
 
       if (!res.ok) {

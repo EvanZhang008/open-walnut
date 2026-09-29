@@ -28,6 +28,9 @@ import { log } from '../../logging/index.js';
 import { sttSpawnEnv } from './spawn-env.js';
 import { PYTHON_STDIN_SCRIPT, feedDaemonSource } from './daemon-source.js';
 import { convertToWav, cleanupTempFile, isFfmpegAvailable } from './audio-convert.js';
+import {
+  probeDaemonPatiently, identifyWalnutDaemon, retireDaemon, isDaemonConnectionLost, QUICK_PROBE_MS,
+} from './daemon-health.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -210,6 +213,10 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
   // Requests currently against the daemon — the idle TTL must not fire while
   // one is in flight (a dictation longer than the TTL would be killed mid-run).
   let inFlight = 0;
+  // A request we stopped waiting for (a dropped live draft) keeps the daemon
+  // generating: it cannot see the closed socket. Until its own deadline the
+  // daemon counts as busy, so a missed probe never retires it mid-orphan.
+  let abandonedBusyUntil = 0;
   // Import check is ~1s of Python startup — cache SUCCESS only, so isAvailable()
   // stays cheap once probed but `pip install mlx-audio` is picked up without a
   // walnut restart after a failed probe.
@@ -238,23 +245,6 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     serverPort = null;
   }
 
-  /**
-   * Is a healthy walnut mlx daemon (for OUR model) already listening on `port`?
-   * Distinguishes three cases: ours (adopt), a walnut daemon for a different
-   * model (retire it, then spawn), and anything else (foreign — leave alone).
-   */
-  async function probeDaemon(port: number): Promise<'ours' | 'other-model' | 'none' | 'foreign'> {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) });
-      if (!res.ok) return 'foreign';
-      const json = await res.json() as { status?: string; model?: string };
-      if (json.status !== 'ok' || !json.model) return 'foreign';
-      return json.model === model ? 'ours' : 'other-model';
-    } catch {
-      return 'none';
-    }
-  }
-
   async function waitForReady(proc: ChildProcess, port: number, timeoutMs: number): Promise<'ready' | 'exited' | 'timeout'> {
     const deadline = Date.now() + timeoutMs;
     let exited = false;
@@ -281,28 +271,37 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     // would misread that as a dead daemon and kill it.
     if (startingPromise) return startingPromise;
 
-    if (serverPort) {
-      const probed = serverProcess ?? undefined;
-      try {
-        const res = await fetch(`http://127.0.0.1:${serverPort}/`, { signal: AbortSignal.timeout(2000) });
-        if (res.ok) return serverPort;
-        throw new Error(`health ${res.status}`);
-      } catch {
-        // A daemon mid-generation can hold the GIL long enough to miss the 2s
-        // probe. If a request is in flight it is BUSY, not dead — killing it
-        // here would abort someone else's transcription. Queue behind it.
-        if (inFlight > 0) {
-          log.stt.info('mlx daemon busy (health probe timed out with requests in flight) — queuing');
-          return serverPort;
-        }
-        log.stt.warn('mlx daemon health check failed — restarting');
-        killServer(probed);
+    const port = serverPort;
+    if (port) {
+      const probed = serverProcess;
+      const health = await probeDaemonPatiently(port, {
+        // A daemon mid-generation can hold the GIL long enough to miss the
+        // quick probe. Working on our request, or on one we abandoned (the
+        // daemon cannot tell), it is BUSY, not dead: killing it would abort a
+        // transcription. Queue behind it.
+        isBusy: () => inFlight > 0 || Date.now() < abandonedBusyUntil,
+        // Silent with nothing of ours running: another server's request, or
+        // our own event loop running late. Look again, patiently.
+        onSlow: () => log.stt.info(`mlx daemon slow to answer its health probe (>${QUICK_PROBE_MS}ms) — looking again before restarting`),
+      });
+      if (health === 'busy') {
+        log.stt.info('mlx daemon busy (health probe timed out while it is generating) — queuing');
+        return port;
       }
+      if (health === 'ok') return port;
+      // Someone else began (or finished) a restart while we were probing.
+      if (startingPromise) return startingPromise;
+      if (serverPort !== port) return ensureServerRunning();
+      log.stt.warn(`mlx daemon health check failed (${health}) — restarting`);
+      serverProcess = null;
+      serverPort = null;
+      startingPromise = retireDaemon(probed, port, 'mlx daemon')
+        .then(startServer)
+        .finally(() => { startingPromise = null; });
+      return startingPromise;
     }
 
-    if (!startingPromise) {
-      startingPromise = startServer().finally(() => { startingPromise = null; });
-    }
+    startingPromise ??= startServer().finally(() => { startingPromise = null; });
     return startingPromise;
   }
 
@@ -314,7 +313,7 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     // THE fix for dictation stalling after every deploy. A daemon for a
     // different model is retired first; a non-walnut listener means the port is
     // simply taken, so fall back to an exclusive one.
-    const found = await probeDaemon(port);
+    const found = await identifyWalnutDaemon(port, model);
     if (found === 'ours') {
       serverProcess = null;
       serverPort = port;
@@ -322,11 +321,9 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
       return port;
     }
     if (found === 'other-model') {
-      log.stt.info(`Retiring mlx daemon on :${port} (different model)`);
-      await fetch(`http://127.0.0.1:${port}/shutdown`, { method: 'POST', signal: AbortSignal.timeout(2000) }).catch(() => {});
-      await new Promise(r => setTimeout(r, 500));
+      await retireDaemon(null, port, 'mlx daemon for a different model');
     } else if (found === 'foreign') {
-      log.stt.warn(`Port ${port} is held by a non-walnut process — using an ephemeral port`);
+      log.stt.warn(`Port ${port} is held by a process that is not a working walnut mlx daemon — using an ephemeral port`);
       port = await findFreePort();
     }
     log.stt.info(`Starting mlx daemon: ${cfg.pythonPath} - ${model} :${port} (source over stdin)`);
@@ -370,7 +367,7 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     serverPort = port;
 
     const outcome = await waitForReady(proc, port, STARTUP_TIMEOUT_MS);
-    if (outcome === 'exited' && (await probeDaemon(port)) === 'ours') {
+    if (outcome === 'exited' && (await identifyWalnutDaemon(port, model)) === 'ours') {
       // Two walnut servers raced a cold start on the shared port; the other one
       // won the bind and its daemon is healthy — adopt instead of failing.
       serverProcess = null;
@@ -436,6 +433,10 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
     async transcribe(req: SttRequest): Promise<SttResult> {
       const t0 = Date.now();
       const port = await ensureServerRunning();
+      // A live draft the browser already dropped must not take a turn on the
+      // model: the daemon serves one generate at a time, so every orphan runs
+      // ahead of the request the user is actually waiting for.
+      req.signal?.throwIfAborted();
       const wavPath = await convertToWav(req.audio, req.format);
       inFlight++; // after convertToWav — a convert throw must not leak the counter
       try {
@@ -444,24 +445,58 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
         // is generous headroom without letting a dictation hang for 15 minutes.
         const wavBytes = (await stat(wavPath)).size;
         const timeoutMs = Math.round(Math.min(15 * 60_000, Math.max(90_000, (wavBytes / 32_000) * 8_000)));
-        log.stt.info(`Sending ${wavPath} to mlx daemon :${port} (model=${model}, timeout=${Math.round(timeoutMs / 1000)}s)`);
-        const res = await fetch(`http://127.0.0.1:${port}/inference`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            wav: wavPath,
-            language: mlxLanguageName(req.language),
-            system_prompt: req.prompt || undefined,
-          }),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (!res.ok) {
-          let detail = '';
-          try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch {}
-          throw new Error(`mlx daemon returned ${res.status}${detail ? `: ${detail}` : ''}`);
+        let dispatched = false;
+        const post = async (daemonPort: number): Promise<SttResult> => {
+          req.signal?.throwIfAborted();
+          dispatched = true;
+          log.stt.info(`Sending ${wavPath} to mlx daemon :${daemonPort} (model=${model}, timeout=${Math.round(timeoutMs / 1000)}s)`);
+          const timeout = AbortSignal.timeout(timeoutMs);
+          const res = await fetch(`http://127.0.0.1:${daemonPort}/inference`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              wav: wavPath,
+              language: mlxLanguageName(req.language),
+              system_prompt: req.prompt || undefined,
+            }),
+            signal: req.signal ? AbortSignal.any([timeout, req.signal]) : timeout,
+          });
+          if (!res.ok) {
+            let detail = '';
+            try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch {}
+            throw new Error(`mlx daemon returned ${res.status}${detail ? `: ${detail}` : ''}`);
+          }
+          const json = await res.json() as { text?: string };
+          return { text: (json.text ?? '').trim(), durationMs: Date.now() - t0 };
+        };
+        try {
+          return await post(port);
+        } catch (err) {
+          if (req.signal?.aborted) {
+            if (!dispatched) throw err;
+            // Dropped mid-generate: the daemon keeps going for about as long
+            // as the audio lasts (realtime is the pessimistic end), plus slack.
+            abandonedBusyUntil = Math.max(abandonedBusyUntil, Date.now() + Math.min(timeoutMs, (wavBytes / 32_000) * 1000 + 30_000));
+            throw err;
+          }
+          // The daemon went away under this request (crashed, hit its idle
+          // TTL, or another server retired it). Transcribing is idempotent, so
+          // bring it back and ask once more instead of failing the dictation.
+          if (!isDaemonConnectionLost(err)) throw err;
+          log.stt.warn(`mlx daemon connection lost mid-request (${err instanceof Error ? err.message : String(err)}) — retrying once`);
+          try {
+            // Not in flight while checking: this request is exactly the one
+            // that proved the daemon gone, so it must not make a daemon still
+            // on its way out look "busy" to its own health check.
+            inFlight--;
+            let nextPort: number;
+            try { nextPort = await ensureServerRunning(); } finally { inFlight++; }
+            return await post(nextPort);
+          } catch (retryErr) {
+            if (!isDaemonConnectionLost(retryErr)) throw retryErr;
+            throw new Error('mlx daemon connection lost twice in a row', { cause: retryErr });
+          }
         }
-        const json = await res.json() as { text?: string };
-        return { text: (json.text ?? '').trim(), durationMs: Date.now() - t0 };
       } finally {
         inFlight--;
         await cleanupTempFile(wavPath);

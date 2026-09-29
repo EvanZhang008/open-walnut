@@ -160,6 +160,11 @@ const DRAFT_MAX_AUDIO_BASE64 = 5 * 1024 * 1024;
  * Body: { audio: string (base64), format: string, language?: string }
  */
 sttRouter.post('/draft', express.json({ limit: DRAFT_BODY_LIMIT }), async (req: Request, res: Response, next: NextFunction) => {
+  // The browser drops a draft the moment it is superseded (every stop aborts
+  // the preview in flight). Tell the engine, so the orphan does not take a
+  // model turn ahead of the stop's own pass.
+  const gone = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) gone.abort(); });
   try {
     const { audio, format, language } = req.body;
     if (!audio || typeof audio !== 'string' || !format || !ALLOWED_FORMATS.has(format)) {
@@ -177,9 +182,13 @@ sttRouter.post('/draft', express.json({ limit: DRAFT_BODY_LIMIT }), async (req: 
       return;
     }
     const config = await getConfig();
-    const result = await transcribeAudio(config, { audio, format, language: language || config.stt?.language });
+    const result = await transcribeAudio(config, {
+      audio, format, language: language || config.stt?.language, signal: gone.signal,
+    });
     res.json({ text: result.text, durationMs: result.durationMs });
   } catch (err) {
+    // Nobody is listening for this answer, so there is nothing to report.
+    if (gone.signal.aborted) return;
     next(err);
   }
 });
@@ -207,12 +216,15 @@ sttRouter.post('/warmup', async (_req: Request, res: Response, next: NextFunctio
  * segments plus the tail pass: transcribing the full clip again server-side
  * would cost seconds purely to write history. This stores the audio and the
  * client's text so the recordings list, Redo, and re-transcribe all still work.
- * Body: { audio: string (base64), format: string, text: string, language?: string }
+ * Also stores a recording whose final pass FAILED (`error`), with whatever
+ * text the user already had (possibly none), so the audio is never lost.
+ * Body: { audio: string (base64), format: string, text: string, language?: string, error?: string }
  */
 sttRouter.post('/save', express.json({ limit: '35mb' }), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { audio, format, text, language } = req.body;
-    if (!audio || typeof audio !== 'string' || !format || !ALLOWED_FORMATS.has(format) || typeof text !== 'string') {
+    const { audio, format, text, language, error } = req.body;
+    if (!audio || typeof audio !== 'string' || !format || !ALLOWED_FORMATS.has(format) || typeof text !== 'string'
+      || (error !== undefined && typeof error !== 'string')) {
       res.status(400).json({ error: 'Missing/invalid audio, format, or text' });
       return;
     }
@@ -227,7 +239,10 @@ sttRouter.post('/save', express.json({ limit: '35mb' }), async (req: Request, re
       language: language || config.stt?.language || 'auto',
       audioSizeBytes: Math.round(audio.length * 3 / 4),
       engine: getOrCreateEngine(config)?.name,
-      result: { text, durationMs: 0 },
+      // A failure with no text is a failed row (the list offers Redo); a
+      // failure after a draft keeps the draft as the row's text.
+      ...(text || !error ? { result: { text, durationMs: 0 } } : {}),
+      ...(error ? { error: error.slice(0, 500) } : {}),
     });
     res.json({ recordingId: saved.id, debugAudioPath: saved.audioPath });
   } catch (err) {

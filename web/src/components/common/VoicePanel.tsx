@@ -140,6 +140,9 @@ export function VoicePanel({ open, onClose, sidebarCollapsed }: VoicePanelProps)
           {recordings.map(rec => {
             const text = rec.result?.text ?? '';
             const failed = !text;
+            // Text AND an error: the final pass failed after the draft was kept,
+            // so this is the start of what was said. Redo gets the rest.
+            const partial = !failed && !!rec.error;
             const time = rec.timestamp
               ? new Date(rec.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
               : '';
@@ -159,6 +162,7 @@ export function VoicePanel({ open, onClose, sidebarCollapsed }: VoicePanelProps)
                 <div className="voice-panel-item-head">
                   <span className="voice-panel-time">{time}</span>
                   {failed && <span className="voice-panel-badge">failed</span>}
+                  {partial && <span className="voice-panel-badge" title={rec.error}>partial</span>}
                   {flash?.id === rec.id && <span className="voice-panel-flash">{flash.note}</span>}
                   <span className="voice-panel-hover-actions" onClick={(e) => e.stopPropagation()}>
                     {text && (

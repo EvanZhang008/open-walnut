@@ -1147,21 +1147,25 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
    * or started dictating again, the newer text wins and this is dropped. Silently
    * replacing text someone is already editing is worse than a slightly rougher
    * transcript.
+   *
+   * Returns whether the box now holds `finalText` where `provisional` was: a
+   * Retry after a partial failure inserts the complete words when it is false.
    */
-  const refineDictation = (finalText: string, provisional: string) => {
-    if (finalText === provisional) return;
+  const refineDictation = (finalText: string, provisional: string): boolean => {
     const at = lastDictationRef.current;
-    if (!at || at.text !== provisional) return;
-    if (value.slice(at.start, at.start + provisional.length) !== provisional) return;
+    if (!at || at.text !== provisional) return false;
+    if (value.slice(at.start, at.start + provisional.length) !== provisional) return false;
     // A dictation started since then owns the box now.
-    if (dictationSpanRef.current) return;
+    if (dictationSpanRef.current) return false;
+    if (finalText === provisional) return true;
     const el = textareaRef.current;
     const caretWasAtEnd = el?.selectionStart === at.start + provisional.length;
     handleChange(value.slice(0, at.start) + finalText + value.slice(at.start + provisional.length));
     lastDictationRef.current = { start: at.start, text: finalText };
-    if (!caretWasAtEnd) return;
+    if (!caretWasAtEnd) return true;
     const caret = at.start + finalText.length;
     requestAnimationFrame(() => { el?.setSelectionRange(caret, caret); });
+    return true;
   };
 
   const handlePaste = (e: ClipboardEvent) => {
@@ -1390,7 +1394,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           text row on top; controls row below: [+] · slot (Bypass/btw/Note) ·
           spacer · mic · send. Mic stays next to send. */}
       <div className="chat-input-row">
-        <div className="chat-input-box">
+        <div className="chat-input-box" data-mic-bubble-anchor="">
           {/* Inline task context pill */}
           {focusedTask && onClearFocus && (
             <div className={`chat-input-task-pill${focusedTask.unread ? ' pill-unread' : ''}`}>

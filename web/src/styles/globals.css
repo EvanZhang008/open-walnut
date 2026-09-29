@@ -7794,6 +7794,9 @@ select {
 /* Transcription-failure bubble — same anchor as the silence warning, red accents + Retry */
 .mic-error-bubble {
   border-color: var(--danger, #d9534f);
+  /* Size to the message: anchored inside the mic's narrow wrapper, a
+     shrink-to-fit box wraps every word onto its own line. */
+  width: max-content;
   max-width: 320px;
 }
 .mic-error-bubble svg {

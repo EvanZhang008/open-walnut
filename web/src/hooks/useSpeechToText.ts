@@ -6,7 +6,10 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { transcribeAudio, draftTranscribe, saveRecording, warmupStt, isRetryableDraftFailure } from '@/api/stt';
+import {
+  transcribeAudio, draftTranscribe, saveRecording, retranscribeRecording, warmupStt,
+  isRetryableDraftFailure, sttFailureMessage, FINAL_PASS_TIMEOUT_MS,
+} from '@/api/stt';
 import { setVoiceStatus } from '@/utils/voice-status';
 import { decideStopAction } from '@/utils/stt-stop';
 import { joinSegments } from '@/utils/stt-segments';
@@ -34,8 +37,12 @@ export interface UseSpeechToTextOptions {
    * whether its text box still holds that untouched and skip the swap if the user
    * has since edited, sent, or dictated over it. Without this the hook waits for
    * the server before showing anything, which is the delay users notice most.
+   *
+   * Return true when the text box now holds `finalText` where `provisional` was.
+   * A Retry after a partial failure reads it: a swap that could not happen means
+   * the complete words are inserted instead, never dropped.
    */
-  onRefine?: (finalText: string, provisional: string) => void;
+  onRefine?: (finalText: string, provisional: string) => boolean | void;
   /** ISO 639-1 language hint */
   language?: string;
 }
@@ -196,6 +203,12 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   const analyserAttachedRef = useRef(false);
   // Keep last audio for retry
   const lastAudioRef = useRef<{ base64: string; format: string } | null>(null);
+  // The history row this hook stored the last clip under (null: none, or
+  // /transcribe stored it server-side). A Retry re-runs that row in place.
+  const savedRecordingRef = useRef<Promise<string | null> | null>(null);
+  // Text of the last recording already in the consumer's box when its final
+  // pass failed: the words before the failure. A Retry replaces it.
+  const retryReplacesRef = useRef<string | null>(null);
   // Refs mirror props to avoid stale closures in MediaRecorder.onstop async callback
   const onTranscribeRef = useRef(onTranscribe);
   onTranscribeRef.current = onTranscribe;
@@ -233,15 +246,15 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
    * appear in their text box. Promote that draft to the final result rather than
    * yanking it away: the words are good enough to send or edit, the audio is
    * still in history for a Redo, and the consumer's draft span gets released.
-   * Returns true when a draft was promoted (so the caller skips the error).
+   * Returns the promoted draft, or null when there was none.
    */
-  const keepLastDraft = useCallback((): boolean => {
+  const keepLastDraft = useCallback((): string | null => {
     const draft = lastDraftRef.current;
-    if (!draft) return false;
+    if (!draft) return null;
     lastDraftRef.current = null;
     log.warn('stt', 'final transcription unusable — keeping the live draft text');
     onTranscribeRef.current(draft);
-    return true;
+    return draft;
   }, []);
 
   /**
@@ -455,13 +468,21 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         const keepForRetry = async (): Promise<string> => {
           const base64 = await readBlobBase64();
           lastAudioRef.current = { base64, format };
+          savedRecordingRef.current = null;
+          retryReplacesRef.current = null;
           if (isMountedRef.current) setHasLastRecording(true);
           return base64;
         };
-        const persistHistory = (base64: string, finalText: string) => {
-          saveRecording(base64, format, finalText, languageRef.current)
-            .then((saved) => { if (isMountedRef.current) setLastDebugPath(saved.debugAudioPath); })
-            .catch((e) => log.warn('stt', `recording history write failed: ${e instanceof Error ? e.message : String(e)}`));
+        const persistHistory = (base64: string, finalText: string, failure?: string) => {
+          savedRecordingRef.current = saveRecording(base64, format, finalText, languageRef.current, failure)
+            .then((saved) => {
+              if (isMountedRef.current) setLastDebugPath(saved.debugAudioPath);
+              return saved.recordingId;
+            })
+            .catch((e) => {
+              log.warn('stt', `recording history write failed: ${e instanceof Error ? e.message : String(e)}`);
+              return null;
+            });
         };
         const persistRecording = async (finalText: string) => {
           try {
@@ -529,6 +550,10 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         if (!isMountedRef.current) return;
         setIsTranscribing(true);
         setVoiceStatus({ transcribing: true });
+        // Set while the final pass rides the draft lane, which stores nothing
+        // server-side (unlike /transcribe): a failure there must store the clip
+        // itself, or dismissing the error, or the next recording, loses it.
+        let unstoredClip: string | null = null;
         try {
           // Empty is the honest default: every path below either produces text or
           // leaves it empty, and empty is already handled (surface it, keep the
@@ -588,7 +613,13 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
                   finalText = confirmedRef.current;
                 } else {
                   const t0 = Date.now();
-                  const { text: tail } = await draftTranscribe(slice.base64, 'wav', languageRef.current);
+                  unstoredClip = retryBase64;
+                  // The user is waiting on THIS pass, so it gets the final-pass
+                  // budget, not a preview's 20s: a cold engine is still loading.
+                  const { text: tail } = await draftTranscribe(
+                    slice.base64, 'wav', languageRef.current, AbortSignal.timeout(FINAL_PASS_TIMEOUT_MS),
+                  );
+                  unstoredClip = null;
                   tookMs = Date.now() - t0;
                   finalText = joinSegments(confirmedRef.current, tail);
                 }
@@ -606,6 +637,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             const base64 = await readBlobBase64();
             log.info('stt', `Sending ${(blob.size / 1024).toFixed(1)}KB ${format} for transcription`);
             lastAudioRef.current = { base64, format };
+            savedRecordingRef.current = null;
+            retryReplacesRef.current = null;
             if (isMountedRef.current) setHasLastRecording(true);
             const result = await transcribeAudio(base64, format, languageRef.current);
             if (isMountedRef.current && result.debugAudioPath) setLastDebugPath(result.debugAudioPath);
@@ -647,8 +680,17 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           const msg = err instanceof Error ? err.message : String(err);
           log.error('stt', `Transcription failed: ${msg} — audio kept for retry`);
           setVoiceStatus({ transcribing: false, lastFailed: true });
+          // Words the user already has: the draft handed over at stop, or the
+          // newest draft promoted now. They are only the START of what was said
+          // (the failed pass was the rest), so this is a partial result, and it
+          // says so. It used to pass silently, and the end of the dictation was
+          // gone with no Retry and no history row (2026-09-28).
+          const partial = provisional ?? (isMountedRef.current ? keepLastDraft() : null);
+          const reason = sttFailureMessage(err);
+          if (unstoredClip) persistHistory(unstoredClip, partial ?? '', reason);
           if (!isMountedRef.current) return;
-          if (provisional === null && !keepLastDraft()) setError(msg);
+          retryReplacesRef.current = partial;
+          setError(partial ? `Only part was transcribed. ${reason}` : reason);
         } finally {
           if (isMountedRef.current) setIsTranscribing(false);
         }
@@ -873,24 +915,36 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     setError(null);
     setIsTranscribing(true);
     try {
-      log.info('stt', `Retrying transcription${model ? ` with model: ${model}` : ' (configured engine)'}`);
-      const result = await transcribeAudio(last.base64, last.format, languageRef.current, model);
+      // A clip this hook stored after its pass failed is re-run in place: the
+      // same history row gets the text, and the audio is not uploaded again.
+      const savedId = model ? null : await (savedRecordingRef.current ?? Promise.resolve(null));
+      log.info('stt', `Retrying transcription${model ? ` with model: ${model}` : ' (configured engine)'}${savedId ? ` from stored recording ${savedId}` : ''}`);
+      const result = savedId
+        ? await retranscribeRecording(savedId, languageRef.current)
+        : await transcribeAudio(last.base64, last.format, languageRef.current, model);
 
       if (isMountedRef.current && result.debugAudioPath) {
         setLastDebugPath(result.debugAudioPath);
       }
 
       if (result.text && isMountedRef.current) {
-        onTranscribeRef.current(result.text);
+        // The words from before the failure may already be in the box. Swap
+        // them for the complete text while they sit there untouched; otherwise
+        // (sent, edited) add the complete text, because the user asked for it
+        // and dropping it would lose the rest of the dictation a second time.
+        const replaces = retryReplacesRef.current;
+        retryReplacesRef.current = null;
+        const swapped = replaces !== null && onRefineRef.current?.(result.text, replaces) === true;
+        if (!swapped) onTranscribeRef.current(result.text);
         const preview = result.text.length > 50 ? result.text.slice(0, 50) + '...' : result.text;
-        log.info('stt', `Retry transcribed: "${preview}" (${result.durationMs}ms, model=${model ?? 'configured'})`);
+        log.info('stt', `Retry transcribed: "${preview}" (${result.durationMs}ms, model=${model ?? 'configured'}, ${swapped ? 'replaced the partial text' : 'inserted'})`);
       } else if (!result.text && isMountedRef.current) {
         setError('Transcription came back empty — the audio is kept, you can retry.');
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error('stt', `Retry failed: ${msg}`);
-      if (isMountedRef.current) setError(msg);
+      if (isMountedRef.current) setError(sttFailureMessage(err));
     } finally {
       if (isMountedRef.current) setIsTranscribing(false);
     }

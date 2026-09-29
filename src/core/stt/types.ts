@@ -9,6 +9,12 @@ export interface SttRequest {
   language?: string;
   /** Domain vocabulary to bias decoder (e.g. "Kubernetes, TypeScript, Walnut"). */
   prompt?: string;
+  /**
+   * Aborted when nobody wants the answer any more (the browser dropped a live
+   * draft). The daemon engines (mlx, whisper-server) honour it before handing
+   * audio to the model and while waiting on it; one-shot engines ignore it.
+   */
+  signal?: AbortSignal;
 }
 
 export interface SttResult {
