@@ -471,7 +471,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
       <CronPill sessionId={resolveTaskSessionId(task)} />
-      <TriggerPill taskId={task.id} />
+      <TriggerPill taskId={task.id} task={task} />
       {/* ▶ — hover-revealed, immediately before the kebab, exactly as on the list
           rows. Hidden in select mode: a press there means "toggle selection", so a
           launch button would be a mis-click trap. */}

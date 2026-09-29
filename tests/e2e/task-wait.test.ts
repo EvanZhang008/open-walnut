@@ -5,8 +5,10 @@
  * The session parks its own task on a trigger it created. The task stays To Do
  * and visible; a finished turn does not hand it back; the trigger's fire is
  * delivered with a note and, once that turn ends, the task goes back to the
- * human as Need Action. A human message, 5 failing checks, deleting the trigger,
- * Stop waiting and completing the task all end the wait.
+ * human as Need Action. 5 failing checks, deleting the trigger, Stop waiting and
+ * completing the task all end the wait, and so does its backstop (`until`, a
+ * week by default); a message does not (user call 2026-09-29), and
+ * trigger_create with `wait_until` sets it in the same call.
  *
  * Harness as in trigger-routines.test.ts: the daemon LOOKUP is stubbed and the
  * trigger events are handed to the sink directly; delivery and the session's
@@ -29,6 +31,9 @@ import { handleTriggerChecked, handleTriggerFired } from '../../src/core/routine
 import { listNotifications } from '../../src/core/notifications/store.js'
 import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../src/providers/trigger-check-core.js'
 import { getOp } from '../../src/ops/index.js'
+import { loadWaitDeadlines, sweepWaitDeadlines } from '../../src/core/task-waiting.js'
+import { updateTaskRaw } from '../../src/core/task-manager.js'
+import { WAIT_TTL_DEFAULT_MS } from '../../src/core/task-waiting-rules.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -60,6 +65,8 @@ async function req(method: string, p: string, body?: unknown, headers: Record<st
   })
   return { status: res.status, json: await res.json().catch(() => null) as any }
 }
+
+const isWaiting = (t: any) => !!t.waiting && !t.waiting.woke_at
 
 async function task(id: string): Promise<any> {
   const r = await req('GET', `/api/tasks/${id}`)
@@ -160,6 +167,8 @@ describe('task_wait: parking the calling session\'s task', () => {
     expect(t.unread).toBeFalsy()
     expect(t.waiting).toMatchObject({ condition: 'CR 1234 is approved', routine_id: routineId })
     expect(t.waiting.woke_at).toBeUndefined()
+    // Every wait has a backstop; none given = a week.
+    expect(Date.parse(t.waiting.until) - Date.parse(t.waiting.since)).toBe(WAIT_TTL_DEFAULT_MS)
   })
 
   it('refuses what cannot work, and changes nothing', async () => {
@@ -179,6 +188,7 @@ describe('task_wait: parking the calling session\'s task', () => {
     const cases: Array<[string, string, unknown, Record<string, string>, number, RegExp]> = [
       ['no condition', '/api/v1/tasks/this/wait', { routine_id: routineId }, h, 400, /condition is required/],
       ['no routine', '/api/v1/tasks/this/wait', { condition: 'x' }, h, 400, /routine_id is required/],
+      ['bad backstop', '/api/v1/tasks/this/wait', { condition: 'x', routine_id: routineId, ttl: 'soon' }, h, 400, /the backstop \(ttl\) must be/],
       ['unknown routine', '/api/v1/tasks/this/wait', { condition: 'x', routine_id: 'nope' }, h, 404, /no trigger nope/],
       ['foreign trigger', '/api/v1/tasks/this/wait', { condition: 'x', routine_id: foreign.json.job.id }, h, 400, /not to this task/],
       ['no check', '/api/v1/tasks/this/wait', { condition: 'x', routine_id: plain.json.job.id }, h, 400, /no check script/],
@@ -289,15 +299,29 @@ describe('task_wait: parking the calling session\'s task', () => {
 })
 
 describe('what else ends a wait', () => {
-  it('a human message ends it; the turn after it hands back as usual', async () => {
+  it('a human message keeps it: the turn it starts ends on the quiet To Do', async () => {
     const id = await createTrigger('msg-watch')
     await waitOp().handler!({ condition: 'the build is green', routine_id: id }, opCall(sid))
-    const r = await req('POST', `/api/v1/sessions/${sid}/messages`, { text: 'actually, do it now' })
-    expect(r.status, JSON.stringify(r.json)).toBeLessThan(300)
-    const woke = await until('wake by message', () => task(taskId), (t) => t.waiting?.woke_reason === 'message')
-    expect(woke.waiting.routine_id).toBe(id)
-    await until('trigger disabled', () => routine(id), (j) => j?.enabled === false)
-    await until('hand-back', () => task(taskId), (t) => t.phase === 'NEED_ACTION' && t.unread === true)
+    const { bus, EventNames } = await import('../../src/core/event-bus.js')
+    const seen: string[] = []
+    bus.subscribe('task-wait-e2e-human', (e) => {
+      const t = (e.data as { task?: { id: string; phase: string } }).task
+      if (t?.id === taskId && seen[seen.length - 1] !== t.phase) seen.push(t.phase)
+    }, { global: true, interest: [EventNames.TASK_UPDATED] })
+    try {
+      const r = await req('POST', `/api/v1/sessions/${sid}/messages`, { text: 'how is it going?' })
+      expect(r.status, JSON.stringify(r.json)).toBeLessThan(300)
+      await until('turn start and end', async () => [...seen], (v) => v.includes('IN_PROGRESS') && v[v.length - 1] === 'TODO')
+    } finally {
+      bus.unsubscribe('task-wait-e2e-human')
+    }
+    expect(seen).not.toContain('NEED_ACTION')
+    const t = await task(taskId)
+    expect(t.unread).toBeFalsy()
+    expect(t.waiting).toMatchObject({ condition: 'the build is green', routine_id: id })
+    expect(t.waiting.woke_at).toBeUndefined()
+    expect((await routine(id)).enabled).toBe(true)
+    await stopOp().handler!({}, opCall(sid))
   })
 
   it('Stop waiting drops the wait and deletes the trigger; the task stays where it is', async () => {
@@ -373,3 +397,153 @@ describe('what else ends a wait', () => {
     expect(r.status).toBe(409)
   })
 })
+
+describe('trigger_create with wait_until: the snooze in one call', () => {
+  const h = () => ({ 'x-walnut-caller-sid': sid })
+  const body = (name: string, extra: Record<string, unknown>) => ({
+    name, run: `bash ~/.open-walnut/triggers/${name}/check.sh`, every: '5m',
+    prompt: 'Tell the user the build result.', description: `Watches ${name} for the build result.`,
+    session: 'this', ...extra,
+  })
+
+  it('creates the trigger off, records the wait, then turns it on; the task is a quiet To Do', async () => {
+    // A new task (the shared one ended COMPLETE above) with a session to call from.
+    const started = await req('POST', '/api/sessions/quick-start', { cwd: '/tmp', message: 'snooze me until the build is green' })
+    expect(started.status).toBe(200)
+    sid = started.json.sessionId
+    taskId = started.json.taskId
+    await until('first hand-back', () => task(taskId), (t) => t.phase === 'NEED_ACTION' && t.unread === true)
+
+    const r = await req('POST', '/api/v1/routines/trigger', body('build-watch', { wait_until: '  the build\n is green ' }), h())
+    expect(r.status, JSON.stringify(r.json)).toBe(201)
+    const id = r.json.job.id
+    expect(r.json.job.enabled).toBe(true)
+    // Born off, the wait recorded, THEN turned on: no check could fire before the wait existed.
+    const since = Date.parse(r.json.task.waiting.since)
+    expect(r.json.job.createdAtMs).toBeLessThanOrEqual(since)
+    expect(r.json.job.updatedAtMs).toBeGreaterThanOrEqual(since)
+    expect(r.json.task).toMatchObject({ id: taskId, phase: 'TODO', waiting: { condition: 'the build is green', routine_id: id } })
+    const t = await task(taskId)
+    expect(t.phase).toBe('TODO')
+    expect(t.unread).toBeFalsy()
+    expect(t.waiting.woke_at).toBeUndefined()
+    expect((await routine(id)).enabled).toBe(true)
+
+    // What the agent reads back.
+    const out = getOp('trigger_create')!.mapResult!({ args: {}, body: r.json } as any) as any
+    expect(JSON.stringify(out)).toContain('the task is snoozed until: the build is green')
+
+    // The fire ends it exactly as a task_wait one does.
+    daemon.clearCommandHistory()
+    await fire(id, 1, 'create-wait-epoch')
+    const sent = await until('fire delivery', async () => envelopes(), (e) => e.length >= 1)
+    expect(sent[0]).toContain('this task was waiting until: the build is green')
+    const back = await until('hand-back after fire', () => task(taskId), (v) => v.phase === 'NEED_ACTION')
+    expect(back.unread).toBe(true)
+  })
+
+  it('a blank wait_until is refused before anything is created', async () => {
+    const before = (await req('GET', '/api/v1/routines?includeDisabled=true')).json.jobs.length
+    const r = await req('POST', '/api/v1/routines/trigger', body('blank-watch', { wait_until: '   ' }), h())
+    expect(r.status).toBe(400)
+    expect(JSON.stringify(r.json)).toMatch(/wait_until must say what the task waits for/)
+    expect((await req('GET', '/api/v1/routines?includeDisabled=true')).json.jobs.length).toBe(before)
+  })
+
+  it('a wait that cannot be set leaves no trigger behind', async () => {
+    const done = await req('POST', '/api/tasks', { title: 'finished work', project: 'Wait e2e' })
+    const doneId = done.json.id ?? done.json.task?.id
+    await req('PATCH', `/api/tasks/${doneId}`, { phase: 'COMPLETE' })
+    const before = (await req('GET', '/api/v1/routines?includeDisabled=true')).json.jobs.length
+    const r = await req('POST', '/api/v1/routines/trigger', body('done-target', { session: doneId, wait_until: 'x happens' }))
+    expect(r.status).toBeGreaterThanOrEqual(400)
+    expect((await req('GET', '/api/v1/routines?includeDisabled=true')).json.jobs.length).toBe(before)
+  })
+})
+
+describe('the backstop: a snooze whose trigger never fires still ends', () => {
+  const h = () => ({ 'x-walnut-caller-sid': sid })
+  const body = (name: string, extra: Record<string, unknown>) => ({
+    name, run: `bash ~/.open-walnut/triggers/${name}/check.sh`, every: '5m',
+    prompt: 'Tell the user the result.', description: `Watches ${name} for the result.`,
+    session: 'this', ...extra,
+  })
+
+  it('wait_ttl sets it; an unreadable one, or one without wait_until, is refused before anything is created', async () => {
+    const before = (await req('GET', '/api/v1/routines?includeDisabled=true')).json.jobs.length
+    for (const [extra, msg] of [
+      [{ wait_until: 'the deploy finishes', wait_ttl: 'soon' }, /wait_ttl: the backstop/],
+      [{ wait_until: 'the deploy finishes', wait_ttl: '45d' }, /wait_ttl: the backstop/],
+      [{ wait_ttl: '2h' }, /wait_ttl needs wait_until/],
+    ] as const) {
+      const r = await req('POST', '/api/v1/routines/trigger', body('ttl-bad', extra), h())
+      expect(r.status, JSON.stringify(extra)).toBe(400)
+      expect(JSON.stringify(r.json)).toMatch(msg)
+    }
+    expect((await req('GET', '/api/v1/routines?includeDisabled=true')).json.jobs.length).toBe(before)
+
+    const r = await req('POST', '/api/v1/routines/trigger', body('ttl-deploy', { wait_until: 'the deploy finishes', wait_ttl: '2h' }), h())
+    expect(r.status, JSON.stringify(r.json)).toBe(201)
+    const w = r.json.task.waiting
+    expect(Date.parse(w.until) - Date.parse(w.since)).toBe(2 * 3_600_000)
+    const out = getOp('trigger_create')!.mapResult!({ args: {}, body: r.json } as any) as any
+    expect(JSON.stringify(out)).toContain('the task comes back anyway')
+    await stopOp().handler!({}, opCall(sid))
+  })
+
+  it('past it, the task comes back as Need Action with a notice, and the trigger stops', async () => {
+    const r = await req('POST', '/api/v1/routines/trigger', body('ttl-never', { wait_until: 'QA signs off', wait_ttl: '1h' }), h())
+    expect(r.status, JSON.stringify(r.json)).toBe(201)
+    const id = r.json.job.id
+    // Not yet: an hour early the sweep leaves it alone.
+    expect(await sweepWaitDeadlines(Date.now() + 30 * 60_000)).not.toContain(taskId)
+    expect(isWaiting(await task(taskId))).toBe(true)
+
+    expect(await sweepWaitDeadlines(Date.now() + 2 * 3_600_000)).toContain(taskId)
+    const t = await task(taskId)
+    expect(t.phase).toBe('NEED_ACTION')
+    expect(t.unread).toBe(true)
+    expect(t.waiting).toMatchObject({ routine_id: id, woke_reason: 'timed-out' })
+    await until('trigger disabled', () => routine(id), (j) => j?.enabled === false)
+    const { feed } = await listNotifications()
+    const note = feed.find((n) => n.dedupKey === `task-wait-timeout:${taskId}:${t.waiting.since}`)
+    expect(note?.title).toContain('Snooze ran out:')
+    expect(note?.body).toContain('"QA signs off" had not fired')
+    // A second sweep finds nothing: the wait is over.
+    expect(await sweepWaitDeadlines(Date.now() + 3 * 3_600_000)).not.toContain(taskId)
+
+    // Keeping it after that (the session decides to wait on) re-arms with a fresh backstop.
+    await waitOp().handler!({ condition: 'QA signs off', routine_id: id, ttl: '3d' }, opCall(sid))
+    const again = await task(taskId)
+    expect(again.phase).toBe('TODO')
+    expect(Date.parse(again.waiting.until) - Date.parse(again.waiting.since)).toBe(3 * 86_400_000)
+    expect((await routine(id)).enabled).toBe(true)
+    // A re-arm with no ttl keeps the backstop it had.
+    await waitOp().handler!({ condition: 'QA signs off', routine_id: id }, opCall(sid))
+    expect((await task(taskId)).waiting.until).toBe(again.waiting.until)
+    await stopOp().handler!({}, opCall(sid))
+  })
+
+  it('a wait recorded before backstops existed gets the default one at boot, counted from when it began', async () => {
+    const id = await createTrigger('ttl-legacy')
+    const since = new Date(Date.now() - 8 * 86_400_000).toISOString()
+    await updateTaskRaw(taskId, { phase: 'TODO', waiting: { condition: 'the old wait', routine_id: id, since } } as any)
+    await loadWaitDeadlines()
+    const t = await task(taskId)
+    expect(Date.parse(t.waiting.until) - Date.parse(since)).toBe(WAIT_TTL_DEFAULT_MS)
+    // Eight days in, its week is over: the next sweep brings the task back.
+    expect(await sweepWaitDeadlines(Date.now())).toContain(taskId)
+    expect((await task(taskId)).waiting.woke_reason).toBe('timed-out')
+
+    // One from yesterday keeps waiting, with six days left.
+    const recent = new Date(Date.now() - 86_400_000).toISOString()
+    await updateTaskRaw(taskId, { phase: 'TODO', waiting: { condition: 'the old wait', routine_id: id, since: recent } } as any)
+    await loadWaitDeadlines()
+    expect(await sweepWaitDeadlines(Date.now())).not.toContain(taskId)
+    const kept = await task(taskId)
+    expect(isWaiting(kept)).toBe(true)
+    expect(Date.parse(kept.waiting.until) - Date.parse(recent)).toBe(WAIT_TTL_DEFAULT_MS)
+    await stopOp().handler!({}, opCall(sid))
+  })
+})
+

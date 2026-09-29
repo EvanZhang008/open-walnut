@@ -9,7 +9,8 @@
  */
 import { test, expect } from './shortcut-test-fixture'
 
-const API = 'http://localhost:3457'
+// The fixture server's port: a run on a private PW_TEST_PORT must not fetch a dead 3457.
+const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 // The daemon-driven tests wait on real check cadences (a 5s first-run delay, a 10s
 // floor) with inner waits up to 60s; the 30s default budget cuts them off under load.

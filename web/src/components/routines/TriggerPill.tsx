@@ -6,6 +6,12 @@
  * never a generic page. Rendered on the task rows, the Focus cards and the
  * session header from the one shared routines store.
  *
+ * On a task snoozed until something happens (task.waiting) the same pill reads
+ * SNOOZED, in the snooze's amber: a snoozed row shows why it is quiet the way a
+ * time-snoozed one shows its start date. Its flyout leads with what the task
+ * waits for and Unsnooze, then the trigger behind it. It needs the task for that,
+ * and shows from the task alone, before the routines store has loaded.
+ *
  * Overlay rules (web/src/AGENTS.md): placed by useMenuPlacement, portalled to
  * <body>, root stops pointerdown propagation (the rows are dnd-kit draggables),
  * outside-click closer exempts `.trigger-jobs-flyout`.
@@ -13,6 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { isTaskWaiting, type Task } from '@open-walnut/core';
 import type { Routine, RoutineAuditEntry } from '@/api/routines';
 import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
@@ -22,11 +29,21 @@ import {
   describeNextRun, describeSchedule,
 } from '@/utils/routine-format';
 import { openSessionOnHome } from '@/utils/open-session';
+import { WaitingLine, waitingBackBy } from '@/components/tasks/TaskStatusControl';
 import '@/styles/routine-description.css';
 import { log } from '@/utils/log';
 
 export interface TriggerPillProps {
   taskId: string | null | undefined;
+  /** The task itself: a snoozed one (task.waiting) makes this the SNOOZED pill. */
+  task?: Task | null;
+}
+
+/** The pill's text: SNOOZED leads on a snoozed task, other triggers ride after it. */
+export function triggerPillLabel(triggerCount: number, snoozedOn?: string | null, triggerIds: readonly string[] = []): string {
+  if (!snoozedOn) return `TRIGGER${triggerCount > 1 ? ` ×${triggerCount}` : ''}`;
+  const others = triggerIds.filter((id) => id !== snoozedOn).length;
+  return `SNOOZED${others ? ` · TRIGGER${others > 1 ? ` ×${others}` : ''}` : ''}`;
 }
 
 /** The hover text: one line per trigger, so the pill alone tells what is polling. */
@@ -209,8 +226,10 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
   );
 }
 
-export function TriggerPill({ taskId }: TriggerPillProps) {
+export function TriggerPill({ taskId, task }: TriggerPillProps) {
   const triggers = useTaskTriggers(taskId);
+  const snoozed = !!task && task.id === taskId && isTaskWaiting(task) && !!task.waiting;
+  const snoozedOn = snoozed ? task!.waiting!.routine_id : null;
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -230,10 +249,11 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
 
-  // The last trigger disabled or deleted from the flyout takes the pill with it.
+  // The last trigger disabled or deleted from the flyout takes the pill with it,
+  // and so does Unsnooze: a pill that comes back later must not come back open.
   useEffect(() => {
-    if (open && triggers.length === 0) setOpen(false);
-  }, [open, triggers.length]);
+    if (open && triggers.length === 0 && !snoozed) setOpen(false);
+  }, [open, triggers.length, snoozed]);
 
   useEffect(() => {
     if (!open) return;
@@ -260,20 +280,24 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
     return () => document.removeEventListener('keydown', onKey, true);
   }, [open, close]);
 
-  if (!taskId || triggers.length === 0) return null;
+  if (!taskId || (triggers.length === 0 && !snoozed)) return null;
 
+  const condition = snoozed ? task!.waiting!.condition : '';
+  const backBy = snoozed ? waitingBackBy(task) : '';
+  const what = snoozed ? `Snoozed until: ${condition}${backBy ? ` (back by ${backBy})` : ''}` : 'Trigger armed';
   return (
     <>
       <button
         ref={triggerRef}
         type="button"
-        className="task-trigger-pill"
-        title={triggerPillTitle(triggers)}
-        aria-label={open ? 'Trigger armed. Hide trigger details' : 'Trigger armed. Show trigger details'}
+        className={`task-trigger-pill${snoozed ? ' is-snoozed' : ''}`}
+        title={snoozed ? [what, triggerPillTitle(triggers)].filter(Boolean).join('\n') : triggerPillTitle(triggers)}
+        aria-label={`${what}. ${open ? 'Hide' : 'Show'} ${snoozed ? 'snooze' : 'trigger'} details`}
         aria-haspopup="dialog"
         aria-expanded={open}
         data-testid="task-trigger-pill"
         data-trigger-count={triggers.length}
+        data-snoozed={snoozed ? 'true' : undefined}
         onPointerDown={(e) => e.stopPropagation()}
         // WebKit never focuses a button on click, so the mousedown would focus the
         // row around the pill instead; the row then scrolls itself into view between
@@ -283,7 +307,7 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); }}
       >
-        TRIGGER{triggers.length > 1 ? ` ×${triggers.length}` : ''}
+        {triggerPillLabel(triggers.length, snoozedOn, triggers.map((r) => r.id))}
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(
@@ -291,14 +315,22 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
               ref={menuRef}
               className="trigger-jobs-flyout"
               role="dialog"
-              aria-label="Armed triggers"
+              aria-label={snoozed ? 'Snooze and its trigger' : 'Armed triggers'}
               data-testid="trigger-jobs-flyout"
               style={menuPlacementStyle(placement)}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
             >
+              {snoozed && (
+                <div className="trigger-jobs-snooze">
+                  <WaitingLine task={task!} testId="trigger-jobs-snooze" />
+                </div>
+              )}
               <div className="trigger-jobs-title">
-                <span>{triggers.length === 1 ? 'Trigger' : `${triggers.length} triggers`} on this task</span>
+                <span>
+                  {triggers.length === 0 ? 'Its trigger is not loaded yet'
+                    : triggers.length === 1 ? 'Trigger on this task' : `${triggers.length} triggers on this task`}
+                </span>
                 <button
                   type="button"
                   className="trigger-jobs-link"

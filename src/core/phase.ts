@@ -428,17 +428,15 @@ export async function applySessionPhase(
   // never produces a phase, so the gate had nothing left to guard.)
 
   // A task waiting on a trigger (task-waiting-rules.ts): a finished turn lands on
-  // TODO with no red dot, and a human message or a prompt that needs the human
-  // ends the wait in the same write.
-  const waitDecision = waitingSessionPhase(task, trigger, newPhase, {
-    humanSend: trigger === 'session:input' && opts?.reopenTerminal === true,
-  })
+  // TODO with no red dot, and a prompt that needs the human ends the wait in the
+  // same write. A message does not: the snooze holds until the trigger fires.
+  const waitDecision = waitingSessionPhase(task, trigger, newPhase)
   newPhase = waitDecision.newPhase
   const wakePatch: Partial<Task> = waitDecision.wake && task.waiting
     ? { waiting: endedWait(task.waiting, waitDecision.wake) }
     : {}
-  // The wait ends even when the phase does not move (a message into a running
-  // turn, or a phase write a guard below skips): the human took the task back.
+  // The wait ends even when the phase does not move (a phase write a guard below
+  // skips): the human is needed now.
   // Only THAT wait: a re-arm since the read (a new `since`) is newer and wins.
   const endWaitOnly = async (): Promise<void> => {
     if (!waitDecision.wake) return

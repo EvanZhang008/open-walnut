@@ -2,10 +2,11 @@
  * Which routines count as a task's armed triggers (the TRIGGER pill's source),
  * and the pill's hover text. Pure functions over the routines store's list.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { Routine } from '../../web/src/api/routines';
 import { isTriggerForTask, triggersForTask } from '../../web/src/hooks/useTaskTriggers';
-import { triggerPillTitle } from '../../web/src/components/routines/TriggerPill';
+import { triggerPillLabel, triggerPillTitle } from '../../web/src/components/routines/TriggerPill';
+import { waitingBackBy } from '../../web/src/components/tasks/TaskStatusControl';
 
 const NOW = Date.parse('2026-09-16T12:00:00Z');
 
@@ -76,5 +77,35 @@ describe('triggerPillTitle', () => {
       // A trigger created before descriptions were required reads as before.
       'CI red: Every 30s, $ bash ~/.open-walnut/triggers/pr/check.sh @ local, never fired yet, last check not checked yet',
     ]);
+  });
+});
+
+describe('triggerPillLabel', () => {
+  it('reads TRIGGER, with a count past one', () => {
+    expect(triggerPillLabel(1)).toBe('TRIGGER');
+    expect(triggerPillLabel(3)).toBe('TRIGGER ×3');
+  });
+
+  it('reads SNOOZED on a snoozed task, the trigger it waits on folded in', () => {
+    expect(triggerPillLabel(1, 'r-wait', ['r-wait'])).toBe('SNOOZED');
+    // Before the routines store has loaded: the task alone says it is snoozed.
+    expect(triggerPillLabel(0, 'r-wait', [])).toBe('SNOOZED');
+    expect(triggerPillLabel(2, 'r-wait', ['r-wait', 'r-pr'])).toBe('SNOOZED · TRIGGER');
+    expect(triggerPillLabel(3, 'r-wait', ['r-pr', 'r-wait', 'r-ci'])).toBe('SNOOZED · TRIGGER ×2');
+  });
+});
+
+describe('waitingBackBy', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  // The default backstop is exactly a week out: a weekday alone would read as today.
+  it('a week out reads M/D, not today\'s weekday; nearer days keep the day words', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 29, 10, 0));
+    const at = (d: Date) => waitingBackBy({ waiting: { until: d.toISOString() } } as never);
+    expect(at(new Date(2026, 9, 6, 10, 54))).toBe('10/6 10:54');
+    expect(at(new Date(2026, 8, 30, 9, 5))).toBe('Tomorrow 9:05');
+    expect(at(new Date(2026, 9, 2, 18, 0))).toBe('Fri 18:00');
+    expect(waitingBackBy({ waiting: { condition: 'x' } } as never)).toBe('');
   });
 });

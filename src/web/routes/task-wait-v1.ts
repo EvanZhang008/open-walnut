@@ -1,7 +1,7 @@
 /**
  * /api/v1 "wait until" endpoints (additive; src/core/task-waiting.ts):
  *
- *   POST   /tasks/:id/wait  { condition, routine_id }  → { task }   park the task on a trigger
+ *   POST   /tasks/:id/wait  { condition, routine_id, ttl? }  → { task }   park the task on a trigger
  *   DELETE /tasks/:id/wait                              → { task }   stop waiting (deletes the trigger)
  *
  * `:id` may be "this": the task of the calling session (the `x-walnut-caller-sid`
@@ -52,6 +52,7 @@ taskWaitV1Router.post('/tasks/:id/wait', (req: Request, res: Response, next: Nex
     taskId: await resolveTaskId(req),
     condition: body.condition,
     routineId: body.routine_id ?? body.routineId,
+    ttl: body.ttl,
     source: 'api-v1',
   })
 }))

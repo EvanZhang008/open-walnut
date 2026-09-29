@@ -98,7 +98,7 @@ import { setActiveSession } from '@/stores/active-session';
 import { COMPOSER_INSERT_EVENT, leadStoredDraft, sessionDraftKey, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
-import { WAIT_UNTIL_ICON } from '@/components/tasks/TaskStatusControl';
+import { SnoozedComposerNotice, WAIT_UNTIL_ICON } from '@/components/tasks/TaskStatusControl';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 
 /**
@@ -1952,7 +1952,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   onClick={() => setCronDetailOpen((open) => !open)}
                 />
               )}
-              {!loading && <TriggerPill taskId={session?.taskId} />}
+              {!loading && <TriggerPill taskId={session?.taskId} task={sessionTask} />}
               {/* The team links, as on the task rows: Sub leads to this task's
                   parent, Leader lists its subtasks. A Personal AI ask is never a
                   board row, so its session header is the one place an ask that
@@ -2304,6 +2304,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               so the user re-orients on a long session without re-reading the
               transcript. Hidden while streaming (live output makes it redundant). */}
           <SessionRecapTip sessionId={sessionId} session={session} hidden={isStreaming} />
+          {/* A snoozed task stays snoozed through a message: say so where one is written. */}
+          <SnoozedComposerNotice task={sessionTask} />
           <ChatInput
             focusNonce={composerFocusNonce}
             // Dictating into this box takes focus and so collapses the page's

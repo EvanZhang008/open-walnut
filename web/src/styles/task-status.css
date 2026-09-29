@@ -138,3 +138,43 @@ button.task-status-badge:hover { filter: brightness(0.96); }
 /* The line takes the menu's width and wraps inside it, never widens it: a max-width
    on the text (240px, then 200px) still left the menu 6px wider in WebKit. */
 .task-kebab-date.open > .task-waiting-line.is-compact { contain: inline-size; }
+
+/* Above a waiting task's composer (SnoozedComposerNotice): a calm strip, the
+   snooze's own amber, so it reads as "still snoozed", not as an error. */
+.task-waiting-line.task-waiting-composer {
+  margin: 0 12px 6px;
+  padding: 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--snooze-hue) 35%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--snooze-hue) 8%, transparent);
+  flex-wrap: nowrap;
+}
+.task-waiting-line.task-waiting-composer .task-waiting-icon { color: var(--snooze-hue); }
+.task-waiting-note { color: var(--fg-muted); }
+
+/* The SNOOZED pill (TriggerPill on a waiting task): the TRIGGER pill's shape,
+   amber instead of blue, so a snoozed row reads apart from a watched one. */
+:root { --snooze-hue: #c26a00; }
+:root[data-theme="dark"] { --snooze-hue: #f5b041; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { --snooze-hue: #f5b041; }
+}
+.task-trigger-pill.is-snoozed {
+  border-color: color-mix(in srgb, var(--snooze-hue) 45%, transparent);
+  background: color-mix(in srgb, var(--snooze-hue) 10%, transparent);
+  color: var(--snooze-hue);
+}
+.task-trigger-pill.is-snoozed:hover,
+.task-trigger-pill.is-snoozed[aria-expanded="true"] {
+  border-color: var(--snooze-hue);
+  background: color-mix(in srgb, var(--snooze-hue) 18%, transparent);
+}
+/* The flyout's first block on a snoozed task: what it waits for, and Unsnooze. */
+.trigger-jobs-snooze {
+  margin: 0 0 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.trigger-jobs-snooze .task-waiting-line { margin: 0; }
+.trigger-jobs-snooze .task-waiting-icon { color: var(--snooze-hue); }
+.task-waiting-backstop { color: var(--fg-muted); white-space: nowrap; }

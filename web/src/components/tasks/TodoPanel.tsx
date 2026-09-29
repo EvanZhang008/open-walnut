@@ -1260,7 +1260,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             {task.title}
           </span>
           <CronPill sessionId={resolveTaskSessionId(task)} />
-          <TriggerPill taskId={task.id} />
+          <TriggerPill taskId={task.id} task={task} />
           <ImportedPill task={task} />
           <TaskTagPills tags={task.tags} />
           <SubtaskPill task={task} />

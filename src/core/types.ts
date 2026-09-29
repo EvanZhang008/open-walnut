@@ -19,7 +19,7 @@ export const VALID_PRIORITIES: readonly TaskPriority[] = ['immediate', 'importan
 export const EXTERNAL_SESSION_IMPORT_TAG = 'walnut:external-sessions';
 
 /** Why a wait ended (TaskWaiting.woke_reason). */
-export type TaskWakeReason = 'fired' | 'message' | 'needs-human' | 'check-failed' | 'status-changed';
+export type TaskWakeReason = 'fired' | 'message' | 'needs-human' | 'check-failed' | 'status-changed' | 'timed-out';
 
 /**
  * A task parked on a trigger ("wait until CR 1234 is approved"). The task stays
@@ -40,6 +40,9 @@ export interface TaskWaiting {
   routine_id: string;
   /** When the wait started (or was last re-armed). */
   since: string;
+  /** The backstop (ISO): a wait still on at this time ends ('timed-out') and the
+   *  task comes back as Need Action, in case the trigger never fires. */
+  until?: string;
   /** Set when the wait ended; absent while the task is still waiting. */
   woke_at?: string;
   woke_reason?: TaskWakeReason;

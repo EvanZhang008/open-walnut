@@ -10,6 +10,10 @@
  *  3. Start / Snooze until holds the times AND "Something happens…". A snoozed
  *     task stays a plain To Do in the list; the collapsed row says what it waits
  *     for, and the open row (and the detail pane) has Unsnooze. Need Action ends it.
+ *     The row carries a SNOOZED pill (the TRIGGER pill's shape, amber) that opens
+ *     what it waits for, Unsnooze and the trigger behind it (user ask 2026-09-29).
+ *  5. A message does not end the snooze: the session panel says it still holds,
+ *     above the composer, with Unsnooze; the turn the message starts ends quietly.
  *  4. "Something happens…" never asks the human to fill a form: it starts a
  *     message to the task's AI that names the skill (/walnut-trigger), and the AI
  *     writes the trigger. With a session it leads that session's composer (menu
@@ -246,9 +250,31 @@ test('a snoozed task stays in the list, says what it waits for, and Unsnooze end
   await expect(rowEl).toBeVisible()
   await expect(rowEl.locator('.task-unread-dot')).toHaveCount(0)
 
+  // The row says it is snoozed the way a time-snoozed one shows its date: one
+  // SNOOZED pill (not SNOOZED and TRIGGER for the same trigger).
+  const pill = rowEl.getByTestId('task-trigger-pill')
+  await expect(pill).toHaveCount(1)
+  await expect(pill).toHaveText('SNOOZED')
+  await expect(pill).toHaveAttribute('data-snoozed', 'true')
+  await expect(pill).toHaveAttribute('title', /^Snoozed until: CR 1234 is approved/)
+  await shot(rowEl, 'row-snoozed-pill', browserName)
+  await pill.click()
+  const flyout = page.getByTestId('trigger-jobs-flyout')
+  await expect(flyout).toBeVisible()
+  await expect(flyout.getByTestId('trigger-jobs-snooze')).toContainText('Snoozed until: CR 1234 is approved')
+  await expect(flyout.getByTestId('trigger-jobs-snooze').getByRole('button', { name: 'Unsnooze' })).toBeVisible()
+  // The trigger behind it, with its own description, under the snooze.
+  await expect(flyout).toContainText('Checks CR 1234 every 5 minutes')
+  await expectInViewport(page, flyout)
+  await shot(flyout, 'row-snoozed-flyout', browserName)
+  await page.keyboard.press('Escape')
+  await expect(flyout).toHaveCount(0)
+
   const detail = await openDetail(page, task)
   const detailLine = detail.getByTestId('task-waiting-line')
   await expect(detailLine).toContainText('Snoozed until: CR 1234 is approved')
+  // The backstop (a week, none given): if the trigger never fires, the task comes back then.
+  await expect(detailLine).toContainText('· back by ')
   await shot(detail.locator('.todo-detail-meta'), 'detail-waiting', browserName)
 
   await detailLine.getByRole('button', { name: 'Unsnooze' }).click()
@@ -381,4 +407,52 @@ test('"Snooze until something happens" leads the task session\'s composer, from 
   await expect(box).toHaveValue(`${PREFIX}the build is green`)
   await shot(panel.locator('.chat-input-container'), 'composer-seeded', browserName)
   await box.fill('')
+})
+
+test('a message does not end the snooze: the session says it still holds, and Unsnooze there ends it', async ({ page, request, browserName }) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'pw-snoozed-session-'))
+  const started = await request.post('/api/sessions/quick-start', { data: { cwd, message: '' } })
+  expect(started.ok(), await started.text()).toBeTruthy()
+  const { sessionId: sid, taskId } = await started.json() as { sessionId: string; taskId: string }
+  litterTasks.push(taskId)
+  // One call: the trigger and the snooze (trigger_create with wait_until).
+  const armed = await api('POST', '/api/v1/routines/trigger', {
+    run: 'bash ~/.open-walnut/triggers/build/check.sh', every: '5m', session: taskId,
+    prompt: 'Tell the user the build result.',
+    description: 'Checks the build every 5 minutes; fires once when it is green.',
+    wait_until: 'the build is green', wait_ttl: '2h',
+  })
+  litterRoutines.push(armed.job.id)
+  expect(armed.task.waiting.condition).toBe('the build is green')
+
+  const [panel] = await openPanels(page, [sid])
+  const notice = panel.getByTestId('session-snoozed-notice')
+  await expect(notice).toBeVisible({ timeout: 15_000 })
+  await expect(notice).toContainText('Snoozed until: the build is green · back by ')
+  await expect(notice).toContainText("· Messages here don't cancel it")
+  // The header's pill says it too.
+  await expect(panel.getByTestId('task-trigger-pill')).toHaveText('SNOOZED')
+  await shot(panel.locator('.session-panel-input'), 'session-snoozed-notice', browserName)
+
+  // A message: the session answers, and the snooze holds (To Do, no red dot).
+  const box = composerTextarea(panel)
+  await box.fill('how is it going?')
+  await box.press('Enter')
+  await expect(panel.getByText(/I processed your message: how is it going\?/).first()).toBeVisible({ timeout: 60_000 })
+  await expect.poll(async () => (await taskOf(taskId)).phase, { timeout: 30_000 }).toBe('TODO')
+  const held = await taskOf(taskId)
+  expect(held.unread).toBeFalsy()
+  expect(held.waiting).toMatchObject({ condition: 'the build is green', routine_id: armed.job.id })
+  expect(held.waiting.woke_at).toBeUndefined()
+  await expect(notice).toBeVisible()
+  await shot(panel, 'session-after-message', browserName)
+
+  // Unsnooze from the notice: the wait and its trigger are gone, the task stays To Do.
+  await notice.getByRole('button', { name: 'Unsnooze' }).click()
+  await expect(notice).toHaveCount(0, { timeout: 10_000 })
+  await expect(panel.getByTestId('task-trigger-pill')).toHaveCount(0)
+  const after = await taskOf(taskId)
+  expect(after.waiting).toBeUndefined()
+  expect(after.phase).toBe('TODO')
+  expect((await fetch(`${API}/api/routines/${armed.job.id}`)).status).toBe(404)
 })

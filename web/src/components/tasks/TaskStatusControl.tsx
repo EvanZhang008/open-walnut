@@ -26,6 +26,9 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { apiDelete } from '@/api/client';
 import { updateTask as apiUpdateTask } from '@/api/tasks';
 import { requestWaitUntil, WAIT_UNTIL_MENU_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
+// formatDraftDate: the default backstop is exactly 7 days out, which the shared
+// formatter would print as today's weekday.
+import { formatDraftDate } from '@/components/sessions/draft-decisions';
 import { log } from '@/utils/log';
 import '@/styles/task-status.css';
 
@@ -91,21 +94,42 @@ function StatusPills({ task, onPick }: { task: Pick<Task, 'id' | 'phase'>; onPic
   );
 }
 
+/** When a snooze's backstop brings the task back anyway ('' when it has none). */
+export function waitingBackBy(task: Task | null | undefined): string {
+  return task?.waiting?.until ? formatDraftDate(task.waiting.until) : '';
+}
+
 /** What an event-snoozed task waits for ('' when it is not waiting), for the collapsed row. */
 export function waitingSummary(task: Task | null | undefined): string {
   return task && isTaskWaiting(task) && task.waiting ? task.waiting.condition : '';
 }
 
 /** "Snoozed until: <condition>" with Unsnooze. Renders nothing for a task that is not waiting. */
-export function WaitingLine({ task, compact }: { task: Task; compact?: boolean }) {
+export function WaitingLine({ task, compact, note, className, testId }: {
+  task: Task;
+  compact?: boolean;
+  /** A sentence after the condition, in the same line. */
+  note?: string;
+  className?: string;
+  testId?: string;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (!isTaskWaiting(task) || !task.waiting) return null;
   return (
-    <div className={`task-waiting-line${compact ? ' is-compact' : ''}`} data-testid="task-waiting-line">
+    <div
+      className={`task-waiting-line${compact ? ' is-compact' : ''}${className ? ` ${className}` : ''}`}
+      data-testid={testId ?? 'task-waiting-line'}
+    >
       <span className="task-waiting-icon" aria-hidden="true">{WAIT_UNTIL_ICON}</span>
-      <span className="task-waiting-text" title={task.waiting.condition}>
+      <span
+        className="task-waiting-text"
+        title={`${task.waiting.condition}${task.waiting.until
+          ? `\nIf it has not happened by ${new Date(task.waiting.until).toLocaleString()}, the task comes back anyway.` : ''}`}
+      >
         Snoozed until: <b>{task.waiting.condition}</b>
+        {task.waiting.until ? <span className="task-waiting-backstop"> · back by {waitingBackBy(task)}</span> : null}
+        {note ? <span className="task-waiting-note"> · {note}</span> : null}
       </span>
       <button
         type="button"
@@ -125,6 +149,23 @@ export function WaitingLine({ task, compact }: { task: Task; compact?: boolean }
       </button>
       {error && <span className="task-waiting-error" role="alert">{error}</span>}
     </div>
+  );
+}
+
+/**
+ * Above a waiting task's composer: the snooze still holds. A message no longer
+ * ends it (user call 2026-09-29), so a human writing to the session is told so
+ * at the moment it matters, next to the one button that does end it.
+ */
+export function SnoozedComposerNotice({ task }: { task: Task | null | undefined }) {
+  if (!task || !isTaskWaiting(task)) return null;
+  return (
+    <WaitingLine
+      task={task}
+      className="task-waiting-composer"
+      testId="session-snoozed-notice"
+      note="Messages here don't cancel it"
+    />
   );
 }
 

@@ -5,6 +5,8 @@
  * separate status). The one exception to the hand-back rule: a finished turn
  * lands on TODO with no red dot. Everything else pins when the wait ENDS, since
  * a wait that never ends is the parked-state bug the WAIT phase was removed for.
+ * A message does not end it (user call 2026-09-29): the snooze holds until the
+ * trigger fires, and the turn a message starts ends quietly too.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fsp from 'node:fs/promises'
@@ -38,7 +40,8 @@ import { _resetSessionTrackerForTesting } from '../../src/core/session-tracker.j
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { isTaskWaiting, type TaskWaiting } from '../../src/core/types.js'
 import {
-  endedWait, normalizeWaitCondition, waitEndsOnStatusChange, waitingSessionPhase, WAIT_CONDITION_MAX,
+  endedWait, normalizeWaitCondition, parseWaitTtlMs, waitEndsOnStatusChange, waitingSessionPhase, waitTimedOut,
+  waitUntilAt, WAIT_CONDITION_MAX, WAIT_TTL_DEFAULT_MS,
 } from '../../src/core/task-waiting-rules.js'
 
 const WAITING: TaskWaiting = { condition: 'CR 1234 is approved', routine_id: 'r-1', since: '2026-09-28T00:00:00.000Z' }
@@ -66,14 +69,9 @@ describe('waitingSessionPhase (pure)', () => {
       .toEqual({ newPhase: 'NEED_ACTION', wake: 'needs-human' })
   })
 
-  it('a human or peer send ends the wait; an automated send does not', () => {
-    expect(waitingSessionPhase(waitingTodo, 'session:input', 'IN_PROGRESS', { humanSend: true }))
-      .toEqual({ newPhase: 'IN_PROGRESS', wake: 'message' })
-    expect(waitingSessionPhase(waitingTodo, 'session:input', 'IN_PROGRESS', { humanSend: false }))
-      .toEqual({ newPhase: 'IN_PROGRESS' })
-    // Mid-turn: no phase move, the wait still ends.
-    expect(waitingSessionPhase(waitingRunning, 'session:input', null, { humanSend: true }))
-      .toEqual({ newPhase: null, wake: 'message' })
+  it('no send ends the wait, a human\'s included: the turn runs and the wait holds', () => {
+    expect(waitingSessionPhase(waitingTodo, 'session:input', 'IN_PROGRESS')).toEqual({ newPhase: 'IN_PROGRESS' })
+    expect(waitingSessionPhase(waitingRunning, 'session:input', null)).toEqual({ newPhase: null })
   })
 
   it('a completed task is never waiting', () => {
@@ -97,7 +95,7 @@ describe('waitEndsOnStatusChange + helpers (pure)', () => {
 
   it('an ended wait keeps its routine link and says why', () => {
     const now = new Date('2026-09-28T10:00:00.000Z')
-    expect(endedWait(WAITING, 'message', now)).toEqual({ ...WAITING, woke_at: now.toISOString(), woke_reason: 'message' })
+    expect(endedWait(WAITING, 'needs-human', now)).toEqual({ ...WAITING, woke_at: now.toISOString(), woke_reason: 'needs-human' })
   })
 
   it('the condition becomes one bounded line', () => {
@@ -113,6 +111,40 @@ describe('waitEndsOnStatusChange + helpers (pure)', () => {
     const emoji = normalizeWaitCondition(`${'x'.repeat(WAIT_CONDITION_MAX - 2)}\u{1F600}tail`)
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(emoji)).toBe(false) // no lone high surrogate
     expect(emoji.endsWith('x\u2026')).toBe(true)
+  })
+})
+
+describe('the backstop (pure)', () => {
+  it('reads minutes, hours and days, and refuses what it cannot read or what is out of range', () => {
+    expect(parseWaitTtlMs(undefined)).toBeUndefined()
+    expect(parseWaitTtlMs('')).toBeUndefined()
+    expect(parseWaitTtlMs('90m')).toBe(90 * 60_000)
+    expect(parseWaitTtlMs(' 12h ')).toBe(12 * 3_600_000)
+    expect(parseWaitTtlMs('3d')).toBe(3 * 86_400_000)
+    expect(parseWaitTtlMs('1.5 days')).toBe(36 * 3_600_000)
+    expect(parseWaitTtlMs(7_200_000)).toBe(7_200_000)
+    for (const bad of ['soon', '3w', '30s', '0m', '31d', -5, 'm']) expect(parseWaitTtlMs(bad), String(bad)).toBeNull()
+  })
+
+  it('a ttl counts from now; with none a re-arm keeps a backstop still ahead, else the default', () => {
+    const now = new Date('2026-09-29T16:00:00.000Z')
+    expect(waitUntilAt(now, 3_600_000)).toBe('2026-09-29T17:00:00.000Z')
+    expect(waitUntilAt(now, undefined)).toBe(new Date(now.getTime() + WAIT_TTL_DEFAULT_MS).toISOString())
+    const ahead = { ...WAITING, until: '2026-09-30T00:00:00.000Z' }
+    expect(waitUntilAt(now, undefined, ahead)).toBe('2026-09-30T00:00:00.000Z')
+    const passed = { ...WAITING, until: '2026-09-29T15:00:00.000Z' }
+    expect(waitUntilAt(now, undefined, passed)).toBe(new Date(now.getTime() + WAIT_TTL_DEFAULT_MS).toISOString())
+    expect(waitUntilAt(now, 60_000, ahead)).toBe('2026-09-29T16:01:00.000Z')
+  })
+
+  it('only a live wait past its backstop has timed out', () => {
+    const w = { ...WAITING, until: '2026-09-29T16:00:00.000Z' }
+    const at = Date.parse('2026-09-29T16:00:00.000Z')
+    expect(waitTimedOut({ phase: 'TODO', waiting: w }, at - 1)).toBe(false)
+    expect(waitTimedOut({ phase: 'TODO', waiting: w }, at)).toBe(true)
+    expect(waitTimedOut({ phase: 'TODO', waiting: endedWait(w, 'fired') }, at + 1)).toBe(false)
+    expect(waitTimedOut({ phase: 'COMPLETE', waiting: w }, at + 1)).toBe(false)
+    expect(waitTimedOut({ phase: 'TODO', waiting: WAITING }, at + 1)).toBe(false) // no backstop recorded
   })
 })
 
@@ -166,25 +198,27 @@ describe('applySessionPhase on a waiting task', () => {
     expect(t.waiting).toMatchObject({ routine_id: 'r-1', woke_reason: 'needs-human' })
   })
 
-  it('a human message ends the wait; the next finished turn hands back as usual', async () => {
+  it('a human message keeps the wait: its turn runs, then ends on the quiet TODO', async () => {
     const id = await waitingTask('TODO')
     await applySessionPhase(id, 'session:input', 'test', { sessionId: 'sid-1', reopenTerminal: true })
     let t = await getTask(id)
     expect(t.phase).toBe('IN_PROGRESS')
-    expect(t.waiting).toMatchObject({ woke_reason: 'message' })
+    expect(isTaskWaiting(t)).toBe(true)
     await applySessionPhase(id, 'session:result', 'test', { sessionId: 'sid-1' })
     t = await getTask(id)
-    expect(t.phase).toBe('NEED_ACTION')
-    expect(t.unread).toBe(true)
+    expect(t.phase).toBe('TODO')
+    expect(t.unread).toBeFalsy()
+    expect(isTaskWaiting(t)).toBe(true)
+    expect(t.waiting).toEqual(WAITING)
   })
 
-  it('a human message into a running turn ends the wait with no phase move', async () => {
+  it('a human message into a running turn changes nothing', async () => {
     const id = await waitingTask('IN_PROGRESS')
     const res = await applySessionPhase(id, 'session:input', 'test', { sessionId: 'sid-1', reopenTerminal: true })
     expect(res.changed).toBe(false)
     const t = await getTask(id)
     expect(t.phase).toBe('IN_PROGRESS')
-    expect(t.waiting).toMatchObject({ woke_reason: 'message' })
+    expect(t.waiting).toEqual(WAITING)
   })
 
   it('an automated send (a trigger fire, auto-continue) keeps the wait', async () => {

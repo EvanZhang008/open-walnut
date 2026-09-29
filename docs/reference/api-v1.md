@@ -834,23 +834,34 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
 - `PUT /api/v1/tasks/:id/depends-on` body `{ "depends_on": [ids] }` →
   `200 { "task" }`; a cycle → `409 conflict` + `task_id`/`dep_id`.
 - `POST /api/v1/tasks/:id/wait` (additive, 2026-09) body
-  `{ "condition", "routine_id" }` → `200 { "task" }`. `condition` is one line
+  `{ "condition", "routine_id", "ttl"? }` → `200 { "task" }`. `condition` is one line
   in the user's words (whitespace folded, at most 300 chars); `routine_id` must
   be a trigger (a routine with a `check`) whose session executor targets THIS
   task, which is what `POST /api/v1/routines/trigger` with `session: "this"`
   makes. `:id` may be `this`: the task of the calling session
   (`x-walnut-caller-sid`). The task stays `TODO` (a `NEED_ACTION` task moves to
-  `TODO`, `unread` clears) and gains `waiting: { condition, routine_id, since }`.
+  `TODO`, `unread` clears) and gains `waiting: { condition, routine_id, since, until }`.
   While it waits, a finished turn lands on `TODO` instead of `NEED_ACTION`. The
   wait ends (`waiting.woke_at` + `woke_reason`) when the trigger fires
-  (`fired`: the fire's turn then hands the task back as usual), a human or peer
-  message arrives (`message`), the session blocks on a human decision
-  (`needs-human`), the status is set to `NEED_ACTION` or `COMPLETE`
+  (`fired`: the fire's turn then hands the task back as usual), the session
+  blocks on a human decision (`needs-human`), the status is set to `NEED_ACTION` or `COMPLETE`
   (`status-changed`; `IN_PROGRESS` keeps it, since a session turn on a waiting
   task is in progress too), or the trigger is auto-disabled after 5 failing
-  checks (`check-failed`: `NEED_ACTION` + a notification). Calling it again with
+  checks (`check-failed`: `NEED_ACTION` + a notification), or its backstop
+  passes (`timed-out`: `NEED_ACTION` + a notification). The backstop is
+  `waiting.until`, set from an optional `ttl` ("90m" / "12h" / "3d" or ms, 1
+  minute to 30 days, else `400`); none given, a re-arm keeps a backstop still
+  ahead and a new wait gets 7 days. The server keeps that clock, not the
+  trigger's host, so it holds when the host is gone. A human or peer
+  message does NOT end it (2026-09-29; `message` is only found on older
+  records): the turn it starts ends on `TODO` like any other. Calling it again with
   the same `routine_id` re-arms an ended wait; a different id replaces the old
-  trigger. When the trigger already fired in the hour before a FIRST wait on it
+  trigger. `POST /api/v1/routines/trigger` with `wait_until` (the condition)
+  does both in one call: the trigger is created disabled, the task is parked on
+  it, then it is turned on, so no check can fire before the wait exists; the
+  `201` adds `task`. `wait_ttl` there is the same backstop (`400` without
+  `wait_until`). A blank `wait_until` is `400` before anything is created,
+  and a wait that cannot be set deletes the new trigger and answers its error. When the trigger already fired in the hour before a FIRST wait on it
   (a new trigger's first check runs seconds after it is created), nothing is
   parked: the response's `waiting` is already over (`woke_reason: "fired"`,
   `woke_at` earlier than `since`). Errors: `400` (no condition / no routine id / not a trigger / the

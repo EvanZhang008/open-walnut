@@ -6,13 +6,20 @@
  *
  * Lifecycle, and who moves it:
  *
- *   task_wait (the session)      → waiting { condition, routine_id }, routine enabled
+ *   trigger_create + wait_until  → the trigger is born off, the wait is recorded,
+ *                                  then the trigger is turned on (parkOnNewTrigger):
+ *                                  no check can fire before the task is waiting
+ *   task_wait (the session)      → waiting { condition, routine_id, until }, routine enabled
  *   trigger fires                → wait ends ('fired'), the fire is delivered with a
  *                                  note, the routine is disabled; the delivered turn
  *                                  ends as NEED_ACTION unless the session re-arms
  *   task_wait again, same id     → re-armed: same routine, its dedup state intact
  *   5 check errors (auto-disable)→ wait ends ('check-failed'), NEED_ACTION + notice
- *   human / peer message         → wait ends ('message')           (phase.ts)
+ *   the backstop (`until`) passes → wait ends ('timed-out'), NEED_ACTION + notice
+ *                                  (a server clock: the trigger's host may be the
+ *                                  very thing that stopped working)
+ *   human / peer message         → the wait holds; its turn ends quietly (phase.ts).
+ *                                  'message' is only read from older records
  *   prompt that needs the human  → wait ends ('needs-human')       (phase.ts)
  *   status set to Need Action    → wait ends ('status-changed')    (applyPhase)
  *   Stop waiting / trigger deleted → record removed (and the routine deleted)
@@ -28,7 +35,10 @@ import { CLOUD_MODE } from '../constants.js';
 import { log } from '../logging/index.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import { SessionControlError } from './sessions/session-controls.js';
-import { EARLY_FIRE_WINDOW_MS, endedWait, normalizeWaitCondition } from './task-waiting-rules.js';
+import {
+  EARLY_FIRE_WINDOW_MS, WAIT_TTL_DEFAULT_MS, WAIT_TTL_ERROR, endedWait, normalizeWaitCondition, parseWaitTtlMs,
+  sameWait, waitTimedOut, waitUntilAt,
+} from './task-waiting-rules.js';
 import { isTaskWaiting, type Task, type TaskWaiting } from './types.js';
 
 interface RoutineRef {
@@ -104,6 +114,8 @@ export async function setTaskWaiting(input: {
   taskId: string;
   condition: unknown;
   routineId: unknown;
+  /** The backstop duration ("3d", "12h", ms); default WAIT_TTL_DEFAULT_MS. */
+  ttl?: unknown;
   source?: string;
 }): Promise<Task> {
   if (CLOUD_MODE) throw new SessionControlError('waits are set on the primary Walnut, not the cloud companion', 501);
@@ -115,6 +127,8 @@ export async function setTaskWaiting(input: {
   if (!routineId) {
     throw new SessionControlError('routine_id is required: the id trigger_create returned for the trigger that ends the wait', 400);
   }
+  const ttlMs = parseWaitTtlMs(input.ttl);
+  if (ttlMs === null) throw new SessionControlError(WAIT_TTL_ERROR, 400);
   const { getTask, updateTaskRaw } = await import('./task-manager.js');
   const task = await getTask(input.taskId).catch(() => null);
   if (!task) throw new SessionControlError(`no task ${input.taskId}`, 404);
@@ -154,24 +168,66 @@ export async function setTaskWaiting(input: {
     log.task.info('task wait set after its trigger already fired', { taskId: task.id, routineId, firedAtMs, condition });
     return res.task ?? { ...task, waiting: over };
   }
-  if (previous && !rearm) await deleteRoutineQuietly(previous);
   settledRoutines.delete(routineId);
-  // Strict: a wait whose only exit is off must not be reported as set.
-  if (job.enabled === false) await setRoutineEnabled(routineId, true, { strict: true });
 
-  const waiting: TaskWaiting = { condition, routine_id: routineId, since: now.toISOString() };
+  // The record first, then the trigger on: a check that fires in between would
+  // otherwise find no wait and be delivered as an ordinary fire, then park the
+  // task on an event that already happened (dedup never fires it again).
+  const waiting: TaskWaiting = {
+    condition, routine_id: routineId, since: now.toISOString(),
+    until: waitUntilAt(now, ttlMs, rearm ? task.waiting : null),
+  };
   const res = await updateTaskRaw(task.id, {
     waiting,
     unread: false,
     // A handed-back task that starts waiting stops asking for the human.
     ...(task.phase === 'NEED_ACTION' ? { phase: 'TODO' as const } : {}),
   }, { emitEvent: true, push: true, source: input.source ?? 'task-wait' });
+  if (job.enabled === false) {
+    try {
+      // Strict: a wait whose only exit is off must not be reported as set.
+      await setRoutineEnabled(routineId, true, { strict: true });
+    } catch (err) {
+      const undo = {
+        waiting: task.waiting ?? null,
+        ...(task.phase === 'NEED_ACTION' ? { phase: task.phase, unread: task.unread } : {}),
+      } as unknown as Partial<Task>;
+      await updateTaskRaw(task.id, undo, {
+        emitEvent: true, source: input.source ?? 'task-wait',
+        shouldUpdate: (current) => sameWait(current.waiting, waiting),
+      }).catch(() => { /* the error below is what the caller needs */ });
+      throw err;
+    }
+  }
+  // After the switch: the old trigger's delete clears only a wait still on it.
+  if (previous && !rearm) await deleteRoutineQuietly(previous);
   log.task.info('task waiting', {
-    taskId: task.id, routineId, condition, rearm, phase: res.task?.phase ?? task.phase,
+    taskId: task.id, routineId, condition, rearm, until: waiting.until, phase: res.task?.phase ?? task.phase,
   });
+  trackDeadline(res.task ?? { ...task, waiting });
   return res.task ?? { ...task, waiting };
 }
 
+
+/**
+ * `trigger_create` with `wait_until`: park the task on the trigger that call just
+ * made, born disabled so no check runs until the wait is recorded (setTaskWaiting
+ * turns it on). A trigger made for a wait that could not be set is deleted rather
+ * than left polling, or sitting off, with nothing waiting on it.
+ */
+export async function parkOnNewTrigger(input: {
+  taskId: string;
+  condition: string;
+  routineId: string;
+  ttl?: unknown;
+}): Promise<Task> {
+  try {
+    return await setTaskWaiting({ ...input, source: 'trigger-create' });
+  } catch (err) {
+    await deleteRoutineQuietly(input.routineId);
+    throw err;
+  }
+}
 
 /** Stop waiting: remove the record and delete its trigger. The task stays where it is (TODO). */
 export async function stopTaskWaiting(taskId: string, opts: { source?: string } = {}): Promise<Task> {
@@ -297,6 +353,114 @@ export async function wakeForFailedTrigger(jobId: string, error: string | undefi
   }
 }
 
+// ── The backstop: a wait still on at its `until` ends, and the task comes back ──
+//
+// A server clock, not the daemon's: the trigger's host is exactly what may have
+// stopped working. One timer for the nearest backstop (re-checked at least hourly,
+// so a Mac that slept past one catches up on wake), fed by a boot scan and by the
+// task events every wait write emits.
+
+const deadlines = new Map<string, number>();
+let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+let deadlinesLive = false;
+const DEADLINE_RECHECK_MS = 3_600_000;
+
+function trackDeadline(task: Task): void {
+  const at = isTaskWaiting(task) && task.waiting?.until ? Date.parse(task.waiting.until) : NaN;
+  if (Number.isFinite(at)) deadlines.set(task.id, at);
+  else deadlines.delete(task.id);
+  armDeadlineTimer();
+}
+
+function armDeadlineTimer(): void {
+  if (deadlineTimer) clearTimeout(deadlineTimer);
+  deadlineTimer = null;
+  if (!deadlinesLive || deadlines.size === 0) return;
+  const next = Math.min(...deadlines.values());
+  const delay = Math.max(1_000, Math.min(next - Date.now(), DEADLINE_RECHECK_MS));
+  deadlineTimer = setTimeout(() => {
+    deadlineTimer = null;
+    void sweepWaitDeadlines().catch((err) => log.task.warn('wait backstop sweep failed', { error: errText(err) }));
+  }, delay);
+  deadlineTimer.unref?.();
+}
+
+/**
+ * End every wait whose backstop has passed. Exported for tests (a fake `nowMs`);
+ * the timer calls it with the real clock. Re-reads each task, so a wait that
+ * ended or was re-armed since it was tracked is left alone.
+ */
+export async function sweepWaitDeadlines(nowMs = Date.now()): Promise<string[]> {
+  const due = [...deadlines.entries()].filter(([, at]) => at <= nowMs).map(([id]) => id);
+  const woke: string[] = [];
+  for (const id of due) {
+    deadlines.delete(id);
+    if (await wakeForDeadline(id, nowMs)) woke.push(id);
+  }
+  armDeadlineTimer();
+  return woke;
+}
+
+async function wakeForDeadline(taskId: string, nowMs: number): Promise<boolean> {
+  const { getTask, updateTaskRaw } = await import('./task-manager.js');
+  const task = await getTask(taskId).catch(() => null);
+  if (!task || !waitTimedOut(task, nowMs)) {
+    if (task) trackDeadline(task);
+    return false;
+  }
+  const waiting = task.waiting!;
+  const res = await updateTaskRaw(task.id, {
+    phase: 'NEED_ACTION', unread: true, waiting: endedWait(waiting, 'timed-out'),
+  }, {
+    emitEvent: true, push: true, source: 'task-wait-timeout',
+    shouldUpdate: (current) => isTaskWaiting(current) && sameWait(current.waiting, waiting),
+  });
+  if (!res.task) return false; // re-armed or ended meanwhile
+  log.task.info('task wait ended: its backstop passed', { taskId: task.id, routineId: waiting.routine_id, until: waiting.until });
+  try {
+    const { addNotification } = await import('./notifications/store.js');
+    await addNotification({
+      kind: 'cron',
+      severity: 'warning',
+      title: `Snooze ran out: ${task.title}`,
+      body: `The trigger watching "${waiting.condition}" had not fired by `
+        + `${new Date(waiting.until!).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}, so the task is back.`,
+      dedupKey: `task-wait-timeout:${task.id}:${waiting.since}`,
+      taskId: task.id,
+    });
+  } catch (err) {
+    log.task.warn('wait backstop notification failed', { taskId: task.id, error: errText(err) });
+  }
+  return true;
+}
+
+/**
+ * The boot scan: every live wait's backstop, including one that passed while
+ * Walnut was down. A wait recorded before backstops existed gets the default one,
+ * counted from when it began, so no wait is left without an end. Exported for tests.
+ */
+export async function loadWaitDeadlines(): Promise<void> {
+  const { listTasks, updateTaskRaw } = await import('./task-manager.js');
+  const tasks = await listTasks();
+  for (const task of tasks) {
+    const waiting = task.waiting;
+    if (!isTaskWaiting(task) || !waiting) continue;
+    let until = waiting.until;
+    if (!until) {
+      const since = Date.parse(waiting.since);
+      until = new Date((Number.isFinite(since) ? since : Date.now()) + WAIT_TTL_DEFAULT_MS).toISOString();
+      await updateTaskRaw(task.id, { waiting: { ...waiting, until } }, {
+        emitEvent: true, source: 'task-wait-backstop',
+        shouldUpdate: (current) => sameWait(current.waiting, waiting) && !current.waiting?.until,
+      }).catch((err) => log.task.warn('wait backstop backfill failed', { taskId: task.id, error: errText(err) }));
+    }
+    const at = Date.parse(until);
+    // A malformed record must not reach the timer: a NaN deadline would re-arm it every millisecond.
+    if (Number.isFinite(at)) deadlines.set(task.id, at);
+  }
+  armDeadlineTimer();
+}
+
 /** A routine was deleted (Stop waiting, the trigger card, trigger_delete): drop a wait on it. */
 export async function onRoutineDeleted(job: RoutineRef | null | undefined): Promise<void> {
   const taskId = routineTargetTask(job);
@@ -323,6 +487,9 @@ export const TASK_WAITING_SUBSCRIBER = 'task-waiting';
 
 async function onTaskEvent(event: BusEvent): Promise<void> {
   const task = (event.data as { task?: Task } | undefined)?.task;
+  if (task && (deadlines.has(task.id) || task.waiting?.until)) {
+    if (event.name === EventNames.TASK_DELETED) { deadlines.delete(task.id); armDeadlineTimer(); } else trackDeadline(task);
+  }
   const waiting = task?.waiting;
   if (!task || !waiting?.routine_id) return;
   const gone = event.name === EventNames.TASK_DELETED;
@@ -342,7 +509,7 @@ async function onTaskEvent(event: BusEvent): Promise<void> {
     log.task.info('wait trigger removed with its task', { taskId: task.id, routineId: waiting.routine_id, deleted: gone });
     return;
   }
-  // Ended by a message, a prompt or a status change: that trigger must stop polling.
+  // Ended by a prompt or a status change: that trigger must stop polling.
   // A fire is finishWaitingFire's to settle: a delivery the daemon still replays
   // (even across a server restart, which empties settledRoutines) needs it enabled.
   if (waiting.woke_at && waiting.woke_reason !== 'fired' && !settledRoutines.has(waiting.routine_id)) {
@@ -369,6 +536,8 @@ export async function notifyParentsOfQuietTurnEnd(taskId: string, sessionId: str
 /** Start the one subscriber (server boot, primary only). Idempotent: the name is overwritten. */
 export function startTaskWaitingWatch(): void {
   if (CLOUD_MODE) return;
+  deadlinesLive = true;
+  void loadWaitDeadlines().catch((err) => log.task.warn('wait backstop scan failed', { error: errText(err) }));
   bus.subscribe(TASK_WAITING_SUBSCRIBER, (event) => {
     void onTaskEvent(event).catch((err) => log.task.warn('task-waiting event failed', {
       event: event.name, error: errText(err),
@@ -381,4 +550,7 @@ export function startTaskWaitingWatch(): void {
 
 export function stopTaskWaitingWatch(): void {
   bus.unsubscribe(TASK_WAITING_SUBSCRIBER);
+  deadlinesLive = false;
+  deadlines.clear();
+  armDeadlineTimer();
 }

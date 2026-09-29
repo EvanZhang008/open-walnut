@@ -12,6 +12,8 @@
 
 import { SessionControlError } from '../sessions/session-controls.js';
 import { log } from '../../logging/index.js';
+import { WAIT_TTL_ERROR, normalizeWaitCondition, parseWaitTtlMs } from '../task-waiting-rules.js';
+import type { Task } from '../types.js';
 import { MIN_EVERY_MS, clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
 import type { TriggersTestResult } from '../../providers/trigger-check-core.js';
 import { requireTriggerDaemon, triggerHost } from './trigger-daemon.js';
@@ -143,7 +145,8 @@ export const TRIGGER_DESCRIPTION_MAX = 600;
 
 /**
  * Create a trigger in one call: check + interval + prompt + description + where
- * to deliver.
+ * to deliver. With `wait_until` it is also the snooze: the target task waits on
+ * it from the start ("Snooze until X"), set before its first check can run.
  *
  * Everything the caller omits is taken from the session that is asking, which is
  * what makes `/walnut-trigger` a one-liner from inside a session. The description
@@ -155,6 +158,8 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string): P
   host: string;
   /** Always null: the daemon owns the clock and reports the real next check. */
   nextCheckAt: null;
+  /** The task, snoozed on this trigger, when `wait_until` was given. */
+  task?: Task;
 }> {
   const b = record(body) ?? {};
   const run = str(b.run);
@@ -175,6 +180,15 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string): P
       400,
     );
   }
+  const waitUntil = b.wait_until == null ? null : normalizeWaitCondition(b.wait_until);
+  if (waitUntil === '') {
+    throw new SessionControlError(
+      'wait_until must say what the task waits for, in the user\'s words (e.g. "CR 1234 is approved")',
+      400,
+    );
+  }
+  if (b.wait_ttl != null && !waitUntil) throw new SessionControlError('wait_ttl needs wait_until: it is the snooze\'s backstop', 400);
+  if (parseWaitTtlMs(b.wait_ttl) === null) throw new SessionControlError(`wait_ttl: ${WAIT_TTL_ERROR}`, 400);
   const everyMs = parseEveryMs(b.every);
   if (everyMs === null) {
     throw new SessionControlError('every is required: milliseconds, or a duration like "30s" / "5m" / "1h"', 400);
@@ -192,6 +206,9 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string): P
   const created = await createRoutine({
     name,
     description,
+    // Off until the wait is recorded: a first check that fired before it would
+    // be an ordinary fire, and the snooze would wait for an event already gone.
+    ...(waitUntil ? { enabled: false } : {}),
     schedule: { kind: 'every', everyMs },
     check: {
       run,
@@ -207,5 +224,10 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string): P
     host, target: resolved.target, everyMs,
     jobId: (created.job as { id?: string } | undefined)?.id,
   });
-  return { job: created.job, host, nextCheckAt: null };
+  if (!waitUntil) return { job: created.job, host, nextCheckAt: null };
+  const routineId = String((created.job as { id?: string } | undefined)?.id ?? '');
+  const { parkOnNewTrigger } = await import('../task-waiting.js');
+  const task = await parkOnNewTrigger({ taskId: resolved.target, condition: waitUntil, routineId, ttl: b.wait_ttl });
+  const { getRoutine } = await import('./routines-core.js');
+  return { job: (await getRoutine(routineId)).job, host, nextCheckAt: null, task };
 }
