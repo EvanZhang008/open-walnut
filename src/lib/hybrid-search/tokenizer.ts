@@ -143,6 +143,15 @@ function emitCjkRun(lower: string, start: number, end: number, orig: string[], s
   }
 }
 
+/** Full-width letters, digits and punctuation, as a CJK input method types them
+ *  in full-width mode, folded to ASCII. Query side only: documents almost never
+ *  hold them (none of 900k terms in a bilingual index), so a full-width "iOS 18"
+ *  found nothing, and folding the index side would need a TOKENIZER_VERSION bump. */
+export function foldWidth(text: string): string {
+  return text.replace(/[\uff01-\uff5e\u3000]/g, (c) =>
+    (c === '\u3000' ? ' ' : String.fromCharCode(c.charCodeAt(0) - 0xfee0)));
+}
+
 /**
  * Tokenize `text` into ordered orig/sub streams. Used verbatim on both the
  * write path (docs) and the read path (queries).

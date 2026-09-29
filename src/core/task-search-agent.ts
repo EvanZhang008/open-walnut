@@ -87,6 +87,9 @@ const CLI_ENGINE_MODEL = 'sonnet';
 // client wall 95s keep the ordering.
 const CLI_ENGINE_TIMEOUT_MS = 80_000;
 
+/** Matches MACHINE_SEMANTIC_WAIT_MS in src/web/routes/search.ts. */
+const SEED_SEMANTIC_WAIT_MS = 2000;
+
 type ProgressData = { kind: 'seed' | 'search' | 'search_done' | 'answering'; q?: string; count?: number };
 
 /** Live progress → browser panel (mini-session lines). Best-effort: never
@@ -112,7 +115,13 @@ async function appendSeedResults(
   try {
     const { search } = await import('./search.js');
     const { buildSeedResultsBlock } = await import('./task-search-agent-contract.js');
-    const seed = await search(query, { types: ['task', 'session'], limit: SEARCH_ROW_LIMIT });
+    // The seed is the one search the model is sure to read, so it waits for
+    // the semantic lane like the child's own (slim) searches do.
+    const seed = await search(query, {
+      types: ['task', 'session'],
+      limit: SEARCH_ROW_LIMIT,
+      semanticDeadlineMs: SEED_SEMANTIC_WAIT_MS,
+    });
     progress({ kind: 'seed', q: query, count: seed.length });
     return prompt + buildSeedResultsBlock(await serializeRows(seed));
   } catch {

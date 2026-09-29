@@ -68,7 +68,12 @@ describe('claude -p default engine wiring', () => {
     // The raw query is pre-searched server-side and injected as seed results,
     // so the child's common case answers in ONE model round.
     expect(opts.prompt).toContain('SEED RESULTS');
-    expect(searchMock).toHaveBeenCalledWith('which task adds docx', { types: ['task', 'session'], limit: 8 });
+    // It waits for the semantic lane, like the child's own slim searches.
+    expect(searchMock).toHaveBeenCalledWith('which task adds docx', {
+      types: ['task', 'session'],
+      limit: 8,
+      semanticDeadlineMs: 2000,
+    });
     expect(typeof opts.toolUseId).toBe('string');
     expect(opts.tools).toEqual(['Bash']);
     // Tool budget is PROMPT-only (user call 2026-08-30: no watchdog): the

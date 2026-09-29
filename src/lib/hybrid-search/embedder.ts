@@ -127,8 +127,6 @@ export function cosineInt8(a: Int8Array, b: Int8Array): number {
  *  alone eats an interactive deadline; a batch used to be 22s). */
 interface Lane {
   submit(texts: string[], recallK?: number): { id: number; promise: Promise<WorkerReply> } | null;
-  /** Caller gave up on a job (deadline) — drop its live closure. */
-  abandon(id: number): void;
   /** Deliberate shutdown (idle reap / dispose) — never counted as a crash. */
   terminate(): Promise<void>;
 }
@@ -187,7 +185,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
         // the 3-strike containment.
         if (msg.error === undefined) crashes = 0;
         const p = pending.get(msg.id);
-        if (!p) return; // deadline already gave up on this job
+        if (!p) return; // terminated: failAllPending already settled it
         pending.delete(msg.id);
         if (msg.error !== undefined || !msg.buf || !msg.dims) {
           p.reject(new Error(msg.error ?? 'embed worker returned no data'));
@@ -232,9 +230,6 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
         });
         return { id, promise };
       },
-      abandon(id) {
-        pending.delete(id);
-      },
       async terminate() {
         const w = worker;
         if (!w) return;
@@ -264,6 +259,15 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
   // moves an entry to the young end; the oldest key is evicted at the cap).
   const queryCache = new Map<string, CachedQuery>();
   const recallFreshMs = config.recallFreshMs ?? DEFAULT_RECALL_FRESH_MS;
+  const inflight = new Map<string, Promise<WorkerReply>>();
+  function remember(key: string, entry: CachedQuery): void {
+    queryCache.delete(key);
+    queryCache.set(key, entry);
+    if (queryCache.size > QUERY_CACHE_CAP) {
+      // Map iteration is insertion order → the first key is the oldest.
+      for (const oldest of queryCache.keys()) { queryCache.delete(oldest); break; }
+    }
+  }
 
   return {
     async embedQuery(text, deadlineMs = 150, recallK) {
@@ -280,9 +284,27 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
       /** Cached vector as the fallback when the worker can't answer in time. */
       const rescue = (): QueryEmbedding | null =>
         (cached ? { vec: cached.vec, recall: [], source: 'cache-vec' } : null);
-      const job = queryLane.submit([prefixed], wantRecall);
-      if (!job) return rescue();
-      job.promise.catch(() => {}); // settled after we gave up ≠ unhandled
+      // One inference per text in flight. A caller that gives up at its
+      // deadline leaves the job running and its answer still lands in the
+      // cache, so the next lane of the same request (and the next request)
+      // finds it there. Abandoning it instead made every lane of one
+      // /api/search submit the same text again: three inferences racing for
+      // the CPU, each slower for the others, and in production 104 of 117
+      // queries on 2026-09-28 lost the 150ms deadline.
+      let promise = inflight.get(cacheKey);
+      if (!promise) {
+        const job = queryLane.submit([prefixed], wantRecall);
+        if (!job) return rescue();
+        promise = job.promise.then((reply) => {
+          if (!disposed) remember(cacheKey, { vec: reply.rows[0], recall: reply.recall, at: Date.now() });
+          return reply;
+        });
+        const settled = promise.finally(() => {
+          if (inflight.get(cacheKey) === promise) inflight.delete(cacheKey);
+        });
+        settled.catch(() => {}); // settled after we gave up ≠ unhandled
+        inflight.set(cacheKey, promise);
+      }
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         // The deadline timer stays REF'd: it is short-lived, cleared in
@@ -290,27 +312,13 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
         // an unref'd timer plus the (deliberately) unref'd worker let a
         // one-shot CLI process exit before the race resolved.
         const reply = await Promise.race([
-          job.promise,
+          promise,
           new Promise<null>((resolve) => {
             timer = setTimeout(() => resolve(null), deadlineMs);
           }),
         ]);
-        if (!reply) {
-          queryLane.abandon(job.id); // deadline: drop the live closure
-          return rescue();
-        }
-        const out: QueryEmbedding = {
-          vec: reply.rows[0],
-          recall: reply.recall,
-          source: 'worker',
-        };
-        queryCache.delete(cacheKey);
-        queryCache.set(cacheKey, { vec: out.vec, recall: out.recall, at: Date.now() });
-        if (queryCache.size > QUERY_CACHE_CAP) {
-          // Map iteration is insertion order → the first key is the oldest.
-          for (const oldest of queryCache.keys()) { queryCache.delete(oldest); break; }
-        }
-        return out;
+        if (!reply) return rescue();
+        return { vec: reply.rows[0], recall: reply.recall, source: 'worker' };
       } catch {
         return rescue();
       } finally {

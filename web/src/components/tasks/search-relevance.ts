@@ -22,11 +22,24 @@ export interface LiteralFields {
   tags?: string[];
 }
 
+/**
+ * Full-width letters, digits and punctuation (a CJK input method in full-width
+ * mode) folded to ASCII. Twin of `foldWidth` in src/lib/hybrid-search/tokenizer.ts,
+ * which the server applies to the same query; tests/web/search-relevance.test.ts
+ * pins the two together. Without it a full-width name matched no title here
+ * while the server found it.
+ */
+export function foldWidth(text: string): string {
+  return text.replace(/[\uff01-\uff5e\u3000]/g, (c) =>
+    (c === '\u3000' ? ' ' : String.fromCharCode(c.charCodeAt(0) - 0xfee0)));
+}
+
 /** The quick lane's test. `lowerQuery` is already trimmed and lowercased. */
 export function taskMatchesLiterally(task: LiteralFields, lowerQuery: string): boolean {
-  return task.title.toLowerCase().includes(lowerQuery)
-    || (task.project ?? '').toLowerCase().includes(lowerQuery)
-    || !!task.tags?.some((tag) => tag.toLowerCase().includes(lowerQuery));
+  const query = foldWidth(lowerQuery);
+  return task.title.toLowerCase().includes(query)
+    || (task.project ?? '').toLowerCase().includes(query)
+    || !!task.tags?.some((tag) => tag.toLowerCase().includes(query));
 }
 
 /** Server hits on an identifier answer exactly what was typed. */
@@ -34,16 +47,16 @@ const REFERENCE_FIELDS = new Set(['id', 'session_id', 'commit_sha', 'external_ur
 
 /** Lowercased whitespace-split terms; one-character terms are noise unless nothing else is left. */
 export function queryTerms(query: string): string[] {
-  const all = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const all = foldWidth(query).trim().toLowerCase().split(/\s+/).filter(Boolean);
   const terms = all.filter((term) => term.length > 1);
   return terms.length > 0 ? terms : all;
 }
 
 /**
- * The server's coverage tier for a row that matched every query term somewhere
+ * The server's coverage tier for a row that matched the query's terms somewhere
  * in the document (`coveredTermHits` is published on a 0-4 scale for
- * multi-term queries: 4 = every term, or all but one on a query of 8+ terms,
- * where the rounding reaches 4). That is keyword evidence, not a
+ * multi-term queries, each term weighted by rarity: 4 = the rare terms are all
+ * there, at most a common word missing). That is keyword evidence, not a
  * semantic guess, even when the ~80-character snippet cannot show all the terms
  * at once: a task titled "... CRON - Dock Hub KB sync" whose note says
  * "cron job" matched "dockhub sync cron job" in full and still folded into
@@ -64,7 +77,7 @@ export function serverRowShowsQuery(
   return terms.every((term) => {
     if (text.includes(term)) return true;
     joined ??= joinWords(text);
-    return joined.includes(term);
+    return joined.includes(joinWords(term));
   });
 }
 
@@ -74,10 +87,13 @@ export function serverRowShowsQuery(
  * server matches compounds both ways; without this the task it found for
  * "dockhub sync" still folded into "Related" for not showing the query.
  * (Two words typed for one written word already pass: "dock" and "hub" are both
- * substrings of "dockhub".)
+ * substrings of "dockhub".) The typed term is joined too, so a version typed
+ * with other separators shows: "opus-4-8" in "Opus 4.8 upgrade", or
+ * "2026-07-01" in "2026/07/01", which the server matches and which otherwise
+ * hid behind the Done chip.
  */
 function joinWords(text: string): string {
-  return text.replace(/([\p{L}\p{N}])[\s_.-]{1,3}(?=[\p{L}\p{N}])/gu, '$1');
+  return text.replace(/([\p{L}\p{N}])[\s_./-]{1,3}(?=[\p{L}\p{N}])/gu, '$1');
 }
 
 export interface SearchMatchFacts<T> {

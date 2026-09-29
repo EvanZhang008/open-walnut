@@ -187,6 +187,27 @@ describe('search() memo (wired)', () => {
     expect(lane).toHaveBeenCalledTimes(2);
   });
 
+  it('never memoizes a keyword-only fallback: the next identical search asks again', async () => {
+    // The embedding that missed its deadline is still being computed and lands
+    // in the embedder's cache; replaying the degraded rows for 20s would hide it.
+    const lane = mockLane();
+    lane.mockResolvedValue([{
+      kind: 'memory', ref: '/m/a.md', title: 'Helm CRD update behavior', text: 'body about helm',
+      score: 0.9, components: { coverage: 1 }, semantic: 'timeout',
+    }]);
+    const { search } = await import('../../src/core/search.js');
+    await search('helm crd', { types: ['memory'] });
+    await search('helm crd', { types: ['memory'] });
+    expect(lane).toHaveBeenCalledTimes(2);
+  });
+
+  it('passes the caller\'s semantic deadline to every hybrid lane', async () => {
+    const lane = mockLane();
+    const { search } = await import('../../src/core/search.js');
+    await search('helm crd', { types: ['memory'], semanticDeadlineMs: 2_000 });
+    expect(lane).toHaveBeenCalledWith('helm crd', expect.objectContaining({ semanticDeadlineMs: 2_000 }));
+  });
+
   it('clearSearchResultCache() forces the next query back to the lane', async () => {
     const lane = mockLane();
     const { search, clearSearchResultCache } = await import('../../src/core/search.js');

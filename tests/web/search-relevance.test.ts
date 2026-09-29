@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   arrangeSearchResults,
+  foldWidth,
   INLINE_COMPLETED_HITS,
   queryTerms,
   serverRowShowsQuery,
   taskMatchesLiterally,
 } from '../../web/src/components/tasks/search-relevance';
+import { foldWidth as serverFoldWidth } from '../../src/lib/hybrid-search/tokenizer';
+
+// Full-width "DockHub" and "iOS 18" (U+3000 is the ideographic space), test data, escaped.
+const FW_DOCKHUB = '\uff24\uff4f\uff43\uff4b\uff28\uff55\uff42';
+const FW_IOS_18 = '\uff49\uff2f\uff33\u3000\uff11\uff18';
 
 const row = (id: string) => ({ id });
 
@@ -16,12 +22,29 @@ describe('taskMatchesLiterally', () => {
     expect(taskMatchesLiterally({ title: 'Plain', tags: ['ops', 'QX2-gate'] }, 'qx2')).toBe(true);
     expect(taskMatchesLiterally({ title: 'Plain', project: 'Marina', tags: ['ops'] }, 'qx2')).toBe(false);
   });
+  it('reads a query typed in full-width mode as the ASCII the server reads', () => {
+    expect(taskMatchesLiterally({ title: 'DockHub website deploy' }, FW_DOCKHUB.toLowerCase())).toBe(true);
+  });
+});
+
+describe('foldWidth', () => {
+  it('is the twin of the server query fold, character for character', () => {
+    const chars: string[] = [];
+    for (let c = 0x20; c <= 0x7e; c++) chars.push(String.fromCharCode(c));
+    for (let c = 0x3000; c <= 0x3003; c++) chars.push(String.fromCharCode(c));
+    for (let c = 0xff00; c <= 0xff65; c++) chars.push(String.fromCharCode(c));
+    for (const ch of chars) expect(foldWidth(ch)).toBe(serverFoldWidth(ch));
+    expect(foldWidth(FW_IOS_18)).toBe('iOS 18');
+  });
 });
 
 describe('queryTerms', () => {
   it('splits on whitespace, lowercases, and drops one-character noise', () => {
     expect(queryTerms('  Dock  Gate a ')).toEqual(['dock', 'gate']);
     expect(queryTerms('QX2')).toEqual(['qx2']);
+  });
+  it('folds full-width input first', () => {
+    expect(queryTerms(FW_IOS_18)).toEqual(['ios', '18']);
   });
   it('keeps short terms when nothing else is left (and CJK stays one term)', () => {
     expect(queryTerms('a b')).toEqual(['a', 'b']);
@@ -58,6 +81,12 @@ describe('serverRowShowsQuery', () => {
     // Two typed words already pass against the one-word spelling.
     expect(serverRowShowsQuery({ title: 'DockHub rollout' }, ['dock', 'hub'])).toBe(true);
     expect(serverRowShowsQuery({ title: 'Dock inspection', snippet: '...the hub...' }, ['dockhub'])).toBe(false);
+  });
+  it('a version typed with other separators shows (the server matches it)', () => {
+    // It was hidden behind the Done chip: completed, and "not showing" the query.
+    expect(serverRowShowsQuery({ title: 'Opus 4.8 upgrade: does the model config change' }, ['opus-4-8'])).toBe(true);
+    expect(serverRowShowsQuery({ title: 'Release 2026/07/01 notes' }, ['2026-07-01'])).toBe(true);
+    expect(serverRowShowsQuery({ title: 'Opus 4.7 upgrade' }, ['opus-4-8'])).toBe(false);
   });
   it('full server-side coverage is evidence even when the snippet cannot show every term', () => {
     // The note says "cron job"; the ~80-char snippet had no room for "job".

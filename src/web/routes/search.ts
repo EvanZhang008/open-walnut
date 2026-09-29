@@ -97,7 +97,25 @@ async function toSlimResults(results: SearchResult[]): Promise<SlimSearchResult[
 
 export const searchRouter = Router()
 
-// GET /api/search?q=...&types=task,memory&limit=20&slim=1
+/** Semantic wait for slim (machine) callers, and the most any caller may ask
+ *  for with ?semanticWaitMs=. */
+export const MACHINE_SEMANTIC_WAIT_MS = 2000
+export const MAX_SEMANTIC_WAIT_MS = 5000
+
+/**
+ * How long this request's semantic lane may wait for the query embedding.
+ * Machine callers (slim=1: the AI search child, agents, the CLI) spend seconds
+ * per call anyway, so they wait: the semantic lane is what finds a paraphrase
+ * or a misspelled word, and at the list's 150ms it lost to the embed model on
+ * most queries. `undefined` keeps the library default.
+ */
+export function semanticDeadlineFor(slim: boolean, raw: unknown): number | undefined {
+  const asked = typeof raw === 'string' && raw !== '' ? Number(raw) : NaN
+  if (Number.isFinite(asked)) return Math.max(0, Math.min(MAX_SEMANTIC_WAIT_MS, Math.round(asked)))
+  return slim ? MACHINE_SEMANTIC_WAIT_MS : undefined
+}
+
+// GET /api/search?q=...&types=task,memory&limit=20&slim=1&semanticWaitMs=2000
 searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const q = (req.query.q as string) ?? ''
@@ -120,13 +138,14 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
     }
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined
     const slim = req.query.slim === '1'
+    const semanticDeadlineMs = semanticDeadlineFor(slim, req.query.semanticWaitMs)
 
     // A verbose search = the human search box (agents/CLI use slim=1); it
     // fires ~500ms before the AI lane's debounce, so pre-boot that lane's
     // CLI child now — by the time the agent query lands, boot is done.
     if (!slim) prewarmAgentSearchChild()
 
-    const results = await search(q, { types, limit })
+    const results = await search(q, { types, limit, semanticDeadlineMs })
     res.json({ results: slim ? await toSlimResults(results) : results })
   } catch (err) {
     next(err)

@@ -6,7 +6,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants());
 
 import express from 'express';
 import request from 'supertest';
-import { searchRouter } from '../../../src/web/routes/search.js';
+import { searchRouter, semanticDeadlineFor, MACHINE_SEMANTIC_WAIT_MS, MAX_SEMANTIC_WAIT_MS } from '../../../src/web/routes/search.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { addTask, _resetForTesting } from '../../../src/core/task-manager.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
@@ -160,5 +160,21 @@ describe('GET /api/search?slim=1', () => {
     expect(res.status).toBe(200);
     expect(res.body.results[0].snippet).toBeDefined();
     expect(res.body.results[0].score).toBeDefined();
+  });
+});
+
+describe('semanticDeadlineFor', () => {
+  it('lets machine (slim) callers wait for the embedding, keeps the list default otherwise', () => {
+    expect(semanticDeadlineFor(true, undefined)).toBe(MACHINE_SEMANTIC_WAIT_MS);
+    expect(semanticDeadlineFor(false, undefined)).toBeUndefined();
+  });
+
+  it('honours an explicit wait, clamped, and ignores junk', () => {
+    expect(semanticDeadlineFor(false, '800')).toBe(800);
+    expect(semanticDeadlineFor(true, '0')).toBe(0);
+    expect(semanticDeadlineFor(false, '999999')).toBe(MAX_SEMANTIC_WAIT_MS);
+    expect(semanticDeadlineFor(false, '-5')).toBe(0);
+    expect(semanticDeadlineFor(false, 'soon')).toBeUndefined();
+    expect(semanticDeadlineFor(true, ['1', '2'])).toBe(MACHINE_SEMANTIC_WAIT_MS);
   });
 });

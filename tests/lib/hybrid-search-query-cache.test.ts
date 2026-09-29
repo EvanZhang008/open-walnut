@@ -163,6 +163,46 @@ describe('query-embedding LRU', () => {
     }
   });
 
+  it('a caller that gives up still leaves the answer in the cache for the next one', async () => {
+    // Production 2026-09-28: 104 of 117 queries lost the 150ms deadline, and the
+    // abandoned answer was thrown away, so the AI search's seed (same text, a
+    // second later) paid the whole inference again.
+    const embedder = createEmbedder(
+      { modelId: 'fake/unit-x', dims: 4, workerPath: STALLING_WORKER },
+      noopLog,
+    );
+    try {
+      expect((await embedder.embedQuery('warm the worker', 5_000))?.source).toBe('worker');
+      expect(await embedder.embedQuery('orbit telemetry', 25)).toBeNull();
+      await new Promise((r) => setTimeout(r, 1_200)); // the stalled job lands
+      expect((await embedder.embedQuery('orbit telemetry', 25))?.source).toBe('cache');
+    } finally {
+      await embedder.dispose();
+    }
+  });
+
+  it('callers asking for the same text while it is being computed share one inference', async () => {
+    // One /api/search asks three lanes for the same text; each used to submit
+    // its own job, and the three raced each other for the CPU.
+    const embedder = createEmbedder(
+      { modelId: 'fake/unit-x', dims: 4, workerPath: STALLING_WORKER },
+      noopLog,
+    );
+    try {
+      await embedder.embedQuery('warm the worker', 5_000);
+      const [a, b] = await Promise.all([
+        embedder.embedQuery('orbit telemetry', 5_000),
+        embedder.embedQuery('orbit telemetry', 5_000),
+      ]);
+      expect(a?.source).toBe('worker');
+      expect(b?.source).toBe('worker');
+      // The same Int8Array instance: one reply, not two equal ones.
+      expect(b?.vec).toBe(a?.vec);
+    } finally {
+      await embedder.dispose();
+    }
+  });
+
   it('an unavailable worker resolves null, never throws into the search path', async () => {
     const embedder = createEmbedder(
       { modelId: 'no/such', dims: 4, workerPath: '/nonexistent/embed-worker.js' },

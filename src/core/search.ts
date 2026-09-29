@@ -9,6 +9,7 @@ import { matchIdQuery, parseIdQuery } from './search/id-lookup.js';
 import { isSearchArtifact } from './task-junk.js';
 import type { SessionRecord, Task } from './types.js';
 import type { QuerySegments } from '../lib/hybrid-search/index.js';
+import { foldWidth } from '../lib/hybrid-search/tokenizer.js';
 
 export interface SearchResult {
   type: 'task' | 'memory' | 'session';
@@ -31,6 +32,11 @@ export interface SearchResult {
 export interface SearchOptions {
   limit?: number;
   types?: ('task' | 'memory' | 'session')[];
+  /** How long the semantic lane may wait for the query embedding (library
+   *  default 150ms, sized for the home list's typing loop). A caller with a
+   *  seconds-long budget of its own (the AI search) passes more, since that
+   *  lane is what finds a paraphrase or a misspelling no keyword shares. */
+  semanticDeadlineMs?: number;
 }
 
 export function extractSnippet(
@@ -761,9 +767,14 @@ export async function search(
       cached = 'miss';
       count('search.result_cache', 1, { result: 'miss' });
     }
-    const results = await searchInner(query, options);
+    const run: SearchRun = { semanticTimedOut: false };
+    const results = await searchInner(query, options, run);
     // Store the copy, hand out the fresh array (nothing else references it yet).
-    if (memoable) {
+    // Never a keyword-only fallback: its embedding is still being computed and
+    // lands in the embedder's cache, so the next identical search (the AI
+    // search's seed after the list's, a second look) gets the real answer
+    // instead of this one replayed for the memo's lifetime.
+    if (memoable && !run.semanticTimedOut) {
       bindResultCacheInvalidation();
       resultCache.set(key, results.map((row) => ({ ...row })));
     }
@@ -825,31 +836,52 @@ function publishHybridSegments(seg: QuerySegments): void {
  */
 export const DEFAULT_SEARCH_TYPES: ReadonlyArray<'task' | 'memory' | 'session'> = ['task', 'memory', 'session'];
 
+/** What searchInner learned beyond its rows. */
+interface SearchRun {
+  /** Some hybrid lane answered in keyword order because the query embedding
+   *  missed its deadline. */
+  semanticTimedOut: boolean;
+}
+
 async function searchInner(
   query: string,
   options: SearchOptions = {},
+  run: SearchRun = { semanticTimedOut: false },
 ): Promise<SearchResult[]> {
   const limit = options.limit ?? 20;
   const types = options.types ?? DEFAULT_SEARCH_TYPES;
 
-  const normalizedQuery = query.trim();
+  // Every lane sees the half-width text (see foldWidth), not just the index's.
+  const normalizedQuery = foldWidth(query).trim();
   if (normalizedQuery.length === 0) return [];
 
   const results: SearchResult[] = [];
   let laneFailure: unknown;
+  const hybridLane = async (kinds: string[]) => {
+    const searchV2Lane = await loadSearchV2Lane();
+    const hits = await searchV2Lane(normalizedQuery, {
+      kinds,
+      limit,
+      semanticDeadlineMs: options.semanticDeadlineMs,
+    });
+    if (hits.some((hit) => hit.semantic === 'timeout')) run.semanticTimedOut = true;
+    return hits;
+  };
   // WALNUT_DISABLE_SEARCH=1 (and cloud replicas): no index exists — the task
   // and session lanes degrade to the in-process BM25 scorers, memory is
   // skipped. Keyword-only, but never a dead end.
   const searchEnabled =
     process.env.WALNUT_DISABLE_SEARCH !== '1'
     && !CLOUD_MODE;
-  // v2's coverage component is a fraction over ITS tokenization of the query;
-  // the merge below wants a hit count over contentQueryTerms. Same terms in
-  // practice — reconstruct the count from the fraction.
+  // v2's coverage component is a share of ITS tokenization of the query, each
+  // term weighted by rarity; the merge below counts in contentQueryTerms units.
+  // Scale the share to that count, unrounded: rounding first would bucket a
+  // row twice, and the weighting is the point (a row holding the rare words of
+  // "where is the cook rice task" is most of the way there).
   const mergeTermCount = contentQueryTerms(normalizedQuery).length;
   const v2CoveredHits = (coverageFrac: number): number | undefined =>
     mergeTermCount > 1
-      ? Math.min(mergeTermCount, Math.round(coverageFrac * mergeTermCount))
+      ? Math.min(mergeTermCount, coverageFrac * mergeTermCount)
       : undefined;
   // One row per task (and per session) survives the lanes: the first to find
   // it. When that is the title lane, which sees only the title, the row lost
@@ -1039,8 +1071,7 @@ async function searchInner(
         appendTaskResult(result);
       }
     } else try {
-      const searchV2Lane = await loadSearchV2Lane();
-      for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['task'], limit })) {
+      for (const hit of await hybridLane(['task'])) {
         appendTaskResult({
           type: 'task',
           title: hit.title,
@@ -1114,11 +1145,10 @@ async function searchInner(
       const taskBySession = new Map(
         (await getSessions()).map((s) => [s.claudeSessionId, s.taskId]),
       );
-      const searchV2Lane = await loadSearchV2Lane();
       const keptSessionRows = new Map(
         results.filter((r) => r.type === 'session' && r.sessionId).map((r) => [r.sessionId!, r]),
       );
-      for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['session'], limit })) {
+      for (const hit of await hybridLane(['session'])) {
         if (seenSessionIds.has(hit.ref)) {
           const kept = keptSessionRows.get(hit.ref);
           if (kept) {
@@ -1160,8 +1190,7 @@ async function searchInner(
   // to score, so the lane simply contributes nothing.
   if (types.includes('memory') && searchEnabled) {
     try {
-      const searchV2Lane = await loadSearchV2Lane();
-      for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['memory', 'note', 'skill'], limit })) {
+      for (const hit of await hybridLane(['memory', 'note', 'skill'])) {
         results.push({
           type: 'memory',
           title: hit.title,
