@@ -85,8 +85,18 @@
   35% { transform: scale(1.14); }
   100% { transform: scale(1); }
 }
+/* A button was pressed and its op has not answered yet: the ring breathes until it does.
+   Opacity only, so it composites off the main thread (the arc itself never animates). */
+.sidebar-status-item.is-pending .status-ring {
+  animation: status-ring-pending 0.9s ease-in-out infinite alternate;
+}
+@keyframes status-ring-pending {
+  from { opacity: 1; }
+  to { opacity: 0.35; }
+}
 @media (prefers-reduced-motion: reduce) {
   .sidebar-status-item .status-ring { animation: none !important; }
+  .sidebar-status-item.is-pending .status-ring { opacity: 0.5; }
 }
 
 /* ── Popover ── */

@@ -15,9 +15,9 @@ import { type Page } from '@playwright/test'
  *      shows words instead of the number.
  *   3. The popover opens beside the rail (never over it, never off-screen), primary
  *      button first; Escape, an outside click and a second click on the item close it.
- *   4. A button runs the plugin's own op and the popover closes on success, again and
- *      again; a failing op keeps it open with the reason and a retry works; a slow op
- *      locks the buttons until it answers.
+ *   4. A button closes the popover at once and runs the plugin's own op, again and again;
+ *      a slow op shows on the item (pulsing, "Slow…") and locks the buttons until it
+ *      answers; a failing op reopens the popover with the reason and a retry works.
  *   5. Its footer opens the plugin's App (SPA navigation).
  *   6. Disabling the plugin takes the item away live, a reload brings it back, and a
  *      page reload shows what is live now (the first GET).
@@ -25,6 +25,8 @@ import { type Page } from '@playwright/test'
  *      Stop block button ends the block.
  *   8. Rhythm's Stand up now starts the stand-up break (a green countdown), not a new
  *      sitting round; End break starts the sitting count again.
+ *   9. A notice (toast) button closes its toast at once, before a slow op answers; a
+ *      failing one answers in its own error toast.
  *
  * Runs against its own server (tests/e2e/browser/status-items-server.ts).
  */
@@ -103,6 +105,8 @@ async function shootRail(page: Page, name: string): Promise<void> {
   // count() first: boundingBox() on a missing element WAITS for it, which ate the whole
   // test timeout whenever no popover was open.
   const pop = (await popover(page).count()) > 0 ? await popover(page).boundingBox() : null
+  // The popover fades in over 0.16s; a shot taken inside it shows a ghost, not the design.
+  if (pop) await popover(page).evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)))
   const right = Math.max(rail!.x + rail!.width, pop ? pop.x + pop.width : 0) + 16
   const top = Math.max(0, Math.min(rail!.y + rail!.height - 330, pop ? pop.y - 16 : Infinity))
   await page.screenshot({ timeout: 60_000, path: `${SHOTS}/${name}.png`, clip: { x: 0, y: top, width: Math.min(1280, right), height: rail!.y + rail!.height - top } })
@@ -253,25 +257,46 @@ test('the popover opens beside the rail, and a button runs the op again and agai
   await expect(popover(page)).toHaveCount(0)
 })
 
-test('a failing op keeps the popover open with the reason; a slow one locks the buttons', async ({ page }) => {
+test('a button answers at once even when its op is slow; a failure reopens with the reason', async ({ page }) => {
   await page.goto(`${base()}/`)
   await expect(page.locator('.sidebar')).toBeVisible({ timeout: 60_000 })
   await setCollapsed(page, true)
-  await show(page, {
+  const choices = {
     title: 'Probe choices', tone: 'neutral',
     actions: [{ label: 'Refuse', op: 'refuse', primary: true }, { label: 'Slow', op: 'slow' }, { label: 'Ack', op: 'ack' }],
-  })
+  }
+  await show(page, choices)
+
+  // The op takes 3s on the server. The popover must be gone while it is still running,
+  // and the item must say so: closing only when the op answered is the reported bug.
+  await item(page).click()
+  const clicked = Date.now()
+  await popover(page).getByRole('button', { name: 'Slow' }).click()
+  await expect(popover(page)).toHaveCount(0)
+  const closedMs = Date.now() - clicked
+  await expect(item(page)).toHaveAttribute('aria-busy', 'true')
+  await expect(item(page)).toHaveAttribute('aria-label', 'Slow…')
+  await expect(item(page)).toHaveClass(/is-pending/)
+  test.info().annotations.push({ type: 'popover-closed-ms', description: String(closedMs) })
+  // Opened again while it runs: the buttons wait instead of stacking a second op.
+  await item(page).click()
+  await expect(popover(page).locator('.status-item-btn').first()).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(item(page)).toHaveAttribute('aria-label', 'Slow one finished', { timeout: 15_000 })
+  await expect(item(page)).not.toHaveAttribute('aria-busy', 'true')
+  await expect(item(page)).not.toHaveClass(/is-pending/)
+
+  // A refusal: closes on the click, then reopens at its item with the reason, and a
+  // retry from there works.
+  await show(page, choices)
   await item(page).click()
   await popover(page).getByRole('button', { name: 'Refuse' }).click()
   await expect(popover(page).locator('.status-item-popover-error')).toContainText('Probe refused on purpose')
-  await expect(popover(page)).toBeVisible()
+  await expect(popover(page).locator('.status-item-btn').first()).toBeEnabled()
   await shootRail(page, '04-popover-error')
-
-  await popover(page).getByRole('button', { name: 'Slow' }).click()
-  await expect(popover(page).locator('.status-item-btn').first()).toBeDisabled()
-  await expect(popover(page).locator('.status-item-popover-error')).toHaveCount(0)
-  await expect(popover(page)).toHaveCount(0, { timeout: 10_000 })
-  await expect(item(page)).toHaveAttribute('aria-label', 'Slow one finished')
+  await popover(page).getByRole('button', { name: 'Ack' }).click()
+  await expect(popover(page)).toHaveCount(0)
+  await expect(item(page)).toHaveAttribute('aria-label', /^Acknowledged \d+$/)
 
   // The item went away while its popover was open: the popover goes with it.
   await show(page, { title: 'About to vanish', actions: [{ label: 'Ack', op: 'ack' }] })
@@ -372,4 +397,36 @@ test('Rhythm: Stand up now starts the stand-up break countdown, and End break st
   const body = await status.json() as { ok: boolean; result: { focus: { phase: string }; today: { breaksTaken: number } } }
   expect(body.result.focus.phase).toBe('idle')
   expect(body.result.today.breaksTaken).toBeGreaterThanOrEqual(1)
+})
+
+test('a notice button closes its toast at once and runs the op after; a failure answers in its own toast', async ({ page }) => {
+  await page.goto(`${base()}/`)
+  await expect(page.locator('.sidebar')).toBeVisible({ timeout: 60_000 })
+  await setCollapsed(page, true)
+  const toastTitled = (title: string) => page.locator('.notification-toast', { has: page.locator('.notification-toast-title', { hasText: title }) })
+  const toast = toastTitled('Probe reminder')
+  await probe(page, 'notice')
+  await expect(toast).toBeVisible({ timeout: 30_000 })
+
+  // The op takes 3s: the toast must be gone before it answers (it sets the rail item when done).
+  const clicked = Date.now()
+  await toast.getByRole('button', { name: 'Slow notice' }).click()
+  await expect(toast).toHaveCount(0)
+  const goneMs = Date.now() - clicked
+  expect(await item(page).count() === 0 || (await item(page).getAttribute('aria-label')) !== 'Slow notice finished').toBe(true)
+  test.info().annotations.push({ type: 'toast-closed-ms', description: String(goneMs) })
+  await expect(item(page)).toHaveAttribute('aria-label', 'Slow notice finished', { timeout: 15_000 })
+
+  // A failing button: its toast closes too, and an error toast says what did not happen and why.
+  await probe(page, 'notice')
+  await expect(toast).toBeVisible({ timeout: 30_000 })
+  await toast.getByRole('button', { name: 'Refuse' }).click()
+  await expect(toast).toHaveCount(0)
+  const failed = toastTitled('"Refuse" did not run')
+  await expect(failed).toBeVisible()
+  await expect(failed.locator('.notification-toast-body')).toContainText('Probe refused on purpose')
+  await expect(failed.locator('.notification-toast-body')).toContainText('still in the notifications panel')
+  await failed.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)))
+  const box = (await failed.boundingBox())!
+  await page.screenshot({ path: `${SHOTS}/08-toast-error.png`, clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: Math.min(1280 - Math.max(0, box.x - 16), box.width + 32), height: box.height + 32 } })
 })

@@ -4,13 +4,18 @@
  *
  * The ring shows minutes left (or a glyph); the expanded rail adds the title. Clicking
  * opens a portalled popover beside the rail, placed by useMenuPlacement like every other
- * overlay. A button runs the plugin's own op through the plugin-runtime route and the
- * popover closes on success; the new state arrives as the next `plugin:status-items`.
+ * overlay. A button closes the popover AT ONCE and runs the plugin's own op through the
+ * plugin-runtime route; the item shows it is working (a pulsing ring, "Start break…")
+ * until the op answers, and the new state arrives as the next `plugin:status-items`. The
+ * op takes tens of milliseconds, but a server busy with other work once held one for 5s,
+ * and a popover waiting on it read as a broken button. A failure reopens the popover with
+ * the reason (or, when the item is gone, says so in an error toast).
  */
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useAppCatalog } from '@/apps/hooks';
+import { useNotifications } from '@/contexts/notifications';
 import { runOpAction } from '@/contexts/notifications/notification-actions';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { log } from '@/utils/log';
@@ -59,18 +64,56 @@ export function StatusRing({ item, now, className = 'status-ring' }: { item: Sta
   );
 }
 
+interface Pending { op: string; label: string; seq: number }
+
 export function SidebarStatusItems({ collapsed }: { collapsed: boolean }) {
   const items = useStatusItems();
   useTicker(items.some((item) => item.timer), TICK_MS);
   const now = Date.now();
+  const { notify } = useNotifications();
   const [openKey, setOpenKey] = useState<string | null>(null);
-  // The open item's button, set on the click that opened it (one stable ref per rail).
+  // Set when a failed op reopens its popover; cleared by the next open or run.
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+  // Per item: two items' ops can run at once, and each shows its own until it answers.
+  const [pending, setPending] = useState<Record<string, Pending>>({});
+  const pendingSeq = useRef(0);
+  // The open item's button (the popover's anchor), and every item's, so a failure can reopen at its own item.
   const openTrigger = useRef<HTMLButtonElement | null>(null);
+  const triggers = useRef(new Map<string, HTMLButtonElement>());
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
   // The item went away (the plugin cleared it or was disabled): its popover goes too.
   useEffect(() => {
     if (openKey && !items.some((item) => item.key === openKey)) setOpenKey(null);
   }, [items, openKey]);
+
+  const run = useCallback(async (item: StatusItem, action: StatusItemAction) => {
+    const seq = ++pendingSeq.current;
+    setPending((all) => ({ ...all, [item.key]: { op: action.op, label: action.label, seq } }));
+    setFailure(null);
+    setOpenKey(null);
+    const result = await runOpAction(action);
+    setPending((all) => {
+      if (all[item.key]?.seq !== seq) return all;
+      const { [item.key]: _done, ...rest } = all;
+      return rest;
+    });
+    if (result.ok) return;
+    log.warn('status-items', 'status item action failed', { key: item.key, op: action.op, message: result.message });
+    const trigger = triggers.current.get(item.key);
+    if (trigger && itemsRef.current.some((one) => one.key === item.key)) {
+      openTrigger.current = trigger;
+      setFailure({ key: item.key, message: result.message });
+      setOpenKey(item.key);
+      return;
+    }
+    notify({
+      kind: 'operation-error', severity: 'error', persistent: false,
+      title: `"${action.label}" did not run`, body: result.message,
+      dedupKey: `status-item-action-error:${item.key}`,
+    });
+  }, [notify]);
 
   if (items.length === 0) return null;
   const open = openKey ? items.find((item) => item.key === openKey) ?? null : null;
@@ -78,19 +121,26 @@ export function SidebarStatusItems({ collapsed }: { collapsed: boolean }) {
   return (
     <>
       {items.map((item) => {
-        const title = itemTitle(item, now);
+        const busy = pending[item.key] ?? null;
+        const title = busy ? `${busy.label}…` : itemTitle(item, now);
         const isOpen = item.key === openKey;
         return (
           <button
             key={item.key}
-            className={`sidebar-link sidebar-status-item${isOpen ? ' is-open' : ''}`}
+            ref={(el) => { if (el) triggers.current.set(item.key, el); else triggers.current.delete(item.key); }}
+            className={`sidebar-link sidebar-status-item${isOpen ? ' is-open' : ''}${busy ? ' is-pending' : ''}`}
             data-tone={item.tone}
             data-status-key={item.key}
-            onClick={(e) => { openTrigger.current = e.currentTarget; setOpenKey(isOpen ? null : item.key); }}
+            onClick={(e) => {
+              openTrigger.current = e.currentTarget;
+              setFailure(null);
+              setOpenKey(isOpen ? null : item.key);
+            }}
             title={collapsed ? title : undefined}
             aria-label={title}
             aria-haspopup="dialog"
             aria-expanded={isOpen}
+            aria-busy={busy ? true : undefined}
           >
             <StatusRing item={item} now={now} />
             <span className="sidebar-label">{title}</span>
@@ -103,24 +153,33 @@ export function SidebarStatusItems({ collapsed }: { collapsed: boolean }) {
           item={open}
           now={now}
           triggerRef={openTrigger}
-          onClose={() => setOpenKey(null)}
+          busyOp={pending[open.key]?.op ?? null}
+          error={failure?.key === open.key ? failure.message : null}
+          // A failure reopens it without taking focus from whatever the person moved on to.
+          takeFocus={failure?.key !== open.key}
+          onRun={(action) => { void run(open, action); }}
+          onClose={() => { setOpenKey(null); setFailure(null); }}
         />
       )}
     </>
   );
 }
 
-function StatusItemPopover({ item, now, triggerRef, onClose }: {
+function StatusItemPopover({ item, now, triggerRef, busyOp, error, takeFocus, onRun, onClose }: {
   item: StatusItem;
   now: number;
   triggerRef: RefObject<HTMLButtonElement | null>;
+  /** An op of this item is still running (the buttons wait for it). */
+  busyOp: string | null;
+  error: string | null;
+  takeFocus: boolean;
+  onRun: (action: StatusItemAction) => void;
   onClose: () => void;
 }) {
   const popRef = useRef<HTMLDivElement | null>(null);
   const navigate = useNavigate();
   const catalog = useAppCatalog();
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const focusOnOpen = useRef(takeFocus);
   // Beside the rail, bottom edge level with the item: a point just right of the
   // trigger's bottom corner, opening rightward and upward. Measured once per open.
   const [anchor] = useState(() => {
@@ -134,7 +193,7 @@ function StatusItemPopover({ item, now, triggerRef, onClose }: {
   closeRef.current = onClose;
 
   // Focus moves in, so Tab reaches the buttons even though the portal sits at the end of <body>.
-  useEffect(() => { popRef.current?.focus({ preventScroll: true }); }, []);
+  useEffect(() => { if (focusOnOpen.current) popRef.current?.focus({ preventScroll: true }); }, []);
 
   useEffect(() => {
     const close = () => closeRef.current();
@@ -165,16 +224,6 @@ function StatusItemPopover({ item, now, triggerRef, onClose }: {
     ? catalog.findByRouteId(`${item.pluginId}~${item.app}`)
     : catalog.all.find((one) => one.pluginId === item.pluginId);
 
-  const run = useCallback(async (action: StatusItemAction) => {
-    setBusy(action.op);
-    setError(null);
-    const result = await runOpAction(action);
-    setBusy(null);
-    if (result.ok) { closeRef.current(); return; }
-    log.warn('status-items', 'status item action failed', { key: item.key, op: action.op, message: result.message });
-    setError(result.message);
-  }, [item.key]);
-
   const title = itemTitle(item, now);
   return createPortal(
     <div
@@ -203,9 +252,9 @@ function StatusItemPopover({ item, now, triggerRef, onClose }: {
               key={`${action.op}:${action.label}`}
               type="button"
               className={`status-item-btn${action.primary ? ' is-primary' : ''}`}
-              disabled={busy !== null}
-              aria-busy={busy === action.op || undefined}
-              onClick={() => { void run(action); }}
+              disabled={busyOp !== null}
+              aria-busy={busyOp === action.op || undefined}
+              onClick={() => onRun(action)}
             >
               {action.label}
             </button>

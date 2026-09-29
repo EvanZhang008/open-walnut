@@ -88,9 +88,23 @@ export function activate(walnut) {
     return { acks }
   })
   op('refuse', async () => { throw new Error('Probe refused on purpose') })
+  // 3s on the server, like the busy moment a real user hit: the UI must answer before this does.
   op('slow', async () => {
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    await new Promise((resolve) => setTimeout(resolve, 3000))
     item.set({ title: 'Slow one finished', tone: 'neutral' })
+    return {}
+  })
+  op('notice', async () => {
+    await walnut.notifications.notify({
+      kind: 'reminder', title: 'Probe reminder', body: 'Pick one.', dedupKey: 'probe-reminder', severity: 'info',
+      actions: [{ label: 'Slow notice', op: 'slow_notice' }, { label: 'Refuse', op: 'refuse' }],
+    })
+    return { raised: true }
+  })
+  op('slow_notice', async () => {
+    await new Promise((resolve) => setTimeout(resolve, 3000))
+    await walnut.notifications.dismiss('probe-reminder')
+    item.set({ title: 'Slow notice finished', tone: 'neutral' })
     return {}
   })
   item.set({ title: 'Probe ready', detail: 'Published on activate.', tone: 'neutral' })
