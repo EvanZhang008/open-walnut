@@ -320,6 +320,30 @@ describe('profile record round-trip', () => {
     expect(resolved.lane).toBe('personal-ai')
   })
 
+  it('resolveResumeArgs moves a retired model to the host catalog successor and persists it', async () => {
+    const { createSessionRecord, getSessionByClaudeId } = await import('../../src/core/session-tracker.js')
+    const { saveHostModelCatalog } = await import('../../src/core/host-model-catalog.js')
+    const { sessionRunner } = await import('../../src/providers/claude-code-session.js')
+    await saveHostModelCatalog(undefined, [
+      { value: 'default', displayName: 'Default' },
+      { value: 'global.anthropic.claude-fable-5-1[1m]', displayName: 'Fable' },
+      { value: 'global.anthropic.claude-opus-5-5[1m]', displayName: 'Opus' },
+    ], tmpBase, Date.now())
+    await createSessionRecord('sid-retired', 'task-5', 'proj', tmpBase, { pid: 4323, cliModel: 'global.anthropic.claude-fable-5[1m]' })
+    await createSessionRecord('sid-current', 'task-6', 'proj', tmpBase, { pid: 4324, cliModel: 'global.anthropic.claude-opus-5-5[1m]' })
+    // No catalog was ever fetched for this host: nothing to judge by, keep it.
+    await createSessionRecord('sid-unknown-host', 'task-7', 'proj', tmpBase, { pid: 4325, host: 'nohost', cliModel: 'global.anthropic.claude-fable-5[1m]' })
+    const resolve = (id: string) => (sessionRunner as unknown as {
+      resolveResumeArgs: (id: string) => Promise<{ model?: string }>
+    }).resolveResumeArgs(id)
+
+    expect((await resolve('sid-retired')).model).toBe('global.anthropic.claude-fable-5-1[1m]')
+    expect((await getSessionByClaudeId('sid-retired'))?.cliModel).toBe('global.anthropic.claude-fable-5-1[1m]')
+    expect((await resolve('sid-current')).model).toBe('global.anthropic.claude-opus-5-5[1m]')
+    expect((await resolve('sid-unknown-host')).model).toBe('global.anthropic.claude-fable-5[1m]')
+    expect((await getSessionByClaudeId('sid-unknown-host'))?.cliModel).toBe('global.anthropic.claude-fable-5[1m]')
+  })
+
   it('resolveResumeArgs leaves profile undefined for a plain session', async () => {
     const { createSessionRecord } = await import('../../src/core/session-tracker.js')
     const { sessionRunner } = await import('../../src/providers/claude-code-session.js')

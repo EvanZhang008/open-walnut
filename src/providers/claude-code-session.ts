@@ -10507,6 +10507,27 @@ export class SessionRunner {
           else resolvedModel = undefined  // → send() passes no --model; CLI --resume keeps the session's own model
         }
       }
+      // A version the host no longer offers (Fable 5 after 5.1) would make the
+      // CLI fall back to its first allowed model. Move it to the same family's
+      // row in the host catalog and persist that, so the picker agrees.
+      if (resolvedModel && record) {
+        const { getHostModelCatalog } = await import('../core/host-model-catalog.js')
+        const { successorForRetiredModel } = await import('../core/sessions/retired-model.js')
+        const catalog = await getHostModelCatalog(record.host).catch(() => null)
+        const successor = successorForRetiredModel(catalog?.models ?? [], resolvedModel)
+        if (successor) {
+          log.session.info('resume: retired model moved to its successor', {
+            sessionId, host: record.host, from: resolvedModel, to: successor,
+          })
+          resolvedModel = successor
+          const { updateSessionRecord } = await import('../core/session-tracker.js')
+          await updateSessionRecord(sessionId, { cliModel: successor }).catch((err) => {
+            log.session.warn('resume: persisting successor model failed', {
+              sessionId, error: err instanceof Error ? err.message : String(err),
+            })
+          })
+        }
+      }
     } catch (err) {
       log.session.warn('resolveResumeArgs: failed to read record', { sessionId, error: err instanceof Error ? err.message : String(err) })
     }
