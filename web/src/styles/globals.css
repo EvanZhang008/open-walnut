@@ -14995,28 +14995,30 @@ body.walnut-dragging {
   background: none;
 }
 
-/* Created / Updated / Last active at the foot of the session panel's ⋮ menu:
+/* Created / Updated / Host at the foot of the session panel's ⋮ menu:
    read-only, so quieter and tighter than an action row. The label column is a
-   fixed width so the three values line up. */
-.task-kebab-times {
+   fixed width so the values line up. */
+.task-kebab-meta {
   padding: 3px 12px;
   font-size: 11px;
   color: var(--fg-secondary);
   cursor: default;
 }
-.task-kebab-time-row {
+.task-kebab-meta-row {
   display: flex;
   align-items: baseline;
   gap: 8px;
   padding: 2px 0;
 }
-.task-kebab-time-label {
-  flex: 0 0 64px;
+.task-kebab-meta-label {
+  flex: 0 0 56px;
   color: var(--fg-muted);
 }
-.task-kebab-time-value {
+.task-kebab-meta-value {
   min-width: 0;
-  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Element-type specificity trick:

@@ -1936,7 +1936,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                       host={session?.host}
                       hostname={session?.hostname}
                       archived={session?.archived}
-                      task={session?.taskId ? sessionTask : null}
                       startedAt={session?.startedAt}
                       lastActiveAt={session?.lastActiveAt}
                       activeView={activeView}
