@@ -43,6 +43,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { getAgentsSnapshot, loadAgents, subscribeAgents } from '@/stores/agents-store';
 import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
+import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
 import {
   GENERAL_AGENT_ID, GENERAL_ASK_AGENT, agentOfTask, resolveSelection, selectAgentTasks, slotAgents,
@@ -462,6 +463,9 @@ export function AskWalnutSlot({
         });
         return true;
       }
+      // The pending view echoed the message; the session panel's first frame
+      // must hold it too (see launch-prompt-seed.ts).
+      if (result.sessionId && launch.message) seedLaunchPrompt(result.sessionId, launch.message);
       setLaunched({
         taskId: result.taskId,
         ...(result.sessionId ? { sessionId: result.sessionId } : {}),

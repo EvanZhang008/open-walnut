@@ -146,6 +146,10 @@ export interface OptimisticMessage extends SessionHistoryMessage {
    *  image message's bubble never matches its persisted twin and stays pinned at
    *  the bottom forever (inc-1785091339102). Set from the send RPC response. */
   dedupText?: string;
+  /** The session's launch prompt (the server's, or this tab's own seed). It heads
+   *  the conversation, above every persisted row, until the first typed user row
+   *  history shows absorbs it (optimistic-dedup.ts). */
+  launch?: boolean;
 }
 
 /** Renders base64 image thumbnails for optimistic messages */
@@ -2106,7 +2110,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // render after the watermark advances past the twin. Remember consumed
   // queueIds for the lifetime of this session view (cleared on session switch).
   const visibleOptimistic = allOptimistic.filter(m => !consumedQueueIds.current.has(m.queueId));
-  const deduped = dedupeOptimisticMessages(visibleOptimistic, messages, turnWatermark.current);
+  const deduped = dedupeOptimisticMessages(visibleOptimistic, messages, turnWatermark.current,
+    { historyFromStart: olderHidden === 0 && !olderWindowed });
   if (deduped.length !== visibleOptimistic.length) {
     const keptIds = new Set(deduped.map(m => m.queueId));
     for (const m of visibleOptimistic) {
@@ -2141,13 +2146,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // time keeps pointing at the same block forever (reset only drops a fully
   // hidden array, clamping anchors to 0 — same visual position: top of the
   // next turn).
-  for (const msg of deduped) {
+  // The launch prompt is the session's FIRST message, so it heads the
+  // conversation (rendered above the persisted rows) instead of joining the live
+  // timeline below them. It can arrive after the turn has streamed (a reload
+  // mid-turn), and a transcript that never yields its row (a degraded read)
+  // must not leave it pinned under the answer.
+  const launchHead = deduped.filter(m => m.launch);
+  const timelineOptimistic = launchHead.length > 0 ? deduped.filter(m => !m.launch) : deduped;
+  for (const msg of timelineOptimistic) {
     if (!blockIndexMap.current.has(msg.queueId)) {
       blockIndexMap.current.set(msg.queueId, blocks.length);
     }
   }
   // Clean stale entries for messages no longer in optimistic state
-  const dedupedIds = new Set(deduped.map(m => m.queueId));
+  const dedupedIds = new Set(timelineOptimistic.map(m => m.queueId));
   for (const key of blockIndexMap.current.keys()) {
     if (!dedupedIds.has(key)) blockIndexMap.current.delete(key);
   }
@@ -2157,7 +2169,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // here, at render time, not by deleting state.
   const isResuming = !isStreaming && phase === 'IN_PROGRESS'
     && deduped.length > 0;
-  const timeline = buildTimeline(blocks, deduped, blockIndexMap.current, isStreaming, isResuming, hiddenBlocks);
+  const timeline = buildTimeline(blocks, timelineOptimistic, blockIndexMap.current, isStreaming, isResuming, hiddenBlocks);
 
   // Prepare both render partitions together so a persisted tool run can absorb
   // the unpersisted run at the streaming boundary instead of producing two rows.
@@ -2974,7 +2986,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           </>
         )}
         {/* Loading / empty / error states rendered INSIDE the scroll container */}
-        {loading && messages.length === 0 && blocks.length === 0 && <LoadingSpinner />}
+        {/* Not over a launch prompt: a fresh session has nothing to load, and the
+            spinner would push the first message down, then let it jump back up. */}
+        {loading && messages.length === 0 && blocks.length === 0 && launchHead.length === 0 && <LoadingSpinner />}
         {/* Gate on the RAW flag: when an unavailable answer is suppressed because
             the session has content, it must not fall through to this generic
             banner and print the internal "HISTORY_UNAVAILABLE:" string. */}
@@ -3071,6 +3085,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             onPop={() => stack.back('quote-head')}
           />
         )}
+        {!onQuestionPage && launchHead.map((m) => (
+          <div key={`launch-${m.queueId}`} data-launch-prompt="">
+            <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+            <OptimisticImagePreviews images={m.images} />
+          </div>
+        ))}
         {pageRows}
         {boundaryRunVisible && mergeBoundary && boundaryHistoryRun && (
           <div

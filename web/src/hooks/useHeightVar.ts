@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useLayoutEffect, useRef, type RefObject } from 'react';
 
 /**
  * Track an overlay element's height into a CSS custom property on a host
@@ -22,7 +22,11 @@ export function useHeightVar(
 ) {
   const targetRef = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
+  // Layout effect: the first measurement lands before the first paint. As a
+  // plain effect, a new panel painted one frame with the CSS fallback padding
+  // and then moved every row by the difference (~10px), which read as the first
+  // message jumping as the column opened.
+  useLayoutEffect(() => {
     const el = targetRef.current;
     const host = hostRef.current;
     if (!el || !host) return;

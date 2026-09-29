@@ -6,6 +6,7 @@ import { log } from '@/utils/log';
 import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { removeBatchMessages, markDeliveredMessages } from '@/components/sessions/optimistic-dedup';
+import { launchSeedFor } from '@/components/sessions/launch-prompt-seed';
 
 /** Per-send extras that ride the `session:send` RPC. */
 export interface SessionSendOptions {
@@ -170,8 +171,29 @@ export function stripSendPrefixes(message: string): string {
   return stripImageRefPrefix(toDisplayedUserText(message));
 }
 
+/**
+ * The bubble for a session's launch prompt (`session:get-queue`'s launchPrompt,
+ * src/core/sessions/launch-prompts.ts). Already handed to the CLI at spawn, so it
+ * starts 'delivered'. `launch` is what lets history absorb it by position rather
+ * than by text: see optimistic-dedup.ts.
+ */
+export function launchBubbleOf(p: { id: string; text: string; at: string }): OptimisticMessage | null {
+  const text = stripSendPrefixes(p.text);
+  if (!p.id || !text.trim()) return null;
+  return { role: 'user', text, timestamp: p.at, queueId: p.id, status: 'delivered', launch: true };
+}
+
+/** What a panel shows before its queue answer: the launch this tab just made. */
+function seededBubbles(sessionId: string | null): OptimisticMessage[] {
+  const seed = sessionId ? launchSeedFor(sessionId) : undefined;
+  const bubble = seed ? launchBubbleOf(seed) : null;
+  return bubble ? [bubble] : [];
+}
+
 export function useSessionSend(activeSessionId: string | null): UseSessionSendReturn {
-  const [optimisticMsgs, setOptimisticMsgs] = useState<OptimisticMessage[]>([]);
+  // Seeded in the initializer, not the effect: the first frame of a freshly
+  // promoted panel must already hold the message the pending column showed.
+  const [optimisticMsgs, setOptimisticMsgs] = useState<OptimisticMessage[]>(() => seededBubbles(activeSessionId));
   const [sendError, setSendError] = useState<string | null>(null);
 
   // Ref for accessing current optimistic messages in callbacks without stale closures
@@ -182,18 +204,26 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   // The queue only contains messages NOT yet delivered to Claude (pending/processing).
   // Once delivered, removeProcessed() clears them eagerly — so no overlap with JSONL.
   useEffect(() => {
-    setOptimisticMsgs([]);
+    setOptimisticMsgs(seededBubbles(activeSessionId));
     setSendError(null);
+    // A panel that switches sessions (the Ask slot does) must not take the rows,
+    // or the launch prompt, of the session it just left.
+    let stale = false;
 
     if (activeSessionId) {
-      wsClient.sendRpc<{ messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string; parkedReason?: string; userUuid?: string }> }>(
+      wsClient.sendRpc<{
+        messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string; parkedReason?: string; userUuid?: string }>;
+        launchPrompt?: { id: string; text: string; at: string };
+      }>(
         'session:get-queue',
         { sessionId: activeSessionId }
       ).then((res) => {
-        if (res?.messages?.length) {
+        if (stale) return;
+        const launch = res?.launchPrompt ? launchBubbleOf(res.launchPrompt) : null;
+        if (res?.messages?.length || launch) {
           setOptimisticMsgs(prev => {
             const existing = new Set(prev.map(m => m.queueId));
-            const newMsgs = res.messages
+            const newMsgs = (res.messages ?? [])
               .filter(m => !existing.has(m.id))
               .map(m => {
                 // The queue stores the ENQUEUED text, which for an attachment send
@@ -227,17 +257,22 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
                   ...(m.userUuid ? { userUuid: m.userUuid } : {}),
                 };
               });
-            return [...prev, ...newMsgs];
+            // The launch prompt opens the first turn, so it goes before anything
+            // the user managed to send while this RPC was in flight.
+            const head = launch && !existing.has(launch.queueId) ? [launch] : [];
+            return [...head, ...prev, ...newMsgs];
           });
           log.info('send', 'rehydrated from queue', {
             sessionId: activeSessionId,
-            count: res.messages.length,
+            count: res.messages?.length ?? 0,
+            ...(launch ? { launchPrompt: launch.queueId } : {}),
           });
         }
       }).catch((e: Error) => {
         log.warn('send', 'queue rehydrate failed', { error: e.message });
       });
     }
+    return () => { stale = true; };
   }, [activeSessionId]);
 
   const send = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[], opts?: SessionSendOptions): Promise<boolean> => {

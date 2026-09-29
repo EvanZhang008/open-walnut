@@ -21,6 +21,7 @@ import { HomeCompanionPanel } from '@/components/layout/HomeCompanionPanel';
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
+import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
   applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, followProjectRegistryChange,
@@ -1588,6 +1589,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // retries transient failures, and the record is written at spawn confirmation.
   const promoteToRealSession = useCallback((pendingColId: string, sessionId: string, taskId?: string) => {
     if (pendingQuickStartMetaRef.current?.id === pendingColId) {
+      // The pending column showed the message; the real panel's first frame must too.
+      const launched = pendingQuickStartMetaRef.current.message;
+      if (launched) seedLaunchPrompt(sessionId, launched);
       pendingQuickStartMetaRef.current = null;
       pendingQuickStartRef.current = null;
     }
@@ -3006,6 +3010,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   host={pendingMeta.host}
                   hostLabel={'hostLabel' in pendingMeta ? (pendingMeta as { hostLabel?: string }).hostLabel : undefined}
                   label={isForkPending ? 'Forking session...' : undefined}
+                  message={'message' in pendingMeta ? (pendingMeta as { message?: string }).message : undefined}
                   initialError={'httpError' in pendingMeta ? (pendingMeta as { httpError?: string }).httpError : undefined}
                   onRetry={!isForkPending && !('gated' in pendingMeta && pendingMeta.gated) ? handleQuickStartRetry : undefined}
                   onClose={() => handleCloseSession(sid)}

@@ -22244,6 +22244,23 @@ td.usage-share-col {
   padding: 32px 24px;
 }
 
+/* The launch message, where the real panel's timeline will show it (same gutter
+   as .session-history). A long paste scrolls inside its share of the column
+   instead of pushing the spinner out. */
+.pending-session-prompt {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  max-height: 55%;
+  overflow-y: auto;
+  padding: 12px clamp(24px, 4%, 40px) 0;
+}
+
+.pending-session-prompt-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .pending-session-spinner-wrap {
   display: flex;
   align-items: center;

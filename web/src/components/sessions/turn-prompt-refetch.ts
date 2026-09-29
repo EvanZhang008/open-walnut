@@ -10,10 +10,12 @@
  * final answer (inc: first-message-hidden-until-turn-ends). "Sometimes it
  * shows" = the panel happened to (re)open after the CLI had written the line.
  *
- * There is no optimistic bubble for the launch prompt (the server sent it at
- * spawn, not the composer), so persisted history is the ONLY thing that can
- * show it. The same gap covers prompts sent from another browser, the phone,
- * or Walnut itself when the `session:message-queued` bubble was missed.
+ * A native launch now gets a bubble at once (the server's launch prompt,
+ * src/core/sessions/launch-prompts.ts, via session:get-queue), and while it is
+ * on screen this refetch stays quiet. It remains the net for what that does not
+ * cover: an ACP engine (no session id until it spawns), a server restart that
+ * dropped the in-memory prompt, and prompts sent from another browser, the
+ * phone, or Walnut itself when the `session:message-queued` bubble was missed.
  *
  * The trigger is the CLI's own ordering guarantee, not a timer: Claude Code
  * appends the user message to the transcript BEFORE it calls the model, so the

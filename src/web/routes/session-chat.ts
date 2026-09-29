@@ -17,6 +17,7 @@ import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQu
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
 import { parseSideLaneKey } from '../../core/sessions/side-thread-fork.js'
+import { launchPromptFor, startLaunchPromptRegistry } from '../../core/sessions/launch-prompts.js'
 import { getSideQuestion } from '../../core/side-questions.js'
 import { buildReferenceCards, appendReferenceCards, stripReferenceCards } from '../../core/sessions/reference-cards.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
@@ -42,6 +43,9 @@ const V4_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
  * Register session-chat RPC methods on the WebSocket handler.
  */
 export function registerSessionChatRpc(): void {
+  // Feeds `session:get-queue`'s launchPrompt field below.
+  startLaunchPromptRegistry()
+
   registerMethod('session:start', async (payload: unknown) => {
     if (typeof payload !== 'object' || payload === null) {
       throw new Error('session:start requires an object payload')
@@ -419,7 +423,11 @@ export function registerSessionChatRpc(): void {
       throw new Error('session:get-queue requires sessionId (string)')
     }
 
-    return { messages: await getQueue(data.sessionId) }
+    // The launch prompt rides beside the queue, not inside it: it was never
+    // queued, can't be edited or deleted, and must not look like a row to any
+    // other reader of the queue. See core/sessions/launch-prompts.ts.
+    const launchPrompt = launchPromptFor(data.sessionId)
+    return { messages: await getQueue(data.sessionId), ...(launchPrompt ? { launchPrompt } : {}) }
   })
 
   registerMethod('session:stream-subscribe', async (payload: unknown, _ws) => {

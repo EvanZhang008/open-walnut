@@ -27,6 +27,9 @@ interface PendingSessionPanelProps {
   host?: string;
   hostLabel?: string;
   label?: string;
+  /** The message this launch carries. Shown from the click on, in the spot the
+   *  real panel shows it, so the column never reads as "started with nothing". */
+  message?: string;
   /** Pre-populated error (e.g. from HTTP failure before WS events) */
   initialError?: string;
   /** Called when user clicks Retry — parent should re-invoke quickStartSession */
@@ -34,7 +37,20 @@ interface PendingSessionPanelProps {
   onClose: () => void;
 }
 
-export function PendingSessionPanel({ cwd, host, hostLabel, label, realTaskId, initialError, onRetry, onClose }: PendingSessionPanelProps) {
+/** The launch message as the first user row of the column (the real panel's
+ *  bubble classes, so promotion swaps nothing visible). */
+function PendingPrompt({ message }: { message?: string }) {
+  if (!message?.trim()) return null;
+  return (
+    <div className="pending-session-prompt">
+      <div className="session-msg session-msg-user">
+        <div className="session-msg-content pending-session-prompt-text">{message}</div>
+      </div>
+    </div>
+  );
+}
+
+export function PendingSessionPanel({ cwd, host, hostLabel, label, message, realTaskId, initialError, onRetry, onClose }: PendingSessionPanelProps) {
   const dirName = cwd.replace(/\/+$/, '').split('/').pop() || '/';
   const [error, setError] = useState<string | null>(initialError ?? null);
   const [phase, setPhase] = useState<'starting' | 'slow' | 'timeout'>(initialError ? 'timeout' : 'starting');
@@ -125,6 +141,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, realTaskId, i
           </div>
         </div>
 
+        <PendingPrompt message={message} />
         <div className="pending-session-body">
           <div className="pending-session-error-icon">!</div>
           <div className="pending-session-info">
@@ -185,6 +202,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, realTaskId, i
         </div>
       </div>
 
+      <PendingPrompt message={message} />
       {/* Body — spinner + path */}
       <div className="pending-session-body">
         <div className="pending-session-spinner-wrap">

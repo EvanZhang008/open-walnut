@@ -29,10 +29,14 @@ interface PersistedLike {
    *  matches an optimistic bubble's queueId, that bubble is consumed by EXACT
    *  id — immune to the text-window pitfalls below. */
   walnutMessageId?: string;
+  /** Skill dumps / image metadata the CLI writes next to a prompt: never a prompt. */
+  injected?: boolean;
 }
 interface OptimisticLike {
   text: string;
   status: string;
+  /** The session's launch prompt (see launchRowIndex). */
+  launch?: boolean;
   /** qm-… once the send RPC resolved; client tempId before that. */
   queueId?: string;
   /** Text the server actually enqueued, when it differs from `text` (image refs
@@ -52,6 +56,20 @@ function dedupKeyOf(m: OptimisticLike): string {
 }
 interface QueuedOptimisticLike extends OptimisticLike {
   queueId: string;
+}
+
+/**
+ * Where history holds a launch prompt: its first typed user row.
+ *
+ * A launch bubble cannot be matched by text or by window. Its text is the
+ * human's words while the row may carry what Walnut wrapped around them (an
+ * image preamble, a repair briefing, a spill pointer), and it can arrive after
+ * the watermark has already moved past its row (a panel opened once the line had
+ * landed). Position is exact instead: the CLI writes a session's launch prompt
+ * before any other user line, so the first one IS it. -1 while none has landed.
+ */
+export function launchRowIndex(messages: readonly PersistedLike[]): number {
+  return messages.findIndex((m) => m.role === 'user' && !m.injected && typedUserText(m.text).trim().length > 0);
 }
 
 /** Window start for the dedup scan. Exported for direct edge-case tests. */
@@ -81,6 +99,9 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   optimistic: readonly T[],
   messages: readonly PersistedLike[],
   prevMsgLen: number,
+  /** false when `messages` is a tail window with older rows unloaded: the
+   *  launch row then sits before it (see launchRowIndex). */
+  { historyFromStart = true }: { historyFromStart?: boolean } = {},
 ): T[] {
   // Id-first evidence: persisted user lines stamped with walnutMessageId are the
   // server-confirmed echoes of EXACTLY those bubbles. Exact ids can't
@@ -152,8 +173,20 @@ export function dedupeOptimisticMessages<T extends OptimisticLike>(
   type Evidence = 'failed' | 'id' | 'text' | 'open';
   const state: Evidence[] = [];
   const idLine: Array<string | undefined> = [];
-  for (const m of optimistic) {
+
+  // Launch prompt: absorbed by position (launchRowIndex), and that row is retired
+  // from the windowed multiset FIRST, so a later send with the same words cannot
+  // be hidden by the launch's row while its own is still on the way. A tail
+  // window's first user row is some later message: the launch row is above the
+  // window, and the panel's Initial Prompt row stands for it.
+  const launchAt = optimistic.findIndex((m) => m.launch && m.status !== 'failed');
+  const launchRow = launchAt >= 0 && historyFromStart ? launchRowIndex(messages) : -1;
+  if (launchRow >= scanStart) takeText(messages[launchRow].text);
+  const launchAbsorbed = !historyFromStart || launchRow >= 0;
+
+  for (const [i, m] of optimistic.entries()) {
     if (m.status === 'failed') { state.push('failed'); idLine.push(undefined); continue; }
+    if (m.launch) { state.push(i === launchAt && launchAbsorbed ? 'text' : 'open'); idLine.push(undefined); continue; }
     const line = m.queueId ? persistedIdText.get(m.queueId) : undefined;
     if (line !== undefined) { state.push('id'); idLine.push(line); continue; }
     idLine.push(undefined);
