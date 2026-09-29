@@ -78,6 +78,8 @@
 
 import { log } from '../logging/index.js'
 import type { TaskPhase, TaskStatus, Task } from './types.js';
+import { isTaskWaiting } from './types.js';
+import { endedWait, sameWait, waitEndsOnStatusChange, waitingSessionPhase } from './task-waiting-rules.js'
 
 // ── Phase → Status (4 → 3) ──
 
@@ -171,6 +173,10 @@ export function readMarkerForPhase(phase: TaskPhase): Partial<Task> {
  * NEED_ACTION stay dot-less while a session-driven one lit up.
  */
 export function applyPhase(task: Task, phase: TaskPhase): void {
+  // Waiting is TODO; Need Action or Complete ends the wait (task-waiting.ts
+  // disables or deletes its trigger when it sees the record). In Progress keeps
+  // it: a session start on a waiting task writes IN_PROGRESS through here.
+  if (task.waiting && waitEndsOnStatusChange(task, phase)) task.waiting = endedWait(task.waiting, 'status-changed')
   if (task.phase !== phase) {
     task.phase_changed_at = new Date(Math.max(Date.now(), (Date.parse(task.phase_changed_at ?? '') || 0) + 1)).toISOString();
   }
@@ -372,6 +378,8 @@ interface ApplySessionPhaseOpts {
    *  (sendSourceReopensTerminal), so it may pull a COMPLETE task back to
    *  IN_PROGRESS. Every other trigger ignores it. */
   reopenTerminal?: boolean
+  /** Internal: this call is the one re-run after the task's wait changed under it. */
+  waitRetried?: boolean
 }
 
 /**
@@ -419,6 +427,41 @@ export async function applySessionPhase(
   // turn — was deleted with the trigger's retirement above: triage-sync now
   // never produces a phase, so the gate had nothing left to guard.)
 
+  // A task waiting on a trigger (task-waiting-rules.ts): a finished turn lands on
+  // TODO with no red dot, and a human message or a prompt that needs the human
+  // ends the wait in the same write.
+  const waitDecision = waitingSessionPhase(task, trigger, newPhase, {
+    humanSend: trigger === 'session:input' && opts?.reopenTerminal === true,
+  })
+  newPhase = waitDecision.newPhase
+  const wakePatch: Partial<Task> = waitDecision.wake && task.waiting
+    ? { waiting: endedWait(task.waiting, waitDecision.wake) }
+    : {}
+  // The wait ends even when the phase does not move (a message into a running
+  // turn, or a phase write a guard below skips): the human took the task back.
+  // Only THAT wait: a re-arm since the read (a new `since`) is newer and wins.
+  const endWaitOnly = async (): Promise<void> => {
+    if (!waitDecision.wake) return
+    await updateTaskRaw(taskId, wakePatch, {
+      emitEvent: true, source,
+      shouldUpdate: (current) => isTaskWaiting(current) && sameWait(current.waiting, task.waiting),
+    }).catch((err) => log.session.warn('task wait end failed', {
+      taskId, trigger, error: err instanceof Error ? err.message : String(err),
+    }))
+    log.session.info('task wait ended', { taskId, trigger, source, reason: waitDecision.wake })
+  }
+  // A waiting task's turn ended quietly: a parent that asked it for a reply must
+  // still hear (session-request-watch only speaks on NEED_ACTION / COMPLETE).
+  if (waitDecision.absorbed && !opts?.waitRetried) {
+    void import('./task-waiting.js')
+      .then((m) => m.notifyParentsOfQuietTurnEnd(taskId, opts?.sessionId))
+      .catch(() => { /* best effort: the request deadline sweeper still settles it */ })
+  }
+  if (!newPhase && waitDecision.wake) {
+    await endWaitOnly()
+    return { changed: false, oldPhase: task.phase }
+  }
+
   const requiresRunning = trigger === 'session:turn-start' || trigger === 'session:human-answered'
   let phaseRunner: typeof import('../providers/claude-code-session.js')['sessionRunner'] | undefined
   if (newPhase && opts?.sessionId
@@ -464,6 +507,7 @@ export async function applySessionPhase(
         phase: newPhase,
         ...readMarkerForPhase(newPhase),
         ...restoreSlot,
+        ...wakePatch,
       }, {
         emitEvent: true, push: true, source,
         // A reopen must also get past updateTaskRaw's own terminal guard (the
@@ -476,6 +520,13 @@ export async function applySessionPhase(
           if (TERMINAL_PHASES.has(current.phase) && !reopensTerminal) return false
           if (opts?.shouldApply && !opts.shouldApply(current)) {
             skipReason = 'superseded-snapshot'
+            return false
+          }
+          // The decision above read the task's wait; if that moved since (a
+          // re-arm, a wake), recompute rather than write a stale one.
+          if ((waitDecision.wake || waitDecision.absorbed)
+            && !(sameWait(current.waiting, task.waiting) && isTaskWaiting(current))) {
+            skipReason = 'wait-changed'
             return false
           }
           const live = opts?.sessionId ? phaseRunner?.findSessionByClaudeId(opts.sessionId) : undefined
@@ -492,6 +543,10 @@ export async function applySessionPhase(
         if (skipReason) log.session.info('phase transition skipped', {
           taskId, trigger, source, sessionId: opts?.sessionId, reason: skipReason, turnGen: opts?.turnGen,
         })
+        if (skipReason === 'wait-changed' && !opts?.waitRetried) {
+          return await applySessionPhase(taskId, trigger, source, { ...opts, waitRetried: true })
+        }
+        if (skipReason !== 'wait-changed') await endWaitOnly()
         return { changed: false, oldPhase }
       }
 

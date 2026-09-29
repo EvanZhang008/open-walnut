@@ -19,6 +19,7 @@ import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { PluginFieldsSection } from './PluginFieldPicker';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
+import { SnoozeUntilEvent, TaskStatusMenuSection, waitingSummary } from './TaskStatusControl';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
 
 type TaskListProjection = Task & {
@@ -66,6 +67,8 @@ interface TaskKebabMenuProps {
   /** Move this task to another project ('' = Inbox). Renders the "Move to project" section. */
   onMoveToProject?: (id: string, project: string) => void;
   onDelete?: (id: string) => void;
+  /** Set the status from the menu's Status row (falls back to the board store). */
+  onSetPhase?: (id: string, phase: string) => void;
 }
 
 const TIER_OPTIONS: { value: FocusTier; label: string; icon: ReactNode }[] = [
@@ -99,20 +102,25 @@ const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: string }[] =
  * is opened, pinned or moved. The menu re-measures itself when the calendar
  * appears (useMenuPlacement observes children), so expanding never clips.
  */
-export function KebabDateRow({ label, date, display, onChange }: {
+export function KebabDateRow({ label, date, display, onChange, extra, testId, className }: {
   label: string;
   date: string | undefined | null;
   /** Human form of `date` for the collapsed row; empty when no date is set. */
   display: string;
   onChange: (date: string | null) => void;
+  /** Shown under the calendar when open (Start / Snooze until's "Something happens…"). */
+  extra?: ReactNode;
+  testId?: string;
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className={`task-kebab-date${open ? ' open' : ''}`}>
+    <div className={`task-kebab-date${className ? ` ${className}` : ''}${open ? ' open' : ''}`} data-testid={testId}>
       <button
         type="button"
         className="task-kebab-item task-kebab-date-toggle"
         aria-expanded={open}
+        title={display ? `${label}: ${display}` : undefined}
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
       >
         <span className="task-kebab-icon">{ICONS.ICON_CALENDAR}</span>
@@ -122,6 +130,7 @@ export function KebabDateRow({ label, date, display, onChange }: {
         <span className={`task-kebab-date-caret${open ? ' open' : ''}`}>{ICONS.CHEVRON_GLYPH}</span>
       </button>
       {open && <DatePicker date={date} onChange={onChange} inline />}
+      {open && extra}
     </div>
   );
 }
@@ -161,7 +170,7 @@ function WalnutPickRow({ pick, afterAction }: {
 export function TaskActionMenuItems({
   task, isPinned, pinnedTier, isDone, batchMode,
   onSetPriority, onPinTask, onPinWithTier, onUnpinTask, onSetTier, onSetDate, onSetStartDate, afterAction,
-  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick,
+  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick, snoozeEvent,
 }: {
   /** Single task (kebab) — null in batch mode. Only the fields the rows READ are
    *  required, so a draft column can hand in its launch meta (the task that
@@ -200,6 +209,10 @@ export function TaskActionMenuItems({
   tierHeading?: string;
   /** Per field, a trailing "Use Walnut's pick: <label>" row. */
   walnutPick?: Partial<Record<DraftTaskField, { label: string; onPick: () => void }>>;
+  /** A single real task's second kind of snooze, inside Start / Snooze until:
+   *  `summary` is what it is snoozed until ('' when not waiting), `body` the
+   *  row under the times (TaskStatusControl.SnoozeUntilEvent). */
+  snoozeEvent?: { summary: string; body: ReactNode };
 }) {
   // Custom tiers append after the built-ins. Safe hook: kebabs also render on
   // isolated surfaces (tests, popouts) that may sit outside the FocusBarProvider.
@@ -295,10 +308,18 @@ export function TaskActionMenuItems({
       {(onSetStartDate || onSetDate) && <div className="task-kebab-divider" />}
       {onSetStartDate && (
         <KebabDateRow
-          label="Start"
+          // Also says what a future start DOES: it hides the task from Now until
+          // then. Snoozing until an event lives here too, under the times.
+          label="Start / Snooze until"
+          testId="task-snooze-row"
+          className="task-snooze-row"
           date={task?.start_date}
-          display={task?.start_date ? (formatDate ? formatDate(task.start_date, 'start') : formatStartDateDisplay(task.start_date)) : ''}
+          display={[
+            task?.start_date ? (formatDate ? formatDate(task.start_date, 'start') : formatStartDateDisplay(task.start_date)) : '',
+            snoozeEvent?.summary ?? '',
+          ].filter(Boolean).join(' · ')}
           onChange={(date) => { onSetStartDate(date); afterAction(); }}
+          extra={snoozeEvent?.body}
         />
       )}
       {onSetStartDate && <WalnutPickRow pick={walnutPick?.startDate} afterAction={afterAction} />}
@@ -462,7 +483,7 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
   );
 }
 
-export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onPinTask, onUnpinTask, onSetTier, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveDown, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete }: TaskKebabMenuProps) {
+export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onPinTask, onUnpinTask, onSetTier, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveDown, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete, onSetPhase }: TaskKebabMenuProps) {
   const integrations = useIntegrations();
   const sessionId = resolveTaskSessionId(task);
   const [open, setOpen] = useState(false);
@@ -716,6 +737,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             </button>
           )}
 
+          {/* Status: one collapsed row, the four phases on click */}
+          <TaskStatusMenuSection task={task} onSetPhase={onSetPhase} afterAction={closeMenu} />
+
           {/* Pin / Tier · Priority · Date — shared with the multi-select batch dropdown */}
           <TaskActionMenuItems
             task={task}
@@ -729,6 +753,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             onSetDate={onSetDate ? (d) => onSetDate(task.id, d) : undefined}
             onSetStartDate={onSetStartDate ? (d) => onSetStartDate(task.id, d) : undefined}
             afterAction={closeMenu}
+            snoozeEvent={{ summary: waitingSummary(task), body: <SnoozeUntilEvent task={task} afterAction={closeMenu} /> }}
           />
 
           {/* Move to project — precise alternative to dragging across group headers */}

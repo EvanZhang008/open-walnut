@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
-import { READ_MARKER_KEYS } from '@open-walnut/core';
+import { READ_MARKER_KEYS, isTaskWaiting } from '@open-walnut/core';
 import type { Task } from '@open-walnut/core';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
@@ -136,7 +136,13 @@ function applyPhaseChangeMany(tasks: Task[], ids: Set<string>, phase: string): T
   return tasks.map((t): Task => {
     if (!ids.has(t.id)) return t;
     const base = completing ? clearSessionSlots(t) : t;
-    return { ...base, phase: phase as Task['phase'], status, completed_at: completing ? now : undefined, updated_at: now };
+    // Mirrors the server (applyPhase): Need Action or Complete ends a wait. The
+    // write's own task:updated echo is swallowed by the phase echo guard, so
+    // without this the row kept saying "Waiting until" after the change.
+    const waiting = t.waiting && isTaskWaiting(t) && (phase === 'NEED_ACTION' || phase === 'COMPLETE') && phase !== t.phase
+      ? { waiting: { ...t.waiting, woke_at: now, woke_reason: 'status-changed' as const } }
+      : {};
+    return { ...base, ...waiting, phase: phase as Task['phase'], status, completed_at: completing ? now : undefined, updated_at: now };
   });
 }
 

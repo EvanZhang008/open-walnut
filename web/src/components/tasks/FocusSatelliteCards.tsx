@@ -499,6 +499,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         onMoveUp={onMoveUp}
         onMoveDown={onMoveDown}
         onDelete={onDelete}
+        onSetPhase={onSetPhase}
       />
     </div>
   );

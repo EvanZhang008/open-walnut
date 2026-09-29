@@ -20,6 +20,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { MoveToProjectSection, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
+import { SnoozeUntilEvent, TaskStatusMenuSection, waitingSummary } from '@/components/tasks/TaskStatusControl';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -347,6 +348,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
             </>
           )}
 
+          {/* Status: the same collapsed row as the board's task kebab. */}
+          <TaskStatusMenuSection task={task} onSetPhase={(_id, phase) => handlePhaseChange(phase)} afterAction={closeKebab} />
+
           {/* Pin / Tier · Priority · Start / Due: the SAME rows as the board's
               task kebab (one definition, TaskKebabMenu.TaskActionMenuItems). */}
           <TaskActionMenuItems
@@ -361,6 +365,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
             onSetDate={handleSetDate}
             onSetStartDate={handleSetStartDate}
             afterAction={closeKebab}
+            snoozeEvent={{ summary: waitingSummary(task), body: <SnoozeUntilEvent task={task} afterAction={closeKebab} /> }}
           />
 
           {/* Move to project — same section as the TodoPanel kebab */}

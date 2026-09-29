@@ -175,3 +175,17 @@ describe('mergeFetchedTasks with tasks inserted after the snapshot was taken', (
     expect(mergeFetchedTasks(prev, [{ ...a }], new Set())).toBe(prev);
   });
 });
+
+describe('tasksShallowEqual and task.waiting', () => {
+  it('a change to the wait alone is a visible change (Stop waiting echo, 2026-09-28)', async () => {
+    const { tasksShallowEqual } = await import('@/hooks/task-list-merge');
+    const waiting = { condition: 'CR 1234 is approved', routine_id: 'r-1', since: '2026-09-28T00:00:00Z' };
+    const a = task({ id: 'w', waiting });
+    expect(tasksShallowEqual(a, { ...a, waiting: { ...waiting } })).toBe(true);
+    // Removed (same updated_at: the write need not bump it).
+    const { waiting: _gone, ...cleared } = a;
+    expect(tasksShallowEqual(a, cleared as Task)).toBe(false);
+    // Ended.
+    expect(tasksShallowEqual(a, { ...a, waiting: { ...waiting, woke_at: '2026-09-28T01:00:00Z', woke_reason: 'fired' } })).toBe(false);
+  });
+});

@@ -6,6 +6,9 @@ description: >-
   when it fires. Use when the user says "tell me when", "let me know if",
   "watch for", "keep an eye on", "as soon as X happens", "poll until", or wants
   to be pinged on new mail / PR comments / build results / a file appearing.
+  Also when the user says "snooze until", "wait until", "park this until",
+  "come back to this when": the task then waits on the trigger (task_wait) with
+  no red dot.
 ---
 
 # Trigger
@@ -127,6 +130,37 @@ trigger. One or two plain sentences, 600 characters at most, covering three thin
   script explained line by line.
 
 Write it in the language you use with the user.
+
+## Snooze until something happens (park the task on the trigger)
+
+When the user says "snooze this task until X" or "wait until X" about the task
+this session works on, the task should go quiet until X happens, then come back
+to them. The task menu's "Start / Snooze until › Something happens…" starts that
+message for them as `/walnut-trigger Snooze this task until: X`. Do the steps
+above (script, test, one line to the user, `trigger_create`), then:
+
+```
+walnut tools call task_wait '{"condition":"CR 1234 is approved","routine_id":"<id from trigger_create>"}'
+```
+
+- `condition` is one line in the user's words; it is shown on the task.
+- The task stays **To Do** and visible. What changes: when your turn ends it does
+  NOT go to Need Action and gets no red dot. Do not set it to Need Action
+  yourself afterwards: that ends the wait.
+- Make the check fire ONCE per event: give each event an item id (the CR's
+  state + revision, the message id), so an unchanged state is quiet.
+- Write the `prompt` for the moment it fires: "Check what changed on CR 1234 and
+  tell the user what it means and the next step."
+- When it fires, the message carries a note: the wait is over and the task goes
+  back to the user as Need Action when that turn ends. If the event does not need
+  the user yet (an acknowledgement, an intermediate stage), call `task_wait` again
+  with the SAME `routine_id` and end the turn: the trigger keeps what it has seen.
+- If the user writes to this session in the meantime, the wait ends: they took
+  the task back. `task_stop_waiting` ends it on purpose (and deletes the trigger).
+- If `task_wait` says the trigger already fired, the condition may already be
+  met: read that fire and tell the user instead of waiting.
+- Ask one short question when the condition is ambiguous (which CR, which
+  channel) instead of guessing; you usually know from the conversation.
 
 ## Managing them
 

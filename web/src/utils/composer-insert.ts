@@ -17,8 +17,10 @@ export const COMPOSER_INSERT_EVENT = 'session:composer-insert';
 
 export interface ComposerInsertDetail {
   sessionId: string;
-  /** Appended after the current draft, one space apart. */
+  /** Appended after the current draft, one space apart ('lead': put in front of it). */
   text: string;
+  /** 'lead' = the text starts the message and what was typed follows it ("Snooze this task until: "). */
+  mode?: 'append' | 'lead';
   /** Set by the panel that consumed the event. */
   handled: boolean;
 }
@@ -30,12 +32,20 @@ export function sessionDraftKey(sessionId: string): string {
 
 export type ComposerInsertOutcome = 'inserted' | 'queued';
 
+/** Put `text` in front of a persisted draft; one it already leads is left as it is. */
+export function leadStoredDraft(key: string, text: string): void {
+  const raw = localStorage.getItem(key) ?? '';
+  if (raw.trimStart().startsWith(text.trimEnd())) return;
+  localStorage.setItem(key, `${text}${raw.trimStart()}`);
+}
+
 export function insertIntoSessionComposer(
   sessionId: string,
   text: string,
   navigate: (to: string) => void,
+  mode: 'append' | 'lead' = 'append',
 ): ComposerInsertOutcome {
-  const detail: ComposerInsertDetail = { sessionId, text, handled: false };
+  const detail: ComposerInsertDetail = { sessionId, text, mode, handled: false };
   window.dispatchEvent(new CustomEvent<ComposerInsertDetail>(COMPOSER_INSERT_EVENT, { detail }));
   if (detail.handled) {
     if (window.location.pathname !== '/') navigate('/');
@@ -43,8 +53,12 @@ export function insertIntoSessionComposer(
   }
   try {
     const key = sessionDraftKey(sessionId);
-    const current = (localStorage.getItem(key) ?? '').replace(/\s+$/, '');
-    localStorage.setItem(key, current ? `${current} ${text}` : text);
+    if (mode === 'lead') {
+      leadStoredDraft(key, text);
+    } else {
+      const current = (localStorage.getItem(key) ?? '').replace(/\s+$/, '');
+      localStorage.setItem(key, current ? `${current} ${text}` : text);
+    }
   } catch { /* storage unavailable: the open below still shows the session */ }
   openSessionOnHome(sessionId, navigate);
   return 'queued';

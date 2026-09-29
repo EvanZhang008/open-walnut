@@ -95,7 +95,11 @@ import { nextSessionControlValue, SessionControlPills } from './SessionControlPi
 import { useNotifications } from '@/contexts/notifications';
 import { useConfirm } from '@/hooks/useConfirm';
 import { setActiveSession } from '@/stores/active-session';
-import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
+import { COMPOSER_INSERT_EVENT, leadStoredDraft, sessionDraftKey, type ComposerInsertDetail } from '@/utils/composer-insert';
+import { ROOT_THREAD_KEY } from '@/utils/thread-tree';
+import { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
+import { WAIT_UNTIL_ICON } from '@/components/tasks/TaskStatusControl';
+import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -821,14 +825,39 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // whatever is typed (a quote joins the sentence in progress, it does not lead
   // it), reveal, focus. Marking the event handled tells the sender the text has
   // a live home; otherwise it parks the text in the persisted draft instead.
+  const threadsForInsert = useRef(threads);
+  threadsForInsert.current = threads;
+  const engineIsAcp = engineUi.isAcp;
+  const engineIsAcpRef = useRef(engineIsAcp);
+  engineIsAcpRef.current = engineIsAcp;
   useEffect(() => {
     const onInsert = (e: Event) => {
       const detail = (e as CustomEvent<ComposerInsertDetail>).detail;
       if (!detail || detail.sessionId !== sessionId || detail.handled) return;
       detail.handled = true;
-      setPrefillText(detail.text);
-      setPrefillMode('append');
-      setPrefillNonce((n) => n + 1);
+      const rootKey = sessionDraftKey(sessionId);
+      // "Snooze until something happens" names its skill as a Claude Code
+      // command; an ACP engine gets the plain sentence (utils/wait-until.ts).
+      const waitLead = detail.mode === 'lead' && startsWithWaitUntil(detail.text);
+      const text = waitLead ? waitUntilPrefix({ acp: engineIsAcpRef.current }) : detail.text;
+      const draftLeads = waitLead
+        ? startsWithWaitUntil(composerTextRef.current)
+        : composerTextRef.current.trimStart().startsWith(text.trimEnd());
+      if (detail.mode === 'lead' && threadsForInsert.current.draftKey !== rootKey) {
+        // A question page's composer posts into the question. A lead is for the
+        // session itself: write it into the session's own draft and go back to
+        // it (ChatInput reloads the draft on the key change).
+        try { leadStoredDraft(rootKey, text); } catch { /* storage unavailable */ }
+        threadsForInsert.current.stack.api.popTo(ROOT_THREAD_KEY, 'insert');
+        setComposerFocusNonce((n) => n + 1);
+      } else if (detail.mode === 'lead' && draftLeads) {
+        // A lead the draft already starts with (the same row clicked twice) only refocuses.
+        setComposerFocusNonce((n) => n + 1);
+      } else {
+        setPrefillText(text);
+        setPrefillMode(detail.mode === 'lead' ? 'keep-draft' : 'append');
+        setPrefillNonce((n) => n + 1);
+      }
       autoCollapsed.current = false;
       setChatCollapsed(false);
       setActiveSession(sessionId);
@@ -981,6 +1010,31 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // "Engine settings" row in the composer's "+" menu and the popover it opens;
   // ChatInput only renders the generic action row, this hook owns the feature.
   const engineSettingsEntry = useEngineSettingsEntry({ sessionId, session, engineUi, onOpenPath: handleFileOpen });
+  // "Snooze until something happens…" leads the root composer's "+" menu actions:
+  // it starts the message, the user says what the task waits for, and this
+  // session's AI sets the trigger up (utils/wait-until.ts). Not on a question page, whose composer
+  // posts into the question rather than to the session's task.
+  const onQuestionPage = !!threads.composerPlaceholder;
+  const composerPlusActions = useMemo<PlusMenuAction[] | undefined>(() => {
+    const rest = engineSettingsEntry.plusMenuActions ?? [];
+    if (!session?.taskId || onQuestionPage) return engineSettingsEntry.plusMenuActions;
+    const waitUntil: PlusMenuAction = {
+      id: 'wait-until',
+      label: WAIT_UNTIL_LABEL,
+      title: WAIT_UNTIL_TITLE,
+      icon: WAIT_UNTIL_ICON,
+      onSelect: () => {
+        if (startsWithWaitUntil(composerTextRef.current)) {
+          setComposerFocusNonce((n) => n + 1);
+          return;
+        }
+        setPrefillText(waitUntilPrefix({ acp: engineIsAcp }));
+        setPrefillMode('keep-draft');
+        setPrefillNonce((n) => n + 1);
+      },
+    };
+    return [waitUntil, ...rest];
+  }, [engineSettingsEntry.plusMenuActions, session?.taskId, onQuestionPage, engineIsAcp]);
 
   // Open the Inbox tab (optionally on one letter) — the arrival half of the
   // `/sessions?id=…&tab=inbox&letter=…` deep link.
@@ -2274,7 +2328,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onControlCommand={handleControlCommand}
             mentionCwd={session?.cwd}
             mentionHost={session?.host}
-            plusMenuActions={engineSettingsEntry.plusMenuActions}
+            plusMenuActions={composerPlusActions}
             enableEntityMention
             sessionMentionSelfId={sessionId}
             // Per page: the root keeps `draft:session:<id>` (old drafts survive),

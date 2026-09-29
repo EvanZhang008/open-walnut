@@ -30,6 +30,7 @@ import type { TriggerCheckedEvent, TriggerEvent, TriggerFiredEvent } from '../..
 import { log } from '../../logging/index.js';
 import type { CronJob } from '../cron/types.js';
 import { buildTriggerMessage } from './trigger-envelope.js';
+import { beginWaitingFire, finishWaitingFire, wakeForFailedTrigger, type WaitingFire } from '../task-waiting.js';
 import { findTriggerDaemon } from './trigger-daemon.js';
 
 async function notifyTrigger(input: {
@@ -111,6 +112,10 @@ export async function handleTriggerChecked(host: string, event: TriggerCheckedEv
   // The push is what actually stops the polling: the job is disabled in the
   // store, so the recompiled set no longer contains it.
   await pushTriggers(applied.host ?? host);
+  // A task waiting on it would otherwise wait forever: hand it back.
+  await wakeForFailedTrigger(event.id, event.error).catch((err) => log.cron.warn('wait wake after trigger disable failed', {
+    jobId: event.id, error: err instanceof Error ? err.message : String(err),
+  }));
 }
 
 /**
@@ -130,12 +135,26 @@ export async function handleTriggerFired(host: string, fires: TriggerFiredEvent 
     return;
   }
 
+  // A task waiting on this trigger ("wait until", src/core/task-waiting.ts): the
+  // fire ends the wait, and the session is told so with the prompt.
+  let waitJob: CronJob | undefined;
+  let waitFire: WaitingFire = { note: '' };
   const applied = await service.applyTriggerFired(batch, async (job, fresh, at) => {
     if (!job.executor) return { status: 'error' as const, error: 'routine has no executor to deliver to' };
-    const message = buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: at.startedAtMs });
+    waitJob = job;
+    waitFire = await beginWaitingFire(job).catch((err) => {
+      log.cron.warn('wait fire bookkeeping failed', { jobId: job.id, error: err instanceof Error ? err.message : String(err) });
+      return { note: '' };
+    });
+    const prompt = waitFire.note ? `${promptOf(job)}\n\n${waitFire.note}` : promptOf(job);
+    const message = buildTriggerMessage(job, fresh, prompt, { deliveredAtMs: at.startedAtMs });
     const { runExecutor } = await import('./registry.js');
     return await runExecutor(job, job.executor, message);
   });
+  if (waitJob && waitFire.taskId) {
+    await finishWaitingFire(waitJob, waitFire, { delivered: applied.delivered === true, retry: applied.retry === true })
+      .catch((err) => log.cron.warn('wait fire finish failed', { jobId: head.id, error: err instanceof Error ? err.message : String(err) }));
+  }
 
   log.cron.info('trigger fired', {
     host, jobId: head.id, epoch: head.epoch, seq: applied.seq ?? Math.min(...seqs),

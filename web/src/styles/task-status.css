@@ -1,0 +1,140 @@
+/* Task status control (TaskStatusControl.tsx): the Status row of the task menu
+   (collapsed like the date rows), the detail pane's clickable status badge, and
+   the event half of Start / Snooze until. */
+
+/* The collapsed Status row: the date rows' shape (globals.css .task-kebab-date*),
+   under its own classes so specs and styles that mean "a date row" still do. */
+.task-kebab-status-row { display: flex; flex-direction: column; }
+.task-kebab-status-toggle { gap: 8px; }
+.task-kebab-status-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-kebab-status-value b { font-weight: 500; color: var(--fg-secondary); }
+.task-kebab-status-caret {
+  display: inline-block;
+  flex-shrink: 0;
+  font-size: 9px;
+  color: var(--fg-muted);
+  transition: transform 0.12s ease;
+}
+.task-kebab-status-caret.open { transform: rotate(90deg); }
+
+.task-kebab-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 12px;
+}
+
+.task-kebab-status-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+
+/* Two columns: four labelled pills in one line would push the menu past 360px. */
+.task-status-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  min-width: 200px;
+}
+
+.task-status-pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.task-status-pill:hover { background: var(--bg-hover, var(--bg-tertiary)); }
+.task-status-pill-icon { display: inline-flex; flex: none; }
+.task-status-pill-icon svg { width: 12px; height: 12px; }
+
+.task-status-pill.is-current { font-weight: 600; border-color: transparent; }
+.task-status-pill-todo.is-current { background: var(--bg-tertiary); color: var(--fg); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.task-status-pill-in_progress.is-current { background: rgba(0, 122, 255, 0.12); color: var(--accent); }
+.task-status-pill-need_action.is-current { background: rgba(255, 59, 48, 0.12); color: var(--error); }
+.task-status-pill-complete.is-current { background: rgba(52, 199, 89, 0.12); color: var(--success); }
+
+/* The detail pane badge becomes a button: same look, plus a caret. */
+button.task-status-badge {
+  border: none;
+  font: inherit;
+  cursor: pointer;
+}
+button.task-status-badge:hover { filter: brightness(0.96); }
+.task-status-caret { font-size: 9px; opacity: 0.7; margin-left: 2px; }
+
+.task-status-menu { padding: 4px 0; }
+
+.task-waiting-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+.task-waiting-line.is-compact { margin: 0; padding: 2px 12px 6px; }
+.task-waiting-icon { display: inline-flex; color: var(--accent); }
+.task-waiting-icon svg { width: 13px; height: 13px; }
+.task-waiting-text {
+  min-width: 0;
+  flex: 1 1 120px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.task-waiting-text b { color: var(--fg); font-weight: 600; }
+.task-waiting-stop {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.task-waiting-stop:hover { color: var(--fg); background: var(--bg-tertiary); }
+.task-waiting-error { flex-basis: 100%; color: var(--error); }
+
+/* The event half of Start / Snooze until, under the calendar: one rule apart from it. */
+.task-kebab-date.open > .task-snooze-event,
+.task-kebab-date.open > .task-waiting-line {
+  border-top: 1px solid var(--border);
+}
+.task-kebab-date.open > .task-waiting-line.is-compact { padding-top: 6px; }
+
+/* A long condition ("Start / Snooze until: QA signs off (file … exists)") truncates
+   instead of widening the whole menu; the row's title has it whole. */
+.task-snooze-row .task-kebab-date-label b {
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+/* The line takes the menu's width and wraps inside it, never widens it: a max-width
+   on the text (240px, then 200px) still left the menu 6px wider in WebKit. */
+.task-kebab-date.open > .task-waiting-line.is-compact { contain: inline-size; }

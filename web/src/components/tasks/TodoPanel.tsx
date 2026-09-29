@@ -98,6 +98,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { dragBus } from '@/utils/drag-bus';
 import { TaskKebabMenu } from './TaskKebabMenu';
+import { TaskStatusBadge, WaitingLine } from './TaskStatusControl';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import {
   ViewDropdown,
@@ -307,13 +308,6 @@ function useFrozenWhile<T>(value: T, frozen: boolean): T {
   if (!frozen) ref.current = value;
   return ref.current;
 }
-
-const PHASE_ICON: Record<string, ReactNode> = {
-  TODO: ICONS.ICON_PHASE_TODO,
-  IN_PROGRESS: ICONS.ICON_PHASE_IN_PROGRESS,
-  NEED_ACTION: ICONS.ICON_PHASE_NEED_ACTION,
-  COMPLETE: ICONS.ICON_PHASE_COMPLETE,
-};
 
 const PHASE_LABEL: Record<string, string> = {
   TODO: 'To Do',
@@ -1318,6 +1312,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             onUnhideGroup={onUnhideGroup}
             onStartSelect={onStartSelect}
             onDelete={onDelete}
+            onSetPhase={onSetPhase}
           />
         </div>
         {/* Where a search / flat-list hit lives, on its own line so the title keeps the row */}
@@ -2083,9 +2078,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
       <div className="todo-detail-meta">
         <div className="todo-detail-title">{task.title}</div>
         <div className="todo-detail-badges">
-          <span className={`badge-phase badge-phase-${task.phase?.toLowerCase()}`}>
-            {PHASE_ICON[task.phase] ?? '○'} {PHASE_LABEL[task.phase] ?? task.phase}
-          </span>
+          <TaskStatusBadge task={task} />
           {showPriority && task.priority && task.priority !== 'none' && (
             <span className={`todo-detail-priority-pill priority-${task.priority}`}>
               {PRIORITY_ICON[task.priority]} {PRIORITY_LABEL[task.priority]}
@@ -2110,6 +2103,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
             </span>
           )}
         </div>
+        <WaitingLine task={task} />
       </div>
 
       {parentTask && (
@@ -2809,6 +2803,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         onStartSession={onStartSession}
         onMoveToProject={onMoveToProject}
         onDelete={onDelete}
+        onSetPhase={onSetPhase}
       />
     </div>
   );

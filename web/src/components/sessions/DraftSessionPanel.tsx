@@ -67,6 +67,7 @@ import { TaskQuickActions } from './TaskQuickActions';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import '@/styles/walnut-agent.css';
+import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 
 const PLACEHOLDER = 'What should this session do?';
 const HINT = 'Nothing runs yet — send to start, or keep it as a task for later.';
@@ -295,6 +296,19 @@ export function DraftSessionPanel({
   // One-tap composer seeds for the Ask Walnut tab — ChatInput's prefill contract
   // (replace + focus + caret-to-end, re-appliable via the nonce; never sends).
   const [prefill, setPrefill] = useState<{ text: string; nonce: number }>({ text: '', nonce: 0 });
+  // A task menu's "Start / Snooze until › Something happens…" on a task with no
+  // session seeds this draft (utils/wait-until.ts). Seeded opens never reuse a
+  // draft with typed text, so the replace-only prefill loses nothing.
+  useEffect(() => {
+    const onInsert = (e: Event) => {
+      const detail = (e as CustomEvent<ComposerInsertDetail>).detail;
+      if (!detail || detail.sessionId !== draft.id || detail.handled) return;
+      detail.handled = true;
+      setPrefill((p) => ({ text: detail.text, nonce: p.nonce + 1 }));
+    };
+    window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
+    return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
+  }, [draft.id]);
   // A Start was refused because no folder is chosen. An unseeded draft opens
   // with NO folder by design (the user picks one; nothing is pre-selected), so
   // this is the ordinary "typed first, forgot the folder" path, not an edge
@@ -394,9 +408,16 @@ export function DraftSessionPanel({
   // one happens to be first in the DOM.
   useEffect(() => {
     if (!autoFocus) return;
-    const raf = requestAnimationFrame(() => { focusComposer(); });
+    const raf = requestAnimationFrame(() => {
+      const el = getComposer();
+      if (!el) return;
+      el.focus();
+      // A restored or seeded draft ("Snooze this task until: ") goes on where its text ends;
+      // a bare focus() leaves the caret at 0, so typing landed in front of it.
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
     return () => cancelAnimationFrame(raf);
-  }, [autoFocus, focusComposer]);
+  }, [autoFocus, getComposer]);
 
   // Owner asked for the folder picker (a Start with no cwd that reached MainPage —
   // see DraftColumn.openPickerNonce). Skips the initial undefined/0 so a freshly

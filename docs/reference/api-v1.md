@@ -111,6 +111,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | PUT | `/api/v1/tasks/:id/description` | Set the description |
 | PUT | `/api/v1/tasks/:id/summary` | Set the summary |
 | PUT | `/api/v1/tasks/:id/depends-on` | Replace dependencies |
+| POST | `/api/v1/tasks/:id/wait` | Park a task on a trigger until it fires (`:id` may be `this`; 501 on REPLICA) |
+| DELETE | `/api/v1/tasks/:id/wait` | Stop waiting and delete the trigger behind the wait |
 | PATCH | `/api/v1/tasks/reorder` | Reorder tasks within one project group |
 | POST | `/api/v1/tasks/batch/phase` | Set the phase of many tasks (partial success) |
 | POST | `/api/v1/tasks/batch/delete` | Delete many tasks (partial success) |
@@ -759,6 +761,34 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   `{ "content" }` → `200 { "task" }` — replaces that field.
 - `PUT /api/v1/tasks/:id/depends-on` body `{ "depends_on": [ids] }` →
   `200 { "task" }`; a cycle → `409 conflict` + `task_id`/`dep_id`.
+- `POST /api/v1/tasks/:id/wait` (additive, 2026-09) body
+  `{ "condition", "routine_id" }` → `200 { "task" }`. `condition` is one line
+  in the user's words (whitespace folded, at most 300 chars); `routine_id` must
+  be a trigger (a routine with a `check`) whose session executor targets THIS
+  task, which is what `POST /api/v1/routines/trigger` with `session: "this"`
+  makes. `:id` may be `this`: the task of the calling session
+  (`x-walnut-caller-sid`). The task stays `TODO` (a `NEED_ACTION` task moves to
+  `TODO`, `unread` clears) and gains `waiting: { condition, routine_id, since }`.
+  While it waits, a finished turn lands on `TODO` instead of `NEED_ACTION`. The
+  wait ends (`waiting.woke_at` + `woke_reason`) when the trigger fires
+  (`fired`: the fire's turn then hands the task back as usual), a human or peer
+  message arrives (`message`), the session blocks on a human decision
+  (`needs-human`), the status is set to `NEED_ACTION` or `COMPLETE`
+  (`status-changed`; `IN_PROGRESS` keeps it, since a session turn on a waiting
+  task is in progress too), or the trigger is auto-disabled after 5 failing
+  checks (`check-failed`: `NEED_ACTION` + a notification). Calling it again with
+  the same `routine_id` re-arms an ended wait; a different id replaces the old
+  trigger. When the trigger already fired in the hour before a FIRST wait on it
+  (a new trigger's first check runs seconds after it is created), nothing is
+  parked: the response's `waiting` is already over (`woke_reason: "fired"`,
+  `woke_at` earlier than `since`). Errors: `400` (no condition / no routine id / not a trigger / the
+  trigger targets another task / `this` without a caller), `404` (task or
+  trigger), `409` (task is complete), `503 unavailable` (the trigger could not
+  be turned back on; retry), `501 not_supported_cloud` on REPLICA.
+- `DELETE /api/v1/tasks/:id/wait` (additive, 2026-09) → `200 { "task" }`:
+  removes `waiting` and deletes its trigger; the phase is untouched. A task that
+  is not waiting answers `200` unchanged. Deleting the trigger elsewhere, or
+  completing / deleting the task, also removes the wait.
 - `PATCH /api/v1/tasks/reorder` body `{ "project", "taskIds" }` →
   `200 { "ok": true }` — permutes the given tasks within ONE project group
   (`project: ""` = Inbox; it's a type check, not a truthiness check).

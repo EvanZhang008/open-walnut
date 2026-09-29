@@ -207,3 +207,71 @@ defineOp({
   ),
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
+
+defineOp({
+  name: 'task_wait',
+  title: 'Make a Walnut task wait until a trigger fires',
+  description:
+    'Park a task until something happens ("wait until CR 1234 is approved", "until Alex replies"). The task '
+    + 'stays To Do and in every list, but a finished turn no longer hands it back: no Need Action, no red dot, '
+    + 'until the trigger fires. The fire is delivered into this session with a note; when that turn ends the '
+    + 'task goes back to the user as Need Action, unless you call task_wait again with the same routine_id '
+    + 'because the event does not need them yet. First write and test the check (walnut-trigger skill), then '
+    + 'trigger_create with session "this" and a prompt for when it fires, then call this with the id it '
+    + 'returned. Do not set the task to Need Action yourself afterwards: that ends the wait.',
+  input: {
+    condition: z.string().min(1)
+      .describe('What the task waits for, in the user\'s words, one line (e.g. "CR 1234 is approved")'),
+    routine_id: z.string().min(1).describe('The trigger id trigger_create returned; it must deliver to this task'),
+    task: z.string().optional().describe('"this" (default) = the calling session\'s task, or a task id'),
+  },
+  bind: { method: 'POST', path: '/tasks/:id/wait' },
+  handler: async (args, call) => {
+    const id = typeof args.task === 'string' && args.task.trim() ? args.task.trim() : 'this'
+    const body = await call('POST', `/tasks/${encodeURIComponent(id)}/wait`, {
+      condition: args.condition, routine_id: args.routine_id,
+    }) as { task?: { id?: string; phase?: string; waiting?: { since?: string; woke_at?: string; woke_reason?: string } } } | undefined
+    const w = body?.task?.waiting
+    if (w?.woke_reason === 'fired' && w.woke_at && w.since && w.since >= w.woke_at) {
+      // setTaskWaiting found the trigger had fired before this call (its first
+      // check runs seconds after trigger_create): nothing was parked.
+      return withOutcome(
+        { ...(body ?? {}) },
+        `The trigger already fired (${w.woke_at}) before the wait was set, so the task is NOT waiting: `
+        + 'the condition may already be met, and that fire is in this session (now or right after this turn).',
+        'Read that fire and tell the user what it means; the task goes back to them when this turn ends. If it '
+        + 'does not need them yet, call task_wait again with the same routine_id to keep waiting.',
+      )
+    }
+    return withOutcome(
+      { ...(body ?? {}) },
+      `The task is waiting until: ${String(args.condition)}. It stays To Do with no red dot; the trigger's fire `
+      + 'lands in this session and ends the wait.',
+      'Tell the user in one line what the task waits for, then end your turn. Stop it with '
+      + `walnut tools call task_stop_waiting '{"task":"${body?.task?.id ?? id}"}'.`,
+    )
+  },
+  tags: { readonly: false, remote: 'allow', destructive: false },
+})
+
+defineOp({
+  name: 'task_stop_waiting',
+  title: 'Stop a Walnut task waiting',
+  description:
+    'End a wait set with task_wait: the task stays To Do, and the trigger behind the wait is deleted '
+    + '(its check script file stays on disk). Nothing happens when the task is not waiting.',
+  input: {
+    task: z.string().optional().describe('"this" (default) = the calling session\'s task, or a task id'),
+  },
+  bind: { method: 'DELETE', path: '/tasks/:id/wait' },
+  handler: async (args, call) => {
+    const id = typeof args.task === 'string' && args.task.trim() ? args.task.trim() : 'this'
+    const body = await call('DELETE', `/tasks/${encodeURIComponent(id)}/wait`) as Record<string, unknown> | undefined
+    return withOutcome(
+      { ...(body ?? {}) },
+      'The task is no longer waiting, and its trigger was deleted.',
+      'Nothing else is required.',
+    )
+  },
+  tags: { readonly: false, remote: 'allow', destructive: false },
+})

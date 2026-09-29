@@ -36,6 +36,9 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
     if (av.length !== bv.length) return false;
     for (let i = 0; i < av.length; i++) if (av[i] !== bv[i]) return false;
   }
+  // An event snooze (task.waiting) drives the "Snoozed until" line. Its writes need
+  // not bump updated_at, so without this the echo of Unsnooze bailed as "equal".
+  if (a.waiting !== b.waiting && JSON.stringify(a.waiting ?? null) !== JSON.stringify(b.waiting ?? null)) return false;
   // Session status slots (nested objects) — compare on the process_status/activity
   // fields we actually render; deeper equality not needed because session:status-changed
   // is a separate WS event that delivers those changes with its own merge path.

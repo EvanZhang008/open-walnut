@@ -96,7 +96,7 @@ describe('TaskActionMenuItems without the draft props (board kebab)', () => {
   it('the Due row keeps the board format when no formatDate is given', async () => {
     const host = await mount({ task: TASK, isPinned: true, pinnedTier: 'focus', isDone: false, ...spies() });
     const labels = [...host.querySelectorAll('.task-kebab-date-label')].map((e) => e.textContent);
-    expect(labels).toEqual(['Start', `Due: ${formatDateDisplay('2026-09-26')}`]);
+    expect(labels).toEqual(['Start / Snooze until', `Due: ${formatDateDisplay('2026-09-26')}`]);
   });
 });
 
@@ -143,8 +143,24 @@ describe('TaskActionMenuItems with the draft props', () => {
       isPinned: true, pinnedTier: 'focus', isDone: false, ...spies(), ...draftProps, formatDate,
     });
     const labels = [...host.querySelectorAll('.task-kebab-date-label')].map((e) => e.textContent);
-    expect(labels).toEqual(['Start: start:2026-09-25', 'Due: due:2026-09-26']);
+    expect(labels).toEqual(['Start / Snooze until: start:2026-09-25', 'Due: due:2026-09-26']);
     expect(formatDate).toHaveBeenCalledWith('2026-09-26', 'due');
+  });
+
+  it('Start / Snooze until also says what an event snooze waits for, and shows its row only when open', async () => {
+    const formatDate = (iso: string, kind: string) => `${kind}:${iso}`;
+    const body = createElement('span', { className: 'snooze-event-body' }, 'Something happens…');
+    const host = await mount({
+      task: { priority: 'none', start_date: '2026-09-25', due_date: null },
+      isPinned: true, pinnedTier: 'focus', isDone: false, ...spies(), formatDate,
+      snoozeEvent: { summary: 'CR 1234 is approved', body },
+    });
+    const snooze = host.querySelector('[data-testid="task-snooze-row"]')!;
+    expect(snooze.querySelector('.task-kebab-date-label')!.textContent)
+      .toBe('Start / Snooze until: start:2026-09-25 · CR 1234 is approved');
+    expect(host.querySelectorAll('.snooze-event-body')).toHaveLength(0);
+    await click(snooze.querySelector('.task-kebab-date-toggle')!);
+    expect(host.querySelectorAll('.snooze-event-body')).toHaveLength(1);
   });
 
   it('a tier heading replaces "Pin to" and nothing is lit (C65)', async () => {

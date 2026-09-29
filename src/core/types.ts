@@ -18,6 +18,42 @@ export const VALID_PRIORITIES: readonly TaskPriority[] = ['immediate', 'importan
  */
 export const EXTERNAL_SESSION_IMPORT_TAG = 'walnut:external-sessions';
 
+/** Why a wait ended (TaskWaiting.woke_reason). */
+export type TaskWakeReason = 'fired' | 'message' | 'needs-human' | 'check-failed' | 'status-changed';
+
+/**
+ * A task parked on a trigger ("wait until CR 1234 is approved"). The task stays
+ * TODO and in every view; the only difference is that a finished turn does not
+ * hand it back (no NEED_ACTION, no red dot) until the trigger fires and the
+ * session decides the human is needed. Not a phase on purpose: WAIT was removed
+ * on 2026-08-18 because a parked state with no exit confused humans and agents,
+ * and this one always has an exit, the routine.
+ *
+ * The record outlives the wait: `woke_at` ends it but keeps `routine_id`, so a
+ * session that decides to keep waiting re-arms the SAME routine (its dedup state
+ * intact) instead of creating one that re-fires on what was already seen.
+ */
+export interface TaskWaiting {
+  /** The condition in the user's words, e.g. "CR 1234 is approved". */
+  condition: string;
+  /** The walnut-trigger routine that ends the wait (session executor on this task). */
+  routine_id: string;
+  /** When the wait started (or was last re-armed). */
+  since: string;
+  /** Set when the wait ended; absent while the task is still waiting. */
+  woke_at?: string;
+  woke_reason?: TaskWakeReason;
+  /** A 'fired' wake only: set once that fire was delivered (or refused for good).
+   *  Until then a replay of it is still the wait's fire; after, a later fire of
+   *  the same trigger is an ordinary one. */
+  settled_at?: string;
+}
+
+/** The task is waiting now: a live wait on an open task. */
+export function isTaskWaiting(task: { waiting?: TaskWaiting | null; phase?: string }): boolean {
+  return !!task.waiting && !task.waiting.woke_at && task.phase !== 'COMPLETE';
+}
+
 /** True for a task the importer still owns (see EXTERNAL_SESSION_IMPORT_TAG). */
 export function isExternalImportTask(task: { tags?: string[] | undefined }): boolean {
   return (task.tags ?? []).includes(EXTERNAL_SESSION_IMPORT_TAG);
@@ -706,6 +742,9 @@ export interface Task {
    *  the persona drift repair (which persona to rebuild). Same storage rules as
    *  walnut_agent: payload blob, local-only. */
   agent_id?: string;
+  /** "Wait until" (src/core/task-waiting.ts): the task is parked on a trigger.
+   *  Local-only, payload blob. */
+  waiting?: TaskWaiting;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

@@ -5,6 +5,7 @@ import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { launchEngineForHost, normalizeEngine } from '@/utils/engines';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
+import { seedDraftComposer, waitUntilPrefix, WAIT_UNTIL_EVENT } from '@/utils/wait-until';
 import { useStoreTask, useTasksContext } from '@/contexts/TasksContext';
 import { useNotifications } from '@/contexts/notifications';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -840,6 +841,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // The /task slash command. The draft column is the ONE place a task is
     // created (its "Create task for later" is the no-session path).
     const handleTaskComposer = () => { openDraftColumnRef.current(); };
+    // "Snooze until something happens" on a task with no session (utils/wait-until.ts): a draft
+    // bound to the task, its composer started with the words, so the first
+    // message starts the session whose AI sets the wait up.
+    const handleWaitUntil = (e: Event) => {
+      const task = (e as CustomEvent<{ task?: Task }>).detail?.task;
+      if (!task) return;
+      const draftId = openDraftColumnRef.current({
+        project: task.project || undefined,
+        taskId: task.id, boundTaskTitle: task.title,
+        ...(task.cwd ? { cwd: task.cwd, host: null, cwdPinned: true } : {}),
+      });
+      if (draftId) seedDraftComposer(draftId, waitUntilPrefix(), draftComposerKey(draftId));
+    };
     const handleToggleTodo = () => {
       if (document.activeElement?.closest('#home-task-navigation')) document.querySelector<HTMLButtonElement>('.app-task-panel-toggle')?.focus();
       setTodoVisible(prev => !prev);
@@ -857,6 +871,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     window.addEventListener('dock:activate-chat', handleDockChat);
     window.addEventListener('session-launcher:open', handleSessionLauncher);
     window.addEventListener('task-composer:open', handleTaskComposer);
+    window.addEventListener(WAIT_UNTIL_EVENT, handleWaitUntil);
     window.addEventListener('sidebar:toggle-todo', handleToggleTodo);
     window.addEventListener('sidebar:toggle-routines', handleToggleRoutines);
     window.addEventListener('sidebar:toggle-calendar', handleToggleCalendar);
@@ -867,6 +882,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       window.removeEventListener('dock:activate-chat', handleDockChat);
       window.removeEventListener('session-launcher:open', handleSessionLauncher);
       window.removeEventListener('task-composer:open', handleTaskComposer);
+      window.removeEventListener(WAIT_UNTIL_EVENT, handleWaitUntil);
       window.removeEventListener('sidebar:toggle-todo', handleToggleTodo);
       window.removeEventListener('sidebar:toggle-routines', handleToggleRoutines);
       window.removeEventListener('sidebar:toggle-calendar', handleToggleCalendar);

@@ -264,6 +264,9 @@ export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed:
   // timer. Its state file stays (a disable must survive a re-enable) and is
   // pruned by age once nothing re-arms it.
   pushTriggersFor([before?.check?.host]);
+  // A task waiting on this trigger stops waiting with it (src/core/task-waiting.ts).
+  const { onRoutineDeleted } = await import('../task-waiting.js');
+  await onRoutineDeleted(before);
   return result;
 }
 
