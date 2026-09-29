@@ -70,11 +70,83 @@ function invalidateSessionStoreCache(): void {
   sessionStoreCacheDataVersion = null;
 }
 
+// ── Write-through: a row write patches the cache instead of dropping it ──
+//
+// Dropping the snapshot on every write meant the NEXT reader rebuilt it with a
+// full `SELECT *` + rowToSession over the whole table: 5.6k rows (5.5k of them
+// stopped for good), ~250ms idle and over 1s on a loaded machine, on the event
+// loop. With ~30 live sessions each writing status every few seconds and
+// /api/sessions/status polling in between, that rebuild ran several times a
+// minute and was 12% of all main-thread CPU on the live server (2026-09-29).
+//
+// Every in-process writer goes through writeSessionRowSqlite (INSERT OR REPLACE
+// by claude_session_id) or deleteSessionRowSqlite, so the lock knows exactly
+// which rows a section touched. On a clean commit it re-reads those rows and
+// swaps them into the snapshot; a section that threw (rolled back), a snapshot
+// that is missing, or a foreign commit (`PRAGMA data_version` moved: the on-stop
+// hook writes through its own connection) still takes the drop.
+let touchedSessionIds: Set<string> | null = null;
+
+function noteSessionRowTouched(claudeSessionId: string): void {
+  touchedSessionIds?.add(claudeSessionId);
+}
+
+/** Rows this connection has changed since it opened: SQLite's own counter. */
+function totalChanges(db: NonNullable<ReturnType<typeof getDb>>): number {
+  return db.prepare('SELECT total_changes() AS n').pluck().get() as number;
+}
+
+/** Store-shape counters for tests and the daily loop check. */
+const sessionStoreStats = { fullScans: 0, patchedRows: 0, cloneReads: 0 };
+export function _sessionStoreStatsForTesting(): Readonly<typeof sessionStoreStats> { return { ...sessionStoreStats }; }
+/** Forget the cached snapshot (the next reader scans), leaving init and the connection alone. */
+export function _dropSessionStoreCacheForTesting(): void { invalidateSessionStoreCache(); }
+
+function patchSessionCacheRows(ids: ReadonlySet<string>): void {
+  const db = getDb();
+  if (!db || !STORE_CACHE_ENABLED || sessionStoreCache === null) {
+    invalidateSessionStoreCache();
+    return;
+  }
+  if (ids.size === 0) return;
+  const current = db.pragma('data_version', { simple: true }) as number;
+  if (current !== sessionStoreCacheDataVersion) {
+    invalidateSessionStoreCache();
+    return;
+  }
+  const wanted = [...ids];
+  const at = new Map(sessionStoreCache.map((s, i) => [s.claudeSessionId, i]));
+  const removed = new Set<string>();
+  for (let i = 0; i < wanted.length; i += 500) {
+    const chunk = wanted.slice(i, i + 500);
+    const rows = db
+      .prepare(`SELECT * FROM sessions WHERE claude_session_id IN (${chunk.map(() => '?').join(',')})`)
+      .all(...chunk) as Record<string, any>[];
+    const present = new Map(rows.map((r) => [r.claude_session_id as string, r]));
+    for (const id of chunk) {
+      const row = present.get(id);
+      if (!row) { removed.add(id); continue; }
+      const record = rowToSession(row);
+      const index = at.get(id);
+      if (index === undefined) {
+        at.set(id, sessionStoreCache.length);
+        sessionStoreCache.push(record);
+      } else {
+        sessionStoreCache[index] = record;
+      }
+      sessionStoreStats.patchedRows += 1;
+    }
+  }
+  if (removed.size > 0) sessionStoreCache = sessionStoreCache.filter((s) => !removed.has(s.claudeSessionId));
+}
+
 /** Reset module-level state for test isolation. */
 export function _resetSessionTrackerForTesting(): void {
   sessionInitialized = false;
   sessionStoreCache = null;
   sessionStoreCacheDataVersion = null;
+  touchedSessionIds = null;
+  for (const key of Object.keys(sessionStoreStats) as (keyof typeof sessionStoreStats)[]) sessionStoreStats[key] = 0;
 }
 
 const MAX_STATUS_HISTORY = 10;
@@ -371,7 +443,9 @@ async function readStore(): Promise<{ sessions: SessionRecord[] }> {
     } while (before !== after);
     sessionStoreCache = rows.map(rowToSession);
     sessionStoreCacheDataVersion = after;
+    sessionStoreStats.fullScans += 1;
   }
+  sessionStoreStats.cloneReads += 1;
   return { sessions: sessionStoreCache.map((s) => ({ ...s })) };
 }
 
@@ -385,15 +459,39 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   const prev = writeLock;
   let resolve: () => void;
   writeLock = new Promise<void>((r) => { resolve = r; });
-  // Invalidate the whole-store read cache after EVERY locked mutation. Every
-  // writer (create/update/batch/conditional/rename/complete/delete/link)
-  // funnels through this lock, so this single hook keeps the cache correct
-  // without enumerating writers. Drop BEFORE releasing the lock so the next
-  // reader rebuilds from fresh rows.
+  // Bring the whole-store read cache up to date after EVERY locked mutation.
+  // Every writer (create/update/batch/conditional/rename/complete/delete/link)
+  // funnels through this lock and through writeSessionRowSqlite /
+  // deleteSessionRowSqlite, so the lock knows which rows the section touched
+  // and patches exactly those (see the write-through note at the cache decl).
+  // A section that threw takes the old drop instead. Either happens BEFORE the
+  // lock releases so the next reader sees the committed rows.
+  // SQLite's change counter is the check on the notes: a section that changed
+  // more rows than it named (a set-based `UPDATE ... WHERE task_id IN (...)`, a
+  // writer that never called noteSessionRowTouched) gets the drop, so a missing
+  // note can only cost a rescan, never a stale row.
+  let touched: Set<string> | null = null;
+  let changesBefore = 0;
   return prev
-    .then(fn)
+    .then(() => {
+      touched = new Set<string>();
+      touchedSessionIds = touched;
+      const db = getDb();
+      changesBefore = db ? totalChanges(db) : 0;
+      return fn();
+    })
+    .then(
+      (value) => {
+        const db = getDb();
+        const changed = db ? totalChanges(db) - changesBefore : 0;
+        if (touched === null || changed > touched.size) invalidateSessionStoreCache();
+        else patchSessionCacheRows(touched);
+        return value;
+      },
+      (err) => { invalidateSessionStoreCache(); throw err; },
+    )
     .finally(() => {
-      invalidateSessionStoreCache();
+      touchedSessionIds = null;
       resolve!();
     });
 }
@@ -1424,6 +1522,13 @@ function writeSessionRowSqlite(db: import('better-sqlite3').Database, session: S
     bound[col] = partial[col] === undefined ? null : partial[col];
   }
   db.prepare(insertSql).run(bound);
+  noteSessionRowTouched(session.claudeSessionId);
+}
+
+/** The one DELETE for a session row: the lock patches the cache from what it notes. */
+function deleteSessionRowSqlite(db: import('better-sqlite3').Database, claudeSessionId: string): void {
+  db.prepare('DELETE FROM sessions WHERE claude_session_id = ?').run(claudeSessionId);
+  noteSessionRowTouched(claudeSessionId);
 }
 
 /**
@@ -1966,6 +2071,7 @@ export async function batchUpdateSessionRecords(
           const bound: Record<string, unknown> = {};
           for (const col of insertCols) bound[col] = partial[col] === undefined ? null : partial[col];
           insertStmt.run(bound);
+          noteSessionRowTouched(id);
           written.push(id);
         } catch (err) {
           // One poisoned row must not roll back the other ~292.
@@ -2089,7 +2195,7 @@ export async function renameSessionId(
       // Delete old PK + insert under new PK in one transaction so a crash mid-rename
       // can't leave both rows orphaned. INSERT OR REPLACE with the new PK won't
       // clean up the old row on its own.
-      handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?').run(oldClaudeSessionId);
+      deleteSessionRowSqlite(handle, oldClaudeSessionId);
       const insertCols = [...SESSION_COLUMNS, 'payload'];
       const insertSql =
         'INSERT OR REPLACE INTO sessions (' + insertCols.join(', ') + ') VALUES (' +
@@ -2100,6 +2206,7 @@ export async function renameSessionId(
         bound[col] = partial[col] === undefined ? null : partial[col];
       }
       handle.prepare(insertSql).run(bound);
+      noteSessionRowTouched(newClaudeSessionId);
       log.session.info('session ID renamed', { oldId: oldClaudeSessionId, newId: newClaudeSessionId });
       // Durable audit (inc-2026-08-10): the old ID stops resolving from this
       // moment — any deep link / queued message still holding it will 404.
@@ -2232,8 +2339,7 @@ export async function rollbackAcpSessionIdMigration(
       const now = new Date().toISOString();
       oldRecord.lastActiveAt = now;
       commitStatusVersion(oldRecord, beforeStatus, now);
-      handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?')
-        .run(newClaudeSessionId);
+      deleteSessionRowSqlite(handle, newClaudeSessionId);
       writeSessionRowSqlite(handle, oldRecord);
       log.session.info('ACP session ID migration rolled back', {
         oldSessionId: oldClaudeSessionId,
@@ -2379,6 +2485,7 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
           bound[col] = partial[col] === undefined ? null : partial[col];
         }
         ins.run(bound);
+        noteSessionRowTouched(session.claudeSessionId);
         updated++;
       }
     });
@@ -2448,6 +2555,7 @@ export async function deleteSessionRecords(ids: Set<string>, reason = 'unspecifi
       for (const id of ids) {
         const row = sel.get(id) as Record<string, any> | undefined;
         const res = del.run(id);
+        noteSessionRowTouched(id);
         removed += res.changes;
         if (res.changes > 0) {
           removedIds.push(id);

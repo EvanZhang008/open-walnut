@@ -24,6 +24,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { preparePluginModule, type PluginModuleFunctions } from './plugins/plugin-module.js';
+import { BUILTIN_HOST_MODULES } from '../integrations/host-modules.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
 import yaml from 'js-yaml';
 import { WALNUT_HOME, CONFIG_FILE, IS_EPHEMERAL } from '../constants.js';
@@ -1496,8 +1497,16 @@ async function prepareGeneration(
   config: Record<string, unknown>,
   strictWeb = false,
 ): Promise<LoadedPluginGeneration> {
+  const hostModule = builtin ? BUILTIN_HOST_MODULES[path.basename(dir)] : undefined;
+  // A web-only builtin (no server entry) evaluates nothing, so it needs no row.
+  if (builtin && !hostModule && manifest.server) {
+    log.warn('builtin plugin is not in the host module table; loading its own bundle (duplicate core modules)', {
+      pluginId: manifest.id, dir,
+    });
+  }
   const module = await preparePluginModule({
     dir, builtin, manifest, bundle: bundleExternalPlugin, deadline: withPluginCodeDeadline, replacement: strictWeb,
+    hostModule,
   });
   const artifactDir = module.sourceRoot ?? dir;
   if (module.sourceRoot) {

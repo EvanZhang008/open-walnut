@@ -134,12 +134,23 @@ let taskStoreCache: TaskStore | null = null;
 // other process created (2026-08-04 task-loss incident — a stray second server
 // on :3467 silently deleted every task created via :3456).
 let taskStoreCacheDataVersion: number | null = null;
+/** id → task of the cached snapshot, built on first use and dropped whenever the
+ *  snapshot changes. getTask() is called from ~40 files; without this each call
+ *  cloned and scanned the whole board to return one row. */
+let taskStoreIndex: Map<string, Task> | null = null;
 
 /** Drop the cached whole-store snapshot. Called from withWriteLock.finally. */
 function invalidateTaskStoreCache(): void {
   taskStoreCache = null;
   taskStoreCacheDataVersion = null;
+  taskStoreIndex = null;
 }
+
+/** Store-shape counters for tests and the daily loop check (`scripts/walnut-logs.sh loop`). */
+const storeStats = { fullScans: 0, fingerprintedRows: 0, rowsWritten: 0, wholeStoreWrites: 0, viewReads: 0, cloneReads: 0 };
+export function _storeStatsForTesting(): Readonly<typeof storeStats> { return { ...storeStats }; }
+/** Forget the cached snapshot (the next reader scans), leaving init and the connection alone. */
+export function _dropTaskStoreCacheForTesting(): void { invalidateTaskStoreCache(); }
 
 /**
  * Bumped each time a writer RE-SEEDS the cache itself (writeStore's tail).
@@ -174,15 +185,49 @@ let taskStoreCacheSeeded = 0;
 // and our shadow may be stale → we fall back to a full rewrite and re-seed. That
 // makes a stale shadow a performance question, never a correctness one.
 interface RowShadow {
-  /** taskId → serialized column tuple as last persisted. */
-  fingerprints: Map<string, string>;
+  /** taskId → bound column values as last persisted, in INSERT_COLS order. */
+  fingerprints: Map<string, RowFingerprint>;
   /** Row order as last persisted (== SQLite rowid order). */
   order: string[];
 }
+/**
+ * The bound values of one row, in INSERT_COLS order. Kept as an ARRAY and compared
+ * element-wise, never joined into one JSON string: the joined form re-serialized
+ * every note on the board on every whole-store write (measured 19.4MB of
+ * throwaway strings per write at 6.5k tasks, 160-320ms on the event loop), and an
+ * unchanged `note` compares by pointer here because the task object still holds
+ * the very string that was read.
+ */
+type RowFingerprint = readonly unknown[];
 let rowShadow: RowShadow | null = null;
 let rowShadowDataVersion: number | null = null;
 /** Shadow built inside the current transaction, published only on commit. */
 let pendingRowShadow: RowShadow | null = null;
+
+/** Every column writeStore binds, in bind order. `payload` is the spill column. */
+const INSERT_COLS: readonly string[] = [...TASK_COLUMNS, 'payload'];
+
+function rowFingerprint(task: Task): RowFingerprint {
+  const partial = taskToRow(task);
+  const values = new Array<unknown>(INSERT_COLS.length);
+  for (let i = 0; i < INSERT_COLS.length; i++) {
+    const v = partial[INSERT_COLS[i]];
+    values[i] = v === undefined ? null : v;
+  }
+  return values;
+}
+
+function sameFingerprint(a: RowFingerprint | undefined, b: RowFingerprint): boolean {
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function boundRow(fingerprint: RowFingerprint): Record<string, unknown> {
+  const bound: Record<string, unknown> = {};
+  for (let i = 0; i < INSERT_COLS.length; i++) bound[INSERT_COLS[i]] = fingerprint[i];
+  return bound;
+}
 
 type SqliteHandle = Pick<import('better-sqlite3').Database, 'pragma'>;
 
@@ -245,11 +290,77 @@ function invalidateRowShadow(): void {
   invalidateTaskStoreCache();
 }
 
+/**
+ * Bring the cached snapshot and the row shadow up to date for exactly `ids` after
+ * a targeted UPDATE/INSERT/DELETE on our own connection, instead of dropping both.
+ *
+ * Dropping them was the hidden cost of every row-level write: the next reader
+ * paid a full `SELECT *` + rowToTask rebuild (6.5k rows, 200-600ms on the event
+ * loop) and the next writeStore paid a full fingerprint rewrite, so a phase
+ * change on ONE task made every route wait for the whole board. Profiled on the
+ * live server 2026-09-29: the task store's whole-table reads and writes were
+ * 38-41% of all main-thread CPU, and this rebuild-after-fast-path was a large
+ * part of it.
+ *
+ * Re-reads the rows by id (a missing row means a delete), replaces them in the
+ * snapshot, refreshes their fingerprints, and appends new ids to the order (an
+ * INSERT takes the highest rowid; an UPDATE keeps its rowid). Falls back to the
+ * drop when there is nothing current to patch: no snapshot yet, or a foreign
+ * connection committed since it was built (`PRAGMA data_version` moved).
+ */
+function patchStoreCacheRows(ids: readonly string[]): void {
+  if (ids.length === 0) return;
+  const db = getDb();
+  if (!db || !STORE_CACHE_ENABLED || taskStoreCache === null || rowShadow === null) {
+    invalidateRowShadow();
+    return;
+  }
+  const version = readDataVersion(db);
+  if (version === null || version !== taskStoreCacheDataVersion || version !== rowShadowDataVersion) {
+    invalidateRowShadow();
+    return;
+  }
+  const unique = [...new Set(ids)];
+  const at = new Map(taskStoreCache.tasks.map((t, i) => [t.id, i]));
+  const removed = new Set<string>();
+  for (let i = 0; i < unique.length; i += 500) {
+    const chunk = unique.slice(i, i + 500);
+    const rows = db
+      .prepare(`SELECT * FROM tasks WHERE id IN (${chunk.map(() => '?').join(',')})`)
+      .all(...chunk) as Record<string, any>[];
+    const present = new Map(rows.map((r) => [r.id as string, r]));
+    for (const id of chunk) {
+      const row = present.get(id);
+      if (!row) { removed.add(id); continue; }
+      const task = rowToTask(row);
+      rowShadow.fingerprints.set(id, rowFingerprint(task));
+      const index = at.get(id);
+      if (index === undefined) {
+        at.set(id, taskStoreCache.tasks.length);
+        taskStoreCache.tasks.push(task);
+        rowShadow.order.push(id);
+      } else {
+        taskStoreCache.tasks[index] = task;
+      }
+    }
+  }
+  if (removed.size > 0) {
+    taskStoreCache.tasks = taskStoreCache.tasks.filter((t) => !removed.has(t.id));
+    rowShadow.order = rowShadow.order.filter((id) => !removed.has(id));
+    for (const id of removed) rowShadow.fingerprints.delete(id);
+  }
+  taskStoreIndex = null;
+  // The lock's finally keeps a snapshot its section re-seeded; this counts as one.
+  taskStoreCacheSeeded += 1;
+}
+
 /** Reset internal flags for test isolation (call in beforeEach). */
 export function _resetForTesting(): void {
   initialized = false;
   taskStoreCache = null;
   taskStoreCacheDataVersion = null;
+  taskStoreIndex = null;
+  for (const key of Object.keys(storeStats) as (keyof typeof storeStats)[]) storeStats[key] = 0;
   rowShadow = null;
   rowShadowDataVersion = null;
   pendingRowShadow = null;
@@ -467,13 +578,59 @@ function sanitizePriority(p: string | undefined): TaskPriority {
  * see the DESIGN DEBT note above for the proper per-call-site SQL-pushdown fix.
  */
 async function readStore(): Promise<TaskStore> {
+  const store = await loadStore();
+  if (!STORE_CACHE_ENABLED) return store;
+  storeStats.cloneReads += 1;
+  return cloneTaskStore(store);
+}
+
+/**
+ * The canonical snapshot itself, for READ-ONLY helpers (getTask, listTasks, the
+ * board counts, …). Never hand a task or array from it to a caller: clone what
+ * you return (cloneTask) and never sort or mutate in place. Every one of those
+ * helpers used to pay cloneTaskStore() (6.5k object spreads) to return one row
+ * or a derived count.
+ */
+async function readStoreView(): Promise<TaskStore> {
+  storeStats.viewReads += 1;
+  return loadStore();
+}
+
+/** One isolated task copy, the same shape readStore's clone hands out. */
+function cloneTask(task: Task): Task {
+  return { ...task };
+}
+
+/** The cached snapshot's id index (exact ids only; prefixes still scan). */
+async function taskIndex(): Promise<Map<string, Task>> {
+  const store = await loadStore();
+  if (!STORE_CACHE_ENABLED) return new Map(store.tasks.map((t) => [t.id, t]));
+  if (taskStoreIndex === null) taskStoreIndex = new Map(store.tasks.map((t) => [t.id, t]));
+  return taskStoreIndex;
+}
+
+/**
+ * The canonical store ONLY if the cache holds it and no other connection has
+ * committed since; null otherwise, never a scan. For a reader with a cheaper
+ * cold path of its own (the composable query's SQL pushdown).
+ */
+function peekStoreView(): TaskStore | null {
+  if (!STORE_CACHE_ENABLED || taskStoreCache === null) return null;
+  const db = getDb();
+  if (!db) return null;
+  const current = readDataVersion(db);
+  return current !== null && current === taskStoreCacheDataVersion ? taskStoreCache : null;
+}
+
+/** The canonical store: the cache while it is current, else a fresh scan that re-seeds it. */
+async function loadStore(): Promise<TaskStore> {
   await ensureInit();
   if (STORE_CACHE_ENABLED && taskStoreCache !== null) {
     // Trust the cache only while no OTHER connection has committed since it was
     // filled (same trust boundary as rowShadowIfCurrent — see the cache decl).
     const current = readDataVersion(getDb()!);
     if (current !== null && current === taskStoreCacheDataVersion) {
-      return cloneTaskStore(taskStoreCache);
+      return taskStoreCache;
     }
     log.task.warn('task store cache dropped: external process wrote the DB', {
       cachedDataVersion: taskStoreCacheDataVersion, currentDataVersion: current,
@@ -481,6 +638,7 @@ async function readStore(): Promise<TaskStore> {
     invalidateTaskStoreCache();
   }
   const db = getDb()!;
+  storeStats.fullScans += 1;
   const taskRows = db.prepare('SELECT * FROM tasks').all() as Record<string, any>[];
   const tasks = taskRows.map(rowToTask);
 
@@ -524,7 +682,7 @@ async function readStore(): Promise<TaskStore> {
   if (STORE_CACHE_ENABLED) {
     taskStoreCache = store;
     taskStoreCacheDataVersion = readDataVersion(db);
-    return cloneTaskStore(store);
+    taskStoreIndex = null;
   }
   return store;
 }
@@ -610,14 +768,14 @@ async function writeStore(store: TaskStore): Promise<void> {
     }
   }
 
-  const insertCols = [...TASK_COLUMNS, 'payload'];
   const insertSql =
-    'INSERT OR REPLACE INTO tasks (' + insertCols.join(', ') + ') VALUES (' +
-    insertCols.map((c) => '@' + c).join(', ') + ')';
+    'INSERT OR REPLACE INTO tasks (' + INSERT_COLS.join(', ') + ') VALUES (' +
+    INSERT_COLS.map((c) => '@' + c).join(', ') + ')';
 
   // Clear any shadow staged by a transaction that rolled back — adopting it on a
   // later commit would describe rows that were never written.
   pendingRowShadow = null;
+  storeStats.wholeStoreWrites += 1;
 
   dbTransaction((handle) => {
     const existingIds = (handle.prepare('SELECT id FROM tasks').all() as { id: string }[])
@@ -666,23 +824,20 @@ async function writeStore(store: TaskStore): Promise<void> {
     // Row order is persisted as rowid order (see RowShadow doc): a permutation must
     // rewrite every row positionally, so only skip rows when order is preserved.
     const canSkipUnchanged = !!shadow && preservesShadowOrder(shadow, nextOrder);
-    const nextFingerprints = new Map<string, string>();
+    const nextFingerprints = new Map<string, RowFingerprint>();
 
     const insertStmt = handle.prepare(insertSql);
     for (const task of validTasks) {
-      const partial = taskToRow(task);
-      const bound: Record<string, unknown> = {};
-      for (const col of insertCols) {
-        bound[col] = partial[col] === undefined ? null : partial[col];
-      }
-      // Identity key over the exact bound values, so a field that round-trips to
-      // the same column value is correctly treated as unchanged.
-      const fingerprint = JSON.stringify(insertCols.map((c) => bound[c] ?? null));
+      // Identity over the exact bound values, so a field that round-trips to the
+      // same column value is correctly treated as unchanged.
+      const fingerprint = rowFingerprint(task);
       nextFingerprints.set(task.id, fingerprint);
-      if (canSkipUnchanged && shadow!.fingerprints.get(task.id) === fingerprint) {
+      storeStats.fingerprintedRows += 1;
+      if (canSkipUnchanged && sameFingerprint(shadow!.fingerprints.get(task.id), fingerprint)) {
         continue; // row unchanged and keeps its position — skip the write
       }
-      insertStmt.run(bound);
+      insertStmt.run(boundRow(fingerprint));
+      storeStats.rowsWritten += 1;
     }
     // Staged, not published: dbTransaction rolls back on throw, and a shadow
     // describing rows that were never persisted would make the NEXT write skip
@@ -761,6 +916,7 @@ async function writeStore(store: TaskStore): Promise<void> {
   if (STORE_CACHE_ENABLED && store.projects !== undefined) {
     taskStoreCache = cloneTaskStore(store);
     taskStoreCacheDataVersion = readDataVersion(db);
+    taskStoreIndex = null;
     taskStoreCacheSeeded += 1;
   } else {
     invalidateTaskStoreCache();
@@ -956,8 +1112,13 @@ export async function remoteListNameFor(project: string): Promise<string> {
 
 /** All registry rows, keyed by their canonical spelling. Never includes Inbox. */
 export async function getStoreProjects(): Promise<Record<string, ProjectRecord>> {
-  const store = await readStore();
-  return store.projects ?? {};
+  const store = await readStoreView();
+  return Object.fromEntries(
+    Object.entries(store.projects ?? {}).map(([name, rec]) => [
+      name,
+      { ...rec, ...(rec.metadata ? { metadata: { ...rec.metadata } } : {}) },
+    ]),
+  );
 }
 
 /** Registry row for a project name (case-insensitive). Null for Inbox/unknown. */
@@ -1983,17 +2144,10 @@ async function pushToPlugin(
       });
     }
 
-    // Clear sync_error on success
+    // Clear sync_error on success (null is the explicit-clear marker)
     if (task.sync_error) {
-      await withWriteLock(async () => {
-        const store = await readStore();
-        const found = store.tasks.find(t => t.id === task.id);
-        if (found && found.sync_error) {
-          found.sync_error = undefined;
-          await writeStore(store);
-          bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
-        }
-      });
+      const { changed, task: cleared } = await updateTaskRaw(task.id, { sync_error: null } as unknown as Partial<Task>);
+      if (changed && cleared) bus.emit(EventNames.TASK_UPDATED, { task: cleared }, ['web-ui'], { source: 'sync' });
     }
 
     return { success: true };
@@ -2002,15 +2156,8 @@ async function pushToPlugin(
     log.task.warn('plugin sync failed', { taskId: task.id, source: task.source, method, error: message });
 
     // Set sync_error
-    await withWriteLock(async () => {
-      const store = await readStore();
-      const found = store.tasks.find(t => t.id === task.id);
-      if (found && found.sync_error !== message) {
-        found.sync_error = message;
-        await writeStore(store);
-        bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
-      }
-    });
+    const { changed, task: stamped } = await updateTaskRaw(task.id, { sync_error: message });
+    if (changed && stamped) bus.emit(EventNames.TASK_UPDATED, { task: stamped }, ['web-ui'], { source: 'sync' });
 
     return { success: false, error: message };
   }
@@ -2089,15 +2236,8 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
     // `task` rather than `taskId` on purpose: taskId is a dedup key, and the actionable
     // fact is the plugin, so a bulk edit of fifty tasks must land as ONE card, not fifty.
     log.task.error('sync skipped: plugin not loaded', { task: task.id, source: task.source, pluginId: task.source });
-    await withWriteLock(async () => {
-      const store = await readStore();
-      const found = store.tasks.find(t => t.id === task.id);
-      if (found && found.sync_error !== message) {
-        found.sync_error = message;
-        await writeStore(store);
-        bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
-      }
-    });
+    const { changed, task: stamped } = await updateTaskRaw(task.id, { sync_error: message });
+    if (changed && stamped) bus.emit(EventNames.TASK_UPDATED, { task: stamped }, ['web-ui'], { source: 'sync' });
     return { success: false, error: message };
   }
 
@@ -2120,12 +2260,9 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
     await persistTaskExt(task);
 
     // Re-read task from store to get fresh ext data for subsequent pushes
-    const freshTask = await withWriteLock(async () => {
-      const store = await readStore();
-      return store.tasks.find(t => t.id === task.id);
-    });
+    const freshTask = (await taskIndex()).get(task.id);
     if (freshTask) {
-      Object.assign(task, freshTask);
+      Object.assign(task, cloneTask(freshTask));
     }
   }
 
@@ -2133,41 +2270,38 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
   try {
     const pushResult = await plugin.sync.pushTask(task);
 
-    // Persist ext changes + _syncedAt in a single write
-    await withWriteLock(async () => {
-      const store = await readStore();
-      const found = store.tasks.find(t => t.id === task.id);
-      if (found) {
-        // Store server timestamp for echo detection on pull
-        found._syncedAt = pushResult.serverTimestamp;
-        // Merge ext data if plugin returned any
-        if (pushResult.ext) {
-          found.ext = { ...found.ext, ...pushResult.ext };
-        }
-        // Also persist any ext mutations the plugin made in memory
-        if (task.ext && Object.keys(task.ext).length > 0) {
-          found.ext = { ...found.ext, ...task.ext };
-        }
-        // Clear sync_error on success
-        if (found.sync_error) {
-          found.sync_error = undefined;
-        }
-        // Derive external_url from plugin display metadata if not already set
-        if (!found.external_url && plugin.display?.getExternalUrl) {
-          const url = plugin.display.getExternalUrl(found);
-          if (url) found.external_url = url;
-        }
-        await writeStore(store);
-        // Ledger ownership — covers first_create AND list-migration re-keys
-        // (the new remote id becomes owned; the old one stays reachable via
-        // previous_ids aliases, which the reconciler now resolves).
-        const { ids, remoteList } = remoteIdsFromExt(found.source, found.ext);
-        for (const remoteId of ids) {
-          recordRemoteLink({ source: found.source, remoteId, taskId: found.id, remoteList, state: 'owned' });
-        }
-        bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
+    // Persist ext changes + _syncedAt in ONE row write, merged against the
+    // stored row under the lock (a pull may have landed since the push began).
+    let found: Task | undefined;
+    const { changed, task: after } = await updateTaskRaw(task.id, (current) => {
+      found = current;
+      let ext = current.ext;
+      // Merge ext data if plugin returned any
+      if (pushResult.ext) ext = { ...ext, ...pushResult.ext };
+      // Also persist any ext mutations the plugin made in memory
+      if (task.ext && Object.keys(task.ext).length > 0) ext = { ...ext, ...task.ext };
+      // Store server timestamp for echo detection on pull
+      const patch: Record<string, unknown> = { _syncedAt: pushResult.serverTimestamp, ext };
+      // Clear sync_error on success (null is the explicit-clear marker)
+      if (current.sync_error) patch.sync_error = null;
+      // Derive external_url from plugin display metadata if not already set
+      if (!current.external_url && plugin.display?.getExternalUrl) {
+        const url = plugin.display.getExternalUrl({ ...current, ext });
+        if (url) patch.external_url = url;
       }
+      return patch as Partial<Task>;
     });
+    if (after) found = after;
+    if (found) {
+      // Ledger ownership — covers first_create AND list-migration re-keys
+      // (the new remote id becomes owned; the old one stays reachable via
+      // previous_ids aliases, which the reconciler now resolves).
+      const { ids, remoteList } = remoteIdsFromExt(found.source, found.ext);
+      for (const remoteId of ids) {
+        recordRemoteLink({ source: found.source, remoteId, taskId: found.id, remoteList, state: 'owned' });
+      }
+      if (changed) bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
+    }
 
     return { success: true };
   } catch (err) {
@@ -2175,15 +2309,8 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
     log.task.warn('pushTask failed', { taskId: task.id, source: task.source, error: message });
 
     // Set sync_error
-    await withWriteLock(async () => {
-      const store = await readStore();
-      const found = store.tasks.find(t => t.id === task.id);
-      if (found && found.sync_error !== message) {
-        found.sync_error = message;
-        await writeStore(store);
-        bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
-      }
-    });
+    const { changed, task: stamped } = await updateTaskRaw(task.id, { sync_error: message });
+    if (changed && stamped) bus.emit(EventNames.TASK_UPDATED, { task: stamped }, ['web-ui'], { source: 'sync' });
 
     return { success: false, error: message };
   }
@@ -2593,7 +2720,7 @@ export interface ListTasksFilter {
  * List tasks, optionally filtered by status and/or project.
  */
 export async function listTasks(filter: ListTasksFilter = {}): Promise<Task[]> {
-  const store = await readStore();
+  const store = await readStoreView();
   let tasks = store.tasks;
 
   if (filter.status) {
@@ -2603,7 +2730,7 @@ export async function listTasks(filter: ListTasksFilter = {}): Promise<Task[]> {
     tasks = tasks.filter((t) => (t.project || '') === filter.project);
   }
 
-  return tasks;
+  return tasks.map(cloneTask);
 }
 
 /**
@@ -2787,6 +2914,38 @@ function rowToSlimTask(row: Record<string, any>, minimal = false): SlimTask {
     slim.has_description = row.has_description === 1 || row.has_description === true;
     slim.has_ext = row.has_ext === 1 || row.has_ext === true;
     slim.has_synced = row.has_synced === 1 || row.has_synced === true;
+  }
+  return slim;
+}
+
+/**
+ * Task → SlimTask in JS, the twin of rowToSlimTask for a task that already sits
+ * in the canonical cache. Each presence flag mirrors the SQL expression in
+ * slimSelectSql over the encoding taskToRow writes: a string column is present
+ * when non-empty; `conversation_log` is stored JSON-encoded, so '' / null /
+ * undefined all read absent; `ext` is present when it has a key that JSON would
+ * keep; `has_synced` is `json_extract(ext, '$.' || source) IS NOT NULL`.
+ * `tests/core/task-query-cache-path.test.ts` pins the two projections equal.
+ */
+function taskToSlimTask(task: Task, minimal: boolean): SlimTask {
+  const { note, conversation_log, ...rest } = task;
+  const slim: SlimTask = {
+    ...rest,
+    has_note: typeof note === 'string' && note !== '',
+    has_conversation_log: conversation_log !== undefined && conversation_log !== null && conversation_log !== '',
+  };
+  if (minimal) {
+    const { summary, description, ext } = task;
+    delete (slim as Partial<Task>).summary;
+    delete (slim as Partial<Task>).description;
+    delete (slim as Partial<Task>).ext;
+    slim.has_summary = typeof summary === 'string' && summary !== '';
+    slim.has_description = typeof description === 'string' && description !== '';
+    slim.has_ext = ext != null && typeof ext === 'object'
+      && Object.values(ext).some((v) => v !== undefined);
+    slim.has_synced = !!task.source && task.source !== 'local'
+      && ext != null && typeof ext === 'object'
+      && (ext as Record<string, unknown>)[task.source] != null;
   }
   return slim;
 }
@@ -3037,36 +3196,50 @@ async function runTaskQuery(
   const normalized = normalizeTaskQuery(query, new Date());
   const db = getDb()!;
 
-  const { conds, params } = buildTaskQueryWhere(normalized, true);
   const sort: TaskQuerySort = normalized.sort ?? 'updated_desc';
 
-  // No SQL ORDER BY / LIMIT: SQL reduces candidates, JS decides. Ordering in SQL
-  // would be lexicographic over the raw text while the shared comparator uses
-  // Date.parse, so the two disagree on any non-canonical stamp — and a SQL LIMIT
-  // on a candidate set the JS predicate still narrows returns too few rows.
-  const whereSql = conds.length > 0 ? ` WHERE ${conds.join(' AND ')}` : '';
-  const selectSql = projection === 'full' ? '*' : slimSelectSql(projection === 'minimal');
-  const rows = db.prepare(`SELECT ${selectSql} FROM tasks${whereSql}`)
-    .all(params) as Record<string, any>[];
+  let candidates: Task[];
+  const view = peekStoreView();
+  if (view) {
+    // The canonical cache is current: every row is already a parsed Task, so the
+    // candidate set is the whole list projected in JS. The home list
+    // (`GET /api/tasks?fields=list`, 6.5k rows) took 170 to 700ms through the
+    // SQL path below (SELECT + a JSON.parse of every payload) on every fetch;
+    // this is ~15ms. SQL below stays the cold-cache path.
+    storeStats.viewReads += 1;
+    candidates = projection === 'full'
+      ? view.tasks.map(cloneTask)
+      : view.tasks.map((t) => taskToSlimTask(t, projection === 'minimal')) as unknown as Task[];
+  } else {
+    const { conds, params } = buildTaskQueryWhere(normalized, true);
+    // No SQL ORDER BY / LIMIT: SQL reduces candidates, JS decides. Ordering in SQL
+    // would be lexicographic over the raw text while the shared comparator uses
+    // Date.parse, so the two disagree on any non-canonical stamp — and a SQL LIMIT
+    // on a candidate set the JS predicate still narrows returns too few rows.
+    const whereSql = conds.length > 0 ? ` WHERE ${conds.join(' AND ')}` : '';
+    const selectSql = projection === 'full' ? '*' : slimSelectSql(projection === 'minimal');
+    const rows = db.prepare(`SELECT ${selectSql} FROM tasks${whereSql}`)
+      .all(params) as Record<string, any>[];
 
-  const candidates: Task[] = projection === 'full'
-    ? rows.map(rowToTask)
-    // Slim rows never carry note/conversation_log; neither the predicate nor the
-    // comparator reads those, so they evaluate identically to a full Task.
-    : rows.map((r) => rowToSlimTask(r, projection === 'minimal')) as unknown as Task[];
+    candidates = projection === 'full'
+      ? rows.map(rowToTask)
+      // Slim rows never carry note/conversation_log; neither the predicate nor the
+      // comparator reads those, so they evaluate identically to a full Task.
+      : rows.map((r) => rowToSlimTask(r, projection === 'minimal')) as unknown as Task[];
+  }
 
   const ctx: TaskQueryContext = {};
   if (normalized.focusTiers?.includes('satellite')) {
     // Satellite folds stale ids of DELETED custom tiers in, exactly like the
     // board split — the registry is one tiny table read, only paid here.
-    ctx.customTierIds = new Set(((await readStore()).custom_tiers ?? []).map((t) => t.id));
+    ctx.customTierIds = new Set(((await readStoreView()).custom_tiers ?? []).map((t) => t.id));
   }
   if (normalized.blocked !== undefined) {
     // Dependencies can point outside the candidate set, so the blocked set is
     // computed over the FULL task list. Only paid for when blocked is queried.
     // computeBlockedIds builds ONE id map — the per-task isTaskBlocked() would
     // rebuild it for every row (quadratic at a few thousand tasks).
-    ctx.blockedIds = computeBlockedIds((await readStore()).tasks);
+    ctx.blockedIds = computeBlockedIds((await readStoreView()).tasks);
   }
 
   // The sentinel exclusion is already in SQL; re-check in JS so a shape SQLite's
@@ -4278,28 +4451,13 @@ export async function appendConversationLog(idPrefix: string, entry: string): Pr
  * Replace the entire note blob on a task by partial ID match.
  */
 export async function updateNote(idPrefix: string, content: string): Promise<{ task: Task }> {
-  // Lock-internal: validate + persist. Push moved outside lock to avoid self-deadlock.
-  const task = await withWriteLock(async () => {
-    const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
-
-    if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
-    }
-    if (matches.length > 1) {
-      throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
-      );
-    }
-
-    const t = matches[0];
-    runPluginContentValidation(t, 'note', content);
-    t.note = content;
-    t.updated_at = new Date().toISOString();
-
-    await writeStore(store);
-    return t;
-  });
+  // getTask resolves the prefix (and throws on none / ambiguous); the write is
+  // one row. Push stays outside the lock to avoid self-deadlock.
+  const target = await getTask(idPrefix);
+  runPluginContentValidation(target, 'note', content);
+  const { task: written } = await updateTaskRaw(target.id, { note: content, updated_at: new Date().toISOString() });
+  if (!written) throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+  const task = written;
 
   const syncResult = await autoPushIfConfigured(task);
   if (!syncResult.success) {
@@ -4324,30 +4482,21 @@ export async function compareAndSetNote(
   expectedContent: string,
   content: string,
 ): Promise<CompareAndSetNoteResult> {
-  const result = await withWriteLock(async () => {
-    const store = await readStore();
-    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
-    if (matches.length === 0) {
-      throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+  const target = await getTask(idPrefix);
+  runPluginContentValidation(target, 'note', content);
+  // The compare runs against the row as stored, inside the lock, so a concurrent
+  // edit between the read above and this write is seen and refused.
+  let stale: Task | undefined;
+  const { task: written } = await updateTaskRaw(target.id, (current) => {
+    if ((current.note ?? '').trim() !== expectedContent.trim()) {
+      stale = cloneTask(current);
+      return null;
     }
-    if (matches.length > 1) {
-      throw new Error(
-        `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
-      );
-    }
-
-    const task = matches[0];
-    if ((task.note ?? '').trim() !== expectedContent.trim()) {
-      return { updated: false, task };
-    }
-    runPluginContentValidation(task, 'note', content);
-    task.note = content;
-    task.updated_at = new Date().toISOString();
-    await writeStore(store);
-    return { updated: true, task };
+    return { note: content, updated_at: new Date().toISOString() };
   });
-
-  if (!result.updated) return result;
+  if (stale) return { updated: false, task: stale };
+  if (!written) throw new Error(`No task found matching ID prefix "${idPrefix}"`);
+  const result: CompareAndSetNoteResult = { updated: true, task: written };
   const syncResult = await autoPushIfConfigured(result.task);
   if (!syncResult.success) {
     throw new Error(`Sync to ${result.task.source} failed: ${syncResult.error ?? 'unknown error'}`);
@@ -4450,7 +4599,11 @@ export async function listTasksByIds(ids: string[]): Promise<Task[]> {
 }
 
 export async function getTask(idPrefix: string): Promise<Task> {
-  const store = await readStore();
+  // An exact id is the common case (every route and hook passes a full id) and
+  // costs one map lookup; only a real prefix scans the snapshot.
+  const exact = (await taskIndex()).get(idPrefix);
+  if (exact) return cloneTask(exact);
+  const store = await readStoreView();
   const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
 
   if (matches.length === 0) {
@@ -4462,7 +4615,7 @@ export async function getTask(idPrefix: string): Promise<Task> {
     );
   }
 
-  return matches[0];
+  return cloneTask(matches[0]);
 }
 
 /**
@@ -5328,6 +5481,8 @@ export async function fileTasksIntoFolder(
     const skipped: TaskFilingSkip[] = [];
     let label = '';
     let project = '';
+    // The folder record itself changed (it followed a project redirect).
+    let createdGroup = false;
     dbTransaction((handle) => {
       const folder = handle.prepare('SELECT label, project FROM task_groups WHERE id = ?').get(groupId) as
         { label: string; project: string | null } | undefined;
@@ -5341,6 +5496,7 @@ export async function fileTasksIntoFolder(
         if (row.name !== project) {
           handle.prepare('UPDATE task_groups SET project = ? WHERE id = ?').run(row.name, groupId);
           project = row.name;
+          createdGroup = true;
         }
       }
       const sel = handle.prepare('SELECT * FROM tasks WHERE id = ?');
@@ -5383,7 +5539,10 @@ export async function fileTasksIntoFolder(
         filed.push(task);
       }
     });
-    if (filed.length || createdProject) invalidateRowShadow();
+    // Rows are patched in place; the folder or project registry rows this wrote
+    // are not in the shadow, so the snapshot (not the shadow) is dropped for them.
+    patchStoreCacheRows(filed.map((t) => t.id));
+    if (createdGroup || createdProject) invalidateTaskStoreCache();
     return { group_id: groupId, label, project, filed, skipped };
   });
   if (createdProject) emitProjectCreated(createdProject.name, createdProject.source);
@@ -5852,7 +6011,7 @@ export async function listFolderLabels(): Promise<Map<string, string>> {
 }
 
 export async function listGroups(): Promise<FolderListing[]> {
-  const store = await readStore();
+  const store = await readStoreView();
   const byGroup = new Map<string, string[]>();
   for (const t of store.tasks) {
     if (t.group_id) {
@@ -6105,14 +6264,12 @@ export async function linkSession(
  * deliberately (it kept shuffling the manually-ordered sprint). Don't re-add it.
  */
 export async function touchLastSessionUpdate(taskIdPrefix: string): Promise<void> {
-  return withWriteLock(async () => {
-    const store = await readStore();
-    const task = store.tasks.find((t) => t.id.startsWith(taskIdPrefix));
-    if (!task) return;
-    task.last_session_update = new Date().toISOString();
-    await writeStore(store);
-    bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-touch' });
-  });
+  // One row: this runs on every session activity, and the whole-store
+  // read + write it used to take cost a fingerprint of every task each time.
+  const found = (await readStoreView()).tasks.find((t) => t.id.startsWith(taskIdPrefix));
+  if (!found) return;
+  const { changed, task } = await updateTaskRaw(found.id, { last_session_update: new Date().toISOString() });
+  if (changed && task) bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-touch' });
 }
 
 /**
@@ -6156,15 +6313,15 @@ export async function clearSession(
  */
 export async function getChildTasks(taskIdPrefix: string): Promise<Task[]> {
   const parent = await getTask(taskIdPrefix);
-  const store = await readStore();
-  return store.tasks.filter((t) => t.parent_task_id === parent.id);
+  const store = await readStoreView();
+  return store.tasks.filter((t) => t.parent_task_id === parent.id).map(cloneTask);
 }
 
 /**
  * Get dashboard summary data.
  */
 export async function getDashboardData(): Promise<DashboardData> {
-  const store = await readStore();
+  const store = await readStoreView();
   const tasks = store.tasks;
 
   const active = tasks.filter((t) => t.status === 'todo' || t.status === 'in_progress');
@@ -6196,9 +6353,9 @@ export async function getDashboardData(): Promise<DashboardData> {
   };
 
   return {
-    urgent_tasks: urgent,
-    today_tasks: todayTasks,
-    recent_tasks: doneTasks,
+    urgent_tasks: urgent.map(cloneTask),
+    today_tasks: todayTasks.map(cloneTask),
+    recent_tasks: doneTasks.map(cloneTask),
     recent_sessions: [],
     stats,
   };
@@ -6314,12 +6471,13 @@ export async function reorderPins(orderedIds: string[]): Promise<TierResult> {
  * Return pinned tasks sorted by pin_order.
  */
 export async function getPinnedTasks(): Promise<Task[]> {
-  const store = await readStore();
+  const store = await readStoreView();
   // Completed pins are INCLUDED (2026-08-26, user request): completion no
   // longer unpins, and the done card stays in its tier until the user unpins.
   return store.tasks
     .filter((t) => t.pinned)
-    .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
+    .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0))
+    .map(cloneTask);
 }
 
 // Focus tiers: focus (current sprint) → satellite (needs doing soon; the
@@ -6369,7 +6527,7 @@ function splitTiers(store: TaskStore): TierResult {
 /** Read-only tier snapshot for the GET /api/focus/tasks route — one definition
  *  of the four-bucket split (satellite excludes REGISTERED custom ids only). */
 export async function getTierSplit(): Promise<TierResult> {
-  return splitTiers(await readStore());
+  return splitTiers(await readStoreView());
 }
 
 /** Per-tier row counts of the pinned board. */
@@ -6402,7 +6560,7 @@ export interface BoardCounts {
  * `pinned_total` exactly.
  */
 export async function getBoardCounts(): Promise<BoardCounts> {
-  const store = await readStore();
+  const store = await readStoreView();
   const pinned = store.tasks.filter((t) => t.pinned && !isRetiredSentinelTitle(t.title));
   const customTiers = store.custom_tiers ?? [];
   const customTierIds = new Set(customTiers.map((t) => t.id));
@@ -6495,8 +6653,8 @@ function validateTierLabel(label: string, existing: CustomTierRecord[], excludeI
 
 /** List registered custom tiers (ordered). */
 export async function getCustomTiers(): Promise<CustomTierRecord[]> {
-  const store = await readStore();
-  return store.custom_tiers ?? [];
+  const store = await readStoreView();
+  return (store.custom_tiers ?? []).map((t) => ({ ...t }));
 }
 
 /** Create a custom tier. Appends to the end of the registry. */
@@ -6659,7 +6817,7 @@ export async function setFocusTier(taskId: string, tier: string): Promise<TierRe
  * Scan all tasks and return unique tags sorted by frequency (for autocomplete).
  */
 export async function getAllTags(): Promise<{ tag: string; count: number }[]> {
-  const store = await readStore();
+  const store = await readStoreView();
   const tagCounts = new Map<string, number>();
   for (const task of store.tasks) {
     if (task.tags) {
@@ -7097,7 +7255,10 @@ function prepareRawUpdate(
  */
 export async function updateTaskRaw(
   id: string,
-  updates: Partial<Task>,
+  /** The patch, or a function of the CURRENT row for a read-modify-write of one
+   *  row under the lock (a merge into `ext`, a clear conditioned on the stored
+   *  value). Returning null writes nothing. */
+  updates: Partial<Task> | ((current: Readonly<Task>) => Partial<Task> | null),
   opts?: {
     emitEvent?: boolean;
     push?: boolean;
@@ -7120,7 +7281,9 @@ export async function updateTaskRaw(
     if (opts?.shouldUpdate && !opts.shouldUpdate(task)) return undefined;
     rawOldPhase = task.phase;
 
-    const prepared = prepareRawUpdate(task, updates, { reopenTerminal: opts?.reopenTerminal });
+    const patch = typeof updates === 'function' ? updates(task) : updates;
+    if (!patch) return undefined;
+    const prepared = prepareRawUpdate(task, patch, { reopenTerminal: opts?.reopenTerminal });
     if (!prepared) return undefined;
 
     // Build the UPDATE dynamically from the fields that actually changed.
@@ -7147,7 +7310,7 @@ export async function updateTaskRaw(
     dbTransaction((handle) => {
       handle.prepare(`UPDATE tasks SET ${setClause} WHERE id = @id`).run(bound);
     });
-    invalidateRowShadow(); // targeted write on our own connection — see invalidateRowShadow
+    patchStoreCacheRows([id]); // targeted write on our own connection — see patchStoreCacheRows
     // Return the merged post-update task so callers can emit / push without re-reading.
     Object.assign(task, prepared);
     normalizeNullClears(task);
@@ -7269,7 +7432,7 @@ export async function updateTasksBulk(
         changedTasks.push(task);
       }
     });
-    if (changedTasks.length) invalidateRowShadow(); // see invalidateRowShadow
+    patchStoreCacheRows(changedTasks.map((t) => t.id)); // see patchStoreCacheRows
     return { changed: changedTasks };
   });
 }
@@ -7352,7 +7515,7 @@ export async function addTasksBulk(
         created.push(task);
       }
     });
-    if (created.length) invalidateRowShadow(); // see invalidateRowShadow
+    patchStoreCacheRows(created.map((t) => t.id)); // see patchStoreCacheRows
     return created;
   });
 }
@@ -7376,7 +7539,7 @@ export async function deleteTasksBulk(ids: string[]): Promise<{ deleted: Task[] 
         del.run(id);
       }
     });
-    if (deleted.length) invalidateRowShadow(); // see invalidateRowShadow
+    patchStoreCacheRows(deleted.map((t) => t.id)); // see patchStoreCacheRows
     return { deleted };
   });
   // Ledger the remote ids. deleteTasksBulk's only caller is the reconciler

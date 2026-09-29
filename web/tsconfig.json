@@ -26,5 +26,5 @@
       "@open-walnut/ask-list": ["../src/core/sessions/ask-list"]
     }
   },
-  "include": ["src", "../src/types/**/*.d.ts"]
+  "include": ["src", "../src/types/**/*.d.ts", "../src/integrations/**/*.d.ts"]
 }

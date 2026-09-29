@@ -810,17 +810,52 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // Virtual task group created / renamed / dissolved. Membership lives on the
   // tasks' group_id (carried by task:created/task:updated) but the group LABEL
   // lives in a separate registry, so the simplest correct refresh is a refetch.
+  // Coalesced like the bulk signals: filing N subtasks, or a create followed by
+  // its AI label refine, emits a burst of these, and each one used to cost every
+  // open window a full list fetch.
   useEvent('task:groups-changed', () => {
-    log.info('tasks', 'ws task:groups-changed → refetch tasks + groups');
-    refetch();
+    log.info('tasks', 'ws task:groups-changed → refetch tasks (coalesced) + groups');
+    scheduleBulkRefetch();
     refetchGroups();
   });
 
   // Shared error handler for optimistic operations: show banner + refetch truth from server
-  const onOpError = useCallback((err: Error) => {
+  // Put server truth back for exactly the rows a mutation touched. A row the
+  // server no longer has leaves the list; one it has that we lack joins it.
+  const resyncTasks = useCallback((ids: readonly string[]) => {
+    const wanted = [...new Set(ids)].filter((id) => !id.startsWith('tmp-'));
+    if (wanted.length === 0) return;
+    tasksApi.fetchTasksByIds(wanted)
+      .then((rows) => {
+        const byId = new Map(rows.map((t) => [t.id, t]));
+        const asked = new Set(wanted);
+        setTasks((prev) => {
+          const seen = new Set<string>();
+          const next: Task[] = [];
+          for (const t of prev) {
+            if (!asked.has(t.id)) { next.push(t); continue; }
+            seen.add(t.id);
+            const fresh = byId.get(t.id);
+            if (fresh) next.push(fresh);
+          }
+          for (const t of rows) if (!seen.has(t.id)) next.push(t);
+          return next;
+        });
+      })
+      .catch((e: Error) => {
+        log.warn('tasks', 'row resync failed; refetching the list', { ids: wanted, error: e.message });
+        refetch();
+      });
+  }, [refetch]);
+
+  // A failed mutation shows the banner and undoes its optimistic rows. With the
+  // touched ids known, only those rows are re-read; without them (or for an
+  // operation whose reach is unknown) the whole list is refetched.
+  const onOpError = useCallback((err: Error, ids?: readonly string[]) => {
     showOperationError(err.message);
-    refetch();
-  }, [showOperationError, refetch]);
+    if (ids && ids.length > 0) resyncTasks(ids);
+    else refetch();
+  }, [showOperationError, refetch, resyncTasks]);
 
   const create = useCallback(async (input: tasksApi.CreateTaskInput, hooks?: CreateHooks) => {
     // Optimistic local-first insert: show the task immediately under a temp id,
@@ -862,12 +897,13 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       if (inflight.real) return inflight.real;
       setTasks((prev) => prev.filter((t) => t.id !== tmpId));
       hooks?.onError?.(tmpId);
-      onOpError(err as Error);
+      // The optimistic row is gone already; nothing on the server to re-read.
+      showOperationError((err as Error).message);
       throw err;
     } finally {
       inflightCreates.current.delete(clientRequestId);
     }
-  }, [reconcileCreate, onOpError]);
+  }, [reconcileCreate, showOperationError]);
 
   const update = useCallback((id: string, updates: tasksApi.UpdateTaskInput) => {
     // Only guard echo + apply optimistic update when the update contains optimistic-safe fields.
@@ -881,19 +917,19 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       if (!onlyReadMarker) guardEcho(`update:${id}`);
       setTasks(prev => applyFieldUpdate(prev, id, updates as Record<string, unknown>));
     }
-    withRetry(() => tasksApi.updateTask(id, updates)).catch(onOpError);
+    withRetry(() => tasksApi.updateTask(id, updates)).catch((err: Error) => onOpError(err, [id]));
   }, [guardEcho, onOpError]);
 
   const toggleComplete = useCallback((id: string) => {
     guardEcho(`complete:${id}`);
     setTasks(prev => applyToggleComplete(prev, id));
-    withRetry(() => tasksApi.toggleCompleteTask(id)).catch(onOpError);
+    withRetry(() => tasksApi.toggleCompleteTask(id)).catch((err: Error) => onOpError(err, [id]));
   }, [guardEcho, onOpError]);
 
   const setPhase = useCallback((id: string, phase: string) => {
     guardEcho(`phase:${id}`);
     setTasks(prev => applyPhaseChange(prev, id, phase));
-    withRetry(() => tasksApi.updateTask(id, { phase })).catch(onOpError);
+    withRetry(() => tasksApi.updateTask(id, { phase })).catch((err: Error) => onOpError(err, [id]));
   }, [guardEcho, onOpError]);
 
   const reorder = useCallback((project: string, taskIds: string[]) => {
@@ -1053,11 +1089,10 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       await withRetry(() => tasksApi.deleteTask(taskId, opts));
       return true;
     } catch (err) {
-      onOpError(err as Error);
-      refetch();
+      onOpError(err as Error, [taskId]);
       return false;
     }
-  }, [onOpError, refetch]);
+  }, [onOpError]);
 
   // Plugin-declared field write (manifest taskFields). NO echo guard,
   // deliberately: the server's task:updated carries the authoritative `ext` plus
@@ -1077,7 +1112,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       const base = { sprint: t.sprint ?? donor?.sprint, ext: { ...donor?.ext, ...t.ext } };
       return { ...t, ...applyPluginFieldPatch(base, field, value), updated_at: now };
     }));
-    withRetry(() => tasksApi.setPluginFieldValue(id, field, value)).catch(onOpError);
+    withRetry(() => tasksApi.setPluginFieldValue(id, field, value)).catch((err: Error) => onOpError(err, [id]));
   }, [onOpError]);
 
   // ── Multi-select batch ops ──
@@ -1099,15 +1134,15 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       // refetch server truth. `syncFailed` tasks DID change locally (only their plugin
       // push failed), so they must NOT trigger a rollback; they're reported to the
       // caller as a warning alongside the real failures.
-      if (failed.length > 0) refetch();
+      if (failed.length > 0) resyncTasks(failed.map((f) => f.id));
       // Tag the sync-only entries so the caller can word its warning honestly
       // ("completed, but not synced" vs "could not complete").
       return [...failed, ...(syncFailed ?? []).map((s) => ({ ...s, syncOnly: true }))];
     } catch (err) {
-      onOpError(err as Error);
+      onOpError(err as Error, ids);
       return [{ id: ids.join(','), ok: false, error: (err as Error).message }];
     }
-  }, [guardEcho, onOpError, refetch]);
+  }, [guardEcho, onOpError, resyncTasks]);
 
   const batchDelete = useCallback(async (ids: string[], opts?: { force?: boolean }) => {
     if (ids.length === 0) return [];
@@ -1136,11 +1171,10 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       }
       return failed;
     } catch (err) {
-      onOpError(err as Error);
-      refetch();
+      onOpError(err as Error, ids);
       return [{ id: ids.join(','), ok: false, error: (err as Error).message }];
     }
-  }, [onOpError, refetch]);
+  }, [onOpError]);
 
   // Local-only batch patch — NO API call, NO echo guard. One setTasks pass for
   // all entries so dependent optimistic UI (e.g. a cross-tier drag that changes
@@ -1175,7 +1209,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         setTaskGroups((prev) => ({ ...prev, [g.group_id]: g.label }));
         if (moveInto !== undefined) { refetch(); refetchGroups(); }
       })
-      .catch((err) => { onOpError(err); refetch(); refetchGroups(); });
+      .catch((err) => { onOpError(err, taskIds); refetchGroups(); });
   }, [onOpError, refetch, refetchGroups]);
 
   const addToGroupCb = useCallback((groupId: string, taskIds: string[], opts?: { moveInto?: string }) => {
@@ -1193,7 +1227,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         setTaskGroups((prev) => ({ ...prev, [g.group_id]: g.label }));
         refetch(); refetchGroups();
       })
-      .catch((err) => { onOpError(err); refetch(); refetchGroups(); });
+      .catch((err) => { onOpError(err, taskIds); refetchGroups(); });
   }, [onOpError, refetch, refetchGroups]);
 
   const ungroupTasksCb = useCallback((taskIds: string[]) => {
@@ -1206,7 +1240,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // direct refetch makes the resync deterministic).
     tasksApi.removeTasksFromGroup(taskIds)
       .then(() => { refetch(); refetchGroups(); })
-      .catch((err) => { onOpError(err); refetch(); refetchGroups(); });
+      .catch((err) => { onOpError(err, taskIds); refetchGroups(); });
   }, [onOpError, refetch, refetchGroups]);
 
   const renameGroupCb = useCallback((groupId: string, label: string) => {
@@ -1242,10 +1276,14 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // Optimistic: drop the folder row and release its members in place.
     setTaskGroups((prev) => { const next = { ...prev }; delete next[groupId]; return next; });
     setFolderMeta((prev) => { const next = { ...prev }; delete next[groupId]; return next; });
-    setTasks((prev) => prev.map((t) => t.group_id === groupId ? { ...t, group_id: undefined } : t));
+    let members: string[] = [];
+    setTasks((prev) => {
+      members = prev.filter((t) => t.group_id === groupId).map((t) => t.id);
+      return prev.map((t) => t.group_id === groupId ? { ...t, group_id: undefined } : t);
+    });
     tasksApi.deleteTaskFolder(groupId)
       .then(() => { refetch(); refetchGroups(); })
-      .catch((err) => { onOpError(err); refetch(); refetchGroups(); });
+      .catch((err) => { onOpError(err, members); refetchGroups(); });
   }, [onOpError, refetch, refetchGroups]);
 
   const setFolderParentCb = useCallback((groupId: string, parentId: string | null) => {

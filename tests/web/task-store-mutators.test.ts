@@ -57,6 +57,7 @@ vi.mock('@/hooks/useWebSocket', () => ({
 
 const api = {
   fetchTasks: vi.fn(async () => [] as Task[]),
+  fetchTasksByIds: vi.fn(async () => [] as Task[]),
   fetchTaskGroups: vi.fn(async () => [] as unknown[]),
   createTask: vi.fn(),
   updateTask: vi.fn(async () => ({}) as Task),

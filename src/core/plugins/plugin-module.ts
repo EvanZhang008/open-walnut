@@ -41,6 +41,12 @@ interface LoadOptions {
   deadline<T>(pending: Promise<T>, id: string, phase: string): Promise<T>
   cacheRoot?: string
   replacement?: boolean
+  /**
+   * For a builtin: the host's own import of the plugin module. Evaluating the
+   * plugin's dist file instead gives it a private copy of every core module it
+   * imports (see src/integrations/host-modules.ts).
+   */
+  hostModule?: () => Promise<Record<string, any>>
 }
 
 type Loaded = {
@@ -122,7 +128,9 @@ export async function preparePluginModule(options: LoadOptions): Promise<PluginM
     try {
       // A builtin is Walnut's own code: host updates arrive with a restart, not a reload.
       loaded = builtin
-        ? { mod: await evaluate(options, entry, false) }
+        ? { mod: options.hostModule
+            ? await options.deadline(options.hostModule(), manifest.id, 'module evaluation')
+            : await evaluate(options, entry, false) }
         : entry.endsWith('.ts')
           ? await loadBundled(options, entry)
           : await loadPrecompiled(options, entry)

@@ -276,6 +276,22 @@ export async function fetchTasks(opts?: { slim?: boolean; minimal?: boolean; onD
   return seedTasks(res.tasks);
 }
 
+/**
+ * The list rows for a handful of ids, in the same minimal projection as
+ * fetchTasks. An id the server no longer has is simply absent from the answer.
+ * Used to put back server truth for the rows a failed mutation touched; the
+ * whole-list refetch it replaces cost a 5MB response per failure (and a
+ * failing request that repeated made the list fetch repeat with it, 2026-09-28).
+ */
+export async function fetchTasksByIds(ids: readonly string[]): Promise<Task[]> {
+  if (ids.length === 0) return [];
+  const res = await apiGet<{ tasks: Task[] }>('/api/tasks', { fields: 'list', ids: ids.join(',') });
+  if (!Array.isArray(res?.tasks)) {
+    throw new ApiError(200, 'Task list response is malformed');
+  }
+  return seedTasks(res.tasks);
+}
+
 /** One projected row from /api/tasks/bulk. `error` replaces the fields. */
 export interface BulkTaskRow {
   id: string;

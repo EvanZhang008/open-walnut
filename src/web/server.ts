@@ -5051,9 +5051,23 @@ function startPluginSyncPolling(): void {
         // in-place so subsequent getTasks() calls in the same tick see the
         // just-applied change.
         const localTasks = await listTasks()
+        // A pull applies its changes one row at a time, and every row write is
+        // synchronous SQLite: a chain of `await`s over sync work only ever yields
+        // to the microtask queue, so N applied changes ran as ONE uninterrupted
+        // turn of the event loop and every HTTP request waited for the whole
+        // batch (2026-09-29: a 16.7s hold, `GET /api/config` timing out at 15s,
+        // during a 25s ms-todo tick). Hand the loop back between rows once a
+        // slice has run for ~20ms.
+        let lastBreath = Date.now()
+        const breathe = async (): Promise<void> => {
+          if (Date.now() - lastBreath < 20) return
+          await new Promise<void>((resolve) => setImmediate(resolve))
+          lastBreath = Date.now()
+        }
         const ctx: SyncPollContext = {
           getTasks: () => localTasks,
           updateTask: async (id, updates) => {
+            await breathe()
             // pushInflight guard: skip pull update if task has active push
             const { isPushInflight } = await import('../core/task-manager.js')
             if (isPushInflight(id)) {
@@ -5085,6 +5099,7 @@ function startPluginSyncPolling(): void {
             return updatedTask ?? await (await import('../core/task-manager.js')).getTask(id)
           },
           addTask: async (taskData) => {
+            await breathe()
             const task = await addTaskFull(taskData)
             bus.emit(EventNames.TASK_CREATED, { task }, [], { source: `${plugin.id}-sync` })
             changeCount++
@@ -5092,6 +5107,7 @@ function startPluginSyncPolling(): void {
             return task
           },
           deleteTask: async (id) => {
+            await breathe()
             const { task } = await deleteTask(id)
             bus.emit(EventNames.TASK_DELETED, { task }, [], { source: `${plugin.id}-sync` })
             changeCount++

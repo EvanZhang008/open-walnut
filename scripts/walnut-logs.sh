@@ -26,6 +26,7 @@
 #   scripts/walnut-logs.sh metrics [pfx] [mins] windowed latency histograms (http/llm/tool/search/eventloop; prefix filter, default 60min; live: GET /api/metrics)
 #   scripts/walnut-logs.sh ttft [sid] [mins]    ⭐ time-to-first-text per turn: turn wide-event firstThinking/Text/Tool + per-layer first-emit/arrival lines — attributes "text shows late" to model vs pipeline
 #   scripts/walnut-logs.sh file <substr> [mins] ⭐ ONE timeline for ONE file: reads + writes + refusals + the editor's own decisions, interleaved — "who overwrote my file?" starts here
+#   scripts/walnut-logs.sh loop [mins]          ⭐ event-loop health for the window (default 24h): probe-late count/sum/max, stall families, slow routes, slow health-monitor and plugin ticks, process RSS/CPU — the daily "is the server responsive?" check
 #   scripts/walnut-logs.sh errors [n]           last n ERR/WARN lines (default 40)
 #   scripts/walnut-logs.sh desktop [mins]       ⭐ Mac app page-process memory curve + recycles/crashes (default 24h) — "Mac app laggy?" starts here
 #   scripts/walnut-logs.sh grep <pattern>       raw grep across today's JSON log
@@ -533,6 +534,70 @@ if shrinks:
     print('   `merge` write shrinking it by a lot is the stale-write-back bug: check the')
     print('   `editor buffer installed` line just before it for a lock/gen mismatch.')
 PY
+    ;;
+
+  loop)
+    # loop [mins] — the daily event-loop health check. Reads the two most recent
+    # dated logs (UTC stamps vs local filename) and prints, for the window:
+    #   1. probe-late events: how often the loop was held, for how long in total,
+    #      and the longest hold (a hold over 1s is what a user feels as "stuck");
+    #   2. the same for the histogram stall detector, with the named sections;
+    #   3. slow routes by path (count, p50, max) from the request logger;
+    #   4. slow health-monitor ticks and slow plugin sync ticks;
+    #   5. the store-shape counters if the server logged any;
+    #   6. the live process: pid, RSS, CPU%, uptime.
+    # Compare a day against the previous one; a new family in (3) or a rising
+    # max in (1) is a bottleneck to profile (kill -USR1 <pid>, then CDP).
+    mins="${1:-1440}"
+    if [[ "$mins" == "0" ]]; then since="1970-01-01T00:00:00Z"; else
+      since=$(date -u -v "-${mins}M" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -u -d "-${mins} minutes" '+%Y-%m-%dT%H:%M:%S')
+    fi
+    logs=$(recent_logs); [[ -n "$logs" ]] || die "no JSON log found in $LOG_DIR"
+    echo "── event loop, last ${mins}min (since ${since}Z) ──"
+    # shellcheck disable=SC2086
+    cat $logs | grep -aF 'event-loop blocked (probe late)' | jq -rs --arg since "$since" '
+      map(select(.time >= $since)) | map(.lateByMs) |
+      if length == 0 then "probe-late: none" else
+      sort | "probe-late: n=\(length) sumMs=\(add) maxMs=\(max) p50=\(.[length/2|floor]) over1s=\(map(select(. > 1000)) | length)" end'
+    # shellcheck disable=SC2086
+    cat $logs | grep -aF 'event-loop stall detected (histogram)' | jq -rs --arg since "$since" '
+      map(select(.time >= $since)) |
+      if length == 0 then "stalls (histogram): none" else
+      "stalls (histogram): n=\(length) maxMs=\(map(.maxMs) | max) sections=\(map(.suspectSection // "unattributed") | group_by(.) | map("\(.[0])=\(length)") | join(" "))" end'
+    echo "── slow routes (request logger, >= 500ms) ──"
+    # shellcheck disable=SC2086
+    cat $logs | grep -aE '"subsystem":"web".*→ [0-9]{3} \(' | jq -r --arg since "$since" '
+      select(.time >= $since) | select(.subsystem == "web") |
+      (.message | capture("^(?<m>[A-Z]+) (?<p>[^ ?]+)[^→]*→ (?<s>[0-9]+) \\((?<ms>[0-9]+)ms\\)")) as $r |
+      select(($r.ms | tonumber) >= 500) |
+      "\($r.m) \($r.p | gsub("/[0-9a-f-]{8,}"; "/:id")) \($r.ms)"' 2>/dev/null |
+      awk '{ k=$1" "$2; n[k]++; s[k]+=$3; if ($3>m[k]) m[k]=$3 } END { for (k in n) printf "%5d  avg=%6d  max=%6d  %s\n", n[k], s[k]/n[k], m[k], k }' | sort -rn | head -15
+    echo "── slow ticks ──"
+    # shellcheck disable=SC2086
+    cat $logs | grep -aE 'health monitor: check\(\) slow|sync: slow tick|GET /api/tasks slow' | jq -r --arg since "$since" '
+      select(.time >= $since) | .message' | sort | uniq -c | sort -rn
+    # shellcheck disable=SC2086
+    cat $logs | grep -aF 'health monitor: check() slow' | jq -rs --arg since "$since" '
+      map(select(.time >= $since)) | if length == 0 then empty else
+      "health-monitor slow ticks: n=\(length) maxMs=\(map(.totalMs) | max) worstPhase=\(map(.phases // {} | to_entries | max_by(.value) | "\(.key)=\(.value)") | .[0:3] | join(","))" end'
+    # A hold of minutes with the daemon log silent for the same minutes is the
+    # machine asleep, not the loop (2026-09-29: a 501s "probe late" was a nap on
+    # battery). macOS keeps the sleep/wake record in pmset; count it for the window.
+    if command -v pmset >/dev/null 2>&1; then
+      epoch=$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "$since" '+%s' 2>/dev/null || echo "")
+      local_since=$([[ -n "$epoch" ]] && date -r "$epoch" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "")
+      if [[ -n "$local_since" ]]; then
+        naps=$(pmset -g log 2>/dev/null | awk -v s="$local_since" '$1" "$2 >= s' | grep -cE '(DarkWake|Wake from|Entering Sleep)' || true)
+        echo "── system sleep/wake events in the window: ${naps:-0} (a hold that spans one is not a loop stall) ──"
+      fi
+    fi
+    echo "── live process ──"
+    pid=$(lsof -nP -iTCP:3456 -sTCP:LISTEN -t 2>/dev/null | head -1)
+    if [[ -n "$pid" ]]; then
+      ps -o pid=,rss=,pcpu=,etime=,nice= -p "$pid" | awk '{ printf "pid=%s rss=%.1fGB cpu=%s%% up=%s nice=%s\n", $1, $2/1048576, $3, $4, $5 }'
+    else
+      echo "no listener on :3456"
+    fi
     ;;
 
   errors)
