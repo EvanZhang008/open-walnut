@@ -5009,12 +5009,20 @@ export async function groupTasks(idPrefixes: string[], label?: string): Promise<
  * folder. Here the read and the write see the same store. A source membership
  * pointing at a folder that no longer exists (no record, no other member)
  * counts as no folder. Used by forks and by work filed from inside a task.
+ *
+ * `nest` (a subtask): the source's folder is joined only when everything in it
+ * (its subfolders included) is the source or the source's own subtasks. A folder
+ * shared with other work gets a SUBFOLDER named `label` instead, and the source
+ * (with the subtasks it already had in that folder) moves into it beside the new
+ * one, so the folder tree follows the subtask tree. At the depth cap the subtask
+ * joins the folder as it is.
  */
 export async function placeInFolderBeside(
   sourceId: string,
   newTaskId: string,
   label: string,
-): Promise<GroupResult & { created: boolean }> {
+  opts: { nest?: boolean } = {},
+): Promise<GroupResult & { created: boolean; parent_id?: string }> {
   return withWriteLock(async () => {
     const store = await readStore();
     const source = store.tasks.find((t) => t.id === sourceId);
@@ -5032,8 +5040,26 @@ export async function placeInFolderBeside(
       groupId = undefined;
     }
     let created = false;
+    let parentId: string | undefined;
     let resolvedLabel: string;
-    if (groupId) {
+    if (groupId && opts.nest && folderRecord(store, groupId)
+        && !folderHoldsOnlyLineOf(store, groupId, source.id, born.id)
+        && folderDepth(store, groupId) < FOLDER_MAX_DEPTH) {
+      parentId = groupId;
+      groupId = `g_${generateId()}`;
+      created = true;
+      resolvedLabel = label.trim() || source.title;
+      store.task_groups = {
+        ...(store.task_groups ?? {}),
+        [groupId]: { label: resolvedLabel, project: folderRecord(store, parentId)?.project ?? source.project ?? '', parent_id: parentId },
+      };
+      // The source's earlier subtasks filed flat beside it move in with it, so
+      // the family stays together (the ones already in their own subfolder stay).
+      const inLine = lineOf(store, source.id);
+      for (const t of store.tasks) {
+        if (t.group_id === parentId && (t.id === source.id || inLine(t))) t.group_id = groupId;
+      }
+    } else if (groupId) {
       resolvedLabel = folderRecord(store, groupId)?.label ?? source.title;
       if (!folderRecord(store, groupId)) {
         store.task_groups = { ...(store.task_groups ?? {}), [groupId]: { label: resolvedLabel, project: source.project ?? '' } };
@@ -5048,8 +5074,48 @@ export async function placeInFolderBeside(
     born.group_id = groupId;
     await writeStore(store);
     const members = store.tasks.filter((t) => t.group_id === groupId).map((t) => t.id);
-    return { group_id: groupId, label: resolvedLabel, member_ids: members, created };
+    return { group_id: groupId, label: resolvedLabel, member_ids: members, created, ...(parentId ? { parent_id: parentId } : {}) };
   });
+}
+
+/**
+ * A test for "is `rootId` or one of its subtasks (any depth)". A parent link may
+ * be a legacy id prefix, so a miss on the exact id falls back to a unique prefix
+ * match; the walk is bounded and cycle-safe.
+ */
+function lineOf(store: TaskStore, rootId: string): (task: Task) => boolean {
+  const byId = new Map(store.tasks.map((t) => [t.id, t]));
+  const resolve = (ref: string): Task | undefined => {
+    const exact = byId.get(ref);
+    if (exact) return exact;
+    const hits = store.tasks.filter((t) => t.id.startsWith(ref));
+    return hits.length === 1 ? hits[0] : undefined;
+  };
+  return (task) => {
+    const seen = new Set<string>();
+    for (let cur: Task | undefined = task; cur && !seen.has(cur.id) && seen.size <= 32;) {
+      if (cur.id === rootId) return true;
+      seen.add(cur.id);
+      cur = cur.parent_task_id ? resolve(cur.parent_task_id) : undefined;
+    }
+    return false;
+  };
+}
+
+/**
+ * True when every task in `groupId` and its subfolders is `rootId` or one of its
+ * subtasks. `ignoreId` (the task being placed) never counts.
+ */
+function folderHoldsOnlyLineOf(store: TaskStore, groupId: string, rootId: string, ignoreId: string): boolean {
+  const inTree = new Set<string>([groupId]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [gid, rec] of Object.entries(store.task_groups ?? {})) {
+      if (!inTree.has(gid) && rec.parent_id && inTree.has(rec.parent_id)) { inTree.add(gid); grew = true; }
+    }
+  }
+  const inLine = lineOf(store, rootId);
+  return store.tasks.every((t) => !t.group_id || !inTree.has(t.group_id) || t.id === ignoreId || inLine(t));
 }
 
 /**

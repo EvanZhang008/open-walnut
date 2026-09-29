@@ -420,8 +420,9 @@ defineOp({
     'to override project defaults. Keep the returned task id: task_send adds context, task_history ' +
     'reads the conversation, task_get reports execution. If starting fails the task still exists; ' +
     'fix the cause and use task_start with that id, never create a duplicate. Placement: called from ' +
-    'inside a task, the new task lands BESIDE yours by default: same project, same folder (Walnut makes ' +
-    'one holding both when yours has none), same host and directory. Name a project to file it elsewhere ' +
+    'inside a task, the new task lands BESIDE yours by default: same project, your folder (Walnut makes ' +
+    'one holding both when yours has none, and a subfolder of yours holding both when yours also holds ' +
+    'other work), same host and directory. Name a project to file it elsewhere ' +
     '("" = Inbox); a folder never follows work into another project. Wherever it lands, the new task is your SUBTASK (Sub on the board), from a Personal AI conversation too. Called from anywhere else, an ' +
     'omitted project means the configured default project (normally the Inbox). A new project name ' +
     'creates its registry row. The result\'s ' +

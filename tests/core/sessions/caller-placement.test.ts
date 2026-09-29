@@ -40,9 +40,9 @@ describe('decidePlacement (the rule table)', () => {
     { kind: 'untracked', session: SESSION },
   ]
   it.each(others.map((c) => [c.kind, c] as const))('a %s caller keeps the old defaults', (_kind, caller) => {
-    expect(decidePlacement({}, caller)).toEqual({ project: undefined, group_id: undefined, createFolderWithCaller: false })
+    expect(decidePlacement({}, caller)).toEqual({ project: undefined, group_id: undefined, placeBesideCaller: false })
     expect(decidePlacement({ project: 'acme', group_id: 'g_x' }, caller))
-      .toEqual({ project: 'acme', group_id: 'g_x', createFolderWithCaller: false })
+      .toEqual({ project: 'acme', group_id: 'g_x', placeBesideCaller: false })
     expect(decidePlacement({ group_id: '' }, caller).group_id).toBeUndefined()
   })
 
@@ -50,54 +50,56 @@ describe('decidePlacement (the rule table)', () => {
     // Its own `Ask …` project is never a place for the user's work, so nothing
     // is inherited from it; the task is still this conversation's, wherever it lands.
     const ask: CallerPlacement = { kind: 'ask', task: { id: 't-ask', title: 'Ask', project: 'Ask Walnut' }, session: SESSION }
-    expect(decidePlacement({}, ask)).toEqual({ project: undefined, group_id: undefined, createFolderWithCaller: false, parentTaskId: 't-ask' })
+    expect(decidePlacement({}, ask)).toEqual({ project: undefined, group_id: undefined, placeBesideCaller: false, parentTaskId: 't-ask' })
     expect(decidePlacement({ project: 'acme', group_id: 'g_x' }, ask))
-      .toEqual({ project: 'acme', group_id: 'g_x', createFolderWithCaller: false, parentTaskId: 't-ask' })
+      .toEqual({ project: 'acme', group_id: 'g_x', placeBesideCaller: false, parentTaskId: 't-ask' })
     expect(decidePlacement({ group_id: '' }, ask).group_id).toBeUndefined()
   })
 
-  it('worker, nothing named, caller in a folder: same project, same folder', () => {
+  it('worker, nothing named, caller in a folder: same project, placed beside it under the lock', () => {
+    // Join or nest is decided against the caller's CURRENT folder by
+    // placeInFolderBeside, so the pure decision never names the folder.
     expect(decidePlacement({}, worker('g_f'))).toEqual({
-      project: 'marina', group_id: 'g_f', createFolderWithCaller: false, inheritedFrom: 't-caller', parentTaskId: 't-caller',
+      project: 'marina', placeBesideCaller: true, inheritedFrom: 't-caller', parentTaskId: 't-caller',
     })
   })
 
   it('worker, nothing named, caller in no folder: same project, a new folder with both', () => {
     expect(decidePlacement({}, worker())).toEqual({
-      project: 'marina', createFolderWithCaller: true, inheritedFrom: 't-caller', parentTaskId: 't-caller',
+      project: 'marina', placeBesideCaller: true, inheritedFrom: 't-caller', parentTaskId: 't-caller',
     })
   })
 
   it('worker naming its own project (any case) still lands beside it', () => {
-    expect(decidePlacement({ project: 'MARINA' }, worker('g_f'))).toMatchObject({ project: 'MARINA', group_id: 'g_f' })
-    expect(decidePlacement({ project: 'marina' }, worker())).toMatchObject({ createFolderWithCaller: true })
+    expect(decidePlacement({ project: 'MARINA' }, worker('g_f'))).toMatchObject({ project: 'MARINA', placeBesideCaller: true })
+    expect(decidePlacement({ project: 'marina' }, worker())).toMatchObject({ placeBesideCaller: true })
   })
 
   it('worker naming another project: that project, and the folder does not follow', () => {
     expect(decidePlacement({ project: 'acme' }, worker('g_f'))).toEqual({
-      project: 'acme', group_id: undefined, createFolderWithCaller: false, parentTaskId: 't-caller',
+      project: 'acme', group_id: undefined, placeBesideCaller: false, parentTaskId: 't-caller',
     })
   })
 
   it('worker naming the Inbox on purpose from a project: Inbox, no folder', () => {
     expect(decidePlacement({ project: '' }, worker('g_f'))).toEqual({
-      project: '', group_id: undefined, createFolderWithCaller: false, parentTaskId: 't-caller',
+      project: '', group_id: undefined, placeBesideCaller: false, parentTaskId: 't-caller',
     })
   })
 
   it('an Inbox worker filing into the Inbox is its own project: beside it', () => {
-    expect(decidePlacement({}, worker(undefined, ''))).toMatchObject({ project: '', createFolderWithCaller: true })
+    expect(decidePlacement({}, worker(undefined, ''))).toMatchObject({ project: '', placeBesideCaller: true })
   })
 
   it('worker saying group_id "" gets its project and no folder, and none is made', () => {
     expect(decidePlacement({ group_id: '' }, worker())).toEqual({
-      project: 'marina', group_id: undefined, createFolderWithCaller: false, inheritedFrom: 't-caller', parentTaskId: 't-caller',
+      project: 'marina', group_id: undefined, placeBesideCaller: false, inheritedFrom: 't-caller', parentTaskId: 't-caller',
     })
   })
 
   it('worker naming a folder gets that folder, never a new one', () => {
     expect(decidePlacement({ group_id: 'g_other' }, worker('g_f'))).toEqual({
-      project: 'marina', group_id: 'g_other', createFolderWithCaller: false, inheritedFrom: 't-caller', parentTaskId: 't-caller',
+      project: 'marina', group_id: 'g_other', placeBesideCaller: false, inheritedFrom: 't-caller', parentTaskId: 't-caller',
     })
   })
 
@@ -342,5 +344,156 @@ describe('against the real store', () => {
     expect(r.created).toBe(false)
     expect(r.error).toMatch(/No task found/)
     expect((await getTask(born.id)).group_id).toBeUndefined()
+  })
+
+  // ── Subtasks (nest: true): the folder tree follows the subtask tree ──
+
+  /** The caller filed in a folder it shares with `others` unrelated tasks. */
+  async function callerInSharedFolder(others = 1) {
+    const { task: me } = await seedCaller()
+    const neighbours = []
+    for (let i = 0; i < others; i++) neighbours.push((await addTask({ title: `Neighbour ${i}`, project: 'marina' })).task)
+    const shared = await createFolder('Shared', 'marina')
+    const { addToGroup } = await import('../../../src/core/task-manager.js')
+    await addToGroup(shared.group_id, [me.id, ...neighbours.map((t) => t.id)])
+    return { me: { ...me, group_id: shared.group_id }, shared: shared.group_id, neighbours }
+  }
+  const subtaskOf = async (parentId: string, title: string) =>
+    (await addTask({ title, project: 'marina', parent_task_id: parentId })).task
+
+  it('a subtask from a caller in a shared folder gets a subfolder of it holding caller + subtask', async () => {
+    const { me, shared, neighbours } = await callerInSharedFolder()
+    const born = await subtaskOf(me.id, 'Write the migration')
+    const r = await joinOrCreateSiblingFolder(me, born.id, { eventSource: 'test', nest: true })
+    expect(r).toMatchObject({ created: true, parentId: shared, label: me.title })
+    const sub = (await listGroups()).find((g) => g.group_id === r.groupId)
+    expect(sub).toMatchObject({ parent_id: shared, project: 'marina' })
+    expect(sub?.member_ids.sort()).toEqual([me.id, born.id].sort())
+    // The neighbour stays where it was; only the caller moved in.
+    expect((await getTask(neighbours[0].id)).group_id).toBe(shared)
+    // Created, so the label is refined like any new folder.
+    await vi.waitFor(async () => {
+      expect((await listGroups()).find((g) => g.group_id === r.groupId)?.label).toBe('Refined Folder')
+    })
+  })
+
+  it('the caller\'s earlier subtasks filed flat beside it move into the subfolder with it', async () => {
+    // The shape older flat placement left behind: the caller, its children and
+    // unrelated work, all in one folder.
+    const { me, shared, neighbours } = await callerInSharedFolder()
+    const earlier = await subtaskOf(me.id, 'Earlier child')
+    const deeper = await subtaskOf(earlier.id, 'Earlier grandchild')
+    const housed = await subtaskOf(me.id, 'Child with its own folder')
+    const { addToGroup } = await import('../../../src/core/task-manager.js')
+    await addToGroup(shared, [earlier.id, deeper.id])
+    const own = await createFolder('Its own', 'marina', shared)
+    await addToGroup(own.group_id, [housed.id])
+    const born = await subtaskOf(me.id, 'New child')
+    const r = await joinOrCreateSiblingFolder(me, born.id, { eventSource: 'test', nest: true })
+    expect(r).toMatchObject({ created: true, parentId: shared })
+    const sub = (await listGroups()).find((g) => g.group_id === r.groupId)
+    expect(sub?.member_ids.sort()).toEqual([me.id, earlier.id, deeper.id, born.id].sort())
+    // A child already in a folder of its own and the unrelated work stay put.
+    expect((await getTask(housed.id)).group_id).toBe(own.group_id)
+    expect((await getTask(neighbours[0].id)).group_id).toBe(shared)
+  })
+
+  it('the next subtask joins that subfolder: it now holds only the caller and its subtasks', async () => {
+    const { me, shared } = await callerInSharedFolder()
+    const first = await subtaskOf(me.id, 'First part')
+    const r1 = await joinOrCreateSiblingFolder(me, first.id, { eventSource: 'test', nest: true })
+    const second = await subtaskOf(me.id, 'Second part')
+    const r2 = await joinOrCreateSiblingFolder({ ...me, group_id: r1.groupId }, second.id, { eventSource: 'test', nest: true })
+    expect(r2).toMatchObject({ created: false, groupId: r1.groupId })
+    expect((await listGroups()).filter((g) => g.parent_id === shared)).toHaveLength(1)
+  })
+
+  it('a folder holding only the caller and its own subtasks (any depth, subfolders too) is joined', async () => {
+    const { task: me } = await seedCaller()
+    const child = await subtaskOf(me.id, 'Child')
+    const grandchild = await subtaskOf(child.id, 'Grandchild')
+    const own = await createFolder('Mine', 'marina')
+    const inner = await createFolder('Inner', 'marina', own.group_id)
+    const { addToGroup } = await import('../../../src/core/task-manager.js')
+    await addToGroup(own.group_id, [me.id, child.id])
+    await addToGroup(inner.group_id, [grandchild.id])
+    const born = await subtaskOf(me.id, 'Another child')
+    const r = await joinOrCreateSiblingFolder({ ...me, group_id: own.group_id }, born.id, { eventSource: 'test', nest: true })
+    expect(r).toMatchObject({ created: false, groupId: own.group_id })
+    expect((await listGroups()).filter((g) => g.parent_id === own.group_id).map((g) => g.group_id)).toEqual([inner.group_id])
+  })
+
+  it('an unrelated task in a SUBFOLDER makes the folder shared', async () => {
+    const { task: me } = await seedCaller()
+    const { task: stranger } = await addTask({ title: 'Stranger', project: 'marina' })
+    const own = await createFolder('Mine', 'marina')
+    const inner = await createFolder('Inner', 'marina', own.group_id)
+    const { addToGroup } = await import('../../../src/core/task-manager.js')
+    await addToGroup(own.group_id, [me.id])
+    await addToGroup(inner.group_id, [stranger.id])
+    const born = await subtaskOf(me.id, 'Child')
+    const r = await joinOrCreateSiblingFolder({ ...me, group_id: own.group_id }, born.id, { eventSource: 'test', nest: true })
+    expect(r).toMatchObject({ created: true, parentId: own.group_id })
+  })
+
+  it('a subtask of a subtask nests one level deeper, so the folder tree follows the subtask tree', async () => {
+    const { me, shared } = await callerInSharedFolder()
+    const child = await subtaskOf(me.id, 'Child')
+    const r1 = await joinOrCreateSiblingFolder(me, child.id, { eventSource: 'test', nest: true })
+    // The child now works and files its own subtask: its folder holds its parent.
+    const grandchild = await subtaskOf(child.id, 'Grandchild')
+    const childTask = await getTask(child.id)
+    const r2 = await joinOrCreateSiblingFolder(childTask, grandchild.id, { eventSource: 'test', nest: true })
+    expect(r2).toMatchObject({ created: true, parentId: r1.groupId, label: 'Child' })
+    const groups = await listGroups()
+    expect(groups.find((g) => g.group_id === r1.groupId)?.parent_id).toBe(shared)
+    expect(groups.find((g) => g.group_id === r2.groupId)?.member_ids.sort()).toEqual([child.id, grandchild.id].sort())
+    expect((await getTask(me.id)).group_id).toBe(r1.groupId)
+  })
+
+  it('at the depth cap the subtask joins the shared folder as it is', async () => {
+    const { task: me } = await seedCaller()
+    const { task: stranger } = await addTask({ title: 'Stranger', project: 'marina' })
+    let parentId: string | undefined
+    for (let d = 1; d <= 5; d++) parentId = (await createFolder(`Level ${d}`, 'marina', parentId)).group_id
+    const { addToGroup } = await import('../../../src/core/task-manager.js')
+    await addToGroup(parentId!, [me.id, stranger.id])
+    const born = await subtaskOf(me.id, 'Child')
+    const r = await joinOrCreateSiblingFolder({ ...me, group_id: parentId }, born.id, { eventSource: 'test', nest: true })
+    expect(r).toMatchObject({ created: false, groupId: parentId })
+  })
+
+  it('without nest (a fork) a shared folder is joined, never nested', async () => {
+    const { me, shared } = await callerInSharedFolder()
+    const { task: fork } = await addTask({ title: 'Fork of it', project: 'marina' })
+    const r = await joinOrCreateSiblingFolder(me, fork.id, { eventSource: 'test' })
+    expect(r).toMatchObject({ created: false, groupId: shared })
+  })
+
+  it('two subtasks at once from a caller in a shared folder end in ONE subfolder', async () => {
+    const { me, shared } = await callerInSharedFolder()
+    const a = await subtaskOf(me.id, 'First')
+    const b = await subtaskOf(me.id, 'Second')
+    const [ra, rb] = await Promise.all([
+      joinOrCreateSiblingFolder(me, a.id, { eventSource: 'test', nest: true }),
+      joinOrCreateSiblingFolder(me, b.id, { eventSource: 'test', nest: true }),
+    ])
+    expect([ra.created, rb.created].sort()).toEqual([false, true])
+    expect(ra.groupId).toBe(rb.groupId)
+    const subs = (await listGroups()).filter((g) => g.parent_id === shared)
+    expect(subs).toHaveLength(1)
+    expect(subs[0].member_ids.sort()).toEqual([me.id, a.id, b.id].sort())
+  })
+
+  it('a legacy id-prefix parent link still counts as the caller\'s own subtask', async () => {
+    const { task: me } = await seedCaller()
+    const { task: old } = await addTask({ title: 'Old child', project: 'marina' })
+    const { updateTaskRaw, addToGroup } = await import('../../../src/core/task-manager.js')
+    await updateTaskRaw(old.id, { parent_task_id: me.id.slice(0, -2) })
+    const own = await createFolder('Mine', 'marina')
+    await addToGroup(own.group_id, [me.id, old.id])
+    const born = await subtaskOf(me.id, 'New child')
+    const r = await joinOrCreateSiblingFolder({ ...me, group_id: own.group_id }, born.id, { eventSource: 'test', nest: true })
+    expect(r).toMatchObject({ created: false, groupId: own.group_id })
   })
 })

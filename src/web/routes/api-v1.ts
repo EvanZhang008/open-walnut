@@ -2150,7 +2150,8 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       await import('../../core/task-manager.js')
     const { projectTask } = await import('../../core/task-projection.js')
     // Work created from INSIDE a task lands beside it: the caller's project and
-    // folder (a new folder when it has none), unless the body names another
+    // folder (a new folder when it has none, a subfolder of it when the folder
+    // also holds other work), unless the body names another
     // place, and it is the caller's subtask wherever it lands. Only a worker
     // session is placed from; a Personal AI ask gets the parent link alone, and
     // the phone and the web UI send no caller and keep the old defaults.
@@ -2234,26 +2235,18 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
           return add(folder)
         }
       }
-      let created
-      try {
-        created = await add(decision.group_id ? { group_id: decision.group_id } : {})
-      } catch (err) {
-        // An INHERITED folder that vanished (deleted, or the caller moved) since
-        // it was read must not fail a create that never asked for a folder.
-        // Deleting the caller can take its folder with it, so the retry keeps
-        // the missing-parent fallback too.
-        const inheritedFolder = placementReq.group_id === undefined && !!decision.group_id
-        if (!inheritedFolder || !(err instanceof Error && /^Folder "/.test(err.message))) throw err
-        folderWarning = err.message
-        created = await add({})
-      }
+      // Only a folder the body NAMED rides the create. The caller's folder is
+      // decided after it, under the store lock (placeBesideCaller below), so a
+      // folder that vanished since the caller was read can never fail a create.
+      const created = await add(decision.group_id ? { group_id: decision.group_id } : {})
       let task = created
       let folderCreated = false
       let folderLabel = decision.group_id && caller.kind === 'worker' && decision.group_id === caller.task.group_id
         ? caller.task.group_label : undefined
-      if (decision.createFolderWithCaller && caller.kind === 'worker') {
+      if (decision.placeBesideCaller && caller.kind === 'worker') {
+        // A subtask: nests when the caller's folder holds other work too.
         const placed = await joinOrCreateSiblingFolder(caller.task, created.id, {
-          eventSource: 'api-v1', refineTitles: [caller.task.title, created.title],
+          eventSource: 'api-v1', refineTitles: [caller.task.title, created.title], nest: true,
         })
         folderCreated = placed.created
         folderLabel = placed.label

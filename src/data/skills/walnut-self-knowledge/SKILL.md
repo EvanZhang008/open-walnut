@@ -33,7 +33,7 @@ Use the current tool schema for exact arguments. This skill explains decisions, 
 
 ## Task and project model
 
-- Grouping is project, then an optional folder inside it. Empty project means Inbox. A folder belongs to one project and never follows a task into another.
+- Grouping is project, then an optional folder inside it. Empty project means Inbox. A folder belongs to one project and never follows a task into another. Folders nest, and the folder tree follows the subtask tree: a task you file from inside a task whose folder also holds other work gets a subfolder of that folder, holding your task and the new one.
 - Moving work: one task moves with `task_update` `project`; a whole folder (its subfolders and every task in it) moves with `folder_move`. `folder_list` shows a project's folders, and `folder_add_tasks` files tasks of the same project into a folder.
 - A task holds one conversation. Continue that work instead of creating another task.
 - `phase` is the work's lifecycle and you set it. `execution` is what a read reports about the run: `not_started`, the process status (`running`, `idle`, `stopped`, `error`), `waiting` when it is parked on a permission prompt, or `unknown`. There is no execution state to write. Every `task_list` row carries it. From inside a task, `task_list` lists your folder by default (your project when you have no folder); `scope` (`project` or `all`) widens it.

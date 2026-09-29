@@ -11486,7 +11486,9 @@ body.walnut-dragging {
   gap: 5px;
   padding: 4px 8px 3px;
   margin-top: 4px;
-  margin-left: 0;
+  /* A subfolder's heading steps in under its parent's (--folder-depth, set by
+     the chip / header row from folder-tree.ts). */
+  margin-left: calc(var(--folder-depth, 0) * 16px);
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary, #6b7280);
@@ -11653,7 +11655,7 @@ body.walnut-dragging {
 .todo-focus-card.task-grouped,
 .todo-pinned-card.task-grouped {
   position: relative;
-  margin-left: 26px;
+  margin-left: calc(26px + var(--folder-depth, 0) * 16px);
 }
 /* Panel rows can't use margin for the member indent: content-visibility clips
    descendant painting at the row's padding box, so the dot must stay INSIDE
@@ -11662,7 +11664,7 @@ body.walnut-dragging {
    pill at 38, dot at x≈27 between the rail (21) and the pill. */
 .todo-panel-item.task-grouped {
   --dot-pull: -17px;
-  padding-left: 44px;
+  padding-left: calc(44px + var(--folder-depth, 0) * 16px);
 }
 .todo-panel-item.task-grouped::before,
 .task-card.task-grouped::before,
@@ -11688,7 +11690,7 @@ body.walnut-dragging {
    offset INSIDE the row box (x=21, between the folder head edge and the member
    pill at 38) — a negative offset would be clipped by content-visibility. */
 .todo-panel-item.task-grouped::before {
-  left: 21px;
+  left: calc(21px + var(--folder-depth, 0) * 16px);
 }
 /* The last member's rail stops at its own bottom edge (no bridge below). */
 .todo-panel-item.task-group-last::before,
@@ -14176,7 +14178,7 @@ body.walnut-dragging {
    lands at x≈27, INSIDE the folder's rail (21) and left of the pill (38). */
 .todo-group-project .todo-panel-item.task-grouped {
   --dot-pull: -25px;
-  padding-left: 52px;
+  padding-left: calc(52px + var(--folder-depth, 0) * 16px);
 }
 
 /* Drag overlay (floating copy while dragging) */

@@ -583,7 +583,11 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   ask), an omitted `project` means THAT task's project, and a task landing in
   the caller's project joins the caller's folder, or a new folder holding both
   when the caller has none (`folder_created: true`, announced as
-  `task:groups-changed`). The task records a cwd only for the host a later
+  `task:groups-changed`). When the caller's folder also holds work that is not
+  the caller or its subtasks, the new task gets a SUBFOLDER of it instead,
+  holding the caller, the new task and the caller's subtasks already filed there
+  (`folder_created: true`; the event carries `parent_id`), so the folder tree
+  follows the subtask tree. The task records a cwd only for the host a later
   start from the board would use (the project's default host), so a cwd never
   pairs with the wrong machine: `launch_host` / `launch_cwd` say where the
   caller is about to start it (a create-and-start client sends them); a `launch_host`

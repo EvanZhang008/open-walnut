@@ -115,10 +115,10 @@
 .home-navigation-scroll .todo-item-title { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; }
 /* One row rhythm (29px pitch). */
 .home-navigation-scroll .todo-pinned-card, .home-navigation-scroll .todo-focus-card { min-height: 27px; padding: 2px 6px 2px 14px; margin-left: 0; }
-.home-navigation-scroll .todo-focus-card.task-grouped, .home-navigation-scroll .todo-pinned-card.task-grouped { margin-left: 16px; }
+.home-navigation-scroll .todo-focus-card.task-grouped, .home-navigation-scroll .todo-pinned-card.task-grouped { margin-left: calc(16px + var(--folder-depth, 0) * 16px); }
 .home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { margin-left: -8px; padding: 3px 6px 3px 22px; }
 .home-navigation-scroll .todo-item-title-row { gap: 6px; }
-.home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped { padding-left: 38px; }
+.home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped { padding-left: calc(38px + var(--folder-depth, 0) * 16px); }
 .home-navigation-scroll .todo-panel-item .todo-row-pill { left: 8px; }
 /* The estimate is the CONTENT box: 22 + the 6px padding = the rendered 28px row. At 28 an
    unrendered row stood 34px tall in WebKit and every row shrank as it came into view,

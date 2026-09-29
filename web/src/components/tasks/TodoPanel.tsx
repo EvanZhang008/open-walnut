@@ -129,6 +129,7 @@ import {
 import { INBOX_TAB, LS_TAB_KEY } from './task-tabs';
 import { staleDonePinIds } from './pin-search-fold';
 import { foldedId, isFoldedAt, pruneFolds, readFolds, saveFolds, toggleFold, unfold } from './place-folds';
+import { ancestorHeadings, buildFolderParents, folderAncestors, folderDepth, nestFolderUnits } from './folder-tree';
 import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { CopyableId } from '../common/CopyableId';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
@@ -610,6 +611,48 @@ interface GroupRenderInfo {
   isLead: boolean;   // first member in sorted order — the folder header row goes here
   isLast: boolean;   // last member — the rail stops here
   count: number;     // displayed member count (shown on the header row)
+  /** Folder depth (folder-tree.ts): 0 at the top of its project, 1 for a subfolder. */
+  depth?: number;
+  /** On the lead: ancestor folders with no row of their own above it, whose
+   *  headings it draws first (root first). */
+  heads?: FolderHeadInfo[];
+  /** Main list only, filled per fold state: an ANCESTOR folder is folded, so this
+   *  folder's own heading hides with it. */
+  headerHidden?: boolean;
+}
+
+/** An ancestor heading a lead row draws above its own folder's. */
+interface FolderHeadInfo {
+  groupId: string;
+  label: string;
+  depth: number;
+  /** Main list only, filled per fold state. */
+  collapsed?: boolean;
+  hidden?: boolean;
+}
+
+/**
+ * The nesting half of a folder's render info: its depth, and on each lead row the
+ * ancestor headings it has to draw (folder-tree.ts). Mutates `map` in place; a
+ * no-op when no folder nests.
+ */
+function addFolderNesting(
+  map: Map<string, GroupRenderInfo>,
+  displayed: Task[],
+  labels: Record<string, string> | undefined,
+  parentOf: Map<string, string>,
+): void {
+  if (parentOf.size === 0) return;
+  const heads = ancestorHeadings(displayed.map((t) => t.group_id || undefined), parentOf);
+  displayed.forEach((t, i) => {
+    const info = map.get(t.id);
+    if (!info) return;
+    info.depth = folderDepth(info.groupId, parentOf);
+    const missing = heads.get(i);
+    if (info.isLead && missing) {
+      info.heads = missing.map((id) => ({ groupId: id, label: labels?.[id] ?? '', depth: folderDepth(id, parentOf) }));
+    }
+  });
 }
 
 /**
@@ -736,7 +779,7 @@ function clusterTierByProject(ids: string[], tasks: Task[], projectOrder?: strin
  * dissolves it). For a lone member isLead and isLast both hold → chip on top +
  * rounded bottom = a complete one-card box. `displayed` must be in clustered order.
  */
-function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>): Map<string, GroupRenderInfo> {
+function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>, parentOf?: Map<string, string>): Map<string, GroupRenderInfo> {
   const map = new Map<string, GroupRenderInfo>();
   const counts = new Map<string, number>();
   for (const t of displayed) if (t.group_id) counts.set(t.group_id, (counts.get(t.group_id) ?? 0) + 1);
@@ -756,6 +799,7 @@ function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>):
       count: counts.get(gid) ?? 0,
     });
   });
+  if (parentOf) addFolderNesting(map, displayed, labels, parentOf);
   return map;
 }
 
@@ -806,14 +850,19 @@ function pinnedFolderFacts(gid: string, pinned: Map<string, Task>): { member?: T
  * the right-click menu needs hooks, and inlining them would mount four extra
  * hooks on every one of the ~6k task rows instead of only the lead members.
  */
-function FolderHeaderRow({ groupId, label, count, project, depth, collapsed, onToggleCollapse, onRename, onMoveToProject, onDelete }: {
+function FolderHeaderRow({ groupId, label, count, project, depth, folderDepth: nestDepth = 0, collapsed, hidden, onToggleCollapse, onRename, onMoveToProject, onDelete }: {
   groupId: string;
   label: string;
   count: number;
   /** Owning project ('' = Inbox) — the current value the picker ticks. */
   project: string;
+  /** The lead row's SUBTASK depth (a folder member's subtask indents its header). */
   depth: number;
+  /** How deep the FOLDER sits in the folder tree (0 = top of its project). */
+  folderDepth?: number;
   collapsed?: boolean;
+  /** An ancestor folder is folded: hidden (display:none) with its contents. */
+  hidden?: boolean;
   onToggleCollapse?: (groupId: string) => void;
   onRename?: (groupId: string, currentLabel: string) => void;
   onMoveToProject?: (groupId: string, project: string) => void;
@@ -828,9 +877,13 @@ function FolderHeaderRow({ groupId, label, count, project, depth, collapsed, onT
   return (
     <>
       <div
-        className={`task-group-chip${onToggleCollapse ? ' task-group-chip-clickable' : ''}`}
-        style={depth > 0 ? { marginLeft: `${14 + depth * 22}px` } : undefined}
+        className={`task-group-chip${onToggleCollapse ? ' task-group-chip-clickable' : ''}${hidden ? ' task-folder-collapsed' : ''}`}
+        style={{
+          ...(nestDepth > 0 ? { '--folder-depth': nestDepth } as CSSProperties : {}),
+          ...(depth > 0 ? { marginLeft: `calc(${14 + depth * 22}px + var(--folder-depth, 0) * 16px)` } : {}),
+        }}
         data-group-id={groupId}
+        data-folder-depth={nestDepth || undefined}
         title={onToggleCollapse
           ? `Folder — click to ${collapsed ? 'expand' : 'collapse'}`
           : 'Folder — independent tasks kept together inside this project'}
@@ -930,6 +983,8 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
     opacity: isDragging ? 0 : undefined,
     // Subtasks indent: 22px = phase-icon(18px) + gap(4px), aligns with parent's first letter
     ...(depth > 0 ? { marginLeft: `${depth * 22}px` } : {}),
+    // A subfolder's members step in under its heading (CSS reads --folder-depth).
+    ...(groupInfo?.depth ? { '--folder-depth': groupInfo.depth } as CSSProperties : {}),
   };
 
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
@@ -1087,6 +1142,25 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
 
   return (
     <>
+    {/* Ancestor folders with no row of their own above this one: their headings
+        first, so a subfolder never sits indented under a name that is not there. */}
+    {groupInfo?.isLead && groupInfo.heads?.map((head) => (
+      <FolderHeaderRow
+        key={head.groupId}
+        groupId={head.groupId}
+        label={head.label}
+        count={0}
+        project={folderProject ?? (task.project || '')}
+        depth={depth}
+        folderDepth={head.depth}
+        collapsed={head.collapsed}
+        hidden={head.hidden}
+        onToggleCollapse={onToggleFolder}
+        onRename={onRenameGroup}
+        onMoveToProject={onMoveFolderToProject}
+        onDelete={onDissolveGroup}
+      />
+    ))}
     {/* Folder header row — only above the lead member; names the whole folder. */}
     {groupInfo?.isLead && (
       <FolderHeaderRow
@@ -1097,6 +1171,8 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
         // own project is the fallback for surfaces that don't pass it.
         project={folderProject ?? (task.project || '')}
         depth={depth}
+        folderDepth={groupInfo.depth}
+        hidden={groupInfo.headerHidden}
         collapsed={folderCollapsed}
         onToggleCollapse={onToggleFolder}
         onRename={onRenameGroup}
@@ -3896,29 +3972,35 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // custom-mode lines into the tier id arrays as REAL sortable units. The rest of
   // the separator machinery (drag state, add/delete/rename) lives further down.
   const separators = ordering?.separators ?? NO_SEPARATORS;
+  // Folder → parent folder, normalised (folder-tree.ts). Empty on a board where no
+  // folder nests, and every nesting pass below is then a no-op.
+  const folderParents = useMemo(() => buildFolderParents(folderMeta), [folderMeta]);
   const clusterForTier = useCallback((tier: string, tierTasks: Task[]): string[] => {
     const isCustom = tierViewMode(tier) === 'custom';
+    const byId = new Map(tierTasks.map((t) => [t.id, t]));
     // Project view sinks folder clusters below the loose tasks (A1); custom view
     // keeps the lead-anchored cluster so the user's hand order stays authoritative.
     const grouped = clusterTierByGroup(tierTasks, !isCustom);
     const projected = isCustom
       ? grouped
       : clusterTierByProject(grouped, tierTasks, ordering?.projectOrder);
+    // A subfolder's rows move inside its parent folder's run (pre-order), so the
+    // tree draws nested instead of as siblings.
+    const nested = nestFolderUnits(projected, (id) => byId.get(id)?.group_id || undefined, folderParents);
     // Chip sentinels go in LAST — see withGroupSentinels for why they must not be
     // visible to the project clustering pass.
-    const withChips = withGroupSentinels(projected, tierTasks, tier);
+    const withChips = withGroupSentinels(nested, tierTasks, tier);
     if (!isCustom) return withChips; // project-mode lines anchor folders → plain DOM rows
     // Custom-mode divider lines ride the items array itself (withSeparatorSentinels):
     // in `items`, the strategy displaces a line with the cards around it, so a card
     // can never visually cross it mid-drag (2026-08-25) and a slot can open above a
     // top-anchored line.
-    const byId = new Map(tierTasks.map((t) => [t.id, t]));
     return withSeparatorSentinels({
       ids: withChips, separators, tier,
       groupOf: (id) => byId.get(id)?.group_id ?? null,
       isTaskId: (id) => byId.has(id),
     });
-  }, [tierViewMode, ordering?.projectOrder, separators]);
+  }, [tierViewMode, ordering?.projectOrder, separators, folderParents]);
   const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterForTier('focus', focusTasksLocal), [dragTierIds, focusTasksLocal, clusterForTier]);
   const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterForTier('satellite', satelliteTasksLocal), [dragTierIds, satelliteTasksLocal, clusterForTier]);
   const backlogIds_arr = useMemo(() => dragTierIds?.get('backlog') ?? clusterForTier('backlog', backlogTasksLocal), [dragTierIds, backlogTasksLocal, clusterForTier]);
@@ -5496,10 +5578,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         pinnedTaskMap, activeDragPinnedId,
       );
       const display = visibleIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task);
-      map[def.id] = { visibleIds, display, groupMeta: buildTierGroupMeta(display, taskGroups) };
+      map[def.id] = { visibleIds, display, groupMeta: buildTierGroupMeta(display, taskGroups, folderParents) };
     }
     return map;
-  }, [customTiers, customIds_arr, tierDisplayTaskIds, pinnedTaskMap, taskGroups, activeDragPinnedId]);
+  }, [customTiers, customIds_arr, tierDisplayTaskIds, pinnedTaskMap, taskGroups, activeDragPinnedId, folderParents]);
   // tier id → its visible render ids, for logic that must work for ANY tier
   // (separator placement) instead of naming the four built-ins.
   const tierIdsByTier = useMemo(() => {
@@ -5539,20 +5621,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [pinnedTaskMap, visibleWaitIds],
   );
   const focusGroupMeta = useMemo(
-    () => buildTierGroupMeta(focusTasksDisplay, taskGroups),
-    [focusTasksDisplay, taskGroups],
+    () => buildTierGroupMeta(focusTasksDisplay, taskGroups, folderParents),
+    [focusTasksDisplay, taskGroups, folderParents],
   );
   const satelliteGroupMeta = useMemo(
-    () => buildTierGroupMeta(satelliteTasksDisplay, taskGroups),
-    [satelliteTasksDisplay, taskGroups],
+    () => buildTierGroupMeta(satelliteTasksDisplay, taskGroups, folderParents),
+    [satelliteTasksDisplay, taskGroups, folderParents],
   );
   const backlogGroupMeta = useMemo(
-    () => buildTierGroupMeta(backlogTasksDisplay, taskGroups),
-    [backlogTasksDisplay, taskGroups],
+    () => buildTierGroupMeta(backlogTasksDisplay, taskGroups, folderParents),
+    [backlogTasksDisplay, taskGroups, folderParents],
   );
   const waitGroupMeta = useMemo(
-    () => buildTierGroupMeta(waitTasksDisplay, taskGroups),
-    [waitTasksDisplay, taskGroups],
+    () => buildTierGroupMeta(waitTasksDisplay, taskGroups, folderParents),
+    [waitTasksDisplay, taskGroups, folderParents],
   );
 
   // --- Parent-anchored sort with child grouping ---
@@ -5641,17 +5723,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (visited.has(task.id) || task.group_id) continue;
       emitWithChildren(task);
     }
+    const clustered: Task[] = [];
     for (const task of topLevel) {
       if (visited.has(task.id) || !task.group_id) continue;
-      // Group lead: emit the whole cluster contiguously, then mark it done so
-      // later members (already visited) are skipped in place.
+      // Group lead: take the whole cluster contiguously, then mark it done so
+      // later members are skipped in place.
       if (emittedGroups.has(task.group_id)) continue;
       emittedGroups.add(task.group_id);
-      const members = groupTopMembers.get(task.group_id) ?? [task];
-      for (const m of members) emitWithChildren(m);
+      clustered.push(...(groupTopMembers.get(task.group_id) ?? [task]));
     }
+    // A subfolder's cluster goes inside its parent folder's (pre-order).
+    for (const m of nestFolderUnits(clustered, (t) => t.group_id || undefined, folderParents)) emitWithChildren(m);
     return order;
-  }, [sortBy, groupBy, sortForProject]);
+  }, [sortBy, groupBy, sortForProject, folderParents]);
 
   // --- Debounced sort order ---
   // Badge/data updates instantly (always use latest `filtered` task objects).
@@ -5892,8 +5976,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         count: counts.get(gid) ?? 0,
       });
     });
+    addFolderNesting(map, sorted, taskGroups, folderParents);
     return map;
-  }, [sorted, taskGroups]);
+  }, [sorted, taskGroups, folderParents]);
 
   // Folder folds. Each tier and the Projects list fold a folder on their own
   // (place-folds.ts), so a folder shown in two places never folds the copy above
@@ -5941,11 +6026,33 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     let currentId: string | undefined = taskId;
     for (let hops = 0; currentId && hops <= 10; hops++) {
       const gid = groupIdByTaskId.get(currentId);
-      if (gid && isFoldedAt(folderFolds, LIST_PLACE, gid)) return true;
+      // Its folder, or any folder ABOVE it in the folder tree.
+      if (gid && (isFoldedAt(folderFolds, LIST_PLACE, gid)
+        || folderAncestors(gid, folderParents).some((a) => isFoldedAt(folderFolds, LIST_PLACE, a)))) return true;
       currentId = childParentMap.get(currentId);
     }
     return false;
-  }, [folderFolds, groupIdByTaskId, childParentMap]);
+  }, [folderFolds, groupIdByTaskId, childParentMap, folderParents]);
+
+  // The fold state on top of groupRenderMap for the main list's headings: a
+  // folder's heading hides when an ANCESTOR folder is folded, while the folded
+  // folder's own heading stays as the way back. Only nested leads get a new
+  // object, so a flat board hands every row the very same groupInfo as before.
+  const listGroupInfo = useMemo(() => {
+    if (folderParents.size === 0) return groupRenderMap;
+    const folded = (gid: string) => isFoldedAt(folderFolds, LIST_PLACE, gid);
+    const underFold = (gid: string) => folderAncestors(gid, folderParents).some(folded);
+    const map = new Map(groupRenderMap);
+    for (const [id, info] of groupRenderMap) {
+      if (!info.isLead || (!info.depth && !info.heads)) continue;
+      map.set(id, {
+        ...info,
+        headerHidden: underFold(info.groupId),
+        ...(info.heads ? { heads: info.heads.map((h) => ({ ...h, collapsed: folded(h.groupId), hidden: underFold(h.groupId) })) } : {}),
+      });
+    }
+    return map;
+  }, [groupRenderMap, folderFolds, folderParents]);
 
   // Determine if a child task should be hidden (any ancestor is collapsed, walks full chain)
   const isChildHidden = useCallback((taskId: string) => {
@@ -7177,6 +7284,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
      * leave the tier).
      */
     const runHidden = (p: string) => showFolders && isRunCollapsed(tier, p);
+    // Folders fold per tier. A folder under a folded ANCESTOR hides with it, chip
+    // and cards (display:none, ids stay in the SortableContext); the folded
+    // folder's own chip stays as the way back.
+    const folded = (gid: string) => isFoldedAt(folderFolds, tier, gid);
+    const underFold = (gid: string) => folderParents.size > 0 && folderAncestors(gid, folderParents).some(folded);
+    // The folder being dragged by its chip already stands in for itself: never
+    // draw it a second time as an ancestor heading above its subfolder.
+    const draggedFolder = activeDragPinnedId && isGroupSentinel(activeDragPinnedId) ? parseGroupSentinelGid(activeDragPinnedId) : null;
     // Project run sequence (first-seen order) — decides which SIDE of the target
     // the drop indicator draws on. handleLabelDrop's splice means the dragged
     // project takes the target's slot: dragging UP lands before the target
@@ -7256,6 +7371,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             project={folderOwnerProject(folderMeta?.[gid], facts.member)}
             showProjectPrefix={!showFolders}
             count={facts.count}
+            depth={folderDepth(gid, folderParents)}
             collapsed={isFoldedAt(folderFolds, tier, gid)}
             // The RUN's project decides, not the folder's registry project: this
             // chip is drawn inside the bucket its members cluster into, and that
@@ -7263,7 +7379,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             // run being walked); facts.member is the first member in ANY tier, so it
             // used to answer for a run this chip is not in. Null = nothing rendered
             // above it yet, so there is no run to be folded inside.
-            projectCollapsed={prevProject !== null ? runHidden(prevProject) : false}
+            projectCollapsed={(prevProject !== null ? runHidden(prevProject) : false) || underFold(gid)}
             inert={foldersInert}
             onToggleCollapse={(id) => toggleFolder(tier, id)}
             onMoveToProject={handleMoveFolderToProject}
@@ -7353,6 +7469,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       prevProject = proj;
       const gi = groupMeta.get(id);
       if (gi?.isLead) {
+        // Ancestor folders with no card of their own in this tier: their heading
+        // still goes above, so a subfolder is never drawn indented under nothing.
+        // Plain DOM like the project label (never in the SortableContext).
+        for (const head of gi.heads ?? []) {
+          if (head.groupId === draggedFolder) continue;
+          out.push(
+            <FolderHeaderRow key={`folderhead:${tier}:${head.groupId}`} groupId={head.groupId} label={head.label}
+              count={0} project={folderOwnerProject(folderMeta?.[head.groupId], task) ?? ''}
+              depth={0} folderDepth={head.depth}
+              collapsed={folded(head.groupId)} hidden={runHidden(proj) || underFold(head.groupId)}
+              onToggleCollapse={(fid) => toggleFolder(tier, fid)}
+              onRename={handleRenameGroup} onMoveToProject={handleMoveFolderToProject} onDelete={handleDissolveGroup} />
+          );
+        }
         out.push(
           <GroupChip key={groupSortableId(gi.groupId, tier)} groupId={gi.groupId} tier={tier}
             label={gi.label}
@@ -7361,8 +7491,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             project={folderOwnerProject(folderMeta?.[gi.groupId], task)}
             showProjectPrefix={!showFolders}
             count={gi.count}
+            depth={gi.depth}
             collapsed={isFoldedAt(folderFolds, tier, gi.groupId)}
-            projectCollapsed={runHidden(proj)}
+            projectCollapsed={runHidden(proj) || underFold(gi.groupId)}
             inert={foldersInert}
             onToggleCollapse={(id) => toggleFolder(tier, id)}
             onMoveToProject={handleMoveFolderToProject}
@@ -7381,7 +7512,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onStartSession={onStartSession}
           onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
           onDelete={onDelete} onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
-          groupInfo={gi} folderCollapsed={!!(gi && isFoldedAt(folderFolds, tier, gi.groupId))}
+          groupInfo={gi} folderCollapsed={!!(gi && (folded(gi.groupId) || underFold(gi.groupId)))}
           projectCollapsed={runHidden(proj)}
           selectMode={selectMode}
           isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle}
@@ -7400,7 +7531,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       out.push(runAddRow(tier, lastScope));
     }
     return out;
-  }, [movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy]);
+  }, [movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, activeDragPinnedId]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -8108,7 +8239,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   searchContext={task.project || 'Inbox'}
                   filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
                   isFadingOverride={fadingOverrideId === task.id}
-                  groupInfo={groupRenderMap.get(task.id)}
+                  groupInfo={listGroupInfo.get(task.id)}
                   onRenameGroup={handleRenameGroup}
                   onUngroupTask={onUngroupTask}
                   isGroupHidden={!!(task.group_id && hiddenGroups?.has(task.group_id))}
@@ -8210,7 +8341,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 pinnedTier={getTier(task.id)}
                                 filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
                                 isFadingOverride={fadingOverrideId === task.id}
-                                groupInfo={groupRenderMap.get(task.id)}
+                                groupInfo={listGroupInfo.get(task.id)}
                                 onRenameGroup={handleRenameGroup}
                                 onUngroupTask={onUngroupTask}
                                 isGroupHidden={!!(task.group_id && hiddenGroups?.has(task.group_id))}

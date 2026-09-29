@@ -14,9 +14,12 @@
  *
  *   - project: the caller's project unless the call names one ('' = Inbox, on
  *     purpose).
- *   - folder:  only inside the caller's project. The caller's folder when it has
- *     one; otherwise a new folder is made holding the caller AND the new task
- *     (the same shape a fork produces). A folder never follows work into another
+ *   - folder:  only inside the caller's project, and the folder tree follows
+ *     the subtask tree. The caller's folder when it holds only the caller and
+ *     its own subtasks; when it holds other work too, a SUBFOLDER of it named
+ *     after the caller, holding the caller and the new task (the caller moves
+ *     in); when the caller has no folder, a new folder holding both (the same
+ *     shape a fork produces). A folder never follows work into another
  *     project, because a folder is that project's private structure.
  *   - parent: whatever a session files is a SUBTASK of that session's task
  *     (`parent_task_id`), the same relation a promoted side question gets:
@@ -147,8 +150,9 @@ export interface PlacementRequest {
 export interface PlacementDecision {
   project?: string;
   group_id?: string;
-  /** Make a new folder holding the caller and the new task once it exists. */
-  createFolderWithCaller: boolean;
+  /** Once the task exists, file it beside the caller (joinOrCreateSiblingFolder
+   *  with `nest`): the caller's folder, a subfolder of it, or a new folder. */
+  placeBesideCaller: boolean;
   /** Set when the caller's placement was used (project, folder or both). */
   inheritedFrom?: string;
   /** The caller's task, for any session caller (worker or ask): the parent,
@@ -162,10 +166,10 @@ export function decidePlacement(req: PlacementRequest, caller: CallerPlacement):
   if (caller.kind === 'ask') {
     // Its `Ask …` project is never a place for the user's work, but the work
     // is still this conversation's: the parent link and nothing else.
-    return { project: req.project, group_id: explicitGroup, createFolderWithCaller: false, parentTaskId: caller.task.id };
+    return { project: req.project, group_id: explicitGroup, placeBesideCaller: false, parentTaskId: caller.task.id };
   }
   if (caller.kind !== 'worker') {
-    return { project: req.project, group_id: explicitGroup, createFolderWithCaller: false };
+    return { project: req.project, group_id: explicitGroup, placeBesideCaller: false };
   }
   const project = req.project !== undefined ? req.project : caller.task.project;
   const own = sameProject(project, caller.task.project);
@@ -175,14 +179,14 @@ export function decidePlacement(req: PlacementRequest, caller: CallerPlacement):
     return {
       project,
       group_id: explicitGroup,
-      createFolderWithCaller: false,
+      placeBesideCaller: false,
       ...(req.project === undefined ? { inheritedFrom: caller.task.id } : {}),
       ...parent,
     };
   }
-  return caller.task.group_id
-    ? { project, group_id: caller.task.group_id, createFolderWithCaller: false, inheritedFrom: caller.task.id, ...parent }
-    : { project, createFolderWithCaller: true, inheritedFrom: caller.task.id, ...parent };
+  // Join, nest or create is decided under the store lock against the caller's
+  // CURRENT folder (placeInFolderBeside), never from this snapshot.
+  return { project, placeBesideCaller: true, inheritedFrom: caller.task.id, ...parent };
 }
 
 /**
@@ -264,22 +268,26 @@ export async function inheritedLaunchPair(
 /**
  * Put `newTaskId` beside `source`: into the source's folder when it has one,
  * otherwise into a new folder holding both, labelled with the source title and
- * refined to an AI group name in the background. Best-effort: a failure leaves
- * the new task standalone in its project and is reported, never thrown.
- * Shared by forks, side-thread promotion and caller placement.
+ * refined to an AI group name in the background. `nest` (a subtask) nests
+ * instead of joining a folder shared with other work (placeInFolderBeside).
+ * Best-effort: a failure leaves the new task standalone in its project and is
+ * reported, never thrown. Shared by forks and side-thread promotion (siblings,
+ * never nested) and caller placement (subtasks, nested).
  */
 export async function joinOrCreateSiblingFolder(
   source: { id: string; title: string; group_id?: string },
   newTaskId: string,
-  opts: { eventSource: string; refineTitles?: string[] },
-): Promise<{ groupId?: string; label?: string; created: boolean; error?: string }> {
+  opts: { eventSource: string; refineTitles?: string[]; nest?: boolean },
+): Promise<{ groupId?: string; label?: string; created: boolean; parentId?: string; error?: string }> {
   const { placeInFolderBeside, renameGroup } = await import('../task-manager.js');
   try {
     // One write lock decides join-or-create against the source's CURRENT folder
     // (a stale "no folder" must never merge a folder the user just made).
-    const r = await placeInFolderBeside(source.id, newTaskId, source.title);
+    const r = await placeInFolderBeside(source.id, newTaskId, source.title, { nest: opts.nest });
     if (!r.created) return { groupId: r.group_id, label: r.label, created: false };
-    bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: r.group_id, label: r.label }, ['web-ui'], { source: opts.eventSource });
+    bus.emit(EventNames.TASK_GROUPS_CHANGED, {
+      group_id: r.group_id, label: r.label, ...(r.parent_id ? { parent_id: r.parent_id } : {}),
+    }, ['web-ui'], { source: opts.eventSource });
     const gid = r.group_id;
     const titles = opts.refineTitles ?? [source.title];
     void (async () => {
@@ -296,7 +304,7 @@ export async function joinOrCreateSiblingFolder(
         });
       }
     })();
-    return { groupId: gid, label: r.label, created: true };
+    return { groupId: gid, label: r.label, created: true, ...(r.parent_id ? { parentId: r.parent_id } : {}) };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     log.session.warn('could not put the new task beside its source', {

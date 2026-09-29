@@ -978,6 +978,46 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Used by nested-folders.spec.ts (chromium): a worker caller whose session
+        // files subtasks. One per browser so the two projects never share it.
+        id: 'pw-task-nested-folder-chromium',
+        title: 'Nested folder parent (chromium)',
+        status: 'todo',
+        phase: 'TODO',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_id: 'pw-nested-folder-session-chromium',
+        session_ids: ['pw-nested-folder-session-chromium'],
+        active_session_ids: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Used by nested-folders.spec.ts (webkit): a worker caller whose session
+        // files subtasks. One per browser so the two projects never share it.
+        id: 'pw-task-nested-folder-webkit',
+        title: 'Nested folder parent (webkit)',
+        status: 'todo',
+        phase: 'TODO',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_id: 'pw-nested-folder-session-webkit',
+        session_ids: ['pw-nested-folder-session-webkit'],
+        active_session_ids: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Used by session-mode-pill.spec.ts exec-slot bug test.
         // Starts with NO session fields so that migration won't pre-set session_id.
         // The test injects a task:updated event (simulating the buggy server emit
@@ -2756,6 +2796,36 @@ await fs.writeFile(
         messageCount: 1,
         cwd: process.cwd(),
         title: 'Bypass: model switch test session',
+      },
+      {
+        // Used by nested-folders.spec.ts: the caller id a subtask create carries.
+        // STOPPED, so the reconciler never touches it.
+        claudeSessionId: 'pw-nested-folder-session-chromium',
+        taskId: 'pw-task-nested-folder-chromium',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(Date.now() - 60_000).toISOString(),
+        startedAt: new Date(Date.now() - 120_000).toISOString(),
+        lastActiveAt: new Date(Date.now() - 60_000).toISOString(),
+        messageCount: 1,
+        cwd: process.cwd(),
+        title: 'Nested folder caller (chromium)',
+      },
+      {
+        // Used by nested-folders.spec.ts: the caller id a subtask create carries.
+        // STOPPED, so the reconciler never touches it.
+        claudeSessionId: 'pw-nested-folder-session-webkit',
+        taskId: 'pw-task-nested-folder-webkit',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(Date.now() - 60_000).toISOString(),
+        startedAt: new Date(Date.now() - 120_000).toISOString(),
+        lastActiveAt: new Date(Date.now() - 60_000).toISOString(),
+        messageCount: 1,
+        cwd: process.cwd(),
+        title: 'Nested folder caller (webkit)',
       },
       {
         // Used by session-mode-pill.spec.ts — STOPPED so reconciler won't touch it

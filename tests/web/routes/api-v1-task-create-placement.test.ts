@@ -271,14 +271,45 @@ describe('a worker caller', () => {
 
   it('a folder the caller had that no longer exists never fails the create', async () => {
     const { task: caller, sid } = await seedCaller('marina')
-    // A stale membership (the folder row is gone): the inherited folder is refused
-    // by the store, and the create must still land, in the project, with a warning.
+    // A stale membership (the folder row is gone) counts as no folder: the create
+    // lands in the project, in a fresh folder beside the caller, with no warning.
     await updateTaskRaw(caller.id, { group_id: 'g_ghost' })
     const { status, json } = await post({ title: 'Still created' }, sid)
     expect(status).toBe(201)
     expect(json.task.project).toBe('marina')
-    expect(json.placement.group_id).toBeUndefined()
-    expect(json.placement.warning).toMatch(/could not be put in a folder/)
+    expect(json.placement).toMatchObject({ folder_created: true })
+    expect(json.placement.group_id).not.toBe('g_ghost')
+    expect(json.placement.warning).toBeUndefined()
+    expect((await getTask(caller.id)).group_id).toBe(json.placement.group_id)
+  })
+
+  it('in a folder shared with other work: a SUBFOLDER of it holding the caller and the new task', async () => {
+    const shared = await createFolder('Pipeline', 'marina')
+    const { task: caller, sid } = await seedCaller('marina', { folder: shared.group_id })
+    const { task: neighbour } = await addTask({ title: 'Unrelated work', project: 'marina' })
+    await addToGroup(shared.group_id, [neighbour.id])
+    const groups: Array<Record<string, any>> = []
+    bus.subscribe('test-nest-groups', (e) => { if (e.name === EventNames.TASK_GROUPS_CHANGED) groups.push(e.data as Record<string, any>) }, { global: true })
+    try {
+      const first = await post({ title: 'First part' }, sid)
+      expect(first.status).toBe(201)
+      const sub = first.json.placement.group_id as string
+      expect(sub).toMatch(/^g_/)
+      expect(sub).not.toBe(shared.group_id)
+      expect(first.json.placement).toMatchObject({ folder_created: true, group_label: caller.title, parent_task_id: caller.id })
+      const listed = (await listGroups()).find((g) => g.group_id === sub)
+      expect(listed).toMatchObject({ parent_id: shared.group_id, project: 'marina' })
+      expect(listed?.member_ids.sort()).toEqual([caller.id, first.json.task.id].sort())
+      // The caller moved in; the unrelated task stayed; the board is told the parent.
+      expect((await getTask(neighbour.id)).group_id).toBe(shared.group_id)
+      expect(groups.find((g) => g.group_id === sub)).toMatchObject({ parent_id: shared.group_id })
+      // The caller's next subtask joins the subfolder, which is now its own.
+      const second = await post({ title: 'Second part' }, sid)
+      expect(second.json.placement).toMatchObject({ group_id: sub, folder_created: false })
+      expect((await listGroups()).filter((g) => g.parent_id === shared.group_id)).toHaveLength(1)
+    } finally {
+      bus.unsubscribe('test-nest-groups')
+    }
   })
 
   it('a caller task deleted mid-create: the work is still filed, just not as its subtask', async () => {

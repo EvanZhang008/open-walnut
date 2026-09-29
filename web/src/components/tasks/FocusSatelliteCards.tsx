@@ -47,7 +47,7 @@ export { groupSortableId } from './tier-group-sentinels';
  *    node measures as 0x0 at the viewport origin, which is a drop target at (0,0)
  *    rather than a useful rect. See the `disabled` argument below.
  */
-export function GroupChip({ groupId, tier, label, project, showProjectPrefix, count, collapsed, projectCollapsed, inert, onRename, onDissolve, onHide, onToggleCollapse, onMoveToProject }: {
+export function GroupChip({ groupId, tier, label, project, showProjectPrefix, count, depth = 0, collapsed, projectCollapsed, inert, onRename, onDissolve, onHide, onToggleCollapse, onMoveToProject }: {
   groupId: string;
   tier: FocusTier;
   label: string;
@@ -63,10 +63,14 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
   showProjectPrefix?: boolean;
   /** Member count, mirroring the main list's folder header. */
   count?: number;
+  /** How deep the folder sits in the folder tree (0 = top of its project): a
+   *  subfolder's chip indents under its parent's (folder-tree.ts). */
+  depth?: number;
   /** Collapsed = this folder's member cards are display:none'd by the tier loop. */
   collapsed?: boolean;
-  /** The PROJECT this chip is drawn under is folded shut, so the whole run is
-   *  hidden with .tier-project-collapsed (display:none) rather than unmounted —
+  /** A CONTAINER this chip is drawn under is folded shut (its project run, or a
+   *  parent folder), so the chip is hidden with .tier-project-collapsed
+   *  (display:none) rather than unmounted —
    *  the chip's sortable id must stay in the tier's SortableContext or dnd-kit's
    *  indices shift. A different reason from `collapsed`, hence a different class:
    *  this chip is not folded, its container is. */
@@ -118,6 +122,7 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
     // like a dragged card. (The floating DragOverlay carries the visible payload.)
     opacity: isDragging ? 0.5 : undefined,
     position: 'relative',
+    ...(depth > 0 ? { '--folder-depth': depth } as CSSProperties : {}),
   };
   return (
     <>
@@ -125,6 +130,7 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
       ref={setNodeRef}
       style={style}
       data-group-id={groupId}
+      data-folder-depth={depth || undefined}
       className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}${canCollapse ? ' task-group-chip-clickable' : ''}${projectCollapsed ? ' tier-project-collapsed' : ''}`}
       title={canCollapse
         ? `Folder — click to ${collapsed ? 'expand' : 'collapse'}, press and drag to move the whole folder`
@@ -208,6 +214,8 @@ export interface TierGroupRenderInfo {
   label: string;
   isLead: boolean;
   isLast: boolean;
+  /** Folder depth: a subfolder's cards indent under its chip. */
+  depth?: number;
 }
 
 interface SortableTierCardProps {
@@ -366,6 +374,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : undefined,
+    ...(groupInfo?.depth ? { '--folder-depth': groupInfo.depth } as CSSProperties : {}),
   };
 
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
