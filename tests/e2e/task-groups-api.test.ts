@@ -922,4 +922,101 @@ describe('folder REST API (/api/tasks/folders)', () => {
     expect(listed.project).toBe('e2e-grp-alpha');
     expect(listed.member_ids).not.toContain(member.id);
   });
+
+  /** RATCHET twin: `joinGroupId` (the join that rides a move) is internal too. */
+  it('PATCH /tasks/:id can NOT smuggle joinGroupId through the request body', async () => {
+    const f = (await (await createFolder({ label: 'No join smuggling', project: 'e2e-grp-dest' })).json()) as FolderResult;
+    const task = await createTask('Only moves');
+    const res = await fetch(apiUrl(`/api/tasks/${task.id}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'e2e-grp-dest', joinGroupId: f.group_id }),
+    });
+    expect(res.status).toBe(200);
+    const reloaded = await getTask(task.id);
+    expect(reloaded.project).toBe('e2e-grp-dest');
+    expect(reloaded.group_id).toBeUndefined();
+  });
+});
+
+/**
+ * A drop into another project's folder moves the task there (`move: true`). The
+ * board used to answer it with "A folder belongs to one project … Move the task
+ * first" (2026-09-28); without the flag the refusal stands (tests 2 and 2b above).
+ */
+describe('filing into another project’s folder (move: true)', () => {
+  it('POST /groups/:gid/add with move moves the task, joins it, and says so over WS', async () => {
+    const a = await createTask('Folder lead', 'e2e-grp-alpha');
+    const b = await createTask('Folder second', 'e2e-grp-alpha');
+    const created = (await (await fetch(apiUrl('/api/tasks/groups'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: [a.id, b.id], label: 'Alpha folder' }),
+    })).json()) as GroupResult;
+    const inbox = await createTask('From the Inbox', '');
+
+    const ws = await connectWs();
+    try {
+      const updated = new Promise<WsFrame>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('no task:updated for the moved task')), 5000);
+        const handler = (raw: WebSocket.RawData) => {
+          const frame = JSON.parse(raw.toString()) as WsFrame;
+          const t = (frame.data as { task?: { id?: string } } | undefined)?.task;
+          if (frame.type === 'event' && frame.name === 'task:updated' && t?.id === inbox.id) {
+            clearTimeout(timer);
+            ws.off('message', handler);
+            resolve(frame);
+          }
+        };
+        ws.on('message', handler);
+      });
+      const res = await fetch(apiUrl(`/api/tasks/groups/${created.group_id}/add`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_ids: [inbox.id], move: true }),
+      });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as GroupResult).member_ids).toContain(inbox.id);
+      // The browser's first word about the move already has the folder in it.
+      const frame = await updated;
+      expect((frame.data as { task: { project?: string; group_id?: string } }).task)
+        .toMatchObject({ project: 'e2e-grp-alpha', group_id: created.group_id });
+    } finally {
+      ws.close();
+      await delay(50);
+    }
+    expect(await getTask(inbox.id)).toMatchObject({ project: 'e2e-grp-alpha', group_id: created.group_id });
+  });
+
+  it('POST /groups with move makes the folder in the FIRST task’s project', async () => {
+    const lead = await createTask('Loose lead', 'e2e-grp-alpha');
+    const mover = await createTask('Loose mover', 'e2e-grp-home');
+    const res = await fetch(apiUrl('/api/tasks/groups'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: [lead.id, mover.id], label: 'Made by a drop', move: true }),
+    });
+    expect(res.status).toBe(200);
+    const created = (await res.json()) as GroupResult;
+    expect(created.member_ids.sort()).toEqual([lead.id, mover.id].sort());
+    expect((await listGroups()).find((g) => g.group_id === created.group_id)?.project).toBe('e2e-grp-alpha');
+    expect(await getTask(mover.id)).toMatchObject({ project: 'e2e-grp-alpha', group_id: created.group_id });
+  });
+
+  it('move must be a boolean, and an unknown folder moves nothing', async () => {
+    const t = await createTask('Stays put', 'e2e-grp-home');
+    const bad = await fetch(apiUrl('/api/tasks/groups/g_whatever/add'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: [t.id], move: 'yes' }),
+    });
+    expect(bad.status).toBe(400);
+    const gone = await fetch(apiUrl('/api/tasks/groups/g_no_such_folder/add'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: [t.id], move: true }),
+    });
+    expect(gone.status).toBe(404);
+    expect((await getTask(t.id)).project).toBe('e2e-grp-home');
+  });
 });

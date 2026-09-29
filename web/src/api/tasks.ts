@@ -515,13 +515,15 @@ export async function fetchTaskGroups(): Promise<TaskGroup[]> {
   return res.groups;
 }
 
-/** Create a group from ≥2 tasks. Label optional (AI-generated if omitted). */
-export async function createTaskGroup(taskIds: string[], label?: string): Promise<TaskGroup> {
-  return apiPost<TaskGroup>('/api/tasks/groups', { task_ids: taskIds, ...(label ? { label } : {}) });
+/** Create a group from ≥2 tasks. Label optional (AI-generated if omitted).
+ *  `move`: the folder lives in the FIRST task's project; the others move there. */
+export async function createTaskGroup(taskIds: string[], label?: string, opts?: { move?: boolean }): Promise<TaskGroup> {
+  return apiPost<TaskGroup>('/api/tasks/groups', { task_ids: taskIds, ...(label ? { label } : {}), ...(opts?.move ? { move: true } : {}) });
 }
 
-export async function addTasksToGroup(groupId: string, taskIds: string[]): Promise<TaskGroup> {
-  return apiPost<TaskGroup>(`/api/tasks/groups/${groupId}/add`, { task_ids: taskIds });
+/** `move`: a task from another project moves into the folder's project as it joins. */
+export async function addTasksToGroup(groupId: string, taskIds: string[], opts?: { move?: boolean }): Promise<TaskGroup> {
+  return apiPost<TaskGroup>(`/api/tasks/groups/${groupId}/add`, { task_ids: taskIds, ...(opts?.move ? { move: true } : {}) });
 }
 
 export async function removeTasksFromGroup(taskIds: string[]): Promise<{ removed_ids: string[]; dissolved_group_ids: string[] }> {

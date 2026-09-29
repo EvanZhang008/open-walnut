@@ -1027,15 +1027,20 @@ tasksRouter.post('/batch/delete', async (req: Request, res: Response, next: Next
 // GET `/groups` listing is registered separately, above GET `/:id` (search for
 // "GET /api/tasks/groups — list" earlier in this file), for the same reason.
 
-// POST /api/tasks/groups — create a group from ≥2 tasks
+// POST /api/tasks/groups — create a group from ≥2 tasks. `move: true` puts the
+// folder in the FIRST task's project and moves the others into it.
 tasksRouter.post('/groups', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { task_ids, label } = req.body as { task_ids?: string[]; label?: string }
+    const { task_ids, label, move } = req.body as { task_ids?: string[]; label?: string; move?: unknown }
     if (!Array.isArray(task_ids) || task_ids.length < 2 || !task_ids.every((id) => typeof id === 'string')) {
       res.status(400).json({ error: 'task_ids must be an array of at least 2 task id strings' })
       return
     }
-    const result = await groupTasks(task_ids, label)
+    if (move !== undefined && typeof move !== 'boolean') {
+      res.status(400).json({ error: 'move must be a boolean' })
+      return
+    }
+    const result = await groupTasks(task_ids, label, { move: move === true, source: 'api' })
     bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'api' })
     // Refine the AI label in the background when the caller didn't supply one.
     if (!label?.trim()) {
@@ -1063,16 +1068,21 @@ tasksRouter.post('/groups', async (req: Request, res: Response, next: NextFuncti
   }
 })
 
-// POST /api/tasks/groups/:groupId/add — add tasks to a group
+// POST /api/tasks/groups/:groupId/add — add tasks to a group. `move: true` moves
+// a task from another project into the folder's project as it joins.
 tasksRouter.post('/groups/:groupId/add', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const groupId = param(req.params.groupId)
-    const { task_ids } = req.body as { task_ids?: string[] }
+    const { task_ids, move } = req.body as { task_ids?: string[]; move?: unknown }
     if (!Array.isArray(task_ids) || task_ids.length < 1 || !task_ids.every((id) => typeof id === 'string')) {
       res.status(400).json({ error: 'task_ids must be a non-empty array of task id strings' })
       return
     }
-    const result = await addToGroup(groupId, task_ids)
+    if (move !== undefined && typeof move !== 'boolean') {
+      res.status(400).json({ error: 'move must be a boolean' })
+      return
+    }
+    const result = await addToGroup(groupId, task_ids, { move: move === true, source: 'api' })
     bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'api' })
     res.json(result)
   } catch (err) {

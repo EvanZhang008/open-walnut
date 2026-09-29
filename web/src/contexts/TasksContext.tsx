@@ -45,8 +45,8 @@ export interface TasksContextValue {
   taskGroups: Record<string, string>;
   hiddenGroups: Set<string>;
   folderMeta: Record<string, FolderMeta>;
-  groupTasks: (taskIds: string[], label?: string) => void;
-  addToGroup: (groupId: string, taskIds: string[]) => void;
+  groupTasks: (taskIds: string[], label?: string, opts?: { moveInto?: string }) => void;
+  addToGroup: (groupId: string, taskIds: string[], opts?: { moveInto?: string }) => void;
   ungroupTasks: (taskIds: string[]) => void;
   renameGroup: (groupId: string, label: string) => void;
   setGroupHidden: (groupId: string, hidden: boolean) => void;

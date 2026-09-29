@@ -355,10 +355,12 @@ interface UseTasksReturn {
   /** Folder metadata: group_id → owning project / parent / live member count.
    *  Includes EMPTY folders (0 members) — they render as droppable rows. */
   folderMeta: Record<string, FolderMeta>;
-  /** Create a folder from ≥2 same-project task ids (label AI-generated if omitted). */
-  groupTasks: (taskIds: string[], label?: string) => void;
-  /** Add task(s) to an existing folder (used by drag-onto-a-foldered-task). */
-  addToGroup: (groupId: string, taskIds: string[]) => void;
+  /** Create a folder from ≥2 same-project task ids (label AI-generated if omitted).
+   *  `moveInto` (the first task's project): the others move there first. */
+  groupTasks: (taskIds: string[], label?: string, opts?: { moveInto?: string }) => void;
+  /** Add task(s) to an existing folder (used by drag-onto-a-foldered-task).
+   *  `moveInto` (the folder's project): tasks from elsewhere move in as they join. */
+  addToGroup: (groupId: string, taskIds: string[], opts?: { moveInto?: string }) => void;
   /** Take task(s) out of their folder (they fall back to the project in place). */
   ungroupTasks: (taskIds: string[]) => void;
   /** Rename a folder. */
@@ -1154,22 +1156,32 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
 
   // ── Virtual task groups ── (optimistic group_id flips + API; WS groups-changed
   // reconciles labels/membership; on error we refetch to resync.)
-  const groupTasksCb = useCallback((taskIds: string[], label?: string) => {
-    tasksApi.createTaskGroup(taskIds, label)
+  const groupTasksCb = useCallback((taskIds: string[], label?: string, opts?: { moveInto?: string }) => {
+    // A move lands in the destination project at once; the folder follows the response.
+    const moveInto = opts?.moveInto;
+    if (moveInto !== undefined) {
+      const movers = new Set(taskIds.slice(1));
+      setTasks((prev) => prev.map((t) => movers.has(t.id) ? { ...t, project: moveInto, group_id: undefined } : t));
+    }
+    tasksApi.createTaskGroup(taskIds, label, { move: moveInto !== undefined })
       .then((g) => {
         setTasks((prev) => prev.map((t) => g.member_ids.includes(t.id) ? { ...t, group_id: g.group_id } : t));
         setTaskGroups((prev) => ({ ...prev, [g.group_id]: g.label }));
+        if (moveInto !== undefined) { refetch(); refetchGroups(); }
       })
       .catch((err) => { onOpError(err); refetch(); refetchGroups(); });
   }, [onOpError, refetch, refetchGroups]);
 
-  const addToGroupCb = useCallback((groupId: string, taskIds: string[]) => {
-    // Optimistic: flip the dragged tasks' group_id immediately. The backend absorbs
-    // any group the dragged task already belonged to (and prunes a donor left with
-    // <2 members), so on success we refetch to pick up those side effects.
+  const addToGroupCb = useCallback((groupId: string, taskIds: string[], opts?: { moveInto?: string }) => {
+    // Optimistic: flip the dragged tasks' group_id (and, for a move, project)
+    // immediately. The backend absorbs any group the dragged task already belonged
+    // to, so on success we refetch to pick up those side effects.
     const idSet = new Set(taskIds);
-    setTasks((prev) => prev.map((t) => idSet.has(t.id) ? { ...t, group_id: groupId } : t));
-    tasksApi.addTasksToGroup(groupId, taskIds)
+    const moveInto = opts?.moveInto;
+    setTasks((prev) => prev.map((t) => idSet.has(t.id)
+      ? { ...t, group_id: groupId, ...(moveInto !== undefined ? { project: moveInto } : {}) }
+      : t));
+    tasksApi.addTasksToGroup(groupId, taskIds, { move: moveInto !== undefined })
       .then((g) => {
         setTasks((prev) => prev.map((t) => g.member_ids.includes(t.id) ? { ...t, group_id: g.group_id } : t));
         setTaskGroups((prev) => ({ ...prev, [g.group_id]: g.label }));

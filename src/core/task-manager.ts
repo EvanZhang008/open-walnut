@@ -3671,8 +3671,9 @@ export async function updateTask(
   updates: UpdateTaskInput,
   // `keepGroupId` is INTERNAL (never parsed off an HTTP body): it suppresses the
   // auto-unfolder below for the one caller that legitimately needs it,
-  // moveFolderToProject — see the comment at that line.
-  eventOptions?: { source?: string; extraTargets?: string[]; ifPhase?: TaskPhase; asyncPush?: boolean; keepGroupId?: boolean },
+  // moveFolderToProject — see the comment at that line. `joinGroupId` is internal
+  // too: addToGroup's `move` files the moved task into that folder in this write.
+  eventOptions?: { source?: string; extraTargets?: string[]; ifPhase?: TaskPhase; asyncPush?: boolean; keepGroupId?: boolean; joinGroupId?: string },
 ): Promise<{ task: Task }> {
   // Lock-internal phase: validate + mutate + persist. Returns enough state for
   // the post-lock push. Push runs OUTSIDE the lock because autoPushIfConfigured
@@ -3787,6 +3788,23 @@ export async function updateTask(
     // opts out here rather than clearing and re-writing group_id in a second
     // pass, which would emit twice per task and race a concurrent read.
     if (projectChanged && task.group_id && !eventOptions?.keepGroupId) delete task.group_id;
+  }
+  // The join rides the move's write, so no reader sees the task in its new
+  // project outside the folder, and one task:updated carries both. Checked after
+  // the move: a refused move (deleted project) leaves the task where it was, and
+  // the join then fails here, before anything is written.
+  if (eventOptions?.joinGroupId) {
+    const gid = eventOptions.joinGroupId;
+    if (!folderRecord(store, gid) && !store.tasks.some((t) => t.group_id === gid)) {
+      throw new Error(`Group "${gid}" not found.`);
+    }
+    const home = folderProject(store, gid);
+    if (!sameProject(task.project, home)) {
+      throw new Error(
+        `A folder belongs to one project: "${task.title}" is in "${task.project || 'Inbox'}", but this folder lives in "${home || 'Inbox'}".`,
+      );
+    }
+    task.group_id = gid;
   }
   if (updates.phase !== undefined && VALID_PHASES.has(updates.phase)) {
     // CAS guard: if caller specified ifPhase, only apply phase change if current phase matches
@@ -4879,7 +4897,9 @@ export async function mergeTaskInto(
 //   Only an explicit deleteFolder removes one — members fall back to the
 //   project in place, child folders re-parent to the deleted folder's parent,
 //   and no task is ever deleted.
-// - Joining/leaving a folder never changes task.project.
+// - Joining/leaving a folder never changes task.project, unless the caller asks
+//   for `move` (a board drop into another project's folder): then the task
+//   moves into the folder's project first, through updateTask.
 // - moveFolderToProject is the inverse of that last rule and the only op that
 //   changes a folder's project: the FOLDER moves, so its members (and its whole
 //   descendant subtree) move with it and KEEP their group_id.
@@ -4961,8 +4981,25 @@ export interface GroupResult {
  * task's title) the caller can refine asynchronously via summarizeGroupLabel +
  * renameGroup (see the fork handler / the task_group agent tool). Returns the
  * new folder id + member ids.
+ *
+ * `move` (a drop onto a card in another project): the FIRST task names the
+ * folder's project, and every other task outside it moves there first, through
+ * updateTask like any project move. Without it a cross-project mix is refused.
  */
-export async function groupTasks(idPrefixes: string[], label?: string): Promise<GroupResult> {
+export async function groupTasks(
+  idPrefixes: string[],
+  label?: string,
+  opts: { move?: boolean; source?: string } = {},
+): Promise<GroupResult> {
+  if (opts.move) {
+    const plan = resolveTasksByPrefix(await readStore(), [...new Set(idPrefixes)]);
+    if (plan.length < 2) throw new Error('A group needs at least 2 tasks.');
+    const home = plan[0].project ?? '';
+    for (const t of plan.slice(1)) {
+      if (sameProject(t.project, home)) continue;
+      await updateTask(t.id, { project: home }, { source: opts.source ?? 'api', asyncPush: true });
+    }
+  }
   return withWriteLock(async () => {
     const store = await readStore();
     const seed = resolveTasksByPrefix(store, [...new Set(idPrefixes)]);
@@ -5123,8 +5160,27 @@ function folderHoldsOnlyLineOf(store: TaskStore, groupId: string, rootId: string
  * (join never changes task.project — move the task first if you want it in).
  * No-op-safe: tasks already in the folder are skipped. Donor folders the tasks
  * came from are left in place even when emptied (folders are never auto-pruned).
+ *
+ * `move` (a drop into another project's folder): a task outside the folder's
+ * project moves into it through updateTask (claims, migration, remote cleanup)
+ * and joins the folder in that same write.
  */
-export async function addToGroup(groupId: string, idPrefixes: string[]): Promise<GroupResult> {
+export async function addToGroup(
+  groupId: string,
+  idPrefixes: string[],
+  opts: { move?: boolean; source?: string } = {},
+): Promise<GroupResult> {
+  if (opts.move) {
+    const plan = await readStore();
+    if (!folderRecord(plan, groupId) && !plan.tasks.some((t) => t.group_id === groupId)) {
+      throw new Error(`Group "${groupId}" not found.`);
+    }
+    const home = folderProject(plan, groupId);
+    for (const t of resolveTasksByPrefix(plan, [...new Set(idPrefixes)])) {
+      if (sameProject(t.project, home)) continue;
+      await updateTask(t.id, { project: home }, { source: opts.source ?? 'api', asyncPush: true, joinGroupId: groupId });
+    }
+  }
   return withWriteLock(async () => {
     const store = await readStore();
     const existing = store.tasks.filter((t) => t.group_id === groupId);

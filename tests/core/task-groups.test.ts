@@ -54,6 +54,7 @@ import {
 import { closeDb, getDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { registry } from '../../src/core/integration-registry.js';
+import { bus, EventNames } from '../../src/core/event-bus.js';
 import { createMockPlugin, createNoopSync } from './plugin-test-utils.js';
 
 beforeEach(async () => {
@@ -227,6 +228,158 @@ describe('addToGroup', () => {
   it('throws for an unknown folder id', async () => {
     const [a] = await makeTasks(['A']);
     await expect(addToGroup('g_nope', [a])).rejects.toThrow(/not found/);
+  });
+});
+
+/**
+ * A drop onto another project's folder (or onto a loose card there) is a move:
+ * the board used to refuse it with "A folder belongs to one project … Move the
+ * task first", which the user read as "this can't be moved" (2026-09-28). `move`
+ * is opt-in; without it both calls keep refusing (covered above).
+ */
+describe('filing into another project’s folder (`move`)', () => {
+  function captureTaskEvents(taskId: string): { events: Array<{ project?: string; group_id?: string }>; stop: () => void } {
+    const events: Array<{ project?: string; group_id?: string }> = [];
+    const name = `move-probe-${taskId}`;
+    bus.subscribe(name, (event) => {
+      if (event.name !== EventNames.TASK_UPDATED) return;
+      const t = (event.data as { task?: { id: string; project?: string; group_id?: string } | null }).task;
+      if (t?.id === taskId) events.push({ project: t.project, group_id: t.group_id });
+    }, { global: true });
+    return { events, stop: () => bus.unsubscribe(name) };
+  }
+
+  it('addToGroup moves an Inbox task into the folder’s project and joins it in one write', async () => {
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    const [c] = await makeTasks(['Open pipeline'], '');
+    const g = await groupTasks([a, b], 'Pipelines');
+    const probe = captureTaskEvents(c);
+
+    const result = await addToGroup(g.group_id, [c], { move: true });
+    probe.stop();
+
+    expect(result.member_ids.sort()).toEqual([a, b, c].sort());
+    // One task:updated, already carrying BOTH the new project and the folder: no
+    // reader ever sees the task in Marina outside the folder.
+    expect(probe.events).toEqual([{ project: 'Marina', group_id: g.group_id }]);
+    closeDb();
+    _resetForTesting();
+    const moved = await getTask(c);
+    expect(moved.project).toBe('Marina');
+    expect(moved.group_id).toBe(g.group_id);
+    expect(moved.source).toBe('local');
+  });
+
+  it('addToGroup fills an EMPTY folder of another project, and a folder in Inbox', async () => {
+    const [x] = await makeTasks(['X'], 'Acme');
+    const empty = await createFolder('Later', 'Marina');
+    await addToGroup(empty.group_id, [x], { move: true });
+    expect(await getTask(x)).toMatchObject({ project: 'Marina', group_id: empty.group_id });
+
+    const inbox = await createFolder('Inbox pile', '');
+    await addToGroup(inbox.group_id, [x], { move: true });
+    const back = await getTask(x);
+    expect(back.project).toBe('');
+    expect(back.group_id).toBe(inbox.group_id);
+    expect((await folder(empty.group_id))?.member_ids).toEqual([]);
+  });
+
+  it('addToGroup leaves same-project tasks as a plain join and moves only the strays', async () => {
+    const [a, b, same] = await makeTasks(['A', 'B', 'Same'], 'Marina');
+    const [stray] = await makeTasks(['Stray'], 'Acme');
+    const g = await groupTasks([a, b]);
+    await addToGroup(g.group_id, [same, stray], { move: true });
+    expect(await getTask(same)).toMatchObject({ project: 'Marina', group_id: g.group_id });
+    expect(await getTask(stray)).toMatchObject({ project: 'Marina', group_id: g.group_id });
+  });
+
+  it('addToGroup refuses an unknown folder BEFORE moving anything', async () => {
+    const [c] = await makeTasks(['C'], 'Acme');
+    await expect(addToGroup('g_gone', [c], { move: true })).rejects.toThrow(/not found/);
+    expect((await getTask(c)).project).toBe('Acme');
+  });
+
+  it('a join that does not match the final project writes nothing', async () => {
+    // updateTask's joinGroupId is checked inside the move's write lock: a move to
+    // the wrong project for that folder must fail whole, not half-apply.
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    const [c] = await makeTasks(['C'], '');
+    const g = await groupTasks([a, b]);
+    await expect(updateTask(c, { project: 'Acme' }, { joinGroupId: g.group_id }))
+      .rejects.toThrow(/A folder belongs to one project/);
+    const untouched = await getTask(c);
+    expect(untouched.project).toBe('');
+    expect(untouched.group_id).toBeUndefined();
+  });
+
+  it('a local task filed into a provider project’s folder stays local', async () => {
+    registry.replace('prov-file', createMockPlugin({ id: 'prov-file' }));
+    await addTask({ title: 'Claimer', project: 'Claimed', source: 'prov-file' });
+    const f = await createFolder('Synced folder', 'Claimed');
+    const [c] = await makeTasks(['Local one'], '');
+    await addToGroup(f.group_id, [c], { move: true });
+    expect(await getTask(c)).toMatchObject({ project: 'Claimed', group_id: f.group_id, source: 'local' });
+  });
+
+  it('a provider task migrates to the destination provider and joins the folder', async () => {
+    registry.replace('prov-from', createMockPlugin({ id: 'prov-from' }));
+    registry.replace('prov-to', createMockPlugin({ id: 'prov-to' }));
+    await addTask({ title: 'From claimer', project: 'FromProj', source: 'prov-from' });
+    await addTask({ title: 'To claimer', project: 'ToProj', source: 'prov-to' });
+    const f = await createFolder('Destination', 'ToProj');
+    const { task } = await addTask({ title: 'Synced one', project: 'FromProj', source: 'prov-from' });
+
+    await addToGroup(f.group_id, [task.id], { move: true });
+    const moved = await getTask(task.id);
+    expect(moved).toMatchObject({ project: 'ToProj', group_id: f.group_id, source: 'prov-to' });
+  });
+
+  it('a failed push still leaves the local move and join whole, and reports the failure', async () => {
+    let rejectPush = false;
+    registry.replace('prov-src', createMockPlugin({ id: 'prov-src' }));
+    registry.replace('prov-refuses', createMockPlugin({
+      id: 'prov-refuses',
+      sync: {
+        ...createNoopSync(),
+        createTask: async () => {
+          if (rejectPush) throw new Error('remote rejected the task');
+          return null;
+        },
+      },
+    }));
+    await addTask({ title: 'Src claimer', project: 'SrcProj', source: 'prov-src' });
+    await addTask({ title: 'Dst claimer', project: 'DstProj', source: 'prov-refuses' });
+    const f = await createFolder('Dst folder', 'DstProj');
+    const { task } = await addTask({ title: 'Will fail to push', project: 'SrcProj', source: 'prov-src' });
+    rejectPush = true;
+
+    await expect(addToGroup(f.group_id, [task.id], { move: true })).rejects.toThrow(/prov-refuses/);
+    expect(await getTask(task.id)).toMatchObject({ project: 'DstProj', group_id: f.group_id });
+  });
+
+  it('groupTasks puts the folder in the FIRST task’s project and moves the other in', async () => {
+    const [lead] = await makeTasks(['Lead'], 'Marina');
+    const [c] = await makeTasks(['From Inbox'], '');
+    const result = await groupTasks([lead, c], 'Together', { move: true });
+    expect(result.member_ids.sort()).toEqual([lead, c].sort());
+    expect((await folder(result.group_id))?.project).toBe('Marina');
+    expect(await getTask(c)).toMatchObject({ project: 'Marina', group_id: result.group_id });
+  });
+
+  it('groupTasks does not drag the mover’s OLD folder along (a folder never follows a task)', async () => {
+    const [lead] = await makeTasks(['Lead'], 'Marina');
+    const [mover, friend] = await makeTasks(['Mover', 'Friend'], 'Acme');
+    const old = await groupTasks([mover, friend], 'Old home');
+    const result = await groupTasks([lead, mover], undefined, { move: true });
+    expect(result.member_ids.sort()).toEqual([lead, mover].sort());
+    expect(await getTask(friend)).toMatchObject({ project: 'Acme', group_id: old.group_id });
+    expect((await folder(old.group_id))?.member_ids).toEqual([friend]);
+  });
+
+  it('groupTasks with fewer than 2 tasks moves nothing', async () => {
+    const [c] = await makeTasks(['Solo'], 'Acme');
+    await expect(groupTasks([c], undefined, { move: true })).rejects.toThrow(/at least 2/);
+    expect((await getTask(c)).project).toBe('Acme');
   });
 });
 

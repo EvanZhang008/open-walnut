@@ -261,9 +261,9 @@ interface TodoPanelProps {
   /** Group ids hidden from the Focus (pinned) area — their cards are skipped there. */
   hiddenGroups?: Set<string>;
   /** Create a virtual group from ≥2 task ids (label AI-generated if omitted). */
-  onGroupTasks?: (taskIds: string[], label?: string) => void;
+  onGroupTasks?: (taskIds: string[], label?: string, opts?: { moveInto?: string }) => void;
   /** Add task(s) to an existing group — used when dragging a task onto a grouped one. */
-  onAddToGroup?: (groupId: string, taskIds: string[]) => void;
+  onAddToGroup?: (groupId: string, taskIds: string[], opts?: { moveInto?: string }) => void;
   /** Remove a single task from its virtual group. */
   onUngroupTask?: (taskId: string) => void;
   /** Remove several tasks from their group(s) in one call (used to dissolve a whole cluster). */
@@ -4133,6 +4133,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // defined ~1200 lines below (it needs ensureManualSort), and naming it in this
   // handler's dep array would read a const in its temporal dead zone.
   const requestMoveTaskRef = useRef<typeof requestMoveTask | null>(null);
+  const requestFileIntoFolderRef = useRef<typeof requestFileIntoFolder | null>(null);
 
   // ── Unpin-by-drag ── `unpinZone` drives the portalled strip (null = no strip),
   // `unpinRectRef` is the same rect for the drop test in a handler that runs after
@@ -4808,16 +4809,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onPinTask?.(activeId);
           setTimeout(() => onSetTier?.(activeId, overTier), 100);
         }
-        if (targetGid && onAddToGroup) {
+        // A card from another project moves into the folder's project as it
+        // joins (requestFileIntoFolder); a same-project join runs synchronously.
+        const fileInto = requestFileIntoFolderRef.current;
+        if (targetGid && onAddToGroup && fileInto) {
           // The card teleports into the cluster — free any line anchored to it
           // BEFORE it goes, or the line rides into the group with it.
           reanchorSeps(snapTierOf(activeId), [activeId]);
-          onAddToGroup(targetGid, [activeId]);
+          const project = folderMeta?.[targetGid]?.project ?? joinTask?.project ?? '';
+          fileInto(activeId, { groupId: targetGid, project }).catch((err) => {
+            onOperationError?.(err instanceof Error ? err.message : 'Move failed');
+          });
           return;
         }
-        if (joinTask && !targetGid && onGroupTasks) {
+        if (joinTask && !targetGid && onGroupTasks && fileInto) {
           reanchorSeps(snapTierOf(activeId), [activeId]);
-          onGroupTasks([joinTask.id, activeId]);
+          fileInto(activeId, { withTaskId: joinTask.id, project: joinTask.project ?? '' }).catch((err) => {
+            onOperationError?.(err instanceof Error ? err.message : 'Move failed');
+          });
           return;
         }
       }
@@ -4995,7 +5004,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // the other side of it now (the strategy's preview was the truth).
     syncCustomSepAnchors([{ tier: origTier, arr: reorderedTier }]);
     onReorderPinned?.(taskIdsOnly(newOrder));
-  }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, onUnpinTask, overUnpinZone, pinnedJoinIntent, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors]);
+  }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, folderMeta, onUngroupTask, onUnpinTask, overUnpinZone, pinnedJoinIntent, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors]);
 
   // Project chips for ViewDropdown, in the flat config order. Inbox rides along as
   // INBOX_TAB (a sentinel chip) whenever any task has no project — '' is the All chip.
@@ -6346,12 +6355,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // claimed by a DIFFERENT provider, the backend migrates the task (old remote twin
   // archived as "[Moved]" + completed) — that is destructive enough to confirm first.
   // Same-provider (and local→provider folder-only) moves go straight through.
-  const requestMoveTask = useCallback(async (
-    taskId: string,
-    project: string,
-    opts?: { insertNearTaskId?: string; ensureSort?: boolean },
-  ): Promise<boolean> => {
-    if (!onMoveTask) return false;
+  const confirmProjectMove = useCallback(async (taskId: string, project: string): Promise<{ ok: boolean; migrates: boolean }> => {
     const task = tasks.find((t) => t.id === taskId);
     const mig = resolveMoveMigration(task?.source, project, projectRegistry.sourceByName);
     // Fail CLOSED while the registry hasn't loaded: with an empty sourceByName
@@ -6368,8 +6372,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           : `“${task?.title ?? taskId}” is a ${fromName} task and “${project || 'Inbox'}” may belong to a different provider (the project list hasn't loaded). If it does, the original ${fromName} task will be archived (renamed “[Moved]” and marked complete).`,
         confirmLabel: 'Move',
       });
-      if (!ok) return false;
+      if (!ok) return { ok: false, migrates: mig.migrates };
     }
+    return { ok: true, migrates: mig.migrates };
+  }, [tasks, projectRegistry.sourceByName, projectRegistry.loaded, confirm]);
+
+  const requestMoveTask = useCallback(async (
+    taskId: string,
+    project: string,
+    opts?: { insertNearTaskId?: string; ensureSort?: boolean },
+  ): Promise<boolean> => {
+    if (!onMoveTask) return false;
+    const { ok, migrates } = await confirmProjectMove(taskId, project);
+    if (!ok) return false;
     // Only a CONFIRMED move switches the list to manual sort — a cancelled one must
     // leave the user's sort mode alone.
     if (opts?.ensureSort) ensureManualSort(project);
@@ -6377,13 +6392,37 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // A migration rewrites the destination project's claim server-side without a
     // project:created event, so the registry snapshot goes stale — refresh it or
     // the NEXT move's confirm decision can be wrong in either direction.
-    if (mig.migrates) projectRegistry.refresh();
+    if (migrates) projectRegistry.refresh();
     return true;
-  }, [onMoveTask, tasks, projectRegistry.sourceByName, projectRegistry.loaded, projectRegistry.refresh, confirm, ensureManualSort]);
+  }, [onMoveTask, confirmProjectMove, projectRegistry.refresh, ensureManualSort]);
   // Published for handlePinnedDragEnd, which is declared above this point. Layout
   // effect, not a render-phase write: this component uses startTransition, and a
   // discarded concurrent render must not leave its abandoned closure in the ref.
   useLayoutEffect(() => { requestMoveTaskRef.current = requestMoveTask; }, [requestMoveTask]);
+
+  // A drop into a folder: `into` is the folder, or a loose card to start one
+  // with. A folder belongs to one project, so a task from another project moves
+  // into it as it joins, behind the same cross-provider confirm as any move.
+  const requestFileIntoFolder = useCallback(async (
+    taskId: string,
+    into: { groupId: string; project: string } | { withTaskId: string; project: string },
+  ): Promise<boolean> => {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return false;
+    const moving = !sameProjectKey(task.project, into.project);
+    let migrates = false;
+    if (moving) {
+      const gate = await confirmProjectMove(taskId, into.project);
+      if (!gate.ok) return false;
+      migrates = gate.migrates;
+    }
+    const opts = moving ? { moveInto: into.project } : undefined;
+    if ('groupId' in into) onAddToGroup?.(into.groupId, [taskId], opts);
+    else onGroupTasks?.([into.withTaskId, taskId], undefined, opts);
+    if (migrates) projectRegistry.refresh();
+    return true;
+  }, [tasks, confirmProjectMove, onAddToGroup, onGroupTasks, projectRegistry.refresh]);
+  useLayoutEffect(() => { requestFileIntoFolderRef.current = requestFileIntoFolder; }, [requestFileIntoFolder]);
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     // Cross-panel drop first (calendar side panel via the drag bus). When a bus
@@ -6404,11 +6443,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
-    // ── Drag-into-group (Main list) ── A left-zone drop on a task card means
-    // "group these together". If the target is already in a group, join it; else
-    // create a new group from the two. This takes precedence over reparent/reorder
-    // (which only run for gap drops or right-zone subtask drops). Grouping has no
-    // scope rule, so cross-project drops are fine.
+    // ── Drag-into-group (Main list) ── A left-zone drop on a foldered task card
+    // joins its folder. This takes precedence over reparent/reorder (which run for
+    // every other drop). A folder belongs to one project, so a card from another
+    // project moves into the target's project as it joins (requestFileIntoFolder).
     // GUARD: only an UNGROUPED active can join here. A grouped member dropped on an
     // outside card must NOT group-merge (groupTasks ABSORBS the member's whole group +
     // the target — the reported bug); it falls through to the drag-OUT block below.
@@ -6416,15 +6454,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const activeId = String(active.id);
       const overTask = tasks.find((t) => t.id === groupDrop);
       const activeTask = tasks.find((t) => t.id === activeId);
-      if (overTask && activeTask && !activeTask.group_id && activeTask.group_id !== overTask.group_id) {
-        if (overTask.group_id && onAddToGroup) {
-          onAddToGroup(overTask.group_id, [activeId]);
-          return;
-        }
-        if (!overTask.group_id && onGroupTasks) {
-          onGroupTasks([overTask.id, activeId]);
-          return;
-        }
+      // Only a FOLDERED card is a join target here. Unlike the pinned tiers, the
+      // main list has no middle-band test (every hovered card lights), so a drop
+      // on a loose card must stay a reorder; making a folder of two loose tasks
+      // is the pinned tiers' and multi-select's job.
+      if (overTask?.group_id && activeTask && !activeTask.group_id && onAddToGroup) {
+        const project = folderMeta?.[overTask.group_id]?.project ?? overTask.project ?? '';
+        requestFileIntoFolder(activeId, { groupId: overTask.group_id, project }).catch((err) => {
+          onOperationError?.(err instanceof Error ? err.message : 'Move failed');
+        });
+        return;
       }
     }
 
@@ -6482,14 +6521,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     let targetProject: string;
     let insertNearTaskId: string | undefined;
 
-    // Dropped on an EMPTY folder row → file the task as its first member.
-    // Same-project only (a folder belongs to one project); a cross-project drop
-    // is a no-op rather than a surprise project move.
+    // Dropped on an EMPTY folder row → file the task as its first member. A
+    // task from another project moves into the folder's project as it joins,
+    // the same as a drop onto a member card.
     if (overId.startsWith(EMPTY_FOLDER_DROP_PREFIX)) {
       const folderData = over.data?.current as { groupId?: string; project?: string } | undefined;
-      if (folderData?.groupId && onAddToGroup &&
-          (folderData.project ?? '').toLowerCase() === activeTaskProject.toLowerCase()) {
-        onAddToGroup(folderData.groupId, [activeId]);
+      if (folderData?.groupId && onAddToGroup) {
+        requestFileIntoFolder(activeId, { groupId: folderData.groupId, project: folderData.project ?? '' }).catch((err) => {
+          onOperationError?.(err instanceof Error ? err.message : 'Move failed');
+        });
       }
       return;
     }
@@ -6633,7 +6673,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         onOperationError?.(err instanceof Error ? err.message : 'Move failed');
       });
     }
-  }, [onReorder, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, trueChildCountMap, ensureManualSort, requestMoveTask, nestTargetId, groupTargetId, clearDropIntent, tasks, onAddToGroup, onGroupTasks, onOperationError]);
+  }, [onReorder, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, trueChildCountMap, ensureManualSort, requestMoveTask, nestTargetId, groupTargetId, clearDropIntent, tasks, onAddToGroup, onGroupTasks, onOperationError, requestFileIntoFolder, folderMeta]);
 
   // Kebab "Move left" — promote subtask to top-level via onReparentTask(id, null).
   // Also primes scroll restoration so the task stays visible after refetch.
