@@ -231,6 +231,13 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
       navigate([...stackPathOf(argsRef.current.tree, draft.parentKey), draft.pageKey], via, draft);
       return;
     }
+    // The pending page is no tree node: its path is its parent's plus itself
+    // (the tree would path an unknown key to Main and drop the page).
+    const pending = stateRef.current.pending;
+    if (pending && key === pending.pageKey) {
+      navigate([...stackPathOf(argsRef.current.tree, pending.parentKey), pending.pageKey], via, pending);
+      return;
+    }
     navigate(stackPathOf(argsRef.current.tree, key), via);
   }, [navigate]);
 

@@ -21,6 +21,7 @@ import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished
 import { groupStreamingBlocks, collectLanes, isLaneChild, isRunMemberBlock, trailingThinkingStart, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
 import { SessionPinnedToc, type TocEntry } from './SessionPinnedToc';
+import { ThreadMap } from './ThreadMap';
 import { placePins } from './outline-order';
 import { QuotePinSelectionBar, type QuotePinTarget } from './QuotePinSelectionBar';
 import { QuotePinPopover } from './QuotePinPopover';
@@ -39,6 +40,9 @@ import { ThreadResolvedStrip } from './ThreadResolvedStrip';
 import { useThreadToast } from './ThreadPanelToast';
 import { useThreadLanding } from '@/hooks/useThreadLanding';
 import { useThreadMarks } from '@/hooks/useThreadMarks';
+import { useThreadMapLayout } from '@/hooks/useThreadMapLayout';
+import { counts as threadCounts } from '@/utils/thread-meta-counts';
+import type { TreeRow } from '@/utils/thread-tree-rows';
 import { pageRowsBefore, pageWindowLimit } from '@/utils/thread-page-window';
 import { deriveThreadLiveStates, displayTitleOf, metaOf, viewStatusOf } from '@/utils/thread-meta';
 import {
@@ -1117,6 +1121,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useLayoutEffect(() => { onQuestionPageRef.current = onQuestionPage; }, [onQuestionPage]);
   const currentKeyRef = useRef(currentKey);
   currentKeyRef.current = currentKey;
+  // A remembered scrollTop belongs to the page it was taken on: another page's
+  // "Back to where I was" would scroll to a place that page never had. Before
+  // paint, so the new page never shows the old page's Back for a frame.
+  useLayoutEffect(() => {
+    jumpReturnTop.current = null;
+    setCanGoBack(false);
+  }, [currentKey]);
 
   /** Anchor per user-row id — the one thing that knows a row's thread before the
    *  transcript does (the id IS the uuid we pre-assigned for that line). */
@@ -2721,6 +2732,46 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (rows.length > 0) askedAfter.set(visibleHistoryParts.length - 1, rows);
   }
   const openFromRow = useCallback((key: string) => stack.pushTo(key, 'asked-from'), [stack]);
+
+  // ── The question map (always on screen in a session with questions) ──
+  const [mapDoneOpen, setMapDoneOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const threadMap = useThreadMapLayout(containerRef, threadsApi.canAsk, {
+    tree: threadTree,
+    index: threadsApi.metaIndex,
+    pins: pinsApi.pins,
+    live: threadDerived.live,
+    ...(stack.pending ? { pending: stack.pending } : {}),
+    drafts: stack.drafts,
+    currentKey: stackMode ? currentKey : null,
+    doneGroupsOpen: mapDoneOpen,
+  }, () => isAtBottom.current);
+  const mapCounts = useMemo(
+    () => (threadMap.shape ? threadCounts(threadTree, threadsApi.metaIndex, pinsApi.pins, threadDerived.live, threadsApi.hiddenKeys) : null),
+    [threadMap.shape, threadTree, threadsApi.metaIndex, pinsApi.pins, threadDerived.live, threadsApi.hiddenKeys],
+  );
+  const activateMapRow = useCallback((row: TreeRow) => {
+    switch (row.kind) {
+      case 'done-group':
+        // Held open while it holds the current page: nothing to toggle.
+        if (row.disclosureDisabled) return;
+        setMapDoneOpen((prev) => {
+          const next = new Set(prev);
+          if (next.has(row.key)) next.delete(row.key); else next.add(row.key);
+          return next;
+        });
+        return;
+      case 'pin':
+        if (row.pinKey) handleTocJump(row.pinKey);
+        return;
+      case 'root': case 'thread': case 'pending': case 'draft':
+        if (row.current) return;
+        if (threadsApi.viewMode !== 'stack') threadsApi.setViewMode('stack');
+        stack.pushTo(row.key, 'map');
+        return;
+      default:
+    }
+  }, [handleTocJump, threadsApi, stack]);
+  const openMapList = useCallback(() => threadsApi.openDrawer(), [threadsApi]);
   const markDoneFromRow = useCallback((key: string) => { void threadsApi.actions?.done(key); }, [threadsApi.actions]);
   const notYetFromRow = useCallback((key: string) => { void threadsApi.actions?.notYet(key); }, [threadsApi.actions]);
 
@@ -2946,21 +2997,42 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         ref={containerRef}
         onClick={handleContainerClick}
         data-view-mode={stackMode ? 'stack' : 'linear'}
-        style={activeTeamTab ? { display: 'none' } : undefined}
+        {...(threadMap.shape ? { 'data-thread-map': threadMap.shape } : {})}
+        style={activeTeamTab ? { display: 'none' }
+          : threadMap.shape === 'panel' ? { ['--thread-map-w' as string]: `${threadMap.panelWidth}px` } : undefined}
       >
-        {/* Pinned-message outline — sticky in the top-left corner of the timeline,
-            collapsed to ticks until hovered. Self-hides with no pins. Lives INSIDE
-            the scroll container (like the ↓ button) so it can't stack over the
-            panel header or the composer. On a stack page it lists that page's
-            pins, plus a count of the pins on other pages (opens the drawer). */}
-        <SessionPinnedToc
-          entries={tocEntries}
-          onJump={handleTocJump}
-          onUnpin={pinsApi.unpin}
-          canGoBack={canGoBack}
-          onBack={jumpBack}
-          {...(pagePins.other > 0 ? { moreCount: pagePins.other, onMore: () => threadsApi.openDrawer('pinned') } : {})}
-        />
+        {/* The top-left corner of the timeline. A session with questions shows
+            the question map there, always (every question and pin, where you
+            are); one without shows the pinned-message outline, collapsed to
+            ticks until hovered, self-hiding with no pins. Both live INSIDE the
+            scroll container (like the ↓ button) so they can't stack over the
+            panel header or the composer. */}
+        {threadMap.shape && mapCounts ? (
+          <ThreadMap
+            shape={threadMap.shape}
+            roomy={threadMap.roomy}
+            scrollerRef={containerRef}
+            boxWidth={threadMap.boxWidth}
+            rows={threadMap.rows}
+            counts={mapCounts}
+            unreadKeys={threadsApi.unreadKeys}
+            answeredAt={threadDerived.answeredAt}
+            canGoBack={canGoBack}
+            onBack={jumpBack}
+            onActivate={activateMapRow}
+            onOpenList={openMapList}
+            onCollapse={threadMap.setCollapsed}
+          />
+        ) : (
+          <SessionPinnedToc
+            entries={tocEntries}
+            onJump={handleTocJump}
+            onUnpin={pinsApi.unpin}
+            canGoBack={canGoBack}
+            onBack={jumpBack}
+            {...(pagePins.other > 0 ? { moreCount: pagePins.other, onMore: () => threadsApi.openDrawer('pinned') } : {})}
+          />
+        )}
         <ThreadMarkTipLayer store={markTips} />
         {/* Quote pins: the pill offered on a text selection, and the popover a
             click on a painted passage opens. Both portal to <body>; they live here

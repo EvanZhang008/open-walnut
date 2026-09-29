@@ -162,16 +162,9 @@ test.describe('Question stack landing', () => {
       const top = await passageTop(panel, phrase)
       expect(Math.abs(top - asked[i]), `landing drift for ${chain[i]}`).toBeLessThanOrEqual(8)
       await expect.poll(() => flashText(page)).toContain(phrase.slice(0, 20))
-      // The rail never offers Back for a pop.
-      await expect(panel.locator('.session-toc-back')).toHaveCount(0)
-      const rail = panel.locator('.session-toc-rail')
-      if (await rail.count() > 0) {
-        await rail.hover()
-        await expect(panel.locator('.session-toc-back')).toHaveCount(0)
-        // Back over the text column: Esc goes to the panel under the pointer.
-        const hb = (await panel.locator('.session-history').boundingBox())!
-        await page.mouse.move(hb.x + hb.width * 0.7, hb.y + hb.height * 0.6)
-      }
+      // The question map (always open in this session) never offers Back for a pop.
+      await expect(panel.locator('.thread-map .thread-map-body')).toBeVisible()
+      await expect(panel.locator('.thread-map-back, .session-toc-back')).toHaveCount(0)
     }
     await shot(page, 'c4-back-at-root')
     await expect(panel.locator('.thread-sliver')).toHaveCount(0)
@@ -284,7 +277,7 @@ test.describe('Question stack landing', () => {
     await expect(panel.locator('.thread-toast')).toHaveCount(0)
   })
 
-  test('the rail lists this page pins and "<n> more"; a pin on another page navigates, lands and flashes', async ({ page }) => {
+  test('the question map lists every pin under its page; a pin on another page navigates, lands and flashes', async ({ page }) => {
     const lines: string[] = []
     page.on('console', (m) => lines.push(m.text()))
     await page.goto('/')
@@ -301,21 +294,21 @@ test.describe('Question stack landing', () => {
     await centre(page, panel, q11)
     await q11.click()
     await expectDepth(panel, 2)
-    // C64: one tick for this page's own pin, one faint tick for the rest.
-    const rail = panel.locator('.session-toc-rail')
-    await expect(rail).toBeVisible()
-    await expect(rail.locator('.session-toc-tick')).toHaveCount(2)
-    await expect(rail.locator('.session-toc-tick--more')).toHaveCount(1)
-    await rail.hover()
-    await expect(panel.locator('.session-toc-item')).toHaveCount(1)
-    const more = panel.locator('.session-toc-more')
-    await expect(more).toHaveText('7 more in other questions')
-    await more.click()
-    await expect(drawer).toBeVisible()
-    await expect(drawer.locator('.thread-drawer-chip[aria-pressed="true"]')).toContainText('Pinned')
-    await shot(page, 'c64-rail-more-opens-pinned')
-    await page.keyboard.press('Escape')
-    await expect(drawer).toBeHidden()
+    // C64 (slice 1b): in a session with questions the map replaces the outline
+    // rail and lists the pins under their own pages (this page's and the
+    // others'), so no "<n> more" row is needed. A narrow column shows the
+    // map's rail: its list opens on hover.
+    await expect(panel.locator('.session-toc')).toHaveCount(0)
+    const map = panel.locator('.thread-map')
+    await expect(map.locator('.thread-map-body')).toBeVisible()
+    if (await map.getAttribute('data-shape') === 'rail') await map.locator('.thread-map-rail').hover()
+    const pinRows = map.locator('.thread-map-row[data-kind="pin"]')
+    await expect(pinRows.filter({ hasText: densePassage('Q21').slice(0, 20) })).toHaveCount(1)
+    expect(await pinRows.count()).toBeGreaterThan(1)
+    await shot(page, 'c64-map-lists-pins')
+    const tb = (await panel.locator('.session-history').boundingBox())!
+    await page.mouse.move(tb.x + tb.width * 0.7, tb.y + tb.height * 0.6)
+    await expect(map.locator('.thread-map-overlay')).toHaveCount(0)
 
     // From root, a quote pin that lives on Q21's page (three levels down).
     await panel.locator('.thread-sliver-bar').first().click()

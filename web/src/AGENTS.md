@@ -175,8 +175,21 @@ show inline after the open ones, other completed hits that show the query fold i
   quote head and the sliver pop to the passage, and in "Show all in order" the 3px gutter bar
   jumps to the origin (`jumpToThreadOrigin`). "Show all in order" is the plain linear transcript
   (view key `walnut:session-view.v2:<sid>`, default stack; the old key is never read).
+  **The question tree is always on screen, never behind a hover or a button** (`ThreadMap`, top
+  left of the timeline, in place of the outline rail once a session has a question). Its rows are
+  the drawer's All view (`utils/thread-map.ts` → `flattenTree`), so the two never disagree. A box
+  of 640px or more reserves a gutter for the labelled tree (`data-thread-map="panel"` pads the
+  scroll box, so no text runs under it); a narrower one, or a user who hid it (localStorage
+  `walnut:thread-map.v1`), gets a rail of marks whose list opens on hover, focus or a tap. The
+  user's report that led here: a real session showed only the header's `2 open` pill, and
+  "people don't know" to look for a drawer. Three traps it encodes: pins alone are no question
+  (a pins-only session keeps its outline, `mapHasContent`); a gutter change reflows every row
+  and the box has no native scroll anchoring, so `useThreadMapLayout` puts the old gutter back
+  for one measure and holds the first row on screen; and a row key holds a NUL, which
+  `CSS.escape` turns into U+FFFD, so DOM ids are `encodeURIComponent`ed.
   Ratchets: `tests/web/thread-tree.test.ts`, `tests/web/thread-stack-state.test.ts`,
-  `tests/e2e/browser/session-threads*.spec.ts`.
+  `tests/web/thread-map.test.ts`, `tests/e2e/browser/session-threads*.spec.ts`,
+  `tests/e2e/browser/session-thread-map.spec.ts`.
 - **Side question vs Ask: two features, pick by context.** A side question (`SideQuestionDrawer`,
   the btw fork) runs in an ISOLATED context: a one-off aside whose answer must not enter the main
   conversation, so the main session never sees it. Ask (select a passage, then Ask) is a

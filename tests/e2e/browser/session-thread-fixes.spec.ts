@@ -126,27 +126,33 @@ test.describe('Slice 1 layout fixes', () => {
     expect(colours.open).not.toBe(colours.muted)
   })
 
-  test('Show all in order: the outline rail sits on an opaque backing over the gutter bars (N22)', async ({ page }) => {
+  test('Show all in order: the question map sits clear of the gutter bars, and its rail on an opaque backing (N22)', async ({ page }) => {
     const panel = await openDense(page, 1400)
     await goTo(panel, 'point 17 change', /^Reader skip cost$/)
     await panel.locator('.thread-stack-header .thread-stack-more').click()
     await page.locator('.thread-menu [role="menuitem"]', { hasText: 'Show all in order' }).click()
     await expect(panel.locator('.thread-linear-banner')).toBeVisible()
-    await expect(panel.locator('.session-msg--threaded').first()).toBeAttached()
-    const rail = panel.locator('.session-toc-rail')
-    await expect(rail).toBeVisible()
-    // The rail fades in over 120ms: read it once it settled.
-    await expect.poll(() => rail.evaluate((el) => getComputedStyle(el).opacity)).toBe('1')
-    const style = await rail.evaluate((el) => {
-      const cs = getComputedStyle(el)
-      const tick = el.querySelector('.session-toc-tick')
-      return { bg: cs.backgroundColor, opacity: cs.opacity, tickOpacity: tick ? getComputedStyle(tick).opacity : null }
+    const bar = panel.locator('.session-msg--threaded').first()
+    await expect(bar).toBeAttached()
+    // A wide column: the labelled map in its own gutter, left of every bar.
+    const map = panel.locator('.thread-map')
+    await expect(map).toHaveAttribute('data-shape', 'panel')
+    const edge = await panel.evaluate((root) => {
+      const body = root.querySelector('.thread-map-body')!.getBoundingClientRect()
+      const bars = Array.from(root.querySelectorAll('.session-msg--threaded')).map((el) => el.getBoundingClientRect().left)
+      return { right: body.right, minBar: Math.min(...bars) }
     })
-    // Opaque: rgb(...) or an rgba/color() with alpha 1, and the rail itself not faded.
-    expect(style.bg).not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/)
-    expect(style.bg).not.toMatch(/\/ 0\.|, 0\.\d+\)$/)
-    expect(style.opacity).toBe('1')
-    expect(style.tickOpacity).toBe('0.55')
+    expect(edge.minBar).toBeGreaterThanOrEqual(edge.right)
+    // Hidden to its rail, the marks sit on an opaque backing a bar passes under.
+    await map.locator('.thread-map-hide').click()
+    await expect(map).toHaveAttribute('data-shape', 'rail')
+    const bg = await map.locator('.thread-map-rail').evaluate((el) => getComputedStyle(el).backgroundColor)
+    expect(bg).not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/)
+    expect(bg).not.toMatch(/\/ 0\.|, 0\.\d+\)$/)
+    // Leave the preference as the next test expects it.
+    await map.locator('.thread-map-rail').hover()
+    await map.locator('.thread-map-keep').click()
+    await expect(map).toHaveAttribute('data-shape', 'panel')
   })
 
   test('keyboard cursor row and the toggle after an Esc close both show a ring, in WebKit too (N5, N34)', async ({ page }) => {

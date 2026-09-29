@@ -30,10 +30,11 @@ const DENSE_READY = 'Walk me through part 6 of the storage notes.'
 /** The fixture's own titles say "Threads ... fixture": data, not UI text. */
 const FIXTURE_TITLE = /fixture (session|task)/i
 /** The question UI inside a panel: stack row, sliver, quote head, Asked-from rows,
- *  linear banner, drawer and its toggle, resolved strip, rail, queued note. */
+ *  linear banner, drawer and its toggle, resolved strip, rail, queued note, map. */
 const NEW_UI = [
   '.thread-stack-header', '.thread-sliver', '.thread-quote-head-wrap', '.thread-asked-from', '.thread-linear-banner',
   '.thread-drawer', '.thread-drawer-toggle', '.thread-strip', '.session-toc', '.thread-queue-note', '.thread-stack-more',
+  '.thread-map',
 ].join(', ')
 
 async function shot(page: Page, name: string): Promise<void> {
@@ -106,12 +107,15 @@ test.describe('Question stack', () => {
         let rules: CSSRuleList
         try { rules = sheet.cssRules } catch { continue }
         for (const r of Array.from(rules)) {
-          if (r.cssText.includes('data-thread-map') || r.cssText.includes('176px + 24px')) return r.cssText
+          // The old tree mode's gutter (176px map + 24px). The question map of a
+          // session WITH questions reuses the attribute on purpose (thread-map.css).
+          if (r.cssText.includes('176px + 24px')) return r.cssText
         }
       }
       return null
     })
     expect(mapRule, 'the map gutter rule is deleted').toBeNull()
+    await expect(history).not.toHaveAttribute('data-thread-map', /.+/)
     // Pixel check against the DOM the old build rendered (no wrapper at all): lift
     // the wrapper's children into its parent and shoot again. Same pixels = the
     // wrapper adds nothing. Last step of the test (React never sees this DOM again).
@@ -143,6 +147,9 @@ test.describe('Question stack', () => {
   test('Ask opens a question page in the same frame; Esc before sending writes nothing', async ({ page, request }) => {
     await boot(page)
     const panel = await openThreadsSession(page, AI_SESSION, AI_TASK, 'How should the reader treat stale copies?')
+    // Compared with what was there, not with nothing: a question another spec
+    // sent here leaves its meta entry behind for the orphan TTL (10 min).
+    const metaBefore = (await readRecord(request, AI_SESSION)).threadMeta ?? []
     const passage = AI_PASSAGE.slice(0, 44)
     await centre(page, panel, panel.locator('.session-msg-content', { hasText: passage }).first())
     await passageRects(panel, passage)
@@ -181,7 +188,7 @@ test.describe('Question stack', () => {
     await expect(panel.locator('.thread-quote-head')).toHaveCount(0)
     const record = await readRecord(request, AI_SESSION)
     expect(record.threadAnchors ?? []).toHaveLength(0)
-    expect(record.threadMeta ?? []).toHaveLength(0)
+    expect(record.threadMeta ?? []).toEqual(metaBefore)
   })
 
   test('the sliver: one bar per ancestor, distinct shades, 1px gaps; the outermost bar pops to root', async ({ page }) => {
@@ -258,9 +265,9 @@ test.describe('Question stack', () => {
     })
     expect(gap).toBeGreaterThanOrEqual(0)
     expect(gap).toBeLessThanOrEqual(12)
-    // Rail and sliver never overlap.
+    // Rail (the outline's, or the question map's in either shape) and sliver never overlap.
     const overlap = await panel.evaluate((root) => {
-      const rail = root.querySelector('.session-toc-rail')?.getBoundingClientRect()
+      const rail = root.querySelector('.session-toc-rail, .thread-map-rail, .thread-map[data-shape="panel"] .thread-map-body')?.getBoundingClientRect()
       const first = root.querySelector('.thread-sliver-bar')!.getBoundingClientRect()
       return rail ? rail.right > first.left && rail.left < first.right + 20 && rail.width > 0 : false
     })

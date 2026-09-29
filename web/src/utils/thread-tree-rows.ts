@@ -353,11 +353,14 @@ function walkChildren(c: Ctx, node: ThreadNode, depth: number, parentRowId: stri
     else walkThread(c, child, depth, parentRowId);
   }
   if (done.length > 0) {
-    const open = c.opts.doneGroupsOpen.has(node.key) || done.some((d) => isOnCurrentPath(c, d.key));
+    // The group holding the current page stays open (you always see where you
+    // are), so a toggle there would do nothing visible: it is disabled instead.
+    const holdsCurrent = done.some((d) => isOnCurrentPath(c, d.key));
+    const open = holdsCurrent || c.opts.doneGroupsOpen.has(node.key);
     const groupId = `g:${node.key}`;
     c.rows.push({
       id: groupId, kind: 'done-group', key: node.key, depth, parentRowId, hue: node.hue,
-      title: doneGroupText(done.length), hasChildren: true, expanded: open, disclosureDisabled: false,
+      title: doneGroupText(done.length), hasChildren: true, expanded: open, disclosureDisabled: holdsCurrent,
       matched: true, ancestorOnly: false, current: false, openBelow: 0, groupCount: done.length,
     });
     if (open) for (const d of done) walkThread(c, d, depth, parentRowId);

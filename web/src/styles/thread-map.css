@@ -1,0 +1,285 @@
+/*
+ * The question map (ThreadMap): sticky in the timeline's top-left corner of a
+ * session with questions. `height: 0` + a negative bottom margin keep it out of
+ * the flex flow (the outline rail's trick): the map floats in space the scroll
+ * box reserves for it, and never pushes the first message down.
+ *
+ * Geometry, left to right inside the scroll box:
+ *   panel: [base padding][map --thread-map-w][gap][sliver room][text]
+ *   rail:  [4px][marks 20px][rest of the base padding + step][sliver room][text]
+ * `--thread-sliver-room` is set by ThreadStackFrame at depth >= 1 (0 otherwise),
+ * `--thread-map-w` by SessionChatHistory from the box's measured width.
+ *
+ * Show all in order draws each question's 3px bar 11px left of the text, and a
+ * press on that strip jumps back to the passage. With the default gap the bar
+ * touched the panel and ran 1px into the rail, so reaching for it hovered the
+ * rail, whose list opened over the text and took the click. That view steps the
+ * text further in, so the bar and its strip stand clear of the map.
+ */
+.session-history[data-thread-map] { --thread-map-gap: 12px; --thread-map-rail-step: 10px; }
+.session-history[data-thread-map][data-view-mode="linear"] { --thread-map-gap: 22px; --thread-map-rail-step: 20px; }
+.thread-map {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  flex: none;
+  align-self: flex-start;
+  height: 0;
+  margin-bottom: -4px;
+  pointer-events: auto;
+}
+.thread-map-body {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: var(--thread-map-maxh, 60vh);
+  min-height: 0;
+}
+
+/* The head / rows / Back wrapper only carries the keyboard handler: its
+   children stay flex items of the body (or the overlay), so the rows scroll. */
+.thread-map-list { display: contents; }
+
+/* ── Panel: the reserved gutter ── */
+:is(.thread-stack, .thread-stack-off) > .session-history[data-thread-map="panel"] {
+  padding-left: calc(clamp(24px, 4%, 40px) + var(--thread-map-w, 184px) + var(--thread-map-gap) + var(--thread-sliver-room, 0px));
+}
+.thread-map[data-shape="panel"] {
+  width: var(--thread-map-w, 184px);
+  margin-left: calc(-1 * (var(--thread-map-w, 184px) + var(--thread-map-gap) + var(--thread-sliver-room, 0px)));
+}
+.thread-map[data-shape="panel"] .thread-map-body { width: 100%; }
+
+.thread-map-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 24px;
+  padding: 0 2px 0 6px;
+  font-size: 11.5px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.thread-map-title { flex: none; color: var(--fg-secondary); font-weight: 600; }
+.thread-map-count {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.thread-map-count[data-all-done="true"] { color: color-mix(in srgb, var(--success) 70%, var(--fg)); }
+.thread-map-head-actions { display: inline-flex; gap: 1px; margin-left: auto; flex: none; }
+.thread-map-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.thread-map-icon:hover { background: var(--thread-row-hover); color: var(--fg); }
+/* The chevron points right by default: hiding folds the map to the left. */
+.thread-map-hide .thread-icon { transform: rotate(180deg); }
+
+.thread-map-rows {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+.thread-map-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px 0 calc(6px + var(--map-depth, 0) * 12px);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 16px;
+  text-align: left;
+  cursor: pointer;
+}
+/* One guide per nested row: the line its parent's children hang from. */
+.thread-map-row[data-kind]:not([data-kind="root"])::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(9px + (var(--map-depth, 1) - 1) * 12px);
+  width: 1px;
+  background: var(--thread-guide);
+}
+.thread-map-row:hover { background: var(--thread-row-hover); color: var(--fg); }
+.thread-map-row[data-on-path="true"] { color: var(--fg); }
+.thread-map-row[data-current="true"] {
+  background: var(--accent-subtle);
+  color: var(--fg);
+  font-weight: 600;
+}
+.thread-map-row[data-status="resolved"]:not([data-current="true"]) { color: var(--fg-muted); }
+.thread-map-row:focus:not(:focus-visible) { outline: none; }
+/* The done group holding the current page stays open: nothing to toggle. */
+.thread-map-row[aria-disabled="true"] { cursor: default; }
+.thread-map-row[aria-disabled="true"]:hover { background: transparent; }
+
+.thread-map-lead {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 10px;
+  height: 10px;
+}
+.thread-map-root-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--fg-muted);
+}
+.thread-map-pin { color: var(--fg-muted); }
+.thread-map-fold { display: inline-grid; place-items: center; color: var(--fg-muted); }
+.thread-map-fold .thread-icon { fill: currentColor; transition: transform 120ms ease; }
+.thread-map-fold[data-open="true"] .thread-icon { transform: rotate(90deg); }
+.thread-map-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-map-row[data-kind="pin"] .thread-map-label { color: var(--fg-muted); font-style: italic; font-size: 12px; }
+.thread-map-row[data-kind="pin"] .thread-map-label::before { content: '\201C'; }
+.thread-map-row[data-kind="pin"] .thread-map-label::after { content: '\201D'; }
+.thread-map-row:is([data-kind="done-group"], [data-kind="pending"], [data-kind="draft"]) .thread-map-label {
+  color: var(--fg-muted);
+  font-weight: 400;
+}
+.thread-map-row:is([data-kind="pending"], [data-kind="draft"]) .thread-map-label { font-style: italic; }
+.thread-map-row .thread-naming { flex: none; font-size: 11px; }
+.thread-map-unread { flex: none; margin-left: 2px; }
+
+.thread-map-back {
+  flex: none;
+  margin: 2px 0 0;
+  padding: 4px 6px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.thread-map-back:hover { text-decoration: underline; }
+
+/* ── Rail: marks in the left padding, the labelled tree on hover / focus / tap ── */
+/* The text steps further in (`--thread-map-rail-step`), so the marks never touch it. */
+:is(.thread-stack, .thread-stack-off) > .session-history[data-thread-map="rail"] {
+  padding-left: calc(clamp(24px, 4%, 40px) + var(--thread-map-rail-step) + var(--thread-sliver-room, 0px));
+}
+.thread-map[data-shape="rail"] {
+  width: 20px;
+  margin-left: calc(4px - clamp(24px, 4%, 40px) - var(--thread-map-rail-step) - var(--thread-sliver-room, 0px));
+}
+.thread-map[data-shape="rail"] .thread-map-body { width: 20px; }
+/* Opaque backing: in Show all in order a question's 3px gutter bar runs through
+   the padding, and passes UNDER the marks (N22's rule for the outline rail). */
+.thread-map-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 20px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 0 6px 6px 0;
+  background: var(--bg);
+  cursor: pointer;
+}
+/* Under the open list, faded but still focusable (visibility: hidden would blur
+   the rail the keyboard just focused, and ArrowDown would go nowhere). */
+.thread-map.is-open .thread-map-rail { opacity: 0; }
+.thread-map-mark {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 14px;
+  padding-left: calc(4px + min(var(--map-depth, 0), 3) * 3px);
+  color: var(--fg-muted);
+}
+.thread-map-mark .thread-status-dot { width: 7px; height: 7px; border-width: 1.5px; }
+.thread-map-mark .thread-map-root-dot { width: 5px; height: 5px; }
+.thread-map-mark .thread-map-pin { width: 9px; height: 9px; }
+.thread-map-mark .thread-map-fold .thread-icon { width: 8px; height: 8px; }
+.thread-map-mark[data-current="true"] .thread-status-dot,
+.thread-map-mark[data-current="true"] .thread-map-root-dot {
+  box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px var(--accent);
+}
+.thread-map-mark[data-unread="true"]::after {
+  content: '';
+  width: 4px;
+  height: 4px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.thread-map-mark--more {
+  justify-content: center;
+  padding: 0;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+.thread-map-rail:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.thread-map-rail:focus:not(:focus-visible) { outline: none; }
+
+/* The rail's list: the panel's content as a card over the text. */
+.thread-map-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: var(--thread-map-overlay-w, 280px);
+  max-height: var(--thread-map-maxh, 60vh);
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: var(--thread-drawer-shadow);
+  animation: thread-map-in 0.1s ease-out;
+}
+@keyframes thread-map-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+.thread-map-keep .thread-icon { transform: none; }
+
+.thread-map-icon:focus-visible,
+.thread-map-row:focus-visible,
+.thread-map-back:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.thread-map-icon:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-map-fold .thread-icon { transition: none; }
+  .thread-map-overlay { animation: none; }
+}

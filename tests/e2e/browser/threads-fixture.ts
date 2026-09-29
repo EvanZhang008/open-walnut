@@ -14,6 +14,9 @@
  *    and one parked follow-up (queue row), no answer text after either.
  *  - pw-threads-rewritten-session: a question whose parent answer no longer
  *    holds its quoted passage.
+ *  - pw-threads-map-session: the question map's realistic density (8 questions,
+ *    3 levels, CJK titles, 2 pins, a table and a code block).
+ *  - pw-threads-pins-only-session: 2 pins and no question (the map stays away).
  * All text is invented, neutral filler.
  */
 
@@ -310,10 +313,129 @@ export function buildRewrittenSession(nowMs: number): ThreadsFixtureSession {
   };
 }
 
+// ── Map session: a realistic density for the question map (slice 1b) ──
+
+/** Real sessions hold up to ~8 questions and a couple of pins, with AI titles
+ *  in the user's language: this one has 8 questions over 3 levels (one hidden,
+ *  one done, one looking answered), a long user title, two titles with CJK text,
+ *  two pins, and root answers carrying a table and a code block (the widest
+ *  things a column holds, so a map gutter that overlaps text shows up). */
+export const MAP_SESSION = 'pw-threads-map-session';
+export const MAP_PASSAGES = {
+  Q1: 'The flush worker writes pages in the order the index lists them.',
+  Q1a: 'A late flush can hide an earlier update to the same slot.',
+  Q1b: 'The reader trusts the newest version number it sees.',
+  Q2: 'Transient errors are retried three times before the batch fails.',
+  Q3: 'Every page carries its own checksum.',
+  Q4: 'The reader skips a copy whose version is older than the index.',
+  Q4a: 'Orphaned ledger rows stay until the next compaction.',
+  Q5: 'The cache is warmed from the last snapshot on start.',
+} as const;
+/** Title shown for each question (Q5 is hidden and never shown). */
+export const MAP_TITLES = {
+  Q1: 'Flush order across workers',
+  Q1a: 'Why a late flush hides an update',
+  Q1b: 'What happens to the reader when two flushes land in the same slot within one tick of each other',
+  // "Transient error classes missed" in Chinese: real titles come in the user's language.
+  Q2: '\u4e34\u65f6\u9519\u8bef\u5206\u7c7b\u9057\u6f0f',
+  Q3: 'Checksum per page',
+  Q4: 'Version skip rule',
+  // "Marina orphan ledger rows": CJK between Latin words.
+  Q4a: 'Marina \u5b64\u513f ledger rows',
+  Q5: 'Snapshot warm start',
+} as const;
+export const MAP_PIN_ROOT = 'pin-map-root';
+export const MAP_PIN_QUOTE = 'pin-map-q1a-q';
+export const MAP_PIN_QUOTE_TEXT = 'The second flush wins only when its version is higher.';
+
+export function buildMapSession(nowMs: number): ThreadsFixtureSession & { ids: Record<string, { u: string; a: string }> } {
+  const P = '0199f8';
+  const at = (k: number) => new Date(nowMs - 1_800_000 + k * 1000).toISOString();
+  const table = [
+    '| Step | Who writes | What the reader sees |',
+    '| --- | --- | --- |',
+    '| Buffer | the flush worker, once per tick | nothing until the page lands |',
+    '| Page | one worker per slot | the newest version it can prove |',
+    '| Index | the compactor, every minute | a pointer to the page it trusts |',
+  ].join('\n');
+  const code = '```ts\nfunction flush(page: Page, index: Index): void {\n  if (page.version <= index.versionOf(page.slot)) return; // an older copy never wins\n  index.write(page.slot, page.version, checksum(page.bytes));\n}\n```';
+  const turns: Array<[string, string, string]> = [
+    ['R0', 'Walk me through how the flush worker orders its writes.',
+      `${filler(71, 160)}\n\n${MAP_PASSAGES.Q1} ${filler(72, 60)}\n\n${table}\n\n${MAP_PASSAGES.Q2} ${filler(73, 120)}\n\n${code}\n\n${filler(74, 140)}`],
+    ['Q1', `> ${MAP_PASSAGES.Q1}\n\nDoes the order hold across workers?`,
+      `${filler(75, 120)}\n\n${MAP_PASSAGES.Q1a} ${filler(76, 80)}\n\n${MAP_PASSAGES.Q1b} ${filler(77, 60)}`],
+    ['Q1a', `> ${MAP_PASSAGES.Q1a}\n\nWhy would a late flush hide it?`,
+      `${filler(78, 90)}\n\n${MAP_PIN_QUOTE_TEXT} ${filler(79, 70)}`],
+    ['Q1b', `> ${MAP_PASSAGES.Q1b}\n\nWhat if two flushes land in one tick?`, filler(80, 160)],
+    ['Q2', `> ${MAP_PASSAGES.Q2}\n\nWhich errors count as transient?`, filler(81, 180)],
+    ['R1', 'How does the reader decide which copy to trust?',
+      `${filler(82, 150)}\n\n${MAP_PASSAGES.Q3} ${filler(83, 90)}\n\n${MAP_PASSAGES.Q4} ${filler(84, 110)}`],
+    ['Q3', `> ${MAP_PASSAGES.Q3}\n\nIs a checksum per page enough?`, filler(85, 120)],
+    ['Q4', `> ${MAP_PASSAGES.Q4}\n\nWhat does it skip exactly?`, `${filler(86, 90)}\n\n${MAP_PASSAGES.Q4a} ${filler(87, 80)}`],
+    ['Q4a', `> ${MAP_PASSAGES.Q4a}\n\nWhen do those rows go away?`, filler(88, 110)],
+    ['R2', 'And what happens on start?', `${filler(89, 140)}\n\n${MAP_PASSAGES.Q5} ${filler(90, 100)}`],
+    ['Q5', `> ${MAP_PASSAGES.Q5}\n\nHow fresh is that snapshot?`, filler(91, 100)],
+    ['R3', 'Summarize the open risks.', filler(92, 220)],
+  ];
+  const ids: Record<string, { u: string; a: string }> = {};
+  const rows: FixtureRow[] = [];
+  turns.forEach(([id, q, a], k) => {
+    const u = fxUuid(P, k + 1, 'u');
+    const aId = fxUuid(P, k + 1, 'a');
+    ids[id] = { u, a: aId };
+    rows.push({ role: 'user', uuid: u, text: q }, { role: 'assistant', uuid: aId, text: a });
+  });
+  const parentOf: Record<string, string> = { Q1: 'R0', Q1a: 'Q1', Q1b: 'Q1', Q2: 'R0', Q3: 'R1', Q4: 'R1', Q4a: 'Q4', Q5: 'R2' };
+  const threadAnchors: FixtureAnchor[] = Object.entries(parentOf).map(([q, parent], k) => ({
+    msgId: ids[q].u, parent: ids[parent].a, quote: { exact: MAP_PASSAGES[q as keyof typeof MAP_PASSAGES] }, source: 'selection', at: at(k),
+  }));
+  const meta = (q: keyof typeof MAP_TITLES, over: Partial<FixtureMeta> = {}): FixtureMeta => ({
+    headId: ids[q].u, status: 'open', title: MAP_TITLES[q], titleSource: 'ai', titleState: 'done', updatedAt: at(100), ...over,
+  });
+  const threadMeta: FixtureMeta[] = [
+    meta('Q1'), meta('Q1a'), meta('Q1b', { titleSource: 'user' }), meta('Q2', { status: 'suggested' }),
+    meta('Q3', { status: 'resolved', takeaway: 'A checksum per page catches torn writes; it does not order them.', takeawaySource: 'ai', takeawayState: 'done' }),
+    meta('Q4'), meta('Q4a'), meta('Q5', { hidden: true }),
+  ];
+  const pinnedMessages: FixturePin[] = [
+    { msgId: ids.R1.a, label: 'Which copy to trust', role: 'assistant', pinnedAt: at(200), id: MAP_PIN_ROOT },
+    { msgId: ids.Q1a.a, label: MAP_PIN_QUOTE_TEXT, role: 'assistant', pinnedAt: at(201), id: MAP_PIN_QUOTE, quote: { exact: MAP_PIN_QUOTE_TEXT } },
+  ];
+  return {
+    sessionId: MAP_SESSION, taskId: 'pw-task-threads-map', title: 'Threads map fixture session',
+    rows, threadAnchors, threadMeta, pinnedMessages, parked: [], ids,
+  };
+}
+
+/** Pins and no question: the map stays away, the outline rail shows (C10). */
+export const PINS_ONLY_SESSION = 'pw-threads-pins-only-session';
+export const PINS_ONLY_TASK = 'pw-task-threads-pins-only';
+export const PINS_ONLY_READY = 'Explain how the index warms up.';
+
+export function buildPinsOnlySession(nowMs: number): ThreadsFixtureSession {
+  const rows = simpleTurns('0199f9', [
+    [PINS_ONLY_READY, filler(101, 220)],
+    ['What does a cold read cost?', filler(102, 240)],
+    ['And after the warm-up?', filler(103, 200)],
+  ]);
+  const at = (k: number) => new Date(nowMs - 3_000_000 + k * 1000).toISOString();
+  return {
+    sessionId: PINS_ONLY_SESSION, taskId: PINS_ONLY_TASK, title: 'Threads pins-only fixture session',
+    rows, threadAnchors: [], threadMeta: [], parked: [],
+    pinnedMessages: [
+      { msgId: rows[1].uuid, label: 'How the index warms up', role: 'assistant', pinnedAt: at(1), id: 'pin-pins-only-1' },
+      { msgId: rows[3].uuid, label: 'Cold read cost', role: 'assistant', pinnedAt: at(2), id: 'pin-pins-only-2' },
+    ],
+  };
+}
+
 // ── Output shapes test-server.ts writes ──
 
 export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
-  return [buildDenseSession(nowMs), buildAiSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession()];
+  return [
+    buildDenseSession(nowMs), buildAiSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
+    buildMapSession(nowMs), buildPinsOnlySession(nowMs),
+  ];
 }
 
 /** The CLI transcript JSONL: one parentUuid chain, like a real transcript. */

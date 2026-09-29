@@ -272,7 +272,7 @@ export const ThreadTreeRows = forwardRef<ThreadTreeRowsHandle, ThreadTreeRowsPro
   const activate = useCallback((row: TreeRow) => {
     setCursorId(row.id);
     switch (row.kind) {
-      case 'done-group': p.onToggleDoneGroup(row.key); return;
+      case 'done-group': if (!row.disclosureDisabled) p.onToggleDoneGroup(row.key); return;
       case 'hidden': onAction(row, 'restore', null); return;
       case 'pin': p.onJumpPin(row.pinKey ?? '', row.key); p.onJumped(); return;
       case 'root': case 'thread': case 'pending': case 'draft':
@@ -286,7 +286,7 @@ export const ThreadTreeRows = forwardRef<ThreadTreeRowsHandle, ThreadTreeRowsPro
   const onFocusRow = useCallback((row: TreeRow) => setCursorId(row.id), []);
 
   const toggleRow = useCallback((row: TreeRow) => {
-    if (row.kind === 'done-group') p.onToggleDoneGroup(row.key);
+    if (row.kind === 'done-group') { if (!row.disclosureDisabled) p.onToggleDoneGroup(row.key); }
     else p.onToggleCollapsed(row.key);
   }, [p]);
 

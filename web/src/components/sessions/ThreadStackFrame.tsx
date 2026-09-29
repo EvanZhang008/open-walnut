@@ -190,13 +190,14 @@ export function ThreadStackFrame({ active, depth, bars, containerRef, header, on
     const contentLeft = contentLeftOf(scroller);
     const left = Math.max(2, Math.round(contentLeft - total - 6));
     const top = Math.round(scroller.offsetTop);
-    const rail = !!scroller.querySelector('.session-toc');
+    const rail = !!scroller.querySelector('.session-toc, .thread-map[data-shape="rail"]');
     setGeom((g) => (g.left === left && g.top === top && g.width === width && g.rail === rail ? g : { left, top, width, rail }));
   }, [containerRef, bars.length]);
 
   // The room the sliver takes from the content column (spec 5.1: at most 40px of
   // bars); the scroll box pads its left side by it (thread-stack-page.css).
-  // With an outline rail in the same padding, 12px more so its button clears the bars.
+  // With an outline rail (or the question map's rail) in the same padding, 12px
+  // more so its marks clear the bars.
   const room = showSliver
     ? bars.length * sliverBarWidth(geom.width) + Math.max(0, bars.length - 1) + 8 + (geom.rail ? 12 : 0)
     : 0;

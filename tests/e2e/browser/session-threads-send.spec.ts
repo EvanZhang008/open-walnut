@@ -91,6 +91,21 @@ function askedRows(panel: Locator): Locator {
   return panel.locator('.thread-asked-row:not(.is-draft)')
 }
 
+/** The question's entry in the map: its row in the labelled panel, its mark on
+ *  the rail (the column's width picks the shape). */
+async function mapEntry(panel: Locator): Promise<{ entry: Locator; rail: boolean }> {
+  const map = panel.locator('.thread-map')
+  await expect(map).toHaveCount(1)
+  const rail = (await map.getAttribute('data-shape')) === 'rail'
+  return { entry: map.locator(rail ? '.thread-map-mark[data-kind="thread"]' : '.thread-map-row[data-kind="thread"]').first(), rail }
+}
+async function expectMapUnread(panel: Locator, on: boolean): Promise<void> {
+  const { entry, rail } = await mapEntry(panel)
+  if (!rail) await expect(entry.locator('.thread-map-unread')).toHaveCount(on ? 1 : 0, { timeout: 60_000 })
+  else if (on) await expect(entry).toHaveAttribute('data-unread', 'true', { timeout: 60_000 })
+  else await expect(entry).not.toHaveAttribute('data-unread', 'true')
+}
+
 test.describe('Question stack: asking and sending', () => {
   test.describe.configure({ mode: 'serial' })
   test.setTimeout(240_000)
@@ -116,6 +131,10 @@ test.describe('Question stack: asking and sending', () => {
     await send(panel, 'what does phase two cost')
     await expect(history).toContainText('what does phase two cost')
     await expectDepth(panel, 1)
+    // Map C9: the sent page is a question in the map now, still the current one.
+    const map = panel.locator('.thread-map')
+    await expect(map.locator('.thread-map-row[data-kind="pending"], .thread-map-mark[data-kind="pending"]')).toHaveCount(0, { timeout: 15_000 })
+    await expect((await mapEntry(panel)).entry).toHaveAttribute('data-current', 'true')
     await expect(history).toContainText('processed your message: > rewrites the index in place', { timeout: 60_000 })
     await shot(page, 'c3-answer-on-page')
     const rec = await readRecord(request, SEND_SESSION)
@@ -138,12 +157,17 @@ test.describe('Question stack: asking and sending', () => {
     await expect(history).not.toContainText('processed your message')
     const row = askedRows(panel).first()
     await expect(row.locator('.thread-asked-state')).toHaveText(/Waiting…|Answering…/)
+    // Map C21: the question's dot says it is being answered, live.
+    await expect((await mapEntry(panel)).entry).toHaveAttribute('data-status', /queued|answering/)
     await shot(page, 'c41-answering-at-root')
     // C82: the answer finishes while he is on root: an unread dot with its age.
     const dot = row.locator('.thread-status-dot[data-status="unread"]')
     await expect(dot).toBeVisible({ timeout: 60_000 })
     await expect(row).toHaveAttribute('title', /^Answered /)
     await expect(row.locator('.thread-asked-state')).toHaveCount(0)
+    // Map C20 / C21: the map carries the same unread dot, and the live state is over.
+    await expectMapUnread(panel, true)
+    await expect((await mapEntry(panel)).entry).not.toHaveAttribute('data-status', /queued|answering/)
     await shot(page, 'c82-unread-at-root')
     // Back on the page, the answer is complete; leaving clears the dot.
     await row.click()
@@ -152,6 +176,7 @@ test.describe('Question stack: asking and sending', () => {
     await page.keyboard.press('Escape')
     await expectDepth(panel, 0)
     await expect(askedRows(panel).first().locator('.thread-status-dot[data-status="unread"]')).toHaveCount(0)
+    await expectMapUnread(panel, false)
     // No reload here: the mock CLI's resumed turns never reach this fixture's saved
     // history (the app says so in a toast), so after a reload the question's rows
     // are gone. The seen-time survives reloads through thread-stack-persist
