@@ -694,6 +694,52 @@ export interface ReconcileProcessStatusInputs {
    *  JSONL for TeamCreate/TeamDelete). ORed with the fold's own detection — the
    *  tail window can miss a team created in an earlier turn. */
   teamActiveHint?: boolean
+  /** Pre-fetched daemon view (tests). Omit to ask the daemon; null = no answer. */
+  daemonView?: DaemonSessionView | null
+}
+
+/** The daemon's view of a session, folded from the WHOLE stream file. */
+export interface DaemonSessionView {
+  /** L2: gating (non-backgrounded) bg tasks still running. */
+  derivedRunning?: number
+  /** snapshot-v1: the fields the snapshot lane projects as 'running' (never
+   *  for a dead CLI: its detached work died with it). */
+  snapshot?: { cliState?: string; detachedBgCount?: number; wakeupAt?: number }
+}
+
+const DAEMON_VIEW_TIMEOUT_MS = 3_000
+
+/** Ask the session's daemon for its whole-file view: over the pooled snapshot
+ *  connection first (it needs no bound session manager: right after a restart
+ *  reconcile runs before the attach binds one), then through the session's own
+ *  manager (pre-snapshot daemons, L2 only). null = no answer, which vetoes
+ *  nothing (the stream tail stays the only evidence, as before). */
+async function fetchDaemonSessionView(sid: string, host: string | null | undefined): Promise<DaemonSessionView | null> {
+  const deadline = <T>(p: Promise<T>): Promise<T | null> => {
+    let timer: NodeJS.Timeout | undefined
+    return Promise.race([
+      p.catch(() => null),
+      new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), DAEMON_VIEW_TIMEOUT_MS) }),
+    ]).finally(() => clearTimeout(timer))
+  }
+  try {
+    const { getPooledSnapshotConnection } = await import('../providers/daemon-connection.js')
+    const conn = getPooledSnapshotConnection(host)
+    if (conn) {
+      const res = await deadline(conn.send('getState', { sid }, DAEMON_VIEW_TIMEOUT_MS))
+      const r = res as { ok?: boolean; exists?: boolean; taskState?: { derivedRunning?: number }; snapshot?: DaemonSessionView['snapshot'] } | null
+      if (!r?.ok || r.exists === false) return null
+      return { derivedRunning: r.taskState?.derivedRunning, snapshot: r.snapshot }
+    }
+  } catch { /* no pool in this process — try the manager */ }
+  try {
+    const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
+    const mgr = getRegisteredSessionManager(sid)
+    const st = mgr?.getState ? await deadline(mgr.getState()) : null
+    return st ? { derivedRunning: st.derivedRunning } : null
+  } catch {
+    return null
+  }
 }
 
 export type ReconcileOutcome =
@@ -803,16 +849,22 @@ export async function reconcileProcessStatus(
   }
   const workStatus = fold.workStatus! // set whenever turnEnded
 
-  // ── Signal 2: daemon L2 veto — its taskState is rebuilt from the FULL jsonl,
-  // so it sees non-backgrounded bg tasks started before our tail window. ──
-  try {
-    const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
-    const mgr = getRegisteredSessionManager(sid)
-    if (mgr?.getState) {
-      const st = await mgr.getState()
-      if (st && st.derivedRunning > 0) return { converged: false, reason: 'daemon-bg-running' }
+  // ── Signal 2: the daemon's veto. It folds the WHOLE stream file, so it sees
+  // work started before our tail window (a whale turn's window starts at the
+  // consumed watermark). Detached work and an armed wakeup veto too: the
+  // snapshot lane projects both as 'running', so converging past them only
+  // makes the lanes flap (2026-09-29: a restart handed back a task whose
+  // run_in_background test run was still going; the next 30s pull put it back). ──
+  const daemonView = inputs.daemonView !== undefined ? inputs.daemonView : await fetchDaemonSessionView(sid, record.host)
+  if (daemonView) {
+    if ((daemonView.derivedRunning ?? 0) > 0) return { converged: false, reason: 'daemon-bg-running' }
+    const snap = daemonView.snapshot
+    if (snap && snap.cliState !== 'dead') {
+      if ((snap.detachedBgCount ?? 0) > 0) return { converged: false, reason: 'daemon-detached-bg-running' }
+      const { isWakeupArmed } = await import('../providers/daemon-fold.js')
+      if (isWakeupArmed(snap.wakeupAt)) return { converged: false, reason: 'daemon-wakeup-armed' }
     }
-  } catch { /* daemon unreachable — the stream tail alone is authoritative */ }
+  }
 
   // ── Target state: mirror what the lost result event would have set live ──
   let alive = inputs.isAlive

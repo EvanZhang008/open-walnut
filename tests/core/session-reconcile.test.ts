@@ -1101,6 +1101,86 @@ describe('fetchStreamTailFold — whale-turn watermark fallback (incident 57b125
     expect(outcome).toEqual({ converged: false, reason: 'tail-window-exhausted' })
   })
 
+  // 2026-09-29 deploy: a whale session's run_in_background test run started in
+  // the turn the live path had already consumed (the result said "detached work
+  // active", so the record stayed running and the task IN_PROGRESS). After the
+  // restart the watermark fold saw nothing but bookkeeping, handed the task back
+  // to NEED_ACTION, and the next 30s snapshot pull set it IN_PROGRESS again.
+  describe('work started before the tail window (the daemon folds the whole file)', () => {
+    async function whaleWithDetachedRun(sid: string) {
+      const { addTaskFull } = await import('../../src/core/task-manager.js')
+      const task = await addTaskFull({
+        title: 'detached run', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
+        project: 'proj', source: 'local', created_at: new Date().toISOString(),
+      } as any)
+      const filler = JSON.stringify({ type: 'system', subtype: 'thinking_tokens', session_id: sid, pad: 'x'.repeat(4000) })
+      const pre = [
+        initEvent(sid), userEvent(sid, 'run the specs in the background'),
+        taskStarted(sid, 'bg-specs'), taskBackgrounded(sid, 'bg-specs'), // never terminal
+        ...Array.from({ length: 600 }, () => filler), // pushes the start out of the 2 MB window
+        resultEvent(sid), stateEvent(sid, 'idle'),
+      ]
+      const watermark = Buffer.byteLength(pre.join('\n') + '\n', 'utf8')
+      await writeStream(sid, [...pre, stateEvent(sid, 'idle')])
+      await stuckRunningRecord(sid, { pid: process.pid, taskId: task.id })
+      await updateSessionRecord(sid, { consumedOffset: watermark })
+      return { task, record: (await getSessionByClaudeId(sid))! }
+    }
+
+    it('the tail fold alone cannot see it (why the daemon view is needed)', async () => {
+      const { record } = await whaleWithDetachedRun('pre-window-blind')
+      const tail = await fetchStreamTailFold(record.claudeSessionId, null, { consumedOffset: record.consumedOffset })
+      expect(typeof tail).not.toBe('string')
+      if (typeof tail !== 'string') {
+        expect(tail.fold.anchorSynthetic).toBe(true)
+        expect(tail.fold.detachedBgCount).toBe(0)
+        expect(tail.fold.turnEnded).toBe(true)
+      }
+    })
+
+    it('the daemon reporting detached work keeps the record running and the task IN_PROGRESS', async () => {
+      const { getTask } = await import('../../src/core/task-manager.js')
+      const { task, record } = await whaleWithDetachedRun('pre-window-detached')
+      const outcome = await reconcileProcessStatus(record, { isAlive: true, daemonView: { snapshot: { detachedBgCount: 1 } } })
+      expect(outcome).toEqual({ converged: false, reason: 'daemon-detached-bg-running' })
+      expect((await getSessionByClaudeId(record.claudeSessionId))?.process_status).toBe('running')
+      expect((await getTask(task.id)).phase).toBe('IN_PROGRESS')
+    })
+
+    it('an armed wakeup and gating work in the daemon veto too; a quiet daemon lets it converge', async () => {
+      const { getTask } = await import('../../src/core/task-manager.js')
+      const { task, record } = await whaleWithDetachedRun('pre-window-daemon')
+      expect(await reconcileProcessStatus(record, { isAlive: true, daemonView: { snapshot: { wakeupAt: Date.now() + 10 * 60_000 } } }))
+        .toEqual({ converged: false, reason: 'daemon-wakeup-armed' })
+      expect(await reconcileProcessStatus(record, { isAlive: true, daemonView: { derivedRunning: 1 } }))
+        .toEqual({ converged: false, reason: 'daemon-bg-running' })
+      // The run finished (the daemon folded its terminal line): the debt is real.
+      expect(await reconcileProcessStatus(record, { isAlive: true, daemonView: { derivedRunning: 0, snapshot: { detachedBgCount: 0 } } }))
+        .toEqual({ converged: true, from: 'running', to: 'idle', phaseSynced: true })
+      expect((await getTask(task.id)).phase).toBe('NEED_ACTION')
+    })
+
+    it('a dead CLI is not kept running by the detached work it left unfinished', async () => {
+      const { record } = await whaleWithDetachedRun('pre-window-dead')
+      const dead = { cliState: 'dead', detachedBgCount: 1, wakeupAt: Date.now() + 10 * 60_000 }
+      expect(await reconcileProcessStatus(record, { isAlive: false, daemonView: { snapshot: dead } }))
+        .toEqual({ converged: true, from: 'running', to: 'stopped', phaseSynced: true })
+    })
+
+    it('asks the session manager when no pooled daemon connection exists (pre-snapshot daemons)', async () => {
+      const { registerSessionManager, unregisterSessionManager } = await import('../../src/providers/session-manager.js')
+      const { record } = await whaleWithDetachedRun('pre-window-mgr')
+      registerSessionManager(record.claudeSessionId, {
+        getState: async () => ({ tasks: {}, resourceVersion: 0, updatedAt: 0, derivedRunning: 1, recentTransitions: [] }),
+      } as any)
+      try {
+        expect(await reconcileProcessStatus(record, { isAlive: true })).toEqual({ converged: false, reason: 'daemon-bg-running' })
+      } finally {
+        unregisterSessionManager(record.claudeSessionId)
+      }
+    })
+  })
+
   it('anchored fold still wins when the anchor IS reachable (fallback never preempts)', async () => {
     const sid = 'whale-not-needed'
     await writeStream(sid, [
