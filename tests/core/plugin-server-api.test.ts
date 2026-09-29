@@ -257,6 +257,93 @@ describe('createServerPluginApi', () => {
     expect(seen[0]!.source).toBe('plugin/sample-plugin')
   })
 
+  /**
+   * A plugin that files tasks needs the folder a task sits in, the sessions behind it, a way to
+   * add one tag without overwriting the rest, and a batch filing call: one `update` per task
+   * rewrites the whole store, which at thousands of tasks held the event loop for minutes.
+   */
+  it('files tasks into folders in one batch, shows folder and sessions, and edits single tags', async () => {
+    const { api } = setup()
+    const groupEvents: unknown[] = []
+    const updateEvents: Array<{ task?: unknown; taskIds?: string[] }> = []
+    bus.subscribe('test-observer', (event) => {
+      if (event.name === EventNames.TASK_GROUPS_CHANGED) groupEvents.push(event.data)
+      if (event.name === EventNames.TASK_UPDATED) updateEvents.push(event.data as { task?: unknown; taskIds?: string[] })
+    }, { global: true, interest: [EventNames.TASK_GROUPS_CHANGED, EventNames.TASK_UPDATED] })
+
+    const first = await api.tasks.create({ title: 'Investigate this ticket', project: 'Filing Import', tags: ['walnut:external-sessions'] })
+    const second = await api.tasks.create({ title: 'Second', project: 'Filing Import' })
+    const synced = await api.tasks.create({ title: 'Synced elsewhere', project: 'Filing Import' })
+    const bystander = await api.tasks.create({ title: 'Bystander', project: 'Filing Import' })
+    const tm = await import('../../src/core/task-manager.js')
+    await tm.linkSession(first.id, 'sess-first')
+    await tm.updateTasksBulk([{ id: synced.id, patch: { source: 'ms-todo' } }])
+    const bystanderBefore = await tm.getTask(bystander.id)
+
+    // A folder in a project the board does not have yet brings the project with it.
+    const folder = await api.tasks.createFolder({ label: 'Robot runs', project: 'Filing Team' })
+    expect(folder).toMatchObject({ label: 'Robot runs', project: 'Filing Team', memberCount: 0 })
+    expect(await tm.getProjectRecord('Filing Team')).toMatchObject({ source: 'local' })
+
+    updateEvents.length = 0
+    const result = await api.tasks.fileIntoFolder(folder.id, [
+      { id: first.id, addTags: ['ticket:P123'], title: 'Nodes stuck NotReady' },
+      { id: second.id },
+      { id: synced.id },
+      { id: 'no-such-task' },
+      { id: first.id, addTags: ['duplicate item ignored'] },
+    ])
+    expect(result.filed.sort()).toEqual([first.id, second.id].sort())
+    expect(result.skipped).toEqual([{ id: synced.id, reason: 'synced' }, { id: 'no-such-task', reason: 'missing' }])
+
+    const filed = await api.tasks.get(first.id)
+    expect(filed).toMatchObject({ title: 'Nodes stuck NotReady', project: 'Filing Team', groupId: folder.id, sessionIds: ['sess-first'] })
+    expect(filed?.tags?.sort()).toEqual(['ticket:P123', 'walnut:external-sessions'])
+    expect(await api.tasks.get(second.id)).toMatchObject({ project: 'Filing Team', groupId: folder.id })
+    expect(await api.tasks.get(synced.id)).toMatchObject({ project: 'Filing Import' })
+    // Only the filed rows changed.
+    expect((await tm.getTask(bystander.id)).updated_at).toBe(bystanderBefore.updated_at)
+    const summaries = await api.tasks.query({ groupId: folder.id })
+    expect(summaries.map((one) => one.id).sort()).toEqual([first.id, second.id].sort())
+    expect((await api.tasks.folders()).find((one) => one.id === folder.id)).toMatchObject({ memberCount: 2 })
+    // One bulk frame for the batch, not one per task; created + filed each refresh the folders.
+    expect(updateEvents).toEqual([expect.objectContaining({ task: null, taskIds: expect.arrayContaining([first.id, second.id]) })])
+    expect(groupEvents).toHaveLength(2)
+
+    // Filing again as asked changes nothing and says so.
+    expect(await api.tasks.fileIntoFolder(folder.id, [{ id: first.id, addTags: ['ticket:P123'] }])).toEqual({ filed: [], skipped: [] })
+    await expect(api.tasks.fileIntoFolder('g_missing', [{ id: first.id }])).rejects.toThrow(/not found/)
+
+    // removeTags leaves the other tags alone; `tags` still replaces the whole set.
+    await api.tasks.update(first.id, { removeTags: ['walnut:external-sessions'] })
+    expect((await api.tasks.get(first.id))?.tags).toEqual(['ticket:P123'])
+    await api.tasks.update(first.id, { tags: ['only'], addTags: ['ignored'] })
+    expect((await api.tasks.get(first.id))?.tags).toEqual(['only'])
+
+    // A folder never follows a task into another project.
+    await api.tasks.update(first.id, { project: 'Elsewhere' })
+    expect((await api.tasks.get(first.id))?.groupId).toBeUndefined()
+  })
+
+  it('files a large batch in chunks, one bulk event each', async () => {
+    const { api } = setup()
+    const tm = await import('../../src/core/task-manager.js')
+    const made = await tm.addTasksBulk(Array.from({ length: 205 }, (_, i) => ({
+      title: `Bulk ${i}`, project: 'Filing Bulk', source: 'local', status: 'todo', phase: 'TODO', priority: 'none',
+    }) as never))
+    const folder = await api.tasks.createFolder({ label: 'All of them', project: 'Filing Bulk' })
+    const frames: string[][] = []
+    bus.subscribe('test-observer', (event) => {
+      const data = event.data as { task?: unknown; taskIds?: string[] }
+      if (event.name === EventNames.TASK_UPDATED && data.taskIds) frames.push(data.taskIds)
+    }, { global: true, interest: [EventNames.TASK_UPDATED] })
+
+    const result = await api.tasks.fileIntoFolder(folder.id, made.map((task) => ({ id: task.id, addTags: ['bulk'] })))
+    expect(result.filed).toHaveLength(205)
+    expect(frames.map((ids) => ids.length)).toEqual([200, 5])
+    expect((await api.tasks.folders()).find((one) => one.id === folder.id)).toMatchObject({ memberCount: 205 })
+  })
+
   it('registers typed multi-point hooks with filters and timeouts', async () => {
     const dispatcher = new HookDispatcher()
     dispatchers.push(dispatcher)

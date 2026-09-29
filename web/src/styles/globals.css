@@ -12000,6 +12000,54 @@ body.walnut-dragging {
   border-radius: 8px;
 }
 
+/* A task's own tags on the Homepage row and detail pane. Wider than the /tasks
+   card's 80px chip so an id tag ("ticket:V1234567890") reads whole when there is
+   room. On a row the pills take at most a third of it and shrink three times as
+   fast as the title; squeezed, the "ticket:" prefix collapses first, then the id
+   ellipsizes (hover shows the whole tag). The pills and a chip stop at 30px, which
+   still reads "V…": any narrower and the chip draws as an empty sliver. (Not
+   min-content: a nowrap chip's min-content is its whole text.) */
+.task-tag-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 3 auto;
+  min-width: 30px;
+  max-width: 34%;
+  overflow: hidden;
+}
+.task-tag-pills .tag-chip-inline {
+  max-width: 150px;
+  min-width: 30px;
+  flex: 0 1 auto;
+}
+.task-tag-pills .tag-chip-prefix {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  flex-shrink: 1000;
+}
+.task-tag-pills .tag-chip-value {
+  min-width: 0;
+  white-space: nowrap;
+}
+.task-tag-pills .tag-chip-overflow {
+  flex-shrink: 0;
+}
+/* Beside tags the title starts from a share of the row instead of its leftovers
+   (a 306px column with a date pill and the kebab leaves ~140px for title and tags).
+   When even that is too much, both shrink, the tags faster, so the title keeps more
+   than the tags and nothing is pushed out of the row. A basis, not a min-width: a
+   floor would push the kebab out of a very narrow column. */
+.todo-item-title-row:has(> .task-tag-pills) > .todo-item-title {
+  flex-basis: min(35%, 120px);
+}
+.todo-detail-badges .task-tag-pills {
+  flex-wrap: wrap;
+  max-width: none;
+  overflow: visible;
+}
+
 /* Deferred-start pill — future start_date; blue tint to read as "scheduled",
    not "late" */
 .todo-item-start-pill {

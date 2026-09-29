@@ -160,7 +160,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 
 | API | Purpose |
 |---|---|
-| `walnut.tasks` | Read, query, create, update, complete, and delete tasks. |
+| `walnut.tasks` | Read, query, create, update, complete, and delete tasks; list, create and file into folders. |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
 | `walnut.notifications` | Raise notices (including `kind: 'reminder'` with up to three op buttons), `dismiss` your own, report plugin errors and recover from them, and hold Walnut's quiet mode with `quiet.get/set/clear`. |
 | `walnut.letters` | Send a letter to the human, hear the answer, reply in its thread, withdraw a stale one. |
@@ -177,6 +177,12 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.unsafe` | Unstable raw host objects, for when no stable API exists. First access logs a warning. |
 
 There is no supported way to import Walnut's private `src/**` modules. Those paths change without notice. Use a typed service, `ops`, events, HTTP, a registry, or `unsafe`.
+
+#### Tasks, folders and tags
+
+A task carries `groupId` (the folder it is filed in, absent at the project root) and `sessionIds` (every session ever linked to it, which survives completion), so a plugin can find the task behind a session it knows about. To change one tag, pass `addTags` or `removeTags` to `update`: they apply to the tags the task has when the write lands, so a tag someone else changes meanwhile survives. `tags` replaces the whole set and wins over both.
+
+A folder belongs to one project, and moving a task to another project with `update` drops its folder. `folders()` lists every folder, empty ones included. `createFolder({ label, project })` makes one, and creates the project as a local one (no sync provider claims it) when the board has none by that name. `fileIntoFolder(folderId, items)` files tasks: each item moves into the folder's project if it is elsewhere, joins the folder, and takes the item's `addTags` and `title`. Use it for anything past a handful of tasks: `update` rewrites the whole task store once per call, so a plugin filing a thousand tasks one `update` at a time holds the server for minutes, while `fileIntoFolder` writes only the changed rows. It moves only local tasks across projects and reports the rest as skipped (`synced`, `missing`, or `rejected` for a title the owning plugin refuses). Never name a plugin setting `project`: Walnut reads `plugins.<id>.project` as that plugin reserving the project for its own sync.
 
 #### Letters
 

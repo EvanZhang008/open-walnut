@@ -1430,6 +1430,14 @@ export async function renameProject(
       });
     }
 
+    // Folders belong to their project and follow it: left behind, a folder would
+    // still name the old project while its members moved on.
+    if (store.task_groups) {
+      store.task_groups = Object.fromEntries(Object.entries(store.task_groups).map(([id, rec]) => [
+        id, (rec.project ?? '').toLowerCase() === fromLower ? { ...rec, project: canonical } : rec,
+      ]));
+    }
+
     await writeStore(store);
     const renamedTasks = store.tasks.filter((t) => renamedTaskIds.includes(t.id));
     return {
@@ -5074,6 +5082,109 @@ export async function addToGroup(groupId: string, idPrefixes: string[]): Promise
     await writeStore(store);
     return { group_id: groupId, label, member_ids: members.map((t) => t.id) };
   });
+}
+
+/**
+ * One task for fileTasksIntoFolder: the tags to add and the title to set, if any.
+ * `expect_project` / `expect_title` make the write conditional on what the caller
+ * planned from, so a task someone moved or renamed in the meantime is left alone.
+ */
+export interface TaskFilingItem {
+  id: string;
+  add_tags?: string[];
+  title?: string;
+  expect_project?: string;
+  expect_title?: string;
+}
+export type TaskFilingSkip = { id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' };
+
+/**
+ * File many tasks into a folder in ONE transaction: each task moves into the
+ * folder's project when it is elsewhere, joins the folder, and takes the given
+ * tags (added to the ones it has at write time) and title. Writes only the
+ * changed rows, like updateTasksBulk: a caller filing hundreds of tasks through
+ * updateTask would pay a whole-store read and write per task.
+ *
+ * The folder's project goes through the registry like any project write: a
+ * renamed one follows its redirect (and the folder record with it), a deleted one
+ * refuses, and a name with no row gets a local one.
+ *
+ * Only LOCAL tasks change beyond joining the folder. Moving, retagging or renaming
+ * a synced task has to reach the other service, which is updateTask's job, so such
+ * a task is filed only when it already sits in the folder's project. A skipped task
+ * is reported with why. The caller emits the task and folder events.
+ */
+export async function fileTasksIntoFolder(
+  groupId: string,
+  items: TaskFilingItem[],
+): Promise<{ group_id: string; label: string; project: string; filed: Task[]; skipped: TaskFilingSkip[] }> {
+  await ensureInit();
+  let createdProject: { name: string; source: TaskSource } | undefined;
+  const result = await withWriteLock(async () => {
+    const filed: Task[] = [];
+    const skipped: TaskFilingSkip[] = [];
+    let label = '';
+    let project = '';
+    dbTransaction((handle) => {
+      const folder = handle.prepare('SELECT label, project FROM task_groups WHERE id = ?').get(groupId) as
+        { label: string; project: string | null } | undefined;
+      if (!folder) throw new Error(`Group "${groupId}" not found.`);
+      label = folder.label;
+      project = folder.project ?? '';
+      if (project) {
+        const row = ensureProjectRowLocked(project, 'local', 'fileTasksIntoFolder');
+        if (row.blocked) throw new Error(`Project "${project}" was deleted; file into a folder of a live project.`);
+        if (row.created) createdProject = { name: row.name, source: row.source };
+        if (row.name !== project) {
+          handle.prepare('UPDATE task_groups SET project = ? WHERE id = ?').run(row.name, groupId);
+          project = row.name;
+        }
+      }
+      const sel = handle.prepare('SELECT * FROM tasks WHERE id = ?');
+      const now = new Date().toISOString();
+      const seen = new Set<string>();
+      for (const item of items) {
+        if (typeof item?.id !== 'string' || seen.has(item.id)) continue;
+        seen.add(item.id);
+        const row = sel.get(item.id) as Record<string, any> | undefined;
+        if (!row) { skipped.push({ id: item.id, reason: 'missing' }); continue; }
+        const task = rowToTask(row);
+        if (item.expect_project !== undefined && !sameProject(task.project, item.expect_project)) {
+          skipped.push({ id: task.id, reason: 'changed' }); continue;
+        }
+        const moving = !sameProject(task.project, project);
+        const adds = (item.add_tags ?? []).filter((tag) => typeof tag === 'string' && tag.trim() && !(task.tags ?? []).includes(tag));
+        const asked = typeof item.title === 'string' ? item.title.trim() : '';
+        const title = asked && asked !== task.title
+          && (item.expect_title === undefined || item.expect_title === task.title) ? asked : '';
+        if (task.source !== 'local' && (moving || adds.length || title)) {
+          skipped.push({ id: task.id, reason: 'synced' }); continue;
+        }
+        if (title && validatePluginContent(task, 'title', title)) { skipped.push({ id: task.id, reason: 'rejected' }); continue; }
+        const patch: Partial<Task> = {};
+        if (moving) patch.project = project;
+        if (task.group_id !== groupId) patch.group_id = groupId;
+        if (adds.length) patch.tags = [...new Set([...(task.tags ?? []), ...adds])];
+        if (title) patch.title = title;
+        const prepared = prepareRawUpdate(task, patch);
+        if (!prepared) continue;
+        prepared.updated_at = now;
+        const patchRow = taskToRow(prepared);
+        // group_id rides the payload column: rebuild it from the merged task so the
+        // other payload fields survive (see updateTasksBulk).
+        if ('payload' in patchRow) patchRow.payload = taskToRow({ ...task, ...prepared }).payload ?? null;
+        const cols = Object.keys(patchRow);
+        handle.prepare(`UPDATE tasks SET ${cols.map((c) => `${c} = @${c}`).join(', ')} WHERE id = @id`).run({ ...patchRow, id: task.id });
+        Object.assign(task, prepared);
+        normalizeNullClears(task);
+        filed.push(task);
+      }
+    });
+    if (filed.length || createdProject) invalidateRowShadow();
+    return { group_id: groupId, label, project, filed, skipped };
+  });
+  if (createdProject) emitProjectCreated(createdProject.name, createdProject.source);
+  return result;
 }
 
 /**

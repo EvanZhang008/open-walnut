@@ -272,12 +272,27 @@ function publicTask(task: Task) {
     dependsOn: task.depends_on ? [...task.depends_on] : undefined,
     tags: task.tags ? [...task.tags] : undefined,
     source: task.source,
+    groupId: task.group_id || undefined,
+    sessionIds: task.session_ids?.length ? [...task.session_ids] : undefined,
     dueDate: task.due_date,
     startDate: task.start_date,
     endDate: task.end_date,
     createdAt: task.created_at,
     updatedAt: task.updated_at,
     completedAt: task.completed_at,
+  }
+}
+
+/** Tasks per transaction in tasks.fileIntoFolder. */
+const FILE_INTO_FOLDER_CHUNK = 200
+
+function publicFolder(folder: { group_id: string; label: string; project: string; parent_id?: string; member_ids: string[] }) {
+  return {
+    id: folder.group_id,
+    label: folder.label,
+    project: folder.project ?? '',
+    ...(folder.parent_id ? { parentId: folder.parent_id } : {}),
+    memberCount: folder.member_ids.length,
   }
 }
 
@@ -292,6 +307,8 @@ function publicTaskSummary(task: Task | SlimTask) {
     dependsOn: task.depends_on ? [...task.depends_on] : undefined,
     tags: task.tags ? [...task.tags] : undefined,
     source: task.source,
+    groupId: task.group_id || undefined,
+    sessionIds: task.session_ids?.length ? [...task.session_ids] : undefined,
     dueDate: task.due_date,
     startDate: task.start_date,
     endDate: task.end_date,
@@ -402,6 +419,12 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     if (!context.signal.aborted) return
     context.logger.warn('Plugin registration refused after disposal', { registration })
     context.signal.throwIfAborted()
+  }
+
+  /** Folder writes are primary-only: a replica's own store is replaced by the next projection
+   *  import, and its outbox forwards single-task updates, not these batches. */
+  const assertPrimaryWrite = (call: string): void => {
+    if (CLOUD_MODE) throw new Error(`${call} is not available on a replica; the primary Walnut owns the board.`)
   }
 
   // Declared as consts, not methods on the bag: a plugin may destructure
@@ -517,6 +540,8 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           ...(typeof patch.endDate === 'string' || patch.endDate === null ? { end_date: patch.endDate ?? '' } : {}),
           ...(typeof patch.sprint === 'string' || patch.sprint === null ? { sprint: patch.sprint ?? '' } : {}),
           ...(Array.isArray(patch.tags) ? { set_tags: patch.tags as string[] } : {}),
+          ...(Array.isArray(patch.addTags) ? { add_tags: patch.addTags as string[] } : {}),
+          ...(Array.isArray(patch.removeTags) ? { remove_tags: patch.removeTags as string[] } : {}),
           ...(Array.isArray(patch.dependsOn) ? { set_depends_on: patch.dependsOn as string[] } : {}),
         }
         const task = Object.keys(structural).length > 0 ? (await updateTask(id, structural)).task : await getTask(id)
@@ -537,6 +562,57 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       async delete(id: string) {
         const { deleteTask } = await import('../task-manager.js')
         await deleteTask(id)
+      },
+      async folders() {
+        const { listGroups } = await import('../task-manager.js')
+        return (await listGroups()).map(publicFolder)
+      },
+      async createFolder(input: { label: string; project: string; parentId?: string }) {
+        assertPrimaryWrite('tasks.createFolder')
+        if (!(input?.label ?? '').trim()) throw new Error('Folder name cannot be empty.')
+        const { createFolder, ensureProject } = await import('../task-manager.js')
+        const asked = (input.project ?? '').trim()
+        // A folder needs its project on the board: mint the registry row the way a task
+        // filed under a new name would (local), and refuse a project the user deleted.
+        const project = asked ? await ensureProject(asked, 'local', { writer: `plugin/${pluginId}` }) : { name: '', blocked: false }
+        if (project.blocked) throw new Error(`Project "${asked}" was deleted; a folder cannot bring it back.`)
+        const created = await createFolder(input.label, project.name, input.parentId)
+        // The web keeps folder labels in a registry of their own and refetches it on this
+        // event; without it a folder a plugin made stays invisible until a full reload.
+        bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: created.group_id, label: created.label }, ['web-ui'], { source: `plugin/${pluginId}` })
+        return publicFolder({ ...created, member_ids: [] })
+      },
+      async fileIntoFolder(folderId: string, items: Array<{ id: string; addTags?: string[]; title?: string; expectProject?: string; expectTitle?: string }>) {
+        assertPrimaryWrite('tasks.fileIntoFolder')
+        const result: { filed: string[]; skipped: Array<{ id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' }> } = { filed: [], skipped: [] }
+        if (!Array.isArray(items) || items.length === 0) return result
+        const { fileTasksIntoFolder } = await import('../task-manager.js')
+        let folder: { group_id: string; label: string } | undefined
+        try {
+          // One transaction per chunk, yielding in between, so a plugin handing over thousands
+          // of tasks never holds the event loop for the whole batch.
+          for (let i = 0; i < items.length; i += FILE_INTO_FOLDER_CHUNK) {
+            if (i > 0) await new Promise<void>((resolve) => setImmediate(resolve))
+            const chunk = items.slice(i, i + FILE_INTO_FOLDER_CHUNK).map((item) => ({
+              id: item?.id,
+              ...(Array.isArray(item?.addTags) ? { add_tags: item.addTags } : {}),
+              ...(typeof item?.title === 'string' ? { title: item.title } : {}),
+              ...(typeof item?.expectProject === 'string' ? { expect_project: item.expectProject } : {}),
+              ...(typeof item?.expectTitle === 'string' ? { expect_title: item.expectTitle } : {}),
+            }))
+            const done = await fileTasksIntoFolder(folderId, chunk)
+            result.skipped.push(...done.skipped)
+            if (done.filed.length === 0) continue
+            folder = { group_id: done.group_id, label: done.label }
+            result.filed.push(...done.filed.map((task) => task.id))
+            // The bulk shape (no `task`, a `taskIds` list): the browser refetches once and the
+            // indexers re-read exactly these ids, instead of one frame per task.
+            bus.emit(EventNames.TASK_UPDATED, { task: null, taskIds: done.filed.map((task) => task.id), fields: ['project', 'group_id', 'tags', 'title'] }, ['web-ui'], { source: `plugin/${pluginId}` })
+          }
+        } finally {
+          if (folder) bus.emit(EventNames.TASK_GROUPS_CHANGED, folder, ['web-ui'], { source: `plugin/${pluginId}` })
+        }
+        return result
       },
     },
 

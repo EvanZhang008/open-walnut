@@ -11,6 +11,7 @@ import type {
   QuietState,
   ServiceApi,
   ServiceChange,
+  TaskFilingResult,
   WalnutServerApi,
 } from './server.js'
 
@@ -53,6 +54,8 @@ export interface FakeWalnutOptions {
   pluginName?: string
   walnutVersion?: string
   tasks?: WalnutTask[]
+  /** Folders that exist before activate. A task files into one through its `groupId`. */
+  folders?: Array<{ id: string; label: string; project: string; parentId?: string }>
   config?: Record<string, unknown>
   overrides?: Partial<WalnutServerApi>
 }
@@ -82,6 +85,10 @@ export interface FakeWalnutResult {
 
 export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutResult {
   const taskMap = new Map((options.tasks ?? []).map((task) => [task.id, structuredClone(task)]))
+  const folderMap = new Map<string, { id: string; label: string; project: string; parentId?: string }>(
+    (options.folders ?? []).map((folder) => [folder.id, structuredClone(folder)]),
+  )
+  let nextFolder = 1
   const notices: PluginNotifyInput[] = []
   const errors: PluginNotice[] = []
   const emitted: PluginEvent[] = []
@@ -236,13 +243,21 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       async update(id, patch) {
         const task = taskMap.get(id)
         if (!task) throw new Error(`Task "${id}" not found`)
+        const { addTags, removeTags, ...rest } = patch
         const mapped = {
-          ...patch,
+          ...rest,
           ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate ?? undefined } : {}),
           ...(patch.startDate !== undefined ? { startDate: patch.startDate ?? undefined } : {}),
           ...(patch.endDate !== undefined ? { endDate: patch.endDate ?? undefined } : {}),
         }
+        // Same rule as the host: a folder never follows a task into another project.
+        if (patch.project !== undefined && patch.project !== (task.project ?? '')) delete task.groupId
         Object.assign(task, mapped, { updatedAt: new Date().toISOString() })
+        if (patch.tags === undefined && (addTags?.length || removeTags?.length)) {
+          const drop = new Set(removeTags ?? [])
+          const next = [...new Set([...(task.tags ?? []), ...(addTags ?? [])])].filter((tag) => !drop.has(tag))
+          task.tags = next.length ? next : undefined
+        }
         return structuredClone(task)
       },
       async appendNote(id, markdown) {
@@ -259,6 +274,57 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
         return structuredClone(task)
       },
       async delete(id) { taskMap.delete(id) },
+      async folders() {
+        return [...folderMap.values()].map((folder) => ({
+          ...structuredClone(folder),
+          memberCount: [...taskMap.values()].filter((task) => task.groupId === folder.id).length,
+        }))
+      },
+      async createFolder(input) {
+        const label = input.label.trim()
+        if (!label) throw new Error('Folder name cannot be empty.')
+        const project = input.project ?? ''
+        if (input.parentId !== undefined) {
+          const parent = folderMap.get(input.parentId)
+          if (!parent) throw new Error(`Parent folder "${input.parentId}" not found.`)
+          if (parent.project !== project) throw new Error('A folder can only nest inside a folder of the same project.')
+        }
+        const folder = { id: `folder-${nextFolder++}`, label, project, ...(input.parentId ? { parentId: input.parentId } : {}) }
+        folderMap.set(folder.id, folder)
+        return { ...structuredClone(folder), memberCount: 0 }
+      },
+      async fileIntoFolder(folderId, items) {
+        const folder = folderMap.get(folderId)
+        if (!folder) throw new Error(`Group "${folderId}" not found.`)
+        const result: TaskFilingResult = { filed: [], skipped: [] }
+        const seen = new Set<string>()
+        for (const item of items) {
+          if (seen.has(item.id)) continue
+          seen.add(item.id)
+          const task = taskMap.get(item.id)
+          if (!task) { result.skipped.push({ id: item.id, reason: 'missing' }); continue }
+          const sameProject = (a: string | undefined, b: string) => (a ?? '').toLowerCase() === b.toLowerCase()
+          if (item.expectProject !== undefined && !sameProject(task.project, item.expectProject)) {
+            result.skipped.push({ id: task.id, reason: 'changed' }); continue
+          }
+          // Same rules as the host: a synced task is only filed, tags are added.
+          const moving = !sameProject(task.project, folder.project)
+          const adds = (item.addTags ?? []).filter((tag) => tag.trim() && !(task.tags ?? []).includes(tag))
+          const title = item.title?.trim()
+          const retitle = !!title && title !== task.title && (item.expectTitle === undefined || item.expectTitle === task.title)
+          if (task.source !== 'local' && (moving || adds.length > 0 || retitle)) {
+            result.skipped.push({ id: task.id, reason: 'synced' }); continue
+          }
+          if (!moving && task.groupId === folderId && adds.length === 0 && !retitle) continue
+          if (moving) task.project = folder.project
+          task.groupId = folderId
+          if (adds.length) task.tags = [...new Set([...(task.tags ?? []), ...adds])]
+          if (retitle) task.title = title!
+          task.updatedAt = new Date().toISOString()
+          result.filed.push(task.id)
+        }
+        return result
+      },
     },
     config: {
       async get() { return structuredClone(config) as any },

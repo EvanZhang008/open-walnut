@@ -65,11 +65,36 @@ export interface TaskPatch {
   phase?: TaskPhase
   project?: string
   dependsOn?: string[]
+  /** Replaces every tag. To change one tag, use `addTags` / `removeTags`. */
   tags?: string[]
+  /** Added to the tags the task has AT WRITE TIME, so a tag someone else changes in
+   *  the meantime survives. Idempotent. Ignored when `tags` is also given. */
+  addTags?: string[]
+  /** Removed from the tags the task has at write time. Ignored when `tags` is given. */
+  removeTags?: string[]
   dueDate?: string | null
   startDate?: string | null
   endDate?: string | null
   sprint?: string | null
+}
+
+/** A folder inside a project. Folders nest; `parentId` names the enclosing one. */
+export interface TaskFolder {
+  id: string
+  label: string
+  /** The project the folder belongs to; '' is the Inbox. */
+  project: string
+  parentId?: string
+  /** Tasks filed directly in this folder. */
+  memberCount: number
+}
+
+export interface TaskFolderCreateInput {
+  label: string
+  /** '' is the Inbox. */
+  project: string
+  /** Nest inside this folder, which must belong to the same project. */
+  parentId?: string
 }
 
 export interface TaskService {
@@ -78,11 +103,47 @@ export interface TaskService {
   query(query: TaskQueryInput): Promise<WalnutTaskSummary[]>
   children(id: string): Promise<WalnutTaskSummary[]>
   create(input: TaskCreateInput): Promise<WalnutTask>
+  /** Moving a task to another project drops its folder: a folder never follows a task
+   *  across projects. File it again with `fileIntoFolder`. */
   update(id: string, patch: TaskPatch): Promise<WalnutTask>
   appendNote(id: string, markdown: string): Promise<void>
   appendLog(id: string, entry: string): Promise<void>
   complete(id: string): Promise<WalnutTask>
   delete(id: string): Promise<void>
+  /** Every folder, empty ones included. */
+  folders(): Promise<TaskFolder[]>
+  /** Creates the project too (a local one) when the board has none by that name, and
+   *  refuses a project the user deleted. Not available on a replica. */
+  createFolder(input: TaskFolderCreateInput): Promise<TaskFolder>
+  /** File tasks into a folder: each one moves into the folder's project when it is
+   *  elsewhere, joins the folder, and takes the given tags and title. The batch is
+   *  written as a few row updates, where `update` rewrites the task store once per
+   *  task, so this is the call for dozens or thousands of tasks.
+   *
+   *  A task another service syncs is only filed, and only when it already sits in the
+   *  folder's project: moving, retagging or renaming it would have to reach that
+   *  service, which is `update`'s job. It is skipped otherwise, as is a missing task, a
+   *  task whose new title the owning plugin rejects, and one that no longer matches
+   *  `expectProject` / `expectTitle`. A task already filed as asked is in neither list.
+   *  Not available on a replica. */
+  fileIntoFolder(folderId: string, items: TaskFilingInput[]): Promise<TaskFilingResult>
+}
+
+export interface TaskFilingInput {
+  id: string
+  /** Plain tags, added to the ones the task has at write time. */
+  addTags?: string[]
+  title?: string
+  /** File only if the task is still in this project (what you planned from). */
+  expectProject?: string
+  /** Rename only if the title is still this one; the rest of the item still applies. */
+  expectTitle?: string
+}
+
+export interface TaskFilingResult {
+  /** Tasks this call changed. */
+  filed: string[]
+  skipped: Array<{ id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' }>
 }
 
 export interface ConfigService {

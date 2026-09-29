@@ -50,6 +50,7 @@ import { TaskStartButton } from './TaskStartButton';
 import { CronPill } from '@/components/sessions/CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
+import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
@@ -1191,6 +1192,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <CronPill sessionId={resolveTaskSessionId(task)} />
           <TriggerPill taskId={task.id} />
           <ImportedPill task={task} />
+          <TaskTagPills tags={task.tags} />
           <SubtaskPill task={task} />
           <LeaderPill task={task} />
           {/* Info pills + kebab — same line as title, no second row */}
@@ -2014,6 +2016,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
             </span>
           )}
           <PluginFieldPills task={task} />
+          <TaskTagPills tags={task.tags} max={8} />
         </div>
         <div className="todo-detail-dates text-xs text-muted">
           {/* The id is a reference, so it rides the metadata line rather than

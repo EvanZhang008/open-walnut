@@ -28,6 +28,11 @@ export interface WalnutTask {
   dependsOn?: string[]
   tags?: string[]
   source: string
+  /** The folder the task is filed in, inside its project. Absent at the project root. */
+  groupId?: string
+  /** Every provider session ever linked to the task, the current one included. It
+   *  outlives completion, which clears the task's live session slot. */
+  sessionIds?: string[]
   dueDate?: string
   startDate?: string
   endDate?: string
