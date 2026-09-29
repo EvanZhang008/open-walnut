@@ -6457,6 +6457,15 @@ interface ChangesCacheEntry {
   mtimeMs: number
   size: number
   output: HostLocalComputeOutput
+  lastUsed: number
+}
+const changesCache = new Map<string, ChangesCacheEntry>()
+const CHANGES_CACHE_MAX_SESSIONS = 12
+// What makes a recompute cheap, kept apart from the heavy output and for more
+// sessions: the prewarm sweep warms ~20 sessions, so with these inside the
+// 12-entry output LRU a whale's were evicted between its warms and every warm
+// re-read the whole transcript (907 MB, 5 to 20 s, 2026-09-29).
+interface ChangesMemo {
   subCache: Map<string, { size: number; fileMap: Map<string, ChangesFileAccum> }>
   gitRootByDir: Map<string, string | null>
   // Where the main transcript parse stopped: a recompute after an append reads
@@ -6464,8 +6473,18 @@ interface ChangesCacheEntry {
   mainParse: { state?: MainParseState }
   lastUsed: number
 }
-const changesCache = new Map<string, ChangesCacheEntry>()
-const CHANGES_CACHE_MAX_SESSIONS = 12
+const changesMemos = new Map<string, ChangesMemo>()
+const CHANGES_MEMO_MAX_SESSIONS = 64
+
+function evictLeastRecent<T extends { lastUsed: number }>(cache: Map<string, T>, max: number, keep: string): void {
+  if (cache.size <= max) return
+  let oldest: string | null = null
+  let oldestTs = Infinity
+  for (const [k, v] of cache) {
+    if (v.lastUsed < oldestTs) { oldestTs = v.lastUsed; oldest = k }
+  }
+  if (oldest && oldest !== keep) cache.delete(oldest)
+}
 let changesInflight: Promise<void> = Promise.resolve()
 const changesInflightBySid = new Map<string, Promise<ChangesCacheEntry | null>>()
 
@@ -6492,39 +6511,30 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
     changesInflight = new Promise<void>((r) => { release = r })
     await prev.catch(() => { /* prior failure doesn't gate us */ })
     try {
-      const prior = changesCache.get(sid)
       // Created BEFORE the compute so its first run fills the same memos.
-      const subCache = prior?.subCache ?? new Map()
-      const gitRootByDir = prior?.gitRootByDir ?? new Map()
-      const mainParse = prior?.mainParse ?? {}
+      const memo: ChangesMemo = changesMemos.get(sid)
+        ?? { subCache: new Map(), gitRootByDir: new Map(), mainParse: {}, lastUsed: 0 }
+      const startedAt = Date.now()
       const output = await computeHostLocalChanges({
         sessionId: sid,
         cwd,
         claudeHome: path.join(HOME_DIR, '.claude'),
-        subCache,
-        gitRootByDir,
-        mainParse,
+        subCache: memo.subCache,
+        gitRootByDir: memo.gitRootByDir,
+        mainParse: memo.mainParse,
       })
+      memo.lastUsed = Date.now()
+      changesMemos.set(sid, memo)
+      evictLeastRecent(changesMemos, CHANGES_MEMO_MAX_SESSIONS, sid)
       if (!output) return null
-      const entry: ChangesCacheEntry = {
-        mtimeMs: output.mtimeMs,
-        size: output.size,
-        output,
-        subCache,
-        gitRootByDir,
-        mainParse,
-        lastUsed: Date.now(),
-      }
+      logMsg('info', 'changes.compute done', {
+        sid, ms: memo.lastUsed - startedAt, resumed: output.parseStats.resumed,
+        readBytes: output.parseStats.readBytes, size: output.size, files: output.result.fileCount,
+      })
+      const entry: ChangesCacheEntry = { mtimeMs: output.mtimeMs, size: output.size, output, lastUsed: Date.now() }
       changesCache.set(sid, entry)
       // LRU bound — whale outputs hold full before/after strings.
-      if (changesCache.size > CHANGES_CACHE_MAX_SESSIONS) {
-        let oldest: string | null = null
-        let oldestTs = Infinity
-        for (const [k, v] of changesCache) {
-          if (v.lastUsed < oldestTs) { oldestTs = v.lastUsed; oldest = k }
-        }
-        if (oldest && oldest !== sid) changesCache.delete(oldest)
-      }
+      evictLeastRecent(changesCache, CHANGES_CACHE_MAX_SESSIONS, sid)
       return entry
     } finally {
       release()

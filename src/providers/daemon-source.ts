@@ -8059,6 +8059,21 @@ async function cmdDescribeExternalSessions(ws, id, cmd) {
 
 const changesCache = new Map();
 const CHANGES_CACHE_MAX_SESSIONS = 12;
+// Parse memos (subCache, gitRootByDir, mainParse) outlive the heavy output, for
+// more sessions: the prewarm sweep warms ~20, so inside the 12-entry output LRU
+// a whale's were evicted between warms. Mirror of the standalone.
+const changesMemos = new Map();
+const CHANGES_MEMO_MAX_SESSIONS = 64;
+
+function evictLeastRecent(cache, max, keep) {
+  if (cache.size <= max) return;
+  let oldest = null;
+  let oldestTs = Infinity;
+  for (const [k, v] of cache) {
+    if (v.lastUsed < oldestTs) { oldestTs = v.lastUsed; oldest = k; }
+  }
+  if (oldest && oldest !== keep) cache.delete(oldest);
+}
 let changesInflight = Promise.resolve();
 const changesInflightBySid = new Map();
 
@@ -8084,40 +8099,32 @@ async function computeChangesCached(sid, cwd, refresh) {
     changesInflight = new Promise((r) => { release = r; });
     await prev.catch(() => {});
     try {
-      const prior = changesCache.get(sid);
       // Created BEFORE the compute so its first run fills the same memos;
       // mainParse lets a recompute read only the bytes appended since.
-      const subCache = (prior && prior.subCache) || new Map();
-      const gitRootByDir = (prior && prior.gitRootByDir) || new Map();
-      const mainParse = (prior && prior.mainParse) || {};
+      const memo = changesMemos.get(sid)
+        || { subCache: new Map(), gitRootByDir: new Map(), mainParse: {}, lastUsed: 0 };
+      const startedAt = Date.now();
       const output = await changesCore.computeHostLocalChanges({
         sessionId: sid,
         cwd: cwd,
         claudeHome: path.join(HOME_DIR, '.claude'),
-        subCache: subCache,
-        gitRootByDir: gitRootByDir,
-        mainParse: mainParse,
+        subCache: memo.subCache,
+        gitRootByDir: memo.gitRootByDir,
+        mainParse: memo.mainParse,
       });
+      memo.lastUsed = Date.now();
+      changesMemos.set(sid, memo);
+      evictLeastRecent(changesMemos, CHANGES_MEMO_MAX_SESSIONS, sid);
       if (!output) return null;
-      const entry = {
-        mtimeMs: output.mtimeMs,
-        size: output.size,
-        output: output,
-        subCache: subCache,
-        gitRootByDir: gitRootByDir,
-        mainParse: mainParse,
-        lastUsed: Date.now(),
-      };
+      const stats = output.parseStats || {};
+      logMsg('info', 'changes.compute done', {
+        sid: sid, ms: memo.lastUsed - startedAt, resumed: stats.resumed === true,
+        readBytes: stats.readBytes, size: output.size, files: output.result.fileCount,
+      });
+      const entry = { mtimeMs: output.mtimeMs, size: output.size, output: output, lastUsed: Date.now() };
       changesCache.set(sid, entry);
       // LRU bound — whale outputs hold full before/after strings.
-      if (changesCache.size > CHANGES_CACHE_MAX_SESSIONS) {
-        let oldest = null;
-        let oldestTs = Infinity;
-        for (const [k, v] of changesCache) {
-          if (v.lastUsed < oldestTs) { oldestTs = v.lastUsed; oldest = k; }
-        }
-        if (oldest && oldest !== sid) changesCache.delete(oldest);
-      }
+      evictLeastRecent(changesCache, CHANGES_CACHE_MAX_SESSIONS, sid);
       return entry;
     } finally {
       release();

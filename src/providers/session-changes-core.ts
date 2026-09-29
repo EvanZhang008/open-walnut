@@ -395,6 +395,9 @@ export interface HostLocalComputeOutput {
   jsonlPath: string;
   mtimeMs: number;
   size: number;
+  /** How the main transcript was read: continued from the caller's
+   *  MainParseState, and how many bytes this compute read. */
+  parseStats: { resumed: boolean; readBytes: number };
 }
 
 const STREAM_WINDOW = 1024 * 1024;
@@ -479,7 +482,7 @@ async function streamParseHostLocal(
   jsonlPath: string,
   deadlineMs: number,
   resume?: MainParseState,
-): Promise<MainParseState & { trailing: string } | null> {
+): Promise<MainParseState & { trailing: string; resumed: boolean; readFrom: number } | null> {
   let fh: fsp.FileHandle;
   try { fh = await fsp.open(jsonlPath, 'r'); } catch { return null; }
   try {
@@ -490,6 +493,7 @@ async function streamParseHostLocal(
     const fileMap = resumed ? cloneFileMap(resume!.fileMap) : new Map<string, FileAccum>();
     let headBlock = resumed ? resume!.headBlock : '';
     let consumed = resumed ? resume!.offset : 0;
+    const readFrom = consumed;
     let carry = Buffer.alloc(0);
     const win = Buffer.alloc(STREAM_WINDOW);
     let offset = consumed;
@@ -513,7 +517,7 @@ async function streamParseHostLocal(
       await new Promise<void>((r) => setImmediate(r));
     }
     const tail = await tailHashAt(fh, consumed);
-    return { epoch, offset: consumed, tail, headBlock, fileMap, trailing: carry.toString('utf-8') };
+    return { epoch, offset: consumed, tail, headBlock, fileMap, trailing: carry.toString('utf-8'), resumed, readFrom };
   } finally {
     await fh.close().catch(() => { /* already closed */ });
   }
@@ -576,7 +580,7 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   // 1. Main JSONL ops (streamed, continuing from the caller's MainParseState).
   const parsed = await streamParseHostLocal(jsonlPath, deadlineMs, opts.mainParse?.state);
   if (parsed === null) return null;
-  const { trailing, ...state } = parsed;
+  const { trailing, resumed, readFrom, ...state } = parsed;
   if (opts.mainParse) opts.mainParse.state = state;
   // This compute's map is a copy when the state is kept: the trailing partial
   // line and the subagent merges below must not reach the next continuation.
@@ -705,6 +709,7 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     jsonlPath,
     mtimeMs: st.mtimeMs,
     size: st.size,
+    parseStats: { resumed, readBytes: state.offset + Buffer.byteLength(trailing) - readFrom },
   };
 }
 
