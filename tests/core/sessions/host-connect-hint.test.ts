@@ -13,8 +13,10 @@ import {
   describeConnectPhase,
   describeListingError,
   IN_PROGRESS_PHASES,
+  type HostConnectErrorKind,
 } from '../../../src/core/sessions/host-connect-hint.js';
 import type { DaemonConnectPhase } from '../../../src/providers/daemon-connection.js';
+import { RemoteShellNoiseError } from '../../../src/providers/remote-sh.js';
 
 const T = 'me@devbox.example.test';
 
@@ -199,6 +201,44 @@ describe('classifyHostConnectError: captured ssh stderr for each new kind', () =
   it('the credential kinds are the ones the warmup re-dials on 1, 2, 5, 10 minutes, then hourly', () => {
     expect([...CREDENTIAL_WAIT_KINDS].sort()).toEqual(['agent_missing', 'cert_expired']);
     expect([0, 1, 2, 3, 4, 9].map(credentialRetryDelayMs)).toEqual([60_000, 120_000, 300_000, 600_000, 3_600_000, 3_600_000]);
+  });
+});
+
+/**
+ * Walnut writes some failure sentences itself. The host's names used to be
+ * blanked out of the WHOLE message before matching, so a host whose name is a
+ * word of such a sentence broke it: the cloud box, labelled "Cloud", turned
+ * "Cloud companion needs an update" into "companion needs an update", and the
+ * card said "SSH works but the session daemon did not come up".
+ */
+describe("Walnut's own sentences are read whatever the host is called", () => {
+  const OWN: Array<[string, string, HostConnectErrorKind]> = [
+    ['ephemeral, host off', "ephemeral server: remote host 'server' is off for test servers (set WALNUT_EPHEMERAL_REMOTE_HOSTS=1 to attach anyway)", 'ephemeral'],
+    ['ephemeral, attach-only', "ephemeral server: no daemon running on 'devbox' and ephemeral sandboxes do not deploy/start remote daemons (attach-only)", 'ephemeral'],
+    ['shell_noise, quoting ssh words', new RemoteShellNoiseError('devbox', 'Permission denied (publickey). Connection closed by 10.0.0.9').message, 'shell_noise'],
+  ];
+  const wordsOf = (s: string) => [...new Set(s.toLowerCase().match(/[a-z0-9_.-]+/g) ?? [])];
+
+  it.each(OWN)('%s: every word of the sentence as the host name, one at a time and all at once', (_label, message, kind) => {
+    for (const word of wordsOf(message)) {
+      expect(classifyHostConnectError(message, T, [word]).kind, `host named "${word}"`).toBe(kind);
+    }
+    expect(classifyHostConnectError(message, T, wordsOf(message)).kind).toBe(kind);
+    // Behind the connect summary's prefix too.
+    expect(classifyHostConnectError(`Connection to server failed 4s ago: ${message}`, T, ['server', 'Server box']).kind).toBe(kind);
+  });
+
+  it('a host whose NAME reads like a Walnut sentence is still only a name', () => {
+    expect(classifyHostConnectError('Connection to ephemeral server failed 3s ago: Permission denied (publickey).', T, ['Ephemeral server']).kind).toBe('auth');
+    expect(classifyHostConnectError('Connection to attach-only failed 3s ago: Connection refused', T, ['attach-only']).kind).toBe('refused');
+    expect(classifyHostConnectError('Connection to shell_noise failed 3s ago: exit 255', T, ['shell_noise']).kind).toBe('unknown');
+  });
+
+  it('ssh output keeps the name blanked: "proxy" as an alias is not a proxy failure', () => {
+    // Why the ssh patterns still read the blanked text: a match that merely
+    // starts at the host's name ("proxy failed") is the summary's own words.
+    expect(classifyHostConnectError('Connection to proxy failed 8s ago: exit 255', T, ['proxy']).kind).toBe('unknown');
+    expect(classifyHostConnectError('Connection to proxy failed 8s ago: Connection refused', T, ['proxy']).kind).toBe('refused');
   });
 });
 

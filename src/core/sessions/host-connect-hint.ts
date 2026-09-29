@@ -213,15 +213,28 @@ export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, targe
 }
 
 /**
- * Text patterns per kind, MOST SPECIFIC FIRST: ssh output often carries
- * several of these words at once (a changed host key prints its warning and
- * then "Permission denied"; a proxy failure says "Connection closed"). The
- * `walnut-ssh-evidence:` tags come from providers/ssh-credential-evidence.ts,
- * which asks this machine's agent why ssh only said "Permission denied".
+ * Sentences Walnut writes itself, checked FIRST and on the text as written.
+ * The host's names are blanked out before the ssh patterns below run, and that
+ * would corrupt these: a name can be one of their words (a host called `server`
+ * turned "ephemeral server" into "ephemeral"). Their detail can also quote
+ * words the ssh patterns would misread (shell_noise quotes what the login shell
+ * printed). Global flag: every occurrence is checked against the name spans.
+ */
+const WALNUT_SENTENCES: Array<[HostConnectErrorKind, RegExp]> = [
+  // providers/daemon-connection.ts (a test server) and providers/remote-sh.ts
+  ['ephemeral', /ephemeral server|attach-only/g],
+  ['shell_noise', /shell_noise:/g],
+]
+
+/**
+ * Evidence in ssh and daemon output, MOST SPECIFIC FIRST: ssh output often
+ * carries several of these words at once (a changed host key prints its
+ * warning and then "Permission denied"; a proxy failure says "Connection
+ * closed"). The `walnut-ssh-evidence:` tags come from
+ * providers/ssh-credential-evidence.ts, which asks this machine's agent why ssh
+ * only said "Permission denied".
  */
 const PATTERNS: Array<[HostConnectErrorKind, RegExp]> = [
-  ['ephemeral', /ephemeral server|attach-only/],
-  ['shell_noise', /shell_noise/],
   ['host_key', /remote host identification has changed|host key verification failed|host key for \S+ has changed|you have requested strict checking|offending \S+ key in|disabled to avoid man-in-the-middle/],
   ['cert_expired', /walnut-ssh-evidence: cert-expired|certificate (has )?expired|expired certificate|certificate invalid: expired/],
   ['agent_missing', /walnut-ssh-evidence: agent-(missing|empty)|could not open a connection to your authentication agent|error connecting to agent|ssh_auth_sock is not set/],
@@ -244,9 +257,13 @@ const PATTERNS: Array<[HostConnectErrorKind, RegExp]> = [
  *
  * `hostNames` are the user's own words for the host (alias, label, hostname,
  * user): the failure text embeds them ("Connection to nodedev failed …"), and a
- * name like `nodedev` or `bun-box` must not read as a runtime problem. The
- * echoed ssh command line is dropped too: Walnut's own `-o
- * StrictHostKeyChecking=no` must never read as a host key problem.
+ * name like `nodedev` or `bun-box` must not read as a runtime problem, so the
+ * ssh patterns read the text with every name blanked out. Walnut's own
+ * sentences are read before that, on the text as written; there a name only
+ * disqualifies an occurrence that lies wholly inside it (a host labelled
+ * "Ephemeral server" is still just a host). The echoed ssh command line is
+ * dropped too: Walnut's own `-o StrictHostKeyChecking=no` must never read as a
+ * host key problem.
  */
 export function classifyHostConnectError(
   message: string,
@@ -254,18 +271,28 @@ export function classifyHostConnectError(
   hostNames: readonly string[] = [],
   target: HostConnectTarget = {},
 ): HostConnectHint {
-  let m = message.toLowerCase()
+  const text = message.toLowerCase()
     .split('\n').filter((line) => !line.trim().startsWith('command failed:')).join('\n')
     .replace(/(^|\s)-o\s*\S+/g, ' ')
-  for (const name of hostNames) {
-    const n = name.trim().toLowerCase()
-    if (!n) continue
-    // Whole tokens only: a user named `me` must not punch a hole in "permission".
-    const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    m = m.replace(new RegExp(`(?<![a-z0-9_.-])${escaped}(?![a-z0-9_-])`, 'g'), ' ')
+  const names = hostNames.map((name) => name.trim().toLowerCase()).filter(Boolean).map(nameToken)
+  const spans = names.flatMap((re) => [...text.matchAll(re)].map((hit): [number, number] => [hit.index, hit.index + hit[0].length]))
+  const said = (re: RegExp) => [...text.matchAll(re)].some((hit) => {
+    const start = hit.index
+    const end = start + hit[0].length
+    return !spans.some(([s, e]) => s <= start && end <= e)
+  })
+  let kind = WALNUT_SENTENCES.find(([, re]) => said(re))?.[0]
+  if (!kind) {
+    const blanked = names.reduce((m, re) => m.replace(re, ' '), text)
+    kind = PATTERNS.find(([, re]) => re.test(blanked))?.[0] ?? 'unknown'
   }
-  const kind = PATTERNS.find(([, re]) => re.test(m))?.[0] ?? 'unknown'
   return { kind, hint: hintForKind(kind, sshTarget, target), retryable: RETRYABLE[kind] }
+}
+
+/** A host name as a whole token: a user named `me` must not punch a hole in "permission". */
+function nameToken(lowerName: string): RegExp {
+  const escaped = lowerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?<![a-z0-9_.-])${escaped}(?![a-z0-9_-])`, 'g')
 }
 
 /**
