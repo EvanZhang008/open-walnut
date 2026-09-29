@@ -14,6 +14,12 @@
  *   2. a write from ANOTHER connection still forces a rescan (data_version)
  *   3. the query's cache path and its SQL path answer identically
  *   4. what a reader gets back is a copy: mutating it never reaches the cache
+ *   5. ONE rescan per foreign write: the row writes that follow patch the fresh
+ *      snapshot (the first post-fix profile on the live server still showed
+ *      loadStore, because the patch used to require the row shadow, which only a
+ *      whole-store write rebuilt), a locked section that wrote nothing keeps the
+ *      snapshot, and the next whole-store write diffs against the snapshot
+ *      instead of re-INSERTing every row
  */
 import { describe, it, expect, vi, beforeAll } from 'vitest';
 import Database from 'better-sqlite3';
@@ -24,6 +30,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-test-write-t
 import {
   addTask,
   addTasksBulk,
+  compareAndSetNote,
   deleteTasksBulk,
   getTask,
   listTasks,
@@ -104,6 +111,57 @@ describe('task store write-through', () => {
     // The query path must not read a stale snapshot either.
     const page = await queryTasksSlimPage({ ids: [task.id] }, { minimal: true });
     expect(page.tasks[0]?.title).toBe('foreign after');
+  });
+
+  it('after a foreign write the rescan happens once: row writes patch the fresh snapshot', async () => {
+    const { task } = await addTask({ title: 'after foreign', project: 'Local', source: 'local' });
+    await listTasks();
+    const other = new Database(TASK_DB_PATH);
+    try {
+      other.prepare('UPDATE tasks SET title = ? WHERE id = ?').run('foreign touched', task.id);
+    } finally {
+      other.close();
+    }
+    expect((await getTask(task.id)).title).toBe('foreign touched');
+    const afterRescan = scans();
+
+    await updateTaskRaw(task.id, { title: 'ours after foreign' });
+    expect((await getTask(task.id)).title).toBe('ours after foreign');
+    await touchLastSessionUpdate(task.id);
+    await updateNote(task.id, 'note after foreign');
+    expect((await listTasks()).find((t) => t.id === task.id)?.note).toBe('note after foreign');
+    expect(scans()).toBe(afterRescan);
+  });
+
+  it('a locked section that wrote nothing keeps the snapshot', async () => {
+    const { task } = await addTask({ title: 'untouched', project: 'Local', source: 'local' });
+    await updateNote(task.id, 'v1');
+    await listTasks();
+    const before = scans();
+
+    const stale = await compareAndSetNote(task.id, 'not v1', 'v2');
+    expect(stale.updated).toBe(false);
+    expect((await updateTaskRaw('no-such-task-id', { title: 'x' })).changed).toBe(false);
+    expect((await getTask(task.id)).note).toBe('v1');
+    expect(scans()).toBe(before);
+  });
+
+  it('the first whole-store write after a rescan writes the changed rows only', async () => {
+    const seed = await addTasksBulk(Array.from({ length: 40 }, (_, i) => ({
+      title: `diff seed ${i}`, project: 'Diff', source: 'local', status: 'active', phase: 'TODO', priority: 'none',
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    })) as never);
+    expect(seed).toHaveLength(40);
+    _dropTaskStoreCacheForTesting(); // as after a foreign commit: no snapshot, no shadow
+    await listTasks();
+    const before = _storeStatsForTesting();
+
+    await addTask({ title: 'one more row', project: 'Diff', source: 'local' });
+    const after = _storeStatsForTesting();
+    expect(after.wholeStoreWrites).toBe(before.wholeStoreWrites + 1);
+    // The new row, not the 40 seeded ones plus everything else in the store.
+    expect(after.rowsWritten - before.rowsWritten).toBeLessThanOrEqual(2);
+    expect(scans()).toBe(before.fullScans);
   });
 
   it('the query answers the same from the cache and from SQL, for every projection', async () => {

@@ -248,6 +248,24 @@ function rowShadowIfCurrent(handle: SqliteHandle): RowShadow | null {
 }
 
 /**
+ * A shadow rebuilt from the cached snapshot when no current one exists. Readers
+ * trust the snapshot at its data_version, so it describes the rows on disk as
+ * well as a shadow from our last write would; without this the first writeStore
+ * after a boot or a foreign commit re-INSERTed the whole table.
+ */
+function shadowFromSnapshot(handle: SqliteHandle): RowShadow | null {
+  if (!STORE_CACHE_ENABLED || taskStoreCache === null) return null;
+  const version = readDataVersion(handle);
+  if (version === null || version !== taskStoreCacheDataVersion) return null;
+  const fingerprints = new Map<string, RowFingerprint>();
+  for (const task of taskStoreCache.tasks) {
+    fingerprints.set(task.id, rowFingerprint(task));
+    storeStats.fingerprintedRows += 1;
+  }
+  return { fingerprints, order: taskStoreCache.tasks.map((t) => t.id) };
+}
+
+/**
  * True when `nextIds` keeps the shadow's relative order for every row that still
  * exists, i.e. the change is only removals and/or appends at the end. In that case
  * surviving rows keep their rowid ordering and need no positional rewrite.
@@ -311,14 +329,26 @@ function invalidateRowShadow(): void {
 function patchStoreCacheRows(ids: readonly string[]): void {
   if (ids.length === 0) return;
   const db = getDb();
-  if (!db || !STORE_CACHE_ENABLED || taskStoreCache === null || rowShadow === null) {
+  if (!db || !STORE_CACHE_ENABLED || taskStoreCache === null) {
     invalidateRowShadow();
     return;
   }
   const version = readDataVersion(db);
-  if (version === null || version !== taskStoreCacheDataVersion || version !== rowShadowDataVersion) {
+  if (version === null || version !== taskStoreCacheDataVersion) {
     invalidateRowShadow();
     return;
+  }
+  // The snapshot and the shadow are patched independently. The shadow only
+  // exists between whole-store writes (writeStore seeds it, a foreign commit
+  // stales it), and tying the snapshot's fate to it made every row write after a
+  // boot or a foreign commit drop the snapshot again until the next writeStore:
+  // the live server (2026-09-29, first post-fix profile) still spent 1.6% of its
+  // main-thread time in loadStore that way. A missing or stale shadow just means
+  // the next writeStore does one full pass; the snapshot stays.
+  const shadow = version === rowShadowDataVersion ? rowShadow : null;
+  if (shadow === null) {
+    rowShadow = null;
+    rowShadowDataVersion = null;
   }
   const unique = [...new Set(ids)];
   const at = new Map(taskStoreCache.tasks.map((t, i) => [t.id, i]));
@@ -333,12 +363,12 @@ function patchStoreCacheRows(ids: readonly string[]): void {
       const row = present.get(id);
       if (!row) { removed.add(id); continue; }
       const task = rowToTask(row);
-      rowShadow.fingerprints.set(id, rowFingerprint(task));
+      shadow?.fingerprints.set(id, rowFingerprint(task));
       const index = at.get(id);
       if (index === undefined) {
         at.set(id, taskStoreCache.tasks.length);
         taskStoreCache.tasks.push(task);
-        rowShadow.order.push(id);
+        shadow?.order.push(id);
       } else {
         taskStoreCache.tasks[index] = task;
       }
@@ -346,8 +376,10 @@ function patchStoreCacheRows(ids: readonly string[]): void {
   }
   if (removed.size > 0) {
     taskStoreCache.tasks = taskStoreCache.tasks.filter((t) => !removed.has(t.id));
-    rowShadow.order = rowShadow.order.filter((id) => !removed.has(id));
-    for (const id of removed) rowShadow.fingerprints.delete(id);
+    if (shadow) {
+      shadow.order = shadow.order.filter((id) => !removed.has(id));
+      for (const id of removed) shadow.fingerprints.delete(id);
+    }
   }
   taskStoreIndex = null;
   // The lock's finally keeps a snapshot its section re-seeded; this counts as one.
@@ -386,22 +418,38 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   const prev = writeLock;
   let resolve: () => void;
   writeLock = new Promise<void>((r) => { resolve = r; });
-  // Invalidate the whole-store read cache after EVERY locked mutation that did
-  // not re-seed it. Writers that end in writeStore() re-seed the cache with the
-  // just-committed snapshot (see taskStoreCacheSeeded); row-level fast paths
-  // (updateTaskRaw/*Bulk) and targeted registry SQL don't, so this hook still
-  // keeps the cache correct for them without enumerating writers.
+  // Invalidate the whole-store read cache after a locked mutation that changed
+  // rows without re-seeding it. Writers that end in writeStore() or
+  // patchStoreCacheRows() re-seed (see taskStoreCacheSeeded); targeted registry
+  // SQL does not, so this hook keeps the cache correct for it without
+  // enumerating writers. A section that wrote nothing (a compare-and-set that
+  // found stale state, a writer whose task is gone, a read under the lock) left
+  // the snapshot true, and SQLite's own change counter is how it proves that; a
+  // rolled-back section still counts as changed and takes the drop.
   let seededAtStart = -1;
+  let changesAtStart = -1;
   return prev
     .then(() => withFileLock(TASKS_FILE, async () => {
       seededAtStart = taskStoreCacheSeeded;
+      changesAtStart = totalChanges();
       writeLockDepth += 1;
       try { return await fn(); } finally { writeLockDepth -= 1; }
     }))
     .finally(() => {
-      if (taskStoreCacheSeeded === seededAtStart) invalidateTaskStoreCache();
+      if (taskStoreCacheSeeded === seededAtStart && totalChanges() !== changesAtStart) invalidateTaskStoreCache();
       resolve!();
     });
+}
+
+/** Rows this connection has changed since it opened (SQLite's counter); -1 without a connection. */
+function totalChanges(): number {
+  const db = getDb();
+  if (!db) return -1;
+  try {
+    return db.prepare('SELECT total_changes() AS n').pluck().get() as number;
+  } catch {
+    return -1;
+  }
 }
 
 /**
@@ -816,7 +864,7 @@ async function writeStore(store: TaskStore): Promise<void> {
     // at our last commit: that counter is bumped by OTHER connections' commits
     // (verified — our own writes leave it untouched), so any external writer
     // (CLI process, migration, plugin) forces a full rewrite and self-heals.
-    const shadow = rowShadowIfCurrent(handle);
+    const shadow = rowShadowIfCurrent(handle) ?? shadowFromSnapshot(handle);
     const validTasks = store.tasks.filter(
       (t) => t && typeof t === 'object' && typeof t.id === 'string',
     );
