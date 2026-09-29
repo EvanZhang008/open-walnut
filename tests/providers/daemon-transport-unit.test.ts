@@ -192,11 +192,14 @@ describe('B2: RemoteSessionManager.writeMessage guard (before start)', () => {
 
 describe('B2b: writeMessage asks daemon as source of truth (strict ack, no stale cache short-circuit)', () => {
   // Minimal DaemonConnection-shaped mock. RemoteSessionManager only uses
-  // `.connected` + `.send(...)` in writeMessage, so a plain object suffices.
+  // `.connected`, `.send(...)` and `.hasCapability(...)` in writeMessage, so a
+  // plain object suffices (without hasCapability the send threw and read as a
+  // failed delivery).
   function makeMockConn(sendImpl: (cmd: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>) {
     return {
       connected: true,
       send: vi.fn(sendImpl),
+      hasCapability: () => false, // an old daemon: plain send payload
     }
   }
 
@@ -240,7 +243,7 @@ describe('B2b: writeMessage asks daemon as source of truth (strict ack, no stale
 
   it('resolves false when WS is disconnected (conn.connected=false)', async () => {
     const transport = new RemoteSessionManager('daemon-b2b-002', 'testhost', testSshTarget)
-    const mockConn = { connected: false, send: vi.fn(async () => ({ ok: true })) }
+    const mockConn = { connected: false, send: vi.fn(async () => ({ ok: true })), hasCapability: () => false }
     injectState(transport, mockConn, 'session-def', true)
 
     const result = await transport.writeMessage('hello')
@@ -399,6 +402,26 @@ describe('B5: ClaudeCodeSession.transport getter', () => {
 //  output") until a manual refresh. Fix normalizes `s.host ?? '__local__'`.
 // ═══════════════════════════════════════════════════════════════════
 
+// The rest of the tracker surface the recovery loop reaches (vitest throws on
+// any export a vi.doMock factory leaves out, which aborted the whole loop).
+function recoveryTrackerExtras(): Record<string, unknown> {
+  return {
+    updateSessionRecordConditionally: vi.fn().mockResolvedValue(null),
+    getSessionsForTaskSync: vi.fn(() => []),
+    getSessionByClaudeId: vi.fn().mockResolvedValue(undefined),
+  }
+}
+
+// The recovery loop emits status events; give it a bus with no subscribers.
+// A real EventBus, not a stub: modules it imports subscribe at load time
+// (session-cron-metadata), and a stub without subscribe() fails the import.
+function mockIsolatedBus(): void {
+  vi.doMock('../../src/core/event-bus.js', async (importOriginal) => {
+    const real = await importOriginal<typeof import('../../src/core/event-bus.js')>()
+    return { ...real, bus: new real.EventBus() }
+  })
+}
+
 describe('B6: recoverDisconnectedSessions host normalization (local sessions)', () => {
   afterEach(() => { vi.resetModules() })
 
@@ -416,11 +439,9 @@ describe('B6: recoverDisconnectedSessions host normalization (local sessions)', 
         ...updates,
       })),
       emitSessionStatusChanged: vi.fn(),
+      ...recoveryTrackerExtras(),
     }))
-    vi.doMock('../../src/core/event-bus.js', () => ({
-      bus: { emit: vi.fn() },
-      EventNames: { SESSION_STATUS_CHANGED: 'session:status-changed' },
-    }))
+    mockIsolatedBus()
     const { DaemonConnection: DC } = await import('../../src/providers/daemon-connection.js')
     const conn = new DC('__local__', null)
     const priv = conn as unknown as Record<string, (...a: unknown[]) => unknown>
@@ -490,11 +511,9 @@ describe('B7: recoverDisconnectedSessions stopped-record rescue', () => {
       listSessions: vi.fn().mockResolvedValue(sessionRecords),
       updateSessionRecord,
       emitSessionStatusChanged: vi.fn(),
+      ...recoveryTrackerExtras(),
     }))
-    vi.doMock('../../src/core/event-bus.js', () => ({
-      bus: { emit: vi.fn() },
-      EventNames: { SESSION_STATUS_CHANGED: 'session:status-changed' },
-    }))
+    mockIsolatedBus()
     const { DaemonConnection: DC } = await import('../../src/providers/daemon-connection.js')
     const conn = new DC('__local__', null)
     const priv = conn as unknown as Record<string, (...a: unknown[]) => unknown>
@@ -526,10 +545,12 @@ describe('B7: recoverDisconnectedSessions stopped-record rescue', () => {
       [stoppedRecord()],
       () => ({ ok: true, alive: true, pid: 4242 }),
     )
+    // 'idle', not 'running': a live CLI behind a stopped record sits between
+    // turns, and the stream projection flips it to running if a turn starts.
     const statusWrite = updateSessionRecord.mock.calls.find(
-      ([, u]) => (u as { process_status?: string }).process_status === 'running',
+      ([, u]) => (u as { process_status?: string }).process_status === 'idle',
     )
-    expect(statusWrite, 'expected a running recovery write').toBeDefined()
+    expect(statusWrite, 'expected an idle recovery write').toBeDefined()
     const pidWrite = updateSessionRecord.mock.calls.find(
       ([, u]) => (u as { pid?: number }).pid === 4242,
     )
