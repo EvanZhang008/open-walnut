@@ -193,9 +193,11 @@ async function revalidate(
     promise = sessionId ? fetchSessionSlashCommands(sessionId, fresh) : fetchSlashCommands(cwd, host, fresh);
     inflightRequests.set(key, promise);
     promise.then((r) => endPerf(`${r.items.length} cmds · ${r.source}${r.degraded ? ' · degraded' : ''}`)).catch(() => endPerf('error'));
+    // The await below handles a failure; this cleanup chain must not re-raise it as an
+    // unhandled rejection (a 404 for a gone session used to reach the page as an error).
     promise.finally(() => {
       if (inflightRequests.get(key) === promise) inflightRequests.delete(key);
-    });
+    }).catch(() => {});
   }
 
   try {
