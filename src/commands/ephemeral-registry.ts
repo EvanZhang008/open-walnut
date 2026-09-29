@@ -18,6 +18,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { spawn } from 'node:child_process'
 
 /**
  * Registry path relative to WALNUT_HOME. Sits under tmp/ because the snapshot
@@ -95,9 +96,37 @@ export function ephemeralRuntimeDirs(snapshotDir: string, root: string = EPHEMER
   return dir ? [dir, `${dir}-streams`] : []
 }
 
+/**
+ * End the dtach terminal masters whose sockets live in `runtimeDir/term/`.
+ *
+ * A dtach master is built to outlive its server and never exits on its own
+ * (terminal-reaper.ts). An ephemeral server's own reaper is off, and deleting
+ * its runtime dir deletes the sockets, so every terminal a test opened there
+ * stayed up for good with a login shell under it, unreachable (three found on
+ * 2026-09-29, five days old). pkill matches the master's command line
+ * (`dtach -A <socket> ...`); the shell under it gets SIGHUP when the master's
+ * pty closes. Fire-and-forget: this runs on the production server's reaper
+ * timer and right before an ephemeral server exits. Resolves when pkill is done.
+ */
+export function endDtachMastersUnder(runtimeDir: string): Promise<void> {
+  if (!EPHEMERAL_RUNTIME_DIR_RE.test(path.basename(runtimeDir))) return Promise.resolve()
+  const pattern = ` -A ${path.join(runtimeDir, 'term')}/walnut-`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new Promise((resolve) => {
+    try {
+      const child = spawn('pkill', ['-f', pattern], { stdio: 'ignore' })
+      child.once('error', () => resolve())
+      child.once('close', () => resolve())
+      child.unref()
+    } catch {
+      resolve()
+    }
+  })
+}
+
 /** Remove a runtime dir and its streams sibling. Only ever touches the exact shape. */
 export function removeEphemeralRuntimeDirs(runtimeDir: string): void {
   if (!EPHEMERAL_RUNTIME_DIR_RE.test(path.basename(runtimeDir))) return
+  void endDtachMastersUnder(runtimeDir)
   for (const dir of [runtimeDir, `${runtimeDir}-streams`]) {
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* best-effort */ }
   }

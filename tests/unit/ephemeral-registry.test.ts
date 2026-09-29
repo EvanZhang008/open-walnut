@@ -22,6 +22,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { spawn, type ChildProcess } from 'node:child_process'
 import {
   registryPath,
   readRegistry,
@@ -48,6 +49,14 @@ let scanBase: string
 
 /** A dead pid: claim our own child-less pid space by using an absurd value. */
 const DEAD_PID = 2 ** 22
+
+function waitForExit(child: ChildProcess, ms: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`pid ${child.pid} still running after ${ms}ms`)), ms)
+    child.once('exit', () => { clearTimeout(timer); resolve() })
+  })
+}
 
 function makeSnapshot(parent: string, name: string, control?: { pid: number }): string {
   const dir = path.join(parent, name)
@@ -337,6 +346,36 @@ describe('ephemeral runtime dirs', () => {
     expect(fs.existsSync(prodLike)).toBe(true)
     expect(fs.existsSync(demo)).toBe(true)
     expect(EPHEMERAL_RUNTIME_DIR_RE.test('open-walnut-eph-5-AbC123-streams')).toBe(false)
+  })
+
+  // 2026-09-29: three dtach masters (each with a login shell) from ephemeral
+  // servers five days gone were still running. Deleting the runtime dir deleted
+  // their sockets, so nothing could ever reach or reap them again.
+  it('removing a runtime dir ends the dtach masters whose sockets live in it, and only those', async () => {
+    const mine = path.join(scanBase, 'open-walnut-eph-7-DtAch1')
+    const sibling = path.join(scanBase, 'open-walnut-eph-7-DtAch2')
+    const prodLike = path.join(scanBase, 'open-walnut')
+    for (const d of [mine, sibling, prodLike]) fs.mkdirSync(path.join(d, 'term'), { recursive: true })
+    // Stand-ins with a dtach master's command line: `<bin> -A <socket> ...`.
+    const fakeMaster = (dir: string, name: string) => spawn(process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)', '--', '-A', path.join(dir, 'term', `walnut-${name}.dsock`), '-z'],
+      { stdio: 'ignore' })
+    const victims = [fakeMaster(mine, 'a'), fakeMaster(mine, 'b')]
+    const bystanders = [fakeMaster(sibling, 'a'), fakeMaster(prodLike, 'a')]
+    const all = [...victims, ...bystanders]
+    try {
+      await new Promise((r) => setTimeout(r, 300))
+      removeEphemeralRuntimeDirs(prodLike)
+      removeEphemeralRuntimeDirs(mine)
+      await Promise.all(victims.map((c) => waitForExit(c, 5_000)))
+      expect(victims.map((c) => c.signalCode)).toEqual(['SIGTERM', 'SIGTERM'])
+      await new Promise((r) => setTimeout(r, 300))
+      expect(bystanders.map((c) => c.exitCode === null && c.signalCode === null)).toEqual([true, true])
+      expect(fs.existsSync(mine)).toBe(false)
+      expect(fs.existsSync(prodLike)).toBe(true)
+    } finally {
+      for (const c of all) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL')
+    }
   })
 
   it('a dead server takes its runtime dirs with it; a live one keeps them', () => {

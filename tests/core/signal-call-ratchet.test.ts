@@ -110,6 +110,8 @@ const INDIRECT_SIGNAL_BUDGET: Record<string, number> = {
   'src/providers/daemon-start-cmd.ts': 1,
   // `pkill -f <socket>` on this Walnut's own dtach terminal master (the socket dir's owner marker gates the sweep)
   'src/web/terminal/dtach-lifecycle.ts': 1,
+  // `pkill -f " -A <runtimeDir>/term/walnut-"`: the dtach masters of an ephemeral server whose runtime dir is being deleted
+  'src/commands/ephemeral-registry.ts': 1,
 };
 
 const RAW_HELPERS = new Set(['safeKillProcessGroup', 'killProcessGroup', 'signalProcessGroup']);
