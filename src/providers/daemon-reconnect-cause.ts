@@ -27,6 +27,11 @@ const SLOW_PROBE_KINDS: ReadonlySet<string> = new Set(['auth', 'host_key', 'dns'
 const CREDENTIAL_KINDS: ReadonlySet<string> = new Set(['cert_expired', 'agent_missing'])
 const WAKE_TRANSIENT_KINDS: ReadonlySet<string> = new Set(['dns', 'unreachable', 'timeout'])
 
+/** A failure a login fixes (cert_expired, agent_missing): the credential schedule's kinds. */
+export function isCredentialWaitKind(kind: string): boolean {
+  return CREDENTIAL_KINDS.has(kind)
+}
+
 export interface ReconnectStepInput {
   kind: HostConnectErrorKind | string
   now: number

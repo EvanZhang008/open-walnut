@@ -259,6 +259,68 @@ test('Reconnect keeps the same session and adds nothing to the conversation', as
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/reconnect-no-message.png` })
 })
 
+// 2026-09-29: the user renewed their SSH certificate, pressed Reconnect twice, and
+// the button spun "Reconnecting…" forever: the retry answered, nothing changed,
+// and nothing ever put the button back. A retry now dials the host first, so its
+// answer is either a recovered session or the host's own reason, and the button
+// must show both outcomes and stay pressable.
+test('a Reconnect the host cannot answer says why and can be pressed again', async ({ page }) => {
+  await freezeSessionInError(page)
+  await stubRecheck(page, {
+    checked: false, reachable: false, processStatus: 'error', infraClaim: true, reason: 'no_pooled_connection',
+  }, { n: 0 })
+  const reason = "Could not reach devhost: Your SSH certificate expired; run your organization's login command, then Retry."
+  let retryCalls = 0
+  await page.route(/\/api\/sessions\/pw-vscode-session\/retry$/, async (route) => {
+    retryCalls += 1
+    await new Promise((r) => setTimeout(r, 600))
+    await route.fulfill({ status: 503, json: { error: reason } })
+  })
+
+  const panel = await openSessionPanel(page)
+  const button = panel.locator('.session-error-banner .session-retry-btn').first()
+  await expect(button).toHaveText('Reconnect', { timeout: 30_000 })
+  await button.click()
+  await expect(button).toHaveText('Reconnecting…')
+  await expect(button).toBeDisabled()
+  await expect(button).toHaveText('Reconnect failed, try again', { timeout: 10_000 })
+  await expect(button).toBeEnabled()
+  await expect(button).toHaveAttribute('title', reason)
+  await panel.locator('.session-error-banner').first().screenshot({ path: `${SCREENSHOT_DIR}/reconnect-failed-reason.png` })
+
+  await button.click()
+  await expect.poll(() => retryCalls, { timeout: 8000 }).toBe(2)
+  await expect(button).toHaveText('Reconnect failed, try again', { timeout: 10_000 })
+})
+
+test('a Reconnect that answered never leaves its spinner behind', async ({ page }) => {
+  await freezeSessionInError(page)
+  await stubRecheck(page, {
+    checked: false, reachable: false, processStatus: 'error', infraClaim: true, reason: 'no_pooled_connection',
+  }, { n: 0 })
+  let retryCalls = 0
+  await page.route(/\/api\/sessions\/pw-vscode-session\/retry$/, async (route) => {
+    retryCalls += 1
+    await new Promise((r) => setTimeout(r, 600))
+    // The queued message was handed back to the runner, but (as the frozen routes
+    // make it) the record stays in error: nothing else will reset the button.
+    await route.fulfill({ json: { status: 'resuming', sessionId: SESSION_ID, restoredMessages: 1 } })
+  })
+
+  const panel = await openSessionPanel(page)
+  const button = panel.locator('.session-error-banner .session-retry-btn').first()
+  await expect(button).toHaveText('Reconnect', { timeout: 30_000 })
+  for (let round = 1; round <= 3; round++) {
+    await button.click()
+    await expect(button).toHaveText('Reconnecting…')
+    await expect(button).toHaveText('Reconnect', { timeout: 10_000 })
+    await expect(button).toBeEnabled()
+    expect(retryCalls).toBe(round)
+  }
+  await expect(page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)).toHaveCount(1)
+  await panel.locator('.session-error-banner').first().screenshot({ path: `${SCREENSHOT_DIR}/reconnect-answered-no-spinner.png` })
+})
+
 test('the real /recheck route answers a bounded, honest shape', async ({ page }) => {
   // No mocks: this is the server endpoint the panel calls, against the fixture's
   // own (healthy, local) session record.

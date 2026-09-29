@@ -759,6 +759,31 @@ async function resumeConversationExists(record: SessionRecord): Promise<boolean>
 }
 
 /**
+ * A remote session's Reconnect is a person asking for its host, so it dials the
+ * host the way Connect now does (connectHostNow) before anything else runs.
+ * Every later step reaches the host through getDaemonConnection, which answers
+ * an AUTOMATIC caller with the standing cause at once (an expired certificate
+ * waits for its credential clock on purpose): on 2026-09-29 the button failed
+ * on that cause twice after the user had already renewed the certificate.
+ * A dial that fails answers the click with the host's own hint; one still
+ * running past the deadline is joined by the steps that follow.
+ */
+async function connectSessionHostForRetry(record: SessionRecord): Promise<void> {
+  const host = record.host;
+  if (!host || host === '__local__') return;
+  const { isDaemonConnected } = await import('../../providers/daemon-connection.js');
+  if (isDaemonConnected(host)) return;
+  const { connectHostNow } = await import('../hosts/host-connect-action.js');
+  const { GATE_CONNECT_DEADLINE_MS } = await import('./host-start-gate.js');
+  const r = await connectHostNow(host, { deadlineMs: GATE_CONNECT_DEADLINE_MS });
+  // Refused (unknown or disabled host, remote hosts off): the steps below decide as before.
+  if (r.httpStatus !== 200 || r.outcome !== 'failed') return;
+  const why = r.status?.hint ?? r.status?.lastHint ?? r.status?.error ?? r.status?.lastError;
+  log.session.warn('session retry: host still unreachable', { sessionId: record.claudeSessionId, host, error: r.status?.error ?? r.status?.lastError });
+  throw new SessionControlError(`Could not reach ${r.status?.label || host}${why ? `: ${why}` : ''}`, 503);
+}
+
+/**
  * Retry a failed/stopped session. It RECONNECTS — it never synthesizes message
  * text, so the only thing that can start a turn is a message the human actually
  * wrote. Four paths:
@@ -780,6 +805,8 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
   if (!record.taskId) {
     throw new SessionControlError('Session has no associated task', 400);
   }
+
+  await connectSessionHostForRetry(record);
 
   if (record.claudeSessionId) {
     const { isSessionProcessAlive } = await import('../../utils/session-liveness.js');
@@ -812,7 +839,8 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
         await unparkMessage(sessionId, parked.id);
       }
       if (pendingMsgs.length > 0) {
-        bus.emit(EventNames.SESSION_SEND, { sessionId, taskId: record.taskId }, ['session-runner'], { source: 'retry' });
+        // message '' like restart's kick: the queue holds the text, and the runner reads message.length.
+        bus.emit(EventNames.SESSION_SEND, { sessionId, taskId: record.taskId, message: '' }, ['session-runner'], { source: 'retry' });
         log.session.info('session retry: re-processing pending queue messages', { sessionId, taskId: record.taskId, count: pendingMsgs.length });
         return { status: 'resuming', sessionId, restoredMessages: pendingMsgs.length };
       }

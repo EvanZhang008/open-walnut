@@ -7935,7 +7935,8 @@ export class SessionRunner {
           // Provenance rides the bus envelope, not the payload: it decides whether
           // this send may reopen a COMPLETE task (phase.ts sendSourceReopensTerminal).
           const sendSource = event.source
-          log.session.info('session send requested', { sessionId: sendData.sessionId, messageLength: sendData.message.length, source: sendSource })
+          // `?? ''`: a kick that carries no text (the queue holds it) once crashed this whole handler right here.
+          log.session.info('session send requested', { sessionId: sendData.sessionId, messageLength: (sendData.message ?? '').length, source: sendSource })
           let acpSession = this.findAcpSession(sendData.sessionId)
           if (!acpSession && !this.sdkSessionMap.has(sendData.sessionId)) {
             // Server restarted since this ACP session was created? Re-attach from

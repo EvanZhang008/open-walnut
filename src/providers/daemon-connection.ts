@@ -64,7 +64,9 @@ import {
   parseBunInstall, parseBunProbe, type RemoteRuntime,
 } from './remote-runtime.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
-import { clearReconnectCause, decideReconnectStep, getReconnectCause, lastHostSignalAt, recordReconnectCause } from './daemon-reconnect-cause.js'
+import {
+  clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause,
+} from './daemon-reconnect-cause.js'
 
 const execFileAsync = promisify(execFileCb)
 
@@ -4691,6 +4693,21 @@ export function reconnectingHosts(): string[] {
   const out: string[] = []
   for (const [key, conn] of connectionPool) {
     if (!key.startsWith('direct:') && !conn.connected && (conn.reconnectPending || conn.reconnectInFlight)) out.push(key)
+  }
+  return out
+}
+
+/**
+ * Hosts whose reconnect loop sits on its timer after a credential failure
+ * (expired certificate, missing agent), with when that attempt failed. A loop
+ * dialling right now is left out: that attempt already sees any new login.
+ */
+export function credentialWaitingHosts(): Array<{ host: string; failedAt: number }> {
+  const out: Array<{ host: string; failedAt: number }> = []
+  for (const [key, conn] of connectionPool) {
+    if (key.startsWith('direct:') || conn.connected || !conn.reconnectPending || conn.reconnectInFlight) continue
+    const cause = getReconnectCause(key)
+    if (cause && isCredentialWaitKind(cause.kind)) out.push({ host: key, failedAt: cause.at })
   }
   return out
 }

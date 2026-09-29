@@ -470,6 +470,16 @@ export class HostWarmup {
     return this.credentialWaits.get(hostKey)?.at
   }
 
+  /** Hosts waiting on their credential clock, with when their last dial failed (none mid-dial). */
+  credentialWaiters(): Array<{ host: string; failedAt: number }> {
+    const out: Array<{ host: string; failedAt: number }> = []
+    for (const key of this.credentialWaits.keys()) {
+      const entry = this.states.get(key)
+      if (entry?.state === 'failed') out.push({ host: key, failedAt: entry.at })
+    }
+    return out
+  }
+
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
       const done = () => { this.sleepResolvers.delete(done); resolve() }

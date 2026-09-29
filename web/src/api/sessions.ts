@@ -1089,7 +1089,8 @@ export async function retrySession(sessionId: string): Promise<
   { status: 'resuming'; sessionId: string } |
   { status: 'pending'; taskId: string; oldSessionId: string }
 > {
-  return apiPost(`/api/sessions/${sessionId}/retry`, {});
+  // A remote session's retry first dials its host (up to 20s server-side), past the 15s default.
+  return apiPost(`/api/sessions/${sessionId}/retry`, {}, { timeoutMs: 30_000 });
 }
 
 /** Mirrors RecheckResult in src/core/sessions/session-lifecycle.ts. */

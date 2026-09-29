@@ -12,7 +12,8 @@ import { CLOUD_MODE, IS_EPHEMERAL } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
 import {
-  clearDaemonFailureCache, expediteReconnect, getDaemonConnectState, getDaemonConnection, reconnectHostNow, reconnectingHosts,
+  clearDaemonFailureCache, credentialWaitingHosts, expediteReconnect, getDaemonConnectState, getDaemonConnection, reconnectHostNow,
+  reconnectingHosts,
 } from '../../providers/daemon-connection.js'
 import { buildHostStatus, type HostDef, type HostStatus } from './host-status.js'
 import { getHostWarmup } from './host-warmup-registry.js'
@@ -220,7 +221,7 @@ export async function listDirsRoute(
   return { kind: 'answer', result: { dirs: [], parent: dir, exists: true, hostError: { message: r.failure.message, kind: 'unknown', hint: 'The computer running Walnut is not reachable from here right now.', retryable: true } } }
 }
 
-// ── Wake / network change: redial what is down, once (C51) ──
+// ── Wake / network change / a new login: redial what is down, once (C51) ──
 
 /**
  * Server wiring for host-wake-signal.ts: each signal redials every enabled
@@ -238,16 +239,31 @@ export function redialAfterWake(host: string): void {
   void warmup.kick(host).catch(() => { /* kick never rejects */ })
 }
 
+/**
+ * Every host waiting on a login, with when its last real dial failed. A host
+ * whose reconnect loop waits is listed by the LOOP's failure: the warmup's
+ * entry for it only echoes the fail-fast of that standing cause, which never
+ * tried the credential, so its time proves nothing about a newer login.
+ */
+export function credentialWaiters(enabled: (host: string) => boolean): Array<{ host: string; failedAt: number }> {
+  const byHost = new Map<string, number>()
+  for (const w of getHostWarmup()?.credentialWaiters() ?? []) byHost.set(w.host, w.failedAt)
+  for (const w of credentialWaitingHosts()) byHost.set(w.host, w.failedAt)
+  return [...byHost].filter(([host]) => host !== '__local__' && enabled(host)).map(([host, failedAt]) => ({ host, failedAt }))
+}
+
 export async function startHostWakeRedial(hosts: () => Record<string, HostDef>): Promise<() => void> {
   const { startHostWakeSignal } = await import('./host-wake-signal.js')
+  const { startHostCredentialSignal } = await import('./host-credential-signal.js')
+  const enabled = (h: string) => { const defs = hosts(); return Object.hasOwn(defs, h) && defs[h].enabled !== false }
   const sig = startHostWakeSignal({
     hostsToRedial: () => {
-      const defs = hosts()
-      const enabled = (h: string) => Object.hasOwn(defs, h) && defs[h].enabled !== false
-      const failed = Object.keys(defs).filter((h) => h !== '__local__' && enabled(h) && getDaemonConnectState(h).phase === 'failed')
+      const failed = Object.keys(hosts()).filter((h) => h !== '__local__' && enabled(h) && getDaemonConnectState(h).phase === 'failed')
       return [...reconnectingHosts().filter(enabled), ...failed]
     },
     redial: redialAfterWake,
   })
-  return sig.stop
+  // A login done outside Walnut (a renewed certificate, a reloaded agent) redials the hosts waiting on it.
+  const cred = startHostCredentialSignal({ waiting: () => credentialWaiters(enabled), redial: redialAfterWake })
+  return () => { sig.stop(); cred.stop() }
 }

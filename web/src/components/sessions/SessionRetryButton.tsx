@@ -32,6 +32,8 @@ export function SessionRetryButton({ sessionId, onRetried, onResuming, host }: S
   const remote = !!host;
   const verb = remote ? 'Reconnect' : 'Recheck';
   const [state, setState] = useState<'idle' | 'retrying' | 'error'>('idle');
+  /** Why the last attempt failed (the server says which host and what to do), shown as the tooltip. */
+  const [failure, setFailure] = useState<string | null>(null);
 
   const handleRetry = useCallback(async () => {
     setState('retrying');
@@ -45,10 +47,14 @@ export function SessionRetryButton({ sessionId, onRetried, onResuming, host }: S
         // Same session — the record's WS status event updates the UI.
         onResuming?.();
       }
+      // The answer is in: a recovered session drops this banner through its status
+      // event; one that did not must not keep a spinner that nothing will stop.
+      setFailure(null);
+      setState('idle');
     } catch (err) {
-      log.warn('session-panel', 'reconnect failed', {
-        sessionId, error: err instanceof Error ? err.message : String(err),
-      });
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn('session-panel', 'reconnect failed', { sessionId, error: message });
+      setFailure(message);
       setState('error');
     }
   }, [sessionId, onRetried, onResuming]);
@@ -66,9 +72,9 @@ export function SessionRetryButton({ sessionId, onRetried, onResuming, host }: S
     <button
       className="session-retry-btn"
       onClick={handleRetry}
-      title={remote
+      title={failure ?? (remote
         ? 'Re-check the host and clear this error. The conversation is kept: send a message to resume the work.'
-        : 'Re-check this session and clear the error. The conversation is kept: send a message to resume the work.'}
+        : 'Re-check this session and clear the error. The conversation is kept: send a message to resume the work.')}
     >
       {state === 'error' ? `${verb} failed, try again` : verb}
     </button>
