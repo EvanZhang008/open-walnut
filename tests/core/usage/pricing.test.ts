@@ -67,6 +67,15 @@ describe('pricing', () => {
       expect(findPricing('global.anthropic.claude-opus-5[1m]')!.pattern).toBe('claude-opus-5');
     });
 
+    it('prices Sonnet 5.5 and Sonnet 5 at $2 / $10', () => {
+      const s55 = findPricing('global.anthropic.claude-sonnet-5-5');
+      expect(s55!.pattern).toBe('claude-sonnet-5-5');
+      expect([s55!.input, s55!.output, s55!.cacheWrite, s55!.cacheRead]).toEqual([2.00, 10.00, 2.50, 0.20]);
+      expect(findPricing('global.anthropic.claude-sonnet-5[1m]')!.pattern).toBe('claude-sonnet-5');
+      // Sonnet 4.x keeps its own $3 / $15 row.
+      expect(findPricing('global.anthropic.claude-sonnet-4-5-20250929-v1:0')!.input).toBe(3.00);
+    });
+
     it('prefers more specific patterns (opus-4-6 over opus-4)', () => {
       const entry46 = findPricing('claude-opus-4-6-v1');
       const entry4 = findPricing('claude-opus-4-v1');

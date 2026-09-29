@@ -46,6 +46,11 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
       model_id: 'global.anthropic.claude-opus-4-6-v1',
       label: 'Opus 4.6 (1M)', max_tokens: 128_000, context_window: 1_000_000,
       compat: { thinking_format: 'anthropic', supports_adaptive: true } },
+    // Sonnet 5.5 (2026-09-28): native 1M on Bedrock too, 128K output, adaptive
+    // thinking, no -1m variant.
+    { id: 'global.anthropic.claude-sonnet-5-5', provider: 'bedrock',
+      label: 'Sonnet 5.5', max_tokens: 128_000, context_window: 1_000_000,
+      compat: { thinking_format: 'anthropic', supports_adaptive: true, native_1m: true } },
     { id: 'global.anthropic.claude-sonnet-4-6', provider: 'bedrock',
       label: 'Sonnet 4.6', max_tokens: 64_000, context_window: 200_000,
       compat: { thinking_format: 'anthropic', supports_adaptive: true } },
@@ -86,6 +91,9 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
       model_id: 'claude-opus-4-6',
       label: 'Opus 4.6 (1M)', max_tokens: 128_000, context_window: 1_000_000,
       compat: { thinking_format: 'anthropic', supports_adaptive: true } },
+    { id: 'claude-sonnet-5-5', provider: 'anthropic',
+      label: 'Sonnet 5.5', max_tokens: 128_000, context_window: 1_000_000,
+      compat: { thinking_format: 'anthropic', supports_adaptive: true, native_1m: true } },
     { id: 'claude-sonnet-4-6', provider: 'anthropic',
       label: 'Sonnet 4.6', max_tokens: 64_000, context_window: 200_000,
       compat: { thinking_format: 'anthropic', supports_adaptive: true } },
@@ -119,6 +127,8 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
     // -- Anthropic --
     { id: 'anthropic/claude-opus-5.5', provider: 'openrouter',
       label: 'Claude Opus 5.5', max_tokens: 128_000, context_window: 1_000_000 },
+    { id: 'anthropic/claude-sonnet-5.5', provider: 'openrouter',
+      label: 'Claude Sonnet 5.5', max_tokens: 128_000, context_window: 1_000_000 },
     { id: 'anthropic/claude-opus-5', provider: 'openrouter',
       label: 'Claude Opus 5', max_tokens: 128_000, context_window: 1_000_000 },
     { id: 'anthropic/claude-opus-5-fast', provider: 'openrouter',

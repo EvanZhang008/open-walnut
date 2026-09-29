@@ -7,7 +7,7 @@
  * - Perplexity: docs.perplexity.ai (Feb 2025)
  */
 
-export const PRICING_VERSION = '2026-09-22';
+export const PRICING_VERSION = '2026-09-29';
 
 export interface PricingEntry {
   /** Substring pattern matched against model ID. First match wins. */
@@ -41,6 +41,10 @@ export const DEFAULT_PRICING: PricingEntry[] = [
   { pattern: 'claude-opus-4-5',     input: 5.00,  output: 25.00, cacheWrite: 6.25,   cacheRead: 0.50 },
   { pattern: 'claude-opus-4-1',     input: 15.00, output: 75.00, cacheWrite: 18.75,  cacheRead: 1.50 },
   { pattern: 'claude-opus-4',       input: 15.00, output: 75.00, cacheWrite: 18.75,  cacheRead: 1.50 },
+  // Sonnet 5.5 (2026-09-28) kept Sonnet 5's list price. Its row sits above
+  // 'claude-sonnet-5', which is a substring of it.
+  { pattern: 'claude-sonnet-5-5',   input: 2.00,  output: 10.00, cacheWrite: 2.50,   cacheRead: 0.20 },
+  { pattern: 'claude-sonnet-5',     input: 2.00,  output: 10.00, cacheWrite: 2.50,   cacheRead: 0.20 },
   { pattern: 'claude-sonnet-4-5',   input: 3.00,  output: 15.00, cacheWrite: 3.75,   cacheRead: 0.30 },
   { pattern: 'claude-sonnet-4',     input: 3.00,  output: 15.00, cacheWrite: 3.75,   cacheRead: 0.30 },
   { pattern: 'claude-3-7-sonnet',   input: 3.00,  output: 15.00, cacheWrite: 3.75,   cacheRead: 0.30 },
