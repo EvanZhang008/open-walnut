@@ -2,15 +2,22 @@
  * Shared helpers for the banner-placement specs (BP-C<n>): the attention card
  * lives in the task panel on Home (data-mount="tasks") and falls back to the
  * slot or the draft column only while the task panel is hidden. The
- * notification panel never holds the card: its System section lists every
- * host once (the Remote hosts block), a problem host as the Home card's own
- * row (dense, same headline, buttons and Show details, no x), every other host
- * as a plain status line. The bell opens the panel on Needs Action when an ask
- * waits, else on System when no in-page card covers the problem (/notes, a
- * hidden task panel), else on All. Host frames and local health are routed
- * client-side (host-problems-helpers.ts), so no remote host is dialed and
- * nothing reaches a real server beyond the fixture; bpSetup lists the routed
- * hosts in the health, as the server lists its configured ones.
+ * notification panel never holds the card. What is broken right now is an
+ * error: All and the all-errors view lead with the problems block
+ * (nfc-problems): this machine's Claude Code notice while it shows, then the
+ * Remote hosts problem card listing each host the Home card has a row for (a
+ * row dismissed on the card is left out), as that row (dense, same headline,
+ * buttons and Show details, no x) and in the card's order, with the feed
+ * errors that host caused right under it; the Errors badge counts each of
+ * them once. The System section still lists every host once (its Remote hosts
+ * block, the inventory, which ignores dismissals), a problem host as its card
+ * row and every other host as a plain status line, and its badge counts git
+ * sync and the search index only. The
+ * bell opens the panel on Needs Action when an ask waits, else on All.
+ * Host frames and local health are routed client-side (host-problems-helpers.ts),
+ * so no remote host is dialed and nothing reaches a real server beyond the
+ * fixture; bpSetup lists the routed hosts in the health, as the server lists
+ * its configured ones.
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import { expect, type Locator, type Page } from '@playwright/test'
@@ -55,13 +62,32 @@ export const systemListHosts = (page: Page): Promise<Array<string | null>> =>
   systemHosts(page).locator('ul.nfc-host-list > li[data-host]').evaluateAll((els) => els.map((e) => e.getAttribute('data-host')))
 /** The hosts the System list gives a row (a problem), in its order. */
 export const systemRowHosts = (page: Page): Promise<Array<string | null>> => hostsOf(systemHosts(page))
-/** This machine's Claude Code notice at the top of System (only while the local notice shows). */
-export const systemLocalCard = (page: Page): Locator => page.locator('.notification-panel [data-testid="nfc-local-claude"]')
+/** The problems block leading All and the all-errors view (absent when nothing is broken). */
+export const panelProblems = (page: Page): Locator => page.locator('.notification-panel [data-testid="nfc-problems"]')
+/**
+ * This machine's Claude Code notice, anywhere in the panel. It renders only in
+ * the problems block (All, all errors) while the local notice shows; System
+ * never holds it.
+ */
+export const panelLocalCard = (page: Page): Locator => page.locator('.notification-panel [data-testid="nfc-local-claude"]')
+/** The problems block's Remote hosts card: each host the Home card has a row for (dismissed rows left out). */
+export const problemHosts = (page: Page): Locator => page.locator('.notification-panel [data-testid="nfc-problem-hosts"]')
+/** A problem host's row in the problems block: the Home card's row for that host. */
+export const problemRow = (page: Page, host: string): Locator => problemHosts(page).locator(`li.hpb-row[data-host="${host}"]`)
+/** The feed errors a problem host caused, right under its row (one collapsed group). */
+export const problemCards = (page: Page, host: string): Locator => problemHosts(page).locator(`li.nfc-problem-cards[data-host-cards="${host}"]`)
+/**
+ * The hosts the problems block gives a row, in its order: the Home card's
+ * (connect failures first, then readiness, each in Settings order; FIXTURE_ORDER).
+ */
+export const problemRowHosts = (page: Page): Promise<Array<string | null>> => hostsOf(problemHosts(page))
 export const toolbarHide = (page: Page): Locator => page.locator('.todo-panel-toolbar .todo-panel-hide')
 export const railButton = (page: Page, label: string): Locator =>
   page.locator('.notification-panel .nfc-rail .nfc-rail-btn', { has: page.locator('.nfc-rail-name', { hasText: new RegExp(`^${label}$`) }) })
-/** The System rail entry's count (git sync, the search index, each problem host, the local notice). */
+/** The System rail entry's count: git sync failing and the search index error only (never a host or Claude Code). */
 export const systemBadge = (page: Page): Locator => railButton(page, 'System').locator('.nfc-rail-badge')
+/** The Errors rail entry's count: the feed's error cards, each problem host, and the local notice while it shows. */
+export const errorsBadge = (page: Page): Locator => railButton(page, 'Errors').locator('.nfc-rail-badge')
 /** Any attention mount inside the notification panel: there is none on any section. */
 export const panelMount = (page: Page): Locator => page.locator('.notification-panel .ab-mount')
 export const settingsEntry = (page: Page): Locator => page.getByTestId('sidebar-core-app-settings')
@@ -196,8 +222,9 @@ export async function pickRail(page: Page, label: string): Promise<void> {
 }
 
 /**
- * Open the bell, then the System section with a real click unless the panel
- * already landed there; returns its Remote hosts block. No card in the panel.
+ * Open the bell, then the System section with a real click (the bell lands on
+ * All or Needs Action, never on System); returns its Remote hosts block. No
+ * card in the panel.
  */
 export async function openSystemHosts(page: Page): Promise<Locator> {
   await openBell(page)
@@ -207,6 +234,18 @@ export async function openSystemHosts(page: Page): Promise<Locator> {
   await expect(systemHosts(page)).toBeVisible({ timeout: 20_000 })
   await expect(panelBanner(page)).toHaveCount(0)
   return systemHosts(page)
+}
+
+/**
+ * Open the bell with no ask waiting: the panel lands on All, whose first block
+ * is the problems block; returns its Remote hosts card. No card in the panel.
+ */
+export async function openProblems(page: Page): Promise<Locator> {
+  await openBell(page)
+  await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+  await expect(problemHosts(page)).toBeVisible({ timeout: 20_000 })
+  await expect(panelBanner(page)).toHaveCount(0)
+  return problemHosts(page)
 }
 
 export interface CardPlace { y: number; height: number }

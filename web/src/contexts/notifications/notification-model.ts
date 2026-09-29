@@ -191,21 +191,29 @@ export function attentionBadgeCount(feed: Notification[]): number {
  *
  * The System zone has no feed entries, so its rail marker can't come from
  * sectionCounts — it comes from the ambient signals the pane actually renders
- * (git sync, the search index, and the attention card's hosts and local Claude
- * Code). A count instead of a bare dot so the rail says "two things in here
+ * (git sync, the search index). Hosts and this machine's Claude Code count on
+ * the Errors badge instead (errorsBadgeCount). A count instead of a bare dot so the rail says "two things in here
  * are broken" rather than "something, somewhere". Falls back to the dot when
  * this is 0 but the caller still believes something is wrong.
  */
 export function systemIssueCount(flags: {
   gitSyncFailing?: boolean;
   indexUnhealthy?: boolean;
-  /** Hosts the System pane lists with a banner problem (the attention card sits in that pane). */
-  hostProblems?: number;
-  /** This machine's Claude Code notice, while the card in the pane carries it. */
+}): number {
+  return (flags.gitSyncFailing ? 1 : 0) + (flags.indexUnhealthy ? 1 : 0);
+}
+
+/**
+ * The Errors badge: the feed's error cards plus what is broken right now and
+ * listed at the top of the view (each problem host once, this machine's Claude
+ * Code once). A host's own cards are already in `feedErrors`.
+ */
+export function errorsBadgeCount(flags: {
+  feedErrors: number;
+  problemHosts?: number;
   localClaude?: boolean;
 }): number {
-  return (flags.gitSyncFailing ? 1 : 0) + (flags.indexUnhealthy ? 1 : 0)
-    + Math.max(0, flags.hostProblems ?? 0) + (flags.localClaude ? 1 : 0);
+  return Math.max(0, flags.feedErrors) + Math.max(0, flags.problemHosts ?? 0) + (flags.localClaude ? 1 : 0);
 }
 
 /** Sort/display timestamp: the latest occurrence for a folded record. */

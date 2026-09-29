@@ -1,10 +1,11 @@
 /**
  * The card's size and motion in the task panel, and the notification panel's
- * System host list (slice spec 4.1, 4.2, 5.5): the 40% cap, narrow and phone
- * widths, themes, loading, search, section switches (the card never leaves
- * the task panel, so the task list holds still), scroll positions, drags,
- * height changes that wait for the pointer, the Errors group's Shown in
- * System link and the screen-reader announcer.
+ * problems block and System host list (slice spec 4.1, 4.2, 5.5): the 40%
+ * cap, narrow and phone widths, themes, loading, search, section switches
+ * (the card never leaves the task panel, so the task list holds still),
+ * scroll positions, drags, height changes that wait for the pointer, a
+ * problem host's error cards placed under its row in Errors, and the
+ * screen-reader announcer.
  * Host frames and local health are routed client-side. BP-C63 is WebKit only.
  *
  * Run: PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-layout --project=chromium --workers=1
@@ -19,8 +20,9 @@ import {
 } from './host-problems-helpers'
 import { openBell, panelBanner, slotBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bpSetup, cardRow, closePanel, expectHomeCardStill, healthyGitSync, hostErrorRecord, hostsOf, markHomeCard,
-  openSystemHosts, pickRail, railButton, systemHostRow, systemHosts, systemListHosts, systemLocalCard,
+  BP_SHOTS, bpSetup, cardRow, closePanel, errorsBadge, expectHomeCardStill, healthyGitSync, hostErrorRecord, hostsOf, markHomeCard,
+  openProblems, openSystemHosts, panelLocalCard, pickRail, problemCards, problemHosts, problemRow, problemRowHosts, railButton,
+  systemHostRow, systemHosts, systemListHosts,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -55,24 +57,31 @@ test.describe('the 40% cap', () => {
     await banner(page).screenshot({ path: `${BP_SHOTS}/c28-tasks-cap.png` })
   })
 
-  test('BP-C29: the same six problems and local sign-in in System: no card; the Claude Code card leads, the host list starts inside the top 60% of the panel and names each host once; the rail keeps the whole panel height', async ({ page }) => {
+  test('BP-C29: the same six problems and local sign-in, where the bell lands (All): no card; the Claude Code card leads, the host problems start inside the top 60% of the panel and name each host once; System lists them too; the rail keeps the whole panel height', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 })
     await bpSetup(page, { hosts: six(), local: 'sign-in' })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    const hosts = await openSystemHosts(page)
+    const hosts = await openProblems(page)
     const panel = (await page.locator('.notification-panel').boundingBox())!
     const first = (await page.locator('.notification-panel .nfc-detail .notification-card').first().boundingBox())!
-    const local = (await systemLocalCard(page).boundingBox())!
+    const local = (await panelLocalCard(page).boundingBox())!
     expect(Math.abs(first.y - local.y)).toBeLessThanOrEqual(1)
     const list = (await hosts.boundingBox())!
     expect(list.y).toBeGreaterThanOrEqual(local.y + local.height - 1)
     expect(list.y - panel.y).toBeLessThanOrEqual(panel.height * 0.6)
-    // A status list has no cap: every host, each once, and nothing wider than the panel.
-    expect(await systemListHosts(page)).toEqual(['keybox', 'netbox', 'proxybox', 'lanbox', 'certbox', 'signbox'])
+    // No cap: every problem host, each once, and nothing wider than the panel.
+    expect(await problemRowHosts(page)).toEqual(['keybox', 'netbox', 'proxybox', 'lanbox', 'certbox', 'signbox'])
     expect(await page.locator('.notification-panel .nfc-detail').evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
     const rail = (await page.locator('.notification-panel .nfc-rail').boundingBox())!
     expect(rail.y).toBeLessThanOrEqual(first.y)
     expect(rail.y + rail.height).toBeGreaterThanOrEqual(panel.y + panel.height - 2)
+    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c29-all-problems.png` })
+    // System: the Remote hosts block is its first block now (no Claude Code card there), every host once.
+    await pickRail(page, 'System')
+    await expect(panelLocalCard(page)).toHaveCount(0)
+    expect(await systemHosts(page).evaluate((el) => el.closest('.nfc-detail')?.querySelector('.notification-card') === el)).toBe(true)
+    expect(await systemListHosts(page)).toEqual(['keybox', 'netbox', 'proxybox', 'lanbox', 'certbox', 'signbox'])
+    expect(await page.locator('.notification-panel .nfc-detail').evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
     await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c29-system-list.png` })
   })
 
@@ -325,7 +334,7 @@ test.describe('height changes wait for the pointer; Errors; the announcer', () =
     expect(reduced.split(',').every((d) => parseFloat(d) === 0)).toBe(true)
   })
 
-  test('BP-C57: the Errors group for Dev box uses its label, with a quiet Shown in System link under it; Enter on the link opens System on the Dev box row, open and focused; a Home card dismissal keeps the link', async ({ page }) => {
+  test('BP-C57: Errors leads with Dev box\'s row and its cards directly under it, indented and inside the Remote hosts card, with no Can\'t reach block and no Shown in System link; the keyboard goes from the row into its cards; after a Home card dismissal the row leaves and the cards stand as a Can\'t reach Dev box block below the problems', async ({ page, browserName }) => {
     await bpSetup(page, {
       hosts: [failed('devbox', 'Dev box', 'cert_expired'), signedOut('signbox', 'Sign box')],
       feed: [hostErrorRecord('devbox', 1), hostErrorRecord('devbox', 2)],
@@ -333,36 +342,49 @@ test.describe('height changes wait for the pointer; Errors; the announcer', () =
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     await pickRail(page, 'Errors')
-    const header = page.locator('.notification-panel .nfc-cause-header')
-    const name = header.locator('.nfc-cat-name')
-    await expect(name).toHaveText("Can't reach Dev box")
-    const link = page.locator('.notification-panel .nfc-body').getByRole('button', { name: 'Shown in System', exact: true })
-    await expect(link).toHaveCount(1)
-    await expect(link).toHaveClass(/nfc-cat-shown-link/)
-    // Under the name, flush with its left edge, in the quiet 11px type.
-    const nb = (await name.boundingBox())!
-    const lb = (await link.boundingBox())!
-    expect(lb.y).toBeGreaterThanOrEqual(nb.y + nb.height - 1)
-    expect(Math.abs(lb.x - nb.x)).toBeLessThanOrEqual(1)
-    expect(await link.evaluate((el) => getComputedStyle(el).fontSize)).toBe('11px')
-    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c57-errors-shown-in-system.png` })
-    // By keyboard: the link is a real button.
-    await link.focus()
-    await page.keyboard.press('Enter')
-    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
     await expect(panelBanner(page)).toHaveCount(0)
-    const dev = systemHostRow(page, 'devbox')
-    await expect(dev).toHaveClass(/hpb-open/)
-    await expect(dev).toBeInViewport()
-    // The link went with Errors: the keyboard lands on the row's own details toggle.
-    await expect(dev.getByRole('button', { name: 'Hide details' })).toBeFocused()
+    await expect.poll(() => problemRowHosts(page)).toEqual(['devbox', 'signbox'])
+    const dev = problemRow(page, 'devbox')
+    const cards = problemCards(page, 'devbox')
+    await expect(cards).toBeVisible()
+    await expect(page.locator('.notification-panel .nfc-cause-header')).toHaveCount(0)
+    await expect(page.locator('.notification-panel .nfc-body').getByRole('button', { name: 'Shown in System', exact: true })).toHaveCount(0)
+    // Directly under the row: below it, indented from its left edge, inside the Remote hosts card, above the next row.
+    const rb = (await dev.boundingBox())!
+    const cb = (await cards.boundingBox())!
+    const box = (await problemHosts(page).boundingBox())!
+    const next = (await problemRow(page, 'signbox').boundingBox())!
+    expect(cb.y).toBeGreaterThanOrEqual(rb.y + rb.height - 1)
+    expect(cb.x).toBeGreaterThan(rb.x)
+    expect(cb.x + cb.width).toBeLessThanOrEqual(box.x + box.width + 1)
+    expect(next.y).toBeGreaterThanOrEqual(cb.y + cb.height - 1)
+    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c57-errors-cards-under-row.png` })
+    // By keyboard: past the row's last control, the next stop is in its cards (WebKit tabs buttons with Option held).
+    await dev.evaluate((el) => {
+      const f = Array.from(el.querySelectorAll<HTMLElement>('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')).filter((e) => e.offsetParent !== null)
+      f[f.length - 1]?.focus()
+    })
+    expect(await page.evaluate(() => !!document.activeElement?.closest('li.hpb-row[data-host="devbox"]'))).toBe(true)
+    await page.keyboard.press(browserName === 'webkit' ? 'Alt+Tab' : 'Tab')
+    expect(await page.evaluate(() => !!document.activeElement?.closest('li.nfc-problem-cards[data-host-cards="devbox"]'))).toBe(true)
+    // Two cards and two hosts.
+    await expect(errorsBadge(page)).toHaveText('4')
     await closePanel(page, 'escape')
     await cardRow(banner(page), 'devbox').getByRole('button', { name: 'Dismiss Dev box' }).click()
     await openBell(page)
     await pickRail(page, 'Errors')
+    // The problems follow the card's dismissal: Dev box leaves them, Sign box stays, and Dev box's
+    // cards stand as their own block named by its label, below the problems.
+    await expect.poll(() => problemRowHosts(page)).toEqual(['signbox'])
+    await expect(dev).toHaveCount(0)
+    await expect(cards).toHaveCount(0)
+    const header = page.locator('.notification-panel .nfc-cause-header')
     await expect(header).toHaveCount(1)
-    // System ignores dismissals, so it still gives Dev box a row, and the link stays.
-    await expect(link).toHaveCount(1)
+    await expect(header.locator('.nfc-cat-name')).toHaveText("Can't reach Dev box")
+    const problemsBox = (await problemHosts(page).boundingBox())!
+    expect((await header.boundingBox())!.y).toBeGreaterThanOrEqual(problemsBox.y + problemsBox.height - 1)
+    await expect(errorsBadge(page)).toHaveText('3')
+    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c57-errors-dismissed-host-block.png` })
   })
 
   test('BP-C63: WebKit: a backdrop click over the card with System open leaves the same card under a still pointer; a removed row 1 waits for the pointer', async ({ page, browserName }) => {

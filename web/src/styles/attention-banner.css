@@ -317,7 +317,10 @@
 .nfc-host-list .hpb-dense:not(.hpb-open) .hpb-headline,
 .nfc-host-list .hpb-dense:not(.hpb-open) .hpb-trying,
 .nfc-host-list .hpb-dense:not(.hpb-open) .hpb-fixing { flex-basis: 100%; margin-right: 0; }
-/* This machine's Claude Code in System: the card label says 'Claude Code', so the section's own title goes. */
+/* All / Errors: what is broken right now leads the view; a problem host's own error cards sit under its row. */
+.nfc-problems { display: flex; flex-direction: column; }
+.nfc-problem-cards { list-style: none; margin: 2px 0 6px 16px; }
+/* This machine's Claude Code in the panel: the card label says 'Claude Code', so the section's own title goes. */
 .nfc-local-claude .ab-local > .setup-banner-header { display: none; }
 .notification-daemon-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .nfc-daemon-row { flex-direction: column; align-items: flex-start; gap: 2px; }

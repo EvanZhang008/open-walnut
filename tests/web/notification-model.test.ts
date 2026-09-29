@@ -18,7 +18,7 @@ import {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory, actionOf,
-  systemIssueCount, causeLabelOf, partitionErrorsByCause, attentionBadgeCount,
+  systemIssueCount, errorsBadgeCount, causeLabelOf, partitionErrorsByCause, attentionBadgeCount,
 } from '../../web/src/contexts/notifications/notification-model';
 import { SHOULD_TOAST } from '../../web/src/contexts/notifications/types';
 import type { Notification, NotificationKind, NotificationSeverity } from '../../web/src/contexts/notifications/types';
@@ -555,13 +555,17 @@ describe('systemIssueCount', () => {
     expect(systemIssueCount({ gitSyncFailing: true })).toBe(1);
     expect(systemIssueCount({ gitSyncFailing: true, indexUnhealthy: true })).toBe(2);
   });
+});
 
-  it('adds the attention card the System pane carries: each problem host and the local Claude Code notice', () => {
-    expect(systemIssueCount({ hostProblems: 3 })).toBe(3);
-    expect(systemIssueCount({ gitSyncFailing: true, hostProblems: 3 })).toBe(4);
-    expect(systemIssueCount({ localClaude: true })).toBe(1);
-    expect(systemIssueCount({ gitSyncFailing: true, indexUnhealthy: true, hostProblems: 2, localClaude: true })).toBe(5);
-    expect(systemIssueCount({ hostProblems: -1 })).toBe(0);
+describe('errorsBadgeCount', () => {
+  it('adds each problem host and the local Claude Code notice to the feed errors', () => {
+    expect(errorsBadgeCount({ feedErrors: 0 })).toBe(0);
+    expect(errorsBadgeCount({ feedErrors: 2 })).toBe(2);
+    expect(errorsBadgeCount({ feedErrors: 0, problemHosts: 3 })).toBe(3);
+    expect(errorsBadgeCount({ feedErrors: 2, problemHosts: 3 })).toBe(5);
+    expect(errorsBadgeCount({ feedErrors: 0, localClaude: true })).toBe(1);
+    expect(errorsBadgeCount({ feedErrors: 4, problemHosts: 2, localClaude: true })).toBe(7);
+    expect(errorsBadgeCount({ feedErrors: -1, problemHosts: -1 })).toBe(0);
   });
 });
 

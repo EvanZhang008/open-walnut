@@ -6,17 +6,17 @@
  * column, else nowhere. The owner is the one mount that renders the card right
  * now: the in-page placement on the home route, else none (MainPage stays
  * mounted, hidden, on every other route, so its placement says nothing there).
- * The notification panel never holds the card: its System section lists every
- * host once, with a problem host's details in its own row (NotificationHostRow).
+ * The notification panel never holds the card: a problem host is its card row
+ * at the top of All and Errors (NotificationProblems), and System lists every
+ * host once (NotificationHostRow).
  *
  * The rail Settings dot and the bell dot read the PAGE rule only (placement +
  * pathname), never whether the panel is open: the panel is a passing overlay
  * and opening it must not make the rail blink.
  */
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { useLocation } from 'react-router-dom';
-import { hostProblemOf } from '@open-walnut/host-problem';
-import { getAllHostStatus, serverNow, subscribeHostStatus, useAllHostStatus } from '@/hooks/useHostStatus';
+import { getAllHostStatus, serverNow, subscribeHostStatus } from '@/hooks/useHostStatus';
 import { nextBanner, type BannerInput } from '@/utils/attention-banner-model';
 import { getHostDismissed, subscribeHostDismissed } from '@/utils/host-banner-dismiss';
 import { getUserEngagedHosts, subscribeUserRetry } from '@/utils/host-user-retrying';
@@ -221,27 +221,13 @@ export function useHostAttentionNeeded(): boolean {
 }
 
 /**
- * Hosts with a connect failure or a banner readiness problem
- * (BANNER_READINESS_KINDS: claude_outdated never counts), dismissals ignored:
- * the System rail badge, which follows what the System pane lists.
- */
-export function useBannerHostProblemCount(): number {
-  const statuses = useAllHostStatus();
-  return useMemo(() => statuses.filter((s) => {
-    const p = hostProblemOf(s, { surface: 'banner' });
-    return p?.type === 'connect' || p?.type === 'readiness';
-  }).length, [statuses]);
-}
-
-/**
  * The section the notification panel opens on: Needs Action while a human
- * decision waits, else System when the bell carries the attention reason (no
- * card on the page says it, so the user is opening the panel to find it),
- * else All.
+ * decision waits, else All, which leads with what is broken right now (this
+ * machine's Claude Code, a host that cannot connect), so opening the bell for
+ * its host reason shows the reason without a second click.
  */
-export function landingSectionFor(actionCount: number, bellReason: BellReason): 'action' | 'system' | 'all' {
-  if (actionCount > 0) return 'action';
-  return bellReason !== null ? 'system' : 'all';
+export function landingSectionFor(actionCount: number): 'action' | 'all' {
+  return actionCount > 0 ? 'action' : 'all';
 }
 
 /** Test hook. */

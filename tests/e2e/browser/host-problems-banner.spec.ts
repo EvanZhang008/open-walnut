@@ -33,7 +33,9 @@ import {
   reconnecting, resetServerHostFixture, routeHealth, row, rows, setup, signedOut, slotLayout, storedKeys, type HS,
 } from './host-problems-helpers'
 import { bannerRow, loadApp, loadFixture, panelBanner, slotBanner, wireHost } from './host-problems-fixture-helpers'
-import { openSystemHosts, systemHostRow } from './banner-placement-helpers'
+import {
+  closePanel, errorsBadge, openProblems, openSystemHosts, problemRow, problemRowHosts, systemHostRow,
+} from './banner-placement-helpers'
 
 test.beforeAll(async ({ request }) => { await resetServerHostFixture(request) })
 
@@ -120,8 +122,9 @@ test.describe('home attention banner: which hosts, which title', () => {
 })
 
 test.describe('home attention banner: dismissal and live clearing', () => {
-  test('row x survives a reload; a new floor brings it back; clearing shows the ready row and drops the key (C17, C18, C19)', async ({ page }) => {
-    const h = await setup(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')])
+  test('row x survives a reload; a new floor brings it back; clearing shows the ready row and drops the key (C17, C18, C19); the panel\'s problems follow the card each time', async ({ page }) => {
+    // listHosts: the health names the routed hosts, so the notification panel's problems can list them.
+    const h = await setup(page, [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')], undefined, { listHosts: true })
     await row(page, 'signbox').getByRole('button', { name: 'Dismiss Sign box' }).click()
     await expect(row(page, 'signbox')).toHaveCount(0)
     expect(await storedKeys(page)).toContain('signbox|claude_not_logged_in|2.1.280')
@@ -132,9 +135,18 @@ test.describe('home attention banner: dismissal and live clearing', () => {
     await loadHome(page)
     await expect(row(page, 'netbox')).toBeVisible()
     await expect(row(page, 'signbox')).toHaveCount(0)
-    // A newer floor is a different problem (the floor is part of the key): the row is back.
+    // The panel reads the same stored key: Sign box is out of All's problems and the Errors count.
+    await openProblems(page)
+    await expect.poll(() => problemRowHosts(page)).toEqual(['netbox'])
+    await expect(errorsBadge(page)).toHaveText('1')
+    await closePanel(page, 'escape')
+    // A newer floor is a different problem (the floor is part of the key): the row is back, on the card and in the panel.
     await h.push(signedOutAtFloor('signbox', 'Sign box', '2.1.290'))
     await expect(row(page, 'signbox')).toBeVisible()
+    await openProblems(page)
+    await expect.poll(() => problemRowHosts(page)).toEqual(['netbox', 'signbox'])
+    await expect(errorsBadge(page)).toHaveText('2')
+    await closePanel(page, 'escape')
     // Cleared: the one success sentence for about 3s, then gone, and no stale key.
     // (Pointer off the card first: a row under the hand waits for it to leave.)
     await page.mouse.move(2, 2)
@@ -334,7 +346,7 @@ test.describe('home attention banner: reconnects, size, sync', () => {
     }
   })
 
-  test('a synced dismissal hides the row on the second browser\'s card while its System section still lists the host, with no x (C92 panel)', async ({ page, browser }) => {
+  test('a synced dismissal hides the row on the second browser\'s card and in its panel\'s problems (one fewer on Errors), while its System list still gives the host its row, with no x (C92 panel)', async ({ page, browser }) => {
     const hosts = () => [signedOut('signbox', 'Sign box'), failed('netbox', 'Net box', 'unreachable')]
     await setup(page, hosts(), undefined, { serverPrefs: true })
     const synced = page.waitForResponse((r) => r.url().includes('/api/ui-prefs') && r.request().method() === 'PUT'
@@ -353,7 +365,13 @@ test.describe('home attention banner: reconnects, size, sync', () => {
       await loadHome(page2)
       await expect(row(page2, 'netbox')).toBeVisible()
       await expect(row(page2, 'signbox')).toHaveCount(0)
-      // System is a status list: dismissals never hide a host there.
+      // The panel's problems follow the synced dismissal too: only Net box leads All, and Errors counts it alone.
+      await openProblems(page2)
+      await expect(problemRow(page2, 'netbox')).toBeVisible()
+      await expect(problemRow(page2, 'signbox')).toHaveCount(0)
+      await expect(errorsBadge(page2)).toHaveText('1')
+      await closePanel(page2, 'escape')
+      // System is the inventory: dismissals never hide a host there.
       await openSystemHosts(page2)
       await expect(systemHostRow(page2, 'signbox')).toBeVisible()
       await expect(systemHostRow(page2, 'signbox').getByRole('button', { name: 'Dismiss Sign box' })).toHaveCount(0)

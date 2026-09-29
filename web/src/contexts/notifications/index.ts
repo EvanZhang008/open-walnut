@@ -7,7 +7,7 @@ export {
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
   causeLabelOf, partitionErrorsByCause, attentionBadgeCount,
-  systemIssueCount, letterIdOf,
+  systemIssueCount, errorsBadgeCount, letterIdOf,
 } from './notification-model';
 export {
   displayActionsOf, runOpAction, opActionPath, wireActionsOf, MAX_NOTIFICATION_ACTIONS,

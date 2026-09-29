@@ -5,8 +5,9 @@
  * host once), keyboard order in System and focus after the card leaves,
  * clicks inside System never close the panel, the list keeps its scroll, the
  * card never starts a task drag, the card waits while the pointer is over
- * what would move, the Errors group heading and its Shown in System link, and
- * the System rail count.
+ * what would move, a problem host's error cards under its row in Errors (a
+ * group named by the host only once it recovered), and the rail counts (a
+ * problem host counts on Errors, never on System).
  * Host frames and local health are routed client-side; page.goto only loads
  * the app, every other step is a real click, key or pointer move.
  *
@@ -18,8 +19,9 @@ import { test, expect, type Page } from '@playwright/test'
 import { banner, connected, failed, outdated, resetServerHostFixture, row } from './host-problems-helpers'
 import { openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bpSetup, closePanel, expectHomeCardStill, expectTasksCard, hostErrorRecord, markHomeCard, maxCards, openSystemHosts,
-  panelMount, pickRail, railButton, systemBadge, systemHostRow, systemHosts,
+  BP_SHOTS, bpSetup, closePanel, errorsBadge, expectHomeCardStill, expectTasksCard, hostErrorRecord, markHomeCard, maxCards,
+  openSystemHosts, panelMount, panelProblems, pickRail, problemCards, problemHosts, problemRow, railButton, systemBadge,
+  systemHostRow, systemHosts,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -326,8 +328,8 @@ test.describe('the card waits for the pointer (5.5)', () => {
   }
 })
 
-test.describe('the Errors group and the System rail', () => {
-  test('C57: a host cause group is named by the host label with a "Shown in System" link that opens System on the host\'s row, open; a Home card dismissal keeps the link; the host recovering drops it, never the group', async ({ page }) => {
+test.describe('the Errors view and the rail counts', () => {
+  test('C57: in Errors a problem host\'s cards sit under its row, with no group of their own and no Shown in System link; a Home card dismissal takes the row out (one fewer on Errors) and turns the cards into a group named by the host label, while System keeps the row; recovering keeps the group', async ({ page }) => {
     const h = await bpSetup(page, {
       hosts: [connected('devbox', 'Dev box'), failed('certbox', 'Cert box', 'cert_expired')],
       feed: [hostErrorRecord('certbox', 1), hostErrorRecord('certbox', 2)],
@@ -335,51 +337,67 @@ test.describe('the Errors group and the System rail', () => {
     await expectTasksCard(page, ['certbox'])
     await openBell(page)
     await pickRail(page, 'Errors')
-    // No section holds the card; the Errors view points at the host's row in System.
+    // No section holds the card; Errors leads with the host's own row, its cards right under it.
     await expect(panelBanner(page)).toHaveCount(0)
     const title = page.locator('.notification-panel .nfc-cause-header .nfc-cat-title[data-cause-key="host:certbox"]')
-    await expect(title.locator('.nfc-cat-name')).toHaveText("Can't reach Cert box")
-    const link = title.locator('.nfc-cat-shown-link')
-    await expect(link).toHaveText('Shown in System')
-    await expect(link).toHaveJSProperty('tagName', 'BUTTON')
-    await page.screenshot({ path: `${BP_SHOTS}/p3-c57-errors-group.png` })
-    await link.click()
-    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
-    const r = systemHostRow(page, 'certbox')
+    const r = problemRow(page, 'certbox')
+    const cards = problemCards(page, 'certbox')
     await expect(r).toBeVisible()
-    await expect(r).toHaveClass(/hpb-open/)
-    await expect(r.locator('.hft-hint')).toBeVisible()
-    await expect(systemHosts(page).getByRole('button', { name: 'Dismiss Cert box' })).toHaveCount(0)
+    await expect(cards.locator('.notification-feed-item')).toHaveCount(1)
+    await expect(cards.locator('.notification-group-toggle')).toHaveText('Show 1 more')
+    await expect(title).toHaveCount(0)
+    await expect(page.locator('.notification-panel .nfc-cat-shown, .notification-panel .nfc-cat-shown-link')).toHaveCount(0)
+    await expect(problemHosts(page).getByRole('button', { name: 'Dismiss Cert box' })).toHaveCount(0)
+    await page.screenshot({ path: `${BP_SHOTS}/p3-c57-errors-group.png` })
+    // Two cards and the host.
+    await expect(errorsBadge(page)).toHaveText('3')
     await closePanel(page, 'escape')
-    // The Home card's x hides the card row; the System list is a status list and keeps it.
+    // The Home card's x ("I know"): the panel's problems follow the card, so the row goes and
+    // its cards come back as a group named by the host label.
     await row(page, 'certbox').getByRole('button', { name: 'Dismiss Cert box' }).click()
     await expect(row(page, 'certbox')).toHaveCount(0)
     await openBell(page)
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    await expect(panelProblems(page)).toHaveCount(0)
     await pickRail(page, 'Errors')
-    await expect(link).toHaveCount(1)
+    await expect(r).toHaveCount(0)
+    await expect(cards).toHaveCount(0)
+    await expect(title.locator('.nfc-cat-name')).toHaveText("Can't reach Cert box")
+    await expect(page.locator('.notification-panel .nfc-cat-shown, .notification-panel .nfc-cat-shown-link')).toHaveCount(0)
+    // The two cards alone: the dismissed host no longer counts.
+    await expect(errorsBadge(page)).toHaveText('2')
+    // System is the inventory: it still gives the host its row, with no x.
     await pickRail(page, 'System')
     await expect(systemHostRow(page, 'certbox')).toBeVisible()
-    // Recovered: the list shows a plain Connected line, so the link goes; the group stays.
+    await expect(systemHosts(page).getByRole('button', { name: 'Dismiss Cert box' })).toHaveCount(0)
+    // Recovered: a plain line in System, and the group in Errors stays, named by the label.
     await h.push(connected('certbox', 'Cert box'))
     await expect(systemHostRow(page, 'certbox')).toHaveCount(0, { timeout: 10_000 })
     await pickRail(page, 'Errors')
     await expect(title.locator('.nfc-cat-name')).toHaveText("Can't reach Cert box")
-    await expect(title.locator('.nfc-cat-shown')).toHaveCount(0)
+    await expect(panelProblems(page)).toHaveCount(0)
+    await expect(errorsBadge(page)).toHaveText('2')
   })
 
-  test('C58: an unreachable host counts 1 on the System rail (git sync healthy), before and after System opens; the pane card reads Remote hosts', async ({ page }) => {
+  test('C58: an unreachable host counts 1 on the Errors rail, before and after Errors opens; System (git sync healthy) wears no count and no dot, and its pane card reads Remote hosts', async ({ page }) => {
     await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')] })
     await expectTasksCard(page, ['netbox'])
     await openBell(page)
     const system = railButton(page, 'System')
-    await expect(systemBadge(page)).toHaveText('1')
+    await expect(errorsBadge(page)).toHaveText('1')
+    await expect(systemBadge(page)).toHaveCount(0)
     await expect(system.locator('.nfc-rail-dot')).toHaveCount(0)
+    await pickRail(page, 'Errors')
+    await expect(errorsBadge(page)).toHaveText('1')
+    await expect(problemRow(page, 'netbox')).toBeVisible()
     await pickRail(page, 'System')
-    await expect(systemBadge(page)).toHaveText('1')
+    await expect(systemBadge(page)).toHaveCount(0)
+    await expect(errorsBadge(page)).toHaveText('1')
     await expect(page.locator('.notification-panel .notification-card-label', { hasText: /^Remote hosts$/ })).toHaveCount(1)
+    await expect(systemHostRow(page, 'netbox')).toBeVisible()
   })
 
-  test('C58: a claude_outdated host alone leaves the System rail without a count or a dot, and the pane still lists it', async ({ page }) => {
+  test('C58: a claude_outdated host alone counts on neither Errors nor System, leads nothing in All, and the System pane still lists it', async ({ page }) => {
     await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), outdated('buildbox', 'Build box')] })
     await page.waitForTimeout(800)
     // The pane lists the daemons system health reports (its own fetch when it opens): name both hosts.
@@ -393,6 +411,9 @@ test.describe('the Errors group and the System rail', () => {
     await expect(system).toBeVisible()
     await expect(system.locator('.nfc-rail-dot')).toHaveCount(0)
     await expect(systemBadge(page)).toHaveCount(0)
+    await expect(errorsBadge(page)).toHaveCount(0)
+    await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    await expect(panelProblems(page)).toHaveCount(0)
     await system.click()
     await expect(page.locator('.notification-panel').getByText('Build box').first()).toBeVisible()
     await expect(systemBadge(page)).toHaveCount(0)

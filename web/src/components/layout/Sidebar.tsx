@@ -392,7 +392,6 @@ export function Sidebar({
         open={notifOpen}
         onClose={() => setNotifOpen(false)}
         sidebarCollapsed={collapsed}
-        bellReason={bellReason}
       />
       <VoicePanel
         open={voiceOpen}

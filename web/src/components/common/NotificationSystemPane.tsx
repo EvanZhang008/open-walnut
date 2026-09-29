@@ -1,27 +1,26 @@
 /**
- * System zone of the notification center — ambient health, not feed entries:
- * this machine's Claude Code (only while its notice shows), remote daemons,
- * the data backup, and the embedding-search index.
+ * System zone of the notification center: long-running status, not feed
+ * entries: remote daemons, the data backup, and the embedding-search index.
  *
  * The remote hosts are ONE list, each host once (NotificationHostRow): a host
  * with a problem is the Home card's own row (same headline, buttons and Show
- * details, no x), every other host a plain status line. The attention card
- * itself never renders in the panel, so System never lists a host twice.
+ * details, no x), every other host a plain status line. What is broken right
+ * now (this machine's Claude Code, a host that cannot connect) is an error, so
+ * it also leads the All and Errors views (NotificationProblems) and is counted
+ * on the Errors badge, not here.
  *
  * Its own component for two reasons beyond file size: the search-index status
  * poll lives here, so mounting only when the System tab is showing means the
  * poll doesn't run while the user reads Errors or Automation; and the panel
  * file stays near the repo's ~500 LOC guideline.
  */
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAllHostStatus } from '@/hooks/useHostStatus';
 import { hostProblemOf } from '@open-walnut/host-problem';
-import { fetchConfig } from '@/api/config';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { NotificationHostRow } from './NotificationHostRow';
-import { useLocalClaudeNotice } from './SetupBanner';
 import '@/styles/attention-banner.css';
 import '@/styles/attention-banner-dense.css';
 import { formatRelative } from '@/contexts/notifications';
@@ -81,22 +80,6 @@ export function searchIndexUnhealthy(status: SearchIndexStatus | null): boolean 
   return status?.status === 'error';
 }
 
-/** Hosts switched off in Settings (the health list carries no such flag); one read per pane mount. */
-function useDisabledHosts(): ReadonlySet<string> {
-  const [off, setOff] = useState<ReadonlySet<string>>(() => new Set());
-  useEffect(() => {
-    let live = true;
-    fetchConfig()
-      .then((c) => {
-        const hosts = (c as { hosts?: Record<string, { enabled?: boolean }> }).hosts ?? {};
-        if (live) setOff(new Set(Object.entries(hosts).filter(([, h]) => h?.enabled === false).map(([a]) => a)));
-      })
-      .catch((err) => log.warn('notifications', 'host config read failed', { error: String(err) }));
-    return () => { live = false; };
-  }, []);
-  return off;
-}
-
 /** One kind's indexed-document row. */
 function StoreRow({ label, stats }: { label: string; stats: IndexStoreStats }) {
   return (
@@ -107,57 +90,25 @@ function StoreRow({ label, stats }: { label: string; stats: IndexStoreStats }) {
   );
 }
 
-/**
- * The Errors view's "Shown in System" asks for one host's row in view (a new
- * nonce each click). The panel has already set the row's expanded flag.
- */
-export interface SystemOpenHost { alias: string; nonce: number }
-
-/**
- * Bring the asked-for host's row into view once it renders, and put the
- * keyboard on its details toggle (the link it came from is gone with Errors).
- */
-function useShowHost(list: HTMLElement | null, openHost: SystemOpenHost | null): void {
-  const done = useRef(0);
-  useLayoutEffect(() => {
-    if (!list || !openHost || done.current === openHost.nonce) return;
-    const row = Array.from(list.querySelectorAll<HTMLElement>('li.hpb-row')).find((li) => li.dataset.host === openHost.alias);
-    if (!row) return;
-    done.current = openHost.nonce;
-    row.scrollIntoView({ block: 'nearest' });
-    const toggles = row.querySelectorAll<HTMLElement>('.hft-details[aria-expanded]:not([aria-controls])');
-    (toggles[toggles.length - 1] ?? row.querySelector<HTMLElement>('button'))?.focus({ preventScroll: true });
-  });
-}
-
 export interface NotificationSystemPaneProps {
   indexStatus: SearchIndexStatus | null;
-  openHost?: SystemOpenHost | null;
+  /** Hosts switched off in Settings (the panel reads them once per open). */
+  disabled: ReadonlySet<string>;
   /** Called before any navigation away (Open Settings, Open API settings): the panel closes. */
   onLeave?: () => void;
 }
 
 export const NotificationSystemPane = memo(function NotificationSystemPane(
-  { indexStatus, openHost = null, onLeave }: NotificationSystemPaneProps,
+  { indexStatus, disabled, onLeave }: NotificationSystemPaneProps,
 ) {
   const { health, gitSync, loading } = useSystemHealth();
   const statuses = useAllHostStatus();
-  const disabled = useDisabledHosts();
   const navigate = useNavigate();
   // Open Settings lands on the host's own Settings row, as the Home card's button does.
   const onOpenSettings = useCallback((alias?: string) => {
     onLeave?.();
     openHostSettings(navigate, alias);
   }, [navigate, onLeave]);
-  const onNavigateSettings = useCallback((hash?: string) => {
-    onLeave?.();
-    navigate(`/settings${hash ?? ''}`);
-  }, [navigate, onLeave]);
-  // This machine's Claude Code (install / sign in), the same section the Home card leads with;
-  // the bell can land here for it, so System says it too. Nothing while Claude Code is fine.
-  const local = useLocalClaudeNotice({ health, loading, onNavigateSettings });
-  const [list, setList] = useState<HTMLUListElement | null>(null);
-  useShowHost(list, openHost);
 
   if (loading) {
     return (
@@ -172,16 +123,6 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
 
   return (
     <>
-      {local.present && (
-        <div className="notification-card warn nfc-local-claude" data-testid="nfc-local-claude" data-kind={local.kind ?? ''}>
-          <div className="notification-card-row">
-            <span className="notification-card-icon warn">⚠</span>
-            <span className="notification-card-label">Claude Code</span>
-          </div>
-          {local.node}
-        </div>
-      )}
-
       {/* Remote daemons status: every host once; a host with a problem is its Home card row. */}
       {health.daemons && health.daemons.length > 0 && (() => {
         // Any host with a banner problem (a failed connect, a banner readiness kind) warns the card.
@@ -197,7 +138,7 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
             <span className="notification-card-label">Remote hosts</span>
           </div>
 
-          <ul ref={setList} className="notification-card-details nfc-host-list">
+          <ul className="notification-card-details nfc-host-list">
             {health.daemons.map((d) => (
               <NotificationHostRow key={d.host} daemon={d} disabled={disabled.has(d.host)} onOpenSettings={onOpenSettings} />
             ))}

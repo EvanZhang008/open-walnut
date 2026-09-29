@@ -11,8 +11,8 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { banner, connected, failed, isolatePrefs, resetServerHostFixture, routeHealth, row, signedOut } from './host-problems-helpers'
 import { loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bellDot, bpSetup, expectHomeCardStill, markHomeCard, openRow, openSystemHosts, pickRail, railButton, settingsDot,
-  systemHostLine, systemHostRow, systemHosts, toolbarHide,
+  BP_SHOTS, bellDot, bpSetup, expectHomeCardStill, markHomeCard, openRow, openSystemHosts, pickRail, problemHosts, railButton,
+  settingsDot, systemHostLine, systemHostRow, systemHosts, toolbarHide,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -300,13 +300,14 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
     expect((await box(slot)).width).toBeLessThanOrEqual(721)
   })
 
-  test('BP-R4-C42: the panel is a dialog on every section, with host rows (System) or without them (All), never a card; Tab walks every rail button, WebKit included', async ({ page }) => {
+  test('BP-R4-C42: the panel is a dialog on every section, with host rows (All\'s problems, System) or without them (Needs Action), never a card; Tab walks every rail button, WebKit included', async ({ page }) => {
     await bpSetup(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await openBell(page)
     const panel = page.locator('.notification-panel')
-    // All: no card in the panel, the dialog contract still on its root.
+    // All: the problem rows lead it, no card in the panel, the dialog contract still on its root.
     await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    await expect(problemHosts(page).locator('li.hpb-row')).toHaveCount(4)
     await expect(panelBanner(page)).toHaveCount(0)
     await expect(panel).toHaveAttribute('role', 'dialog')
     await expect(panel).toHaveAttribute('aria-modal', 'true')
@@ -325,6 +326,12 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
     await railButton(page, 'Needs Action').focus()
     await page.keyboard.press('Tab')
     await expect(railButton(page, 'Inbox')).toBeFocused()
+    // Needs Action: nothing waits, so no host rows and no card; the same contract.
+    await pickRail(page, 'Needs Action')
+    await expect(panel.locator('li.hpb-row')).toHaveCount(0)
+    await expect(panelBanner(page)).toHaveCount(0)
+    await expect(panel).toHaveAttribute('role', 'dialog')
+    await expect(panel).toHaveAttribute('aria-modal', 'true')
     await page.keyboard.press('Escape')
     await expect(panel).toHaveCount(0)
   })

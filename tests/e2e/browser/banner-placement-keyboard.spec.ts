@@ -1,8 +1,8 @@
 /**
- * The card and the System host list by keyboard (slice spec 5.1 to 5.3): where
+ * The card and the panel's problems by keyboard (slice spec 5.1 to 5.3): where
  * Tab enters and leaves (in the notification panel: the header, then the
- * rail, then the System section: the Claude Code card when it shows, then the
- * first problem row), where focus goes when the last row folds away, that
+ * rail, then All's problems block: the Claude Code card when it shows, then
+ * the first problem row), where focus goes when the last row folds away, that
  * Escape still closes the panel, and that no two dismiss controls sit close.
  * Host frames and local health are routed client-side.
  *
@@ -14,7 +14,8 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { banner, failed, resetServerHostFixture, row, signedOut } from './host-problems-helpers'
 import { panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, boxGap, bpSetup, openSystemHosts, railButton, systemHostRow, systemHosts, systemLocalCard, toolbarHide,
+  BP_SHOTS, boxGap, bpSetup, openProblems, panelLocalCard, pickRail, problemHosts, problemRow, railButton, systemHostRow,
+  systemHosts, toolbarHide,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -61,13 +62,14 @@ test.describe('Tab order around the task panel card', () => {
     expect(where).toEqual({ body: false, inCard: false, inToolbar: false, inPanel: true })
   })
 
-  test('BP-C25: in the panel Tab goes Close, then the rail from Needs Action to All, then System\'s Claude Code card, then the first problem row\'s control', async ({ page, browserName }) => {
+  test('BP-C25: in the panel Tab goes Close, then the rail from Needs Action to All, then All\'s Claude Code card, then the first problem row\'s control', async ({ page, browserName }) => {
     // WebKit on macOS moves Tab through every button only with Option held (the Safari default).
     const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')], local: 'sign-in' })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    await openSystemHosts(page)
-    const local = await stops(systemLocalCard(page))
+    // The landing (no ask waits): All, led by the problems.
+    await openProblems(page)
+    const local = await stops(panelLocalCard(page))
     expect(local.count, 'the Claude Code card has controls').toBeGreaterThan(0)
     await page.locator('.notification-panel .notification-panel-close').focus()
     await page.keyboard.press(TAB)
@@ -86,8 +88,8 @@ test.describe('Tab order around the task panel card', () => {
     expect(await activeIn(page, '[data-testid="nfc-local-claude"]'), `after All focus is on: ${now}`).toBe(true)
     expect(now).toBe(local.first)
     for (let i = 0; i < local.count + 2 && await activeIn(page, '[data-testid="nfc-local-claude"]'); i++) await page.keyboard.press(TAB)
-    // Then the host list, in its order: Net box's Retry, the first problem row's first control.
-    await expect(systemHostRow(page, 'netbox').getByTestId('hpb-retry')).toBeFocused()
+    // Then the problem hosts, in the card's order: Net box's Retry, the first problem row's first control.
+    await expect(problemRow(page, 'netbox').getByTestId('hpb-retry')).toBeFocused()
   })
 })
 
@@ -145,13 +147,17 @@ test.describe('where focus goes when the card folds away', () => {
     expect({ inList: next.inList, forbidden: next.forbidden, body: next.body }, `focused: ${next.desc}`).toEqual({ inList: true, forbidden: false, body: false })
   })
 
-  test('BP-C27: clicks on a System row\'s headline, the Remote hosts label and the Claude Code card keep the panel open; Escape with focus in a row closes it', async ({ page }) => {
+  test('BP-C27: clicks on a problem row\'s headline, the Remote hosts labels and the Claude Code card (All), and on a System row keep the panel open; Escape with focus in a row closes it', async ({ page }) => {
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')], local: 'sign-in' })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
-    await openSystemHosts(page)
+    await openProblems(page)
+    await problemRow(page, 'netbox').locator('.hft-headline').click()
+    await problemHosts(page).locator(':scope > .notification-card-row .notification-card-label').click()
+    await panelLocalCard(page).locator('.notification-card-label').click()
+    await expect(page.locator('.notification-panel')).toBeVisible()
+    await pickRail(page, 'System')
     await systemHostRow(page, 'netbox').locator('.hft-headline').click()
     await systemHosts(page).locator('.notification-card-label').click()
-    await systemLocalCard(page).locator('.notification-card-label').click()
     await expect(page.locator('.notification-panel')).toBeVisible()
     await systemHostRow(page, 'netbox').getByTestId('hpb-retry').focus()
     await page.keyboard.press('Escape')
@@ -160,7 +166,7 @@ test.describe('where focus goes when the card folds away', () => {
 })
 
 test.describe('dismiss controls stay apart', () => {
-  test('BP-C53: on the Home card every x and Dismiss all are 24px apart and from Hide task panel; each x is titled with its name; System has no row x and no Dismiss all, and its Claude Code x keeps 24px from Close', async ({ page }) => {
+  test('BP-C53: on the Home card every x and Dismiss all are 24px apart and from Hide task panel; each x is titled with its name; the panel (All and System) has no row x and no Dismiss all, and All\'s Claude Code x keeps 24px from Close', async ({ page }) => {
     await bpSetup(page, {
       hosts: [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'), failed('proxybox', 'Proxy box', 'proxy'),
         failed('lanbox', 'Lan box', 'unreachable'), signedOut('signbox', 'Sign box')],
@@ -189,15 +195,19 @@ test.describe('dismiss controls stay apart', () => {
       })).toBe(true)
     }
     await check(banner(page), toolbarHide(page), 'tasks')
-    await openSystemHosts(page)
+    await openProblems(page)
     const panel = page.locator('.notification-panel')
     await expect(panelBanner(page)).toHaveCount(0)
+    await expect(problemHosts(page).locator('li.hpb-row[data-host]')).toHaveCount(5)
     await expect(panel.locator('.hpb-x, .hpb-dismiss, .ab-dismiss-all')).toHaveCount(0)
-    const localX = systemLocalCard(page).locator('.ab-local-x')
+    const localX = panelLocalCard(page).locator('.ab-local-x')
     await expect(localX).toBeVisible()
     expect(await localX.getAttribute('title')).toBe(await localX.getAttribute('aria-label'))
     const close = (await panel.locator('.notification-panel-close').boundingBox())!
     expect(boxGap((await localX.boundingBox())!, close)).toBeGreaterThanOrEqual(24)
     await panel.screenshot({ path: `${BP_SHOTS}/c53-panel-controls.png` })
+    await pickRail(page, 'System')
+    await expect(systemHosts(page).locator('li.hpb-row[data-host]')).toHaveCount(5)
+    await expect(panel.locator('.hpb-x, .hpb-dismiss, .ab-dismiss-all, .ab-local-x')).toHaveCount(0)
   })
 })

@@ -18,7 +18,7 @@
  * people look to decide whether to go fix something.
  */
 import { useRef, type ReactNode } from 'react';
-import { BANNER_READINESS_KINDS, firstSentence, hostProblemOf, type HostStatusInput } from '@open-walnut/host-problem';
+import { BANNER_READINESS_KINDS, firstSentence, hostProblemOf } from '@open-walnut/host-problem';
 import type { DaemonHealth } from '@/hooks/useSystemHealth';
 import { serverNow, useHostStatus } from '@/hooks/useHostStatus';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
@@ -30,11 +30,6 @@ import { SingleHostRow } from './HostProblemRows';
 
 /** Settings' word for a host switched off there (RemoteHostStatus DISABLED_TEXT). */
 const DISABLED_TEXT = 'Disabled';
-
-/** Does the System list give this host its card row right now (the Errors view's "Shown in System")? */
-export function systemListShowsRow(status: HostStatusInput | undefined, replica = false): boolean {
-  return !!status && hostRowFor(status, { now: serverNow(), replica }) !== null;
-}
 
 /** A host with nothing to fix: the dot, the name, the status sentence. */
 function HostStatusLine({ daemon, disabled }: { daemon: DaemonHealth; disabled: boolean }): ReactNode {

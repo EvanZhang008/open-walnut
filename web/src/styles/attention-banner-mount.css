@@ -45,27 +45,10 @@
   padding-top: 46px;
 }
 
-/* Errors view: a root-cause block heading with the quiet "Shown in System" link. */
+/* Errors view: a root-cause block heading (its name). */
 .nfc-cat-title {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   min-width: 0;
-}
-.nfc-cat-shown {
-  font-size: 11px;
-  color: var(--fg-muted);
-}
-.nfc-cat-shown-link {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-  text-align: left;
-}
-.nfc-cat-shown-link:hover {
-  color: var(--accent-text);
-  text-decoration: underline;
 }

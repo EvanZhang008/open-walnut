@@ -39,13 +39,10 @@ describe('owner store', () => {
 })
 
 describe('landing section', () => {
-  it('Needs Action wins; a bell reason opens System; otherwise All', () => {
-    const reasons: BellReason[] = [null, 'hosts', 'local', 'both']
-    for (const reason of reasons) {
-      expect(landingSectionFor(1, reason)).toBe('action')
-      expect(landingSectionFor(3, reason)).toBe('action')
-      expect(landingSectionFor(0, reason)).toBe(reason === null ? 'all' : 'system')
-    }
+  it('Needs Action while a decision waits, otherwise All (which leads with what is broken)', () => {
+    expect(landingSectionFor(1)).toBe('action')
+    expect(landingSectionFor(3)).toBe('action')
+    expect(landingSectionFor(0)).toBe('all')
   })
 })
 

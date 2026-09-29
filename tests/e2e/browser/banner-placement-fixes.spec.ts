@@ -4,7 +4,8 @@
  * shows its headline and one button, the rows name their host first, counts
  * and cues for clipped rows, result lines in place, no entrance motion when
  * the card only changed place, undo lines that hold through a panel open, one
- * look for one alert on the rail and the bell, and the System pane's host list
+ * look for one alert on the rail and the bell, the panel's keyboard order (All
+ * leads with the problem rows, then the feed), and the System pane's host list
  * (each host once: a problem host is its card row, every other a status line).
  * Host frames and local health are routed client-side (host-problems-helpers.ts).
  *
@@ -19,8 +20,9 @@ import {
 } from './host-problems-helpers'
 import { loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bellDot, bpSetup, closePanel, expectHomeCardStill, fixtureHosts, goRail, hostErrorRecord, hostsOf, markHomeCard, openRow,
-  openSystemHosts, pickRail, railButton, systemHostRow, systemHosts, systemRowHosts, toolbarHide,
+  BP_SHOTS, FIXTURE_ORDER, bellDot, bpSetup, closePanel, expectHomeCardStill, fixtureHosts, goRail, hostErrorRecord, hostsOf,
+  markHomeCard, openRow, openSystemHosts, pickRail, problemRow, problemRowHosts, railButton, systemHostRow, systemHosts,
+  systemRowHosts, toolbarHide,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -443,21 +445,27 @@ test.describe('the rail and the bell (N16; N9 moved to BP-R3-N12)', () => {
 })
 
 test.describe('the System pane and panel keyboard (N14, C25; N17 moved to BP-R3-N11)', () => {
-  test('BP-C25: with a feed item on All (no card in the panel), Tab from Close reaches Needs Action and Tab from All the first feed item; in System, Tab from All lands on the first problem row (WebKit too)', async ({ page, browserName }) => {
+  test('BP-C25: with a feed item on All (no card in the panel), Tab from Close reaches Needs Action; Tab from All lands on the first problem row, and past the problems on the feed item; in System, Tab from All lands on the first problem row (WebKit too)', async ({ page, browserName }) => {
     const TAB = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
     await bpSetup(page, { hosts: fixtureHosts(), feed: [hostErrorRecord('devbox', 1)] })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     await openBell(page)
-    // The task card covers the hosts: the panel opens on All, with only the feed in its section.
+    // The panel opens on All: the problems first (the Home card covers them, and they still lead), then the feed.
     await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
     await expect(panelBanner(page)).toHaveCount(0)
+    await expect.poll(() => problemRowHosts(page), { timeout: 10_000 }).toEqual(FIXTURE_ORDER)
     const item = page.locator('.notification-panel .notification-feed-item').first()
     await expect(item).toBeVisible({ timeout: 10_000 })
+    // Dev box is healthy, so its error is a feed card of its own, not under a problem row.
+    expect(await item.evaluate((el) => !el.closest('[data-testid="nfc-problems"]'))).toBe(true)
     await page.locator('.notification-panel .notification-panel-close').focus()
     await page.keyboard.press(TAB)
     await expect(railButton(page, 'Needs Action')).toBeFocused()
     await railButton(page, 'All').focus()
     await page.keyboard.press(TAB)
+    await expect(problemRow(page, 'keybox').locator('.hpb-actions button').first()).toBeFocused()
+    const inProblems = () => page.evaluate(() => !!document.activeElement?.closest('[data-testid="nfc-problems"]'))
+    for (let i = 0; i < 40 && await inProblems(); i++) await page.keyboard.press(TAB)
     await expect(item).toBeFocused()
     // System: the same step from All lands on the first problem row's first control. The list is
     // in Settings order (Dev box and Build box are plain lines), so that is Sign box's Check again.

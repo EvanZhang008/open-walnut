@@ -5,12 +5,12 @@
  * The rail sorts the feed by WHAT THE USER HAS TO DO:
  *   Needs Action — pending permission asks, answerable right here
  *   Inbox        — letters agents wrote to the human (read in the LetterReader)
- *   Errors       — operation errors (with the server's ×N occurrence folding)
+ *   Errors       — operation errors (with the server's ×N occurrence folding),
+ *                  led by what is broken right now (NotificationProblems)
  *   Automation   — cron / skill / hook receipts
- *   System       — ambient health (this machine's Claude Code while its notice
- *                  shows, remote hosts, data backup, embedding search); a host
- *                  with a problem is its Home card row, each host listed once
- *   All          — the whole feed, newest first
+ *   System       — long-running status (remote hosts, data backup, embedding
+ *                  search); each host listed once
+ *   All          — the whole feed, newest first, led by the same problems
  * A flat single list buried the one entry that blocks a session under twenty
  * receipts, which is why permissions used to need a session round-trip.
  *
@@ -27,7 +27,7 @@ import {
   useNotifications, sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
-  partitionErrorsByCause, systemIssueCount, letterIdOf,
+  partitionErrorsByCause, systemIssueCount, errorsBadgeCount, letterIdOf,
   type Notification, type NotificationSection,
 } from '@/contexts/notifications';
 import {
@@ -37,13 +37,11 @@ import { PermissionAnswerForm } from './PermissionAnswerForm';
 import { NotificationActionButtons } from './NotificationActionButtons';
 import { QuietToggle } from './QuietToggle';
 import { displayActionsOf } from '@/contexts/notifications/notification-actions';
-import {
-  NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy, type SystemOpenHost,
-} from './NotificationSystemPane';
+import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } from './NotificationSystemPane';
+import { NotificationProblems, useDisabledHosts, useProblemHosts } from './NotificationProblems';
 import { ErrorCategoryTitle } from './ErrorCategoryTitle';
-import { landingSectionFor, useBannerHostProblemCount, type BellReason } from '@/utils/host-banner-placement';
-import { bannerHostRowId } from '@/utils/attention-banner-model';
-import { setRowExpanded } from '@/utils/attention-banner-session';
+import { landingSectionFor } from '@/utils/host-banner-placement';
+import { hostOfCauseKey } from '@/contexts/notifications/notification-model';
 import { useLocalDismissed } from '@/utils/host-banner-dismiss';
 import { localNoticeShows } from '@/utils/local-claude-banner';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
@@ -67,16 +65,16 @@ interface NotificationPanelProps {
   open: boolean;
   onClose: () => void;
   sidebarCollapsed: boolean;
-  /** The bell's attention reason (no card on the page says it): the panel opens on System. */
-  bellReason?: BellReason;
 }
 
 /** Rail tabs — the notification sections plus the ambient System zone. */
 type RailSection = NotificationSection | 'system';
 
-export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason = null }: NotificationPanelProps) {
+export function NotificationPanel({ open, onClose, sidebarCollapsed }: NotificationPanelProps) {
   const { hasIssues, health, loading: healthLoading } = useSystemHealth();
-  const hostProblems = useBannerHostProblemCount();
+  // What is broken right now: it leads All and Errors, and counts on the Errors badge.
+  const disabledHosts = useDisabledHosts(open);
+  const problemHosts = useProblemHosts(health.daemons, disabledHosts);
   const localDismissed = useLocalDismissed();
   const localClaude = localNoticeShows(health, localDismissed, healthLoading) !== null;
   const { feed, loaded, unreadCount, markAllRead, markLocalRead, dismissFeed } = useNotifications();
@@ -95,16 +93,13 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
     setOpenSeen(open);
     if (open) {
       userPickedSection.current = false;
-      setSection(landingSectionFor(sectionCounts(feed).action, bellReason));
+      setSection(landingSectionFor(sectionCounts(feed).action));
     }
   }
   // Second-level filter inside Errors: null = every category (the landing view),
   // a string = just that family. Owned here (not in the section union) because it
   // is a refinement of one section, not a sibling of the others.
   const [errorCategory, setErrorCategory] = useState<string | null>(null);
-  // The host row System opens and brings into view ("Shown in System" in Errors). Cleared
-  // when the user picks a section themselves and when the panel closes.
-  const [openHost, setOpenHost] = useState<SystemOpenHost | null>(null);
   const navigate = useNavigate();
   const indexStatus = useSearchIndexStatus(open, section === 'system');
 
@@ -201,16 +196,34 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
   // The System zone's own health signal. `hasIssues` is useSystemHealth's own
   // derivation (git-sync unprotected or failing) — the same one the Sidebar's
   // status pill reads; the index error state is the other thing shown in there
-  // that can be broken.
-  const systemUnhealthy = hasIssues || searchIndexUnhealthy(indexStatus) || hostProblems > 0 || localClaude;
+  // that can be broken. Hosts and Claude Code are errors (the Errors badge).
+  const systemUnhealthy = hasIssues || searchIndexUnhealthy(indexStatus);
   // …and how MANY of them are broken, for the rail badge (the derivation is in
   // the model so it is testable and can't drift from the flags above).
   const systemIssues = systemIssueCount({
     gitSyncFailing: hasIssues,
     indexUnhealthy: searchIndexUnhealthy(indexStatus),
-    hostProblems,
-    localClaude,
   });
+
+  // The error cards each problem host caused (causeKey `host:<alias>`), newest
+  // first: they render under that host's row at the top of All and Errors, so
+  // the rest of the view leaves them out and a host reads as one block.
+  const problemAliases = useMemo(() => problemHosts.map(p => p.alias).join('\n'), [problemHosts]);
+  const hostCards = useMemo(() => {
+    const aliases = new Set(problemAliases ? problemAliases.split('\n') : []);
+    const byHost = new Map<string, Notification[]>();
+    for (const n of feed) {
+      if (sectionOf(n) !== 'errors' || !n.causeKey) continue;
+      const alias = hostOfCauseKey(n.causeKey);
+      if (!alias || !aliases.has(alias)) continue;
+      const list = byHost.get(alias);
+      if (list) list.push(n);
+      else byHost.set(alias, [n]);
+    }
+    for (const list of byHost.values()) list.sort((a, b) => effectiveTs(b) - effectiveTs(a));
+    return byHost;
+  }, [feed, problemAliases]);
+  const hostCardIds = useMemo(() => new Set([...hostCards.values()].flat().map(n => n.id)), [hostCards]);
 
   // Items of the active section, newest first. Sorting on effectiveTs (not
   // timestamp) keeps a folded recurring error at the top of the list — its
@@ -218,10 +231,10 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
   const items = useMemo(() => {
     // Inbox rows come from the letter store, not the feed (see `inbox` above).
     const pool = section === 'system' || section === 'inbox' ? []
-      : section === 'all' ? feed
+      : section === 'all' ? feed.filter(n => !hostCardIds.has(n.id))
       : feed.filter(n => sectionOf(n) === section);
     return [...pool].sort((a, b) => effectiveTs(b) - effectiveTs(a));
-  }, [feed, section]);
+  }, [feed, section, hostCardIds]);
 
   // An unanswered action_required letter blocks work exactly like a permission
   // ask, so it is counted into Needs Action — and therefore has to be LISTED
@@ -289,9 +302,13 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
   // problems. Cards sharing an open `causeKey` fold into one block instead —
   // only in the all-errors view, because drilling into a family means the user
   // asked for that family's whole list.
+  // A problem host's cards are under its row already (hostCards), so they are
+  // not a cause block a second time.
   const errorCauses = useMemo(() => (
-    section === 'errors' && !activeErrorCategory ? partitionErrorsByCause(sortedErrors) : null
-  ), [sortedErrors, section, activeErrorCategory]);
+    section === 'errors' && !activeErrorCategory
+      ? partitionErrorsByCause(sortedErrors.filter(n => !hostCardIds.has(n.id)))
+      : null
+  ), [sortedErrors, section, activeErrorCategory, hostCardIds]);
 
   const errorBlocks = useMemo(() => {
     if (section !== 'errors') return null;
@@ -317,7 +334,6 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
 
   const pickSection = useCallback((next: RailSection) => {
     userPickedSection.current = true;
-    setOpenHost(null);
     setSection(next);
     // Entering Errors through the SECTION button always lands on every category
     // ("all" is the natural landing); a specific family is only reached through
@@ -327,25 +343,13 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
 
   const pickErrorCategory = useCallback((category: string) => {
     userPickedSection.current = true;
-    setOpenHost(null);
     setSection('errors');
     setErrorCategory(category);
   }, []);
 
   useEffect(() => {
     if (open) setErrorCategory(null);
-    else setOpenHost(null);
   }, [open]);
-
-  // "Shown in System" on a host's root-cause block: System, with that host's row in view and its
-  // details open (the row's own expanded flag, the one the Home card's row shares).
-  const openHostNonce = useRef(0);
-  const showHostInSystem = useCallback((alias: string) => {
-    setRowExpanded(bannerHostRowId(alias), true);
-    pickSection('system');
-    openHostNonce.current += 1;
-    setOpenHost({ alias, nonce: openHostNonce.current });
-  }, [pickSection]);
 
   // …but on the FIRST open the initial GET may still be in flight, so the feed is
   // empty-so-far and the choice above lands on All even with pending permissions
@@ -353,7 +357,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
   // already clicked a section, in which case their choice wins.
   useEffect(() => {
     if (!open || !loaded || userPickedSection.current) return;
-    setSection(landingSectionFor(sectionCounts(feed).action, bellReason));
+    setSection(landingSectionFor(sectionCounts(feed).action));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- loaded-transition only
   }, [open, loaded]);
 
@@ -388,6 +392,34 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
   }, []);
 
   if (!open) return null;
+
+  // The problems lead All and the all-errors view (never a drilled-in family,
+  // which is the list the user asked for); each host's cards sit under its row.
+  const problemsHere = (section === 'all' || (section === 'errors' && !activeErrorCategory))
+    && (problemHosts.length > 0 || localClaude);
+  const problems = problemsHere ? (
+    <NotificationProblems
+      hosts={problemHosts}
+      health={health}
+      healthLoading={healthLoading}
+      onLeave={onClose}
+      renderHostCards={(alias) => {
+        const cards = hostCards.get(alias);
+        return cards?.length ? (
+          <FeedGroups
+            groups={[{ key: `host:${alias}`, items: cards }]}
+            expandedGroups={expandedGroups}
+            onToggleGroup={toggleGroup}
+            onNavigate={onNavigate}
+            onDismissKey={key => dismissFeed([key])}
+            showCategoryChip
+            canFix={canFix}
+            fixNeedsClone={fixNeedsClone}
+          />
+        ) : null;
+      }}
+    />
+  ) : null;
 
   // Portal to <body>: the panel is mounted inside the Sidebar, whose mobile
   // styles apply a transform — that turns the sidebar into the containing
@@ -450,8 +482,12 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
                 one click away, because opening the panel marks everything read.
                 Errors are RED (live failures), pending permissions amber, the
                 rest the calm accent. */}
+            {/* Errors counts what the view leads with too: each problem host
+                and this machine's Claude Code, once each. */}
             <RailButton
-              label="Errors" count={counts.errorsTotal} danger
+              label="Errors"
+              count={errorsBadgeCount({ feedErrors: counts.errorsTotal, problemHosts: problemHosts.length, localClaude })}
+              danger
               active={section === 'errors' && !activeErrorCategory}
               onClick={() => pickSection('errors')}
             />
@@ -473,8 +509,8 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
               active={section === 'automation'} onClick={() => pickSection('automation')}
             />
             {/* System has no feed entries, so its number comes from what the
-                pane renders as wrong (git sync, the search index, each problem
-                host and local Claude Code). Zero but still flagged → the old dot. */}
+                pane renders as wrong (git sync, the search index). Zero but
+                still flagged → the old dot. */}
             <RailButton
               label="System" count={systemIssues} warn dot={systemUnhealthy}
               active={section === 'system'} onClick={() => pickSection('system')}
@@ -489,10 +525,10 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
 
           <div className="nfc-detail">
             {section === 'system' ? (
-              /* Ambient health (local Claude Code, hosts, backup, embedding
-                 search): its own component so the search-index poll only runs
-                 while this tab is showing. */
-              <NotificationSystemPane indexStatus={indexStatus} openHost={openHost} onLeave={onClose} />
+              /* Long-running status (hosts, backup, embedding search): its own
+                 component so the search-index poll only runs while this tab is
+                 showing. */
+              <NotificationSystemPane indexStatus={indexStatus} disabled={disabledHosts} onLeave={onClose} />
             ) : section === 'inbox' ? (
               <InboxPane
                 letters={inboxRows}
@@ -507,7 +543,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
                 onToggleArchive={toggleLetterArchive}
                 onToggleRead={(l) => markLetterRead(l.id, !l.read)}
               />
-            ) : groups.length === 0 && !(section === 'action' && decisionLetters.length > 0) ? (
+            ) : groups.length === 0 && !problems && !(section === 'action' && decisionLetters.length > 0) ? (
               <div className="notification-feed-empty">{EMPTY_TEXT[section]}</div>
             ) : errorBlocks ? (
               /* Errors: one block per ROOT CAUSE, then one per CATEGORY. The
@@ -515,6 +551,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
                  the family and how many cards are in it, so a rail of twenty reds
                  becomes four readable problems. */
               <div className="notification-feed">
+                {problems}
                 {/* Root-cause blocks first: they name the ONE thing that broke
                     ("Can't reach devbox"), and the cards under them are the
                     conditions it produced. A single group so the existing
@@ -523,7 +560,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
                 {errorCauses?.causes.map(cause => (
                   <div key={cause.causeKey} className="nfc-cat-block">
                     <div className="nfc-cat-header nfc-cause-header">
-                      <ErrorCategoryTitle causeKey={cause.causeKey} label={cause.label} onShowSystem={showHostInSystem} />
+                      <ErrorCategoryTitle causeKey={cause.causeKey} label={cause.label} />
                       <span className="nfc-cat-count">{cause.items.length}</span>
                     </div>
                     <FeedGroups
@@ -586,6 +623,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed, bellReason 
               </div>
             ) : (
               <div className="notification-feed">
+                {problems}
                 {/* Letters awaiting a decision sit ABOVE the permission cards in
                     Needs Action: they are the asks that survived the session
                     going idle, so they are the oldest debt in the section. */}

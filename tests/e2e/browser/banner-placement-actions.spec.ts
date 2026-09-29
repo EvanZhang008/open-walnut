@@ -2,8 +2,9 @@
  * The card's buttons and the System section's host rows (slice spec 5.1, 5.3,
  * 2.1): Open Settings in a System row leaves the panel first, Retry there keeps
  * it open, one attempt is shared by the Home card and System, the Needs Action
- * landing carries no card (System lists the problem hosts, and its badge counts
- * them), and the success sentence drops its check mark in the card.
+ * landing carries no card (the Errors badge counts the problem hosts, All
+ * leads with them and System lists them), and the success sentence drops its
+ * check mark in the card.
  * Host frames and local health are routed client-side; the Settings checks
  * (BP-C20, BP-C66) use the server's host fixture so Settings lists the hosts.
  *
@@ -19,8 +20,9 @@ import {
 } from './host-problems-helpers'
 import { hostRow, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, askRecord, bpSetup, closePanel, expectTasksCard, healthyGitSync, hostsOf, openRow, openSystemHosts, panelMount,
-  pickRail, railButton, systemBadge, systemHostLine, systemHostRow, systemHosts, systemListHosts, systemRowHosts,
+  BP_SHOTS, askRecord, bpSetup, closePanel, errorsBadge, expectTasksCard, healthyGitSync, hostsOf, openProblems, openRow,
+  openSystemHosts, panelMount, pickRail, problemHosts, problemRow, problemRowHosts, railButton, systemBadge, systemHostLine,
+  systemHostRow, systemHosts, systemListHosts, systemRowHosts,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -67,11 +69,16 @@ test.describe('the card in the task panel, the rows in System', () => {
     await expect(page.locator('[data-testid="attention-banner"]:visible')).toHaveCount(0)
   })
 
-  test('BP-C21: five problems: the Home card caps at 3 rows and "and 2 more"; System lists all five once each, with no "more" link', async ({ page }) => {
+  test('BP-C21: five problems: the Home card caps at 3 rows and "and 2 more"; All\'s problems and System list all five once each, with no "more" link', async ({ page }) => {
     await bpSetup(page, { hosts: five() })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await expect(banner(page).locator('li.hpb-row[data-host]')).toHaveCount(3)
     await expect(banner(page).locator('.hpb-more')).toHaveText('and 2 more')
+    // All (the landing): no cap either, in the card's order (connect failures, then the sign-in).
+    await openBell(page)
+    await expect.poll(() => problemRowHosts(page), { timeout: 20_000 }).toEqual(['keybox', 'netbox', 'proxybox', 'lanbox', 'signbox'])
+    await expect(problemHosts(page).locator('.hpb-more')).toHaveCount(0)
+    await closePanel(page, 'escape')
     await openSystemHosts(page)
     // A status list has no cap: every host, in the order given, each once.
     await expect.poll(() => systemListHosts(page)).toEqual(['keybox', 'netbox', 'proxybox', 'lanbox', 'signbox'])
@@ -111,16 +118,16 @@ test.describe('the card in the task panel, the rows in System', () => {
 })
 
 test.describe('one attempt, one state, whichever mount shows it', () => {
-  test('BP-C48: a Retry started in the task panel is the same pending attempt in the panel; one connect request in all', async ({ page }) => {
+  test('BP-C48: a Retry started in the task panel is the same pending attempt in the panel (All\'s problem row, where the bell lands); one connect request in all', async ({ page }) => {
     const h = await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), failed('keybox', 'Key box', 'auth'), signedOut('signbox', 'Sign box')] })
     await expect(row(page, 'netbox')).toBeVisible({ timeout: 20_000 })
     h.connectDelayMs = 2000
     h.connectAnswer = (host) => failed(host, 'Net box', 'unreachable')
     await row(page, 'netbox').getByTestId('hpb-retry').click()
     await page.waitForTimeout(300)
-    await openSystemHosts(page)
-    await expect(systemHostRow(page, 'netbox')).toContainText('Connecting to Net box...')
-    await expect(systemHostRow(page, 'netbox').getByTestId('hpb-retry')).toBeDisabled()
+    await openProblems(page)
+    await expect(problemRow(page, 'netbox')).toContainText('Connecting to Net box...')
+    await expect(problemRow(page, 'netbox').getByTestId('hpb-retry')).toBeDisabled()
     await closePanel(page, 'escape')
     await expect(row(page, 'netbox')).toContainText('Connecting to Net box...')
     await expect(row(page, 'netbox').getByTestId('hpb-receipt')).toHaveText('Tried again just now: same result', { timeout: 10_000 })
@@ -158,7 +165,7 @@ test.describe('one attempt, one state, whichever mount shows it', () => {
 })
 
 test.describe('landing, the named cap, and the success sentence', () => {
-  test('BP-C62: two asks and four host problems: the bell lands on Needs Action with no card there; the System badge counts the four hosts; System lists them as dense card rows', async ({ page }) => {
+  test('BP-C62: two asks and four host problems: the bell lands on Needs Action with no card and no problems there; the Errors badge counts the four hosts, System\'s nothing; System lists them as dense card rows', async ({ page }) => {
     await bpSetup(page, {
       hosts: [failed('keybox', 'Key box', 'auth'), failed('netbox', 'Net box', 'unreachable'), failed('certbox', 'Cert box', 'cert_expired'), signedOut('signbox', 'Sign box')],
       feed: [askRecord(1), askRecord(2)],
@@ -175,8 +182,12 @@ test.describe('landing, the named cap, and the success sentence', () => {
     const panelBox = (await page.locator('.notification-panel').boundingBox())!
     const askTop = (await page.locator('.notification-panel .nfc-perm-card').first().boundingBox())!.y
     expect(askTop - panelBox.y).toBeLessThanOrEqual(panelBox.height * 0.6)
-    // The System rail counts what its section lists as wrong: the four hosts (git sync healthy, this machine ready).
-    await expect(systemBadge(page)).toHaveText('4')
+    // Needs Action is the asks alone: the problems lead All and Errors, not this section.
+    await expect(problemHosts(page)).toHaveCount(0)
+    // The hosts are errors: the Errors rail counts the four (no feed errors, this machine ready);
+    // System (git sync healthy) counts nothing.
+    await expect(errorsBadge(page)).toHaveText('4')
+    await expect(systemBadge(page)).toHaveCount(0)
     await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c62-needs-action-landing.png` })
     await pickRail(page, 'System')
     const hosts = systemHosts(page)
@@ -184,7 +195,8 @@ test.describe('landing, the named cap, and the success sentence', () => {
     await expect(panelBanner(page)).toHaveCount(0)
     await expect(banner(page)).toHaveCount(1)
     await expect(hosts.locator('li.hpb-row[data-host]')).toHaveCount(4)
-    await expect(systemBadge(page)).toHaveText('4')
+    await expect(systemBadge(page)).toHaveCount(0)
+    await expect(errorsBadge(page)).toHaveText('4')
     // Never the one-line form in System (dense: headline, then the primary action).
     for (const r of await hosts.locator('li.hpb-row[data-host]').all()) {
       await expect(r).toHaveClass(/hpb-dense/)

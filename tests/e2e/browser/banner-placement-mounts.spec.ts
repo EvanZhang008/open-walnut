@@ -1,9 +1,10 @@
 /**
  * Where the attention card mounts (slice spec 2 and 4.4): the task panel on
  * Home, the slot and the draft column only while the task panel is hidden,
- * never the notification panel (its System section lists each host once, a
- * problem host as its card row; the bell lands there only when no in-page
- * card covers the problem), and never two cards at once.
+ * never the notification panel (All leads with each problem host as its card
+ * row, and the bell lands on All whether or not an in-page card covers the
+ * problem; its System section lists each host once), and never two cards at
+ * once.
  * Host frames and local health are routed client-side; page.goto only loads
  * the app, every other step is a real click or key.
  *
@@ -21,9 +22,10 @@ import {
 import { openBell, panelBanner, slotBanner, tasksBanner } from './host-problems-fixture-helpers'
 import { openDraft } from './draft-helpers'
 import {
-  BP_SHOTS, FIXTURE_ORDER, bellDot, bpSetup, closePanel, countInFirstFrameAfterClick, expectHomeCardStill, expectTasksCard, goRail,
-  hostsOf, markHomeCard, maxCards, openSystemHosts, panelMount, pickRail, railButton, settingsDot, systemBadge, systemHostLine,
-  systemHostRow, systemHosts, systemListHosts, systemRowHosts, toolbarHide, triples, type CloseWay,
+  BP_SHOTS, FIXTURE_ORDER, bellDot, bpSetup, closePanel, countInFirstFrameAfterClick, errorsBadge, expectHomeCardStill,
+  expectTasksCard, goRail, hostsOf, markHomeCard, maxCards, openProblems, openSystemHosts, panelMount, panelProblems, pickRail,
+  problemHosts, problemRow, problemRowHosts, railButton, settingsDot, systemBadge, systemHostLine, systemHostRow, systemHosts,
+  systemListHosts, systemRowHosts, toolbarHide, triples, type CloseWay,
 } from './banner-placement-helpers'
 
 test.describe.configure({ timeout: 90_000 })
@@ -136,7 +138,7 @@ test.describe('the notification panel never takes the card', () => {
     expect(await maxCards(page)).toBe(1)
   })
 
-  test('BP-C8: on /notes no card on the page, the rail Settings dot and the bell dot lit; the bell opens on System, where each problem host has the card\'s row', async ({ page }) => {
+  test('BP-C8: on /notes no card on the page, the rail Settings dot and the bell dot lit; the bell opens on All, led by each problem host as the card\'s row, in the card\'s order', async ({ page }) => {
     await bpSetup(page)
     await expectTasksCard(page)
     const inTasks = await triples(banner(page))
@@ -144,11 +146,10 @@ test.describe('the notification panel never takes the card', () => {
     await expect(page.locator('[data-testid="attention-banner"]:visible')).toHaveCount(0)
     await expect(settingsDot(page)).toHaveAttribute('data-kind', 'warn')
     await expect(bellDot(page)).toHaveCount(1)
-    await openBell(page)
-    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
+    const hosts = await openProblems(page)
     await expect(panelBanner(page)).toHaveCount(0)
-    await expect(systemHosts(page)).toBeVisible()
-    expect([...await triples(systemHosts(page))].sort()).toEqual([...inTasks].sort())
+    // The same rows (type and kind) as the card, in the same order.
+    await expect.poll(() => triples(hosts)).toEqual(inTasks)
     await page.screenshot({ path: `${BP_SHOTS}/c8-notes-panel.png` })
   })
 })
@@ -193,9 +194,11 @@ test.describe('empty, and the first frame after a move', () => {
     })
     expect(Math.abs(gap)).toBeLessThanOrEqual(1)
     await openBell(page)
-    // Nothing to say: the bell lands on All, and System holds no card either.
+    // Nothing to say: the bell lands on All with no problems block, and System holds no card either.
     await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
     await expect(page.locator('.notification-panel [data-testid="attention-banner"]')).toHaveCount(0)
+    await expect(panelProblems(page)).toHaveCount(0)
+    await expect(errorsBadge(page)).toHaveCount(0)
     await pickRail(page, 'System')
     await expect(page.locator('.notification-panel [data-testid="attention-banner"]')).toHaveCount(0)
     await expect(systemHostLine(page, 'devbox')).toBeVisible()
@@ -252,12 +255,15 @@ test.describe('empty, and the first frame after a move', () => {
 })
 
 test.describe('the System section lists the hosts; the card stays on Home', () => {
-  test('BP-C69: Home with the task card: the bell opens on All with no card or mount in the panel; the task card stays', async ({ page }) => {
+  test('BP-C69: Home with the task card: the bell opens on All, led by the problem rows, with no card or mount in the panel; the task card stays', async ({ page }) => {
     await bpSetup(page)
     await expectTasksCard(page)
     const before = (await banner(page).boundingBox())!
     await openBell(page)
     await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+    // The card on Home covers the hosts, and the panel still leads with them: errors, not ambient status.
+    await expect.poll(() => problemRowHosts(page)).toEqual(FIXTURE_ORDER)
+    await expect(problemHosts(page).locator('li.hpb-row').first()).toBeInViewport()
     // Not above the sections (the old place) and not anywhere else in the panel.
     await expect(page.locator('.notification-panel > .ab-mount')).toHaveCount(0)
     await expect(panelMount(page)).toHaveCount(0)
@@ -290,29 +296,32 @@ test.describe('the System section lists the hosts; the card stays on Home', () =
     expect(await maxCards(page)).toBe(1)
   })
 
-  test('BP-C71: on /notes the bell opens on System with each problem host\'s row; the System badge counts the problem hosts, a Home card dismissal included', async ({ page }) => {
-    // bpSetup routes git sync healthy and this machine ready, so the badge counts hosts only.
+  test('BP-C71: on /notes the bell opens on All with each problem host\'s row and the Errors badge counts them (System\'s counts none); a host dismissed on the Home card leaves All and the count, and stays in System', async ({ page }) => {
+    // bpSetup routes git sync healthy and this machine ready, so the Errors badge counts hosts only.
     await bpSetup(page)
     await expectTasksCard(page)
     await goRail(page, 'notes')
-    await openBell(page)
-    await expect(railButton(page, 'System')).toHaveAttribute('aria-current', 'true')
-    await expect(panelBanner(page)).toHaveCount(0)
+    await openProblems(page)
     await expect(anyBanner(page)).toHaveCount(0)
-    await expect.poll(() => systemRowHosts(page)).toEqual(['signbox', 'keybox', 'certbox', 'netbox'])
+    await expect.poll(() => problemRowHosts(page)).toEqual(FIXTURE_ORDER)
     // keybox, certbox, netbox, signbox; the healthy devbox and the merely outdated buildbox never count.
-    await expect(systemBadge(page)).toHaveText(String(FIXTURE_ORDER.length))
-    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c71-notes-system-badge.png` })
-    // The badge follows what the System pane lists, and the list ignores dismissals.
+    await expect(errorsBadge(page)).toHaveText(String(FIXTURE_ORDER.length))
+    await expect(systemBadge(page)).toHaveCount(0)
+    await page.locator('.notification-panel').screenshot({ path: `${BP_SHOTS}/c71-notes-errors-badge.png` })
+    // The badge follows what the problems list, and they follow the Home card's dismissals.
     await closePanel(page, 'escape')
     await goRail(page, 'home')
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await row(page, 'netbox').getByRole('button', { name: 'Dismiss Net box' }).click()
     await expect(row(page, 'netbox')).toHaveCount(0)
     await goRail(page, 'notes')
-    await openBell(page)
+    await openProblems(page)
+    await expect.poll(() => problemRowHosts(page)).toEqual(FIXTURE_ORDER.filter((h) => h !== 'netbox'))
+    await expect(problemRow(page, 'netbox')).toHaveCount(0)
+    await expect(errorsBadge(page)).toHaveText(String(FIXTURE_ORDER.length - 1))
+    // System is the inventory: the dismissed host keeps its row there, and System still counts nothing.
     await pickRail(page, 'System')
     await expect(systemHostRow(page, 'netbox')).toBeVisible()
-    await expect(systemBadge(page)).toHaveText(String(FIXTURE_ORDER.length))
+    await expect(systemBadge(page)).toHaveCount(0)
   })
 })

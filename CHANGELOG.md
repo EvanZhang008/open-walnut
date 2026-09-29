@@ -6,6 +6,18 @@ breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **Host problems show the moment the notifications panel opens.** A remote host that cannot be
+  reached, or a Claude Code that is missing or not signed in, now counts as an error: it leads the
+  All view the panel opens on, and the Errors view, as the same row as on the Home card (the
+  sentence, the Retry or Check again button, `Show details` for the reason and Open Settings), in
+  the card's order and without the dismiss button. A host's failed attempts sit under its row
+  instead of in a second block naming the same host, and the Errors badge counts each problem host
+  once. A problem dismissed on the Home card stays out of these views too. System is back to
+  long-running status: its `Remote hosts` list still names every host once (dismissed ones
+  included), and its badge no longer counts hosts. A pending ask still opens Needs Action first.
+
 ## [0.5.1] - 2026-09-28
 
 ### Changed
