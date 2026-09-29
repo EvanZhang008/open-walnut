@@ -64,6 +64,8 @@ import { createHostRuntime, NODE_DISCOVERY_SHELL } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
+import { createOfflineHost, type HostSlice } from './offline-host-core.js'
+import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
 import {
   foldLine,
   initialFoldState,
@@ -1807,6 +1809,12 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // NOT in BRIDGE_ALLOWED_COMMANDS: only the trusted SSH-tunneled walnut
     // client may answer agent-gateway relays (see the gateway section).
     case 'gateway-result': return cmdGatewayResult(ws, id as number, cmd)
+    // Offline host ('offline-host-v1', docs/plan/daemon-first-hosts.md). NOT in
+    // BRIDGE_ALLOWED_COMMANDS: a Walnut's copy and journal belong to that
+    // Walnut's trusted SSH-tunneled server only. Keep in sync with daemon-source.ts.
+    case 'host.slice': return cmdHostSlice(ws, id as number, cmd)
+    case 'offline.drain': return cmdOfflineDrain(ws, id as number, cmd)
+    case 'offline.ack': return cmdOfflineAck(ws, id as number, cmd)
     case 'acpStart': return cmdAcpStart(ws, id as number, cmd)
     case 'acpSend': return cmdAcpOp(ws, id as number, cmd, 'prompt')
     case 'acpSteer': return cmdAcpOp(ws, id as number, cmd, 'steer')
@@ -2322,19 +2330,99 @@ function gatewayError(code: GatewayErrorCode, message: string): GatewayResponse 
   return { ok: false, error: { code, message } }
 }
 
+// ── Offline host: answers a Walnut's sessions while that Walnut is away ──
+// (offline-host-core.ts; docs/plan/daemon-first-hosts.md). The server pushes a
+// read copy per home (`host.slice`, which also tags its socket with that home),
+// and drains the journal on reconnect (`offline.drain` / `offline.ack`).
+// Keep in sync with daemon-source.ts.
+
+/** Trusted socket → the Walnut data dir it pushed a copy for. */
+const gatewayClientHomes = new WeakMap<ServerWebSocket<WsData>, string>()
+
+const offlineHost = createOfflineHost({
+  fs, path,
+  dir: path.join(DAEMON_DIR, 'offline-host'),
+  now: () => Date.now(),
+  randomHex: (n) => crypto.randomBytes(n).toString('hex'),
+  keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
+  kit: createEnvelopeKit(),
+  log: (level, msg, data) => logMsg(level, msg, data),
+  isLive: (sid) => sessions.get(sid)?.state === 'running',
+  turnActive: (sid) => sessions.get(sid)?.foldState.turnActive === true,
+  // The same gate and turn-retry reset a server send goes through (cmdSend).
+  deliver: (sid, text, messageId) => sessionStartGate.run(sid, async () => {
+    cancelTurnRetry(sid, 'superseded-by-send')
+    const r = await core.handleSendCommand(sid, text, undefined, [{ message: text, messageId }])
+    return 'ok' in r && r.ok ? { ok: true as const } : { ok: false as const, reason: 'reason' in r ? String(r.reason) : String((r as { error?: string }).error) }
+  }),
+  streamOffset: (sid) => {
+    const s = sessions.get(sid)
+    try { return s ? fs.statSync(s.jsonlPath).size : undefined } catch { return undefined }
+  },
+  onJournal: (home) => {
+    for (const client of wsClients) {
+      if (client.data?.origin !== 'bridge' && gatewayClientHomes.get(client) === home) sendEvent(client, 'offline-journal', { home })
+    }
+  },
+})
+setInterval(() => { void offlineHost.sweep() }, 60_000).unref?.()
+
+/** The Walnut a session belongs to: the home whose copy lists it. */
+function gatewayOwnerHome(callerSid: string): string | undefined {
+  return offlineHost.ownerOf(callerSid)
+}
+
+function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  try {
+    const slice = cmd.slice as HostSlice
+    const r = offlineHost.configure(slice)
+    gatewayClientHomes.set(ws, slice.home)
+    sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.pendingHandover(slice.home) })
+  } catch (err) {
+    sendError(ws, id, 'host.slice: ' + (err as Error).message)
+  }
+}
+
+function cmdOfflineDrain(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'offline.drain: missing home')
+  sendOk(ws, id, offlineHost.drain(cmd.home) as unknown as Record<string, unknown>)
+}
+
+function cmdOfflineAck(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (typeof cmd.home !== 'string' || !cmd.home || typeof cmd.upTo !== 'number') return sendError(ws, id, 'offline.ack: missing home or upTo')
+  sendOk(ws, id, offlineHost.ack(cmd.home, cmd.upTo))
+}
+
 function sendGatewayRequest(
   capability: string,
   callerSid: string,
   payload: Record<string, unknown>,
   respond: (resp: GatewayResponse) => void,
 ) {
-  // Pick any trusted client (never the bridge adapter) — same rule as
-  // cmdLaunchRelay: normally exactly one, the walnut server's DaemonConnection.
+  // The server of the caller's Walnut when one pushed a copy; else any trusted
+  // client that never identified itself (an older server), never the bridge
+  // adapter. Picking "any trusted client" for a caller whose Walnut is known
+  // would hand the real Walnut's calls to a test server on a shared host.
+  const home = gatewayOwnerHome(callerSid)
   let target: ServerWebSocket<WsData> | null = null
+  let untagged: ServerWebSocket<WsData> | null = null
   for (const client of wsClients) {
-    if (client.data?.origin !== 'bridge') { target = client; break }
+    if (client.data?.origin === 'bridge') continue
+    const clientHome = gatewayClientHomes.get(client)
+    if (home && clientHome === home) target = client
+    else if (!clientHome && !untagged) untagged = client
+  }
+  if (!home) target = untagged
+  else if (!target && !offlineHost.pendingHandover(home)) target = untagged
+  // Answer here while the Walnut is away, and while its server is still taking
+  // the handover: an id it has not imported yet must never reach it.
+  if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
+    logMsg('info', 'gateway: answered offline', { capability, callerSid, op: typeof payload.name === 'string' ? payload.name : undefined, serverConnected: !!target })
+    void offlineHost.handle(home, callerSid, capability, payload).then((r) => respond(r as GatewayResponse))
+    return
   }
   if (!target) {
+    logMsg('info', 'gateway: no server connected', { capability, callerSid })
     return respond(gatewayError('hub_unreachable', 'no primary server connected'))
   }
   const relayId = ++gatewayRelayCounter
@@ -4432,6 +4520,8 @@ function ensureWatcher(sid: string) {
           try { checkTurnRetry(sid, s, line, v) } catch (err) {
             logMsg('warn', 'turn-retry check threw', { sid, error: (err as Error).message })
           }
+          // A reply request this host owns ends with this turn (offline-host-core.ts).
+          void offlineHost.onResult(sid, line, v).catch(() => {})
         }
 
         // ── L2: materialize daemon-authoritative task state ──

@@ -121,6 +121,11 @@ export async function notifyRequesterFallback(
   outcome: SessionRequestOutcome,
   context: FallbackContext = {},
 ): Promise<boolean> {
+  // A host that answered while this server was away may be handing over a reply
+  // to this very request right now (offline-handover.ts): let it land first, or
+  // the asker hears "no reply" after it already got one.
+  const { waitForOfflineHandovers } = await import('../offline-handover.js');
+  await waitForOfflineHandovers();
   const settled = await settleNotified(request.id, outcome);
   if (!settled) return false; // replied / already notified — someone else spoke
 

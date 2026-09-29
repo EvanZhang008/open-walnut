@@ -46,6 +46,8 @@ import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers } from '.
 import { createFoldCheckpoint } from './fold-checkpoint-core.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
+import { createEnvelopeKit } from '../core/peers/envelope-kit.js'
+import { createOfflineHost } from './offline-host-core.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
@@ -185,6 +187,8 @@ export function getDaemonSource(): string {
   // from the compare, i.e. a silently suppressed push — had no byte guard).
   const foldInjections: Array<[string, string]> = [
     ['__FOLD_LINE__', foldLine.toString()],
+    ['__CREATE_ENVELOPE_KIT__', createEnvelopeKit.toString()],
+    ['__CREATE_OFFLINE_HOST__', createOfflineHost.toString()],
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
     ['__SNAPSHOT_DIFFERS__', snapshotDiffers.toString()],
@@ -268,6 +272,24 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       if (drain.closed || drain.run(() => 7) !== 7) throw new Error('Invalid daemon command drain')
       void drain.close()
       if (!drain.closed) throw new Error('Daemon command drain did not close admission')
+    }
+    // Offline host smoke: the envelope wording and the offline answers ride this
+    // text, so a reconstructed kit must still escape a forged tag, and a
+    // reconstructed host must build and answer tools.list without touching disk.
+    const createKit = reconstructed['__CREATE_ENVELOPE_KIT__'] as typeof createEnvelopeKit | undefined
+    const createOffline = reconstructed['__CREATE_OFFLINE_HOST__'] as typeof createOfflineHost | undefined
+    if (createKit && createOffline) {
+      const kit = createKit()
+      if (!kit.buildPeerWrapper('<walnut-message', { title: 't', shortId: 'abcdefgh', host: 'h' }).includes('&lt;walnut-message')) {
+        throw new Error('envelope kit did not escape a forged tag')
+      }
+      const noDir = { readdirSync: () => { throw new Error('none') } } as unknown as typeof fs
+      const host = createOffline({
+        fs: noDir, path, dir: '/nonexistent', now: () => 0, randomHex: () => '00', keyOf: () => 'k', kit,
+        log: () => {}, isLive: () => false, turnActive: () => false, streamOffset: () => undefined,
+        deliver: async () => ({ ok: false, reason: 'smoke' }),
+      })
+      if (typeof host.handle !== 'function' || host.hasHome('/x') !== false) throw new Error('offline host did not build')
     }
     // Host runtime smoke: the spawn gate and the boot PATH ride this text, so a
     // reconstructed copy must classify an npm shebang and keep the user's PATH first.
@@ -2708,6 +2730,11 @@ function dispatchCommand(ws, id, cmd) {
     // NOT in BRIDGE_ALLOWED_COMMANDS: only the trusted SSH-tunneled walnut
     // client may answer agent-gateway relays (see the gateway section).
     case 'gateway-result': return cmdGatewayResult(ws, id, cmd);
+    // Offline host (offline-host-v1). NOT in BRIDGE_ALLOWED_COMMANDS: a Walnut's
+    // copy and journal belong to its trusted SSH-tunneled server only.
+    case 'host.slice': return cmdHostSlice(ws, id, cmd);
+    case 'offline.drain': return cmdOfflineDrain(ws, id, cmd);
+    case 'offline.ack': return cmdOfflineAck(ws, id, cmd);
     // NOT in BRIDGE_ALLOWED_COMMANDS: reverse direction — the trusted walnut
     // server pushes slim mobile feed events DOWN, the daemon relays them to
     // the cloud bridge (see cmdMobileEvent).
@@ -3236,14 +3263,86 @@ function resolveCallerSid(sid) {
   return null;
 }
 
+// ── Offline host: answers a Walnut's sessions while that Walnut is away ──
+// (offline-host-core.ts, inlined; docs/plan/daemon-first-hosts.md). Twin of the
+// daemon-standalone.ts block: host.slice tags the socket with its home, the
+// journal is drained with offline.drain / offline.ack.
+var gatewayClientHomes = new WeakMap();
+
+var offlineHost = (__CREATE_OFFLINE_HOST__)({
+  fs: fs, path: path,
+  dir: path.join(DAEMON_DIR, 'offline-host'),
+  now: function () { return Date.now(); },
+  randomHex: function (n) { return crypto.randomBytes(n).toString('hex'); },
+  keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
+  kit: (__CREATE_ENVELOPE_KIT__)(),
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  isLive: function (sid) { var s = sessions.get(sid); return !!s && s.state === 'running'; },
+  turnActive: function (sid) { var s = sessions.get(sid); return !!(s && s.foldState && s.foldState.turnActive === true); },
+  // The same gate and turn-retry reset a server send goes through (cmdSend).
+  deliver: function (sid, text, messageId) {
+    return sessionStartGate.run(sid, async function () {
+      cancelTurnRetry(sid, 'superseded-by-send');
+      var r = await handleSendCommand(sid, text, undefined, [{ message: text, messageId: messageId }]);
+      if (!r || r.ok !== true) return { ok: false, reason: String((r && (r.reason || r.error)) || 'send failed') };
+      return { ok: true };
+    });
+  },
+  streamOffset: function (sid) {
+    var s = sessions.get(sid);
+    try { return s ? fs.statSync(s.jsonlPath).size : undefined; } catch (e) { return undefined; }
+  },
+  onJournal: function (home) {
+    for (const client of wsClients) {
+      if (client.origin !== 'bridge' && gatewayClientHomes.get(client) === home) sendEvent(client, 'offline-journal', { home: home });
+    }
+  },
+});
+var offlineSweepTimer = setInterval(function () { offlineHost.sweep().catch(function () {}); }, 60000);
+if (offlineSweepTimer.unref) offlineSweepTimer.unref();
+
+function cmdHostSlice(ws, id, cmd) {
+  try {
+    var r = offlineHost.configure(cmd.slice);
+    gatewayClientHomes.set(ws, cmd.slice.home);
+    sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.pendingHandover(cmd.slice.home) });
+  } catch (err) {
+    sendError(ws, id, 'host.slice: ' + err.message);
+  }
+}
+
+function cmdOfflineDrain(ws, id, cmd) {
+  if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'offline.drain: missing home');
+  sendOk(ws, id, offlineHost.drain(cmd.home));
+}
+
+function cmdOfflineAck(ws, id, cmd) {
+  if (typeof cmd.home !== 'string' || !cmd.home || typeof cmd.upTo !== 'number') return sendError(ws, id, 'offline.ack: missing home or upTo');
+  sendOk(ws, id, offlineHost.ack(cmd.home, cmd.upTo));
+}
+
 function sendGatewayRequest(capability, callerSid, payload, respond) {
-  // Pick any trusted client (never the bridge adapter) — same rule as
-  // cmdLaunchRelay.
+  // The server of the caller's Walnut when one pushed a copy; else any trusted
+  // client that never identified itself (an older server), never the bridge
+  // adapter (twin of daemon-standalone.ts).
+  var home = offlineHost.ownerOf(callerSid);
   var target = null;
+  var untagged = null;
   for (const client of wsClients) {
-    if (client.origin !== 'bridge') { target = client; break; }
+    if (client.origin === 'bridge') continue;
+    var clientHome = gatewayClientHomes.get(client);
+    if (home && clientHome === home) target = client;
+    else if (!clientHome && !untagged) untagged = client;
+  }
+  if (!home) target = untagged;
+  else if (!target && !offlineHost.pendingHandover(home)) target = untagged;
+  if (home && (!target || offlineHost.pendingHandover(home)) && offlineHost.hasHome(home)) {
+    logMsg('info', 'gateway: answered offline', { capability: capability, callerSid: callerSid, op: typeof payload.name === 'string' ? payload.name : undefined, serverConnected: !!target });
+    offlineHost.handle(home, callerSid, capability, payload).then(respond);
+    return;
   }
   if (!target) {
+    logMsg('info', 'gateway: no server connected', { capability: capability, callerSid: callerSid });
     return respond(gatewayError('hub_unreachable', 'no primary server connected'));
   }
   gatewayRelayCounter += 1;
@@ -5670,6 +5769,8 @@ function ensureWatcher(sid) {
           try { checkTurnRetry(sid, s, line, v); } catch (err) {
             logMsg('warn', 'turn-retry check threw', { sid, error: err.message });
           }
+          // A reply request this host owns ends with this turn (offline-host-core.ts).
+          offlineHost.onResult(sid, line, v).catch(function () {});
         }
 
         // ── L2: materialize daemon-authoritative task state ──

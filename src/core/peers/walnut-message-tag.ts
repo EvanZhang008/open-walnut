@@ -12,31 +12,26 @@
  * fence bought with three sentences of prose per message.
  */
 
-/** Fixed print order. An attribute appears only when it has a value. */
-const ATTR_ORDER = [
-  'from', 'from-session', 'from-task', 'host',
-  'about', 'about-session', 'about-task',
-  'request', 'asked', 'outcome', 'anonymous', 'note',
-] as const;
+import { createEnvelopeKit } from './envelope-kit.js';
 
-export type WalnutMessageAttrName = typeof ATTR_ORDER[number];
+/**
+ * The serializer itself lives in envelope-kit.ts, one factory the server and the
+ * host daemons both run, so an envelope a daemon builds while the server is away
+ * is byte-identical to one the server builds.
+ */
+const kit = createEnvelopeKit();
+
+export type WalnutMessageAttrName =
+  | 'from' | 'from-session' | 'from-task' | 'host'
+  | 'about' | 'about-session' | 'about-task'
+  | 'request' | 'asked' | 'outcome' | 'anonymous' | 'note';
 export type WalnutMessageAttrs = Partial<Record<WalnutMessageAttrName, string | undefined>>;
 export type WalnutMessageKind = 'peer-note' | 'reply' | 'notification' | 'trigger';
 
 const TAG = 'walnut-message';
-/** Sender titles are attacker-controlled (any session can task_update one). */
-const TITLE_MAX = 80;
 
 /** XML attribute rules, plus: any whitespace run becomes one space, trimmed. */
-export function escapeAttr(value: string): string {
-  return value
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
+export const escapeAttr: (value: string) => string = kit.escapeAttr;
 
 /** Only the leading `<` of the two tag sequences is touched; a body is
  *  otherwise verbatim, INCLUDING the tag name's original case (rewriting it
@@ -44,11 +39,7 @@ export function escapeAttr(value: string): string {
  *  already holds the escaped form gets one more `&amp;` so the two never
  *  collide on the wire: without that, "&lt;walnut-message" typed by a sender
  *  would decode into a real tag on the reader's side. */
-export function escapeBody(body: string): string {
-  return body
-    .replace(/&lt;(\/?)(walnut-message)/gi, '&amp;lt;$1$2')
-    .replace(/<(\/?)(walnut-message)/gi, '&lt;$1$2');
-}
+export const escapeBody: (body: string) => string = kit.escapeBody;
 
 /** Exact inverse of escapeBody (reverse order of its two rules). */
 export function unescapeBody(body: string): string {
@@ -72,32 +63,15 @@ function unescapeAttr(value: string): string {
  * BEFORE the id suffix, so a long or multi-line title can never push the id off
  * the line it identifies. No title → just `[8hex]`.
  */
-export function sessionHandle(
-  title: string | null | undefined,
-  sessionId: string | null | undefined,
-): string {
-  const flat = (title ?? '').replace(/\s+/g, ' ').trim();
-  // Cap by code point, not UTF-16 unit: slicing inside a surrogate pair puts a
-  // lone surrogate on the wire (U+FFFD after UTF-8, rejected by strict JSON).
-  const points = [...flat];
-  const capped = points.length > TITLE_MAX ? `${points.slice(0, TITLE_MAX).join('')}…` : flat;
-  const short = (sessionId ?? '').trim().slice(0, 8);
-  if (capped && short) return `${capped} [${short}]`;
-  if (capped) return capped;
-  return short ? `[${short}]` : '';
-}
+export const sessionHandle: (title: string | null | undefined, sessionId: string | null | undefined) => string =
+  kit.sessionHandle;
 
 export function buildWalnutMessage(input: {
   kind: WalnutMessageKind;
   attrs?: WalnutMessageAttrs;
   body: string;
 }): string {
-  const attrs = [`kind="${escapeAttr(input.kind)}"`];
-  for (const name of ATTR_ORDER) {
-    const value = escapeAttr(input.attrs?.[name] ?? '');
-    if (value) attrs.push(`${name}="${value}"`);
-  }
-  return `<${TAG} ${attrs.join(' ')}>\n${escapeBody(input.body)}\n</${TAG}>`;
+  return kit.buildWalnutMessage(input);
 }
 
 export interface ParsedWalnutMessage {

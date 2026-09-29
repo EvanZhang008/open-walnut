@@ -136,6 +136,10 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/claude-check-core.ts',
   // fs.ls with its per-entry and whole-listing budgets: same rule.
   'src/providers/fs-ls-core.ts',
+  // The offline host and the envelope wording it shares with the server: same
+  // import-or-inline rule (docs/plan/daemon-first-hosts.md).
+  'src/providers/offline-host-core.ts',
+  'src/core/peers/envelope-kit.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',
 ] as const

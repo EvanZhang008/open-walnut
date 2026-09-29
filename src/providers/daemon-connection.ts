@@ -337,6 +337,14 @@ export class DaemonConnection {
   private triggersPushInFlight = false
   private triggersPushRerun = false
   private lastTriggersPushHash: string | null = null
+  /** host.slice serialization (see pushHostSlice) — same three fields, same reasons. */
+  private hostSlicePushInFlight = false
+  private hostSlicePushRerun = false
+  private lastHostSlicePushHash: string | null = null
+  /** The daemon's offline journal may hold records: set on connect and on its offline-journal event. */
+  private offlineDrainDue = true
+  /** One pending retry after a failed push (a starved daemon timed out the drain). */
+  private hostSliceRetryTimer: ReturnType<typeof setTimeout> | null = null
 
   /**
    * Bulk data channel — a SECOND WebSocket to the same daemon (same tunnel
@@ -656,6 +664,10 @@ export class DaemonConnection {
     // triggers.json must be corrected by the server's own view.
     if (changed) this.lastTriggersPushHash = null
     if (changed && value) this.pushTriggers()
+    // And for the offline host: first take back what the daemon did while we
+    // were away, then hand it a fresh read copy (docs/plan/daemon-first-hosts.md).
+    if (changed) { this.lastHostSlicePushHash = null; this.offlineDrainDue = true }
+    if (changed && value) this.pushHostSlice()
     // Distribute the walnut skill to this host's engine-native discovery
     // surfaces (claude skill store / codex AGENTS.md) on every (re)connect —
     // same freshness mechanism as the shims, hash-skipped daemon-side.
@@ -898,6 +910,80 @@ export class DaemonConnection {
         })
       } finally {
         this.triggersPushInFlight = false
+      }
+    })()
+  }
+
+  /**
+   * Offline host (`offline-host-v1`, docs/plan/daemon-first-hosts.md): drain the
+   * daemon's journal of what it answered while this server was away, then push
+   * this Walnut's read copy for the host (`host.slice`, which also tells the
+   * daemon which socket is ours). Same discipline as pushTriggers: read-only
+   * sandboxes never write a shared daemon, serialized per connection with a
+   * rerun flag so the LAST state wins, and an unchanged copy skips the RPC. The
+   * drain runs only when the journal can hold something: after a (re)connect,
+   * and when the daemon says it wrote one (offline-journal event, or
+   * pendingHandover on the push reply). Every task change re-pushes, so a drain
+   * per push was a round trip per change to every host.
+   */
+  pushHostSlice(): void {
+    if (this.isReadOnlyRemote) return
+    // Only on a daemon that said it has it (hello runs before any push): a copy
+    // pushed to anything else is a command it answers "unknown".
+    if (!this.hasCapability('offline-host-v1')) return
+    if (this.hostSlicePushInFlight) { this.hostSlicePushRerun = true; return }
+    this.hostSlicePushInFlight = true
+    void (async () => {
+      try {
+        do {
+          this.hostSlicePushRerun = false
+          const [{ runOfflineHandover }, { buildHostSlice, ensureHostSliceSync }] = await Promise.all([
+            import('../core/offline-handover.js'),
+            import('../core/host-slice.js'),
+          ])
+          ensureHostSliceSync()
+          if (this.offlineDrainDue) {
+            this.offlineDrainDue = false
+            try {
+              await runOfflineHandover({ hostKey: this.hostKey, send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) })
+            } catch (err) {
+              this.offlineDrainDue = true
+              throw err
+            }
+          }
+          const slice = await buildHostSlice(this.hostKey)
+          if (slice.hash === this.lastHostSlicePushHash) continue
+          const reply = await this.send('host.slice', { slice: slice as unknown as Record<string, unknown> })
+          if (reply.ok !== true) {
+            log.session.warn('DaemonConnection: host slice push rejected', {
+              host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
+            })
+            continue
+          }
+          this.lastHostSlicePushHash = slice.hash
+          log.session.info('DaemonConnection: host slice pushed', {
+            host: this.hostKey, hash: slice.hash, sessions: slice.sessions.length, tasks: slice.tasks.length,
+            requests: slice.requests.length, changed: (reply as Record<string, unknown>).changed === true,
+          })
+          // Records written while the handover ran (the daemon answered here
+          // until its journal was empty) go in the next round.
+          if ((reply as Record<string, unknown>).pendingHandover === true) { this.offlineDrainDue = true; this.hostSlicePushRerun = true }
+        } while (this.hostSlicePushRerun)
+      } catch (err) {
+        log.session.warn('DaemonConnection: host slice push failed', {
+          host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+        })
+        // Pushes ride task changes; a quiet board would otherwise leave the
+        // daemon answering offline (its journal untaken) while we are connected.
+        if (!this.hostSliceRetryTimer && !this._destroyed) {
+          this.hostSliceRetryTimer = setTimeout(() => {
+            this.hostSliceRetryTimer = null
+            if (this._connected && !this._destroyed) this.pushHostSlice()
+          }, 30_000)
+          this.hostSliceRetryTimer.unref?.()
+        }
+      } finally {
+        this.hostSlicePushInFlight = false
       }
     })()
   }
@@ -3215,6 +3301,13 @@ export class DaemonConnection {
         void this.handleGatewayRequest(event)
         return
       }
+      // Offline host: the daemon answered one of our sessions itself (we were
+      // away or still taking the handover) and asks us to drain its journal.
+      if (event.ev === 'offline-journal') {
+        this.offlineDrainDue = true
+        this.pushHostSlice()
+        return
+      }
       // walnut-trigger: the daemon's check reports. Routed to the registered
       // sink (never to session eventHandlers — a trigger belongs to a ROUTINE,
       // not to a session) before the generic fan-out.
@@ -4385,6 +4478,13 @@ export function pushDaemonHooksToAllHosts(): void {
  */
 export function pushTriggersToHost(hostKey: string): void {
   getConnectedDaemonConnection(hostKey)?.pushTriggers()
+}
+
+/** Re-push every connected host's read copy (host-slice.ts debounces the callers). */
+export function pushHostSliceToAllHosts(): void {
+  for (const conn of connectionPool.values()) {
+    if (conn.connected) conn.pushHostSlice()
+  }
 }
 
 /** Re-arm every connected host — the connect-time and boot-time sweep. */

@@ -78,6 +78,10 @@ must live under one of these top-level categories instead of directly under
 - [Coding-agent ACP provider](plan/coding-agent-acp-provider.md)
 - [Codex ACP UI test plan](plan/codex-acp-ui-test-plan.md)
 - [Daemon source-of-truth events](plan/daemon-source-of-truth-versioned-events.md)
+- [Daemon-first hosts](plan/daemon-first-hosts.md): a host keeps working while its
+  Walnut is away (a read copy, same-host messages and queued writes in the daemon,
+  handed back when the server returns), and why this is one owner per record
+  instead of consensus
 - [Inbox Triage](plan/inbox-triage.md) - a batch of new mail and Slack read by a
   NEW session every run, with notes as the memory that carries across runs
 - [Leaving a mailing list](plan/mail-unsubscribe.md) - the unsubscribe ladder,

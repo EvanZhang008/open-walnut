@@ -262,6 +262,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'session.control',
   'mobile-event',
   'agent-gateway',
+  // 'offline-host-v1' (docs/plan/daemon-first-hosts.md): the trusted server
+  // pushes `host.slice` (its read copy for this host, which also tags the socket
+  // with its data dir), and drains what the daemon did while it was away with
+  // `offline.drain` / `offline.ack`. Gateway calls from a Walnut whose server is
+  // not connected are answered from the copy (offline-host-core.ts) instead of
+  // hub_unreachable, and a connected server of another Walnut never gets them.
+  // Both twins implement it (the core is text-injected into the source twin), so
+  // it is NOT sidecar-gated. Not bridge-reachable. Optional: without it the
+  // server pushes nothing and the gateway answers as before.
+  'offline-host-v1',
   'session.message',
   'hooks-v1',
   'changes-v1',

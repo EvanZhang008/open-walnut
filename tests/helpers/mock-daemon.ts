@@ -314,6 +314,11 @@ export class MockDaemon {
         }
         return this.dispatchCommand(ws, id, { ...cmd, cmd: route.cmd })
       }
+      // Offline host (offline-host-v1, advertised above): a mock host is never
+      // left answering for an away server, so its journal is always empty.
+      case 'host.slice': return this.sendOk(ws, id, { changed: true, pendingHandover: false })
+      case 'offline.drain': return this.sendOk(ws, id, { records: [], more: false })
+      case 'offline.ack': return this.sendOk(ws, id, { remaining: 0 })
       default: return this.sendError(ws, id, `unknown command: ${cmd.cmd}`)
     }
   }
