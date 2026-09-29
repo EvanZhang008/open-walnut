@@ -72,6 +72,7 @@ import {
   type FoldState,
   type SessionSnapshot,
 } from './daemon-fold.js'
+import { createFoldCheckpoint } from './fold-checkpoint-core.js'
 import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
 import { resolveAgentCommand } from './agent-command-map.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
@@ -457,7 +458,7 @@ function sweepDeadStreams(): void {
       const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10)
       if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) continue
     } catch {}
-    for (const ext of ['.jsonl', '.jsonl.err', '.pgid', '.pipe', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.pgid', '.pipe', '.log']) {
       try { fs.unlinkSync(path.join(STREAMS_DIR, sid + ext)) } catch {}
     }
     reaped.add(sid)
@@ -602,6 +603,8 @@ interface SessionData {
   // file was recreated and v restarted at 0" (incident 019a7fe5). null when
   // stat failed; recomputed lazily by streamEpochOf.
   streamEpoch?: string | null
+  // foldState.v of the last fold checkpoint written for this session.
+  foldCheckpointV?: number
   // Turn-error auto-retry (see daemon-core decideTurnRetry). Streak bookkeeping
   // persists in the registry so a daemon restart can't reset a 12h budget to 0.
   turnRetry?: TurnRetryState
@@ -1157,14 +1160,41 @@ function applyTaskEvent(ts: TaskState, parsed: Record<string, unknown>, v: numbe
 // shape as rebuildFoldStateFromJsonl; the '"task_' substring pre-filter means
 // almost no line is ever decoded. Keep in sync with daemon-source.ts.
 const TASK_LINE_MARKER = Buffer.from('"task_')
+
+// Fold checkpoints (fold-checkpoint-core.ts): both rebuilds below resume from
+// one, so a restart does not replay a whale stream from byte 0 before the
+// daemon listens. Keep in sync with daemon-source.ts.
+const foldCheckpoint = createFoldCheckpoint({
+  fs, createHash: crypto.createHash, pid: process.pid,
+  log: (level, msg, meta) => logMsg(level, msg, meta),
+})
+// A live session re-checkpoints after this much growth (see checkpointFolds).
+const FOLD_CHECKPOINT_EVERY_BYTES = 32 * 1024 * 1024
+const FOLD_CHECKPOINT_SWEEP_MS = 5 * 60_000
+
+/** Checkpoint where this session's fold stands. `force` skips the growth
+ *  threshold (shutdown, death) and skips an unchanged fold only while its
+ *  checkpoint is still on disk (something else may have deleted it). */
+function checkpointSessionFold(session: SessionData, force: boolean): void {
+  const v = session.foldState.v
+  const last = session.foldCheckpointV ?? 0
+  if (v <= last && (!force || fs.existsSync(foldCheckpoint.pathFor(session.jsonlPath)))) return
+  if (!force && v - last < FOLD_CHECKPOINT_EVERY_BYTES) return
+  if (foldCheckpoint.write(session.jsonlPath, session.foldState, session.taskState, streamEpochOf(session))) {
+    session.foldCheckpointV = v
+  }
+}
+
 function rebuildTaskStateFromJsonl(jsonlPath: string, now: number): TaskState {
-  const ts = emptyTaskState()
+  // Resume from the fold checkpoint when it still describes this file.
+  const ck = foldCheckpoint.load<FoldState, TaskState>(jsonlPath)
+  const ts = ck?.task ? foldCheckpoint.restampTaskState(ck.task, now) : emptyTaskState()
   let fd: number
   try { fd = fs.openSync(jsonlPath, 'r') } catch { return ts }
   try {
     const buf = Buffer.alloc(FOLD_REBUILD_CHUNK)
-    let filePos = 0
-    let v = 0
+    let filePos = ck?.task ? ck.boundary : 0
+    let v = filePos
     let carry: Buffer = Buffer.alloc(0)
     let discardThroughNextNewline = false
     for (;;) {
@@ -1246,15 +1276,18 @@ interface FoldRebuild {
 // Keep in sync with daemon-source.ts.
 const FOLD_REBUILD_CHUNK = 1024 * 1024
 function rebuildFoldStateFromJsonl(jsonlPath: string): FoldRebuild {
-  let state = initialFoldState(0)
+  // A valid checkpoint IS the fold of every byte before its boundary, so the
+  // rebuild continues from there (fold-checkpoint-core.ts).
+  const ck = foldCheckpoint.load<FoldState, TaskState>(jsonlPath)
+  let state = ck ? ck.fold : initialFoldState(0)
   let fd: number
   // Running end-of-line byte offset — same coordinate as the tailer's v. Only
   // ever advanced past COMPLETE lines, so it doubles as the boundary.
-  let v = 0
-  try { fd = fs.openSync(jsonlPath, 'r') } catch { return { state, boundary: 0 } }
+  let v = ck ? ck.boundary : 0
+  try { fd = fs.openSync(jsonlPath, 'r') } catch { return { state: initialFoldState(0), boundary: 0 } }
   try {
     const buf = Buffer.alloc(FOLD_REBUILD_CHUNK)
-    let filePos = 0
+    let filePos = v
     let carry: Buffer = Buffer.alloc(0)
     let discardThroughNextNewline = false
     for (;;) {
@@ -1310,6 +1343,11 @@ function drainSessionFold(session: SessionData, sid: string): void {
   try { size = fs.statSync(session.jsonlPath).size } catch { return }
   if (size <= from) return
   const boundary = drainFoldRange(session, from, size, (line, v) => {
+    // Task state reads the same lines the fold does (the tailer's L2 step), so a
+    // checkpoint of both at foldState.v describes the same bytes.
+    if (line.includes('"task_')) {
+      try { applyTaskEvent(session.taskState, JSON.parse(line), v, Date.now()) } catch {}
+    }
     for (const ws of session.subscribers) {
       if (ws.readyState === 1) {
         try { sendEvent(ws, 'jsonl', { sid, line, v }) } catch {}
@@ -1487,7 +1525,12 @@ const core = createDaemonCore<SessionData>({
   sessions,
   pushSnapshotFn: (sid, immediate) => pushSnapshot(sid, immediate),
   // C18: synchronous pre-death fold drain + last-line fan-out (see drainSessionFold).
-  drainFoldFn: (session) => drainSessionFold(session, sessionSidOf(session)),
+  // Death is also when a fold checkpoint is worth most: a resume or the next
+  // daemon's adopt starts from it (fold-checkpoint-core.ts).
+  drainFoldFn: (session) => {
+    drainSessionFold(session, sessionSidOf(session))
+    try { checkpointSessionFold(session, true) } catch {}
+  },
   // Daemon hooks: core's session.reap point consults the same pushed rules as
   // the tailer points (hookActions is hoisted; evaluated only at runtime).
   hookActionsFn: (point, ctx) => hookActions(point, ctx),
@@ -2956,6 +2999,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // from the previous incarnation would veto every snapshot (the 019a7fe5 class).
   if (!resume) {
     try { fs.unlinkSync(jsonlPath) } catch {}
+    foldCheckpoint.discard(jsonlPath)
     try { fs.writeFileSync(jsonlPath, '') } catch {}
   }
   const outputFd = fs.openSync(jsonlPath, 'a')
@@ -5105,7 +5149,7 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
   }
 
   try {
-    for (const ext of ['.jsonl', '.jsonl.err', '.pipe', '.pgid', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.pipe', '.pgid', '.log']) {
       try { fs.renameSync(oldBase + ext, newBase + ext) } catch {}
     }
     session.jsonlPath = newBase + '.jsonl'
@@ -7090,6 +7134,9 @@ function cleanup() {
   // level via this path). See reapAllSessionGroupsSync + shouldReapOnExit.
   for (const [sid, session] of sessions) {
     stopSessionWatcher(sid)
+    // The successor adopts this session: hand it the fold so far, so its boot
+    // folds only what arrives after this line (fold-checkpoint-core.ts).
+    try { checkpointSessionFold(session, true) } catch {}
     // C1: flush a pending coalesced snapshot BEFORE dropping subscribers — the
     // last state change of this daemon's life still reaches the connected
     // walnut instead of dying inside a 50ms timer. Keep in sync with
@@ -7670,6 +7717,15 @@ if (action === '--start' || SERVICE_MODE) {
           backoffBaseMs: TURN_RETRY_CFG.backoffBaseMs, backoffMaxMs: TURN_RETRY_CFG.backoffMaxMs }
       : false,
   })
+
+  // Periodic fold checkpoints, so even a crash hands the successor a recent
+  // fold (checkpointSessionFold). Keep in sync with daemon-source.ts.
+  setInterval(() => {
+    for (const session of sessions.values()) {
+      if (session.state !== 'running') continue
+      try { checkpointSessionFold(session, false) } catch {}
+    }
+  }, FOLD_CHECKPOINT_SWEEP_MS).unref?.()
 
   void cronRuntime?.tick().catch((error) => logMsg('error', 'cron supervision startup failed', { error: String(error) }))
 

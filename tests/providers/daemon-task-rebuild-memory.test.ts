@@ -55,6 +55,8 @@ function buildTemplateRebuild(): RebuildFn {
     'const FOLD_REBUILD_CHUNK = 1024 * 1024;',
     'const TAILER_CARRY_MAX = 32 * 1024 * 1024;',
     'const logMsg = () => {};',
+    // No fold checkpoint: these cases pin the rebuild from byte 0.
+    'const foldCheckpoint = { load: () => null, restampTaskState: (t) => t };',
     extractFn(src, 'emptyTaskState'),
     extractFn(src, 'runningTaskCount'),
     extractFn(src, 'applyTaskEvent'),
@@ -204,6 +206,7 @@ describe('streamed rebuildTaskStateFromJsonl (template-extracted production code
       'const FOLD_REBUILD_CHUNK = 1024 * 1024;',
       'const TAILER_CARRY_MAX = 32 * 1024 * 1024;',
       'const logMsg = () => {};',
+      'const foldCheckpoint = { load: () => null, restampTaskState: (t) => t };',
       extractFn(src, 'emptyTaskState'),
       extractFn(src, 'runningTaskCount'),
       extractFn(src, 'applyTaskEvent'),

@@ -1401,7 +1401,8 @@ describe('C13 fold rebuild carry cap (template source, injected small cap)', () 
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const factory = new Function(
       'fs', 'logMsg', 'foldLine', 'initialFoldState', 'FOLD_REBUILD_CHUNK', 'TAILER_CARRY_MAX',
-      `${block}\nreturn rebuildFoldStateFromJsonl;`,
+      // No fold checkpoint: this pins the rebuild from byte 0.
+      `const foldCheckpoint = { load: () => null };\n${block}\nreturn rebuildFoldStateFromJsonl;`,
     ) as (
       f: typeof fs, l: (lvl: string, m: string) => void, fl: typeof foldLine,
       ifs: typeof initialFoldState, chunk: number, c: number,

@@ -43,6 +43,7 @@ import { fileURLToPath } from 'node:url'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { computeExpectedDaemonVersion } from './daemon-version-check.js'
 import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers } from './daemon-fold.js'
+import { createFoldCheckpoint } from './fold-checkpoint-core.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { createCronMetadataTracker, CRON_PROMPT_LIMIT } from './daemon-cron-metadata.js'
 import { createHostRuntime } from './host-runtime-core.js'
@@ -187,6 +188,7 @@ export function getDaemonSource(): string {
     ['__INITIAL_FOLD_STATE__', initialFoldState.toString()],
     ['__ASSEMBLE_SNAPSHOT__', assembleSnapshot.toString()],
     ['__SNAPSHOT_DIFFERS__', snapshotDiffers.toString()],
+    ['__CREATE_FOLD_CHECKPOINT__', createFoldCheckpoint.toString()],
     ['__CREATE_COMMAND_DRAIN__', createDaemonCommandDrain.toString()],
     ['__CREATE_CRON_METADATA__', createCronMetadataTracker.toString()],
     ['__CREATE_HOST_RUNTIME__', createHostRuntime.toString()],
@@ -1070,7 +1072,7 @@ function sweepDeadStreams() {
       const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10);
       if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) continue;
     } catch {}
-    for (const ext of ['.jsonl', '.jsonl.err', '.pgid', '.pipe', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.pgid', '.pipe', '.log']) {
       try { fs.unlinkSync(path.join(STREAMS_DIR, sid + ext)); } catch {}
     }
     reaped.add(sid);
@@ -1543,6 +1545,8 @@ function reapSession(sid, code, reason, groupExited = false) {
   // It also FANS OUT those lines (subscribers are cleared just below).
   // Keep in sync with daemon-core.ts reapSession (drainFoldFn).
   try { drainSessionFold(session, sid); } catch {}
+  // Death is also when a fold checkpoint is worth most (fold-checkpoint-core.ts).
+  try { checkpointSessionFold(session, true); } catch {}
 
   // C1: death snapshots push IMMEDIATELY (skip the 50ms coalesce), BEFORE the
   // exit fan-out clears the subscriber set. exitCode is already normalized.
@@ -1686,14 +1690,36 @@ function applyTaskEvent(ts, parsed, v, now) {
 // shape as rebuildFoldStateFromJsonl; the '"task_' substring pre-filter means
 // almost no line is ever decoded. Keep in sync with daemon-standalone.ts.
 const TASK_LINE_MARKER = Buffer.from('"task_');
+
+// Fold checkpoints (fold-checkpoint-core.ts, inlined): both rebuilds resume from
+// one, so a restart does not replay a whale stream from byte 0 before the daemon
+// listens. Keep in sync with daemon-standalone.ts.
+const foldCheckpoint = (__CREATE_FOLD_CHECKPOINT__)({
+  fs: fs, createHash: crypto.createHash, pid: process.pid,
+  log: function (level, msg, meta) { logMsg(level, msg, meta); },
+});
+const FOLD_CHECKPOINT_EVERY_BYTES = 32 * 1024 * 1024;
+const FOLD_CHECKPOINT_SWEEP_MS = 5 * 60000;
+function checkpointSessionFold(session, force) {
+  const v = session.foldState.v;
+  const last = session.foldCheckpointV || 0;
+  // A forced checkpoint rewrites an unchanged fold whose file was deleted.
+  if (v <= last && (!force || fs.existsSync(foldCheckpoint.pathFor(session.jsonlPath)))) return;
+  if (!force && v - last < FOLD_CHECKPOINT_EVERY_BYTES) return;
+  if (foldCheckpoint.write(session.jsonlPath, session.foldState, session.taskState, streamEpochOf(session))) {
+    session.foldCheckpointV = v;
+  }
+}
+
 function rebuildTaskStateFromJsonl(jsonlPath, now) {
-  const ts = emptyTaskState();
+  const ck = foldCheckpoint.load(jsonlPath);
+  const ts = ck && ck.task ? foldCheckpoint.restampTaskState(ck.task, now) : emptyTaskState();
   let fd;
   try { fd = fs.openSync(jsonlPath, 'r'); } catch { return ts; }
   try {
     const buf = Buffer.alloc(FOLD_REBUILD_CHUNK);
-    let filePos = 0;
-    let v = 0;
+    let filePos = ck && ck.task ? ck.boundary : 0;
+    let v = filePos;
     let carry = Buffer.alloc(0);
     let discardThroughNextNewline = false;
     for (;;) {
@@ -1771,15 +1797,17 @@ const TAILER_CARRY_MAX = 32 * 1024 * 1024;
 // Keep in sync with daemon-standalone.ts.
 const FOLD_REBUILD_CHUNK = 1024 * 1024;
 function rebuildFoldStateFromJsonl(jsonlPath) {
-  let state = initialFoldState(0);
+  // A valid checkpoint IS the fold of every byte before its boundary.
+  const ck = foldCheckpoint.load(jsonlPath);
+  let state = ck ? ck.fold : initialFoldState(0);
   let fd;
   // Running end-of-line byte offset — same coordinate as the tailer's v. Only
   // ever advanced past COMPLETE lines, so it doubles as the boundary.
-  let v = 0;
-  try { fd = fs.openSync(jsonlPath, 'r'); } catch { return { state: state, boundary: 0 }; }
+  let v = ck ? ck.boundary : 0;
+  try { fd = fs.openSync(jsonlPath, 'r'); } catch { return { state: initialFoldState(0), boundary: 0 }; }
   try {
     const buf = Buffer.alloc(FOLD_REBUILD_CHUNK);
-    let filePos = 0;
+    let filePos = v;
     let carry = Buffer.alloc(0);
     let discardThroughNextNewline = false;
     for (;;) {
@@ -1834,6 +1862,11 @@ function drainSessionFold(session, sid) {
   try { size = fs.statSync(session.jsonlPath).size; } catch { return; }
   if (size <= from) return;
   const boundary = drainFoldRange(session, from, size, (line, v) => {
+    // Task state reads the same lines the fold does (the tailer's L2 step), so a
+    // checkpoint of both at foldState.v describes the same bytes.
+    if (line.includes('"task_')) {
+      try { applyTaskEvent(session.taskState, JSON.parse(line), v, Date.now()); } catch {}
+    }
     for (const ws of session.subscribers) {
       if (ws.readyState === 1) {
         try { sendEvent(ws, 'jsonl', { sid, line, v }); } catch {}
@@ -3826,6 +3859,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   // so consumers know v restarted at 0. Mirror daemon-standalone.ts.
   if (!resume) {
     try { fs.unlinkSync(jsonlPath); } catch {}
+    foldCheckpoint.discard(jsonlPath);
     try { fs.writeFileSync(jsonlPath, ''); } catch {}
   }
   const outputFd = fs.openSync(jsonlPath, 'a');
@@ -6373,7 +6407,7 @@ function cmdRename(ws, id, cmd) {
   }
 
   try {
-    for (const ext of ['.jsonl', '.jsonl.err', '.pipe', '.pgid', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.pipe', '.pgid', '.log']) {
       try { fs.renameSync(oldBase + ext, newBase + ext); } catch {}
     }
     session.jsonlPath = newBase + '.jsonl';
@@ -8740,6 +8774,8 @@ function cleanup() {
     }
     // Stop the session-bound watcher.
     stopSessionWatcher(sid);
+    // The successor adopts this session: hand it the fold so far.
+    try { checkpointSessionFold(session, true); } catch {}
     // C1: flush a pending coalesced snapshot while subscribers are still
     // attached — the last state change of this daemon's life reaches the
     // connected walnut instead of dying inside a 50ms timer. (This twin does
@@ -9066,6 +9102,16 @@ async function startDaemon() {
         logMsg('error', 'cron supervision startup failed', { error: String(err) });
       });
     }
+
+    // Periodic fold checkpoints, so even a crash hands the successor a recent
+    // fold. Keep in sync with daemon-standalone.ts.
+    const foldCheckpointTimer = setInterval(function () {
+      for (const session of sessions.values()) {
+        if (session.state !== 'running') continue;
+        try { checkpointSessionFold(session, false); } catch {}
+      }
+    }, FOLD_CHECKPOINT_SWEEP_MS);
+    if (foldCheckpointTimer.unref) foldCheckpointTimer.unref();
 
     // Start session idle scanner (every 60s)
     setInterval(scanIdleSessions, SESSION_SCAN_INTERVAL_MS);

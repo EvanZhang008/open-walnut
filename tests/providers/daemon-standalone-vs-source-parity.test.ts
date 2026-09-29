@@ -142,6 +142,34 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(templatePoll).not.toMatch(/[^A-Za-z]readStartTime\(pid\)/)
   })
 
+  // P3c — fold checkpoints (2026-09-28: a boot folded a 1.76 GB stream from byte
+  // 0 for 99s before listening). Both twins resume both rebuilds from one, write
+  // one at death, at shutdown and periodically, and move/delete it with the stream.
+  it('both twins resume from a fold checkpoint and write it at the same points', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    expect(templateSrc.split('__CREATE_FOLD_CHECKPOINT__').length - 1).toBe(2) // injection entry + use
+    for (const src of [standaloneSrc, templateSrc]) {
+      const fold = src.slice(src.indexOf('function rebuildFoldStateFromJsonl'), src.indexOf('function drainSessionFold'))
+      const task = src.slice(src.indexOf('function rebuildTaskStateFromJsonl'), src.indexOf('function rebuildFoldStateFromJsonl'))
+      expect(fold).toMatch(/foldCheckpoint\.load/)
+      expect(task).toMatch(/foldCheckpoint\.load/)
+      expect(task).toMatch(/restampTaskState\(ck\.task, now\)/)
+      expect(src).toMatch(/FOLD_CHECKPOINT_EVERY_BYTES = 32 \* 1024 \* 1024/)
+      expect(src).toMatch(/FOLD_CHECKPOINT_SWEEP_MS = 5 \* 60_?000/)
+      expect(src.match(/checkpointSessionFold\(session, true\)/g)).toHaveLength(2) // death + shutdown
+      expect(src).toMatch(/checkpointSessionFold\(session, false\)/) // periodic
+      // A forced write replaces a checkpoint something else deleted (the server's
+      // startup stream cleanup did, under live sessions, before a daemon upgrade).
+      expect(src).toMatch(/v <= last && \(!force \|\| fs\.existsSync\(foldCheckpoint\.pathFor\(session\.jsonlPath\)\)\)/)
+      expect(src).toMatch(/foldCheckpoint\.discard\(jsonlPath\)/) // fresh spawn
+      expect(src.match(/'\.jsonl\.err', '\.jsonl\.fold'/g)).toHaveLength(2) // retention sweep + rename
+      // The death drain feeds task state the lines it folds, so both halves of a
+      // checkpoint describe the same bytes.
+      const drain = src.slice(src.indexOf('function drainSessionFold'), src.indexOf('function drainFoldRange'))
+      expect(drain).toMatch(/applyTaskEvent\(session\.taskState/)
+    }
+  })
+
   // P3b — orphan poll reap reasons
   it('both implementations use reason=orphan-poll-dead and pid-recycled', () => {
     expect(coreSrc).toMatch(/orphan-poll-dead/)
@@ -1506,6 +1534,7 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
         /\(session: SessionData, from: number, to: number, onLine\?: \(line: string, v: number\) => void\): number/,
         '(session, from, to, onLine)',
       )
+      .replace(/<FoldState, TaskState>/g, '')
       .replace(/let (\w+): number\b/g, 'let $1')
       .replace(/let (\w+): Buffer\b/g, 'let $1')
       .replace(/;/g, '')
@@ -1687,7 +1716,7 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     // Standalone injects the same drain into core, resolving the sid the core
     // hook doesn't hand it (the drain fans the drained lines out under that sid).
     expect(standaloneSrc)
-      .toMatch(/drainFoldFn:\s*\(session\)\s*=>\s*drainSessionFold\(session,\s*sessionSidOf\(session\)\)/)
+      .toMatch(/drainFoldFn:\s*\(session\)\s*=>\s*\{?\s*drainSessionFold\(session,\s*sessionSidOf\(session\)\)/)
   })
 
   it('both drainSessionFold implementations start at the published boundary and re-publish it', () => {

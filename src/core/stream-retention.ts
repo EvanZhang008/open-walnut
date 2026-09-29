@@ -126,6 +126,7 @@ export async function sweepRecoverableStreamFiles(opts: StreamRetentionOptions):
       await fs.unlink(file)
       deleted.push(file)
       await fs.unlink(file + '.err').catch(() => { /* no error sidecar */ })
+      await fs.unlink(file + '.fold').catch(() => { /* no fold checkpoint */ })
     } catch {
       // ledger write failed, raced with a concurrent delete, or the file is
       // pinned — keep the capture; next reap retries

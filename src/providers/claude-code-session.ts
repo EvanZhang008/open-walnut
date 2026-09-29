@@ -11291,6 +11291,16 @@ export const sessionRunner = new SessionRunner()
  *   Pass non-terminal session IDs from sessions.json to prevent deleting files that
  *   are still referenced and could cause ENOENT errors during reconnection.
  */
+/**
+ * The session id a streams-dir file belongs to: `<sid>.jsonl` and every
+ * daemon sidecar of it. A sidecar missing here is deleted under a live
+ * session: a `.jsonl.fold` checkpoint lost that way made the next daemon
+ * restart fold a whale stream from byte 0 (fold-checkpoint-core.ts).
+ */
+export function streamFileSessionId(file: string): string {
+  return file.replace(/\.(jsonl\.err|jsonl\.fold|jsonl|pipe|pgid|log)$/, '')
+}
+
 export async function cleanupStreamFiles(preserveSessionIds?: Set<string>): Promise<number> {
   let cleaned = 0
   try {
@@ -11301,9 +11311,7 @@ export async function cleanupStreamFiles(preserveSessionIds?: Set<string>): Prom
     for (const file of files) {
       // Check if this file belongs to a preserved session
       if (preserveSessionIds) {
-        // Extract session ID from filename: {sessionId}.jsonl, {sessionId}.jsonl.err, {sessionId}.pipe
-        const baseName = file.replace(/\.(jsonl\.err|jsonl|pipe)$/, '')
-        if (preserveSessionIds.has(baseName)) continue
+        if (preserveSessionIds.has(streamFileSessionId(file))) continue
       }
 
       const filePath = path.join(SESSION_STREAMS_DIR, file)

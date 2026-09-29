@@ -41,6 +41,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-standalone.ts',
   'src/providers/daemon-core.ts',
   'src/providers/daemon-fold.ts',
+  // Fold checkpoints: imported by the binary, text-injected into the source twin.
+  'src/providers/fold-checkpoint-core.ts',
   'src/providers/daemon-source.ts',
   // The capability list itself. Both twins report it on `hello` — the standalone
   // one imports it, the source one has it substituted in — so a capability-only
