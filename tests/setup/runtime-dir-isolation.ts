@@ -37,7 +37,13 @@
  *
  * Tests that manage their own runtime dir (the daemon suites, which set
  * WALNUT_DAEMON_DIR to a per-file tmp path) are left untouched.
+ *
+ * The production SERVER gets the same treatment: prod-server-guard refuses any
+ * connection to :3456 or to a socket in the production runtime dir, and fails
+ * the test that tried (2026-09-29: a test's ops reached the live server).
+ * Imported here so every config built on vitest.config.ts loads it.
  */
+import './prod-server-guard.js'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'

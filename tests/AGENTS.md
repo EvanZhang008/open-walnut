@@ -35,6 +35,15 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
   real git metadata; never point the run at the real repo. The production half of the same class
   lives in `src/lib/git-env.ts` (`gitChildEnv()`), pinned by
   `tests/integrations/git-sync-env-redirect.test.ts`.
+- **No test may reach the production Walnut.** The op clients fall back to
+  `http://127.0.0.1:3456` (or an inherited `OPEN_WALNUT_API_URL`, which a Walnut session sets to
+  the same), so an op called with no `apiBase` before the test's own server listens writes to the
+  user's real board: `tests/mcp/ops-registry.test.ts` sent four `PATCH /api/v1/tasks/x` on every
+  run from 2026-08-21 until 2026-09-29. `tests/setup/prod-server-guard.ts` (loaded by
+  `runtime-dir-isolation.ts` and listed in every standalone config) now refuses any connect to
+  :3456 on this machine or to a socket under `/tmp/open-walnut`, and fails the test that tried,
+  even when the code swallowed the error. Point ops at `startServer({ port: 0 })` or a local
+  stub. Child processes are not covered: give a spawned CLI an explicit `OPEN_WALNUT_API_URL`.
 - **Browser tier is serialized machine-wide.** One Chromium per worker (~385 MB), `workers`
   capped at 4, and an exclusive lease on :3457 so a second `npx playwright test` queues instead
   of colliding (specs hardcode that port; `reuseExistingServer` would otherwise let two runs

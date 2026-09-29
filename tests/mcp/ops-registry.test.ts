@@ -7,9 +7,11 @@
  * is read from the live Express app (startServer port 0), so the check is
  * against what actually serves, not against a hand-maintained list.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, onTestFinished, vi } from 'vitest'
 import fs from 'node:fs/promises'
+import http from 'node:http'
 import path from 'node:path'
+import type { AddressInfo } from 'node:net'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
@@ -132,20 +134,46 @@ describe('ops registry — arg validation (executor front door)', () => {
     // The human-vs-AI gate is deliberately gone: both write every phase,
     // COMPLETE included. Only the phase VALUE is still checked, and it is
     // derived from PHASE_ORDER so a rename can't drift out of the schema.
+    //
+    // The transport is a local stub. This describe runs before the live server
+    // below listens, so these calls once went out with no apiBase, fell back to
+    // http://127.0.0.1:3456 and sent four PATCH /api/v1/tasks/x to the user's
+    // real Walnut on every run (2026-09-29). The stub also lets the test check
+    // what "reaches transport" means instead of accepting any failure.
+    const seen: Array<{ method?: string; url?: string; body: string }> = []
+    const stub = http.createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => { body += chunk })
+      req.on('end', () => {
+        seen.push({ method: req.method, url: req.url, body })
+        res.writeHead(404, { 'Content-Type': 'application/json' }).end('{"error":"Task not found"}')
+      })
+    })
+    await new Promise<void>((resolve) => stub.listen(0, '127.0.0.1', resolve))
+    onTestFinished(() => new Promise<void>((resolve) => stub.close(() => resolve())))
+    const apiBase = `http://127.0.0.1:${(stub.address() as AddressInfo).port}`
+
     for (const phase of PHASE_ORDER) {
-      const r = await executeOp('task_update', { id: 'x', phase })
-      // Reaches transport (no local policy rejection) — the id is fake, so the
-      // only possible failure is a server/transport error, never a phase error.
+      const r = await executeOp('task_update', { id: 'x', phase }, { apiBase })
+      // The id is fake, so the stub's 404 is the only possible failure: a
+      // server error, never a phase error.
+      expect(r.ok).toBe(false)
       if (!r.ok) expect(r.message).not.toContain('Invalid arguments')
     }
+    // Every valid phase passed validation and reached the transport, one PATCH each.
+    expect(seen).toEqual(PHASE_ORDER.map((phase) => ({
+      method: 'PATCH', url: '/api/v1/tasks/x', body: JSON.stringify({ phase }),
+    })))
 
     // The DELETED phases and a nonsense value must all fail the enum.
     // ('WAIT' joined that list on 2026-08-18 — a blocked task is just TODO.)
     for (const phase of ['HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'AWAIT_HUMAN_ACTION', 'WAIT', 'NOT_A_PHASE']) {
-      const r = await executeOp('task_update', { id: 'x', phase })
+      const r = await executeOp('task_update', { id: 'x', phase }, { apiBase })
       expect(r.ok, `${phase} must be rejected`).toBe(false)
       if (!r.ok) expect(r.message).toContain('Invalid arguments')
     }
+    // ...before any request left the process.
+    expect(seen).toHaveLength(PHASE_ORDER.length)
   })
 
   it('unknown op name yields a friendly catalog pointer, not a throw', async () => {
