@@ -27,7 +27,7 @@
  *      into the same session as a follow-up: one quick-start, both questions answered.
  *  10. The draft is the Home draft's fork: Ask Walnut by default, Start Task one card away (it needs a
  *      folder, and runs there with the mail as its context), a task that starts in Focus, and More for
- *      its fields. "Create task for later" files the text with the mail in its description.
+ *      its fields. "Save as todo" files the text with the mail in its description.
  *
  * Two fixtures, because the two halves need opposite installs: `PW_MAIL_CTX=1` is the small mailbox
  * with one account that can send and one that cannot, and `PW_MAIL_DENSE=1` is the production-density
@@ -38,7 +38,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { draftCwdPill, draftTaskMenu, openDraftSettings } from './draft-helpers'
+import { draftCwdPill, draftTaskMenu, openDraftSettings, draftSend } from './draft-helpers'
 import { MailFixtureServer, folderRow, openMail, shoot } from './mail-review-helpers'
 
 const SHOT_DIR = '/tmp/mail-ask-drawer/chromium'
@@ -462,7 +462,7 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     // A Start with no folder says so, opens the picker, keeps the text and starts nothing.
     const composer = draftPanel(page).locator('textarea.chat-input-textarea')
     await composer.fill('Write the reply as a script in this repo')
-    await draftPanel(page).locator('.draft-start-btn').click()
+    await draftSend(draftPanel(page)).click()
     await expect(draftPanel(page).getByTestId('draft-needs-folder')).toBeVisible()
     await expect(composer).toHaveValue('Write the reply as a script in this repo')
     expect(launches.bodies).toHaveLength(0)
@@ -477,7 +477,7 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(drawer(page)).toBeVisible()
     console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'start-task-draft')}`)
 
-    await draftPanel(page).locator('.draft-start-btn').click()
+    await draftSend(draftPanel(page)).click()
     await expect.poll(() => launches.bodies.length, { timeout: 60_000 }).toBe(1)
     const body = launches.bodies[0] as LaunchBody & { host?: string; projectFromFolder?: boolean }
     expect(body.cwd).toBe(folder)
@@ -532,7 +532,7 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     await expect(answers(page, /When is lunch\?/)).toHaveCount(1, { timeout: 90_000 })
   })
 
-  test('S4-16: Create task for later files the text with the mail in its description', async ({ page }) => {
+  test('S4-16: Save as todo files the text with the mail in its description', async ({ page }) => {
     const creates = recordTaskCreates(page)
     const launches = recordLaunches(page)
     await openWriterInbox(page)

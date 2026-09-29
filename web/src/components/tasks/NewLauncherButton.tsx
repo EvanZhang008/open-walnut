@@ -1,7 +1,7 @@
 /**
  * NewLauncherButton — primary "New task" action in the task-panel toolbar.
  *
- * A task may remain sessionless ("Create task for later") or start with a
+ * A task may remain sessionless ("Save as todo") or start with a
  * session. Both paths begin in the same draft column, so the toolbar presents
  * one task-first verb instead of exposing that implementation detail.
  */

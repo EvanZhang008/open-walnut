@@ -2,8 +2,8 @@
  * DraftSessionPanel — an EMPTY session column the user just opened with "+".
  *
  * Nothing exists server-side yet (0 bytes): column, cwd/host, project, launch
- * meta and text are pure client state until Start (→ `pending:` → real session)
- * or "Create task placeholder without running" (→ a task); closing leaves no trace. Same chrome
+ * meta and text are pure client state until a send (→ `pending:` → real session)
+ * or "Save as todo" (→ a task); closing leaves no trace. Same chrome
  * classes as SessionPanel/PendingSessionPanel. Imported normally (never
  * React.lazy): instant-open cannot wait on a chunk fetch.
  *
@@ -17,7 +17,9 @@
  *                      picker POPS OUT over the page (fixed, anchored to the cwd
  *                      pill; a ~300px column can't contain it)
  *   composer           shared ChatInput; its controls row holds the model select
- *                      and the two verbs. Mod+. here opens the More menu.
+ *                      and "Save as todo". Its send arrow (Enter) is the one way
+ *                      to START: the old "Start ↵" twin was removed on 2026-09-29
+ *                      (it did the same thing). Mod+. here opens the More menu.
  *
  * Row shape, launch-memory and field-ownership rules live in ./draft-column and
  * ./draft-ownership (shared with MainPage). This panel only delivers parses with
@@ -70,10 +72,10 @@ import '@/styles/walnut-agent.css';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 
 const PLACEHOLDER = 'What should this session do?';
-const HINT = 'Nothing runs yet — send to start, or keep it as a task for later.';
-const BOUND_HINT = 'Start a session on this task — type the first instruction, or press Start to send its title.';
-const BOUND_WALNUT_HINT = 'Ask Walnut about this task — type what you need, or press Start to send its title.';
-const FORK_HINT = 'Forks the source conversation into a sibling session — type where it should go next (or Start to just branch).';
+const HINT = 'Nothing runs yet: send to start, or save it as a todo.';
+const BOUND_HINT = 'Start a session on this task: type the first instruction, or send with nothing typed to use its title.';
+const BOUND_WALNUT_HINT = 'Ask Walnut about this task: type what you need, or send with nothing typed to use its title.';
+const FORK_HINT = 'Forks the source conversation into a sibling session: type where it should go next, or send with nothing typed to just branch.';
 const FORK_PLACEHOLDER = 'Message for the forked session (optional)';
 const WALNUT_PLACEHOLDER = 'Ask Walnut anything…';
 /** "Fix Walnut": the guidance the old chat-anchored repair bar carried. The draft
@@ -546,11 +548,12 @@ export function DraftSessionPanel({
     return onStart(draft.id, body, images, override ? { overrideReadiness: true } : undefined);
   }, [draft.cwd, draft.walnut, draft.id, onStart]);
 
-  // "Start" is Enter by another name: click ChatInput's own send button (in THIS
-  // column) so pasted IMAGES ride along and dispatchSend's settle rules apply;
-  // its `disabled` is exactly "nothing composed". The fallback passes the mirrored
-  // TEXT, never '' (worst case "images lost", not "message emptied"). An empty
-  // bound composer resolves to the task title in the owner.
+  // "Start anyway" (the host gate's override) is a send by another name: click
+  // ChatInput's own send button (in THIS column) so pasted IMAGES ride along and
+  // dispatchSend's settle rules apply; its `disabled` is exactly "nothing to
+  // send". The fallback passes the mirrored TEXT, never '' (worst case "images
+  // lost", not "message emptied"). An empty bound composer resolves to the task
+  // title in the owner.
   const handleStartClick = useCallback(() => {
     const sendBtn = rootRef.current?.querySelector<HTMLButtonElement>('.chat-send-btn-icon');
     if (sendBtn && !sendBtn.disabled) { sendBtn.click(); return; }
@@ -722,6 +725,20 @@ export function DraftSessionPanel({
         <ChatInput
           onSend={(body, images) => startWith(body, images)}
           onValueChange={setText}
+          // The arrow is the ONE start affordance, so an empty composer may send
+          // only where '' means something: a bound draft sends its task's title, a
+          // fork just branches. A plain draft needs words (spawn-and-idle is legal,
+          // but an accidental Enter must not start a CLI on nothing).
+          allowEmptySend={isBound || isFork}
+          sendTitle={isFork
+            ? 'Fork the source session (an empty message just branches the conversation)'
+            : isBound && isWalnut
+              ? 'Ask Walnut about this task (an empty message sends the task title)'
+              : isBound
+                ? 'Start the session on this task (an empty message sends the task title)'
+                : isWalnut
+                  ? askLabel
+                  : 'Start the session'}
           // Only offered where the parse actually runs. A fork has nothing to
           // guess at, Ask Walnut has no launch pills, and a column with no
           // onAiParse has nowhere to put the answer — a switch that changes
@@ -777,34 +794,14 @@ export function DraftSessionPanel({
                   className="draft-later-btn"
                   disabled={!text.trim()}
                   onClick={() => { void onSaveAsTask(draft.id, text); }}
-                  title="Creates a task from this text — first line becomes the title. No session starts."
+                  title="Creates a todo from this text (first line becomes the title). No session starts."
                 >
-                  ◌&nbsp;Create task placeholder without running
+                  ◌&nbsp;Save as todo
                 </button>
               )}
-              {/* Enabled even with an empty composer: spawn-and-idle is legal —
-                  the CLI starts, initializes and waits on stdin. Ask Walnut has
-                  NO extra button (user: keep it minimal — the composer's send arrow, amber
-                  in this mode, is the one send affordance; an empty ask is
-                  pointless anyway). */}
-              {/* A BOUND walnut draft keeps it: its empty composer still has
-                  something to send (the task title), and losing the button on the
-                  tab switch would read as the ask having no way to start. */}
-              {(!isWalnut || isBound) && (
-                <button
-                  className="draft-start-btn"
-                  onClick={handleStartClick}
-                  title={isFork
-                    ? 'Fork the source session (an empty message just branches the conversation)'
-                    : isBound && isWalnut
-                      ? 'Ask Walnut about this task (an empty message sends the task title)'
-                      : isBound
-                        ? 'Start the session on this task (an empty message sends the task title)'
-                        : 'Start the session (an empty message is fine — the agent spawns and waits)'}
-                >
-                  {isFork ? 'Fork ↵' : 'Start ↵'}
-                </button>
-              )}
+              {/* No "Start ↵" here: the composer's send arrow (and Enter) already
+                  starts the session, and two buttons for one action read as two
+                  actions (user, 2026-09-29). */}
             </div>
           )}
         />

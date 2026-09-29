@@ -38,7 +38,7 @@ import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip, draftDecisionChips,
   draftPanel, draftPanels, draftProjectPill, loadHome, mockQuickParse, openDraft, openDraftOnCwd,
-  patchClientConfig, pickDraftFolder, seedColumns, typeAndSettle, watchForbiddenRequests,
+  patchClientConfig, pickDraftFolder, seedColumns, typeAndSettle, watchForbiddenRequests, draftSend,
 } from './draft-helpers'
 import {
   armParse, createTaskForLater, expectSeededTierLands, expectTaskInTier, pickDraftProject,
@@ -67,7 +67,7 @@ test.describe.configure({ mode: 'serial' })
 
 test('project header "+" opens a draft in one click with the project AND its default_cwd', async ({ page }) => {
   // The sibling spec's scenario 6 already proves the PILL reads the project and that
-  // the seed reaches a "Create task for later". What R7 adds — and what only this
+  // the seed reaches a "Save as todo". What R7 adds — and what only this
   // scenario checks — is the OTHER half of the seed: the project's declared folder
   // lands on the row too, so Start needs no folder pick. Plus the one-click contract
   // itself: no menu is allowed to appear between the "+" and the column (the "+"
@@ -142,7 +142,7 @@ test('project header "+" opens a draft in one click with the project AND its def
   await draftComposer(page).fill(message)
   const launch = page.waitForRequest((req) =>
     req.method() === 'POST' && new URL(req.url()).pathname === '/api/sessions/quick-start')
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const payload = (await launch).postDataJSON() as { cwd?: string; taskMeta?: { project?: string } }
   expect(payload.cwd, 'the seeded default_cwd is what actually launches').toBe(seedCwd)
   // The launch column really became a session (a 4xx would leave a pending
@@ -394,7 +394,7 @@ test('AI-suggested dates ride BOTH exits onto the task', async ({ page }) => {
   await stubParse(page, { title: 'ship it', due_date: DUE, start_date: START })
   await loadHome(page)
 
-  // ── Exit 1: "Create task for later" carries the dates ──
+  // ── Exit 1: "Save as todo" carries the dates ──
   const panel = await openDraft(page)
   const stamp = Date.now()
   // The parse has to have been APPLIED before the commit (armParse), or the exit
@@ -426,7 +426,7 @@ test('AI-suggested dates ride BOTH exits onto the task', async ({ page }) => {
     res.request().method() === 'POST'
     && new URL(res.url()).pathname === '/api/sessions/quick-start' && res.ok())
     .then((res) => res.json() as Promise<{ taskId: string }>)
-  await panel2.locator('.draft-start-btn').click()
+  await draftSend(panel2).click()
   const { taskId: qsTaskId } = await launched
   await expect.poll(async () => {
     const body = (await (await page.request.get(`/api/tasks/${qsTaskId}`)).json()) as
@@ -439,15 +439,15 @@ test('AI-suggested dates ride BOTH exits onto the task', async ({ page }) => {
 
 // ── 4. Session "Fork" → a pre-bound fork DRAFT column (R10) ─────────────────
 
-test('Fork opens a pre-bound draft: pinned folder/project, no chips/meta/task-exit, and Fork ↵ calls the fork API', async ({ page }) => {
+test('Fork opens a pre-bound draft: pinned folder/project, no chips/meta/task-exit, and sending calls the fork API', async ({ page }) => {
   // The Fork button no longer opens its own popover form — it opens the SAME
   // draft column every "+" opens, pre-bound to the source session. What must
   // hold, per the fork contract (a fork resumes the source conversation in
   // place): folder + project arrive preselected and IMMUTABLE, the quick chips
   // and the tier/priority meta row are gone (the fork API takes only
-  // message+model), "Create task for later" is gone (the fork route creates
-  // the sibling task itself), and Start is relabelled Fork ↵ and calls
-  // POST /api/sessions/<src>/fork — not quick-start.
+  // message+model), "Save as todo" is gone (the fork route creates the
+  // sibling task itself), and a send calls POST /api/sessions/<src>/fork,
+  // not quick-start.
   await page.setViewportSize({ width: 2400, height: 1000 })
   await seedColumns(page, ['pw-model-switch-session'])
   await loadHome(page)
@@ -473,10 +473,13 @@ test('Fork opens a pre-bound draft: pinned folder/project, no chips/meta/task-ex
   await expect(draftDecisionChips(panel)).toHaveCount(0)
   await expect(panel.locator('.draft-later-btn')).toHaveCount(0)
   await expect(panel.locator('.draft-model-select')).toBeVisible()
-  await expect(panel.locator('.draft-start-btn')).toHaveText('Fork ↵')
+  // The send arrow is the fork's one start affordance, named for what it does,
+  // and enabled on an empty composer (an empty send just branches).
+  await expect(draftSend(panel)).toHaveAttribute('title', /^Fork the source session/)
+  await expect(draftSend(panel)).toBeEnabled()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/05a-fork-draft.png`, fullPage: false })
 
-  // Fork ↵ → POST /api/sessions/<source>/fork with the composed message.
+  // Send → POST /api/sessions/<source>/fork with the composed message.
   // Stubbed: the mock-CLI fixture can't execute a real --fork-session resume,
   // and the server-side fork contract has its own suite (session-controls).
   let forkBody: Record<string, unknown> | null = null
@@ -488,7 +491,7 @@ test('Fork opens a pre-bound draft: pinned folder/project, no chips/meta/task-ex
     })
   })
   await draftComposer(page).type('take the other approach from here')
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   await expect.poll(() => forkBody !== null, { timeout: 10_000, message: 'the fork API was never called' }).toBe(true)
   expect(forkBody!.message, 'the composed text rides as the fork message').toBe('take the other approach from here')
   expect(forkBody!.create_child_task, 'fork always creates the sibling task').toBe(true)
@@ -572,7 +575,7 @@ test('a failing quick-parse is a silent no-op — no toast, no pill change, no c
   // The column is still fully alive (a crashed panel would take the composer with
   // it), and the text the user typed is untouched.
   await expect(draftComposer(page)).toHaveValue('this sentence will never be understood')
-  await expect(panel.locator('.draft-start-btn')).toBeVisible()
+  await expect(draftSend(panel)).toBeEnabled()
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03c-parse-error-silent.png`, fullPage: false })
 })

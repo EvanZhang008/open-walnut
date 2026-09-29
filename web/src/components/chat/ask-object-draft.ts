@@ -93,7 +93,7 @@ export function askLaunchBody(input: {
 }
 
 /**
- * "Create task for later" from the drawer: the first line is the title, the rest and then the object's
+ * "Save as todo" from the drawer: the first line is the title, the rest and then the object's
  * context are the description, so the task still says which mail it is about (the block carries the
  * Walnut link back to it). Null when there is no title to file.
  */

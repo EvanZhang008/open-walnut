@@ -115,6 +115,17 @@ export function draftComposer(page: Page): Locator {
 }
 
 /**
+ * A draft's ONE start affordance: the composer's send arrow (Enter by another
+ * name). There is no separate "Start ↵" button any more (removed 2026-09-29: it
+ * clicked this very arrow). The draft has no Start button of its own in the DOM,
+ * so this is also what an assertion about "can it start" should look at; an
+ * empty composer is sendable only on a bound or fork draft.
+ */
+export function draftSend(panel: Locator): Locator {
+  return panel.locator('.chat-send-btn-icon')
+}
+
+/**
  * The launch row's pills: "Folder/Host: x · host" first, then the Project chip
  * once the draft has a project ("Project: y", or "New project: y" when Start will
  * create it). `.draft-composer-bar` is the container marker that survived every
@@ -339,11 +350,13 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   await expect(modelSelect).toBeVisible()
   const actions = await composer.locator('.draft-actions-bar').boundingBox()
   const model = await modelSelect.boundingBox()
-  const start = await composer.locator('.draft-start-btn').boundingBox()
-  if (!actions || !model || !start) throw new Error('the composer controls row did not render')
+  const send = await draftSend(composer).boundingBox()
+  if (!actions || !model || !send) throw new Error('the composer controls row did not render')
   expect(Math.abs(model.x - actions.x), 'the model select is leftmost in the controls row')
     .toBeLessThan(6)
-  expect(model.x, 'the model select sits before "Start ↵"').toBeLessThan(start.x)
+  expect(model.x, 'the model select sits before the send arrow').toBeLessThan(send.x)
+  // No "Start ↵" twin of the send arrow (removed 2026-09-29).
+  await expect(composer.locator('.draft-start-btn')).toHaveCount(0)
 }
 
 /**

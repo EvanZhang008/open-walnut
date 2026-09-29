@@ -4,9 +4,8 @@
  * Every "+" in the app (todo toolbar, project header, pin-tier header, the Ask Walnut slot's "+ Session" chip,
  * `/session`, ⌘⇧Enter) now grows an EMPTY session column instead of opening a
  * launcher popover. The column is pure client state until the user commits:
- * "Start ↵" morphs it `draft:` → `pending:` → a real session, "◌ Create task
- * placeholder without running" turns the composed text into a task, and closing it
- * leaves NO trace anywhere.
+ * a send morphs it `draft:` → `pending:` → a real session, "◌ Save as todo"
+ * turns the composed text into a task, and closing it leaves NO trace anywhere.
  *
  * SHAPE (the approved v4 layout — everything stacked UP from the composer):
  *   header             title + Draft badge + (bound task) + ✕
@@ -55,7 +54,7 @@ import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftLaunchBar, draftPanel,
   draftPanels,
   draftProjectPill, expectV4Stack, homeColumns, loadHome, lockLeftmostPanel, openDraft,
-  openDraftOnCwd, seedColumns, setPanelMode, tasksTitled, watchForbiddenRequests,
+  openDraftOnCwd, seedColumns, setPanelMode, tasksTitled, watchForbiddenRequests, draftSend,
 } from './draft-helpers'
 import { openSessionFromPlus } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
@@ -161,7 +160,7 @@ test('Start with no folder picked says so and opens the picker — no request, t
   page.on('request', (req) => {
     if (req.method() === 'POST' && new URL(req.url()).pathname === '/api/sessions/quick-start') launches.push(req.url())
   })
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
 
   await expect(panel.getByTestId('draft-needs-folder')).toBeVisible()
   await expect(page.locator('.session-path-selector')).toBeVisible()
@@ -241,7 +240,7 @@ test('Start launches with the picked cwd and NO taskId, becomes a real panel, an
 
   const launch = page.waitForRequest((req) =>
     req.method() === 'POST' && new URL(req.url()).pathname === '/api/sessions/quick-start')
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
 
   const payload = (await launch).postDataJSON() as {
     cwd?: string; message?: string; taskId?: string; sessionId?: string
@@ -305,9 +304,9 @@ test('closing a draft leaves no trace: no task, no persisted column, no draft ke
   expect(residue.draftKeys, 'the draft composer key is cleared on close').toEqual([])
 })
 
-// ── 5. "Create task placeholder" — one click, first line is the title ───────
+// ── 5. "Save as todo" — one click, first line is the title ───────
 
-test('Create task placeholder turns the draft into a task: first line = title, rest = description', async ({ page }) => {
+test('Save as todo turns the draft into a task: first line = title, rest = description', async ({ page }) => {
   await loadHome(page)
   const stamp = Date.now()
   const title = `Fix the login bug ${stamp}`
@@ -315,12 +314,12 @@ test('Create task placeholder turns the draft into a task: first line = title, r
 
   const panel = await openDraft(page)
   await draftComposer(page).fill(`${title}\n\n${description}`)
-  // The label is the whole affordance: it has to promise a TASK and deny a
-  // run in the words the user chose ("Save for later" read like a draft
-  // autosave, "Create task for later" did not say nothing runs), so it is
-  // asserted, not just clicked.
+  // The label is the whole affordance: it has to promise a TODO in the words
+  // the user chose ("Save for later" read like a draft autosave, "Create task
+  // for later" was too long next to the send arrow), so it is asserted, not
+  // just clicked.
   const later = panel.locator('.draft-later-btn')
-  await expect(later).toContainText('Create task placeholder without running')
+  await expect(later).toContainText('Save as todo')
   // ONE click, no dialog — that is the whole point of this control.
   await later.click()
 
@@ -354,7 +353,7 @@ test('Create task placeholder turns the draft into a task: first line = title, r
 
 // ── 6. Project header "+" seeds the project (R7: one click, no menu) ────────
 
-test('project header "+" pre-fills the project pill, and Create task placeholder files the task there', async ({ page }) => {
+test('project header "+" pre-fills the project pill, and Save as todo files the task there', async ({ page }) => {
   // Both panel axes open (stacked sections + the All project chip) so the project
   // group headers — and their "+" — render.
   await presetPanelView(page, { section: 'all', project: '' })
@@ -489,7 +488,7 @@ test('title-only task ▶ Start opens a bound draft (no launch), and its Start r
   // …the task's own folder came along as a pin (so Start needs no picker)…
   await expect(draftCwdPill(panel)).toContainText(basenameOf(cwd))
   await expect(draftProjectPill(panel)).toHaveText('Project: Walnut')
-  // …and "Create task for later" is GONE: this draft already IS a task, so
+  // …and "Save as todo" is GONE: this draft already IS a task, so
   // offering to create one could only mint a duplicate.
   await expect(panel.locator('.draft-later-btn')).toHaveCount(0)
 
@@ -505,7 +504,7 @@ test('title-only task ▶ Start opens a bound draft (no launch), and its Start r
 
   const launch = page.waitForRequest((req) =>
     req.method() === 'POST' && new URL(req.url()).pathname === '/api/sessions/quick-start')
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
 
   const payload = (await launch).postDataJSON() as {
     taskId?: string; message?: string; cwd?: string; sessionId?: string

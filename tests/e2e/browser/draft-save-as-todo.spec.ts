@@ -1,17 +1,18 @@
 /**
- * The draft composer's no-run exit reads "◌ Create task placeholder without running".
+ * The draft composer's no-run exit reads "◌ Save as todo".
  *
- * The label is long for a pill in a wrapping controls row, and the button never
- * shrinks (flex-shrink 0, nowrap), so this pins the geometry at the widths a real
- * column reaches: the whole label shows, the button stays inside its column, and it
- * never lands on the mic/send cluster.
+ * The pill sits in a wrapping controls row that a narrow column squeezes to ~120px
+ * (a longer label once spilled under the mic/send cluster), so this pins the
+ * geometry at the widths a real column reaches: the whole label shows, the button
+ * stays inside its column, and it never lands on the mic/send cluster. It also
+ * pins the send arrow as the ONE start affordance: no "Start ↵" twin.
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { draftComposer, homeColumns, loadHome, openDraft, seedColumns, setPanelMode } from './draft-helpers'
+import { draftComposer, draftSend, homeColumns, loadHome, openDraft, seedColumns, setPanelMode } from './draft-helpers'
 
-const SHOTS = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-placeholder-label'
-const LABEL = 'Create task placeholder without running'
+const SHOTS = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-save-as-todo'
+const LABEL = 'Save as todo'
 
 test.setTimeout(180_000)
 
@@ -26,7 +27,7 @@ async function expectLabelFits(page: Page, panel: Locator, shot: string): Promis
   const later = panel.locator('.draft-later-btn')
   await expect(later).toContainText(LABEL)
   await expect(later).toBeDisabled()
-  await draftComposer(page).fill(`placeholder label ${shot}`)
+  await draftComposer(page).fill(`save-as-todo label ${shot}`)
   await expect(later).toBeEnabled()
 
   const geo = await panel.evaluate((root) => {
@@ -51,18 +52,21 @@ async function expectLabelFits(page: Page, panel: Locator, shot: string): Promis
   expect(geo.clipped, `label clipped in a ${geo.panel}px column`).toBe(false)
   expect(geo.insideLeft && geo.insideRight, `button spills out of a ${geo.panel}px column`).toBe(true)
   expect(geo.hitsSend, `button covers the mic/send cluster in a ${geo.panel}px column`).toBe(false)
+  // One way to start: the arrow. A plain draft's arrow needs words; it has them now.
+  await expect(panel.locator('.draft-start-btn')).toHaveCount(0)
+  await expect(draftSend(panel)).toBeEnabled()
   await panel.locator('.session-panel-input').screenshot({ path: `${SHOTS}/composer-${shot}-${geo.panel}px.png` })
 }
 
 for (const width of [2400, 1280, 900]) {
-  test(`the placeholder label fits a lone draft column (${width}px window)`, async ({ page }) => {
+  test(`the save-as-todo label fits a lone draft column (${width}px window)`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
     await loadHome(page)
     await expectLabelFits(page, await openDraft(page), `${width}`)
   })
 }
 
-test('the placeholder label fits the narrowest column (third of three, 1100px window)', async ({ page }) => {
+test('the save-as-todo label fits the narrowest column (third of three, 1100px window)', async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 900 })
   // Set the count BEFORE seeding columns (eviction is one-way).
   await setPanelMode(page, '2')

@@ -839,7 +839,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       else openDraftColumnRef.current();
     };
     // The /task slash command. The draft column is the ONE place a task is
-    // created (its "Create task for later" is the no-session path).
+    // created (its "Save as todo" is the no-session path).
     const handleTaskComposer = () => { openDraftColumnRef.current(); };
     // "Snooze until something happens" on a task with no session (utils/wait-until.ts): a draft
     // bound to the task, its composer started with the words, so the first
@@ -1317,7 +1317,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *
    * Entering walnut mode SEEDS the row with the facts the launch will carry
    * (project ASK_WALNUT_PROJECT, tier Focus unless a user or seed owns it) so every downstream reader — the
-   * "Create task for later" exit, the launch itself — sees one consistent row.
+   * "Save as todo" exit, the launch itself — sees one consistent row.
    * `projectSource: 'seed'` (not 'user'): switching back must be able to undo
    * it, and the AI backfill is disabled in walnut mode anyway. Leaving restores
    * only what the seed wrote and the user hasn't since touched.
@@ -1622,7 +1622,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // TodoPanel toolbar "+" — one verb "New": grow an empty draft session column.
   // No popover, no tabs, no network; the draft's own composer row covers what the
-  // old Session|Task tab pair did ("◌ Create task for later" is the Task half).
+  // old Session|Task tab pair did ("◌ Save as todo" is the Task half).
   const handleToolbarOpenLauncher = useCallback(() => {
     openDraftColumn();
   }, [openDraftColumn]);
@@ -1888,7 +1888,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         title: input.title,
         priority: input.priority,
         project: input.capture ? captureProject : input.project,
-        // Long-form body (a draft column's "Create task for later": everything
+        // Long-form body (a draft column's "Save as todo": everything
         // after the first line). Passed straight through — POST /api/tasks → addTask.
         description: input.description,
         due_date: input.due_date,
@@ -2115,7 +2115,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     update(id, updates);
   }, [update]);
 
-  // The draft column's "Create task for later" (a task with no session):
+  // The draft column's "Save as todo" (a task with no session):
   // create → locate the new row → success toast w/ Undo.
   const handleQuickTaskCreate = useCallback(async (input: Parameters<typeof handleCreate>[0]) => {
     const created = await handleCreate(input);
@@ -2369,7 +2369,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // ── Draft column → session / task ──
 
   /**
-   * "Start ↵" in a draft column. Returns a PROMISE always (never a bare `false`):
+   * A send from a draft column (its arrow / Enter). Returns a PROMISE always (never a bare `false`):
    * ChatInput restores the composer only for a promise resolving false — a sync
    * false takes its other branch and CLEARS the persisted draft, losing the text.
    */
@@ -2485,7 +2485,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return true;
   }, [forgetDraft, launchQuickStart, handleForkPending, handleForkResolved, handleForkFailed, clearDraftGateError]);
 
-  /** "◌ Create task for later": the composed text becomes a task, no session. First
+  /** "◌ Save as todo": the composed text becomes a task, no session. First
    *  line = title, the rest = description. Images are dropped (text-only by design). */
   const handleDraftSaveAsTask = useCallback(async (draftId: string, text: string) => {
     const draft = draftColumnsRef.current.find(d => d.id === draftId);

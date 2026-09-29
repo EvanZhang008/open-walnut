@@ -25,7 +25,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
-import { draftCwdPill, draftQuickChips, openDraft } from './draft-helpers'
+import { draftCwdPill, draftQuickChips, openDraft, draftSend } from './draft-helpers'
 import {
   HEALTHY, fixtureCounters, fixtureFile, gateBar, hostFixture, hostTab, isolatePrefs, loadApp, loadFixture, openPicker,
   pickFolder, picker, resetServerHostFixture, start, startOnHost, tasksBanner, wireHost,
@@ -138,7 +138,7 @@ test.describe('the gate bar lives with the host', () => {
     await expect(ready).toHaveText(/^✓ Build box is ready \(Claude Code 2\.1\.281\)$/)
     await expect(bar).toHaveCount(0)
     await expect(ready).toHaveCount(0, { timeout: 5_000 })
-    await expect(panel.locator('.draft-start-btn')).toBeEnabled()
+    await expect(draftSend(panel)).toBeEnabled()
   })
 
   test('another host on the draft clears the bar at once (C80)', async ({ page }) => {

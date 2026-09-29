@@ -24,7 +24,7 @@
  *      conversation, above the answer, and is never duplicated.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test'
-import { discoverFixtureRoot, draftComposer, draftPanel, loadHome, openDraft, openDraftOnCwd } from './draft-helpers'
+import { discoverFixtureRoot, draftComposer, draftPanel, loadHome, openDraft, openDraftOnCwd, draftSend } from './draft-helpers'
 
 const SHOTS = process.env.LAUNCH_PROMPT_SHOT_DIR ?? '/tmp/launch-prompt-first-message'
 
@@ -161,7 +161,7 @@ test('Start Task: the first message shows from the click, survives a reload mid-
   const frames = await startFrameSampler(page, stamp)
 
   const t0 = Date.now()
-  const launched = launch(page, () => draft.locator('.draft-start-btn').click())
+  const launched = launch(page, () => draftSend(draft).click())
   const pending = page.locator('.main-page-session-column .pending-session-panel')
   await expect(pending.locator('.session-msg-user')).toContainText(stamp, { timeout: 5_000 })
   const pendingMs = Date.now() - t0
@@ -230,7 +230,7 @@ test('a transcript that never yields the row: the message still heads the conver
   await loadHome(page)
   const draft = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
   await draftComposer(page).fill(`${stamp} quick question`)
-  const panel = await launch(page, () => draft.locator('.draft-start-btn').click())
+  const panel = await launch(page, () => draftSend(draft).click())
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await expectPromptHeads(panel, stamp)
 

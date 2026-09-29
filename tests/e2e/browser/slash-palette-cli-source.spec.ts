@@ -18,7 +18,7 @@
 
 import { test, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { discoverFixtureRoot, draftComposer, draftCwdPill, openDraftOnCwd, loadHome, seedColumns } from './draft-helpers'
+import { discoverFixtureRoot, draftComposer, draftCwdPill, openDraftOnCwd, loadHome, seedColumns, draftSend } from './draft-helpers'
 
 const SCREENSHOT_DIR = process.env.SLASH_SHOT_DIR ?? '/tmp/slash-palette-cli'
 
@@ -74,7 +74,7 @@ test('a live session palette lists the CLI-advertised commands, hides terminal-o
 
   const launch = page.waitForRequest((req) =>
     req.method() === 'POST' && new URL(req.url()).pathname === '/api/sessions/quick-start')
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const { sessionId } = (await launch).postDataJSON() as { sessionId?: string }
   expect(sessionId, 'native quick-start sends a client session id').toBeTruthy()
 

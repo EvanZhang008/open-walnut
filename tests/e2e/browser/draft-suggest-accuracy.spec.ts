@@ -23,7 +23,7 @@
  * applied, dates applied unseen) is counted apart. Priority is recorded only while
  * `ui.show_priority` is on: a hidden field is neither written nor measured.
  *
- * Committed through "◌ Create task for later" rather than Start: both exits record
+ * Committed through "◌ Save as todo" rather than Start: both exits record
  * (`surface` tells them apart), and the task exit needs no folder and spawns no CLI,
  * so the claim under test isn't wrapped in a session launch.
  *
@@ -38,7 +38,7 @@ import { test, expect, type Page } from '@playwright/test'
 import {
   basenameOf, captureDraftRequests, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip,
   draftPanels, draftProjectPill, isoDay, loadHome, mockQuickParse, nthRequest, openDraft, openDraftOnCwd,
-  openDraftSettings, patchClientConfig, dayWords,
+  openDraftSettings, patchClientConfig, dayWords, draftSend,
 } from './draft-helpers'
 import { armParse, createTaskForLater, pickDraftProject } from './draft-outcome-helpers'
 
@@ -252,7 +252,7 @@ test('Start carries the chips\' tier, priority and due, and the ledger records e
   await expect(draftDecisionChip(panel, 'dueDate')).toHaveText(new RegExp(`Due ${dayWords(3)}`))
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-chips-before-start.png`, fullPage: false })
 
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const body = await nthRequest(log, 'quickStart')
   expect(body.taskMeta).toMatchObject({ pinTier: 'satellite', priority: 'immediate', due_date: DUE })
   const ledger = await nthRequest(log, 'feedback')
@@ -275,7 +275,7 @@ test('with priority hidden an AI priority is neither shown, launched nor recorde
   await parsed()
   await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/, { timeout: 10_000 })
   await expect(draftDecisionChip(panel, 'priority')).toHaveCount(0)
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const body = await nthRequest(log, 'quickStart')
   expect(body.taskMeta?.priority ?? 'none').toBe('none')
   const ledger = await nthRequest(log, 'feedback')

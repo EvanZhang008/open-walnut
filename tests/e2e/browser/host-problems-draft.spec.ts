@@ -20,7 +20,7 @@
  *      PW_WEBKIT=1 PW_TEST_PORT=35991 npx playwright test host-problems-draft --project=webkit --workers=1
  */
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
-import { draftComposer, draftCwdPill, draftPanel, draftQuickChips, openDraft } from './draft-helpers'
+import { draftComposer, draftCwdPill, draftPanel, draftQuickChips, openDraft, draftSend } from './draft-helpers'
 import { SHOTS, hostFixture, resetServerHostFixture } from './host-problems-helpers'
 
 test.describe.configure({ mode: 'serial' })
@@ -82,7 +82,7 @@ async function pickRemoteFolder(page: Page, panel: Locator, host: string, dir: s
 async function start(page: Page, panel: Locator, text: string) {
   await draftComposer(page).fill(text)
   const res = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   return res
 }
 

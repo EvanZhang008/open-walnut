@@ -8,7 +8,7 @@
  *   . the launch body in each mode (walnut flag and project vs folder, host, engine, project);
  *   . the tier: Focus by default, a More pick rides the launch, an unpin says null, a deleted custom
  *     tier degrades to Focus;
- *   . "Create task for later" files the text with the object's context in the description.
+ *   . "Save as todo" files the text with the object's context in the description.
  */
 import { describe, expect, it, vi } from 'vitest';
 

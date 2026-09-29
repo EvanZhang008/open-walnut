@@ -25,7 +25,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { draftCwdPill, draftTaskMenu, openDraftSettings } from './draft-helpers'
+import { draftCwdPill, draftTaskMenu, openDraftSettings, draftSend } from './draft-helpers'
 import { MailFixtureServer, folderRow, openMail, shoot } from './mail-review-helpers'
 
 const SHOT_DIR = '/tmp/mail-ask-drawer/webkit'
@@ -241,7 +241,7 @@ test('S4-W6: Start Task picks its folder, More closes on Escape, and the launch 
 
   const composer = draft.locator('textarea.chat-input-textarea')
   await composer.fill('Write the reply as a script in this repo')
-  await draft.locator('.draft-start-btn').click()
+  await draftSend(draft).click()
   await expect.poll(() => launches.length, { timeout: 60_000 }).toBe(1)
   expect(launches[0]).toMatchObject({ cwd: folder, project: 'marina-app', taskMeta: { pinTier: 'focus' } })
   expect(launches[0]).not.toHaveProperty('walnutAgent')

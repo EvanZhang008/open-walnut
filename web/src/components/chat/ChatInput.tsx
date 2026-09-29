@@ -158,6 +158,12 @@ interface ChatInputProps {
    *  on `value`, so every mutation path is covered (draft restore, prefill, mention
    *  rewrite, voice insert, post-send reset), not just typing. */
   onValueChange?: (text: string) => void;
+  /** Let an EMPTY composer send. Only an owner that gives '' a meaning sets it: a
+   *  bound draft sends its task's title, a fork just branches. Enter counts too. */
+  allowEmptySend?: boolean;
+  /** Resting title of the send arrow, when "Send" undersells it (a draft's arrow
+   *  STARTS a session, FORKS one, or ASKS Walnut). Streaming titles still win. */
+  sendTitle?: string;
   /**
    * On/off rows for the "+" menu, under their own divider below Shortcuts.
    *
@@ -199,7 +205,7 @@ interface ChatInputProps {
   plusMenuActions?: PlusMenuAction[];
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -708,7 +714,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // complete message ("look at this task"), so refs alone are sendable.
     const body = value.trim();
     const text = composeWithRefs(refs, value);
-    if ((!text && images.length === 0) || disabled || queueFull) return;
+    if ((!text && images.length === 0 && !allowEmptySend) || disabled || queueFull) return;
 
     // Sending is the user saying they are done talking. Stop the mic and drop the
     // audio: the words are already in the message, so a transcription arriving
@@ -1274,7 +1280,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const hasInput = !!(value.trim() || refs.length > 0 || images.length > 0);
-  const canSend = !disabled && !queueFull && hasInput;
+  const canSend = !disabled && !queueFull && (hasInput || !!allowEmptySend);
 
   // Claude-style primary action swap: while a turn is streaming and the composer is
   // EMPTY, the primary button is a square STOP (there is nothing to send anyway).
@@ -1284,7 +1290,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // The primary send action always sends the composed message. Its title reflects
   // whether a live turn is running (queue / interrupt) so the icon-only button
   // stays self-explanatory. The overflow "▾" exposes Interrupt / Stop while streaming.
-  let sendTitle = 'Send';
+  let sendTitle = sendTitleProp ?? 'Send';
   if (isStreaming && !onInterruptSend) {
     sendTitle = queueFull ? 'Queue full' : 'Queue message (sends after the current turn)';
   } else if (isStreaming && onInterruptSend) {

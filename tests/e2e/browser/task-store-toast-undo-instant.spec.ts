@@ -38,7 +38,7 @@ test('Undo on the "Task created" toast drops the board row before the DELETE is 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // The draft column is the one place a task is created; "Create task for later"
+  // The draft column is the one place a task is created; "Save as todo"
   // is its no-session path and the toast under test is its receipt.
   const panel = await openDraft(page)
   await draftComposer(page).fill(title)

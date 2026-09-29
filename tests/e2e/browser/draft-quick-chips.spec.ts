@@ -32,7 +32,7 @@ import {
   basenameOf, discoverFixtureRoot, draftChipPaths, draftComposer, draftCwdPill, draftPanel,
   draftPanels,
   draftProjectPill, draftQuickChips, draftQuickKey, expectedChips, loadHome, openDraft, openDraftOnCwd,
-  watchForbiddenRequests, type WorkingDir,
+  watchForbiddenRequests, type WorkingDir, draftSend,
 } from './draft-helpers'
 import { openSessionFromPlus } from './draft-surface-helpers'
 import { presetPanelView } from './todo-panel-helpers'
@@ -92,7 +92,7 @@ test('the chip row is top-2-by-use then 2-most-recent — a different answer fro
   await draftComposer(page).fill(`chip-order store seeding ${Date.now()}`)
   const launch = page.waitForRequest((req) =>
     req.method() === 'POST' && new URL(req.url()).pathname === '/api/sessions/quick-start')
-  await seedPanel.locator('.draft-start-btn').click()
+  await draftSend(seedPanel).click()
   await launch
   // The spawn is what records the directory, so wait for the column to really become
   // a session before reading the store back.
@@ -394,7 +394,7 @@ test('an unclaimed folder defaults the project to its basename, badged new, and 
   await draftComposer(page).fill(`folder-derived project launch ${Date.now()}`)
   const launched = page.waitForResponse((res) =>
     res.request().method() === 'POST' && new URL(res.url()).pathname === '/api/sessions/quick-start' && res.ok())
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const body = (await (await launched).json()) as { taskId?: string }
   expect(body.taskId, 'quick-start returned a task id').toBeTruthy()
 

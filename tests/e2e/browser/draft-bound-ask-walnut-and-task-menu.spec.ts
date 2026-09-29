@@ -24,7 +24,7 @@ import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip, draftDecisionChips,
   draftMoreButton, draftPanel, draftPanels, draftProjectPill, draftTaskMenu, isoDay, loadHome, mockQuickParse,
   openAskWalnutDrawer, openDraft, openDraftOnCwd, openDraftSettings, patchClientConfig, tasksTitled,
-  watchForbiddenRequests,
+  watchForbiddenRequests, draftSend,
 } from './draft-helpers'
 import { expectTaskInTier, pinnedTierOf } from './draft-outcome-helpers'
 import { presetPanelView } from './todo-panel-helpers'
@@ -96,17 +96,17 @@ test('task-row ▶ opens a bound draft WITH the Start Task / Ask Walnut fork, an
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/01-bound-draft-with-fork.png` })
 
   // Switch to Ask Walnut: the header says so, the binding survives, the generic
-  // "plan my day" seeds stay away (this column is about ONE task), and Start ↵
-  // is still there (an empty composer sends the title).
+  // "plan my day" seeds stay away (this column is about ONE task), and the send
+  // arrow is enabled on the EMPTY composer (an empty send uses the title).
   await askWalnutCard(page).click()
   await expect(askWalnutCard(page)).toHaveAttribute('aria-pressed', 'true')
   await expect(panel.locator('.session-panel-title')).toHaveText('Ask Walnut')
   await expect(panel.locator('.draft-bound-task')).toContainText(title)
   await expect(panel.locator('.draft-quick-hint')).toContainText('Ask Walnut about this task')
   await expect(panel.locator('.draft-walnut-suggests')).toHaveCount(0)
-  await expect(panel.locator('.draft-start-btn')).toBeVisible()
+  await expect(draftSend(panel)).toBeEnabled()
   // Walnut mode has no folder/project pills (the server owns both) — and the
-  // "create task for later" exit stays gone: this draft already IS a task.
+  // "Save as todo" exit stays gone: this draft already IS a task.
   await expect(panel.locator('.draft-later-btn')).toHaveCount(0)
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/02-bound-draft-ask-walnut.png` })
 
@@ -118,7 +118,7 @@ test('task-row ▶ opens a bound draft WITH the Start Task / Ask Walnut fork, an
   await expect(panel.locator('.session-panel-title')).toHaveText('Ask Walnut')
 
   const launch = page.waitForRequest((req) => req.method() === 'POST' && isQuickStart(req.url()))
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const payload = (await launch).postDataJSON() as {
     taskId?: string; message?: string; cwd?: string; walnutAgent?: boolean; project?: string; sessionId?: string
   }
@@ -270,7 +270,7 @@ test('a plain draft has no header ⋮; More ends the pills row, sets tier + unre
   // More never lights up for edits: the edits are the chips.
   await expect(draftMoreButton(panel)).not.toHaveClass(/draft-more-btn-active/)
   const launched = page.waitForResponse((res) => res.request().method() === 'POST' && isQuickStart(res.url()))
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const res = await launched
   expect(res.ok(), await res.text()).toBe(true)
   const payload = res.request().postDataJSON() as {

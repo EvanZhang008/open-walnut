@@ -2,7 +2,7 @@
  * The draft session column's data model + its launch-memory rules.
  *
  * A draft is an EMPTY session column the user just opened with "+": pure client
- * state (0 bytes server-side) until Start or "Create task for later". This module
+ * state (0 bytes server-side) until Start or "Save as todo". This module
  * is the leaf both the panel (DraftSessionPanel) and the owner (MainPage) import,
  * so the row shape and the "which model will this actually launch with" logic have
  * exactly one definition.

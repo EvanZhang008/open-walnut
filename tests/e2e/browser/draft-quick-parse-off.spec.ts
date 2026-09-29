@@ -41,7 +41,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
   captureDraftRequests, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip,
   draftDecisionChips, draftMoreButton, draftQuickChips, draftQuickKey, DRAFT_PANEL, isoDay, loadHome,
-  mockQuickParse, nthRequest, openDraft, openDraftOnCwd, openDraftSettings, watchForbiddenRequests,
+  mockQuickParse, nthRequest, openDraft, openDraftOnCwd, openDraftSettings, watchForbiddenRequests, draftSend,
 } from './draft-helpers'
 
 /** Evidence lives outside test-results/ — concurrent Playwright runs wipe that dir. */
@@ -219,7 +219,7 @@ test('a draft panel that re-mounts on restored text fires zero quick-parse reque
   // useState initializer, so a panel MOUNTING on left-over text ran the effect with
   // no keystroke at all. That is the "I didn't type and it was still calling" report.
   //
-  // The product's one genuine remount-with-text path is the "Create task for later"
+  // The product's one genuine remount-with-text path is the "Save as todo"
   // failure recovery (MainPage: the optimistic close is undone by re-writing
   // `draft:new-session:<id>` and re-adding the column, precisely so ChatInput's
   // mount-time read restores the user's writing). Reached here by failing the CREATE
@@ -531,7 +531,7 @@ test('turning the switch OFF mid-draft drops the AI chips at once, keeps a More-
   await page.keyboard.press('Escape')
   await panel.screenshot({ path: `${SHOT_DIR}/07-off-ai-chips-gone.png` })
 
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const body = await nthRequest(log, 'quickStart')
   expect(body.taskMeta?.pinTier).toBe('backlog')
   expect(body.taskMeta?.due_date).toBeUndefined()

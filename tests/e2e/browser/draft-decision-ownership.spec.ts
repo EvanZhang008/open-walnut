@@ -28,7 +28,7 @@ import {
   LEGS_OK, basenameOf, bootDecisions, captureDraftRequests, chipLabel, dayWords, discoverFixtureRoot, draftComposer,
   draftCwdPill, draftDecisionChip, draftDecisionChips, draftModelPill, draftPanel, draftPanels,
   draftProjectPill, draftQuickChipFor, draftTaskMenu, isoDay, nthRequest,
-  openDraft, openDraftOnCwd, openDraftSettings, rememberModelFor, typeAndSettle, type ParseSource,
+  openDraft, openDraftOnCwd, openDraftSettings, rememberModelFor, typeAndSettle, type ParseSource, draftSend,
 } from './draft-helpers'
 import { createTaskForLater } from './draft-outcome-helpers'
 import { openSessionFromPlus, pinToTier } from './draft-surface-helpers'
@@ -98,7 +98,7 @@ test('a tier picked in the menu is FINAL against later parses, while the AI keep
   await expectAiChip(panel, 'priority', 'Important')
   await page.screenshot({ path: `${SHOT_DIR}/c9-c10-tier-owned-priority-ai.png` })
 
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const body = await nthRequest(log, 'quickStart')
   expect(body.taskMeta?.pinTier).toBe('focus')
   expect(body.taskMeta?.priority).toBe('important')
@@ -125,7 +125,7 @@ test('a field the newer trailing parse no longer proposes goes back to its defau
   await expect(draftDecisionChip(panel, 'pinTier')).not.toHaveClass(AI)
   await expect(draftDecisionChips(panel)).toHaveCount(1)
 
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const body = await nthRequest(log, 'quickStart')
   expect(body.taskMeta?.pinTier, 'the reverted tier is the launcher default').toBe('focus')
   expect(body.taskMeta?.due_date, 'a withdrawn due never rides the launch').toBeUndefined()
@@ -159,7 +159,7 @@ test('a failed leg never withdraws the chips it owns, and a reply without legs w
   await typeAndSettle(page, mock, 'ship the invoice export')
   await expect(draftDecisionChips(panel)).toHaveCount(3)
 
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const body = await nthRequest(log, 'quickStart')
   expect(body.taskMeta?.due_date).toBe(due)
   expect(body.taskMeta?.pinTier).toBe('satellite')
@@ -286,7 +286,7 @@ test('an End set in the footer takes over Start and End together, and a later pa
   await typeAndSettle(page, mock, 'pair on the release notes the day after tomorrow at 3pm sharp')
   await expectUserChip(panel, 'startDate', / to /)
 
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const body = await nthRequest(log, 'quickStart')
   expect(body.taskMeta?.start_date).toBe(start)
   expect(body.taskMeta?.end_date).toBe(isoDay(3))
@@ -359,10 +359,10 @@ test('an emptied composer (after the debounce) withdraws AI tier, dates, project
   await expect(draftModelPill(panel)).toHaveAttribute('data-model', model ?? '')
 })
 
-// ── C43: Create task for later carries what the chips say ────────────────────
+// ── C43: Save as todo carries what the chips say ────────────────────
 // ("Start unread" left the launch menus on 2026-09-25, so no unread PATCH.)
 
-test('Create task for later sends the chips\' tier, priority and due', async ({ page }) => {
+test('Save as todo sends the chips\' tier, priority and due', async ({ page }) => {
   const due = isoDay(3)
   const mock = await boot(page, { pinTier: 'satellite', priority: 'immediate', due_date: due })
   const log = await captureDraftRequests(page)
@@ -404,7 +404,7 @@ test('with priority hidden an "urgent" parse writes no priority; turning the set
     await typeAndSettle(page, mock, 'fix the flaky login test, urgent')
     await expectAiChip(panel, 'pinTier', 'Satellite')
     await expect(draftDecisionChip(panel, 'priority')).toHaveCount(0)
-    await panel.locator('.draft-start-btn').click()
+    await draftSend(panel).click()
     const body = await nthRequest(log, 'quickStart')
     expect(body.taskMeta?.priority ?? 'none', 'a hidden AI priority never rides the launch').toBe('none')
     const ledger = await nthRequest(log, 'feedback')

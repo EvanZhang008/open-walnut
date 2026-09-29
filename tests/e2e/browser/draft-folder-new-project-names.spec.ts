@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
   basenameOf, captureDraftRequests, discoverFixtureRoot, draftComposer, draftPanel, draftPanels,
-  draftProjectPill, loadHome, nthRequest, openDraft, openDraftOnCwd, pickDraftFolder,
+  draftProjectPill, loadHome, nthRequest, openDraft, openDraftOnCwd, pickDraftFolder, draftSend,
 } from './draft-helpers'
 import { createTaskForLater } from './draft-outcome-helpers'
 
@@ -50,7 +50,7 @@ async function folderOf(page: Page, project: string): Promise<string | undefined
 async function startDraft(page: Page, panel: Locator, text: string): Promise<string> {
   await panel.locator('.chat-input-textarea').fill(text)
   const res = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   const body = (await (await res).json()) as { taskId?: string }
   expect(body.taskId, JSON.stringify(body)).toBeTruthy()
   return body.taskId!

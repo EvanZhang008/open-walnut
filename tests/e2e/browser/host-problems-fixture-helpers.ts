@@ -7,7 +7,7 @@
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
 import { expect, type APIRequestContext, type Locator, type Page, type Response } from '@playwright/test'
-import { draftComposer, draftCwdPill, openDraft } from './draft-helpers'
+import { draftComposer, draftCwdPill, openDraft, draftSend } from './draft-helpers'
 import { hostFixture, isolatePrefs, resetServerHostFixture, waitForHome } from './host-problems-helpers'
 
 export { hostFixture, isolatePrefs, resetServerHostFixture }
@@ -133,7 +133,7 @@ export async function pickFolder(page: Page, panel: Locator, host: string, dir: 
 export async function start(page: Page, panel: Locator, text: string): Promise<Response> {
   await draftComposer(page).fill(text)
   const res = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
-  await panel.locator('.draft-start-btn').click()
+  await draftSend(panel).click()
   return res
 }
 
