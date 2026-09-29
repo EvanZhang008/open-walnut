@@ -14995,6 +14995,30 @@ body.walnut-dragging {
   background: none;
 }
 
+/* Created / Updated / Last active at the foot of the session panel's ⋮ menu:
+   read-only, so quieter and tighter than an action row. The label column is a
+   fixed width so the three values line up. */
+.task-kebab-times {
+  padding: 3px 12px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  cursor: default;
+}
+.task-kebab-time-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+}
+.task-kebab-time-label {
+  flex: 0 0 64px;
+  color: var(--fg-muted);
+}
+.task-kebab-time-value {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Element-type specificity trick:
    div.task-kebab-info = non-interactive source display (no external URL)
    a.task-kebab-info   = clickable external link (has external URL)

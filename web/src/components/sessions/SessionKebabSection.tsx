@@ -13,6 +13,7 @@ import { openSessionInVscode } from './openSessionInVscode';
 import { prefetchVscodeEmbed } from './vscodeEmbedPrefetch';
 import { inboxChipTitle } from '@/components/inbox/session-letters';
 import type { SessionSplitView } from './sessionSplitView';
+import { sessionKebabTimeRows } from './session-kebab-times';
 import {
   useSessionPanelMode,
   MIN_PANELS,
@@ -72,6 +73,11 @@ interface SessionKebabSectionProps {
   host?: string;
   hostname?: string;
   archived?: boolean;
+  /** The session's task (Created / Updated rows); null while it is not loaded. */
+  task?: { created_at?: string; updated_at?: string } | null;
+  /** Session record times (Created fallback / Last active rows). */
+  startedAt?: string;
+  lastActiveAt?: string;
   activeView: SessionSplitView | null;
   onToggleView: (view: SessionSplitView) => void;
   unreadCount: number;
@@ -124,7 +130,7 @@ function CopyItem({ label, value, onAfter }: { label: string; value: string; onA
 }
 
 export function SessionKebabSection({
-  sessionId, cwd, host, hostname, archived, activeView, onToggleView,
+  sessionId, cwd, host, hostname, archived, task, startedAt, lastActiveAt, activeView, onToggleView,
   unreadCount, decisionCount, attentionCount,
   notesOpen, onToggleNotes, messagesOpen, onToggleMessages, msgCount,
   onRestart, restartBusy,
@@ -134,6 +140,8 @@ export function SessionKebabSection({
 }: SessionKebabSectionProps) {
   const codeHoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(codeHoverTimer.current), [sessionId]);
+  // Computed per render: the menu mounts when opened, so "2m ago" is fresh each time.
+  const timeRows = sessionKebabTimeRows(task, { startedAt, lastActiveAt });
   const cdPrefix = cwd ? `cd ${cwd} && ` : '';
   const cwdLabel = cwd ? (cwd.split('/').filter(Boolean).pop() || 'CWD') : null;
 
@@ -273,15 +281,24 @@ export function SessionKebabSection({
         </span>
       </button>
 
-      {/* SSH host — read-only info line for remote sessions. */}
+      {/* Read-only footer: when this was created / changed / last active, and
+          the SSH host for remote sessions. */}
+      {(timeRows.length > 0 || host) && <div className="task-kebab-divider" />}
+      {timeRows.length > 0 && (
+        <div className="task-kebab-times" data-testid="session-kebab-times">
+          {timeRows.map((row) => (
+            <div key={row.key} className="task-kebab-time-row" data-time={row.key} title={row.title}>
+              <span className="task-kebab-time-label">{row.label}</span>
+              <span className="task-kebab-time-value">{row.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {host && (
-        <>
-          <div className="task-kebab-divider" />
-          <div className="task-kebab-item task-kebab-info" title={hostname || host}>
-            <span className="task-kebab-icon">🖥️</span>
-            <span>SSH: {host}</span>
-          </div>
-        </>
+        <div className="task-kebab-item task-kebab-info" title={hostname || host}>
+          <span className="task-kebab-icon">🖥️</span>
+          <span>SSH: {host}</span>
+        </div>
       )}
     </div>
   );
