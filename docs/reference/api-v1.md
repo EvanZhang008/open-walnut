@@ -274,12 +274,22 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
   "cloud": false,           // WALNUT_CLOUD_MODE flag
   "version": "0.2.0",
   "serverTime": "2026-07-08T12:00:00.000Z",
+  "capabilities": ["asks"],  // additive, 2026-09
   "lastSyncAt": "2026-07-08T11:59:30.000Z"   // omitted when git-sync unavailable
 }
 ```
 
 `mode` is `REPLICA` on a cloud box today; when the reverse-WS bridge to the
 primary lands (Phase 2), a bridged cloud box will report `LIVE`.
+
+`capabilities` (additive, 2026-09): the v1 features this server offers beyond
+the frozen base, by name. Absent on a server that predates the field; treat that
+as an empty list. `"asks"`: this server can serve `GET /api/v1/asks`. On a
+REPLICA it means the companion relays the list; it does not promise that the
+primary behind it can list or launch asks (a primary that predates the list
+answers `400 session_control_needs_upgrade`). Whether New chat can launch an ask
+is the `launch` field of the `GET /api/v1/asks` answer, which the primary
+computes itself.
 
 ### GET /api/v1/agents
 
@@ -311,6 +321,68 @@ Array, most-recent first:
 ### POST /api/v1/conversations
 
 Body (optional): `{ "title": "My thread", "agentId": "general" }` → `201 { "id": "conv-…" }`
+
+### GET /api/v1/asks?agentId=general&q=&limit=200 (additive, 2026-09)
+
+One agent's asks, exactly as the web console's Ask Walnut drawer lists them. The
+rules live in one module (`src/core/sessions/ask-list.ts`) that the drawer imports
+too, so a client renders `asks` in the order given and never sorts, filters or
+retitles them itself.
+
+```json
+{
+  "agentId": "general",
+  "project": "Ask Walnut",
+  "total": 40,
+  "launch": true,
+  "asks": [
+    { "id": "<task id>", "title": "Garden plan", "state": "idle",
+      "activityAt": "2026-09-24T20:30:00.000Z", "createdAt": "2026-09-01T09:00:00.000Z",
+      "sessionId": "<session id>", "phase": "NEED_ACTION" }
+  ]
+}
+```
+
+- **Membership**: a task born as this agent's ask (`walnut_agent` plus its
+  `agent_id` stamp; no stamp means Walnut), wherever it is filed now, or any task
+  filed under the agent's `Ask <name>` project (`project` in the answer).
+- **Order**: newest `activityAt` first. `activityAt` is the later of the last
+  message sent into the task's session (`last_session_update`) and the task's
+  birth. An edit (rename, re-file, priority) does not move a row, and neither does
+  a streaming reply. Ties: newer `createdAt`, then the id by code unit.
+- **Printed time**: `activityAt` is also the stamp to print ("2d ago"), so the
+  times read in order down the list. A client that holds rows in place while the
+  list is on screen must hold what they print too, or a row continued since reads
+  "just now" under "5mo ago": the web drawer prints each held row's stamp from
+  when the list appeared, marks a row that came since as "New", and shows the
+  real times in the true order on the next open.
+- **`title`**: the task title, or the agent's project name while the task has none.
+- **`state`**: `done` (the task is complete), `running` (its session is running a
+  turn), `idle` (a session is attached and not running), `todo` (no session yet).
+  Treat a value you do not know as a new state, not an error.
+- `sessionId` is absent while the ask has no session; `unread: true` appears only
+  when set.
+- `q`: every whitespace-separated word must appear in the title, any case.
+  `limit` defaults to 200; a larger one, however many digits it has, is capped at
+  1000, and `total` counts the matches before `limit`. A `limit` that is not a
+  whole number from 1 up (`0`, `-1`, `2.5`, `abc`, empty, or given twice) is
+  `400 bad_request`, and so is an `agentId` or a `q` given twice.
+- `launch: true`: this answer's server launches an ask from `POST /api/v1/sessions`
+  `{ "walnutAgent": true }` (the phone's New chat, see Ask launch below). The
+  primary sets it, so a replica relaying the list carries the Mac's own answer. A
+  primary that predates the field omits it; read absent as "no".
+- Unknown or non-console agent: `404 not_found`. Malformed `agentId`: `400 bad_request`.
+- Cost: the server reads only the rows that could be an ask (the stamp, or a
+  project that looks like `Ask <name>`) and applies the rule above to those, so a
+  request stays cheap on a board of thousands of tasks.
+
+REPLICA: Class B relay (`server.asks`). The pushed task projection carries neither
+the ask stamp nor the activity stamp nor the session ids, so the replica never
+computes a list of its own. Bridge down: `503 bridge_offline`. A primary that
+predates the action: `400 session_control_needs_upgrade`. A server that predates
+the endpoint answers a plain `404` whose `error` is a string, not the v1 envelope.
+Clients read both of those last two as "not available on this server yet" and keep
+what they had; `bridge_offline` is a real, temporary answer.
 
 ### GET /api/v1/conversations/:id/messages?limit=50&before=<cursor>
 
@@ -1280,6 +1352,25 @@ host's SSH daemon). Works on BOTH boxes:
     returned `sessionId` immediately works with the stream/messages AND
     transcript endpoints — the transcript answers `200 messages: []` during
     the pre-spawn window (see above), then fills in as turns complete.
+- Ask launch (additive, 2026-09): the phone's New chat. `POST /api/v1/sessions`
+  body `{ "walnutAgent": true, "agentId"?, "message"?, "taskId"?, "model"? }`,
+  with no `cwd` and no `host` → the same `201 { "sessionId", "taskId", "title" }`.
+  - It creates the task the web console's Ask tab creates: filed under the
+    agent's `Ask <name>` project (`Ask Walnut` when `agentId` is absent or
+    `general`), stamped with `agent_id` for any other agent, born in Focus, and
+    running in the server's own folder with that agent's persona. Once its
+    session is up it is the top row of `GET /api/v1/asks` for that agent (the
+    row's activity time is when the session linked, not when the POST answered).
+  - `model` absent: the model last picked for an ask. A `model` here becomes
+    that memory; `"default"` clears it.
+  - `taskId`: continue an existing ask; its own agent stamp decides the persona.
+  - A client `cwd` is ignored (the server owns an ask's folder).
+  - `400 bad_request`, before anything is written: `agentId` without
+    `walnutAgent`, an unknown agent, a `walnutAgent` that is not a boolean, or
+    any `host` (an ask runs where the server runs).
+  - REPLICA: relayed to the primary like any launch, fields intact. A primary
+    that predates ask launches answers `400 bad_request` "cwd is required", so
+    offer this only when the `GET /api/v1/asks` answer carries `"launch": true`.
 
 ### Session control (additive, 2026-08) — model / effort / fork / model-options
 

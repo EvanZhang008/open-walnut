@@ -14,46 +14,16 @@
  *   - the `agent_id` stamp on the task, absent for general, which is how the
  *     chat slot's drawer and the persona drift repair know whose ask it is
  *
- * Keep the naming rule in sync with the client's `askProjectFor`
- * (web/src/components/chat/ask-walnut-slot-model.ts): the drawer lists an
- * agent's asks by that stamp OR by project name, so both sides must derive the
- * same project from the same agent.
+ * The naming rule (askProjectFor) is defined once in ask-list.ts and
+ * re-exported here: the drawer lists an agent's asks by that stamp OR by
+ * project name, so both sides must derive the same project from the same agent.
  */
 
-export const GENERAL_AGENT_ID = 'general';
-
-/** The general agent's project. The client twin is ASK_WALNUT_PROJECT. */
-export const ASK_WALNUT_PROJECT = 'Ask Walnut';
-
-export interface AskAgentRef {
-  id: string;
-  name: string;
-}
-
-/**
- * The project an agent's asks are filed under.
- *
- * A project name becomes a directory segment (assertValidProjectName in
- * task-manager), and an agent's display name is free text, so the name is
- * folded to what the gate accepts: separators and `..` are not allowed and the
- * length is capped; the id stands in for a name that folds to nothing. The
- * leading "Ask " already rules out the hidden-directory and reserved-key cases.
- * Client twin: askProjectFor in web/src/components/chat/ask-walnut-slot-model.ts
- * (same folding, so both derive the same project for the same agent).
- */
-export function askProjectFor(agent: AskAgentRef): string {
-  if (agent.id === GENERAL_AGENT_ID) return ASK_WALNUT_PROJECT;
-  return `Ask ${projectSafeName(agent.name) || projectSafeName(agent.id) || 'agent'}`;
-}
-
-function projectSafeName(raw: string): string {
-  return raw
-    .replace(/[/\\\0]/g, '-')
-    .replace(/\.{2,}/g, '.')
-    .trim()
-    .slice(0, 60)
-    .trim();
-}
+// The naming rule lives in ask-list.ts, the one pure module the web drawer
+// imports too (`@open-walnut/ask-list`), so the server and the browser derive
+// the same project from the same agent by construction, not by keeping twins.
+export { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID, askProjectFor, type AskAgentRef } from './ask-list.js';
+import { GENERAL_AGENT_ID, type AskAgentRef } from './ask-list.js';
 
 /**
  * Resolve an ask's agent from the registry, or undefined when no agent has that

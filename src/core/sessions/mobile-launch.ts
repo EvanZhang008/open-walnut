@@ -22,7 +22,16 @@ import { getFrequentDirs, scoreFrequentDir } from '../frequent-dirs.js';
 import { quickStartSession, QuickStartError } from './quick-start.js';
 import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
 import type { SessionEngine } from '../types.js';
-import { engineCaps, normalizeEngine } from '../agents/engine-registry.js';
+import { engineCaps, isAcpEngine, normalizeEngine } from '../agents/engine-registry.js';
+import {
+  ASK_HOST_REFUSAL,
+  ASK_LAUNCH_CWD,
+  askLaunchProject,
+  askLaunchTier,
+  rememberAskModelPick,
+  rememberedAskModel,
+  resolveLaunchAskAgent,
+} from './ask-launch-plan.js';
 import { log } from '../../logging/index.js';
 
 /** Launch-time permission modes — the full registry set (core/types.ts). */
@@ -37,6 +46,7 @@ export interface LaunchOptionsResult { hosts: LaunchOptionsHost[]; dirs: LaunchO
 
 /** Validated launch input — every field already shape-checked. */
 export interface MobileLaunchInput {
+  /** '' for an ask: the server owns an ask's cwd (ask-launch-plan.ts). */
   cwd: string;
   /** undefined = the primary box; otherwise a config.hosts alias (validated
    *  against the config in performMobileLaunch, not here). */
@@ -50,6 +60,15 @@ export interface MobileLaunchInput {
   engine?: SessionEngine;
   /** "Start anyway": skip an overridable readiness refusal (claude_outdated / claude_not_logged_in). */
   overrideReadiness?: boolean;
+  /**
+   * Launch an ASK (the phone's New chat): the same task the web draft's Ask
+   * Walnut tab creates, filed under "Ask <name>", born in Focus, running in
+   * the server's home with the agent's persona. `agentId` absent = Walnut.
+   */
+  walnutAgent?: true;
+  agentId?: string;
+  /** The body's `model` as sent, kept for an ask's launch memory (absent = not named). */
+  rawModel?: string;
 }
 
 /** HTTP status → frozen v1 error code (also the relay errorKind vocabulary). */
@@ -69,6 +88,7 @@ export function launchErrorCode(status: number): string {
 function validateLaunchBody(body: unknown): MobileLaunchInput {
   const {
     cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode, overrideReadiness,
+    walnutAgent, agentId,
   } = (body ?? {}) as {
     cwd?: unknown;
     host?: unknown;
@@ -79,19 +99,37 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     model?: unknown;
     mode?: unknown;
     overrideReadiness?: unknown;
+    walnutAgent?: unknown;
+    agentId?: unknown;
   };
 
-  if (typeof cwd !== 'string' || !cwd.trim()) {
-    throw new QuickStartError('cwd is required', 400);
+  // An ask: the same rule as the web quick-start (agentId only with walnutAgent;
+  // no host, an ask runs where the server runs; the server owns the cwd, so a
+  // client cwd is ignored rather than checked).
+  if (walnutAgent !== undefined && typeof walnutAgent !== 'boolean') {
+    throw new QuickStartError('walnutAgent must be a boolean', 400);
   }
-  // Absolute-only: a relative path from a phone keyboard would still 201
-  // (spawn is async) and then die as an opaque session error. This is the
-  // server-side gate; the sheet's hasPrefix("/") check is the client mirror.
-  if (!cwd.startsWith('/')) {
-    throw new QuickStartError('cwd must be an absolute path', 400);
+  const isAsk = walnutAgent === true;
+  if (agentId !== undefined && (typeof agentId !== 'string' || !agentId.trim() || agentId.length > 128 || !isAsk)) {
+    throw new QuickStartError('agentId must be a non-empty string and requires walnutAgent', 400);
   }
-  if (cwd.length > 4096) {
-    throw new QuickStartError('cwd too long (max 4096 chars)', 400);
+  if (isAsk && rawHost !== undefined && rawHost !== null && rawHost !== '') {
+    throw new QuickStartError(ASK_HOST_REFUSAL, 400);
+  }
+
+  if (!isAsk) {
+    if (typeof cwd !== 'string' || !cwd.trim()) {
+      throw new QuickStartError('cwd is required', 400);
+    }
+    // Absolute-only: a relative path from a phone keyboard would still 201
+    // (spawn is async) and then die as an opaque session error. This is the
+    // server-side gate; the sheet's hasPrefix("/") check is the client mirror.
+    if (!cwd.startsWith('/')) {
+      throw new QuickStartError('cwd must be an absolute path', 400);
+    }
+    if (cwd.length > 4096) {
+      throw new QuickStartError('cwd too long (max 4096 chars)', 400);
+    }
   }
   // Empty/absent message = spawn + idle with no first turn (same contract as
   // the web launcher's path-first start).
@@ -137,13 +175,16 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
   }
 
   return {
-    cwd, host, message: msg,
+    cwd: isAsk ? '' : cwd as string, host, message: msg,
     taskId: typeof taskId === 'string' ? taskId : undefined,
     taskTitle: typeof taskTitle === 'string' ? taskTitle.trim() : undefined,
     project: typeof project === 'string' ? project.trim() : undefined,
     model,
     mode: typeof mode === 'string' ? mode : undefined,
     ...(overrideReadiness === true ? { overrideReadiness: true } : {}),
+    ...(isAsk ? { walnutAgent: true as const } : {}),
+    ...(isAsk && typeof agentId === 'string' ? { agentId: agentId.trim() } : {}),
+    ...(isAsk && typeof rawModel === 'string' ? { rawModel } : {}),
   };
 }
 
@@ -249,15 +290,22 @@ export async function performMobileLaunch(
   }
 
   const preassignedSessionId = engineCaps(input.engine).idProvisioning === 'provider-issued' ? undefined : randomUUID();
+  const ask = input.walnutAgent ? await planMobileAsk(input) : undefined;
   const task = await quickStartSession({
     message: input.message,
-    cwd: input.cwd,
+    cwd: ask ? ASK_LAUNCH_CWD : input.cwd,
     host: input.host,
-    model: input.model,
+    model: ask ? ask.model : input.model,
     mode: input.mode,
     existingTaskId: input.taskId,
     taskTitle: input.taskTitle,
-    project: input.project,
+    project: ask ? ask.project : input.project,
+    ...(ask ? {
+      walnutAgent: true,
+      agentId: ask.agentId,
+      projectFromFolder: false,
+      taskMeta: { pinTier: askLaunchTier(undefined) },
+    } : {}),
     source,
     requestTs: Date.now(),
     engine: normalizeEngine(input.engine),
@@ -265,14 +313,34 @@ export async function performMobileLaunch(
     ...(input.overrideReadiness ? { overrideReadiness: true } : {}),
     hostGate: { deadlineMs: MOBILE_HOST_GATE_DEADLINE_MS },
   });
+  if (ask) rememberAskModelPick(input.rawModel, input.taskId);
   log.web.info(`${source}: session created`, {
-    sessionId: preassignedSessionId, taskId: task.id, cwd: input.cwd, host: input.host ?? '',
+    sessionId: preassignedSessionId, taskId: task.id, cwd: ask ? ASK_LAUNCH_CWD : input.cwd, host: input.host ?? '',
+    ...(ask ? { ask: true, agentId: ask.agentId } : {}),
   });
   return {
     ...(preassignedSessionId ? { sessionId: preassignedSessionId } : {}),
     taskId: task.id,
     title: task.title,
   };
+}
+
+/**
+ * The ask half of a phone launch, from the same rules the web draft uses
+ * (ask-launch-plan.ts): whose ask it is (a retry names no agent, the task's
+ * stamp decides), the project it files under, and the remembered model when
+ * the body names none. An unknown agent is a 400 before anything is written.
+ */
+async function planMobileAsk(input: MobileLaunchInput): Promise<{ agentId: string; project: string; model?: string }> {
+  const agent = await resolveLaunchAskAgent(input.agentId, input.taskId);
+  if (!agent) throw new QuickStartError(`Unknown console agent "${input.agentId}"`, 400);
+  // A phone launch always mints its session id, so it runs on the native engine
+  // unless the body named another (quickStartSession: an inherited engine yields
+  // to a promised id). The memory only applies there.
+  const model = input.rawModel === undefined
+    ? await rememberedAskModel(!isAcpEngine(input.engine))
+    : input.model;
+  return { agentId: agent.id, project: askLaunchProject(input.project, agent), ...(model ? { model } : {}) };
 }
 
 /**

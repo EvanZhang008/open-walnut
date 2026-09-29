@@ -29,7 +29,12 @@
 
 import { forwardRef, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import type { Task } from '@open-walnut/core';
-import { useTaskCircle } from '@/hooks/useSessionStatus';
+import {
+  askActivityAt, askState, holdOrder, matchesAskQuery, nextHeldOrder, printedStamp,
+  type AskState, type HeldList, type HeldOrder,
+} from '@open-walnut/ask-list';
+import { useSessionStatus } from '@/hooks/useSessionStatus';
+import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import type { AskAgent } from './ask-walnut-slot-model';
 
@@ -96,6 +101,9 @@ interface DrawerProps {
   agent: AskAgent;
   onPickAgent: (agentId: string) => void;
   rows: DrawerRow[];
+  /** True while the task list is still loading: the list says so instead of
+   *  "no sessions yet", and the rows are not held until they have arrived. */
+  loading?: boolean;
   /** null while the slot shows the composer or a pending launch. */
   selectedTaskId: string | null;
   onPick: (taskId: string) => void;
@@ -106,15 +114,8 @@ interface DrawerProps {
   onToggleInspector: () => void;
 }
 
-/** Case- and whitespace-insensitive "every word of the query appears in the
- *  title", so `deploy ios` finds "iOS build 73 deploy". */
-function matches(title: string, query: string): boolean {
-  const hay = title.toLowerCase();
-  return query.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w));
-}
-
 export function AskWalnutDrawer({
-  open, onClose, returnFocusRef, agents, agent, onPickAgent, rows, selectedTaskId, onPick, onNew,
+  open, onClose, returnFocusRef, agents, agent, onPickAgent, rows, loading = false, selectedTaskId, onPick, onNew,
   onFixWalnut, inspectorOpen, onToggleInspector,
 }: DrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -182,9 +183,29 @@ export function AskWalnutDrawer({
       ?.scrollIntoView({ block: 'nearest' });
   }, [open, selectedTaskId]);
 
+  // Rows hold the places they had when the list first appeared in this open
+  // (shared `holdOrder`): a background ask that gets a message while the list is
+  // on screen must not climb over the row the user is aiming at. They print the
+  // stamp they had then too (`printedStamp`; a newcomer reads "New"), or a held
+  // row continued since would read "just now" under "5mo ago". Advanced during
+  // render, not in an effect, so the frame that first shows the rows already
+  // holds them; `nextHeldOrder` waits for a loaded, non-empty list (a snapshot of
+  // the empty list the drawer can open on made every row "new") and keeps one
+  // snapshot per agent until the drawer closes. The next open shows the true
+  // order with the real times.
+  const openedWithRef = useRef<HeldOrder | null>(null);
+  openedWithRef.current = nextHeldOrder(openedWithRef.current, {
+    open, agentId: agent.id, rows: rows.map(heldRowView), loading,
+  });
+  const held = openedWithRef.current?.byAgent.get(agent.id);
+  const ordered = useMemo(
+    () => (held ? holdOrder(rows, held.ids) : rows),
+    [rows, held],
+  );
+
   const visible = useMemo(
-    () => (query.trim() ? rows.filter((r) => matches(r.title, query)) : rows),
-    [rows, query],
+    () => (query.trim() ? ordered.filter((r) => matchesAskQuery(r.title, query)) : ordered),
+    [ordered, query],
   );
 
   if (!open) return null;
@@ -289,7 +310,7 @@ export function AskWalnutDrawer({
         </div>
 
         <div className="ask-walnut-drawer-list" role="group" aria-label="Your asks" data-testid="ask-walnut-drawer-list">
-          {rows.length === 0 && (
+          {rows.length === 0 && !loading && (
             <p className="ask-walnut-drawer-empty">No {agent.project} sessions yet.</p>
           )}
           {/* role=status: a screen reader typing in the search box hears when the
@@ -301,10 +322,19 @@ export function AskWalnutDrawer({
             <DrawerItem
               key={row.id}
               row={row}
+              held={held}
               selected={row.id === selectedTaskId}
               onPick={() => { onClose(); onPick(row.id); }}
             />
           ))}
+          {/* Until the board has loaded, an empty or short list is not the
+              answer: say it is still coming rather than "no sessions yet". */}
+          {loading && (
+            <p className="ask-walnut-drawer-empty ask-walnut-drawer-loading" role="status" data-testid="ask-walnut-drawer-loading">
+              <span className="spinner ask-walnut-pending-spinner" aria-hidden="true" />
+              Loading your asks…
+            </p>
+          )}
         </div>
 
         <div className="ask-walnut-drawer-foot">
@@ -348,11 +378,20 @@ export function AskWalnutDrawer({
   );
 }
 
-function DrawerItem({ row, selected, onPick }: { row: DrawerRow; selected: boolean; onPick: () => void }) {
-  // Last activity, not birth: the list is in birth order (stable under the
-  // cursor), and the stamp on the right is the "when did I last touch this"
-  // hint the Claude sidebar gives.
-  const when = row.task?.updated_at || row.task?.created_at;
+/** A row as the shared snapshot reads it: the stamp the list SORTS by (the
+ *  shared `askActivityAt`: the last message sent into the ask). */
+function heldRowView(row: DrawerRow): { id: string; activityAt?: string } {
+  const at = row.task ? askActivityAt(row.task) : undefined;
+  return at ? { id: row.id, activityAt: at } : { id: row.id };
+}
+
+function DrawerItem({ row, held, selected, onPick }: {
+  row: DrawerRow; held: HeldList | undefined; selected: boolean; onPick: () => void;
+}) {
+  // The stamp the row sorts by, so the times read in order down the list (it
+  // used to print `updated_at` over a birth-ordered list, which put a "1d ago"
+  // among the "1w ago" rows); while the order is held, the stamp it had then.
+  const stamp = printedStamp(held, heldRowView(row));
   return (
     <button
       type="button"
@@ -365,14 +404,29 @@ function DrawerItem({ row, selected, onPick }: { row: DrawerRow; selected: boole
     >
       {row.task ? <TaskDot task={row.task} /> : <span className="ask-walnut-drawer-dot task-circle-session" aria-hidden="true" />}
       <span className="ask-walnut-drawer-item-title">{row.title}</span>
-      {when && <span className="ask-walnut-drawer-item-time">{timeAgo(when)}</span>}
+      {stamp.kind === 'time' && <span className="ask-walnut-drawer-item-time">{timeAgo(stamp.at)}</span>}
+      {stamp.kind === 'new' && (
+        <span className="ask-walnut-drawer-item-time is-new" data-testid="ask-walnut-drawer-item-new">New</span>
+      )}
     </button>
   );
 }
 
-/** The same live circle class the board rows use (running / attached / done), as
- *  a dot. Its own component because the class is a store subscription. */
+/** The shared ask state as the board's circle classes (same colours): blue =
+ *  a conversation that is not running, pulsing blue = running a turn, green =
+ *  done, grey = no session yet. */
+const STATE_CLASS: Record<AskState, string> = {
+  idle: 'task-circle-session',
+  running: 'task-circle-running',
+  done: 'task-circle-done',
+  todo: 'task-circle-todo',
+};
+
+/** The row's state as a dot: the shared `askState` fed the live session status
+ *  (the phone gets the same rule from GET /api/v1/asks). Its own component
+ *  because the live status is a store subscription. */
 function TaskDot({ task }: { task: Task }) {
-  const cls = useTaskCircle(task);
-  return <span className={`ask-walnut-drawer-dot ${cls}`} aria-hidden="true" />;
+  const live = useSessionStatus(resolveTaskSessionId(task));
+  const state = askState(task, live);
+  return <span className={`ask-walnut-drawer-dot ${STATE_CLASS[state]}`} data-ask-state={state} aria-hidden="true" />;
 }

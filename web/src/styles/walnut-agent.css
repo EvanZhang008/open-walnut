@@ -409,6 +409,12 @@
   font-size: 12px;
   color: var(--fg-muted);
 }
+/* The drawer opened before the board arrived: a spinner line, not "no sessions yet". */
+.ask-walnut-drawer-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .ask-walnut-drawer-item {
   display: flex;
   align-items: center;
@@ -443,6 +449,11 @@
   font-size: 11px;
   font-weight: 400;
   color: var(--fg-muted);
+}
+/* A row that came after the list opened: "New" where a time would be. */
+.ask-walnut-drawer-item-time.is-new {
+  color: var(--accent-text, var(--accent));
+  font-weight: 500;
 }
 /* Status dot: the board's task-circle colours (globals), as a 7px disc. */
 .ask-walnut-drawer-dot {
@@ -561,7 +572,11 @@
   gap: 8px;
   margin: 0;
 }
-.ask-walnut-pending-spinner {
+/* Two classes on purpose: the element is also a global `.spinner` (32px), and
+   globals.css is imported after this file (main.tsx imports App first), so a
+   single-class rule here lost on load order and every Ask spinner drew 32px. */
+.spinner.ask-walnut-pending-spinner {
+  flex: none;
   width: 12px;
   height: 12px;
   border-width: 2px;

@@ -35,7 +35,7 @@ import path from 'path'
 import { isSessionProcessAlive } from '../../utils/session-liveness.js'
 import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan-message.js'
 import { getFrequentDirs, compileFromSessions, recordLaunchPrefs, scoreFrequentDir } from '../../core/frequent-dirs.js'
-import { getAskWalnutLaunchPrefs, rememberAskWalnutLaunch } from '../../core/sessions/ask-walnut-launch.js'
+import { getAskWalnutLaunchPrefs } from '../../core/sessions/ask-walnut-launch.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
 import { VALID_SESSION_MODEL_IDS, VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
 import { getHostModelCatalog, listHostModelCatalogs } from '../../core/host-model-catalog.js'
@@ -45,7 +45,15 @@ import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readAcpSessionHistoryState } from '../../providers/acp-session-history.js'
 import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
-import { askProjectFor, resolveAskAgent, stampedAgentId } from '../../core/sessions/ask-agent.js'
+import {
+  ASK_HOST_REFUSAL,
+  ASK_LAUNCH_CWD,
+  askLaunchProject,
+  askLaunchTier,
+  rememberAskModelPick,
+  rememberedAskModel,
+  resolveLaunchAskAgent,
+} from '../../core/sessions/ask-launch-plan.js'
 import { ensureCwd } from '../../core/sessions/ensure-cwd.js'
 import { buildSessionVscodeUri, SessionVscodeUriError } from '../../core/session-vscode-uri.js'
 import { buildSessionVscodeEmbed, SessionVscodeEmbedError } from '../../core/session-vscode-embed.js'
@@ -58,7 +66,7 @@ import {
   getSubagentHistoryPayload, executeCompactSession,
 } from '../../core/sessions/session-extras.js'
 import { filterSessionsByQuery } from '../../core/session-search.js'
-import { QUICK_START_MESSAGE_HARD_LIMIT, WALNUT_HOME } from '../../constants.js'
+import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
 import { resolveDefaultEngine } from '../../core/agents/default-engine.js'
 import { splitAcpModelId } from '../../providers/acp-session.js'
@@ -350,8 +358,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // Resolved HERE (not only in core) because the project default below needs
     // the agent's name; an unknown id fails before anything is written. A retry
     // on an existing ask names no agent: its task stamp says whose it is.
-    const askAgentId = agentId ?? (isWalnutAgent && existingTaskId ? await stampedAgentId(existingTaskId) : undefined)
-    const askAgent = isWalnutAgent ? await resolveAskAgent(askAgentId) : undefined
+    const askAgent = isWalnutAgent ? await resolveLaunchAskAgent(agentId, existingTaskId) : undefined
     if (isWalnutAgent && !askAgent) {
       res.status(400).json({ error: `Unknown console agent "${agentId}"` })
       return
@@ -365,7 +372,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       //
       // Remote is meaningless here: the Personal AI runs where the server runs.
       if (host) {
-        res.status(400).json({ error: 'walnutAgent sessions run on the server host' })
+        res.status(400).json({ error: ASK_HOST_REFUSAL })
         return
       }
     }
@@ -381,7 +388,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // Ask Walnut ignores any client cwd: the Personal AI's home is a server fact
     // (same directory a main-chat lane spawns in), not a client choice.
     const cwd = isWalnutAgent
-      ? WALNUT_HOME
+      ? ASK_LAUNCH_CWD
       : !host && (rawCwd === '~' || rawCwd.startsWith('~/'))
         ? path.join(os.homedir(), rawCwd.slice(1))
         : rawCwd
@@ -462,8 +469,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // client, so a draft that never saw the memory (opened before the pick,
       // a retry, a non-web caller) still launches on it — and can't erase it:
       // only an explicit 'default' (the picker's Auto row) means "back to Auto".
-      const remembered = (await getAskWalnutLaunchPrefs()).model
-      if (remembered) model = resolveModelSwitchValue(remembered) ?? undefined
+      const remembered = await rememberedAskModel(true)
+      if (remembered) model = remembered
     }
 
     if (mode) {
@@ -574,18 +581,20 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       : {}
 
     // Ask Walnut defaults, same shape as the fix-walnut block above: the task
-    // files under the real 'Walnut' project and lands in Focus unless the
-    // client picked a tier explicitly (`null` still opts out of pinning).
-    const walnutTaskMeta = isWalnutAgent && taskMeta?.pinTier === undefined
-      ? { ...taskMeta, pinTier: 'focus' as const }
+    // lands in Focus unless the client picked a tier explicitly (`null` still
+    // opts out of pinning). The rules live in core/sessions/ask-launch-plan.ts,
+    // shared with the phone's POST /api/v1/sessions, so an ask born on either
+    // surface is the same task.
+    const walnutTaskMeta = isWalnutAgent
+      ? { ...taskMeta, pinTier: askLaunchTier(taskMeta?.pinTier) }
       : taskMeta
     const walnutExtras = askAgent
       // Its OWN project per agent ("Ask Walnut", "Ask Mentor", …), deliberately
       // NOT 'Walnut' — that's where the user's app-dev tasks and fix-walnut
       // repairs live; Personal-AI asks mixing into it made "whose task is this"
-      // unreadable. The naming rule is askProjectFor (client twin in
-      // web/src/components/chat/ask-walnut-slot-model.ts).
-      ? { project: project?.trim() || askProjectFor(askAgent), projectFromFolder: false, walnutAgent: true, agentId: askAgent.id }
+      // unreadable. The naming rule is askProjectFor (ask-list.ts, which the
+      // web drawer imports too).
+      ? { project: askLaunchProject(project, askAgent), projectFromFolder: false, walnutAgent: true, agentId: askAgent.id }
       : {}
 
     // Shared core (also used by the claude-code routine executor): task create/
@@ -658,8 +667,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
           // change to that default).
           engine: normalizeEngine(engine),
         }).catch(() => {})
-      } else if (!existingTaskId && isWalnutAgent && rawModel !== undefined) {
-        rememberAskWalnutLaunch({ model: rawPickerModel }).catch(() => {})
+      } else if (isWalnutAgent) {
+        rememberAskModelPick(rawModel, existingTaskId)
       }
       // sessionId is present for native starts (see preassignedSessionId above).
       // Clients MUST treat it as optional — an ACP start omits it.

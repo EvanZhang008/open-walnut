@@ -45,6 +45,7 @@ import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
+import { askTitle } from '@open-walnut/ask-list';
 import {
   GENERAL_AGENT_ID, GENERAL_ASK_AGENT, agentOfTask, resolveSelection, selectAgentTasks, slotAgents,
   type AskAgent,
@@ -265,10 +266,12 @@ export function AskWalnutSlot({
     return () => clearTimeout(timer);
   }, [launched]);
 
-  // The drawer's list: every ask of the agent on show, newest first, with the
-  // just-launched one on top until the store carries it.
+  // The drawer's list: every ask of the agent on show, most recently used
+  // first (the shared order), with the just-launched one on top until the store
+  // carries it. Titles come from the shared rule too, so the phone's list reads
+  // the same words.
   const rows = useMemo<DrawerRow[]>(() => {
-    const list = askTasks.map((t) => ({ id: t.id, title: t.title || agent.project, task: t }));
+    const list = askTasks.map((t) => ({ id: t.id, title: askTitle(t, agent), task: t }));
     if (launched && !askTasks.some((t) => t.id === launched.taskId)) {
       return [{ id: launched.taskId, title: launched.title }, ...list];
     }
@@ -651,6 +654,7 @@ export function AskWalnutSlot({
         agent={agent}
         onPickAgent={selectAgent}
         rows={rows}
+        loading={tasksLoading === true || !agentsLoaded}
         selectedTaskId={view === 'session' ? selectedTaskId : null}
         onPick={selectAsk}
         onNew={startNew}

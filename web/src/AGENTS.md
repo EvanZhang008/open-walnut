@@ -48,7 +48,18 @@ show inline after the open ones, other completed hits that show the query fold i
   overlay (never a portal: the slot clips itself) with a search box, the asks and `New chat`.
   The drawer's title is the agent switcher (an inline accordion, not a portal): one list of
   asks PER console agent (`selectAgentTasks` / `isAskOf`: `walnut_agent` + the task's
-  `agent_id` stamp, no stamp = Walnut, OR the agent's `Ask <name>` project), the slot's draft
+  `agent_id` stamp, no stamp = Walnut, OR the agent's `Ask <name>` project). Membership, order,
+  title and dot state are ONE module, `@open-walnut/ask-list` (src/core/sessions/ask-list.ts),
+  which `GET /api/v1/asks` also serves the phone from: newest `last_session_update` first (never
+  `updated_at`, which edits move), the row prints the stamp it sorts by, and rows hold their
+  places while the drawer is open (`holdOrder`; a newcomer joins at the end). A held row
+  prints the stamp it had in the snapshot and a newcomer reads "New" (`printedStamp`), so a
+  continued ask never reads "just now" under "5mo ago"; the next open shows real times in the
+  true order. The places are the ones the user SAW: `nextHeldOrder` takes an agent's snapshot
+  only once the task list has loaded and has rows (a drawer opened before the board arrived
+  used to hold an empty list, so every row followed the live order), keeps ONE per agent until
+  the drawer closes (Walnut, Mentor, Walnut shows Walnut's first list again), and until then the
+  list reads "Loading your asks…", never "no sessions yet". The slot's draft
   carries `draft.agent` so `DraftSessionPanel` names it ("Ask Mentor", the agent's description
   in place of the Walnut seeds), and the launch payload carries `agentId`. The search input's
   own chrome is flattened in BOTH rest and `:focus` (globals' `input:focus` ring outranks a bare

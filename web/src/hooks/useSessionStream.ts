@@ -265,7 +265,14 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
     // Fallback: fetch pending permissions from REST (covers cases where buffer was pruned)
     fetch(`/api/sessions/${sessionId}`)
-      .then(r => r.ok ? r.json() : null)
+      .then(r => {
+        if (r.ok) return r.json()
+        // Release a refused answer (a 404 for a session that is gone): Chromium
+        // keeps a response whose body is never read open, so the request never
+        // finishes and holds its connection until the page is collected.
+        void r.body?.cancel().catch(() => {})
+        return null
+      })
       .then((data: {
         session?: unknown;
         pendingPermissions?: Array<{

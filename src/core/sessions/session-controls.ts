@@ -751,6 +751,10 @@ export type SessionControlAction =
   // replica relays the query here instead of refusing outright — the Mac
   // being reachable is exactly the common case for a phone on the replica.
   | 'server.search'
+  // One agent's asks list (GET /api/v1/asks): the pushed projection lacks the
+  // ask stamps, activity stamp and session ids, so only the primary can compute
+  // the list the Mac's drawer shows.
+  | 'server.asks'
   // Wave 2 box-level family: routines CRUD/control (single-writer: the
   // PRIMARY's cron engine owns cron-jobs.json — replicas never write it
   // locally, avoiding the dual-engine blind-write storms), the launcher's
@@ -1141,6 +1145,13 @@ export async function handleSessionControlRelay(
           ? Math.max(1, Math.min(100, Number(p.limit) || 20)) : undefined;
         const { search } = await import('../search.js');
         result = { results: await search(q, { types, limit }) };
+        break;
+      }
+      case 'server.asks': {
+        // Same validation as the direct route (parseAsksQuery), then the same
+        // computation the primary's own GET /api/v1/asks runs.
+        const { parseAsksQuery, computeAgentAsks } = await import('../../web/routes/asks-v1.js');
+        result = await computeAgentAsks(parseAsksQuery(p)) as unknown as Record<string, unknown>;
         break;
       }
       // ── Wave 2 box-level family: routines (PRIMARY's engine is the single writer) ──

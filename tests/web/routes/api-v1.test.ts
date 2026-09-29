@@ -90,6 +90,8 @@ describe('GET /api/v1/status', () => {
     expect(typeof body.version).toBe('string')
     expect(typeof body.serverTime).toBe('string')
     expect(Number.isNaN(Date.parse(body.serverTime as string))).toBe(false)
+    // This server can serve GET /api/v1/asks.
+    expect(body.capabilities).toContain('asks')
   })
 })
 

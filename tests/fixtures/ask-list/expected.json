@@ -1,0 +1,80 @@
+{
+  "agentId": "general",
+  "project": "Ask Walnut",
+  "total": 8,
+  "launch": true,
+  "asks": [
+    {
+      "id": "ask-release",
+      "title": "Release checklist",
+      "state": "running",
+      "activityAt": "2026-09-26T08:00:00.000Z",
+      "createdAt": "2026-09-25T10:00:00.000Z",
+      "sessionId": "sess-release",
+      "phase": "IN_PROGRESS"
+    },
+    {
+      "id": "ask-garden",
+      "title": "Garden plan",
+      "state": "idle",
+      "activityAt": "2026-09-24T20:30:00.000Z",
+      "createdAt": "2026-09-01T09:00:00.000Z",
+      "sessionId": "sess-garden",
+      "phase": "NEED_ACTION"
+    },
+    {
+      "id": "todo-by-hand",
+      "title": "Filed by hand",
+      "state": "todo",
+      "activityAt": "2026-09-22T09:00:00.000Z",
+      "createdAt": "2026-09-22T09:00:00.000Z",
+      "phase": "TODO"
+    },
+    {
+      "id": "ask-untitled",
+      "title": "Ask Walnut",
+      "state": "idle",
+      "activityAt": "2026-09-20T09:00:00.000Z",
+      "createdAt": "2026-09-20T09:00:00.000Z",
+      "sessionId": "sess-untitled",
+      "phase": "IN_PROGRESS"
+    },
+    {
+      "id": "ask-moved",
+      "title": "Garden \u7814\u7a76 notes",
+      "state": "idle",
+      "activityAt": "2026-09-18T12:00:00.000Z",
+      "createdAt": "2026-09-15T09:00:00.000Z",
+      "sessionId": "sess-moved",
+      "phase": "IN_PROGRESS"
+    },
+    {
+      "id": "ask-tie-a",
+      "title": "Tie a",
+      "state": "idle",
+      "activityAt": "2026-09-12T00:00:00.000Z",
+      "createdAt": "2026-09-12T00:00:00.000Z",
+      "sessionId": "sess-tie-a",
+      "phase": "IN_PROGRESS"
+    },
+    {
+      "id": "ask-tie-b",
+      "title": "Tie b",
+      "state": "idle",
+      "activityAt": "2026-09-12T00:00:00.000Z",
+      "createdAt": "2026-09-12T00:00:00.000Z",
+      "sessionId": "sess-tie-b",
+      "phase": "IN_PROGRESS"
+    },
+    {
+      "id": "ask-reading",
+      "title": "Reading list",
+      "state": "done",
+      "activityAt": "2026-09-10T09:05:00.000Z",
+      "createdAt": "2026-09-10T09:00:00.000Z",
+      "sessionId": "sess-reading",
+      "phase": "COMPLETE",
+      "unread": true
+    }
+  ]
+}

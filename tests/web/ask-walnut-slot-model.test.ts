@@ -8,15 +8,19 @@
  *    under the project, and the ones that were moved out"), one list PER agent;
  *  - WHICH agent a task belongs to (the stamp, then the project);
  *  - WHICH row survives a task-list change (the persisted pick while it exists,
- *    else the newest, else nothing).
+ *    else the drawer's top row, else nothing).
+ *
+ * Membership and order are the SHARED asks-list rules (src/core/sessions/ask-list.ts,
+ * the module GET /api/v1/asks serves the phone from); tests/core/sessions/ask-list.test.ts
+ * pins them in full. The cases here pin that the slot really uses them.
  *
  * (WHICH session a task's panel mounts is `resolveTaskSessionId` in
  * web/src/utils/session-status.ts — one precedence for every surface. This module
  * used to carry a second copy of it plus a session-list fallback nobody fed.)
  *
  * The ordering assertions are the ones a browser spec cannot make: a streaming
- * ask must not slide out from under the cursor, and two tasks stamped in the same
- * millisecond must not swap places between refetches.
+ * ask must not climb (only a SENT message moves an ask), and two tasks stamped in
+ * the same millisecond must not swap places between refetches.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -130,7 +134,7 @@ describe('selectAgentTasks — Walnut', () => {
     expect(selectAskWalnutTasks(tasks).map((t) => t.id).sort()).toEqual(['lower', 'padded']);
   });
 
-  it('sorts by created_at descending', () => {
+  it('with no conversation yet, a newer birth sorts first', () => {
     const tasks = [
       walnut('old', { created_at: '2026-09-01T00:00:00.000Z' }),
       walnut('new', { created_at: '2026-09-03T00:00:00.000Z' }),
@@ -139,11 +143,10 @@ describe('selectAgentTasks — Walnut', () => {
     expect(selectAskWalnutTasks(tasks).map((t) => t.id)).toEqual(['new', 'mid', 'old']);
   });
 
-  // THE REGRESSION THIS ORDER EXISTS FOR: `updated_at` moves on every streamed
-  // turn, so ordering on it slid the answering ask toward the front while the
-  // user was aiming at a row — the click landed on whatever took its place. Row
-  // position is birth order, which nothing can change after the fact.
-  it('does NOT reorder when an older ask is updated (a streaming turn)', () => {
+  // `updated_at` moves on every streamed turn and on any field edit (a bulk
+  // re-file, title drift), so ordering on it slid an answering ask toward the
+  // front while the user was aiming at a row. Only a SENT message moves an ask.
+  it('does NOT reorder when an older ask is updated (a streaming turn, an edit)', () => {
     const tasks = [
       walnut('born-first', { created_at: '2026-09-01T00:00:00.000Z', updated_at: '2026-09-09T00:00:00.000Z' }),
       walnut('born-second', { created_at: '2026-09-02T00:00:00.000Z', updated_at: '2026-09-02T00:00:00.000Z' }),
@@ -151,17 +154,30 @@ describe('selectAgentTasks — Walnut', () => {
     expect(selectAskWalnutTasks(tasks).map((t) => t.id)).toEqual(['born-second', 'born-first']);
   });
 
-  it('breaks a created_at tie on updated_at, then on the id — deterministically', () => {
+  // The reported row: an ask born long ago and continued yesterday. It used to
+  // sit in birth order while printing its last touch ("1d ago" among "1w ago").
+  it('an old ask that got a message climbs to where its activity puts it', () => {
+    const tasks = [
+      walnut('born-old-used-yesterday', { created_at: '2026-09-01T00:00:00.000Z', last_session_update: '2026-09-24T20:00:00.000Z' }),
+      walnut('born-mid', { created_at: '2026-09-15T00:00:00.000Z', last_session_update: '2026-09-15T00:05:00.000Z' }),
+      walnut('born-new', { created_at: '2026-09-25T00:00:00.000Z', last_session_update: '2026-09-25T00:05:00.000Z' }),
+    ];
+    expect(selectAskWalnutTasks(tasks).map((t) => t.id)).toEqual(['born-new', 'born-old-used-yesterday', 'born-mid']);
+  });
+
+  it('breaks an activity tie on birth, then on the id, deterministically', () => {
     const same = '2026-09-02T00:00:00.000Z';
     const tasks = [
       walnut('zz', { created_at: same, updated_at: same }),
       walnut('aa', { created_at: same, updated_at: same }),
+      // A later updated_at is NOT a tie-breaker any more (it is not activity).
       walnut('newer-touch', { created_at: same, updated_at: '2026-09-02T09:00:00.000Z' }),
+      walnut('born-earlier', { created_at: '2026-09-01T00:00:00.000Z', last_session_update: same }),
     ];
     const first = selectAskWalnutTasks(tasks).map((t) => t.id);
     // Reversing the input must not change the answer — that is the whole point.
     const second = selectAskWalnutTasks([...tasks].reverse()).map((t) => t.id);
-    expect(first).toEqual(['newer-touch', 'aa', 'zz']);
+    expect(first).toEqual(['aa', 'newer-touch', 'zz', 'born-earlier']);
     expect(second).toEqual(first);
   });
 
@@ -191,14 +207,22 @@ describe('resolveSelection', () => {
     expect(resolveSelection('old', tasks)).toBe('old');
   });
 
-  it('falls back to the newest task when the selection is gone', () => {
+  it('falls back to the top row when the selection is gone', () => {
     expect(resolveSelection('deleted', tasks)).toBe('new');
     expect(resolveSelection(null, tasks)).toBe('new');
     expect(resolveSelection(undefined, tasks)).toBe('new');
   });
 
-  it('finds the newest task regardless of the input order', () => {
+  it('finds the top row regardless of the input order', () => {
     expect(resolveSelection(null, [...tasks].reverse())).toBe('new');
+  });
+
+  it('the top row is the most recently USED ask, not the newest born', () => {
+    const used = [
+      ...tasks,
+      walnut('oldest-but-used', { created_at: '2026-08-01T00:00:00.000Z', last_session_update: '2026-09-04T00:00:00.000Z' }),
+    ];
+    expect(resolveSelection(null, used)).toBe('oldest-but-used');
   });
 
   // The reload regression: the task store is EMPTY at first paint and fills a

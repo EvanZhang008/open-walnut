@@ -153,6 +153,16 @@ apiV1Router.post('/devices/self', async (req: Request, res: Response, next: Next
 
 // ─── GET /api/v1/status ────────────────────────────────────────────────────
 
+/**
+ * The v1 features this server offers beyond the frozen base, by name, so a
+ * client gates a feature on the server it is talking to instead of on its own
+ * build. 'asks' = this server can serve GET /api/v1/asks. On a REPLICA that
+ * means it relays the list; it promises nothing about the primary behind it.
+ * Whether New chat can LAUNCH an ask is the `launch` field of the /asks answer,
+ * which the primary computes itself.
+ */
+const V1_CAPABILITIES: readonly string[] = ['asks']
+
 apiV1Router.get('/status', async (_req: Request, res: Response) => {
   // mode: LIVE = talking to the primary (Mac at home); REPLICA = the cloud
   // companion serving synced data. Per-session talk capability is signalled by
@@ -186,6 +196,7 @@ apiV1Router.get('/status', async (_req: Request, res: Response) => {
     cloud: CLOUD_MODE,
     version: getVersion(),
     serverTime: new Date().toISOString(),
+    capabilities: V1_CAPABILITIES,
     ...(lastSyncAt ? { lastSyncAt } : {}),
     ...(bridgeHostsList ? { bridgeHosts: bridgeHostsList } : {}),
     ...(cloudExec ? { cloudExec } : {}),

@@ -2638,6 +2638,14 @@ export interface ListTasksSlimFilter extends ListTasksFilter {
    * instead. The detail pane lazy-loads the full content on focus.
    */
   minimal?: boolean;
+  /**
+   * Only rows that COULD be an agent's ask (GET /api/v1/asks): born one
+   * (`walnut_agent`), or filed under a project that could read "Ask <name>".
+   * A SUPERSET, never the rule: the caller runs `isAskOf` (ask-list.ts) as the
+   * final judge. It exists so one list request reads a few dozen rows instead of
+   * the whole table (~6.5k on a real board, 110-390ms of blocked event loop).
+   */
+  askCandidates?: boolean;
 }
 
 /**
@@ -2711,6 +2719,31 @@ export async function listTasksSlim(filter: ListTasksSlimFilter = {}): Promise<S
     }
   }
   if (filter.source) { where.push('source = @source'); params.source = filter.source; }
+  if (filter.askCandidates) {
+    // A SUPERSET of isAskOf, row by row, for every row taskToRow writes and for
+    // the foreign shapes rowToTask still reads:
+    //  - The stamp lives in the payload; `= 1` admits true (and 1, which isAskOf
+    //    then refuses). A payload SQLite cannot read but JSON.parse may (deeper
+    //    than SQLite's JSON depth limit, or malformed) passes whole (ELSE 1) for
+    //    the JS rule to judge; taskToRow never writes one, so it costs nothing.
+    //  - The project: isAskOf compares the JS trim().toLowerCase() of it with
+    //    "ask <name>". The only characters whose JS lower case is 'a' or 's' are
+    //    ASCII (LIKE folds ASCII case), the third may be any character ('_':
+    //    U+212A KELVIN SIGN lowers to 'k'), and the fourth is the literal space
+    //    askProjectFor writes. No anchor, since JS trim strips Unicode whitespace
+    //    that SQLite's trim does not. rowToTask takes a payload `project` key
+    //    when the column is NULL, so that key is matched the same way.
+    // Outside the proof: a payload the two parsers read differently (a key
+    // written twice: SQLite takes the first, JSON.parse the last), which
+    // JSON.stringify never writes.
+    where.push(
+      "((payload IS NOT NULL AND payload <> '' AND CASE WHEN json_valid(payload)"
+      + " THEN json_extract(payload, '$.walnut_agent') = 1"
+      + " OR (project IS NULL AND json_extract(payload, '$.project') LIKE '%as_ %')"
+      + ' ELSE 1 END)'
+      + " OR project LIKE '%as_ %')",
+    );
+  }
   const whereSql = where.length ? ' WHERE ' + where.join(' AND ') : '';
 
   const sql = `SELECT ${sqlCols} FROM tasks${whereSql} ORDER BY updated_at DESC`;

@@ -116,6 +116,7 @@ import { taskWaitV1Router } from './routes/task-wait-v1.js'
 import { messagesV1Router } from './routes/messages-v1.js'
 import { personalAiV1Router } from './routes/personal-ai-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
+import { asksV1Router } from './routes/asks-v1.js'
 import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
 import { sttV1Router, sttPayloadTooLargeHandler } from './routes/stt-v1.js'
 import { inboxPayloadTooLargeHandler } from './routes/human-inbox-v1.js'
@@ -1669,6 +1670,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Search/memory/notifications/favorites/notes utilities (additive, Wave 1).
   // Mixed classes: search 501 on replica, notifications B-relay, rest A.
   app.use('/api/v1', searchMemoryV1Router)
+  // One agent's asks, exactly as the web drawer lists them (additive,
+  // 2026-09): same rules module as the browser; B-class relay on a REPLICA.
+  app.use('/api/v1', asksV1Router)
   // Live events feed (additive): one SSE stream of slim task/session updates
   // for mobile — bus-fed on the primary, bridge-fed on a REPLICA. Started
   // unconditionally (one lifecycle-interest bus subscription — cheap even on
