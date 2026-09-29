@@ -63,6 +63,11 @@ async function openAt(
     await panel.locator('button[title="Expand to full screen"]').click()
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
   }
+  // Geometry is read once the page stops moving: a rect taken inside the
+  // fullscreen sheet's entrance (or a column's) is wherever the animation was.
+  await page.evaluate(() => Promise.all(document.getAnimations()
+    .filter((a) => a.playState === 'running' && a.effect?.getComputedTiming().endTime !== Infinity)
+    .map((a) => a.finished.catch(() => undefined))))
   return panel
 }
 
@@ -155,6 +160,14 @@ async function readingRow(panel: Locator): Promise<{ id: string; top: number }> 
 async function rowTop(panel: Locator, id: string): Promise<number> {
   return panel.locator('.session-history').evaluate((box, rid) =>
     box.querySelector(`[data-message-id="${CSS.escape(rid)}"]`)!.getBoundingClientRect().top, id)
+}
+
+/** The rail's list once its fade-in is over: opaque, so the text under it never
+ *  shows through (a shot taken inside the 100ms fade reads as a see-through list). */
+async function expectSettledOverlay(overlay: Locator): Promise<void> {
+  await overlay.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
+  expect(await overlay.evaluate((el) => getComputedStyle(el).opacity)).toBe('1')
+  expect(await overlay.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toMatch(/rgba\(.*,\s*0\)$|transparent/)
 }
 
 /** Relative luminance of a computed `rgb(...)` colour, 0 (black) to 1 (white). */
@@ -379,6 +392,7 @@ test.describe('Question map', () => {
     const overlay = map.locator('.thread-map-overlay')
     await expect(overlay).toBeVisible()
     await expect(rowNamed(overlay, MAP_TITLES.Q2)).toBeVisible()
+    await expectSettledOverlay(overlay)
     await shot(page, 'narrow-rail-open')
     const hb = (await panel.locator('.session-history').boundingBox())!
     await page.mouse.move(hb.x + hb.width * 0.7, hb.y + hb.height * 0.6)
@@ -687,6 +701,7 @@ test.describe('Question map', () => {
     const overlay = map.locator('.thread-map-overlay')
     await expect(overlay).toBeVisible()
     expect(luminance(await overlay.evaluate((el) => getComputedStyle(el).backgroundColor))).toBeLessThan(0.1)
+    await expectSettledOverlay(overlay)
     await shot(page, 'dark-narrow-open')
   })
 })
