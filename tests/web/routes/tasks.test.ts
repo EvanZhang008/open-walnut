@@ -8,8 +8,10 @@ import express from 'express';
 import request from 'supertest';
 import { tasksRouter } from '../../../src/web/routes/tasks.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
-import { addTask, linkSessionSlot, _resetForTesting } from '../../../src/core/task-manager.js';
+import { addTask, linkSession, linkSessionSlot, _resetForTesting } from '../../../src/core/task-manager.js';
 import { closeDb } from '../../../src/core/task-db.js';
+import { closeDb as closeSessionDb } from '../../../src/core/session-db.js';
+import { createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -25,12 +27,15 @@ function createApp() {
 // silently carries every previous test's rows into the next one.
 beforeEach(async () => {
   closeDb();
+  closeSessionDb();
+  _resetSessionTrackerForTesting();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
 afterEach(async () => {
   closeDb();
+  closeSessionDb();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -774,6 +779,7 @@ describe('DELETE /api/tasks/:id', () => {
 
   it('returns 409 when task has active session slots', async () => {
     const { task } = await addTask({ title: 'Active session task' });
+    await createSessionRecord('session-aaa', task.id, '', undefined, { initialProcessStatus: 'running' });
     await linkSessionSlot(task.id, 'session-aaa', 'exec');
 
     const app = createApp();
@@ -789,6 +795,8 @@ describe('DELETE /api/tasks/:id', () => {
 
   it('returns 409 with both slots occupied', async () => {
     const { task } = await addTask({ title: 'Multi session task' });
+    await createSessionRecord('sess-plan', task.id, '', undefined, { initialProcessStatus: 'idle' });
+    await createSessionRecord('sess-exec', task.id, '', undefined, { initialProcessStatus: 'running' });
     await linkSessionSlot(task.id, 'sess-plan', 'plan');
     await linkSessionSlot(task.id, 'sess-exec', 'exec');
 
@@ -798,6 +806,18 @@ describe('DELETE /api/tasks/:id', () => {
     expect(res.body.active_session_ids).toHaveLength(2);
     expect(res.body.active_session_ids).toContain('sess-plan');
     expect(res.body.active_session_ids).toContain('sess-exec');
+  });
+
+  it('deletes (204, no force) a task whose linked session has stopped', async () => {
+    const { task } = await addTask({ title: 'Ended session task' });
+    await createSessionRecord('sess-ended', task.id, '', undefined, { initialProcessStatus: 'stopped' });
+    await linkSession(task.id, 'sess-ended');
+
+    const app = createApp();
+    const res = await request(app).delete(`/api/tasks/${task.id}`);
+    expect(res.status).toBe(204);
+    const listRes = await request(app).get('/api/tasks');
+    expect(listRes.body.tasks).toHaveLength(0);
   });
 
   it('returns 404 for non-existent task', async () => {

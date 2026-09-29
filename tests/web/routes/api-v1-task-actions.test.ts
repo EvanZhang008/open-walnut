@@ -17,7 +17,9 @@ import request from 'supertest'
 import { taskV1Router } from '../../../src/web/routes/task-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { addTask, getTask, listTasks, _resetForTesting } from '../../../src/core/task-manager.js'
+import { addTask, getTask, listTasks, linkSession, linkSessionSlot, _resetForTesting } from '../../../src/core/task-manager.js'
+import { closeDb as closeSessionDb } from '../../../src/core/session-db.js'
+import { createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js'
 
 function createApp() {
   const app = express()
@@ -33,12 +35,15 @@ async function makeTask(title: string, extra: Record<string, unknown> = {}): Pro
 }
 
 beforeEach(async () => {
+  closeSessionDb()
+  _resetSessionTrackerForTesting()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   _resetForTesting()
 })
 
 afterEach(async () => {
+  closeSessionDb()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -94,6 +99,26 @@ describe('DELETE /api/v1/tasks/:id', () => {
     const res = await request(createApp()).delete('/api/v1/tasks/nope-nope')
     expect(res.status).toBe(404)
     expect(res.body.error.code).toBe('not_found')
+  })
+
+  it('204 without force when the linked session has stopped', async () => {
+    const id = await makeTask('Ended session')
+    await createSessionRecord('sess-v1-ended', id, '', undefined, { initialProcessStatus: 'stopped' })
+    await linkSession(id, 'sess-v1-ended')
+    const res = await request(createApp()).delete(`/api/v1/tasks/${id}`)
+    expect(res.status).toBe(204)
+    await expect(getTask(id)).rejects.toThrow(/No task found/)
+  })
+
+  it('409 conflict without force while a linked session is running', async () => {
+    const id = await makeTask('Running session')
+    await createSessionRecord('sess-v1-live', id, '', undefined, { initialProcessStatus: 'running' })
+    await linkSessionSlot(id, 'sess-v1-live', 'exec')
+    await linkSession(id, 'sess-v1-live')
+    const res = await request(createApp()).delete(`/api/v1/tasks/${id}`)
+    expect(res.status).toBe(409)
+    expect(res.body.error.code).toBe('conflict')
+    expect((await getTask(id)).id).toBe(id)
   })
 })
 

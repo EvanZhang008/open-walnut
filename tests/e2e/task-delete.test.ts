@@ -17,7 +17,13 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
-import { linkSessionSlot, clearSessionSlot } from '../../src/core/task-manager.js';
+import { linkSession, linkSessionSlot, clearSessionSlot } from '../../src/core/task-manager.js';
+import { createSessionRecord } from '../../src/core/session-tracker.js';
+
+/** The delete guard blocks only on a session that may still be running. */
+async function seedSession(sid: string, taskId: string, status: 'running' | 'idle' | 'stopped' = 'running'): Promise<void> {
+  await createSessionRecord(sid, taskId, '', undefined, { initialProcessStatus: status });
+}
 
 let server: HttpServer;
 let port: number;
@@ -104,6 +110,7 @@ describe('Task deletion — no active sessions', () => {
 describe('Task deletion — blocked by active sessions', () => {
   it('DELETE returns 409 when task has one active session', async () => {
     const task = await createTask('Has active session');
+    await seedSession('sess-block-1', task.id);
     await linkSessionSlot(task.id, 'sess-block-1', 'exec');
 
     const deleteRes = await fetch(apiUrl(`/api/tasks/${task.id}`), { method: 'DELETE' });
@@ -122,6 +129,8 @@ describe('Task deletion — blocked by active sessions', () => {
   it('DELETE returns 409 with multiple active session IDs', async () => {
     const task = await createTask('Has many sessions');
     // Use both slots (plan + exec) to have 2 active sessions
+    await seedSession('sess-multi-1', task.id, 'idle');
+    await seedSession('sess-multi-2', task.id);
     await linkSessionSlot(task.id, 'sess-multi-1', 'plan');
     await linkSessionSlot(task.id, 'sess-multi-2', 'exec');
 
@@ -136,6 +145,8 @@ describe('Task deletion — blocked by active sessions', () => {
 
   it('allows deletion after clearing all active sessions', async () => {
     const task = await createTask('Clear then delete');
+    await seedSession('sess-clear-1', task.id);
+    await seedSession('sess-clear-2', task.id);
     await linkSessionSlot(task.id, 'sess-clear-1', 'plan');
     await linkSessionSlot(task.id, 'sess-clear-2', 'exec');
 
@@ -155,11 +166,46 @@ describe('Task deletion — blocked by active sessions', () => {
     const listBody = await listRes.json() as { tasks: Array<{ id: string }> };
     expect(listBody.tasks.find((t) => t.id === task.id)).toBeUndefined();
   });
+
+  // Regression (2026-08-12): force-delete released only the plan/exec slots, so a
+  // task whose PRIMARY slot (session_id) was set re-threw ActiveSessionError on
+  // the retry and the route answered 500. Both delete routes must clear it.
+  for (const route of ['/api/tasks', '/api/v1/tasks']) {
+    it(`DELETE ${route}/:id?force=true deletes a task holding a primary session`, async () => {
+      const task = await createTask(`Force delete via ${route}`);
+      const sid = `sess-force-${route.replace(/\W+/g, '-')}`;
+      await seedSession(sid, task.id);
+      await linkSessionSlot(task.id, sid, 'exec');
+      await linkSession(task.id, sid);
+
+      // Running: a plain delete is refused, force stops the session and deletes.
+      const refused = await fetch(apiUrl(`${route}/${task.id}`), { method: 'DELETE' });
+      expect(refused.status).toBe(409);
+      const res = await fetch(apiUrl(`${route}/${task.id}?force=true`), { method: 'DELETE' });
+      expect(res.status).toBe(204);
+
+      const listRes = await fetch(apiUrl('/api/tasks'));
+      const listBody = await listRes.json() as { tasks: Array<{ id: string }> };
+      expect(listBody.tasks.find((t) => t.id === task.id)).toBeUndefined();
+    });
+
+    // A task keeps session_id after its session ends; a plain delete (the calendar's
+    // delete sends no force) must still succeed once the session has stopped.
+    it(`DELETE ${route}/:id without force deletes a task whose session has stopped`, async () => {
+      const task = await createTask(`Stopped session via ${route}`);
+      const sid = `sess-stopped-${route.replace(/\W+/g, '-')}`;
+      await seedSession(sid, task.id, 'stopped');
+      await linkSession(task.id, sid);
+
+      const res = await fetch(apiUrl(`${route}/${task.id}`), { method: 'DELETE' });
+      expect(res.status).toBe(204);
+    });
+  }
 });
 
 describe('Task deletion — error cases', () => {
-  it('returns 500 for non-existent task ID', async () => {
+  it('returns 404 for non-existent task ID', async () => {
     const deleteRes = await fetch(apiUrl('/api/tasks/does-not-exist'), { method: 'DELETE' });
-    expect(deleteRes.status).toBe(500);
+    expect(deleteRes.status).toBe(404);
   });
 });

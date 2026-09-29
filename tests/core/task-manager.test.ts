@@ -9,8 +9,10 @@ let configFile: string;
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 // Import after mocking
-import { addTask, addTaskFull, addTasksBulk, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkSession, linkSessionSlot, clearSessionSlot, ActiveSessionError, updateTask, autoPushIfConfigured, updateTaskRaw, getTask, _resetForTesting } from '../../src/core/task-manager.js';
+import { addTask, addTaskFull, addTasksBulk, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkSession, linkSessionSlot, clearSessionSlot, clearSession, ActiveSessionError, updateTask, autoPushIfConfigured, updateTaskRaw, getTask, _resetForTesting } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
+import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
+import * as sessionTracker from '../../src/core/session-tracker.js';
 import { log } from '../../src/logging/index.js';
 import { WALNUT_HOME, TASKS_FILE, CONFIG_FILE } from '../../src/constants.js';
 
@@ -20,14 +22,27 @@ beforeEach(async () => {
   configFile = CONFIG_FILE;
   // Clean temp directory
   closeDb();
+  closeSessionDb();
+  sessionTracker._resetSessionTrackerForTesting();
   _resetForTesting();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   closeDb();
+  closeSessionDb();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
+
+/** A session record in `status`: the delete guard only blocks on a live one. */
+async function seedSession(
+  sessionId: string,
+  taskId: string,
+  status: 'running' | 'idle' | 'stopped' | 'error' = 'running',
+): Promise<void> {
+  await sessionTracker.createSessionRecord(sessionId, taskId, '', undefined, { initialProcessStatus: status });
+}
 
 describe('addTask', () => {
   it('creates a task with correct default fields', async () => {
@@ -445,6 +460,8 @@ describe('deleteTask', () => {
 
   it('throws ActiveSessionError when task has active session slots', async () => {
     const { task } = await addTask({ title: 'Has sessions' });
+    await seedSession('session-abc', task.id, 'running');
+    await seedSession('session-def', task.id, 'idle');
     await linkSessionSlot(task.id, 'session-abc', 'plan');
     await linkSessionSlot(task.id, 'session-def', 'exec');
 
@@ -465,6 +482,7 @@ describe('deleteTask', () => {
 
   it('allows deletion after clearing session slots', async () => {
     const { task } = await addTask({ title: 'Clear then delete' });
+    await seedSession('session-xyz', task.id, 'running');
     await linkSessionSlot(task.id, 'session-xyz', 'exec');
 
     // Should fail with active session
@@ -479,6 +497,54 @@ describe('deleteTask', () => {
 
     const tasks = await listTasks({});
     expect(tasks).toHaveLength(0);
+  });
+
+  // A task keeps its primary session_id after the session ends, so the guard asks
+  // the session store: a session that cannot be running must not block a plain
+  // (non-force) delete, or every task whose CLI died stays undeletable.
+  it('does not block on a stopped, errored, archived or unknown session', async () => {
+    const { task } = await addTask({ title: 'Dead sessions' });
+    await seedSession('sess-dead-primary', task.id, 'stopped');
+    await seedSession('sess-dead-exec', task.id, 'error');
+    await seedSession('sess-dead-plan', task.id, 'idle');
+    await sessionTracker.updateSessionRecord('sess-dead-plan', { archived: true });
+    await linkSessionSlot(task.id, 'sess-dead-plan', 'plan');
+    await linkSessionSlot(task.id, 'sess-dead-exec', 'exec');
+    await linkSession(task.id, 'sess-dead-primary');
+
+    const { task: deleted } = await deleteTask(task.id);
+    expect(deleted.id).toBe(task.id);
+
+    const { task: orphan } = await addTask({ title: 'Unknown session' });
+    await linkSession(orphan.id, 'sess-no-record');
+    const { task: gone } = await deleteTask(orphan.id);
+    expect(gone.id).toBe(orphan.id);
+    expect(await listTasks({})).toHaveLength(0);
+  });
+
+  it('a live session still blocks, and only live ids are reported', async () => {
+    const { task } = await addTask({ title: 'One live, one dead' });
+    await seedSession('sess-old', task.id, 'stopped');
+    await seedSession('sess-live', task.id, 'running');
+    await linkSession(task.id, 'sess-old');
+    await linkSessionSlot(task.id, 'sess-live', 'exec');
+
+    const err = await deleteTask(task.id).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ActiveSessionError);
+    expect((err as ActiveSessionError).activeSessionIds).toEqual(['sess-live']);
+    expect(await listTasks({})).toHaveLength(1);
+  });
+
+  // Fail closed: when the session store cannot be read, no linked session is
+  // proven stopped, so the delete waits instead of racing a CLI that may be live.
+  it('an unreadable session store blocks the delete', async () => {
+    const { task } = await addTask({ title: 'Store down' });
+    await seedSession('sess-stopped-but-unreadable', task.id, 'stopped');
+    await linkSession(task.id, 'sess-stopped-but-unreadable');
+    vi.spyOn(sessionTracker, 'getSessionByClaudeId').mockRejectedValue(new Error('SQLITE_CANTOPEN'));
+
+    await expect(deleteTask(task.id)).rejects.toThrow(ActiveSessionError);
+    expect(await listTasks({})).toHaveLength(1);
   });
 
   it('does not affect other tasks when deleting', async () => {
@@ -538,17 +604,34 @@ describe('linkSessionSlot / clearSessionSlot', () => {
     expect(updated.exec_session_id).toBeUndefined();
   });
 
-  // Regression (2026-08-12): the primary slot (session_id, set by linkSession /
-  // quick-start) was never cleared by clearSessionSlot(taskId, sessionId), so
-  // force-delete's stop→clear→retry loop re-threw ActiveSessionError forever
-  // (HTTP 500 on DELETE ?force=true).
-  it('clears the primary session_id slot by session id', async () => {
+  // clearSessionSlot(taskId, sessionId) is what every terminal-status path
+  // (runner result, reconciler, health monitor) calls when a session stops or
+  // errors. It releases the plan/exec slot but must keep the task's durable
+  // primary link, or a task forgets its conversation the moment its CLI dies.
+  it('keeps the primary session_id when releasing a session by id', async () => {
     const { task } = await addTask({ title: 'Primary slot' });
+    await linkSessionSlot(task.id, 'sess-primary', 'exec');
     await linkSession(task.id, 'sess-primary');
     const { task: updated } = await clearSessionSlot(task.id, 'sess-primary');
 
-    expect(updated.session_id).toBeUndefined();
-    // deletion must now succeed (this was the force-delete 500)
+    expect(updated.exec_session_id).toBeUndefined();
+    expect(updated.session_id).toBe('sess-primary');
+    expect(updated.session_ids).toContain('sess-primary');
+  });
+
+  // Regression (2026-08-12): force-delete released only the plan/exec slots, so
+  // deleteTask's guard (which reads session_id too) re-threw ActiveSessionError
+  // forever (HTTP 500 on DELETE ?force=true). The force paths pair
+  // clearSessionSlot with clearSession; together they make the task deletable.
+  it('clearSessionSlot + clearSession release every slot deleteTask guards', async () => {
+    const { task } = await addTask({ title: 'Primary slot delete' });
+    await seedSession('sess-primary', task.id, 'running');
+    await linkSessionSlot(task.id, 'sess-primary', 'exec');
+    await linkSession(task.id, 'sess-primary');
+    await expect(deleteTask(task.id)).rejects.toThrow(ActiveSessionError);
+
+    await clearSessionSlot(task.id, 'sess-primary');
+    await clearSession(task.id, 'sess-primary');
     const { task: deleted } = await deleteTask(task.id);
     expect(deleted.id).toBe(task.id);
   });

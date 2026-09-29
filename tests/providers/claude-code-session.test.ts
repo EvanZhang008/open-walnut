@@ -1146,11 +1146,11 @@ describe('End-to-end session flow', () => {
     const { getTask } = await import('../../src/core/task-manager.js');
     const task = await getTask('e2e-task-001');
     expect(task.session_ids).toContain(sessionId);
-    // The legacy primary slot is not durable: the mock CLI exits after its result,
-    // and a session that ends 'stopped' releases every slot, session_id included
-    // (clearSessionSlot: a leftover session_id blocked force-delete, 2026-08-12).
-    // The UI then resolves the task's session from session_ids.
-    expect([undefined, sessionId]).toContain(task.session_id);
+    // The primary slot survives too. The stopped-session release clears only the
+    // plan/exec slots: session_id is what the task's phase edges and hooks name as
+    // "the task's session" (TASK_PHASE_CHANGED carries task.session_id), so a
+    // session that died must stay named there. Force-delete clears it explicitly.
+    expect(task.session_id).toBe(sessionId);
   });
 
   it('session:result carries all fields needed by frontend', async () => {

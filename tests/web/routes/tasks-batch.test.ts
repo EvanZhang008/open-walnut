@@ -25,6 +25,8 @@ import { tasksRouter } from '../../../src/web/routes/tasks.js';
 import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { addTask, getTask, listTasks, linkSession, _resetForTesting } from '../../../src/core/task-manager.js';
 import { closeDb } from '../../../src/core/task-db.js';
+import { closeDb as closeSessionDb } from '../../../src/core/session-db.js';
+import { createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 
 function createApp() {
@@ -37,12 +39,15 @@ function createApp() {
 
 beforeEach(async () => {
   closeDb();
+  closeSessionDb();
+  _resetSessionTrackerForTesting();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
 afterEach(async () => {
   closeDb();
+  closeSessionDb();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -179,6 +184,7 @@ describe('POST /api/tasks/batch/delete', () => {
 
   it('returns 200 with failed[] for a task with an active session — the rest still delete', async () => {
     const [busy, free] = await makeTasks(['Busy', 'Free']);
+    await createSessionRecord('sess-route-batch', busy, 'Marina', undefined, { initialProcessStatus: 'running' });
     await linkSession(busy, 'sess-route-batch');
 
     const res = await request(createApp())
@@ -195,6 +201,7 @@ describe('POST /api/tasks/batch/delete', () => {
 
   it('force=true deletes a task with an active session', async () => {
     const [busy] = await makeTasks(['Busy']);
+    await createSessionRecord('sess-route-batch-force', busy, 'Marina', undefined, { initialProcessStatus: 'running' });
     await linkSession(busy, 'sess-route-batch-force');
 
     const res = await request(createApp())

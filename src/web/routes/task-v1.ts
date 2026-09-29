@@ -174,6 +174,7 @@ taskV1Router.delete('/tasks/:id', async (req: Request, res: Response, next: Next
         await completeTaskSessions(err.activeSessionIds)
         for (const sid of err.activeSessionIds) {
           try { await tm.clearSessionSlot(id, sid) } catch { /* best-effort */ }
+          try { await tm.clearSession(id, sid) } catch { /* best-effort */ }
         }
         const result = await tm.deleteTask(id)
         log.web.info('task force-deleted via api-v1 (stopped sessions)', { taskId: id, stoppedSessions: err.activeSessionIds.length })

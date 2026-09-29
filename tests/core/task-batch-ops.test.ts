@@ -28,16 +28,21 @@ import {
   _resetForTesting,
 } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
+import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
+import { createSessionRecord, _resetSessionTrackerForTesting } from '../../src/core/session-tracker.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 
 beforeEach(async () => {
   closeDb();
+  closeSessionDb();
+  _resetSessionTrackerForTesting();
   _resetForTesting();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
 afterEach(async () => {
   closeDb();
+  closeSessionDb();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -196,6 +201,7 @@ describe('deleteTasksByIds', () => {
 
   it('skips a task with an active session but still deletes the rest', async () => {
     const [busy, free] = await makeTasks(['Busy', 'Free']);
+    await createSessionRecord('sess-batch-1', busy, 'Marina', undefined, { initialProcessStatus: 'running' });
     await linkSession(busy, 'sess-batch-1');
 
     const { deleted, failed } = await deleteTasksByIds([busy, free]);
@@ -206,6 +212,18 @@ describe('deleteTasksByIds', () => {
     expect(failed[0].error).toMatch(/active session/i);
     // The busy task survives.
     expect((await listTasks()).map((t) => t.id)).toEqual([busy]);
+  });
+
+  it('deletes a task whose only linked session has stopped (same rule as deleteTask)', async () => {
+    const [ended] = await makeTasks(['Ended']);
+    await createSessionRecord('sess-batch-ended', ended, 'Marina', undefined, { initialProcessStatus: 'stopped' });
+    await linkSession(ended, 'sess-batch-ended');
+
+    const { deleted, failed } = await deleteTasksByIds([ended]);
+
+    expect(failed).toEqual([]);
+    expect(deleted.map((t) => t.id)).toEqual([ended]);
+    expect(await listTasks()).toHaveLength(0);
   });
 
   it('reports unknown ids without touching the valid ones', async () => {

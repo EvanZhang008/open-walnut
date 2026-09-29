@@ -180,6 +180,9 @@ describe('Part 1: Typed session slots', () => {
     const taskId = task.id as string;
 
     const { linkSessionSlot } = await import('../../src/core/task-manager.js');
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js');
+    // The guard blocks only on a session that may still be running.
+    await createSessionRecord('guard-session', taskId, 'work', undefined, { initialProcessStatus: 'running' });
     await linkSessionSlot(taskId, 'guard-session', 'exec');
 
     const res = await fetch(apiUrl(`/api/tasks/${taskId}`), { method: 'DELETE' });

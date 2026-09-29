@@ -4584,12 +4584,58 @@ export class CircularDependencyError extends Error {
   }
 }
 
+function slotSessionIds(task: Task): string[] {
+  return [task.session_id, task.plan_session_id, task.exec_session_id].filter(Boolean) as string[];
+}
+
+/**
+ * The linked session ids that provably cannot be running, so a delete need not
+ * wait on them: the record is missing, archived, stopped or error. A task keeps
+ * its primary session_id after the session ends (the durable link to its
+ * conversation), so the delete guard asks the session store instead of treating
+ * every linked id as active.
+ *
+ * An unreadable session store proves nothing, so the answer is the empty set and
+ * every linked id keeps blocking (fail closed): a delete that cannot tell whether
+ * a CLI is still working in the task must not remove the task from under it.
+ * ?force=true stays the way out, since it stops the sessions first.
+ *
+ * Callers read this BEFORE the task write lock: session-tracker has its own store
+ * and the two locks must never nest. An id that reaches a slot after this read is
+ * not in the set, so it blocks.
+ */
+async function sessionIdsProvenStopped(ids: string[]): Promise<Set<string>> {
+  const stopped = new Set<string>();
+  if (ids.length === 0) return stopped;
+  try {
+    const { getSessionByClaudeId } = await import('./session-tracker.js');
+    for (const id of new Set(ids)) {
+      const record = await getSessionByClaudeId(id);
+      if (!record || record.archived
+        || record.process_status === 'stopped' || record.process_status === 'error') {
+        stopped.add(id);
+      }
+    }
+  } catch (err) {
+    log.task.warn('delete guard: session store unreadable, linked sessions count as active', {
+      sessionIds: ids,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return new Set();
+  }
+  return stopped;
+}
+
 /**
  * Delete a task by partial ID match.
- * Throws ActiveSessionError if the task has active sessions.
+ * Throws ActiveSessionError if a linked session may still be running (see
+ * sessionIdsProvenStopped: a stopped, errored or archived session does not block).
  * Fire-and-forget deletes from MS To-Do / external plugins if applicable.
  */
 export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
+  let linkedIds: string[] = [];
+  try { linkedIds = slotSessionIds(await getTask(idPrefix)); } catch { /* the locked read below reports it */ }
+  const stoppedIds = await sessionIdsProvenStopped(linkedIds);
   const result = await withWriteLock(async () => {
   const store = await readStore();
   const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
@@ -4605,8 +4651,8 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
 
   const task = matches[0];
 
-  // Block deletion if task has active session slots
-  const activeIds = [task.session_id, task.plan_session_id, task.exec_session_id].filter(Boolean) as string[];
+  // Block deletion while a linked session may still be running
+  const activeIds = slotSessionIds(task).filter((id) => !stoppedIds.has(id));
   if (activeIds.length > 0) {
     throw new ActiveSessionError(task.id, activeIds);
   }
@@ -4709,8 +4755,10 @@ export async function deleteTasksByIds(
 
   const failed = [...resolved.skipped];
   const targets: Task[] = [];
+  // Same rule as deleteTask: only a session that may still be running blocks.
+  const stoppedIds = await sessionIdsProvenStopped(resolved.found.flatMap(slotSessionIds));
   for (const task of resolved.found) {
-    const activeIds = [task.session_id, task.plan_session_id, task.exec_session_id].filter(Boolean) as string[];
+    const activeIds = slotSessionIds(task).filter((id) => !stoppedIds.has(id));
     if (activeIds.length === 0) { targets.push(task); continue; }
     if (!opts?.force) {
       failed.push({ id: task.id, title: task.title, ok: false, error: new ActiveSessionError(task.id, activeIds).message });
@@ -5847,8 +5895,9 @@ export async function linkSessionSlot(
 /**
  * Clear a session slot from a task by partial ID match.
  * If sessionId is provided, only clears the slot if it matches that session.
- * If slot is omitted, clears whichever slot matches the sessionId.
- * If neither sessionId nor slot is provided, clears both slots.
+ * If slot is omitted, clears whichever plan/exec slot matches the sessionId;
+ * the primary session_id is kept (clearSession() owns it).
+ * If neither sessionId nor slot is provided, clears every slot, primary included.
  */
 export async function clearSessionSlot(
   idPrefix: string,
@@ -5871,14 +5920,13 @@ export async function clearSessionSlot(
   const task = matches[0];
 
   if (sessionId) {
-    // Clear the specific session from whichever slot it occupies. The legacy
-    // primary slot (session_id) must clear too — deleteTask's active-session
-    // check reads all three slots, so leaving it set made force-delete loop
-    // into the same ActiveSessionError forever (2026-08-12: 8 stress-test
-    // tasks undeletable with 500 despite ?force=true).
-    if (task.session_id === sessionId && !slot) {
-      task.session_id = undefined;
-    }
+    // Clear the specific session from whichever plan/exec slot it occupies.
+    // The primary slot (session_id) is deliberately left alone: it is the
+    // task's durable link to its conversation, and the terminal-status callers
+    // (runner result handler, reconciler, health monitor) call this for every
+    // stopped/error session. Clearing it here unlinked every task whose session
+    // had ever died. A caller that must drop the primary link as well (archive,
+    // retry, force-delete) pairs this call with clearSession().
     if (task.plan_session_id === sessionId && (!slot || slot === 'plan')) {
       task.plan_session_id = undefined;
     }

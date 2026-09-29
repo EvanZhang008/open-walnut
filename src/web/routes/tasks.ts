@@ -1458,10 +1458,13 @@ tasksRouter.delete('/:id', async (req: Request, res: Response, next: NextFunctio
       if (err instanceof ActiveSessionError && force) {
         // Force mode: stop sessions and retry
         const { completeTaskSessions } = await import('../../core/session-tracker.js')
-        const { clearSessionSlot } = await import('../../core/task-manager.js')
+        const { clearSessionSlot, clearSession } = await import('../../core/task-manager.js')
         await completeTaskSessions(err.activeSessionIds)
+        // Release every slot deleteTask guards: plan/exec AND the primary
+        // session_id, or the retry below throws the same ActiveSessionError.
         for (const sid of err.activeSessionIds) {
           try { await clearSessionSlot(id, sid) } catch { /* best-effort */ }
+          try { await clearSession(id, sid) } catch { /* best-effort */ }
         }
         const result = await deleteTask(id)
         log.web.info('task force-deleted via REST (stopped sessions)', { taskId: id, stoppedSessions: err.activeSessionIds.length })
