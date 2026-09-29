@@ -1,0 +1,10 @@
+Timestamp               Ty Process[PID:TID]
+2026-03-10 03:05:00.500 Df kernel[0:6dc588] tcp_connection_summary (tcp_close:1820)[<IPv4-redacted>:60945<-><IPv4-redacted>:443] interface: en0 (skipped: 100)
+so_gencnt: 1001 t_state: ESTABLISHED process: daemon-darwin-ar:4242 Duration: 300.200 sec Conn_Time: 0.036 sec bytes in/out: 5120/2400000 pkts in/out: 151/1944 pkt rxmit: 429 ooo pkts: 0 dup bytes in: 0 ACKs delayed: 40 delayed ACKs sent: 0
+rtt: 130.062 ms rttvar: 4.312 ms base rtt: 33 ms so_error: 54 svc/tc: 0 flow: 0x1
+2026-03-10 03:05:00.500 Df kernel[0:6dc588] tcp_connection_summary [<IPv4-redacted>:60945<-><IPv4-redacted>:443] interface: en0 (skipped: 100)
+so_gencnt: 1001 t_state: ESTABLISHED process: daemon-darwin-ar:4242 flowctl: 0us (0x) SYN in/out: 1/1 FIN in/out: 0/0 RST in/out: 1/0 AccECN (client/server): Disabled/Disabled
+Timestamp               Ty Process[PID:TID]
+2026-03-10 03:10:00.100 Df kernel[0:6dc588] tcp_connection_summary (tcp_usrclosed:3259)[<IPv4-redacted>:65184<-><IPv4-redacted>:443] interface: en0 (skipped: 100)
+so_gencnt: 1002 t_state: LAST_ACK process: daemon-darwin-ar:4242 Duration: 33.463 sec Conn_Time: 0.185 sec bytes in/out: 297119/1400774 pkts in/out: 36/144 pkt rxmit: 0 ooo pkts: 0 dup bytes in: 0 ACKs delayed: 2 delayed ACKs sent: 1
+rtt: 43.750 ms rttvar: 1.250 ms base rtt: 33 ms so_error: 0 svc/tc: 0 flow: 0x2

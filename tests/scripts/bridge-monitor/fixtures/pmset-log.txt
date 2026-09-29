@@ -1,0 +1,9 @@
+2026-03-10 02:59:00 -0700 Assertions          	PID 123(SomeApp) Created PreventUserIdleSystemSleep "x" 00:00:00  id:0x1 [System: PrevIdle]
+2026-03-10 03:00:00 -0700 Notification        	Display is turned off                                                      
+2026-03-10 03:00:05 -0700 Sleep               	Entering Sleep state due to 'Clamshell Sleep':TCPKeepAlive=active Using AC (Charge:100%) 9 secs    
+2026-03-10 03:00:06 -0700 Wake Requests       	[process=dasd request=SleepService deltaSecs=900 info="com.example.task"]
+2026-03-10 03:02:00 -0700 DarkWake            	DarkWake from Deep Idle [CDNP] : due to smc.sysState.Wake Using AC 
+2026-03-10 03:02:30 -0700 Sleep               	Entering Sleep state due to 'Maintenance Sleep':TCPKeepAlive=active Using AC (Charge:100%) 30 secs
+2026-03-10 03:02:31 -0700 Wake Requests       	[process=dasd request=SleepService deltaSecs=900 info="com.example.task"]
+2026-03-10 03:10:00 -0700 Wake                	Wake from Deep Idle [CDNVA] : due to smc.sysState.Wake lid Using BATT (Charge:99%)           
+2026-03-10 03:10:01 -0700 Notification        	Display is turned on

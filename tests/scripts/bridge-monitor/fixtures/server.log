@@ -1,0 +1,7 @@
+{"time":"2026-03-10T10:04:58.000Z","level":"info","subsystem":"session","message":"DaemonConnection: bridge config pushed","host":"__local__"}
+{"time":"2026-03-10T10:05:00.900Z","level":"warn","subsystem":"session","message":"DaemonConnection: WebSocket closed","host":"devbox","wsUrl":"ws://127.0.0.1:50000","localDaemonPidAlive":null}
+{"time":"2026-03-10T10:05:00.950Z","level":"warn","subsystem":"session","message":"DaemonConnection: connection lost, scheduling reconnect","host":"devbox"}
+{"time":"2026-03-10T10:05:02.000Z","level":"warn","subsystem":"session","message":"DaemonConnection: SSH tunnel died","host":"devbox"}
+{"time":"2026-03-10T10:05:09.000Z","level":"info","subsystem":"session","message":"DaemonConnection: SSH tunnel created","host":"devbox"}
+{"time":"2026-03-10T10:39:59.000Z","level":"warn","subsystem":"session","message":"DaemonConnection: connection lost, scheduling reconnect","host":"__local__"}
+{"time":"2026-03-10T10:41:00.000Z","level":"info","subsystem":"web","message":"request done","status":200}

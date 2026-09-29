@@ -1,0 +1,25 @@
+Wi-Fi:
+
+      Software Versions:
+          CoreWLAN: 16.0 (1657)
+      Interfaces:
+        en0:
+          Card Type: Wi-Fi  (0x14E4, 0x4388)
+          Status: Connected
+          Current Network Information:
+            <redacted>:
+              PHY Mode: 802.11ax
+              Channel: 36 (5GHz, 80MHz)
+              Country Code: US
+              Network Type: Infrastructure
+              Security: WPA3 Personal
+              Signal / Noise: -66 dBm / -94 dBm
+              Transmit Rate: 432
+              MCS Index: 3
+          Other Local Wi-Fi Networks:
+            ExampleNeighbor:
+              Channel: 6 (2GHz, 20MHz)
+        awdl0:
+          MAC Address: 02:00:00:00:00:02
+          Current Network Information:
+              Network Type: Infrastructure

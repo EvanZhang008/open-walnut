@@ -1,0 +1,13 @@
+{
+  "bridgeUrl": null,
+  "daemonLogDir": "/tmp/open-walnut",
+  "serverLogDir": "/tmp/open-walnut",
+  "retentionDays": 14,
+  "publicIp": { "url": "https://api.ipify.org", "everyMin": 5 },
+  "tcp": { "everyMin": 15, "windowMin": 20, "processNames": ["daemon-darwin"] },
+  "heavy": { "busySlots": null, "maxPressureLevel": 4 },
+  "inbox": { "api": "http://127.0.0.1:3456", "enabled": true },
+  "alert": { "enabled": true, "maxDropsPer10Min": 3, "outageSec": 60, "cooldownMin": 30, "maxPerDay": 6, "includeSleep": false },
+  "replicaLogDir": null,
+  "probe": { "enabled": false, "url": null, "tokenFile": null, "hostAlias": "probe", "burstPhaseSec": "auto" }
+}

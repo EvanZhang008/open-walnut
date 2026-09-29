@@ -1,0 +1,8 @@
+<dictionary> {
+  BSSID : <redacted>
+  InterfaceType : WiFi
+  LinkStatusActive : TRUE
+  NetworkID : <redacted>
+  SSID : <redacted>
+  Security : WPA3_SAE
+}

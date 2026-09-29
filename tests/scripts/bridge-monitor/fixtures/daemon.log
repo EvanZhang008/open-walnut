@@ -1,0 +1,15 @@
+{"ts":"2026-03-10T10:00:00.100Z","level":"info","msg":"bridge: starting","instanceId":"d-100-aaaa","reason":"startup","url":"wss://bridge.example.test/bridge","hostAlias":"__local__"}
+{"ts":"2026-03-10T10:00:00.300Z","level":"info","msg":"bridge-conn-open","connId":"c-1","dialMs":180}
+{"ts":"2026-03-10T10:00:00.310Z","level":"info","msg":"bridge: connected","instanceId":"d-100-aaaa","hostAlias":"__local__","wsId":1}
+{"ts":"2026-03-10T10:04:59.800Z","level":"info","msg":"bridge: configured","instanceId":"d-100-aaaa","enabled":true,"hostAlias":"__local__","changed":false,"restarted":false}
+{"ts":"2026-03-10T10:05:00.500Z","level":"info","msg":"bridge-conn-close","connId":"c-1","uptimeMs":300190,"code":1006,"reason":"","wasClean":false,"lastError":"ECONNRESET","bytesIn":5120,"bytesOut":2400000,"framesIn":22,"framesOut":40,"maxOutFrameBytes":1900000,"maxOutFrameKind":"jsonl","bufferedAmountPeak":65536,"bufferedAmountAtClose":0,"lastInboundAgeMs":900,"rttMsP50":35,"rttMsMax":180,"loopDriftMax60sMs":12,"loopDriftMax5sMs":3}
+{"ts":"2026-03-10T10:05:00.510Z","level":"info","msg":"bridge: disconnected \u2014 redialing","instanceId":"d-100-aaaa","nextBackoffMs":1000}
+{"ts":"2026-03-10T10:05:01.700Z","level":"info","msg":"bridge: connected","instanceId":"d-100-aaaa","hostAlias":"__local__","wsId":2}
+{"ts":"2026-03-10T10:20:00.000Z","level":"warn","msg":"bridge: inbound silence \u2014 tearing down","instanceId":"d-100-aaaa","silentMs":98000}
+{"ts":"2026-03-10T10:20:00.020Z","level":"info","msg":"bridge: disconnected \u2014 redialing","instanceId":"d-100-aaaa","nextBackoffMs":1000}
+{"ts":"2026-03-10T10:20:21.000Z","level":"warn","msg":"bridge: dial timeout \u2014 abandoning socket","instanceId":"d-100-aaaa","dialMs":20000}
+{"ts":"2026-03-10T10:22:30.000Z","level":"info","msg":"bridge: connected","instanceId":"d-100-aaaa","hostAlias":"__local__","wsId":3}
+{"ts":"2026-03-10T10:30:00.000Z","level":"info","msg":"client connected","instanceId":"d-100-aaaa","wsId":4}
+not json at all, mentions "bridge
+{"ts":"2026-03-10T10:40:00.000Z","level":"info","msg":"bridge: starting","instanceId":"d-200-bbbb","reason":"startup","token":"must-never-be-copied"}
+{"ts":"2026-03-10T10:40:00.200Z","level":"info","msg":"bridge: connected","instanceId":"d-200-bbbb","hostAlias":"__local__","wsId":1}

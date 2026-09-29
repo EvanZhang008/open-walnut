@@ -1,0 +1,6 @@
+   route to: 203.0.113.10
+destination: default
+       mask: default
+    gateway: 10.0.0.1
+  interface: en0
+      flags: <UP,GATEWAY,DONE,STATIC,PRCLONING,GLOBAL>

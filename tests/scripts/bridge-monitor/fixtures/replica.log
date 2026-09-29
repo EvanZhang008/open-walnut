@@ -1,0 +1,6 @@
+{"time":"2026-03-10T10:00:00.400Z","level":"info","subsystem":"ws","message":"bridge: host connected","hostAlias":"__local__","deviceName":"bridge-local","version":"v1","sids":3}
+{"time":"2026-03-10T10:05:00.900Z","level":"info","subsystem":"ws","message":"bridge: host disconnected","hostAlias":"__local__","reason":"socket closed"}
+{"time":"2026-03-10T10:05:00.950Z","level":"info","subsystem":"ws","message":"bridge: host closed","hostAlias":"__local__","code":1006,"reason":"","wsError":"read ECONNRESET","initiator":"client","bytesRead":1024,"bytesWritten":4096,"maxInFrameBytes":1900000,"pendingRpcs":0,"clientIp":"198.51.100.7","loopP99Ms":40}
+{"time":"2026-03-10T10:05:01.800Z","level":"info","subsystem":"ws","message":"bridge: host connected","hostAlias":"__local__","deviceName":"bridge-local","version":"v1","sids":3}
+{"time":"2026-03-10T10:05:30.000Z","level":"info","subsystem":"ws","message":"bridge: host connected","hostAlias":"probe","deviceName":"bridge-probe","version":"p1","sids":0}
+{"time":"2026-03-10T10:07:00.000Z","level":"info","subsystem":"ws","message":"cloud ws upgrade authenticated","name":"bridge-local","kind":"machine"}

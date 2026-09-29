@@ -1,0 +1,19 @@
+Network information
+
+IPv4 network interface information
+     en0 : flags      : 0x7 (IPv4,IPv6,DNS)
+           address    : 10.0.0.2
+           reach      : 0x00000002 (Reachable)
+   utun7 : flags      : 0x5 (IPv4,DNS)
+           address    : 10.99.0.2
+           reach      : 0x00000003 (Transient Connection,Reachable)
+
+   REACH : flags 0x00000002 (Reachable)
+
+IPv6 network interface information
+   No IPv6 states found
+
+
+   REACH : flags 0x00000000 (Not Reachable)
+
+Network interfaces: en0 utun7

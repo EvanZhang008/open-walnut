@@ -1,0 +1,8 @@
+<dictionary> {
+  PrimaryInterface : en0
+  PrimaryService : 00000000-0000-0000-0000-000000000001
+  Router : 10.0.0.1
+}
+  subKey [0] = State:/Network/Interface/en0/IPv4
+  subKey [1] = State:/Network/Interface/lo0/IPv4
+  subKey [2] = State:/Network/Interface/utun7/IPv4
