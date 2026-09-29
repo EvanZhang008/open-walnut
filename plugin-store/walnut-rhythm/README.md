@@ -2,7 +2,7 @@
 
 Focus blocks and movement breaks for Walnut. Rhythm does three things:
 
-- **A stand-up reminder that knows when you are at the keyboard.** After an hour of continuous keyboard time it asks you to stand up, with Done and Snooze buttons. Time you spent away already counts as moving, so it never nags someone who just came back from a walk.
+- **A stand-up reminder that knows when you are at the keyboard.** After an hour of continuous keyboard time it asks you to stand up, with Start break and Snooze buttons. Start break counts a short break down in the sidebar, and the sitting count starts when it ends. Time you spent away already counts as moving, so it never nags someone who just came back from a walk.
 - **A focus block (a pomodoro) tied to a task.** Pick a task, start 25 minutes, and the block's minutes are logged on that task when it ends. Then a short break, and a long break every fourth block.
 - **Quiet while you focus.** Walnut quiet mode stays on for the length of a block, and it can follow the Mac's own Focus as well.
 
@@ -20,11 +20,13 @@ The sitting streak works like the chapters in Time: a gap of `away_reset_minutes
 
 | Moment | What Rhythm does |
 |---|---|
-| An hour at the keyboard | "Time to stand up" reminder with **Done** and **Snooze 10 min**. Ignored, it comes back after another hour. |
+| All the time you sit | A small ring at the bottom of the sidebar, above Voice, fills up toward the next reminder. Click it for **Stand up now** (starts the stand-up break) or **Start focus block**. |
+| An hour at the keyboard | The ring turns orange and a "Stand up" reminder appears with **Start break** and **Snooze 10 min**. Ignored, it comes back after another hour. |
+| You press Start break (or Stand up now) | The ring turns green and counts down the stand-up break (`stand_break_minutes`, 10 by default). **End break** ends it early. When it runs out, a "Break over" notice sounds and the ring starts filling toward the next stand-up. |
 | You walk away while it is waiting | The reminder is withdrawn and counted as a break taken. |
-| A focus block starts | Walnut quiet mode on until the block ends (and macOS Do Not Disturb, if you turned that on). |
+| A focus block starts | Walnut quiet mode on until the block ends (and macOS Do Not Disturb, if you turned that on). The ring turns blue and counts the block down. |
 | The block ends | Quiet off, the minutes logged on the task, and "Focus block done, stand up" with **Start break**, **Skip break** and **Another block**. |
-| The break ends | "Break over" with **Start next block** and **Stop**. |
+| The block's break ends | "Break over" with **Start next block** and **Done for today**. |
 
 The stand-up reminder waits during a focus block (the block's own break handles it), inside quiet hours, and while Walnut quiet mode is on. It fires once they end if you are still sitting.
 
@@ -37,6 +39,7 @@ All keys live under `plugins.walnut-rhythm` and show up in Settings, Plugins, Rh
 | `reminder_every_minutes` | 60 | Keyboard minutes before the stand-up reminder (15 to 240). |
 | `away_reset_minutes` | 5 | This long with no attention counts as a break, and the count starts over. |
 | `snooze_minutes` | 10 | How long Snooze waits. |
+| `stand_break_minutes` | 10 | Length of the stand-up break that Start break and Stand up now count down (1 to 60). |
 | `quiet_hours` | `22:00-08:00` | Local window with no stand-up reminders. Empty turns it off. Windows across midnight work. |
 | `defer_for_natural_pause_minutes` | 5 | Longest wait for an agent turn to finish before reminding. 0 never waits. |
 | `focus_minutes` | 25 | Length of a focus block. |
@@ -56,10 +59,10 @@ Ops are named `walnut_rhythm_<name>`. The everyday ones can be called from any W
 | `status` | `refresh?` | Read-only. Streak, next reminder, running block, quiet holds, macOS state, today's scorecard. |
 | `focus_start` | `taskId?`, `minutes?` | Start a block. Refused while one is running. |
 | `focus_stop` | | Stop the block or break and end the cycle. |
-| `break_done` | | Log a break; the sitting count starts over. |
+| `break_done` | | Log a stand-up that already happened, with no timer; the sitting count starts over. |
 | `break_snooze` | `minutes?` | Snooze the stand-up reminder. |
-| `break_start` | | Start the break a finished block earned. |
-| `break_skip` | | Skip the waiting or running break. |
+| `break_start` | | Start a timed break: the one a finished block earned, or else the stand-up break. The sitting count starts when it ends. |
+| `break_skip` | | Skip the waiting break, or end the running one early. |
 | `macos_shortcuts_install` | | Prepare and open the two shortcuts (Mac only, in-process only). |
 
 `status` and `focus_start` are also registered as tools, for routine watchers. The App updates live from the plugin event `plugin:walnut-rhythm:state`.

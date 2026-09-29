@@ -5,6 +5,10 @@
  *                     │                   │  └──Skip break / expiry──▶ idle
  *                     └──stop──▶ idle     └──Another block──▶ focus
  *
+ * A stand-up break (`idle ──Start break / Stand up now──▶ break`, kind `stand`) uses the
+ * same break phase with its own length: it is the timer the stand-up reminder starts,
+ * and it leaves the focus cycle alone.
+ *
  * `break_due` is the moment the block ended and the person has not answered yet. It
  * waits for a click rather than starting the break on its own, so "Start break" means
  * what it says; if nobody answers it lapses after BREAK_DUE_EXPIRY_MS. Every Nth
@@ -13,7 +17,7 @@
  */
 
 export type FocusPhase = 'idle' | 'focus' | 'break_due' | 'break'
-export type BreakKind = 'short' | 'long'
+export type BreakKind = 'short' | 'long' | 'stand'
 
 export interface FocusState {
   phase: FocusPhase
@@ -36,6 +40,7 @@ export interface FocusDurations {
   breakMinutes: number
   longBreakMinutes: number
   longBreakEvery: number
+  standBreakMinutes: number
 }
 
 export interface CompletedBlock {
@@ -94,16 +99,16 @@ export function stopFocus(state: FocusState, now: number): { state: FocusState; 
 }
 
 export function breakLengthMs(kind: BreakKind, d: FocusDurations): number {
-  return (kind === 'long' ? d.longBreakMinutes : d.breakMinutes) * MIN
+  return (kind === 'long' ? d.longBreakMinutes : kind === 'stand' ? d.standBreakMinutes : d.breakMinutes) * MIN
 }
 
 /**
  * Start (or restart) the break now. From `break_due` it is the break the block
- * earned; from `idle` it is a plain short break someone asked for.
+ * earned; from `idle` it is the stand-up break (the reminder's Start break).
  */
 export function startBreak(state: FocusState, now: number, d: FocusDurations): FocusState {
   if (state.phase === 'focus') throw new Error('A focus block is running. Stop it first, or wait for it to end.')
-  const kind: BreakKind = state.phase === 'idle' ? 'short' : state.breakKind ?? 'short'
+  const kind: BreakKind = state.phase === 'idle' ? 'stand' : state.breakKind ?? 'short'
   return { ...state, phase: 'break', breakKind: kind, startedAt: now, endsAt: now + breakLengthMs(kind, d) }
 }
 
@@ -179,7 +184,7 @@ export function focusOnBoot(raw: unknown): FocusState {
     startedAt: num(value.startedAt),
     endsAt: num(value.endsAt),
     completedInCycle: Math.floor(num(value.completedInCycle)),
-    ...(value.breakKind === 'long' || value.breakKind === 'short' ? { breakKind: value.breakKind } : {}),
+    ...(value.breakKind === 'long' || value.breakKind === 'short' || value.breakKind === 'stand' ? { breakKind: value.breakKind } : {}),
     lastEndedAt: num(value.lastEndedAt),
   }
   if (state.phase !== 'idle' && state.endsAt === 0) return { ...IDLE_FOCUS, lastEndedAt: state.lastEndedAt }

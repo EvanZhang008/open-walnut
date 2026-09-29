@@ -19,6 +19,7 @@ import '@/styles/notification-quiet.css';
 import { NotificationPanel } from '@/components/common/NotificationPanel';
 import { VoicePanel } from '@/components/common/VoicePanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
+import { SidebarStatusItems } from './SidebarStatusItems';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
 import { bellPresentation } from '@/utils/host-banner-placement';
@@ -343,6 +344,8 @@ export function Sidebar({
             <span className="sidebar-label">{formatDuration(audio.totalDuration)}</span>
           </button>
         )}
+        {/* Plugin status items (a live ring each), above Voice; nothing when none is live. */}
+        <SidebarStatusItems collapsed={collapsed} />
         <button
           className={`sidebar-link sidebar-voice-btn${voiceStatus.transcribing ? ' voice-transcribing' : ''}`}
           onClick={() => setVoiceOpen(!voiceOpen)}

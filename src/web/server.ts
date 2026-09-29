@@ -134,6 +134,7 @@ import { metricsRouter } from './routes/metrics.js'
 import { clientEvidenceRouter } from './routes/client-evidence.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { quietRouter } from './routes/quiet.js'
+import { pluginStatusItemsRouter } from './routes/plugin-status-items.js'
 import { initQuiet, stopQuiet } from '../core/quiet/quiet-state.js'
 import { hooksRouter } from './routes/hooks.js'
 import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications } from '../core/notifications/store.js'
@@ -1711,6 +1712,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/client-evidence', clientEvidenceRouter)
   app.use('/api/notifications', notificationsRouter)
   app.use('/api/quiet', quietRouter)
+  app.use('/api/plugin-status-items', pluginStatusItemsRouter)
   app.use('/api/hooks', hooksRouter)
   // Deprecated alias — served from the unified hook registry (same shape as
   // the retired task-phase-hooks endpoint).

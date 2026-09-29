@@ -28,6 +28,8 @@ export interface RhythmPublicState {
     signals: { walnut: number | null; mac: number | null }
   }
   reminder: ReminderView & {
+    /** A reminder fired and nobody answered it yet (the phase has already moved on to the next count). */
+    outstanding: boolean
     turnsInFlight: number
     quietHours: { value: string; valid: boolean; inside: boolean }
   }
@@ -75,6 +77,7 @@ export function buildPublicState(runtime: RhythmRuntime, now: number): RhythmPub
     },
     reminder: {
       ...view,
+      outstanding: runtime.reminder.outstanding,
       turnsInFlight: runtime.turnsInFlight(now),
       quietHours: { value: config.quietHours, valid: runtime.quietHoursValid, inside: runtime.inQuietHours(now) },
     },

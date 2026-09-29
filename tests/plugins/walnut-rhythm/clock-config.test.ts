@@ -47,7 +47,7 @@ describe('formatting', () => {
     expect(formatSitting(45 * 60_000)).toBe('45 min')
     expect(formatSitting(63 * 60_000)).toBe('1h 03m')
     expect(formatSitting(-5)).toBe('0 min')
-    expect(standUpNotice(63 * 60_000, 10).body).toBe('You have been at the keyboard for 1h 03m. Walk for a couple of minutes.')
+    expect(standUpNotice(63 * 60_000, 10, 10).title).toBe('Stand up: 1h 03m at the keyboard')
   })
 
   it('day keys are local dates', () => {
@@ -59,14 +59,14 @@ describe('formatting', () => {
 describe('normalizeConfig', () => {
   it('fills defaults', () => {
     expect(normalizeConfig(undefined)).toEqual({
-      reminderEveryMinutes: 60, awayResetMinutes: 5, snoozeMinutes: 10, quietHours: '22:00-08:00',
+      reminderEveryMinutes: 60, awayResetMinutes: 5, snoozeMinutes: 10, standBreakMinutes: 10, quietHours: '22:00-08:00',
       deferForNaturalPauseMinutes: 5, focusMinutes: 25, breakMinutes: 5, longBreakMinutes: 15, longBreakEvery: 4,
       focusQuietsWalnut: true, mirrorMacosFocus: true, macosFocusShortcuts: false,
     })
   })
 
   it('clamps numbers into range and keeps an explicitly empty quiet_hours', () => {
-    const config = normalizeConfig({ reminder_every_minutes: 5, away_reset_minutes: '7', snooze_minutes: 'x', quiet_hours: '', long_break_every: 99, macos_focus_shortcuts: true })
-    expect(config).toMatchObject({ reminderEveryMinutes: 15, awayResetMinutes: 7, snoozeMinutes: 10, quietHours: '', longBreakEvery: 12, macosFocusShortcuts: true })
+    const config = normalizeConfig({ reminder_every_minutes: 5, away_reset_minutes: '7', snooze_minutes: 'x', stand_break_minutes: 0, quiet_hours: '', long_break_every: 99, macos_focus_shortcuts: true })
+    expect(config).toMatchObject({ reminderEveryMinutes: 15, awayResetMinutes: 7, snoozeMinutes: 10, standBreakMinutes: 1, quietHours: '', longBreakEvery: 12, macosFocusShortcuts: true })
   })
 })

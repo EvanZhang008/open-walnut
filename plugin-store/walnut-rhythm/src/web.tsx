@@ -1,9 +1,9 @@
 /**
- * Rhythm's web entry: one App, its CSS, and the badge.
+ * Rhythm's web entry: one App and its CSS.
  *
- * The store starts at activation, not when the App opens, so the badge shows the
- * minutes left in a running focus block wherever the person is in the console. The
- * badge is cleared whenever no block is running.
+ * The live countdown is NOT drawn here: the server publishes a status item and the host
+ * draws it as a ring in the rail on every screen. The App entry carries no badge, since
+ * a pinned App would repeat the ring's minutes right next to it.
  */
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { RhythmApp } from './web/app'
@@ -12,7 +12,6 @@ import { RHYTHM_CSS } from './web/styles'
 
 /** The documented default weight for a plugin App (core screens use 10 to 1000). */
 const APP_ORDER = 500
-const BADGE_TICK_MS = 30_000
 
 export async function activate(walnut: WalnutWebApi) {
   const store = createRhythmStore(walnut)
@@ -41,27 +40,6 @@ export async function activate(walnut: WalnutWebApi) {
     fullBleed: true,
   })
   walnut.ui.injectCss(RHYTHM_CSS)
-
-  let lastBadge: string | null | undefined
-  const updateBadge = () => {
-    const state = store.get()
-    const running = state?.focus.phase === 'focus' && state.focus.endsAt !== null
-    const minutes = running ? Math.max(0, Math.ceil((state.focus.endsAt! - store.serverNow()) / 60_000)) : null
-    const next = minutes === null ? null : `${minutes}m`
-    if (next === lastBadge) return
-    lastBadge = next
-    // Minutes left are a status, not a count, so the muted text badge. A host that
-    // predates text badges refuses the object; a plain dot still says "running".
-    try { app.setBadge(next === null ? null : { text: next }) }
-    catch { app.setBadge(next === null ? null : 'dot') }
-  }
-  const unsubscribe = store.subscribe(updateBadge)
-  // Minutes tick down between server events, so the badge re-reads the clock on its own.
-  const timer = window.setInterval(updateBadge, BADGE_TICK_MS)
-  walnut.signal.addEventListener('abort', () => {
-    window.clearInterval(timer)
-    unsubscribe()
-  }, { once: true })
 
   void store.refresh()
   walnut.log.info('Rhythm web activated', { appPath: app.path })

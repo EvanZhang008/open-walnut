@@ -58,6 +58,7 @@ Walnut exposes that local `ping` registration to the model as `my_plugin_ping`. 
 | `walnut.tasks` | read, query, create, update, complete, delete tasks |
 | `walnut.config` | read and patch `plugins.<id>`, subscribe to changes |
 | `walnut.notifications` | raise notices, report plugin errors, recover |
+| `walnut.ui` | a live status item in the console rail: a ring the host ticks from a timer, with op buttons |
 | `walnut.ops` | call stable host operations with no typed service yet |
 | `walnut.events` | subscribe to host events, emit namespaced plugin events |
 | `walnut.http` | `route(method, path, handler)` and `fetch(url, init)` with a deadline |

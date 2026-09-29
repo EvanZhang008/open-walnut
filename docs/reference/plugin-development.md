@@ -163,6 +163,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.tasks` | Read, query, create, update, complete, and delete tasks; list, create and file into folders. |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
 | `walnut.notifications` | Raise notices (including `kind: 'reminder'` with up to three op buttons), `dismiss` your own, report plugin errors and recover from them, and hold Walnut's quiet mode with `quiet.get/set/clear`. |
+| `walnut.ui` | Show a live status item in the console's left rail: a ring the host ticks from a timer, a label, and a popover with up to three op buttons. |
 | `walnut.letters` | Send a letter to the human, hear the answer, reply in its thread, withdraw a stale one. |
 | `walnut.ops` | Call stable host operations that no typed service covers yet. |
 | `walnut.services` | Publish a capability for other plugins, and use the ones you declared as dependencies. |
@@ -412,7 +413,7 @@ A plugin that interrupts the human on a schedule (a stand-up nudge, a pomodoro, 
 1. **Know when the human is there.** Subscribe to `time:banked` (attention the console or the phone just recorded, roughly once a minute while someone is present) and, when the user has turned on app sampling in the Time App, `time:outside` (attention in other Mac apps). Fold the records yourself: a gap longer than your threshold means the person was away.
 2. **Interrupt with a reminder, not a notice.** `notify({ kind: 'reminder' })` toasts for two minutes, chimes, raises a browser notification when the tab is hidden, and carries up to three buttons. Each button names one of YOUR ops by its local name; the host binds it to your plugin, so a click can never run someone else's op. Re-firing under the same `dedupKey` replaces the previous reminder, and `dismiss` retires it when it stops being true, so the feed never fills with stale copies.
 3. **Go quiet while the human focuses.** `notifications.quiet.set({ until, reason })` holds Walnut's quiet mode: every other producer's toasts, chimes, browser notifications and phone pushes wait, the feed still collects, and permission asks still show unless your hold says otherwise. One hold per plugin; `clear` releases it, and so does disabling or reloading the plugin. Read `quiet.get()` or subscribe to `quiet:changed` before you fire, because a reminder raised during quiet lands only in the feed.
-4. **Show progress without shouting.** A countdown belongs on the App's badge as `{ text: '24m' }`, which draws muted; a number would draw as a red count (see Badges).
+4. **Show progress without shouting.** A countdown belongs in a status item (next section): a small ring at the bottom of the rail that ticks on its own and turns orange only when you set `tone: 'warning'`.
 
 ```ts compile=reminders
 import type {
@@ -476,6 +477,44 @@ export function activate(walnut: WalnutServerApi) {
   })
 }
 ```
+
+### Sidebar status items
+
+`walnut.ui.statusItem({ id })` gives your plugin a small live item at the bottom of the console's left rail, above Voice. It is data, not a component: you say what is true now and the host draws it the same way for every plugin.
+
+- **The ring ticks on its own.** Give it `timer: { startedAt, endsAt, mode }` in epoch milliseconds; `drain` empties it as time runs out, `fill` fills it up. The collapsed rail shows the minutes left in the centre, or a `glyph` (`check`, `alert`, `stand`, `pause`) instead. Put `{remaining}` in `title` and the host fills in the live time left ("12 min", "1 h 5 min"), so one `set` stays current for the whole block.
+- **Tone says how much it matters.** `neutral` (the default) is grey and quiet, `accent` is a running activity, `success` is a finished one, and `warning` is "this needs you now": it turns the label orange and nudges the ring once.
+- **Clicking opens a popover** with the title, `detail`, up to three buttons and a link to your App (`app`, a local App id; default your first App). Buttons follow the reminder rule: each names one of YOUR ops by its local name, and the host binds it to your plugin. At most one is `primary`. Name what happens next ("Start break", "Snooze 10 min"), never a bare "Done".
+- **It lives as long as you do.** `set` replaces what the item shows and skips the broadcast when nothing changed, so calling it on every state change is fine. `clear` hides it; disabling, reloading or uninstalling the plugin removes it. Items are not saved: after a restart your `activate` publishes again. At most two per plugin.
+
+```ts compile=status-items
+import type { WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+export function activate(walnut: WalnutServerApi) {
+  const item = walnut.ui.statusItem({ id: 'focus' })
+
+  walnut.registry.op({
+    name: 'start', title: 'Start a focus block', description: 'Twenty-five minutes.', readonly: false,
+    async handler() {
+      const startedAt = Date.now()
+      item.set({
+        title: 'Focus · {remaining} left',
+        detail: 'Walnut is quiet until it ends.',
+        tone: 'accent',
+        timer: { startedAt, endsAt: startedAt + 25 * 60_000, mode: 'drain' },
+        actions: [{ label: 'Stop block', op: 'stop' }],
+      })
+      return { ok: true }
+    },
+  })
+  walnut.registry.op({
+    name: 'stop', title: 'Stop the focus block', description: 'End it early.', readonly: false,
+    async handler() { item.clear(); return { ok: true } },
+  })
+}
+```
+
+Tests read what an item shows from `createFakeWalnut().statusItems`, a map from id to the last state you set.
 
 ## Storage and secrets
 

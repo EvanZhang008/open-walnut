@@ -84,7 +84,10 @@ function NowBlock({ state, run, busy }: { state: RhythmPublicState; run: RhythmA
             <p className="rhythm-error">Quiet hours "{reminder.quietHours.value}" is not HH:MM-HH:MM, so it is off.</p>
           )}
           <div className="rhythm-actions">
-            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-break-done" onClick={() => run('break_done')}>I stood up</button>
+            {/* Starts the stand-up break timer (the ring counts it down); a running block or break owns the next break. */}
+            <button type="button" className="rhythm-button" disabled={busy || state.focus.phase !== 'idle'} data-testid="rhythm-stand-now" onClick={() => run('break_start')}>
+              Stand up now ({config.standBreakMinutes} min)
+            </button>
             <button type="button" className="rhythm-button" disabled={busy || !sitting.present} data-testid="rhythm-break-snooze" onClick={() => run('break_snooze')}>
               Snooze {config.snoozeMinutes} min
             </button>

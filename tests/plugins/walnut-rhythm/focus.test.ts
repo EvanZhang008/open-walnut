@@ -9,7 +9,7 @@ import {
 
 const MIN = 60_000
 const T0 = Date.UTC(2026, 8, 25, 16, 0)
-const D: FocusDurations = { focusMinutes: 25, breakMinutes: 5, longBreakMinutes: 15, longBreakEvery: 4 }
+const D: FocusDurations = { focusMinutes: 25, breakMinutes: 5, longBreakMinutes: 15, longBreakEvery: 4, standBreakMinutes: 10 }
 
 /** Run one block to its end at `start + minutes` and return the state and the event. */
 function completeBlock(state: FocusState, start: number, minutes = 25) {
@@ -69,6 +69,18 @@ describe('the focus cycle', () => {
     expect(stopped.stoppedMinutes).toBe(10)
     expect(stopped.state).toMatchObject({ phase: 'idle', completedInCycle: 0 })
     expect(stopFocus(IDLE_FOCUS, T0).stoppedMinutes).toBeNull()
+  })
+
+  it('a break from idle is the stand-up break: its own length, and the cycle count is untouched', () => {
+    const idle = { ...IDLE_FOCUS, completedInCycle: 2, lastEndedAt: T0 - 5 * MIN }
+    const stand = startBreak(idle, T0, D)
+    expect(stand).toMatchObject({ phase: 'break', breakKind: 'stand', startedAt: T0, endsAt: T0 + 10 * MIN, completedInCycle: 2 })
+    expect(desiredHold({ focus: stand, focusQuietsWalnut: true, macosFocusName: null })).toBeNull()
+    const over = advanceFocus(stand, T0 + 11 * MIN, D)
+    expect(over.events).toEqual([{ type: 'break-ended', breakKind: 'stand', lateMs: MIN }])
+    expect(over.state).toMatchObject({ phase: 'idle', completedInCycle: 2, lastEndedAt: T0 + 10 * MIN })
+    // A restart reads the kind back.
+    expect(focusOnBoot(JSON.parse(JSON.stringify(stand)))).toMatchObject({ phase: 'break', breakKind: 'stand' })
   })
 
   it('refuses a second block while one runs, and a break during a block', () => {

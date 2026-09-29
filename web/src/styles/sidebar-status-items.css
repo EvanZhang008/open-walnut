@@ -1,0 +1,199 @@
+/* Plugin status items: the live rings above Voice in the rail, and their popover.
+   The ring's colour is the item's tone; the track is the page's ink at low alpha so
+   one rule reads in both themes. */
+
+.sidebar-status-item {
+  --status-tone: var(--fg-muted);
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.sidebar-status-item[data-tone="accent"],
+.status-item-popover[data-tone="accent"] { --status-tone: var(--accent); }
+.sidebar-status-item[data-tone="success"],
+.status-item-popover[data-tone="success"] { --status-tone: var(--success); }
+.sidebar-status-item[data-tone="warning"],
+.status-item-popover[data-tone="warning"] { --status-tone: var(--warning); }
+.status-item-popover { --status-tone: var(--fg-muted); }
+
+.sidebar-status-item.is-open {
+  color: var(--fg);
+  background: var(--accent-subtle);
+}
+.sidebar-status-item .sidebar-label {
+  color: var(--fg);
+  text-overflow: ellipsis;
+}
+.sidebar-status-item[data-tone="warning"] .sidebar-label { color: var(--priority-important-text); }
+
+/* Wins over `.sidebar-link svg` (18px) in the collapsed rail: the minutes need 22px. */
+.sidebar-link svg.status-ring,
+.status-ring {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  overflow: visible;
+}
+/* The minutes need 22px, but the row must stay as tall as its 18px-icon neighbours:
+   the ring overhangs 2px top and bottom instead of growing the row. */
+.sidebar-link svg.status-ring { margin: -2px 0; }
+/* The expanded rail has the words, so the ring shrinks to an icon and drops its number. */
+.sidebar:not(.collapsed) .sidebar-link svg.status-ring { width: 18px; height: 18px; margin: 0; }
+.sidebar:not(.collapsed) .sidebar-status-item .status-ring text,
+.sidebar:not(.collapsed) .sidebar-status-item .status-ring-glyph { display: none; }
+
+.status-ring-track {
+  fill: none;
+  stroke: color-mix(in srgb, var(--fg) 12%, transparent);
+  stroke-width: 2.2;
+}
+.status-ring-arc {
+  fill: none;
+  stroke: var(--status-tone);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  /* No stroke-dashoffset transition: the arc moves a hair per tick, and animating it
+     repainted the ring on the main thread for 0.6s every 5 seconds (measured 8x the
+     idle renderer CPU) to move it less than a pixel. */
+  transition: stroke 0.3s;
+}
+.status-ring text {
+  font: 600 8.6px -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  fill: var(--fg);
+}
+.status-ring-glyph {
+  fill: none;
+  stroke: var(--status-tone);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.status-ring-glyph-fill { fill: var(--status-tone); stroke: none; }
+
+/* "Needs you now": one small nudge when the item turns warning, never a loop. */
+.sidebar-status-item[data-tone="warning"] .status-ring {
+  transform-origin: center;
+  animation: status-ring-nudge 1.1s ease-out 1;
+}
+@keyframes status-ring-nudge {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.14); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-status-item .status-ring { animation: none !important; }
+}
+
+/* ── Popover ── */
+
+.status-item-popover {
+  width: 292px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 14px 14px 12px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
+  font-size: 13px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  animation: status-item-pop 0.16s ease-out;
+}
+@keyframes status-item-pop {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-item-popover { animation: none; }
+}
+
+.status-item-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.status-item-popover-head svg.status-ring-lg { width: 38px; height: 38px; }
+.status-item-popover-text { min-width: 0; }
+.status-item-popover-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 19px;
+}
+.status-item-popover[data-tone="warning"] .status-item-popover-title { color: var(--priority-important-text); }
+.status-item-popover-detail {
+  margin-top: 1px;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--fg-muted);
+}
+
+.status-item-popover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.status-item-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 26px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.status-item-btn:hover:not(:disabled) { background: var(--bg-hover); }
+.status-item-btn.is-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.status-item-btn.is-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.status-item-btn:disabled { opacity: 0.55; cursor: default; }
+.status-item-btn[aria-busy="true"] { opacity: 0.8; }
+.status-item-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.status-item-popover-error {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--error);
+}
+
+.status-item-popover-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+.status-item-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  cursor: pointer;
+}
+.status-item-link:hover { text-decoration: underline; }
+/* The box takes focus only so Tab reaches its buttons (they show their own ring).
+   WebKit counts that programmatic focus as :focus-visible and drew a thick ring
+   around the whole popover on every mouse open. */
+.status-item-popover:focus,
+.status-item-popover:focus-visible { outline: none; }

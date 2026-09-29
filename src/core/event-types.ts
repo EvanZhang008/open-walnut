@@ -945,6 +945,9 @@ export interface PluginLifecycleChangedEvent {
   state: string;
 }
 
+/** Every live plugin status item, whole list (src/core/plugins/plugin-status-items.ts). */
+export type PluginStatusItemsEvent = import('./plugins/plugin-status-items.js').StatusItemsSnapshot;
+
 export interface SystemHealthEvent {
   embedding: {
     total: number;
@@ -1242,6 +1245,7 @@ export interface EventPayloadMap {
   'human-inbox:answered': HumanInboxAnsweredEvent;
 
   'plugin:lifecycle-changed': PluginLifecycleChangedEvent;
+  'plugin:status-items': PluginStatusItemsEvent;
 
   'audio:started': AudioStartedEvent;
   'audio:stopped': AudioStoppedEvent;

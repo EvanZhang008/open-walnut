@@ -16,9 +16,9 @@ import {
   type FocusDurations, type FocusEvent, type FocusState, type HoldSpec,
 } from './focus'
 import type { MacosBridge } from './macos-bridge'
-import { breakOverNotice, focusDoneNotice, KEY_BREAK_OVER, KEY_FOCUS_DONE, KEY_STAND_UP, standUpNotice } from './notices'
+import { breakOverNotice, focusDoneNotice, KEY_BREAK_OVER, KEY_FOCUS_DONE, KEY_STAND_UP, standBreakOverNotice, standUpNotice } from './notices'
 import {
-  EMPTY_PRESENCE, expireIfAway, foldAttention, presenceOnBoot, sittingMs,
+  EMPTY_PRESENCE, expireIfAway, foldAttention, presenceOnBoot, restartStreak, sittingMs,
   type AttentionSpan, type PresenceState, type StreakEnded,
 } from './presence'
 import { EMPTY_REMINDER, evaluateReminder, pushBackReminder, reminderOnBoot, type Evaluation, type ReminderState } from './scheduler'
@@ -108,7 +108,7 @@ export class RhythmRuntime {
 
   durations(): FocusDurations {
     const c = this.config
-    return { focusMinutes: c.focusMinutes, breakMinutes: c.breakMinutes, longBreakMinutes: c.longBreakMinutes, longBreakEvery: c.longBreakEvery }
+    return { focusMinutes: c.focusMinutes, breakMinutes: c.breakMinutes, longBreakMinutes: c.longBreakMinutes, longBreakEvery: c.longBreakEvery, standBreakMinutes: c.standBreakMinutes }
   }
 
   /** Run `fn` after everything queued before it. A failure never poisons the queue. */
@@ -250,8 +250,12 @@ export class RhythmRuntime {
         await this.raise(focusDoneNotice(block, event.breakKind, minutes))
       }
     } else if (event.type === 'break-ended') {
+      // Nobody sat through the break: the sitting count starts when it ends, not when it began.
+      this.presence = restartStreak(this.presence, now - event.lateMs)
       await this.dismiss(KEY_FOCUS_DONE)
-      if (event.lateMs < LATE_NOTIFY_MS) await this.raise(breakOverNotice(this.focus))
+      if (event.lateMs < LATE_NOTIFY_MS) {
+        await this.raise(event.breakKind === 'stand' ? standBreakOverNotice() : breakOverNotice(this.focus))
+      }
     } else {
       await this.dismiss(KEY_FOCUS_DONE)
     }
@@ -259,7 +263,7 @@ export class RhythmRuntime {
 
   private async fireStandUp(sitting: number): Promise<void> {
     this.recordDay({ type: 'reminder-fired' })
-    await this.raise(standUpNotice(sitting, this.config.snoozeMinutes))
+    await this.raise(standUpNotice(sitting, this.config.snoozeMinutes, this.config.standBreakMinutes))
   }
 
   // ── effects ───────────────────────────────────────────────────────────────

@@ -47,9 +47,9 @@ export function nextReminderText(state: RhythmPublicState): string {
   }
 }
 
-export function focusPhaseText(phase: RhythmPublicState['focus']['phase'], breakKind?: 'short' | 'long'): string {
+export function focusPhaseText(phase: RhythmPublicState['focus']['phase'], breakKind?: 'short' | 'long' | 'stand'): string {
   if (phase === 'focus') return 'Focus'
-  if (phase === 'break') return breakKind === 'long' ? 'Long break' : 'Break'
+  if (phase === 'break') return breakKind === 'long' ? 'Long break' : breakKind === 'stand' ? 'Stand-up break' : 'Break'
   if (phase === 'break_due') return 'Block done'
   return 'Idle'
 }

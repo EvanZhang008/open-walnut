@@ -38,9 +38,9 @@ describe('the stand-up reminder on a real timeline', () => {
     expect(fired).toHaveLength(1)
     expect(fired[0]!.notice).toMatchObject({
       kind: 'reminder',
-      title: 'Time to stand up',
-      body: 'You have been at the keyboard for 1h 00m. Walk for a couple of minutes.',
-      actions: [{ label: 'Done', op: 'break_done' }, { label: 'Snooze 10 min', op: 'break_snooze', args: { minutes: 10 } }],
+      title: 'Stand up: 1h 00m at the keyboard',
+      body: 'Start break counts down 10 min in the sidebar. Walk, stretch, look away from the screen.',
+      actions: [{ label: 'Start break', op: 'break_start' }, { label: 'Snooze 10 min', op: 'break_snooze', args: { minutes: 10 } }],
     })
     // Dismiss-before-refire: the call right before the notify dismissed the same key.
     const index = h.calls.indexOf(fired[0]!)
@@ -72,7 +72,7 @@ describe('the stand-up reminder on a real timeline', () => {
     expect(runtime.day).toMatchObject({ movedWithoutClick: 1, breaksTaken: 1, remindersFired: 1 })
   })
 
-  it('Done starts the count over; Snooze brings it back after the snooze', async () => {
+  it('break_done (a stand-up logged with no timer) starts the count over; Snooze brings it back after the snooze', async () => {
     const { h, runtime } = await boot()
     await sitThrough(h, runtime, NINE, NINE + 61 * MIN)
     const done = await actions.breakDone(runtime)
@@ -187,9 +187,11 @@ describe('focus blocks', () => {
     await h.tick(runtime, 5 * MIN)
     const over = h.notices('break-over')
     expect(over).toHaveLength(1)
+    // The block's break keeps its own prompt: the next block, or done for today.
+    expect(over[0]!.notice.title).toBe('Break over')
     expect(over[0]!.notice.actions).toEqual([
       { label: 'Start next block', op: 'focus_start', args: { taskId: 'task-7', minutes: 25 } },
-      { label: 'Stop', op: 'focus_stop' },
+      { label: 'Done for today', op: 'focus_stop' },
     ])
     expect(runtime.day).toMatchObject({ focusBreaks: 1, breaksTaken: 1 })
   })

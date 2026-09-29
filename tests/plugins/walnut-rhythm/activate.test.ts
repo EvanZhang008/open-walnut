@@ -49,11 +49,18 @@ describe('activate', () => {
       expect(quiet.active).toBe(true)
       expect(quiet.holds).toEqual([expect.objectContaining({ source: 'plugin:walnut-rhythm', reason: 'Focus block' })])
       expect(fake.emitted.some((event) => event.name === 'state')).toBe(true)
+      // The rail's ring, published through the real host seam.
+      expect(fake.statusItems.get('rhythm')).toMatchObject({
+        title: 'Focus · {remaining} left', tone: 'accent', timer: { mode: 'drain' },
+        actions: [{ label: 'Stop block', op: 'focus_stop' }],
+      })
 
       await expect(op(fake, 'focus_start')({})).rejects.toThrow(/already running/)
       const stopped = await op(fake, 'focus_stop')() as { message: string }
       expect(stopped.message).toMatch(/^Focus block stopped after 0 min\.$/)
       expect((await fake.api.notifications.quiet.get()).active).toBe(false)
+      // Nobody has been at the keyboard, so there is nothing left to count: the ring goes.
+      expect(fake.statusItems.has('rhythm')).toBe(false)
     } finally {
       await deactivate()
     }

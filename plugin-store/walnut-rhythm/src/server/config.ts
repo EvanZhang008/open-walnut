@@ -12,6 +12,8 @@ export interface RhythmConfig {
   reminderEveryMinutes: number
   awayResetMinutes: number
   snoozeMinutes: number
+  /** The break a stand-up starts (Start break / Stand up now), counted down in the ring. */
+  standBreakMinutes: number
   /** Raw `HH:MM-HH:MM`; '' disables. Parsed by clock.ts. */
   quietHours: string
   deferForNaturalPauseMinutes: number
@@ -30,6 +32,7 @@ const INT_FIELDS: IntField[] = [
   { key: 'reminder_every_minutes', field: 'reminderEveryMinutes', def: 60, min: 15, max: 240 },
   { key: 'away_reset_minutes', field: 'awayResetMinutes', def: 5, min: 2, max: 60 },
   { key: 'snooze_minutes', field: 'snoozeMinutes', def: 10, min: 1, max: 120 },
+  { key: 'stand_break_minutes', field: 'standBreakMinutes', def: 10, min: 1, max: 60 },
   { key: 'defer_for_natural_pause_minutes', field: 'deferForNaturalPauseMinutes', def: 5, min: 0, max: 30 },
   { key: 'focus_minutes', field: 'focusMinutes', def: 25, min: 5, max: 180 },
   { key: 'break_minutes', field: 'breakMinutes', def: 5, min: 1, max: 60 },

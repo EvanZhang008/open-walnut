@@ -10,6 +10,7 @@ import type {
   QuietHold,
   QuietState,
   ServiceApi,
+  StatusItemState,
   ServiceChange,
   TaskFilingResult,
   WalnutServerApi,
@@ -81,6 +82,8 @@ export interface FakeWalnutResult {
    * `onAnswered` handlers, the way the real inbox does. A letter can be answered once.
    */
   answerLetter(letterId: string, actionId: string, freeText?: string): Promise<void>
+  /** What each status item shows now, by id. A cleared or disposed item is absent. */
+  statusItems: Map<string, StatusItemState>
 }
 
 export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutResult {
@@ -95,6 +98,8 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const registeredOps: PluginOpDefinition[] = []
   const services = new Map<string, ServiceApi>()
   const letters: LetterState[] = []
+  const statusItems = new Map<string, StatusItemState>()
+  const registeredItems = new Set<string>()
   const letterWatchers = new Set<(event: LetterAnsweredEvent) => void | Promise<void>>()
   const answerLetter = async (letterId: string, actionId: string, freeText?: string, source: LetterAnsweredEvent['source'] = 'web') => {
     const letter = letters.find((one) => one.letterId === letterId)
@@ -364,6 +369,27 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
         async clear() { quietHold = null; publishQuiet() },
       },
     },
+    // Same limits as the host (id shape, two per plugin, one registration per id), so a
+    // plugin that passes here does not throw on its first real activation.
+    ui: {
+      statusItem({ id }) {
+        if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(id)) throw new Error('Status item id must be 1-40 characters of a-z, 0-9, - and _')
+        if (registeredItems.has(id)) throw new Error(`Status item "${id}" is already registered`)
+        if (registeredItems.size >= 2) throw new Error('A plugin shows at most 2 status items')
+        registeredItems.add(id)
+        let live = true
+        const handle = disposable(() => { live = false; registeredItems.delete(id); statusItems.delete(id) })
+        return {
+          set(state) {
+            if (!live) throw new Error(`Status item "${id}" was disposed`)
+            if ((state.actions ?? []).length > 3) throw new Error('A status item carries at most 3 actions')
+            statusItems.set(id, structuredClone(state))
+          },
+          clear() { if (live) statusItems.delete(id) },
+          dispose: handle.dispose,
+        }
+      },
+    },
     ops: {
       async call(name) { return { ok: false, message: `No fake op registered: ${name}` } },
       unwrap(result) { if (!result.ok) throw new Error(result.message); return result.result },
@@ -493,5 +519,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems }
 }

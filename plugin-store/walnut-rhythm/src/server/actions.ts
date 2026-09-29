@@ -65,6 +65,8 @@ export function focusStop(runtime: RhythmRuntime): Promise<ActionResult> {
     runtime.focus = stopped.state
     runtime.markDirty()
     if (stopped.stoppedMinutes !== null) runtime.recordDay({ type: 'stopped' })
+    // Stopping a running break means they are back at the keyboard.
+    if (was === 'break') runtime.presence = restartStreak(runtime.presence, runtime.now())
     if (was === 'focus' && runtime.config.macosFocusShortcuts) {
       runtime.macos.setDoNotDisturb(false, runtime.now)
       runtime.macos.assumeDoNotDisturbOff(runtime.now())
@@ -78,7 +80,7 @@ export function focusStop(runtime: RhythmRuntime): Promise<ActionResult> {
   })
 }
 
-/** "I stood up": the sitting streak starts over now. */
+/** Log a stand-up without a timer (agents and scripts): the sitting streak starts over now. */
 export function breakDone(runtime: RhythmRuntime): Promise<ActionResult> {
   return runtime.serial(async () => {
     const answered = runtime.reminder.outstanding
@@ -109,11 +111,16 @@ export function breakStart(runtime: RhythmRuntime): Promise<ActionResult> {
     const was = runtime.focus.phase
     const now = runtime.now()
     runtime.focus = startBreak(runtime.focus, now, runtime.durations())
-    // Taking the break means standing up: the sitting count starts over too.
+    // Taking the break means standing up: the sitting count starts over, and again when
+    // the break ends (runtime's break-ended), so the break itself never counts as sitting.
     runtime.presence = restartStreak(runtime.presence, now)
+    // From idle this is the stand-up break, which answers a reminder that is on screen.
+    const answered = was === 'idle' && runtime.reminder.outstanding
+    runtime.reminder = syncStreak({ ...runtime.reminder, outstanding: false }, runtime.presence)
     runtime.markDirty()
     if (was === 'break_due') runtime.recordDay({ type: 'focus-break' })
-    else if (was === 'idle') runtime.recordDay({ type: 'break' })
+    else if (was === 'idle') runtime.recordDay({ type: answered ? 'reminder-done' : 'break' })
+    await runtime.dismiss(KEY_STAND_UP)
     await runtime.dismiss(KEY_FOCUS_DONE)
     await runtime.dismiss(KEY_BREAK_OVER)
     const minutes = Math.round((runtime.focus.endsAt - now) / 60_000)
@@ -125,7 +132,10 @@ export function breakSkip(runtime: RhythmRuntime): Promise<ActionResult> {
   return runtime.serial(async () => {
     await settle(runtime)
     const was = runtime.focus.phase
-    runtime.focus = skipBreak(runtime.focus, runtime.now())
+    const now = runtime.now()
+    runtime.focus = skipBreak(runtime.focus, now)
+    // Ending a running break early means they are back: the sitting count starts now.
+    if (was === 'break') runtime.presence = restartStreak(runtime.presence, now)
     runtime.markDirty()
     await runtime.dismiss(KEY_FOCUS_DONE)
     await runtime.dismiss(KEY_BREAK_OVER)

@@ -43,7 +43,7 @@ export const OP_SPECS: OpSpec[] = [
   },
   {
     name: 'break_done', title: 'Log a stand-up break', readonly: false, remote: 'allow',
-    description: 'Record that the person stood up. Answers the stand-up reminder and starts the sitting count over.',
+    description: 'Record that the person already stood up, with no timer. Answers the stand-up reminder and starts the sitting count over. To start the timed stand-up break instead, use break_start.',
   },
   {
     name: 'break_snooze', title: 'Snooze the stand-up reminder', readonly: false, remote: 'allow',
@@ -52,11 +52,11 @@ export const OP_SPECS: OpSpec[] = [
   },
   {
     name: 'break_start', title: 'Start the break', readonly: false, remote: 'allow',
-    description: 'Start the break a finished focus block earned (the long one every Nth block), or a plain short break when nothing is running.',
+    description: 'Start a timed break. After a focus block it is the break the block earned (the long one every Nth block); otherwise it is the stand-up break (stand_break_minutes), which answers the stand-up reminder. The sitting count starts when the break ends.',
   },
   {
     name: 'break_skip', title: 'Skip the break', readonly: false, remote: 'allow',
-    description: 'Skip the waiting or running break. The block cycle continues, so the long break still comes.',
+    description: 'Skip the waiting break, or end the running one early (the sitting count starts now). The block cycle continues, so the long break still comes.',
   },
   {
     name: 'macos_shortcuts_install', title: 'Install the Rhythm shortcuts', readonly: false, remote: 'deny',

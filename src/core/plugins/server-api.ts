@@ -31,6 +31,7 @@ import {
 import { clearSkillsCache } from '../skill-loader.js'
 import { toDisposable, type Disposable } from './disposable.js'
 import { createPluginNotifications } from './plugin-notifications.js'
+import { createPluginUi } from './plugin-status-items.js'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
 import type { HumanInboxAnsweredEvent } from '../event-types.js'
 import { getConfig, updatePluginConfig } from '../config-manager.js'
@@ -638,6 +639,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     },
 
     notifications: createPluginNotifications({ pluginId, own, assertLive }),
+    ui: createPluginUi({ pluginId, pluginName: options.pluginName, own, assertLive }),
 
     /**
      * Letters: ask the ONE human a question, wherever they are, and hear the answer back.

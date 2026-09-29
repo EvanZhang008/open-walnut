@@ -4,7 +4,8 @@
  * Three signals feed it: attention (`time:banked`, `time:outside`), agent turns (a hook
  * on turn start and end, for the natural pause), and the clock (a 30s tick plus one
  * precise timeout at the end of the running focus phase). Everything it registers is
- * owned by the host, so disable and reload take all of it away, the quiet hold included.
+ * owned by the host, so disable and reload take all of it away, the quiet hold and the
+ * sidebar ring included.
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,6 +17,7 @@ import { registerOps } from './server/ops'
 import { spanFromOutside, spansFromBanked } from './server/presence'
 import { buildPublicState, stateFingerprint } from './server/public-state'
 import { RhythmRuntime } from './server/runtime'
+import { rhythmStatusItem, STATUS_ITEM_ID } from './server/status-item'
 
 const TICK_MS = 30_000
 /** Land the phase change just after the boundary, never a hair before it. */
@@ -50,9 +52,20 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
   await runtime.load()
   active = runtime
 
+  // The ring in the console rail. A host older than status items has no `walnut.ui`.
+  const statusItem = typeof walnut.ui?.statusItem === 'function' ? walnut.ui.statusItem({ id: STATUS_ITEM_ID }) : null
   let lastFingerprint = ''
   emitState = () => {
     const state = buildPublicState(runtime, runtime.now())
+    if (statusItem) {
+      try {
+        const item = rhythmStatusItem(state)
+        if (item) statusItem.set(item)
+        else statusItem.clear()
+      } catch (error) {
+        runtime.warnOnce('status-item', 'Rhythm could not update its sidebar item', { error: String(error) })
+      }
+    }
     const fingerprint = stateFingerprint(state)
     if (fingerprint === lastFingerprint) return
     lastFingerprint = fingerprint

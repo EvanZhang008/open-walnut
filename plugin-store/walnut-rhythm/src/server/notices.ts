@@ -5,6 +5,9 @@
  * dismisses a key before raising it again and whenever it stops being true (the person
  * walked away, a new block started). Action `op`s are LOCAL op names; the host prefixes
  * them, so a button can only ever run one of this plugin's own ops.
+ *
+ * Button words say what happens next, never "Done": "Start break" starts the timer the
+ * person stands up for (the rail's ring counts it down), the same as the rail's popover.
  */
 import type { PluginNoticeAction, PluginNotifyInput } from '@open-walnut/plugin-api/server'
 import { formatSitting } from './clock'
@@ -14,17 +17,28 @@ export const KEY_STAND_UP = 'stand-up'
 export const KEY_FOCUS_DONE = 'focus-done'
 export const KEY_BREAK_OVER = 'break-over'
 
-export function standUpNotice(sittingMs: number, snoozeMinutes: number): PluginNotifyInput {
+export function standUpNotice(sittingMs: number, snoozeMinutes: number, breakMinutes: number): PluginNotifyInput {
   return {
     kind: 'reminder',
-    title: 'Time to stand up',
-    body: `You have been at the keyboard for ${formatSitting(sittingMs)}. Walk for a couple of minutes.`,
+    title: `Stand up: ${formatSitting(sittingMs)} at the keyboard`,
+    body: `Start break counts down ${breakMinutes} min in the sidebar. Walk, stretch, look away from the screen.`,
     dedupKey: KEY_STAND_UP,
     severity: 'info',
     actions: [
-      { label: 'Done', op: 'break_done' },
+      { label: 'Start break', op: 'break_start' },
       { label: `Snooze ${snoozeMinutes} min`, op: 'break_snooze', args: { minutes: snoozeMinutes } },
     ],
+  }
+}
+
+/** The stand-up break ran out. No buttons: the sitting count has already started. */
+export function standBreakOverNotice(): PluginNotifyInput {
+  return {
+    kind: 'reminder',
+    title: 'Break over',
+    body: 'Welcome back. The sitting count starts again now.',
+    dedupKey: KEY_BREAK_OVER,
+    severity: 'info',
   }
 }
 
@@ -65,7 +79,7 @@ export function breakOverNotice(focus: Pick<FocusState, 'taskId' | 'title' | 'mi
     ...(focus.taskId ? { taskId: focus.taskId } : {}),
     actions: [
       { label: 'Start next block', op: 'focus_start', args: nextBlockArgs(focus) },
-      { label: 'Stop', op: 'focus_stop' },
+      { label: 'Done for today', op: 'focus_stop' },
     ],
   }
 }

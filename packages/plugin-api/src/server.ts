@@ -229,6 +229,72 @@ export interface NotificationService {
   readonly quiet: QuietService
 }
 
+// ── Sidebar status items ──
+//
+// A small live item at the bottom of the console's left rail, above Voice: a ring that
+// counts down (or fills up) on its own, a short label, and a popover with a few buttons.
+// It is DATA, not a component: the host draws it, ticks the ring from `timer` without any
+// message from the plugin, and removes it when the plugin is disabled, reloaded or
+// uninstalled. Publish what is true now; call `set` again when it changes.
+
+/** `neutral` is the quiet default; `warning` is for "this needs you now". */
+export type StatusItemTone = 'neutral' | 'accent' | 'success' | 'warning'
+
+/** Drawn in the ring's centre instead of the minutes left. */
+export type StatusItemGlyph = 'check' | 'alert' | 'stand' | 'pause'
+
+export interface StatusItemTimer {
+  /** Epoch ms. */
+  startedAt: number
+  /** Epoch ms, after `startedAt`. */
+  endsAt: number
+  /** `drain` (default) empties the ring as time runs out; `fill` fills it up. */
+  mode?: 'fill' | 'drain'
+}
+
+/** A popover button. `op` is one of YOUR ops by its local name; the host prefixes it. */
+export interface StatusItemAction {
+  label: string
+  op: string
+  args?: Record<string, unknown>
+  /** The one filled button. At most one action may set it. */
+  primary?: boolean
+}
+
+export interface StatusItemState {
+  /**
+   * The rail label and the popover title, at most 80 characters. `{remaining}` is
+   * replaced with the live time left on `timer` ("12 min", "1 h 5 min"), so
+   * `'Stand up in {remaining}'` stays current without another `set`.
+   */
+  title: string
+  /** One line under the title in the popover, at most 200 characters. */
+  detail?: string
+  tone?: StatusItemTone
+  /** Without one, the ring is drawn full. */
+  timer?: StatusItemTimer
+  glyph?: StatusItemGlyph
+  /** At most three, primary first. */
+  actions?: StatusItemAction[]
+  /** Local id of your App that the popover's footer link opens. Default: your first App. */
+  app?: string
+}
+
+export interface StatusItemHandle extends Disposable {
+  /** Show the item, or replace what it shows. Throws on an invalid state. */
+  set(state: StatusItemState): void
+  /** Hide it until the next `set`. */
+  clear(): void
+}
+
+export interface UiService {
+  /**
+   * One status item per `id` (1-40 of `a-z 0-9 - _`), at most two per plugin. `order`
+   * sorts items from different plugins, lower first (default 500).
+   */
+  statusItem(options: { id: string; order?: number }): StatusItemHandle
+}
+
 // ── Presence and quiet events ──
 //
 // `walnut.events.on(name, handler)` delivers these to a server entry. They are what a
@@ -955,6 +1021,7 @@ export interface WalnutServerApi {
   readonly tasks: TaskService
   readonly config: ConfigService
   readonly notifications: NotificationService
+  readonly ui: UiService
   readonly letters: LettersService
   readonly ops: OpsService
   readonly services: ServicesService
