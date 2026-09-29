@@ -2202,6 +2202,9 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   let mtimeMs: number | undefined;
   let statSize: number | undefined;
   let statPath: string | undefined;
+  // Set when the LOCAL daemon failed to answer the stat at all (timeout, no
+  // connection), as opposed to answering with an error.
+  let localDaemonDown: string | undefined;
   {
     const daemonHost = host ?? '__local__';
     if (cwd && isSafeForProjectEncoding(cwd)) {
@@ -2280,10 +2283,11 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
         // stat failed (old daemon without fs.stat, transport error, or local
         // daemon mid-restart) — skip the cache and fall through to a full read.
         // Not fatal.
+        const error = err instanceof Error ? err.message : String(err);
         log.session.debug('fs.stat via daemon failed, skipping history cache', {
-          sessionId, host: daemonHost,
-          error: err instanceof Error ? err.message : String(err),
+          sessionId, host: daemonHost, error,
         });
+        if (!host && !error.startsWith('fs.stat failed:')) localDaemonDown = error;
       }
     }
   }
@@ -2349,7 +2353,9 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   // transport failures keep their existing contract.
   let result: Awaited<ReturnType<typeof readSessionJsonlContent>>;
   try {
-    result = await readSessionJsonlContent(sessionId, cwd, host, outputFile);
+    result = await readSessionJsonlContent(sessionId, cwd, host, outputFile, {
+      throwOnReadFailure: true, localDaemonError: localDaemonDown,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!msg.includes('byte ceiling')) throw err;

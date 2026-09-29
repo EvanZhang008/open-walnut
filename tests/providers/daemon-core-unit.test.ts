@@ -385,6 +385,39 @@ describe('reconcileRegistry', () => {
     expect(h.sessions.get('recycled')!.exitReason).toBe('reconcile-pid-recycled')
   })
 
+  it('reads every adoptable start time in ONE batched call, falling back per pid only for a miss', () => {
+    const entries: Record<string, RegistryEntry> = {}
+    for (let i = 0; i < 15; i++) {
+      entries[`live-${i}`] = {
+        pid: 1100 + i, startTime: 'T',
+        pipePath: `/tmp/l${i}.pipe`, jsonlPath: `/tmp/l${i}.jsonl`, pgidPath: `/tmp/l${i}.pgid`,
+        cwd: '/tmp', args: [], spawnedAt: new Date().toISOString(), parented: true,
+      }
+      h.pidAlive.add(1100 + i)
+      h.pidStartTime.set(1100 + i, 'T')
+    }
+    // The batch misses one pid (it answered for 14): that one is read directly.
+    h.pidStartTime.set(1114, 'RECYCLED')
+    seedRegistry(entries)
+    const batchCalls: number[][] = []
+    let singleReads = 0
+    const core = createDaemonCore({
+      ...h.deps,
+      readStartTimeFn: (pid) => { singleReads++; return h.pidStartTime.get(pid) ?? null },
+      readStartTimesFn: (pids) => {
+        batchCalls.push([...pids])
+        return new Map(pids.filter((p) => p !== 1114).map((p) => [p, 'T']))
+      },
+    })
+    core.reconcileRegistry()
+
+    expect(batchCalls).toHaveLength(1)
+    expect(batchCalls[0]!.sort()).toEqual(Array.from({ length: 15 }, (_, i) => 1100 + i))
+    expect(singleReads).toBe(1)
+    expect(h.sessions.get('live-0')!.state).toBe('running')
+    expect(h.sessions.get('live-14')!.exitReason).toBe('reconcile-pid-recycled')
+  })
+
   it('is re-entrant — does not overwrite existing session', () => {
     const entry: RegistryEntry = {
       pid: 1003, startTime: '100',
@@ -429,7 +462,7 @@ describe('startOrphanPoll', () => {
     expect(h.sessions.get(sid)!.exitReason).toBe('orphan-poll-dead')
   })
 
-  it('detects pid recycling (different start_time) in-poll', () => {
+  it('detects pid recycling (different start_time) in-poll, on the periodic check', async () => {
     const core = createDaemonCore(h.deps)
     const sid = 'poll-recycle'
     h.sessions.set(sid, makeSession(sid, { pid: 2002, startTime: '100' }))
@@ -443,8 +476,63 @@ describe('startOrphanPoll', () => {
     h.pidStartTime.set(2002, '777')
 
     h.tick(1000)
+    await Promise.resolve()
+    // The 1s tick is a kill(pid,0) probe only; the start time is re-read every 30s.
+    expect(h.sessions.get(sid)!.state).toBe('running')
+
+    h.tick(29_000)
+    await Promise.resolve()
+    await Promise.resolve()
     expect(h.sessions.get(sid)!.state).toBe('dead')
     expect(h.sessions.get(sid)!.exitReason).toBe('pid-recycled')
+  })
+
+  it('never runs a synchronous start-time read from the 1s tick (15 orphans, 60s)', async () => {
+    let syncReads = 0
+    const asyncReads: number[] = []
+    const core = createDaemonCore({
+      ...h.deps,
+      readStartTimeFn: (pid) => { syncReads++; return h.pidStartTime.get(pid) ?? null },
+      readStartTimeAsyncFn: async (pid) => { asyncReads.push(pid); return h.pidStartTime.get(pid) ?? null },
+    })
+    for (let i = 0; i < 15; i++) {
+      const pid = 3000 + i
+      h.sessions.set(`orphan-${i}`, makeSession(`orphan-${i}`, { pid, startTime: 'T' }))
+      h.pidAlive.add(pid)
+      h.pidStartTime.set(pid, 'T')
+      core.startOrphanPoll(`orphan-${i}`)
+    }
+    for (let s = 0; s < 60; s++) { h.tick(1000); await Promise.resolve() }
+
+    expect(syncReads).toBe(0)
+    // Two periodic checks per orphan in 60s, instead of 60 blocking spawns each.
+    expect(asyncReads.length).toBe(30)
+    expect([...h.sessions.values()].every((s) => s.state === 'running')).toBe(true)
+    expect(h.killHistory.filter((k) => k.sig === 0).length).toBe(15 * 60)
+  })
+
+  it('keeps one start-time probe in flight per orphan, and a late answer for a replaced session reaps nothing', async () => {
+    let release: ((v: string | null) => void) | null = null
+    let probes = 0
+    const core = createDaemonCore({
+      ...h.deps,
+      readStartTimeAsyncFn: () => { probes++; return new Promise((r) => { release = r }) },
+    })
+    const sid = 'poll-slow-probe'
+    h.sessions.set(sid, makeSession(sid, { pid: 2010, startTime: 'OLD' }))
+    h.pidAlive.add(2010)
+    core.startOrphanPoll(sid)
+
+    h.tick(30_000)
+    h.tick(30_000) // a second period elapses while the first probe is still out
+    expect(probes).toBe(1)
+
+    // cmdStart replaced the session (new process, new record) meanwhile.
+    h.sessions.set(sid, makeSession(sid, { pid: 2010, startTime: 'NEW' }))
+    release!('SOMEONE-ELSE')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(h.sessions.get(sid)!.state).toBe('running')
   })
 
   it('is idempotent — second call does not start a second timer', () => {

@@ -50,6 +50,9 @@ import { classifySessionHostStart } from './session-host-core.js'
 // unaffected. Production sets nothing → /tmp/open-walnut.
 const DEFAULT_DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
 
+/** Patience for a daemon whose pid is alive but whose first hello timed out. */
+const BUSY_DAEMON_HELLO_MS = 15_000
+
 export function getLocalDaemonBinaryName(
   platform: string = process.platform,
   arch: string = process.arch,
@@ -190,6 +193,8 @@ export interface LocalDaemonOptions {
   daemonDir?: string
   /** Override binary path (default: autodetected). Tests use this with a mock script. */
   binaryPath?: string
+  /** Override the wait for a live-but-slow daemon's hello (default 15s). */
+  busyHelloMs?: number
 }
 
 export class LocalDaemon {
@@ -217,6 +222,7 @@ export class LocalDaemon {
   private readonly instanceIdFile: string
   private readonly ownerFile: string
   private readonly overrideBinaryPath: string | undefined
+  private readonly busyHelloMs: number
 
   constructor(opts: LocalDaemonOptions = {}) {
     this.daemonDir = opts.daemonDir ?? DEFAULT_DAEMON_DIR
@@ -225,6 +231,7 @@ export class LocalDaemon {
     this.instanceIdFile = path.join(this.daemonDir, 'daemon.instance')
     this.ownerFile = path.join(this.daemonDir, DAEMON_OWNER_FILE)
     this.overrideBinaryPath = opts.binaryPath
+    this.busyHelloMs = opts.busyHelloMs ?? BUSY_DAEMON_HELLO_MS
   }
 
   get port(): number | null { return this._port }
@@ -275,6 +282,24 @@ export class LocalDaemon {
     let existingPort = this.readPortFile()
     if (existingPort) {
       let helloResult = await this.ping(existingPort)
+      // Alive but slow (a starved event loop on a loaded machine): wait for it
+      // instead of spawning. A second daemon can never take over a live one's
+      // runtime dir (its instance lock makes the newcomer exit), so each spawn
+      // was pure cost: 321 futile Walnut.app + daemon launches in one day, every
+      // one ending in "started but not responding to hello".
+      const recordedPid = this.readPidFile()
+      if (!helloResult.alive && helloResult.failure === 'timeout' && recordedPid && this.isPidAlive(recordedPid)) {
+        log.session.warn('local daemon is alive but slow to answer hello — waiting instead of respawning', {
+          port: existingPort, pid: recordedPid, waitMs: this.busyHelloMs,
+        })
+        helloResult = await this.ping(existingPort, this.busyHelloMs)
+        if (!helloResult.alive && helloResult.failure === 'timeout' && this.isPidAlive(recordedPid)) {
+          throw new Error(
+            `Local daemon (pid ${recordedPid}, port ${existingPort}) is running but did not answer within `
+            + `${this.busyHelloMs / 1000}s; not starting a second one`,
+          )
+        }
+      }
       if (helloResult.alive) {
         if (helloResult.capabilities?.includes('cron-supervision-v1')) {
           if (expectedVersion && helloResult.version !== expectedVersion) {
@@ -570,19 +595,29 @@ export class LocalDaemon {
     }
   }
 
-  private async ping(port: number): Promise<{ alive: boolean; version?: string; capabilities?: string[]; instanceId?: string }> {
+  private async ping(port: number, timeoutMs = 2000): Promise<{
+    alive: boolean; version?: string; capabilities?: string[]; instanceId?: string
+    /** Set when not alive: a timeout means something accepted or is holding the
+     *  connection without answering; an error means nothing is listening. */
+    failure?: 'timeout' | 'error' | 'bad-reply'
+  }> {
     return new Promise((resolve) => {
       // 2s is generous for localhost WebSocket (typically <10ms) but handles
       // daemon startup jitter. This blocks Walnut server startup, so keep short.
-      const timeout = setTimeout(() => { resolve({ alive: false }) }, 2000)
+      let ws: WebSocket | null = null
+      const timeout = setTimeout(() => {
+        try { ws?.terminate() } catch { /* already closed */ }
+        resolve({ alive: false, failure: 'timeout' })
+      }, timeoutMs)
       try {
-        const ws = new WebSocket(`ws://localhost:${port}`)
-        ws.on('open', () => {
-          ws.send(JSON.stringify({ id: 1, cmd: 'hello' }))
+        const socket = new WebSocket(`ws://localhost:${port}`)
+        ws = socket
+        socket.on('open', () => {
+          socket.send(JSON.stringify({ id: 1, cmd: 'hello' }))
         })
-        ws.on('message', (data) => {
+        socket.on('message', (data) => {
           clearTimeout(timeout)
-          ws.close()
+          socket.close()
           try {
             const msg = JSON.parse(data.toString()) as {
               ok?: boolean; version?: string; capabilities?: string[]; instanceId?: string
@@ -592,15 +627,16 @@ export class LocalDaemon {
               version: msg.version,
               capabilities: msg.capabilities,
               instanceId: msg.instanceId,
+              ...(msg.ok === true ? {} : { failure: 'bad-reply' as const }),
             })
           } catch {
-            resolve({ alive: false })
+            resolve({ alive: false, failure: 'bad-reply' })
           }
         })
-        ws.on('error', () => { clearTimeout(timeout); resolve({ alive: false }) })
+        socket.on('error', () => { clearTimeout(timeout); resolve({ alive: false, failure: 'error' }) })
       } catch {
         clearTimeout(timeout)
-        resolve({ alive: false })
+        resolve({ alive: false, failure: 'error' })
       }
     })
   }

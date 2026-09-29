@@ -19,7 +19,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { execSync } from 'node:child_process'
+import { execSync, spawn } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { LocalDaemon } from '../../src/providers/local-daemon.js'
 
@@ -198,6 +198,41 @@ describe('LocalDaemon — mock daemon coverage', () => {
 
     await expect(daemon.ensureRunning()).rejects.toThrow(/not responding to hello/)
   }, 15000)
+
+  // Incident 2026-09-28: a live daemon too busy to answer hello within 2s made
+  // every ensureRunning() spawn a replacement that could never take over (its
+  // instance lock makes the newcomer exit): 321 futile launches in one day.
+  describe('a daemon that is alive but slow', () => {
+    async function startOutsideLocalDaemon(opts: MockOpts): Promise<{ binary: string; daemonDir: string; pid: number; port: number }> {
+      const daemonDir = path.join(tmpDir, 'daemon')
+      const binary = makeMockDaemon(tmpDir, daemonDir, 'v1-busy', opts)
+      spawn(binary, ['--start'], { detached: true, stdio: 'ignore' }).unref()
+      const pidFile = path.join(daemonDir, 'daemon.pid')
+      for (let i = 0; i < 100 && !fs.existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 50))
+      const pid = Number(fs.readFileSync(pidFile, 'utf-8'))
+      const port = Number(fs.readFileSync(path.join(daemonDir, 'daemon.port'), 'utf-8'))
+      return { binary, daemonDir, pid, port }
+    }
+
+    it('is waited for and adopted, never respawned', async () => {
+      const { binary, daemonDir, pid, port } = await startOutsideLocalDaemon({ helloDelay: 3000 })
+      const daemon = new LocalDaemon({ daemonDir, binaryPath: binary, busyHelloMs: 8000 })
+
+      expect(await daemon.ensureRunning()).toBe(port)
+      expect(Number(fs.readFileSync(path.join(daemonDir, 'daemon.pid'), 'utf-8'))).toBe(pid)
+      expect(daemon.pid).toBe(pid)
+    }, 20000)
+
+    it('that never answers is reported, and still no second daemon is started', async () => {
+      const { binary, daemonDir, pid, port } = await startOutsideLocalDaemon({ deadOnPing: true })
+      const daemon = new LocalDaemon({ daemonDir, binaryPath: binary, busyHelloMs: 1000 })
+
+      await expect(daemon.ensureRunning()).rejects.toThrow(/is running but did not answer within 1s; not starting a second one/)
+      expect(Number(fs.readFileSync(path.join(daemonDir, 'daemon.pid'), 'utf-8'))).toBe(pid)
+      expect(Number(fs.readFileSync(path.join(daemonDir, 'daemon.port'), 'utf-8'))).toBe(port)
+      expect(daemon.sessionHostPid).toBeNull()
+    }, 15000)
+  })
 
   it('throws when binary does not exist (ENOENT caught early)', async () => {
     const daemon = new LocalDaemon({

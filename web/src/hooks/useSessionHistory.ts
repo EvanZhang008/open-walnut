@@ -267,7 +267,16 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           }
         })
         .catch((e: Error) => {
-          if (!cancelled) { endP2('error'); setError(e.message); }
+          if (cancelled) return;
+          endP2('error');
+          // A 5xx or timed-out delta means the live read failed (daemon or SSH not
+          // answering). Keep the timeline we hold and show the stale banner, whose
+          // full-fetch retry replaces it once the read works again.
+          const status = (e as { status?: unknown }).status;
+          const timedOut = e.name === 'TimeoutError';
+          if (timedOut || (typeof status === 'number' && status >= 500)) {
+            setStale(timedOut ? 'history read timed out' : (e.message || 'live read failed'));
+          } else setError(e.message);
         })
         .finally(() => {
           if (!cancelled) { setLoading(false); setPhase2Pending(false); }

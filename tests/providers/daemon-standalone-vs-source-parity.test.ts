@@ -126,6 +126,22 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(templateSrc).toMatch(/ORPHAN_POLL_INTERVAL_MS\s*=\s*1000/)
   })
 
+  // P3a — the pid-recycling re-check is periodic and async (2026-09-28: one
+  // synchronous `ps` per orphan per second starved the daemon's event loop).
+  it('both implementations re-read an orphan start time every 30s, asynchronously, and batch the boot reconcile', () => {
+    expect(coreSrc).toMatch(/orphanStartTimeCheckMs\s*\?\?\s*30_000/)
+    expect(coreSrc).toMatch(/readStartTimeAsync\(pid\)/)
+    expect(coreSrc).toMatch(/deps\.readStartTimesFn\(pids\)/)
+    expect(templateSrc).toMatch(/ORPHAN_START_TIME_CHECK_MS\s*=\s*30000/)
+    expect(templateSrc).toMatch(/readStartTimeAsync\(pid\)\.then/)
+    expect(templateSrc).toMatch(/prefetched = readStartTimes\(/)
+    // The 1s tick itself never calls the synchronous reader any more.
+    const corePoll = coreSrc.slice(coreSrc.indexOf('function startOrphanPoll'), coreSrc.indexOf('function reconcileRegistry'))
+    const templatePoll = templateSrc.slice(templateSrc.indexOf('function startOrphanPoll'), templateSrc.indexOf('// ── L2: daemon-authoritative'))
+    expect(corePoll).not.toMatch(/readStartTimeFn\(pid\)/)
+    expect(templatePoll).not.toMatch(/[^A-Za-z]readStartTime\(pid\)/)
+  })
+
   // P3b — orphan poll reap reasons
   it('both implementations use reason=orphan-poll-dead and pid-recycled', () => {
     expect(coreSrc).toMatch(/orphan-poll-dead/)

@@ -263,14 +263,27 @@ export async function mergeSyntheticUserEvents(sessionId: string, content: strin
  * Returns { content, source, foundCwd } where source indicates where data was read from.
  * foundCwd is extracted from the JSONL content (first user message's cwd field) —
  * useful when the provided cwd was wrong but the session was found via fallback search.
+ *
+ * `throwOnReadFailure`: when the local daemon read FAILED (as opposed to finding
+ * no file) and no fallback had content, throw instead of returning null. The
+ * history reader needs the difference: null reads as "this session has no
+ * history", and a delta answered that way replaced the client's whole timeline
+ * with nothing while the daemon was merely slow (2026-09-28).
+ *
+ * `localDaemonError`: the caller's own request to the local daemon just went
+ * unanswered. Skip the daemon read (a second 30s wait would push the response
+ * past the client's 60s deadline) and go straight to the local fallbacks.
  */
 export async function readSessionJsonlContent(
   sessionId: string,
   cwd?: string,
   host?: string,
   outputFile?: string,
+  opts?: { throwOnReadFailure?: boolean; localDaemonError?: string },
 ): Promise<ReadSessionResult | null> {
   const { SESSION_STREAMS_DIR } = await import('../constants.js');
+  const skipDaemonRead = !host && !!opts?.localDaemonError;
+  let localReadError: string | null = skipDaemonRead ? opts!.localDaemonError! : null;
 
   // Helper: attach foundCwd from JSONL content. `canonicalChars` records where
   // the on-disk file ends inside `content` (before synthetic-event append) so
@@ -298,7 +311,7 @@ export async function readSessionJsonlContent(
   //    "Daemon-uniform file access". The daemon uses tilde paths (~/.claude/...),
   //    expanded server-side via $HOME (localDaemon runs as the same user, so ~
   //    resolves to the same ~/.claude the old local path used).
-  {
+  if (!skipDaemonRead) {
     const daemonHost = host ?? '__local__';
     // Timeout: covers cold-start daemon connect (ControlMaster ~15s + tunnel + WS) + file reads.
     // Individual operations have their own timeouts, but getDaemonConnection() may wait in
@@ -366,6 +379,7 @@ export async function readSessionJsonlContent(
       // throwing — the local daemon may be mid-restart while the streams file
       // (written directly by LocalIO) is still readable.
       if (host) throw new Error(`Remote read failed (${host}): ${errMsg}`);
+      localReadError = errMsg;
     }
   }
 
@@ -395,6 +409,7 @@ export async function readSessionJsonlContent(
     }
   }
 
+  if (localReadError && opts?.throwOnReadFailure) throw new Error(`Local read failed: ${localReadError}`);
   return null;
 }
 

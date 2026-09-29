@@ -78,11 +78,13 @@ function condenseStaleReason(msg: string): string {
   const clean = msg.replace(/\x1b\[[0-9;]*m/g, '').replace(/\s+/g, ' ').trim()
   const host = /^Remote read failed \(([^)]+)\)/.exec(clean)?.[1]
   const at = host ? ` (${host})` : ''
+  const local = clean.startsWith('Local read failed:')
   if (/authenticat|cookie is invalid or expired/i.test(clean)) return `SSH auth expired${at} — re-authenticate to the host`
   if (/timeout|timed out/i.test(clean)) {
     const dur = /timeout \(([^)]*)\)/i.exec(clean)?.[1]
-    return `Remote read timeout${dur ? ` (${dur})` : ''}${at}`
+    return `${local ? 'Local daemon read timeout' : 'Remote read timeout'}${dur ? ` (${dur})` : ''}${at}`
   }
+  if (local && /not responding to hello|did not answer/i.test(clean)) return 'Local daemon not answering'
   if (/Command failed: ssh/i.test(clean)) return `SSH connection failed${at}`
   return clean.length > 120 ? clean.slice(0, 117) + '…' : clean
 }
@@ -1163,8 +1165,20 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // full path below): an 8+ MB whale JSONL parsed whole on the event loop
       // took seconds and stalled every other route, only for the tail slice to
       // throw most of it away.
-      const { messages, finishedAgentIds: p1FinishedIds, windowed: p1Windowed } = await readProviderSessionHistory(sessionId, record, undefined, true,
-        tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
+      let p1: Awaited<ReturnType<typeof readProviderSessionHistory>>
+      try {
+        p1 = await readProviderSessionHistory(sessionId, record, undefined, true,
+          tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
+      } catch (err) {
+        // The local read failed (daemon not answering). Phase 1 is only a fast
+        // preview: answer empty and let the full fetch run its degraded path.
+        log.web.warn('session history phase-1 read failed; answering empty', {
+          sessionId, error: err instanceof Error ? err.message : String(err),
+        })
+        res.json({ messages: [], total: 0 })
+        return
+      }
+      const { messages, finishedAgentIds: p1FinishedIds, windowed: p1Windowed } = p1
       logMessageOrdering('P1:streams', sessionId, messages, record?.host)
       const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
       const p1InitialUserText = p1Windowed ? undefined : initialUserTextOf(messages)
@@ -1241,6 +1255,9 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           return
         }
       }
+      // A failed delta is answered in place: the client keeps its timeline under
+      // the stale banner and retries, so it is not an endpoint incident card.
+      if (req.query.since !== undefined) markHandledFailure(res)
       res.status(502).json({ error: condenseStaleReason(msg) })
       return
     }

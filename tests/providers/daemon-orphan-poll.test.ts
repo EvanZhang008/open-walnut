@@ -5,7 +5,7 @@
  *   - Sets interval at 1000ms
  *   - Skips tick if session missing or state!='running'
  *   - kill(pid,0) ESRCH → reapSession('orphan-poll-dead')
- *   - start_time mismatch → reapSession('pid-recycled')
+ *   - start_time mismatch → reapSession('pid-recycled'), found by the 30s re-check
  *   - startTime null → only alive check, no recycle check
  *   - Timer cleared after reap
  *   - Idempotent: two startOrphanPoll calls → one timer
@@ -105,7 +105,12 @@ describe('L1.4 daemon-orphan-poll: 1s watchdog', () => {
     ctx.sessions.set('sid', makeTestSession({ pid: 104, startTime: 'ORIGINAL' }))
     core.startOrphanPoll('sid')
 
-    vi.advanceTimersByTime(1001)
+    // The 1s tick only probes liveness; the start time is re-read every 30s.
+    await vi.advanceTimersByTimeAsync(1001)
+    expect(ctx.spies.readStartTimeFn).not.toHaveBeenCalled()
+    expect(ctx.sessions.get('sid')!.state).toBe('running')
+
+    await vi.advanceTimersByTimeAsync(29_000)
 
     expect(ctx.sessions.get('sid')!.state).toBe('dead')
     expect(ctx.sessions.get('sid')!.exitReason).toBe('pid-recycled')

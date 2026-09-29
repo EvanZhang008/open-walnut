@@ -28,6 +28,8 @@ import type { ServerWebSocket } from 'bun'
 import {
   createDaemonCore,
   defaultReadStartTime,
+  defaultReadStartTimes,
+  createAsyncStartTimeReader,
   shouldAutoRespond,
   buildControlResponse,
   decideBridgeRestart,
@@ -1456,10 +1458,16 @@ const core = createDaemonCore<SessionData>({
   clock: () => Date.now(),
   killFn: (pid, sig) => { process.kill(pid, sig as NodeJS.Signals) },
   readStartTimeFn: (pid) => defaultReadStartTime(fs, pid),
+  readStartTimesFn: (pids) => defaultReadStartTimes(fs, pids),
+  readStartTimeAsyncFn: createAsyncStartTimeReader({
+    fs,
+    execFileFn: (file, args, options, callback) => execFile(file, args, options, (error, stdout) => callback(error, String(stdout ?? ''))),
+  }),
   killProcessGroupFn: killProcessGroup,
   streamsDir: STREAMS_DIR,
   registryFile: REGISTRY_FILE,
   orphanPollIntervalMs: 1000,
+  orphanStartTimeCheckMs: 30_000,
   logger: logMsg,
   broadcastSessionStateFn: (payload) => {
     const session = sessions.get(payload.sid)

@@ -15,7 +15,7 @@
  * behaviour for SSH-deployed daemons.
  */
 
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { dirname, join as pathJoin } from 'node:path'
 
 // ── Shared types ──
@@ -131,8 +131,18 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
   clock: () => number
   /** `process.kill(pid, sig)` — throws on ESRCH/EPERM. sig===0 is a liveness probe. */
   killFn: (pid: number, sig: number | string) => void
-  /** Read /proc/<pid>/stat field 22 on Linux. Returns null on non-Linux or error. */
+  /** Kernel start time of a pid (see defaultReadStartTime). SYNCHRONOUS, and on
+   *  macOS it spawns `ps`, so it belongs to one-shot identity checks (reap, stop,
+   *  adopt), never to a loop over sessions. */
   readStartTimeFn: (pid: number) => string | null
+  /** Start times of many pids in ONE read, for the boot reconcile. Returns only
+   *  the pids it found. Absent ⇒ one readStartTimeFn call per registry entry. */
+  readStartTimesFn?: (pids: number[]) => Map<number, string>
+  /** Non-blocking start-time read for the orphan poll's recycling check.
+   *  Absent ⇒ readStartTimeFn (still throttled by orphanStartTimeCheckMs). */
+  readStartTimeAsyncFn?: (pid: number) => Promise<string | null>
+  /** How often a live orphan's start time is re-read. Default 30s. */
+  orphanStartTimeCheckMs?: number
   /** Send signal to an entire process group (pgid===pid for detached spawns). */
   killProcessGroupFn: (pid: number, signal: string) => boolean
   setIntervalFn?: typeof setInterval
@@ -288,6 +298,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
   const setTimeoutFn = deps.setTimeoutFn ?? setTimeout
   const orphanPollIntervalMs = deps.orphanPollIntervalMs ?? 1000
+  const orphanStartTimeCheckMs = deps.orphanStartTimeCheckMs ?? 30_000
+  const readStartTimeAsync = deps.readStartTimeAsyncFn
+    ?? ((pid: number) => Promise.resolve(readStartTimeFn(pid)))
   const fifoWriteDeadlineMs = deps.fifoWriteDeadlineMs ?? 20_000
 
   /**
@@ -606,6 +619,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     if (session.orphanPollTimer) return  // idempotent
     const pid = session.pid
     const capturedStartTime = session.startTime
+    // The start time was just read by whoever adopted the session, so the first
+    // recycling re-check waits one full period.
+    let lastStartCheckAt = clock()
+    let startCheckInFlight = false
     logger('info', 'startOrphanPoll: started', { sid, pid, startTime: capturedStartTime })
     const timer = setIntervalFn(() => {
       const s = sessions.get(sid)
@@ -640,15 +657,28 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         return
       }
       // PID recycling defence: different start_time means the kernel handed
-      // the pid to somebody else after the original CLI died.
-      if (capturedStartTime) {
-        const current = readStartTimeFn(pid)
-        if (current && current !== capturedStartTime) {
-          logger('warn', 'orphan poll: pid recycled (start_time drift) — reaping', {
-            sid, pid, captured: capturedStartTime, current,
-          })
-          reapSession(sid, -1, 'pid-recycled')
+      // the pid to somebody else after the original CLI died. Periodic and
+      // async on purpose: on macOS the read spawns `ps`, and one synchronous
+      // `ps` per orphan per second (15 adopted CLIs after a deploy, ~1s per
+      // spawn under load) left the daemon's event loop blocked nearly all the
+      // time, so hello took 10s+ and every local history read failed.
+      if (capturedStartTime && !startCheckInFlight && clock() - lastStartCheckAt >= orphanStartTimeCheckMs) {
+        startCheckInFlight = true
+        lastStartCheckAt = clock()
+        const settle = (current: string | null): void => {
+          startCheckInFlight = false
+          const live = sessions.get(sid)
+          if (!live || live !== s || live.state !== 'running' || live.pid !== pid) return
+          if (current && current !== capturedStartTime) {
+            logger('warn', 'orphan poll: pid recycled (start_time drift) — reaping', {
+              sid, pid, captured: capturedStartTime, current,
+            })
+            reapSession(sid, -1, 'pid-recycled')
+          }
         }
+        let probe: Promise<string | null>
+        try { probe = readStartTimeAsync(pid) } catch { probe = Promise.resolve(null) }
+        probe.then(settle, () => settle(null))
       }
     }, orphanPollIntervalMs)
     session.orphanPollTimer = timer
@@ -661,6 +691,19 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    */
   function reconcileRegistry(): void {
     const registry = readRegistry()
+    // Every adoptable entry's start time in ONE read (one `ps` on macOS) instead
+    // of one blocking spawn per entry: a deploy restart adopts every live CLI,
+    // and per-entry reads kept a busy machine's daemon deaf for ~15s at boot.
+    let prefetched: Map<number, string> | null = null
+    if (deps.readStartTimesFn) {
+      const pids = Object.entries(registry)
+        .filter(([sid, e]) => !sessions.has(sid) && !!e.startTime && Number.isSafeInteger(e.pid) && e.pid > 1)
+        .map(([, e]) => e.pid)
+      if (pids.length > 0) {
+        try { prefetched = deps.readStartTimesFn(pids) } catch { prefetched = null }
+      }
+    }
+    const startTimeOf = (pid: number): string | null => prefetched?.get(pid) ?? readStartTimeFn(pid)
     for (const [sid, entry] of Object.entries(registry)) {
       const pid = entry.pid
       if (!pid || pid <= 0) continue
@@ -705,7 +748,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
 
       // Alive and ours: verify start_time to catch pid recycling; in supervised mode the identity must be proven before adoption.
       if (entry.startTime) {
-        const current = readStartTimeFn(pid)
+        const current = startTimeOf(pid)
         if (current && current !== entry.startTime) {
           reapSession(sid, -1, 'reconcile-pid-recycled')
           continue
@@ -1983,4 +2026,109 @@ export function defaultReadStartTime(fs: typeof import('node:fs'), pid: number):
     return result || null
   } catch {}
   return null
+}
+
+/** Linux /proc start time; `undefined` when /proc is unavailable (macOS). */
+function readProcStartTime(fs: typeof import('node:fs'), pid: number): string | null | undefined {
+  try {
+    const raw = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8')
+    const rparen = raw.lastIndexOf(')')
+    if (rparen < 0) return null
+    return raw.slice(rparen + 2).split(' ')[19] ?? null
+  } catch {
+    return fs.existsSync('/proc/self/stat') ? null : undefined
+  }
+}
+
+const PS_START_TIME_ARGS = (pids: number[]): string[] => ['-o', 'pid=,lstart=', '-p', pids.join(',')]
+
+/**
+ * Parse `ps -o pid=,lstart=` output into pid → lstart. Each value is byte-equal
+ * to what `ps -p <pid> -o lstart=` prints (trimmed), so start times recorded by
+ * defaultReadStartTime still compare equal.
+ */
+export function parsePsStartTimes(stdout: string): Map<number, string> {
+  const out = new Map<number, string>()
+  for (const line of stdout.split('\n')) {
+    const m = /^\s*(\d+)\s+(\S.*?)\s*$/.exec(line)
+    if (m) out.set(Number(m[1]), m[2]!)
+  }
+  return out
+}
+
+const validPids = (pids: number[]): number[] =>
+  [...new Set(pids.filter((p) => Number.isSafeInteger(p) && p > 1))]
+
+/** Batched, synchronous start-time read: one `ps` for every pid on macOS. */
+export function defaultReadStartTimes(fs: typeof import('node:fs'), pids: number[]): Map<number, string> {
+  const out = new Map<number, string>()
+  const wanted = validPids(pids)
+  if (wanted.length === 0) return out
+  if (readProcStartTime(fs, wanted[0]!) !== undefined) {
+    for (const pid of wanted) {
+      const t = readProcStartTime(fs, pid)
+      if (t) out.set(pid, t)
+    }
+    return out
+  }
+  try {
+    return parsePsStartTimes(execFileSync('ps', PS_START_TIME_ARGS(wanted), {
+      encoding: 'utf-8', timeout: 5000, env: { ...process.env, LANG: 'C' },
+    }))
+  } catch (err) {
+    // ps exits 1 when any pid is gone but still prints the live ones.
+    const stdout = (err as { stdout?: unknown }).stdout
+    return typeof stdout === 'string' ? parsePsStartTimes(stdout) : out
+  }
+}
+
+type ExecFileLike = (
+  file: string,
+  args: string[],
+  options: { encoding: 'utf-8'; timeout: number; env: NodeJS.ProcessEnv },
+  callback: (error: Error | null, stdout: string) => void,
+) => unknown
+
+/**
+ * Non-blocking start-time reader for the orphan poll. Requests arriving within
+ * `batchWindowMs` share ONE async `ps` (the polls of sessions adopted together
+ * fire together), and nothing ever waits on the event loop.
+ */
+export function createAsyncStartTimeReader(opts: {
+  fs: typeof import('node:fs')
+  execFileFn: ExecFileLike
+  batchWindowMs?: number
+  setTimeoutFn?: typeof setTimeout
+}): (pid: number) => Promise<string | null> {
+  const setTimeoutFn = opts.setTimeoutFn ?? setTimeout
+  let pending: Map<number, Array<(value: string | null) => void>> | null = null
+  const flush = (): void => {
+    const batch = pending
+    pending = null
+    if (!batch) return
+    const settleAll = (found: Map<number, string>): void => {
+      for (const [pid, waiters] of batch) for (const w of waiters) w(found.get(pid) ?? null)
+    }
+    try {
+      opts.execFileFn('ps', PS_START_TIME_ARGS([...batch.keys()]), {
+        encoding: 'utf-8', timeout: 5000, env: { ...process.env, LANG: 'C' },
+      }, (_error, stdout) => settleAll(parsePsStartTimes(typeof stdout === 'string' ? stdout : '')))
+    } catch {
+      settleAll(new Map())
+    }
+  }
+  return (pid: number): Promise<string | null> => {
+    if (!Number.isSafeInteger(pid) || pid <= 1) return Promise.resolve(null)
+    const proc = readProcStartTime(opts.fs, pid)
+    if (proc !== undefined) return Promise.resolve(proc)
+    return new Promise((resolve) => {
+      if (!pending) {
+        pending = new Map()
+        setTimeoutFn(flush, opts.batchWindowMs ?? 50)
+      }
+      const waiters = pending.get(pid)
+      if (waiters) waiters.push(resolve)
+      else pending.set(pid, [resolve])
+    })
+  }
 }

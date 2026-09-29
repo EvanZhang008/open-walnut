@@ -1306,6 +1306,65 @@ function readStartTime(pid) {
   return null;
 }
 
+// Batched start-time reads. Keep in sync with daemon-core.ts parsePsStartTimes /
+// defaultReadStartTimes / createAsyncStartTimeReader: one "ps" per sweep instead
+// of one blocking spawn per session, which starved the event loop.
+function hasProcFs() {
+  try { return fs.existsSync('/proc/self/stat'); } catch { return false; }
+}
+function parsePsStartTimes(stdout) {
+  const out = new Map();
+  for (const line of String(stdout || '').split('\\n')) {
+    const m = /^\\s*(\\d+)\\s+(\\S.*?)\\s*$/.exec(line);
+    if (m) out.set(Number(m[1]), m[2]);
+  }
+  return out;
+}
+function psStartTimeArgs(pids) { return ['-o', 'pid=,lstart=', '-p', pids.join(',')]; }
+function uniquePids(pids) {
+  return Array.from(new Set(pids.filter(function (p) { return Number.isSafeInteger(p) && p > 1; })));
+}
+function readStartTimes(pids) {
+  const wanted = uniquePids(pids);
+  const out = new Map();
+  if (wanted.length === 0) return out;
+  if (hasProcFs()) {
+    for (const pid of wanted) { const t = readStartTime(pid); if (t) out.set(pid, t); }
+    return out;
+  }
+  try {
+    const env = Object.assign({}, process.env, { LANG: 'C' });
+    return parsePsStartTimes(execFileSync('ps', psStartTimeArgs(wanted), { encoding: 'utf-8', timeout: 5000, env: env }));
+  } catch (err) {
+    // ps exits 1 when any pid is gone but still prints the live ones.
+    return err && typeof err.stdout === 'string' ? parsePsStartTimes(err.stdout) : out;
+  }
+}
+let startTimeBatch = null;
+function readStartTimeAsync(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return Promise.resolve(null);
+  if (hasProcFs()) return Promise.resolve(readStartTime(pid));
+  return new Promise(function (resolve) {
+    if (!startTimeBatch) {
+      startTimeBatch = new Map();
+      setTimeout(function () {
+        const batch = startTimeBatch;
+        startTimeBatch = null;
+        const settleAll = function (found) {
+          batch.forEach(function (waiters, p) { for (const w of waiters) w(found.get(p) || null); });
+        };
+        try {
+          const env = Object.assign({}, process.env, { LANG: 'C' });
+          execFile('ps', psStartTimeArgs(Array.from(batch.keys())), { encoding: 'utf-8', timeout: 5000, env: env },
+            function (_err, stdout) { settleAll(parsePsStartTimes(stdout)); });
+        } catch { settleAll(new Map()); }
+      }, 50);
+    }
+    const waiters = startTimeBatch.get(pid);
+    if (waiters) waiters.push(resolve); else startTimeBatch.set(pid, [resolve]);
+  });
+}
+
 // ── Session state broadcast (Phase B) ──
 function broadcastSessionState(sid, state, extra) {
   const session = sessions.get(sid);
@@ -1503,11 +1562,14 @@ function reapSession(sid, code, reason, groupExited = false) {
 
 // ── Orphan poll (Phase D, layer 3.2) ──
 const ORPHAN_POLL_INTERVAL_MS = 1000;
+const ORPHAN_START_TIME_CHECK_MS = 30000;
 function startOrphanPoll(sid) {
   const session = sessions.get(sid);
   if (!session || session.state !== 'running' || !session.pid || session.orphanPollTimer) return;
   const pid = session.pid;
   const capturedStartTime = session.startTime;
+  let lastStartCheckAt = Date.now();
+  let startCheckInFlight = false;
   logMsg('info', 'startOrphanPoll: started', { sid, pid, startTime: capturedStartTime });
   const timer = setInterval(() => {
     const s = sessions.get(sid);
@@ -1532,14 +1594,22 @@ function startOrphanPoll(sid) {
       reapSession(sid, -1, 'orphan-poll-dead');
       return;
     }
-    if (capturedStartTime) {
-      const current = readStartTime(pid);
-      if (current && current !== capturedStartTime) {
-        logMsg('warn', 'orphan poll: pid recycled (start_time drift) — reaping', {
-          sid, pid, captured: capturedStartTime, current,
-        });
-        reapSession(sid, -1, 'pid-recycled');
-      }
+    // Recycling re-check: periodic and async (see daemon-core startOrphanPoll).
+    if (capturedStartTime && !startCheckInFlight && Date.now() - lastStartCheckAt >= ORPHAN_START_TIME_CHECK_MS) {
+      startCheckInFlight = true;
+      lastStartCheckAt = Date.now();
+      const settle = (current) => {
+        startCheckInFlight = false;
+        const live = sessions.get(sid);
+        if (!live || live !== s || live.state !== 'running' || live.pid !== pid) return;
+        if (current && current !== capturedStartTime) {
+          logMsg('warn', 'orphan poll: pid recycled (start_time drift) — reaping', {
+            sid, pid, captured: capturedStartTime, current,
+          });
+          reapSession(sid, -1, 'pid-recycled');
+        }
+      };
+      readStartTimeAsync(pid).then(settle, () => settle(null));
     }
   }, ORPHAN_POLL_INTERVAL_MS);
   session.orphanPollTimer = timer;
@@ -1901,6 +1971,13 @@ function pushSnapshot(sid, immediate) {
 // ── Startup reconcile (Phase C, primitive P4) ──
 function reconcileRegistry() {
   const registry = readRegistry();
+  // One start-time read for every adoptable entry (see daemon-core reconcileRegistry).
+  let prefetched = null;
+  try {
+    prefetched = readStartTimes(Object.keys(registry)
+      .filter((sid) => !sessions.has(sid) && registry[sid] && registry[sid].startTime)
+      .map((sid) => registry[sid].pid));
+  } catch { prefetched = null; }
   for (const sid of Object.keys(registry)) {
     const entry = registry[sid];
     const pid = entry.pid;
@@ -2006,7 +2083,7 @@ function reconcileRegistry() {
     }
 
     if (alive && entry.startTime) {
-      const current = readStartTime(pid);
+      const current = (prefetched && prefetched.get(pid)) || readStartTime(pid);
       if (current && current !== entry.startTime) {
         reapSession(sid, -1, 'reconcile-pid-recycled');
         continue;
