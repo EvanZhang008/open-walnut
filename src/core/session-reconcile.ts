@@ -709,6 +709,16 @@ export interface DaemonSessionView {
 
 const DAEMON_VIEW_TIMEOUT_MS = 3_000
 
+async function daemonVeto(view: DaemonSessionView | null): Promise<string | null> {
+  if (!view) return null
+  if ((view.derivedRunning ?? 0) > 0) return 'daemon-bg-running'
+  const snap = view.snapshot
+  if (!snap || snap.cliState === 'dead') return null
+  if ((snap.detachedBgCount ?? 0) > 0) return 'daemon-detached-bg-running'
+  const { isWakeupArmed } = await import('../providers/daemon-fold.js')
+  return isWakeupArmed(snap.wakeupAt) ? 'daemon-wakeup-armed' : null
+}
+
 /** Ask the session's daemon for its whole-file view: over the pooled snapshot
  *  connection first (it needs no bound session manager: right after a restart
  *  reconcile runs before the attach binds one), then through the session's own
@@ -856,14 +866,13 @@ export async function reconcileProcessStatus(
   // makes the lanes flap (2026-09-29: a restart handed back a task whose
   // run_in_background test run was still going; the next 30s pull put it back). ──
   const daemonView = inputs.daemonView !== undefined ? inputs.daemonView : await fetchDaemonSessionView(sid, record.host)
-  if (daemonView) {
-    if ((daemonView.derivedRunning ?? 0) > 0) return { converged: false, reason: 'daemon-bg-running' }
-    const snap = daemonView.snapshot
-    if (snap && snap.cliState !== 'dead') {
-      if ((snap.detachedBgCount ?? 0) > 0) return { converged: false, reason: 'daemon-detached-bg-running' }
-      const { isWakeupArmed } = await import('../providers/daemon-fold.js')
-      if (isWakeupArmed(snap.wakeupAt)) return { converged: false, reason: 'daemon-wakeup-armed' }
-    }
+  const veto = await daemonVeto(daemonView)
+  if (veto) {
+    // Every tail check passed, so without the daemon this would have converged.
+    log.session.info('reconcileProcessStatus: daemon vetoed a convergence the tail fold allowed', {
+      sessionId: sid, reason: veto, anchorSynthetic: fold.anchorSynthetic === true,
+    })
+    return { converged: false, reason: veto }
   }
 
   // ── Target state: mirror what the lost result event would have set live ──
