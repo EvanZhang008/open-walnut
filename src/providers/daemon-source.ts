@@ -8085,20 +8085,27 @@ async function computeChangesCached(sid, cwd, refresh) {
     await prev.catch(() => {});
     try {
       const prior = changesCache.get(sid);
+      // Created BEFORE the compute so its first run fills the same memos;
+      // mainParse lets a recompute read only the bytes appended since.
+      const subCache = (prior && prior.subCache) || new Map();
+      const gitRootByDir = (prior && prior.gitRootByDir) || new Map();
+      const mainParse = (prior && prior.mainParse) || {};
       const output = await changesCore.computeHostLocalChanges({
         sessionId: sid,
         cwd: cwd,
         claudeHome: path.join(HOME_DIR, '.claude'),
-        subCache: prior ? prior.subCache : undefined,
-        gitRootByDir: prior ? prior.gitRootByDir : undefined,
+        subCache: subCache,
+        gitRootByDir: gitRootByDir,
+        mainParse: mainParse,
       });
       if (!output) return null;
       const entry = {
         mtimeMs: output.mtimeMs,
         size: output.size,
         output: output,
-        subCache: (prior && prior.subCache) || new Map(),
-        gitRootByDir: (prior && prior.gitRootByDir) || new Map(),
+        subCache: subCache,
+        gitRootByDir: gitRootByDir,
+        mainParse: mainParse,
         lastUsed: Date.now(),
       };
       changesCache.set(sid, entry);

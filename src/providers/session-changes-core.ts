@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { parseBashFileOps } from '../core/bash-file-ops.js';
 
 // ── Public result types (the wire + frontend shape) ──
@@ -379,6 +380,9 @@ export interface HostLocalComputeOptions {
   /** Caller-owned caches, reused across recomputes for the same session. */
   subCache?: Map<string, { size: number; fileMap: Map<string, FileAccum> }>;
   gitRootByDir?: Map<string, string | null>;
+  /** Caller-owned holder for where the main transcript parse stopped, so the
+   *  next compute reads only what was appended since (see MainParseState). */
+  mainParse?: { state?: MainParseState };
   /** Abort if the whole compute exceeds this (default 100s). */
   deadlineMs?: number;
 }
@@ -395,6 +399,50 @@ export interface HostLocalComputeOutput {
 
 const STREAM_WINDOW = 1024 * 1024;
 const CONTENT_READ_PARALLELISM = 8;
+const TAIL_HASH_BYTES = 4096;
+
+/**
+ * Where a main-transcript parse stopped, so the next compute continues from
+ * there. The transcript is append-only and collectOpsFromJsonl is an in-order
+ * fold over lines, so continuing from the end of the last complete line gives
+ * exactly the full parse's ops. Why: every append changes the transcript's
+ * mtime, so each compute of a live session re-read the whole file; on
+ * 2026-09-29 a 907 MB transcript was re-parsed every ~5 minutes, 11-35 s each,
+ * with the daemon's heap spiking to 8 GB (13.7 GB peak footprint).
+ */
+export interface MainParseState {
+  /** dev:ino:birthtime of the transcript: the same file, not a recreated one. */
+  epoch: string;
+  /** Bytes consumed: just past the last complete line. */
+  offset: number;
+  /** Hash of the bytes just before `offset`; any rewrite there starts over. */
+  tail: string;
+  headBlock: string;
+  /** Ops of the complete lines before `offset`. Never merged into: merges and
+   *  the trailing partial line go to a copy (cloneFileMap). */
+  fileMap: Map<string, FileAccum>;
+}
+
+const epochOf = (st: fs.Stats): string => `${st.dev}:${st.ino}:${Math.floor(st.birthtimeMs)}`;
+
+async function tailHashAt(fh: fsp.FileHandle, offset: number): Promise<string> {
+  const len = Math.min(TAIL_HASH_BYTES, offset);
+  const buf = Buffer.alloc(len);
+  let got = 0;
+  while (got < len) {
+    const { bytesRead } = await fh.read(buf, got, len - got, offset - len + got);
+    if (bytesRead <= 0) break;
+    got += bytesRead;
+  }
+  return createHash('sha1').update(buf.subarray(0, got)).digest('hex') + ':' + got;
+}
+
+/** Copy a fileMap so ops pushed into the copy never reach the original. */
+export function cloneFileMap(src: Map<string, FileAccum>): Map<string, FileAccum> {
+  const out = new Map<string, FileAccum>();
+  for (const [key, accum] of src) out.set(key, { filePath: accum.filePath, cwd: accum.cwd, ops: accum.ops.slice() });
+  return out;
+}
 
 /** Resolve the canonical JSONL path for a session on THIS host. */
 export async function resolveJsonlPathHostLocal(
@@ -417,22 +465,34 @@ export async function resolveJsonlPathHostLocal(
   return null;
 }
 
-/** Stream-parse a whole JSONL into `fileMap` in 1MB newline-aligned windows —
- *  never materializes the file as one string (whales exceed any sane cap).
- *  Yields the event loop between windows so the daemon's session I/O never
- *  starves. Returns the first decoded block (for cwd extraction). */
+/**
+ * Parse a transcript's complete lines into a fileMap: from `resume` when it
+ * still describes this file, otherwise from byte 0. Reads in 1MB
+ * newline-aligned windows (never the whole file as one string) and yields the
+ * event loop between windows so the daemon's session I/O never starves. The
+ * trailing partial line (a write in progress, or a last line without its
+ * newline) is returned, not parsed, so the returned state covers exactly the
+ * bytes before `offset`. `headBlock` is the first decoded block (for cwd
+ * extraction).
+ */
 async function streamParseHostLocal(
   jsonlPath: string,
-  fileMap: Map<string, FileAccum>,
   deadlineMs: number,
-): Promise<{ headBlock: string } | null> {
+  resume?: MainParseState,
+): Promise<MainParseState & { trailing: string } | null> {
   let fh: fsp.FileHandle;
   try { fh = await fsp.open(jsonlPath, 'r'); } catch { return null; }
   try {
+    const st = await fh.stat();
+    const epoch = epochOf(st);
+    const resumed = !!resume && resume.epoch === epoch && st.size >= resume.offset
+      && await tailHashAt(fh, resume.offset) === resume.tail;
+    const fileMap = resumed ? cloneFileMap(resume!.fileMap) : new Map<string, FileAccum>();
+    let headBlock = resumed ? resume!.headBlock : '';
+    let consumed = resumed ? resume!.offset : 0;
     let carry = Buffer.alloc(0);
-    let headBlock = '';
     const win = Buffer.alloc(STREAM_WINDOW);
-    let offset = 0;
+    let offset = consumed;
     for (;;) {
       if (Date.now() > deadlineMs) throw new Error('changes: stream-parse deadline exceeded');
       const { bytesRead } = await fh.read(win, 0, STREAM_WINDOW, offset);
@@ -445,14 +505,15 @@ async function streamParseHostLocal(
         collectOpsFromJsonl(text, fileMap);
         if (!headBlock) headBlock = text;
         carry = Buffer.from(buf.subarray(lastNl + 1));
+        consumed = offset - carry.length;
       } else {
         carry = buf;
       }
       // Explicit yield: fh.read can complete synchronously from page cache.
       await new Promise<void>((r) => setImmediate(r));
     }
-    if (carry.length) collectOpsFromJsonl(carry.toString('utf-8'), fileMap);
-    return { headBlock };
+    const tail = await tailHashAt(fh, consumed);
+    return { epoch, offset: consumed, tail, headBlock, fileMap, trailing: carry.toString('utf-8') };
   } finally {
     await fh.close().catch(() => { /* already closed */ });
   }
@@ -512,10 +573,15 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   let st: fs.Stats;
   try { st = await fsp.stat(jsonlPath); } catch { return null; }
 
-  // 1. Main JSONL ops (streamed).
-  const fileMap = new Map<string, FileAccum>();
-  const parsed = await streamParseHostLocal(jsonlPath, fileMap, deadlineMs);
+  // 1. Main JSONL ops (streamed, continuing from the caller's MainParseState).
+  const parsed = await streamParseHostLocal(jsonlPath, deadlineMs, opts.mainParse?.state);
   if (parsed === null) return null;
+  const { trailing, ...state } = parsed;
+  if (opts.mainParse) opts.mainParse.state = state;
+  // This compute's map is a copy when the state is kept: the trailing partial
+  // line and the subagent merges below must not reach the next continuation.
+  const fileMap = opts.mainParse ? cloneFileMap(state.fileMap) : state.fileMap;
+  if (trailing) collectOpsFromJsonl(trailing, fileMap);
   const effectiveCwd = extractCwdFromJsonl(parsed.headBlock) ?? opts.cwd;
 
   // 2. Subagent JSONLs — size-keyed cache so finished agents are parsed once.
@@ -535,14 +601,24 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     try { sst = await fsp.stat(p); } catch { subCache.delete(name); continue; }
     const cached = subCache.get(name);
     if (cached && cached.size === sst.size) continue;
-    const sub = new Map<string, FileAccum>();
-    const ok = await streamParseHostLocal(p, sub, deadlineMs);
-    if (ok) subCache.set(name, { size: sst.size, fileMap: sub });
+    const sub = await streamParseHostLocal(p, deadlineMs);
+    if (sub) {
+      if (sub.trailing) collectOpsFromJsonl(sub.trailing, sub.fileMap);
+      subCache.set(name, { size: sst.size, fileMap: sub.fileMap });
+    }
   }
   for (const name of [...present].sort()) {
     const c = subCache.get(name);
     if (c) mergeFileMapInto(c.fileMap, fileMap);
   }
+
+  const gitRootByDir = opts.gitRootByDir ?? new Map<string, string | null>();
+  const gitRootOf = async (dir: string): Promise<string | null> => {
+    if (gitRootByDir.has(dir)) return gitRootByDir.get(dir)!;
+    const root = await findGitRootHostLocal(dir);
+    gitRootByDir.set(dir, root);
+    return root;
+  };
 
   // 3. Current contents + reconstruction (bounded pool — local fs, still
   //    keep the daemon's loop responsive).
@@ -561,7 +637,10 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
         current = cst.isFile() ? await fsp.readFile(accum.filePath, 'utf-8') : null;
       } catch { current = null; }
       const isDeleted = accum.ops[accum.ops.length - 1]?.kind === 'delete';
-      const deletedBefore = isDeleted ? await readDeletedBeforeHostLocal(accum.filePath) : null;
+      // No .git above the file means git can't have it: skip the two git
+      // spawns (a long session deletes hundreds of scratch files in /tmp).
+      const deletedBefore = isDeleted && await gitRootOf(path.dirname(accum.filePath))
+        ? await readDeletedBeforeHostLocal(accum.filePath) : null;
       const { renamedFrom, ...recon } = reconstructFile(current, accum, deletedBefore);
       const change: SessionFileChange = { filePath: accum.filePath, relPath: accum.filePath, ...recon };
       if (renamedFrom !== undefined) change.oldRelPath = renamedFrom;
@@ -571,19 +650,12 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   await Promise.all(Array.from({ length: Math.min(CONTENT_READ_PARALLELISM, entries.length) }, worker));
 
   // 4-6. Group by repo root, drop no-ops/orphans/excluded, order.
-  const gitRootByDir = opts.gitRootByDir ?? new Map<string, string | null>();
   const cwdRepoRoot = effectiveCwd ? await findGitRootHostLocal(effectiveCwd) : null;
   const isUnder = (child: string, ancestor: string): boolean =>
     child === ancestor || child.startsWith(ancestor + path.sep);
   const resolveRepoRoot = async (filePath: string, fileCwd?: string): Promise<{ root: string; orphan: boolean }> => {
     const dir = path.dirname(filePath);
-    let gitRoot: string | null;
-    if (gitRootByDir.has(dir)) {
-      gitRoot = gitRootByDir.get(dir)!;
-    } else {
-      gitRoot = await findGitRootHostLocal(dir);
-      gitRootByDir.set(dir, gitRoot);
-    }
+    const gitRoot = await gitRootOf(dir);
     if (gitRoot) return { root: gitRoot, orphan: false };
     if (cwdRepoRoot && isUnder(filePath, cwdRepoRoot)) return { root: cwdRepoRoot, orphan: false };
     if (effectiveCwd && isUnder(filePath, effectiveCwd)) return { root: effectiveCwd, orphan: false };

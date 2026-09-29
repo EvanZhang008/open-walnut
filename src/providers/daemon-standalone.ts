@@ -83,6 +83,7 @@ import {
   toLightChangesResult,
   type HostLocalComputeOutput,
   type FileAccum as ChangesFileAccum,
+  type MainParseState,
 } from './session-changes-core.js'
 import { probeTranscriptRewindHostLocal, type RewindProbeInput, type RewindProbeOutput } from './transcript-rewind-core.js'
 import { describeExternalSessions, scanExternalSessions } from './external-session-scan-core.js'
@@ -6458,6 +6459,9 @@ interface ChangesCacheEntry {
   output: HostLocalComputeOutput
   subCache: Map<string, { size: number; fileMap: Map<string, ChangesFileAccum> }>
   gitRootByDir: Map<string, string | null>
+  // Where the main transcript parse stopped: a recompute after an append reads
+  // only the new bytes (session-changes-core.ts MainParseState).
+  mainParse: { state?: MainParseState }
   lastUsed: number
 }
 const changesCache = new Map<string, ChangesCacheEntry>()
@@ -6489,20 +6493,26 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
     await prev.catch(() => { /* prior failure doesn't gate us */ })
     try {
       const prior = changesCache.get(sid)
+      // Created BEFORE the compute so its first run fills the same memos.
+      const subCache = prior?.subCache ?? new Map()
+      const gitRootByDir = prior?.gitRootByDir ?? new Map()
+      const mainParse = prior?.mainParse ?? {}
       const output = await computeHostLocalChanges({
         sessionId: sid,
         cwd,
         claudeHome: path.join(HOME_DIR, '.claude'),
-        subCache: prior?.subCache,
-        gitRootByDir: prior?.gitRootByDir,
+        subCache,
+        gitRootByDir,
+        mainParse,
       })
       if (!output) return null
       const entry: ChangesCacheEntry = {
         mtimeMs: output.mtimeMs,
         size: output.size,
         output,
-        subCache: prior?.subCache ?? new Map(),
-        gitRootByDir: prior?.gitRootByDir ?? new Map(),
+        subCache,
+        gitRootByDir,
+        mainParse,
         lastUsed: Date.now(),
       }
       changesCache.set(sid, entry)
