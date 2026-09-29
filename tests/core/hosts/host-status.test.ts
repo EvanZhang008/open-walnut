@@ -211,6 +211,8 @@ describe('buildHostStatus: first-connect facts (runtime, daemon dir, credential 
     ['Could not open a connection to your authentication agent.', 'agent_missing', false],
     ['@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\nHost key verification failed.', 'host_key', false],
     ['kex_exchange_identification: Connection closed by remote host\nConnection closed by UNKNOWN port 65535', 'proxy', true],
+    // The cached one-line summary of a proxy whose own login expired (the tag keeps the kind).
+    ['Error: Acme SSH Client returned an error when reaching to Acme SSH Proxy: An error… [walnut-ssh-evidence: proxy-login (the SSH proxy says its own login is invalid or expired)]', 'proxy_login', false],
   ] as const)('classifies %j as %s (retryable %s)', (error, kind, retryable) => {
     const s = buildHostStatus('devbox', devbox, state('failed', { error }), undefined, AT);
     expect(s.kind).toBe(kind);

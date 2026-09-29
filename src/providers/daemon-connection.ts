@@ -20,8 +20,7 @@
  *   Events: { ev, ...data } (no id — unsolicited)
  */
 
-import { spawn, execFile as execFileCb, type ChildProcess } from 'node:child_process'
-import { promisify } from 'node:util'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -53,8 +52,8 @@ import { isRecoverableSessionError, isRescuableStoppedRecord } from '../core/ses
 import { isAcpEngine } from '../core/agents/engine-registry.js'
 import type { SessionRecord } from '../core/types.js'
 import { sessionCronMetadata } from '../core/sessions/session-cron-metadata.js'
-import { classifyHostConnectError, credentialRetryDelayMs } from '../core/sessions/host-connect-hint.js'
-import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, shq, userShellPathScript } from './remote-sh.js'
+import { classifyHostConnectError, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../core/sessions/host-connect-hint.js'
+import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
 import {
   PROD_REMOTE_DAEMON_DIR, buildDaemonDirProbeScript, chooseDaemonDir, daemonDirEnv, parseDaemonDirProbe,
   buildLiveDaemonScanScript, parseLiveDaemonScan, productionDaemonDirs, type DaemonDirChoice,
@@ -68,7 +67,8 @@ import {
   clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause,
 } from './daemon-reconnect-cause.js'
 
-const execFileAsync = promisify(execFileCb)
+/** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
+const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
 
 // ── Types ──
 
@@ -1769,8 +1769,14 @@ export class DaemonConnection {
     args.push('-fN', this.sshHostString)  // -f: background, -N: no command
 
     try {
-      await execFileAsync('ssh', args, { timeout: 15_000 })
-      // execFileAsync resolves when -f backgrounds. ControlMaster is now running.
+      // Bounded (remote-sh.ts runSshBounded): execFile's own timeout killed ssh but
+      // then waited for the ProxyCommand child holding its stderr, 15 minutes once.
+      const run = await runSshBounded(args, { timeoutMs: 15_000 })
+      if (run.spawnError) throw run.spawnError
+      if (run.timedOut || run.code !== 0) {
+        throw new Error(`Command failed: ssh ${args.join(' ')}\n${run.timedOut ? 'timed out after 15000ms' : run.stderr.trim() || `exit code ${run.code}`}`)
+      }
+      // ssh returns once -f backgrounds. ControlMaster is now running.
       log.session.info('DaemonConnection: SSH ControlMaster started', {
         host: this.hostKey, socketPath,
       })
@@ -1787,10 +1793,9 @@ export class DaemonConnection {
    */
   private async stopControlMaster(): Promise<void> {
     if (this._controlPath) {
+      // Nothing to check: a master that is already gone is the usual case here.
       try {
-        await execFileAsync('ssh', ['-o', `ControlPath=${this._controlPath}`, '-O', 'exit', this.sshHostString], {
-          timeout: 5_000,
-        })
+        await runSshBounded(['-o', `ControlPath=${this._controlPath}`, '-O', 'exit', this.sshHostString], { timeoutMs: 5_000 })
       } catch { /* already gone */ }
       this._controlPath = null
     }
@@ -2836,17 +2841,11 @@ export class DaemonConnection {
       await this.sshExec(`mkdir -p ${shq(dir)} && rm -f ${shq(dir + '/daemon.js')}`)
 
       const args = [...this.baseSshArgs, this.sshHostString, markedUploadCommand(`${dir}/daemon.cjs`)]
-      const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
-      proc.stdin!.on('error', () => {})  // prevent EPIPE crash if SSH dies
-
-      await new Promise<void>((resolve, reject) => {
-        proc.on('close', (code) => {
-          if (code === 0) resolve()
-          else reject(new Error(`daemon source deploy failed with code ${code}`))
-        })
-        proc.on('error', reject)
-        proc.stdin!.end(source)
-      })
+      // Bounded: these uploads had no deadline at all (remote-sh.ts runSshBounded).
+      const upload = await runSshBounded(args, { input: source, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS })
+      if (upload.spawnError) throw upload.spawnError
+      if (upload.timedOut) throw new Error(`daemon source deploy timed out after ${SOURCE_UPLOAD_TIMEOUT_MS}ms`)
+      if (upload.code !== 0) throw new Error(`daemon source deploy failed with code ${upload.code}`)
 
       // Sidecar bundles: the source template can't import modules, so each of
       // these is require()d next to daemon.cjs and gates its own capability.
@@ -2857,16 +2856,10 @@ export class DaemonConnection {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
           const scArgs = [...this.baseSshArgs, this.sshHostString, markedUploadCommand(`${dir}/${sidecarFile}`)]
-          const scProc = spawn('ssh', scArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
-          scProc.stdin!.on('error', () => {})
-          await new Promise<void>((resolve, reject) => {
-            scProc.on('close', (code) => {
-              if (code === 0) resolve()
-              else reject(new Error(`${sidecarFile} sidecar deploy failed with code ${code}`))
-            })
-            scProc.on('error', reject)
-            scProc.stdin!.end(sidecar)
-          })
+          const sc = await runSshBounded(scArgs, { input: sidecar, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS })
+          if (sc.spawnError) throw sc.spawnError
+          if (sc.timedOut) throw new Error(`${sidecarFile} sidecar deploy timed out after ${SOURCE_UPLOAD_TIMEOUT_MS}ms`)
+          if (sc.code !== 0) throw new Error(`${sidecarFile} sidecar deploy failed with code ${sc.code}`)
         } catch (err) {
           log.session.info('DaemonConnection: sidecar not deployed (fallback stays)', {
             host: this.hostKey, sidecar: sidecarFile,
@@ -3642,8 +3635,8 @@ export class DaemonConnection {
     const msg = err instanceof Error ? err.message : String(err)
     // Standing failures: retrying every 30s can't fix an expired SSH cert
     // (needs a login), a changed host key, or a hostname that no longer
-    // resolves. Credential waits follow the warmup's schedule (1, 2, 5, 10
-    // minutes, then hourly) so a login done elsewhere reconnects soon;
+    // resolves. Credential waits follow the warmup's schedule (1, 2, 5
+    // minutes, then every 5) so a login done elsewhere reconnects soon;
     // the rest back off to a slow probe (RECONNECT_STANDING_FAILURE_DELAY_MS).
     const kind = this.sshTarget
       ? classifyHostConnectError(msg, this.sshHostString, [this.hostKey, this.ssh.hostname, this.ssh.user ?? '']).kind
@@ -4441,12 +4434,16 @@ const FAILURE_CACHE_TTL_MS = 60_000  // 60s — longer than the worst-case SSH t
  * produced 864 near-identical multi-line warns inside a single hour on
  * 2026-08-22 — the log became unreadable exactly when it was needed. The full
  * text is still logged once, at the moment the connect actually failed.
+ * Terminal colour codes are dropped (a proxy prints its errors in red).
  */
 export function summarizeConnectFailure(raw: string, maxLen = 160): string {
-  const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean)
+  // eslint-disable-next-line no-control-regex
+  const lines = raw.split('\n').map((l) => l.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').trim()).filter(Boolean)
   // Evidence the connect gathered locally (ssh-credential-evidence.ts) is the
-  // part that says WHY, so it always survives the summary.
+  // part that says WHY, so it always survives the summary. A proxy's "login
+  // expired" sentence is too long to survive the clip, so it becomes a tag too.
   const evidence = lines.find((l) => l.startsWith(SSH_EVIDENCE_PREFIX))
+    ?? (classifyHostConnectError(raw, '').kind === 'proxy_login' ? PROXY_LOGIN_EVIDENCE : undefined)
   const rest = lines.filter((l) => l !== evidence && !/^@+$/.test(l))
   // Prefer the line that says what went wrong over the echoed command.
   const signal = rest.find((l) => /^(ssh|Connection|Permission|Host|kex_|Timeout|error:|Error:|Could not|shell_noise|Port forwarding|@\s+WARNING)/i.test(l)

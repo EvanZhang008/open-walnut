@@ -254,7 +254,7 @@ export function credentialWaiters(enabled: (host: string) => boolean): Array<{ h
 
 export async function startHostWakeRedial(hosts: () => Record<string, HostDef>): Promise<() => void> {
   const { startHostWakeSignal } = await import('./host-wake-signal.js')
-  const { startHostCredentialSignal } = await import('./host-credential-signal.js')
+  const { newestLoginFileMtime, startHostCredentialSignal } = await import('./host-credential-signal.js')
   const enabled = (h: string) => { const defs = hosts(); return Object.hasOwn(defs, h) && defs[h].enabled !== false }
   const sig = startHostWakeSignal({
     hostsToRedial: () => {
@@ -263,7 +263,17 @@ export async function startHostWakeRedial(hosts: () => Record<string, HostDef>):
     },
     redial: redialAfterWake,
   })
-  // A login done outside Walnut (a renewed certificate, a reloaded agent) redials the hosts waiting on it.
-  const cred = startHostCredentialSignal({ waiting: () => credentialWaiters(enabled), redial: redialAfterWake })
+  // A login done outside Walnut (a renewed certificate, a proxy's sign-in, a
+  // reloaded agent) redials the hosts waiting on it.
+  const { getConfig } = await import('../config-manager.js')
+  const loginFiles = async (): Promise<string[]> => {
+    const files = (await getConfig().catch(() => null))?.ssh_login_files
+    return Array.isArray(files) ? files.filter((f): f is string => typeof f === 'string' && f.trim() !== '') : []
+  }
+  const cred = startHostCredentialSignal({
+    waiting: () => credentialWaiters(enabled),
+    redial: redialAfterWake,
+    newestFileMtime: async () => newestLoginFileMtime(await loginFiles()),
+  })
   return () => { sig.stop(); cred.stop() }
 }

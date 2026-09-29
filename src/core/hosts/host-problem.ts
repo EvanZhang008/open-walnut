@@ -8,7 +8,7 @@
 
 /** Mirrors HostConnectErrorKind (host-connect-hint.ts), kept local so this file stays import-free. */
 export type HostFailureKind =
-  | 'auth' | 'host_key' | 'cert_expired' | 'agent_missing' | 'proxy' | 'shell_noise'
+  | 'auth' | 'host_key' | 'cert_expired' | 'agent_missing' | 'proxy_login' | 'proxy' | 'shell_noise'
   | 'dns' | 'unreachable' | 'refused' | 'timeout' | 'runtime' | 'daemon'
   | 'ephemeral' | 'listing' | 'unknown'
 
@@ -89,12 +89,12 @@ export const BANNER_READINESS_KINDS: readonly string[] = [
   'claude_missing', 'claude_needs_node', 'claude_error', 'claude_not_logged_in',
 ]
 /** A reconnect that meets one of these will not heal itself: the screen shows it as failed. */
-export const STANDING_FAILURE_KINDS: readonly string[] = ['auth', 'host_key', 'dns', 'cert_expired', 'agent_missing']
+export const STANDING_FAILURE_KINDS: readonly string[] = ['auth', 'host_key', 'dns', 'cert_expired', 'agent_missing', 'proxy_login']
 /** Waiting on the user's login (one row for all hosts that share the kind). */
-export const CREDENTIAL_WAIT_KINDS: readonly string[] = ['cert_expired', 'agent_missing']
+export const CREDENTIAL_WAIT_KINDS: readonly string[] = ['cert_expired', 'agent_missing', 'proxy_login']
 /** Opening the picker never re-dials a host that failed with one of these (key taps, agent prompts). */
 export const NO_PREWARM_KINDS: readonly string[] = [
-  'auth', 'host_key', 'cert_expired', 'agent_missing', 'dns', 'shell_noise', 'runtime',
+  'auth', 'host_key', 'cert_expired', 'agent_missing', 'proxy_login', 'dns', 'shell_noise', 'runtime',
 ]
 /** Their detail is a filesystem or daemon log line, not SSH output. */
 export const DETAILS_NOT_SSH_KINDS: readonly string[] = ['listing', 'daemon', 'runtime']
@@ -143,6 +143,7 @@ export function hostFailureHeadline(
   switch (kind) {
     case 'cert_expired': return `Could not connect to ${label}: SSH certificate expired`
     case 'agent_missing': return `Could not connect to ${label}: no SSH agent key`
+    case 'proxy_login': return `Could not connect to ${label}: SSH proxy login expired`
     case 'timeout': return `Connecting to ${label} timed out`
     case 'runtime': return `${label} has no runtime for the session daemon`
     case 'daemon': return `The session daemon on ${label} did not start`

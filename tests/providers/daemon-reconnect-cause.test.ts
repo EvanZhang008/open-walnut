@@ -37,6 +37,15 @@ describe('decideReconnectStep', () => {
   it('credential kinds follow the credential schedule', () => {
     expect(decideReconnectStep({ ...base, kind: 'cert_expired', credentialAttempt: 2 })).toEqual({ standing: true, credentialWait: true, nextDelayMs: 5 * 60_000, retryAt: T0 + 5 * 60_000 })
   })
+  it("a proxy's expired login waits like a certificate: standing, on the credential clock, never past 5 minutes", () => {
+    // It read as a transient proxy failure and retried every 3 seconds for 3 hours.
+    for (const credentialAttempt of [0, 1, 2, 3, 40]) {
+      const s = decideReconnectStep({ ...base, kind: 'proxy_login', credentialAttempt })
+      expect(s).toMatchObject({ standing: true, credentialWait: true })
+      expect(s.nextDelayMs).toBe(credentialRetryDelayMs(credentialAttempt))
+      expect(s.nextDelayMs).toBeLessThanOrEqual(5 * 60_000)
+    }
+  })
   it('C50: dns within 90s of a wake is the network waking up; after 90s it is standing again', () => {
     expect(decideReconnectStep({ ...base, kind: 'dns', lastSignalAt: T0 - 10_000 }).standing).toBe(false)
     expect(decideReconnectStep({ ...base, kind: 'dns', lastSignalAt: T0 - WAKE_GRACE_MS - 1 }).standing).toBe(true)

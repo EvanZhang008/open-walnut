@@ -11,8 +11,9 @@
  *    not come back by itself soon), but recovery never stops: exactly ONE slow
  *    probe (RECONNECT_STANDING_FAILURE_DELAY_MS) is scheduled, and its time is
  *    the real `retryAt`.
- *  - cert_expired / agent_missing: standing, re-dialled on the credential
- *    schedule (1, 2, 5, 10 minutes, then hourly); `retryAt` = that attempt.
+ *  - cert_expired / agent_missing / proxy_login: standing, re-dialled on the
+ *    credential schedule (1, 2, 5 minutes, then every 5) and at once when a
+ *    login is seen (host-credential-signal.ts); `retryAt` = the scheduled one.
  *  - dns / unreachable / timeout within WAKE_GRACE_MS of a wake or network
  *    change: NOT standing (Wi-Fi or VPN is still coming up after the lid opens).
  *  - anything else: plain exponential backoff, no promise of a time.
@@ -24,10 +25,10 @@ import type { HostConnectErrorKind } from '../core/sessions/host-connect-hint.js
 export const WAKE_GRACE_MS = 90_000
 
 const SLOW_PROBE_KINDS: ReadonlySet<string> = new Set(['auth', 'host_key', 'dns'])
-const CREDENTIAL_KINDS: ReadonlySet<string> = new Set(['cert_expired', 'agent_missing'])
+const CREDENTIAL_KINDS: ReadonlySet<string> = new Set(['cert_expired', 'agent_missing', 'proxy_login'])
 const WAKE_TRANSIENT_KINDS: ReadonlySet<string> = new Set(['dns', 'unreachable', 'timeout'])
 
-/** A failure a login fixes (cert_expired, agent_missing): the credential schedule's kinds. */
+/** A failure a login fixes (cert_expired, agent_missing, proxy_login): the credential schedule's kinds. */
 export function isCredentialWaitKind(kind: string): boolean {
   return CREDENTIAL_KINDS.has(kind)
 }

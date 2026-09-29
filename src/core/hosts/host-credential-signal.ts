@@ -1,13 +1,16 @@
 /**
  * "I just ran my login command": notice a local SSH credential change while a
  * host waits on one, and redial that host now. An expired certificate or a
- * missing agent is fixed OUTSIDE Walnut, and the credential clock (1, 2, 5, 10
- * minutes, then hourly) used to be the only thing that noticed: on 2026-09-29 a
- * certificate renewed at 08:00 left the host dark until its next hourly re-dial.
+ * missing agent is fixed OUTSIDE Walnut, and the credential clock (then 1, 2, 5,
+ * 10 minutes, then hourly; now every 5 at most) used to be the only thing that
+ * noticed: on 2026-09-29 a certificate renewed at 08:00 left the host dark until
+ * its next hourly re-dial.
  *
  * Two cheap observations, and only while some host waits on a credential:
  *  - files: every regular file in ~/.ssh (keys, certificates, config), never
- *    known_hosts or a ControlMaster socket. One modified AFTER the host's last
+ *    known_hosts or a ControlMaster socket, plus the `ssh_login_files` the user
+ *    configured (an SSH proxy keeps its own login elsewhere, and renews it on
+ *    its own clock). One modified AFTER the host's last
  *    failed dial means the login happened since. Comparing with the failure
  *    time needs no baseline, so a login made between the failure and the first
  *    poll still counts; a redial that fails again moves the failure time past
@@ -75,6 +78,26 @@ export async function newestSshFileMtime(
     if (newest === null || st.mtimeMs > newest) newest = st.mtimeMs
   }
   return newest
+}
+
+/**
+ * Newest mtime across ~/.ssh and the configured login files (`ssh_login_files`:
+ * a proxy's own sign-in, a token file). A directory counts by its newest regular
+ * file; `~/` is expanded; a path that does not exist counts as nothing.
+ */
+export async function newestLoginFileMtime(
+  extra: readonly string[] = [],
+  nowMs: number = Date.now(),
+  home: string = process.env.HOME || os.homedir(),
+): Promise<number | null> {
+  const paths = [path.join(home, '.ssh'), ...extra.map((p) => (p === '~' || p.startsWith('~/') ? path.join(home, p.slice(1)) : p))]
+  const each = await Promise.all(paths.map(async (p) => {
+    const st = await fs.stat(p).catch(() => null)
+    if (st?.isDirectory()) return newestSshFileMtime(p, nowMs)
+    return st?.isFile() && st.mtimeMs <= nowMs + FUTURE_SLACK_MS ? st.mtimeMs : null
+  }))
+  const known = each.filter((t): t is number => t !== null)
+  return known.length ? Math.max(...known) : null
 }
 
 /**

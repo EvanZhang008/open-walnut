@@ -1110,6 +1110,12 @@ export interface Config {
   hosts_warmup?: {
     enabled?: boolean;
   };
+  /** Files a login command writes outside ~/.ssh (an SSH proxy's own sign-in, a
+   *  token file; a directory counts by its newest file, `~/` is expanded). While
+   *  a host waits on a login (an expired certificate, the proxy's login), a
+   *  change to one of them redials it at once. ~/.ssh is always watched
+   *  (core/hosts/host-credential-signal.ts). */
+  ssh_login_files?: string[];
   /** Per-host maximum concurrent CLI session limits.
    *  'local' key = sessions without a host.
    *  Other keys = host aliases from config.hosts (e.g. 'devbox', 'nas-server').

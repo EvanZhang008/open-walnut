@@ -10,6 +10,7 @@ import {
   RETRYABLE,
   credentialRetryDelayMs,
   CREDENTIAL_WAIT_KINDS,
+  PROXY_LOGIN_EVIDENCE,
   describeConnectPhase,
   describeListingError,
   IN_PROGRESS_PHASES,
@@ -116,6 +117,22 @@ describe('describeConnectPhase', () => {
  */
 const ECHO = 'Command failed: ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ControlPath=/tmp/walnut-ssh-devbox-1 me@devbox.example.test sh -s';
 
+/**
+ * An SSH proxy (ProxyCommand) whose own sign-in expired, in the shape one really
+ * printed on 2026-09-27 (names neutralized): red terminal codes, the proxy's
+ * sentence, then ssh's "Connection closed by UNKNOWN port 65535". It read as a
+ * plain `proxy` failure, so the host retried every 3 seconds for 3 hours while
+ * nothing but the user's login could fix it.
+ */
+const PROXY_LOGIN_EXPIRED = [
+  ECHO,
+  '\u001b[31m Error: Acme SSH Client returned an error when reaching to Acme SSH Proxy: \u001b[31m An error occured during the Acme authentication process. This is likely because your Acme cookie is invalid or expired. Please run "acme-login" to re-authenticate, then retry.',
+  ' \u001b[0m',
+  '\u001b[31m Please retry SSH, or check the availability of the proxy service. ',
+  ' \u001b[0m \u001b[0m',
+  'Connection closed by UNKNOWN port 65535',
+].join('\n');
+
 const CAPTURED: Array<[string, string, string]> = [
   ['host_key', 'changed key, strict checking', [
     ECHO,
@@ -154,6 +171,10 @@ const CAPTURED: Array<[string, string, string]> = [
     'stdio forwarding failed',
     'Connection closed by UNKNOWN port 65535',
   ].join('\n')],
+  ['proxy_login', "a proxy whose own login cookie expired", PROXY_LOGIN_EXPIRED],
+  ['proxy_login', 'the same, cut short by a probe timeout', `${ECHO}\nRemote command timed out after 5000ms\n${PROXY_LOGIN_EXPIRED.split('\n')[1]}`],
+  ['proxy_login', 'a proxy whose token expired', [ECHO, 'proxy error: session token expired, sign in again', 'Connection closed by UNKNOWN port 65535'].join('\n')],
+  ['proxy_login', 'the tag a summary keeps', `Connection closed by UNKNOWN port 65535 [${PROXY_LOGIN_EVIDENCE}]`],
   ['shell_noise', 'login shell that never ran sh -s', "shell_noise: the login shell on me@devbox.example.test answered without Walnut's output markers (it did not run `sh -s` as written). It printed: This account is restricted."],
 ];
 
@@ -163,6 +184,25 @@ describe('classifyHostConnectError: captured ssh stderr for each new kind', () =
     expect(r.kind).toBe(kind);
     expect(r.hint.trim()).toBe(r.hint);
     expect(r.hint).not.toMatch(/\n/);
+  });
+
+  it('proxy_login needs the proxy AND an invalid or expired login; nearby shapes keep their kind', () => {
+    const k = (m: string) => classifyHostConnectError(m, T, ['devbox', 'devbox.example.test', 'me']).kind;
+    // No proxy in sight: a daemon's own token problem is the daemon's.
+    expect(k('daemon handshake failed: invalid token')).toBe('daemon');
+    expect(k('websocket closed: the session token is invalid')).toBe('daemon');
+    // A proxy that died for another reason stays a plain (retryable) proxy failure.
+    expect(k([ECHO, '/bin/sh: line 1: jump-helper: command not found', 'Connection closed by UNKNOWN port 65535'].join('\n'))).toBe('proxy');
+    expect(k('proxy error: upstream connect failed')).toBe('proxy');
+    // The more specific local evidence still wins over the proxy's words.
+    expect(k(`${PROXY_LOGIN_EXPIRED}\nwalnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-09-24 08:00)`)).toBe('cert_expired');
+  });
+
+  it('the proxy_login hint names no product and says what to do', () => {
+    const { hint } = classifyHostConnectError(PROXY_LOGIN_EXPIRED, T, [], { hostname: 'devbox.example.test' });
+    expect(hint).toMatch(/proxy/i);
+    expect(hint).toMatch(/organization's login command/);
+    expect(hint).toMatch(/Retry/);
   });
 
   it("Walnut's own echoed `-o StrictHostKeyChecking=no` is never host key evidence", () => {
@@ -195,12 +235,13 @@ describe('classifyHostConnectError: captured ssh stderr for each new kind', () =
     expect(r('Permission denied (publickey).')).toBe(false);
     expect(r('walnut-ssh-evidence: cert-expired (x)')).toBe(false);
     expect(r('shell_noise: x')).toBe(false);
+    expect(r(PROXY_LOGIN_EXPIRED)).toBe(false);
     expect(describeListingError('X').retryable).toBe(true);
   });
 
-  it('the credential kinds are the ones the warmup re-dials on 1, 2, 5, 10 minutes, then hourly', () => {
-    expect([...CREDENTIAL_WAIT_KINDS].sort()).toEqual(['agent_missing', 'cert_expired']);
-    expect([0, 1, 2, 3, 4, 9].map(credentialRetryDelayMs)).toEqual([60_000, 120_000, 300_000, 600_000, 3_600_000, 3_600_000]);
+  it('the credential kinds are the ones the warmup re-dials on 1, 2, 5 minutes, then every 5', () => {
+    expect([...CREDENTIAL_WAIT_KINDS].sort()).toEqual(['agent_missing', 'cert_expired', 'proxy_login']);
+    expect([0, 1, 2, 3, 4, 9, 500].map(credentialRetryDelayMs)).toEqual([60_000, 120_000, 300_000, 300_000, 300_000, 300_000, 300_000]);
   });
 });
 
@@ -248,7 +289,7 @@ const prose = (hint: string) => hint.split('`').filter((_, i) => i % 2 === 0).jo
 describe('C87: the hint calls the host by its label; user@host only inside a command', () => {
   const target = { label: 'Dev box', hostname: 'devbox.example.com', user: 'alice' };
   const ssh = 'alice@devbox.example.com';
-  it.each(['unreachable', 'timeout', 'proxy', 'refused', 'dns', 'shell_noise', 'host_key', 'auth', 'listing', 'unknown'] as const)('%s', (kind) => {
+  it.each(['unreachable', 'timeout', 'proxy', 'proxy_login', 'refused', 'dns', 'shell_noise', 'host_key', 'auth', 'listing', 'unknown'] as const)('%s', (kind) => {
     const hint = hintForKind(kind, ssh, target);
     expect(prose(hint)).not.toContain('@');
     if (kind !== 'dns' && kind !== 'auth' && kind !== 'unknown') expect(hint).toContain('Dev box');

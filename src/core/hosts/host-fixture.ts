@@ -21,7 +21,7 @@ import type { DaemonConnectState } from '../../providers/daemon-connection.js'
 import type { HostPreflightResult } from '../../providers/host-runtime-core.js'
 import { claudeCliFloorFor, claudeVersionAtLeast, type ClaudeCliFloor } from './claude-version-floor.js'
 import { decideReconnectStep } from '../../providers/daemon-reconnect-cause.js'
-import { credentialRetryDelayMs } from '../sessions/host-connect-hint.js'
+import { credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE } from '../sessions/host-connect-hint.js'
 import { buildHostStatus, type HostDef, type HostStatus } from './host-status.js'
 import { getHostReadiness, setClaudeFloorOverride, setHostReadinessForTest, setReadinessProbeSkip, type HostReadiness } from './host-readiness.js'
 import { withFixState, type HostFixing, type HostFixRecord } from './host-autofix.js'
@@ -246,7 +246,7 @@ export function fixtureConnectState(host: string, now = fixtureNow()): DaemonCon
   return state
 }
 
-/** The credential re-dial the warmup would have armed (cert_expired / agent_missing hosts). */
+/** The credential re-dial the warmup would have armed (cert_expired / agent_missing / proxy_login hosts). */
 function fixtureCredentialRetryAt(host: string): number | undefined {
   const h = st.hosts.get(host)
   return h?.phase === 'failed' ? h.retryAt : undefined
@@ -286,6 +286,7 @@ export function fixtureFailureText(kind: string, hostname: string): string {
     case 'host_key': return 'Host key verification failed.'
     case 'cert_expired': return 'Permission denied (publickey).\nwalnut-ssh-evidence: cert-expired (SSH certificate expired)'
     case 'agent_missing': return 'Permission denied (publickey).\nwalnut-ssh-evidence: agent-missing (no key in the agent)'
+    case 'proxy_login': return `Error: the SSH proxy could not sign you in [${PROXY_LOGIN_EVIDENCE}]`
     case 'dns': return `ssh: Could not resolve hostname ${hostname}: nodename nor servname provided, or not known`
     case 'unreachable': return `ssh: connect to host ${hostname} port 22: No route to host`
     case 'refused': return `ssh: connect to host ${hostname} port 22: Connection refused`
@@ -298,8 +299,10 @@ export function fixtureFailureText(kind: string, hostname: string): string {
   }
 }
 
-const CREDENTIAL = new Set(['cert_expired', 'agent_missing'])
-const kindOfText = (text: string): string => (/cert-expired/.test(text) ? 'cert_expired' : /agent-missing/.test(text) ? 'agent_missing' : '')
+const CREDENTIAL = new Set(['cert_expired', 'agent_missing', 'proxy_login'])
+const kindOfText = (text: string): string => (
+  /cert-expired/.test(text) ? 'cert_expired' : /agent-missing/.test(text) ? 'agent_missing' : /proxy-login/.test(text) ? 'proxy_login' : ''
+)
 
 /** Mark a host failed with `kind` (or a raw text). Credential kinds re-arm a 60s re-dial like the warmup's first tier. */
 export function failFixtureHost(host: string, kindOrText: { kind?: string; text?: string }, now = fixtureNow()): void {

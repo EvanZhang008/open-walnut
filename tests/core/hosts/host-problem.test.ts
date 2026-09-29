@@ -30,6 +30,7 @@ describe('hostFailureHeadline: one headline per kind (spec 2.1)', () => {
     ['shell_noise', `Could not connect to ${L}`], ['unknown', `Could not connect to ${L}`], [undefined, `Could not connect to ${L}`],
     ['cert_expired', `Could not connect to ${L}: SSH certificate expired`],
     ['agent_missing', `Could not connect to ${L}: no SSH agent key`],
+    ['proxy_login', `Could not connect to ${L}: SSH proxy login expired`],
     ['timeout', `Connecting to ${L} timed out`],
     ['runtime', `${L} has no runtime for the session daemon`],
     ['daemon', `The session daemon on ${L} did not start`],

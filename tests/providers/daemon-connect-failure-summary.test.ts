@@ -101,6 +101,29 @@ describe('summarizeConnectFailure', () => {
     expect(classifyHostConnectError(out, 'devbox').kind).toBe('shell_noise')
   })
 
+  it("a proxy's expired login survives the summary as a tag, and colour codes are dropped", () => {
+    // The shape a ProxyCommand printed on 2026-09-27 (names neutralized). Its one
+    // sentence runs past 160 characters, so the summary cut it before "cookie is
+    // invalid" and every fail-fast re-throw read as a plain, retryable proxy failure.
+    const raw = [
+      'Command failed: ssh me@devbox.example.test sh -s',
+      '\u001b[31m Error: Acme SSH Client returned an error when reaching to Acme SSH Proxy: \u001b[31m An error occured during the Acme authentication process. This is likely because your Acme cookie is invalid or expired. Please run "acme-login" to re-authenticate, then retry.',
+      ' \u001b[0m',
+      'Connection closed by UNKNOWN port 65535',
+    ].join('\n')
+    const out = summarizeConnectFailure(raw)
+    expect(out).not.toContain('\u001b')
+    expect(out).not.toContain('\n')
+    expect(out.length).toBeLessThanOrEqual(160)
+    expect(out.startsWith('Error: Acme SSH Client returned an error')).toBe(true)
+    expect(out).toContain('[walnut-ssh-evidence: proxy-login')
+    expect(classifyHostConnectError(out, 'me@devbox.example.test').kind).toBe('proxy_login')
+    // A proxy failure of another kind gets no tag.
+    const died = summarizeConnectFailure('Command failed: ssh h sh -s\n/bin/sh: jump-helper: command not found\nConnection closed by UNKNOWN port 65535')
+    expect(died).toBe('Connection closed by UNKNOWN port 65535')
+    expect(classifyHostConnectError(died, 'h').kind).toBe('proxy')
+  })
+
   it('a tunnel refused by the server keeps the forwarding line', () => {
     const out = summarizeConnectFailure('daemon tunnel is not accepting connections\nchannel 2: open failed: administratively prohibited: open failed\nPort forwarding failed')
     expect(out).toBe('Port forwarding failed')

@@ -428,7 +428,8 @@ describe('hostWarmupGateReason', () => {
 /**
  * An expired SSH certificate or a missing agent is fixed OUTSIDE Walnut (a login
  * command), so nobody comes back to click Retry: the warmup re-dials those
- * hosts on its own at 1, 2, 5, 10 minutes, then hourly.
+ * hosts on its own at 1, 2, 5 minutes, then every 5 (hourly after 18 minutes
+ * once left a renewed login unnoticed for up to an hour).
  */
 describe('HostWarmup credential waits', () => {
   let warmup: HostWarmup | null = null;
@@ -462,13 +463,13 @@ describe('HostWarmup credential waits', () => {
 
   it('the periodic resweep leaves a waiting host to the credential clock (one schedule, tiers advance once)', async () => {
     // Resweep every 30s: without the skip it dials at 30s, 90s, ... and every
-    // failure there advanced the 1/2/5/10 counter a second time.
+    // failure there advanced the 1/2/5 counter a second time.
     const { calls } = credentialWarmup(() => CERT_EXPIRED, { resweepIntervalMs: 30_000 });
     warmup!.start();
     await vi.advanceTimersByTimeAsync(10);
     await vi.advanceTimersByTimeAsync(18 * MIN);
     const gaps = calls.slice(1).map((t, i) => Math.round((t - calls[i]) / MIN));
-    expect(gaps).toEqual([1, 2, 5, 10]);
+    expect(gaps).toEqual([1, 2, 5, 5, 5]);
   });
 
   it('a host known only from ~/.ssh/config stops re-dialling after a day; a configured one keeps going', async () => {
@@ -495,7 +496,7 @@ describe('HostWarmup credential waits', () => {
     expect(warmup!.credentialRetryAt('devbox')).toBeDefined();
   });
 
-  it('re-dials a cert_expired host at 1, 2, 5, 10 minutes, then hourly, with no click', async () => {
+  it('re-dials a cert_expired host at 1, 2, 5 minutes, then every 5, with no click', async () => {
     const { calls } = credentialWarmup(() => CERT_EXPIRED);
     warmup!.start();
     await vi.advanceTimersByTimeAsync(10);
@@ -509,14 +510,16 @@ describe('HostWarmup credential waits', () => {
     expect(calls).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(5 * MIN);
     expect(calls).toHaveLength(4);
-    await vi.advanceTimersByTimeAsync(10 * MIN);
-    expect(calls).toHaveLength(5);
-    await vi.advanceTimersByTimeAsync(59 * MIN);
-    expect(calls).toHaveLength(5);               // hourly from here on
+    await vi.advanceTimersByTimeAsync(4 * MIN);
+    expect(calls).toHaveLength(4);               // never faster than every 5 minutes
     await vi.advanceTimersByTimeAsync(1 * MIN);
-    expect(calls).toHaveLength(6);
+    expect(calls).toHaveLength(5);
+    // Two hours on, it still tries every 5 minutes: a login it cannot see waits 5 minutes at most.
+    await vi.advanceTimersByTimeAsync(120 * MIN);
+    expect(calls).toHaveLength(29);
     const gaps = calls.slice(1).map((t, i) => Math.round((t - calls[i]) / MIN));
-    expect(gaps).toEqual([1, 2, 5, 10, 60]);
+    expect(gaps.slice(0, 3)).toEqual([1, 2, 5]);
+    expect(new Set(gaps.slice(3))).toEqual(new Set([5]));
   });
 
   it('a login done elsewhere reconnects on the next re-dial, and the waits stop', async () => {

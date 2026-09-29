@@ -22,10 +22,11 @@
  *     would otherwise burn a full ssh timeout every resweep, forever. Each
  *     consecutive failure doubles its wait, capped at an hour; a success, a
  *     config edit or a human retry resets it.
- *   - WAITS FOR CREDENTIALS. An expired SSH certificate or a missing agent
- *     (CREDENTIAL_WAIT_KINDS) is fixed OUTSIDE Walnut, by a login command, so
- *     nobody comes back to click Retry. Those hosts are re-dialled on their own
- *     clock (1, 2, 5, 10 minutes, then hourly) and ONLY by it: the periodic
+ *   - WAITS FOR CREDENTIALS. An expired SSH certificate, a missing agent or an
+ *     SSH proxy's expired login (CREDENTIAL_WAIT_KINDS) is fixed OUTSIDE Walnut,
+ *     by a login command, so nobody comes back to click Retry. Those hosts are
+ *     re-dialled on their own clock (1, 2, 5 minutes, then every 5) and ONLY
+ *     by it (plus a login seen on disk, host-credential-signal.ts): the periodic
  *     resweep skips them, or every failure would advance the clock twice. A host
  *     known only from ~/.ssh/config (one Retry dialled it) stops after a day.
  */
@@ -420,14 +421,14 @@ export class HostWarmup {
 
   /**
    * Re-dial `host` on the credential schedule (credentialRetryDelayMs). The
-   * attempt count survives each re-dial, so the waits grow 1 → 2 → 5 → 10
-   * minutes, then stay hourly. Returns when the re-dial fires.
+   * attempt count survives each re-dial, so the waits grow 1 → 2 → 5 minutes,
+   * then stay at 5. Returns when the re-dial fires.
    */
   private armCredentialWait(host: HostWarmupCandidate): number | undefined {
     const prior = this.credentialWaits.get(host.key)
     if (prior) { clearTimeout(prior.timer); this.timers.delete(prior.timer) }
     const since = prior?.since ?? this.now()
-    // A ~/.ssh/config host dialled by one Retry gets a day, not hourly ssh forever.
+    // A ~/.ssh/config host dialled by one Retry gets a day, not ssh every 5 minutes forever.
     if (host.discovered === true && this.now() - since >= HostWarmup.DISCOVERED_CREDENTIAL_WAIT_MS) {
       this.credentialWaits.delete(host.key)
       this.logger.info('host warmup: giving up the credential wait for a host not in config', { host: host.key })

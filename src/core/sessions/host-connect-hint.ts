@@ -109,6 +109,8 @@ export type HostConnectErrorKind =
   | 'host_key'
   | 'cert_expired'
   | 'agent_missing'
+  // The SSH proxy (ProxyCommand) answered that ITS login expired: a login fixes it, not a retry.
+  | 'proxy_login'
   | 'proxy'
   | 'shell_noise'
   | 'dns'
@@ -136,11 +138,18 @@ export interface HostConnectHint {
 }
 
 /** Failures a person fixes OUTSIDE Walnut (a login command, an agent): re-dialled on a schedule. */
-export const CREDENTIAL_WAIT_KINDS: ReadonlySet<HostConnectErrorKind> = new Set<HostConnectErrorKind>(['cert_expired', 'agent_missing'])
+export const CREDENTIAL_WAIT_KINDS: ReadonlySet<HostConnectErrorKind> = new Set<HostConnectErrorKind>(['cert_expired', 'agent_missing', 'proxy_login'])
 
-/** 1, 2, 5, 10 minutes, then hourly: fast enough to feel automatic after a login, slow enough to never hammer. */
-const CREDENTIAL_RETRY_STEPS_MS = [1, 2, 5, 10].map((m) => m * 60_000)
-const CREDENTIAL_RETRY_CAP_MS = 60 * 60_000
+/**
+ * 1, 2, 5 minutes, then every 5. A login Walnut can see (a file it watches, the
+ * agent) redials within seconds (core/hosts/host-credential-signal.ts); this
+ * clock bounds the wait after one it cannot see. It used to go hourly after 10
+ * minutes, which left a host dark for up to an hour after the login (2026-09-26:
+ * 412 of a 413-minute outage was spent waiting). Twelve dials an hour per host
+ * is still far from the 30s loop that once hammered hosts for a night.
+ */
+const CREDENTIAL_RETRY_STEPS_MS = [1, 2, 5].map((m) => m * 60_000)
+const CREDENTIAL_RETRY_CAP_MS = 5 * 60_000
 
 /** Delay before credential re-dial number `attempt` (0-based). */
 export function credentialRetryDelayMs(attempt: number): number {
@@ -149,7 +158,7 @@ export function credentialRetryDelayMs(attempt: number): number {
 
 /** Whether a plain retry of the same attempt can succeed, per kind (the API's `retryable`). */
 export const RETRYABLE: Record<HostConnectErrorKind, boolean> = {
-  auth: false, host_key: false, cert_expired: false, agent_missing: false, proxy: true, shell_noise: false,
+  auth: false, host_key: false, cert_expired: false, agent_missing: false, proxy_login: false, proxy: true, shell_noise: false,
   dns: false, unreachable: true, refused: true, timeout: true, runtime: false, daemon: true,
   ephemeral: false, listing: true, unknown: true,
 }
@@ -197,6 +206,7 @@ export function hintForKind(kind: HostConnectErrorKind, sshTarget: string, targe
     case 'host_key': return `The host key of ${who} changed since this machine last saw it. If the host was rebuilt, run \`ssh-keygen -R ${knownHostsName(sshTarget, target)}\` and then \`ssh ${sshTarget}\` once to accept the new key; if nothing changed on the host, stop: a changed key can also mean someone is intercepting the connection.`
     case 'cert_expired': return 'Your SSH certificate expired; run your organization\'s login command, then Retry.'
     case 'agent_missing': return 'Walnut could not reach an SSH agent holding your key (no agent running, or no key loaded). Start your agent or run your organization\'s login command, then Retry.'
+    case 'proxy_login': return `SSH to ${who} goes through a proxy (ProxyCommand), and the proxy says its own login expired. Run your organization's login command, then Retry.`
     case 'proxy': return `SSH to ${who} goes through a proxy or jump host (ProxyCommand / ProxyJump), and it closed the connection. Check that \`ssh ${sshTarget}\` works in a terminal (VPN, the jump host, or the proxy's own login), then Retry.`
     case 'auth': return `Walnut runs \`ssh ${sshTarget}\` without a password prompt. Make sure that command works from this machine on its own (an SSH key or ssh-agent, and any VPN or auth step your host needs), then Retry.`
     case 'dns': return `The hostname "${hostname}" does not resolve from this machine. Check the hostname in Settings › Remote Hosts (or your VPN / SSH config).`
@@ -238,6 +248,9 @@ const PATTERNS: Array<[HostConnectErrorKind, RegExp]> = [
   ['host_key', /remote host identification has changed|host key verification failed|host key for \S+ has changed|you have requested strict checking|offending \S+ key in|disabled to avoid man-in-the-middle/],
   ['cert_expired', /walnut-ssh-evidence: cert-expired|certificate (has )?expired|expired certificate|certificate invalid: expired/],
   ['agent_missing', /walnut-ssh-evidence: agent-(missing|empty)|could not open a connection to your authentication agent|error connecting to agent|ssh_auth_sock is not set/],
+  // A proxy that says its sign-in is invalid or expired (a cookie, a token, a session).
+  // Before 'proxy': the same failure also prints "Connection closed by UNKNOWN port 65535".
+  ['proxy_login', /walnut-ssh-evidence: proxy-login|proxy[\s\S]{0,300}?\b(cookie|token|login|session|credential)s?\b[^\n]{0,40}?\b(invalid|expired)\b/],
   ['proxy', /kex_exchange_identification|ssh_exchange_identification|connection closed by unknown port 65535|proxycommand|proxyjump|proxy (connect|error|failed)|stdio forwarding failed|jump host/],
   // ssh's own refusal shapes only: a bare "permission denied" is also what an
   // EACCES in a daemon start log says, and that is not a key problem.
@@ -249,6 +262,14 @@ const PATTERNS: Array<[HostConnectErrorKind, RegExp]> = [
   ['runtime', /bun|node|runtime|glibc|command not found|exec format error|illegal instruction/],
   ['daemon', /daemon|handshake|capabilit|hello|tunnel|websocket/],
 ]
+
+/**
+ * The tag summarizeConnectFailure adds when ssh output says the proxy's login
+ * expired: the proxy's own sentence runs past the 160-character summary, and a
+ * summary cut before "cookie is invalid" read as a plain proxy failure, so every
+ * fail-fast re-throw put the host back on the fast transient retry.
+ */
+export const PROXY_LOGIN_EVIDENCE = 'walnut-ssh-evidence: proxy-login (the SSH proxy says its own login is invalid or expired)'
 
 /**
  * Map a connect failure (the one-line summary from summarizeConnectFailure, or a

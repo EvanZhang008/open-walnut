@@ -1,8 +1,9 @@
 /**
- * A login done outside Walnut (a renewed SSH certificate, a reloaded agent)
- * redials the hosts waiting on it at the next poll, instead of at the credential
- * clock's next tick (hourly after the first 18 minutes). Reported 2026-09-29:
- * the certificate was renewed at 08:00 and the host stayed dark until 08:32.
+ * A login done outside Walnut (a renewed SSH certificate, a reloaded agent, an
+ * SSH proxy's own sign-in) redials the hosts waiting on it at the next poll,
+ * instead of at the credential clock's next tick (then hourly after the first
+ * 18 minutes). Reported 2026-09-29: the certificate was renewed at 08:00 and the
+ * host stayed dark until 08:32.
  *
  * The rules pinned here: a credential file modified AFTER a host's last failed
  * dial redials it once; a redial that fails again (newer failure time) does not
@@ -14,7 +15,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { newestSshFileMtime, startHostCredentialSignal, type CredentialWaiter } from '../../../src/core/hosts/host-credential-signal.js'
+import { newestLoginFileMtime, newestSshFileMtime, startHostCredentialSignal, type CredentialWaiter } from '../../../src/core/hosts/host-credential-signal.js'
 import { HOST_REDIAL_MIN_INTERVAL_MS } from '../../../src/core/hosts/host-wake-signal.js'
 
 function harness(initial: CredentialWaiter[]) {
@@ -170,5 +171,42 @@ describe('newestSshFileMtime', () => {
 
   it('a missing ~/.ssh reads as nothing, not an error', async () => {
     expect(await newestSshFileMtime(path.join(os.tmpdir(), 'wn-no-such-ssh-dir-xyz'))).toBeNull()
+  })
+})
+
+describe('newestLoginFileMtime: ~/.ssh plus the configured login files', () => {
+  let home = ''
+  afterEach(async () => {
+    if (home) await fs.rm(home, { recursive: true, force: true })
+    home = ''
+  })
+  const at = (s: number) => new Date(s * 1000)
+  const touch = async (p: string, secs: number) => {
+    await fs.mkdir(path.dirname(p), { recursive: true })
+    await fs.writeFile(p, 'x')
+    await fs.utimes(p, at(secs), at(secs))
+  }
+
+  it("a proxy's login file newer than every ssh file is the newest login", async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'wn-home-'))
+    await touch(path.join(home, '.ssh', 'id_ecdsa-cert.pub'), 1_000)
+    await touch(path.join(home, '.acme', 'cookie'), 2_000)
+    const nowMs = 3_000_000
+    expect(await newestLoginFileMtime([], nowMs, home)).toBe(1_000_000)
+    // `~/` expands against home; a directory counts by its newest file.
+    expect(await newestLoginFileMtime(['~/.acme'], nowMs, home)).toBe(2_000_000)
+    expect(await newestLoginFileMtime(['~/.acme/cookie'], nowMs, home)).toBe(2_000_000)
+    expect(await newestLoginFileMtime([path.join(home, '.acme', 'cookie')], nowMs, home)).toBe(2_000_000)
+  })
+
+  it('a missing path counts as nothing; a future date is a skewed clock', async () => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), 'wn-home-'))
+    await touch(path.join(home, '.ssh', 'id_ed25519'), 1_000)
+    const nowMs = 3_000_000
+    await touch(path.join(home, 'token'), nowMs / 1000 + 3_600)
+    expect(await newestLoginFileMtime(['~/no-such-login', '~/token'], nowMs, home)).toBe(1_000_000)
+    // No ~/.ssh and nothing configured: null, never a throw.
+    const empty = await fs.mkdtemp(path.join(os.tmpdir(), 'wn-home-empty-'))
+    try { expect(await newestLoginFileMtime(['~/also-missing'], nowMs, empty)).toBeNull() } finally { await fs.rm(empty, { recursive: true, force: true }) }
   })
 })

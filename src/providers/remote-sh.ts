@@ -106,24 +106,69 @@ export function isSshTransportFailure(err: unknown): boolean {
   return err instanceof RemoteCommandError && err.code === 255 && !err.timedOut
 }
 
-interface RawRun { stdout: string; stderr: string; code: number | null; timedOut: boolean; spawnError?: Error }
+export interface SshRun { stdout: string; stderr: string; code: number | null; timedOut: boolean; spawnError?: Error }
 
-function runSsh(args: string[], input: string, timeoutMs: number): Promise<RawRun> {
+/** After ssh exits, how long its pipes may stay open before the answer is taken as it stands. */
+export const SSH_PIPE_GRACE_MS = 1_000
+/** After the deadline's SIGTERM, how long ssh gets before SIGKILL. */
+const SSH_KILL_GRACE_MS = 2_000
+
+/**
+ * Run one `ssh` and settle by its deadline, whoever else holds its pipes.
+ *
+ * A ProxyCommand child (a corporate proxy client, a jump helper) inherits ssh's
+ * stderr. Waiting for `close` therefore waited for THAT process: when a proxy
+ * client got stuck, killing ssh at the deadline changed nothing, and the call
+ * settled only when the proxy gave up on its own. On 2026-09-28 a 5s probe
+ * answered after 11 minutes and a 15s ControlMaster start after 15, so one
+ * reconnect attempt ran 47 minutes and the host stayed dark the whole time.
+ * Now the deadline settles the call at once (SIGTERM, then SIGKILL, pipes
+ * released), and a normal exit settles once ssh's own output has drained
+ * (SSH_PIPE_GRACE_MS at most), not when the last pipe holder exits.
+ */
+export function runSshBounded(args: string[], opts: { input?: string | Buffer; timeoutMs: number; bin?: string }): Promise<SshRun> {
   return new Promise((resolve) => {
-    const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    const proc = spawn(opts.bin ?? 'ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
     let timedOut = false
     let settled = false
-    const finish = (run: RawRun) => { if (!settled) { settled = true; clearTimeout(timer); resolve(run) } }
-    const timer = setTimeout(() => { timedOut = true; proc.kill('SIGTERM') }, timeoutMs)
-    proc.stdout.on('data', (d: Buffer) => { if (stdout.length < MAX_CAPTURE_BYTES) stdout += d.toString() })
-    proc.stderr.on('data', (d: Buffer) => { if (stderr.length < MAX_CAPTURE_BYTES) stderr += d.toString() })
-    proc.stdin.on('error', () => { /* ssh died before reading the script: the exit code says why */ })
+    let graceTimer: ReturnType<typeof setTimeout> | undefined
+    const release = () => {
+      // Our ends only: a proxy child still holding the other end gets EPIPE, not us.
+      for (const s of [proc.stdin, proc.stdout, proc.stderr]) { try { s?.destroy() } catch { /* already closed */ } }
+    }
+    const finish = (run: SshRun) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      clearTimeout(graceTimer)
+      resolve(run)
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      proc.kill('SIGTERM')
+      const killTimer = setTimeout(() => { if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL') }, SSH_KILL_GRACE_MS)
+      killTimer.unref?.()
+      finish({ stdout, stderr, code: null, timedOut })
+      release()
+    }, opts.timeoutMs)
+    // Optional pipes: a stand-in child (tests) may carry only some of them.
+    proc.stdout?.on('data', (d: Buffer) => { if (stdout.length < MAX_CAPTURE_BYTES) stdout += d.toString() })
+    proc.stderr?.on('data', (d: Buffer) => { if (stderr.length < MAX_CAPTURE_BYTES) stderr += d.toString() })
+    proc.stdin?.on('error', () => { /* ssh died before reading the script: the exit code says why */ })
     proc.on('error', (err) => finish({ stdout, stderr, code: null, timedOut, spawnError: err }))
+    proc.on('exit', (code) => {
+      if (settled) return
+      graceTimer = setTimeout(() => { finish({ stdout, stderr, code, timedOut }); release() }, SSH_PIPE_GRACE_MS)
+    })
     proc.on('close', (code) => finish({ stdout, stderr, code, timedOut }))
-    proc.stdin.end(input)
+    proc.stdin?.end(opts.input ?? '')
   })
+}
+
+function runSsh(args: string[], input: string, timeoutMs: number): Promise<SshRun> {
+  return runSshBounded(args, { input, timeoutMs })
 }
 
 /**

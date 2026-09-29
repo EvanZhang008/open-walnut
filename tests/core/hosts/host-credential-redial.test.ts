@@ -11,6 +11,10 @@
  * session tracker and message queue (isolated WALNUT_HOME), retrySession.
  * STUBBED: DaemonConnection.reconnect()/connect() (they would ssh), the
  * conversation probe on the host, and the signal's file/agent reads.
+ *
+ * The same holds for an SSH proxy whose own login expired (2026-09-27: it read
+ * as a transient proxy failure, retried every 3 seconds for 3 hours, and nothing
+ * watched the proxy's login file).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fsp from 'node:fs/promises'
@@ -57,6 +61,13 @@ const { SessionControlError } = await import('../../../src/core/sessions/session
 
 const CERT_EXPIRED = 'alice@devbox.example.com: Permission denied (publickey).\n'
   + 'walnut-ssh-evidence: cert-expired (SSH certificate expired at 2026-09-29 06:10)'
+/** A ProxyCommand's refusal in the shape one printed (names neutralized): colour codes, its sentence, ssh's line. */
+const PROXY_LOGIN = [
+  'Command failed: ssh alice@devbox.example.com sh -s',
+  '\u001b[31m Error: Acme SSH Client returned an error when reaching to Acme SSH Proxy: \u001b[31m An error occured during the Acme authentication process. This is likely because your Acme cookie is invalid or expired. Please run "acme-login" to re-authenticate, then retry.',
+  ' \u001b[0m',
+  'Connection closed by UNKNOWN port 65535',
+].join('\n')
 type Internals = { _disconnectedSince: number | null; _connected: boolean; scheduleReconnect: (d: number) => void }
 const settle = (ms = 30) => new Promise((r) => setTimeout(r, ms))
 
@@ -65,16 +76,16 @@ let reconnect: ReturnType<typeof vi.spyOn>
 /** What the next reconnect() does: 'expired' | 'ok' | 'hang'. */
 let dial: 'expired' | 'ok' | 'hang'
 
-/** devbox dropped and its loop met an expired certificate: failed on screen, a credential re-dial armed. */
-async function devboxWaitingOnCredential(): Promise<void> {
+/** devbox dropped and its loop met an expired login: failed on screen, a credential re-dial armed. */
+async function devboxWaitingOnCredential(failure = CERT_EXPIRED, kind = 'cert_expired'): Promise<void> {
   conn = new dc.DaemonConnection('devbox', { hostname: 'devbox.example.com', user: 'alice' })
   dc.setPooledConnectionForTest('devbox', conn)
   ;(conn as unknown as Internals)._disconnectedSince = Date.now()
   conn.setPhaseForTest('reconnecting')
   dial = 'expired'
   reconnect = vi.spyOn(conn as never, 'reconnect' as never).mockImplementation((async () => {
-    if (dial === 'expired') throw new Error(CERT_EXPIRED)
-    if (dial === 'hang') { await new Promise((r) => setTimeout(r, 2_000)); throw new Error(CERT_EXPIRED) }
+    if (dial === 'expired') throw new Error(failure)
+    if (dial === 'hang') { await new Promise((r) => setTimeout(r, 2_000)); throw new Error(failure) }
     ;(conn as unknown as Internals)._connected = true
   }) as never)
   vi.spyOn(conn, 'connect').mockImplementation(async () => { throw new Error('connect() must not run: it would ssh for real') })
@@ -83,7 +94,7 @@ async function devboxWaitingOnCredential(): Promise<void> {
   expect(conn.reconnectPending).toBe(true)
   const st = dc.getDaemonConnectState('devbox')
   expect(st.phase).toBe('failed')
-  expect(st.kind).toBe('cert_expired')
+  expect(st.kind).toBe(kind)
 }
 
 beforeEach(async () => {
@@ -131,6 +142,36 @@ describe('a renewed credential redials the waiting host', () => {
     expect(dc.isDaemonConnected('devbox')).toBe(true)
     // Connected: it waits on nothing any more.
     expect(credentialWaiters(() => true)).toEqual([])
+  })
+
+  it("proxy login expired: automatic callers fail fast instead of redialling, and the proxy's new login reconnects", async () => {
+    await devboxWaitingOnCredential(PROXY_LOGIN, 'proxy_login')
+    const st = dc.getDaemonConnectState('devbox')
+    // The next try is on the credential clock (the first wait is a minute), not 3 seconds away.
+    expect(st.retryAt! - Date.now()).toBeGreaterThan(50_000)
+    expect(st.retryAt! - Date.now()).toBeLessThanOrEqual(60_000)
+    expect(st.error ?? st.lastError ?? '').not.toContain('\u001b')
+    // Every automatic caller (a JSONL read, a status probe) used to redial right away.
+    for (let i = 0; i < 5; i++) {
+      await expect(dc.getDaemonConnection('devbox', { hostname: 'devbox.example.com', user: 'alice' })).rejects.toThrow()
+    }
+    expect(reconnect).toHaveBeenCalledTimes(1)
+
+    const [w] = credentialWaiters(() => true)
+    expect(w?.host).toBe('devbox')
+    let newest = w.failedAt - 60_000
+    const sig = startHostCredentialSignal({
+      waiting: () => credentialWaiters(() => true), redial: redialAfterWake,
+      newestFileMtime: async () => newest, agentListing: async () => null,
+      setInterval: () => ({}), clearInterval: () => {},
+    })
+    expect(await sig.poll()).toEqual([])
+    dial = 'ok'
+    newest = Date.now()                            // the proxy's login command rewrote its cookie file
+    expect(await sig.poll()).toEqual(['devbox'])
+    await settle()
+    expect(reconnect).toHaveBeenCalledTimes(2)
+    expect(dc.isDaemonConnected('devbox')).toBe(true)
   })
 
   it('a disabled host is never redialled by the signal', async () => {
