@@ -28,6 +28,15 @@ function bail(reason: string): never {
 
 const initialPpid = process.ppid
 
+// Daemons a test spawns itself (the real binary or the source twin, launched
+// with `{ ...process.env }`) inherit this and exit once this worker is gone.
+// Without it, a test file killed before its afterAll left its daemon running
+// with ppid=1: two were found on 2026-09-29, one 2.5 days old, and about 40
+// test files spawn a daemon this way. local-daemon.ts deletes an inherited
+// value and never sets one for the production dir, and runtime-dir-isolation
+// keeps every test daemon off that dir anyway.
+if (!process.env.WALNUT_DAEMON_PARENT_PID) process.env.WALNUT_DAEMON_PARENT_PID = String(process.pid)
+
 // Primary signal: IPC channel to the runner closed → runner is gone.
 if (typeof process.disconnect === 'function') {
   process.on('disconnect', () => bail('runner IPC channel disconnected'))
