@@ -32,7 +32,8 @@ export function resolveApiBase(override?: string): string {
 
 export type OpOutcome =
   | { ok: true; result: unknown }
-  | { ok: false; message: string; result?: unknown }
+  /** `unreachable`: nothing answered at all (a session's CLI may ask its host daemon instead). */
+  | { ok: false; message: string; result?: unknown; unreachable?: true }
 
 /** Header every op request carries when the caller's session id is known. */
 export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
@@ -108,7 +109,7 @@ async function rawRequest(
   } catch (err) {
     const code = causeCode(err)
     if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'ECONNRESET') {
-      return { ok: false, message: `Walnut server not running at ${base} — start with \`open-walnut web\`` }
+      return { ok: false, unreachable: true, message: `Walnut server not running at ${base} — start with \`open-walnut web\`` }
     }
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
       return { ok: false, message: `Walnut request timed out after ${timeoutMs}ms: ${method} ${path}` }

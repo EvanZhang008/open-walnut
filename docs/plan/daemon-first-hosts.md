@@ -101,6 +101,13 @@ server", so on a shared host a test server could answer the real Walnut's calls.
 | `task_update`, `task_complete` | journaled with the caller and time, applied to the read copy so later reads agree, replayed through the op registry on reconnect |
 | anything else | `hub_unreachable`, with a message listing what works offline |
 
+On the Mac, a session's `walnut` is the installed Walnut CLI, which talks to the
+server over HTTP (the daemon's own `walnut` is first on PATH only on hosts
+without an install). When nothing answers there, it hands the same call to the
+session's host daemon through the agent socket the daemon put in the session's
+environment, so Mac sessions get the same offline answers while the server
+restarts.
+
 What deliberately stays on the server: starting sessions (the launch recipe:
 model, prompt, environment), creating tasks (placement rules), cross-host
 messages, notes, memory, the human inbox.
@@ -151,11 +158,6 @@ settles anything, so an offline reply is never followed by a "no reply" notice.
 | later | offline session start, once the launch recipe can be cached per project |
 
 ## Known limits of phase 1
-
-- On the Mac itself, a session's `walnut` is the installed Walnut CLI, which
-  talks to the server directly, so while the server restarts those calls fail
-  instead of reaching the daemon. Sessions on other hosts use the daemon's own
-  `walnut`, which is what this phase covers.
 
 - A session that has been idle for two hours with no server attached is stopped
   by the daemon's idle reaper, and restarting it needs the launch recipe, so a

@@ -197,6 +197,11 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       parsed = args.args
     }
     const r = await executeOp(name, parsed)
+    if (!r.ok && r.unreachable) {
+      const { callThroughHostDaemon } = await import('./tools-daemon-fallback.js')
+      const code = await callThroughHostDaemon(name, parsed)
+      if (code !== null) { process.exitCode = code; return }
+    }
     if (!r.ok) {
       if (r.result !== undefined) console.log(JSON.stringify(r.result, null, 2))
       console.error(r.message)

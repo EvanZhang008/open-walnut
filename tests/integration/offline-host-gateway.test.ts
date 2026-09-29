@@ -16,7 +16,7 @@
  * Hygiene: every daemon is killed in afterAll by the pid IT wrote into its own
  * temp dir; nothing touches the production daemon dir or journal.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -269,6 +269,37 @@ describe.each(twins)('offline host on the real %s daemon', (twin) => {
     await waitFor(() => inboxOf(d.dir, A).some((m) => m.content.includes('kind="reply"') && m.content.includes('The answer is 42.')), 10_000, 'A receives the reply')
     const status = await gateway(d.sock, A, 'request_get', { id: requestId })
     expect(status.ok && (status.result.request as { status: string }).status).toBe('replied')
+  })
+
+  it('the installed walnut CLI (a Mac session) reaches the same answers when the server is down', async () => {
+    const saved = { url: process.env.OPEN_WALNUT_API_URL, sock: process.env.WALNUT_AGENT_SOCKET, sid: process.env.WALNUT_SESSION_ID }
+    const dead = await new Promise<number>((resolve) => {
+      const s = net.createServer().listen(0, '127.0.0.1', () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)) })
+    })
+    process.env.OPEN_WALNUT_API_URL = `http://127.0.0.1:${dead}`
+    process.env.WALNUT_AGENT_SOCKET = d.sock
+    process.env.WALNUT_SESSION_ID = A
+    let out = ''
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      out += String(chunk)
+      ;(rest.find((r) => typeof r === 'function') as (() => void) | undefined)?.()
+      return true
+    }) as typeof process.stdout.write)
+    const errs = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as typeof process.stderr.write)
+    try {
+      const { runTools } = await import('../../src/commands/tools.js')
+      process.exitCode = undefined
+      await runTools(['call', 'task_get', JSON.stringify({ id: TASK_B })], {})
+      expect(process.exitCode ?? 0).toBe(0)
+    } finally {
+      write.mockRestore(); errs.mockRestore()
+      process.exitCode = undefined
+      for (const [k, v] of [['OPEN_WALNUT_API_URL', saved.url], ['WALNUT_AGENT_SOCKET', saved.sock], ['WALNUT_SESSION_ID', saved.sid]] as const) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
+    expect(JSON.parse(out)).toMatchObject({ offline: true, task: { id: TASK_B } })
   })
 
   it('queues task_complete and shows it in reads', async () => {
