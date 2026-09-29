@@ -271,3 +271,25 @@ describe('SessionReaper — rotateArchives drops archives older than 180 days', 
     await expect(fsp.access(freshStream)).resolves.toBeUndefined();
   });
 });
+
+describe('SessionReaper — ephemeral snapshot reap', () => {
+  it('runs the injected ephemeral reap on every pass, with or without reapable sessions', async () => {
+    let calls = 0;
+    const reaper = new SessionReaper({ reapEphemeral: () => { calls++; } });
+
+    await reaper.reap();
+    await seedTerminalEnvSession('triage-ephemeral-pass', { ageDays: 31 });
+    await reaper.reap();
+
+    expect(calls).toBe(2);
+  });
+
+  it('a throwing ephemeral reap does not stop session reaping', async () => {
+    await seedTerminalEnvSession('triage-ephemeral-throw', { ageDays: 31 });
+    const reaper = new SessionReaper({ reapEphemeral: () => { throw new Error('tmpdir unreadable'); } });
+
+    const result = await reaper.reap();
+
+    expect(result.reaped).toBe(1);
+  });
+});

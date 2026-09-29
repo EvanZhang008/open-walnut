@@ -13,7 +13,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { log } from '../logging/index.js'
-import { SESSION_STREAMS_DIR, CLAUDE_HOME } from '../constants.js'
+import { SESSION_STREAMS_DIR, CLAUDE_HOME, WALNUT_HOME } from '../constants.js'
 import type { SessionRecord } from './types.js'
 import { isEnvironmentSession } from './session-tracker.js'
 import { sweepRecoverableStreamFiles } from './stream-retention.js'
@@ -36,9 +36,21 @@ function sessionTimestamp(s: SessionRecord): string | undefined {
   return s.last_status_change ?? s.lastActiveAt ?? s.startedAt
 }
 
+export interface SessionReaperDeps {
+  /**
+   * Reclaim `web --ephemeral` snapshot dirs (~3.4G each) whose server is gone.
+   * The launcher only reaps at the NEXT ephemeral launch, so a SIGKILLed child's
+   * snapshot otherwise sits in $TMPDIR until someone happens to launch again.
+   * Injected (not imported) so unit tests never scan the real $TMPDIR.
+   */
+  reapEphemeral?: () => void
+}
+
 export class SessionReaper {
   private timer: ReturnType<typeof setInterval> | null = null
   private initialTimer: ReturnType<typeof setTimeout> | null = null
+
+  constructor(private readonly deps: SessionReaperDeps = {}) {}
 
   start(): void {
     if (this.timer) return
@@ -94,11 +106,20 @@ export class SessionReaper {
         .filter(s => s.process_status === 'running' || s.process_status === 'idle')
         .map(s => s.claudeSessionId),
     )
-    const walnutTmp = path.join(os.homedir(), '.open-walnut', 'tmp')
+    // WALNUT_HOME, not os.homedir(): the same dir in production, but a test or
+    // ephemeral server (WALNUT_HOME = a temp snapshot) must not sweep the live
+    // data dir's streams.
+    const walnutTmp = path.join(WALNUT_HOME, 'tmp')
     const claudeProjectsDir = path.join(CLAUDE_HOME, 'projects')
     const spawnJournal = spawnJournalPath(os.homedir())
     for (const streamsDir of [path.join(walnutTmp, 'streams'), SESSION_STREAMS_DIR]) {
       await sweepRecoverableStreamFiles({ streamsDir, claudeProjectsDir, activeIds, spawnJournal })
+    }
+
+    try {
+      this.deps.reapEphemeral?.()
+    } catch (err) {
+      log.session.warn('session reaper: ephemeral snapshot reap failed', { error: String(err) })
     }
 
     // Find reapable sessions

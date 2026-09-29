@@ -2868,7 +2868,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     sideThreadManager.start()
 
     // -- Start session reaper (periodic cleanup of high-volume triage session records) --
-    sessionReaper = new SessionReaper()
+    const { reapStaleEphemeralDirs } = await import('../commands/ephemeral-registry.js')
+    sessionReaper = new SessionReaper({ reapEphemeral: () => reapStaleEphemeralDirs(WALNUT_HOME) })
     sessionReaper.start()
 
     // -- One-shot heal: stale pendingPermission on terminal sessions --
