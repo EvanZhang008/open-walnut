@@ -265,6 +265,10 @@ export interface SearchIndex {
   stats(): IndexStats;
   optimize(): void;
   close(): void;
+  /** Stop the embedding workers and wait until they are gone: a run in flight
+   *  finishes first, because a process that exits under one aborts. The
+   *  semantic lane then degrades to keyword order. Call before exiting. */
+  stopEmbedder(): Promise<void>;
   /** Escape hatch for the embedding worker and tests; not part of the
    *  stable surface. */
   readonly db: SearchDb;
@@ -744,6 +748,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     },
     stats: () => collectStats(db),
     optimize: () => optimizeIndex(db),
+    stopEmbedder: async () => { await embedder?.dispose(); },
     close: () => {
       closed = true; // in-flight backfill/searches bail instead of touching a closed handle
       void embedder?.dispose();

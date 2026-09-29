@@ -13,7 +13,10 @@ const STALL_MS = 1000;
 
 let served = 0;
 
-parentPort.on('message', ({ id, texts }) => {
+parentPort.on('message', (msg) => {
+  // The host's stop request (embedder.ts terminate): exit at once.
+  if (msg && msg.stop) process.exit(0);
+  const { id, texts } = msg;
   const buf = new Int8Array(texts.length * DIMS);
   for (let i = 0; i < texts.length; i++) buf[i * DIMS] = 127;
   const reply = () => parentPort.postMessage({ id, buf: buf.buffer, dims: DIMS });

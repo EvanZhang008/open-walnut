@@ -243,7 +243,35 @@ function recallTopK(queryVec: Int8Array, k: number): Array<{ docId: number; cos:
   return top.sort((a, b) => b.cos - a.cos);
 }
 
-parentPort?.on('message', (job: Job) => {
+/**
+ * How this worker ends. worker.terminate() (or the process exiting) while
+ * onnxruntime is inside a run aborts the WHOLE process: "libc++abi: terminating
+ * due to uncaught exception of type Napi::Error", exit 134. That was the
+ * production server dying on 2026-09-29 when the passage lane's idle reaper
+ * fired after a wake with a backfill embed in flight. Ending the thread while
+ * no run is active is safe, so the host sends { stop: true } and the worker
+ * exits on its own once its jobs have finished.
+ */
+let activeJobs = 0;
+let stopping = false;
+
+function exitIfDrained(): void {
+  // process.exit in a worker ends this thread only.
+  if (stopping && activeJobs === 0) process.exit(0);
+}
+
+parentPort?.on('message', (msg: Job | { stop: true }) => {
+  if ('stop' in msg) {
+    stopping = true;
+    exitIfDrained();
+    return;
+  }
+  const job = msg;
+  if (stopping) {
+    parentPort?.postMessage({ id: job.id, error: 'embed worker stopping' });
+    return;
+  }
+  activeJobs++;
   void (async () => {
     try {
       const extractor = await loadExtractor();
@@ -262,6 +290,9 @@ parentPort?.on('message', (job: Job) => {
         id: job.id,
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      activeJobs--;
+      exitIfDrained();
     }
   })();
 });

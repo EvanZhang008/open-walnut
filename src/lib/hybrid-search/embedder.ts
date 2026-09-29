@@ -67,6 +67,10 @@ export const MAX_EMBED_CHARS = 2000;
 
 const MAX_CONSECUTIVE_CRASHES = 3;
 
+/** How long a stopping worker may take to finish its run and exit before it is
+ *  forced. One passage embeds in well under this even on a loaded machine. */
+export const WORKER_STOP_GRACE_MS = 10_000;
+
 /**
  * Query-embedding LRU (per embedder instance, i.e. per index handle).
  *
@@ -127,18 +131,31 @@ export function cosineInt8(a: Int8Array, b: Int8Array): number {
  *  alone eats an interactive deadline; a batch used to be 22s). */
 interface Lane {
   submit(texts: string[], recallK?: number): { id: number; promise: Promise<WorkerReply> } | null;
+  /** No job in flight. */
+  idle(): boolean;
   /** Deliberate shutdown (idle reap / dispose) — never counted as a crash. */
   terminate(): Promise<void>;
 }
 
-export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embedder {
+export interface EmbedderOptions {
+  /** Test seam: how long a stopping worker gets before it is forced. */
+  stopGraceMs?: number;
+  /** Test seam: how long the passage lane may sit idle before it is reaped. */
+  passageIdleMs?: number;
+}
+
+export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, options: EmbedderOptions = {}): Embedder {
+  const stopGraceMs = options.stopGraceMs ?? WORKER_STOP_GRACE_MS;
   let disposed = false;
 
   function makeLane(role: string): Lane {
     let worker: Worker | null = null;
     let nextId = 1;
     let crashes = 0;
-    let expectedExit = false;
+    // Workers asked to stop. A stopping worker can outlive the next one's
+    // spawn (it finishes its run first), so its exit must neither clear the
+    // new worker's slot nor count as a crash.
+    const stopped = new WeakSet<Worker>();
     const pending = new Map<number, Pending>();
 
     function failAllPending(reason: string): void {
@@ -150,8 +167,9 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
       if (disposed || crashes >= MAX_CONSECUTIVE_CRASHES) return null;
       if (worker) return worker;
       const scriptPath = config.workerPath ?? new URL('./embed-worker.js', import.meta.url);
+      let w: Worker;
       try {
-        worker = new Worker(scriptPath, {
+        w = new Worker(scriptPath, {
           workerData: {
             modelId: config.modelId,
             dims: config.dims,
@@ -170,9 +188,9 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
         });
         return null;
       }
-      expectedExit = false;
-      worker.unref();
-      worker.on('message', (msg: {
+      worker = w;
+      w.unref();
+      w.on('message', (msg: {
         id: number;
         buf?: ArrayBuffer;
         dims?: number;
@@ -198,15 +216,15 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
         }
         p.resolve({ rows, recall: msg.recall ?? [] });
       });
-      worker.on('error', (err) => {
+      w.on('error', (err) => {
         log('warn', 'hybrid-search: embed worker error', {
           role,
           error: err instanceof Error ? err.message : String(err),
         });
       });
-      worker.on('exit', (code) => {
-        worker = null;
-        if (disposed || expectedExit) return;
+      w.on('exit', (code) => {
+        if (worker === w) worker = null;
+        if (disposed || stopped.has(w)) return;
         crashes++;
         failAllPending(`embed worker exited (code ${code})`);
         if (crashes >= MAX_CONSECUTIVE_CRASHES) {
@@ -216,7 +234,7 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
           });
         }
       });
-      return worker;
+      return w;
     }
 
     return {
@@ -230,12 +248,26 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
         });
         return { id, promise };
       },
+      idle() {
+        return pending.size === 0;
+      },
       async terminate() {
         const w = worker;
         if (!w) return;
-        expectedExit = true;
+        stopped.add(w);
         worker = null;
         failAllPending('embed worker terminated');
+        // Never worker.terminate() a run in flight: it aborts the whole process
+        // (embed-worker.ts). The worker finishes its run and exits on its own;
+        // only a run that outlives the grace is forced. The timer stays ref'd
+        // so a shutdown that awaits this cannot exit under a live run.
+        const exited = new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), stopGraceMs);
+          w.once('exit', () => { clearTimeout(timer); resolve(true); });
+        });
+        w.postMessage({ stop: true });
+        if (await exited) return;
+        log('warn', 'hybrid-search: embed worker did not stop in time — forcing it', { role, graceMs: stopGraceMs });
         await w.terminate();
       },
     };
@@ -247,11 +279,17 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn): Embed
   // reaped after idle, steady-state RAM is one model, not two.
   const queryLane = makeLane('query');
   const passageLane = makeLane('passage');
-  const PASSAGE_IDLE_KILL_MS = 5 * 60_000;
+  const PASSAGE_IDLE_KILL_MS = options.passageIdleMs ?? 5 * 60_000;
   let passageIdleTimer: ReturnType<typeof setTimeout> | undefined;
   function armPassageReaper(): void {
     if (passageIdleTimer) clearTimeout(passageIdleTimer);
-    passageIdleTimer = setTimeout(() => { void passageLane.terminate(); }, PASSAGE_IDLE_KILL_MS);
+    passageIdleTimer = setTimeout(() => {
+      // A job that started after this timer was armed is still running (after
+      // a sleep every timer fires at once): reaping now would fail it for
+      // nothing. Look again later.
+      if (!passageLane.idle()) { armPassageReaper(); return; }
+      void passageLane.terminate();
+    }, PASSAGE_IDLE_KILL_MS);
     passageIdleTimer.unref?.();
   }
 

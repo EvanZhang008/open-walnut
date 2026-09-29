@@ -741,6 +741,9 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
       bus.unsubscribe('search-v2-task-sync');
       bus.unsubscribe('search-v2-session-sync');
       await Promise.all([taskQueue.stop(), sessionQueue.stop()]);
+      // The server exits right after this: an embed run still in flight would
+      // abort it (libc++abi, exit 134), so wait for the workers to finish and go.
+      await handle?.stopEmbedder();
     },
   };
 }

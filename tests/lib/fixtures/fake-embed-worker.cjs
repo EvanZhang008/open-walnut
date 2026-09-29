@@ -33,7 +33,10 @@ function recallTopK(k) {
   }
 }
 
-parentPort.on('message', ({ id, texts, recallK }) => {
+parentPort.on('message', (msg) => {
+  // The host's stop request (embedder.ts terminate): nothing runs here, so exit.
+  if (msg && msg.stop) process.exit(0);
+  const { id, texts, recallK } = msg;
   const buf = new Int8Array(texts.length * DIMS);
   for (let i = 0; i < texts.length; i++) buf[i * DIMS] = 127;
   parentPort.postMessage({ id, buf: buf.buffer, dims: DIMS, recall: recallK ? recallTopK(recallK) : undefined });
