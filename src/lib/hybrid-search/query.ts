@@ -201,11 +201,113 @@ interface Term {
   anyExpr: string;
   /** Same match, restricted to the body streams (see BODY_COLUMNS). */
   bodyExpr: string;
+  /** Compound spellings of the term (see compoundForms), unguarded: coverage
+   *  asks only "is it here in any form", and a bare OR is cheaper to probe. */
+  formsExpr?: string;
+  bodyFormsExpr?: string;
   /** Relaxed-lane OR members (orig + sub parts / bigrams). */
   relaxedExprs: string[];
 }
 
-function compileTerm(token: string): Term {
+/**
+ * Compound spellings: one name written as one word or as two. "dockhub" and
+ * "Dock Hub" are the same name, and so are "setup"/"set up" and "timeout"/"time
+ * out", but the tokenizer sees `dockhub` in one and `dock`, `hub` in the other, so
+ * every lane missed the task titled "... Dock Hub KB sync" when the user typed
+ * "dockhub sync" (2026-09-28), and the AI search, which judges only what this
+ * engine hands it, never saw that task either. camelCase already bridged the gap
+ * (`DockHub` indexes `dockhub` plus the sub parts `dock`, `hub`); a lowercase word
+ * and a spaced pair have no shared token at all.
+ *
+ * The fix lives on the query side, as extra OR forms of a term, so the index is
+ * untouched (joining every adjacent word pair at index time would roughly double
+ * the sub streams of every transcript for a rare query shape):
+ *   split  a single-word term also matches its two halves as an adjacent PHRASE
+ *          ("dockhub" → "dock hub"), adjacency being what keeps it a compound and
+ *          not two words anywhere in the doc;
+ *   join   two adjacent query terms also match their concatenation as one token
+ *          ("dock hub" → "dockhub"), credited to BOTH terms, so strict AND and
+ *          coverage count the pair as present.
+ * A form is kept only when the index holds it: the joined token, or the split
+ * PHRASE itself, not merely its two halves (a bounded `LIMIT 1` probe each,
+ * halves first as the cheap filter). Halves alone let noise through: this
+ * index holds "ial", "uld" and "ion", so "credential" grew "credent ial"
+ * and "should" grew "sho uld", phrases no doc contains, and each one still
+ * cost a coverage probe. Long pasted queries skip this entirely: they have
+ * enough other terms to match on, and each probe is a synchronous seek.
+ */
+export const COMPOUND_MIN_HALF = 2;
+const COMPOUND_MAX_QUERY_TERMS = 8;
+const COMPOUND_MAX_SPLITS_PER_TERM = 2;
+/** Phrase probes per term: a long word has many splits whose halves exist. */
+const COMPOUND_MAX_SPLIT_PROBES = 4;
+const COMPOUND_MAX_FORMS = 12;
+const PLAIN_WORD_RE = /^[\p{L}\p{N}]+$/u;
+
+function compoundForms(
+  origSeq: readonly string[],
+  uniqueOrig: readonly string[],
+  exists: (token: string) => boolean,
+): Map<string, string[]> {
+  const forms = new Map<string, string[]>();
+  if (uniqueOrig.length > COMPOUND_MAX_QUERY_TERMS) return forms;
+  let budget = COMPOUND_MAX_FORMS;
+  const add = (token: string, expr: string): void => {
+    const list = forms.get(token) ?? [];
+    if (budget <= 0 || list.includes(expr)) return;
+    list.push(expr);
+    forms.set(token, list);
+    budget--;
+  };
+  const plain = (token: string): boolean =>
+    PLAIN_WORD_RE.test(token) && !hasCjk(token) && !/^\p{N}+$/u.test(token);
+
+  // join: adjacent terms written as one word in the doc.
+  for (let i = 0; i < origSeq.length - 1; i++) {
+    const a = origSeq[i];
+    const b = origSeq[i + 1];
+    if (a === b || !plain(a) || !plain(b)) continue;
+    const joined = a + b;
+    if (!exists(joined)) continue;
+    add(a, ftsQuote(joined));
+    add(b, ftsQuote(joined));
+  }
+
+  // A joined token ("dock-hub", "dock_hub") names the same thing as its parts
+  // written apart or run together; the FTS token is the joined form only.
+  for (const token of uniqueOrig) {
+    if (plain(token) || hasCjk(token)) continue;
+    const parts = tokenize(token).sub;
+    if (parts.length < 2 || !parts.every(plain)) continue;
+    if (parts.every(exists) && exists(parts.join(' '))) add(token, ftsQuote(parts.join(' ')));
+    if (exists(parts.join(''))) add(token, ftsQuote(parts.join('')));
+  }
+
+  // split: a one-word term written as two adjacent words in the doc. The most
+  // balanced splits first ("dock|hub" before "do|ckhub"; "work|flow" beats
+  // "wo|rkflow"), since a real compound rarely hangs on a two-letter fragment.
+  for (const token of uniqueOrig) {
+    if (!plain(token) || token.length < COMPOUND_MIN_HALF * 2) continue;
+    const splits: Array<[string, string]> = [];
+    for (let k = COMPOUND_MIN_HALF; k <= token.length - COMPOUND_MIN_HALF; k++) {
+      splits.push([token.slice(0, k), token.slice(k)]);
+    }
+    splits.sort((x, y) => Math.min(y[0].length, y[1].length) - Math.min(x[0].length, x[1].length));
+    let kept = 0;
+    let probes = 0;
+    for (const [head, tail] of splits) {
+      if (kept >= COMPOUND_MAX_SPLITS_PER_TERM || probes >= COMPOUND_MAX_SPLIT_PROBES || budget <= 0) break;
+      if (!exists(head) || !exists(tail)) continue;
+      probes++;
+      if (!exists(`${head} ${tail}`)) continue;
+      add(token, ftsQuote(`${head} ${tail}`));
+      kept++;
+    }
+  }
+  return forms;
+}
+
+function compileTerm(token: string, forms: readonly string[] = []): Term {
   if (hasCjk(token)) {
     // The whole-run token lives in orig columns, but matching happens through
     // the ordered bigram stream: phrase for precision, OR bag for recall.
@@ -222,12 +324,21 @@ function compileTerm(token: string): Term {
   }
   const quoted = ftsQuote(token);
   const subParts = tokenize(token).sub;
+  // Each form counts only where the term itself is absent. Unguarded, a
+  // camelCase doc matched twice for one occurrence (`EventOperator` indexes the
+  // joined token AND its sub parts), bm25 summed both, and on
+  // "kind event operator reconciler" two notes that merely mention the
+  // component rose above the task named for it. Guarded, a doc earns one form's
+  // credit per term, so the forms find new docs without reranking the old ones.
+  const guarded = forms.map((form) => `(${form} NOT ${quoted})`);
+  const formsExpr = forms.length > 0 ? `(${forms.join(' OR ')})` : undefined;
   return {
     token,
-    strictExpr: quoted,
+    strictExpr: guarded.length > 0 ? `(${[quoted, ...guarded].join(' OR ')})` : quoted,
     anyExpr: quoted,
     bodyExpr: `${BODY_COLUMNS}:${quoted}`,
-    relaxedExprs: [quoted, ...subParts.map((p) => ftsQuote(p))],
+    ...(formsExpr ? { formsExpr, bodyFormsExpr: `${BODY_COLUMNS}:${formsExpr}` } : {}),
+    relaxedExprs: [quoted, ...subParts.map((p) => ftsQuote(p)), ...guarded],
   };
 }
 
@@ -244,7 +355,22 @@ export function searchKeyword(
   const origSeq = tokenize(query).orig; // ordered — adjacency feeds the pair lane
   const uniqueOrig = [...new Set(origSeq)];
   if (uniqueOrig.length === 0) return [];
-  const terms = uniqueOrig.map(compileTerm);
+  const existsStmt = db.prepare(`SELECT 1 FROM doc_fts WHERE doc_fts MATCH ? LIMIT 1`);
+  const known = new Map<string, boolean>();
+  const exists = (token: string): boolean => {
+    let hit = known.get(token);
+    if (hit === undefined) {
+      try {
+        hit = existsStmt.get(ftsQuote(token)) !== undefined;
+      } catch {
+        hit = false;
+      }
+      known.set(token, hit);
+    }
+    return hit;
+  };
+  const forms = compoundForms(origSeq, uniqueOrig, exists);
+  const terms = uniqueOrig.map((token) => compileTerm(token, forms.get(token)));
 
   const limit = options.limit ?? DEFAULT_LIMIT;
   const candidateLimit = options.candidateLimit ?? DEFAULT_CANDIDATES;
@@ -422,16 +548,41 @@ export function searchKeyword(
   const coverStmt = db.prepare(
     `SELECT rowid FROM doc_fts WHERE doc_fts MATCH ? AND rowid IN (${idList})`,
   );
-  const termSets = new Map<string, Set<number>>();
-  for (const term of terms) {
-    try {
-      termSets.set(term.token, new Set(
-        (coverStmt.all(term.anyExpr) as Array<{ rowid: number }>).map((r) => r.rowid),
-      ));
-    } catch {
-      termSets.set(term.token, new Set());
+  // A term's compound forms are matched ONCE against the whole index and
+  // intersected here, never through `rowid IN`: that path re-evaluates the
+  // expression per id, and a phrase pays a position-list seek each time (a
+  // "dock hub"-shaped phrase over two common halves: 26ms over 250 ids, vs 2ms
+  // for every match in a 12k-doc index). Probed per id, the forms had tripled
+  // the latency of descriptive queries.
+  const formRows = new Map<string, Set<number>>();
+  const formStmt = db.prepare(`SELECT rowid FROM doc_fts WHERE doc_fts MATCH ?`);
+  const rowsOfForms = (expr: string): Set<number> => {
+    let rows = formRows.get(expr);
+    if (!rows) {
+      try {
+        rows = new Set((formStmt.all(expr) as Array<{ rowid: number }>).map((r) => r.rowid));
+      } catch {
+        rows = new Set();
+      }
+      formRows.set(expr, rows);
     }
-  }
+    return rows;
+  };
+  const probeSet = (expr: string, formsExpr: string | undefined): Set<number> => {
+    let found: Set<number>;
+    try {
+      found = new Set((coverStmt.all(expr) as Array<{ rowid: number }>).map((r) => r.rowid));
+    } catch {
+      found = new Set();
+    }
+    if (formsExpr) {
+      const viaForms = rowsOfForms(formsExpr);
+      for (const id of ids) if (viaForms.has(id)) found.add(id);
+    }
+    return found;
+  };
+  const termSets = new Map<string, Set<number>>();
+  for (const term of terms) termSets.set(term.token, probeSet(term.anyExpr, term.formsExpr));
 
   // ── body coverage sets, same bounded probe, restricted to summary/note ──
   // Only the DISCRIMINATIVE terms participate: a term the df gate rejected is
@@ -441,15 +592,7 @@ export function searchKeyword(
     ? terms.filter((t) => !overDf(t))
     : [];
   const bodyTermSets = new Map<string, Set<number>>();
-  for (const term of bodyTerms) {
-    try {
-      bodyTermSets.set(term.token, new Set(
-        (coverStmt.all(term.bodyExpr) as Array<{ rowid: number }>).map((r) => r.rowid),
-      ));
-    } catch {
-      bodyTermSets.set(term.token, new Set());
-    }
-  }
+  for (const term of bodyTerms) bodyTermSets.set(term.token, probeSet(term.bodyExpr, term.bodyFormsExpr));
 
   // ── score ──
   // Identifier-query detection: on a 1-2 token query the identifier IS the

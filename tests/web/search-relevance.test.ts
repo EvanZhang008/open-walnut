@@ -50,6 +50,24 @@ describe('serverRowShowsQuery', () => {
     }
     expect(serverRowShowsQuery({ title: 'Unrelated', matchField: 'child' }, ['abc123'])).toBe(false);
   });
+  it('a name typed as one word shows in a row that writes it as two (2026-09-28)', () => {
+    // The server found this task for "dockhub sync"; it must not fold into Related.
+    const row = { title: 'Walnut Trigger · CRON - Dock Hub KB sync', snippet: '' };
+    expect(serverRowShowsQuery(row, ['dockhub', 'sync'])).toBe(true);
+    expect(serverRowShowsQuery({ title: 'dock-hub rollout' }, ['dockhub'])).toBe(true);
+    // Two typed words already pass against the one-word spelling.
+    expect(serverRowShowsQuery({ title: 'DockHub rollout' }, ['dock', 'hub'])).toBe(true);
+    expect(serverRowShowsQuery({ title: 'Dock inspection', snippet: '...the hub...' }, ['dockhub'])).toBe(false);
+  });
+  it('full server-side coverage is evidence even when the snippet cannot show every term', () => {
+    // The note says "cron job"; the ~80-char snippet had no room for "job".
+    const row = { title: 'Walnut Trigger · CRON - Dock Hub KB sync', snippet: '...the daily sync of the hub...' };
+    const terms = ['dockhub', 'sync', 'cron', 'job'];
+    expect(serverRowShowsQuery({ ...row, coveredTermHits: 4 }, terms)).toBe(true);
+    // Partial coverage is still not evidence on its own.
+    expect(serverRowShowsQuery({ ...row, coveredTermHits: 3 }, terms)).toBe(false);
+    expect(serverRowShowsQuery(row, terms)).toBe(false);
+  });
 });
 
 describe('arrangeSearchResults', () => {

@@ -39,15 +39,45 @@ export function queryTerms(query: string): string[] {
   return terms.length > 0 ? terms : all;
 }
 
-/** Does a server row show the query in its own text (every term, in its title or snippet)? */
+/**
+ * The server's coverage tier for a row that matched every query term somewhere
+ * in the document (`coveredTermHits` is published on a 0-4 scale for
+ * multi-term queries: 4 = every term, or all but one on a query of 8+ terms,
+ * where the rounding reaches 4). That is keyword evidence, not a
+ * semantic guess, even when the ~80-character snippet cannot show all the terms
+ * at once: a task titled "... CRON - Dock Hub KB sync" whose note says
+ * "cron job" matched "dockhub sync cron job" in full and still folded into
+ * Related because its snippet had no room for "job".
+ */
+const FULL_COVERAGE_TIER = 4;
+
+/** Does a server row show the query (every term in its title or snippet, or full server-side coverage)? */
 export function serverRowShowsQuery(
-  row: { title?: string; snippet?: string; matchField?: string },
+  row: { title?: string; snippet?: string; matchField?: string; coveredTermHits?: number },
   terms: readonly string[],
 ): boolean {
   if (row.matchField && REFERENCE_FIELDS.has(row.matchField)) return true;
   if (terms.length === 0) return false;
+  if (typeof row.coveredTermHits === 'number' && row.coveredTermHits >= FULL_COVERAGE_TIER) return true;
   const text = `${row.title ?? ''}\n${row.snippet ?? ''}`.toLowerCase();
-  return terms.every((term) => text.includes(term));
+  let joined: string | null = null;
+  return terms.every((term) => {
+    if (text.includes(term)) return true;
+    joined ??= joinWords(text);
+    return joined.includes(term);
+  });
+}
+
+/**
+ * The text with the separators between words removed, so a name typed as one
+ * word shows in a row that writes it as two: "dockhub" in "Dock Hub KB sync". The
+ * server matches compounds both ways; without this the task it found for
+ * "dockhub sync" still folded into "Related" for not showing the query.
+ * (Two words typed for one written word already pass: "dock" and "hub" are both
+ * substrings of "dockhub".)
+ */
+function joinWords(text: string): string {
+  return text.replace(/([\p{L}\p{N}])[\s_.-]{1,3}(?=[\p{L}\p{N}])/gu, '$1');
 }
 
 export interface SearchMatchFacts<T> {

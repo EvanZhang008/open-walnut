@@ -579,6 +579,47 @@ describe('termInText — word-boundary + stem-flex containment', () => {
   });
 });
 
+// 2026-09-28: a query typing a name as one word could not find the task whose
+// title writes it as two. The index lane's half lives in
+// tests/lib/hybrid-search-compound.test.ts.
+describe('compound spellings on the ranking side', () => {
+  const TITLE = 'walnut trigger · cron - dock hub kb sync';
+
+  it('a one-word term matches its two-word spelling, as adjacent words only', async () => {
+    const { termInText } = await import('../../src/core/cjk.js');
+    expect(termInText(TITLE, 'dockhub')).toBe(true);
+    expect(termInText('the dock-hub rollout', 'dockhub')).toBe(true);
+    expect(termInText('dock inspection at the hub', 'dockhub')).toBe(false);
+    // Still a whole-word match: a longer word ending in "dock" is not "dock hub".
+    expect(termInText('paddock hub', 'dockhub')).toBe(false);
+  });
+
+  it('two adjacent terms both count when the text runs them together', async () => {
+    const { countTermsInText, termsFoundInText } = await import('../../src/core/cjk.js');
+    expect(termsFoundInText('dockhub website rollout', ['dock', 'hub', 'rollout'])).toEqual([true, true, true]);
+    expect(countTermsInText('dockhub website', ['dock', 'hub'])).toBe(2);
+    // Not adjacent in the query: no join credit.
+    expect(countTermsInText('dockhub website', ['dock', 'website', 'hub'])).toBe(1);
+  });
+
+  it('the title lane fires for the reported query shape', async () => {
+    const { titleMatchScore } = await import('../../src/core/search.js');
+    const title = 'Walnut Trigger · CRON - Dock Hub KB sync';
+    expect(titleMatchScore(title, 'dockhub sync cron job')).toBeGreaterThan(0.6);
+    expect(titleMatchScore(title, 'dockhub sync')).toBeGreaterThan(0.6);
+  });
+
+  it('the snippet shows the two-word spelling it matched, whole', async () => {
+    const note = `${'filler words about pallets and crates. '.repeat(8)}The Dock Hub KB sync runs nightly.`;
+    const snippet = extractSnippet(note, 'dockhub sync', 20);
+    expect(snippet).toContain('Dock Hub KB sync');
+  });
+
+  it('the fallback scorer credits the two-word spelling', () => {
+    expect(scoreMatch('Walnut Trigger · CRON - Dock Hub KB sync', 'dockhub sync', 1)).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe('the AI search must not surface its own ask rows (2026-09-21)', () => {
   beforeEach(() => { vi.resetModules(); });
   afterEach(() => {
@@ -638,5 +679,83 @@ describe('the AI search must not surface its own ask rows (2026-09-21)', () => {
     // The lane must still be live — a test that passes because nothing matched
     // would go green even with the gate removed.
     expect(results.some((r) => r.taskId === 'mtest002-0a02')).toBe(true);
+  });
+});
+
+describe('a task found by the title lane AND the index lane (2026-09-28)', () => {
+  // The reported shape: the title holds 3 of the 4 query terms, the note holds the
+  // 4th. The title lane finds the task first, so its row used to be the one kept,
+  // and it carried title-only coverage (3/4) and the title as its snippet. Every
+  // transcript mentioning all four words outranked it, and the panel folded it
+  // into "Related" for not showing the query.
+  const QUERY = 'dockhub sync cron job';
+  beforeEach(() => { vi.resetModules(); });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock('../../src/core/search/wiring.js');
+    vi.doUnmock('../../src/core/task-manager.js');
+    vi.doUnmock('../../src/core/session-tracker.js');
+  });
+
+  function mockBoard() {
+    vi.doMock('../../src/core/task-manager.js', () => ({
+      listTasks: vi.fn().mockResolvedValue([
+        {
+          id: 'mtest101-0b01', title: 'Walnut Trigger · CRON - Dock Hub KB sync',
+          phase: 'NEED_ACTION', status: 'todo', updated_at: '2026-09-27T00:00:00.000Z',
+        },
+        {
+          id: 'mtest102-0b02', title: 'Old onboarding loop',
+          phase: 'COMPLETE', status: 'done',
+          completed_at: '2026-06-01T00:00:00.000Z', updated_at: '2026-06-01T00:00:00.000Z',
+        },
+      ]),
+    }));
+    vi.doMock('../../src/core/session-tracker.js', () => ({
+      listSessions: vi.fn().mockResolvedValue([]),
+      isLaneSession: () => false,
+    }));
+  }
+
+  it('keeps the index lane coverage and snippet on the kept row', async () => {
+    mockBoard();
+    mockLane((kinds) => kinds?.includes('task') ? [
+      laneHit({
+        kind: 'task', ref: 'mtest102-0b02', title: 'Old onboarding loop',
+        text: 'Old onboarding loop. The dockhub sync cron job was deleted after the window.',
+        score: 0.9, components: { coverage: 1, cosine: 0 },
+      }),
+      laneHit({
+        kind: 'task', ref: 'mtest101-0b01', title: 'Walnut Trigger · CRON - Dock Hub KB sync',
+        text: 'Walnut Trigger · CRON - Dock Hub KB sync. A cron job runs the nightly sync.',
+        score: 0.5, components: { coverage: 1, cosine: 0 },
+      }),
+    ] : []);
+
+    const { search } = await import('../../src/core/search.js');
+    const results = await search(QUERY, { types: ['task'] });
+    const target = results.find((r) => r.taskId === 'mtest101-0b01');
+    expect(target).toBeDefined();
+    expect(target!.coveredTermHits).toBe(4);
+    expect(target!.snippet.toLowerCase()).toContain('cron job');
+    expect(results[0].taskId).toBe('mtest101-0b01');
+  });
+
+  it('keeps the better score: being found twice never ranks a task lower', async () => {
+    mockBoard();
+    mockLane((kinds) => kinds?.includes('task') ? [
+      laneHit({
+        kind: 'task', ref: 'mtest101-0b01', title: 'Walnut Trigger · CRON - Dock Hub KB sync',
+        text: 'Walnut Trigger · CRON - Dock Hub KB sync. A cron job runs the nightly sync.',
+        score: 0.95, components: { coverage: 1, cosine: 0 },
+      }),
+    ] : []);
+
+    const { search, titleMatchScore } = await import('../../src/core/search.js');
+    const title = 'Walnut Trigger · CRON - Dock Hub KB sync';
+    expect(titleMatchScore(title, QUERY)).toBeLessThan(0.95);
+    const results = await search(QUERY, { types: ['task'] });
+    const target = results.find((r) => r.taskId === 'mtest101-0b01');
+    expect(target?.score).toBeCloseTo(0.95, 5);
   });
 });

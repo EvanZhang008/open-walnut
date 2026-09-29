@@ -20,6 +20,7 @@ interface ServerSearchItem {
   title?: string;
   snippet?: string;
   matchField?: string;
+  coveredTermHits?: number;
 }
 
 export interface UseTaskSearchReturn {

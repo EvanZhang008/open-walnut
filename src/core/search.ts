@@ -1,7 +1,7 @@
 import { log } from '../logging/index.js';
 import { count, observe, timed } from './observability/metrics.js';
 import { CLOUD_MODE } from '../constants.js';
-import { contentQueryTerms, termInText, termIndexesInText } from './cjk.js';
+import { contentQueryTerms, countTermsInText, termHitsInText, termInText, termUnitsInText } from './cjk.js';
 import { bus, EventNames } from './event-bus.js';
 import { listTasks } from './task-manager.js';
 import { listSessions, isLaneSession } from './session-tracker.js';
@@ -58,11 +58,10 @@ export function extractSnippet(
   // of it, and take the densest. The old code took the earliest occurrence of any
   // term, so a term inside a long title always beat the real match deep in the
   // body: the row came back correct and its snippet explained nothing.
-  const hits: Array<{ at: number; term: string }> = [];
-  for (const term of terms) {
-    for (const at of termIndexesInText(lower, term)) hits.push({ at, term });
-    if (hits.length > 400) break; // bounded work on a 250KB body
-  }
+  // Bounded work on a 250KB body. Compound spellings count ("dock hub" for the
+  // term "dockhub", "dockhub" for the adjacent terms "dock" "hub"), with their real
+  // matched length, so the window that proves the hit also shows it.
+  const hits = termHitsInText(lower, terms, 400);
 
   if (hits.length === 0) {
     // No query term is present at all: fall back to the head, at the same width
@@ -82,13 +81,13 @@ export function extractSnippet(
   // was rewritten to fix, one step later. A real case: the only "docx" in the
   // text sat 3 characters inside the window and the trim removed it.
   let bestFrom = hits[0]!.at;
-  let bestTo = hits[0]!.at + hits[0]!.term.length;
+  let bestTo = hits[0]!.at + hits[0]!.len;
   for (let i = 0; i < hits.length; i++) {
     const anchor = hits[i]!;
     const distinct = new Set<string>();
     let count = 0;
     let from = anchor.at;
-    let to = anchor.at + anchor.term.length;
+    let to = anchor.at + anchor.len;
     // Both directions: the emitted window reaches BACKWARD from the anchor too, so
     // a forward-only count undervalues an anchor that sits at the end of a dense
     // run and makes the choice depend on which hit happens to be scanned first.
@@ -100,7 +99,7 @@ export function extractSnippet(
     for (let j = i + 1; j < hits.length && hits[j]!.at - anchor.at <= window; j++) {
       distinct.add(hits[j]!.term);
       count++;
-      to = Math.max(to, hits[j]!.at + hits[j]!.term.length);
+      to = Math.max(to, hits[j]!.at + hits[j]!.len);
     }
     if (distinct.size > bestDistinct || (distinct.size === bestDistinct && count > bestCount)) {
       bestDistinct = distinct.size;
@@ -202,7 +201,7 @@ export function titleMatchScore(title: string | undefined, query: string): numbe
   const terms = contentQueryTerms(query);
   if (terms.length < TITLE_LANE_MIN_MATCHED) return 0;
   const hay = title.toLowerCase();
-  const matched = terms.filter((t) => termInText(hay, t)).length;
+  const { units, matched } = termUnitsInText(hay, terms);
   if (matched < TITLE_LANE_MIN_MATCHED) return 0;
   // Bidirectional F1, not one-way query coverage. One-way breaks the
   // cross-language paraphrase: an English query against the Chinese title
@@ -211,7 +210,7 @@ export function titleMatchScore(title: string | undefined, query: string): numbe
   // matched 100% of the title vocabulary it could. The title-side fraction
   // tells those apart from a long title that happens to contain two common
   // words (2/20 title coverage → F1 0.16, stays out).
-  const fq = matched / terms.length;
+  const fq = matched / units;
   const titleTermCount = Math.max(1, contentQueryTerms(title).length);
   const ft = Math.min(1, matched / titleTermCount);
   const f1 = (2 * fq * ft) / (fq + ft);
@@ -251,6 +250,10 @@ export function scoreMatch(text: string, query: string, weight: number): number 
       if (count > 1) {
         score += weight * 0.3 * Math.log(count);
       }
+    } else if (termInText(lower, term)) {
+      // Written as two words ("Dock Hub" for "dockhub"): the compound rule the
+      // index lane applies, so a cloud replica finds what the Mac finds.
+      score += weight;
     }
   }
   return score;
@@ -848,6 +851,29 @@ async function searchInner(
     mergeTermCount > 1
       ? Math.min(mergeTermCount, Math.round(coverageFrac * mergeTermCount))
       : undefined;
+  // One row per task (and per session) survives the lanes: the first to find
+  // it. When that is the title lane, which sees only the title, the row lost
+  // what the index lane saw in the whole document: its coverage, so the task
+  // sank below every transcript that mentions all the terms somewhere
+  // (2026-09-28: a task whose title held 3 of 4 query terms and whose note held
+  // the 4th ranked 29th); its score, so a long title's weak F1 replaced a
+  // stronger index score and being found twice ranked the task LOWER than being
+  // found once; and its snippet, so the row showed only its title and the panel
+  // folded it into "Related" for not showing the query. The dropped duplicate
+  // hands all three over: a second lane can only add evidence.
+  const indexCoverage = new Map<SearchResult, number>();
+  const mergeDuplicate = (
+    kept: SearchResult,
+    dup: { coveredTermHits?: number; snippet: string; score: number },
+  ): void => {
+    if (dup.coveredTermHits !== undefined) {
+      indexCoverage.set(kept, Math.max(indexCoverage.get(kept) ?? 0, dup.coveredTermHits));
+    }
+    // Both lane scales are normalized to the same band (see titleMatchScore).
+    if (dup.score > kept.score) kept.score = dup.score;
+    // A title-lane snippet is the title itself; a document window says more.
+    if (kept.matchField === 'title' && dup.snippet) kept.snippet = dup.snippet;
+  };
 
   // Tasks loaded lazily — only when needed for BM25 fallback or child expansion.
   // Timed because the whole-store read is a peer of the hybrid lanes in this
@@ -960,10 +986,14 @@ async function searchInner(
   // IDs, so an identifier hit should not trigger semantic noise.
   if (types.includes('task')) {
     const taskResults: SearchResult[] = [];
-    const seenTaskIds = new Set<string>();
+    const keptByTaskId = new Map<string, SearchResult>();
     const appendTaskResult = (result: SearchResult) => {
-      if (result.taskId && seenTaskIds.has(result.taskId)) return;
-      if (result.taskId) seenTaskIds.add(result.taskId);
+      const kept = result.taskId ? keptByTaskId.get(result.taskId) : undefined;
+      if (kept) {
+        mergeDuplicate(kept, result);
+        return;
+      }
+      if (result.taskId) keptByTaskId.set(result.taskId, result);
       taskResults.push(result);
     };
 
@@ -1085,8 +1115,21 @@ async function searchInner(
         (await getSessions()).map((s) => [s.claudeSessionId, s.taskId]),
       );
       const searchV2Lane = await loadSearchV2Lane();
+      const keptSessionRows = new Map(
+        results.filter((r) => r.type === 'session' && r.sessionId).map((r) => [r.sessionId!, r]),
+      );
       for (const hit of await searchV2Lane(normalizedQuery, { kinds: ['session'], limit })) {
-        if (seenSessionIds.has(hit.ref)) continue;
+        if (seenSessionIds.has(hit.ref)) {
+          const kept = keptSessionRows.get(hit.ref);
+          if (kept) {
+            mergeDuplicate(kept, {
+              coveredTermHits: v2CoveredHits(hit.components.coverage),
+              snippet: extractSnippet(hit.text, normalizedQuery),
+              score: hit.score,
+            });
+          }
+          continue;
+        }
         const ownerTaskId = taskBySession.get(hit.ref);
         results.push({
           type: 'session',
@@ -1172,8 +1215,9 @@ async function searchInner(
         let hits = result.coveredTermHits;
         if (hits === undefined) {
           const haystack = `${result.title}\n${result.snippet}`.toLowerCase();
-          hits = terms.filter((t) => termInText(haystack, t)).length;
+          hits = countTermsInText(haystack, terms);
         }
+        hits = Math.max(hits, indexCoverage.get(result) ?? 0);
         coverage.set(result, Math.round((Math.min(hits, terms.length) / terms.length) * 4));
       }
     }
