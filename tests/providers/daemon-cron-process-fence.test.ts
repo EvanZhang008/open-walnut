@@ -746,7 +746,9 @@ function buildGateTwin(kind: 'standalone' | 'template'): GateTwin {
   const src = kind === 'standalone'
     ? nodeFs.readFileSync(nodePath.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
     : getDaemonSource()
-  const commands = ['cmdStart', 'cmdStop', 'cmdSend', 'cmdBridgeResume', 'fireTurnRetry', 'checkTurnRetry'].map((name) => sliceTopLevelFn(src, name)).join('\n')
+  // stopOwnerRefusal (owner-home-v1) rides along because cmdStop calls it first; these
+  // stops name no Walnut, so it answers "allowed" without reading the journal.
+  const commands = ['cmdStart', 'cmdStop', 'stopOwnerRefusal', 'cmdSend', 'cmdBridgeResume', 'fireTurnRetry', 'checkTurnRetry'].map((name) => sliceTopLevelFn(src, name)).join('\n')
   const exports = '\nreturn { cmdStart, cmdStop, cmdSend, cmdBridgeResume, fireTurnRetry, checkTurnRetry, gate: sessionStartGate };'
   const gateCode = kind === 'template' ? sliceTemplateGate(src) : ''
   const js = ts.transpileModule(gateCode + '\n' + commands + exports, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText

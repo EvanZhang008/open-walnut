@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { SessionRecord } from '../types.js'
+import { describeStopRefusal, STOP_NOT_SENT_NO_OWNERSHIP_CHECK, stopProvenance } from './stop-provenance.js'
 
 type StopRequest = NonNullable<SessionRecord['stopRequest']>
 
@@ -15,6 +16,8 @@ export function isSessionStopSuperseded(error: unknown): error is SessionStopSup
 export interface SessionStopConnection {
   connected: boolean
   send(command: string, args: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
+  /** Daemon capabilities from hello; decides the stop's ownership fields (stop-provenance.ts). */
+  hasCapability?(cap: string): boolean
 }
 
 export interface SessionStopDeps {
@@ -82,16 +85,20 @@ export class SessionStopCoordinator {
     let error: string | undefined
     try {
       const conn = connection ?? await this.deps.connection(record.host ?? '__local__')
+      // A person's stop names this Walnut, so a daemon that records the session
+      // for another Walnut refuses it (owner-home-v1, stop-provenance.ts).
+      const provenance = conn?.connected ? stopProvenance(conn, 'human') : null
       if (!conn?.connected) error = 'Host unavailable; waiting for stop confirmation'
+      else if (!provenance) error = STOP_NOT_SENT_NO_OWNERSHIP_CHECK
       else {
-        const reply = await conn.send('stop', { sid, reason: 'user', stopRequestId: request.id }, 10_000)
+        const reply = await conn.send('stop', { sid, reason: 'user', stopRequestId: request.id, ...provenance }, 10_000)
         if (reply.ok === true && reply.stopped === true) {
           const confirmed: StopRequest = { id: request.id, requestedAt: request.requestedAt, state: 'confirmed' }
           const updated = await this.deps.confirm(sid, confirmed)
           if (updated) this.deps.changed(updated)
           return updated?.stopRequest ?? (await this.deps.get(sid))?.stopRequest ?? request
         }
-        error = typeof reply.error === 'string' ? reply.error : 'Daemon did not confirm the stop'
+        error = describeStopRefusal(reply)
       }
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause)

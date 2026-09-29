@@ -17,6 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
+import { WALNUT_HOME } from '../../src/constants.js'
 
 const TEST_TARGET = { hostname: '127.0.0.1', user: undefined, port: undefined }
 
@@ -57,12 +58,13 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true, stopped: true })
     try {
       await mgr.stop()
-      expect(send.mock.calls[0]).toEqual(['stop', { sid: 'sid-test', reason: 'maintenance' }, 10_000])
+      // Every stop names this Walnut to a daemon that checks ownership (owner-home-v1).
+      expect(send.mock.calls[0]).toEqual(['stop', { sid: 'sid-test', reason: 'maintenance', home: WALNUT_HOME, initiator: 'human' }, 10_000])
       send.mockResolvedValueOnce({ ok: true, stopped: false, reason: 'cron_supervised' })
       expect(await mgr.stopForIdle()).toBe(false)
       expect(mgr.hasPipe).toBe(true)
       await mgr.interrupt()
-      expect(send.mock.calls[2]).toEqual(['stop', { sid: 'sid-test', reason: 'user' }, 10_000])
+      expect(send.mock.calls[2]).toEqual(['stop', { sid: 'sid-test', reason: 'user', home: WALNUT_HOME, initiator: 'human' }, 10_000])
     } finally { send.mockRestore() }
   })
 

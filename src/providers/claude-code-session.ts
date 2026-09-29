@@ -32,7 +32,6 @@ import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
 import { isProcessAliveAsync } from '../utils/process.js'
-import { isLocalJsonlFresh } from '../utils/session-liveness.js'
 import { SESSION_STREAMS_DIR, CLAUDE_HOME, CLOUD_MODE } from '../constants.js'
 import { log } from '../logging/index.js'
 import {
@@ -8432,95 +8431,30 @@ export class SessionRunner {
   }
 
   /**
-   * Kill orphaned claude processes from stopped/terminal sessions.
-   * Scans sessions.json for sessions with PIDs where process_status is 'stopped'
-   * or in terminal state, but the OS process is still alive.
-   * This prevents accumulation of zombie claude processes over time.
+   * End orphaned CLI processes: records that say the session was deliberately
+   * ended while a pid is still set. The server NEVER signals that pid. It asks
+   * the daemon that owns the session, which ends the process only after proving
+   * it spawned it and that nothing keeps it alive (core/sessions/owner-stop.ts).
+   *
+   * This used to SIGTERM every 'stopped'/'error' row whose pid was alive and
+   * looked like claude, vetoed only by a JSONL written in the last 2 minutes. On
+   * 2026-09-26 and 09-27 an ephemeral test server holding a copy of the
+   * production database ran it and killed 11, then 9, of the user's live
+   * sessions: the pids belonged to the production daemon, and the veto could not
+   * see their stream files. The same veto also failed for any live CLI idling
+   * between turns.
+   *
+   * Fire-and-forget from every session start; single-flight inside the sweep.
    */
   private async killOrphanedSessionProcesses(): Promise<void> {
-    // Single-flight: this runs fire-and-forget on every session start, and each
-    // run scans the whole sessions table + execs `ps` per live pid. Without the
-    // guard, launching several sessions back-to-back (or one Quick Start while a
-    // cron start fires) stacks concurrent scans that each burn CPU and contend on
-    // the same reads. Callers get the in-flight run's promise instead.
-    if (this._orphanSweepInFlight) return this._orphanSweepInFlight
-    const run = this._runOrphanSweep().finally(() => { this._orphanSweepInFlight = null })
-    this._orphanSweepInFlight = run
-    return run
-  }
-
-  private _orphanSweepInFlight: Promise<void> | null = null
-
-  private async _runOrphanSweep(): Promise<void> {
     try {
-      const { listSessions, isTerminalSession } = await import('../core/session-tracker.js')
-      const sessions = await listSessions()
-
-      // Cheap filters first (pure field reads, no syscalls), so the expensive
-      // liveness probes below run only for genuine candidates.
-      const candidates = sessions.filter((s) => {
-        if (s.pid == null) return false
-        if (s.provider === 'embedded' || s.provider === 'sdk') return false
-        return s.process_status === 'stopped' || s.process_status === 'error' || isTerminalSession(s)
+      const { listOrphanCandidates } = await import('../core/session-tracker.js')
+      const { sweepOrphansThroughOwner } = await import('../core/sessions/owner-stop.js')
+      await sweepOrphansThroughOwner(await listOrphanCandidates(), 'session-start', {
+        markExpectedTeardown: async (sid, reason) => this.markExpectedTeardown(sid, reason),
       })
-
-      // Probe liveness in PARALLEL. Each isProcessAliveAsync spawns `ps` (up to a
-      // 3s timeout); serially that was O(candidates) × exec latency — the bulk of
-      // the old ~1–2s. They're independent reads, so fan them out.
-      const alive = await Promise.all(
-        candidates.map(async (s) => ({
-          s,
-          isAlive: await isProcessAliveAsync(s.pid!, s.host ? 'ssh' : 'claude'),
-        })),
-      )
-
-      let killed = 0
-      for (const { s, isAlive } of alive) {
-        if (!isAlive) continue
-
-        // GROUND-TRUTH RECHECK before a destructive kill — veto on POSITIVE proof of life.
-        // This sweeper fires on every session start and trusts process_status==='stopped'
-        // (plus a live, binary-verified pid) as the kill signal — with NO grace period.
-        // That is exactly how the false-zombie incident killed a healthy CLI: the
-        // server-restart reconciler mis-marked a live local session 'stopped', and on the
-        // next session start this loop SIGTERM'd the real (still-streaming) process.
-        // The DB status flag is not authoritative; the JSONL mtime is (it's the same signal
-        // the daemon's reapSession uses). Only a fresh JSONL (process wrote output within the
-        // window) is positive proof the CLI is alive and working → veto the kill.
-        //
-        // We veto ONLY on `=== true`, NOT on 'unknown'. 'unknown' means "remote session" or
-        // "local file already cleaned/archived" — neither is evidence of life, and treating
-        // them as a veto would (a) leak remote orphans forever and (b) leak local PID-recycled
-        // orphans. The existing isProcessAliveAsync(pid,'claude') binary check above already
-        // guards PID reuse (a recycled non-claude pid returns false), so letting 'unknown'
-        // fall through to the kill restores exactly the prior, correct cleanup behavior while
-        // still blocking the one case that caused the incident.
-        const ORPHAN_FRESH_WINDOW_MS = 2 * 60 * 1000
-        if (isLocalJsonlFresh(s, ORPHAN_FRESH_WINDOW_MS) === true) {
-          log.session.warn('skipping orphan kill — JSONL recently written (process alive despite stopped flag)', {
-            sessionId: s.claudeSessionId, pid: s.pid, process_status: s.process_status,
-          })
-          continue
-        }
-
-        // Process is alive but session is done — kill it
-        log.session.warn('killing orphaned session process', {
-          sessionId: s.claudeSessionId,
-          taskId: s.taskId,
-          pid: s.pid,
-          process_status: s.process_status,
-        })
-
-        // Non-null: the candidate filter above admitted only pid != null rows.
-        try { process.kill(s.pid!, 'SIGTERM') } catch { /* already dead */ }
-        killed++
-      }
-
-      if (killed > 0) {
-        log.session.info('killed orphaned session processes', { count: killed })
-      }
     } catch (err) {
-      log.session.warn('killOrphanedSessionProcesses failed', {
+      log.session.warn('orphan sweep failed', {
         error: err instanceof Error ? err.message : String(err),
       })
     }
@@ -9485,17 +9419,15 @@ export class SessionRunner {
       }
     }
 
-    // Kill orphaned processes from stopped/terminal sessions to prevent accumulation.
-    // Over time, claude processes can leak (e.g. idle timeout GC'd, server restart
-    // orphaned the in-process timer). This ensures we don't exhaust OS resources.
+    // Ask the owning daemons to end orphaned CLIs (deliberately ended records whose
+    // pid is still set). Nothing here signals a process: see
+    // killOrphanedSessionProcesses.
     //
-    // Deliberately NOT awaited: reaping OTHER sessions' leaked processes has no
-    // causal relation to starting THIS one, but the scan is expensive (whole
-    // sessions table + one `ps` exec per live pid — measured ~1–2s at 130 live
-    // pids / 3.3k rows) and it sat directly in front of the spawn, so the user
-    // paid all of it as click latency. Fire-and-forget keeps the cleanup while
-    // letting the CLI start now. The in-flight guard inside makes a burst of
-    // starts share ONE sweep instead of N concurrent table scans.
+    // Deliberately NOT awaited: ending OTHER sessions' leaked processes has no
+    // causal relation to starting THIS one, and a stop the daemon accepts waits
+    // for the process group to exit (up to ~7s). It used to sit directly in front
+    // of the spawn, so the user paid all of it as click latency. The in-flight
+    // guard inside makes a burst of starts share ONE sweep.
     void this.killOrphanedSessionProcesses()
 
     const mapKey = taskId || `taskless-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`

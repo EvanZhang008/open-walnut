@@ -1,6 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { SESSIONS_DIR } from '../constants.js';
+import { SESSIONS_DIR, WALNUT_HOME } from '../constants.js';
 import { ensureDir } from '../utils/fs.js';
 import { isSessionProcessAlive } from '../utils/session-liveness.js';
 import { log } from '../logging/index.js';
@@ -662,7 +662,7 @@ export interface SessionLimitResult {
  *   1. Processing limit (per-host, default local=7): only running sessions count.
  *      Idle sessions do NOT block new work.
  *   2. Idle limit (per-host, default local=30, remote=40): cap on idle processes.
- *      When exceeded, the oldest idle session is gracefully stopped (SIGINT)
+ *      When exceeded, the oldest idle session is stopped through its daemon
  *      to make room. Does NOT block new sessions.
  *
  * @param host — host alias from config.hosts, or undefined/null for local.
@@ -723,24 +723,39 @@ export async function checkSessionLimit(
   const evicted: SessionRecord[] = [];
 
   if (maxIdle > 0 && idleSessions.length >= maxIdle) {
-    // Only evict CLI sessions (they have PIDs we can SIGINT).
-    // SDK/embedded sessions have no PID — evicting them has no effect on actual resources.
+    // Only evict CLI sessions (a daemon holds their process and can stop it).
+    // SDK/embedded sessions have no process: evicting them frees nothing.
     const evictable = idleSessions
       .filter(s => s.provider !== 'sdk' && s.provider !== 'embedded')
       .sort((a, b) => a.lastActiveAt.localeCompare(b.lastActiveAt));
 
     const needToEvict = idleSessions.length - maxIdle + 1; // +1 to make room for one more
-    for (let i = 0; i < needToEvict && i < evictable.length; i++) {
-      const victim = evictable[i];
+    const { stopThroughOwner } = await import('./sessions/owner-stop.js');
+    for (const victim of evictable) {
+      if (evicted.length >= needToEvict) break;
       log.session.warn('evicting idle session for capacity', { sessionId: victim.claudeSessionId, pid: victim.pid });
-      if (victim.pid != null) {
-        // Mark first — an unmarked kill surfaces as a spurious "init failed" error toast.
-        try {
-          const { sessionRunner } = await import('../providers/claude-code-session.js');
-          sessionRunner.markExpectedTeardown(victim.claudeSessionId, 'capacity_eviction');
-        } catch { /* runner unavailable — the kill is still correct */ }
-        try { process.kill(victim.pid, 'SIGINT') } catch (err) { log.session.warn('SIGINT failed during eviction', { pid: victim.pid, error: String(err) }); }
+      // Mark first: an unmarked kill surfaces as a spurious "init failed" error toast.
+      let undoTeardown: (() => void) | undefined;
+      try {
+        const { sessionRunner } = await import('../providers/claude-code-session.js');
+        undoTeardown = sessionRunner.markExpectedTeardown(victim.claudeSessionId, 'capacity_eviction');
+      } catch { /* runner unavailable: the stop is still correct */ }
+      // The daemon that owns the CLI stops it, by sid; this server never signals
+      // a pid it read from a record (it used to SIGINT victim.pid, on every host,
+      // from the LOCAL machine). See sessions/owner-stop.ts. A refusal comes back
+      // at once (cron supervision, another Walnut's session): keep that session
+      // and try the next one. An accepted stop answers once the process has
+      // exited, so after a short wait it counts as under way.
+      const outcome = await firstAnswer(stopThroughOwner(victim, 'idle', 'capacity_eviction'), EVICTION_ANSWER_WAIT_MS);
+      if (outcome === 'refused') {
+        undoTeardown?.();
+        log.session.info('idle eviction: the owning daemon kept the session', { sessionId: victim.claudeSessionId, host: victim.host });
+        continue;
       }
+      // 'stopped', 'pending' (being stopped), or 'unreachable'/'unknown': this
+      // server can do nothing more now. A CLI left running is a bounded leak: the
+      // row keeps its pid, so the orphan sweep asks its daemon again once it is
+      // reachable, and the daemon's own idle reaper ends it regardless.
       await updateSessionRecord(victim.claudeSessionId, {
         process_status: 'stopped',
         activity: undefined,
@@ -1079,6 +1094,76 @@ export async function listOrphanCandidates(): Promise<SessionRecord[]> {
       AND last_status_change >= ?
   `).all(cutoff) as Record<string, any>[];
   return rows.map(rowToSession);
+}
+
+/** How long an idle eviction waits for the owning daemon's answer before counting the stop as under way. */
+const EVICTION_ANSWER_WAIT_MS = 2_000;
+
+/** `work`'s result, or 'pending' when it has not settled within `ms` (it keeps running). */
+async function firstAnswer<T>(work: Promise<T>, ms: number): Promise<T | 'pending'> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<'pending'>((resolve) => { timer = setTimeout(() => resolve('pending'), ms); })]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Existence probe (signal 0 delivers nothing). EPERM still means the pid exists. */
+function pidExists(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  try { process.kill(pid, 0); return true; } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/**
+ * EPHEMERAL SERVERS ONLY: clear every pid in the sessions store, before any
+ * subsystem reads one. An ephemeral server runs over a snapshot of another
+ * Walnut's data, so every pid in it names a process some other daemon spawned,
+ * never one this server started. On 2026-09-26 a hand-copied production
+ * sessions.sqlite gave an ephemeral server the pids of the user's live CLIs and
+ * its orphan sweep killed them.
+ *
+ * Clear rather than refuse to start: a copied store is a legitimate way to get
+ * realistic data into a UI test, and the rows (titles, history, statuses) stay
+ * useful; only the pids are wrong for this server, and a null pid says exactly
+ * "not a process this server started". `alive` counts the pids that still
+ * answered, for the startup warning.
+ *
+ * The pid is cleared from the column AND from the row's payload JSON: rowToSession
+ * starts from the payload and a NULL column does not override it, so a pid left
+ * in the payload (a hand-edited or legacy row) would come straight back.
+ *
+ * Refuses to run on the production data dir (sessions/ephemeral-guard.ts): this
+ * rewrites the store, which only an ephemeral server's own copy may take.
+ */
+export async function scrubInheritedSessionPids(
+  isAlive: (pid: number) => boolean = pidExists,
+  guard: { home?: string; productionHomes?: readonly string[] } = {},
+): Promise<{ scrubbed: number; alive: number }> {
+  const { assertEphemeralHomeIsNotProduction } = await import('./sessions/ephemeral-guard.js');
+  assertEphemeralHomeIsNotProduction(guard.home ?? WALNUT_HOME, guard.productionHomes);
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return { scrubbed: 0, alive: 0 };
+  // CASE, not AND: SQLite does not promise short-circuit evaluation, and
+  // json_extract on a malformed payload throws.
+  const payloadPid = "CASE WHEN json_valid(payload) THEN json_extract(payload, '$.pid') END";
+  const holdsPid = `pid IS NOT NULL OR ${payloadPid} IS NOT NULL`;
+  return withWriteLock(async () => {
+    const rows = db.prepare(`SELECT pid, ${payloadPid} AS payload_pid FROM sessions WHERE ${holdsPid}`)
+      .all() as Array<{ pid: unknown; payload_pid: unknown }>;
+    let alive = 0;
+    for (const row of rows) {
+      const pid = typeof row.pid === 'number' ? row.pid : row.payload_pid;
+      if (typeof pid === 'number' && isAlive(pid)) alive++;
+    }
+    if (rows.length > 0) {
+      db.prepare(
+        `UPDATE sessions SET pid = NULL, payload = CASE WHEN ${payloadPid} IS NOT NULL THEN json_remove(payload, '$.pid') ELSE payload END WHERE ${holdsPid}`,
+      ).run();
+    }
+    return { scrubbed: rows.length, alive };
+  });
 }
 
 /**
@@ -2227,8 +2312,8 @@ export async function relinkSessionsToTask(fromTaskId: string, toTaskId: string)
 /**
  * Mark all sessions in the given list as completed.
  * Skips sessions that are already in a terminal state (completed/error).
- * Also kills any orphaned OS processes (best-effort, fire-and-forget).
- * Returns the number of sessions actually updated.
+ * Also asks the owning daemon to stop each CLI that still had a pid
+ * (best-effort, fire-and-forget). Returns the number of sessions actually updated.
  */
 export async function completeTaskSessions(sessionIds: string[]): Promise<number> {
   if (!sessionIds.length) return 0;
@@ -2240,10 +2325,10 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
     }
     const now = new Date().toISOString();
     let updated = 0;
-    // sid rides along with the pid: the in-memory session must be told the kill is
-    // intentional BEFORE the signal lands, or its liveness monitor reports the exit
-    // as "session init failed" (a red toast on every task you mark done, 2026-08-10).
-    const pidsToKill: { pid: number; sid: string }[] = [];
+    // The in-memory session must be told the stop is intentional BEFORE it lands,
+    // or its liveness monitor reports the exit as "session init failed" (a red
+    // toast on every task you mark done, 2026-08-10). host picks the owning daemon.
+    const pidsToKill: { sid: string; host?: string }[] = [];
     const toReap: { claudeSessionId: string; host?: string }[] = [];
 
     const insertCols = [...SESSION_COLUMNS, 'payload'];
@@ -2268,11 +2353,11 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
         // listen, queueing the browser's first requests behind it).
         if (session.process_status === 'stopped' && session.pid == null) continue;
         if (session.pid != null && session.provider !== 'embedded' && session.provider !== 'sdk') {
-          pidsToKill.push({ pid: session.pid, sid: session.claudeSessionId });
+          pidsToKill.push({ sid: session.claudeSessionId, host: session.host });
         }
         toReap.push({ claudeSessionId: session.claudeSessionId, host: session.host });
         session.process_status = 'stopped';
-        // Stamp the INTENT before the SIGINT below lands: the death snapshot the
+        // Stamp the INTENT before the stop below lands: the death snapshot the
         // daemon folds after our kill has no clean result tail (the CLI can die
         // mid-turn — e.g. the session completing its OWN task via the gateway is
         // killed while its Bash tool is still running) and projects 'error'. The
@@ -2313,8 +2398,16 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
           });
         }
       }
-      for (const { pid } of pidsToKill) {
-        try { process.kill(pid, 'SIGINT'); } catch { /* already dead */ }
+      // The daemon that owns each CLI stops it; this server never signals a pid
+      // it read from a record. It used to SIGINT each pid from the LOCAL machine,
+      // remote hosts' pids included, and at startup this ran over every completed
+      // task, so a server holding a copy of another server's database signalled
+      // that server's live CLIs. See sessions/owner-stop.ts.
+      if (pidsToKill.length > 0) {
+        const { stopThroughOwner } = await import('./sessions/owner-stop.js');
+        for (const target of pidsToKill) {
+          void stopThroughOwner({ claudeSessionId: target.sid, host: target.host }, 'maintenance', 'task_completed');
+        }
       }
       // Conditionally reap each session's persistent terminal (dtach): a session
       // still running a foreground build/test is kept; an idle shell is killed.

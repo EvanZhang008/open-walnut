@@ -15,8 +15,6 @@
 
 import fsp from 'node:fs/promises'
 import { log } from '../logging/index.js'
-import { isProcessAliveAsync } from '../utils/process.js'
-import { safeKillProcessGroup } from './process-group-kill.js'
 import { isSessionProcessAlive, isLocalJsonlFresh } from '../utils/session-liveness.js'
 import { bus, EventNames } from './event-bus.js'
 import { runPeriodic, type PeriodicHandle, type TickContext } from './periodic-task.js'
@@ -36,6 +34,24 @@ const HEALTH_CHECK_IDLE_INTERVAL_MS = 5 * 60_000
 const HEALTH_CHECK_BUDGET_MS = 20_000
 /** Orphan sweep runs on its own slow cadence — a leaked process doesn't need 30s precision. */
 const ORPHAN_SWEEP_EVERY_TICKS = 120
+/** Idle stops in flight at once per tick (each waits on its daemon, up to ~15s). */
+const IDLE_REAP_CONCURRENCY = 4
+
+/** What an idle reap calls. Loaded once per tick, before the reap workers start. */
+interface IdleReapTools {
+  stopThroughOwner: typeof import('./sessions/owner-stop.js').stopThroughOwner
+  markExpectedTeardown?: (sessionId: string, reason: string) => (() => void) | undefined
+}
+
+async function loadIdleReapTools(): Promise<IdleReapTools> {
+  const { stopThroughOwner } = await import('./sessions/owner-stop.js')
+  let markExpectedTeardown: IdleReapTools['markExpectedTeardown']
+  try {
+    const { sessionRunner } = await import('../providers/claude-code-session.js')
+    markExpectedTeardown = (sid, reason) => sessionRunner.markExpectedTeardown(sid, reason)
+  } catch { /* runner unavailable: the stop is still correct */ }
+  return { stopThroughOwner, markExpectedTeardown }
+}
 /** Rollback switch: WALNUT_HEALTH_V2=0 restores the legacy whole-table scan. */
 const HEALTH_V2 = process.env.WALNUT_HEALTH_V2 !== '0'
 /**
@@ -247,8 +263,8 @@ export class SessionHealthMonitor {
       return p
     }
 
-    // Kill orphaned processes from terminal/stopped sessions (leaked processes).
-    // Slow cadence: a leaked process doesn't need 30s precision, and the sweep's
+    // Ask the owning daemons to end orphaned CLIs (leaked processes). Slow
+    // cadence: a leaked process doesn't need 30s precision, and the sweep's
     // input is its own SQL predicate (recent terminal rows with a pid), not the
     // active set. First tick also runs it so a restart cleans up promptly.
     if (this.tickCount === 1 || this.tickCount % ORPHAN_SWEEP_EVERY_TICKS === 0) {
@@ -256,11 +272,10 @@ export class SessionHealthMonitor {
       if (HEALTH_V2) {
         try {
           const { listOrphanCandidates } = await import('./session-tracker.js')
-          // activePids collision guard needs the active set too — concat both views.
           orphanScan = [...allSessions, ...await listOrphanCandidates()]
         } catch { /* fall back to active set only */ }
       }
-      await this.killOrphanedProcesses(orphanScan, cachedIsAlive)
+      this.killOrphanedProcesses(orphanScan)
     }
     const tOrphan = Date.now()
 
@@ -818,13 +833,14 @@ export class SessionHealthMonitor {
       runner = sessionRunner
     } catch { /* fallback: no team check */ }
 
+    const reaps: Array<(tools: IdleReapTools) => Promise<string | null>> = []
     for (const session of sessions) {
       // Budget enforced inside the loop (see checkHungSessions). Safe to abandon:
       // an idle session that misses this tick is reaped on the next one, and the
       // thresholds are 1–2 HOURS, so 30 s of extra life is immaterial.
       if (ctx?.overBudget()) {
         log.session.warn('health monitor: checkIdleTimeout abandoned mid-loop (over budget)', {
-          killed: killedIds.size, sessionCount: sessions.length,
+          killed: killedIds.size, queuedReaps: reaps.length, sessionCount: sessions.length,
         })
         break
       }
@@ -994,74 +1010,32 @@ export class SessionHealthMonitor {
         source: mgr ? 'lastEventAt' : 'file-mtime',
       })
 
-      // Mark BEFORE any signal: an unmarked kill reaches the session's liveness
-      // monitor as an unexplained death and used to be reported as "session init
-      // failed" (red toast quoting stale spawn-time stderr, 2026-08-10).
-      let undoTeardown: (() => void) | undefined
-      try {
-        const { sessionRunner: r } = await import('../providers/claude-code-session.js')
-        undoTeardown = r.markExpectedTeardown(session.claudeSessionId, 'idle_timeout')
-      } catch { /* runner unavailable — the kill is still correct */ }
-
-      // Graceful kill via session manager if available (handles both local + remote),
-      // otherwise fall back to local PID signals.
-      if (mgr) {
-        if (mgr.stopForIdle) {
-          let stopped = false
-          try { stopped = await mgr.stopForIdle() }
-          finally { if (!stopped) undoTeardown?.() }
-          if (!stopped) continue
-        } else mgr.kill('idle')
-      } else {
-        const pid = session.pid
-        if (pid == null) { undoTeardown?.(); continue }
-        // Kill entire process group (-pid) to also clean up MCP child processes.
-        // safeKillProcessGroup refuses pid ≤ 1 — a corrupted pid here would
-        // otherwise broadcast the kill to the whole user session (2026-08-09).
-        safeKillProcessGroup(pid, 'SIGINT')
-        // Deferred SIGTERM/SIGKILL fallback — fire-and-forget, doesn't block health check loop
-        setTimeout(() => {
-          isProcessAliveAsync(pid, 'claude').then((alive) => {
-            if (alive) {
-              safeKillProcessGroup(pid, 'SIGTERM')
-              setTimeout(() => {
-                safeKillProcessGroup(pid, 'SIGKILL')
-              }, 2_000)
-            }
-          }).catch(() => {})
-        }, 5_000)
-      }
-
-      killedIds.add(session.claudeSessionId)
-
-      const updateNow = new Date().toISOString()
-      const updated = await updateSessionRecord(session.claudeSessionId, {
-        process_status: 'stopped',
-        errorMessage: `No output for ${idleMinutes} min`,
-        activity: undefined,
-        last_status_change: updateNow,
-        status_reason: 'idle_timeout',
-        status_changed_by: 'health-monitor',
-      } as any)
-
-      emitSessionStatusChanged(updated, {}, ['*'], { source: 'health-monitor' })
-
-      // Phase sync: idle timeout → WAIT (we killed the session, not a normal completion)
-      if (session.taskId) {
-        try {
-          const { applySessionPhase } = await import('./phase.js')
-          await applySessionPhase(
-            session.taskId, 'session:error', 'health-monitor:idle-timeout',
-            { sessionId: session.claudeSessionId, processAlive: false },
-          )
-        } catch (err) {
-          log.session.warn('health monitor: phase sync failed on idle timeout', {
-            sessionId: session.claudeSessionId, taskId: session.taskId,
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-      }
+      // The stop itself waits for the daemon (up to ~15s per session: SIGINT,
+      // 5s, SIGTERM, 2s), so it runs after the scan, a few at a time, instead of
+      // one after another inside this loop.
+      reaps.push((tools) => this.reapIdleSession(session, mgr, idleMinutes, updateSessionRecord, tools))
     }
+
+    // Reap concurrently with a small cap: each stop is one RPC to its owning
+    // daemon, and a burst of idle sessions must neither serialize (N x 15s in
+    // one tick) nor flood one daemon socket. The modules a reap needs are loaded
+    // ONCE, before the workers start (see pooledConnection in owner-stop.ts for
+    // why concurrent dynamic imports of one module are avoided).
+    const tools = reaps.length === 0 ? null : await loadIdleReapTools().catch((err: unknown) => {
+      log.session.warn('health monitor: idle reaps skipped this tick', { error: err instanceof Error ? err.message : String(err) })
+      return null
+    })
+    let nextReap = 0
+    await Promise.all(Array.from({ length: Math.min(IDLE_REAP_CONCURRENCY, reaps.length) }, async () => {
+      while (tools && nextReap < reaps.length) {
+        const reap = reaps[nextReap++]
+        const killed = await reap(tools).catch((err: unknown) => {
+          log.session.warn('health monitor: idle reap failed', { error: err instanceof Error ? err.message : String(err) })
+          return null
+        })
+        if (killed) killedIds.add(killed)
+      }
+    }))
 
     // Bounded memory: drop warn state for sessions that left the scan set
     // (same discipline as snapshotPullAt / reconcileAttemptAt).
@@ -1073,6 +1047,71 @@ export class SessionHealthMonitor {
     }
 
     return killedIds
+  }
+
+  /**
+   * Stop one idle session through its owner and record the idle timeout.
+   * Resolves the session id when it was stopped, null when the owner declined
+   * or could not be reached (the record is left as it was).
+   */
+  private async reapIdleSession(
+    session: SessionRecord,
+    mgr: { stopForIdle?(): Promise<boolean>; kill(reason?: 'user' | 'maintenance' | 'idle'): void } | undefined,
+    idleMinutes: number,
+    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
+    tools: IdleReapTools,
+  ): Promise<string | null> {
+    // Mark BEFORE any signal: an unmarked kill reaches the session's liveness
+    // monitor as an unexplained death and used to be reported as "session init
+    // failed" (red toast quoting stale spawn-time stderr, 2026-08-10).
+    let undoTeardown: (() => void) | undefined
+    try {
+      undoTeardown = tools.markExpectedTeardown?.(session.claudeSessionId, 'idle_timeout')
+    } catch { /* runner unavailable: the stop is still correct */ }
+
+    // Graceful stop via the session manager when this server holds one, else
+    // straight to the daemon that owns the session. Both end at the daemon's
+    // `stop`, which only signals a process in its own registry and refuses a
+    // session another Walnut started (owner-home-v1). There is NO local-pid
+    // fallback any more: the one that lived here sent SIGINT, SIGTERM and finally
+    // SIGKILL to whatever pid the record named, and a record's pid proves nothing
+    // about who owns that process (core/sessions/owner-stop.ts).
+    let stopped = false
+    try {
+      if (mgr?.stopForIdle) stopped = await mgr.stopForIdle()
+      else if (mgr) { mgr.kill('idle'); stopped = true }
+      else stopped = (await tools.stopThroughOwner(session, 'idle', 'idle_timeout')) === 'stopped'
+    } finally { if (!stopped) undoTeardown?.() }
+    if (!stopped) return null
+
+    const updateNow = new Date().toISOString()
+    const updated = await updateSessionRecord(session.claudeSessionId, {
+      process_status: 'stopped',
+      errorMessage: `No output for ${idleMinutes} min`,
+      activity: undefined,
+      last_status_change: updateNow,
+      status_reason: 'idle_timeout',
+      status_changed_by: 'health-monitor',
+    } as any)
+
+    emitSessionStatusChanged(updated, {}, ['*'], { source: 'health-monitor' })
+
+    // Phase sync: idle timeout → WAIT (we killed the session, not a normal completion)
+    if (session.taskId) {
+      try {
+        const { applySessionPhase } = await import('./phase.js')
+        await applySessionPhase(
+          session.taskId, 'session:error', 'health-monitor:idle-timeout',
+          { sessionId: session.claudeSessionId, processAlive: false },
+        )
+      } catch (err) {
+        log.session.warn('health monitor: phase sync failed on idle timeout', {
+          sessionId: session.claudeSessionId, taskId: session.taskId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+    return session.claudeSessionId
   }
 
   /**
@@ -1427,115 +1466,30 @@ export class SessionHealthMonitor {
   }
 
   /**
-   * Kill orphaned OS processes from sessions that are in terminal state
-   * (completed/error) or marked stopped but whose process is still alive.
-   * These are invisible to the normal health checks (which only scan non-terminal sessions)
-   * and accumulate over time, eventually exhausting OS resources.
+   * Ask the owning daemons to end orphaned CLI processes: records that say the
+   * session was deliberately ended while a pid is still set.
    *
-   * NOTE: This function is the PID-reuse defense for Walnut. isSessionProcessAlive()
-   * no longer does `ps`-based binary verification (too expensive on the hot path) —
-   * see the header comment in src/utils/session-liveness.ts for the full rationale.
-   * The 2-minute grace period + activePids collision check below are what prevent us
-   * from killing a recycled PID that now belongs to a different, still-active session.
+   * This monitor never signals that pid. It used to SIGTERM the process group of
+   * any 'stopped'/'error' row whose pid was alive (2-min grace, activePids
+   * collision check, JSONL-freshness veto), which is exactly the pattern that
+   * killed the user's live sessions from an ephemeral test server on 2026-09-26:
+   * a pid in a database row proves nothing about which daemon spawned the
+   * process. The daemon that owns the session decides now, with first-hand
+   * evidence, and that also retires the PID-reuse question (it only ever
+   * signals the process it holds for the sid, after checking its start time).
+   * See core/sessions/owner-stop.ts.
+   *
+   * Not awaited: an accepted stop waits for the process group to exit (up to
+   * ~7s), and the sweep's outcome feeds nothing else in this tick.
    */
-  private async killOrphanedProcesses(
-    sessions: SessionRecord[],
-    cachedIsAlive: (s: SessionRecord) => Promise<boolean>,
-  ): Promise<void> {
-    // Grace period: don't kill processes whose session record changed very recently.
-    // The reconciler or other subsystems may have just updated the record, and the
-    // current state may be transient. Real orphans are always older than 2 minutes.
-    // 2 min = worst-case reconciler duration + a few HEALTH_CHECK_INTERVAL_MS (30s each)
-    // cycles to handle transient states created during server startup.
-    const ORPHAN_GRACE_MS = 2 * 60 * 1000
-
-    try {
-      const { isTerminalSession } = await import('./session-tracker.js')
-
-      // Build set of PIDs actively used by non-terminal, non-stopped sessions.
-      // This prevents PID-reuse collisions: OS can recycle a PID from a completed
-      // session and assign it to a new active session.
-      const activePids = new Set<number>()
-      for (const s of sessions) {
-        if (s.pid == null) continue
-        const isStopped = s.process_status === 'stopped' || s.process_status === 'error'
-        if (!isTerminalSession(s) && !isStopped) {
-          activePids.add(s.pid)
-        }
-      }
-
-      const now = Date.now()
-      let killed = 0
-      for (const s of sessions) {
-        if (s.pid == null) continue
-        if (s.provider === 'embedded' || s.provider === 'sdk') continue
-
-        // Only target sessions that SHOULD have no running process
-        const isStopped = s.process_status === 'stopped' || s.process_status === 'error'
-        if (!isTerminalSession(s) && !isStopped) continue
-
-        // Grace period: skip sessions whose record was recently changed.
-        // Prevents killing processes during transient reconciler/startup race windows.
-        const lastChange = s.last_status_change ?? s.lastActiveAt
-        if (lastChange && (now - new Date(lastChange).getTime()) < ORPHAN_GRACE_MS) continue
-
-        // PID reuse protection: skip if this PID is used by an active session
-        if (activePids.has(s.pid)) {
-          log.session.warn('health monitor: skipping orphan kill — PID reuse collision detected', {
-            staleSessionId: s.claudeSessionId, pid: s.pid,
-            staleProcessStatus: s.process_status,
-          })
-          continue
-        }
-
-        if (!await cachedIsAlive(s)) continue
-
-        // GROUND-TRUTH RECHECK before a destructive kill — veto on POSITIVE proof of life.
-        // We only reach here because the session is terminal/stopped AND the pid is still
-        // alive — exactly the state a WRONG 'stopped' flag produces (e.g. the server-restart
-        // reconciler mis-marking a live local session). Trusting that stale flag is what
-        // SIGTERM'd a healthy CLI in the false-zombie incident. The DB status flag is not
-        // authoritative; the JSONL mtime is (same signal the daemon's reapSession uses).
-        // Veto ONLY on `=== true` (a fresh JSONL = positive proof the CLI is still working).
-        // 'unknown' (remote session, or local file already cleaned/archived) is NOT evidence
-        // of life and must fall through — vetoing on it would leak orphans. PID-reuse here is
-        // already guarded by the activePids check above; remote cleanup is the daemon's job.
-        if (isLocalJsonlFresh(s, ORPHAN_GRACE_MS) === true) {
-          log.session.warn('health monitor: skipping orphan kill — JSONL recently written (process alive despite stopped flag)', {
-            sessionId: s.claudeSessionId, pid: s.pid, process_status: s.process_status,
-          })
-          continue
-        }
-
-        log.session.warn('health monitor: killing orphaned process', {
-          sessionId: s.claudeSessionId,
-          taskId: s.taskId,
-          pid: s.pid,
-          process_status: s.process_status,
+  private killOrphanedProcesses(sessions: SessionRecord[]): void {
+    void import('./sessions/owner-stop.js')
+      .then(({ sweepOrphansThroughOwner }) => sweepOrphansThroughOwner(sessions, 'health-monitor'))
+      .catch((err) => {
+        log.session.debug('health monitor: orphan sweep failed, will retry', {
+          error: err instanceof Error ? err.message : String(err),
         })
-
-        // Mark first so the death reads as expected, not as an init failure.
-        try {
-          const { sessionRunner: r } = await import('../providers/claude-code-session.js')
-          r.markExpectedTeardown(s.claudeSessionId, 'orphan_cleanup')
-        } catch { /* runner unavailable — the kill is still correct */ }
-
-        // Kill entire process group (-pid) to also clean up MCP child processes
-        safeKillProcessGroup(s.pid, 'SIGTERM')
-
-        // Remote process cleanup is handled by daemon transport when the local tunnel dies.
-
-        killed++
-      }
-
-      if (killed > 0) {
-        log.session.info('health monitor: killed orphaned processes', { count: killed })
-      }
-    } catch (err) {
-      log.session.debug('health monitor: orphan process cleanup failed, will retry', {
-        error: err instanceof Error ? err.message : String(err),
       })
-    }
   }
 
   /**

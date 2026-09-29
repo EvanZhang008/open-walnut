@@ -34,6 +34,18 @@ retries a run that already sent letters.
   Sanctioned helpers live in `session-file-reader.ts` / `session-history.ts` / `session-changes.ts`.
   Documented exceptions (partial-read fast paths pending a daemon `fs.readRange`):
   `team-reader.ts`, `subagent-poller.ts`, `_areTeammatesStillActive()`.
+- **The server never signals a CLI pid.** A pid in a session record proves nothing about which
+  daemon spawned the process (2026-09-26: an ephemeral test server over a copied production store
+  killed the user's live CLIs). Ending a CLI always goes to the owning daemon's `stop`:
+  `stopThroughOwner` / `sweepOrphansThroughOwner` / `stopAcpThroughOwner` in
+  `sessions/owner-stop.ts`. Every `stop` with reason user, maintenance or idle spreads
+  `stopProvenance(conn, initiator)` (`sessions/stop-provenance.ts`: `home`, `initiator`, and
+  `strict` from an ephemeral server) so the daemon can refuse another Walnut's session. The orphan
+  `stop` sends `home` alone, with `expectPid`: the daemon checks it against its own registry,
+  `.pgid` file and journal (`orphanStopRefusal`). `acpStop` carries only the runtime id, and an
+  ephemeral server sends it to its local daemon only. Never add a
+  `process.kill` / `safeKillProcessGroup` on a pid read from the sessions store
+  (`tests/core/signal-call-ratchet.test.ts` fails on any new signal site).
 - **Daemon socket writes:** every daemon→client WS write in `daemon-standalone.ts` MUST use
   `safeSend` (Bun silently drops sends under backpressure). Plain-Node `daemon-source.ts` doesn't
   need it — see the PARITY NOTE there.

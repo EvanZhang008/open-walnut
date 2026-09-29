@@ -19,11 +19,16 @@ vi.mock('../../src/utils/process.js', () => ({
   isProcessAliveAsync: async () => false,
 }));
 
-// Mock daemon-connection — local sessions don't use it
+// Mock daemon-connection — local sessions don't use it. getConnectedDaemonConnection
+// is the owner-stop pool: no daemon unless a test hands one in (daemonHook.conn).
+const { daemonHook } = vi.hoisted(() => ({
+  daemonHook: { conn: null as null | { connected: boolean; hasCapability(cap: string): boolean; send(command: string, args: Record<string, unknown>): Promise<Record<string, unknown>> } },
+}));
 vi.mock('../../src/providers/daemon-connection.js', () => ({
   isDaemonConnected: () => false,
   getDaemonDisconnectedSince: () => null,
   probeDaemonSession: async () => null,
+  getConnectedDaemonConnection: () => daemonHook.conn,
 }));
 
 // Mock session-manager registry — returns null (no active manager registered)
@@ -64,18 +69,47 @@ vi.mock('../../src/core/event-bus.js', () => ({
   },
 }));
 
+// The monitor fires its orphan sweep without awaiting it. Record every sweep's
+// promise (the real implementation still runs) so a test can wait for the
+// verdict instead of asserting before the sweep has looked at anything.
+const { sweeps } = vi.hoisted(() => ({ sweeps: [] as Array<Promise<unknown>> }));
+vi.mock('../../src/core/sessions/owner-stop.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/sessions/owner-stop.js')>();
+  return {
+    ...actual,
+    sweepOrphansThroughOwner: (...args: Parameters<typeof actual.sweepOrphansThroughOwner>) => {
+      const run = actual.sweepOrphansThroughOwner(...args);
+      sweeps.push(run);
+      return run;
+    },
+  };
+});
+
 import {
   createSessionRecord,
   listSessions,
   updateSessionRecord,
 } from '../../src/core/session-tracker.js';
 import { SessionHealthMonitor } from '../../src/core/session-health-monitor.js';
+import type { OrphanOutcome } from '../../src/core/sessions/owner-stop.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { log } from '../../src/logging/index.js';
+
+/** Above any real pid limit: even a signal that escaped the spies would reach nothing. */
+const IMPOSSIBLE_PID = 2 ** 22 + 71;
+
+/** Wait for the monitor's fire-and-forget orphan sweep(s) to start and finish. */
+async function settledSweeps(): Promise<OrphanOutcome[]> {
+  await vi.waitFor(() => expect(sweeps.length).toBeGreaterThan(0), { timeout: 5_000 });
+  const results = await Promise.all(sweeps.splice(0));
+  return results.flat() as OrphanOutcome[];
+}
 
 let tmpDir: string;
 
 beforeEach(async () => {
+  sweeps.length = 0;
+  daemonHook.conn = null;
   tmpDir = WALNUT_HOME;
   await fsp.rm(tmpDir, { recursive: true, force: true });
   await fsp.mkdir(tmpDir, { recursive: true });
@@ -178,69 +212,175 @@ describe('SessionHealthMonitor — process_status:error behavior', () => {
   });
 });
 
-// ── REGRESSION: orphan sweeper must not kill a live process off a stale 'stopped' flag ──
+// ── REGRESSION: the orphan sweep never signals a pid read from the sessions store ──
 
-describe('SessionHealthMonitor — killOrphanedProcesses JSONL-freshness veto (false-zombie regression)', () => {
+describe('SessionHealthMonitor: orphan sweep goes through the owning daemon, never a signal', () => {
   it('does NOT SIGTERM a local session whose JSONL was just written, even when process_status=stopped + pid alive', async () => {
-    // Reproduce the false-zombie state exactly:
+    // The false-zombie state:
     //   - local session (host null), process_status='stopped' (mis-set by a bad reconcile)
-    //   - pid is genuinely ALIVE (use the test runner's own pid)
+    //   - the pid answers the liveness probe (the spy below says so)
     //   - last_status_change older than the 2-min orphan grace (so grace doesn't save it)
     //   - JSONL freshly written (process is actively producing output)
-    // Old behavior: cachedIsAlive=true + stopped flag → SIGTERM the real process.
-    // Fixed behavior: fresh JSONL vetoes the kill.
+    // The monitor no longer signals any record pid (core/sessions/owner-stop.ts);
+    // this shape is not even a candidate (a 'stopped' observation, not a decision).
     const sid = 'live-but-flagged-stopped';
     const jsonlPath = path.join(WALNUT_HOME, 'streams', `${sid}.jsonl`);
     await fsp.mkdir(path.dirname(jsonlPath), { recursive: true });
     await fsp.writeFile(jsonlPath, '{"type":"assistant"}\n', 'utf-8'); // mtime = now → fresh
 
-    await createSessionRecord(sid, 'task-1', 'proj', undefined, { pid: process.pid });
+    await createSessionRecord(sid, 'task-1', 'proj', undefined, { pid: IMPOSSIBLE_PID });
     const old = new Date(Date.now() - 5 * 60 * 1000).toISOString(); // 5min ago > 2min grace
     await updateSessionRecord(sid, { process_status: 'stopped', last_status_change: old });
 
-    // Spy on process.kill so we can assert no SIGTERM is sent to the (alive) pid.
+    const signals: Array<[number, string | number | undefined]> = [];
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, sig?: string | number) => {
-      // Allow the liveness probe (signal 0) to behave normally (process is alive).
-      if (sig === 0) return true as unknown as boolean;
-      // Any real kill signal in this test is the bug — record it, do nothing.
+      if (sig !== 0) signals.push([pid, sig]);   // record, never deliver
+      return true as unknown as boolean;         // every probe answers "alive"
+    }) as typeof process.kill);
+
+    try {
+      const monitor = new SessionHealthMonitor();
+      await monitor.check();
+      // The sweep is fire-and-forget: wait for it to run and finish, or this
+      // assertion would pass before the sweep ever looked at the record.
+      const outcomes = await settledSweeps();
+      expect(outcomes.some((o) => o.sessionId === sid), 'an observed stop is not an orphan candidate').toBe(false);
+      expect(signals).toEqual([]);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('a deliberately stopped record with a live pid and a STALE JSONL is handed to its daemon, never signalled', async () => {
+    // The incident shape once the old freshness veto is gone: a user stop recorded
+    // long ago, the pid answers the probe, and the JSONL is 10 minutes old (a live
+    // CLI idling between turns looks exactly like this). The old sweep SIGTERM'd
+    // it. Now the monitor asks the owning daemon; this test has none connected,
+    // so the sweep leaves the process alone.
+    const sid = 'stopped-by-user-live-pid';
+    const jsonlPath = path.join(WALNUT_HOME, 'streams', `${sid}.jsonl`);
+    await fsp.mkdir(path.dirname(jsonlPath), { recursive: true });
+    await fsp.writeFile(jsonlPath, '{"type":"assistant"}\n', 'utf-8');
+    const old = Date.now() - 10 * 60 * 1000;
+    await fsp.utimes(jsonlPath, old / 1000, old / 1000);
+
+    await createSessionRecord(sid, 'task-1', 'proj', undefined, { pid: IMPOSSIBLE_PID + 1 });
+    await updateSessionRecord(sid, {
+      process_status: 'stopped',
+      status_reason: 'user_stopped',
+      last_status_change: new Date(old).toISOString(),
+    });
+
+    const signals: Array<[number, string | number | undefined]> = [];
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, sig?: string | number) => {
+      if (sig !== 0) signals.push([pid, sig]);   // record, never deliver
       return true as unknown as boolean;
     }) as typeof process.kill);
 
     try {
       const monitor = new SessionHealthMonitor();
       await monitor.check();
+      const outcomes = await settledSweeps();
+      expect(outcomes.find((o) => o.sessionId === sid)).toEqual({
+        sessionId: sid, host: '__local__', pid: IMPOSSIBLE_PID + 1, result: 'left', reason: 'owner_unreachable',
+      });
+      expect(signals).toEqual([]);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+});
 
-      // The orphan sweeper must NOT have sent SIGTERM/SIGKILL to our pid.
-      const destructiveKill = killSpy.mock.calls.find(
-        ([, sig]) => sig === 'SIGTERM' || sig === 'SIGKILL' || sig === 'SIGINT',
-      );
-      expect(destructiveKill).toBeUndefined();
+// ── Idle reaps: every stop goes to the owner, a few at a time ──
+
+describe('SessionHealthMonitor: idle reaps run concurrently with a small cap', () => {
+  it('stops nine idle sessions with no manager through their owner, at most four in flight', async () => {
+    const old = Date.now() - 70 * 60 * 1000; // past the local 60-min threshold
+    const ids: string[] = [];
+    for (let i = 1; i <= 9; i++) {
+      const sid = `idle-reap-${i}`;
+      const outputFile = path.join(tmpDir, `${sid}.jsonl`);
+      await fsp.writeFile(outputFile, '', 'utf-8');
+      await fsp.utimes(outputFile, old / 1000, old / 1000);
+      await createSessionRecord(sid, 'task-1', 'proj', undefined, { pid: IMPOSSIBLE_PID + 10 + i, outputFile });
+      await updateSessionRecord(sid, { process_status: 'idle', last_status_change: new Date(old).toISOString() });
+      ids.push(sid);
+    }
+
+    // The owning daemon: every stop takes a moment, so overlapping ones are visible.
+    let inFlight = 0;
+    let peak = 0;
+    const asked: string[] = [];
+    daemonHook.conn = {
+      connected: true,
+      hasCapability: () => false,
+      async send(command, args) {
+        if (command !== 'stop') return { ok: true };
+        asked.push(String(args.sid));
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 25));
+        inFlight--;
+        return { ok: true, stopped: true };
+      },
+    };
+    const signals: Array<[number, string | number | undefined]> = [];
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, sig?: string | number) => {
+      if (sig !== 0) signals.push([pid, sig]);   // record, never deliver
+      return true as unknown as boolean;
+    }) as typeof process.kill);
+
+    try {
+      const monitor = new SessionHealthMonitor();
+      const rows = (await listSessions()).filter((s) => ids.includes(s.claudeSessionId));
+      const checkIdle = (monitor as unknown as {
+        checkIdleTimeout(
+          sessions: typeof rows, update: typeof updateSessionRecord, taskMap: Map<string, unknown>,
+          alive: () => Promise<boolean>,
+        ): Promise<Set<string>>
+      }).checkIdleTimeout.bind(monitor);
+      const killed = await checkIdle(rows, updateSessionRecord, new Map(), async () => true);
+
+      expect(asked.sort()).toEqual([...ids].sort());
+      expect(peak, 'the stops overlap instead of running one after another').toBeGreaterThan(1);
+      expect(peak, 'but never more than four at once').toBeLessThanOrEqual(4);
+      expect([...killed].sort()).toEqual([...ids].sort());
+      const after = await listSessions();
+      for (const sid of ids) {
+        expect(after.find((s) => s.claudeSessionId === sid)).toMatchObject({ process_status: 'stopped', status_reason: 'idle_timeout' });
+      }
+      expect(signals).toEqual([]);
     } finally {
       killSpy.mockRestore();
     }
   });
 
-  it('DOES allow orphan kill when JSONL is stale (genuinely dead process, no false-positive veto)', async () => {
-    // Same shape but the JSONL is OLD → freshness veto must NOT fire, so a truly
-    // orphaned process group is still cleaned up. Use a dead pid so no real signal lands.
-    const sid = 'truly-orphaned';
-    const jsonlPath = path.join(WALNUT_HOME, 'streams', `${sid}.jsonl`);
-    await fsp.mkdir(path.dirname(jsonlPath), { recursive: true });
-    await fsp.writeFile(jsonlPath, '{"type":"assistant"}\n', 'utf-8');
-    const old = Date.now() - 10 * 60 * 1000; // 10min ago → stale
-    await fsp.utimes(jsonlPath, old / 1000, old / 1000);
+  it('a stop the owner refuses leaves the session as it was', async () => {
+    const old = Date.now() - 70 * 60 * 1000;
+    const outputFile = path.join(tmpDir, 'idle-refused.jsonl');
+    await fsp.writeFile(outputFile, '', 'utf-8');
+    await fsp.utimes(outputFile, old / 1000, old / 1000);
+    await createSessionRecord('idle-refused', 'task-1', 'proj', undefined, { pid: IMPOSSIBLE_PID + 30, outputFile });
+    await updateSessionRecord('idle-refused', { process_status: 'idle', last_status_change: new Date(old).toISOString() });
+    const asked: string[] = [];
+    daemonHook.conn = {
+      connected: true,
+      hasCapability: () => false,
+      async send(command, args) {
+        if (command === 'stop') asked.push(String(args.sid));
+        return { ok: true, stopped: false, reason: 'cron_supervised' };
+      },
+    };
 
-    await createSessionRecord(sid, 'task-1', 'proj', undefined, { pid: 999999999 });
-    await updateSessionRecord(sid, {
-      process_status: 'stopped',
-      last_status_change: new Date(old).toISOString(),
-    });
-
-    // pid 999999999 is dead → cachedIsAlive returns false → kill loop `continue`s
-    // before reaching the freshness check. This asserts the veto doesn't break the
-    // normal path: a dead orphan is simply skipped (not kept alive forever).
     const monitor = new SessionHealthMonitor();
-    await expect(monitor.check()).resolves.not.toThrow();
+    const rows = (await listSessions()).filter((s) => s.claudeSessionId === 'idle-refused');
+    const killed = await (monitor as unknown as {
+      checkIdleTimeout(...args: unknown[]): Promise<Set<string>>
+    }).checkIdleTimeout(rows, updateSessionRecord, new Map(), async () => true);
+
+    expect(asked).toEqual(['idle-refused']);
+    expect(killed.size).toBe(0);
+    expect((await listSessions()).find((s) => s.claudeSessionId === 'idle-refused')).toMatchObject({ process_status: 'idle', pid: IMPOSSIBLE_PID + 30 });
   });
 });
 

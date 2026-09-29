@@ -128,7 +128,10 @@ afterAll(async () => {
 })
 
 it('real server and daemon persist toggle and stop across daemon restart', async () => {
-  const started = await connection!.send('start', { sid: SID, cwd: home, args: [program, '-p', '--session-id', SID], mode: 'default' })
+  // `origin` names this Walnut in the daemon's spawn journal, as every real start
+  // does (RemoteSessionManager). This server is ephemeral, so its terminate is a
+  // strict stop: the daemon honours it only for a session journaled for it.
+  const started = await connection!.send('start', { sid: SID, cwd: home, args: [program, '-p', '--session-id', SID], mode: 'default', origin: { home: WALNUT_HOME } })
   expect(started.ok).toBe(true)
   const readMetadata = async () => {
     const response = await fetch(`${origin}/api/sessions/status?ids=${SID}`)

@@ -1394,6 +1394,15 @@ const STALE_QUESTION = {
     }],
   },
 } as const
+/** The durable pendingPermission of that record, shared by the seed row and the
+ *  post-boot reseed below. */
+const STALE_QUESTION_PERMISSION = {
+  requestId: STALE_QUESTION.requestId,
+  toolName: 'AskUserQuestion',
+  input: STALE_QUESTION.input,
+  reason: 'Need a colour',
+  receivedAt: STALE_QUESTION.askedAt,
+}
 // Files-panel Refresh fixture (file-explorer-refresh.spec.ts): a file whose
 // content the spec rewrites on disk, plus a dir it creates a new file inside —
 // Refresh must surface both without a page reload.
@@ -2734,12 +2743,9 @@ await fs.writeFile(
         mode: 'bypass',
         provider: 'sdk',
         type: 'subagent',
-        // The health monitor's orphan dead-pool stops any local running record
-        // with pid==null once last_status_change is >2 min old, and this record
-        // is deliberately 10 min stale. A live pid keeps it out of that pool; the
-        // fixture server's own pid is the one process guaranteed alive for the
-        // run, and `provider: 'sdk'` exempts it from every kill path.
-        pid: process.pid,
+        // No pid here: this fixture boots as an ephemeral server, which clears
+        // every pid its data inherited (scrubInheritedSessionPids). The row's
+        // live pid is set right after startServer, below.
         // >5 min old: trips the subscribe RPC's stale-running rule, which is the
         // condition under which the pending card used to be reclaimed.
         last_status_change: STALE_QUESTION.askedAt,
@@ -2748,13 +2754,7 @@ await fs.writeFile(
         messageCount: 1,
         cwd: vscodeFixtureRoot,
         title: 'Stale pending question',
-        pendingPermission: {
-          requestId: STALE_QUESTION.requestId,
-          toolName: 'AskUserQuestion',
-          input: STALE_QUESTION.input,
-          reason: 'Need a colour',
-          receivedAt: STALE_QUESTION.askedAt,
-        },
+        pendingPermission: { ...STALE_QUESTION_PERMISSION },
       },
       {
         claudeSessionId: '2532066a-e210-4702-be34-ed01008adbde',
@@ -3584,6 +3584,48 @@ if (builtSpa && !process.env.WALNUT_WEB_STATIC_DIR) {
   throw new Error('PW_BUILT_SPA requires WALNUT_WEB_STATIC_DIR')
 }
 const apiServer = await startServer({ port: builtSpa ? testPort : 0, dev: !builtSpa })
+
+// The stale-question row needs a live pid. The health monitor's orphan dead-pool
+// stops any local running record with pid==null once last_status_change is >2
+// min old, and this record is deliberately 10 min stale. The fixture server's own
+// pid is the one process guaranteed alive for the run, and `provider: 'sdk'`
+// exempts the row from every stop path. It is set AFTER boot because an
+// ephemeral server clears every pid its data inherited before any subsystem
+// reads one (the scrub stays unconditional: an opt-out is how the 2026-09-26
+// incident would come back).
+//
+// Two details keep this identical to a pre-boot seed. The write preserves the
+// row's 10-minute-old lastActiveAt (a plain update would stamp it "now"). And the
+// first health tick runs ~30s after the monitor starts, normally well after
+// startServer returns; on a starved machine it can win, drain the pid-less row
+// to stopped and drop its pendingPermission, so the reseed then puts the row back
+// exactly as seeded instead of letting the spec fail on a fixture race.
+{
+  const { updateSessionRecordConditionally } = await import('../../../src/core/session-tracker.js')
+  const keepActivity = { preserveLastActiveAt: true }
+  const seeded = await updateSessionRecordConditionally(
+    STALE_QUESTION.sessionId,
+    { pid: process.pid },
+    (current) => current.process_status === 'running',
+    keepActivity,
+  )
+  if (!seeded) {
+    console.warn('[test-server] the first health tick drained the stale-question row before its pid was set; reseeding it')
+    await updateSessionRecordConditionally(
+      STALE_QUESTION.sessionId,
+      {
+        pid: process.pid,
+        process_status: 'running',
+        status_reason: 'fixture_reseed',
+        status_changed_by: 'pw-fixture',
+        last_status_change: STALE_QUESTION.askedAt,
+        pendingPermission: { ...STALE_QUESTION_PERMISSION },
+      },
+      () => true,
+      keepActivity,
+    )
+  }
+}
 
 // Stream buffer of the stale-question session, as the live server holds it two
 // hours into an unanswered AskUserQuestion: the turn is still marked streaming,

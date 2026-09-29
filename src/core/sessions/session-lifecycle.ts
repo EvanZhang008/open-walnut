@@ -18,7 +18,6 @@ import { randomUUID } from 'node:crypto';
 import { SessionControlError } from './session-controls.js';
 import { normalizeThreadMeta, writeThreadFieldsAsClient } from './thread-meta.js';
 import { bus, EventNames } from '../event-bus.js';
-import { safeKillProcessGroup } from '../process-group-kill.js';
 import { log } from '../../logging/index.js';
 import type { SessionRecord, SessionMode, SessionOutputMode } from '../types.js';
 import { SESSION_MODE_IDS, SESSION_OUTPUT_MODE_IDS } from '../types.js';
@@ -628,15 +627,17 @@ export async function terminateSession(
     if (mgr) {
       log.session.info('session terminate: killing via SessionManager', { sessionId, managerKind: mgr.constructor.name });
       mgr.kill();
-    } else if (record.pid != null && !record.host) {
-      // Local session, no manager — SIGTERM the process group directly.
-      if (safeKillProcessGroup(record.pid, 'SIGTERM')) {
-        log.session.info('session terminate: SIGTERM sent to process group', { sessionId, pgid: record.pid });
-      } else {
-        log.session.warn('session terminate: group kill not delivered (dead, or pid failed the safety floor)', {
-          sessionId, pgid: record.pid,
-        });
-      }
+    } else if (record.acpRuntimeId) {
+      // Only an ACP engine reaches this branch (CLI engines stopped through the
+      // stop coordinator above). No live session and no manager: ask the daemon
+      // that hosts the ACP worker to end it (acpStop by runtime id). This server
+      // never signals a pid it read from a record (it used to SIGTERM this one's
+      // process group); see sessions/owner-stop.ts.
+      const { stopAcpThroughOwner } = await import('./owner-stop.js');
+      const outcome = await stopAcpThroughOwner(record, 'user_terminated');
+      log.session.info('session terminate: detached ACP session, asked its daemon', {
+        sessionId, host: record.host, runtimeId: record.acpRuntimeId, outcome,
+      });
     } else {
       log.session.info('session terminate: no live session/manager to kill', { sessionId, host: record.host });
     }

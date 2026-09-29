@@ -26,6 +26,7 @@ import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
 import { isDaemonCommandOutcomeUnknown } from './delivery-failure.js'
 import { isSessionStopSuperseded, SessionStopSupersededError } from '../core/sessions/session-stop.js'
+import { describeStopRefusal, STOP_NOT_SENT_NO_OWNERSHIP_CHECK, stopProvenance } from '../core/sessions/stop-provenance.js'
 import {
   findImagePaths,
   findLocalImagePaths,
@@ -695,10 +696,18 @@ export class RemoteSessionManager implements SessionManager {
       throw new Error(`DaemonConnection not connected to ${this.hostKey}; stop was not confirmed`)
     }
 
+    // Every stop names this Walnut (owner-home-v1): the daemon refuses one for a
+    // session its spawn journal records for another Walnut. This path drives a
+    // live session this server holds, so it counts as 'human' (stop-provenance.ts).
+    const provenance = stopProvenance(this.conn, reason === 'idle' ? 'automatic' : 'human')
+    if (!provenance) {
+      log.session.info('RemoteSessionManager.stop: not sent, the daemon cannot check ownership', { host: this.hostKey, sid: this._sid })
+      throw new Error(STOP_NOT_SENT_NO_OWNERSHIP_CHECK)
+    }
     log.session.info('RemoteSessionManager.stop: sending stop cmd to daemon', { host: this.hostKey, sid: this._sid })
     try {
-      const result = await this.conn.send('stop', { sid: this._sid, reason }, 10_000)
-      if (result.ok !== true || result.stopped !== true) throw new Error(result.error ?? 'Daemon did not confirm the stop')
+      const result = await this.conn.send('stop', { sid: this._sid, reason, ...provenance }, 10_000)
+      if (result.ok !== true || result.stopped !== true) throw new Error(describeStopRefusal(result))
       log.session.info('RemoteSessionManager.stop: daemon acked', {
         host: this.hostKey, sid: this._sid, result,
       })
@@ -720,11 +729,16 @@ export class RemoteSessionManager implements SessionManager {
       return
     }
 
+    const provenance = stopProvenance(this.conn, reason === 'idle' ? 'automatic' : 'human')
+    if (!provenance) {
+      log.session.info('RemoteSessionManager.kill: not sent, the daemon cannot check ownership', { host: this.hostKey, sid: this._sid })
+      return
+    }
     log.session.info('RemoteSessionManager.kill: sending stop cmd to daemon (fire-and-forget)', {
       host: this.hostKey, sid: this._sid,
     })
     // Fire-and-forget — but log the outcome so we can tell if daemon actually received it
-    this.conn.send('stop', { sid: this._sid, reason })
+    this.conn.send('stop', { sid: this._sid, reason, ...provenance })
       .then(result => log.session.info('RemoteSessionManager.kill: daemon acked', {
         host: this.hostKey, sid: this._sid, result,
       }))
@@ -737,8 +751,10 @@ export class RemoteSessionManager implements SessionManager {
 
   async stopForIdle(): Promise<boolean> {
     if (!this.conn?.connected || !this._sid) return false
+    const provenance = stopProvenance(this.conn, 'automatic')
+    if (!provenance) return false
     try {
-      const result = await this.conn.send('stop', { sid: this._sid, reason: 'idle' }, 10_000)
+      const result = await this.conn.send('stop', { sid: this._sid, reason: 'idle', ...provenance }, 10_000)
       if (result.ok !== true || result.stopped !== true) return false
       this._hasPipe = false
       return true

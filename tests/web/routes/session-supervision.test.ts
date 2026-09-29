@@ -99,7 +99,8 @@ describe('session supervision API with real stop persistence', () => {
     const after = await getSessionByClaudeId(SID)
     expect(after?.stopRequest).toMatchObject({ id: before!.stopRequest!.id, state: 'confirmed' })
     expect(after?.process_status).toBe('stopped')
-    expect(send).toHaveBeenCalledExactlyOnceWith('stop', { sid: SID, reason: 'user', stopRequestId: before!.stopRequest!.id }, 10_000)
+    // A person's stop names this Walnut to a daemon that checks ownership (owner-home-v1).
+    expect(send).toHaveBeenCalledExactlyOnceWith('stop', { sid: SID, reason: 'user', stopRequestId: before!.stopRequest!.id, home: WALNUT_HOME, initiator: 'human' }, 10_000)
   })
 
   it('rejects malformed input, unknown records, archived enable, and unsupported daemons', async () => {

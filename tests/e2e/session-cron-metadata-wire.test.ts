@@ -355,7 +355,9 @@ function expectNextRun(actual: number | null, cron: string, from: number, until:
 }
 
 it('carries cron job metadata from the CLI stream to both REST carriers and the WS feed', async () => {
-  const started = await connection!.send('start', { sid: SID, cwd: home, args: [program, '-p', '--session-id', SID], mode: 'default' })
+  // `origin` journals the session for this (ephemeral) Walnut, as every real start
+  // does, so a strict stop from this server is not refused as unjournaled.
+  const started = await connection!.send('start', { sid: SID, cwd: home, args: [program, '-p', '--session-id', SID], mode: 'default', origin: { home: WALNUT_HOME } })
   expect(started.ok).toBe(true)
   const runPhase = async (label: string) => {
     expect(await connection!.send('send', { sid: SID, message: label })).toMatchObject({ ok: true })

@@ -233,6 +233,14 @@ const LEGACY_SPAWN_LEDGER_DIR = path.join(process.env.HOME || HOME_DIR, '.open-w
 const SPAWN_JOURNAL_LINE_MAX = 4096
 interface SpawnInfo { kind: 'new' | 'fork' | 'resume'; parent?: string; cwd?: string; home?: string; task?: string }
 let journaledSids: Set<string> | null = null
+// sid -> the Walnut data dir that asked for its first spawn, from the same
+// lines: the ownership proofs (orphan-stop-v1, owner-home-v1) name the asking
+// Walnut, not just "some Walnut on this host". The FIRST line for a sid decides,
+// the same rule as readSpawnJournal in external-session-scan-core.ts: a first
+// line without a home (a backfilled record) names no Walnut, even when another
+// daemon on the host appended a later line that does. Later spawns of a
+// journaled sid append nothing.
+const journaledHomes = new Map<string, string>()
 // A crashed writer can leave a torn last line with no newline; the first append
 // then starts a fresh line instead of gluing its record onto the torn one.
 let journalTornTail = false
@@ -251,11 +259,20 @@ function journaledIds(): Set<string> {
     if (!line) continue
     try {
       const rec = JSON.parse(line)
-      if (isJournalSid(rec?.sid)) ids.add(rec.sid)
+      if (isJournalSid(rec?.sid) && !ids.has(rec.sid)) {
+        ids.add(rec.sid)
+        if (typeof rec.home === 'string' && rec.home) journaledHomes.set(rec.sid, rec.home)
+      }
     } catch { /* torn tail from a crashed writer */ }
   }
   journaledSids = ids
   return ids
+}
+
+/** The data dir of the Walnut that first asked this host to spawn `sid`, if recorded. */
+function journaledHome(sid: string): string | undefined {
+  journaledIds()
+  return journaledHomes.get(sid)
 }
 
 function appendSpawnJournal(sid: unknown, rec: Record<string, unknown>): void {
@@ -264,12 +281,15 @@ function appendSpawnJournal(sid: unknown, rec: Record<string, unknown>): void {
   if (ids.has(sid)) return
   const at = new Date().toISOString()
   let line = JSON.stringify({ v: 1, sid, at, ...rec }) + '\n'
-  if (Buffer.byteLength(line) > SPAWN_JOURNAL_LINE_MAX) line = JSON.stringify({ v: 1, sid, at, kind: rec.kind }) + '\n'
+  let full = true
+  if (Buffer.byteLength(line) > SPAWN_JOURNAL_LINE_MAX) { line = JSON.stringify({ v: 1, sid, at, kind: rec.kind }) + '\n'; full = false }
   try {
     fs.mkdirSync(path.dirname(SPAWN_JOURNAL), { recursive: true })
     fs.appendFileSync(SPAWN_JOURNAL, (journalTornTail ? '\n' : '') + line, { mode: 0o600 })
     journalTornTail = false
     ids.add(sid)
+    // Remember only what the line on disk says, so a restart reads the same.
+    if (full && typeof rec.home === 'string' && rec.home) journaledHomes.set(sid, rec.home)
   } catch { /* best effort: the scan also consults the streams dir */ }
 }
 
@@ -4988,8 +5008,39 @@ async function cmdStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   if (cmd.stopRequestId !== undefined && (typeof cmd.stopRequestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cmd.stopRequestId))) {
     return sendError(ws, id, 'stop: invalid stopRequestId')
   }
-  if (cmd.reason !== undefined && !['user', 'maintenance', 'idle'].includes(cmd.reason as string)) {
+  if (cmd.reason !== undefined && !['user', 'maintenance', 'idle', 'orphan'].includes(cmd.reason as string)) {
     return sendError(ws, id, 'stop: invalid reason')
+  }
+  // owner-home-v1: a stop the server decided on names the asking Walnut, and a
+  // session the spawn journal records for another Walnut is refused
+  // (stopOwnerRefusal). Checked before anything changes, so a refused stop
+  // disables no supervision and fences no start. 'orphan' has its own, stricter
+  // proof below.
+  if (cmd.reason !== 'orphan') {
+    const ownerRefusal = stopOwnerRefusal(sid, cmd)
+    if (ownerRefusal) {
+      logMsg('info', 'cmdStop: stop refused for a session another Walnut started', { sid, reason: cmd.reason, initiator: cmd.initiator, ...ownerRefusal })
+      return sendOk(ws, id, { stopped: false, ...ownerRefusal })
+    }
+  }
+  // 'orphan' (orphan-stop-v1): a server found a record saying this session was
+  // deliberately ended while its pid still answers. A server never signals a
+  // pid it read from its database: the pid proves nothing about which daemon
+  // spawned the process (2026-09-26, an ephemeral test server holding a copy of
+  // the production database SIGTERM'd the user's live CLIs). It asks the owner,
+  // and the owner decides with first-hand evidence (orphanStopRefusal).
+  // Supervision is never touched: a supervised session is refused.
+  if (cmd.reason === 'orphan') {
+    return sessionStartGate.run(sid, async () => {
+      const refusal = orphanStopRefusal(sid, cmd.expectPid, cmd.home)
+      if (refusal) {
+        logMsg('info', 'cmdStop: orphan stop refused', { sid, expectPid: cmd.expectPid, ...refusal })
+        return sendOk(ws, id, { stopped: false, ...refusal })
+      }
+      logMsg('warn', 'cmdStop: ending an orphaned session this daemon owns', { sid, pid: cmd.expectPid })
+      sessionStopVersions.set(sid, (sessionStopVersions.get(sid) ?? 0) + 1)
+      return stopSessionProcess(ws, id, sid)
+    })
   }
   // Supervision may be re-enabled while queued, so an idle reap must re-check inside the gate.
   if (cmd.reason === 'idle') {
@@ -5006,6 +5057,92 @@ async function cmdStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   sessionStopVersions.set(sid, (sessionStopVersions.get(sid) ?? 0) + 1)
   if (cronRuntime && cmd.reason !== 'maintenance') await cronRuntime.disable(sid, cmd.stopRequestId as string | undefined)
   return sessionStartGate.run(sid, () => stopSessionProcess(ws, id, sid))
+}
+
+/**
+ * owner-home-v1: why this daemon will NOT carry out a stop the server decided
+ * on (reason user, maintenance or idle), or null when it may.
+ *
+ * A pid or a sid in a server's database proves nothing about which Walnut
+ * started the session: an ephemeral test server over a copy of the production
+ * data holds the user's session ids, and a remote host's daemon is shared by
+ * every Walnut that reaches it. So a stop names the asking Walnut (`home`, its
+ * data dir) and the spawn journal's first line for the sid decides:
+ *  - it names a Walnut: only that one may stop the session, for any reason;
+ *  - it names none (first spawned before the journal recorded homes, or not
+ *    journaled at all): `strict` (an ephemeral server, which never started such
+ *    a session) is refused; otherwise a session with a journal line keeps
+ *    today's behaviour, and an unjournaled one may only be stopped by a person
+ *    (`initiator: 'human'`), never by a reaper or sweep.
+ * A session one Walnut started stays that Walnut's even after another one
+ * resumes it: the second is refused here (fail closed), and this daemon's own
+ * idle reaper still ends the process.
+ * A request with no `home` comes from a server older than owner-home-v1 and
+ * keeps today's behaviour. stopSessionProcess still checks the registry and the
+ * process start time before any signal. Keep in sync with daemon-source.ts.
+ */
+function stopOwnerRefusal(sid: string, cmd: Record<string, unknown>): { reason: string; detail?: string } | null {
+  const home = cmd.home
+  if (home === undefined) return null
+  if (typeof home !== 'string' || !home) return { reason: 'bad_request', detail: 'home must name the asking Walnut' }
+  const owner = journaledHome(sid)
+  if (owner) return owner === home ? null : { reason: 'not_owned', detail: 'other_walnut' }
+  const journaled = journaledIds().has(sid)
+  const detail = journaled ? 'no_journaled_walnut' : 'not_journaled'
+  if (cmd.strict === true) return { reason: 'not_owned', detail }
+  if (journaled) return null
+  const human = cmd.initiator === 'human' || (cmd.initiator === undefined && cmd.reason === 'user')
+  return human ? null : { reason: 'not_owned', detail }
+}
+
+/**
+ * Why this daemon will NOT end `sid` as an orphan, or null when it may.
+ *
+ * Ownership first, all first-hand: the sid is in THIS daemon's registry with
+ * exactly the pid the server named, the .pgid file in this daemon's own streams
+ * dir names the same group (written at spawn by this daemon, or by the earlier
+ * daemon on the same dir it adopted the session from), and the host's spawn
+ * journal records the sid as started for the asking Walnut (`home`, its data
+ * dir). A remote host's daemon is shared by every Walnut that reaches it, so
+ * "this daemon spawned it" alone would let a server end another server's
+ * session. A process that fails any of these belongs to someone else:
+ * 'not_owned'. Then liveness, with the same keep-alive rules the idle scanner
+ * uses: recent output, a turn in flight, a cron, a team, a running background
+ * task or a pending turn retry all refuse. stopSessionProcess then re-checks
+ * the process identity (start time) before its first signal.
+ *
+ * Race window: cmdStop runs this and stopSessionProcess under the same per-sid
+ * gate a start takes, and from here to the first SIGINT everything is
+ * synchronous, so no other daemon command (a send included) can land between
+ * the check and the signal. Only the CLI itself could start work in between
+ * (a cron firing inside it), a window of microseconds.
+ * Keep in sync with daemon-source.ts.
+ */
+function orphanStopRefusal(sid: string, expectPid: unknown, home: unknown): { reason: string; detail?: string } | null {
+  if (typeof expectPid !== 'number' || !Number.isSafeInteger(expectPid) || expectPid <= 1) {
+    return { reason: 'bad_request', detail: 'expectPid must be an integer above 1' }
+  }
+  if (typeof home !== 'string' || !home) return { reason: 'bad_request', detail: 'home must name the asking Walnut' }
+  const session = sessions.get(sid)
+  if (!session) return { reason: 'not_owned', detail: 'not_in_registry' }
+  if (session.pid !== expectPid) return { reason: 'not_owned', detail: 'pid_mismatch' }
+  if (SERVICE_MODE && session.bootId && session.bootId !== daemonBootId) return { reason: 'not_owned', detail: 'previous_boot' }
+  if (session.state !== 'running' || session.exitCode !== null) return { reason: 'not_running' }
+  let pgid = NaN
+  try { pgid = parseInt(fs.readFileSync(session.pgidPath, 'utf-8').trim(), 10) } catch { /* no pgid file: not provable */ }
+  if (pgid !== expectPid) return { reason: 'not_owned', detail: 'pgid_mismatch' }
+  if (!journaledIds().has(sid)) return { reason: 'not_owned', detail: 'not_journaled' }
+  const owner = journaledHome(sid)
+  if (owner !== home) return { reason: 'not_owned', detail: owner ? 'other_walnut' : 'no_journaled_walnut' }
+  const now = Date.now()
+  let mtimeMs: number
+  try { mtimeMs = fs.statSync(session.jsonlPath).mtimeMs } catch { return { reason: 'protected', detail: 'no-stream-file' } }
+  if (now - mtimeMs < SESSION_IDLE_WARNING_MS) return { reason: 'recent_output' }
+  if (session.foldState && session.foldState.turnActive) return { reason: 'protected', detail: 'turn-active' }
+  const prot = deriveSessionProtection(session, sid, now)
+  if (prot.source) return { reason: 'protected', detail: prot.source }
+  if (hasRecentSchedulerFiring(sid, SESSION_IDLE_KILL_MS)) return { reason: 'protected', detail: 'cron-debug-log' }
+  return null
 }
 
 function stopSessionProcess(ws: ServerWebSocket<WsData>, id: number, sid: string) {

@@ -134,6 +134,81 @@ NOT the same as `session-reconciler.ts` above (startup-only zombie sweep). This 
 
 An SSH-tunnel flap makes `isAlive()` return false for every remote session past the 5-min disconnect grace, and the health monitor marks them `error` / `status_reason='remote_unreachable'`. In the SAME tick, `reconcileTaskPhases` Rule A used to see `aliveSessions: 0` and force IN_PROGRESS → AWAIT_HUMAN_ACTION — the "session is running but task shows complete" incident (inc-311a517d, clouddev tunnel flap; self-healed 4 min later when the stream reconnected, but the task badge lied the whole time). The guard: when ALL dead primary sessions are remote with `status_reason === 'remote_unreachable'`, liveness is UNKNOWN — skip the phase force. `isProcessAlive()` is a hard OS fact for local sessions only; for remote sessions during a disconnect it is a guess.
 
+## Ending a CLI process: only the owning daemon may (`src/core/sessions/owner-stop.ts`)
+
+**The server never signals a CLI pid.** A CLI belongs to the daemon that spawned it: that daemon
+holds its FIFO, the `.pgid` file in its streams dir (written at spawn, by it or by the earlier daemon
+on the same dir it adopted the session from), its registry entry and its start-time identity, and
+every death funnels into its `reapSession()`. A pid in a server database row proves nothing about
+which daemon spawned the process, or whether the pid still names that process.
+
+Incident (2026-09-26 and 09-27): a test run started an ephemeral server over a hand-copied production
+`sessions.sqlite`. Its orphan sweep found `stopped` rows whose pids were alive and looked like claude,
+and SIGTERM'd 11, then 9, of the user's live sessions, all owned by the production daemon. The sweep's
+only veto ("JSONL written in the last 2 minutes") also fails for any live CLI idling between turns.
+
+How each path ends a process now:
+
+| Path | Asks the owner with | Notes |
+|---|---|---|
+| Orphan sweep (runner on every start; health monitor on its first tick, then every 120th) | `stop` reason `'orphan'` + `expectPid` + `home` | Capability `orphan-stop-v1`; an old daemon is not asked, so nothing ends. A tick is 30 s while any session is running or idle and 5 min after 3 empty ticks, so the monitor's sweep comes every hour when busy and up to every 10 hours when quiet |
+| Health monitor idle timeout, no manager | `stop` reason `'idle'` | Was a SIGINT, SIGTERM, SIGKILL chain on the record's pid; now up to 4 stops in flight per tick |
+| Capacity eviction (`checkSessionLimit`) | `stop` reason `'idle'` | Was `process.kill(victim.pid)` from the LOCAL machine, remote pids included; a refusal keeps the session and undoes the teardown mark |
+| Task completion (`completeTaskSessions`, also at boot) | `stop` reason `'maintenance'` | Same; ran over every completed task at startup |
+| Terminate, ACP engine, no live session or manager | `acpStop` by `acpRuntimeId` (`stopAcpThroughOwner`) | Was a SIGTERM to the record's pid group; a test server never sends it to a shared host (CLI engines stop through the stop coordinator) |
+| User stop, live manager stop / kill / stopForIdle | `stop` with `home` + `initiator` | `session-stop.ts`, `remote-session-manager.ts` |
+
+- **Every `stop` names the asking Walnut** (`stopProvenance`, capability `owner-home-v1`): `home` (its
+  data dir), `initiator` (`'automatic'` for a reaper or sweep deciding from records, `'human'` for a
+  person or for the server driving a live session it holds), and `strict` from an ephemeral server.
+  The daemon (`stopOwnerRefusal`, both twins, pinned identical) reads the spawn journal's FIRST line
+  for the sid. When it names a Walnut, only that one may stop the session, for any reason. When it
+  names none, `strict` is refused, a backfilled line keeps today's behaviour, and an unjournaled sid may
+  only be stopped by a human. A session one Walnut started stays that Walnut's after another resumes
+  it: the second is refused (fail closed) and the daemon's own idle reaper still ends the process.
+  Sessions older than the journal's `home` field have only a backfilled line with no home, and a
+  long-lived install holds many of them, which is why production does not refuse those. A daemon without `owner-home-v1` gets today's
+  unlabelled stop from production and NO stop from an ephemeral server. The scenario this closes: an
+  ephemeral server with `WALNUT_EPHEMERAL_REMOTE_HOSTS=1` over copied data, whose reconnect and health
+  recovery write the shared remote daemon's live pids back onto copied rows; its eviction or task
+  completion then asked that daemon to stop the user's production CLI.
+
+- **Orphan candidates** (`orphanCandidateSkip`) are records that say someone DECIDED the session ends:
+  `status_reason` in `user_stopped`, `user_terminated`, `expected_teardown`, `idle_timeout`,
+  `idle_eviction`, with a usable pid, past a 2-minute grace, no pending user stop. An observation
+  (`normal_completion`, `liveness_check_failed`, no reason) is a claim a live process refutes: the
+  recovery loop relabels those rows and the daemon's idle reaper ends a CLI that really is idle.
+- **The daemon's orphan proof** (`orphanStopRefusal` in both twins): the sid is in ITS registry with
+  exactly `expectPid`, the `.pgid` file in its streams dir names the same group, the spawn journal's
+  first line for the sid names the asking Walnut (`home`, its data dir: a remote host's daemon is shared
+  by every Walnut that reaches it), and it is not a previous boot's process; then no output in 5
+  minutes, no turn in flight, and no idle-scanner protection (cron, team, running background task,
+  turn retry, recent scheduler firing). The check and `stopSessionProcess` (which re-checks the start
+  time) run under the per-sid gate a start takes, synchronously up to the first SIGINT, so no daemon
+  command can land in between. A refusal answers
+  `{stopped:false, reason:'not_owned'|'not_running'|'recent_output'|'protected', detail}` and the
+  server logs it at info (`orphan sweep: left alone`).
+- **Ephemeral servers** clear every inherited pid at boot, from the column and from the payload JSON
+  (`scrubInheritedSessionPids`, called from `startServer` when `IS_EPHEMERAL`), and refuse to start if
+  that fails or if their data dir is the production one (`sessions/ephemeral-guard.ts`). The launcher's
+  `*.sqlite` skip is not enough on its own: the incident's store was copied by hand around the launcher.
+  A fixture that needs a live pid on a row sets it AFTER `startServer` (`tests/e2e/browser/test-server.ts`).
+- **Ratchet**: `tests/core/signal-call-ratchet.test.ts` (AST, outside the daemon twins). A raw signal
+  (`process.kill` with a non-zero signal, a bare `kill(`, the process-group helpers) may only appear in
+  the files that signal a process they spawned themselves, within a per-file budget; session-store code
+  (`session-*.ts`, `sessions/`, the runner, the session manager, the sessions routes) has a budget for
+  every kill-shaped call, `.kill(` on an object included. A new site fails the quick tier.
+- Tests: `tests/core/sessions/owner-stop.test.ts`, `tests/core/sessions/owner-stop-callers.test.ts`,
+  `tests/core/sessions/stop-provenance.test.ts`, `tests/core/sessions/recovered-pid-stop.test.ts` (a pid
+  recovery wrote back reaches the daemon's own decision code and is refused on every stop path),
+  `tests/core/sessions/terminate-detached-acp.test.ts`, `tests/core/sessions/ephemeral-guard.test.ts`,
+  `tests/providers/runner-orphan-sweep.test.ts`, `tests/providers/daemon-orphan-stop-twins.test.ts`,
+  `tests/core/ephemeral-pid-scrub.test.ts`, `tests/e2e/ephemeral-inherited-pids.test.ts` and the health
+  monitor's orphan cases. All stub `process.kill`; none sends a real signal. The one real-process
+  proof, `tests/providers/daemon-orphan-stop-real-e2e.test.ts`, only runs with
+  `WALNUT_REAL_SIGNAL_TEST=1`: a source-twin daemon ends a dummy it spawned, and a look-alike dummy it
+  never spawned survives.
+
 ## Session Start Steps
 
 1. Agent tool `session_start` validates the task and calls `sessionRunner.startSession()` directly (awaits the Claude session ID so the response can include a `<session-ref>` tag). Other callers (REST, CLI) still emit `SESSION_START` via the bus.

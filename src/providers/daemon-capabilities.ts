@@ -329,6 +329,31 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // so it is NOT sidecar-gated. Not bridge-reachable. Optional: without it the
   // server never fixes anything and the readiness lines keep their commands.
   'hostfix-v1',
+  // 'orphan-stop-v1': `stop` accepts reason 'orphan' plus `expectPid` and
+  // `home` (the asking Walnut's data dir). The server never signals a CLI pid
+  // it read from its own database (a pid proves nothing about which daemon
+  // spawned the process); when a record says a session was deliberately ended
+  // while its pid still answers, it asks the owning daemon, which ends it only
+  // after proving ownership (its registry pid, the .pgid file it wrote, a spawn
+  // journal line naming that same Walnut) and finding nothing that keeps the
+  // session alive. The reply is {stopped:true} or {stopped:false,
+  // reason:'not_owned'|'not_running'|'recent_output'|'protected', detail}.
+  // Both twins implement it inline, so it is NOT sidecar-gated. Optional, and
+  // fail-closed: a daemon without it gets no orphan request at all (and would
+  // answer 'stop: invalid reason' if it did), so nothing is ended.
+  'orphan-stop-v1',
+  // 'owner-home-v1': EVERY server-originated `stop` (user, maintenance, idle)
+  // carries `home` (the asking Walnut's data dir) and `initiator` ('human' or
+  // 'automatic'), and an ephemeral server adds `strict`. The daemon refuses the
+  // stop, before touching supervision or fencing a start, when the spawn
+  // journal's first line for the sid names a different Walnut; when it names
+  // none, `strict` is refused and an unjournaled sid may only be stopped by a
+  // human. Why: an ephemeral server over copied data holds the user's session
+  // ids, and with remote hosts on it reaches the SAME shared remote daemon.
+  // Both twins implement it inline. Optional: the production server sends the
+  // old unlabelled stop to a daemon without it; an ephemeral server sends none
+  // at all (fail closed).
+  'owner-home-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

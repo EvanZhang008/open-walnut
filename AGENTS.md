@@ -317,6 +317,20 @@ diagnosis: degrade to the nearest existing directory plus "couldn't find X".
 
 **Delivery paths (where mid-turn injection breaks):** A send to a session walnut thinks is "processing" (`activeProcessing`) goes through `injectMidTurn` (gated on `targetSession.hasPipe`); otherwise `processNext` (writes the FIFO directly, no hasPipe gate). Pitfall: `RemoteSessionManager._hasPipe` is set `true` only in `start()` — `attach()` (used when reconnecting to an already-alive CLI after a daemon restart) returns `alive:true` but historically left `_hasPipe=false`, so `injectMidTurn` falsely reported "no FIFO pipe" and queued the message until the turn ended (25–55s grey stall). Keep `_hasPipe` in sync with daemon-authoritative liveness, not with spawn-vs-attach.
 
+**The server never signals a CLI pid; orphans end through the owning daemon.** A pid in a session
+record proves nothing about which daemon spawned the process: on 2026-09-26 an ephemeral test server
+over a hand-copied production `sessions.sqlite` SIGTERM'd the user's live CLIs from its orphan sweep.
+Every server path that ends a CLI now sends the owning daemon's `stop` (`src/core/sessions/owner-stop.ts`),
+and every such stop names the asking Walnut (`home`, capability `owner-home-v1`, `stop-provenance.ts`): the
+daemon refuses one for a session its spawn journal records for another Walnut. Orphans use reason
+`'orphan'` (capability `orphan-stop-v1`, fail-closed on old daemons), which the daemon honours only for a
+process in its own registry (the pid it holds, a matching `.pgid` file in its own streams dir written at
+spawn by it or by the daemon it took the session over from, a first spawn-journal line naming the asking
+data dir) that nothing keeps alive. Ephemeral servers clear every
+inherited pid at boot, refuse to boot on the production data dir, send `strict` stops (only sessions the
+journal names them for), and send no stop at all to a daemon without `owner-home-v1`. Ratchet:
+`tests/core/signal-call-ratchet.test.ts`.
+
 **Daemon restart:** old `cleanup()` leaves CLI alive. New daemon reconciles sessions.json then scans `.pgid` files — scan MUST skip sids already adopted (`if (sessions.has(sid)) continue`). All death paths funnel into `reapSession()` in `daemon-core.ts`; it calls `isTurnCompleteExit()` to normalize code to 0 when JSONL tail shows clean turn completion (otherwise every turn-end shows "exit -1" in UI).
 
 **Keep in sync:** `daemon-standalone.ts` (bun binary) + `daemon-source.ts` (JS fallback). Build: `bash scripts/build-daemon.sh`.

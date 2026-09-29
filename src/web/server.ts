@@ -888,9 +888,38 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // unkillable servers accumulated and starved the machine on 2026-08-09.
   installExitDiagnostics()
 
+  // An ephemeral server treats its data as a disposable copy (it clears every
+  // session pid below), so it must never boot on the production Walnut's own
+  // data dir (sessions/ephemeral-guard.ts). Checked before anything touches it.
+  if (IS_EPHEMERAL) {
+    const { assertEphemeralHomeIsNotProduction } = await import('../core/sessions/ephemeral-guard.js')
+    assertEphemeralHomeIsNotProduction(WALNUT_HOME)
+  }
+
   // Ensure ~/.open-walnut/ directory structure exists and seed config defaults
   const { initDirectories } = await import('../core/init.js')
   await initDirectories()
+
+  // An ephemeral server runs over a snapshot of another Walnut's data: every pid
+  // in its sessions store belongs to a process some other daemon spawned. Clear
+  // them before any subsystem reads one, and refuse to start if that fails
+  // (2026-09-26: a hand-copied production sessions store gave an ephemeral
+  // server the pids of the user's live CLIs, and it killed them).
+  if (IS_EPHEMERAL) {
+    const { scrubInheritedSessionPids } = await import('../core/session-tracker.js')
+    let scrub: { scrubbed: number; alive: number }
+    try {
+      scrub = await scrubInheritedSessionPids()
+    } catch (err) {
+      throw new Error(
+        'Ephemeral server refused to start: could not clear the pids its data snapshot inherited '
+        + `(${err instanceof Error ? err.message : String(err)}). It must never hold another Walnut's process ids.`,
+      )
+    }
+    if (scrub.scrubbed > 0) {
+      log.session.warn('ephemeral server: cleared inherited session pids (they belong to another Walnut)', scrub)
+    }
+  }
 
   // Route every log.error()/log.fatal() into the notification center (deduped
   // + storm-throttled in the bridge). Installed before any subsystem starts so
