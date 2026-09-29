@@ -191,3 +191,36 @@ describe('isSessionProcessAlive — remote fallback probes the daemon', () => {
     expect(await isSessionProcessAlive(remoteSession())).toBe(true)
   })
 })
+
+/**
+ * Registry rule (2026-09-29): a registered manager answers only once it is bound
+ * to its session. attachToExisting registers before it attaches, and the unbound
+ * manager's "false" made every restart mark live CLIs stopped.
+ */
+describe('isSessionProcessAlive — registered manager', () => {
+  const sid = 'registry-liveness-sid'
+  const record = () => ({
+    claudeSessionId: sid, provider: 'cli', process_status: 'running', pid: process.pid,
+  }) as unknown as SessionRecord
+  const fake = (bound: boolean | undefined, alive: boolean) =>
+    ({ bound, isAlive: async () => alive, detach: () => {} }) as never
+
+  afterEach(async () => {
+    const { unregisterSessionManager } = await import('../../src/providers/session-manager.js')
+    unregisterSessionManager(sid)
+  })
+
+  it('an unbound manager defers to the pid fallback', async () => {
+    const { registerSessionManager } = await import('../../src/providers/session-manager.js')
+    registerSessionManager(sid, fake(false, false))
+    expect(await isSessionProcessAlive(record())).toBe(true)
+  })
+
+  it('a bound manager (or one that does not say) is still the authority', async () => {
+    const { registerSessionManager } = await import('../../src/providers/session-manager.js')
+    registerSessionManager(sid, fake(true, false))
+    expect(await isSessionProcessAlive(record())).toBe(false)
+    registerSessionManager(sid, fake(undefined, false))
+    expect(await isSessionProcessAlive(record())).toBe(false)
+  })
+})

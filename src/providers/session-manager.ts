@@ -237,6 +237,13 @@ export interface SessionManager {
   isAlive(): Promise<boolean>
 
   /**
+   * False while the manager is registered but not yet started or attached to
+   * its session. Such a manager cannot answer isAlive() (it would say false),
+   * so liveness callers use the record-based fallback instead.
+   */
+  readonly bound?: boolean
+
+  /**
    * L2: PULL the daemon-authoritative background-task state (source of truth) to reconcile a
    * lost-terminal event without guessing liveness. Returns null when the daemon can't be reached
    * or has no record — callers treat null as "no authoritative answer, keep current state".

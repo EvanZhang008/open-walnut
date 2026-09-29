@@ -126,6 +126,8 @@ export class RemoteSessionManager implements SessionManager {
   // ── Properties ──
 
   get pid(): number | null { return this._pid }
+  /** start()/attach() bind the sid; before that isAlive() knows nothing. */
+  get bound(): boolean { return this._sid !== null }
   /** Remote sessions have no local output file. Returns null. */
   get outputFile(): string | null { return null }
   get hasPipe(): boolean { return this._hasPipe }

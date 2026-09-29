@@ -10414,24 +10414,29 @@ export class SessionRunner {
     // SAME text isn't shadowed by it (FIFO text-match binding would give the dead
     // claim the retry's echo line — see revokeEchoClaims).
     revokeEchoClaims(sessionId, msgs.map((m) => m.id))
-    if (verdict.kind === 'permanent') parkMessages(msgs, verdict.reason).catch(() => {})
-    else revertToPending(msgs).catch(() => {})
-    bus.emit(EventNames.SESSION_BATCH_FAILED, {
-      sessionId,
-      messageIds: msgs.map((m) => m.id),
-      error: err.message,
-    }, ['main-ai'], { source: 'session-runner' })
-    // errorKind 'delivery_failed' = connectivity status, NOT a turn outcome.
-    // Consumers (server.ts chat persist, hook dispatcher, push notify, and the
-    // session-runner's own handler) all short-circuit on it: no batch-completed,
-    // no processNext re-trigger, no phase flip, deduped notification. The
-    // missing kind is what turned an SSH outage into the 2-req/s infinite
-    // retry loop + 150 red boxes on 2026-06-10.
-    bus.emit(EventNames.SESSION_ERROR, {
-      sessionId,
-      error: err.message,
-      errorKind: 'delivery_failed' as const,
-    }, ['main-ai'], { source: 'session-runner' })
+    // Announce the failure only once the batch is back on disk (processNext's
+    // failure path awaits the same way). batch-failed is what offers Retry, and a
+    // Retry that ran while the batch still read 'processing' picked nothing up,
+    // leaving the message pending with no send to deliver it.
+    const settled = verdict.kind === 'permanent' ? parkMessages(msgs, verdict.reason) : revertToPending(msgs)
+    void settled.catch(() => {}).then(() => {
+      bus.emit(EventNames.SESSION_BATCH_FAILED, {
+        sessionId,
+        messageIds: msgs.map((m) => m.id),
+        error: err.message,
+      }, ['main-ai'], { source: 'session-runner' })
+      // errorKind 'delivery_failed' = connectivity status, NOT a turn outcome.
+      // Consumers (server.ts chat persist, hook dispatcher, push notify, and the
+      // session-runner's own handler) all short-circuit on it: no batch-completed,
+      // no processNext re-trigger, no phase flip, deduped notification. The
+      // missing kind is what turned an SSH outage into the 2-req/s infinite
+      // retry loop + 150 red boxes on 2026-06-10.
+      bus.emit(EventNames.SESSION_ERROR, {
+        sessionId,
+        error: err.message,
+        errorKind: 'delivery_failed' as const,
+      }, ['main-ai'], { source: 'session-runner' })
+    })
   }
 
   /**

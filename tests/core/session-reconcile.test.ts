@@ -391,6 +391,47 @@ describe('reconcileProcessStatus — convergence (incidents B/D shape)', () => {
     expect(after?.pid).toBe(process.pid)
   })
 
+  // 2026-09-29: attachToExisting registers the session manager, reconciles a
+  // turn that ended during the restart, and only THEN attaches. The unattached
+  // manager's isAlive() said false, so every server restart converged such live
+  // CLIs to 'stopped', cleared their pid and handed their tasks back. No isAlive
+  // input below: liveness is derived the way production derives it.
+  describe('liveness derived while a restart attach is in flight', () => {
+    async function unboundManager(sid: string) {
+      const { RemoteSessionManager } = await import('../../src/providers/remote-session-manager.js')
+      const { registerSessionManager } = await import('../../src/providers/session-manager.js')
+      const mgr = new RemoteSessionManager(sid, '__local__', null, 'ws://127.0.0.1:9')
+      expect(mgr.bound).toBe(false)
+      expect(await mgr.isAlive()).toBe(false) // the answer the old code trusted
+      registerSessionManager(sid, mgr)
+    }
+    afterEach(async () => {
+      const { unregisterSessionManager } = await import('../../src/providers/session-manager.js')
+      unregisterSessionManager('conv-attach-alive')
+      unregisterSessionManager('conv-attach-dead')
+    })
+
+    it('a live CLI converges to idle and keeps its pid', async () => {
+      const sid = 'conv-attach-alive'
+      await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+      const record = await stuckRunningRecord(sid, { pid: process.pid })
+      await unboundManager(sid)
+      expect(await reconcileProcessStatus(record, {})).toEqual({ converged: true, from: 'running', to: 'idle' })
+      expect((await getSessionByClaudeId(sid))?.pid).toBe(process.pid)
+    })
+
+    it('a CLI that really died still converges to stopped', async () => {
+      const sid = 'conv-attach-dead'
+      await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+      // A pid that provably exited (kill(pid, 0) is only an existence probe).
+      const { spawnSync } = await import('node:child_process')
+      const deadPid = spawnSync(process.execPath, ['-e', '']).pid!
+      const record = await stuckRunningRecord(sid, { pid: deadPid })
+      await unboundManager(sid)
+      expect(await reconcileProcessStatus(record, {})).toEqual({ converged: true, from: 'running', to: 'stopped' })
+    })
+  })
+
   it('error result → error, with errorMessage persisted', async () => {
     const sid = 'conv-error'
     await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid, true)])

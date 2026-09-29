@@ -56,6 +56,15 @@ async function waitForStatus(sessionId: string, status: string): Promise<QueuedM
   }
 }
 
+/** batch-failed is announced once the batch is back on disk; wait for it. */
+async function waitForFailure(): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (batchFailed.length === 0) {
+    if (Date.now() > deadline) throw new Error('batch-failed never fired');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
@@ -115,6 +124,7 @@ describe('settleResumeFailure — permanent failure parks the batch', () => {
 
     settle(sid, batch, new CwdMissingError('Working directory no longer exists: /tmp/gone'));
     await waitForStatus(sid, 'parked');
+    await waitForFailure();
 
     // Same reporting contract as a transient failure: one batch-failed for the UI
     // bubble, one delivery_failed status. Parking removes the RE-fire, not the
@@ -151,5 +161,22 @@ describe('settleResumeFailure — transient failure keeps retrying (unchanged)',
     expect(queue[0].status).toBe('pending');
     expect(queue[0].parkedAt).toBeUndefined();
     expect(await getAllSessionsWithPending()).toContain(sid);
+  });
+
+  it('announces the failure only once the batch is pending again on disk', async () => {
+    // batch-failed is what offers Retry. Announced before the revert landed, a
+    // Retry could run while the row still read 'processing', pick nothing up, and
+    // leave the message pending with no send to deliver it.
+    for (const [sid, err, status] of [
+      ['order-transient-sid', new Error('daemon start failed: publickey denied'), 'pending'],
+      ['order-permanent-sid', new CwdMissingError('Working directory no longer exists: /tmp/gone'), 'parked'],
+    ] as const) {
+      batchFailed = [];
+      await enqueueMessage(sid, 'retry me');
+      settle(sid, await markProcessing(sid), err);
+      await waitForFailure();
+      resetCache();
+      expect((await getQueue(sid))[0].status, sid).toBe(status);
+    }
   });
 });

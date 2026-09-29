@@ -3,8 +3,9 @@
  *
  * All callers use this ONE function instead of doing ad-hoc PID checks.
  * The function routes to the right session manager:
- *   - Registry hit → manager.isAlive() (authoritative — asks the actual manager)
- *   - Fallback (after server restart, no active manager):
+ *   - Registry hit → manager.isAlive() (authoritative — asks the actual manager),
+ *     once the manager is bound to its session (started or attached)
+ *   - Fallback (after server restart, no active or no bound manager):
  *       Remote → isDaemonConnected(host) with 5min grace period
  *       Local  → process.kill(pid, 0) (pure syscall, no fork)
  *   - Embedded/SDK sessions → always true (managed externally)
@@ -102,11 +103,16 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
   // sweep's target set, which is not safe.)
   if (session.process_status === 'stopped' || session.process_status === 'error') return false
 
-  // Prefer the registry — the active SessionManager knows the truth
+  // Prefer the registry — the active SessionManager knows the truth. A manager
+  // not yet bound to its session does not: attachToExisting registers it, then
+  // reconciles a turn that ended during the restart, then attaches. Its
+  // isAlive() said false there, and every server restart marked such live CLIs
+  // 'stopped', cleared their pid and handed their tasks back (2026-09-29, four at
+  // once). Unbound = no active manager: use the fallback below.
   if (session.claudeSessionId) {
     const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
     const mgr = getRegisteredSessionManager(session.claudeSessionId)
-    if (mgr) return mgr.isAlive()
+    if (mgr && mgr.bound !== false) return mgr.isAlive()
   }
 
   // Fallback: no active manager (e.g. server just restarted, transport not yet attached)
