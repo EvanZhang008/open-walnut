@@ -56,7 +56,7 @@ beforeAll(async () => {
     hasCapability: (cap: string) => ['external-scan-v1', 'external-scan-filter-v1'].includes(cap),
     send: async (command: string, options: Parameters<typeof scanExternalSessions>[0]) => {
       expect(command).toBe('sessions.discoverExternal');
-      return { ok: true, ...scanExternalSessions({ ...options, homeDir: WALNUT_HOME }) };
+      return { ok: true, ...(await scanExternalSessions({ ...options, homeDir: WALNUT_HOME })) };
     },
   } as unknown as ReturnType<typeof daemonConnections.getConnectedDaemonConnection>));
 });

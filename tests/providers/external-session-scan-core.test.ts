@@ -107,10 +107,10 @@ afterEach(() => {
 })
 
 describe('scanExternalSessions — claude classification', () => {
-  it('picks up a terminal-typed session', () => {
+  it('picks up a terminal-typed session', async () => {
     claudeSession({ sid: 'human-1', entrypoint: 'cli', aiTitle: 'Fix login redirect' })
 
-    const { candidates } = scan()
+    const { candidates } = await scan()
     expect(candidates.map((c) => c.sessionId)).toEqual(['human-1'])
     expect(candidates[0]).toMatchObject({
       engine: 'claude',
@@ -120,7 +120,7 @@ describe('scanExternalSessions — claude classification', () => {
     })
   })
 
-  it('picks up other SDK apps with a real cwd, but never temp-dir test debris', () => {
+  it('picks up other SDK apps with a real cwd, but never temp-dir test debris', async () => {
     // An SDK-based agent orchestrator records entrypoint 'sdk-cli' — same
     // as Walnut's own spawns. Walnut's own are excluded by knownSessionIds;
     // what separates the rest from ephemeral-server test debris is the cwd.
@@ -129,7 +129,7 @@ describe('scanExternalSessions — claude classification', () => {
     claudeSession({ sid: 'sdk-tmp2', entrypoint: 'sdk-cli', cwd: '/tmp/modetest' })
     claudeSession({ sid: 'sdk-tmp3', entrypoint: 'sdk-cli', cwd: '/private/var/folders/ph/x/T/walnut-test-123/memory' })
 
-    const { candidates } = scan()
+    const { candidates } = await scan()
     expect(candidates.map((c) => c.sessionId)).toEqual(['sdk-real'])
     expect(candidates[0].origin).toBe('sdk-cli')
     // Regression: the entrypoint check used to stop the walk on ANY non-human
@@ -139,64 +139,64 @@ describe('scanExternalSessions — claude classification', () => {
     expect(candidates[0].messageCount).toBe(2)
   })
 
-  it('excludes configured directories for every entrypoint, without matching sibling paths', () => {
+  it('excludes configured directories for every entrypoint, without matching sibling paths', async () => {
     for (const entrypoint of ['cli', 'claude-desktop', 'sdk-cli']) {
       claudeSession({ sid: `probe-${entrypoint}`, entrypoint, cwd: '/Users/dev/probes/run-1' })
     }
     claudeSession({ sid: 'real', entrypoint: 'cli', cwd: '/Users/dev/probes-app' })
     claudeSession({ sid: 'scratch', entrypoint: 'cli', cwd: '/tmp/real-work' })
     codexSession({ id: 'probe-codex', originator: 'codex-tui', cwd: '/Users/dev/probes/run-2' })
-    expect(scan({ excludedCwds: ['/Users/dev/probes/'] }).candidates.map(c => c.sessionId).sort())
+    expect((await scan({ excludedCwds: ['/Users/dev/probes/'] })).candidates.map(c => c.sessionId).sort())
       .toEqual(['real', 'scratch'])
   })
 
-  it('filters before the candidate limit so excluded probes cannot starve real sessions', () => {
+  it('filters before the candidate limit so excluded probes cannot starve real sessions', async () => {
     for (let i = 0; i < 205; i++) {
       claudeSession({ sid: `probe-${i}`, entrypoint: 'cli', cwd: '/Users/dev/probes' })
     }
     claudeSession({ sid: 'real', entrypoint: 'sdk-cli', cwd: '/Users/dev/work', mtimeMs: Date.now() - 10_000 })
-    expect(scan({ excludedCwds: ['/Users/dev/probes'], limit: 1 }).candidates.map(c => c.sessionId))
+    expect((await scan({ excludedCwds: ['/Users/dev/probes'], limit: 1 })).candidates.map(c => c.sessionId))
       .toEqual(['real'])
-    expect(scan({ excludedCwds: ['/Users/dev/probes'], limit: 1 }).truncated).toBe(false)
+    expect((await scan({ excludedCwds: ['/Users/dev/probes'], limit: 1 })).truncated).toBe(false)
   })
 
-  it('still excludes tracked sdk sessions via knownSessionIds (Walnut\'s own)', () => {
+  it('still excludes tracked sdk sessions via knownSessionIds (Walnut\'s own)', async () => {
     claudeSession({ sid: 'walnut-own', entrypoint: 'sdk-cli', cwd: '/Users/dev/proj' })
-    expect(scan({ knownSessionIds: ['walnut-own'] }).candidates).toHaveLength(0)
+    expect((await scan({ knownSessionIds: ['walnut-own'] })).candidates).toHaveLength(0)
   })
 
-  it('includes the desktop app entrypoint', () => {
+  it('includes the desktop app entrypoint', async () => {
     claudeSession({ sid: 'desk-1', entrypoint: 'claude-desktop' })
-    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['desk-1'])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['desk-1'])
   })
 
-  it('skips subagent sidechain transcripts', () => {
+  it('skips subagent sidechain transcripts', async () => {
     claudeSession({ sid: 'side-1', entrypoint: 'cli', isSidechain: true })
-    expect(scan().candidates).toHaveLength(0)
+    expect((await scan()).candidates).toHaveLength(0)
   })
 
-  it('skips ids the server already tracks (never parsed)', () => {
+  it('skips ids the server already tracks (never parsed)', async () => {
     claudeSession({ sid: 'human-1', entrypoint: 'cli' })
     claudeSession({ sid: 'human-2', entrypoint: 'cli' })
-    const { candidates } = scan({ knownSessionIds: ['human-1'] })
+    const { candidates } = await scan({ knownSessionIds: ['human-1'] })
     expect(candidates.map((c) => c.sessionId)).toEqual(['human-2'])
   })
 
-  it('honors the time window', () => {
+  it('honors the time window', async () => {
     claudeSession({ sid: 'fresh', entrypoint: 'cli', mtimeMs: Date.now() - 2 * 86400_000 })
     claudeSession({ sid: 'ancient', entrypoint: 'cli', mtimeMs: Date.now() - 200 * 86400_000 })
-    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['fresh'])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['fresh'])
   })
 
-  it('prefers the CLI ai-title, else falls back to the first user message', () => {
+  it('prefers the CLI ai-title, else falls back to the first user message', async () => {
     claudeSession({ sid: 'titled', entrypoint: 'cli', aiTitle: 'Real title', firstUserText: 'raw text' })
     claudeSession({ sid: 'untitled', entrypoint: 'cli', firstUserText: 'raw text here' })
-    const byId = new Map(scan().candidates.map((c) => [c.sessionId, c]))
+    const byId = new Map((await scan()).candidates.map((c) => [c.sessionId, c]))
     expect(byId.get('titled')?.title).toBe('Real title')
     expect(byId.get('untitled')?.title).toBe('raw text here')
   })
 
-  it('never titles a session with an injected preamble', () => {
+  it('never titles a session with an injected preamble', async () => {
     claudeSession({
       sid: 'pre-1', entrypoint: 'cli',
       firstUserText: '# AGENTS.md instructions for /Users/dev/proj <INSTRUCTIONS> always do X',
@@ -205,45 +205,45 @@ describe('scanExternalSessions — claude classification', () => {
       sid: 'pre-2', entrypoint: 'cli',
       firstUserText: '<local-command-caveat>Caveat: the messages below were generated…',
     })
-    for (const c of scan().candidates) expect(c.title).toBeUndefined()
+    for (const c of (await scan()).candidates) expect(c.title).toBeUndefined()
   })
 
-  it('collapses whitespace and truncates a very long title', () => {
+  it('collapses whitespace and truncates a very long title', async () => {
     claudeSession({ sid: 'long-1', entrypoint: 'cli', firstUserText: 'a\nb   c ' + 'x'.repeat(400) })
-    const title = scan().candidates[0].title!
+    const title = (await scan()).candidates[0].title!
     expect(title.startsWith('a b c')).toBe(true)
     expect(title.length).toBeLessThanOrEqual(120)
     expect(title.endsWith('…')).toBe(true)
   })
 
-  it('survives malformed and empty transcripts', () => {
+  it('survives malformed and empty transcripts', async () => {
     const bad = path.join(home, '.claude', 'projects', 'dir', 'broken.jsonl')
     fs.mkdirSync(path.dirname(bad), { recursive: true })
     fs.writeFileSync(bad, '{not json\n\n{"type":"user"\n')
     fs.writeFileSync(path.join(home, '.claude', 'projects', 'dir', 'empty.jsonl'), '')
     claudeSession({ sid: 'good', entrypoint: 'cli' })
-    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['good'])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['good'])
   })
 
-  it('returns an empty result when no transcript dirs exist at all', () => {
-    expect(scan()).toEqual({ candidates: [], scanned: 0, truncated: false })
+  it('returns an empty result when no transcript dirs exist at all', async () => {
+    expect(await scan()).toEqual({ candidates: [], scanned: 0, parsed: 0, truncated: false })
   })
 })
 
 describe('scanExternalSessions — codex classification', () => {
-  it('picks up the TUI/desktop originators and skips Walnut\'s own', () => {
+  it('picks up the TUI/desktop originators and skips Walnut\'s own', async () => {
     codexSession({ id: 'cx-tui', originator: 'codex-tui', stamp: '2026-08-10T10-00-00' })
     codexSession({ id: 'cx-desk', originator: 'Codex Desktop', stamp: '2026-08-10T11-00-00' })
     codexSession({ id: 'cx-walnut', originator: 'open-walnut', stamp: '2026-08-10T12-00-00' })
     codexSession({ id: 'cx-exec', originator: 'codex_exec', stamp: '2026-08-10T13-00-00' })
 
-    const ids = scan().candidates.map((c) => c.sessionId).sort()
+    const ids = (await scan()).candidates.map((c) => c.sessionId).sort()
     expect(ids).toEqual(['cx-desk', 'cx-tui'])
-    const tui = scan().candidates.find((c) => c.sessionId === 'cx-tui')!
+    const tui = (await scan()).candidates.find((c) => c.sessionId === 'cx-tui')!
     expect(tui).toMatchObject({ engine: 'codex', origin: 'codex-tui', title: 'add retry to the uploader' })
   })
 
-  it('dedupes resume rollouts of one session id, keeping the newest file', () => {
+  it('dedupes resume rollouts of one session id, keeping the newest file', async () => {
     codexSession({
       id: 'cx-1', originator: 'codex-tui', stamp: '2026-08-10T10-00-00',
       firstUserText: 'first run', mtimeMs: Date.now() - 5 * 86400_000,
@@ -252,16 +252,16 @@ describe('scanExternalSessions — codex classification', () => {
       id: 'cx-1', originator: 'codex-tui', stamp: '2026-08-12T10-00-00',
       firstUserText: 'resumed run', mtimeMs: Date.now() - 1 * 86400_000,
     })
-    const { candidates } = scan()
+    const { candidates } = await scan()
     expect(candidates).toHaveLength(1)
     expect(candidates[0].sessionId).toBe('cx-1')
     expect(candidates[0].title).toBe('resumed run')
   })
 
-  it('walks the year/month/day layout', () => {
+  it('walks the year/month/day layout', async () => {
     codexSession({ id: 'cx-a', originator: 'codex-tui', day: '2026/07/01' })
     codexSession({ id: 'cx-b', originator: 'codex-tui', day: '2026/08/15' })
-    expect(scan({ sinceMs: 10 * 365 * 86400_000 }).candidates.map((c) => c.sessionId).sort())
+    expect((await scan({ sinceMs: 10 * 365 * 86400_000 })).candidates.map((c) => c.sessionId).sort())
       .toEqual(['cx-a', 'cx-b'])
   })
 })
@@ -273,7 +273,7 @@ describe('scanExternalSessions — deep-head reads (regression)', () => {
   // on real files lands at byte 86K-155K. A fixed 64KB window found the metadata
   // but never the message, so every codex session imported with no title and a
   // message count of 0. These pin the incremental read.
-  it('finds a codex user message that sits past 150KB of preamble', () => {
+  it('finds a codex user message that sits past 150KB of preamble', async () => {
     const filePath = path.join(home, '.codex', 'sessions', '2026/08/10', 'rollout-2026-08-10T10-00-00-cx-deep.jsonl')
     const bulk = 'y'.repeat(60_000)
     writeJsonl(filePath, [
@@ -289,12 +289,12 @@ describe('scanExternalSessions — deep-head reads (regression)', () => {
     ])
     expect(fs.statSync(filePath).size).toBeGreaterThan(150_000)
 
-    const { candidates } = scan()
+    const { candidates } = await scan()
     expect(candidates).toHaveLength(1)
     expect(candidates[0]).toMatchObject({ sessionId: 'cx-deep', title: 'the real question', messageCount: 2 })
   })
 
-  it('counts every message in a long claude session, not just the first', () => {
+  it('counts every message in a long claude session, not just the first', async () => {
     const lines: unknown[] = [{
       type: 'user', message: { role: 'user', content: 'start the work' },
       timestamp: '2026-08-10T10:00:00.000Z', cwd: '/Users/dev/proj', entrypoint: 'cli', isSidechain: false,
@@ -305,13 +305,13 @@ describe('scanExternalSessions — deep-head reads (regression)', () => {
     }
     writeJsonl(path.join(home, '.claude', 'projects', 'dir', 'long.jsonl'), lines)
 
-    const { candidates } = scan()
+    const { candidates } = await scan()
     expect(candidates).toHaveLength(1)
     expect(candidates[0].title).toBe('start the work')
     expect(candidates[0].messageCount).toBe(301)
   })
 
-  it('does not lose a value that straddles a read-chunk boundary', () => {
+  it('does not lose a value that straddles a read-chunk boundary', async () => {
     // Pad past the 128KB chunk size with entries carrying no fields we want, so
     // the ai-title/user-message parse must survive at least one boundary.
     const pad = { type: 'system', message: { role: 'system', content: 'p'.repeat(2000) } }
@@ -327,13 +327,13 @@ describe('scanExternalSessions — deep-head reads (regression)', () => {
     expect(fs.statSync(path.join(home, '.claude', 'projects', 'dir', 'straddle.jsonl')).size)
       .toBeGreaterThan(131072)
 
-    const { candidates } = scan()
+    const { candidates } = await scan()
     expect(candidates).toHaveLength(1)
     expect(candidates[0].title).toBe('buried first words')
     expect(candidates[0].cwd).toBe('/Users/dev/proj')
   })
 
-  it('rejects a Walnut-owned rollout without reading its preamble', () => {
+  it('rejects a Walnut-owned rollout without reading its preamble', async () => {
     const filePath = path.join(home, '.codex', 'sessions', '2026/08/10', 'rollout-2026-08-10T10-00-00-cx-own.jsonl')
     writeJsonl(filePath, [
       {
@@ -342,28 +342,28 @@ describe('scanExternalSessions — deep-head reads (regression)', () => {
       },
       { type: 'event_msg', payload: { type: 'user_message', message: 'should never be titled' } },
     ])
-    expect(scan().candidates).toHaveLength(0)
+    expect((await scan()).candidates).toHaveLength(0)
   })
 })
 
 describe('scanExternalSessions — result shape', () => {
-  it('sorts newest-first and reports truncation instead of silently dropping', () => {
+  it('sorts newest-first and reports truncation instead of silently dropping', async () => {
     for (let i = 0; i < 5; i++) {
       claudeSession({ sid: `s-${i}`, entrypoint: 'cli', mtimeMs: Date.now() - i * 3600_000 })
     }
-    const all = scan()
+    const all = await scan()
     expect(all.candidates.map((c) => c.sessionId)).toEqual(['s-0', 's-1', 's-2', 's-3', 's-4'])
     expect(all.truncated).toBe(false)
 
-    const capped = scan({ limit: 2 })
+    const capped = await scan({ limit: 2 })
     expect(capped.candidates.map((c) => c.sessionId)).toEqual(['s-0', 's-1'])
     expect(capped.truncated).toBe(true)
   })
 
-  it('reports both engines together with counts', () => {
+  it('reports both engines together with counts', async () => {
     claudeSession({ sid: 'cl-1', entrypoint: 'cli' })
     codexSession({ id: 'cx-1', originator: 'codex-tui' })
-    const res = scan()
+    const res = await scan()
     expect(res.candidates.map((c) => c.engine).sort()).toEqual(['claude', 'codex'])
     expect(res.scanned).toBe(2)
     for (const c of res.candidates) {
@@ -390,54 +390,54 @@ describe('scanExternalSessions — title rule (CLI parity)', () => {
   const assistant = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }, timestamp: '2026-08-10T10:00:05.000Z' }
   const transcript = (sid: string, lines: unknown[]): void =>
     writeJsonl(path.join(home, '.claude', 'projects', '-Users-dev-proj', `${sid}.jsonl`), lines)
-  const titleOf = (sid: string): string | undefined => scan().candidates.find((c) => c.sessionId === sid)?.title
+  const titleOf = async (sid: string): Promise<string | undefined> => (await (await scan())).candidates.find((c) => c.sessionId === sid)?.title
 
-  it('skips a flagged compaction summary and titles by the human message after it', () => {
+  it('skips a flagged compaction summary and titles by the human message after it', async () => {
     transcript('cont-1', [user(COMPACT, { isCompactSummary: true }), assistant, user('now fix the flaky test'), assistant])
-    expect(titleOf('cont-1')).toBe('now fix the flaky test')
+    expect(await titleOf('cont-1')).toBe('now fix the flaky test')
   })
 
-  it('skips the compaction summary by its text when an older CLI left no flag', () => {
+  it('skips the compaction summary by its text when an older CLI left no flag', async () => {
     transcript('cont-2', [user(COMPACT), assistant, user('continue with the migration'), assistant])
-    expect(titleOf('cont-2')).toBe('continue with the migration')
+    expect(await titleOf('cont-2')).toBe('continue with the migration')
   })
 
-  it('yields no title when the summary is the only user line (server mints the fallback)', () => {
+  it('yields no title when the summary is the only user line (server mints the fallback)', async () => {
     transcript('cont-3', [user(COMPACT, { isCompactSummary: true }), assistant])
-    expect(titleOf('cont-3')).toBeUndefined()
+    expect(await titleOf('cont-3')).toBeUndefined()
   })
 
-  it('skips any line that opens with a markup tag, as the CLI does (Walnut envelopes included)', () => {
+  it('skips any line that opens with a markup tag, as the CLI does (Walnut envelopes included)', async () => {
     transcript('warm-1', [user('<walnut-cache-warmup>This is a cache warm-up from Walnut.</walnut-cache-warmup>'), assistant, user('look at the failing build'), assistant])
     transcript('digest-1', [user('<walnut-side-thread-digest>summary</walnut-side-thread-digest>'), assistant, user('next step please'), assistant])
     transcript('ctx-1', [user('<context_entry> You are an agent</context_entry>'), assistant, user('check the queue'), assistant])
     transcript('only-tag', [user('<walnut-message from="task x">please rebase</walnut-message>'), assistant])
-    expect(titleOf('warm-1')).toBe('look at the failing build')
-    expect(titleOf('digest-1')).toBe('next step please')
-    expect(titleOf('ctx-1')).toBe('check the queue')
-    expect(titleOf('only-tag')).toBeUndefined()
+    expect(await titleOf('warm-1')).toBe('look at the failing build')
+    expect(await titleOf('digest-1')).toBe('next step please')
+    expect(await titleOf('ctx-1')).toBe('check the queue')
+    expect(await titleOf('only-tag')).toBeUndefined()
   })
 
-  it('skips interrupt markers', () => {
+  it('skips interrupt markers', async () => {
     transcript('int-1', [user('[Request interrupted by user for tool use]'), assistant, user('[Request interrupted by user]'), user('try the other approach'), assistant])
-    expect(titleOf('int-1')).toBe('try the other approach')
+    expect(await titleOf('int-1')).toBe('try the other approach')
   })
 
-  it('skips built-in commands even with args, titles a custom one with args as "/name args"', () => {
+  it('skips built-in commands even with args, titles a custom one with args as "/name args"', async () => {
     transcript('cmd-1', [user('<command-name>/model</command-name>\n<command-args>sonnet</command-args>'), assistant, user('start over'), assistant])
     transcript('cmd-2', [user('<command-name>/clear</command-name>\n<command-args></command-args>'), assistant, user('start over on the parser'), assistant])
     transcript('cmd-3', [user('<command-name>/deploy</command-name>\n<command-args>staging now</command-args>'), assistant])
-    expect(titleOf('cmd-1')).toBe('start over')
-    expect(titleOf('cmd-2')).toBe('start over on the parser')
-    expect(titleOf('cmd-3')).toBe('/deploy staging now')
+    expect(await titleOf('cmd-1')).toBe('start over')
+    expect(await titleOf('cmd-2')).toBe('start over on the parser')
+    expect(await titleOf('cmd-3')).toBe('/deploy staging now')
   })
 
-  it('titles bash-mode input as "! cmd"', () => {
+  it('titles bash-mode input as "! cmd"', async () => {
     transcript('bash-1', [user('<bash-input>git status</bash-input>'), assistant])
-    expect(titleOf('bash-1')).toBe('! git status')
+    expect(await titleOf('bash-1')).toBe('! git status')
   })
 
-  it('looks past leading metadata blocks inside one message', () => {
+  it('looks past leading metadata blocks inside one message', async () => {
     transcript('ide-1', [{
       type: 'user', uuid: 'u', timestamp: '2026-08-10T10:00:00.000Z', cwd: '/Users/dev/proj', sessionId: 'ide-1', entrypoint: 'cli',
       message: { role: 'user', content: [
@@ -446,46 +446,46 @@ describe('scanExternalSessions — title rule (CLI parity)', () => {
         { type: 'text', text: 'why does this throw' },
       ] },
     }, assistant])
-    expect(titleOf('ide-1')).toBe('why does this throw')
+    expect(await titleOf('ide-1')).toBe('why does this throw')
   })
 
-  it('skips meta user lines exactly like the CLI', () => {
+  it('skips meta user lines exactly like the CLI', async () => {
     transcript('meta-1', [user('<injected instruction>', { isMeta: true }), assistant, user('real question here'), assistant])
-    expect(titleOf('meta-1')).toBe('real question here')
+    expect(await titleOf('meta-1')).toBe('real question here')
   })
 
-  it('prefers a /rename custom-title over the ai-title and the first prompt', () => {
+  it('prefers a /rename custom-title over the ai-title and the first prompt', async () => {
     transcript('custom-1', [
       user('first prompt'), assistant,
       { type: 'ai-title', aiTitle: 'AI picked this', sessionId: 'custom-1' },
       { type: 'custom-title', customTitle: 'Human named it', sessionId: 'custom-1' },
     ])
-    expect(titleOf('custom-1')).toBe('Human named it')
+    expect(await titleOf('custom-1')).toBe('Human named it')
   })
 
-  it('treats an emptied custom-title as cleared and falls back to the ai-title', () => {
+  it('treats an emptied custom-title as cleared and falls back to the ai-title', async () => {
     transcript('custom-2', [
       user('first prompt'), assistant,
       { type: 'custom-title', customTitle: 'Old name', sessionId: 'custom-2' },
       { type: 'ai-title', aiTitle: 'AI picked this', sessionId: 'custom-2' },
       { type: 'custom-title', customTitle: '', sessionId: 'custom-2' },
     ])
-    expect(titleOf('custom-2')).toBe('AI picked this')
+    expect(await titleOf('custom-2')).toBe('AI picked this')
   })
 
-  it('finds an ai-title that scrolled out of the tail window', () => {
+  it('finds an ai-title that scrolled out of the tail window', async () => {
     // 128KB tail: bury the title line under ~300KB of later turns.
     const filler = Array.from({ length: 300 }, (_, i) => ({
       type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'x'.repeat(1000) }] },
       timestamp: `2026-08-10T10:${String(i % 60).padStart(2, '0')}:00.000Z`,
     }))
     transcript('head-title', [user('first prompt'), { type: 'ai-title', aiTitle: 'Early AI title', sessionId: 'head-title' }, ...filler])
-    expect(titleOf('head-title')).toBe('Early AI title')
+    expect(await titleOf('head-title')).toBe('Early AI title')
   })
 
-  it('leaves codex titling unchanged (first human message)', () => {
+  it('leaves codex titling unchanged (first human message)', async () => {
     codexSession({ id: 'cdx-1', originator: 'codex-tui', firstUserText: 'refactor the parser' })
-    expect(scan().candidates.find((c) => c.sessionId === 'cdx-1')?.title).toBe('refactor the parser')
+    expect((await scan()).candidates.find((c) => c.sessionId === 'cdx-1')?.title).toBe('refactor the parser')
   })
 })
 
@@ -499,35 +499,35 @@ describe('describeExternalSessions — by id, regardless of age', () => {
   // fraction can come back as 122.999999ms, which toISOString reads one ms early.
   const YEAR_AGO = Math.floor((Date.now() - 400 * 24 * 60 * 60 * 1000) / 1000) * 1000
 
-  it('finds a claude transcript by id in any project dir even when the scan window misses it', () => {
+  it('finds a claude transcript by id in any project dir even when the scan window misses it', async () => {
     claudeSession({ sid: 'old-1', entrypoint: 'cli', firstUserText: 'old but gold', mtimeMs: YEAR_AGO, encodedDir: '-Users-dev-somewhere' })
-    expect(scan().candidates.map((c) => c.sessionId)).not.toContain('old-1')
-    const { candidates } = describeExternalSessions({ sessionIds: ['old-1', 'missing-9'], homeDir: home })
+    expect((await scan()).candidates.map((c) => c.sessionId)).not.toContain('old-1')
+    const { candidates } = await describeExternalSessions({ sessionIds: ['old-1', 'missing-9'], homeDir: home })
     expect(candidates).toHaveLength(1)
     expect(candidates[0]).toMatchObject({ sessionId: 'old-1', engine: 'claude', title: 'old but gold', cwd: '/Users/dev/proj' })
   })
 
-  it('applies the CLI title rule (custom-title over the first prompt) and skips sidechains', () => {
+  it('applies the CLI title rule (custom-title over the first prompt) and skips sidechains', async () => {
     const file = claudeSession({ sid: 'named-1', entrypoint: 'sdk-cli', firstUserText: 'first prompt', mtimeMs: YEAR_AGO })
     fs.appendFileSync(file, JSON.stringify({ type: 'custom-title', customTitle: 'Renamed by hand', sessionId: 'named-1' }) + '\n')
     claudeSession({ sid: 'side-1', entrypoint: 'cli', isSidechain: true, mtimeMs: YEAR_AGO })
-    const { candidates } = describeExternalSessions({ sessionIds: ['named-1', 'side-1'], homeDir: home })
+    const { candidates } = await describeExternalSessions({ sessionIds: ['named-1', 'side-1'], homeDir: home })
     expect(candidates.map((c) => c.sessionId)).toEqual(['named-1'])
     expect(candidates[0].title).toBe('Renamed by hand')
   })
 
-  it('finds a codex session by rollout suffix, newest rollout wins', () => {
+  it('finds a codex session by rollout suffix, newest rollout wins', async () => {
     codexSession({ id: 'cdx-old', originator: 'codex-tui', firstUserText: 'older rollout', stamp: '2025-01-01T10-00-00', day: '2025/01/01', mtimeMs: YEAR_AGO - 1000 })
     codexSession({ id: 'cdx-old', originator: 'codex-tui', firstUserText: 'newer rollout', stamp: '2025-01-02T10-00-00', day: '2025/01/02', mtimeMs: YEAR_AGO })
-    const { candidates } = describeExternalSessions({ sessionIds: ['cdx-old'], homeDir: home })
+    const { candidates } = await describeExternalSessions({ sessionIds: ['cdx-old'], homeDir: home })
     expect(candidates).toHaveLength(1)
     expect(candidates[0]).toMatchObject({ sessionId: 'cdx-old', engine: 'codex', title: 'newer rollout' })
   })
 
-  it('answers stat-only activity without parsing, and omits ids with no transcript', () => {
+  it('answers stat-only activity without parsing, and omits ids with no transcript', async () => {
     claudeSession({ sid: 'act-1', entrypoint: 'cli', mtimeMs: YEAR_AGO })
     codexSession({ id: 'act-cdx', originator: 'codex-tui', mtimeMs: YEAR_AGO })
-    const { candidates, activity } = describeExternalSessions({ sessionIds: ['act-1', 'act-cdx', 'gone'], activityOnly: true, homeDir: home })
+    const { candidates, activity } = await describeExternalSessions({ sessionIds: ['act-1', 'act-cdx', 'gone'], activityOnly: true, homeDir: home })
     expect(candidates).toEqual([])
     expect(activity).toEqual(expect.arrayContaining([
       { sessionId: 'act-1', lastActiveAt: new Date(YEAR_AGO).toISOString() },
@@ -536,9 +536,9 @@ describe('describeExternalSessions — by id, regardless of age', () => {
     expect(activity).toHaveLength(2)
   })
 
-  it('returns nothing for an empty ask or an unreadable home', () => {
-    expect(describeExternalSessions({ sessionIds: [], homeDir: home }).candidates).toEqual([])
-    expect(describeExternalSessions({ sessionIds: ['x'], homeDir: path.join(home, 'nope') }).candidates).toEqual([])
+  it('returns nothing for an empty ask or an unreadable home', async () => {
+    expect((await describeExternalSessions({ sessionIds: [], homeDir: home })).candidates).toEqual([])
+    expect((await describeExternalSessions({ sessionIds: ['x'], homeDir: path.join(home, 'nope') })).candidates).toEqual([])
   })
 })
 
@@ -561,7 +561,7 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text }] }, ...extra,
   })
 
-  it('skips a side-thread fork: queued warm-up, copied compaction summary, reminder-wrapped sends', () => {
+  it('skips a side-thread fork: queued warm-up, copied compaction summary, reminder-wrapped sends', async () => {
     writeJsonl(file('fork-1'), [
       { type: 'permission-mode', permissionMode: 'bypassPermissions', sessionId: 'fork-1' },
       { type: 'queue-operation', operation: 'enqueue', sessionId: 'fork-1', content: '<walnut-cache-warmup>This is a cache warm-up. Reply with exactly one word: Ready.' },
@@ -570,10 +570,10 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
       user('fork-1', 'continue\n\n' + REMINDER),
       reply(),
     ])
-    expect(scan().candidates).toEqual([])
+    expect((await scan()).candidates).toEqual([])
   })
 
-  it('skips a programmatic fork with no Walnut envelope at all (markdown-mode btw / lane / task fork)', () => {
+  it('skips a programmatic fork with no Walnut envelope at all (markdown-mode btw / lane / task fork)', async () => {
     // The queued first input is stamped at fork time; the copied chain keeps
     // the parent's older timestamps.
     writeJsonl(file('fork-plain'), [
@@ -584,13 +584,13 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
       user('fork-plain', 'what does this function return?', { timestamp: '2026-09-21T18:30:37.000Z' }),
       reply(),
     ])
-    const byId = Object.fromEntries(describeExternalSessions({ sessionIds: ['fork-plain'], homeDir: home })
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: ['fork-plain'], homeDir: home }))
       .candidates.map((c) => [c.sessionId, c.notExternal]))
-    expect(scan().candidates).toEqual([])
+    expect((await scan()).candidates).toEqual([])
     expect(byId).toEqual({ 'fork-plain': 'fork' })
   })
 
-  it('keeps a plain SDK session whose later input was queued mid-turn, and a terminal fork', () => {
+  it('keeps a plain SDK session whose later input was queued mid-turn, and a terminal fork', async () => {
     writeJsonl(file('plain-q'), [
       { type: 'queue-operation', operation: 'enqueue', timestamp: '2026-09-21T10:00:00.000Z', content: 'start the work' },
       user('plain-q', 'start the work', { timestamp: '2026-09-21T10:00:00.500Z' }),
@@ -602,34 +602,34 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
       user('term-fork-2', 'copied parent turn', { entrypoint: 'cli', timestamp: '2026-09-18T17:55:38.049Z' }),
       reply(),
     ])
-    expect(scan().candidates.map((c) => c.sessionId).sort()).toEqual(['plain-q', 'term-fork-2'])
+    expect((await scan()).candidates.map((c) => c.sessionId).sort()).toEqual(['plain-q', 'term-fork-2'])
   })
 
-  it('skips a Walnut-driven session found by the reminder alone, and by the mode switch line', () => {
+  it('skips a Walnut-driven session found by the reminder alone, and by the mode switch line', async () => {
     writeJsonl(file('rem-1'), [user('rem-1', [{ type: 'text', text: 'fix the flaky test\n\n' + REMINDER }]), reply()])
     writeJsonl(file('edge-1'), [user('edge-1', 'hello\n\n[Rich output mode: ON] Keep writing markdown.'), reply()])
-    expect(scan().candidates).toEqual([])
+    expect((await scan()).candidates).toEqual([])
   })
 
-  it('keeps a session whose text merely mentions the markers mid-sentence', () => {
+  it('keeps a session whose text merely mentions the markers mid-sentence', async () => {
     writeJsonl(file('talk-1'), [
       user('talk-1', 'why does my reply end with [Rich output mode is still on]? and what is <walnut-cache-warmup> for'),
       reply(),
     ])
-    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['talk-1'])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['talk-1'])
   })
 
-  it('keeps a terminal fork of a Walnut session: a person started that work', () => {
+  it('keeps a terminal fork of a Walnut session: a person started that work', async () => {
     writeJsonl(file('term-fork'), [
       user('term-fork', 'continue\n\n' + REMINDER, { entrypoint: 'cli' }),
       reply(),
       user('term-fork', 'now split the doc in two', { entrypoint: 'cli' }),
       reply(),
     ])
-    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['term-fork'])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['term-fork'])
   })
 
-  it('skips a probe whose only reply is an API error, and one answered by a synthetic stub', () => {
+  it('skips a probe whose only reply is an API error, and one answered by a synthetic stub', async () => {
     writeJsonl(file('probe-1'), [
       { type: 'queue-operation', operation: 'enqueue', content: 'Say only Z.' },
       user('probe-1', 'Say only Z.'),
@@ -641,16 +641,16 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     ])
     writeJsonl(file('asked-1'), [user('asked-1', 'still thinking about this one')])
     writeJsonl(file('ok-1'), [user('ok-1', 'Say only Z.'), reply('Z')])
-    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['ok-1'])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['ok-1'])
   })
 
-  it('does not call a transcript reply-less when the head budget could not reach the reply', () => {
+  it('does not call a transcript reply-less when the head budget could not reach the reply', async () => {
     const big = 'x'.repeat(2.5 * 1024 * 1024)
     writeJsonl(file('big-1'), [user('big-1', 'review this log'), user('big-1', big), reply('done')])
-    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['big-1'])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['big-1'])
   })
 
-  it('describe reports why a known import is not an outside session', () => {
+  it('describe reports why a known import is not an outside session', async () => {
     writeJsonl(file('fork-2'), [
       { type: 'queue-operation', operation: 'enqueue', content: '<walnut-cache-warmup>Reply Ready.' },
       user('fork-2', 'What is a VPC CIDR versus a subnet?'),
@@ -658,12 +658,12 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     ])
     writeJsonl(file('probe-2'), [user('probe-2', 'Say only Z.'), reply('err', { isApiErrorMessage: true })])
     writeJsonl(file('real-2'), [user('real-2', 'fix the login bug', { entrypoint: 'cli' }), reply()])
-    const byId = Object.fromEntries(describeExternalSessions({ sessionIds: ['fork-2', 'probe-2', 'real-2'], homeDir: home })
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: ['fork-2', 'probe-2', 'real-2'], homeDir: home }))
       .candidates.map((c) => [c.sessionId, c.notExternal]))
     expect(byId).toEqual({ 'fork-2': 'walnut-driven', 'probe-2': 'no-reply', 'real-2': null })
   })
 
-  it('skips any id in the spawn journal and says which Walnut started it', () => {
+  it('skips any id in the spawn journal and says which Walnut started it', async () => {
     const journal = path.join(home, 'journal', 'spawn-journal.jsonl')
     fs.mkdirSync(path.dirname(journal), { recursive: true })
     fs.writeFileSync(journal, [
@@ -677,9 +677,9 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     ].join('\n'))
     writeJsonl(file('jr-1'), [user('jr-1', 'fix the login bug', { entrypoint: 'cli' }), reply()])
     writeJsonl(file('jr-2'), [user('jr-2', 'add retries', { entrypoint: 'cli' }), reply()])
-    expect(scan({ spawnJournal: journal }).candidates.map((c) => c.sessionId))
+    expect((await scan({ spawnJournal: journal })).candidates.map((c) => c.sessionId))
       .toEqual(['jr-2'])
-    const byId = Object.fromEntries(describeExternalSessions({ sessionIds: ['jr-1', 'jr-2'], homeDir: home, spawnJournal: journal })
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: ['jr-1', 'jr-2'], homeDir: home, spawnJournal: journal }))
       .candidates.map((c) => [c.sessionId, [c.notExternal, c.spawnedBy]]))
     expect(byId).toEqual({
       'jr-1': ['walnut-spawned', { kind: 'fork', at: '2026-09-26T00:00:00.000Z', parent: 'p-1', home: '/tmp/eph', task: 't-1' }],
@@ -687,7 +687,7 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     })
   })
 
-  it('skips any id in the legacy marker dir or the streams dir, whatever the transcript says', () => {
+  it('skips any id in the legacy marker dir or the streams dir, whatever the transcript says', async () => {
     // A daemon on this host started these CLIs for SOME Walnut instance —
     // maybe not the asking server (dev/test server, records gone).
     fs.mkdirSync(path.join(home, '.open-walnut', 'tmp', 'spawned-sessions'), { recursive: true })
@@ -701,8 +701,8 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     writeJsonl(file('led-1'), [user('led-1', 'fix the login bug', { entrypoint: 'cli' }), reply()])
     writeJsonl(file('str-1'), [user('str-1', 'add retries', { entrypoint: 'cli' }), reply()])
     writeJsonl(file('out-1'), [user('out-1', 'real outside work', { entrypoint: 'cli' }), reply()])
-    expect(scan().candidates.map((c) => c.sessionId)).toEqual(['out-1'])
-    const byId = Object.fromEntries(describeExternalSessions({ sessionIds: ['led-1', 'str-1', 'out-1'], homeDir: home })
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['out-1'])
+    const byId = Object.fromEntries((await describeExternalSessions({ sessionIds: ['led-1', 'str-1', 'out-1'], homeDir: home }))
       .candidates.map((c) => [c.sessionId, c.notExternal]))
     expect(byId).toEqual({ 'led-1': 'walnut-spawned', 'str-1': 'walnut-spawned', 'out-1': null })
   })
@@ -718,5 +718,109 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
       outputModeReminder: OUTPUT_MODE_REMINDER_MARKER,
     })
     expect(RICH_OUTPUT_MODE_REMINDER).toBe(REMINDER)
+  })
+})
+
+/**
+ * The scan runs on the daemon's one event loop. In one synchronous pass over a
+ * real host's 16,000 transcripts it held that loop for 17 to 75 s every ten
+ * minutes (2026-09-29), long enough for a user's send to time out and the live
+ * CLI to be stopped for a resume. It now remembers each file's verdict until
+ * the file changes, and hands the loop back as it walks.
+ */
+describe('scanExternalSessions — remembered verdicts and a responsive event loop', () => {
+  const PROJ = '/Users/dev/proj'
+  const file = (sid: string) => path.join(home, '.claude', 'projects', '-Users-dev-proj', sid + '.jsonl')
+  const user = (sid: string, content: string, extra: Record<string, unknown> = {}) => ({
+    type: 'user', message: { role: 'user', content }, cwd: PROJ, sessionId: sid, entrypoint: 'cli',
+    timestamp: '2026-09-29T10:00:00.000Z', ...extra,
+  })
+  const reply = { type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'ok' }] } }
+
+  it('reads no head for a transcript that has not changed since the last scan', async () => {
+    writeJsonl(file('keep-1'), [user('keep-1', 'fix the login bug'), reply])
+    writeJsonl(file('debris-1'), [user('debris-1', 'probe', { entrypoint: 'sdk-cli', cwd: '/tmp/x' }), reply])
+    codexSession({ id: 'cx-keep', originator: 'codex-tui' })
+
+    const first = await scan()
+    expect(first).toMatchObject({ scanned: 3, parsed: 3 })
+    const second = await scan()
+    expect(second).toMatchObject({ scanned: 3, parsed: 0 })
+    expect(second.candidates).toEqual(first.candidates)
+    expect(second.candidates.map((c) => c.sessionId).sort()).toEqual(['cx-keep', 'keep-1'])
+  })
+
+  it('reads a transcript again once it changes, even when a rewrite keeps its size and mtime', async () => {
+    const probe = file('grow-1')
+    writeJsonl(probe, [user('grow-1', 'still thinking about this one')])
+    expect((await scan()).candidates).toEqual([])
+    // The reply lands: the reply-less verdict must not stick.
+    fs.appendFileSync(probe, JSON.stringify(reply) + '\n')
+    const grown = await scan()
+    expect(grown).toMatchObject({ parsed: 1 })
+    expect(grown.candidates.map((c) => c.title)).toEqual(['still thinking about this one'])
+
+    // Same length, same mtime put back: only ctime tells the rewrite apart.
+    // A whole second, because utimes rounds a Date to the millisecond.
+    const pinned = new Date(Math.floor(Date.now() / 1000) * 1000)
+    fs.utimesSync(probe, pinned, pinned)
+    expect((await scan()).candidates.map((c) => c.title)).toEqual(['still thinking about this one'])
+    const before = fs.statSync(probe)
+    fs.writeFileSync(probe, fs.readFileSync(probe, 'utf8').replace('still thinking', 'quiet thinking'))
+    fs.utimesSync(probe, pinned, pinned)
+    expect(fs.statSync(probe)).toMatchObject({ size: before.size, mtimeMs: before.mtimeMs })
+    expect((await scan()).candidates.map((c) => c.title)).toEqual(['quiet thinking about this one'])
+  })
+
+  it('still applies excluded cwds and known ids to a remembered verdict', async () => {
+    writeJsonl(file('real-1'), [user('real-1', 'real work'), reply])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['real-1'])
+    const excluded = await scan({ excludedCwds: [PROJ] })
+    expect(excluded).toMatchObject({ candidates: [], parsed: 0 })
+    expect((await scan({ knownSessionIds: ['real-1'] })).candidates).toEqual([])
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['real-1'])
+  })
+
+  it('forgets a deleted transcript and hands out copies of what it remembers', async () => {
+    writeJsonl(file('gone-1'), [user('gone-1', 'short lived'), reply])
+    writeJsonl(file('stay-1'), [user('stay-1', 'stays put'), reply])
+    const first = await scan()
+    for (const c of first.candidates) c.title = 'mutated by a caller'
+    fs.rmSync(file('gone-1'))
+    const second = await scan()
+    expect(second).toMatchObject({ scanned: 1, parsed: 0 })
+    expect(second.candidates.map((c) => [c.sessionId, c.title])).toEqual([['stay-1', 'stays put']])
+  })
+
+  it('tries an unreadable transcript again on the next scan instead of remembering the failure', async () => {
+    writeJsonl(file('locked-1'), [user('locked-1', 'real work'), reply])
+    writeJsonl(file('plain-1'), [{ type: 'summary', summary: 'no user line' }])
+    fs.chmodSync(file('locked-1'), 0o000)
+    try {
+      expect(await scan()).toMatchObject({ candidates: [], scanned: 2, parsed: 2 })
+      // plain-1's reject is remembered; locked-1's failed read is not.
+      expect(await scan()).toMatchObject({ candidates: [], scanned: 2, parsed: 1 })
+    } finally {
+      fs.chmodSync(file('locked-1'), 0o644)
+    }
+    expect((await scan()).candidates.map((c) => c.sessionId)).toEqual(['locked-1'])
+  })
+
+  it('lets timers run while it walks a large tree', async () => {
+    const chat = { type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'y'.repeat(4000) }] } }
+    for (let i = 0; i < 400; i++) {
+      writeJsonl(file('bulk-' + i), [user('bulk-' + i, 'task ' + i, { entrypoint: 'sdk-cli' }), ...Array(10).fill(chat)])
+    }
+    let ticks = 0
+    const timer = setInterval(() => { ticks++ }, 1)
+    let scanned = 0
+    try {
+      scanned = (await scan()).scanned
+    } finally {
+      clearInterval(timer)
+    }
+    // A synchronous walk lets no timer fire until it returns.
+    expect(ticks).toBeGreaterThan(0)
+    expect(scanned).toBe(400)
   })
 })

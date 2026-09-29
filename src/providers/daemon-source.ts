@@ -8009,11 +8009,11 @@ async function cmdDiscoverExternalSessions(ws, id, cmd) {
     const t0 = Date.now();
     const excludedCwds = Array.isArray(cmd.excludedCwds)
       ? cmd.excludedCwds.filter(function (value) { return typeof value === 'string'; }) : [];
-    const result = externalScanCore.scanExternalSessions({
+    const result = await externalScanCore.scanExternalSessions({
       sinceMs: sinceMs, knownSessionIds: knownSessionIds, excludedCwds: excludedCwds, limit: limit, homeDir: HOME_DIR,
     });
     logMsg('info', 'external session scan', {
-      scanned: result.scanned, found: result.candidates.length,
+      scanned: result.scanned, parsed: result.parsed, found: result.candidates.length,
       truncated: result.truncated, ms: Date.now() - t0,
     });
     sendOk(ws, id, {
@@ -8044,7 +8044,7 @@ async function cmdDescribeExternalSessions(ws, id, cmd) {
       : [];
     const activityOnly = cmd.activityOnly === true;
     const t0 = Date.now();
-    const result = externalScanCore.describeExternalSessions({ sessionIds: sessionIds, activityOnly: activityOnly, homeDir: HOME_DIR });
+    const result = await externalScanCore.describeExternalSessions({ sessionIds: sessionIds, activityOnly: activityOnly, homeDir: HOME_DIR });
     logMsg('info', 'external session describe', {
       asked: sessionIds.length, activityOnly: activityOnly,
       found: activityOnly ? result.activity.length : result.candidates.length, ms: Date.now() - t0,
@@ -8113,6 +8113,11 @@ async function computeChangesCached(sid, cwd, refresh) {
         mainParse: memo.mainParse,
       });
       memo.lastUsed = Date.now();
+      // The light wire answer and the stat it came from (see ChangesMemo.light
+      // in daemon-standalone.ts: the sweep warms more sessions than 12 fit).
+      memo.light = output
+        ? { mtimeMs: output.mtimeMs, size: output.size, jsonlPath: output.jsonlPath, result: changesCore.toLightChangesResult(output.result) }
+        : undefined;
       changesMemos.set(sid, memo);
       evictLeastRecent(changesMemos, CHANGES_MEMO_MAX_SESSIONS, sid);
       if (!output) return null;
@@ -8135,6 +8140,19 @@ async function computeChangesCached(sid, cwd, refresh) {
   return run;
 }
 
+// The memo's light answer while the transcript still has the stat it came from.
+async function lightChangesHit(sid) {
+  const memo = changesMemos.get(sid);
+  const light = memo && memo.light;
+  if (!light) return null;
+  try {
+    const st = await fs.promises.stat(light.jsonlPath);
+    if (st.mtimeMs !== light.mtimeMs || st.size !== light.size) return null;
+  } catch (err) { return null; }
+  memo.lastUsed = Date.now();
+  return light;
+}
+
 async function cmdChangesCompute(ws, id, cmd) {
   if (!changesCore) return sendError(ws, id, 'changes.compute: core sidecar not available on this host');
   const sid = cmd.sid;
@@ -8142,6 +8160,10 @@ async function cmdChangesCompute(ws, id, cmd) {
   const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined;
   const refresh = cmd.refresh === true;
   try {
+    const light = refresh ? null : await lightChangesHit(sid);
+    if (light) {
+      return sendOk(ws, id, { found: true, result: light.result, mtimeMs: light.mtimeMs, jsonlPath: light.jsonlPath });
+    }
     const entry = await computeChangesCached(sid, cwd, refresh);
     if (!entry) return sendOk(ws, id, { found: false, result: null });
     // The wire result is ALWAYS light — per-file content rides changes.file.

@@ -84,6 +84,7 @@ import {
   type HostLocalComputeOutput,
   type FileAccum as ChangesFileAccum,
   type MainParseState,
+  type SessionChangesResult,
 } from './session-changes-core.js'
 import { probeTranscriptRewindHostLocal, type RewindProbeInput, type RewindProbeOutput } from './transcript-rewind-core.js'
 import { describeExternalSessions, scanExternalSessions } from './external-session-scan-core.js'
@@ -6471,6 +6472,12 @@ interface ChangesMemo {
   // Where the main transcript parse stopped: a recompute after an append reads
   // only the new bytes (session-changes-core.ts MainParseState).
   mainParse: { state?: MainParseState }
+  // The last compute's wire answer and the transcript stat it came from. Only
+  // 12 full outputs fit (each holds every before/after string) and the sweep
+  // warms ~20 sessions, so every sweep rebuilt every session's before/after for
+  // an answer that had not changed (1 to 18 s each, 2026-09-29). This copy is
+  // light, so every memo keeps one and changes.compute answers from it.
+  light?: { mtimeMs: number; size: number; jsonlPath: string; result: SessionChangesResult }
   lastUsed: number
 }
 const changesMemos = new Map<string, ChangesMemo>()
@@ -6524,6 +6531,9 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
         mainParse: memo.mainParse,
       })
       memo.lastUsed = Date.now()
+      memo.light = output
+        ? { mtimeMs: output.mtimeMs, size: output.size, jsonlPath: output.jsonlPath, result: toLightChangesResult(output.result) }
+        : undefined
       changesMemos.set(sid, memo)
       evictLeastRecent(changesMemos, CHANGES_MEMO_MAX_SESSIONS, sid)
       if (!output) return null
@@ -6545,12 +6555,29 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
   return run
 }
 
+/** The memo's light answer while the transcript still has the stat it came from. */
+async function lightChangesHit(sid: string): Promise<ChangesMemo['light'] | null> {
+  const memo = changesMemos.get(sid)
+  const light = memo?.light
+  if (!memo || !light) return null
+  try {
+    const st = await fs.promises.stat(light.jsonlPath)
+    if (st.mtimeMs !== light.mtimeMs || st.size !== light.size) return null
+  } catch { return null }
+  memo.lastUsed = Date.now()
+  return light
+}
+
 async function cmdChangesCompute(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const sid = cmd.sid as string
   if (!sid) return sendError(ws, id, 'changes.compute: missing sid')
   const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined
   const refresh = cmd.refresh === true
   try {
+    const light = refresh ? null : await lightChangesHit(sid)
+    if (light) {
+      return sendOk(ws, id, { found: true, result: light.result, mtimeMs: light.mtimeMs, jsonlPath: light.jsonlPath })
+    }
     const entry = await computeChangesCached(sid, cwd, refresh)
     if (!entry) return sendOk(ws, id, { found: false, result: null })
     // The wire result is ALWAYS light — per-file content rides changes.file.
@@ -6693,9 +6720,10 @@ async function cmdDiscoverExternalSessions(
     const t0 = Date.now()
     const excludedCwds = Array.isArray(cmd.excludedCwds)
       ? cmd.excludedCwds.filter((value): value is string => typeof value === 'string') : []
-    const result = scanExternalSessions({ sinceMs, knownSessionIds, excludedCwds, limit })
+    const result = await scanExternalSessions({ sinceMs, knownSessionIds, excludedCwds, limit })
     logMsg('info', 'external session scan', {
       scanned: result.scanned,
+      parsed: result.parsed,
       found: result.candidates.length,
       truncated: result.truncated,
       ms: Date.now() - t0,
@@ -6731,7 +6759,7 @@ async function cmdDescribeExternalSessions(
       : []
     const activityOnly = cmd.activityOnly === true
     const t0 = Date.now()
-    const result = describeExternalSessions({ sessionIds, activityOnly })
+    const result = await describeExternalSessions({ sessionIds, activityOnly })
     logMsg('info', 'external session describe', {
       asked: sessionIds.length, activityOnly,
       found: activityOnly ? result.activity.length : result.candidates.length, ms: Date.now() - t0,

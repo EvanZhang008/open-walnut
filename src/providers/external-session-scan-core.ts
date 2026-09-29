@@ -107,6 +107,9 @@ export interface ScanExternalSessionsResult {
   candidates: ExternalSessionCandidate[]
   /** Transcript files considered (post-window, pre-classification). */
   scanned: number
+  /** Of those, the files whose head was read this scan; the rest were
+   *  unchanged since the last scan and kept its verdict. */
+  parsed: number
   /** True when `limit` clipped the result — the server logs what it dropped. */
   truncated: boolean
 }
@@ -282,13 +285,13 @@ function readChunk(filePath: string, size: number, bytes: number, fromEnd: boole
  * Walk a transcript's head line by line, reading only as far as needed.
  * `onEntry` returns true to stop. Partial trailing lines are never parsed —
  * they are carried into the next chunk — so a value can't be lost at a chunk
- * boundary.
+ * boundary. False when the file could not be opened or read.
  */
 function walkHeadLines(
   filePath: string,
   size: number,
   onEntry: (entry: Record<string, unknown>) => boolean,
-): void {
+): boolean {
   let fd: number | null = null
   try {
     fd = fs.openSync(filePath, 'r')
@@ -309,7 +312,7 @@ function walkHeadLines(
         if (!line.trim()) continue
         let entry: Record<string, unknown>
         try { entry = JSON.parse(line) as Record<string, unknown> } catch { continue }
-        if (onEntry(entry)) return
+        if (onEntry(entry)) return true
       }
     }
     // Final carry is a complete line only when the file has no trailing newline
@@ -317,8 +320,10 @@ function walkHeadLines(
     if (carry.trim() && position >= size) {
       try { onEntry(JSON.parse(carry) as Record<string, unknown>) } catch { /* partial */ }
     }
+    return true
   } catch {
-    /* unreadable file — caller treats it as unclassifiable */
+    // Unreadable file: the caller treats it as unclassifiable, this time.
+    return false
   } finally {
     if (fd !== null) { try { fs.closeSync(fd) } catch { /* ignore */ } }
   }
@@ -499,6 +504,8 @@ interface ClaudeHead extends TitleLines {
   replied: boolean
   /** The whole file fit the head budget, so a missing reply is a fact. */
   readWhole: boolean
+  /** Opening or reading the file failed: no verdict to remember. */
+  readFailed?: boolean
 }
 
 /** Why a programmatic claude transcript is not an outside session, if it isn't.
@@ -538,7 +545,7 @@ function parseClaudeHead(filePath: string, size: number): ClaudeHead {
   }
   let latestBeforeFirstMessage = 0
   let sawMessage = false
-  walkHeadLines(filePath, size, (entry) => {
+  const readable = walkHeadLines(filePath, size, (entry) => {
     const type = entry.type
     const at = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN
     if (!sawMessage && Number.isFinite(at)) {
@@ -590,22 +597,90 @@ function parseClaudeHead(filePath: string, size: number): ClaudeHead {
     // ones (it is display-only either way).
     return false
   })
+  if (!readable) out.readFailed = true
   return out
 }
 
-function scanClaude(
+/**
+ * The scan shares the daemon's one event loop with every live session's I/O.
+ * Done in one synchronous pass over ~16,000 transcripts (1.6 GB of heads on one
+ * host) it held that loop for 17 to 75 s every ten minutes (2026-09-29): a send
+ * timed out, the server fell back to a resume and the daemon stopped the live
+ * CLI to make room for it. The walk now hands the loop back every SLICE_MS.
+ */
+const SLICE_MS = 8
+
+/** A yield point: free inside a slice, otherwise lets timers and sockets run. */
+function createPause(): () => Promise<void> {
+  let sliceStart = Date.now()
+  return async () => {
+    if (Date.now() - sliceStart < SLICE_MS) return
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    sliceStart = Date.now()
+  }
+}
+
+/** What a stat says about a file's bytes: any write moves size, mtime or ctime
+ *  (ctime also moves on utimes, which is how a copy can fake an mtime). */
+interface FileStamp { size: number; mtimeMs: number; ctimeMs: number; ino: number }
+
+function stampOf(stat: FileStamp): FileStamp {
+  return { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino }
+}
+
+function sameStamp(a: FileStamp, b: FileStamp): boolean {
+  return a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.ino === b.ino
+}
+
+/**
+ * Last scan's verdict per transcript path. A verdict depends only on the
+ * file's own bytes (the window, known ids and excluded cwds are applied around
+ * it), so an unchanged file keeps it and a steady-state scan is one stat per
+ * file: on the host above every one of the 16,000 files was rejected, head
+ * read and all, every ten minutes. Each scan rebuilds the map from the files it
+ * visits, so it never outgrows the directory.
+ */
+const claudeVerdicts = new Map<string, FileStamp & { candidate: ExternalSessionCandidate | null }>()
+const codexHeads = new Map<string, FileStamp & { head: CodexHead }>()
+
+interface ScanTally { scanned: number; parsed: number }
+
+/** One claude transcript's verdict from its bytes: its descriptor or null,
+ *  and whether the bytes could be read at all (a failed read is not a verdict). */
+function classifyClaude(
+  sessionId: string,
+  filePath: string,
+  stat: fs.Stats,
+): { candidate: ExternalSessionCandidate | null; readable: boolean } {
+  const head = parseClaudeHead(filePath, stat.size)
+  const reject = { candidate: null, readable: !head.readFailed }
+  // A sidechain file is a subagent transcript, not a session someone opened.
+  if (!head.entrypoint || head.isSidechain) return reject
+  const isHuman = HUMAN_CLAUDE_ENTRYPOINTS.has(head.entrypoint)
+  // Programmatic (other SDK apps, e.g. an investigation orchestrator):
+  // only with a real working directory — temp-dir ones are test debris.
+  const isProgram = PROGRAMMATIC_CLAUDE_ENTRYPOINTS.has(head.entrypoint) && !isTempCwd(head.cwd)
+  if (!isHuman && !isProgram) return reject
+  if (claudeNotExternal(head)) return reject
+  return { candidate: claudeCandidate(sessionId, filePath, stat, head), readable: true }
+}
+
+async function scanClaude(
   homeDir: string,
   cutoff: number,
   known: Set<string>,
   excludedCwds: string[],
   out: ExternalSessionCandidate[],
-): number {
+  tally: ScanTally,
+  pause: () => Promise<void>,
+): Promise<void> {
   const root = path.join(homeDir, '.claude', 'projects')
   let dirs: string[]
-  try { dirs = fs.readdirSync(root) } catch { return 0 }
-  let scanned = 0
+  try { dirs = fs.readdirSync(root) } catch { return }
+  const verdicts = new Map<string, FileStamp & { candidate: ExternalSessionCandidate | null }>()
 
   for (const dirName of dirs) {
+    await pause()
     const dir = path.join(root, dirName)
     let files: string[]
     try {
@@ -617,27 +692,30 @@ function scanClaude(
       if (!fileName.endsWith('.jsonl')) continue
       const sessionId = fileName.slice(0, -'.jsonl'.length)
       if (known.has(sessionId)) continue
+      await pause()
       const filePath = path.join(dir, fileName)
       let stat: fs.Stats
       try { stat = fs.statSync(filePath) } catch { continue }
       if (!stat.isFile() || stat.mtimeMs < cutoff || stat.size === 0) continue
-      scanned++
+      tally.scanned++
 
-      const head = parseClaudeHead(filePath, stat.size)
-      if (!head.entrypoint) continue
-      // A sidechain file is a subagent transcript, not a session someone opened.
-      if (head.isSidechain || isExcludedExternalCwd(head.cwd, excludedCwds)) continue
-      const isHuman = HUMAN_CLAUDE_ENTRYPOINTS.has(head.entrypoint)
-      // Programmatic (other SDK apps, e.g. an investigation orchestrator):
-      // only with a real working directory — temp-dir ones are test debris.
-      const isProgram = PROGRAMMATIC_CLAUDE_ENTRYPOINTS.has(head.entrypoint) && !isTempCwd(head.cwd)
-      if (!isHuman && !isProgram) continue
-      if (claudeNotExternal(head)) continue
-
-      out.push(claudeCandidate(sessionId, filePath, stat, head))
+      const stamp = stampOf(stat)
+      const prev = claudeVerdicts.get(filePath)
+      let candidate: ExternalSessionCandidate | null
+      if (prev && sameStamp(prev, stamp)) {
+        candidate = prev.candidate
+        verdicts.set(filePath, prev)
+      } else {
+        tally.parsed++
+        const verdict = classifyClaude(sessionId, filePath, stat)
+        candidate = verdict.candidate
+        if (verdict.readable) verdicts.set(filePath, { ...stamp, candidate })
+      }
+      if (candidate && !isExcludedExternalCwd(candidate.cwd, excludedCwds)) out.push({ ...candidate })
     }
   }
-  return scanned
+  claudeVerdicts.clear()
+  for (const [filePath, verdict] of verdicts) claudeVerdicts.set(filePath, verdict)
 }
 
 /** The descriptor for one claude transcript whose head is already parsed. */
@@ -663,11 +741,13 @@ interface CodexHead {
   startedAt?: string
   firstUserText?: string
   messageCount: number
+  /** Opening or reading the file failed: no verdict to remember. */
+  readFailed?: boolean
 }
 
 function parseCodexHead(filePath: string, size: number): CodexHead {
   const out: CodexHead = { messageCount: 0 }
-  walkHeadLines(filePath, size, (entry) => {
+  const readable = walkHeadLines(filePath, size, (entry) => {
     const payload = (entry.payload ?? {}) as Record<string, unknown>
     if (entry.type === 'session_meta') {
       const id = payload.session_id ?? payload.id
@@ -695,6 +775,7 @@ function parseCodexHead(filePath: string, size: number): CodexHead {
     }
     return false
   })
+  if (!readable) out.readFailed = true
   return out
 }
 
@@ -716,44 +797,61 @@ function codexCandidate(
   }
 }
 
+type RolloutFile = FileStamp & { filePath: string }
+
 /** Every codex rollout file under ~/.codex/sessions (a bounded 3-level walk). */
-function listCodexRollouts(homeDir: string): Array<{ filePath: string; size: number; mtimeMs: number }> {
+async function listCodexRollouts(homeDir: string, pause: () => Promise<void>): Promise<RolloutFile[]> {
   const root = path.join(homeDir, '.codex', 'sessions')
-  const files: Array<{ filePath: string; size: number; mtimeMs: number }> = []
-  const walk = (dir: string, depth: number): void => {
+  const files: RolloutFile[] = []
+  const walk = async (dir: string, depth: number): Promise<void> => {
     let entries: fs.Dirent[]
     try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
     for (const entry of entries) {
+      await pause()
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) {
-        if (depth < 4) walk(full, depth + 1)
+        if (depth < 4) await walk(full, depth + 1)
         continue
       }
       if (!entry.name.endsWith('.jsonl')) continue
       let stat: fs.Stats
       try { stat = fs.statSync(full) } catch { continue }
       if (!stat.isFile() || stat.size === 0) continue
-      files.push({ filePath: full, size: stat.size, mtimeMs: stat.mtimeMs })
+      files.push({ filePath: full, ...stampOf(stat) })
     }
   }
-  walk(root, 0)
+  await walk(root, 0)
   return files
 }
 
-function scanCodex(
+async function scanCodex(
   homeDir: string,
   cutoff: number,
   known: Set<string>,
   excludedCwds: string[],
   out: ExternalSessionCandidate[],
-): number {
+  tally: ScanTally,
+  pause: () => Promise<void>,
+): Promise<void> {
   // Layout is <year>/<month>/<day>/rollout-*.jsonl — a bounded 3-level walk.
-  const files = listCodexRollouts(homeDir).filter((f) => f.mtimeMs >= cutoff)
+  const files = (await listCodexRollouts(homeDir, pause)).filter((f) => f.mtimeMs >= cutoff)
+  tally.scanned += files.length
 
   // Resume writes a fresh rollout file per session id — newest file wins.
   const byId = new Map<string, ExternalSessionCandidate>()
+  const heads = new Map<string, FileStamp & { head: CodexHead }>()
   for (const file of files) {
-    const head = parseCodexHead(file.filePath, file.size)
+    await pause()
+    const remembered = codexHeads.get(file.filePath)
+    let head: CodexHead
+    if (remembered && sameStamp(remembered, file)) {
+      head = remembered.head
+      heads.set(file.filePath, remembered)
+    } else {
+      tally.parsed++
+      head = parseCodexHead(file.filePath, file.size)
+      if (!head.readFailed) heads.set(file.filePath, { ...stampOf(file), head })
+    }
     if (!head.sessionId || !head.originator) continue
     if (!HUMAN_CODEX_ORIGINATORS.has(head.originator)) continue
     if (known.has(head.sessionId) || isExcludedExternalCwd(head.cwd, excludedCwds)) continue
@@ -771,7 +869,8 @@ function scanCodex(
     }
   }
   for (const candidate of byId.values()) out.push(candidate)
-  return files.length
+  codexHeads.clear()
+  for (const [filePath, entry] of heads) codexHeads.set(filePath, entry)
 }
 
 export interface DescribeExternalSessionsOptions {
@@ -799,7 +898,11 @@ type LocatedFile = { filePath: string; size: number; mtimeMs: number }
 
 /** Find each wanted id's transcript: claude by one readdir per project dir,
  *  codex by rollout suffix (newest rollout wins, resume writes a new one). */
-function locateTranscripts(homeDir: string, ids: string[]): Map<string, { engine: 'claude' | 'codex'; file: LocatedFile }> {
+async function locateTranscripts(
+  homeDir: string,
+  ids: string[],
+  pause: () => Promise<void>,
+): Promise<Map<string, { engine: 'claude' | 'codex'; file: LocatedFile }>> {
   const wanted = new Set(ids)
   const found = new Map<string, { engine: 'claude' | 'codex'; file: LocatedFile }>()
   const root = path.join(homeDir, '.claude', 'projects')
@@ -807,6 +910,7 @@ function locateTranscripts(homeDir: string, ids: string[]): Map<string, { engine
   try { dirs = fs.readdirSync(root) } catch { dirs = [] }
   for (const dirName of dirs) {
     if (wanted.size === 0) break
+    await pause()
     let names: string[]
     try { names = fs.readdirSync(path.join(root, dirName)) } catch { continue }
     for (const name of names) {
@@ -822,7 +926,7 @@ function locateTranscripts(homeDir: string, ids: string[]): Map<string, { engine
     }
   }
   if (wanted.size > 0) {
-    for (const file of listCodexRollouts(homeDir)) {
+    for (const file of await listCodexRollouts(homeDir, pause)) {
       const base = path.basename(file.filePath, '.jsonl')
       for (const sessionId of wanted) {
         if (!base.endsWith('-' + sessionId)) continue
@@ -846,16 +950,18 @@ function locateTranscripts(homeDir: string, ids: string[]): Map<string, { engine
  * An id with no transcript is simply absent from the answer. A transcript
  * the scan would have skipped says why in notExternal.
  */
-export function describeExternalSessions(
+export async function describeExternalSessions(
   options: DescribeExternalSessionsOptions,
-): { candidates: ExternalSessionCandidate[]; activity: ExternalSessionActivity[] } {
+): Promise<{ candidates: ExternalSessionCandidate[]; activity: ExternalSessionActivity[] }> {
   const homeDir = options.homeDir ?? os.homedir()
   const ids = [...new Set(options.sessionIds.filter((id) => typeof id === 'string' && id.length > 0))].slice(0, DESCRIBE_LIMIT)
   const candidates: ExternalSessionCandidate[] = []
   const activity: ExternalSessionActivity[] = []
   if (ids.length === 0) return { candidates, activity }
   const spawned = walnutSpawnedIds(homeDir, options.spawnJournal)
-  for (const [sessionId, hit] of locateTranscripts(homeDir, ids)) {
+  const pause = createPause()
+  for (const [sessionId, hit] of await locateTranscripts(homeDir, ids, pause)) {
+    await pause()
     if (options.activityOnly) {
       activity.push({ sessionId, lastActiveAt: new Date(hit.file.mtimeMs).toISOString() })
       continue
@@ -881,23 +987,31 @@ export function describeExternalSessions(
 
 /**
  * Scan this host for sessions started outside Walnut. Pure host-local I/O —
- * safe to call from either daemon twin.
+ * safe to call from either daemon twin. It yields to the event loop as it
+ * goes (see SLICE_MS), so a caller that must not overlap two scans serializes
+ * them itself, as both daemon twins do.
  */
-export function scanExternalSessions(
+export async function scanExternalSessions(
   options: ScanExternalSessionsOptions,
-): ScanExternalSessionsResult {
+): Promise<ScanExternalSessionsResult> {
   const homeDir = options.homeDir ?? os.homedir()
   const cutoff = Date.now() - Math.max(0, options.sinceMs)
   const known = new Set(options.knownSessionIds ?? [])
   for (const sid of walnutSpawnedIds(homeDir, options.spawnJournal).keys()) known.add(sid)
   const candidates: ExternalSessionCandidate[] = []
 
-  let scanned = 0
-  scanned += scanClaude(homeDir, cutoff, known, options.excludedCwds ?? [], candidates)
-  scanned += scanCodex(homeDir, cutoff, known, options.excludedCwds ?? [], candidates)
+  const tally: ScanTally = { scanned: 0, parsed: 0 }
+  const pause = createPause()
+  await scanClaude(homeDir, cutoff, known, options.excludedCwds ?? [], candidates, tally, pause)
+  await scanCodex(homeDir, cutoff, known, options.excludedCwds ?? [], candidates, tally, pause)
 
   candidates.sort((a, b) => Date.parse(b.lastActiveAt) - Date.parse(a.lastActiveAt))
   const limit = options.limit ?? 200
   const truncated = candidates.length > limit
-  return { candidates: truncated ? candidates.slice(0, limit) : candidates, scanned, truncated }
+  return {
+    candidates: truncated ? candidates.slice(0, limit) : candidates,
+    scanned: tally.scanned,
+    parsed: tally.parsed,
+    truncated,
+  }
 }

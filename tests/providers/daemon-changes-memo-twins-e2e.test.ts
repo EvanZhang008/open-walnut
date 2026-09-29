@@ -162,5 +162,45 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       expect(log[0]).toMatchObject({ resumed: false, readBytes: fs.statSync(transcript(whale)).size - Buffer.byteLength(appended) })
       expect(log[1]).toMatchObject({ resumed: true, readBytes: Buffer.byteLength(appended), files: 2 })
     }, 90_000)
+
+    // The same sweep, seen from a session that did not change: its full output
+    // was evicted too, and every sweep rebuilt its before/after (1 to 18 s per
+    // session in production) only to send the same light list again.
+    it(`${twin.name}: an unchanged session outside the output LRU answers from its light copy`, async () => {
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-changes-light-')))
+      const home = path.join(root, 'home')
+      const daemonDir = path.join(root, 'daemon')
+      const repo = path.join(root, 'repo')
+      fs.mkdirSync(repo, { recursive: true })
+      const projectDir = path.join(home, '.claude', 'projects', encodeProjectPathCore(repo))
+      fs.mkdirSync(projectDir, { recursive: true })
+      const sids = Array.from({ length: 15 }, (_, i) => `s-${i}`)
+      for (const sid of sids) {
+        fs.writeFileSync(path.join(projectDir, `${sid}.jsonl`), writeLine(repo, `${sid}.ts`, 'new\n'))
+        fs.writeFileSync(path.join(repo, `${sid}.ts`), 'new\n')
+      }
+
+      await boot(twin, home, daemonDir)
+      const firsts = new Map<string, Record<string, unknown>>()
+      for (const sid of sids) firsts.set(sid, await rpc({ cmd: 'changes.compute', sid, cwd: repo }))
+      // s-0 is the least recent of 15 outputs in a 12-entry LRU: evicted.
+      const again = await rpc({ cmd: 'changes.compute', sid: 's-0', cwd: repo })
+      expect(again).toEqual({ ...firsts.get('s-0'), id: again.id })
+      expect(computeLog(daemonDir, 's-0')).toHaveLength(1)
+
+      // A file click still needs the full content, so it computes once more.
+      const file = await rpc({ cmd: 'changes.file', sid: 's-0', cwd: repo, path: path.join(repo, 's-0.ts') })
+      expect(file).toMatchObject({ found: true, file: { relPath: 's-0.ts', after: 'new\n' } })
+      expect(computeLog(daemonDir, 's-0')).toHaveLength(2)
+
+      // A transcript that moved is never answered from the old copy.
+      fs.appendFileSync(path.join(projectDir, 's-0.jsonl'), writeLine(repo, 's-0b.ts', 'b\n'))
+      fs.writeFileSync(path.join(repo, 's-0b.ts'), 'b\n')
+      const moved = await rpc({ cmd: 'changes.compute', sid: 's-0', cwd: repo })
+      expect((moved.result as { fileCount: number }).fileCount).toBe(2)
+      // And refresh always recomputes.
+      await rpc({ cmd: 'changes.compute', sid: 's-1', cwd: repo, refresh: true })
+      expect(computeLog(daemonDir, 's-1')).toHaveLength(2)
+    }, 90_000)
   }
 })
