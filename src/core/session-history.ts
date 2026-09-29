@@ -653,6 +653,8 @@ interface RawJsonlLine {
   // queue-operation fields (FIFO-injected user messages)
   operation?: string;
   content?: string;
+  /** type='attachment' lines; `queued_command` carries a mid-turn send as the model saw it. */
+  attachment?: { type?: string; prompt?: unknown };
   message?: {
     id?: string;
     role?: string;
@@ -728,6 +730,16 @@ export function transformInjectedUserText(text: string): string | null | undefin
     return `[Teammate${id ? ` ${id}` : ''}] ${body}`;
   }
   return undefined;
+}
+
+/** Text of a `queued_command` attachment's prompt: a string, or a content array
+ *  whose first text block holds it (an image send). */
+function queuedCommandText(prompt: unknown): string | undefined {
+  if (typeof prompt === 'string') return prompt;
+  if (!Array.isArray(prompt)) return undefined;
+  const tb = prompt.find((b): b is { type: 'text'; text: string } =>
+    (b as { type?: string })?.type === 'text' && typeof (b as { text?: unknown }).text === 'string');
+  return tb?.text;
 }
 
 /** CLI-flagged injected user line (not typed by the human). Canonical JSONL:
@@ -980,26 +992,53 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   }
   const skipEnqueueIndices = new Set<number>();
   // ── Removed pass (runs first) ──
-  // A queued message the CLI dropped before running it (a Stop with cancel_queued,
-  // Esc in the CLI's own UI) logs `remove` with the same content and never gets a
-  // user line, so it was never part of the conversation: its enqueue must not become
-  // a Pattern B row. First, so a resend of the same text keeps its own twin.
+  // `remove` means a message left the CLI's queue, for one of two reasons (CLI
+  // query.ts): it ran mid-turn, handed to the model as a `queued_command`
+  // attachment just before the remove, or it was dropped unrun (a Stop with
+  // cancel_queued, Esc in the CLI's own UI) with no attachment and no user line.
+  // Only a dropped one was never part of the conversation, so only its enqueue is
+  // skipped. The one that ran stays a Pattern B row at its enqueue, where it was
+  // sent. Reading every remove as a drop hid 1084 of 1086 mid-turn sends in a local
+  // scan: history lost the message and its Delivered bubble sat below the later
+  // turns (inc-1790637095180). First, so a resend of the same text keeps its twin.
+  const pairedEnqueues = new Set<number>();
+  const claimedAttachments = new Set<number>();
+  /** Enqueues whose twin is their attachment: they must not claim a user line. */
+  const ranMidTurn = new Set<number>();
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
     if (raw.type !== 'queue-operation' || raw.operation !== 'remove' || !raw.content) continue;
-    for (let j = i - 1; j >= 0; j--) {
+    let j = i - 1;
+    for (; j >= 0; j--) {
       const e = rawMessages[j];
       if (e.type === 'queue-operation' && e.operation === 'enqueue' && e.content === raw.content
-        && !skipEnqueueIndices.has(j)) {
-        skipEnqueueIndices.add(j);
+        && !pairedEnqueues.has(j)) break;
+    }
+    if (j < 0) continue;
+    pairedEnqueues.add(j);
+    // The attachment usually precedes the remove, but the two writes race (15 of
+    // 1084 land after it), so look a window past it too, never past a later enqueue
+    // of the same text: that is a resend with its own fate.
+    const wanted = raw.content.trim();
+    const end = Math.min(rawMessages.length, i + 1 + PATTERN_A_LOOKAHEAD);
+    let ran = false;
+    for (let k = j + 1; k < end; k++) {
+      const e = rawMessages[k];
+      if (k > i && e.type === 'queue-operation' && e.operation === 'enqueue' && e.content === raw.content) break;
+      if (claimedAttachments.has(k) || e.type !== 'attachment' || e.attachment?.type !== 'queued_command') continue;
+      if (queuedCommandText(e.attachment.prompt)?.trim() === wanted) {
+        claimedAttachments.add(k);
+        ran = true;
         break;
       }
     }
+    if (ran) ranMidTurn.add(j);
+    else skipEnqueueIndices.add(j);
   }
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
     if (raw.type !== 'queue-operation' || raw.operation !== 'enqueue' || !raw.content) continue;
-    if (skipEnqueueIndices.has(i)) continue;
+    if (skipEnqueueIndices.has(i) || ranMidTurn.has(i)) continue;
     // Claim the earliest not-yet-claimed real user line within the lookahead window whose
     // text matches. Found → Pattern A (skip enqueue). None → Pattern B (emit synthetic msg).
     const wanted = raw.content.trim();
@@ -1033,7 +1072,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
     if (raw.type !== 'queue-operation' || raw.operation !== 'enqueue' || !raw.content) continue;
-    if (skipEnqueueIndices.has(i)) continue;
+    if (skipEnqueueIndices.has(i) || ranMidTurn.has(i)) continue;
     pendingEnqueues.push({ index: i, content: raw.content });
   }
   if (pendingEnqueues.length >= 2) {

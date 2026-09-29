@@ -64,6 +64,8 @@ Claude Code CLI writes JSONL output (one JSON object per line). User messages ap
 
 Server-side parser (`src/core/session-history.ts`): matches enqueue→dequeue pairs (Pattern A skips enqueue, uses the user message that follows). Unmatched enqueues (Pattern B) are synthesized as user messages at their chronological position.
 
+**`remove` has two meanings (CLI 2.1.280).** A send that arrives while a tool runs is handed to the model at the next tool boundary as an `attachment` line of type `queued_command` (its `prompt` is the text, or a content array for an image send), then the CLI logs `queue-operation:remove`. A Stop with `cancel_queued` also logs `remove`, with no attachment. Only the second hides the enqueue; the first stays a Pattern B row at its enqueue. Treating every remove as a drop hid nearly every mid-turn send and left its "Delivered" bubble below the later turns (inc-1790637095180, `tests/core/session-history-queued-command.test.ts`).
+
 ### Optimistic message lifecycle
 
 ```
