@@ -99,20 +99,32 @@ const EMBED_MODELS: Record<string, Omit<EmbedderConfig, 'workerPath'>> = {
 };
 const DEFAULT_EMBED_MODEL = 'qwen3-0.6b';
 
-function resolveEmbedWorkerPath(): string | undefined {
-  const here = path.dirname(fileURLToPath(import.meta.url));
+export function embedWorkerCandidates(
+  here: string,
+  argv1: string | undefined,
+  cwd: string,
+): string[] {
   // Bundled: this module lives inside a dist entry — dist/web/server.js (one
-  // level up from dist/lib) or dist/cli.js (same level: argv[1] candidate).
+  // level up from dist/lib) or dist/cli.js (same level as dist/lib).
   // Un-bundled (tsx/vitest): under src/core/search/. Workers can't run .ts,
   // so every candidate points at the tsup-built dist file.
-  const entryDir = process.argv[1] ? path.dirname(process.argv[1]) : undefined;
-  const candidates = [
+  // argv[1] is only the dist entry when node was given it directly; under an
+  // npm global install it is the bin symlink (/opt/homebrew/bin/open-walnut),
+  // which is why the `here`-relative candidates come first and cover both
+  // entry files on their own.
+  const entryDir = argv1 ? path.dirname(argv1) : undefined;
+  return [
+    path.join(here, 'lib', 'hybrid-search', 'embed-worker.js'),
     path.join(here, '..', 'lib', 'hybrid-search', 'embed-worker.js'),
     ...(entryDir ? [path.join(entryDir, 'lib', 'hybrid-search', 'embed-worker.js')] : []),
     path.join(here, '..', '..', '..', 'dist', 'lib', 'hybrid-search', 'embed-worker.js'),
-    path.join(process.cwd(), 'dist', 'lib', 'hybrid-search', 'embed-worker.js'),
+    path.join(cwd, 'dist', 'lib', 'hybrid-search', 'embed-worker.js'),
   ];
-  return candidates.find((p) => fs.existsSync(p));
+}
+
+function resolveEmbedWorkerPath(): string | undefined {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return embedWorkerCandidates(here, process.argv[1], process.cwd()).find((p) => fs.existsSync(p));
 }
 
 function buildEmbedderConfig(): EmbedderConfig | undefined {
