@@ -19,9 +19,8 @@ import { releaseSelectionHold, requestSelectionHold } from '@/utils/selection-ho
 import { SessionRecapTip } from './SessionRecapTip';
 import { ThreadToastProvider } from './ThreadPanelToast';
 import { ThreadToastBridge } from './ThreadStackFrame';
-import { ThreadDrawerToggle } from './ThreadDrawerToggle';
+import { ThreadModePill } from './ThreadModePill';
 import { ThreadTreeDrawer } from './ThreadTreeDrawer';
-import { ThreadStackMenu } from './ThreadStackMenu';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
 import { SessionRewindDialog } from './SessionRewindDialog';
 import { SessionFileExplorer } from './SessionFileExplorer';
@@ -1937,40 +1936,18 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 : <span className="session-panel-title text-muted">Untitled session</span>
               }
             </div>
-            {/* The questions drawer's button: a FIXED slot right after the flex:1
-                title, so it never moves close / fullscreen; it fades in when the
-                record's questions arrive. Absent for a session without questions. */}
+            {/* The one question control up here: the mode pill (Tree Mode /
+                Conversation Mode). Counts and the list live in the sidebar. */}
             {threads.hasQuestions && (
-              <div className="thread-drawer-toggle-slot">
-                <ThreadDrawerToggle
-                  counts={threads.counts}
-                  expanded={threads.stack.drawer.mode !== 'closed'}
+              <div className="thread-mode-pill-slot">
+                <ThreadModePill
+                  viewMode={threadsApi.viewMode}
                   narrow={threads.stack.panelWidth > 0 && threads.stack.panelWidth < 560}
-                  onToggle={() => threads.stack.drawer.setMode(threads.stack.drawer.mode === 'closed' ? 'open' : 'closed')}
+                  onToggle={() => threadsApi.setViewMode(threadsApi.viewMode === 'linear' ? 'stack' : 'linear')}
                 />
               </div>
             )}
             <div className="session-panel-title-meta">
-              {/* The root page's question menu (Show all in order / hidden
-                  questions), where the view toggle used to be. Only with questions. */}
-              {/* Below the root the menu gives way to a same-size blank slot, so the
-                  drawer toggle and the pills beside it never shift between depths. */}
-              {!loading && threads.hasQuestions && threads.stack.api.depth > 0 && threadsApi.actions && (
-                <span className="thread-stack-more-slot" aria-hidden="true" />
-              )}
-              {!loading && threads.hasQuestions && threads.stack.api.depth === 0 && threadsApi.actions && (
-                <ThreadStackMenu
-                  variant="root"
-                  visibleDescendants={0}
-                  hiddenCount={threads.hiddenCount}
-                  viewMode={threadsApi.viewMode}
-                  actions={threadsApi.actions}
-                  onShowInTree={threadsApi.revealInTree}
-                  onShowAllInOrder={() => threadsApi.setViewMode('linear')}
-                  onBackToQuestions={() => threadsApi.setViewMode('stack')}
-                  onShowHidden={() => { threads.stack.drawer.setShowHidden(true); threads.stack.drawer.open('all'); }}
-                />
-              )}
               {!loading && session?.provider === 'embedded' && (
                 <span
                   className="session-panel-badge"
@@ -2417,9 +2394,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             revealNonce={threads.stack.drawer.revealNonce}
             showHidden={threads.stack.drawer.showHidden}
             setShowHidden={threads.stack.drawer.setShowHidden}
+            hiddenCount={threads.hiddenCount}
             actions={threadsApi.actions}
             onNavigate={(key, via) => {
-              if (threadsApi.viewMode !== 'stack') threadsApi.setViewMode('stack');
+              // Conversation Mode: the row is the composer's target and the
+              // timeline goes to its first turn, the view stays. Tree Mode: its page.
+              if (threadsApi.viewMode === 'linear') { threadsApi.requestHeadJump(key); return; }
               threads.stack.api.pushTo(key, via);
             }}
             onJumpPin={(pinKey, threadKey) => threadsApi.requestPinJump(pinKey, threadKey)}

@@ -1,0 +1,192 @@
+/**
+ * Question numbers and the `[Qn]` reply tag (web/src/utils/question-tag.ts).
+ *
+ * The tag is how an answer says which question it belongs to, so the cases
+ * here are the ones that used to lose an answer: a turn whose user row lost
+ * its pre-assigned uuid (resume fallback), two sends merged into one turn, a
+ * reply that opens with bold or a blank line before the tag. Filing by tag
+ * has to beat Walnut's turn-order guess in every one of them, and a tag for a
+ * question that does not exist has to change nothing.
+ */
+import { describe, it, expect } from 'vitest';
+import {
+  QUESTION_BANNER_RE, headsBySeq, keysBySeq, nextQuestionSeq, parseQuestionTag,
+  questionBanner, questionBannerName, questionNumbers, stripQuestionTag,
+  tagKeyOfBlocks, withQuestionBanner, withTagAnchors,
+} from '@/utils/question-tag';
+import { buildThreadTree, threadKeyOf, ROOT_THREAD_KEY } from '@/utils/thread-tree';
+import type { ThreadTreeMessage } from '@/utils/thread-tree';
+import { indexMeta } from '@/utils/thread-meta';
+import type { SessionThreadAnchor, SessionThreadMeta } from '@/types/session';
+
+const user = (msgId: string, text = `q ${msgId}`): ThreadTreeMessage => ({ role: 'user', msgId, text });
+const reply = (msgId: string, text = `a ${msgId}`): ThreadTreeMessage => ({ role: 'assistant', msgId, text });
+const anchor = (msgId: string, parent: string, extra: Partial<SessionThreadAnchor> = {}): SessionThreadAnchor =>
+  ({ msgId, parent, source: 'selection', at: '2026-09-03T10:00:00Z', ...extra });
+const meta = (headId: string, extra: Partial<SessionThreadMeta> = {}): SessionThreadMeta =>
+  ({ headId, status: 'open', updatedAt: '2026-09-03T10:00:00Z', ...extra });
+
+describe('parseQuestionTag / stripQuestionTag', () => {
+  it('reads the tag at the start of a reply and strips exactly that line', () => {
+    expect(parseQuestionTag('[Q4]\nThe answer.')).toEqual({ seq: 4, rest: 'The answer.' });
+    expect(stripQuestionTag('[Q4]\nThe answer.')).toBe('The answer.');
+    // Same line, with a colon or a space inside the brackets.
+    expect(parseQuestionTag('[Q 12]: yes')?.seq).toBe(12);
+    expect(stripQuestionTag('[Q 12]: yes')).toBe('yes');
+  });
+
+  it('allows bold markers and leading blank lines, the way models actually write it', () => {
+    expect(parseQuestionTag('**[Q2]**\n\nBody')).toEqual({ seq: 2, rest: 'Body' });
+    expect(parseQuestionTag('\n\n[Q7]\nBody')?.seq).toBe(7);
+    expect(parseQuestionTag('__[Q3]__ Body')).toEqual({ seq: 3, rest: 'Body' });
+  });
+
+  it('leaves everything else alone', () => {
+    expect(parseQuestionTag('Sure. [Q4] is what you asked')).toBeNull();
+    expect(parseQuestionTag('[Q0]\nzero is not a question')).toBeNull();
+    expect(parseQuestionTag('[Question 4]\nnot the tag')).toBeNull();
+    expect(parseQuestionTag('')).toBeNull();
+    expect(parseQuestionTag(undefined)).toBeNull();
+    const plain = 'No tag here.\n[Q4] later on';
+    expect(stripQuestionTag(plain)).toBe(plain);
+  });
+
+  it('keeps the body verbatim after the tag (markdown, code, blank lines inside)', () => {
+    const body = '```ts\nconst a = 1;\n```\n\nSecond paragraph.';
+    expect(stripQuestionTag(`[Q9]\n${body}`)).toBe(body);
+  });
+});
+
+describe('questionBanner', () => {
+  it('uses the repo banner shape so existing readers fold it, and names the tag to write', () => {
+    const b = questionBanner(4);
+    expect(b.startsWith('[Question Q4]\n')).toBe(true);
+    expect(b.endsWith('\n[/Question Q4]')).toBe(true);
+    expect(b).toContain('"[Q4]"');
+    expect(QUESTION_BANNER_RE.test(questionBannerName(4))).toBe(true);
+    expect(QUESTION_BANNER_RE.test('Question Q')).toBe(false);
+    expect(QUESTION_BANNER_RE.test('Walnut')).toBe(false);
+  });
+
+  it('puts the banner before the user text, separated by a blank line', () => {
+    const sent = withQuestionBanner('Why does this fail?', 2);
+    expect(sent).toBe(`${questionBanner(2)}\n\nWhy does this fail?`);
+  });
+});
+
+describe('questionNumbers / nextQuestionSeq / keysBySeq', () => {
+  const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3'), user('u4'), reply('r4')];
+
+  it('numbers legacy questions by transcript order and keeps a stored seq', () => {
+    const anchors = [anchor('u2', 'r1'), anchor('u3', 'r1', { quote: { exact: 'x' } }), anchor('u4', 'r2')];
+    const tree = buildThreadTree(messages, anchors);
+    // u4 was asked with the field present; u2 and u3 predate it.
+    const index = indexMeta([meta('u4', { seq: 7 })]);
+    const numbers = questionNumbers(tree, index);
+    expect(numbers.get(threadKeyOf({ parent: 'r1' }))).toBe(1);
+    expect(numbers.get(threadKeyOf({ parent: 'r1', quote: { exact: 'x' } }))).toBe(2);
+    expect(numbers.get(threadKeyOf({ parent: 'r2' }))).toBe(7);
+    expect(numbers.has(ROOT_THREAD_KEY)).toBe(false);
+    expect(nextQuestionSeq(tree, index)).toBe(8);
+    expect(keysBySeq(numbers).get(7)).toBe(threadKeyOf({ parent: 'r2' }));
+  });
+
+  it('the next number clears every stored seq, including one whose question is outside the window', () => {
+    const tree = buildThreadTree(messages, [anchor('u2', 'r1')]);
+    const list = [meta('u2', { seq: 3 }), meta('gone-head', { seq: 11 })];
+    expect(nextQuestionSeq(tree, indexMeta([meta('u2', { seq: 3 })]), list)).toBe(12);
+    // No questions at all: the first one is 1.
+    expect(nextQuestionSeq(buildThreadTree(messages, []), indexMeta([]))).toBe(1);
+  });
+});
+
+describe('withTagAnchors', () => {
+  const q1 = anchor('u2', 'r1', { quote: { exact: 'passage' } });
+
+  it('files a turn under the question its first answer text names, user row included', () => {
+    // u3 was sent as a follow-up on question 1 but its uuid was lost (resume
+    // fallback): no anchor. The reply carries [Q1].
+    const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3', '[Q1]\nmore on it')];
+    const out = withTagAnchors(messages, [q1], headsBySeq([meta('u2', { seq: 1 })]));
+    expect(out).toHaveLength(2);
+    const extra = out.find((a) => a.msgId === 'u3')!;
+    expect(extra).toMatchObject({ parent: 'r1', quote: { exact: 'passage' }, source: 'manual' });
+    const tree = buildThreadTree(messages, out);
+    const key = threadKeyOf({ parent: 'r1', quote: { exact: 'passage' } });
+    expect(tree.byRow.get('u3')?.key).toBe(key);
+    expect(tree.byRow.get('r3')?.key).toBe(key);
+  });
+
+  it('overrides the turn-order anchor when the tag names another question', () => {
+    // Two questions sent quickly; Walnut guessed the second reply was for u3,
+    // the model says it answers question 1.
+    const q2 = anchor('u3', 'r2');
+    const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3', '**[Q1]**\nanswer one')];
+    const out = withTagAnchors(messages, [q1, q2], headsBySeq([meta('u2', { seq: 1 }), meta('u3', { seq: 2 })]));
+    expect(out.filter((a) => a.msgId === 'u3')).toHaveLength(1);
+    expect(out.find((a) => a.msgId === 'u3')).toMatchObject({ parent: 'r1', quote: { exact: 'passage' } });
+  });
+
+  it('changes nothing when the tag agrees, is unknown, or names a later question', () => {
+    const heads = headsBySeq([meta('u2', { seq: 1 }), meta('u4', { seq: 2 })]);
+    const agree = [user('u1'), reply('r1'), user('u2'), reply('r2', '[Q1]\nok')];
+    const agreeAnchors = [q1];
+    // Same array instance back: the tree memo sees no change.
+    expect(withTagAnchors(agree, agreeAnchors, heads)).toBe(agreeAnchors);
+    // A number no question has.
+    const unknown = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3', '[Q9]\n?')];
+    expect(withTagAnchors(unknown, [q1], heads)).toHaveLength(1);
+    // The named question is asked AFTER this turn: an answer cannot precede its question.
+    const later = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3', '[Q2]\n?'), user('u4'), reply('r4')];
+    const q2Later = anchor('u4', 'r3');
+    expect(withTagAnchors(later, [q1, q2Later], heads)).toHaveLength(2);
+    // No numbered questions at all: the input array comes back as is.
+    const anchors = [q1];
+    expect(withTagAnchors(agree, anchors, new Map())).toBe(anchors);
+  });
+
+  it('reads only the FIRST answer text of a turn; tool rows and empty texts are skipped', () => {
+    const messages = [
+      user('u1'), reply('r1'), user('u2'), reply('r2'),
+      user('u3'), reply('r3a', ''), reply('r3b', '[Q1]\nfirst text'), reply('r3c', '[Q2]\nlater text'),
+    ];
+    const heads = headsBySeq([meta('u2', { seq: 1 }), meta('u9', { seq: 2 })]);
+    const out = withTagAnchors(messages, [q1, anchor('u9', 'r2')], heads);
+    expect(out.find((a) => a.msgId === 'u3')).toMatchObject({ parent: 'r1' });
+  });
+
+  it('a synthetic anchor never reaches the tree twice: the tagged turn keeps one row entry', () => {
+    const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3', '[Q1]\nx')];
+    const out = withTagAnchors(messages, [q1], headsBySeq([meta('u2', { seq: 1 })]));
+    const tree = buildThreadTree(messages, out);
+    // Question 1 owns u2, r2, u3, r3; nothing new was created.
+    expect(tree.threads.filter((t) => t.key !== ROOT_THREAD_KEY)).toHaveLength(1);
+    expect(tree.threads[1].turnIds).toEqual(['u2', 'u3']);
+    expect(tree.byRow.get('r3')?.key).toBe(tree.threads[1].key);
+  });
+});
+
+describe('tagKeyOfBlocks', () => {
+  const keyBySeq = new Map([[1, 'k1'], [2, 'k2']]);
+  const text = (content: string, parentToolUseId?: string) => ({ type: 'text', content, parentToolUseId });
+
+  it('resolves the first main-lane text block of the run', () => {
+    const blocks = [{ type: 'thinking', content: 'hm' }, text('[Q2]\nans'), text('[Q1]\nlater')];
+    expect(tagKeyOfBlocks(blocks, 0, blocks.length, keyBySeq)).toBe('k2');
+  });
+
+  it('skips subagent-lane text, tool calls and empty text; null without a tag', () => {
+    const blocks = [text('[Q1]\nlane', 'tool-9'), { type: 'tool_call', content: '' }, text('   '), text('plain answer')];
+    expect(tagKeyOfBlocks(blocks, 0, blocks.length, keyBySeq)).toBeNull();
+    // Unknown number: null too (fall back to the turn's own guess).
+    expect(tagKeyOfBlocks([text('[Q5]\nx')], 0, 1, keyBySeq)).toBeNull();
+    // A partial tag mid-stream ("[Q" not yet closed) is not a tag yet.
+    expect(tagKeyOfBlocks([text('[Q')], 0, 1, keyBySeq)).toBeNull();
+  });
+
+  it('honours the [from, to) window', () => {
+    const blocks = [text('[Q1]\nfirst turn'), text('[Q2]\nsecond turn')];
+    expect(tagKeyOfBlocks(blocks, 1, 2, keyBySeq)).toBe('k2');
+    expect(tagKeyOfBlocks(blocks, 2, 5, keyBySeq)).toBeNull();
+  });
+});

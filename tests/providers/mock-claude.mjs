@@ -319,10 +319,29 @@ let slowDelayMs = 0;
 let effectiveMessage = message;
 let chunkDelayMs = 0;
 let resultText = '';
+// Walnut opens some sends with machine banners (`[Name]\n…\n[/Name]`): a
+// question's send carries `[Question Q<n>]`, which asks the reply to begin with
+// the line `[Q<n>]`. Peel the banners off before the test prefixes (slow:,
+// chunk-delay:) are matched, and answer the tag the way a real model does, so
+// the client's tag-based filing runs in these fixtures too.
+let questionSeq = null;
+function stripBanners(text) {
+  questionSeq = null;
+  let body = text;
+  for (;;) {
+    const m = body.match(/^\s*\[([^\]\n]+)\]\n[\s\S]*?\n\[\/\1\]\s*/);
+    if (!m) break;
+    const q = m[1].match(/^Question Q(\d+)$/);
+    if (q) questionSeq = Number(q[1]);
+    body = body.slice(m[0].length);
+  }
+  return body;
+}
 function computeMessageParts() {
   slowDelayMs = 0;
-  effectiveMessage = message;
-  const slowMatch = message.match(/^slow:(\d+)\s+(.*)/);
+  const bare = stripBanners(message);
+  effectiveMessage = bare;
+  const slowMatch = bare.match(/^slow:(\d+)\s+(.*)/);
   if (slowMatch) {
     slowDelayMs = parseInt(slowMatch[1], 10);
     effectiveMessage = slowMatch[2];
@@ -347,7 +366,8 @@ function computeMessageParts() {
   const modelPart = modelFlag ? ` [model:${modelFlag}]` : '';
   const effortPart = effortFlag ? ` [effort:${effortFlag}]` : '';
   const bypassCapabilityPart = dangerouslySkipPermissions ? ' [dangerously-skip-permissions:true]' : '';
-  resultText = `Hello! I processed your message: ${effectiveMessage}${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
+  const tagPart = questionSeq ? `[Q${questionSeq}]\n` : '';
+  resultText = `${tagPart}Hello! I processed your message: ${effectiveMessage}${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
 }
 computeMessageParts();
 

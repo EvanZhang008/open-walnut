@@ -70,21 +70,21 @@ export function pluralQuestions(n: number): string {
   return `${n} ${n === 1 ? 'question' : 'questions'}`;
 }
 
-/** Questions still to settle: open plus look answered (the Open filter lists
+/** Questions still to settle: open plus to check (the Open filter lists
  *  both kinds, the toggle's `All done` needs both at zero). */
 export function openChipCount(c: ThreadCounts): number {
   return c.open + c.suggested;
 }
 
-/** `9 open, 4 look answered` when some look answered, else undefined (the Open
+/** `9 open, 4 to check` when some to check, else undefined (the Open
  *  chip's tooltip, N43). */
 export function openChipTitle(c: ThreadCounts): string | undefined {
-  return c.suggested > 0 ? `${c.open} open, ${c.suggested} look answered` : undefined;
+  return c.suggested > 0 ? `${c.open} open, ${c.suggested} to check` : undefined;
 }
 
 /**
  * The drawer toggle's text (the list icon is an SVG sibling, not part of this):
- * `3 open`, `3 open · 2 look answered`, `All done`. Narrow keeps a word on its
+ * `3 open`, `3 open · 2 to check`, `All done`. Narrow keeps a word on its
  * one number (bare `3 · 2` said nothing, N28): `3 open`, or `2 to check` when
  * every open question looks answered; the tooltip carries the full text.
  */
@@ -92,7 +92,7 @@ export function toggleLabel(c: ThreadCounts, opts: { narrow?: boolean } = {}): s
   if (c.open + c.suggested === 0) return 'All done';
   if (c.suggested === 0) return `${c.open} open`;
   if (opts.narrow) return c.open > 0 ? `${c.open} open` : `${c.suggested} to check`;
-  return `${c.open} open · ${c.suggested} look answered`;
+  return `${c.open} open · ${c.suggested} to check`;
 }
 
 /** The drawer shortcut as text. Spelled out, never the Shift arrow glyph: it
@@ -109,12 +109,12 @@ export function toggleTitle(c: ThreadCounts, opts: { mac?: boolean; narrow?: boo
   return dropped ? `${toggleLabel(c)}. All questions (${key})` : `All questions (${key})`;
 }
 
-/** Drawer summary: `3 open · 2 look answered · 5 done · 4 pinned`, zero
+/** Drawer summary: `3 open · 2 to check · 5 done · 4 pinned`, zero
  *  segments omitted; empty string when every segment is zero. */
 export function summaryText(c: ThreadCounts): string {
   const parts: string[] = [];
   if (c.open) parts.push(`${c.open} open`);
-  if (c.suggested) parts.push(`${c.suggested} look answered`);
+  if (c.suggested) parts.push(`${c.suggested} to check`);
   if (c.done) parts.push(`${c.done} done`);
   if (c.pinned) parts.push(`${c.pinned} pinned`);
   return parts.join(' · ');
@@ -122,7 +122,7 @@ export function summaryText(c: ThreadCounts): string {
 
 /** Filter chip labels (`All <n>` · `Open <n>` · `Pinned <n>`). `Open` counts
  *  the same set the toggle and the summary call open (N43: one meaning of
- *  "open" per screen); the filter also lists the ones that look answered, each
+ *  "open" per screen); the filter also lists the ones that to check, each
  *  labelled so, and the chip's tooltip names both numbers. */
 export function chipCounts(c: ThreadCounts): { all: number; open: number; pinned: number } {
   return { all: c.all, open: c.open, pinned: c.pinned };

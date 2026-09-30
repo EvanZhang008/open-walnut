@@ -39,7 +39,10 @@ const LAZY_NAME_CONCURRENCY = 2;
  *  renders it once per crossing, not per pixel). */
 const DRAWER_WIDTH_TIERS = [420] as const;
 /** Clicks here are not "outside" (portals the drawer's own actions open). */
-const OUTSIDE_EXEMPT = `${THREAD_OVERLAY_SELECTOR}, .quote-pin-pill, .thread-menu, .thread-drawer-toggle`;
+const OUTSIDE_EXEMPT = `${THREAD_OVERLAY_SELECTOR}, .quote-pin-pill, .thread-menu`;
+/** Where focus goes back to after a close when the opener is unknown: the map's
+ *  list button (panel shape) or its rail (the map's one tab stop when narrow). */
+const MAP_OPENER = '.thread-map .thread-map-icon[aria-label="Open the question list"], .thread-map .thread-map-rail';
 
 /** Filter, search and fold state per session, for the panel's lifetime
  *  (closing the drawer keeps it; a reload starts fresh). */
@@ -135,9 +138,12 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
   const close = useCallback((restoreFocus = true) => {
     setMode('closed');
     if (!restoreFocus) return;
-    const back = opener.current;
+    // The rail's list button unmounts with its card the moment the drawer opens,
+    // so an opener that is gone hands focus to whatever the map shows now.
+    const remembered = opener.current;
+    const back = remembered && document.contains(remembered) ? remembered : panelRef.current?.querySelector<HTMLElement>(MAP_OPENER) ?? null;
     const active = document.activeElement;
-    if (back && document.contains(back) && (!active || active === document.body || drawerRef.current?.contains(active))) {
+    if (back && (!active || active === document.body || drawerRef.current?.contains(active))) {
       // WebKit never matches :focus-visible on a programmatic focus, so a
       // keyboard close marks the opener itself: its ring stays until it blurs.
       if (drawerRef.current?.dataset.kb === 'true') markKeyboardFocus(back);
@@ -157,10 +163,10 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
     }
     setVisible(true);
     if (was === 'closed') {
-      // WebKit never focuses a clicked button, so a click on the toggle leaves
-      // focus on <body>: the toggle is then the element to give focus back to.
+      // WebKit never focuses a clicked button, so a click on the map's list
+      // button leaves focus on <body>: the map is then the element to give focus back to.
       const active = document.activeElement;
-      const toggle = panelRef.current?.querySelector<HTMLElement>('.thread-drawer-toggle') ?? null;
+      const toggle = panelRef.current?.querySelector<HTMLElement>(MAP_OPENER) ?? null;
       opener.current = active instanceof HTMLElement && active !== document.body && !drawerRef.current?.contains(active) ? active : toggle;
       expandTo(p.currentKey);
       // Until a filter is picked, it follows the rule (Open when anything is open).
@@ -291,6 +297,16 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
             <ThreadCloseIcon size={12} />
           </button>
         </div>
+        {/* Removed questions come back through the drawer (the root More menu
+            that used to offer this is gone): a row under All, like the older row. */}
+        {p.hiddenCount > 0 && !p.showHidden && filter === 'all' && (
+          <div className="thread-drawer-hidden">
+            <span>{p.hiddenCount === 1 ? '1 hidden question' : `${p.hiddenCount} hidden questions`}</span>
+            <button type="button" className="thread-tree-text-btn" onClick={() => p.setShowHidden(true)}>
+              {`Show hidden questions (${p.hiddenCount})`}
+            </button>
+          </div>
+        )}
         {olderKeys.length > 0 && (
           <div className="thread-drawer-older">
             <span>{pluralQuestions(olderKeys.length).replace(/question/, 'older question')}</span>

@@ -4,11 +4,11 @@
  * fixture (30 questions over 5 levels, 10 pins), reset before every test, in
  * Chromium and WebKit (the Mac app is WKWebView).
  *
- * Checklist: C7, C27, C28, C29, C31, C32, C37, C38, C45, C48, C56, C63, C67, C75.
+ * Checklist: C7, C27, C28, C29, C31, C32, C37, C38, C45, C56, C63, C67, C75 (C48, the header count bump, left with the count pill).
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
-  DENSE_SESSION, REWRITTEN_SESSION, openThreadsSession, readRecord, resetThreadsFixture, noBannedGlyphs,
+  DENSE_SESSION, REWRITTEN_SESSION, openThreadsSession, readRecord, resetThreadsFixture, noBannedGlyphs, modePill, openQuestionList,
 } from './threads-helpers'
 import { DENSE_EXPECTED_COUNTS } from './threads-fixture'
 
@@ -24,7 +24,7 @@ async function openDense(page: Page, opts: { width?: number; sessionId?: string;
   await page.goto('/')
   if (opts.width) await pinPanelWidth(page, sessionId, opts.width)
   const panel = await openThreadsSession(page, sessionId, opts.taskId ?? TASK)
-  await expect(panel.locator('.thread-drawer-toggle')).toBeVisible({ timeout: 30_000 })
+  await expect(modePill(panel)).toBeVisible({ timeout: 30_000 })
   await settled(panel)
   return panel
 }
@@ -48,8 +48,7 @@ const rowTitled = (panel: Locator, title: string) =>
   panel.locator('.thread-tree-row').filter({ has: panel.page().locator('.thread-tree-title', { hasText: title }) })
 
 async function openDrawer(panel: Locator): Promise<Locator> {
-  await panel.locator('.thread-drawer-toggle').click()
-  const drawer = drawerOf(panel)
+  const drawer = await openQuestionList(panel.page(), panel)
   await expect(drawer).toHaveAttribute('data-mode', 'open')
   // Geometry is measured after the 160ms slide-in, never mid-animation.
   await drawer.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
@@ -75,22 +74,30 @@ test.describe('tree drawer', () => {
   for (const width of [480, 1400]) {
     test(`opening the drawer never changes the transcript box at ${width}px (C7, C27)`, async ({ page }) => {
       const panel = await openDense(page, { width })
-      const toggle = panel.locator('.thread-drawer-toggle')
+      const pill = modePill(panel)
       const c = DENSE_EXPECTED_COUNTS
-      // Narrow tier keeps the word and drops the second number (N28: `9 · 4` said nothing).
-      await expect(toggle).toHaveText(new RegExp(`^(${c.open} open · ${c.suggested} look answered|${c.open} open)$`))
-      await expect(toggle.locator('svg[data-thread-icon="list"]')).toHaveCount(1)
+      // The header holds the mode pill alone; the counts live in the map. The
+      // map's count keeps the word and drops the second number (N28: `9 · 4` said nothing).
+      // These specs open in Tree Mode, so the pill offers Conversation Mode.
+      await expect(pill).toHaveText(width < 560 ? '' : 'Conversation Mode')
+      await expect(pill).toHaveAttribute('title', 'Switch to Conversation Mode')
+      const map = panel.locator('.thread-map')
+      if (width >= 640) await expect(map.locator('.thread-map-count')).toHaveText(`${c.open} open`)
       const history = panel.locator('.session-history').first()
       // A 1400px panel is wider than the viewport: Playwright's click scrolls the
-      // columns to reach the toggle, so bring it into view before measuring.
-      await toggle.scrollIntoViewIfNeeded()
+      // columns to reach the map's list button (top left of the timeline), so
+      // bring that into view before measuring.
+      if (width >= 640) await map.locator('.thread-map-icon[aria-label="Open the question list"]').scrollIntoViewIfNeeded()
+      else await pill.scrollIntoViewIfNeeded()
       await settled(panel)
-      const before = await box(history)
+      // The box's place INSIDE its panel: the columns strip may scroll sideways
+      // to reach a control of a panel wider than the viewport, which moves both.
+      const before = { ...(await box(history)), px: (await box(panel)).x }
       const drawer = await openDrawer(panel)
-      const after = await box(history)
+      const after = { ...(await box(history)), px: (await box(panel)).x }
       // Float noise below a layout unit (1/64 px) is not a change; anything real is.
       expect(Math.abs(after.width - before.width)).toBeLessThan(0.01)
-      expect(Math.abs(after.x - before.x)).toBeLessThan(0.01)
+      expect(Math.abs((after.x - after.px) - (before.x - before.px))).toBeLessThan(0.01)
       expect(after.padLeft).toBe(before.padLeft)
       const d = await box(drawer)
       const pb = await box(panel)
@@ -98,7 +105,6 @@ test.describe('tree drawer', () => {
       expect(d.right).toBeLessThanOrEqual(pb.right)
       const expectW = pb.width < 420 ? pb.width - 24 : Math.min(300, pb.width - 56)
       expect(Math.abs(d.width - expectW)).toBeLessThanOrEqual(1)
-      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
       await noBannedGlyphs(page, drawer)
     })
   }
@@ -108,10 +114,9 @@ test.describe('tree drawer', () => {
     // Focus inside the panel (the router picks the focused panel first).
     await panel.locator('textarea').first().click()
     // The chord follows the PAGE's platform (the Desktop Chrome device reports
-    // Windows even on a Mac host), and the toggle's tooltip names the same one.
-    const title = await panel.locator('.thread-drawer-toggle').getAttribute('title')
-    expect(title).toMatch(/All questions \((Cmd|Ctrl)\+Shift\+E\)$/)
-    const chord = title!.includes('Cmd') ? 'Meta+Shift+E' : 'Control+Shift+E'
+    // Windows even on a Mac host), the way usePanelKeyRouter reads it.
+    const mac = await page.evaluate(() => /mac|iphone|ipad/i.test((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform ?? navigator.userAgent))
+    const chord = mac ? 'Meta+Shift+E' : 'Control+Shift+E'
     await page.keyboard.press(chord)
     const drawer = drawerOf(panel)
     await expect(drawer).toHaveAttribute('data-mode', 'open')
@@ -215,9 +220,9 @@ test.describe('tree drawer', () => {
     const c = DENSE_EXPECTED_COUNTS
     await expect(await chip(drawer, 'All')).toHaveText(`All ${c.all}`)
     // N43: `Open` counts what the summary calls open; the filter also lists the
-    // ones that look answered, and the chip's tooltip says so.
+    // ones that to check, and the chip's tooltip says so.
     await expect(await chip(drawer, 'Open')).toHaveText(`Open ${c.open}`)
-    await expect(await chip(drawer, 'Open')).toHaveAttribute('title', `${c.open} open, ${c.suggested} look answered`)
+    await expect(await chip(drawer, 'Open')).toHaveAttribute('title', `${c.open} open, ${c.suggested} to check`)
     await expect(await chip(drawer, 'Pinned')).toHaveText(`Pinned ${c.pinned}`)
     await (await chip(drawer, 'Open')).click()
     const matched = drawer.locator('.thread-tree-row[data-kind="thread"]:not([data-ancestor-only])')
@@ -232,7 +237,7 @@ test.describe('tree drawer', () => {
     await drawer.locator('.thread-drawer-search-input').fill('point')
     await expect(await chip(drawer, 'Pinned')).toHaveText(`Pinned ${c.pinned}`)
     await expect(await chip(drawer, 'All')).toHaveText(`All ${c.all}`)
-    await expect(drawer.locator('.thread-drawer-summary')).toHaveText(`${c.open} open · ${c.suggested} look answered · ${c.done} done · ${c.pinned} pinned`)
+    await expect(drawer.locator('.thread-drawer-summary')).toHaveText(`${c.open} open · ${c.suggested} to check · ${c.done} done · ${c.pinned} pinned`)
   })
 
   test('first open lands on Open, the choice is remembered, done rows fold per parent (C67)', async ({ page }) => {
@@ -257,9 +262,10 @@ test.describe('tree drawer', () => {
 
   test('Show hidden questions opens the Hidden group and Restore brings one back (C45)', async ({ page, request }) => {
     const panel = await openDense(page)
-    await panel.locator('.thread-stack-more').first().click()
-    await page.locator('.thread-menu [role="menuitem"]', { hasText: 'Show hidden questions (3)' }).click()
-    const drawer = drawerOf(panel)
+    // The offer lives in the drawer, under All (the root More menu is gone).
+    const drawer = await openDrawer(panel)
+    await (await chip(drawer, 'All')).click()
+    await drawer.getByRole('button', { name: 'Show hidden questions (3)' }).click()
     await expect(drawer.locator('.thread-tree-group-label')).toHaveText('Hidden')
     const hidden = drawer.locator('.thread-tree-row[data-kind="hidden"]')
     await expect(hidden).toHaveCount(3)
@@ -298,13 +304,15 @@ test.describe('tree drawer', () => {
   }
 
   test('opens under 100ms and each search key is handled within a frame (C38)', async ({ page }) => {
-    const panel = await openDense(page)
+    const panel = await openDense(page, { width: 900 })
     // Warm the drawer once (module code, first layout), then time a real open.
     await openDrawer(panel)
     await page.keyboard.press('Escape')
     await expect(drawerOf(panel)).toHaveCount(0)
+    // The map's list button (the panel shape shows it outright).
+    await expect(panel.locator('.thread-map')).toHaveAttribute('data-shape', 'panel')
     const openMs = await panel.evaluate(async (root) => {
-      const btn = root.querySelector<HTMLButtonElement>('.thread-drawer-toggle')!
+      const btn = root.querySelector<HTMLButtonElement>('.thread-map-icon[aria-label="Open the question list"]')!
       const t0 = performance.now()
       btn.click()
       while (!root.querySelector('.thread-drawer .thread-tree-row')) await new Promise((r) => requestAnimationFrame(r))
@@ -341,9 +349,9 @@ test.describe('tree drawer', () => {
       inFlight.max = Math.max(inFlight.max, inFlight.now)
     })
     page.on('requestfinished', (r) => { if (r.method() === 'PATCH' && r.url().includes(DENSE_SESSION) && inFlight.now > 0) inFlight.now -= 1 })
-    const panel = await openDense(page)
+    const panel = await openDense(page, { width: 900 })
     const c = DENSE_EXPECTED_COUNTS
-    await expect(panel.locator('.thread-drawer-toggle')).toHaveText(new RegExp(`^${c.open} `))
+    await expect(panel.locator('.thread-map .thread-map-count')).toHaveText(new RegExp(`^${c.open} `))
     const drawer = await openDrawer(panel)
     await (await chip(drawer, 'All')).click()
     await expect(drawer.locator('.thread-tree-row[data-status="older"]').first()).toBeVisible()
@@ -361,53 +369,22 @@ test.describe('tree drawer', () => {
       .toBeGreaterThanOrEqual(1)
   })
 
-  test('the count pill bumps once on change, never under reduced motion (C48)', async ({ page }) => {
-    const panel = await openDense(page)
-    // Record every bump the moment it mounts (the class lives ~200ms).
-    await panel.locator('.thread-drawer-toggle').evaluate((btn) => {
-      const seen: Array<{ name: string; duration: string; label: string }> = []
-      ;(window as unknown as { __bumps: typeof seen }).__bumps = seen
-      new MutationObserver(() => {
-        const el = btn.querySelector('.thread-drawer-toggle-count--bump')
-        if (el && !(el as HTMLElement).dataset.seen) {
-          ;(el as HTMLElement).dataset.seen = '1'
-          const cs = getComputedStyle(el)
-          seen.push({ name: cs.animationName, duration: cs.animationDuration, label: el.textContent ?? '' })
-        }
-      }).observe(btn, { childList: true, subtree: true, attributes: true })
-    })
-    const bumps = () => page.evaluate(() => (window as unknown as { __bumps: Array<{ name: string; duration: string; label: string }> }).__bumps)
-    const drawer = await openDrawer(panel)
-    const row = rowTitled(drawer, 'Buffer flush order')
-    await row.hover()
-    await row.getByRole('button', { name: 'Mark done' }).click()
-    // It has open follow-ups: the drawer asks first, like the header (N20).
-    const confirm = page.locator('.thread-confirm')
-    await expect(confirm).toContainText(/Also mark \d+ follow-ups? done\?/)
-    await confirm.getByRole('button', { name: 'Only this one' }).click()
-    await expect.poll(async () => (await bumps()).map((b) => b.label)).toHaveLength(1)
-    expect((await bumps())[0]).toMatchObject({ name: 'thread-count-bump', duration: '0.2s' })
-    await page.emulateMedia({ reducedMotion: 'reduce' })
-    await row.hover()
-    await row.getByRole('button', { name: 'Reopen' }).click()
-    await expect.poll(async () => (await bumps()).length).toBe(2)
-    expect((await bumps())[1].name).toBe('none')
-  })
-
   test('`1 open` to `All done` moves nothing in the header (C75)', async ({ page }) => {
-    const panel = await openDense(page, { sessionId: REWRITTEN_SESSION, taskId: 'pw-task-threads-rewritten' })
-    const toggle = panel.locator('.thread-drawer-toggle')
-    await expect(toggle).toHaveText('1 open')
-    const header = toggle.locator('xpath=..')
+    const panel = await openDense(page, { sessionId: REWRITTEN_SESSION, taskId: 'pw-task-threads-rewritten', width: 900 })
+    const pill = modePill(panel)
+    const count = panel.locator('.thread-map .thread-map-count')
+    await expect(count).toHaveText('1 open')
+    const header = panel.locator('.session-panel-header')
     const xs = () => header.evaluate((el) => Array.from(el.querySelectorAll('button')).map((b) => Math.round(b.getBoundingClientRect().right)))
-    const before = { toggle: await box(toggle), xs: await xs() }
+    const before = { pill: await box(pill), xs: await xs() }
     const drawer = await openDrawer(panel)
     const row = rowTitled(drawer, 'Cache expiry claim')
     await row.hover()
     await row.getByRole('button', { name: 'Mark done' }).click()
-    await expect(toggle).toHaveText('All done')
-    await expect(toggle).toHaveAttribute('data-all-done', 'true')
-    expect((await box(toggle)).width).toBe(before.toggle.width)
+    // The count changes in the map; the header keeps every button where it was.
+    await expect(count).toHaveText('All done')
+    await expect(count).toHaveAttribute('data-all-done', 'true')
+    expect((await box(pill)).width).toBe(before.pill.width)
     expect(await xs()).toEqual(before.xs)
   })
 })

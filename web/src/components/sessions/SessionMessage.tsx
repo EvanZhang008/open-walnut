@@ -25,6 +25,7 @@ import { detectOutboundSend } from './session-outbound';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { SessionOutboundCard } from './SessionOutboundCard';
 import { splitLeadingBanners } from './injected-banner';
+import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
 import { SearchAnswerCard } from './SearchAnswerCard';
@@ -1029,7 +1030,10 @@ function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionH
 
 
 export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
-  const { role, text, timestamp, tools: rawTools, thinking } = message;
+  const { role, text: rawText, timestamp, tools: rawTools, thinking } = message;
+  // A reply's `[Q<n>]` tag names its question (question-tag.ts); the label above
+  // the turn shows the number, so the line itself never renders.
+  const text = role === 'assistant' ? stripQuestionTag(rawText ?? '') : rawText;
   const tools = suppressTools ? undefined : rawTools;
   const time = formatTime(timestamp);
   const isUser = role === 'user';
@@ -1085,10 +1089,17 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   // adoptable ("Open as session"). It is not bracket-fenced, so the banner scan
   // cannot find it; recognizing it produces the same split, which leaves the
   // QUERY as the bubble and folds the prompt into one disclosure row.
-  const bannerSplit = useMemo(
-    () => (isUser && text ? (searchPromptBannerSplit(text) ?? splitLeadingBanners(text)) : null),
-    [isUser, text],
-  );
+  const bannerSplit = useMemo(() => {
+    if (!isUser || !text) return null;
+    const split = searchPromptBannerSplit(text) ?? splitLeadingBanners(text);
+    if (!split) return null;
+    // The question-number banner (`[Question Q4]`) asks the model for its reply
+    // tag; the turn label and the sidebar already show the number, so the
+    // bubble drops it rather than folding it (a fold per bubble was the noise
+    // the label replaced).
+    const banners = split.banners.filter((b) => !QUESTION_BANNER_RE.test(b.name));
+    return banners.length === split.banners.length ? split : { ...split, banners };
+  }, [isUser, text]);
   const bodyText = bannerSplit ? bannerSplit.body : text;
 
   // …and its ANSWER is a JSON object, usually with the model's own reasoning

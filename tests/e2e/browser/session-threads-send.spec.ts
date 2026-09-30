@@ -20,7 +20,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, FAILED_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage,
+  centreInHistory, DENSE_SESSION, FAILED_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList,
 } from './threads-helpers'
 import { FAILED_ERROR_TEXT, FAILED_PASSAGES, PARKED_FOLLOW_UP, densePassage } from './threads-fixture'
 
@@ -101,7 +101,8 @@ async function mapEntry(panel: Locator): Promise<{ entry: Locator; rail: boolean
 }
 async function expectMapUnread(panel: Locator, on: boolean): Promise<void> {
   const { entry, rail } = await mapEntry(panel)
-  if (!rail) await expect(entry.locator('.thread-map-unread')).toHaveCount(on ? 1 : 0, { timeout: 60_000 })
+  // The panel row says `New` (a status word, no colour dot) while the newest answer is unseen.
+  if (!rail) await expect(entry.locator('.thread-status-word[data-kind="new"]')).toHaveCount(on ? 1 : 0, { timeout: 60_000 })
   else if (on) await expect(entry).toHaveAttribute('data-unread', 'true', { timeout: 60_000 })
   else await expect(entry).not.toHaveAttribute('data-unread', 'true')
 }
@@ -208,7 +209,7 @@ test.describe('Question stack: asking and sending', () => {
     await page.keyboard.press('Escape')
     await expectDepth(panel, 0)
     await expect(askedRows(panel)).toHaveCount(1)
-    await expect(panel.locator('.thread-drawer-toggle')).toBeVisible()
+    await expect(modePill(panel)).toBeVisible()
 
     // A selection that only overlaps opens a new, unwritten page.
     await askAbout(page, panel, 'rewrites the index')
@@ -267,7 +268,7 @@ test.describe('Question stack: asking and sending', () => {
     await expect(composer(panel)).toHaveValue('half a root thought')
     const draftRow = panel.locator('.thread-asked-row.is-draft')
     await expect(draftRow).toHaveText(/New question \(draft\)/)
-    await panel.locator('.thread-drawer-toggle').click()
+    await openQuestionList(page, panel)
     await expect(panel.locator('.thread-drawer .thread-tree-row[data-kind="draft"]')).toHaveCount(1)
     await page.keyboard.press('Escape')
     await expect(panel.locator('.thread-drawer')).toBeHidden()
@@ -345,7 +346,7 @@ test.describe('Question stack: asking and sending', () => {
     // follow-up's question is pinned by the test above).
     await expect(rows.nth(0).locator('.thread-asked-state--failed')).toHaveText(/No answer · Retry/)
     await expect(rows.nth(0)).toHaveAttribute('data-status', 'failed')
-    await panel.locator('.thread-drawer-toggle').click()
+    await openQuestionList(page, panel)
     const failedTreeRows = panel.locator('.thread-drawer .thread-tree-row[data-status="failed"]')
     await expect(failedTreeRows.first()).toBeVisible()
     await expect(failedTreeRows.first().locator('.thread-status-dot-error')).toHaveCount(1)

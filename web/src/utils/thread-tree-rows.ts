@@ -23,6 +23,7 @@ import {
 import { pinThreadKey } from '@/utils/thread-meta-counts';
 import { pinKeyOf } from '@/hooks/useSessionPins';
 import { hitSnippet, matchRanges, windowOnMatch, type MatchRange } from '@/utils/thread-search-window';
+import { questionNumbers } from '@/utils/question-tag';
 
 export { hitSnippet, matchRanges, segmentsOf } from '@/utils/thread-search-window';
 
@@ -41,6 +42,9 @@ export interface TreeRow {
   depth: number;
   parentRowId?: string;
   hue: number;
+  /** The question's number (thread rows): what the sidebar, the turn label and
+   *  the model's `[Q<n>]` tag call it. */
+  number?: number;
   status?: ThreadViewStatus;
   title: string;
   naming?: boolean;
@@ -135,7 +139,7 @@ export function secondaryOf(node: ThreadNode, index: ThreadMetaIndex, status: Th
     case 'queued': return 'Waiting…';
     case 'failed': return 'No answer · Retry';
     case 'answering': return 'Answering…';
-    case 'suggested': return 'Looks answered';
+    case 'suggested': return 'To check';
     default: return questionLine(node, index);
   }
 }
@@ -164,6 +168,7 @@ interface Ctx {
   hidden: Set<string>;
   pinsByThread: Map<string, SessionPinnedMessage[]>;
   openBelow: Map<string, number>;
+  numbers: Map<string, number>;
   /** Filtering: the keys (threads) and pin keys that stay, ancestors included. */
   keep?: Set<string>;
   keepPins?: Set<string>;
@@ -260,8 +265,10 @@ function pushThreadRow(c: Ctx, node: ThreadNode, depth: number, parentRowId: str
   }
   if (c.q && pass) secondary = windowOnMatch(secondary, c.q, 64);
   const titleShown = c.q && pass ? windowOnMatch(title, c.q, 44) : title;
+  const number = c.numbers.get(node.key);
   const row: TreeRow = {
     id: `t:${node.key}`, kind: 'thread', key: node.key, depth, parentRowId, hue: node.hue, status, title, naming, secondary,
+    ...(number !== undefined ? { number } : {}),
     ...(titleShown !== title ? { titleShown } : {}),
     titleMatches: c.q ? matchRanges(titleShown, c.q) : undefined,
     secondaryMatches: c.q ? matchRanges(secondary, c.q) : undefined,
@@ -441,6 +448,7 @@ export function flattenTree(
   const c: Ctx = {
     tree, index, live, opts, q, hidden, pinsByThread, rows: [], matchCount: 0,
     openBelow: openBelowAll(tree, index, hidden),
+    numbers: questionNumbers(tree, index),
   };
   const filtering = q !== '' || opts.filter !== 'all';
   if (filtering) computeKeep(c);

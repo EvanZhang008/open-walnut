@@ -52,17 +52,17 @@ describe('counts (the one count function, spec 7.3)', () => {
   it('header, summary and chips read the same numbers', () => {
     const { s, tree, index } = dense();
     const c = counts(tree, index, s.pinnedMessages);
-    expect(toggleLabel(c)).toBe(`${c.open} open · ${c.suggested} look answered`);
+    expect(toggleLabel(c)).toBe(`${c.open} open · ${c.suggested} to check`);
     expect(toggleLabel(c, { narrow: true })).toBe(`${c.open} open`);
     expect(toggleLabel({ ...c, open: 0 }, { narrow: true })).toBe(`${c.suggested} to check`);
     // N29: the tooltip is the spec text; only a narrow label that dropped a count leads with the full text.
     expect(toggleTitle(c, { mac: true })).toBe('All questions (Cmd+Shift+E)');
-    expect(toggleTitle(c, { mac: true, narrow: true })).toBe(`${c.open} open · ${c.suggested} look answered. All questions (Cmd+Shift+E)`);
-    expect(summaryText(c)).toBe(`${c.open} open · ${c.suggested} look answered · ${c.done} done · ${c.pinned} pinned`);
+    expect(toggleTitle(c, { mac: true, narrow: true })).toBe(`${c.open} open · ${c.suggested} to check. All questions (Cmd+Shift+E)`);
+    expect(summaryText(c)).toBe(`${c.open} open · ${c.suggested} to check · ${c.done} done · ${c.pinned} pinned`);
     // N43: the Open chip counts the same `open` as the toggle and the summary;
     // its tooltip names both numbers.
     expect(chipCounts(c)).toEqual({ all: c.all, open: c.open, pinned: c.pinned });
-    expect(openChipTitle(c)).toBe(`${c.open} open, ${c.suggested} look answered`);
+    expect(openChipTitle(c)).toBe(`${c.open} open, ${c.suggested} to check`);
     expect(openChipTitle({ ...c, suggested: 0 })).toBeUndefined();
   });
 

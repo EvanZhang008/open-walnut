@@ -16,8 +16,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  AI_SESSION, centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, noBannedGlyphs, openThreadsSession, passageRects,
-  selectPassage, sessionPanel,
+  AI_SESSION, centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, noBannedGlyphs, openThreadsSession, passageRects, selectPassage, sessionPanel, modePill, openQuestionList, switchView,
 } from './threads-helpers'
 import {
   AI_PASSAGE, buildMapSession, MAP_PASSAGES, MAP_PIN_QUOTE_TEXT, MAP_SESSION, MAP_TITLES, PINS_ONLY_READY, PINS_ONLY_SESSION,
@@ -199,8 +198,7 @@ test.describe('Question map', () => {
 
     // C4: the same rows, in the same order, as the drawer's All view.
     const mapTitles = await map.locator('.thread-map-row .thread-map-label').allInnerTexts()
-    await panel.locator('.thread-drawer-toggle').click()
-    const drawer = panel.locator('.thread-drawer')
+    const drawer = await openQuestionList(page, panel)
     await expect(drawer).toHaveAttribute('data-mode', 'open')
     await drawer.locator('.thread-drawer-chip', { hasText: 'All' }).click()
     const drawerTitles = await drawer.locator('.thread-tree-row .thread-tree-title').allInnerTexts()
@@ -321,34 +319,34 @@ test.describe('Question map', () => {
     await expect(back).toHaveCount(0)
   })
 
-  test('Show all in order keeps the map; a row opens its page in the stack (C8)', async ({ page }) => {
+  test('Conversation Mode keeps the map; a row makes that question the target and goes to its turn (C8)', async ({ page }) => {
     const panel = await openAt(page, WIDE)
-    await panel.locator('.session-panel-title-meta .thread-stack-more').click()
-    await page.locator('.thread-menu [role="menuitem"]', { hasText: 'Show all in order' }).click()
-    await expect(panel.locator('.thread-linear-banner')).toBeVisible()
+    await switchView(panel, 'linear')
     const map = mapOf(panel)
     await expect(map).toHaveAttribute('data-shape', 'panel')
-    await expect(map.locator('.thread-map-row[aria-current="page"]')).toHaveCount(0)
-    // The gutter bars of Show all in order run beside the text, clear of the map.
+    // The composer's target starts on the main conversation.
+    await expect(rowNamed(map, 'Main conversation')).toHaveAttribute('aria-current', 'page')
+    // The turn rules of Conversation Mode run beside the text, clear of the map.
     const bar = panel.locator('.session-msg--threaded').first()
     await centreInHistory(page, panel, bar, { capRow: true })
     const body = await rectOf(map.locator('.thread-map-body'))
     expect((await rectOf(bar)).left).toBeGreaterThanOrEqual(body.right)
     await shot(page, 'wide-linear')
     await rowNamed(map, MAP_TITLES.Q4).click()
-    await expect(panel.locator('.thread-linear-banner')).toHaveCount(0)
-    await expectDepth(panel, 1)
+    // Still Conversation Mode: no question page opened, the row is the target.
+    await expect(modePill(panel)).toHaveAttribute('data-view-mode', 'linear')
+    await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
     await expect(rowNamed(map, MAP_TITLES.Q4)).toHaveAttribute('aria-current', 'page')
+    await expect(panel.locator(`.session-msg--threaded[data-message-id="${MAP_IDS.Q4.u}"]`)).toHaveAttribute('data-thread-current', 'true')
+    await expect(panel.locator('.thread-turn-label[data-current="true"]')).toContainText(MAP_TITLES.Q4)
   })
 
-  test('Show all in order at 480px: a gutter bar stands clear of the rail, and a press on it jumps without opening the list', async ({ page }) => {
+  test('Conversation Mode at 480px: a turn rule stands clear of the rail, and a press on it jumps without opening the list', async ({ page }) => {
     const panel = await openAt(page, NARROW)
     const map = mapOf(panel)
     const rail = map.locator('.thread-map-rail')
     await expect(map).toHaveAttribute('data-shape', 'rail')
-    await panel.locator('.session-panel-title-meta .thread-stack-more').click()
-    await page.locator('.thread-menu [role="menuitem"]', { hasText: 'Show all in order' }).click()
-    await expect(panel.locator('.thread-linear-banner')).toBeVisible()
+    await switchView(panel, 'linear')
     // Q2's bar: its passage sits in the first answer, far above its own rows.
     const bar = panel.locator(`.session-msg--threaded[data-message-id="${MAP_IDS.Q2.u}"]`)
     await centreInHistory(page, panel, bar, { capRow: true })
@@ -592,8 +590,7 @@ test.describe('Question map', () => {
     const box = (await panel.locator('.session-history').boundingBox())!
     expect(body.bottom).toBeLessThanOrEqual(box.y + box.height)
     // The last question in the tree, through the drawer: the map scrolls to it.
-    await panel.locator('.thread-drawer-toggle').click()
-    const drawer = panel.locator('.thread-drawer')
+    const drawer = await openQuestionList(page, panel)
     await drawer.locator('.thread-drawer-chip', { hasText: 'All' }).click()
     const last = drawer.locator('.thread-tree-row[data-kind="thread"]').last()
     const title = (await last.locator('.thread-tree-title').innerText()).trim()
@@ -667,11 +664,13 @@ test.describe('Question map', () => {
     await expect(overlay).toBeVisible()
     expect(await overlay.evaluate((el) => getComputedStyle(el).animationName)).toBe('none')
     const count = overlay.locator('.thread-map-count')
-    // The fixture has 5 open and 1 that looks answered: the narrow form drops the second.
+    // The fixture has 5 open and 1 to check: the narrow form drops the second.
     await expect(count).toHaveText('5 open')
-    await expect(count).toHaveAttribute('title', '5 open \u00b7 1 look answered')
-    const pill = panel.locator('.thread-drawer-toggle')
-    await expect(pill).toContainText('5 open')
+    await expect(count).toHaveAttribute('title', '5 open \u00b7 1 to check')
+    // The header carries no count any more: the pill alone, naming the other
+    // view (icon only at this width, the label is its tooltip).
+    await expect(modePill(panel)).toHaveAttribute('title', 'Switch to Conversation Mode')
+    await expect(panel.locator('.session-panel-header')).not.toContainText('5 open')
   })
 
   test('dark theme: the map reads on the dark background (C13, C29)', async ({ page }) => {

@@ -14,7 +14,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, openThreadsSession, passageRects, resetThreadsFixture, selectPassage,
+  centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, openQuestionList,
 } from './threads-helpers'
 import { densePassage } from './threads-fixture'
 
@@ -92,9 +92,7 @@ test.describe('Question stack review fixes', () => {
     const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
     await expectDepth(panel, 0)
     // A root pin from the drawer's Pinned filter: the quote pinned on R2 (Q5's passage).
-    await panel.locator('.thread-drawer-toggle').click()
-    const drawer = panel.locator('.thread-drawer')
-    await expect(drawer).toBeVisible()
+    const drawer = await openQuestionList(page, panel)
     await drawer.locator('.thread-drawer-chip', { hasText: 'Pinned' }).click()
     const pinRow = drawer.locator('.thread-tree-row[data-kind="pin"]', { hasText: densePassage('Q5').slice(0, 24) })
     await expect(pinRow).toBeVisible()

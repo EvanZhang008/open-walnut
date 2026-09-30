@@ -113,6 +113,11 @@ export interface SessionThreadsApi {
   pinJump: { pinKey: string; seq: number } | null;
   /** Go to the pin's page (through the stack), then land on the pin + flash. */
   requestPinJump: (pinKey: string, threadKey: string) => void;
+  /** Conversation Mode: a question picked outside the timeline (the drawer). The
+   *  timeline lands on the question's first turn; the stack already holds it as
+   *  the composer's target. */
+  headJump: { threadKey: string; seq: number } | null;
+  requestHeadJump: (threadKey: string) => void;
   /**
    * Is a real store behind this api? FALSE for the stub, and the gate for every
    * Ask affordance: a timeline mounted without a session record to PATCH (the
@@ -168,6 +173,8 @@ const EMPTY: SessionThreadsApi = {
   retry: NOOP,
   pinJump: null,
   requestPinJump: NOOP,
+  headJump: null,
+  requestHeadJump: NOOP,
   canAsk: false,
 };
 

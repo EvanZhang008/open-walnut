@@ -17,6 +17,9 @@
  *  - pw-threads-map-session: the question map's realistic density (8 questions,
  *    3 levels, CJK titles, 2 pins, a table and a code block).
  *  - pw-threads-pins-only-session: 2 pins and no question (the map stays away).
+ *  - pw-threads-tagged-session: replies that carry the `[Qn]` question tag,
+ *    including two turns the anchors file wrongly or not at all (a lost uuid,
+ *    a merged send) that the tag has to put right.
  * All text is invented, neutral filler.
  */
 
@@ -33,7 +36,7 @@ export const THREAD_AI_STUB_PREFIX = 'pw-threads-ai-';
 export const NO_THREAD_SESSION = 'pw-outline-window-session';
 
 export interface FixtureAnchor { msgId: string; parent: string; quote?: { exact: string; prefix?: string; suffix?: string }; source: 'selection' | 'sticky' | 'manual'; at: string }
-export interface FixtureMeta { headId: string; status: 'open' | 'suggested' | 'resolved' | 'older'; title?: string; titleSource?: 'ai' | 'user'; titleState?: 'pending' | 'done' | 'failed' | 'unavailable'; question?: string; takeaway?: string; takeawaySource?: 'fallback' | 'user' | 'ai'; takeawayState?: 'pending' | 'done' | 'failed'; hidden?: boolean; suggestDismissed?: boolean; updatedAt: string }
+export interface FixtureMeta { headId: string; status: 'open' | 'suggested' | 'resolved' | 'older'; title?: string; titleSource?: 'ai' | 'user'; titleState?: 'pending' | 'done' | 'failed' | 'unavailable'; question?: string; takeaway?: string; takeawaySource?: 'fallback' | 'user' | 'ai'; takeawayState?: 'pending' | 'done' | 'failed'; hidden?: boolean; suggestDismissed?: boolean; seq?: number; updatedAt: string }
 export interface FixturePin { msgId: string; label: string; role: 'user' | 'assistant' | 'system'; pinnedAt: string; timestamp?: string; id?: string; quote?: { exact: string } }
 export interface FixtureRow { role: 'user' | 'assistant'; uuid: string; text: string; isApiError?: boolean }
 
@@ -429,12 +432,73 @@ export function buildPinsOnlySession(nowMs: number): ThreadsFixtureSession {
   };
 }
 
+export const TAGGED_SESSION = 'pw-threads-tagged-session';
+export const TAGGED_TASK = 'pw-task-threads-tagged';
+export const TAGGED_READY = 'Explain how the flush order is decided.';
+export const TAGGED_PASSAGE = 'The oldest dirty page goes first unless a newer one holds the same slot.';
+export const TAGGED_TITLES = { Q1: 'Flush order', Q2: 'Slot ownership' } as const;
+/** Each turn's text opens with a distinct phrase a spec can find rows by. */
+export const TAGGED_TEXT = {
+  q1: 'Why does the oldest page go first?',
+  a1: 'Because age is the only order every worker agrees on.',
+  lost: 'And when two pages are the same age?',
+  aLost: 'Then the lower slot number wins the tie.',
+  root: 'Back on the main line: what does the reader do meanwhile?',
+  aRoot: 'The reader keeps serving the last checksummed copy.',
+  q2: 'Who owns a slot while it is being flushed?',
+  a2: 'The flusher owns it until the checksum is written.',
+  merged: 'Does the tie rule also cover a page from another worker?',
+  aMerged: 'Yes: the tie rule looks only at slot numbers, never at workers.',
+} as const;
+
+/**
+ * Replies carry the `[Q<n>]` tag. Two turns are filed wrongly by the anchors
+ * alone: `lost` has no anchor (its pre-assigned uuid did not survive a resume
+ * fallback), and `merged` is anchored to question 2 by Walnut's send-order
+ * guess while its reply says `[Q1]`. Both belong to question 1.
+ */
+export function buildTaggedSession(nowMs: number): ThreadsFixtureSession & { ids: Record<string, { u: string; a: string }> } {
+  const P = 'a1b2c3';
+  const t = (k: number) => ({ u: fxUuid(P, k, 'u'), a: fxUuid(P, k, 'a') });
+  const ids = { R1: t(1), Q1: t(2), LOST: t(3), ROOT: t(4), Q2: t(5), MERGED: t(6) };
+  const T = TAGGED_TEXT;
+  const rows: FixtureRow[] = [
+    { role: 'user', uuid: ids.R1.u, text: TAGGED_READY },
+    { role: 'assistant', uuid: ids.R1.a, text: `${filler(201, 60)}\n\n${TAGGED_PASSAGE} ${filler(202, 60)}` },
+    { role: 'user', uuid: ids.Q1.u, text: `> ${TAGGED_PASSAGE}\n\n${T.q1}` },
+    { role: 'assistant', uuid: ids.Q1.a, text: `[Q1]\n${T.a1} ${filler(203, 40)}` },
+    { role: 'user', uuid: ids.LOST.u, text: T.lost },
+    { role: 'assistant', uuid: ids.LOST.a, text: `[Q1]\n${T.aLost} ${filler(204, 40)}` },
+    { role: 'user', uuid: ids.ROOT.u, text: T.root },
+    { role: 'assistant', uuid: ids.ROOT.a, text: `${T.aRoot} ${filler(205, 40)}` },
+    { role: 'user', uuid: ids.Q2.u, text: T.q2 },
+    { role: 'assistant', uuid: ids.Q2.a, text: `**[Q2]**\n\n${T.a2} ${filler(206, 40)}` },
+    { role: 'user', uuid: ids.MERGED.u, text: T.merged },
+    { role: 'assistant', uuid: ids.MERGED.a, text: `[Q1]\n${T.aMerged} ${filler(207, 40)}` },
+  ];
+  const at = (k: number) => new Date(nowMs - 2_000_000 + k * 1000).toISOString();
+  return {
+    sessionId: TAGGED_SESSION, taskId: TAGGED_TASK, title: 'Threads tagged fixture session',
+    rows, parked: [], pinnedMessages: [], ids,
+    threadAnchors: [
+      { msgId: ids.Q1.u, parent: ids.R1.a, quote: { exact: TAGGED_PASSAGE }, source: 'selection', at: at(1) },
+      { msgId: ids.Q2.u, parent: ids.R1.a, source: 'selection', at: at(2) },
+      // Walnut's guess: the send after question 2 was a follow-up on it.
+      { msgId: ids.MERGED.u, parent: ids.R1.a, source: 'sticky', at: at(3) },
+    ],
+    threadMeta: [
+      { headId: ids.Q1.u, status: 'open', title: TAGGED_TITLES.Q1, titleSource: 'ai', titleState: 'done', seq: 1, updatedAt: at(1) },
+      { headId: ids.Q2.u, status: 'open', title: TAGGED_TITLES.Q2, titleSource: 'ai', titleState: 'done', seq: 2, updatedAt: at(2) },
+    ],
+  };
+}
+
 // ── Output shapes test-server.ts writes ──
 
 export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
     buildDenseSession(nowMs), buildAiSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
-    buildMapSession(nowMs), buildPinsOnlySession(nowMs),
+    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs),
   ];
 }
 

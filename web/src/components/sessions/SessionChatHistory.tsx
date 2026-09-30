@@ -34,8 +34,9 @@ import {
 import { ThreadStackFrame, ThreadMarkTipLayer } from './ThreadStackFrame';
 import { ThreadQuoteHead } from './ThreadQuoteHead';
 import { ThreadAskedFromList } from './ThreadAskedFromList';
-import { ThreadLinearBanner } from './ThreadLinearBanner';
 import { ThreadStackHeader } from './ThreadStackHeader';
+import { ThreadTurnLabel } from './ThreadTurnLabel';
+import { headsBySeq, keysBySeq, questionNumbers, tagKeyOfBlocks, withTagAnchors } from '@/utils/question-tag';
 import { ThreadResolvedStrip } from './ThreadResolvedStrip';
 import { useThreadToast } from './ThreadPanelToast';
 import { useThreadLanding } from '@/hooks/useThreadLanding';
@@ -1091,10 +1092,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       : withPendingUserRows<ThreadTreeMessage>(messages, optimisticMessages)),
     [messages, optimisticMessages, threadsApi.anchors],
   );
-  const threadTree = useMemo(
-    () => buildThreadTree(threadRows, threadsApi.anchors),
-    [threadRows, threadsApi.anchors],
+  // A reply that opens with `[Q<n>]` files its whole turn under question n
+  // (question-tag.ts): synthetic anchors, client only, so the tree, the stats
+  // and every row's key agree without reading the tag twice.
+  const headBySeq = useMemo(() => headsBySeq([...threadsApi.metaIndex.values()]), [threadsApi.metaIndex]);
+  const tagAnchors = useMemo(
+    () => (threadsApi.anchors.length === 0 ? threadsApi.anchors : withTagAnchors(threadRows as ThreadTreeMessage[], threadsApi.anchors, headBySeq)),
+    [threadRows, threadsApi.anchors, headBySeq],
   );
+  const threadTree = useMemo(
+    () => buildThreadTree(threadRows, tagAnchors),
+    [threadRows, tagAnchors],
+  );
+  const questionNumber = useMemo(() => questionNumbers(threadTree, threadsApi.metaIndex), [threadTree, threadsApi.metaIndex]);
+  const keyBySeq = useMemo(() => keysBySeq(questionNumber), [questionNumber]);
   // Publish it to the panel (composer chip + the send path's "is this the newest
   // thread?" question). A session with anchors gets a fresh tree per history
   // change, so this costs the panel one extra render per refetch and converges
@@ -1106,14 +1117,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const historyComplete = !loading && !phase2Pending && olderHidden === 0 && !olderWindowed;
   useEffect(() => { publishTree(threadTree, historyComplete); }, [publishTree, threadTree, historyComplete]);
 
-  /** The stack view (default) vs Show all in order. Only a session WITH
+  /** Tree Mode (the stack) vs Conversation Mode (the default). Only a session WITH
    *  questions (or an Ask pending) has a stack; one without renders exactly as
    *  before. */
   const stack = threadsApi.stack;
   const hasQuestions = threadTree.threads.length > 1 || !!stack.pending || stack.draftPages.length > 0;
   const stackMode = threadsApi.viewMode === 'stack' && hasQuestions;
-  const linearWithQuestions = threadsApi.viewMode === 'linear' && threadTree.threads.length > 1;
+  /** Conversation Mode with questions: every turn in order, each question's
+   *  turns labelled; the stack path is the composer's target, never a filter. */
+  const convMode = threadsApi.viewMode === 'linear' && hasQuestions;
   const currentKey = stackMode ? stack.currentKey : ROOT_THREAD_KEY;
+  /** The question the composer posts into (both views). */
+  const targetKey = hasQuestions ? stack.currentKey : ROOT_THREAD_KEY;
   const onQuestionPage = stackMode && currentKey !== ROOT_THREAD_KEY;
   // A question page owns its scroll (restored or landed by useThreadLanding): the
   // initial-load "always to the bottom" never overrides it; following does.
@@ -1133,11 +1148,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    *  transcript does (the id IS the uuid we pre-assigned for that line). */
   const anchorByRowId = useMemo(() => {
     const map = new Map<string, SessionThreadAnchor>();
-    for (const a of threadsApi.anchors) {
+    for (const a of tagAnchors) {
       if (a?.msgId && a.parent) map.set(a.msgId, a);
     }
     return map;
-  }, [threadsApi.anchors]);
+  }, [tagAnchors]);
 
   /**
    * Thread of ONE row: the tree's answer first, the anchor's second.
@@ -1213,9 +1228,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /** Ask on a passage (the pill): the stack pushes a pending page in this frame,
    *  or the question already about this passage. Nothing is written yet. */
   const askAboutQuote = useCallback((target: QuotePinTarget) => {
-    if (threadsApi.viewMode !== 'stack') threadsApi.setViewMode('stack');
+    // Either view: in Conversation Mode the pending question is the composer's
+    // target and the timeline stays as it is.
     stack.ask({ msgId: target.msgId, quote: target.quote });
-  }, [threadsApi, stack]);
+  }, [stack]);
 
   /** Titles as every question surface shows them (AI title, else the fallback). */
   const titleOfKey = useCallback((key: string): string => {
@@ -1447,7 +1463,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }, [pinJump?.seq, currentKey]);
 
   /**
-   * Show all in order: the click on a row's gutter bar lands on the PASSAGE its
+   * Conversation Mode: the click on a turn's rule lands on the PASSAGE its
    * question hangs off (the reply the user selected in and pressed Ask).
    * Resolved from the tree when it knows the question, else from the row's own
    * anchor (a just-sent bubble, before history has absorbed it).
@@ -1474,7 +1490,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }, [jumpToThreadOrigin]);
 
   /**
-   * Row wrapper props. Show all in order: a question's rows wear the 3px hue
+   * Row wrapper props. Conversation Mode: a question's rows wear the grey
    * gutter bar (continuous across every wrapper kind), which is also the way
    * back to the passage. A stack page shows one question, so no bar; its head
    * row is marked so the page hides the quote block the quote head already shows.
@@ -1493,10 +1509,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return {
       className: `${baseClass ? `${baseClass} ` : ''}session-msg--threaded`,
       'data-thread-row-depth': info.depth,
-      style: { ['--thread-hue' as string]: info.hue } as React.CSSProperties,
+      'data-thread-current': info.key === targetKey ? 'true' : undefined,
       onClick: (e: React.MouseEvent<HTMLDivElement>) => onThreadBarClick(e, info.key, rowId),
     };
-  }, [rowThreadInfo, stackMode, currentKey, onThreadBarClick]);
+  }, [rowThreadInfo, stackMode, currentKey, targetKey, onThreadBarClick]);
 
   // Scroll handler: track whether user is near bottom.
   // Ignores scroll events caused by container resizes (which corrupt isAtBottom).
@@ -2563,6 +2579,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Suppressed whenever the session has visible content — see history-unavailable.ts.
   const historyUnavailable = visibleHistoryUnavailable(error, hasContent);
 
+  /** Finished live turns and their pages (recorded below, read above it). */
+  const turnSegmentsRef = useRef<readonly StreamTurnSegment[]>([]);
+
   /** Question of an optimistic bubble: its pre-assigned uuid, when it has one. */
   const optimisticThreadKey = (m: OptimisticMessage): string =>
     rowThreadKey(m.msgId ?? m.userUuid ?? m.walnutMessageId);
@@ -2577,8 +2596,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    * three Asks sent during one answer would otherwise pull that answer onto the
    * last one's page (C49). With nothing running, the oldest queued row is next.
    */
+  // The turn's own tag wins over every guess below: the first text block of the
+  // live turn (blocks after the last finished turn) opening with `[Q<n>]`.
+  const liveTurnStart = turnSegmentsRef.current.length > 0 ? turnSegmentsRef.current[turnSegmentsRef.current.length - 1].end : 0;
+  const liveTagKey = hasQuestions ? tagKeyOfBlocks(blocks, liveTurnStart, blocks.length, keyBySeq) : null;
   const liveStreamKey = (() => {
     if (!hasQuestions) return ROOT_THREAD_KEY;
+    if (liveTagKey !== null) return liveTagKey;
     let nextQueued: OptimisticMessage | undefined;
     for (let i = deduped.length - 1; i >= 0; i--) {
       const m = deduped[i];
@@ -2598,7 +2622,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // delivered bubble, else the newest persisted user row. Render-phase refs, idempotent: an owner is taken only when
   // a new segment is actually recorded.
   const turnBook = useRef<TurnBook>(newTurnBook());
-  const turnSegments = useRef<readonly StreamTurnSegment[]>([]);
+  const turnSegments = turnSegmentsRef;
   if (stackMode) {
     const book = turnBook.current;
     // Keyed by the row's own identity, never the queue id: a bubble's queue id
@@ -2644,6 +2668,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     turnSegments.current = [];
     turnBook.current = newTurnBook();
   }, [sessionId]);
+
+  /** The page a live block renders on: its finished turn's tag, else that turn's
+   *  recorded owner, else the live turn's key (tag first, see liveStreamKey). */
+  const pageKeyOfBlock = (index: number): string => {
+    const segs = turnSegments.current;
+    let from = 0;
+    for (const seg of segs) {
+      if (index < seg.end) {
+        const tagged = tagKeyOfBlocks(blocks, from, seg.end, keyBySeq);
+        return tagged ?? blockPageKey(segs, index, streamThreadKey);
+      }
+      from = seg.end;
+    }
+    return streamThreadKey;
+  };
 
   // The page's own rows: the SAME parts, filtered by row identity.
   const visibleHistoryParts = stackMode
@@ -2742,7 +2781,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     live: threadDerived.live,
     ...(stack.pending ? { pending: stack.pending } : {}),
     drafts: stack.drafts,
-    currentKey: stackMode ? currentKey : null,
+    currentKey: hasQuestions ? targetKey : null,
     doneGroupsOpen: mapDoneOpen,
   }, () => isAtBottom.current);
   const mapCounts = useMemo(
@@ -2764,13 +2803,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         if (row.pinKey) handleTocJump(row.pinKey);
         return;
       case 'root': case 'thread': case 'pending': case 'draft':
+        // Conversation Mode: the row is the composer's target, and the timeline
+        // goes to that question's first turn. Tree Mode: its page.
+        if (convMode) {
+          const node = threadTree.byKey.get(row.key);
+          if (!row.current) stack.pushTo(row.key, 'map');
+          if (row.kind === 'thread' && node) jumpToPlace(node.headId, undefined, 'map-row');
+          return;
+        }
         if (row.current) return;
-        if (threadsApi.viewMode !== 'stack') threadsApi.setViewMode('stack');
         stack.pushTo(row.key, 'map');
         return;
       default:
     }
-  }, [handleTocJump, threadsApi, stack]);
+  }, [handleTocJump, stack, convMode, threadTree, jumpToPlace]);
   const openMapList = useCallback(() => threadsApi.openDrawer(), [threadsApi]);
   const markDoneFromRow = useCallback((key: string) => { void threadsApi.actions?.done(key); }, [threadsApi.actions]);
   const notYetFromRow = useCallback((key: string) => { void threadsApi.actions?.notYet(key); }, [threadsApi.actions]);
@@ -2791,6 +2837,41 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   useThreadLanding({
     sessionId, enabled: stackMode, containerRef, stack, tree: threadTree, locatePassage, jumpToPlace, toast, isAtBottom,
   });
+
+  /** Conversation Mode: the label above a question's user row (the turn head). */
+  const selectTarget = useCallback((key: string) => { stack.pushTo(key, 'label'); }, [stack]);
+  const turnLabelFor = (rowId: string | undefined, role: string): React.ReactNode => {
+    if (!convMode || role !== 'user' || !rowId) return null;
+    const info = rowThreadInfo(rowId);
+    if (!info || info.depth < 1) return null;
+    const node = threadTree.byKey.get(info.key);
+    const t = displayTitleOf(node, threadsApi.metaIndex);
+    return (
+      <ThreadTurnLabel
+        threadKey={info.key}
+        number={questionNumber.get(info.key)}
+        title={t.title}
+        naming={t.naming}
+        status={node ? viewStatusOf(node, threadsApi.metaIndex, threadDerived.live) : undefined}
+        unread={threadsApi.unreadKeys.has(info.key)}
+        current={info.key === targetKey}
+        onSelect={selectTarget}
+      />
+    );
+  };
+
+  // A drawer row picked in Conversation Mode: land on the question's first turn
+  // (the stack already made it the target). Once per request, like a pin jump.
+  const headJump = threadsApi.headJump;
+  const headJumpLandedRef = useRef<typeof headJump>(null);
+  useEffect(() => {
+    if (!headJump || headJump === headJumpLandedRef.current || !convMode) return;
+    const node = threadTree.byKey.get(headJump.threadKey);
+    if (!node || node.key === ROOT_THREAD_KEY) return;
+    headJumpLandedRef.current = headJump;
+    jumpToPlace(node.headId, undefined, 'drawer-row');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per request
+  }, [headJump?.seq, convMode]);
 
   /**
    * ONE row renderer, called from three places: the linear timeline, the current
@@ -2839,7 +2920,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     const { m, globalIndex } = part;
     // Question rows wear their decoration through the wrapper (the gutter bar in
-    // Show all in order); top-level rows stay exactly as they were.
+    // Conversation Mode); top-level rows stay exactly as they were.
     const rowId = m.msgId ?? m.walnutMessageId;
     return (
       <div
@@ -2858,6 +2939,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             <span className="session-fork-divider-label">Forked session starts here</span>
           </div>
         )}
+        {turnLabelFor(rowId, m.role)}
         <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
       </div>
     );
@@ -2966,12 +3048,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           wraps the ONE scroll container at every depth (display: contents for a
           session without questions, so nothing about it changes). */}
       <ThreadStackFrame
-        active={stackMode || linearWithQuestions}
+        active={stackMode}
         depth={stackMode ? stack.depth : 0}
         bars={sliver}
         containerRef={containerRef}
         header={(panelWidth) => {
-          if (linearWithQuestions) return <ThreadLinearBanner onBack={() => threadsApi.setViewMode('stack')} />;
           if (!stackMode || stack.depth === 0 || !threadsApi.actions) return null;
           return (
             <ThreadStackHeader
@@ -3013,6 +3094,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             roomy={threadMap.roomy}
             scrollerRef={containerRef}
             boxWidth={threadMap.boxWidth}
+            panelWidth={threadMap.shape === 'panel' ? threadMap.panelWidth : 0}
             rows={threadMap.rows}
             counts={mapCounts}
             unreadKeys={threadsApi.unreadKeys}
@@ -3205,7 +3287,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 if (item.kind === 'user') {
                   if (optimisticThreadKey(item.msg) !== currentKey) return null;
                 } else if (item.kind === 'block') {
-                  if (blockPageKey(turnSegments.current, item.index, streamThreadKey) !== currentKey) return null;
+                  if (pageKeyOfBlock(item.index) !== currentKey) return null;
                 } else if (!streamVisible) {
                   return null;
                 }
@@ -3410,6 +3492,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
               return (
                 <div key={`u-${m.queueId}`} {...threadWrapperProps(optimisticRowId, wrapperClass)}>
+                  {turnLabelFor(optimisticRowId, 'user')}
                   <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
                   {queuedBehind && (
                     <div className="thread-queue-note" role="status">Waits for “{answeringTitle}” to finish.</div>

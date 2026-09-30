@@ -14,11 +14,26 @@ export function sessionPanel(page: Page, sessionId: string): Locator {
   return page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
 }
 
+/** The localStorage key the panel falls back to when a session has no saved view. */
+export const VIEW_MODE_DEFAULT_KEY = 'walnut:session-view.default'
+
+export interface OpenThreadsOpts {
+  /** The view the column opens in. Conversation Mode (`linear`) is the product
+   *  default; these specs mostly exercise the question pages, so the helper
+   *  defaults to `stack` (Tree Mode) unless a spec says otherwise. */
+  view?: 'stack' | 'linear'
+}
+
 /** Open a fixture session's column through the task board (idempotent: an
  *  already open column is reused, since clicking its task again would close it). */
-export async function openThreadsSession(page: Page, sessionId: string, taskId: string, readyText?: string): Promise<Locator> {
+export async function openThreadsSession(
+  page: Page, sessionId: string, taskId: string, readyText?: string, opts: OpenThreadsOpts = {},
+): Promise<Locator> {
   const panel = sessionPanel(page, sessionId)
   if (await panel.count() === 0) {
+    // A view the session already saved (a spec's own switch, kept across its
+    // reload) still wins over this default.
+    await page.evaluate(([key, view]) => localStorage.setItem(key, view), [VIEW_MODE_DEFAULT_KEY, opts.view ?? 'stack'] as const)
     await page.locator('.todo-search-input').fill(sessionId)
     const task = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`)
     // The board search answers in well under a second on an idle machine, but a
@@ -30,6 +45,42 @@ export async function openThreadsSession(page: Page, sessionId: string, taskId: 
   await expect(panel).toBeVisible({ timeout: 20_000 })
   if (readyText) await expect(panel.locator('.session-history')).toContainText(readyText, { timeout: 30_000 })
   return panel
+}
+
+/** The header pill: says the view a click switches TO. */
+export function modePill(panel: Locator): Locator {
+  return panel.locator('.session-panel-header .thread-mode-pill')
+}
+
+/** Switch the panel to Tree Mode (`stack`) or Conversation Mode (`linear`) through the pill. */
+export async function switchView(panel: Locator, view: 'stack' | 'linear'): Promise<void> {
+  const pill = modePill(panel)
+  await expect(pill).toBeVisible()
+  if (await pill.getAttribute('data-view-mode') === view) return
+  await pill.click()
+  await expect(pill).toHaveAttribute('data-view-mode', view)
+}
+
+/** Open the question drawer from the map (its list button; the rail shape shows
+ *  the button in the hover list). */
+export async function openQuestionList(page: Page, panel: Locator): Promise<Locator> {
+  const map = panel.locator('.thread-map')
+  // The nav itself is a 0px-tall sticky anchor; its body is what shows.
+  await expect(map.locator('.thread-map-body')).toBeVisible()
+  if (await map.getAttribute('data-shape') === 'rail') {
+    // Hovering opens the list (and a click would land on the card that then
+    // covers the rail); a pointer that cannot hover falls back to a synthetic tap.
+    const overlay = map.locator('.thread-map-overlay')
+    if (await overlay.count() === 0) {
+      await map.locator('.thread-map-rail').hover()
+      if (await overlay.count() === 0) await map.locator('.thread-map-rail').dispatchEvent('click')
+    }
+    await expect(overlay).toBeVisible()
+  }
+  await map.locator('.thread-map-icon[aria-label="Open the question list"]').click()
+  const drawer = page.locator('.thread-drawer')
+  await expect(drawer).toBeVisible()
+  return drawer
 }
 
 /** Viewport rects of `phrase` inside the panel's rendered messages. */

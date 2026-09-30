@@ -26,7 +26,7 @@ export const MAP_PANEL_MAX_W = 260;
 export const MAP_RAIL_PITCH = 14;
 
 const NO_KEYS: ReadonlySet<string> = new Set<string>();
-/** A current key no page can have: nothing is current (Show all in order). */
+/** A current key no page can have: nothing is current (no target chosen). */
 const NO_PAGE = '\u0000no-page';
 
 export function mapShapeFor(boxWidth: number, collapsed: boolean): ThreadMapShape {
@@ -53,7 +53,7 @@ export interface MapRowsInput {
   live?: ReadonlyMap<string, ThreadLiveState>;
   pending?: ThreadPendingPage;
   drafts?: readonly ThreadDraftRow[];
-  /** The page on screen; null when no page is (Show all in order). */
+  /** The page on screen, or Conversation Mode's target; null when neither. */
   currentKey: string | null;
   /** Parents whose `<n> done` group the user opened in the map. */
   doneGroupsOpen: ReadonlySet<string>;

@@ -10,7 +10,9 @@
  *    box's top edge as the top of the content.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture, selectPassage } from './threads-helpers'
+import {
+  centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture, selectPassage, modePill, openQuestionList,
+} from './threads-helpers'
 
 const TASK = 'pw-task-threads-dense'
 
@@ -19,13 +21,12 @@ async function openDense(page: Page): Promise<Locator> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   const panel = await openThreadsSession(page, DENSE_SESSION, TASK)
-  await expect(panel.locator('.thread-drawer-toggle')).toBeVisible({ timeout: 30_000 })
+  await expect(modePill(panel)).toBeVisible({ timeout: 30_000 })
   return panel
 }
 
 async function goTo(panel: Locator, query: string, title: RegExp): Promise<void> {
-  await panel.locator('.thread-drawer-toggle').click()
-  const drawer = panel.locator('.thread-drawer')
+  const drawer = await openQuestionList(panel.page(), panel)
   await expect(drawer).toHaveAttribute('data-mode', 'open')
   await drawer.locator('.thread-drawer-chip', { hasText: /^All\b/ }).click()
   const search = drawer.locator('.thread-drawer-search-input')

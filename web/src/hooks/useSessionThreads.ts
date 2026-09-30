@@ -16,6 +16,7 @@ import {
 import { displayTitleOf, hiddenKeysOf, statusOf } from '@/utils/thread-meta';
 import { counts as threadCounts, type ThreadCounts } from '@/utils/thread-meta-counts';
 import { composerDraftKey, unreadKeysOf } from '@/utils/thread-stack-state';
+import { nextQuestionSeq, questionNumbers, withQuestionBanner } from '@/utils/question-tag';
 import { log } from '@/utils/log';
 
 /** One anchor per user message, so the msgId IS the row identity. */
@@ -177,22 +178,33 @@ export function useSessionThreads(
   return useMemo(() => ({ anchors, add, remove, stage }), [anchors, add, remove, stage]);
 }
 
-/** 'stack' (the question pages, default) or 'linear' (Show all in order). */
+/**
+ * 'linear' = Conversation Mode (every turn in order, each question's turns
+ * labelled; the default) or 'stack' = Tree Mode (the question pages). The header
+ * pill names the OTHER one, the one a click switches to.
+ */
 export type SessionViewMode = 'stack' | 'linear';
 
-/** v2 key: the old 'linear' / 'tree' choice is never read (every session opens
- *  as a stack once after the upgrade) and never deleted (rollback stays safe). */
+/** v2 key: the old 'linear' / 'tree' choice is never read and never deleted
+ *  (rollback stays safe). */
 export function viewModeKey(sessionId: string): string {
   return `walnut:session-view.v2:${sessionId}`;
 }
 
+/** The view a session opens in when it has no choice of its own. */
+export const VIEW_MODE_DEFAULT_KEY = 'walnut:session-view.default';
+export const DEFAULT_VIEW_MODE: SessionViewMode = 'linear';
+
 function readViewMode(sessionId: string): SessionViewMode {
   try {
-    return localStorage.getItem(viewModeKey(sessionId)) === 'linear' ? 'linear' : 'stack';
-  } catch { return 'stack'; }
+    const own = localStorage.getItem(viewModeKey(sessionId));
+    if (own === 'linear' || own === 'stack') return own;
+    const fallback = localStorage.getItem(VIEW_MODE_DEFAULT_KEY);
+    return fallback === 'stack' || fallback === 'linear' ? fallback : DEFAULT_VIEW_MODE;
+  } catch { return DEFAULT_VIEW_MODE; }
 }
 
-/** Stack vs Show all in order, remembered per session across reloads. */
+/** Tree Mode (stack) vs Conversation Mode (linear), remembered per session across reloads. */
 export function useSessionViewMode(sessionId: string): {
   viewMode: SessionViewMode;
   setViewMode: (mode: SessionViewMode) => void;
@@ -332,7 +344,8 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     const r = refs.current;
     const dispatch = interrupt ? r.args.interruptSend : r.args.send;
     const s = r.stack.api;
-    const live = r.stack.enabled;
+    // Both views: in Conversation Mode the path is the composer's target.
+    const live = r.stack.active;
     const key = live ? s.currentKey : ROOT_THREAD_KEY;
     const pending = live && s.pending?.pageKey === key ? s.pending : undefined;
     const latestKey = r.tree.latestKey;
@@ -358,11 +371,21 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     };
     let text: string;
     const metaEntries: SessionThreadMetaPatch[] = [];
+    // The question's NUMBER rides the message as a leading banner asking for
+    // the `[Q<n>]` reply tag: a new question takes the next free number (stored
+    // in its meta), a follow-up reuses its question's.
     if (pending) {
-      text = keepCommandFirst(message, (t) => composeAnchoredText(t, { parent, ...(quote ? { quote } : {}), source: 'selection', label: pending.title }, latestKey));
-      metaEntries.push({ headId: userUuid, status: 'open', titleState: 'pending', question: message.slice(0, 400) });
+      const seq = nextQuestionSeq(r.tree, r.meta.index, r.meta.list);
+      text = keepCommandFirst(message, (t) => withQuestionBanner(
+        composeAnchoredText(t, { parent, ...(quote ? { quote } : {}), source: 'selection', label: pending.title }, latestKey), seq,
+      ));
+      metaEntries.push({ headId: userUuid, status: 'open', titleState: 'pending', question: message.slice(0, 400), seq });
     } else {
-      text = keepCommandFirst(message, (t) => composeOrientedText(t, { latestKey, currentKey: key, titleOfKey }));
+      const seq = questionNumbers(r.tree, r.meta.index).get(key);
+      text = keepCommandFirst(message, (t) => {
+        const oriented = composeOrientedText(t, { latestKey, currentKey: key, titleOfKey });
+        return seq ? withQuestionBanner(oriented, seq) : oriented;
+      });
       if (node && statusOf(node, r.meta.index) === 'older') metaEntries.push({ headId: node.headId, status: 'open' });
     }
     persistAnchor(anchor, metaEntries);
@@ -391,6 +414,13 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     setPinJump((prev) => ({ pinKey, seq: (prev?.seq ?? 0) + 1 }));
   }, []);
 
+  const [headJump, setHeadJump] = useState<{ threadKey: string; seq: number } | null>(null);
+  const requestHeadJump = useCallback((threadKey: string) => {
+    const s = refs.current.stack.api;
+    if (threadKey !== s.currentKey) s.pushTo(threadKey, 'drawer');
+    setHeadJump((prev) => ({ threadKey, seq: (prev?.seq ?? 0) + 1 }));
+  }, []);
+
   const unreadKeys = useMemo(
     () => unreadKeysOf(tree, derived.answeredAt, stack.lastViewedAt, stack.api.currentKey),
     [tree, derived.answeredAt, stack.lastViewedAt, stack.api.currentKey],
@@ -404,7 +434,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     setTree,
     viewMode,
     setViewMode,
-    currentThreadKey: stack.enabled ? stack.api.currentKey : ROOT_THREAD_KEY,
+    currentThreadKey: stack.active ? stack.api.currentKey : ROOT_THREAD_KEY,
     stack: stack.api,
     metaIndex: meta.index,
     hiddenKeys,
@@ -417,9 +447,12 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     retry,
     pinJump,
     requestPinJump,
+    headJump,
+    requestHeadJump,
     canAsk: args.canAsk,
   }), [store.anchors, store.add, store.remove, tree, viewMode, setViewMode, stack.enabled, stack.api, meta.index,
-    hiddenKeys, actions, derived, unreadKeys, stack.drawer.open, stack.drawer.reveal, retry, pinJump, requestPinJump, args.canAsk]);
+    hiddenKeys, actions, derived, unreadKeys, stack.drawer.open, stack.drawer.reveal, retry, pinJump, requestPinJump,
+    headJump, requestHeadJump, args.canAsk]);
 
   // The drawer and its toggle need a real question; a draft-only session keeps
   // its draft row on the page it was asked from (SessionChatHistory).
@@ -430,8 +463,8 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     const heads = new Set(tree.threads.map((n) => n.headId));
     return meta.list.filter((m) => m.hidden && heads.has(m.headId)).length;
   }, [tree, meta.list]);
-  const pageKey = stack.enabled ? stack.api.currentKey : ROOT_THREAD_KEY;
-  const composerPlaceholder = !stack.enabled || pageKey === ROOT_THREAD_KEY ? undefined
+  const pageKey = stack.active ? stack.api.currentKey : ROOT_THREAD_KEY;
+  const composerPlaceholder = !stack.active || pageKey === ROOT_THREAD_KEY ? undefined
     : stack.api.pending?.pageKey === pageKey ? ASK_PLACEHOLDER
       : followUpPlaceholder(displayTitleOf(tree.byKey.get(pageKey), meta.index).title);
 

@@ -10,7 +10,7 @@
  * `--thread-sliver-room` is set by ThreadStackFrame at depth >= 1 (0 otherwise),
  * `--thread-map-w` by SessionChatHistory from the box's measured width.
  *
- * Show all in order draws each question's 3px bar 11px left of the text, and a
+ * Conversation Mode draws each question's 2px rule 11px left of the text, and a
  * press on that strip jumps back to the passage. With the default gap the bar
  * touched the panel and ran 1px into the rail, so reaching for it hovered the
  * rail, whose list opened over the text and took the click. That view steps the
@@ -146,9 +146,32 @@
   display: inline-grid;
   place-items: center;
   flex: none;
-  width: 10px;
-  height: 10px;
+  min-width: 16px;
+  height: 16px;
 }
+/* The question's number: one grey badge, the same for every question (a hue per
+   question read as noise, and nobody could tell which was which). The current
+   row inverts it. */
+.thread-map-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.thread-map-num--new { color: var(--fg-muted); }
+.thread-map-row[data-current="true"] .thread-map-num { background: var(--fg); color: var(--bg-elevated); }
+.thread-map-status { flex: none; margin-left: 2px; }
+.thread-map-status[data-compact="true"] { margin-left: 0; }
 .thread-map-root-dot {
   width: 6px;
   height: 6px;
@@ -175,7 +198,6 @@
 }
 .thread-map-row:is([data-kind="pending"], [data-kind="draft"]) .thread-map-label { font-style: italic; }
 .thread-map-row .thread-naming { flex: none; font-size: 11px; }
-.thread-map-unread { flex: none; margin-left: 2px; }
 
 .thread-map-back {
   flex: none;
@@ -202,7 +224,7 @@
   margin-left: calc(4px - clamp(24px, 4%, 40px) - var(--thread-map-rail-step) - var(--thread-sliver-room, 0px));
 }
 .thread-map[data-shape="rail"] .thread-map-body { width: 20px; }
-/* Opaque backing: in Show all in order a question's 3px gutter bar runs through
+/* Opaque backing: in Conversation Mode a question's turn rule runs through
    the padding, and passes UNDER the marks (N22's rule for the outline rail). */
 .thread-map-rail {
   display: flex;
@@ -223,14 +245,14 @@
   align-items: center;
   flex: none;
   height: 14px;
-  padding-left: calc(4px + min(var(--map-depth, 0), 3) * 3px);
+  padding-left: calc(2px + min(var(--map-depth, 0), 3) * 2px);
   color: var(--fg-muted);
 }
-.thread-map-mark .thread-status-dot { width: 7px; height: 7px; border-width: 1.5px; }
+.thread-map-mark .thread-map-num { min-width: 14px; height: 13px; padding: 0 2px; border-radius: 3px; font-size: 9px; }
 .thread-map-mark .thread-map-root-dot { width: 5px; height: 5px; }
 .thread-map-mark .thread-map-pin { width: 9px; height: 9px; }
 .thread-map-mark .thread-map-fold .thread-icon { width: 8px; height: 8px; }
-.thread-map-mark[data-current="true"] .thread-status-dot,
+.thread-map-mark[data-current="true"] .thread-map-num { background: var(--fg); color: var(--bg); }
 .thread-map-mark[data-current="true"] .thread-map-root-dot {
   box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px var(--accent);
 }

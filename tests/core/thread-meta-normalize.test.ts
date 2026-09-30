@@ -36,6 +36,10 @@ describe('normalizeThreadMeta', () => {
     [[{ headId: 'h', titleState: 'naming' }], /titleState must be one of/],
     [[{ headId: 'h', hidden: 'yes' }], /hidden must be a boolean/],
     [[{ headId: 'h', status: null }], /status cannot be cleared/],
+    [[{ headId: 'h', seq: 0 }], /seq must be an integer from 1 to 100000/],
+    [[{ headId: 'h', seq: 1.5 }], /seq must be an integer from 1 to 100000/],
+    [[{ headId: 'h', seq: '3' }], /seq must be an integer from 1 to 100000/],
+    [[{ headId: 'h', seq: 100001 }], /seq must be an integer from 1 to 100000/],
     [['not-an-object'], /each thread_meta entry must be an object/],
     [{ headId: 'h' }, /thread_meta must be an array/],
   ])('rejects %j with 400', (body, message) => {
@@ -49,6 +53,10 @@ describe('normalizeThreadMeta', () => {
     const list = (n: number) => Array.from({ length: n }, (_, i) => ({ headId: `h${i}` }));
     expect(normalizeThreadMeta(list(500))).toHaveLength(500);
     expect(() => normalizeThreadMeta(list(501))).toThrow(/at most 500/);
+  });
+
+  it('accepts a question number in range', () => {
+    expect(normalizeThreadMeta([{ headId: 'h', seq: 1 }, { headId: 'i', seq: 100000 }]).map((e) => e.seq)).toEqual([1, 100000]);
   });
 
   it('truncates a long question to 400 chars without an error', () => {
@@ -82,6 +90,25 @@ describe('mergeThreadMeta: upsert by headId', () => {
     expect(meta[0].titleState).toBe('unavailable');
     expect(meta[0].takeawayState).toBeUndefined();
     expect(meta[0].takeaway).toBe('fb');
+  });
+});
+
+describe('mergeThreadMeta: the question number is written once', () => {
+  it('a client sets seq when the question is asked; later writes cannot move or clear it', () => {
+    const asked = mergeThreadMeta([], [{ headId: 'head-q', question: 'why?', seq: 4 }], T1, client);
+    expect(asked.meta[0].seq).toBe(4);
+    const moved = mergeThreadMeta(asked.meta, [{ headId: 'head-q', seq: 9, status: 'resolved' }], T1, client);
+    expect(moved.meta[0]).toMatchObject({ seq: 4, status: 'resolved' });
+    const cleared = mergeThreadMeta(asked.meta, [{ headId: 'head-q', seq: null }], T1, client);
+    expect(cleared.meta[0].seq).toBe(4);
+    expect(cleared.touched).toEqual([]);
+  });
+
+  it('the AI never writes a number: its replies carry the one the client gave', () => {
+    const base = [entry({ headId: 'head-q' })];
+    const out = mergeThreadMeta(base, [{ headId: 'head-q', seq: 2, title: 'Named' }], T1, ai);
+    expect(out.meta[0].seq).toBeUndefined();
+    expect(out.meta[0].title).toBe('Named');
   });
 });
 

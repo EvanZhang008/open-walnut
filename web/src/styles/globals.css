@@ -33081,27 +33081,21 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   display: block;
 }
 
-/* ── Conversation threads: the linear view's gutter bar ─────────────────────
-   "Show all in order" marks each question's turns with a 3px bar in the gutter,
-   coloured by `--thread-hue` (set inline by the timeline). The negative margin
-   puts the bar in the container's left padding, so the message text does not
-   shift. The Stack view's own rules live in styles/thread-stack*.css. */
+/* ── Conversation Mode: a question's turn is a group ──────────────────────────
+   Every row of a question's turn wears a 2px grey rule down its left edge
+   (continuous across every wrapper kind), and the turn label above the bubble
+   names the question. No colour per question: the label's number is the
+   identity. The negative margin puts the rule in the container's left padding,
+   so the message text does not shift. The rule is also the way back to where
+   the question was asked: a press on that strip (rule + padding,
+   THREAD_BAR_HIT_PX in SessionChatHistory) jumps to the passage. */
 .session-msg--threaded {
-  /* Deeper questions read lighter: same branch, less weight. */
-  --thread-bar: hsl(var(--thread-hue, 214) 70% 50% / 0.45);
   position: relative;
-  border-left: 3px solid var(--thread-bar);
-  border-radius: 2px 0 0 2px;
-  padding-left: 8px;
+  border-left: 2px solid var(--border-strong, var(--border));
+  padding-left: 9px;
   margin-left: -11px;
 }
-.session-msg--threaded[data-thread-row-depth="1"] {
-  --thread-bar: hsl(var(--thread-hue, 214) 70% 50%);
-}
-/* The bar is a way back to where the question was asked: a press on this strip
-   (bar + padding, THREAD_BAR_HIT_PX in SessionChatHistory) jumps to the passage.
-   A pseudo-element only for the cursor; the wrapper's handler reads the press
-   position instead. */
+.session-msg--threaded[data-thread-current="true"] { border-left-color: var(--fg-secondary); }
 .session-msg--threaded::before {
   content: '';
   position: absolute;

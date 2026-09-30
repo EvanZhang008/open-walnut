@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useRef, useMemo, memo } from 'react';
+import { stripQuestionTag } from '@/utils/question-tag';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
@@ -331,8 +332,10 @@ function settledCardClass(status: PermissionRequestStatus): string {
 /** Render a single streaming block */
 export const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, sessionCwd, sessionHost, live, onTaskClick, onSessionClick, onFileOpen }: { block: StreamingBlock; sessionId: string; sessionCwd?: string; sessionHost?: string; live?: boolean; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
   if (block.type === 'text') {
-    if (!block.content.trim()) return null;
-    return <StreamingTextBlock content={block.content} msgId={block.msgId} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+    // The reply tag (`[Q<n>]`, question-tag.ts) files the turn; it is not prose.
+    const content = stripQuestionTag(block.content);
+    if (!content.trim()) return null;
+    return <StreamingTextBlock content={content} msgId={block.msgId} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   if (block.type === 'system') {

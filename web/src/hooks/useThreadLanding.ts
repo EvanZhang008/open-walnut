@@ -120,7 +120,7 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
 
   // Capture: the page being left, right before its rows are swapped out.
   // Registered whether or not the stack is on: the very first Ask in a session
-  // without questions (or an Ask from Show all in order) leaves root while the
+  // without questions (or an Ask from Conversation Mode) leaves root while the
   // stack is still off, and the way back needs root's place.
   useEffect(() => {
     stack.setCapture((from, to, pending) => {

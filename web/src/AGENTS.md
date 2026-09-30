@@ -183,9 +183,38 @@ show inline after the open ones, other completed hits that show the query fold i
   this, three Asks sent during one answer pulled that answer onto the last question's page.
   **Every mark a question paints is also the way back to it**: a mark in an answer (CSS Custom
   Highlight, hit-tested by caret position in `utils/thread-mark-hit.ts`) pushes its page, the
-  quote head and the sliver pop to the passage, and in "Show all in order" the 3px gutter bar
-  jumps to the origin (`jumpToThreadOrigin`). "Show all in order" is the plain linear transcript
-  (view key `walnut:session-view.v2:<sid>`, default stack; the old key is never read).
+  quote head and the sliver pop to the passage, and in Conversation Mode the 2px turn rule
+  jumps to the origin (`jumpToThreadOrigin`).
+  **Two views, one pill, one sidebar (2026-09-29).** `SessionViewMode`: `linear` is
+  **Conversation Mode**, the DEFAULT, every row in order with ONE `ThreadTurnLabel` (number,
+  title, status word) above each question turn's user row and a grey rule down the turn
+  (`.session-msg--threaded`); `stack` is **Tree Mode**, the question pages. The header's only
+  question control is `ThreadModePill`, which names the view a click switches TO (icon only under
+  560px). The `N open` count pill, the root `More` menu and the linear banner are gone: counts and
+  the list live in the sidebar (`ThreadMap`), the drawer opens from the map's list button or
+  Cmd+Shift+E. View key `walnut:session-view.v2:<sid>`, fallback `walnut:session-view.default`
+  (specs set it to `stack`); the pre-v2 key is never read. In Conversation Mode the stack path is
+  the composer's TARGET, not a filter (`useThreadStack.active` is mode-independent, `enabled` is
+  stack view only): a map row or a turn label picks the question the next message replies in.
+  **Questions are told apart by NUMBER and status word, never by colour.** `SessionThreadMeta.seq`
+  is given once at Ask (`nextQuestionSeq`; the server keeps it write-once and the AI writer may
+  not set it), questions from before the field are numbered by transcript order
+  (`utils/question-tag.ts` `questionNumbers`). Status words: Waiting / Answering… / New / Answered
+  / To check / Done / No answer / Draft (`ThreadStatusWord`); a streaming answer already counts as
+  present. The user's words on the hue-per-question design: "I don't know which one is which".
+  **The reply tag files the answer.** A question's send (and every follow-up) opens with the
+  `[Question Q<n>]…[/Question Q<n>]` banner asking the model to begin with the line `[Q<n>]`; the
+  bubble hides that banner (`QUESTION_BANNER_RE`), `SessionMessage` and `StreamingBlockView` strip
+  the tag from the text on screen, and the tag decides where the turn belongs: `withTagAnchors`
+  adds a client-side synthetic anchor for a turn whose first answer text names another question
+  (or none was recorded), and `tagKeyOfBlocks` routes live blocks the same way, both ahead of the
+  send-order guesses (`recordTurnSegments` / `blockPageKey`). This is the fix for "the answer
+  shows while it streams and then disappears": the user row's pre-assigned uuid is lost on a
+  `--resume` fallback or when two sends merge into one turn, so the anchor filed the reply under
+  the wrong turn the moment history absorbed it, and a truncated half of it stayed pinned at the
+  main conversation's tail. The mock CLI answers the banner with the tag (`tests/providers/
+  mock-claude.mjs` `stripBanners`), so every fixture exercises this path. Ratchets:
+  `tests/web/question-tag.test.ts`, `tests/e2e/browser/session-conversation-mode.spec.ts`.
   **The question tree is always on screen, never behind a hover or a button** (`ThreadMap`, top
   left of the timeline, in place of the outline rail once a session has a question). Its rows are
   the drawer's All view (`utils/thread-map.ts` → `flattenTree`), so the two never disagree. A box

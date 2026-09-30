@@ -2036,6 +2036,9 @@ export interface SessionThreadMeta {
   suggestDismissed?: boolean;
   /** ISO; the one refine call on the first answer already ran. */
   refinedAt?: string;
+  /** The question's number (1..), given when it is asked and never changed:
+   *  the sidebar shows it, and the model's reply opens with `[Q<seq>]`. */
+  seq?: number;
   /** ISO, stamped by the server on every write to this entry. */
   updatedAt: string;
 }

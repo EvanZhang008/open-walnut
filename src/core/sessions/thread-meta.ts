@@ -26,6 +26,8 @@ export const MAX_THREAD_META_ID_CHARS = 128;
 export const MAX_THREAD_TITLE_CHARS = 120;
 export const MAX_THREAD_TAKEAWAY_CHARS = 280;
 export const MAX_THREAD_QUESTION_CHARS = 400;
+/** A question number: the count of questions a session can hold, with room. */
+export const MAX_THREAD_SEQ = 100_000;
 /** An entry without an anchor survives this long, so a meta write that lands
  *  before its anchor write is not pruned in between. */
 export const THREAD_META_ORPHAN_TTL_MS = 10 * 60_000;
@@ -43,7 +45,7 @@ const BOOLEANS = ['hidden', 'suggestDismissed'] as const;
 type MetaField = Exclude<keyof SessionThreadMeta, 'headId' | 'updatedAt'>;
 const FIELDS: readonly MetaField[] = [
   'status', 'title', 'titleSource', 'titleState', 'question', 'takeaway',
-  'takeawaySource', 'takeawayState', 'hidden', 'suggestDismissed', 'refinedAt',
+  'takeawaySource', 'takeawayState', 'hidden', 'suggestDismissed', 'refinedAt', 'seq',
 ];
 
 function bad(message: string): never {
@@ -96,6 +98,11 @@ export function normalizeThreadMeta(value: unknown): SessionThreadMetaPatch[] {
       } else if (field === 'refinedAt') {
         if (typeof v !== 'string' || Number.isNaN(Date.parse(v))) bad('thread_meta[].refinedAt must be an ISO date');
         patch[field] = v;
+      } else if (field === 'seq') {
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > MAX_THREAD_SEQ) {
+          bad(`thread_meta[].seq must be an integer from 1 to ${MAX_THREAD_SEQ}`);
+        }
+        patch[field] = v;
       }
     }
     out.push(patch as SessionThreadMetaPatch);
@@ -130,8 +137,17 @@ function aiGuard(base: SessionThreadMeta, patch: SessionThreadMetaPatch): Sessio
     const may = p.status === 'suggested' && base.status === 'open' && !base.suggestDismissed;
     if (!may) delete p.status;
   }
-  delete p.hidden; delete p.suggestDismissed; delete p.question;
+  delete p.hidden; delete p.suggestDismissed; delete p.question; delete p.seq;
   return p as SessionThreadMetaPatch;
+}
+
+/** A question's number is given once: a later write may not move or clear it
+ *  (the model's replies already carry it). */
+function seqGuard(base: SessionThreadMeta, patch: SessionThreadMetaPatch): SessionThreadMetaPatch {
+  if (patch.seq === undefined || base.seq === undefined) return patch;
+  const p = { ...patch };
+  delete p.seq;
+  return p;
 }
 
 /** A client that re-sends a bare `titleState: 'pending'` over a finished or user
@@ -172,7 +188,7 @@ export function mergeThreadMeta(
     const before: SessionThreadMeta = at === undefined
       ? { headId: raw.headId, status: 'open', updatedAt: nowIso }
       : list[at];
-    const patch = opts.writer === 'ai' ? aiGuard(before, raw) : clientGuard(before, raw);
+    const patch = seqGuard(before, opts.writer === 'ai' ? aiGuard(before, raw) : clientGuard(before, raw));
     const next: Record<string, unknown> = { ...before };
     for (const field of FIELDS) {
       const v = patch[field];

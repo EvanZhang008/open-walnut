@@ -19,7 +19,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { pluralFollowUps } from '@/utils/thread-meta';
 import '@/styles/thread-stack.css';
 
-export const REMOVE_CONFIRM_BODY = 'Walnut hides them from this view. The session transcript is owned by the CLI and keeps every message; you can still read them in Show all in order.';
+export const REMOVE_CONFIRM_BODY = 'Walnut hides them from this view. The session transcript is owned by the CLI and keeps every message; you can still read them in Conversation Mode.';
 export const removeQuestionTitle = (n: number): string => `Remove this question and ${pluralFollowUps(n)}?`;
 /** Portals that are not "outside" for a thread menu. */
 export const THREAD_MENU_EXEMPT = `${THREAD_OVERLAY_SELECTOR}, .thread-drawer, .thread-menu`;
@@ -52,8 +52,8 @@ export function ThreadStackMenu(props: ThreadStackMenuProps & ThreadStackMenuExt
   const linear = viewMode === 'linear';
   const items: Item[] = [];
   const orderItem: Item = linear
-    ? { id: 'back-to-questions', label: 'Back to questions', run: props.onBackToQuestions }
-    : { id: 'show-all', label: 'Show all in order', run: props.onShowAllInOrder };
+    ? { id: 'back-to-questions', label: 'Tree Mode', run: props.onBackToQuestions }
+    : { id: 'show-all', label: 'Conversation Mode', run: props.onShowAllInOrder };
   if (variant === 'page' && threadKey !== undefined) {
     if (props.onRename) items.push({ id: 'rename', label: 'Rename…', run: props.onRename });
     items.push(props.resolved

@@ -9,7 +9,9 @@
  * Dense fixture, reset per test, Chromium and WebKit.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel } from './threads-helpers'
+import {
+  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList,
+} from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION, densePassage } from './threads-fixture'
 
 const TASK = 'pw-task-threads-dense'
@@ -25,13 +27,12 @@ async function openDense(page: Page, width: number): Promise<Locator> {
   await page.goto('/')
   await pinPanelWidth(page, width)
   const panel = await openThreadsSession(page, DENSE_SESSION, TASK)
-  await expect(panel.locator('.thread-drawer-toggle')).toBeVisible({ timeout: 30_000 })
+  await expect(modePill(panel)).toBeVisible({ timeout: 30_000 })
   return panel
 }
 
 async function openDrawer(panel: Locator): Promise<Locator> {
-  await panel.locator('.thread-drawer-toggle').click()
-  const drawer = panel.locator('.thread-drawer')
+  const drawer = await openQuestionList(panel.page(), panel)
   await expect(drawer).toHaveAttribute('data-mode', 'open')
   await drawer.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
   return drawer
@@ -157,7 +158,7 @@ test.describe('Slice 1 fixes, round 3', () => {
     await expect(panel.locator('.thread-quote-head')).toContainText(phrase)
     await expect(panel.locator('.session-history')).toContainText('what drains first')
     await expect(panel.locator('.session-history')).toContainText('processed your message')
-    await expect(panel.locator('.thread-drawer-toggle')).toBeVisible()
+    await expect(modePill(panel)).toBeVisible()
     expect(new URL(page.url()).search).toContain(`=${head}`)
   })
 
@@ -266,9 +267,13 @@ test.describe('Slice 1 fixes, round 3', () => {
 
   test('Show hidden questions lists the Hidden group under All only (N45)', async ({ page }) => {
     const panel = await openDense(page, 720)
-    await panel.locator('.thread-stack-more').first().click()
-    await page.locator('.thread-menu [role="menuitem"]', { hasText: /^Show hidden questions/ }).click()
-    const drawer = panel.locator('.thread-drawer')
+    const drawer = await openDrawer(panel)
+    await chip(drawer, 'All').click()
+    // The offer sits in the drawer under All; the other filters never show it.
+    await chip(drawer, 'Pinned').click()
+    await expect(drawer.getByRole('button', { name: /^Show hidden questions/ })).toHaveCount(0)
+    await chip(drawer, 'All').click()
+    await drawer.getByRole('button', { name: /^Show hidden questions/ }).click()
     await expect(drawer.locator('.thread-tree-group-label')).toHaveText('Hidden')
     await chip(drawer, 'Pinned').click()
     await expect(drawer.locator('.thread-tree-row[data-kind="pin"]').first()).toBeVisible()
@@ -319,13 +324,13 @@ test.describe('Slice 1 fixes, round 3', () => {
     expect(bare, 'matched rows that show no match').toEqual([])
   })
 
-  test('a 360px column keeps its session title readable next to the toggle (N47)', async ({ page }) => {
+  test('a 360px column keeps its session title readable next to the mode pill (N47)', async ({ page }) => {
     const panel = await openDense(page, 360)
-    const toggle = panel.locator('.thread-drawer-toggle')
-    await expect(toggle).toHaveText(/\d+ open/)
-    // The narrow slot is sized for `<n> to check`; while any question is open
-    // the label is `<n> open`, which the base width (the `All done` width) fits.
-    await expect(toggle).toHaveAttribute('data-tier', 'base')
+    const pill = modePill(panel)
+    // Narrow: the pill keeps its icon and hands the label to the tooltip.
+    await expect(pill).toHaveAttribute('data-narrow', 'true')
+    await expect(pill).toHaveAttribute('title', 'Switch to Conversation Mode')
+    await expect(pill.locator('.thread-mode-pill-label')).toHaveCount(0)
     const title = panel.locator('.session-panel-title').first()
     // The old 117px pill left `Threa…` (about 40px).
     expect((await rectOf(title)).right - (await rectOf(title)).left, 'session title width').toBeGreaterThanOrEqual(70)
@@ -385,7 +390,7 @@ test.describe('Slice 1 fixes, round 3', () => {
     await resetThreadsFixture(request, RELOAD_SESSION)
     await page.goto('/')
     const panel = await openThreadsSession(page, RELOAD_SESSION, 'pw-task-threads-reload', 'What does the reader do after a rotation?')
-    await expect(panel.locator('.thread-drawer-toggle')).toHaveCount(0)
+    await expect(modePill(panel)).toHaveCount(0)
     const header = panel.locator('.session-panel-header')
     const h0 = (await rectOf(header)).bottom - (await rectOf(header)).top
     const phrase = RELOAD_PASSAGE.slice(0, 40)
@@ -404,7 +409,7 @@ test.describe('Slice 1 fixes, round 3', () => {
     await box.click()
     await box.fill('how long is a rotation')
     await box.press('Enter')
-    await expect(panel.locator('.thread-drawer-toggle')).toBeVisible({ timeout: 30_000 })
+    await expect(modePill(panel)).toBeVisible({ timeout: 30_000 })
     const h1 = (await rectOf(header)).bottom - (await rectOf(header)).top
     expect(Math.abs(h1 - h0), `header ${h0}px before the first question, ${h1}px after`).toBeLessThan(0.5)
   })

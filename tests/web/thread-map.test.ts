@@ -75,7 +75,7 @@ describe('mapRows', () => {
     expect(map.find((r) => r.current)?.key).toBe(currentKey);
   });
 
-  it('marks nothing current in Show all in order', () => {
+  it('marks nothing current with no target chosen', () => {
     const { tree, index, pins } = dense();
     const map = mapRows({ tree, index, pins, currentKey: null, doneGroupsOpen: NO_GROUPS });
     expect(map.some((r) => r.current)).toBe(false);

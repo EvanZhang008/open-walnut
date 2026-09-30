@@ -1,10 +1,10 @@
 /**
  * Question stack, views and page surfaces (spec slice 1, sections 5.4, 5.6, 5.9,
- * 5.10): Show all in order, the marks in an answer, the Asked-from rows, Done,
+ * 5.10): Conversation Mode, the marks in an answer, the Asked-from rows, Done,
  * Undo and Remove as they move the stack, and the quote head.
  *
- * Covers C35 (Show all in order: every row, gutter bars lead back, Back to
- * questions restores the page and scroll, the choice survives a reload), C80
+ * Covers C35 (Conversation Mode: every row, turn rules lead back, the pill
+ * back to Tree Mode restores the page and scroll, the choice survives a reload), C80
  * (an old saved view opens as Stack), C26 and C36 (marks: hover tip, click,
  * painted, resolved fainter, pin plus mark), C25 (Asked-from rows, keyboard),
  * C11, C12, C77 (Done pops, persists, rolls back on a failed write, Undo after
@@ -17,7 +17,9 @@
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture } from './threads-helpers'
+import {
+  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, modePill, openQuestionList, switchView,
+} from './threads-helpers'
 import { buildDenseSession, densePassage } from './threads-fixture'
 
 const DENSE_TASK = 'pw-task-threads-dense'
@@ -114,7 +116,7 @@ test.describe('Question stack views', () => {
     await seedWriteSession(request)
   })
 
-  test('Show all in order: every row, gutter bars lead back, Back to questions restores the page', async ({ page }) => {
+  test('Conversation Mode: every row, turn rules lead back, Tree Mode restores the page', async ({ page }) => {
     await boot(page)
     let panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
     const history = panel.locator('.session-history')
@@ -125,15 +127,20 @@ test.describe('Question stack views', () => {
     await page.mouse.wheel(0, 180)
     await page.waitForTimeout(700)
     const before = await history.evaluate((el) => el.scrollTop)
-    await pageMenu(page, panel, 'Show all in order')
-    // C35: the plain transcript with a banner, hidden questions included.
+    await pageMenu(page, panel, 'Conversation Mode')
+    // C35: the plain transcript, hidden questions included; the pill now offers Tree Mode.
     await expect(history).toHaveAttribute('data-view-mode', 'linear')
-    await expect(panel.locator('.thread-linear-banner-text')).toHaveText('Showing every message in order.')
+    await expect(modePill(panel)).toHaveText('Tree Mode')
     await expect(panel.locator('.thread-sliver, .thread-stack-header, .thread-quote-head, .thread-asked-from')).toHaveCount(0)
     await expect(panel.locator(`[data-message-id="${IDS.head.Q8}"]`)).toBeAttached()
     const bar = panel.locator(`.session-msg--threaded[data-message-id="${IDS.head.Q9}"]`)
     await expect(bar).toBeAttached()
-    expect(await bar.evaluate((el) => getComputedStyle(el).borderLeftWidth)).toBe('3px')
+    expect(await bar.evaluate((el) => getComputedStyle(el).borderLeftWidth)).toBe('2px')
+    // One label per turn group, above the question's own row: number, title, status.
+    const label = bar.locator('.thread-turn-label')
+    await expect(label).toHaveCount(1)
+    await expect(label.locator('.thread-map-num')).toHaveText(/^\d+$/)
+    await expect(label.locator('.thread-status-word')).toBeVisible()
     await shot(page, 'c35-linear')
     // The bar is the way back to where that question was asked. Q9 sits ~26000px
     // below this spot in the full transcript, past what the wheel loop covers:
@@ -156,8 +163,8 @@ test.describe('Question stack views', () => {
     await page.waitForLoadState('networkidle')
     panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
     await expect(panel.locator('.session-history')).toHaveAttribute('data-view-mode', 'linear')
-    // Back to questions: the page and the scroll he left.
-    await panel.locator('.thread-linear-banner-back').click()
+    // Back to Tree Mode through the pill: the page and the scroll he left.
+    await switchView(panel, 'stack')
     await expectDepth(panel, 2)
     await expect(panel.locator('.thread-quote-head')).toContainText(densePassage('Q17').slice(0, 24))
     await expect.poll(() => panel.locator('.session-history').evaluate((el) => el.scrollTop)).toBeGreaterThan(before - 9)
@@ -178,8 +185,7 @@ test.describe('Question stack views', () => {
     await expect(panel.locator('.session-history')).toHaveAttribute('data-view-mode', 'stack')
     await expect(panel.locator('.thread-asked-from').first()).toBeVisible()
     expect(await page.evaluate((k) => localStorage.getItem(k), `walnut:session-view:${DENSE_SESSION}`)).toBe('linear')
-    await panel.locator('.session-panel-title-meta .thread-stack-more').click()
-    await page.locator('.thread-menu [role="menuitem"]', { hasText: 'Show all in order' }).click()
+    await switchView(panel, 'linear')
     await expect(panel.locator('.session-history')).toHaveAttribute('data-view-mode', 'linear')
     await page.reload()
     await page.waitForLoadState('networkidle')
@@ -252,8 +258,8 @@ test.describe('Question stack views', () => {
     await expectDepth(panel, 1)
     await expect(panel.locator('.thread-quote-head')).toContainText(q6.slice(0, 20))
     // C26: after a full re-render of the rows the marks still work.
-    await pageMenu(page, panel, 'Show all in order')
-    await panel.locator('.thread-linear-banner-back').click()
+    await pageMenu(page, panel, 'Conversation Mode')
+    await switchView(panel, 'stack')
     await expectDepth(panel, 1)
     await page.keyboard.press('Escape')
     await expectDepth(panel, 0)
@@ -263,7 +269,7 @@ test.describe('Question stack views', () => {
     await page.mouse.click(again.left + 10, again.top + again.height / 2)
     await expectDepth(panel, 1)
     // (e) on Q1's page one passage is both pinned and asked: both paint, a click opens the question.
-    await panel.locator('.thread-drawer-toggle').click()
+    await openQuestionList(page, panel)
     await panel.locator('.thread-drawer .thread-tree-row[data-kind="thread"]', { hasText: 'Buffer flush order' }).first().click()
     await expectDepth(panel, 1)
     const q11 = densePassage('Q11')
@@ -317,15 +323,19 @@ test.describe('Question stack views', () => {
 
   test('Done pops to the passage and persists; Undo after leaving keeps the page, Undo in place returns', async ({ page, request }) => {
     await boot(page)
+    // Wide enough for the labelled map: the count lives there now (the header
+    // holds the mode pill alone).
+    await page.addStyleTag({ content: `.main-page-session-column:has(.session-panel[data-session-id="${WRITE_SESSION}"]) {
+      flex: 0 0 900px !important; width: 900px !important; min-width: 900px !important; max-width: 900px !important; }` })
     let panel = await openThreadsSession(page, WRITE_SESSION, WRITE_TASK, WRITE_READY)
-    const toggle = panel.locator('.thread-drawer-toggle')
-    await expect(toggle).toContainText('3 open')
+    const count = panel.locator('.thread-map .thread-map-count')
+    await expect(count).toContainText('3 open')
     await openAsked(page, panel, 'Question about reply twenty', 1)
     await openAsked(page, panel, 'Deeper about reply twenty one', 2)
     // C11: Done on the leaf: resolved at once, one fewer open, back to the passage.
     await panel.locator('.thread-stack-done').first().click()
     await expectDepth(panel, 1)
-    await expect(toggle).toContainText('2 open')
+    await expect(count).toContainText('2 open')
     const b = panel.locator('.thread-asked-row', { hasText: 'Deeper about reply twenty one' })
     await expect(b).toHaveClass(/is-resolved/)
     await expect(b.locator('.thread-asked-done')).toHaveText('Done')
@@ -382,7 +392,7 @@ test.describe('Question stack views', () => {
     expect((await metaOf(request, askUuid(24)))?.status).toBe('open')
   })
 
-  test('Remove hides the question and keeps its anchors; Show all in order still shows its rows', async ({ page, request }) => {
+  test('Remove hides the question and keeps its anchors; Conversation Mode still shows its rows', async ({ page, request }) => {
     await boot(page)
     const panel = await openThreadsSession(page, WRITE_SESSION, WRITE_TASK, WRITE_READY)
     await openAsked(page, panel, 'Question about reply twenty', 1)
@@ -394,8 +404,7 @@ test.describe('Question stack views', () => {
     // C14: the anchors stay, the head entry is hidden.
     await expect.poll(async () => (await metaOf(request, askUuid(21)))?.hidden).toBe(true)
     expect((await readRecord(request, WRITE_SESSION)).threadAnchors ?? []).toHaveLength(ANCHORS.length)
-    await panel.locator('.session-panel-title-meta .thread-stack-more').click()
-    await page.locator('.thread-menu [role="menuitem"]', { hasText: 'Show all in order' }).click()
+    await switchView(panel, 'linear')
     await expect(panel.locator('.session-history')).toHaveAttribute('data-view-mode', 'linear')
     await expect(panel.locator(`.session-history [data-message-id="${askUuid(21)}"]`)).toBeAttached()
     await expect(panel.locator(`.session-history [data-message-id="${askUuid(23)}"]`)).toBeAttached()

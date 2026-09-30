@@ -87,40 +87,6 @@
 .thread-quote-exact { color: var(--fg); }
 .thread-same-passage { color: var(--fg-muted); font-size: 12px; }
 
-/* ── Show all in order: the banner above the linear timeline ── */
-.thread-linear-banner {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 4px 10px 4px 14px;
-  background: var(--bg-secondary);
-  box-shadow: inset 0 -1px 0 var(--border);
-  font-size: 12px;
-}
-.thread-linear-banner-text {
-  flex: 1;
-  min-width: 0;
-  color: var(--fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.thread-linear-banner-back {
-  flex: none;
-  padding: 2px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--accent-text);
-  font: inherit;
-  font-weight: 550;
-  cursor: pointer;
-}
-.thread-linear-banner-back:hover { background: var(--accent-subtle); }
-.thread-linear-banner-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-
 /* ── Asked from this answer ── */
 .thread-asked-from { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 12px; }
 .thread-asked-heading {
@@ -208,7 +174,7 @@
 /* The drawer toggle's fixed slot in the session header. */
 /* Zero layout height, centred on the row: the 24px toggle appearing on the first
    send must not grow the session header (N15: the stack row dropped 4px). */
-.thread-drawer-toggle-slot { flex: none; display: inline-flex; align-items: center; align-self: center; height: 0; overflow: visible; }
+.thread-mode-pill-slot { flex: none; display: inline-flex; align-items: center; align-self: center; height: 0; overflow: visible; }
 
 /* ── Marks: passages in an answer that have a question behind them ──
    CSS Custom Highlights (useThreadMarks.ts), one name per hue and state. A fill
@@ -287,7 +253,7 @@
 }
 .thread-quote-from-title { color: var(--fg-secondary); font-weight: 550; }
 
-/* Show all in order (N22): the outline rail floats over the left gutter where
+/* Conversation Mode (N22): the outline rail floats over the left gutter where
    each question's 3px bar runs, and a bar used to run straight through the
    ticks. In that view the rail gets an opaque backing and dims its ticks rather
    than itself, so a bar passes UNDER the rail. */

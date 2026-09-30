@@ -17,8 +17,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, AI_SESSION, DENSE_SESSION, NO_THREAD_SESSION, findBannedGlyphs, openThreadsSession, passageRects,
-  readRecord, resetThreadsFixture, selectPassage,
+  centreInHistory, AI_SESSION, DENSE_SESSION, NO_THREAD_SESSION, findBannedGlyphs, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, openQuestionList,
 } from './threads-helpers'
 import { AI_PASSAGE } from './threads-fixture'
 
@@ -30,10 +29,10 @@ const DENSE_READY = 'Walk me through part 6 of the storage notes.'
 /** The fixture's own titles say "Threads ... fixture": data, not UI text. */
 const FIXTURE_TITLE = /fixture (session|task)/i
 /** The question UI inside a panel: stack row, sliver, quote head, Asked-from rows,
- *  linear banner, drawer and its toggle, resolved strip, rail, queued note, map. */
+ *  mode pill, drawer, resolved strip, rail, queued note, map. */
 const NEW_UI = [
-  '.thread-stack-header', '.thread-sliver', '.thread-quote-head-wrap', '.thread-asked-from', '.thread-linear-banner',
-  '.thread-drawer', '.thread-drawer-toggle', '.thread-strip', '.session-toc', '.thread-queue-note', '.thread-stack-more',
+  '.thread-stack-header', '.thread-sliver', '.thread-quote-head-wrap', '.thread-asked-from', '.thread-mode-pill',
+  '.thread-drawer', '.thread-strip', '.session-toc', '.thread-queue-note', '.thread-stack-more',
   '.thread-map',
 ].join(', ')
 
@@ -85,9 +84,9 @@ test.describe('Question stack', () => {
   test('a session without questions renders exactly as before; the old question UI is gone', async ({ page }) => {
     await boot(page)
     const panel = await openThreadsSession(page, NO_THREAD_SESSION, NO_THREAD_TASK, 'outline filler reply 230')
-    // C10: no drawer button, no sliver, no edge hot zone, no question menu, and the
+    // C10: no mode pill, no sliver, no edge hot zone, no question menu, and the
     // frame adds nothing (display: contents), so the box is the one it always was.
-    await expect(panel.locator('.thread-drawer-toggle')).toHaveCount(0)
+    await expect(panel.locator('.thread-mode-pill')).toHaveCount(0)
     await expect(panel.locator('.thread-sliver')).toHaveCount(0)
     await expect(panel.locator('.thread-drawer-edge, .thread-drawer')).toHaveCount(0)
     await expect(panel.locator('.thread-stack-more')).toHaveCount(0)
@@ -332,8 +331,7 @@ test.describe('Question stack', () => {
     await expect(page.locator('.thread-menu')).toBeVisible()
     await scan('page menu')
     await page.keyboard.press('Escape')
-    await panel.locator('.thread-drawer-toggle').click()
-    await expect(panel.locator('.thread-drawer')).toBeVisible()
+    await openQuestionList(page, panel)
     await scan('drawer open')
     await shot(page, 'c8-drawer-depth2')
   })
@@ -349,9 +347,7 @@ test.describe('Question stack', () => {
     await expect(page.locator('.thread-menu')).toHaveCount(0)
     await expectDepth(panel, 1)
     // The drawer open: Esc closes only the drawer.
-    await panel.locator('.thread-drawer-toggle').click()
-    const drawer = panel.locator('.thread-drawer')
-    await expect(drawer).toBeVisible()
+    const drawer = await openQuestionList(page, panel)
     await page.keyboard.press('Escape')
     await expect(drawer).toBeHidden()
     await expectDepth(panel, 1)

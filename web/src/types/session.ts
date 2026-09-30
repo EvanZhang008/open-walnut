@@ -65,6 +65,8 @@ export interface SessionThreadMeta {
   hidden?: boolean;
   suggestDismissed?: boolean;
   refinedAt?: string;
+  /** The question's number (1..), fixed when it is asked; the reply tag `[Q<seq>]` names it. */
+  seq?: number;
   updatedAt: string;
 }
 

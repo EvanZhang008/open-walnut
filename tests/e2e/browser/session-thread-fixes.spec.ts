@@ -4,12 +4,14 @@
  *    to close) and the session name stay reachable at 480px;
  *  - N14: the toast after Done leaves the row that just changed visible;
  *  - N19: a resolved Asked-from row reads grey;
- *  - N22: in Show all in order the outline rail sits over the gutter bars on an
+ *  - N22: in Conversation Mode the outline rail sits over the gutter bars on an
  *    opaque backing.
  * Dense fixture, reset per test, Chromium and WebKit.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, resetThreadsFixture } from './threads-helpers'
+import {
+  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, resetThreadsFixture, modePill, openQuestionList,
+} from './threads-helpers'
 import { densePassage } from './threads-fixture'
 
 const TASK = 'pw-task-threads-dense'
@@ -27,13 +29,12 @@ async function openDense(page: Page, width: number): Promise<Locator> {
   await page.goto('/')
   await pinPanelWidth(page, width)
   const panel = await openThreadsSession(page, DENSE_SESSION, TASK)
-  await expect(panel.locator('.thread-drawer-toggle')).toBeVisible({ timeout: 30_000 })
+  await expect(modePill(panel)).toBeVisible({ timeout: 30_000 })
   return panel
 }
 
 async function goTo(panel: Locator, query: string, title: RegExp): Promise<void> {
-  await panel.locator('.thread-drawer-toggle').click()
-  const drawer = panel.locator('.thread-drawer')
+  const drawer = await openQuestionList(panel.page(), panel)
   await expect(drawer).toHaveAttribute('data-mode', 'open')
   await drawer.locator('.thread-drawer-chip', { hasText: /^All\b/ }).click()
   const search = drawer.locator('.thread-drawer-search-input')
@@ -68,18 +69,17 @@ test.describe('Slice 1 layout fixes', () => {
   test.beforeEach(async ({ request }) => { await resetThreadsFixture(request, DENSE_SESSION) })
 
   for (const width of [480, 720]) {
-    test(`the open drawer leaves the header toggle and the session name reachable at ${width}px (N13)`, async ({ page }) => {
+    test(`the open drawer leaves the mode pill and the session name reachable at ${width}px (N13)`, async ({ page }) => {
       const panel = await openDense(page, width)
-      const toggle = panel.locator('.thread-drawer-toggle')
-      await toggle.click()
-      const drawer = panel.locator('.thread-drawer')
+      const pill = modePill(panel)
+      const drawer = await openQuestionList(page, panel)
       await expect(drawer).toHaveAttribute('data-mode', 'open')
       const header = await rectOf(panel.locator('.session-panel-header'))
       const box = await rectOf(drawer)
       expect(box.top, 'drawer starts below the session header').toBeGreaterThanOrEqual(header.bottom)
-      expect(await onTop(toggle), 'toggle is not covered').toBe(true)
+      expect(await onTop(pill), 'mode pill is not covered').toBe(true)
       expect(await onTop(panel.locator('.session-panel-title').first()), 'session name is not covered').toBe(true)
-      await toggle.click()
+      await page.keyboard.press('Escape')
       await expect(drawer).toHaveCount(0)
     })
   }
@@ -126,12 +126,12 @@ test.describe('Slice 1 layout fixes', () => {
     expect(colours.open).not.toBe(colours.muted)
   })
 
-  test('Show all in order: the question map sits clear of the gutter bars, and its rail on an opaque backing (N22)', async ({ page }) => {
+  test('Conversation Mode: the question map sits clear of the gutter bars, and its rail on an opaque backing (N22)', async ({ page }) => {
     const panel = await openDense(page, 1400)
     await goTo(panel, 'point 17 change', /^Reader skip cost$/)
     await panel.locator('.thread-stack-header .thread-stack-more').click()
-    await page.locator('.thread-menu [role="menuitem"]', { hasText: 'Show all in order' }).click()
-    await expect(panel.locator('.thread-linear-banner')).toBeVisible()
+    await page.locator('.thread-menu [role="menuitem"]', { hasText: 'Conversation Mode' }).click()
+    await expect(modePill(panel)).toHaveAttribute('data-view-mode', 'linear')
     const bar = panel.locator('.session-msg--threaded').first()
     await expect(bar).toBeAttached()
     // A wide column: the labelled map in its own gutter, left of every bar.
@@ -155,10 +155,9 @@ test.describe('Slice 1 layout fixes', () => {
     await expect(map).toHaveAttribute('data-shape', 'panel')
   })
 
-  test('keyboard cursor row and the toggle after an Esc close both show a ring, in WebKit too (N5, N34)', async ({ page }) => {
+  test('keyboard cursor row and the list button after an Esc close both show a ring, in WebKit too (N5, N34)', async ({ page }) => {
     const panel = await openDense(page, 720)
-    await panel.locator('.thread-drawer-toggle').click()
-    const drawer = panel.locator('.thread-drawer')
+    const drawer = await openQuestionList(page, panel)
     await expect(drawer).toHaveAttribute('data-mode', 'open')
     await drawer.locator('.thread-drawer-search-input').click()
     // Focus moves a frame after each key (the row can render late): pace them.
@@ -177,11 +176,11 @@ test.describe('Slice 1 layout fixes', () => {
     await expect(drawer).toHaveCount(0)
     const toggle = await page.evaluate(() => {
       const el = document.activeElement as HTMLElement | null
-      if (!el?.classList.contains('thread-drawer-toggle')) return { toggle: false, outline: `${el?.tagName}.${String(el?.className ?? '')}` }
+      if (el?.getAttribute('aria-label') !== 'Open the question list') return { toggle: false, outline: `${el?.tagName}.${String(el?.className ?? '')}` }
       const cs = getComputedStyle(el)
       return { toggle: true, outline: `${cs.outlineStyle} ${cs.outlineWidth}` }
     })
-    expect(toggle.toggle, `focus returned to the toggle, not ${toggle.outline}`).toBe(true)
+    expect(toggle.toggle, `focus returned to the map's list button, not ${toggle.outline}`).toBe(true)
     expect(toggle.outline).toBe('solid 2px')
   })
 
@@ -234,8 +233,7 @@ test.describe('Slice 1 layout fixes', () => {
   for (const width of [480, 720]) {
     test(`drawer text stays whole and its triangles read at ${width}px (N10, N11, N26)`, async ({ page }) => {
       const panel = await openDense(page, width)
-      await panel.locator('.thread-drawer-toggle').click()
-      const drawer = panel.locator('.thread-drawer')
+      const drawer = await openQuestionList(page, panel)
       await expect(drawer).toHaveAttribute('data-mode', 'open')
       await drawer.locator('.thread-drawer-chip', { hasText: /^All\b/ }).click()
       const summary = drawer.locator('.thread-drawer-summary')

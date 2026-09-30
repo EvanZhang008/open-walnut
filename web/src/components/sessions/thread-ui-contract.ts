@@ -128,13 +128,6 @@ export interface ThreadActions {
 
 // ── Props of the P4 components P3 mounts ──
 
-export interface ThreadDrawerToggleProps {
-  counts: ThreadCounts;
-  expanded: boolean;
-  narrow: boolean;
-  onToggle: () => void;
-}
-
 export interface ThreadTreeDrawerProps {
   sessionId: string;
   panelRef: RefObject<HTMLElement | null>;
@@ -156,6 +149,8 @@ export interface ThreadTreeDrawerProps {
   revealNonce: number;
   showHidden: boolean;
   setShowHidden: (show: boolean) => void;
+  /** Hidden (removed) questions in the loaded tree; the drawer offers to show them. */
+  hiddenCount: number;
   actions: ThreadActions;
   onNavigate: (key: string, via: ThreadNavVia) => void;
   onJumpPin: (pinKey: string, threadKey: string) => void;

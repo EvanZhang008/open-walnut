@@ -7,7 +7,9 @@
  * Checklist: C13, C21, C22, C24, C39, C46, C52, C70, C74, C78.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { DENSE_SESSION, openThreadsSession, readRecord, resetThreadsFixture } from './threads-helpers'
+import {
+  DENSE_SESSION, openThreadsSession, readRecord, resetThreadsFixture, modePill, openQuestionList,
+} from './threads-helpers'
 import { buildDenseSession } from './threads-fixture'
 
 const TASK = 'pw-task-threads-dense'
@@ -21,14 +23,13 @@ async function openDense(page: Page, width = 1400): Promise<Locator> {
   await page.goto('/')
   await pinPanelWidth(page, width)
   const panel = await openThreadsSession(page, DENSE_SESSION, TASK)
-  await expect(panel.locator('.thread-drawer-toggle')).toBeVisible({ timeout: 30_000 })
+  await expect(modePill(panel)).toBeVisible({ timeout: 30_000 })
   return panel
 }
 
 /** Go to a question through the drawer's search (Enter opens the first match). */
 async function goTo(panel: Locator, query: string, title: string | RegExp): Promise<Locator> {
-  await panel.locator('.thread-drawer-toggle').click()
-  const drawer = panel.locator('.thread-drawer')
+  const drawer = await openQuestionList(panel.page(), panel)
   await expect(drawer).toHaveAttribute('data-mode', 'open')
   await drawer.locator('.thread-drawer-chip', { hasText: /^All\b/ }).click()
   const search = drawer.locator('.thread-drawer-search-input')
@@ -243,14 +244,14 @@ test.describe('stack chrome', () => {
     await expect(more).toHaveAttribute('title', 'More')
     await more.click()
     const menu = page.locator('.thread-menu[role="menu"]')
-    await expect(menu.locator('[role="menuitem"]')).toHaveText(['Rename…', 'Mark done', 'Show in tree', 'Show all in order', 'Remove question…'])
+    await expect(menu.locator('[role="menuitem"]')).toHaveText(['Rename…', 'Mark done', 'Show in tree', 'Conversation Mode', 'Remove question…'])
     await fitsViewport(page, menu)
     await expect(menu.locator('select')).toHaveCount(0)
     await expect(menu.locator('[data-item="remove"] svg[data-thread-icon="trash"]')).toHaveCount(1)
     await menu.locator('[role="menuitem"]', { hasText: 'Remove question…' }).click()
     const confirm = page.locator('.thread-confirm')
     await expect(confirm.locator('.thread-confirm-title')).toHaveText(/^Remove this question and \d+ follow-ups\?$/)
-    await expect(confirm.locator('.thread-confirm-body')).toHaveText('Walnut hides them from this view. The session transcript is owned by the CLI and keeps every message; you can still read them in Show all in order.')
+    await expect(confirm.locator('.thread-confirm-body')).toHaveText('Walnut hides them from this view. The session transcript is owned by the CLI and keeps every message; you can still read them in Conversation Mode.')
     // Soft: default focus is ThreadConfirm's (P1) job; the steps after it still run.
     await expect.soft(confirm.getByRole('button', { name: 'Cancel' })).toBeFocused()
     await expect(confirm.getByRole('button', { name: 'Remove' })).toHaveClass(/thread-confirm-btn--danger/)
@@ -295,8 +296,7 @@ test.describe('stack chrome', () => {
     await expect(strip.locator('.thread-strip-text')).toHaveText('Each page checks its own sum before a read trusts it.')
     await expect.poll(async () => (await readRecord(request, DENSE_SESSION)).threadMeta!
       .find((m) => m.headId === headOf('Q2'))?.takeawaySource).toBe('user')
-    await panel.locator('.thread-drawer-toggle').click()
-    const drawer = panel.locator('.thread-drawer')
+    const drawer = await openQuestionList(page, panel)
     await drawer.locator('.thread-drawer-search-input').fill('checksum per page')
     await expect(drawer.locator('.thread-tree-row[aria-selected="true"] .thread-tree-secondary'))
       .toHaveText('Each page checks its own sum before a read trusts it.')
@@ -337,7 +337,7 @@ test.describe('stack chrome', () => {
   for (const width of [480, 1400]) {
     test(`stack chrome stays within 56px and never moves the session header at ${width}px (C70)`, async ({ page }) => {
       const panel = await openDense(page, width)
-      const toggle = panel.locator('.thread-drawer-toggle')
+      const toggle = modePill(panel)
       const at = { root: await stableRect(toggle) }
       const steps: Array<[string, RegExp | string]> = [
         ['point 1 change', 'Buffer flush order'], ['point 11 change', /^Point 11:/],

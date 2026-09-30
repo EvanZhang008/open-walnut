@@ -13,7 +13,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, FAILED_SESSION, REWRITTEN_SESSION, openThreadsSession, passageRects, resetThreadsFixture, sessionPanel,
+  centreInHistory, DENSE_SESSION, FAILED_SESSION, REWRITTEN_SESSION, openThreadsSession, passageRects, resetThreadsFixture, sessionPanel, openQuestionList, VIEW_MODE_DEFAULT_KEY,
 } from './threads-helpers'
 import { seedColumns, setPanelMode } from './draft-helpers'
 import { buildDenseSession, densePassage, seededThreadState } from './threads-fixture'
@@ -284,9 +284,7 @@ test.describe('Question stack landing', () => {
     await page.waitForLoadState('networkidle')
     const panel = await openThreadsSession(page, DENSE_SESSION, DENSE_TASK, DENSE_READY)
     // Root to Q1 through the drawer (R0 is above the loaded window), then Q11.
-    await panel.locator('.thread-drawer-toggle').click()
-    const drawer = panel.locator('.thread-drawer')
-    await expect(drawer).toBeVisible()
+    const drawer = await openQuestionList(page, panel)
     await drawer.locator('.thread-tree-row[data-kind="thread"]', { hasText: 'Buffer flush order' }).first().click()
     await expectDepth(panel, 1)
     await expect(drawer).toBeHidden()
@@ -313,7 +311,7 @@ test.describe('Question stack landing', () => {
     // From root, a quote pin that lives on Q21's page (three levels down).
     await panel.locator('.thread-sliver-bar').first().click()
     await expectDepth(panel, 0)
-    await panel.locator('.thread-drawer-toggle').click()
+    await openQuestionList(page, panel)
     await drawer.locator('.thread-drawer-chip', { hasText: 'Pinned' }).click()
     const pinRow = drawer.locator('.thread-tree-row[data-kind="pin"]', { hasText: densePassage('Q26').slice(0, 24) })
     await expect(pinRow).toBeVisible()
@@ -335,6 +333,8 @@ test.describe('Question stack landing', () => {
     })
     await page.setViewportSize({ width: 3400, height: 1000 })
     await resetThreadsFixture(page.request, FAILED_SESSION)
+    // Columns seeded past openThreadsSession: ask for Tree Mode the same way it does.
+    await page.addInitScript((key) => localStorage.setItem(key, 'stack'), VIEW_MODE_DEFAULT_KEY)
     await seedColumns(page, [DENSE_SESSION, FAILED_SESSION, REWRITTEN_SESSION])
     // Three columns explicitly (Auto's breakpoints measure the strip beside the
     // chat slot); set back to Auto at the end.
@@ -362,9 +362,9 @@ test.describe('Question stack landing', () => {
       expect(routed.length - before).toBe(1)
     }
     // The chord follows the page's platform (the Desktop Chrome device reports
-    // Windows even on a Mac host); the toggle's tooltip names the same one.
-    const title = await panels[0].locator('.thread-drawer-toggle').getAttribute('title')
-    const CHORD = title?.includes('Cmd') ? 'Meta+Shift+E' : 'Control+Shift+E'
+    // Windows even on a Mac host), the way usePanelKeyRouter reads it.
+    const mac = await page.evaluate(() => /mac|iphone|ipad/i.test((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform ?? navigator.userAgent))
+    const CHORD = mac ? 'Meta+Shift+E' : 'Control+Shift+E'
     // C19: keys typed in column 2 move column 2 only.
     await panels[1].locator('.chat-input-textarea').first().click()
     await pressOnce('Escape')

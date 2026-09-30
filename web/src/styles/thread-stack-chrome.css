@@ -1,6 +1,6 @@
 /* owner P3 */
 /*
- * Tree drawer + stack chrome (P4): the drawer toggle, the left-edge band, the
+ * Tree drawer + stack chrome (P4): the left-edge band, the
  * drawer overlay, tree rows, the stack row (back, crumbs, title, Done, More),
  * the thread menus and the resolved / suggested strip. Imported by
  * thread-stack.css; tokens from globals.css and the --thread-* foundation.
@@ -24,33 +24,6 @@
     --thread-chip-on: var(--bg-tertiary);
     --thread-chip-on-shadow: none;
   }
-}
-
-/* ── Drawer toggle (session header slot). min-width per tier: no jitter (C75). ── */
-.thread-drawer-toggle {
-  display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; height: 24px;
-  min-width: calc(9ch + 34px); padding: 0 8px; border: 1px solid var(--border); border-radius: 7px;
-  background: transparent; color: var(--fg-secondary); font: inherit; font-size: 12px;
-  font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer;
-}
-.thread-drawer-toggle[data-tier="answered"] { min-width: calc(26ch + 34px); }
-.thread-drawer-toggle[data-tier="narrow-answered"] { min-width: calc(11ch + 34px); }
-.thread-drawer-toggle:hover { background: var(--bg-hover); color: var(--fg); }
-.thread-drawer-toggle[aria-expanded="true"] { background: var(--accent-subtle); color: var(--accent-text); border-color: transparent; }
-.thread-drawer-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.thread-drawer-toggle:focus:not(:focus-visible) { outline: none; }
-/* WebKit: a keyboard close returns focus programmatically (no :focus-visible). */
-.thread-drawer-toggle[data-kb-focus="true"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.thread-drawer-toggle-count { display: inline-block; border-radius: 6px; padding: 0 3px; }
-.thread-drawer-toggle[data-all-done] .thread-drawer-toggle-count {
-  background: color-mix(in srgb, var(--success) 16%, transparent);
-  color: color-mix(in srgb, var(--success) 70%, var(--fg)); padding: 0 6px;
-}
-.thread-drawer-toggle-count--bump { animation: thread-count-bump 200ms ease-out; }
-@keyframes thread-count-bump {
-  0% { transform: scale(1); }
-  45% { transform: scale(1.18); }
-  100% { transform: scale(1); }
 }
 
 /* ── Left-edge band: no layout width, no pointer events (geometry only). ── */
@@ -106,7 +79,7 @@
   background: transparent; color: var(--fg-secondary); cursor: pointer;
 }
 .thread-drawer-close:hover { background: var(--bg-hover); color: var(--fg); }
-.thread-drawer-older {
+.thread-drawer-older, .thread-drawer-hidden {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 12px 4px; color: var(--fg-muted);
   font-size: 12px;
 }
@@ -386,7 +359,7 @@
 @media (prefers-reduced-motion: reduce) {
   .thread-drawer { animation: thread-drawer-fade-in 120ms linear; }
   .thread-drawer[data-state="closing"] { animation: thread-drawer-fade-out 120ms linear forwards; }
-  .thread-drawer-toggle-count--bump, .thread-tree-row[data-pulse="true"], .thread-tree-skeleton { animation: none; }
+  .thread-tree-row[data-pulse="true"], .thread-tree-skeleton { animation: none; }
   .thread-tree-disclosure svg, .thread-drawer-edge::after { transition: none; }
 }
 @keyframes thread-drawer-fade-in { from { opacity: 0; } to { opacity: 1; } }

@@ -48,7 +48,7 @@ export interface UseThreadStackArgs {
   hiddenKeys: ReadonlySet<string>;
   metaIndex: ThreadMetaIndex;
   panelRef: RefObject<HTMLElement | null>;
-  /** The stack view is chosen (not Show all in order). The stack is live when
+  /** Tree Mode is chosen (not Conversation Mode). The stack is live when
    *  this holds AND the session has questions (or a pending page). */
   stackView: boolean;
   composer: ComposerProbe;
@@ -102,6 +102,13 @@ export interface ThreadStackHandle {
   lastViewedAt: ReadonlyMap<string, number>;
   /** The stack is live (stack view, and questions or a pending page exist). */
   enabled: boolean;
+  /**
+   * Questions exist (or a pending page / a draft does), whichever view is on.
+   * In Conversation Mode the path is not a page but the composer's TARGET: the
+   * question a click on a turn label or a sidebar row selected, or the pending
+   * question an Ask opened; the timeline stays unfiltered. Esc clears it.
+   */
+  active: boolean;
   /** The panel's width TIER (widthTier: 0 unmeasured or no questions; the
    *  toggle's narrow label reads it). */
   panelWidth: number;
@@ -139,9 +146,12 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   draftsRef.current = drafts;
   // A draft question (an unsent page left with text) keeps the stack on too: its
   // row is the way back to it.
-  const enabled = args.stackView && (tree.threads.length > 1 || !!state.pending || drafts.size > 0);
+  const active = tree.threads.length > 1 || !!state.pending || drafts.size > 0;
+  const enabled = args.stackView && active;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const lastViewed = useRef(new Map<string, number>());
   const [viewedTick, setViewedTick] = useState(0);
   /** The reload restore is decided (landed, given up, or the reader moved first). */
@@ -394,7 +404,7 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   usePanelKeyRouter(args.panelRef, {
     sessionId,
     onEscape: () => {
-      if (!enabledRef.current) return false;
+      if (!activeRef.current) return false;
       if (drawerModeRef.current !== 'closed') { setDrawerMode('closed'); return true; }
       const c = argsRef.current.composer;
       const decision = escapeDecision({ depth: stateRef.current.path.length - 1, composerFocused: c.focused(), composerText: c.text() });
@@ -403,11 +413,11 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
       return true;
     },
     onToggleDrawer: () => {
-      if (!enabledRef.current) return false;
+      if (!activeRef.current) return false;
       setDrawerMode((m) => (m === 'closed' ? 'open' : 'closed'));
       return true;
     },
-    hasEscapeLayer: () => enabledRef.current && drawerModeRef.current !== 'closed',
+    hasEscapeLayer: () => activeRef.current && drawerModeRef.current !== 'closed',
   });
 
   const depth = state.path.length - 1;
@@ -416,9 +426,9 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   useEffect(() => {
     const el = args.panelRef.current;
     if (!el) return;
-    if (enabled) el.setAttribute('data-thread-depth', String(depth));
+    if (active) el.setAttribute('data-thread-depth', String(depth));
     else el.removeAttribute('data-thread-depth');
-  }, [args.panelRef, enabled, depth]);
+  }, [args.panelRef, active, depth]);
 
   // The leaf rides the URL (`t<n>` beside the column's `s<n>`).
   const leafKey = state.path[state.path.length - 1];
@@ -486,5 +496,5 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     return () => ro.disconnect();
   }, [args.panelRef, hasQuestions]);
 
-  return { api, bridge, drawer, promotePending, lastViewedAt, enabled, panelWidth };
+  return { api, bridge, drawer, promotePending, lastViewedAt, enabled, active, panelWidth };
 }

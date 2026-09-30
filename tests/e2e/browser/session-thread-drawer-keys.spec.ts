@@ -8,18 +8,19 @@
  * Checklist: C13, C30, C33, C39, C66, C73, C81.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { DENSE_SESSION, openThreadsSession, readRecord, resetThreadsFixture } from './threads-helpers'
+import {
+  DENSE_SESSION, openThreadsSession, readRecord, resetThreadsFixture, modePill, openQuestionList,
+} from './threads-helpers'
 import { buildDenseSession } from './threads-fixture'
 
 const TASK = 'pw-task-threads-dense'
-const REMOVE_BODY = 'Walnut hides them from this view. The session transcript is owned by the CLI and keeps every message; you can still read them in Show all in order.'
+const REMOVE_BODY = 'Walnut hides them from this view. The session transcript is owned by the CLI and keeps every message; you can still read them in Conversation Mode.'
 
 async function openDrawer(page: Page): Promise<{ panel: Locator; drawer: Locator }> {
   await page.goto('/')
   const panel = await openThreadsSession(page, DENSE_SESSION, TASK)
-  const toggle = panel.locator('.thread-drawer-toggle')
-  await expect(toggle).toBeVisible({ timeout: 30_000 })
-  await toggle.click()
+  await expect(modePill(panel)).toBeVisible({ timeout: 30_000 })
+  await openQuestionList(page, panel)
   const drawer = panel.locator('.thread-drawer')
   await expect(drawer).toHaveAttribute('data-mode', 'open')
   return { panel, drawer }
@@ -75,12 +76,16 @@ test.describe('tree drawer keys and inline actions', () => {
 
   test('Enter jumps and closes; Esc on a row closes and gives focus back (C30)', async ({ page }) => {
     const { panel, drawer } = await openDrawer(page)
-    const toggle = panel.locator('.thread-drawer-toggle')
     await rowTitled(drawer, 'Buffer flush order').focus()
     await page.keyboard.press('Escape')
     await expect(drawer).toHaveCount(0)
-    await expect(toggle).toBeFocused()
-    await toggle.click()
+    // The opener was the map: its list button (panel shape) or, since the rail's
+    // card closed with the drawer, the rail itself.
+    await expect.poll(() => panel.evaluate((root) => {
+      const el = document.activeElement
+      return !!el && root.contains(el) && !!el.closest('.thread-map')
+    })).toBe(true)
+    await openQuestionList(page, panel)
     await rowTitled(drawer, 'Buffer flush order').focus()
     await page.keyboard.press('Enter')
     await expect(drawer).toHaveCount(0)

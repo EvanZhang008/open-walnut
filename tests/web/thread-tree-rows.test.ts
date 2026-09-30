@@ -16,7 +16,6 @@ import { buildDenseSession, DENSE_EXPECTED_COUNTS } from '../e2e/browser/threads
 import { shouldArmEdge } from '@/hooks/useDrawerEdgePeek';
 import { insidePeekRegion } from '@/hooks/useDrawerPeekClose';
 import { foldCrumbs, pathItems } from '@/components/sessions/ThreadStackCrumbs';
-import { toggleTier } from '@/components/sessions/ThreadDrawerToggle';
 import { answeredAgo } from '@/components/sessions/ThreadTreeRows';
 import { lazyNameCandidates } from '@/components/sessions/ThreadTreeDrawer';
 import { pathToRoot } from '@/utils/thread-tree';
@@ -385,17 +384,6 @@ describe('drawer and stack chrome rules', () => {
     const { tree, index, keyOf } = dense();
     const items = pathItems(pathToRoot(tree, keyOf('Q21')), index);
     expect(items.map((i) => i.label)).toEqual(['Main', 'Buffer flush order', expect.stringMatching(/^Point 11:/)]);
-  });
-
-  it('the toggle width tier never changes between `1 open` and `All done` (C75)', () => {
-    const c = { open: 1, suggested: 0, done: 3, older: 0, all: 4, pinned: 0 };
-    expect(toggleTier(c, false)).toBe('base');
-    expect(toggleTier({ ...c, open: 0 }, false)).toBe('base');
-    expect(toggleTier({ ...c, suggested: 2 }, false)).toBe('answered');
-    // N47: narrow shows `<n> open` while any is open, in the base width; only
-    // `<n> to check` takes the wider narrow slot.
-    expect(toggleTier({ ...c, suggested: 2 }, true)).toBe('base');
-    expect(toggleTier({ ...c, open: 0, suggested: 2 }, true)).toBe('narrow-answered');
   });
 
   it('unread tooltips read `Answered <relative time>`', () => {

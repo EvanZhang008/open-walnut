@@ -27,7 +27,7 @@ import {
   memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent,
   type RefObject,
 } from 'react';
-import { ThreadStatusDot } from '@/components/sessions/ThreadStatusDot';
+import { ThreadStatusWord } from '@/components/sessions/ThreadStatusWord';
 import { ThreadChevronIcon, ThreadListIcon, ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { answeredAgo } from '@/components/sessions/ThreadTreeRows';
 import { mapOverlayWidth, mapStep, onPathIds, railMarks, type ThreadMapShape } from '@/utils/thread-map';
@@ -43,6 +43,9 @@ export interface ThreadMapProps {
   scrollerRef: RefObject<HTMLElement | null>;
   /** The scroll box's width, px: the rail's list never runs past it. */
   boxWidth: number;
+  /** The panel shape's width, px (0 for the rail): decides whether the status
+   *  word fits beside the titles. */
+  panelWidth: number;
   rows: TreeRow[];
   counts: ThreadCounts;
   unreadKeys: ReadonlySet<string>;
@@ -130,25 +133,36 @@ function rowDomId(id: string): string {
   return encodeURIComponent(id);
 }
 
-function rowStyle(depth: number, hue: number): CSSProperties {
-  return { '--map-depth': depth, '--thread-hue': String(hue) } as CSSProperties;
+/** Depth only: a question has a number, not a colour. */
+function rowStyle(depth: number): CSSProperties {
+  return { '--map-depth': depth } as CSSProperties;
 }
 
 /**
- * The leading glyph: a status dot, the pin icon, or the done group's chevron.
- * Rows and marks take primitives and are memoized: every push and pop rebuilds
- * the row objects (a new current page), and without this every row and every
- * glyph re-rendered for a change that touches two or three of them.
+ * The leading glyph: the question's NUMBER, the pin icon, or the done group's
+ * chevron. A pending or draft question (no number yet) shows a plus. Rows and
+ * marks take primitives and are memoized: every push and pop rebuilds the row
+ * objects (a new current page), and without this every row and every glyph
+ * re-rendered for a change that touches two or three of them.
  */
-const Lead = memo(function Lead({ kind, status, hue, depth, expanded }: {
-  kind: TreeRow['kind']; status: TreeRow['status']; hue: number; depth: number; expanded: boolean;
+const Lead = memo(function Lead({ kind, number, expanded }: {
+  kind: TreeRow['kind']; number: number | undefined; expanded: boolean;
 }) {
   if (kind === 'pin') return <ThreadPinIcon size={11} className="thread-map-pin" />;
   if (kind === 'done-group') {
     return <span className="thread-map-fold" data-open={expanded ? 'true' : undefined}><ThreadChevronIcon size={9} /></span>;
   }
   if (kind === 'root') return <span className="thread-map-root-dot" aria-hidden="true" />;
-  return <ThreadStatusDot status={status ?? 'older'} hue={hue} depth={depth} />;
+  // A question being asked has no number yet: a plus in the badge's place (an
+  // SVG, so a row's text is its title alone).
+  if (kind === 'pending' || kind === 'draft') {
+    return (
+      <span className="thread-map-num thread-map-num--new" aria-hidden="true">
+        <svg viewBox="0 0 10 10" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M5 1.5v7M1.5 5h7" /></svg>
+      </span>
+    );
+  }
+  return <span className="thread-map-num" aria-hidden="true">{number ?? ''}</span>;
 });
 
 interface MapRowProps {
@@ -164,10 +178,12 @@ interface MapRowProps {
   label: string;
   naming: boolean;
   depth: number;
-  hue: number;
+  number: number | undefined;
   tabIndex: number;
   entry: boolean;
   unread: string | undefined;
+  /** Room for the status WORD (else the glyph alone, the word as its tooltip). */
+  wide: boolean;
   onFocusStop: (stop: string) => void;
   onClickRow: (id: string, byKey: boolean) => void;
 }
@@ -190,16 +206,24 @@ const MapRow = memo(function MapRow(r: MapRowProps) {
       aria-disabled={r.disabled ? 'true' : undefined}
       aria-label={r.kind === 'pin' ? r.name : undefined}
       title={r.name}
-      style={rowStyle(r.depth, r.hue)}
+      style={rowStyle(r.depth)}
       onFocus={() => r.onFocusStop(r.stop)}
       onClick={(e) => r.onClickRow(r.id, byKeyboard(e))}
     >
       <span className="thread-map-lead">
-        <Lead kind={r.kind} status={r.status} hue={r.hue} depth={r.depth} expanded={r.expanded} />
+        <Lead kind={r.kind} number={r.number} expanded={r.expanded} />
       </span>
       <span className="thread-map-label">{r.label}</span>
       {r.naming && <span className="thread-naming">Naming…</span>}
-      {r.unread && <ThreadStatusDot status="open" hue={r.hue} unread title={r.unread} className="thread-map-unread" />}
+      {r.kind === 'thread' && (
+        <ThreadStatusWord
+          status={r.status}
+          unread={!!r.unread}
+          compact={!r.wide}
+          {...(r.unread ? { title: r.unread } : {})}
+          className="thread-map-status"
+        />
+      )}
     </button>
   );
 });
@@ -226,6 +250,9 @@ function MapList(p: ListProps) {
   useLayoutEffect(() => { setCursor(undefined); }, [currentId]);
 
   const showToggle = !p.overlay || p.roomy;
+  // The status word needs room beside a title: below this width the glyph
+  // stands alone and the word is its tooltip.
+  const wide = p.overlay || p.panelWidth >= 220;
   const stops = useMemo(() => [
     STOP_LIST, ...(showToggle ? [STOP_TOGGLE] : []), ...rows.map((r) => rowDomId(r.id)), ...(p.canGoBack ? [STOP_BACK] : []),
   ], [showToggle, rows, p.canGoBack]);
@@ -341,10 +368,11 @@ function MapList(p: ListProps) {
               label={row.title}
               naming={!!row.naming}
               depth={row.depth}
-              hue={row.hue}
+              number={row.number}
               tabIndex={tabIndexOf(stop)}
               entry={stop === tabStop}
               unread={unreadTitle(row)}
+              wide={wide}
               onFocusStop={onFocusStop}
               onClickRow={onClickRow}
             />
@@ -488,9 +516,9 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
               data-status={row.status}
               data-current={row.current ? 'true' : undefined}
               data-unread={row.kind === 'thread' && p.unreadKeys.has(row.key) ? 'true' : undefined}
-              style={rowStyle(row.depth, row.hue)}
+              style={rowStyle(row.depth)}
             >
-              <Lead kind={row.kind} status={row.status} hue={row.hue} depth={row.depth} expanded={row.expanded} />
+              <Lead kind={row.kind} number={row.number} expanded={row.expanded} />
             </span>
           ))}
           {more > 0 && <span className="thread-map-mark thread-map-mark--more">+{more}</span>}
