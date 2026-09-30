@@ -303,6 +303,14 @@ interface UseTasksReturn {
   tasks: Task[];
   loading: boolean;
   refreshing: boolean;
+  /** Completed tasks older than the recent window that are not in `tasks` yet (0 once all are loaded). */
+  completedHidden: number;
+  /**
+   * Load the whole archive (every completed task) and keep loading it on later
+   * refetches. Surfaces that show completed rows call this when they start to:
+   * Show completed, the COMPLETE phase filter, search, the /tasks Done chip.
+   */
+  ensureAllTasks: () => void;
   error: string | null;
   operationError: string | null;
   clearOperationError: () => void;
@@ -399,6 +407,10 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const [folderMeta, setFolderMeta] = useState<Record<string, FolderMeta>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [completedHidden, setCompletedHidden] = useState(0);
+  // Once a surface asks for the archive every later list fetch is the whole
+  // list, so a refetch can keep dropping rows the answer no longer carries.
+  const wantAllTasks = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const opErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -541,18 +553,19 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // fetchTasks takes no query: `/` and `/tasks` share this one cache, so every
     // condition is evaluated in the browser (see api/tasks.ts). `filter` stays a
     // refetch key + log field only.
-    tasksApi.fetchTasks({
-      minimal: true,
+    tasksApi.fetchTaskList({
+      ...(wantAllTasks.current ? {} : { recentCompletedDays: tasksApi.RECENT_COMPLETED_DAYS }),
       onDispatch: () => {
         if (listDispatch.current?.generation === generation) listDispatch.current.at = performance.now();
       },
     })
-      .then((tasks) => {
+      .then(({ tasks, completedHidden: hidden }) => {
         if (generation !== fetchGeneration.current) return;
         const elapsed = Math.round(performance.now() - t0);
         endPerf?.(`${tasks.length} tasks`);
-        log.info('tasks', 'fetch complete', { count: tasks.length, elapsed, attempt });
+        log.info('tasks', 'fetch complete', { count: tasks.length, completedHidden: hidden, elapsed, attempt });
         hasLoadedRef.current = true;
+        setCompletedHidden(hidden);
         // startTransition: adopting ~6k tasks renders thousands of rows — as a
         // sync render that was a 2-3s main-thread block on every page load.
         // Time-sliced, the page stays responsive while rows mount. Loading
@@ -1363,5 +1376,12 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       .finally(() => { movingFolders.current.delete(groupId); });
   }, [onOpError, refetchGroups, showOperationError]);
 
-  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, setPluginField, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb, moveFolderToProject: moveFolderToProjectCb };
+  const ensureAllTasks = useCallback(() => {
+    if (wantAllTasks.current) return;
+    wantAllTasks.current = true;
+    log.info('tasks', 'loading the completed archive');
+    refetch();
+  }, [refetch]);
+
+  return { tasks, taskGroups, hiddenGroups, folderMeta, loading, refreshing, completedHidden, ensureAllTasks, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, setPluginField, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb, createFolder: createFolderCb, deleteFolder: deleteFolderCb, setFolderParent: setFolderParentCb, moveFolderToProject: moveFolderToProjectCb };
 }

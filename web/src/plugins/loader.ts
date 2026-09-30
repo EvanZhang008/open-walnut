@@ -211,26 +211,35 @@ export function initWebPlugins(): Promise<void> {
   // the client's own plugins-changed); they collapse into one catalogue read (N2-10).
   //
   // Each signal is stamped with when it arrived, and the run asks the skill bridge
-  // for a list that includes changes up to the LATEST stamp it serves: on a page
-  // load, the first socket connect then reuses the skill read index.ts already
-  // sent after it instead of reading the 1.2MB list again.
+  // for a list that includes changes up to the LATEST stamp it serves.
+  //
+  // The page's FIRST connect is stamped 0: it announces no change, it only proves
+  // the server is up. The skill list index.ts read (or is reading) covers it, and
+  // a read that failed or never ran still happens. Stamping it with the connect
+  // time made every load read the 1.2MB list twice, because index.ts's read
+  // leaves before the socket opens after React's first mount. A reconnect may
+  // follow changes this socket missed, so it is stamped like any change.
   let latestSignalAt = 0
   const coalesced = coalesceRefresh(() => refreshWebPluginsWithCommands(latestSignalAt))
-  const refreshWithCommands = () => {
-    latestSignalAt = performance.now()
+  const signal = (changedAt: number) => {
+    latestSignalAt = Math.max(latestSignalAt, changedAt)
     void coalesced.request()
   }
+  const refreshWithCommands = () => signal(performance.now())
   window.addEventListener(PLUGINS_CHANGED_EVENT, refreshWithCommands)
   wsClient.onEvent('plugin:runtime-changed', refreshWithCommands)
+  let connectedBefore = false
   wsClient.onConnectionChange((state) => {
-    if (state === 'connected') refreshWithCommands()
+    if (state !== 'connected') return
+    signal(connectedBefore ? performance.now() : 0)
+    connectedBefore = true
   })
   // The catalogue only: commands/index.ts owns the first command + skill load.
   // Running the command refresh here too made every page load read the skill
   // list (1.2MB) an extra time, concurrently with index.ts's own read. A first
   // connect still asks (it is how a page loaded while the server was down
   // recovers its palette); the skill bridge answers it from index.ts's read when
-  // that read left after the connect.
+  // that read succeeded or is still running.
   return Promise.all([refreshWebPlugins(), refreshAppsCatalogue()]).then(() => undefined)
 }
 

@@ -1,8 +1,18 @@
 import { apiGet, apiPut, apiPost } from './client';
 import type { Config } from '@open-walnut/core';
+import { invalidateSharedGet, sharedGet } from './shared-get';
+
+const CONFIG_URL = '/api/config';
+// After a reconnect the answer may predate a change whose event this socket missed.
+const CONFIG_CHANGE_EVENTS = ['config:changed', '_ws:reconnected'] as const;
+
+/** fetchConfig and the page-lifetime helpers below read ONE shared request. */
+function fetchConfigResponse<T>(): Promise<T> {
+  return sharedGet(CONFIG_URL, () => apiGet<T>(CONFIG_URL), { invalidateOn: CONFIG_CHANGE_EVENTS });
+}
 
 export async function fetchConfig(): Promise<Config & { _envTokenHint?: string }> {
-  const res = await apiGet<{ config: Config; envTokenHint?: string }>('/api/config');
+  const res = await fetchConfigResponse<{ config: Config; envTokenHint?: string }>();
   // Attach env hint as a transient field
   if (res.envTokenHint) (res.config as Config & { _envTokenHint?: string })._envTokenHint = res.envTokenHint;
   return res.config;
@@ -55,7 +65,7 @@ let _factsPromise: Promise<ServerFacts> | null = null;
 let _facts: ServerFacts | null = null;
 function serverFacts(): Promise<ServerFacts> {
   if (!_factsPromise) {
-    const p: Promise<ServerFacts> = apiGet<ServerFacts>('/api/config')
+    const p: Promise<ServerFacts> = fetchConfigResponse<ServerFacts>()
       .then(res => { if (_factsPromise === p) _facts = res; return res; })
       .catch(err => { if (_factsPromise === p) _factsPromise = null; throw err; });
     _factsPromise = p;
@@ -70,6 +80,7 @@ function selectFact<T>(pick: (facts: ServerFacts) => T, fallback: T): Promise<T>
 export function _resetServerFactsForTest(): void {
   _factsPromise = null;
   _facts = null;
+  invalidateSharedGet(CONFIG_URL);
 }
 
 /**
@@ -89,6 +100,7 @@ export function fetchSelfRepair(): Promise<SelfRepairInfo | null> {
 }
 export function invalidateSelfRepair(): void {
   _factsPromise = null;
+  invalidateSharedGet(CONFIG_URL);
 }
 
 /** Notes vault root (cwd for Claude Code sessions started from /notes). null in cloud mode. */
@@ -127,8 +139,14 @@ export function peekBuildInfo(): BuildInfo | null {
   return _facts?.build ?? null;
 }
 
+/** A read started before or during the write may predate it: drop it both times. */
 export async function updateConfig(config: Partial<Config>): Promise<{ ok: boolean }> {
-  return apiPut<{ ok: boolean }>('/api/config', config);
+  invalidateSharedGet(CONFIG_URL);
+  try {
+    return await apiPut<{ ok: boolean }>(CONFIG_URL, config);
+  } finally {
+    invalidateSharedGet(CONFIG_URL);
+  }
 }
 
 export interface TestConnectionResult {

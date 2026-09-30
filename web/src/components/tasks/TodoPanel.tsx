@@ -53,6 +53,7 @@ import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
+import { countSubtasksByParent, resolveParentRef, withSubtaskContext } from './task-tree-index';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useShowPriority } from '@/hooks/useShowPriority';
@@ -1709,7 +1710,7 @@ function getEffectiveDateField(task: Task, allTasks: Task[], field: 'due_date' |
   // Walk up parent chain (max 10 depth to avoid infinite loops)
   let current: Task | undefined = task;
   for (let i = 0; i < 10 && current?.parent_task_id; i++) {
-    const parent = allTasks.find(t => t.id.startsWith(current!.parent_task_id!));
+    const parent: Task | undefined = resolveParentRef(allTasks, current.parent_task_id);
     if (!parent) break;
     if (parent[field]) return parent[field];
     current = parent;
@@ -5241,29 +5242,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // depth. They are RENDERED but are not filter hits: a parent matching must
     // never make its whole subtree count as matches, or the result count and the
     // chips would over-report. Only the completed-hiding rule applies to them.
-    const result = [...matchedList];
-    const included = new Set<string>(matchedIds);
-    let added = true;
-    while (added) {
-      added = false;
-      for (const t of tasks) {
-        if (included.has(t.id)) continue; // already included
-        if (!t.parent_task_id) continue; // not a child task
-        // Respect completed filter even for children (but keep recently-completed visible)
-        if (!completedBypass(t) && !showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE' && !keepWhileCompleting(t)) continue;
-        // parent_task_id uses a prefix convention: check if any visible task's id
-        // starts with this task's parent_task_id (handles composite/prefixed IDs).
-        // Only a parent in the SAME project pulls its child in: a subtask filed
-        // into another project is that project's own row (its Sub pill carries
-        // the link), and must not drag its project into a view filtered to the parent's.
-        const parentVisible = result.some(p => p.id.startsWith(t.parent_task_id!) && sameProjectKey(p.project, t.project));
-        if (parentVisible) {
-          result.push(t);
-          included.add(t.id);
-          added = true;
-        }
-      }
-    }
+    const result = withSubtaskContext(tasks, matchedList, (t) =>
+      completedBypass(t) || showCompleted || t.status !== 'done' || phaseFilter === 'COMPLETE' || keepWhileCompleting(t));
     return { list: result, matchedIds };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- focusOverrideRef/fadingOverrideRef read via _overrideTick
   }, [tasks, showCompleted, phaseFilter, matchesQuery, completedBypass, taskQueryState.pinned, dateFilter, _tick, _overrideTick, recentTick, activeProject]);
@@ -5295,6 +5275,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Search mode keeps completed tasks visible, so no exit animation there either
   // (otherwise the row fades out then pops back when the grace timer clears).
   const completedWillHide = !showCompleted && phaseFilter !== 'COMPLETE' && !isSearchMode;
+
+  // The list arrives with a recent window of completed tasks (useTasks); the
+  // first view that shows completed rows loads the rest of the archive once.
+  const tasksStore = useTasksContextSafe();
+  const ensureAllTasks = tasksStore?.ensureAllTasks;
+  const wantsCompletedArchive = showCompleted || phaseFilter === 'COMPLETE' || isSearchMode
+    || taskQueryState.completion.includes('complete') || taskQueryState.phases.includes('COMPLETE');
+  useEffect(() => {
+    if (wantsCompletedArchive) ensureAllTasks?.();
+  }, [wantsCompletedArchive, ensureAllTasks]);
 
   const overrideReasonTaskId = filterOverrideId || fadingOverrideId;
 
@@ -5888,16 +5878,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Orphans (parent hidden/completed/filtered out) render as normal top-level tasks.
   // True child count from the FULL task list (unfiltered) — used for chevron + "N sub" badge
   // so the user always sees that children exist, even when they're filtered out.
-  const trueChildCountMap = useMemo(() => {
-    const countMap = new Map<string, number>();
-    for (const task of tasks) {
-      if (task.parent_task_id) {
-        const parent = tasks.find((t) => t.id.startsWith(task.parent_task_id!));
-        if (parent) countMap.set(parent.id, (countMap.get(parent.id) ?? 0) + 1);
-      }
-    }
-    return countMap;
-  }, [tasks]);
+  const trueChildCountMap = useMemo(() => countSubtasksByParent(tasks), [tasks]);
 
   const { childTaskIds, childParentMap, depthMap } = useMemo(() => {
     const childIds = new Set<string>();
@@ -5906,7 +5887,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (task.parent_task_id) {
         // Find parent — match by prefix (parent_task_id may be a short prefix)
         const parentId = task.parent_task_id;
-        const parent = sorted.find((t) => t.id.startsWith(parentId));
+        const parent = resolveParentRef(sorted, parentId);
         // Same project only, as computeSortOrder nests: a cross-project subtask
         // is a top-level row in its own project, never indented or folded away.
         if (parent && sameProjectKey(parent.project, task.project)) {

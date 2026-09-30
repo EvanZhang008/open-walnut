@@ -29,6 +29,8 @@ vi.mock('@/utils/log', () => ({ log: logMock }))
 
 const api = vi.hoisted(() => ({
   fetchTasks: vi.fn(),
+  fetchTaskList: vi.fn(async (opts?: unknown) => ({ tasks: await api.fetchTasks(opts as never), completedHidden: 0 })),
+  RECENT_COMPLETED_DAYS: 7,
   fetchTasksByIds: vi.fn(),
   fetchTaskGroups: vi.fn(async () => []),
   updateTask: vi.fn(),

@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useEvent } from './useWebSocket';
 import type { LocalClaudeStatus } from '@/api/local-claude';
+import { sharedGet } from '@/api/shared-get';
 
 export interface GitSyncHealth {
   protected: boolean;
@@ -56,13 +57,13 @@ export function useSystemHealth() {
   const [gitSync, setGitSync] = useState<GitSyncHealth>(defaultGitSync);
   const [loading, setLoading] = useState(true);
 
-  // Fetch initial state
+  // Fetch initial state. Every consumer mounts this hook, so the reads are shared.
   useEffect(() => {
-    fetch('/api/system/health')
+    sharedGet('/api/system/health', () => fetch('/api/system/health')
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
-      })
+      }), { invalidateOn: ['system:health'] })
       .then((data: SystemHealth) => {
         setHealth(data);
         setLoading(false);
@@ -72,11 +73,11 @@ export function useSystemHealth() {
       });
 
     // Fetch git-sync status separately
-    fetch('/api/git-sync/status')
+    sharedGet('/api/git-sync/status', () => fetch('/api/git-sync/status')
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
-      })
+      }), { invalidateOn: ['git-sync:status'] })
       .then((data: GitSyncHealth) => setGitSync(data))
       .catch(() => {});
   }, []);

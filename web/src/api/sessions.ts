@@ -1,5 +1,5 @@
 import { apiGet, apiPatch, apiPost, apiPut, ApiError } from './client';
-import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry, SessionEngine, SessionCronMetadata } from '@open-walnut/core';
+import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogEntry, SessionEngine, SessionCronMetadata, Task } from '@open-walnut/core';
 import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
@@ -98,20 +98,63 @@ export async function fetchSessionSummaries(limit?: number): Promise<SessionSumm
 
 const STATUS_HYDRATION_BATCH_SIZE = 100;
 
+/** The sessions a task's status pills read: its slots plus its newest historical id. */
+export function taskSessionIds(tasks: Iterable<Task>): string[] {
+  const ids = new Set<string>();
+  for (const task of tasks) {
+    if (task.session_id) ids.add(task.session_id);
+    if (task.plan_session_id) ids.add(task.plan_session_id);
+    if (task.exec_session_id) ids.add(task.exec_session_id);
+    const historicalIds = task.session_ids ?? [];
+    const latestHistoricalId = historicalIds[historicalIds.length - 1];
+    if (latestHistoricalId) ids.add(latestHistoricalId);
+  }
+  return [...ids];
+}
+
+/**
+ * Whether a task list load hydrates this task's sessions. A board holds
+ * thousands of finished tasks (4,792 sessions against 164 of open tasks,
+ * 2026-09-29), and hydrating them all was 48 serial requests on every load. A
+ * finished task keeps the status its list payload seeded, live events still
+ * update it, and opening it hydrates it (hydrateTaskSessionStatuses).
+ */
+export function isTaskOpenForStatus(task: Pick<Task, 'phase' | 'status'>): boolean {
+  return task.phase !== 'COMPLETE' && task.status !== 'done';
+}
+
+/** taskSessionIds over the open tasks only (see isTaskOpenForStatus). */
+export function openTaskSessionIds(tasks: Iterable<Task>): string[] {
+  const open: Task[] = [];
+  for (const task of tasks) if (isTaskOpenForStatus(task)) open.push(task);
+  return taskSessionIds(open);
+}
+
+/** Hydrate these tasks' sessions now, finished tasks included (a task being opened). */
+export function hydrateTaskSessionStatuses(tasks: Iterable<Task>): Promise<void> {
+  return hydrateSessionStatuses(taskSessionIds(tasks));
+}
+
 export async function hydrateSessionStatuses(sessionIds: Iterable<string>): Promise<void> {
   const uniqueIds = [...new Set(sessionIds)]
     .filter((sessionId) => sessionId && !isPlaceholderColumnId(sessionId));
   for (let index = 0; index < uniqueIds.length; index += STATUS_HYDRATION_BATCH_SIZE) {
     const ids = uniqueIds.slice(index, index + STATUS_HYDRATION_BATCH_SIZE);
     const cronGeneration = sessionStatusStore.getCronRequestGeneration();
+    const startedAt = performance.now();
     try {
       const res = await apiGet<{ statuses: Record<string, unknown>; cron?: Record<string, SessionCronMetadata> }>(
         '/api/sessions/status',
         { ids: ids.join(',') },
       );
-      for (const snapshot of Object.values(res.statuses ?? {})) {
-        sessionStatusStore.applyVersioned(snapshot, 'rest:session-list');
-      }
+      const snapshots = Object.values(res.statuses ?? {});
+      const accepted = sessionStatusStore.applyVersionedBatch(snapshots, 'rest:session-list');
+      log.info('session-status', 'status batch hydrated', {
+        requested: ids.length,
+        received: snapshots.length,
+        accepted,
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
       if (cronGeneration === sessionStatusStore.getCronRequestGeneration()) {
         for (const metadata of Object.values(res.cron ?? {})) sessionStatusStore.applyCron(metadata, 'rest:session-list');
       }

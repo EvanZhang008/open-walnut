@@ -20,6 +20,8 @@ interface SkillLoad {
    *  it still waits. From that moment the server may already have read the skill
    *  list, so a change made later is not guaranteed to be in the answer. */
   dispatchedAt: number | null;
+  /** The answer reached the palette (false while in flight, and for a failed read). */
+  installed: boolean;
 }
 
 let inFlight: SkillLoad | null = null;
@@ -28,7 +30,7 @@ let trailing: Promise<void> | null = null;
 let installedFrom: number | null = null;
 
 function startLoad(): SkillLoad {
-  const load: SkillLoad = { promise: Promise.resolve(), dispatchedAt: null };
+  const load: SkillLoad = { promise: Promise.resolve(), dispatchedAt: null, installed: false };
   load.promise = (async () => {
     try {
       // Low priority: the palette is not open while this loads (see api/client).
@@ -53,6 +55,7 @@ function startLoad(): SkillLoad {
         registerOwned('skill', cmd);
       }
       installedFrom = load.dispatchedAt;
+      load.installed = true;
     } catch {
       // Server may not be up yet — palette just shows commands only. The next
       // socket connect (plugins/loader) asks again.
@@ -68,16 +71,21 @@ function startLoad(): SkillLoad {
  * each fetching the list (1.2MB): a page load asked three times (commands/index.ts,
  * the plugin loader's first run, the first socket connect), 2026-09-23.
  *   - the answer already installed came from a read that left after `changedAt`:
- *     nothing to do (the first socket connect, when index.ts's read left after it);
+ *     nothing to do (the first socket connect, stamped 0 by the plugin loader);
  *   - a read still waiting in the admission queue, or one that left after
- *     `changedAt`, will include the change: join it;
+ *     `changedAt`, will include the change: join it, and read again if it fails
+ *     (a failed read covers nobody: a page loaded while the server was down
+ *     recovers its palette this way on the first connect);
  *   - a read that left before `changedAt` may predate it: one more read after it,
  *     shared by everyone who asks meanwhile.
  */
 export function loadSkillCommands(opts?: { changedAt?: number }): Promise<void> {
   const changedAt = opts?.changedAt ?? performance.now();
   if (installedFrom !== null && installedFrom >= changedAt) return Promise.resolve();
-  if (inFlight && (inFlight.dispatchedAt === null || inFlight.dispatchedAt >= changedAt)) return inFlight.promise;
+  if (inFlight && (inFlight.dispatchedAt === null || inFlight.dispatchedAt >= changedAt)) {
+    const joined = inFlight;
+    return joined.promise.then(() => (joined.installed ? undefined : loadSkillCommands(opts)));
+  }
   if (inFlight) {
     trailing ??= inFlight.promise.then(() => {
       trailing = null;

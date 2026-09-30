@@ -401,6 +401,9 @@ export class SessionStatusStore {
   private cronEpochIntakeOpen = false;
   private cronRequestGeneration = 0;
   private retiredCronEpochs = new Set<string>();
+  private bulkDepth = 0;
+  private bulkAccepted = 0;
+  private bulkEmitPending = false;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -783,7 +786,19 @@ export class SessionStatusStore {
 
   seedTaskList(tasks: unknown, source: SessionStatusSource = 'rest:task-list'): void {
     if (!Array.isArray(tasks)) return;
-    for (const task of tasks) this.seedTaskRecord(task, source);
+    const accepted = this.inBulk(() => {
+      for (const task of tasks) this.seedTaskRecord(task, source);
+    });
+    if (accepted > 0) {
+      log.info('session-status', 'task list seeded', { source, tasks: tasks.length, accepted });
+    }
+  }
+
+  /** Apply a batch of versioned snapshots with one notification; returns how many were accepted. */
+  applyVersionedBatch(inputs: Iterable<unknown>, source: SessionStatusSource): number {
+    return this.inBulk(() => {
+      for (const input of inputs) this.applyVersioned(input, source);
+    });
   }
 
   ingestStatusEvent(data: unknown): SessionStatusApplyResult {
@@ -977,20 +992,47 @@ export class SessionStatusStore {
     return true;
   }
 
+  /**
+   * Run a bulk apply (a task list seed, a hydration batch). A page load applied
+   * ~9,600 transitions this way, and a log line plus a listener pass for each
+   * cost over a second of main thread: inside a bulk apply they log at debug and
+   * the listeners hear once, at the end. Returns the transitions it accepted.
+   */
+  private inBulk(apply: () => void): number {
+    const acceptedBefore = this.bulkAccepted;
+    this.bulkDepth++;
+    try {
+      apply();
+    } finally {
+      this.bulkDepth--;
+      if (this.bulkDepth === 0 && this.bulkEmitPending) {
+        this.bulkEmitPending = false;
+        this.emit();
+      }
+    }
+    return this.bulkAccepted - acceptedBefore;
+  }
+
   private acceptTransition(
     previous: StoredSessionStatus | undefined,
     next: StoredSessionStatus,
     source: SessionStatusSource,
   ): void {
     this.epoch++;
-    log.info('session-status', 'transition accepted', {
+    const detail = {
       sessionId: next.sessionId,
       taskId: next.taskId,
       revision: next.statusRevision,
       source,
       previousProcessStatus: previous?.process_status ?? null,
       processStatus: next.process_status,
-    });
+    };
+    if (this.bulkDepth > 0) {
+      this.bulkAccepted++;
+      log.debug('session-status', 'transition accepted', detail);
+    } else {
+      log.info('session-status', 'transition accepted', detail);
+    }
     this.emit();
   }
 
@@ -1010,6 +1052,10 @@ export class SessionStatusStore {
   }
 
   private emit(): void {
+    if (this.bulkDepth > 0) {
+      this.bulkEmitPending = true;
+      return;
+    }
     for (const listener of this.listeners) listener();
   }
 

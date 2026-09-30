@@ -1,4 +1,5 @@
 import type { Task } from '@open-walnut/core';
+import { ParentRefMatcher } from './task-tree-index';
 
 /**
  * Who leads whom, read off the task list once per list.
@@ -26,10 +27,11 @@ function buildIndex(tasks: readonly Task[]): Map<string, Task[]> {
   }
   const index = new Map<string, Task[]>();
   if (byPrefix.size === 0) return index;
+  const matcher = new ParentRefMatcher(byPrefix.keys());
   for (const parent of tasks) {
     let children: Task[] | undefined;
-    for (const [prefix, list] of byPrefix) {
-      if (!parent.id.startsWith(prefix)) continue;
+    for (const prefix of matcher.refsOf(parent.id)) {
+      const list = byPrefix.get(prefix)!;
       children = children ? children.concat(list) : list.slice();
     }
     if (!children) continue;

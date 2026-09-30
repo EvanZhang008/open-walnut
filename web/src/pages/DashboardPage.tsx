@@ -61,7 +61,7 @@ function readColumns(): TpColumnId[] {
 
 /** /tasks — dense two-pane workspace: project rail (left) + task table (right). */
 export function DashboardPage() {
-  const { tasks, loading, error, toggleComplete, create, deleteTask, update } = useTasksContext();
+  const { tasks, loading, error, toggleComplete, create, deleteTask, update, completedHidden, ensureAllTasks } = useTasksContext();
   const { projectOrder, reorderProjects } = useOrdering();
   const { projectNames, sourceByName, favoriteByName, refresh: refreshRegistry } = useProjectRegistry();
   const { toggleFavoriteProject } = useFavorites();
@@ -103,6 +103,8 @@ export function DashboardPage() {
   const showTodoChip = noCompletionCondition
     || query.completion.includes('todo') || query.completion.includes('in_progress');
   const showDoneChip = noCompletionCondition || query.completion.includes('complete');
+  // Completed rows on this page mean the whole archive, not the recent window.
+  useEffect(() => { if (showDoneChip) ensureAllTasks(); }, [showDoneChip, ensureAllTasks]);
 
   // Both chip handlers compute the next state with the CURRENT `query` rather
   // than a setQuery updater: logging is a side effect, and an updater callback
@@ -255,8 +257,9 @@ export function DashboardPage() {
 
   const stats = useMemo(() => ({
     todo: inScope.filter((t) => t.status !== 'done').length,
-    done: inScope.filter((t) => t.status === 'done').length,
-  }), [inScope]);
+    // Archive rows not loaded yet still count; they are only counted board-wide.
+    done: inScope.filter((t) => t.status === 'done').length + (activeProject === null ? completedHidden : 0),
+  }), [inScope, completedHidden, activeProject]);
 
   // Value lists for the query panel — registry names union task-derived ones, so
   // a zero-task project is still selectable. '' (Inbox) leads: it's a real value.

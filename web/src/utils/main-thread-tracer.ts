@@ -22,11 +22,21 @@
  */
 
 import { installCallbackTracing, slowCallbacksSince } from './trace-dispatchers';
+import { log } from './log';
 
 const SAMPLE_INTERVAL_MS = 100;
 const REPORT_THRESHOLD_MS = 250;
 const RECENT_PHASE_BUFFER = 8;
 const MAX_REPORTS_PER_MIN = 12;
+
+// WebKit (the Mac app's WKWebView) aligns the timers of a visually idle page to
+// 1s, so every 100ms sample wakes ~900ms late with nothing running: 44s of fake
+// "blocks" per minute for hours. A late wakeup with no slow callback and no
+// phase, inside this band, is that alignment; THROTTLE_ENTER_TICKS in a row
+// mean the page is throttled, and such ticks are counted instead of reported.
+const THROTTLE_LATE_MIN_MS = 700;
+const THROTTLE_LATE_MAX_MS = 1100;
+const THROTTLE_ENTER_TICKS = 3;
 
 interface ActivePhase { name: string; startedAt: number }
 interface EndedPhase { name: string; startedAt: number; endedAt: number }
@@ -100,13 +110,52 @@ export function initMainThreadTracer(): void {
     visibleSince = document.visibilityState === 'visible' ? performance.now() : Infinity;
   });
 
+  // Idle-aligned late wakeups in a row (see THROTTLE_LATE_MIN_MS).
+  let alignedRun = 0;
+  let alignedRunMs = 0;
+  let throttled = false;
+
+  const endAlignedRun = (): void => {
+    if (throttled) {
+      log.warn('perf', 'timers throttled ended', { count: alignedRun, totalMs: Math.round(alignedRunMs) });
+      throttled = false;
+    }
+    alignedRun = 0;
+    alignedRunMs = 0;
+  };
+
+  /** True when this late wakeup is timer alignment on an idle page: counted, not reported. */
+  const absorbAlignedWakeup = (lateBy: number, blockStart: number, now: number): boolean => {
+    const { active: activeNames, recent } = describePhases(blockStart);
+    const idle = activeNames.length === 0 && recent.length === 0
+      && slowCallbacksSince(blockStart).length === 0;
+    if (!idle || lateBy < THROTTLE_LATE_MIN_MS || lateBy > THROTTLE_LATE_MAX_MS) {
+      endAlignedRun();
+      return false;
+    }
+    alignedRun++;
+    alignedRunMs += lateBy;
+    if (!throttled && alignedRun >= THROTTLE_ENTER_TICKS) {
+      throttled = true;
+      log.warn('perf', 'timers throttled (page idle)', {
+        count: alignedRun,
+        totalMs: Math.round(alignedRunMs),
+        sincePageLoadMs: Math.round(now),
+      });
+    }
+    return throttled;
+  };
+
   const tick = (): void => {
     const now = performance.now();
     const lateBy = now - expectedAt;
     const hiddenOrJustShown = document.visibilityState !== 'visible'
       || now - visibleSince < SAMPLE_INTERVAL_MS + REPORT_THRESHOLD_MS;
 
-    if (lateBy >= REPORT_THRESHOLD_MS && !hiddenOrJustShown) {
+    if (lateBy < REPORT_THRESHOLD_MS && !hiddenOrJustShown) endAlignedRun();
+
+    if (lateBy >= REPORT_THRESHOLD_MS && !hiddenOrJustShown
+      && !absorbAlignedWakeup(lateBy, expectedAt - SAMPLE_INTERVAL_MS, now)) {
       const blockStart = expectedAt - SAMPLE_INTERVAL_MS;
       const wallNow = Date.now();
       if (wallNow - windowStart > 60_000) {

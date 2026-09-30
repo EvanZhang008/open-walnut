@@ -56,6 +56,8 @@ vi.mock('@/utils/log', () => ({ log: logMock }))
 
 const api = {
   fetchTasks: vi.fn(async () => []),
+  fetchTaskList: vi.fn(async (opts?: unknown) => ({ tasks: await api.fetchTasks(opts as never), completedHidden: 0 })),
+  RECENT_COMPLETED_DAYS: 7,
   fetchTaskGroups: vi.fn<() => Promise<unknown[]>>(),
 }
 vi.mock('@/api/tasks', () => api)

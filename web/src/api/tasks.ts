@@ -4,24 +4,11 @@ import {
   seedTaskSessionStatuses,
   sessionStatusStore,
 } from '@/stores/session-status-store';
-import { hydrateSessionStatuses } from './sessions';
-
-function taskSessionIds(tasks: Task[]): string[] {
-  const ids = new Set<string>();
-  for (const task of tasks) {
-    if (task.session_id) ids.add(task.session_id);
-    if (task.plan_session_id) ids.add(task.plan_session_id);
-    if (task.exec_session_id) ids.add(task.exec_session_id);
-    const historicalIds = task.session_ids ?? [];
-    const latestHistoricalId = historicalIds[historicalIds.length - 1];
-    if (latestHistoricalId) ids.add(latestHistoricalId);
-  }
-  return [...ids];
-}
+import { hydrateSessionStatuses, hydrateTaskSessionStatuses, openTaskSessionIds } from './sessions';
 
 async function seedTask<T extends Task>(task: T): Promise<T> {
   seedTaskSessionStatuses(task, 'rest:task');
-  await hydrateSessionStatuses(taskSessionIds([task]));
+  await hydrateTaskSessionStatuses([task]);
   return task;
 }
 
@@ -39,7 +26,7 @@ async function seedTask<T extends Task>(task: T): Promise<T> {
  */
 function seedTasks<T extends Task>(tasks: T[]): T[] {
   sessionStatusStore.seedTaskList(tasks, 'rest:task-list');
-  hydrateListInBackground(taskSessionIds(tasks));
+  hydrateListInBackground(openTaskSessionIds(tasks));
   return tasks;
 }
 
@@ -250,6 +237,39 @@ export interface UpdateTaskInput {
   set_depends_on?: string[];
 }
 
+/**
+ * How many days of completed tasks the home board loads with the open ones.
+ * The board hides completed rows unless asked (Show completed, the COMPLETE
+ * phase filter, search), so the rest of the archive is fetched only when one
+ * of those asks for it (`ensureAllTasks` in useTasks). Measured on a live board
+ * of 6,578 tasks, 6,400 of them completed: the list was 6.8MB of JSON on every
+ * page load for 77 rendered rows.
+ */
+export const RECENT_COMPLETED_DAYS = 7;
+
+export interface TaskListPage {
+  tasks: Task[];
+  /** Completed tasks the server left out because they are older than the window. */
+  completedHidden: number;
+}
+
+/**
+ * The list the board runs on. With `recentCompletedDays`, completed tasks older
+ * than that many days stay on the server and are counted in `completedHidden`
+ * (pinned and focus-tier tasks always come, whatever their age).
+ */
+export async function fetchTaskList(opts?: { recentCompletedDays?: number; onDispatch?: () => void }): Promise<TaskListPage> {
+  const params: Record<string, string> = { fields: 'list' };
+  if (opts?.recentCompletedDays !== undefined) params.completedWithinDays = String(opts.recentCompletedDays);
+  const res = opts?.onDispatch
+    ? await apiGet<{ tasks: Task[]; completedHidden?: number }>('/api/tasks', params, { onDispatch: opts.onDispatch })
+    : await apiGet<{ tasks: Task[]; completedHidden?: number }>('/api/tasks', params);
+  if (!Array.isArray(res?.tasks)) {
+    throw new ApiError(200, 'Task list response is malformed');
+  }
+  return { tasks: seedTasks(res.tasks), completedHidden: typeof res.completedHidden === 'number' ? res.completedHidden : 0 };
+}
+
 export async function fetchTasks(opts?: { slim?: boolean; minimal?: boolean; onDispatch?: () => void }): Promise<Task[]> {
   const params: Record<string, string> = {};
   if (opts?.minimal) {
@@ -446,7 +466,7 @@ export async function fetchDashboard(): Promise<DashboardData> {
     ...dashboard.recent_tasks,
   ];
   sessionStatusStore.seedTaskList(tasks, 'rest:dashboard');
-  await hydrateSessionStatuses(taskSessionIds(tasks));
+  await hydrateSessionStatuses(openTaskSessionIds(tasks));
   return dashboard;
 }
 

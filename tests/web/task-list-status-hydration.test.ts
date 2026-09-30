@@ -11,10 +11,13 @@
  *     the batches still run (one at a time) and land in the store;
  *  2. list fetches that land while a chain runs start no second chain beside it:
  *     exactly one follow-up chain runs afterwards, with the NEWEST list's ids;
- *  3. a failing batch neither rejects anything nor stops the chain.
+ *  3. a failing batch neither rejects anything nor stops the chain;
+ *  4. finished tasks are left out of the list's hydration and hydrated on
+ *     demand when one is opened.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchTasks, settleTaskListHydrationForTesting } from '../../web/src/api/tasks'
+import { fetchTask, fetchTasks, settleTaskListHydrationForTesting } from '../../web/src/api/tasks'
+import { hydrateTaskSessionStatuses } from '../../web/src/api/sessions'
 import { sessionStatusStore } from '../../web/src/stores/session-status-store'
 
 type Pending = { url: string; resolve: (r: Response) => void }
@@ -157,5 +160,61 @@ describe('task list status hydration runs behind the list', () => {
     } finally {
       process.off('unhandledRejection', unhandled)
     }
+  })
+})
+
+describe('finished tasks are not hydrated by the list', () => {
+  // A live board: 4,792 sessions, 164 of them on tasks that are not completed
+  // (2026-09-29). Hydrating every one was 48 serial requests per load.
+  function mixedList() {
+    const open = listOf(3)
+    const done = Array.from({ length: 250 }, (_, i) => ({
+      id: `done-${i}`, title: `d${i}`, phase: 'COMPLETE', session_id: sid(5000 + i),
+      session_status: { process_status: 'stopped' },
+    }))
+    // An older server may still say `status: 'done'` without the phase.
+    const legacyDone = { id: 'legacy-done', title: 'l', phase: 'TODO', status: 'done', session_id: sid(9000) }
+    return [...open, ...done, legacyDone]
+  }
+
+  it('the list hydrates the open tasks only, and the finished ones keep their seeded status', async () => {
+    const got = fetchTasks({ minimal: true })
+    await tick()
+    await answerList(mixedList())
+    expect(await got).toHaveLength(254)
+    await tick()
+
+    expect(statusCalls()).toHaveLength(1)
+    expect(idsOf(statusCalls()[0])).toEqual([sid(0), sid(1), sid(2)])
+    await answerBatch()
+    await settleTaskListHydrationForTesting()
+    expect(statusCalls()).toHaveLength(0)
+    expect(sessionStatusStore.getStatus(sid(0))?.statusRevision).toBe(5)
+    // Seeded from the list payload, unversioned, so any live event still wins.
+    expect(sessionStatusStore.getStatus(sid(5000))).toMatchObject({ process_status: 'stopped', statusRevision: null })
+  })
+
+  it('opening a finished task hydrates its sessions on demand', async () => {
+    const task = { id: 'done-x', title: 'x', phase: 'COMPLETE', session_id: sid(7000), session_ids: [sid(6999), sid(7001)] }
+    const done = hydrateTaskSessionStatuses([task as never])
+    await tick()
+    expect(statusCalls()).toHaveLength(1)
+    expect(idsOf(statusCalls()[0])).toEqual([sid(7000), sid(7001)])
+    await answerBatch(8)
+    await done
+    expect(sessionStatusStore.getStatus(sid(7000))?.statusRevision).toBe(8)
+  })
+
+  it('fetchTask hydrates a finished task too', async () => {
+    const got = fetchTask('done-y')
+    await tick()
+    const call = pending.find((p) => p.url.startsWith('/api/tasks/done-y'))!
+    pending.splice(pending.indexOf(call), 1)
+    call.resolve(json({ task: { id: 'done-y', title: 'y', phase: 'COMPLETE', session_id: sid(7100) } }))
+    await tick(); await tick()
+    expect(idsOf(statusCalls()[0])).toEqual([sid(7100)])
+    await answerBatch(3)
+    await got
+    expect(sessionStatusStore.getStatus(sid(7100))?.statusRevision).toBe(3)
   })
 })

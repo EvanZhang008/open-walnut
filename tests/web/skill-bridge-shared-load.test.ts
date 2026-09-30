@@ -179,3 +179,55 @@ describe('skill-bridge shared reads', () => {
     expect(getCommand('alpha')?.source).toBe('skill')
   })
 })
+
+describe('skill-bridge: the first socket connect (stamped 0 by the plugin loader)', () => {
+  it('reuses a boot read that left BEFORE the connect, finished or still on the wire', async () => {
+    // The usual page load: index.ts's read leaves, then React mounts and the socket opens.
+    const boot = loadSkillCommands()
+    calls[0].opts!.onDispatch!()
+    const whileOnWire = refreshSkillCommands({ changedAt: 0 })
+    expect(calls).toHaveLength(1)
+    calls[0].resolve([skill('alpha')])
+    await Promise.all([boot, whileOnWire])
+    await flush()
+    await refreshSkillCommands({ changedAt: 0 })
+    await flush()
+    expect(calls).toHaveLength(1)
+    expect(getCommand('alpha')?.source).toBe('skill')
+  })
+
+  it('a page loaded while the server was down still recovers its palette', async () => {
+    // index.ts's read failed before the socket could connect.
+    const boot = loadSkillCommands()
+    calls[0].opts!.onDispatch!()
+    calls[0].reject(new Error('connection refused'))
+    await boot
+    await flush()
+    expect(getCommand('alpha')).toBeUndefined()
+
+    const onConnect = refreshSkillCommands({ changedAt: 0 })
+    expect(calls).toHaveLength(2)
+    calls[1].opts!.onDispatch!()
+    calls[1].resolve([skill('alpha')])
+    await onConnect
+    expect(getCommand('alpha')?.source).toBe('skill')
+  })
+
+  it('a connect that joined a read which then FAILS reads again', async () => {
+    // The server came up while index.ts's read was still running, and that read failed.
+    const boot = loadSkillCommands()
+    calls[0].opts!.onDispatch!()
+    const onConnect = refreshSkillCommands({ changedAt: 0 })
+    calls[0].reject(new Error('503 while starting'))
+    await boot
+    await flush()
+    expect(calls).toHaveLength(2)
+    calls[1].opts!.onDispatch!()
+    calls[1].resolve([skill('alpha')])
+    await onConnect
+    expect(getCommand('alpha')?.source).toBe('skill')
+    // The one that started the failed read does not retry on its own.
+    await flush()
+    expect(calls).toHaveLength(2)
+  })
+})

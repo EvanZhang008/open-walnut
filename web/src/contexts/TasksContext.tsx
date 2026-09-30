@@ -9,6 +9,9 @@ export interface TasksContextValue {
   tasks: Task[];
   loading: boolean;
   refreshing: boolean;
+  /** Completed tasks older than the recent window not loaded yet; see useTasks. */
+  completedHidden: number;
+  ensureAllTasks: () => void;
   error: string | null;
   operationError: string | null;
   clearOperationError: () => void;
