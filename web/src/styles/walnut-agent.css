@@ -198,6 +198,12 @@
   top: 50%;
   transform: translateY(-50%);
 }
+/* Read but still waiting on the user: the list's hollow ring (its own class is
+   display:none outside the lists, so this one is separate). */
+.session-panel-unread-dot.session-panel-attention-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--error);
+}
 .session-panel-header-leading + .session-panel-title-area > .session-panel-unread-dot {
   position: static;
   transform: none;

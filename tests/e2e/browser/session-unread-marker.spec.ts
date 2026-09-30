@@ -78,6 +78,8 @@ async function readTask(page: Page, taskId: string): Promise<TaskRow> {
 }
 
 const dot = (panel: Locator): Locator => panel.locator('.session-panel-header .session-panel-unread-dot')
+const solidDot = (panel: Locator): Locator => panel.locator('.session-panel-header .session-panel-unread-dot:not(.session-panel-attention-dot)')
+const ringDot = (panel: Locator): Locator => panel.locator('.session-panel-header .session-panel-unread-dot.session-panel-attention-dot')
 const composerCard = (panel: Locator): Locator => panel.locator('.session-panel-input .chat-input-box')
 /** The title's x inside its own panel (columns move when another one opens). */
 const titleX = async (panel: Locator): Promise<number> =>
@@ -87,7 +89,8 @@ const titleX = async (panel: Locator): Promise<number> =>
 async function expectMarked(page: Page, panel: Locator, taskId: string): Promise<void> {
   await expect.poll(async () => (await readTask(page, taskId)).unread === true, { timeout: 30_000 }).toBe(true)
   await expect(panel).toHaveClass(UNREAD_CLASS, { timeout: 15_000 })
-  await expect(dot(panel)).toBeVisible()
+  await expect(solidDot(panel)).toBeVisible()
+  await expect(ringDot(panel)).toHaveCount(0)
   // The card's own 0.2s transition fades the red in; read it once it settles.
   await expect.poll(() => composerCard(panel).evaluate((el) => {
     const s = getComputedStyle(el)
@@ -97,7 +100,14 @@ async function expectMarked(page: Page, panel: Locator, taskId: string): Promise
 
 async function expectRead(page: Page, panel: Locator, taskId: string): Promise<void> {
   await expect(panel).not.toHaveClass(UNREAD_CLASS, { timeout: 15_000 })
-  await expect(dot(panel)).toHaveCount(0)
+  // Read is not done: the task still needs the user, so the header keeps the
+  // list's hollow ring (transparent fill, red outline) until they reply or complete.
+  await expect(solidDot(panel)).toHaveCount(0)
+  await expect(ringDot(panel)).toBeVisible()
+  expect(await ringDot(panel).evaluate((el) => {
+    const s = getComputedStyle(el)
+    return { fill: s.backgroundColor, ring: s.boxShadow.includes('rgb(255, 59, 48)') }
+  })).toEqual({ fill: 'rgba(0, 0, 0, 0)', ring: true })
   await expect.poll(() => composerCard(panel).evaluate((el) => getComputedStyle(el).boxShadow.includes('rgba(255, 59, 48')),
     { timeout: 5_000 }).toBe(false)
   await expect.poll(async () => (await readTask(page, taskId)).unread === true, { timeout: 15_000 }).toBe(false)
