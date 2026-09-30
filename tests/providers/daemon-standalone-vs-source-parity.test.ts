@@ -1366,8 +1366,9 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       expect(src).toMatch(/fold rebuild carry overflow — dropping oversized partial line/)
       expect(src).toMatch(/fold drain carry overflow — dropping oversized partial line/)
       expect(src).toMatch(/task rebuild carry overflow — dropping oversized partial line/)
+      expect(src).toMatch(/cold rebuild carry overflow, dropping oversized partial line/)
       expect((src.match(/if \(carry\.length > TAILER_CARRY_MAX\)/g) ?? []).length,
-        'fold rebuild + drain + task rebuild must all cap the carry').toBe(3)
+        'fold rebuild + drain + task rebuild + cold getState rebuild must all cap the carry').toBe(4)
       // After a drop, the rest of the oversized line must be skipped too.
       expect((src.match(/discardThroughNextNewline = true/g) ?? []).length,
         'tailer + rebuilds + drain must all realign after a dropped line').toBeGreaterThanOrEqual(4)
@@ -1605,8 +1606,8 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
   it('both getState responses include the assembled snapshot (live + disk-rebuild paths)', () => {
     for (const src of [standaloneSrc, templateSrc]) {
       expect(src).toMatch(/snapshot:\s*assembleSessionSnapshot\(session\)/)
-      // Disk-rebuild path assembles dead:true from the rebuilt fold's `.state`.
-      expect(src).toMatch(/foldState:\s*rebuildFoldStateFromJsonl\(jsonlPath\)\.state,\s*\n\s*pendingCtrl:\s*null,\s*\n\s*dead:\s*true/)
+      // Disk-rebuild path assembles dead:true from the cold rebuild's `.state`.
+      expect(src).toMatch(/foldState:\s*coldFold\.state,\s*\n\s*pendingCtrl:\s*null,\s*\n\s*dead:\s*true/)
     }
   })
 
@@ -1690,7 +1691,7 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     }
     // The assembleSnapshot call in the disk-rebuild getState path counts too.
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/foldState:\s*rebuildFoldStateFromJsonl\(jsonlPath\)\.state,\s*\n\s*pendingCtrl:\s*null,\s*\n\s*dead:\s*true/)
+      expect(src).toMatch(/foldState:\s*coldFold\.state,\s*\n\s*pendingCtrl:\s*null,\s*\n\s*dead:\s*true/)
     }
   })
 
@@ -2959,6 +2960,82 @@ describe('skills.sync multi-skill daemon parity', () => {
       expect(body).toMatch(/function syncSkill\(name(: string)?, skill(: string)?\)/)
       expect(body).toMatch(/'distributed-skills', name\)/)
       expect(body).toMatch(/path\.join\(skillsDir, name\)/)
+    }
+  })
+})
+
+// Bounded reads (2026-09-29 live inspection: a 1.79 GB stream, cold sids pulled
+// every 5 minutes for a day, 20 of 227 streams with a fold checkpoint). The
+// catch-up replay, the cold getState rebuild, read-history and fs.read each
+// read at most a fixed number of bytes. The new helpers are compared as whole
+// bodies with types stripped, so a one-sided edit fails here.
+describe('bounded daemon reads parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  const bodyOf = (src: string, name: string): string => {
+    const start = src.search(new RegExp(`(?:async )?function ${name}\\(`))
+    expect(start, `${name} missing`).toBeGreaterThan(-1)
+    const end = src.indexOf('\n}', start)
+    return src.slice(start, end + 2)
+  }
+  const normalized = (code: string): string => ts.transpileModule(code, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None, removeComments: true },
+  }).outputText.replace(/;/g, '').replace(/\s+/g, '')
+
+  it.each(['coldStateKey', 'coldState', 'scanColdState', 'getStateFromDisk', 'readTailWindow'])(
+    'both %s bodies are identical once types are stripped',
+    (name) => {
+      expect(normalized(bodyOf(standaloneSrc, name))).toBe(normalized(bodyOf(templateSrc, name)))
+    },
+  )
+
+  it('both cap the catch-up replay with the same window and replay_truncated marker', () => {
+    const block = (src: string): string => {
+      const fn = bodyOf(src, 'addSubscriber')
+      const start = fn.indexOf('const capped = bytesToRead > REPLAY_BACKFILL_MAX_BYTES')
+      const end = fn.indexOf("const text = bytes.toString('utf-8')")
+      expect(start).toBeGreaterThan(-1)
+      expect(end).toBeGreaterThan(start)
+      return fn.slice(start, end)
+    }
+    expect(normalized(block(standaloneSrc))).toBe(normalized(block(templateSrc)))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/REPLAY_BACKFILL_MAX_BYTES = 8 \* 1024 \* 1024/)
+      const fn = bodyOf(src, 'addSubscriber')
+      expect(fn).toContain("subtype: 'replay_truncated'")
+      // The marker rides the jsonl event with v = the replay's resume offset.
+      expect(fn).toMatch(/sendEvent\(ws, 'jsonl', \{ sid, line: marker, v: lineStartV \}\)/)
+      // The read is sized from the window, never from the whole gap.
+      expect(fn).toMatch(/Buffer\.alloc\(currentOffset - readFrom\)/)
+      expect(fn).not.toMatch(/Buffer\.alloc\(bytesToRead\)/)
+    }
+  })
+
+  it('both answer a cold getState from the memoized one-pass rebuild', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/COLD_STATE_SCAN_MAX_BYTES = 32 \* 1024 \* 1024/)
+      expect(src).toMatch(/COLD_STATE_SLICE_MS = 8/)
+      const getState = bodyOf(src, 'cmdGetState')
+      expect(getState).toMatch(/return getStateFromDisk\(ws, id, cmd, sid, cronSupervision\)/)
+      expect(getState).not.toMatch(/rebuild(?:Task|Fold)StateFromJsonl/)
+      const scan = bodyOf(src, 'scanColdState')
+      expect(scan).toMatch(/await new Promise(?:<void>)?\(\(resolve\) => setImmediate\(resolve\)\)/)
+      expect(scan).not.toMatch(/readFileSync/)
+    }
+  })
+
+  it('both cap read-history and fs.read at the server reader ceiling', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/READ_HISTORY_MAX_BYTES = 32 \* 1024 \* 1024/)
+      expect(src).toMatch(/FS_READ_MAX_BYTES = 32 \* 1024 \* 1024/)
+      const history = bodyOf(src, 'cmdReadHistory')
+      expect(history).not.toMatch(/readFileSync/)
+      expect(history).toMatch(/truncated: true, size: mainSize/)
+      const read = bodyOf(src, 'cmdFsRead')
+      expect(read).toContain("-byte ceiling for one read (EFBIG)")
+      // The size check runs before anything is read.
+      expect(read.indexOf('st.size > FS_READ_MAX_BYTES')).toBeLessThan(read.indexOf('fs.promises.readFile('))
     }
   })
 })

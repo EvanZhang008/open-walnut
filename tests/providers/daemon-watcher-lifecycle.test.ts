@@ -172,9 +172,11 @@ describe('L1 daemon watcher lifecycle: session-bound, not ws-bound', () => {
       expect(fn).toBeTruthy()
       if (fn) {
         const body = fn[0]
-        // Read bytes from fromOffset to the watcher's current offset and push.
+        // Read bytes from fromOffset (or the capped window's start) to the
+        // watcher's current offset and push.
         expect(body).toMatch(/start\s*<\s*currentOffset/)
-        expect(body).toMatch(/fs\.readSync\(fd,\s*buf,\s*0,\s*bytesToRead,\s*start\)/)
+        expect(body).toMatch(/const readFrom = capped \? currentOffset - REPLAY_BACKFILL_MAX_BYTES - 1 : start/)
+        expect(body).toMatch(/fs\.readSync\(fd,\s*buf,\s*0,\s*buf\.length,\s*readFrom\)/)
         expect(body).toMatch(/sendEvent\(ws,\s*'jsonl'/)
       }
     })
@@ -185,7 +187,8 @@ describe('L1 daemon watcher lifecycle: session-bound, not ws-bound', () => {
       if (fn) {
         const body = fn[0]
         expect(body).toMatch(/start\s*<\s*currentOffset/)
-        expect(body).toMatch(/fs\.readSync\(fd,\s*buf,\s*0,\s*bytesToRead,\s*start\)/)
+        expect(body).toMatch(/const readFrom = capped \? currentOffset - REPLAY_BACKFILL_MAX_BYTES - 1 : start/)
+        expect(body).toMatch(/fs\.readSync\(fd,\s*buf,\s*0,\s*buf\.length,\s*readFrom\)/)
         expect(body).toMatch(/sendEvent\(ws,\s*'jsonl'/)
       }
     })

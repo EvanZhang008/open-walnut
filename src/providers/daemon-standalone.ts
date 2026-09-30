@@ -4762,8 +4762,15 @@ function stopSessionWatcher(sid: string) {
   session.watcher = null
 }
 
+// Most bytes one catch-up replay reads. An offset of 0, or one taken from
+// another file, against a whale stream (1.79 GB seen live) would otherwise
+// allocate and split the whole gap on the daemon's one thread.
+const REPLAY_BACKFILL_MAX_BYTES = 8 * 1024 * 1024
+
 // Add ws to the session's subscribers and catch-up-push bytes
 // [fromOffset, currentOffset) to this one ws so reconnecting clients see no gap.
+// A gap over REPLAY_BACKFILL_MAX_BYTES replays only its newest lines, after a
+// replay_truncated system line saying how many bytes were skipped.
 function addSubscriber(ws: ServerWebSocket<WsData>, sid: string, fromOffset: number): boolean {
   const session = sessions.get(sid)
   if (!session) return false
@@ -4802,14 +4809,44 @@ function addSubscriber(ws: ServerWebSocket<WsData>, sid: string, fromOffset: num
       })
     }
     try {
+      // Over the cap, read one byte before the window so the cut can land on a line start.
+      const capped = bytesToRead > REPLAY_BACKFILL_MAX_BYTES
+      const readFrom = capped ? currentOffset - REPLAY_BACKFILL_MAX_BYTES - 1 : start
       const fd = fs.openSync(session.jsonlPath, 'r')
-      const buf = Buffer.alloc(bytesToRead)
-      fs.readSync(fd, buf, 0, bytesToRead, start)
-      fs.closeSync(fd)
-      const text = buf.toString('utf-8')
+      const buf = Buffer.alloc(currentOffset - readFrom)
+      let got = 0
+      try { got = fs.readSync(fd, buf, 0, buf.length, readFrom) } finally { fs.closeSync(fd) }
+      let bytes = buf.subarray(0, got)
       // L1: stamp `v` (end-of-line byte offset) identically to the live watcher so the
       // client dedupes a replayed line against the same `v` it may already have seen live.
       let lineStartV = start
+      if (capped) {
+        const nl = bytes.indexOf(10)
+        lineStartV = nl === -1 ? readFrom + got : readFrom + nl + 1
+        bytes = bytes.subarray(nl === -1 ? got : nl + 1)
+        const skippedBytes = lineStartV - start
+        logMsg('warn', 'addSubscriber: catch-up capped', {
+          sid, fromOffset: start, currentOffset, skippedBytes, cap: REPLAY_BACKFILL_MAX_BYTES,
+        })
+        // Same shape as appendSystemMarker's lines, but sent to this ws only and
+        // never written to the file. Its v is where the replay resumes.
+        const marker = JSON.stringify({
+          type: 'system',
+          subtype: 'replay_truncated',
+          content: 'Catch-up replay skipped ' + skippedBytes + ' bytes of earlier output (limit '
+            + REPLAY_BACKFILL_MAX_BYTES + ' bytes).',
+          skipped_bytes: skippedBytes,
+          from_offset: start,
+          resume_offset: lineStartV,
+          uuid: crypto.randomUUID(),
+          session_id: sid,
+          timestamp: new Date().toISOString(),
+        })
+        if (ws.readyState === 1) {
+          try { sendEvent(ws, 'jsonl', { sid, line: marker, v: lineStartV }) } catch {}
+        }
+      }
+      const text = bytes.toString('utf-8')
       for (const line of text.split('\n')) {
         const v = lineStartV + Buffer.byteLength(line, 'utf-8') + 1
         lineStartV = v
@@ -5302,6 +5339,131 @@ async function cmdCronSupervision(ws: ServerWebSocket<WsData>, id: number, cmd: 
   return sendOk(ws, id, { cronSupervision: cronSupervisionStatus(sid) })
 }
 
+// ── Cold getState: a sid with no session in memory ──
+// The server pulls a stopped session's state every 5 minutes for a day, and
+// most dead streams have no fold checkpoint. So this disk rebuild folds both
+// states in one pass, hands the event loop back every COLD_STATE_SLICE_MS (the
+// external session scan's pattern), reads at most the newest
+// COLD_STATE_SCAN_MAX_BYTES, and is remembered until the stream file or its
+// checkpoint changes. The adopt/attach/resume rebuilds are separate: they seed
+// a live watcher and must stay exact. Keep in sync with daemon-source.ts.
+const COLD_STATE_SCAN_MAX_BYTES = 32 * 1024 * 1024
+const COLD_STATE_SLICE_MS = 8
+const COLD_STATE_MEMO_MAX = 64
+interface ColdState { state: FoldState; task: TaskState }
+const coldStateMemo = new Map<string, { key: string; result: Promise<ColdState> }>()
+
+function coldStateKey(jsonlPath: string, st: fs.Stats): string {
+  let ck = 'none'
+  try {
+    const c = fs.statSync(foldCheckpoint.pathFor(jsonlPath))
+    ck = c.size + ':' + c.mtimeMs
+  } catch {}
+  return st.ino + ':' + st.size + ':' + st.mtimeMs + ':' + ck
+}
+
+/** The rebuild of one stream file, shared by every caller until the file changes. */
+function coldState(jsonlPath: string, st: fs.Stats): Promise<ColdState> {
+  const key = coldStateKey(jsonlPath, st)
+  const hit = coldStateMemo.get(jsonlPath)
+  coldStateMemo.delete(jsonlPath)
+  const entry = hit && hit.key === key ? hit : { key, result: scanColdState(jsonlPath, st.size) }
+  coldStateMemo.set(jsonlPath, entry)
+  if (coldStateMemo.size > COLD_STATE_MEMO_MAX) coldStateMemo.delete(coldStateMemo.keys().next().value as string)
+  return entry.result
+}
+
+async function scanColdState(jsonlPath: string, size: number): Promise<ColdState> {
+  const startedAt = Date.now()
+  const ck = foldCheckpoint.load<FoldState, TaskState>(jsonlPath)
+  let from = ck && ck.task ? ck.boundary : 0
+  const capped = size - from > COLD_STATE_SCAN_MAX_BYTES
+  if (capped) from = size - COLD_STATE_SCAN_MAX_BYTES
+  const resume = ck && ck.task && !capped ? ck : null
+  let state = resume ? resume.fold : initialFoldState(0)
+  const ts = resume && resume.task ? foldCheckpoint.restampTaskState(resume.task, startedAt) : emptyTaskState()
+  // After a cap cut, start one byte early and drop through the first newline:
+  // a cut that lands exactly on a line start keeps that line.
+  let filePos = capped ? from - 1 : from
+  let v = filePos
+  let discardThroughNextNewline = capped
+  let sliceStart = Date.now()
+  let fd: number
+  try { fd = fs.openSync(jsonlPath, 'r') } catch { return { state, task: ts } }
+  try {
+    const buf = Buffer.alloc(FOLD_REBUILD_CHUNK)
+    let carry: Buffer = Buffer.alloc(0)
+    while (filePos < size) {
+      const n = fs.readSync(fd, buf, 0, Math.min(FOLD_REBUILD_CHUNK, size - filePos), filePos)
+      if (n <= 0) break
+      filePos += n
+      const chunk = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n)
+      let start = 0
+      for (;;) {
+        const nl = chunk.indexOf(10, start)
+        if (nl === -1) break
+        v += (nl - start) + 1
+        if (discardThroughNextNewline) discardThroughNextNewline = false
+        else {
+          const line = chunk.subarray(start, nl).toString('utf-8')
+          if (line.trim()) {
+            state = foldLine(state, line, v)
+            if (line.includes('"task_')) {
+              try { applyTaskEvent(ts, JSON.parse(line), v, startedAt) } catch {}
+            }
+          }
+        }
+        start = nl + 1
+        if (Date.now() - sliceStart >= COLD_STATE_SLICE_MS) {
+          await new Promise<void>((resolve) => setImmediate(resolve))
+          sliceStart = Date.now()
+        }
+      }
+      carry = Buffer.from(chunk.subarray(start))
+      if (carry.length > TAILER_CARRY_MAX) {
+        logMsg('error', 'cold rebuild carry overflow, dropping oversized partial line', {
+          jsonlPath, carryBytes: carry.length, cap: TAILER_CARRY_MAX, filePos,
+        })
+        v = filePos
+        carry = Buffer.alloc(0)
+        discardThroughNextNewline = true
+      }
+    }
+  } catch { /* a partial fold is still safe to serve */ } finally {
+    try { fs.closeSync(fd) } catch {}
+  }
+  logMsg(capped ? 'warn' : 'info', 'getState: cold rebuild', {
+    jsonlPath, size, from, capped, cap: COLD_STATE_SCAN_MAX_BYTES,
+    fromCheckpoint: !!resume, ms: Date.now() - startedAt,
+  })
+  return { state, task: ts }
+}
+
+async function getStateFromDisk(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, sid: string, cronSupervision: ReturnType<typeof cronSupervisionStatus>): Promise<void> {
+  const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
+  let st: fs.Stats
+  try { st = fs.statSync(jsonlPath) } catch { return sendOk(ws, id, { exists: false, cronSupervision }) }
+  const coldFold = await coldState(jsonlPath, st)
+  // The scan yields, so the session may have come alive meanwhile.
+  if (sessions.has(sid)) return cmdGetState(ws, id, cmd)
+  // The memo is shared: answer with a copy stamped now, as a rebuild would be.
+  const taskState = foldCheckpoint.restampTaskState(JSON.parse(JSON.stringify(coldFold.task)) as TaskState, Date.now())
+  // C1: disk-rebuild snapshot. No live process backs this sid (it would be in
+  // the map), so it is dead, with no pendingCtrl and unknown pid/exitCode. The
+  // epoch is stamped from the on-disk file so a pull against a dead session
+  // still lets walnut detect a recreated file (incident 019a7fe5: this IS the
+  // reconcile path).
+  const snapshot = assembleSnapshot({
+    foldState: coldFold.state,
+    pendingCtrl: null,
+    dead: true,
+    pid: null,
+    exitCode: null,
+    streamEpoch: st.dev + ':' + st.ino + ':' + Math.floor(st.birthtimeMs),
+  })
+  return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState, snapshot, cronSupervision })
+}
+
 function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid } = cmd as { sid: string }
   if (!sid) return sendError(ws, id, 'getState: missing sid')
@@ -5324,27 +5486,7 @@ function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
   }
   if (cmd.memoryOnly === true) return sendOk(ws, id, { snapshotAvailable: false, cronSupervision })
   // Unknown in memory — rebuild from the durable jsonl if it exists (post-restart PULL).
-  const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
-  if (!fs.existsSync(jsonlPath)) return sendOk(ws, id, { exists: false, cronSupervision })
-  const taskState = rebuildTaskStateFromJsonl(jsonlPath, Date.now())
-  // C1: disk-rebuild snapshot. No live process backs this sid (it would be in
-  // the map) → dead, no pendingCtrl, unknown pid/exitCode. The epoch is stamped
-  // from the on-disk file so a pull against a dead session still lets walnut
-  // detect a recreated file (incident 019a7fe5 — this IS the reconcile path).
-  let diskEpoch: string | null = null
-  try {
-    const st = fs.statSync(jsonlPath)
-    diskEpoch = `${st.dev}:${st.ino}:${Math.floor(st.birthtimeMs)}`
-  } catch {}
-  const snapshot = assembleSnapshot({
-    foldState: rebuildFoldStateFromJsonl(jsonlPath).state,
-    pendingCtrl: null,
-    dead: true,
-    pid: null,
-    exitCode: null,
-    streamEpoch: diskEpoch,
-  })
-  return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState, snapshot, cronSupervision })
+  return getStateFromDisk(ws, id, cmd, sid, cronSupervision)
 }
 
 // ── Rename session files ──
@@ -5415,6 +5557,28 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 }
 
 // ── Read history ──
+// Most bytes one read-history reply carries, main and subagents together: the
+// same ceiling as the server's DaemonFileReader. A reply is one frame.
+const READ_HISTORY_MAX_BYTES = 32 * 1024 * 1024
+
+/** The newest `maxBytes` of a file; past a cut the partial first line is dropped. */
+function readTailWindow(filePath: string, maxBytes: number): { text: string; bytes: number; size: number; cut: boolean } {
+  const st = fs.statSync(filePath)
+  const start = Math.max(0, st.size - maxBytes)
+  const fd = fs.openSync(filePath, 'r')
+  try {
+    const buf = Buffer.alloc(st.size - start)
+    const got = fs.readSync(fd, buf, 0, buf.length, start)
+    let from = 0
+    if (start > 0) {
+      const nl = buf.subarray(0, got).indexOf(10)
+      from = nl === -1 ? got : nl + 1
+    }
+    const kept = buf.subarray(from, got)
+    return { text: kept.toString('utf-8'), bytes: kept.length, size: st.size, cut: start > 0 }
+  } finally { fs.closeSync(fd) }
+}
+
 function cmdReadHistory(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid, canonicalPath, tailBytes } = cmd as { sid: string; canonicalPath?: string; tailBytes?: number }
   if (!sid) return sendError(ws, id, 'read-history: missing sid')
@@ -5422,46 +5586,50 @@ function cmdReadHistory(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   try {
     // Read main JSONL. tailBytes > 0 = tail-only read (mobile transcript):
     // whale sessions (10MB+) must not ride the bridge as one frame when the
-    // caller only renders the last ~200 rows. The first (possibly partial)
-    // line after the cut is dropped. Keep in sync with daemon-source.ts.
+    // caller only renders the last ~200 rows. Without tailBytes the reply is
+    // still capped at READ_HISTORY_MAX_BYTES, served as the newest window and
+    // flagged `truncated` with the file's `size`. Keep in sync with daemon-source.ts.
     let mainContent = ''
+    let mainBytes = 0
+    let mainSize = 0
+    let truncated = false
     const jsonlPath = canonicalPath || path.join(STREAMS_DIR, sid + '.jsonl')
     const wantTail = typeof tailBytes === 'number' && tailBytes > 0
+    const windowBytes = wantTail ? Math.min(tailBytes as number, READ_HISTORY_MAX_BYTES) : READ_HISTORY_MAX_BYTES
     try {
-      if (wantTail) {
-        const st = fs.statSync(jsonlPath)
-        const start = Math.max(0, st.size - (tailBytes as number))
-        const fd = fs.openSync(jsonlPath, 'r')
-        try {
-          const buf = Buffer.alloc(st.size - start)
-          fs.readSync(fd, buf, 0, buf.length, start)
-          mainContent = buf.toString('utf-8')
-          if (start > 0) {
-            const nl = mainContent.indexOf('\n')
-            mainContent = nl >= 0 ? mainContent.slice(nl + 1) : ''
-          }
-        } finally { fs.closeSync(fd) }
-      } else {
-        mainContent = fs.readFileSync(jsonlPath, 'utf-8')
-      }
+      const main = readTailWindow(jsonlPath, windowBytes)
+      mainContent = main.text
+      mainBytes = main.bytes
+      mainSize = main.size
+      if (main.cut && (!wantTail || (tailBytes as number) > windowBytes)) truncated = true
     } catch {}
 
     // Read subagents (skipped on tail reads — transcripts are main-lane only)
+    // from what the main file left of the cap.
     const subagents: Record<string, string> = {}
     if (!wantTail) {
+      let budget = READ_HISTORY_MAX_BYTES - mainBytes
       const subagentDir = path.dirname(jsonlPath) + '/' + sid + '/subagents'
       try {
         const files = fs.readdirSync(subagentDir)
         for (const f of files) {
           if (f.endsWith('.jsonl')) {
+            if (budget <= 0) { truncated = true; continue }
             try {
-              subagents[f] = fs.readFileSync(path.join(subagentDir, f), 'utf-8')
+              const sub = readTailWindow(path.join(subagentDir, f), budget)
+              subagents[f] = sub.text
+              budget -= sub.bytes
+              if (sub.cut) truncated = true
             } catch {}
           }
         }
       } catch {}
     }
 
+    if (truncated) {
+      logMsg('warn', 'read-history: reply capped', { sid, size: mainSize, cap: READ_HISTORY_MAX_BYTES })
+      return sendOk(ws, id, { main: mainContent, subagents, truncated: true, size: mainSize })
+    }
     sendOk(ws, id, { main: mainContent, subagents })
   } catch (err: unknown) {
     sendError(ws, id, 'read-history failed: ' + (err as Error).message)
@@ -5604,6 +5772,10 @@ function cmdWriteInbox(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
 // NOTE: use fs.promises.* instead of sync calls — a large file read (e.g. a
 // 50MB session JSONL) would otherwise block every queued RPC on this daemon
 // until it completes.
+// The reply is one frame built synchronously (base64 + stringify), so a whole
+// file is refused over this size: the server's own DaemonFileReader ceiling,
+// and it reads anything bigger through fs.readRange. Keep in sync with daemon-source.ts.
+const FS_READ_MAX_BYTES = 32 * 1024 * 1024
 async function cmdFsRead(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   let filePath = cmd.path as string
   const encoding = cmd.encoding as string | undefined
@@ -5621,6 +5793,10 @@ async function cmdFsRead(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     const st = await fs.promises.stat(filePath)
     if (!st.isFile()) {
       return sendError(ws, id, 'fs.read failed: not a regular file (ENOTFILE)')
+    }
+    if (st.size > FS_READ_MAX_BYTES) {
+      return sendError(ws, id, 'fs.read failed: file is ' + st.size + ' bytes, over the '
+        + FS_READ_MAX_BYTES + '-byte ceiling for one read (EFBIG)')
     }
     const enc = encoding || 'base64'
     const data = await fs.promises.readFile(filePath)
