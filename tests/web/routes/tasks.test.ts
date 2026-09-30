@@ -275,6 +275,36 @@ describe('GET /api/tasks — canonical query params', () => {
     expect(await idsFor('?ids=no-such-task')).toEqual([]);
   });
 
+  it('completedWithinDays leaves old completions out and counts them; pinned ones stay', async () => {
+    const { completeTask, updateTaskRaw, togglePin } = await import('../../../src/core/task-manager.js');
+    const { task: open } = await addTask({ title: 'Open' });
+    const { task: recent } = await addTask({ title: 'Recent done' });
+    const { task: old } = await addTask({ title: 'Old done' });
+    const { task: oldPinned } = await addTask({ title: 'Old pinned done' });
+    // Completion no longer unpins, so the pin goes on first.
+    await togglePin(oldPinned.id);
+    for (const t of [recent, old, oldPinned]) await completeTask(t.id);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    await updateTaskRaw(old.id, { completed_at: thirtyDaysAgo });
+    await updateTaskRaw(oldPinned.id, { completed_at: thirtyDaysAgo });
+
+    const res = await request(createApp()).get('/api/tasks?fields=list&completedWithinDays=7');
+    expect(res.status).toBe(200);
+    expect(new Set((res.body.tasks as { id: string }[]).map((t) => t.id)))
+      .toEqual(new Set([open.id, recent.id, oldPinned.id]));
+    expect(res.body.completedHidden).toBe(1);
+    // `total` still counts what the query matched.
+    expect(res.body.total).toBe(4);
+
+    // Without the window the whole list comes back and the field is absent.
+    const all = await request(createApp()).get('/api/tasks?fields=list');
+    expect(all.body.tasks).toHaveLength(4);
+    expect(all.body.completedHidden).toBeUndefined();
+
+    await expect400('?completedWithinDays=soon');
+    await expect400('?completedWithinDays=-1');
+  });
+
   it('parent_task_id is an EXACT match on REST', async () => {
     const { task: parent } = await addTask({ title: 'Parent' });
     const { task: child } = await addTask({ title: 'Child', parent_task_id: parent.id });

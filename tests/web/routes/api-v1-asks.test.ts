@@ -21,6 +21,7 @@ const sessionsMock = vi.fn()
 vi.mock('../../../src/core/session-tracker.js', async (orig) => ({
   ...(await orig<typeof import('../../../src/core/session-tracker.js')>()),
   listSessions: () => sessionsMock(),
+  listSessionsForTasks: () => sessionsMock(),
 }))
 
 import express from 'express'

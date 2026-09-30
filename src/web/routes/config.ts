@@ -363,8 +363,8 @@ export async function buildProvidersPayload(): Promise<{
       // claude-cli is keyless: "ready" means the local CLI is installed. Its login
       // (Bedrock, subscription, a key) is the CLI's own; we only name the mode.
       if (prov.api === 'claude-cli') {
-        const { detectClaudeCli } = await import('../../core/claude-cli-detect.js')
-        const caps = detectClaudeCli()
+        const { detectClaudeCliAsync } = await import('../../core/claude-cli-detect.js')
+        const caps = await detectClaudeCliAsync()
         providers[name] = {
           api: prov.api,
           base_url: prov.base_url,
@@ -444,8 +444,8 @@ export async function buildProvidersPayload(): Promise<{
         const template = KNOWN_PROVIDERS[name]
         // claude-cli is keyless: the installed binary is the credential.
         if (template.api === 'claude-cli') {
-          const { detectClaudeCli } = await import('../../core/claude-cli-detect.js')
-          const caps = detectClaudeCli()
+          const { detectClaudeCliAsync } = await import('../../core/claude-cli-detect.js')
+          const caps = await detectClaudeCliAsync()
           providers[name] = {
             api: template.api,
             status: caps.installed ? 'ready' : 'no_key',

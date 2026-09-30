@@ -16,7 +16,9 @@ import {
   parseFrontmatter,
   isEligible,
   clearSkillsCache,
+  getSkillsCacheGeneration,
   normalizeSkillType,
+  type DiscoveredSkill,
   type SkillType,
 } from './skill-loader.js';
 
@@ -73,22 +75,58 @@ function canonical(p: string): string {
   }
 }
 
-function resolveSource(skillDir: string): SkillSource {
-  const dir = canonical(skillDir);
+async function canonicalAsync(p: string): Promise<string> {
+  try {
+    return await fsp.realpath(p);
+  } catch {
+    return p;
+  }
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fsp.stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Canonical skill roots in match order. Resolved once per call, never once per skill. */
+interface SourceRoots {
+  walnut: string;
+  builtin: string;
+  claude: string;
+  workspace: string;
+  plugin: string[];
+}
+
+async function loadSourceRoots(): Promise<SourceRoots> {
+  const [walnut, builtin, claude, workspace, plugin] = await Promise.all([
+    canonicalAsync(GLOBAL_SKILLS_DIR),
+    canonicalAsync(BUILTIN_SKILLS_DIR),
+    canonicalAsync(CLAUDE_SKILLS_DIR),
+    canonicalAsync(path.resolve('skills')),
+    Promise.all(getPluginSkillDirs().map(canonicalAsync)),
+  ]);
+  return { walnut, builtin, claude, workspace, plugin };
+}
+
+async function resolveSource(skillDir: string, roots?: SourceRoots): Promise<SkillSource> {
+  const [dir, r] = await Promise.all([canonicalAsync(skillDir), roots ?? loadSourceRoots()]);
+  const under = (root: string) => dir.startsWith(root + path.sep);
   // Specific roots first — path.resolve('skills') is cwd-relative and can
   // coincide with the walnut global dir, so the workspace check goes LAST.
-  if (dir.startsWith(canonical(GLOBAL_SKILLS_DIR) + path.sep)) return 'walnut';
-  if (dir.startsWith(canonical(BUILTIN_SKILLS_DIR) + path.sep)) return 'walnut';
-  if (dir.startsWith(canonical(CLAUDE_SKILLS_DIR) + path.sep)) return 'claude';
-  if (dir.startsWith(canonical(path.resolve('skills')) + path.sep)) return 'workspace';
+  if (under(r.walnut)) return 'walnut';
+  if (under(r.builtin)) return 'walnut';
+  if (under(r.claude)) return 'claude';
+  if (under(r.workspace)) return 'workspace';
   // Plugin-contributed roots (manifest `<pluginDir>/skills` + every directory a
   // plugin registered through `registry.skill`) BEFORE the fallback: without this
   // a plugin's skill is reported as living in the user's own Claude store, and the
   // Settings page offers to edit a file the plugin overwrites on its next update.
   // Empty list on a plugin-free install, so this costs nothing there.
-  for (const root of getPluginSkillDirs()) {
-    if (dir.startsWith(canonical(root) + path.sep)) return 'plugin';
-  }
+  if (r.plugin.some(under)) return 'plugin';
   return 'claude';
 }
 
@@ -117,26 +155,52 @@ function canWrite(p: string): boolean {
 
 // ─── read operations ────────────────────────────────────────────────
 
-export async function listAllSkills(): Promise<SkillInfo[]> {
-  const dirs = getSearchDirs();
-  const discovered = await discoverSkills(dirs);
-  const settings = await readSettings();
-  const disabledSet = new Set(settings.disabled);
-  const skills: SkillInfo[] = [];
+/**
+ * GET /api/skills runs on every page load and socket reconnect and answers with every
+ * SKILL.md body. Discovery (readdir + one stat per skill) still runs per call, and its
+ * SKILL.md mtimes and sizes key the built list, so an edit shows on the next call while
+ * an unchanged tree is never re-read or re-parsed. The age cap covers inputs the key
+ * cannot see: a binary appearing on PATH, a new references/ directory.
+ */
+const SKILL_LIST_MAX_AGE_MS = 60_000;
 
-  for (const [dirName, { dir, file, category }] of discovered) {
+let skillListCache: { key: string; builtAt: number; skills: SkillInfo[] } | null = null;
+let skillListBuild: { key: string; promise: Promise<SkillInfo[]> } | null = null;
+
+/** Test hook: drop the built list. */
+export function _resetSkillListCacheForTest(): void {
+  skillListCache = null;
+  skillListBuild = null;
+}
+
+function skillListKey(generation: number, dirs: string[], discovered: Map<string, DiscoveredSkill>): string {
+  const parts: string[] = [String(generation), ...dirs];
+  for (const [dirName, { file, mtimeMs, size }] of discovered) {
+    parts.push(`${dirName}\0${file}\0${mtimeMs}\0${size}`);
+  }
+  return parts.join('\n');
+}
+
+async function buildSkillList(
+  discovered: Map<string, DiscoveredSkill>,
+  disabledSet: Set<string>,
+): Promise<SkillInfo[]> {
+  const roots = await loadSourceRoots();
+  const built = await Promise.all([...discovered].map(async ([dirName, { dir, file, category }]): Promise<SkillInfo | null> => {
     let raw: string;
     try {
       raw = await fsp.readFile(file, 'utf-8');
     } catch {
-      continue;
+      return null;
     }
     const { frontmatter } = parseFrontmatter(raw);
-    const source = resolveSource(dir);
-    const eligible = isEligible(frontmatter);
-    const hasReferences = fs.existsSync(path.join(dir, 'references'));
+    const [source, eligible, hasReferences] = await Promise.all([
+      resolveSource(dir, roots),
+      isEligible(frontmatter),
+      pathExists(path.join(dir, 'references')),
+    ]);
 
-    skills.push({
+    return {
       dirName,
       name: frontmatter.name ?? dirName,
       description: frontmatter.description ?? '',
@@ -149,10 +213,41 @@ export async function listAllSkills(): Promise<SkillInfo[]> {
       eligible,
       enabled: !disabledSet.has(dirName),
       hasReferences,
-    });
+    };
+  }));
+  return built.filter((s): s is SkillInfo => s !== null);
+}
+
+export async function listAllSkills(): Promise<SkillInfo[]> {
+  const generation = getSkillsCacheGeneration();
+  const dirs = getSearchDirs();
+  const [discovered, settings] = await Promise.all([discoverSkills(dirs), readSettings()]);
+  const disabledSet = new Set(settings.disabled);
+  const key = skillListKey(generation, dirs, discovered);
+  const startedAt = Date.now();
+
+  let skills: SkillInfo[];
+  if (skillListCache && skillListCache.key === key && startedAt - skillListCache.builtAt < SKILL_LIST_MAX_AGE_MS) {
+    skills = skillListCache.skills;
+  } else {
+    // Concurrent callers with the same key share one build.
+    if (!skillListBuild || skillListBuild.key !== key) {
+      const promise: Promise<SkillInfo[]> = buildSkillList(discovered, disabledSet)
+        .then((built) => {
+          skillListCache = { key, builtAt: startedAt, skills: built };
+          return built;
+        })
+        .finally(() => {
+          if (skillListBuild?.promise === promise) skillListBuild = null;
+        });
+      skillListBuild = { key, promise };
+    }
+    skills = await skillListBuild.promise;
   }
 
-  return skills;
+  // Fresh objects per call, and `enabled` from this call's settings read: the settings
+  // file is not part of the key, and callers must not be able to edit the cache.
+  return skills.map((s) => ({ ...s, enabled: !disabledSet.has(s.dirName) }));
 }
 
 export async function getSkill(dirName: string): Promise<SkillInfo | null> {
@@ -169,8 +264,12 @@ export async function getSkill(dirName: string): Promise<SkillInfo | null> {
   }
 
   const { frontmatter } = parseFrontmatter(raw);
-  const source = resolveSource(entry.dir);
-  const settings = await readSettings();
+  const [source, settings, eligible, hasReferences] = await Promise.all([
+    resolveSource(entry.dir),
+    readSettings(),
+    isEligible(frontmatter),
+    pathExists(path.join(entry.dir, 'references')),
+  ]);
 
   return {
     dirName,
@@ -182,9 +281,9 @@ export async function getSkill(dirName: string): Promise<SkillInfo | null> {
     category: frontmatter.category ?? entry.category,
     type: normalizeSkillType(frontmatter.type),
     metadata: frontmatter.metadata,
-    eligible: isEligible(frontmatter),
+    eligible,
     enabled: !settings.disabled.includes(dirName),
-    hasReferences: fs.existsSync(path.join(entry.dir, 'references')),
+    hasReferences,
   };
 }
 
@@ -236,7 +335,7 @@ export async function updateSkill(dirName: string, content: string): Promise<Ski
   const entry = discovered.get(dirName);
   if (!entry) throw new Error(`Skill not found: ${dirName}`);
 
-  const source = resolveSource(entry.dir);
+  const source = await resolveSource(entry.dir);
   if (source === 'workspace') {
     throw new Error('Cannot modify workspace skills');
   }
@@ -263,7 +362,7 @@ export async function deleteSkill(dirName: string): Promise<void> {
   const entry = discovered.get(dirName);
   if (!entry) throw new Error(`Skill not found: ${dirName}`);
 
-  const source = resolveSource(entry.dir);
+  const source = await resolveSource(entry.dir);
   if (source === 'workspace') {
     throw new Error('Cannot delete workspace skills');
   }

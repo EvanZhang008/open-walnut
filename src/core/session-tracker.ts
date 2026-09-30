@@ -97,7 +97,7 @@ function totalChanges(db: NonNullable<ReturnType<typeof getDb>>): number {
 }
 
 /** Store-shape counters for tests and the daily loop check. */
-const sessionStoreStats = { fullScans: 0, patchedRows: 0, cloneReads: 0 };
+const sessionStoreStats = { fullScans: 0, patchedRows: 0, cloneReads: 0, viewReads: 0, clonedRows: 0 };
 export function _sessionStoreStatsForTesting(): Readonly<typeof sessionStoreStats> { return { ...sessionStoreStats }; }
 /** Forget the cached snapshot (the next reader scans), leaving init and the connection alone. */
 export function _dropSessionStoreCacheForTesting(): void { invalidateSessionStoreCache(); }
@@ -412,6 +412,33 @@ export function isListableSession(s: SessionRecord): boolean {
  * in project memory (task_storage_root_cause_and_sqlite_plan).
  */
 async function readStore(): Promise<{ sessions: SessionRecord[] }> {
+  const sessions = await loadStoreRows();
+  if (!STORE_CACHE_ENABLED) return { sessions };
+  sessionStoreStats.cloneReads += 1;
+  sessionStoreStats.clonedRows += sessions.length;
+  return { sessions: sessions.map((s) => ({ ...s })) };
+}
+
+/**
+ * The canonical cached rows themselves, for helpers that filter before they
+ * return. Never hand a record or the array to a caller: clone what you return
+ * (cloneSession) and never sort or mutate in place. Collect what you need before
+ * any await: a write patches this array in place. Every filtered helper used to
+ * pay readStore()'s clone of all ~5.6k rows to keep a few dozen.
+ */
+async function readStoreView(): Promise<readonly SessionRecord[]> {
+  sessionStoreStats.viewReads += 1;
+  return loadStoreRows();
+}
+
+/** One isolated record copy, the same shape readStore's clone hands out. */
+function cloneSession(s: SessionRecord): SessionRecord {
+  sessionStoreStats.clonedRows += 1;
+  return { ...s };
+}
+
+/** The cached snapshot while it is current, else a fresh scan that re-seeds it. */
+async function loadStoreRows(): Promise<SessionRecord[]> {
   await ensureSessionInit();
   if (!STORE_CACHE_ENABLED) {
     const db = getDb();
@@ -419,7 +446,7 @@ async function readStore(): Promise<{ sessions: SessionRecord[] }> {
       throw new Error('readStore: SQLite handle is null');
     }
     const rows = db.prepare('SELECT * FROM sessions').all() as Record<string, any>[];
-    return { sessions: rows.map(rowToSession) };
+    return rows.map(rowToSession);
   }
   const db = getDb();
   if (!db) {
@@ -445,8 +472,7 @@ async function readStore(): Promise<{ sessions: SessionRecord[] }> {
     sessionStoreCacheDataVersion = after;
     sessionStoreStats.fullScans += 1;
   }
-  sessionStoreStats.cloneReads += 1;
-  return { sessions: sessionStoreCache.map((s) => ({ ...s })) };
+  return sessionStoreCache;
 }
 
 // ── Write lock: serializes read-modify-write operations in-process ────────
@@ -534,6 +560,23 @@ export async function listSessions(): Promise<SessionRecord[]> {
   return store.sessions;
 }
 
+/**
+ * Copies of the sessions linked to one of `taskIds` through their taskId, plus
+ * any session named in `sessionIds`, in store order. This is everything a task
+ * list's session enrichment reads, so it never pays for the rest of the store.
+ */
+export async function listSessionsForTasks(
+  taskIds: ReadonlySet<string>,
+  sessionIds: ReadonlySet<string> = new Set(),
+): Promise<SessionRecord[]> {
+  const view = await readStoreView();
+  const linked: SessionRecord[] = [];
+  for (const s of view) {
+    if ((s.taskId && taskIds.has(s.taskId)) || sessionIds.has(s.claudeSessionId)) linked.push(cloneSession(s));
+  }
+  return linked;
+}
+
 export async function listPendingSessionStops(host: string): Promise<SessionRecord[]> {
   await ensureSessionInit();
   const db = getDb();
@@ -584,13 +627,13 @@ const MAX_SESSION_QUERY_LIMIT = 500;
  * rank 1, including when it falls outside the recent prefix.
  */
 export async function querySessions(options: SessionQueryOptions = {}): Promise<SessionQueryResult> {
-  const store = await readStore();
+  const view = await readStoreView();
   const limit = Math.max(1, Math.min(
     Number.isFinite(options.limit) ? Math.floor(options.limit!) : DEFAULT_SESSION_QUERY_LIMIT,
     MAX_SESSION_QUERY_LIMIT,
   ));
   const query = options.query?.trim().toLowerCase() ?? '';
-  const matching = store.sessions.filter((session) => {
+  const matching = view.filter((session) => {
     if (!options.includeArchived && session.archived) return false;
     if (!query) return true;
     return [
@@ -613,7 +656,7 @@ export async function querySessions(options: SessionQueryOptions = {}): Promise<
     return active || a.claudeSessionId.localeCompare(b.claudeSessionId);
   });
   return {
-    sessions: matching.slice(0, limit),
+    sessions: matching.slice(0, limit).map(cloneSession),
     total: matching.length,
     limit,
     hasMore: matching.length > limit,
@@ -629,10 +672,10 @@ export function isTerminalSession(s: { process_status?: string }, taskPhase?: Ta
  * List sessions that are not in a terminal state (for health monitor).
  */
 export async function listNonTerminalSessions(): Promise<SessionRecord[]> {
-  const store = await readStore();
-  return store.sessions.filter(
+  const view = await readStoreView();
+  return view.filter(
     (s) => !isTerminalSession(s) && !s.archived,
-  );
+  ).map(cloneSession);
 }
 
 /** Default session limits: local=7, any remote host=20. */
@@ -658,19 +701,21 @@ export async function getActiveSessionsByHost(): Promise<Record<string, SessionR
   // `SELECT * FROM sessions WHERE process_status='running'` (indexed) + a
   // narrowed liveness check. Left as a full scan for now; the readStore cache
   // makes the repetition cheap but not free.
-  const store = await readStore();
-  const result: Record<string, SessionRecord[]> = {};
-  const staleIds: string[] = [];
-  for (const s of store.sessions) {
-    if (s.archived) continue;
-    if (s.process_status !== 'running') continue;
+  const candidates = (await readStoreView()).filter((s) => {
+    if (s.archived) return false;
+    if (s.process_status !== 'running') return false;
     // Embedded/SDK sessions have no OS process — don't count toward host limits
-    if (s.provider === 'embedded' || s.provider === 'sdk') continue;
+    if (s.provider === 'embedded' || s.provider === 'sdk') return false;
     // Side threads are hidden asides of another session: they must not occupy a
     // capacity slot, and they must not be the reason a host is kept awake.
     // Prefix literal = SIDE_LANE_PREFIX (side-thread-fork.ts, which imports
     // this module — importing back would be circular).
-    if (s.lane?.startsWith('side:')) continue;
+    if (s.lane?.startsWith('side:')) return false;
+    return true;
+  }).map(cloneSession);
+  const result: Record<string, SessionRecord[]> = {};
+  const staleIds: string[] = [];
+  for (const s of candidates) {
     if (!await isSessionProcessAlive(s)) {
       staleIds.push(s.claudeSessionId);
       continue;
@@ -693,14 +738,16 @@ export async function getActiveSessionsByHost(): Promise<Record<string, SessionR
  * are asynchronously corrected.
  */
 export async function getAllAliveSessionsByHost(): Promise<Record<string, SessionRecord[]>> {
-  const store = await readStore();
+  const candidates = (await readStoreView()).filter((s) => {
+    if (s.archived) return false;
+    if (s.process_status === 'stopped' || s.process_status === 'error') return false;
+    // Embedded/SDK sessions have no OS process: they don't count toward host limits
+    if (s.provider === 'embedded' || s.provider === 'sdk') return false;
+    return true;
+  }).map(cloneSession);
   const result: Record<string, SessionRecord[]> = {};
   const staleIds: string[] = [];
-  for (const s of store.sessions) {
-    if (s.archived) continue;
-    if (s.process_status === 'stopped' || s.process_status === 'error') continue;
-    // Embedded/SDK sessions have no OS process — don't count toward host limits
-    if (s.provider === 'embedded' || s.provider === 'sdk') continue;
+  for (const s of candidates) {
     if (!await isSessionProcessAlive(s)) {
       staleIds.push(s.claudeSessionId);
       continue;
@@ -782,17 +829,19 @@ export async function checkSessionLimit(
     ?? (key === 'local' ? DEFAULT_LOCAL_IDLE_LIMIT : DEFAULT_REMOTE_IDLE_LIMIT);
 
   // Single store read — avoids double-read race and double PID-liveness scan.
-  const store = await readStore();
+  const candidates = (await readStoreView()).filter((s) => {
+    if (s.archived) return false;
+    if (s.process_status === 'stopped') return false;
+    if (s.process_status === 'error') return false;
+    // Embedded/SDK sessions have no OS process: they don't count toward host limits
+    if (s.provider === 'embedded' || s.provider === 'sdk') return false;
+    return true;
+  }).map(cloneSession);
   const runningSessions: SessionRecord[] = [];
   const idleSessions: SessionRecord[] = [];
   const staleIds: string[] = [];
 
-  for (const s of store.sessions) {
-    if (s.archived) continue;
-    if (s.process_status === 'stopped') continue;
-    if (s.process_status === 'error') continue;
-    // Embedded/SDK sessions have no OS process — don't count toward host limits
-    if (s.provider === 'embedded' || s.provider === 'sdk') continue;
+  for (const s of candidates) {
     if (!await isSessionProcessAlive(s)) {
       staleIds.push(s.claudeSessionId);
       continue;
@@ -2634,11 +2683,12 @@ export async function getRecentSessions(
   limit = 10,
   opts?: { includeLanes?: boolean },
 ): Promise<SessionRecord[]> {
-  const store = await readStore();
-  return store.sessions
+  const view = await readStoreView();
+  return view
     .filter((s) => (opts?.includeLanes ? true : !isLaneSession(s)))
     .sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
-    .slice(0, limit);
+    .slice(0, limit)
+    .map(cloneSession);
 }
 
 /**

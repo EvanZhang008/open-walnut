@@ -256,7 +256,7 @@ export const TASK_DB_WRITERS_RECOVERY_KEY = 'task-db-writers'
 export interface ForeignWriterWatchState {
   /** Holders seen last tick — the persistence filter (transient hooks last ms). */
   prevPids: Set<number>
-  /** Pids already alerted on, so one rogue writer alerts once, not every minute. */
+  /** Pids already alerted on, so one rogue writer alerts once, not every tick. */
   alertedPids: Set<number>
   /** True since the last alert, until an all-clear — the recovery edge memory. */
   alerting: boolean
@@ -308,10 +308,14 @@ export function stepForeignWriterWatch(
  * next tick that sees a single holder (us) retires the card. Optional and
  * injected, because this module must not import the notification store; the
  * server owns that. Fires on the failing→clear EDGE only — a healthy box would
- * otherwise pay for a locked scan of notifications.json every 60s forever.
+ * otherwise pay for a locked scan of notifications.json every tick forever.
+ *
+ * Default tick is 5 minutes because each `lsof` walks the whole process table,
+ * which costs seconds on a machine running ~1000 processes; a rogue writer still
+ * alerts within two ticks.
  */
 export function startForeignWriterWatchdog(
-  intervalMs = 60_000,
+  intervalMs = 300_000,
   onAllClear?: () => void,
 ): { stop: () => void } {
   let state = initialForeignWriterWatchState()

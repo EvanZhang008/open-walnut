@@ -352,6 +352,37 @@ describe('rewriteHistoryRemoteImages: already-rewritten text is left alone', () 
   })
 })
 
+describe('rewriteHistoryRemoteImages: cached messages are scanned once', () => {
+  it('a second request over the same message objects runs no regex and no existsSync', async () => {
+    // The in-memory history cache hands the same objects to every request, and
+    // a remote session's transcript is re-requested on every poll and delta.
+    sendMock.mockResolvedValue(enoent)
+    const messages = [
+      msg('see /workspace/marina/first.png'),
+      { role: 'assistant', timestamp: '', text: 'ran a tool',
+        tools: [{ name: 'Bash', input: 'cp /workspace/marina/hint.png out/', result: 'ok' }] } as unknown as SessionHistoryMessage,
+      msg('no image here at all'),
+    ]
+    const exists = vi.spyOn(fs, 'existsSync')
+    await rewriteHistoryRemoteImages(messages, 'remotehost', SID, CWD)
+    await settle()
+    const firstPass = exists.mock.calls.length
+    expect(firstPass).toBeGreaterThan(0)
+    expect(messages[0].text).not.toContain('/workspace/marina/first.png')
+
+    await rewriteHistoryRemoteImages(messages, 'remotehost', SID, CWD)
+    expect(exists.mock.calls.length).toBe(firstPass)
+
+    // A message whose content changed (a tool result streamed in) is scanned again,
+    // and its new reference is mirrored.
+    messages[2].text = 'now see /workspace/marina/second.png'
+    await rewriteHistoryRemoteImages(messages, 'remotehost', SID, CWD)
+    expect(exists.mock.calls.length).toBeGreaterThan(firstPass)
+    expect(messages[2].text).not.toContain('/workspace/marina/second.png')
+    exists.mockRestore()
+  })
+})
+
 describe('the guard does not create a new way to lose an image', () => {
   it('a glued path whose slot EXISTS on disk still points at those bytes', async () => {
     // Skipping the path must leave it pointing where it already pointed, not blank

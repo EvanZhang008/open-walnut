@@ -91,69 +91,69 @@ Body`;
 // ─── isEligible ─────────────────────────────────────────────────────
 
 describe('isEligible', () => {
-  it('returns true when no requires', () => {
-    expect(isEligible({ name: 'test', description: 'test' })).toBe(true);
+  it('returns true when no requires', async () => {
+    expect(await isEligible({ name: 'test', description: 'test' })).toBe(true);
   });
 
-  it('returns true when requires is empty', () => {
+  it('returns true when requires is empty', async () => {
     expect(
-      isEligible({
+      await isEligible({
         name: 'test',
         metadata: { openclaw: { requires: {} } },
       }),
     ).toBe(true);
   });
 
-  it('returns true when required bin exists', () => {
+  it('returns true when required bin exists', async () => {
     // 'node' should be available in any test environment
     expect(
-      isEligible({
+      await isEligible({
         metadata: { openclaw: { requires: { bins: ['node'] } } },
       }),
     ).toBe(true);
   });
 
-  it('returns false when required bin is missing', () => {
+  it('returns false when required bin is missing', async () => {
     expect(
-      isEligible({
+      await isEligible({
         metadata: { openclaw: { requires: { bins: ['__nonexistent_binary_xyz__'] } } },
       }),
     ).toBe(false);
   });
 
-  it('checks env vars', () => {
+  it('checks env vars', async () => {
     process.env.__SKILL_TEST_VAR__ = '1';
     expect(
-      isEligible({
+      await isEligible({
         metadata: { openclaw: { requires: { env: ['__SKILL_TEST_VAR__'] } } },
       }),
     ).toBe(true);
     delete process.env.__SKILL_TEST_VAR__;
 
     expect(
-      isEligible({
+      await isEligible({
         metadata: { openclaw: { requires: { env: ['__MISSING_ENV_VAR_XYZ__'] } } },
       }),
     ).toBe(false);
   });
 
-  it('checks platform', () => {
+  it('checks platform', async () => {
     expect(
-      isEligible({
+      await isEligible({
         metadata: { openclaw: { requires: { platform: [process.platform] } } },
       }),
     ).toBe(true);
 
     expect(
-      isEligible({
+      await isEligible({
         metadata: { openclaw: { requires: { platform: ['__fake_os__'] } } },
       }),
     ).toBe(false);
   });
 
-  it('checks os alias same as platform', () => {
+  it('checks os alias same as platform', async () => {
     expect(
-      isEligible({
+      await isEligible({
         metadata: { openclaw: { requires: { os: [process.platform] } } },
       }),
     ).toBe(true);

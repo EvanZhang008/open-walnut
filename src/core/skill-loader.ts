@@ -24,9 +24,10 @@
  * Opt back in with WALNUT_PERSONAL_AI_CLAUDE_SKILLS=1 (single-surface setups where the
  * Personal AI really should see the CLI's skills).
  */
+import type { Stats } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
 import { isMemorySafetyEnforced, screenMemoryText } from './memory-safety.js';
@@ -154,6 +155,9 @@ export interface DiscoveredSkill {
   file: string;
   /** Category from the directory layout: skills/<category>/<name>/SKILL.md. 'general' for flat skills. */
   category: string;
+  /** SKILL.md stat from discovery, so a cache can tell an edited file without reading it. */
+  mtimeMs: number;
+  size: number;
 }
 
 async function discoverSkills(dirs: string[]): Promise<Map<string, DiscoveredSkill>> {
@@ -172,17 +176,21 @@ async function discoverSkills(dirs: string[]): Promise<Map<string, DiscoveredSki
     for (const entry of entries) {
       const entryDir = path.join(base, entry);
       const skillFile = path.join(entryDir, 'SKILL.md');
-      let isFlatSkill = false;
+      let flatStat: Stats | undefined;
       try {
-        isFlatSkill = (await fsp.stat(skillFile)).isFile();
+        const st = await fsp.stat(skillFile);
+        if (st.isFile()) flatStat = st;
       } catch {
         // no SKILL.md directly — may be a category directory (checked below)
       }
 
-      if (isFlatSkill) {
+      if (flatStat) {
         // Flat layout: skills/<name>/SKILL.md (back-compat)
         if (!found.has(entry)) {
-          found.set(entry, { dir: entryDir, file: skillFile, category: 'general' });
+          found.set(entry, {
+            dir: entryDir, file: skillFile, category: 'general',
+            mtimeMs: flatStat.mtimeMs, size: flatStat.size,
+          });
         }
         continue;
       }
@@ -202,8 +210,12 @@ async function discoverSkills(dirs: string[]): Promise<Map<string, DiscoveredSki
         if (found.has(key)) continue; // higher-priority source already registered
         const subFile = path.join(entryDir, sub, 'SKILL.md');
         try {
-          if ((await fsp.stat(subFile)).isFile()) {
-            found.set(key, { dir: path.join(entryDir, sub), file: subFile, category: entry });
+          const st = await fsp.stat(subFile);
+          if (st.isFile()) {
+            found.set(key, {
+              dir: path.join(entryDir, sub), file: subFile, category: entry,
+              mtimeMs: st.mtimeMs, size: st.size,
+            });
           }
         } catch {
           // no SKILL.md in this subdir — expected
@@ -244,24 +256,54 @@ function parseFrontmatter(raw: string): { frontmatter: SkillFrontmatter; body: s
 
 // ─── eligibility ────────────────────────────────────────────────────
 
-function hasBin(name: string): boolean {
-  try {
-    execFileSync('which', [name], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;  // binary not found — expected for eligibility filtering
-  }
+/** GET /api/skills asks on every page load and socket reconnect, and each probe is a
+ *  process spawn, so one answer (found or missing) serves every request for this long. */
+const BIN_PROBE_TTL_MS = 10 * 60_000;
+const BIN_PROBE_TIMEOUT_MS = 5_000;
+
+const binProbes = new Map<string, { found: boolean; at: number }>();
+const binProbesInFlight = new Map<string, Promise<boolean>>();
+
+/**
+ * Whether `name` resolves on PATH. Only a definite answer is cached: `which` ran and
+ * exited, or `which` itself is missing (the old behaviour: no bin passes). A timeout or
+ * a failed spawn says the machine is loaded, not that the binary is gone, so it counts
+ * as found for this request and the next request asks again.
+ */
+function hasBin(name: string): Promise<boolean> {
+  const cached = binProbes.get(name);
+  if (cached && Date.now() - cached.at < BIN_PROBE_TTL_MS) return Promise.resolve(cached.found);
+  const pending = binProbesInFlight.get(name);
+  if (pending) return pending;
+
+  const probe = new Promise<boolean>((resolve) => {
+    try {
+      execFile('which', [name], { timeout: BIN_PROBE_TIMEOUT_MS }, (err) => {
+        const definite = !err || (!err.killed && (typeof err.code === 'number' || err.code === 'ENOENT'));
+        if (!definite) {
+          resolve(true);
+          return;
+        }
+        binProbes.set(name, { found: !err, at: Date.now() });
+        resolve(!err);
+      });
+    } catch {
+      resolve(true);
+    }
+  }).finally(() => binProbesInFlight.delete(name));
+  binProbesInFlight.set(name, probe);
+  return probe;
 }
 
-function isEligible(fm: SkillFrontmatter): boolean {
+/** Test hook: forget every cached `which` answer. */
+export function _resetBinProbeCacheForTest(): void {
+  binProbes.clear();
+  binProbesInFlight.clear();
+}
+
+async function isEligible(fm: SkillFrontmatter): Promise<boolean> {
   const req = fm.metadata?.openclaw?.requires;
   if (!req) return true;
-
-  if (req.bins) {
-    for (const bin of req.bins) {
-      if (!hasBin(bin)) return false;
-    }
-  }
 
   if (req.env) {
     for (const envVar of req.env) {
@@ -274,6 +316,13 @@ function isEligible(fm: SkillFrontmatter): boolean {
   if (allowed && allowed.length > 0) {
     const normalised = allowed.map((p) => p.toLowerCase());
     if (!normalised.includes(platform)) return false;
+  }
+
+  // Last: the only check that may spawn a process.
+  if (req.bins) {
+    for (const bin of req.bins) {
+      if (!(await hasBin(bin))) return false;
+    }
   }
 
   return true;
@@ -400,12 +449,19 @@ let cachedSessionPrompt: string | undefined;
 let cachedSkills: (SkillMeta & { dirName: string })[] | undefined;
 /** Prompt scope only (no ~/.claude/skills) — what the Personal AI's index is built from. */
 let cachedPromptSkills: (SkillMeta & { dirName: string })[] | undefined;
+/** Bumped by every clear, so caches kept elsewhere (skill-store's list) drop with these. */
+let skillsCacheGeneration = 0;
 
 export function clearSkillsCache(): void {
   cachedPrompt = undefined;
   cachedSessionPrompt = undefined;
   cachedSkills = undefined;
   cachedPromptSkills = undefined;
+  skillsCacheGeneration++;
+}
+
+export function getSkillsCacheGeneration(): number {
+  return skillsCacheGeneration;
 }
 
 /** Read the set of disabled skill dirNames from skill-settings.json. */
@@ -438,8 +494,8 @@ async function loadEligibleSkills(dirs: string[]): Promise<(SkillMeta & { dirNam
       continue;
     }
     const { frontmatter } = parseFrontmatter(raw);
-    if (!isEligible(frontmatter)) continue;
     if (disabledSet.has(dirName)) continue;
+    if (!(await isEligible(frontmatter))) continue;
 
     skills.push({
       dirName,

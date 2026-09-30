@@ -11,9 +11,11 @@
  *   - infer plan/exec slot status from session_ids + session mode / planCompleted
  *   - graceful degradation when the session store is unreadable
  *
- * Strategy: mock the session store (listSessions) so we drive the enrichment purely
- * from in-memory fixtures, and mock constants so the task-manager / session-tracker
- * module-load side effects don't touch the real filesystem.
+ * Strategy: mock the session store (listSessionsForTasks) so we drive the enrichment
+ * purely from in-memory fixtures, and mock constants so the task-manager /
+ * session-tracker module-load side effects don't touch the real filesystem. The
+ * mock returns every fixture, which is a superset of what the real read returns:
+ * the enrichment must keep only what its tasks link or name.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
@@ -21,16 +23,16 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants())
 
 // Replace the session store read with a controllable mock. enrichTasksWithSessionStatus
-// is the only consumer of listSessions in tasks.ts, so this fully isolates the unit.
+// is the only consumer of listSessionsForTasks in tasks.ts, so this fully isolates the unit.
 vi.mock('../../../src/core/session-tracker.js', () => ({
-  listSessions: vi.fn(),
+  listSessionsForTasks: vi.fn(),
 }))
 
 import { enrichTasksWithSessionStatus } from '../../../src/web/routes/tasks.js'
-import { listSessions } from '../../../src/core/session-tracker.js'
+import { listSessionsForTasks } from '../../../src/core/session-tracker.js'
 import type { Task, SessionRecord, ProcessStatus, SessionMode, SessionProvider } from '../../../src/core/types.js'
 
-const listSessionsMock = vi.mocked(listSessions)
+const listSessionsMock = vi.mocked(listSessionsForTasks)
 
 // ── Fixture builders ────────────────────────────────────────────────
 
@@ -160,6 +162,31 @@ describe('enrichTasksWithSessionStatus — reverse-map via taskId', () => {
 
     expect(enriched.session_ids ?? []).not.toContain('embedded-1')
     expect(enriched.session_id).toBeUndefined()
+  })
+
+  it('asks the store for exactly the listed task ids and the session ids they name', async () => {
+    listSessionsMock.mockResolvedValue([])
+    await enrichTasksWithSessionStatus([
+      makeTask({ id: 'task-1', session_id: 's-single', session_ids: ['s-old', 's-single'] }),
+      makeTask({ id: 'task-2', plan_session_id: 's-plan', exec_session_id: 's-exec', session_ids: [] }),
+      makeTask({ id: 'task-3', session_ids: [] }),
+    ])
+    expect(listSessionsMock).toHaveBeenCalledTimes(1)
+    const [taskIds, sessionIds] = listSessionsMock.mock.calls[0]
+    expect([...taskIds].sort()).toEqual(['task-1', 'task-2', 'task-3'])
+    expect([...sessionIds!].sort()).toEqual(['s-exec', 's-old', 's-plan', 's-single'])
+  })
+
+  it('ignores sessions of tasks that are not in the list', async () => {
+    listSessionsMock.mockResolvedValue([
+      makeSession({ claudeSessionId: 'other-task-live', taskId: 'task-9' }),
+      makeSession({ claudeSessionId: 'mine', taskId: 'task-1', process_status: 'idle' as ProcessStatus }),
+    ])
+    const [enriched] = await enrichTasksWithSessionStatus([makeTask({ id: 'task-1', session_ids: [] })])
+    expect(enriched.session_ids).toEqual(['mine'])
+    expect(enriched.session_id).toBe('mine')
+    expect(enriched.session_status?.process_status).toBe('idle')
+    expect(enriched.session_history_count).toBe(1)
   })
 })
 

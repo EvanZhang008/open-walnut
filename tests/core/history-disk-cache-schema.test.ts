@@ -28,7 +28,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-history-cach
 }))
 
 import { HISTORY_CACHE_DIR } from '../../src/constants.js'
-import { readHistoryCache, writeHistoryCache } from '../../src/core/history-disk-cache.js'
+import { flushHistoryCacheWrites, readHistoryCache, writeHistoryCache } from '../../src/core/history-disk-cache.js'
 import type { SessionHistoryMessage } from '../../src/core/session-history.js'
 
 const SID = 'cache-schema-session'
@@ -93,6 +93,7 @@ describe('history disk cache: schema stamp', () => {
 
   it('reads back what the current writer wrote, stamp and all', async () => {
     writeHistoryCache(SID, staleMessages(), 1_757_000_000_000, ['agent-7'])
+    flushHistoryCacheWrites()
     const raw = await waitForEntry()
     // The stamp is a NUMBER in the payload, so an older build reading a newer file
     // makes the same "not mine" decision rather than half-trusting it.
@@ -103,6 +104,24 @@ describe('history disk cache: schema stamp', () => {
     expect(back?.mtimeMs).toBe(1_757_000_000_000)
     // The out-of-band proof rides along, as before (a restart re-marks orphans).
     expect(back?.finishedAgentIds).toEqual(['agent-7'])
+  })
+
+  it('coalesces a burst of writes into one file write of the newest payload', async () => {
+    const first = staleMessages()
+    const second = [...staleMessages(), { ...staleMessages()[0], id: 'm2' } as unknown as SessionHistoryMessage]
+    writeHistoryCache(SID, first, 1)
+    writeHistoryCache(SID, second, 2, ['agent-9'])
+    // Still inside the window: nothing on disk yet, but a reader sees the newest.
+    await expect(fs.readFile(entryPath(SID), 'utf-8')).rejects.toThrow()
+    const pending = await readHistoryCache(SID)
+    expect(pending?.messages).toHaveLength(2)
+    expect(pending?.mtimeMs).toBe(2)
+    expect(pending?.finishedAgentIds).toEqual(['agent-9'])
+
+    flushHistoryCacheWrites()
+    const raw = JSON.parse(await waitForEntry()) as { messages: unknown[]; mtimeMs: number }
+    expect(raw.messages).toHaveLength(2)
+    expect(raw.mtimeMs).toBe(2)
   })
 
   it('still returns null for a missing or corrupt file', async () => {

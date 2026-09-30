@@ -580,14 +580,14 @@ export class DaemonFileReader implements SessionFileReader {
    * the session-changes incremental cache for hashed-cwd sessions, where a
    * full read just to learn the path would defeat the point).
    */
-  async findSessionPath(sessionId: string): Promise<string | null> {
+  async findSessionPath(sessionId: string, timeoutMs?: number): Promise<string | null> {
     await this.resolve()
     const conn = await getDaemonConnection(this.host, this.sshTarget!)
     const result = await conn.send('fs.find', {
       path: '~/.claude/projects',
       name: sessionId + '.jsonl',
       maxDepth: 3,
-    })
+    }, timeoutMs)
     if (!result.ok || !(result.files as string[])?.length) return null
     return (result.files as string[])[0]
   }

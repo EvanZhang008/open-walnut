@@ -17,16 +17,50 @@ function tempPath(ext: string): string {
   return join(tmpdir(), `walnut-stt-${randomBytes(6).toString('hex')}.${ext}`);
 }
 
-/** Check if ffmpeg is available on the system (augmented PATH — see spawn-env.ts).
- *  `extraDirs` prepends additional dirs to the probe PATH (e.g. the resolved
- *  whisper-server binary's own prefix, where a bundled ffmpeg may sit). */
-export async function isFfmpegAvailable(extraDirs: string[] = []): Promise<boolean> {
+/** Every GET /api/stt/status and POST /api/stt/draft asks, and each probe is a spawn. */
+const FFMPEG_FOUND_TTL_MS = 10 * 60_000;
+const FFMPEG_MISSING_TTL_MS = 30_000;
+
+const ffmpegProbes = new Map<string, { available: boolean; at: number; ttlMs: number }>();
+const ffmpegProbesInFlight = new Map<string, Promise<boolean>>();
+
+async function probeFfmpeg(extraDirs: string[], previous: boolean | undefined): Promise<{ available: boolean; ttlMs: number }> {
   try {
     await execFileAsync('ffmpeg', ['-version'], { timeout: 5000, env: sttSpawnEnv(extraDirs) });
-    return true;
-  } catch {
-    return false;
+    return { available: true, ttlMs: FFMPEG_FOUND_TTL_MS };
+  } catch (err) {
+    // A timeout on a loaded machine is not a missing ffmpeg: keep an earlier
+    // "found", and ask again soon rather than trusting it for ten minutes.
+    const timedOut = (err as { killed?: boolean } | null)?.killed === true;
+    return { available: timedOut && previous === true, ttlMs: FFMPEG_MISSING_TTL_MS };
   }
+}
+
+/** Check if ffmpeg is available on the system (augmented PATH, see spawn-env.ts).
+ *  `extraDirs` prepends additional dirs to the probe PATH (e.g. the resolved
+ *  whisper-server binary's own prefix, where a bundled ffmpeg may sit).
+ *  Memoized per `extraDirs`: found for 10 minutes, missing or timed out for 30s. */
+export function isFfmpegAvailable(extraDirs: string[] = []): Promise<boolean> {
+  const key = extraDirs.join('\0');
+  const cached = ffmpegProbes.get(key);
+  if (cached && Date.now() - cached.at < cached.ttlMs) return Promise.resolve(cached.available);
+  const pending = ffmpegProbesInFlight.get(key);
+  if (pending) return pending;
+
+  const probe = probeFfmpeg(extraDirs, cached?.available)
+    .then(({ available, ttlMs }) => {
+      ffmpegProbes.set(key, { available, at: Date.now(), ttlMs });
+      return available;
+    })
+    .finally(() => ffmpegProbesInFlight.delete(key));
+  ffmpegProbesInFlight.set(key, probe);
+  return probe;
+}
+
+/** Test hook: forget every cached ffmpeg probe. */
+export function _resetFfmpegProbeCacheForTest(): void {
+  ffmpegProbes.clear();
+  ffmpegProbesInFlight.clear();
 }
 
 /**

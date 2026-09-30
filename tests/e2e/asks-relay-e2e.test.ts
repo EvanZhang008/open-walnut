@@ -34,6 +34,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-asks-relay-e
 vi.mock('../../src/core/session-tracker.js', async (orig) => ({
   ...(await orig<typeof import('../../src/core/session-tracker.js')>()),
   listSessions: async () => [],
+  listSessionsForTasks: async () => [],
 }))
 
 import express from 'express'

@@ -8,8 +8,8 @@
  * Files: ~/.open-walnut/cache/history/<sessionId>.json
  * Format: { schema: number, messages: SessionHistoryMessage[], cachedAt: ISO string }
  *
- * Writes are fire-and-forget (async, non-blocking). Reads are synchronous-style
- * (awaited) but fast (local disk). A missing, corrupt or out-of-date file returns
+ * Writes are fire-and-forget and coalesced per session (see WRITE_COALESCE_MS).
+ * Reads are awaited but fast (local disk). A missing, corrupt or out-of-date file returns
  * null, and the caller re-parses (see HISTORY_CACHE_SCHEMA — this file outlives
  * every deploy, so a shape change here is a shape change to data already on disk).
  */
@@ -70,15 +70,49 @@ export function writeHistoryCache(
   finishedAgentIds?: readonly string[],
 ): void {
   if (messages.length === 0) return;
+  const queued = pendingWrites.get(sessionId);
+  if (queued) {
+    queued.messages = messages;
+    queued.mtimeMs = mtimeMs;
+    queued.finishedAgentIds = finishedAgentIds;
+    return;
+  }
+  const timer = setTimeout(() => flushWrite(sessionId), WRITE_COALESCE_MS);
+  timer.unref?.();
+  pendingWrites.set(sessionId, { messages, mtimeMs, finishedAgentIds, timer });
+}
+
+/**
+ * Writes are coalesced per session: the payload is one JSON.stringify of the
+ * WHOLE parsed history (megabytes for a long session) on the event loop, and
+ * the incremental read path asked for one after every turn of every tracked
+ * session, so a busy board serialized the same histories many times a minute.
+ * Only the newest arguments within the window are written.
+ */
+const WRITE_COALESCE_MS = 2_000;
+
+interface PendingWrite {
+  messages: SessionHistoryMessage[];
+  mtimeMs: number | undefined;
+  finishedAgentIds: readonly string[] | undefined;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const pendingWrites = new Map<string, PendingWrite>();
+
+function flushWrite(sessionId: string): void {
+  const entry = pendingWrites.get(sessionId);
+  pendingWrites.delete(sessionId);
+  if (!entry) return;
   const payload = JSON.stringify({
     schema: HISTORY_CACHE_SCHEMA,
-    messages,
+    messages: entry.messages,
     cachedAt: new Date().toISOString(),
-    ...(mtimeMs !== undefined ? { mtimeMs } : {}),
+    ...(entry.mtimeMs !== undefined ? { mtimeMs: entry.mtimeMs } : {}),
     // Orphan finished-agent ids (see session-history.ts getOrphanFinishedAgentIds):
     // proof that lives OUTSIDE the messages array, so it must be persisted
     // explicitly or a post-restart disk-cache hit silently drops it.
-    ...(finishedAgentIds && finishedAgentIds.length > 0 ? { finishedAgentIds: [...finishedAgentIds] } : {}),
+    ...(entry.finishedAgentIds && entry.finishedAgentIds.length > 0 ? { finishedAgentIds: [...entry.finishedAgentIds] } : {}),
   });
   ensureDir()
     .then(() => fsp.writeFile(cachePath(sessionId), payload, 'utf-8'))
@@ -89,12 +123,25 @@ export function writeHistoryCache(
     });
 }
 
+/** Write every queued entry now (tests, and a shutdown that wants the cache complete). */
+export function flushHistoryCacheWrites(): void {
+  for (const [sessionId, entry] of [...pendingWrites]) {
+    clearTimeout(entry.timer);
+    flushWrite(sessionId);
+  }
+}
+
 /**
  * Delete a session's disk cache entry. Used when the cached parse became WRONG
  * without the source file changing (in-place rewind: same bytes + mtime, new
  * meaning) — the mtime fast-path would otherwise serve it forever.
  */
 export async function deleteHistoryCache(sessionId: string): Promise<void> {
+  const queued = pendingWrites.get(sessionId);
+  if (queued) {
+    clearTimeout(queued.timer);
+    pendingWrites.delete(sessionId);
+  }
   try {
     await fsp.unlink(cachePath(sessionId));
   } catch { /* missing file = already gone */ }
@@ -106,6 +153,16 @@ export async function deleteHistoryCache(sessionId: string): Promise<void> {
  * every caller already treats null as "no cache" and re-parses.
  */
 export async function readHistoryCache(sessionId: string): Promise<{ messages: SessionHistoryMessage[]; cachedAt: string; mtimeMs?: number; finishedAgentIds?: string[] } | null> {
+  // A write still in its coalescing window is the newest entry there is.
+  const queued = pendingWrites.get(sessionId);
+  if (queued) {
+    return {
+      messages: queued.messages,
+      cachedAt: new Date().toISOString(),
+      ...(queued.mtimeMs !== undefined ? { mtimeMs: queued.mtimeMs } : {}),
+      ...(queued.finishedAgentIds && queued.finishedAgentIds.length > 0 ? { finishedAgentIds: [...queued.finishedAgentIds] } : {}),
+    };
+  }
   try {
     const raw = await fsp.readFile(cachePath(sessionId), 'utf-8');
     const parsed = JSON.parse(raw);

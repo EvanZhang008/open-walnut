@@ -4917,6 +4917,16 @@ export class ClaudeCodeSession {
               log.session.debug('stream-json bookkeeping subtype (not rendered)', {
                 sessionId: sid, taskId: this.taskId, subtype: String(sys.subtype),
               })
+            } else if (sys.subtype === 'replay_truncated' && typeof sys.content === 'string') {
+              // The daemon capped a catch-up replay (addSubscriber): the reader
+              // gets the sentence, not the subtype name and a JSON dump.
+              log.session.warn('catch-up replay was capped by the daemon', {
+                sessionId: sid, taskId: this.taskId, skippedBytes: sys.skipped_bytes,
+              })
+              bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+                sessionId: sid, taskId: this.taskId,
+                variant: 'info' as const, message: sys.content,
+              }, ['main-ai'], { source: 'session-runner' })
             } else {
               // Catch-all: unknown future subtypes — forward full payload so we
               // don't lose diagnostic info to a bare subtype name.

@@ -38,15 +38,29 @@ const MIN_JSONL_BYTES = 256
  *  per window is plenty. */
 const NEGATIVE_TTL_MS = 60_000
 
+/**
+ * The evidence comes from the head and the tail of the transcript, never the
+ * whole file: the first user line carries cwd, title and the start time, the
+ * last lines the end time. A missing record is asked for by every session panel
+ * that opens before its row is written, so the old whole-file read (fs.find
+ * with the 30 s default, then the entire JSONL over the socket and a JSON.parse
+ * per line on the event loop) ran on the hot path of opening a new session;
+ * GET /api/sessions/:id maxed at 29.9 s on the live server, exactly that timeout.
+ */
+const HEAD_BYTES = 256 * 1024
+const TAIL_BYTES = 64 * 1024
+const FIND_TIMEOUT_MS = 5_000
+
 const negativeCache = new Map<string, number>()
 const inflight = new Map<string, Promise<SessionRecord | null>>()
 
 /** Extract recovery evidence from canonical JSONL content. */
-export function extractRecoveryEvidence(content: string): {
+export function extractRecoveryEvidence(content: string, tail?: string): {
   cwd?: string
   firstUserText?: string
   firstTimestamp?: string
   lastTimestamp?: string
+  /** Lines seen; a lower bound when `tail` is given (the middle was not read). */
   messageCount: number
 } {
   let cwd: string | undefined
@@ -54,7 +68,9 @@ export function extractRecoveryEvidence(content: string): {
   let firstTimestamp: string | undefined
   let lastTimestamp: string | undefined
   let messageCount = 0
-  for (const line of content.split('\n')) {
+  // A window cut mid-line yields one unparsable fragment at each cut; skipped.
+  const lines = tail === undefined ? content.split('\n') : [...content.split('\n'), ...tail.split('\n')]
+  for (const line of lines) {
     if (!line) continue
     let parsed: Record<string, unknown>
     try { parsed = JSON.parse(line) } catch { continue }
@@ -121,13 +137,25 @@ export async function recoverSessionRecordFromJsonl(
 
       const { DaemonFileReader } = await import('../daemon-file-reader.js')
       const reader = new DaemonFileReader('__local__')
-      const found = await reader.findSession(sessionId)
-      if (!found || found.content.length < MIN_JSONL_BYTES) {
+      const jsonlPath = await reader.findSessionPath(sessionId, FIND_TIMEOUT_MS)
+      const size = jsonlPath ? (await reader.stat(jsonlPath))?.size : undefined
+      if (!jsonlPath || size === undefined || size < MIN_JSONL_BYTES) {
         negativeCache.set(sessionId, Date.now())
         return null
       }
+      const head = await reader.readRangeBytes(jsonlPath, 0, Math.min(size, HEAD_BYTES))
+      if (!head) {
+        negativeCache.set(sessionId, Date.now())
+        return null
+      }
+      let tail: string | undefined
+      if (size > HEAD_BYTES) {
+        const tailStart = Math.max(HEAD_BYTES, size - TAIL_BYTES)
+        tail = (await reader.readRangeBytes(jsonlPath, tailStart, size - tailStart))?.buf.toString('utf-8')
+      }
+      const found = { path: jsonlPath, bytesRead: head.buf.length + (tail?.length ?? 0), size }
 
-      const evidence = extractRecoveryEvidence(found.content)
+      const evidence = extractRecoveryEvidence(head.buf.toString('utf-8'), tail)
       // A transcript with zero conversational lines is not a session worth
       // reviving (e.g. a bare queue-operation stub).
       if (evidence.messageCount === 0) {
@@ -153,6 +181,8 @@ export async function recoverSessionRecordFromJsonl(
       log.session.warn('session record self-healed from canonical JSONL', {
         sessionId,
         jsonlPath: found.path,
+        fileBytes: found.size,
+        bytesRead: found.bytesRead,
         messageCount: evidence.messageCount,
         cwd: evidence.cwd,
         firstSeen: evidence.firstTimestamp,

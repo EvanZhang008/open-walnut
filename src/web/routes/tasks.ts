@@ -52,9 +52,10 @@ import {
   BulkGetError,
   type BulkGetResult,
 } from '../../core/task-bulk-get.js'
-import { listSessions } from '../../core/session-tracker.js'
+import { listSessionsForTasks } from '../../core/session-tracker.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import {
+  computeBlockedIds,
   LEGACY_STATUS_TO_COMPLETION,
   MAX_QUERY_LIMIT,
   TaskQueryError,
@@ -64,6 +65,7 @@ import {
 import { VALID_PRIORITIES, type Task, type ProcessStatus, type SessionMode } from '../../core/types.js'
 import { parseQuickTask, quickParseEnabled, unparsedTask } from '../../core/quick-task-parse.js'
 import { buildProjectDigest, type ProjectDigest } from '../../core/quick-task-digest.js'
+import { parseCompletedWithinDays, recentCompletedWindow } from '../../core/task-recent-completed.js'
 import {
   SUGGEST_FIELDS,
   recordSuggestDiff,
@@ -117,11 +119,14 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
     if (t.session_ids) for (const sid of t.session_ids) sessionIds.add(sid)
   }
 
-  // Single read of the session store — avoids N file reads via getSessionByClaudeId.
+  const taskIds = new Set(tasks.map((t) => t.id))
+
+  // Single read of the session store, copying only the sessions these tasks
+  // link or name (a superset of what the loops below keep).
   // Graceful degradation: if session store is unreadable, return tasks without enrichment.
-  let allSessions: Awaited<ReturnType<typeof listSessions>>
+  let allSessions: Awaited<ReturnType<typeof listSessionsForTasks>>
   try {
-    allSessions = await listSessions()
+    allSessions = await listSessionsForTasks(taskIds, sessionIds)
   } catch (err) {
     log.web.warn('session enrichment skipped — failed to read session store', {
       error: err instanceof Error ? err.message : String(err),
@@ -135,7 +140,6 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
   // failed due to file lock contention or ambiguous prefix).
   // Excludes embedded subagent runs (triage, general agent) — these are high-volume
   // housekeeping sessions that should not appear in the session pill.
-  const taskIds = new Set(tasks.map((t) => t.id))
   const sessionsByTaskId = new Map<string, typeof allSessions>()
   for (const rec of allSessions) {
     if (rec.taskId && taskIds.has(rec.taskId) && rec.provider !== 'embedded') {
@@ -290,6 +294,19 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
 
     return enriched
   })
+}
+
+/**
+ * Sets is_blocked on every task that has dependencies, judged against the
+ * listed tasks only (a dependency outside the list does not block). One id map
+ * for the whole list: isTaskBlocked builds one per call.
+ */
+export function withBlockedFlags<T extends Task>(tasks: T[]): (T & { is_blocked?: boolean })[] {
+  const blocked = computeBlockedIds(tasks)
+  return tasks.map((t) => ({
+    ...t,
+    ...(t.depends_on?.length ? { is_blocked: blocked.has(t.id) } : {}),
+  }))
 }
 
 export const tasksRouter = Router()
@@ -475,6 +492,7 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     let query: TaskQuery
     let isMinimal: boolean
     let isSlim: boolean
+    let completedWithinDays: number | undefined
     try {
       const fields = queryString(rawQuery.fields, 'fields')
       // fields=list implies slim + drops summary/description/ext for the home
@@ -482,8 +500,9 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
       isMinimal = fields === 'list'
       isSlim = queryString(rawQuery.slim, 'slim') === '1' || isMinimal
       query = parseTaskQueryParams(rawQuery)
+      completedWithinDays = parseCompletedWithinDays(rawQuery.completedWithinDays)
     } catch (err) {
-      if (err instanceof QueryParamError) { res.status(400).json({ error: err.message }); return }
+      if (err instanceof QueryParamError || err instanceof RangeError) { res.status(400).json({ error: err.message }); return }
       throw err
     }
 
@@ -503,6 +522,15 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
       if (err instanceof TaskQueryError) { res.status(400).json({ error: err.message }); return }
       throw err
     }
+    // The recent-completed window (src/core/task-recent-completed.ts) applies
+    // AFTER the query and BEFORE enrichment, so the rows it leaves out cost no
+    // session lookups either. `total` still counts what the query matched.
+    let completedHidden: number | undefined
+    if (completedWithinDays !== undefined) {
+      const window = recentCompletedWindow(queried as Task[], completedWithinDays)
+      queried = window.tasks
+      completedHidden = window.completedHidden
+    }
     const tList = Date.now()
 
     // enrichTasksWithSessionStatus reads session_id / session_ids / slot IDs
@@ -511,10 +539,7 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     // via a Task cast (the helper only reads/writes shared fields).
     const enriched = await enrichTasksWithSessionStatus(queried as unknown as Task[])
     const tEnrich = Date.now()
-    const tasksWithBlocked = enriched.map((t) => ({
-      ...t,
-      ...(t.depends_on?.length ? { is_blocked: isTaskBlocked(t, enriched) } : {}),
-    }))
+    const tasksWithBlocked = withBlockedFlags(enriched)
     // `total` / `truncated` are additive: `tasks` keeps its exact old shape, and
     // a caller that passed no limit always sees truncated=false.
     //
@@ -523,7 +548,11 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     // reporting it as the board. Only computed for working_set — it is a second
     // store read no other query needs.
     const board = query.workingSet === true ? await getBoardCounts() : undefined
-    res.json({ tasks: tasksWithBlocked, total, truncated, ...(board ? { board } : {}) })
+    res.json({
+      tasks: tasksWithBlocked, total, truncated,
+      ...(completedHidden !== undefined ? { completedHidden } : {}),
+      ...(board ? { board } : {}),
+    })
     const tDone = Date.now()
     const elapsed = tDone - t0
     if (elapsed > 200) {

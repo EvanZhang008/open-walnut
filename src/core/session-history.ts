@@ -3040,17 +3040,23 @@ export async function rewriteHistoryRemoteImages(
   sessionId: string,
   cwd?: string,
 ): Promise<SessionHistoryMessage[]> {
+  // The rewrite is in place, and the in-memory history cache hands the same
+  // message objects to every request, so a message already rewritten at this
+  // size is skipped (its paths are mirror slots now, which both
+  // passes below leave alone anyway): on a remote session every request (cache
+  // hits and 400-row deltas included) used to run the image regexes and an
+  // existsSync per path over the WHOLE history again.
+  const pending = messages.filter((msg) => rewrittenImages.get(msg) !== imageRewriteSignature(msg))
+  if (pending.length === 0) return messages
+
   const cache = new Map<string, string>()
   const fs = await import('node:fs')
 
   // Pre-scan: build filename → absolute path hints from tool inputs/results.
   // Tool inputs (e.g. Bash `cp` commands, file paths) contain full absolute paths
   // that are more accurate than CWD-based resolution for relative filenames.
+  // Per message the scan is memoized under the same signature as the rewrite.
   const filePathHints = new Map<string, string[]>()
-  const isUsefulHint = (p: string) =>
-    !p.startsWith(LOCAL_HOME) &&        // skip local filesystem paths
-    !looksAlreadyMirrored(p) &&         // a rewritten path is not a source of truth
-    p.lastIndexOf('/') > 0              // require ≥2 path components
   const addHint = (p: string) => {
     const bn = path.basename(p)
     const arr = filePathHints.get(bn)
@@ -3059,19 +3065,11 @@ export async function rewriteHistoryRemoteImages(
   }
   for (const msg of messages) {
     if (!msg.tools) continue
-    for (const tool of msg.tools) {
-      const inputStr = typeof tool.input === 'string'
-        ? tool.input
-        : (tool.input ? JSON.stringify(tool.input) : '')
-      for (const p of findImagePaths(inputStr)) {
-        if (isUsefulHint(p)) addHint(p)
-      }
-      if (tool.result) {
-        for (const p of findImagePaths(tool.result)) {
-          if (isUsefulHint(p)) addHint(p)
-        }
-      }
-    }
+    const signature = imageRewriteSignature(msg)
+    const memo = imageHints.get(msg)
+    const hints = memo && memo.signature === signature ? memo.paths : scanImageHints(msg)
+    if (!memo || memo.signature !== signature) imageHints.set(msg, { signature, paths: hints })
+    for (const p of hints) addHint(p)
   }
 
   /**
@@ -3159,7 +3157,7 @@ export async function rewriteHistoryRemoteImages(
     return rewritten
   }
 
-  for (const msg of messages) {
+  for (const msg of pending) {
     if (msg.text) {
       msg.text = rewriteText(msg.text)
     }
@@ -3170,7 +3168,38 @@ export async function rewriteHistoryRemoteImages(
         }
       }
     }
+    rewrittenImages.set(msg, imageRewriteSignature(msg))
   }
 
   return messages
+}
+
+/** Messages whose image paths were already rewritten, by content size (see rewriteHistoryRemoteImages). */
+const rewrittenImages = new WeakMap<SessionHistoryMessage, string>()
+/** Absolute image paths found in a message's tool inputs and results, under the same signature. */
+const imageHints = new WeakMap<SessionHistoryMessage, { signature: string; paths: string[] }>()
+
+const imageRewriteSignature = (msg: SessionHistoryMessage): string =>
+  `${msg.text?.length ?? 0}:${msg.tools?.reduce((n, t) => n + (t.result?.length ?? 0), 0) ?? 0}`
+
+function scanImageHints(msg: SessionHistoryMessage): string[] {
+  const isUsefulHint = (p: string) =>
+    !p.startsWith(LOCAL_HOME) &&        // skip local filesystem paths
+    !looksAlreadyMirrored(p) &&         // a rewritten path is not a source of truth
+    p.lastIndexOf('/') > 0              // require at least two path components
+  const paths: string[] = []
+  for (const tool of msg.tools ?? []) {
+    const inputStr = typeof tool.input === 'string'
+      ? tool.input
+      : (tool.input ? JSON.stringify(tool.input) : '')
+    for (const p of findImagePaths(inputStr)) {
+      if (isUsefulHint(p) && !paths.includes(p)) paths.push(p)
+    }
+    if (tool.result) {
+      for (const p of findImagePaths(tool.result)) {
+        if (isUsefulHint(p) && !paths.includes(p)) paths.push(p)
+      }
+    }
+  }
+  return paths
 }

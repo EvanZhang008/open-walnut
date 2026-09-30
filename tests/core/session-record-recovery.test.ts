@@ -136,6 +136,40 @@ describe('recoverSessionRecordFromJsonl', () => {
     expect(fetched!.title).toBe(record!.title);
   });
 
+  it('recovers a large transcript from its head and tail without reading the middle', async () => {
+    const sid = '7a1b2c3d-0000-4000-8000-00000000abcd';
+    // 2 MB of assistant lines between the first user line and the last line.
+    let body = '';
+    for (let i = 0; i < 4000; i++) {
+      body += jsonlLine({
+        type: 'assistant', uuid: `a-${i}`, timestamp: `2026-07-14T18:${String(10 + Math.floor(i / 200)).padStart(2, '0')}:00.000Z`,
+        message: { role: 'assistant', id: `msg_${i}`, content: [{ type: 'text', text: 'y'.repeat(480) }] },
+      });
+    }
+    const content = sampleJsonl() + body + jsonlLine({
+      type: 'assistant', uuid: 'a-last', timestamp: '2026-07-14T19:30:00.000Z',
+      message: { role: 'assistant', id: 'msg_last', content: [{ type: 'text', text: 'done' }] },
+    });
+    const jsonlPath = await writeCanonicalJsonl(sid, content);
+    const size = (await fsp.stat(jsonlPath)).size;
+    expect(size).toBeGreaterThan(1024 * 1024);
+
+    const { DaemonFileReader } = await import('../../src/core/daemon-file-reader.js');
+    const ranges = vi.spyOn(DaemonFileReader.prototype, 'readRangeBytes');
+    const record = await recoverSessionRecordFromJsonl(sid);
+    // Two windows, head and tail, well under the file size.
+    expect(ranges).toHaveBeenCalledTimes(2);
+    const bytesAsked = ranges.mock.calls.reduce((n, call) => n + (call[2] as number), 0);
+    expect(bytesAsked).toBeLessThan(size / 2);
+    ranges.mockRestore();
+    expect(record).not.toBeNull();
+    expect(record!.cwd).toBe(CWD);
+    expect(record!.title).toContain('Investigate whether the 2025 T1');
+    expect(record!.startedAt).toBe('2026-07-14T17:56:04.000Z');
+    // The end time comes from the tail window, so it is the real last line.
+    expect(record!.lastActiveAt).toBe('2026-07-14T19:30:00.000Z');
+  });
+
   it('returns null (and negative-caches) when no JSONL exists', async () => {
     const first = await recoverSessionRecordFromJsonl('11111111-2222-3333-4444-555555555555');
     expect(first).toBeNull();
