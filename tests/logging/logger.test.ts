@@ -13,7 +13,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 // Build a unique tmpdir for LOG_DIR
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { initFileLogger, writeLogEntry, flushLogBuffer } from '../../src/logging/logger.js';
+import { initFileLogger, writeLogEntry, flushLogBuffer, flushLogBufferNow } from '../../src/logging/logger.js';
 import { LOG_DIR, LOG_PREFIX } from '../../src/constants.js';
 
 let logDir: string;
@@ -154,5 +154,27 @@ describe('writeLogEntry', () => {
     expect(JSON.parse(lines[0]).message).toBe('line one');
     expect(JSON.parse(lines[1]).message).toBe('line two');
     expect(JSON.parse(lines[2]).message).toBe('line three');
+  });
+});
+
+describe('flushLogBufferNow', () => {
+  beforeEach(() => {
+    initFileLogger();
+  });
+
+  it('also writes an entry logged while a timer flush is already running', async () => {
+    // flushLogBuffer returns at once while another flush is in flight, so an
+    // entry logged in that window waited for the next 2s tick: too late for a
+    // process that is about to be killed (a launchd job removing itself).
+    writeLogEntry({ time: '2025-01-15T10:00:00.000Z', level: 'info', subsystem: 'test', message: 'before' });
+    const running = flushLogBuffer();
+    writeLogEntry({ time: '2025-01-15T10:00:01.000Z', level: 'warn', subsystem: 'test', message: 'the last words' });
+    await flushLogBuffer(); // the in-flight guard: returns without writing
+    await flushLogBufferNow();
+    await running;
+
+    const logFile = fs.readdirSync(logDir).find((f) => f.startsWith(LOG_PREFIX) && f.endsWith('.log'))!;
+    const messages = fs.readFileSync(path.join(logDir, logFile), 'utf-8').trim().split('\n').map((l) => JSON.parse(l).message);
+    expect(messages).toEqual(['before', 'the last words']);
   });
 });

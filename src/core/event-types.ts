@@ -401,6 +401,12 @@ export interface SessionMessagesDeliveredEvent {
    *  Optional during rollout; the failure path (SessionBatchFailedEvent)
    *  always carried ids — this closes the success/failure asymmetry. */
   messageIds?: string[];
+  /** The delivering session's turn generation right after delivery
+   *  (ClaudeCodeSession.turnGen): the generation of the turn that will answer
+   *  this batch. An idle send opens a new turn (gen bump), a mid-turn send joins
+   *  the running one. Lane turns match their result with it
+   *  (core/sessions/lane-turn.ts). Absent on non-CLI emitters (ACP). */
+  turnGen?: number;
 }
 
 /** Messages the CLI had queued behind a running turn and dropped when the user

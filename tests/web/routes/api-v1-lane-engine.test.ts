@@ -337,7 +337,9 @@ describe('a mobile turn runs in the conversation lane session', () => {
 
       const err = await sse.waitFor((e) => e.event === 'error')
       expect(typeof err.data.message).toBe('string')
-      expect(err.data.message as string).toMatch(/did not answer/i)
+      // A session:error is a dead CLI, and the notice now says so (lane-turn-late.ts
+      // laneFailureMessage) instead of the old catch-all "did not answer".
+      expect(err.data.message as string).toMatch(/stopped before it answered/i)
       expect(sse.events.some((e) => e.event === 'message-end')).toBe(false)
 
       // A failed turn is persisted as a notification, so it lands in Notifications

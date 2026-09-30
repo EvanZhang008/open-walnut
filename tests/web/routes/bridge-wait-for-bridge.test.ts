@@ -21,6 +21,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-bridge-wait', { CLOUD_MODE: true }))
 
 import { attachBridge, waitForBridge, bridgeForHost, closeAllBridges } from '../../../src/web/ws/bridge-registry.js'
+import { OFFLINE_ANNOUNCE_DELAY_MS } from '../../../src/web/ws/bridge-presence.js'
 
 /** Fake bridge socket: attachBridge only uses on/send/close. */
 class FakeBridgeWs extends EventEmitter {
@@ -73,6 +74,9 @@ describe('waitForBridge', () => {
     // Connect and drop first, so the registry's silence-sweep interval is
     // already installed and counted: the delta below is the waiter's alone.
     connectFakeBridge('marina', 'bridge-marina').close()
+    // The drop also arms the offline-announcement grace timer (a redial would
+    // cancel it, bridge-presence.ts): let it run out so it is not in the count.
+    vi.advanceTimersByTime(OFFLINE_ANNOUNCE_DELAY_MS + 1)
     const before = vi.getTimerCount()
     const waiting = waitForBridge('marina', 60_000)
     expect(vi.getTimerCount()).toBe(before + 1)

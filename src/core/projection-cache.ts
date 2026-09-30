@@ -32,6 +32,13 @@ import path from 'node:path';
 import { PROJECTION_CACHE_DIR, TRANSCRIPT_CACHE_DIR, CLOUD_MODE } from '../constants.js';
 import { writeJsonFile } from '../utils/fs.js';
 import { log } from '../logging/index.js';
+import * as ingest from './cloud-ingest.js';
+import {
+  INGEST_LANE, SELF_HEAL_INTERVAL_MS, alreadyHeld, forgetDelivery, preparePush, rememberDelivery,
+  _resetProjectionPushStateForTesting,
+} from './projection-push-state.js';
+
+export { preparePush } from './projection-push-state.js';
 
 export type ProjectionKind = 'sessions' | 'tasks';
 
@@ -161,6 +168,7 @@ export async function legacyProjectionFilesEnabled(): Promise<boolean> {
 export function _resetProjectionCacheForTesting(): void {
   legacyFlagCache = null;
   pendingTranscriptPushSids.clear();
+  _resetProjectionPushStateForTesting();
 }
 
 // ── Mac → cloud push (the git-sync replacement) ─────────────────────────────
@@ -194,12 +202,23 @@ export function _pendingTranscriptPushSidsForTesting(): ReadonlySet<string> {
   return pendingTranscriptPushSids;
 }
 
+function pushKey(kind: 'projection-upsert' | 'transcript-upsert', payload: unknown): string | null {
+  if (kind === 'projection-upsert') {
+    const which = (payload as { which?: unknown } | null)?.which;
+    return typeof which === 'string' ? `projection:${which}` : null;
+  }
+  const sid = payloadSid(payload);
+  return sid ? `transcript:${sid}` : null;
+}
+
+export type ProjectionPushOutcome = 'sent' | 'unchanged' | 'skipped' | 'failed';
+
 
 /**
- * Push a cache payload to the cloud companion over the existing mobile-event
- * lane: local daemon `mobile-event` command → daemon's dialed-out /bridge WS →
- * cloud bridge-registry (hard-filtered to hostAlias '__local__') →
- * events-v1 handleBridgeMobileEvent → the cache writers above.
+ * Push a cache payload to the cloud companion: POST /bridge/ingest first, else
+ * the legacy mobile-event lane (local daemon → its dialed-out /bridge WS → cloud
+ * bridge-registry, hard-filtered to '__local__'). Both end in events-v1
+ * applyBridgeCacheFrame → the cache writers above.
  *
  * Kinds (additive to the feed-event kinds, but routed to DISK, never to
  * phone SSE):
@@ -217,51 +236,143 @@ export function pushProjectionToCloud(
   kind: 'projection-upsert' | 'transcript-upsert',
   payload: unknown,
 ): void {
-  if (CLOUD_MODE) return; // cloud is the receiver, never the pusher
-  void (async () => {
+  void pushProjectionToCloudNow(kind, payload);
+}
+
+/**
+ * The awaitable form. Never rejects. Lanes, in order:
+ *   1. POST /bridge/ingest (core/cloud-ingest.ts), one request in flight per
+ *      key with only the newest payload waiting. A failure there is 'failed',
+ *      and deliberately NOT retried on the bridge (see that file).
+ *   2. The daemon's bridge `mobile-event`, when the replica has no ingest route
+ *      or no companion is configured.
+ * `bridgeConnId` lets the sweep ask the daemon which bridge connection is up
+ * once instead of per push.
+ */
+export async function pushProjectionToCloudNow(
+  kind: 'projection-upsert' | 'transcript-upsert',
+  payload: unknown,
+  opts?: { bridgeConnId?: () => Promise<string | null> },
+): Promise<ProjectionPushOutcome> {
+  if (CLOUD_MODE) return 'skipped'; // cloud is the receiver, never the pusher
+  try {
+    let prepared: { wire: string; hash: string } | null;
     try {
-      let size: number;
-      try {
-        size = Buffer.byteLength(JSON.stringify(payload), 'utf8');
-      } catch {
-        return; // unserializable payload — nothing sane to send
-      }
-      // Per-kind budget: the list lane is bounded and essential, the transcript
-      // lane carries user-shaped text. See the two constants above.
-      const cap = kind === 'projection-upsert' ? PROJECTION_PUSH_MAX_BYTES : PUSH_MAX_BYTES;
-      if (size > cap) {
-        log.session.warn('projection-cache: push skipped — payload exceeds frame cap', {
-          kind, size, cap,
-        });
-        return;
-      }
-      const { getConnectedDaemonConnection } = await import('../providers/daemon-connection.js');
-      const conn = getConnectedDaemonConnection('__local__');
-      if (!conn || !conn.hasCapability('mobile-event')) {
-        if (kind === 'transcript-upsert') notePendingTranscriptPush(payload);
-        return;
-      }
-      await conn.send('mobile-event', { kind, data: payload });
-      if (kind === 'transcript-upsert') {
-        const sid = payloadSid(payload);
-        if (sid) pendingTranscriptPushSids.delete(sid);
-      }
-    } catch (err) {
-      if (kind === 'transcript-upsert') notePendingTranscriptPush(payload);
-      // Non-fatal by design — the periodic sweep heals any gap.
-      log.session.debug('projection-cache: bridge push failed', {
-        kind, error: err instanceof Error ? err.message : String(err),
-      });
+      prepared = preparePush(payload);
+    } catch {
+      prepared = null;
     }
-  })();
+    if (!prepared) return 'skipped'; // unserializable payload: nothing sane to send
+    const size = Buffer.byteLength(prepared.wire, 'utf8');
+    // Per-kind budget: the list lane is bounded and essential, the transcript
+    // lane carries user-shaped text. See the two constants above.
+    const cap = kind === 'projection-upsert' ? PROJECTION_PUSH_MAX_BYTES : PUSH_MAX_BYTES;
+    if (size > cap) {
+      log.session.warn('projection-cache: push skipped — payload exceeds frame cap', {
+        kind, size, cap,
+      });
+      return 'skipped';
+    }
+    const key = pushKey(kind, payload);
+    const bridge = (): Promise<ProjectionPushOutcome> =>
+      pushViaBridge(kind, key, prepared.hash, payload, opts?.bridgeConnId ?? currentBridgeConnId);
+    if (!key) return await bridge();
+    // BOTH lanes run inside the key's order, so a push that finds the lane
+    // resting cannot overtake an ingest request of the same key still in flight.
+    return await ingest.runLatestPerKey(key, async (): Promise<ProjectionPushOutcome> => {
+      if (ingest.cloudIngestResting()) return bridge();
+      if (alreadyHeld(kind, key, prepared.hash, INGEST_LANE)) {
+        settleTranscript(kind, payload);
+        return 'unchanged';
+      }
+      const outcome = await ingest.postToCloudIngest(kind, prepared.wire);
+      if (outcome === 'sent') {
+        rememberDelivery(key, prepared.hash, INGEST_LANE);
+        settleTranscript(kind, payload);
+        return 'sent';
+      }
+      if (outcome === 'failed') {
+        forgetDelivery(key); // it may have landed anyway: what the replica holds is unknown
+        if (kind === 'transcript-upsert') notePendingTranscriptPush(payload);
+        return 'failed';
+      }
+      return bridge(); // this replica has no ingest route (or no companion is set up)
+    });
+  } catch (err) {
+    forgetDelivery(pushKey(kind, payload));
+    if (kind === 'transcript-upsert') notePendingTranscriptPush(payload);
+    // Non-fatal by design — the periodic sweep heals any gap.
+    log.session.debug('projection-cache: cloud push failed', {
+      kind, error: err instanceof Error ? err.message : String(err),
+    });
+    return 'failed';
+  }
+}
+
+function settleTranscript(kind: 'projection-upsert' | 'transcript-upsert', payload: unknown): void {
+  if (kind !== 'transcript-upsert') return;
+  const sid = payloadSid(payload);
+  if (sid) pendingTranscriptPushSids.delete(sid);
+}
+
+/** The legacy lane: local daemon `mobile-event` → its dialed-out /bridge WS. */
+async function pushViaBridge(
+  kind: 'projection-upsert' | 'transcript-upsert',
+  key: string | null,
+  hash: string,
+  payload: unknown,
+  bridgeConnId: () => Promise<string | null>,
+): Promise<ProjectionPushOutcome> {
+  const { getConnectedDaemonConnection } = await import('../providers/daemon-connection.js');
+  const conn = getConnectedDaemonConnection('__local__');
+  if (!conn || !conn.hasCapability('mobile-event')) {
+    forgetDelivery(key);
+    if (kind === 'transcript-upsert') notePendingTranscriptPush(payload);
+    return 'skipped';
+  }
+  if (alreadyHeld(kind, key, hash, await bridgeConnId())) {
+    settleTranscript(kind, payload);
+    return 'unchanged';
+  }
+  const res = await conn.send('mobile-event', { kind, data: payload });
+  // An older daemon acks without `relayed`; `relayed: false` means its bridge
+  // was down (or the uplink refused the frame), so nothing reached the replica.
+  if (res?.relayed === false) {
+    forgetDelivery(key);
+    if (kind === 'transcript-upsert') notePendingTranscriptPush(payload);
+    return 'failed';
+  }
+  // An ack without a connId (older daemon) cannot be matched to a connection
+  // later, so it proves nothing a skip could use.
+  if (typeof res?.connId === 'string' && res.connId) rememberDelivery(key, hash, res.connId);
+  else forgetDelivery(key);
+  settleTranscript(kind, payload);
+  return 'sent';
+}
+
+/**
+ * The daemon's live bridge connection id, or null when the daemon cannot say
+ * (no bridge-uplink-v1) or its bridge is down. Asked once per sweep, and per
+ * write-time push that takes the bridge lane (a local RPC).
+ */
+async function currentBridgeConnId(): Promise<string | null> {
+  try {
+    const { getConnectedDaemonConnection } = await import('../providers/daemon-connection.js');
+    const conn = getConnectedDaemonConnection('__local__');
+    if (!conn || !conn.hasCapability('bridge-uplink-v1')) return null;
+    const res = await conn.send('bridge.status', {});
+    return res?.connected === true && typeof res.connId === 'string' ? res.connId : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Periodic self-heal (primary only) ───────────────────────────────────────
 
-/** Re-push cadence. Bounds cloud staleness after a bridge outage without
- *  needing a bridge-reconnected hook: worst case the cloud cache lags by one
- *  sweep interval once the link is back. */
-const SELF_HEAL_INTERVAL_MS = 5 * 60_000;
+// Re-push cadence: SELF_HEAL_INTERVAL_MS (projection-push-state.ts, 5 minutes).
+// Bounds cloud staleness after a bridge outage without needing a
+// bridge-reconnected hook: worst case the cloud cache lags by one sweep interval
+// once the link is back. The skip windows are derived from it.
 
 /**
  * Every 5 minutes, re-push both projections and the transcript tails of
@@ -271,49 +382,66 @@ const SELF_HEAL_INTERVAL_MS = 5 * 60_000;
  * retries. Primary only, interval unref'd (never holds the process open).
  */
 export function startProjectionCacheSelfHeal(): { stop: () => void } {
-  const timer = setInterval(() => {
-    void (async () => {
-      try {
-        const sessions = await readProjectionCache('sessions');
-        if (sessions != null) {
-          pushProjectionToCloud('projection-upsert', { which: 'sessions', data: sessions });
-        }
-        const tasks = await readProjectionCache('tasks');
-        if (tasks != null) {
-          pushProjectionToCloud('projection-upsert', { which: 'tasks', data: tasks });
-        }
-        // Alive sessions' tails only — stopped sessions' frozen tails were
-        // pushed when written; re-sending hundreds of archives every sweep
-        // would be pure bridge noise.
-        const pushedThisSweep = new Set<string>();
-        const rows = (sessions as { sessions?: Array<{ id?: string; process_status?: string }> } | null)?.sessions;
-        if (Array.isArray(rows)) {
-          for (const s of rows) {
-            if (!s?.id || (s.process_status !== 'running' && s.process_status !== 'idle')) continue;
-            const tail = await readTranscriptCache(s.id);
-            if (tail != null) {
-              pushProjectionToCloud('transcript-upsert', { sid: s.id, data: tail });
-              pushedThisSweep.add(s.id);
-            }
-          }
-        }
-        // …plus tails whose write-time push was lost to a bridge outage —
-        // typically sessions that STOPPED during it (their frozen tail is
-        // written exactly once, so no later sweep would carry it). Success
-        // removes the sid inside pushProjectionToCloud; failure re-notes it.
-        for (const sid of [...pendingTranscriptPushSids]) {
-          if (pushedThisSweep.has(sid)) continue;
-          const tail = await readTranscriptCache(sid);
-          if (tail == null) { pendingTranscriptPushSids.delete(sid); continue; }
-          pushProjectionToCloud('transcript-upsert', { sid, data: tail });
-        }
-      } catch (err) {
-        log.session.debug('projection-cache: self-heal sweep failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    })();
-  }, SELF_HEAL_INTERVAL_MS);
+  const timer = setInterval(() => { void runProjectionSelfHealSweep(); }, SELF_HEAL_INTERVAL_MS);
   timer.unref?.();
   return { stop: () => clearInterval(timer) };
+}
+
+/**
+ * One sweep, pushes awaited one after another (not a burst), each skipped when
+ * the replica already holds that content on the lane it would take.
+ * Exported for tests.
+ */
+export async function runProjectionSelfHealSweep(): Promise<Record<ProjectionPushOutcome, number>> {
+  const counts: Record<ProjectionPushOutcome, number> = { sent: 0, unchanged: 0, skipped: 0, failed: 0 };
+  // Asked at most once per sweep, and only if a push actually takes the bridge.
+  let connIdAsked: Promise<string | null> | undefined;
+  let bridgeConnId: string | null | undefined;
+  const askConnId = (): Promise<string | null> => (connIdAsked ??= currentBridgeConnId().then((id) => (bridgeConnId = id)));
+  const push = async (kind: 'projection-upsert' | 'transcript-upsert', payload: unknown): Promise<void> => {
+    counts[await pushProjectionToCloudNow(kind, payload, { bridgeConnId: askConnId })]++;
+  };
+  try {
+    const sessions = await readProjectionCache('sessions');
+    if (sessions != null) {
+      await push('projection-upsert', { which: 'sessions', data: sessions });
+    }
+    const tasks = await readProjectionCache('tasks');
+    if (tasks != null) {
+      await push('projection-upsert', { which: 'tasks', data: tasks });
+    }
+    // Alive sessions' tails only — stopped sessions' frozen tails were
+    // pushed when written; re-sending hundreds of archives every sweep
+    // would be pure bridge noise.
+    const pushedThisSweep = new Set<string>();
+    const rows = (sessions as { sessions?: Array<{ id?: string; process_status?: string }> } | null)?.sessions;
+    if (Array.isArray(rows)) {
+      for (const s of rows) {
+        if (!s?.id || (s.process_status !== 'running' && s.process_status !== 'idle')) continue;
+        const tail = await readTranscriptCache(s.id);
+        if (tail != null) {
+          await push('transcript-upsert', { sid: s.id, data: tail });
+          pushedThisSweep.add(s.id);
+        }
+      }
+    }
+    // …plus tails whose write-time push was lost to a bridge outage —
+    // typically sessions that STOPPED during it (their frozen tail is
+    // written exactly once, so no later sweep would carry it). Success
+    // removes the sid inside pushProjectionToCloud; failure re-notes it.
+    for (const sid of [...pendingTranscriptPushSids]) {
+      if (pushedThisSweep.has(sid)) continue;
+      const tail = await readTranscriptCache(sid);
+      if (tail == null) { pendingTranscriptPushSids.delete(sid); continue; }
+      await push('transcript-upsert', { sid, data: tail });
+    }
+  } catch (err) {
+    log.session.debug('projection-cache: self-heal sweep failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  if (counts.sent > 0 || counts.failed > 0) {
+    log.session.debug('projection-cache: self-heal sweep', { ...counts, bridgeConnId });
+  }
+  return counts;
 }

@@ -597,8 +597,16 @@ export async function buildTranscriptViaBridge(sessionId: string): Promise<Recor
   })
   const host = resolved?.host
   if (!host) return null
-  const { bridgeRequest, bridgeForHost } = await import('../ws/bridge-registry.js')
+  const { bridgeForHost } = await import('../ws/bridge-registry.js')
   if (!bridgeForHost(host).connected) return null
+  // One read per session however many phones (or retries) ask at once, reused
+  // while nothing new reached the session (ws/bridge-read-history.ts).
+  const { coalescedSessionRead } = await import('../ws/bridge-read-history.js')
+  return coalescedSessionRead(host, sessionId, () => readTranscriptViaBridge(host, sessionId))
+}
+
+async function readTranscriptViaBridge(host: string, sessionId: string): Promise<Record<string, unknown> | null> {
+  const { bridgeRequest } = await import('../ws/bridge-registry.js')
   const { toolDetail, toolResultPreview, toolResultText } = await import('../../core/tool-summary.js')
   const res = await bridgeRequest(host, 'read-history', { sid: sessionId, tailBytes: TRANSCRIPT_TAIL_BYTES })
   if (res.ok !== true || typeof res.main !== 'string' || res.main === '') return null
@@ -851,9 +859,12 @@ sessionStreamV1Router.get('/sessions/:id/stream', async (req: Request, res: Resp
       const resolved = await resolveHostOrAnswer(res, sessionId)
       if (!resolved) return
       const host = resolved.host
-      const { bridgeAttachSession, bridgeDetachSession, bridgeForHost } = await import('../ws/bridge-registry.js')
-      let online = bridgeForHost(host).connected
-      if (online) {
+      const {
+        bridgeAttachSession, bridgeDetachSession, bridgeForHost, bridgePhoneState, noteStreamWithoutBridge,
+      } = await import('../ws/bridge-registry.js')
+      const phoneState = bridgePhoneState(host)
+      let online = phoneState !== 'offline'
+      if (phoneState === 'connected') {
         try {
           await bridgeAttachSession(host, sessionId)
         } catch (err) {
@@ -876,6 +887,13 @@ sessionStreamV1Router.get('/sessions/:id/stream', async (req: Request, res: Resp
             reason: err instanceof Error ? err.message : String(err),
           })
         }
+      }
+      if (phoneState !== 'connected' || !online) {
+        // No socket to attach through (or it died mid-attach). The redial
+        // re-attaches this page, and one told offline is owed a `bridge-online`
+        // then. Inside the grace window a routine redial hole is not news
+        // (ws/bridge-presence.ts).
+        noteStreamWithoutBridge(host, sessionId, online ? 'online' : 'offline')
       }
       const isOnline = online
       attachSse(channelKey(sessionId), req, res, {

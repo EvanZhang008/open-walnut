@@ -16,6 +16,7 @@ import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
 import { resolveMainProviderName } from '../model/providers/default-provider.js';
 import { log } from '../logging/index.js';
 import { updateTaskRaw, getTask } from './task-manager.js';
+import { backgroundAiDisabled } from './cheap-model.js';
 import type { Task } from './types.js';
 
 const MAX_DESC_LEN = 120;
@@ -112,6 +113,9 @@ export async function generateLedgerDesc(
  * (a metadata write — must not bump plugin sync or re-validate content).
  */
 export function scheduleLedgerDesc(taskId: string): void {
+  // An unprompted model call: a test server would otherwise run the configured
+  // engine (the real `claude` CLI) for every task it creates.
+  if (backgroundAiDisabled()) return;
   void (async () => {
     try {
       const task = await getTask(taskId);

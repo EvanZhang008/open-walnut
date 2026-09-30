@@ -13,6 +13,13 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-routines'))
 
+// No model call may leave this file: on a dev machine the configured engine is
+// the real `claude` CLI, and a test must never run it. The draft route's failure path is exercised by that call failing.
+vi.mock('../../../src/model/model.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/model/model.js')>()),
+  sendMessage: vi.fn(async () => { throw new Error('no model calls in this test') }),
+}))
+
 import express from 'express'
 import request from 'supertest'
 import { routinesV1Router } from '../../../src/web/routes/routines-v1.js'
@@ -175,8 +182,9 @@ describe('POST /routines/draft (Wave 3)', () => {
   })
 
   it('surfaces a draft failure as 422 in the frozen shape (no model creds in tests)', async () => {
-    // No provider credentials exist in this harness, so the underlying LLM
-    // call fails — the route must map that to 422, not 500.
+    // The model call fails (mocked at the top of this file; it used to rely on
+    // the machine having no credentials, and ran the real CLI where it did), so
+    // the route must map that to 422, not 500.
     const res = await request(createApp(service)).post('/api/v1/routines/draft').send({ text: 'every morning say hi' })
     expect(res.status).toBe(422)
     expect(res.body.error.code).toBeTruthy()

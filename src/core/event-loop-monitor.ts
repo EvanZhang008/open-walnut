@@ -77,6 +77,8 @@ function wakeTimeChangedSince(cb: (changed: boolean) => void): void {
 }
 
 let histogram: ReturnType<typeof monitorEventLoopDelay> | null = null
+/** p99 loop delay of the last completed window (ms), for close-time diagnostics. */
+let lastWindowP99Ms: number | null = null
 let windowTimer: ReturnType<typeof setInterval> | null = null
 let probeTimer: ReturnType<typeof setTimeout> | null = null
 let clocks: MonitorClocks = defaultClocks
@@ -210,6 +212,7 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
     // stall warnings below are the outliers of. Lets "was the loop healthy at
     // 14:32?" be answered from metrics instead of absence-of-warnings.
     observe('eventloop.delay.max', Math.round(maxMs))
+    lastWindowP99Ms = Math.round(histogram.percentile(99) / 1e6)
     if (maxMs >= STALL_THRESHOLD_MS) {
       const payload = {
         windowMs: WINDOW_MS,
@@ -305,10 +308,20 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
   log.web.info('event-loop monitor started', { stallThresholdMs: STALL_THRESHOLD_MS, windowMs: WINDOW_MS })
 }
 
+/**
+ * The p99 event-loop delay of the most recent 5s window, or null before the
+ * first window (or with the monitor off). A bridge that goes silent while this
+ * process's loop was blocked is a different story from a link that died.
+ */
+export function eventLoopP99Ms(): number | null {
+  return lastWindowP99Ms
+}
+
 export function stopEventLoopMonitor(): void {
   if (windowTimer) { clearInterval(windowTimer); windowTimer = null }
   if (probeTimer) { clearTimeout(probeTimer); probeTimer = null }
   if (histogram) { histogram.disable(); histogram = null }
+  lastWindowP99Ms = null
   openSections.clear()
   clocks = defaultClocks
 }

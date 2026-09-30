@@ -9,8 +9,9 @@
  *     ⇒ never send it again); a reused lane gets an explicit send.
  *   - CORRELATION — only this session's results count, intermediate (teamActive)
  *     results are not turn-over, and the first real one wins.
- *   - DEGRADATION — session:error and a timeout resolve `null`; the promise never
- *     rejects, so a producer can decide for itself whether that's fatal.
+ *   - DEGRADATION: session:error, a failed send and an explicit ceiling resolve
+ *     `null` with a failure kind; the promise never rejects, so a producer can
+ *     decide for itself whether that's fatal. (Liveness: lane-turn-liveness.test.ts.)
  *   - HYGIENE — the bus subscription and the timer are always released.
  *
  * Real bus, mocked lane + send queue: nothing here can spawn a `claude`.
@@ -57,7 +58,9 @@ function emitResult(data: Record<string, unknown>): void {
  * budget would race it.
  */
 async function settleSend(): Promise<void> {
-  for (let i = 0; i < 60; i++) {
+  // Generous budget: the first reused-lane test pays the cold import of the
+  // catch-up path, which under a loaded machine takes well over a second.
+  for (let i = 0; i < 1_000; i++) {
     if (sendMessageToSession.mock.calls.length > 0) return
     await new Promise((r) => setTimeout(r, 5))
   }
@@ -139,7 +142,7 @@ describe('delivery', () => {
     laneReturns(SID, false)
     sendMessageToSession.mockRejectedValueOnce(new Error('queue write failed') as never)
     await expect(runLaneTurn('general', 'conv-a', 'x', { source: 'cron' }))
-      .resolves.toEqual({ sessionId: SID, resultText: null })
+      .resolves.toEqual({ sessionId: SID, resultText: null, failure: 'send-failed' })
   })
 })
 
@@ -196,13 +199,16 @@ describe('degradation', () => {
     const turn = runLaneTurn('general', 'conv-a', 'x', { source: 'cron' })
     await settleSend()
     bus.emit(EventNames.SESSION_ERROR, { error: 'CLI died', sessionId: SID } as never, ['main-ai'])
-    await expect(turn).resolves.toEqual({ sessionId: SID, resultText: null })
+    await expect(turn).resolves.toEqual({ sessionId: SID, resultText: null, failure: 'died' })
   })
 
-  it('resolves null on timeout, still reporting the session it waited on', async () => {
+  it('resolves null on an explicit absolute ceiling, still reporting the session it waited on', async () => {
+    // No production caller passes timeoutMs any more (liveness is the rule, see
+    // lane-turn-liveness.test.ts); the option survives for a producer that needs
+    // a hard bound, and it must still degrade to null.
     laneReturns(SID, false)
     await expect(runLaneTurn('general', 'conv-a', 'x', { source: 'cron', timeoutMs: 50 }))
-      .resolves.toEqual({ sessionId: SID, resultText: null })
+      .resolves.toEqual({ sessionId: SID, resultText: null, failure: 'timeout' })
   })
 })
 
@@ -242,7 +248,16 @@ describe('subscription hygiene', () => {
     await settleSend()
     const opts = subscribeSpy.mock.calls.at(-1)?.[2] as { global?: boolean; interest?: string[] }
     expect(opts?.global).toBe(true)
-    expect(opts?.interest).toEqual([EventNames.SESSION_RESULT, EventNames.SESSION_ERROR])
+    // Low-frequency events only: turn-over, death, delivery (result correlation)
+    // and tool starts/results (progress). Stream liveness is polled from
+    // session-progress.ts instead of subscribing to deltas.
+    expect(opts?.interest).toEqual([
+      EventNames.SESSION_RESULT, EventNames.SESSION_ERROR, EventNames.SESSION_MESSAGES_DELIVERED,
+      EventNames.SESSION_TOOL_USE, EventNames.SESSION_TOOL_RESULT,
+    ])
+    for (const streaming of [EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_THINKING_DELTA]) {
+      expect(opts?.interest?.some((p) => streaming.startsWith(p))).toBe(false)
+    }
     await turn
   })
 })

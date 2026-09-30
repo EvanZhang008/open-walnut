@@ -104,6 +104,7 @@ SOURCES=(
   src/providers/offline-host-core.ts
   src/core/peers/envelope-kit.ts
   src/providers/git-diff-core.ts
+  src/providers/bridge-uplink-core.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then

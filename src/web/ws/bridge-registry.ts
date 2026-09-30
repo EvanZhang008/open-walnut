@@ -27,6 +27,16 @@ import type { WebSocket } from 'ws'
 import { emitSse, sseConnCount } from '../sse-channels.js'
 import { toolDetail, toolInputPreview, toolResultPreview, toolResultText } from '../../core/tool-summary.js'
 import { log } from '../../logging/index.js'
+import { noteSessionContentChanged } from './bridge-read-history.js'
+import {
+  REPLICA_CHUNK_BYTES, createChunkAssembler, newBridgeWireStats, noteFrameIn, noteFrameOut, logBridgeHostClosed,
+  type BridgeWireStats, type ChunkAssembler,
+} from './bridge-wire.js'
+import { eventLoopP99Ms } from '../../core/event-loop-monitor.js'
+import {
+  sessionChannelKey, scheduleOfflineAnnouncement, cancelOfflineAnnouncement, offlineAnnouncementPending,
+  markAnnouncedOffline, announceOnline, forgetPresence, clearBridgePresence,
+} from './bridge-presence.js'
 
 interface PendingRequest {
   resolve: (data: Record<string, unknown>) => void
@@ -46,6 +56,10 @@ interface BridgeConn {
   /** Sessions this conn has sent an `attach` for (idempotence guard). */
   attachSent: Set<string>
   lastInbound: number
+  /** Per-socket counters for the close log (bridge-wire.ts). */
+  stats: BridgeWireStats
+  /** Reassembles `{ev:'chunk'}` frames from a paced daemon uplink. */
+  chunks: ChunkAssembler
 }
 
 /** The primary box's daemon always registers under this alias (see
@@ -62,7 +76,7 @@ const SILENCE_SWEEP_MS = 30_000
 
 const bridges = new Map<string, BridgeConn>()
 /** Sockets that connected but haven't sent their hello yet. */
-const preHello = new Map<WebSocket, { deviceName: string; timer: NodeJS.Timeout }>()
+const preHello = new Map<WebSocket, { deviceName: string; timer: NodeJS.Timeout; stats: BridgeWireStats }>()
 /**
  * Durable phone interest per host. `attachSent` is per-SOCKET idempotence and
  * dies with the conn — when a bridge redials, the new conn must re-attach
@@ -102,6 +116,7 @@ function ensureSilenceSweep(): void {
         log.ws.warn('bridge: host silent — dropping', {
           hostAlias: conn.hostAlias, silentMs: now - conn.lastInbound,
         })
+        conn.stats.initiator = 'silence'
         try { conn.ws.close() } catch { /* already closed */ }
       }
     }
@@ -110,7 +125,21 @@ function ensureSilenceSweep(): void {
 }
 
 function channelKey(sessionId: string): string {
-  return `session:${sessionId}`
+  return sessionChannelKey(sessionId)
+}
+
+/**
+ * The CLI's last reported turn state per session (session_state_changed), to
+ * find the turn-start EDGE: `requires_action → running` is the same turn
+ * resuming after a permission answer, not a new one.
+ */
+const lastCliState = new Map<string, string>()
+function noteCliState(sessionId: string, state: string): string | undefined {
+  const prev = lastCliState.get(sessionId)
+  lastCliState.delete(sessionId)
+  lastCliState.set(sessionId, state)
+  while (lastCliState.size > 2_000) lastCliState.delete(lastCliState.keys().next().value as string)
+  return prev
 }
 
 /** Map a raw daemon jsonl line to phone SSE events (main lane only). */
@@ -129,6 +158,10 @@ function forwardJsonlLine(sessionId: string, line: string): void {
     else if (delta?.type === 'thinking_delta' && delta.thinking) emitSse(key, 'thinking', { delta: delta.thinking })
     return
   }
+
+  // Any other line is new transcript content: a cached fresh read of this
+  // session no longer answers "what does it say now" (bridge-read-history.ts).
+  noteSessionContentChanged(sessionId)
 
   if (type === 'assistant') {
     // Tool starts only — text already streamed via stream_event deltas, and
@@ -196,7 +229,15 @@ function forwardJsonlLine(sessionId: string, line: string): void {
     // requires_action = paused mid-turn on a permission prompt — still a
     // live turn (same projection as session-snapshot-apply's waiting→running).
     const state = parsed.state as string | undefined
+    const prev = state ? noteCliState(sessionId, state) : undefined
     if (state === 'running' || state === 'requires_action') {
+      // A turn STARTS: open a fresh replay window, as the primary's own stream
+      // does (routes/session-stream-v1.ts). Without it the replica's window
+      // spanned every turn since the channel was created, and a reconnecting
+      // phone was replayed all of them.
+      if (state === 'running' && prev !== 'running' && prev !== 'requires_action') {
+        emitSse(key, 'turn-start', {}, { reset: true })
+      }
       emitSse(key, 'status', { processStatus: 'running' })
     } else if (state === 'idle') {
       emitSse(key, 'status', { processStatus: 'idle' })
@@ -209,6 +250,14 @@ function handleFrame(conn: BridgeConn, raw: string): void {
   conn.lastInbound = Date.now()
   let msg: Record<string, unknown>
   try { msg = JSON.parse(raw) } catch { return }
+
+  // A paced daemon splits big frames once we asked it to (bridge.peer): the
+  // joined parts are the original frame.
+  if (msg.ev === 'chunk') {
+    const whole = conn.chunks.accept(msg)
+    if (whole !== null) handleFrame(conn, whole)
+    return
+  }
 
   // RPC response — settle the pending request.
   if (typeof msg.id === 'number' && conn.pending.has(msg.id)) {
@@ -228,7 +277,11 @@ function handleFrame(conn: BridgeConn, raw: string): void {
     // own pings, which we silently ate, so every bridge flapped on a ~90s
     // cycle (dial → 90s silence → teardown → redial). Any frame feeds its
     // liveness clock; `ping` is a no-op command every daemon understands.
-    bridgeRequest(conn.hostAlias, 'ping').catch(() => { /* redial path handles it */ })
+    // Echoing `seq` confirms every byte the daemon wrote before this marker,
+    // which is what paces its uplink (bridge-uplink-core.ts); an older daemon
+    // ignores the field.
+    const ackParams = typeof msg.seq === 'number' ? { ackSeq: msg.seq } : {}
+    bridgeRequest(conn.hostAlias, 'ping', ackParams).catch(() => { /* redial path handles it */ })
     return
   }
 
@@ -328,17 +381,20 @@ export function addPrimaryBridgeConnectedHandler(handler: () => void): () => voi
  * Wire an authenticated /bridge socket. Registration completes when the
  * daemon's hello arrives (carries the hostAlias).
  */
-export function attachBridge(ws: WebSocket, deviceName: string): void {
+export function attachBridge(ws: WebSocket, deviceName: string, meta?: { clientIp?: string | null }): void {
   ensureSilenceSweep()
+  const stats = newBridgeWireStats(meta?.clientIp ?? null)
   // A daemon that never says hello is holding a slot — drop it.
   const helloTimer = setTimeout(() => {
     preHello.delete(ws)
+    stats.initiator = 'hello-timeout'
     try { ws.close() } catch { /* already closed */ }
   }, 10_000)
-  preHello.set(ws, { deviceName, timer: helloTimer })
+  preHello.set(ws, { deviceName, timer: helloTimer, stats })
 
   ws.on('message', (data) => {
     const raw = data.toString()
+    noteFrameIn(stats, Buffer.isBuffer(data) ? data.length : Buffer.byteLength(raw))
 
     const waiting = preHello.get(ws)
     if (waiting) {
@@ -347,7 +403,7 @@ export function attachBridge(ws: WebSocket, deviceName: string): void {
       if (msg.ev !== 'hello' || typeof msg.hostAlias !== 'string') return
       clearTimeout(waiting.timer)
       preHello.delete(ws)
-      registerBridge(ws, waiting.deviceName, msg)
+      registerBridge(ws, waiting.deviceName, msg, waiting.stats)
       return
     }
 
@@ -355,14 +411,23 @@ export function attachBridge(ws: WebSocket, deviceName: string): void {
     if (conn) handleFrame(conn, raw)
   })
 
-  ws.on('close', () => {
+  ws.on('close', (code: number, reason: Buffer) => {
     const waiting = preHello.get(ws)
     if (waiting) { clearTimeout(waiting.timer); preHello.delete(ws) }
     const conn = findConn(ws)
+    // Counted BEFORE dropBridge rejects them: how many requests the close cut off.
+    logBridgeHostClosed(stats, {
+      hostAlias: conn?.hostAlias ?? null,
+      code,
+      reason: reason?.toString() ?? '',
+      pendingRpcs: conn?.pending.size ?? 0,
+      loopP99Ms: eventLoopP99Ms(),
+    })
     if (conn) dropBridge(conn, 'socket closed')
   })
 
-  ws.on('error', () => { /* close always follows */ })
+  // close always follows; keep what the error said for the close line.
+  ws.on('error', (err: Error) => { stats.wsError = (err?.message ?? String(err)).slice(0, 200) })
 }
 
 function findConn(ws: WebSocket): BridgeConn | null {
@@ -385,8 +450,10 @@ function tokenBoundAlias(deviceName: string): string {
   return alias === 'local' ? '__local__' : alias
 }
 
-function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string, unknown>): void {
+function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string, unknown>, stats: BridgeWireStats): void {
   const hostAlias = hello.hostAlias as string
+  if (typeof hello.connId === 'string') stats.connId = hello.connId.slice(0, 80)
+  stats.hostAlias = hostAlias.slice(0, 120)
   const boundAlias = tokenBoundAlias(deviceName)
   if (hostAlias !== boundAlias) {
     // Token identity and claimed host disagree — impersonation attempt (or a
@@ -394,12 +461,14 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
     log.ws.warn('bridge: hello hostAlias does not match token identity — rejecting', {
       claimedHostAlias: hostAlias, tokenAlias: boundAlias, deviceName,
     })
+    stats.initiator = 'none'
     try { ws.close(CLOSE_UNAUTHORIZED, 'hostAlias/token mismatch') } catch { /* already closed */ }
     return
   }
   const existing = bridges.get(hostAlias)
   if (existing) {
     log.ws.info('bridge: replacing existing connection', { hostAlias })
+    existing.stats.initiator = 'replaced'
     try { existing.ws.close(CLOSE_REPLACED, 'replaced') } catch { /* already closed */ }
     dropBridge(existing, 'replaced')
   }
@@ -414,10 +483,14 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
     pending: new Map(),
     attachSent: new Set(),
     lastInbound: Date.now(),
+    stats,
+    chunks: createChunkAssembler(),
   }
   bridges.set(hostAlias, conn)
   // The link is back: this host has no outage to report until it drops again.
   bridgeLossAt.delete(hostAlias)
+  // A redial inside the grace window: the phones were never told it was gone.
+  cancelOfflineAnnouncement(hostAlias)
   // Wake anything parked on this host's reconnect BEFORE the slower re-attach
   // work below: the waiter only needs the conn to be registered, and its
   // continuation runs as a microtask, so it can never observe a half-built map.
@@ -425,11 +498,16 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
   log.ws.info('bridge: host connected', {
     hostAlias, deviceName, version: conn.version,
     sids: Array.isArray(hello.sids) ? hello.sids.length : 0,
+    connId: stats.connId,
   })
+  // A paced daemon (hello.uplink) may cut big frames for us: say how big.
+  if (hello.uplink === 1) {
+    void bridgeRequest(hostAlias, 'bridge.peer', { chunkBytes: REPLICA_CHUNK_BYTES }).catch(() => { /* frames stay whole */ })
+  }
   // Re-attach sessions that still have live phone SSE consumers, THEN tell
-  // those phones the bridge is back. Interest survives the socket (see
-  // hostInterest) — without this, a redial left every open conversation on
-  // "offline" until the user backed out and reopened it.
+  // the phones that were told it was gone that it is back. Interest survives
+  // the socket (see hostInterest); without this, a redial left every open
+  // conversation on "offline" until the user backed out and reopened it.
   void reattachInterestedSessions(conn)
   // Anything that banked work during the outage gets a chance to drain now
   // (Phase 4's task-op queue). Guarded: a throwing handler must not abort the
@@ -463,14 +541,14 @@ async function reattachInterestedSessions(conn: BridgeConn): Promise<void> {
     if (sseConnCount(channelKey(sid)) === 0) { interested.delete(sid); continue }
     try {
       await bridgeAttachSession(conn.hostAlias, sid)
-      emitSse(channelKey(sid), 'bridge-online', {})
+      announceOnline(conn.hostAlias, sid)
     } catch (err) {
       // Attach failed but the socket is still up (per-session refusal — ACP
       // journal / dead CLI — or a transient RPC timeout): the BRIDGE is back
       // regardless, and sends/polling work — tell the phone. Only a socket
       // that died again leaves the page offline (the next redial retries).
       if (bridges.get(conn.hostAlias) === conn) {
-        emitSse(channelKey(sid), 'bridge-online', {})
+        announceOnline(conn.hostAlias, sid)
       }
       log.ws.warn('bridge: re-attach after redial failed', {
         hostAlias: conn.hostAlias, sessionId: sid,
@@ -480,15 +558,10 @@ async function reattachInterestedSessions(conn: BridgeConn): Promise<void> {
   }
 }
 
-function emitSseToAllAttachedChannels(conn: BridgeConn, event: 'bridge-online' | 'bridge-offline'): void {
-  for (const sid of conn.attachSent) {
-    emitSse(channelKey(sid), event, {})
-  }
-}
-
 function dropBridge(conn: BridgeConn, reason: string): void {
   // Only drop if this exact conn is still registered (replace races).
-  if (bridges.get(conn.hostAlias) === conn) {
+  const wasRegistered = bridges.get(conn.hostAlias) === conn
+  if (wasRegistered) {
     bridges.delete(conn.hostAlias)
     // Stamp the loss for lastBridgeLossAt(). A 'replaced' drop stamps too and is
     // cleared by the registration that replaced it a moment later, so a redial
@@ -500,7 +573,17 @@ function dropBridge(conn: BridgeConn, reason: string): void {
     req.reject(new Error('bridge disconnected'))
   }
   conn.pending.clear()
-  emitSseToAllAttachedChannels(conn, 'bridge-offline')
+  conn.chunks.clear()
+  // Tell the phones only if the host STAYS gone (bridge-presence.ts). A
+  // replacement is already connected, and a shutdown is not the host's news.
+  if (wasRegistered && reason !== 'replaced' && reason !== 'shutdown') {
+    const host = conn.hostAlias
+    const attached = [...conn.attachSent]
+    scheduleOfflineAnnouncement(host, {
+      isConnected: () => bridges.has(host),
+      interested: () => new Set([...attached, ...(hostInterest.get(host) ?? [])]),
+    })
+  }
   log.ws.info('bridge: host disconnected', { hostAlias: conn.hostAlias, reason })
 }
 
@@ -508,6 +591,28 @@ function dropBridge(conn: BridgeConn, reason: string): void {
 
 export function bridgeForHost(hostAlias: string): { connected: boolean } {
   return { connected: bridges.has(hostAlias) }
+}
+
+/**
+ * What a phone opening a stream should be told: 'connected'; 'grace' (the
+ * bridge just dropped and has not been announced gone, so say online and let
+ * the announcement reach this page if it comes); or 'offline'.
+ */
+export function bridgePhoneState(hostAlias: string): 'connected' | 'grace' | 'offline' {
+  if (bridges.has(hostAlias)) return 'connected'
+  return offlineAnnouncementPending(hostAlias) ? 'grace' : 'offline'
+}
+
+/**
+ * A phone opened a stream while the host had no bridge. Record its interest so
+ * the redial re-attaches it; when its attach frame said offline, it is owed a
+ * `bridge-online` on that redial.
+ */
+export function noteStreamWithoutBridge(hostAlias: string, sessionId: string, told: 'online' | 'offline'): void {
+  let interested = hostInterest.get(hostAlias)
+  if (!interested) { interested = new Set(); hostInterest.set(hostAlias, interested) }
+  interested.add(sessionId)
+  if (told === 'offline') markAnnouncedOffline(hostAlias, sessionId)
 }
 
 /**
@@ -597,6 +702,7 @@ export function bridgeRequest(
     conn.pending.set(id, { resolve, reject, timer })
     try {
       conn.ws.send(frame)
+      noteFrameOut(conn.stats, Buffer.byteLength(frame))
     } catch (err) {
       conn.pending.delete(id)
       clearTimeout(timer)
@@ -637,18 +743,23 @@ export function bridgeDetachSession(hostAlias: string, sessionId: string): void 
   // socket. Cheap and correct for a single-digit session count.
   bridges.get(hostAlias)?.attachSent.delete(sessionId)
   hostInterest.get(hostAlias)?.delete(sessionId)
+  forgetPresence(hostAlias, sessionId)
 }
 
 /** Tests / shutdown: close everything. */
 export function closeAllBridges(): void {
   for (const conn of [...bridges.values()]) {
+    conn.stats.initiator = 'none'
     try { conn.ws.close() } catch { /* already closed */ }
     dropBridge(conn, 'shutdown')
   }
   for (const [ws, waiting] of preHello) {
     clearTimeout(waiting.timer)
+    waiting.stats.initiator = 'none'
     try { ws.close() } catch { /* already closed */ }
   }
   preHello.clear()
+  clearBridgePresence()
+  lastCliState.clear()
   if (silenceSweepTimer) { clearInterval(silenceSweepTimer); silenceSweepTimer = null }
 }

@@ -896,6 +896,82 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     assertEphemeralHomeIsNotProduction(WALNUT_HOME)
   }
 
+  const port = options.port ?? DEFAULT_PORT
+  const dev = options.dev ?? false
+  const isEphemeral = IS_EPHEMERAL
+  // Own-server URL for agent-facing skills/tools (e.g. the install-plugin skill curls
+  // the REST API). Sandbox/demo servers on other ports inherit the right value.
+  // Set again after listen, where port 0 resolves to a real number.
+  process.env.WALNUT_SERVER_URL = `http://localhost:${port}`
+
+  // Tripwire: never serve the PRODUCTION port from a test/temp home. A shell with
+  // leaked vitest env (VITEST / NODE_ENV=test / OPEN_WALNUT_HOME=…test-global) makes
+  // constants.ts silently redirect WALNUT_HOME to an empty temp dir; if that process
+  // then binds 3456 it "successfully" serves zero tasks and 404s every session —
+  // production data looks wiped until the next clean restart (incident
+  // inc-1783280584117, 2026-07-05). Fail fast with an actionable message instead.
+  if (port === DEFAULT_PORT && !dev && !isEphemeral) {
+    const home = WALNUT_HOME
+    const looksLikeTestHome = /open-walnut-test|walnut-test/.test(home) || home.startsWith(os.tmpdir())
+    if (looksLikeTestHome) {
+      throw new Error(
+        `Refusing to bind production port ${DEFAULT_PORT} with WALNUT_HOME=${home} (a test/temp dir).\n` +
+        `  Your shell likely has leaked test env vars. Fix with:\n` +
+        `    env -u VITEST -u VITEST_MODE -u VITEST_WORKER_ID -u NODE_ENV -u OPEN_WALNUT_HOME npm run dev:prod`,
+      )
+    }
+  }
+
+  // Single-instance lock on WALNUT_HOME: a second server on the SAME data dir
+  // (even on a different port) silently corrupts task data — each process's
+  // whole-store cache goes stale against the other's writes, and writeStore()'s
+  // full-snapshot rewrite then DELETES the rows it never saw (2026-08-04: a
+  // stray `web --port 3467` erased every task/fork created via :3456 for a
+  // day). Different port ≠ different data; the lock guards the data directory.
+  // Ephemeral/test servers run on their own snapshot HOME → their own lock.
+  //
+  // Taken FIRST, before any subsystem runs (init, notifications, the local
+  // daemon, recovery passes): a duplicate used to get through the daemon connect
+  // and the orphan recovery before it reached this point.
+  //
+  // Three layers, because the lock file only binds lock-AWARE builds:
+  //   1. lock file      — new builds refuse to double-start (instant, free)
+  //   2. lsof gate      — an OLD binary already holding tasks.sqlite blocks
+  //                       startup too (it can't know about the lock; we can
+  //                       still see it). Skipped in cloud mode (no local DB
+  //                       contention model) — lock file still applies.
+  //   3. watchdog       — a rogue writer arriving AFTER startup raises a
+  //                       notification-center error within ~2 ticks.
+  {
+    const {
+      acquireInstanceLock, assertNoForeignDbHolders, startForeignWriterWatchdog, releaseInstanceLock,
+      TASK_DB_WRITERS_RECOVERY_KEY, InstanceLockError,
+    } = await import('../core/instance-lock.js')
+    try {
+      acquireInstanceLock(port)
+    } catch (err) {
+      // A duplicate launched by the deploy's launchd job must not be relaunched
+      // by KeepAlive every ~11s (2026-09-25: seven hours of it). Only acts when
+      // launchd confirms this pid IS the job (core/launchd-self-remove.ts).
+      if (err instanceof InstanceLockError) {
+        const { removeOwnLaunchdJob } = await import('../core/launchd-self-remove.js')
+        await removeOwnLaunchdJob(err.message)
+      }
+      throw err
+    }
+    // Capture for the fatal-signal path (which cannot await an import).
+    releaseInstanceLockSync = releaseInstanceLock
+    if (!CLOUD_MODE) {
+      await assertNoForeignDbHolders()
+      // The all-clear (the user killed the rogue writer) retires the SECOND
+      // WRITER card. Edge-gated inside the watchdog, so a healthy box's 60s tick
+      // stays a bare lsof and never touches notifications.json.
+      foreignWriterWatchdog = startForeignWriterWatchdog(undefined, () => {
+        void publishRecovery([TASK_DB_WRITERS_RECOVERY_KEY])
+      })
+    }
+  }
+
   // Ensure ~/.open-walnut/ directory structure exists and seed config defaults
   const { initDirectories } = await import('../core/init.js')
   await initDirectories()
@@ -1069,67 +1145,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
   }
 
-  const port = options.port ?? DEFAULT_PORT
-  const dev = options.dev ?? false
-  const isEphemeral = IS_EPHEMERAL
-  // Own-server URL for agent-facing skills/tools (e.g. the install-plugin skill curls
-  // the REST API). Sandbox/demo servers on other ports inherit the right value.
-  // Set again after listen, where port 0 resolves to a real number.
-  process.env.WALNUT_SERVER_URL = `http://localhost:${port}`
-
-  // Tripwire: never serve the PRODUCTION port from a test/temp home. A shell with
-  // leaked vitest env (VITEST / NODE_ENV=test / OPEN_WALNUT_HOME=…test-global) makes
-  // constants.ts silently redirect WALNUT_HOME to an empty temp dir; if that process
-  // then binds 3456 it "successfully" serves zero tasks and 404s every session —
-  // production data looks wiped until the next clean restart (incident
-  // inc-1783280584117, 2026-07-05). Fail fast with an actionable message instead.
-  if (port === DEFAULT_PORT && !dev && !isEphemeral) {
-    const home = WALNUT_HOME
-    const looksLikeTestHome = /open-walnut-test|walnut-test/.test(home) || home.startsWith(os.tmpdir())
-    if (looksLikeTestHome) {
-      throw new Error(
-        `Refusing to bind production port ${DEFAULT_PORT} with WALNUT_HOME=${home} (a test/temp dir).\n` +
-        `  Your shell likely has leaked test env vars. Fix with:\n` +
-        `    env -u VITEST -u VITEST_MODE -u VITEST_WORKER_ID -u NODE_ENV -u OPEN_WALNUT_HOME npm run dev:prod`,
-      )
-    }
-  }
-
-  // Single-instance lock on WALNUT_HOME: a second server on the SAME data dir
-  // (even on a different port) silently corrupts task data — each process's
-  // whole-store cache goes stale against the other's writes, and writeStore()'s
-  // full-snapshot rewrite then DELETES the rows it never saw (2026-08-04: a
-  // stray `web --port 3467` erased every task/fork created via :3456 for a
-  // day). Different port ≠ different data; the lock guards the data directory.
-  // Ephemeral/test servers run on their own snapshot HOME → their own lock.
-  //
-  // Three layers, because the lock file only binds lock-AWARE builds:
-  //   1. lock file      — new builds refuse to double-start (instant, free)
-  //   2. lsof gate      — an OLD binary already holding tasks.sqlite blocks
-  //                       startup too (it can't know about the lock; we can
-  //                       still see it). Skipped in cloud mode (no local DB
-  //                       contention model) — lock file still applies.
-  //   3. watchdog       — a rogue writer arriving AFTER startup raises a
-  //                       notification-center error within ~2 ticks.
-  {
-    const {
-      acquireInstanceLock, assertNoForeignDbHolders, startForeignWriterWatchdog, releaseInstanceLock,
-      TASK_DB_WRITERS_RECOVERY_KEY,
-    } = await import('../core/instance-lock.js')
-    acquireInstanceLock(port)
-    // Capture for the fatal-signal path (which cannot await an import).
-    releaseInstanceLockSync = releaseInstanceLock
-    if (!CLOUD_MODE) {
-      await assertNoForeignDbHolders()
-      // The all-clear (the user killed the rogue writer) retires the SECOND
-      // WRITER card. Edge-gated inside the watchdog, so a healthy box's 60s tick
-      // stays a bare lsof and never touches notifications.json.
-      foreignWriterWatchdog = startForeignWriterWatchdog(undefined, () => {
-        void publishRecovery([TASK_DB_WRITERS_RECOVERY_KEY])
-      })
-    }
-  }
-
   const app = express()
 
   // Never auto-generate ETags for API JSON. Express's default weak ETag let the
@@ -1168,6 +1183,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (CLOUD_MODE) {
     const { gitHttpRouter } = await import('./routes/git-http.js')
     app.use('/git/data', gitHttpRouter)
+    // The primary's projection/transcript uploads, off the bridge socket. Its
+    // own auth (primary machine token) and body parser (gzip, inflated limit);
+    // outside /api, so neither the device-token middleware nor the 15mb global
+    // parser applies. See src/web/routes/bridge-ingest.ts.
+    const { createBridgeIngestRouter, BRIDGE_INGEST_PATH } = await import('./routes/bridge-ingest.js')
+    app.use(BRIDGE_INGEST_PATH, createBridgeIngestRouter())
   }
 
   // gzip JSON/text responses. The list payloads (/api/tasks, /api/sessions,

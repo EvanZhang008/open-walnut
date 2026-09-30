@@ -531,9 +531,9 @@ export async function reconcileLaneOrphanTurns(
       // ── Why this is an ADVISORY and not a terminal turn frame ──
       // The obvious move — emit the SSE `message-end` a live lane turn ends with
       // — settles the WRONG turn. `emitSse` hands every frame to
-      // mirrorRelayedChatFrame, which RE-STAMPS it with whichever turnId is
-      // currently armed for the conversation, so the replica clears its live
-      // in-flight turn with this old answer and then DROPS the real terminal
+      // mirrorRelayedChatFrame, which used to RE-STAMP it with whichever turnId
+      // was armed (it now drops a frame naming an unarmed turn), so the replica
+      // cleared its live in-flight turn with this old answer and then DROPPED the real terminal
       // frame. iOS is worse: its `message-end` handler ignores turnId entirely —
       // it wipes the streaming text of whatever is running, cancels the
       // watchdog, unlocks the composer, and appends the old answer at the TAIL

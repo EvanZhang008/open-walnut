@@ -351,14 +351,17 @@ export function attachWss(server: HttpServer): WebSocketServer {
       // Import BEFORE handleUpgrade: the daemon sends its hello immediately on
       // open, and message listeners must be attached synchronously in the
       // upgrade callback or the first frame is lost (first-connection race).
-      Promise.all([verifyCloudUpgrade(url, request), import('./bridge-registry.js')]).then(([cred, { attachBridge }]) => {
+      Promise.all([verifyCloudUpgrade(url, request), import('./bridge-registry.js'), import('./bridge-wire.js')]).then(([cred, { attachBridge }, { bridgeClientIp }]) => {
         if (!cred || cred.kind !== 'machine') {
           socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
           socket.destroy()
           return
         }
+        // Resolved before the upgrade: the close log names the dialer (behind the
+        // reverse proxy, the first X-Forwarded-For hop).
+        const clientIp = bridgeClientIp(request.headers['x-forwarded-for'], request.socket.remoteAddress)
         wss!.handleUpgrade(request, socket, head, (ws) => {
-          attachBridge(ws, cred.name)
+          attachBridge(ws, cred.name, { clientIp })
         })
       }).catch(() => socket.destroy())
       return

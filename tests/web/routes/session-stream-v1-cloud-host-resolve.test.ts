@@ -39,6 +39,8 @@ vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeRequest: bridgeRequestMock,
   BridgeOfflineError,
   bridgeForHost: () => ({ connected: true }),
+  bridgePhoneState: () => 'connected',
+  noteStreamWithoutBridge: () => {},
   bridgeHosts: () => [],
   bridgeAttachSession: bridgeAttachSessionMock,
   bridgeDetachSession: () => {},

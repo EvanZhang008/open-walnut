@@ -17,6 +17,14 @@ import { WALNUT_HOME, IMAGES_DIR } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { bus, EventNames } from '../../../src/core/event-bus.js'
 import { createSessionRecord } from '../../../src/core/session-tracker.js'
+import { sessionRunner } from '../../../src/providers/claude-code-session.js'
+import { createMockDaemon, type MockDaemon } from '../../helpers/mock-daemon.js'
+
+// A message POSTed here is really delivered, so a daemon resumes the session.
+// On the server's own local daemon that ran the REAL `claude -p --resume
+// talk-test-...`. The daemon owns the spawn (sessionRunner.setCliCommand never
+// reaches it), so sessions go to a mock daemon, which spawns mock-claude.
+let daemon: MockDaemon
 
 // 1×1 red PNG for image-attachment cases.
 const TINY_PNG_BASE64 =
@@ -103,6 +111,8 @@ const SID = 'talk-test-session-0001'
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
+  daemon = await createMockDaemon()
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
   if (!addr || typeof addr === 'string') throw new Error('no port')
@@ -112,6 +122,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await stopServer()
+  sessionRunner.setTestDaemonUrl(undefined)
+  await daemon?.stop()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 

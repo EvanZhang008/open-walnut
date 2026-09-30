@@ -688,6 +688,9 @@ LKG_DIR="${WALNUT_DEVPROD_LKG_DIR:-${TMPDIR:-/tmp}/open-walnut-lkg}"
 # (/usr/bin:/bin:...) — pass the caller's full PATH through so child tools
 # (ffmpeg, git, ssh, brew, agent CLIs) resolve exactly as they would from the
 # deploying shell.
+# WALNUT_LAUNCHD_LABEL names the job to the server: a server that loses the
+# instance lock removes its OWN job (after launchd confirms its pid is the job's),
+# so KeepAlive cannot relaunch a duplicate forever (src/core/launchd-self-remove.ts).
 submit_launchd_job() {
   # Callers hold use_launchd=1 (Darwin-only); the guard keeps the helper inert
   # if one is ever added on another path.
@@ -703,6 +706,7 @@ submit_launchd_job() {
     -u WALNUT_DAEMON_DIR \
     -u VITEST \
     PATH="$PATH" \
+    WALNUT_LAUNCHD_LABEL="$LAUNCH_LABEL" \
     "$NODE_BIN" "$1" web --port "$PORT"
 }
 
@@ -921,6 +925,29 @@ if [[ "$ready" != "1" ]]; then
   echo "Server failed its bounded readiness check." >&2
   rollback_to_lkg
   exit 1
+fi
+
+# ── Foreign supervisor: is :$PORT served by THIS deploy's job? ─────────────────
+# 2026-09-25: this script killed the server the Mac app had started, the Mac app
+# restarted it one second later, and that server won the instance lock. Readiness
+# passed (the Mac app's server answered), while this job's own server exited as a
+# duplicate and launchd KeepAlive relaunched it about every 11s for seven hours.
+# New servers remove their own job when they lose the lock; this also covers an
+# old dist in the job. Removes only a job PROVABLY not serving: it is registered
+# (launchctl list answered) and its PID is absent or differs from the listener's.
+# A probe that answers nothing removes nothing.
+if (( use_launchd )); then
+  listener_now="$(listener_pids | head -n 1)"
+  if [[ -n "$listener_now" ]] && job_info="$(launchctl list "$LAUNCH_LABEL" 2>/dev/null)"; then
+    job_pid_now="$(printf '%s\n' "$job_info" | sed -n 's/.*"PID" = \([0-9][0-9]*\);.*/\1/p' | head -n 1)"
+    if [[ "$job_pid_now" != "$listener_now" ]]; then
+      listener_cmd="$(ps -o command= -p "$listener_now" 2>/dev/null || true)"
+      echo "Port :$PORT is served by PID $listener_now, not by launchd job '$LAUNCH_LABEL' (PID ${job_pid_now:-none})." >&2
+      echo "Another supervisor (for example the Mac app) restarted the server first: ${listener_cmd:-unknown command}" >&2
+      echo "Removing the redundant job so KeepAlive cannot relaunch a duplicate server." >&2
+      remove_launchd_job
+    fi
+  fi
 fi
 
 # /api/config answers out of memory; it says nothing about whether the web app

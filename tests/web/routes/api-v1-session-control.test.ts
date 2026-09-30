@@ -14,6 +14,13 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-sessionctl'))
 
+// No model call may leave this file: on a dev machine the configured engine is
+// the real `claude` CLI, and a test must never run it. A fork's title and folder name fall back to their plain forms, which is what this file asserts.
+vi.mock('../../../src/model/model.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/model/model.js')>()),
+  sendMessage: vi.fn(async () => { throw new Error('no model calls in this test') }),
+}))
+
 import express from 'express'
 import request from 'supertest'
 import { sessionControlV1Router } from '../../../src/web/routes/session-control-v1.js'

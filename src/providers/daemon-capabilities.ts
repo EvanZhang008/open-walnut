@@ -329,6 +329,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // so it is NOT sidecar-gated. Not bridge-reachable. Optional: without it the
   // server never fixes anything and the readiness lines keep their commands.
   'hostfix-v1',
+  // 'bridge-uplink-v1': the cloud bridge socket is paced (at most 1MB the
+  // replica has not confirmed, via bridge-ping markers the replica echoes;
+  // bridge-uplink-core.ts), frames over the peer's chunk size are split once
+  // the replica opts in with `bridge.peer`, `mobile-event` acks say whether the
+  // frame was queued and on which connection (connId), and the trusted
+  // `bridge.status` command answers {connected, connId, queuedBytes}. Both twins
+  // implement it (the core is text-injected into the source twin), so it is NOT
+  // sidecar-gated. Optional: without it the server pushes every self-heal
+  // projection as before (no unchanged-content skip).
+  'bridge-uplink-v1',
   // 'orphan-stop-v1': `stop` accepts reason 'orphan' plus `expectPid` and
   // `home` (the asking Walnut's data dir). The server never signals a CLI pid
   // it read from its own database (a pid proves nothing about which daemon

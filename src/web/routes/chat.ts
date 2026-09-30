@@ -830,14 +830,14 @@ export function registerChatRpc(): void {
         try {
           // AWAITED: the reply belongs in this chat. runLaneTurn owns
           // create/send/result-correlation (lane-turn.ts); onSessionId fires
-          // before the send, so the relay can't miss a delta.
-          // 30 min ceiling — a chat turn that long has effectively hung.
+          // before the send, so the relay can't miss a delta. No wall-clock
+          // ceiling: a turn fails on a dead CLI or a stalled stream only.
           const { runLaneTurn } = await import('../../core/sessions/lane-turn.js')
-          const { sessionId, resultText } = await runLaneTurn(agentId, conversationId, sessionMessage, {
+          const turn = await runLaneTurn(agentId, conversationId, sessionMessage, {
             source: 'chat',
-            timeoutMs: 1_800_000,
             onSessionId: (sid) => { relaySessionId = sid },
           })
+          const { sessionId, resultText } = turn
           laneSessionId = sessionId
           flushThinking()
 
@@ -860,9 +860,45 @@ export function registerChatRpc(): void {
           }
 
           if (resultText === null) {
-            // Timeout / session:error / failed send — the user must see a real
-            // error in chat, not silence (the catch below persists it).
-            throw new Error('The main AI did not answer this turn (timed out or errored).')
+            const { LANE_STALL_NOTICE, laneFailureMessage, followLateAnswer } = await import('./lane-turn-late.js')
+            if (turn.laneStillRunning && turn.lateResult) {
+              // Stalled but the CLI still runs: the turn may still answer, so the
+              // notice is SHOWN (not persisted) and the late answer is filed under
+              // this turn when it lands (lane-turn-late.ts).
+              log.web.warn('chat lane turn stalled with the lane still running', { agentId, conversationId, sessionId })
+              const notice = `[Error: ${LANE_STALL_NOTICE}]`
+              broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
+                entry: {
+                  role: 'assistant', content: notice, source: 'agent-error',
+                  notification: true, timestamp: new Date().toISOString(),
+                },
+                agentId,
+                conversationId,
+              })
+              broadcastEvent(EventNames.AGENT_ERROR, { error: LANE_STALL_NOTICE, agentId, conversationId })
+              void followLateAnswer({
+                agentId, conversationId, turnId, laneSessionId: sessionId, late: turn.lateResult,
+                prepare: resolveEntityRefs,
+                onGiveUp: async (errMsg) => {
+                  await chatHistory.addAIMessages(
+                    [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
+                    { source: 'agent-error', agentId, conversationId },
+                  ).catch(() => { /* best-effort */ })
+                  broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
+                    entry: {
+                      role: 'assistant', content: `[Error: ${errMsg}]`, source: 'agent-error',
+                      notification: true, timestamp: new Date().toISOString(),
+                    },
+                    agentId,
+                    conversationId,
+                  })
+                },
+              })
+              return
+            }
+            // A dead CLI / failed send / stall with the CLI gone: the user must
+            // see a real error in chat, not silence (the catch below persists it).
+            throw new Error(laneFailureMessage(turn.failure))
           }
 
           // Persist ONLY the final answer (compat shim, see above): the turn's

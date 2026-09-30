@@ -93,11 +93,29 @@ export const CHAT_TURN_FRAME_KIND = 'chat-turn-frame'
  */
 const RELAYABLE_EVENTS = new Set([
   'queued', 'message-start', 'text-delta', 'thinking', 'tool', 'tool-result',
-  'message-end', 'error',
+  'message-end', 'error', 'message-late',
 ])
 
 /** Frames that END a turn — they settle the replica's in-flight bookkeeping. */
 const TERMINAL_EVENTS = new Set(['message-end', 'error'])
+
+/**
+ * A stalled turn's late answer (lane-turn-late.ts): the only frames a replica
+ * accepts for a turn it no longer has in flight, and only while it watches that
+ * turn (lateWatch below).
+ */
+const LATE_EVENTS = new Set(['message-late', 'message-end'])
+
+/**
+ * How long a replica keeps listening for a stalled turn's answer after the stall
+ * notice. The primary gives up at LANE_LATE_ANSWER_MAX_MS (60 minutes,
+ * core/sessions/lane-turn.ts); five more cover a slow filing. A literal rather
+ * than an import, because that module pulls the whole lane stack in.
+ */
+const LATE_WATCH_MS = 65 * 60_000
+
+/** Cap on stalled turns a replica watches at once; the oldest goes first. */
+const LATE_WATCH_MAX = 64
 
 /**
  * Liveness-only frame: rearms the replica's watchdog and is NEVER fanned out.
@@ -155,6 +173,17 @@ interface InFlightRelay {
 
 /** Relayed turns this replica is waiting on downlink frames for. */
 const inFlight = new Map<string, InFlightRelay>()
+
+/**
+ * Relayed turns that stalled while their lane kept running, keyed by
+ * conversation + turn. The stall notice ended the turn's in-flight entry (the
+ * phone may send its next message, exactly as it may against the primary), but
+ * the answer can still come, so its frames are let through until then.
+ */
+interface LateWatch { conversationId: string; turnId: string; engine: string; expiresAt: number }
+const lateWatch = new Map<string, LateWatch>()
+
+const lateKey = (conversationId: string, turnId: string): string => JSON.stringify([conversationId, turnId])
 
 export type RelayStartOutcome =
   /** The primary took the turn; frames will arrive on the downlink. */
@@ -414,7 +443,9 @@ function clearInFlight(conversationId: string, turnId: string): void {
  *
  * Frames for a conversation this replica is not tracking are DROPPED: they are
  * either a turn started from the web console on the Mac (which no phone here
- * asked for) or a late frame from a turn we already gave up on.
+ * asked for) or a late frame from a turn we already gave up on. The exception is
+ * a turn whose stall notice said its lane is still running: its `message-late`
+ * and `message-end` still reach the phone (lateWatch).
  */
 export function handleBridgeChatTurnFrame(data: unknown): void {
   const d = (data ?? {}) as {
@@ -427,7 +458,12 @@ export function handleBridgeChatTurnFrame(data: unknown): void {
   if (event !== KEEPALIVE_EVENT && !RELAYABLE_EVENTS.has(event)) return
 
   const entry = inFlight.get(conversationId)
-  if (!entry || (turnId && entry.turnId !== turnId)) return
+  if (!entry || (turnId && entry.turnId !== turnId)) {
+    // Not the turn in flight here. The one exception is a stalled turn's late
+    // answer, which arrives after its notice already ended the turn on this side.
+    if (turnId && LATE_EVENTS.has(event)) fanOutLateFrame(conversationId, turnId, event, d.data)
+    return
+  }
 
   if (event === KEEPALIVE_EVENT) {
     // Proof of life for a turn that is queued or inside a long tool call.
@@ -449,7 +485,54 @@ export function handleBridgeChatTurnFrame(data: unknown): void {
 
   emitChannelSse(conversationId, event, payload ?? {}, { reset: event === 'message-start' })
 
-  if (TERMINAL_EVENTS.has(event)) clearInFlight(conversationId, entry.turnId)
+  if (TERMINAL_EVENTS.has(event)) {
+    // The stall notice (`laneStillRunning`, api-v1.ts) ends the turn's guard here
+    // but not the turn: keep listening for its answer. Dropping the late frames
+    // is what left a relayed phone showing the notice with the answer on disk.
+    if (event === 'error' && isStillRunningNotice(d.data)) watchLateAnswer(conversationId, entry.turnId, entry.engine)
+    clearInFlight(conversationId, entry.turnId)
+  }
+}
+
+function isStillRunningNotice(data: unknown): boolean {
+  return !!data && typeof data === 'object' && (data as { laneStillRunning?: unknown }).laneStillRunning === true
+}
+
+function watchLateAnswer(conversationId: string, turnId: string, engine: string): void {
+  const now = Date.now()
+  for (const [key, watch] of lateWatch) if (watch.expiresAt <= now) lateWatch.delete(key)
+  const key = lateKey(conversationId, turnId)
+  lateWatch.delete(key)
+  lateWatch.set(key, { conversationId, turnId, engine, expiresAt: now + LATE_WATCH_MS })
+  while (lateWatch.size > LATE_WATCH_MAX) {
+    const oldest = lateWatch.keys().next().value
+    if (oldest === undefined) break
+    lateWatch.delete(oldest)
+  }
+  log.web.info('chat-turn relay: turn stalled with its lane running, watching for the late answer', {
+    conversationId, turnId, watchMs: LATE_WATCH_MS,
+  })
+}
+
+/** Fan out one late frame for a watched turn; `message-end` ends the watch. */
+function fanOutLateFrame(conversationId: string, turnId: string, event: string, data: unknown): void {
+  const key = lateKey(conversationId, turnId)
+  const watch = lateWatch.get(key)
+  if (!watch) return
+  if (watch.expiresAt <= Date.now()) {
+    lateWatch.delete(key)
+    return
+  }
+  let payload: unknown = data ?? {}
+  if (event === 'message-end' && payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    payload = { ...(payload as Record<string, unknown>), engine: watch.engine }
+  }
+  // Never a replay reset: the conversation may be streaming a later turn now.
+  emitChannelSse(conversationId, event, payload)
+  if (event === 'message-end') {
+    lateWatch.delete(key)
+    log.web.info('chat-turn relay: late answer delivered to the phone channel', { conversationId, turnId })
+  }
 }
 
 /** Tests / shutdown: drop all relay bookkeeping. */
@@ -462,6 +545,8 @@ export function resetChatTurnRelayState(): void {
   primaryTurns.clear()
   recentTurnIds.clear()
   mirroring.clear()
+  lateWatch.clear()
+  lateMirroring.clear()
 }
 
 // ─── Primary side: accept a relayed turn, mirror its frames downlink ─────────
@@ -502,17 +587,72 @@ export function activeRelayedTurnCount(): number {
 const mirroring = new Map<string, string>()
 
 /**
+ * events-v1, loaded once and shared. Dynamic (it imports this module back), and
+ * memoized because the mirror sits on the per-delta hot path and two frames are
+ * often mirrored in one tick (a late answer's `message-late` + `message-end`):
+ * under vitest's module mocker, two concurrent imports of a mocked module can
+ * resolve to different instances, and one frame then skipped the mock.
+ */
+let eventsV1: Promise<typeof import('./events-v1.js')> | undefined
+const loadEventsV1 = (): Promise<typeof import('./events-v1.js')> =>
+  (eventsV1 ??= import('./events-v1.js').catch((err: unknown) => { eventsV1 = undefined; throw err }))
+
+/**
+ * conversationId → relayed turns that stalled while their lane kept running.
+ * `mirroring` is disarmed when the turn function returns at the stall, but the
+ * late answer comes after that: a frame whose payload names one of these turns
+ * still goes down, under that turn's id. Emptied by armLateMirror once the late
+ * watch ends, which the lane bounds at LANE_LATE_ANSWER_MAX_MS.
+ */
+const lateMirroring = new Map<string, Set<string>>()
+
+/**
+ * Primary: keep mirroring a stalled relayed turn's late frames until `done`
+ * settles (followLateAnswer's promise). Must be called while the turn is still
+ * armed in `mirroring`, i.e. before the turn function returns; a no-op for a
+ * turn that was not relayed.
+ */
+export function armLateMirror(conversationId: string, turnId: string, done: Promise<unknown>): void {
+  if (mirroring.get(conversationId) !== turnId) return
+  let turns = lateMirroring.get(conversationId)
+  if (!turns) {
+    turns = new Set()
+    lateMirroring.set(conversationId, turns)
+  }
+  turns.add(turnId)
+  const disarm = (): void => {
+    const current = lateMirroring.get(conversationId)
+    if (!current) return
+    current.delete(turnId)
+    if (current.size === 0) lateMirroring.delete(conversationId)
+  }
+  void done.then(disarm, disarm)
+}
+
+/**
  * Primary: mirror one local SSE frame down the bridge lane, for conversations
  * whose turn was relayed from the cloud. A no-op (one Map lookup) for every
  * ordinary turn, so this is safe to call from the hot emit path.
+ *
+ * A frame whose payload names a turn other than the armed one is never sent
+ * under the armed turn's id: that is how a late `message-end` of an earlier,
+ * unrelayed turn (a phone that was on the Mac directly, then moved to the
+ * replica) would end the live relayed turn on the replica, which then drops that
+ * turn's real frames. Such a frame rides its own id while its late answer is
+ * armed (armLateMirror) and is dropped otherwise.
  */
 export function mirrorRelayedChatFrame(conversationId: string, event: string, data: unknown): void {
-  const turnId = mirroring.get(conversationId)
+  let turnId = mirroring.get(conversationId)
+  const named = (data as { turnId?: unknown } | null)?.turnId
+  if (typeof named === 'string' && named !== turnId) {
+    if (!lateMirroring.get(conversationId)?.has(named)) return
+    turnId = named
+  }
   if (turnId === undefined) return
   if (event !== KEEPALIVE_EVENT && !RELAYABLE_EVENTS.has(event)) return
   void (async () => {
     try {
-      const { forwardMobileEventToBridge } = await import('./events-v1.js')
+      const { forwardMobileEventToBridge } = await loadEventsV1()
       await forwardMobileEventToBridge(CHAT_TURN_FRAME_KIND, { conversationId, turnId, event, data })
     } catch (err) {
       // Best-effort by design: a dropped delta costs a repaint, and the answer

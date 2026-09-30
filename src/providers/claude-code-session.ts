@@ -64,6 +64,7 @@ import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpMod
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingText } from '../core/sessions/launch-naming.js'
+import { noteSessionProgress } from '../core/sessions/session-progress.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
 import {
@@ -4194,6 +4195,9 @@ export class ClaudeCodeSession {
     this._currentEventV = v
     // Clear stall diagnostic timer — we're receiving output, session is responsive
     this._lastJsonlEventTs = Date.now()
+    // Lane-turn liveness (core/sessions/session-progress.ts): EVERY stream line
+    // counts, heartbeats included. One Map write per line.
+    noteSessionProgress(this.claudeSessionId)
     this._streamLinesSeen++
     this.clearStallDiagTimer()
     // Reset team-idle timer on any new JSONL event — the team is still active.
@@ -10467,6 +10471,9 @@ export class SessionRunner {
         sessionId,
         count: newMsgs.length,
         messageIds: newMsgs.map((m) => m.id),
+        // A mid-turn send JOINS the running turn (no gen bump): the turn that
+        // answers it is this one. Lane-turn result correlation keys on it.
+        turnGen: targetSession.turnGen,
       }, ['main-ai'], { source: 'session-runner' })
     } else {
       // stdin write failed — the daemon's FIFO probe says the CLI isn't reading
@@ -10536,6 +10543,7 @@ export class SessionRunner {
       sessionId,
       count: msgs.length,
       messageIds: msgs.map((m) => m.id),
+      turnGen: session.turnGen,
     }, ['main-ai'], { source: 'session-runner' })
     this.logDeliveryLatency(sessionId, 'resume', msgs, session)
   }
@@ -11240,6 +11248,9 @@ export class SessionRunner {
             sessionId,
             count: msgs.length,
             messageIds: msgs.map((m) => m.id),
+            // writeMessage already opened the new turn (gen bump) for an idle
+            // send, so this is the generation of the turn that will answer.
+            turnGen: targetSession.turnGen,
           }, ['main-ai'], { source: 'session-runner' })
 
           // FIFO stall detection removed — the 120s timer was killing legitimate

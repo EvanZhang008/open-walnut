@@ -113,6 +113,131 @@ cloud_bridge:
   `POST /api/v1/sessions/:id/messages` + `GET /api/v1/sessions/:id/stream`
   (see [`api-v1.md`](api-v1.md)). `GET /api/v1/status` lists live `bridgeHosts`.
 
+### How the bridge carries load
+
+Five rules keep one busy Mac and one busy phone from knocking the link over.
+
+- **Bulk uploads do not ride the bridge.** The session list, the task list and
+  transcript tails go to `POST /bridge/ingest` on the companion
+  (`src/web/routes/bridge-ingest.ts`, client `src/core/cloud-ingest.ts`): short
+  gzip HTTPS requests, authenticated with the Mac's own machine credential
+  (`bridge-local`; every other credential gets 403). One request per list is in
+  flight at a time, and while it runs only the newest copy waits; at most 2
+  requests run at once, each with a 30s deadline. A failed request (network,
+  timeout, 5xx) is retried by the next sweep and is never resent over the
+  bridge. Only a companion without the route (404/405) or one that refuses the
+  credential (401/403) gets the old path, the daemon's `mobile-event` over the
+  bridge, for the next 10 minutes. Requests queued behind the cap when a
+  refusal lands are not sent: on the companion each wrong token is a strike
+  against the caller's IP (10 in 60s lock that IP out, the phone behind the
+  same NAT included), so the lane spends at most 2 per rest. See "Why bulk
+  uploads leave the bridge" below.
+
+- **The daemon paces its uplink** (`src/providers/bridge-uplink-core.ts`, both
+  daemon twins, capability `bridge-uplink-v1`). At most 1MB may be on the wire
+  that the companion has not confirmed. Every `bridge-ping` frame is a marker
+  with a `seq`; the companion answers each with a `ping` RPC carrying
+  `ackSeq`, which confirms everything written before that marker. A companion
+  that predates `ackSeq` answers each marker in order, which confirms the
+  oldest one. A marker nobody confirms within 15s releases the window. Frames
+  over 256KB are cut into `{ev:'chunk', cid, i, n, part}` envelopes once the
+  companion asks for them with `bridge.peer {chunkBytes}` (it does so when
+  the daemon's `hello` says `uplink: 1`). The `mobile-event` ack reports
+  `relayed`, `queued`, `queuedBytes` and `connId`.
+- **The Mac skips what the companion already has.** At write time and in the
+  5-minute self-heal (which sends one push after another), a push is skipped
+  when the same content already went over the same lane: the ingest route, or
+  the same bridge connection (asked with the trusted `bridge.status` command).
+  The content hash leaves out the envelope's `exportedAt`, because the
+  exporters restamp an unchanged list. A new bridge connection sends everything
+  again, and so does any push after one that did not clearly land (a failed
+  request may still have been written). An unchanged list still reaches the
+  companion at least every 10 minutes (it serves the list's `exportedAt` as the
+  phone's "Synced X ago"), a transcript every 30: a skip is allowed only while
+  the last delivery is younger than that bound minus one sweep interval (5 and
+  25 minutes), so the next sweep always falls inside it.
+- **The companion reads a session once.** Fresh transcript requests for one
+  session share a single `read-history` call, reuse its result for 4s while no
+  new transcript line arrived, and at most 2 such reads run against one host
+  (`src/web/ws/bridge-read-history.ts`).
+- **Phones hear about a real outage, not a redial.** `bridge-offline` goes to
+  an open session page only after 6s of continuous absence, `bridge-online`
+  only to a page that was told offline, and neither enters the replay buffer
+  (`src/web/ws/bridge-presence.ts`). The session channel starts a fresh replay
+  window at each turn start (`turn-start`), as the Mac's own stream does.
+
+### Why bulk uploads leave the bridge
+
+Field evidence, 2026-09-24 to 09-30, from the bridge monitor's close records,
+the companion's own logs and the TLS terminator in front of it:
+
+- Of 84 closes the far side sent (a reset or a close the Mac did not start),
+  81 had at least 100KB written and not yet confirmed. Across the whole
+  connection lifetime that much is in flight about 1% of the time. The value at
+  close was usually about 1.2MB: the task list.
+- On 09-29, each of 46 such closes matched a `socket closed` on the companion
+  within 0.2s, with no silence close, replacement or hello timeout there. The
+  companion's app did not close them; the connection under it ended.
+- In the same days, the TLS terminator logged `bad record MAC` on uploads from
+  the Mac only, git pushes over `/git/data` included, and 9 of 13 failed git
+  pushes fell within 5 minutes of a bridge reset (10% would by chance). A
+  record that fails its MAC check ends the whole TLS connection. The data was
+  damaged on the way, after the Mac encrypted it (the Mac's endpoint security
+  filters and every network hop to the companion sit on that path; which one
+  damages it is not yet known).
+
+Pacing and chunking cannot fix damage in transit. What helps is fewer bytes on
+the one connection whose loss costs everything at once, so uploads moved to
+their own short requests: a damaged one costs one retry. The bridge keeps
+RPCs, stream relays and presence, which are small.
+
+### Bridge connection logs
+
+Counts and sizes only, never content. The daemon's lines are in its own log
+(`daemon-<instance>.log`); the companion's are in its server log under
+`subsystem=ws`. The `connId` is the same on both sides.
+
+`bridge-conn-open` (daemon), once per connection:
+
+| Field | Meaning |
+|---|---|
+| `connId` | `<daemon instance id>.<n>`, also sent in `hello` |
+| `dialMs` | time from starting the dial to the socket opening |
+
+`bridge-conn-close` (daemon), once per connection that opened:
+
+| Field | Meaning |
+|---|---|
+| `connId` | as above |
+| `uptimeMs` | how long the connection was open |
+| `code`, `reason`, `wasClean` | the WebSocket close; `code` is null and `reason` is `stopped` when the daemon shut the bridge down itself (reconfigure) |
+| `lastError` | the last socket error, or why the daemon closed (`inbound silence (daemon closed)`, `uplink queue overflow (daemon closed)`) |
+| `bytesIn`, `framesIn` | received from the companion |
+| `bytesOut`, `framesOut` | written to the socket, markers and chunks included |
+| `maxOutFrameBytes`, `maxOutFrameKind` | the biggest frame written and its `ev` (`chunk`, `mobile-event`, `reply` for an RPC answer) |
+| `bufferedAmountPeak` | the most bytes ever unconfirmed at once. This is the uplink's own count: the Bun client's `bufferedAmount` reads 0 whatever the kernel holds, so it cannot be used |
+| `bufferedAmountAtClose` | unconfirmed plus queued bytes when the socket closed |
+| `lastInboundAgeMs` | time since the last frame from the companion |
+| `rttMsP50`, `rttMsMax` | marker to echo round trip (a `bridge-ping` to the companion's `ping` RPC), last 128 samples |
+| `loopDriftMax60sMs`, `loopDriftMax5sMs` | how late the daemon's 500ms timer fired at worst over the last 60s and 5s, a stalled daemon loop in numbers |
+| `chunkedFrames`, `ackTimeouts` | frames that were cut, and markers released unconfirmed |
+
+`bridge host closed` (companion), once per host socket, whichever side closed:
+
+| Field | Meaning |
+|---|---|
+| `hostAlias` | null when the socket closed before its `hello` |
+| `connId` | from the daemon's `hello` |
+| `code`, `reason` | the WebSocket close |
+| `wsError` | the last socket error, if any |
+| `initiator` | who closed it: `silence` (75s without a frame), `replaced` (a newer dial for the same host), `hello-timeout`, `none` (shutdown or a rejected token), `remote` (the daemon or the network) |
+| `uptimeMs` | how long the socket was open |
+| `bytesRead`, `framesIn`, `maxInFrameBytes` | received from the daemon |
+| `bytesWritten`, `framesOut` | RPC frames sent to the daemon |
+| `pendingRpcs` | requests the close cut off |
+| `clientIp` | the first `X-Forwarded-For` hop, else the socket peer |
+| `loopP99Ms` | the companion's p99 event-loop delay over the last 5s window |
+
 ## The companion as an exec host
 
 A provisioned companion also runs sessions itself, through its own loopback

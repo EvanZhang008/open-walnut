@@ -43,6 +43,7 @@ vi.mock('../../../src/core/session-projection.js', async (importOriginal) => {
 })
 
 import { buildTranscriptViaBridge } from '../../../src/web/routes/session-stream-v1.js'
+import { _resetBridgeReadHistoryForTesting } from '../../../src/web/ws/bridge-read-history.js'
 
 function jsonl(lines: Array<Record<string, unknown>>): string {
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
@@ -50,6 +51,8 @@ function jsonl(lines: Array<Record<string, unknown>>): string {
 
 beforeEach(() => {
   bridgeRequestMock.mockReset()
+  // Each case answers the same session differently: drop the shared read cache.
+  _resetBridgeReadHistoryForTesting()
 })
 
 describe('buildTranscriptViaBridge user-line filtering', () => {

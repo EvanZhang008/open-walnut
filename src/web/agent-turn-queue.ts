@@ -15,20 +15,26 @@
  * - Cron isolated jobs (empty history, never write chat-history)
  * - Embedded subagents (own history)
  * - Compaction summarizer (empty history)
+ *
+ * A running turn may give its slot up while it waits on an earlier turn of its
+ * own lane (core/turn-slot.ts): the slot is the agent's, and that wait is not the
+ * agent's work, so the agent's other conversations run meanwhile.
  */
 
 import { log } from '../logging/index.js';
+import { runHoldingTurnSlot, type TurnSlot } from '../core/turn-slot.js';
 
-interface QueueEntry<T> {
+interface QueueEntry {
   label: string;
-  task: () => Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason: unknown) => void;
+  /** Called once the slot is this entry's (`active` already counts it). */
+  start: () => void;
   enqueuedAt: number;
+  /** A turn taking its slot back after a wait (see TurnSlot.releaseWhile). */
+  resume?: boolean;
 }
 
 interface AgentQueue {
-  queue: QueueEntry<unknown>[];
+  queue: QueueEntry[];
   active: number;
 }
 
@@ -61,6 +67,7 @@ function pump(agentId: string): void {
         label: entry.label,
         waitMs,
         queued: q.queue.length,
+        ...(entry.resume ? { resume: true } : {}),
       });
     }
     log.agent.info('agent turn queue: dequeue', {
@@ -68,34 +75,30 @@ function pump(agentId: string): void {
       label: entry.label,
       waitMs,
       queued: q.queue.length,
+      ...(entry.resume ? { resume: true } : {}),
     });
     q.active++;
-    void (async () => {
-      const startMs = Date.now();
-      try {
-        const result = await entry.task();
-        q.active--;
-        log.agent.info('agent turn queue: done', {
-          agentId,
-          label: entry.label,
-          durationMs: Date.now() - startMs,
-          queued: q.queue.length,
-        });
-        pump(agentId);
-        entry.resolve(result);
-      } catch (err) {
-        q.active--;
-        log.agent.error('agent turn queue: error', {
-          agentId,
-          label: entry.label,
-          durationMs: Date.now() - startMs,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        pump(agentId);
-        entry.reject(err);
-      }
-    })();
+    entry.start();
   }
+}
+
+/**
+ * Resolves once the agent's slot is the caller's. `front` (a turn taking its slot
+ * back after a wait): ahead of every new turn, behind resumers already queued.
+ */
+function acquireSlot(agentId: string, label: string, front: boolean): Promise<void> {
+  const q = getOrCreate(agentId);
+  return new Promise<void>((start) => {
+    const entry: QueueEntry = { label, start, enqueuedAt: Date.now(), ...(front ? { resume: true } : {}) };
+    if (front) {
+      // Behind turns already resuming, ahead of new ones: resumers keep the
+      // order they were running in (an unshift made four waiters on one gate
+      // resume W1, W4, W3, W2).
+      const i = q.queue.findIndex((e) => !e.resume);
+      q.queue.splice(i === -1 ? q.queue.length : i, 0, entry);
+    } else q.queue.push(entry);
+    pump(agentId);
+  });
 }
 
 /**
@@ -105,6 +108,9 @@ function pump(agentId: string): void {
  * @param agentId — console agent ID (e.g. 'general', 'mentor')
  * @param label — human-readable label for logging (e.g. 'chat', 'cron:reminder')
  * @param task — async function that runs the agent turn
+ *
+ * The task runs as the holder of the agent's slot (core/turn-slot.ts), so a
+ * wait inside it may give the slot up through `releaseTurnSlotWhile`.
  */
 export function enqueueAgentTurn<T>(
   agentId: string,
@@ -112,21 +118,64 @@ export function enqueueAgentTurn<T>(
   task: () => Promise<T>,
 ): Promise<T> {
   const q = getOrCreate(agentId);
-  return new Promise<T>((resolve, reject) => {
-    q.queue.push({
-      label,
-      task: () => task() as Promise<unknown>,
-      resolve: resolve as (value: unknown) => void,
-      reject,
-      enqueuedAt: Date.now(),
-    });
-    log.agent.info('agent turn queue: enqueue', {
-      agentId,
-      label,
-      queueSize: q.queue.length + q.active,
-    });
-    pump(agentId);
+  // Queued synchronously: turns start in the order they were enqueued.
+  const acquired = acquireSlot(agentId, label, false);
+  log.agent.info('agent turn queue: enqueue', {
+    agentId,
+    label,
+    queueSize: q.queue.length + q.active,
   });
+  return (async () => {
+    await acquired;
+    let held = true;
+    let ended = false;
+    const give = (): void => {
+      held = false;
+      q.active--;
+      pump(agentId);
+    };
+    const slot: TurnSlot = {
+      releaseWhile: async <W>(wait: Promise<W>): Promise<W> => {
+        if (!held || ended) return wait;
+        give();
+        log.agent.info('agent turn queue: slot released while waiting', { agentId, label, queued: q.queue.length });
+        try {
+          return await wait;
+        } finally {
+          await acquireSlot(agentId, label, true);
+          if (ended) {
+            // The turn finished while this wait was still pending (a detached
+            // helper): hand the slot straight back instead of keeping it.
+            give();
+          } else {
+            held = true;
+          }
+        }
+      },
+    };
+    const startMs = Date.now();
+    try {
+      const result = await runHoldingTurnSlot(slot, task);
+      log.agent.info('agent turn queue: done', {
+        agentId,
+        label,
+        durationMs: Date.now() - startMs,
+        queued: q.queue.length,
+      });
+      return result;
+    } catch (err) {
+      log.agent.error('agent turn queue: error', {
+        agentId,
+        label,
+        durationMs: Date.now() - startMs,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    } finally {
+      ended = true;
+      if (held) give();
+    }
+  })();
 }
 
 /**

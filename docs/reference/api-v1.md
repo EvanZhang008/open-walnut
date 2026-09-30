@@ -573,20 +573,52 @@ The additive `engine` field on the terminal frame reports which engine answered
 | Event | Data | Meaning |
 |---|---|---|
 | `message-start` | `{ "turnId", "answeredBy"? }` | A turn began. `answeredBy` (additive) is `"cloud"` only when the cloud companion answers the turn itself because the primary is unreachable; absent otherwise |
-| `queued` | `{ "turnId", "position" }` | Turn accepted but waiting behind another turn on the shared agent queue (additive, may precede `message-start` by minutes) |
+| `queued` | `{ "turnId", "position" }` | Turn accepted but waiting behind another turn on the shared agent queue (additive, may precede `message-start` by minutes). Also sent after `message-start` when the turn waits for an earlier, stalled turn on the same lane (see "A turn that stalls" below) |
 | `text-delta` | `{ "delta" }` | Streaming assistant text chunk |
 | `tool` | `{ "name", "toolUseId"?, "detail"?, "inputPreview"? }` | The agent invoked a tool. `detail` (additive) is the same one-line input summary the message rows carry (≤160+`…`, masked), so the activity line can read `Bash · ls docs/`; `inputPreview` (additive) is the same ≤2000-char masked `key: value` render the message rows carry, so an expanded live row shows what the tool was actually called with (`detail` prefers a Bash `description`, which is why the command itself needs this field); `toolUseId` (additive) pairs this frame with its `tool-result` |
 | `tool-result` | `{ "toolUseId", "resultPreview"? }` | That tool finished (additive) — clears the activity line. `resultPreview` (additive) is the same ≤700+`…` masked excerpt the message row carries, so a finished live row can show its output before the transcript lands. Still no full output on this channel: the whole text is only reachable through the row's `detailRef` read. Only sent for a `toolUseId` whose `tool` frame this turn actually delivered, so an id you never saw open is never closed |
 | `thinking` | `{ "delta"? }` | The agent is reasoning. `delta` (additive, optional) is the reasoning text — coalesced into ~120 ms batches, so treat it as an append, not one whole block. Clients that ignore it and just show a spinner keep working |
 | `message-end` | `{ "turnId", "fullText", "engine"?, "answeredBy"? }` | Turn finished; `fullText` = complete reply. `answeredBy` as on `message-start` |
-| `error` | `{ "message", "engine"?, "answeredBy"? }` | Turn failed. `answeredBy` as on `message-start` |
+| `error` | `{ "message", "turnId"?, "laneStillRunning"?, "engine"?, "answeredBy"? }` | Turn failed. `answeredBy` as on `message-start`. `laneStillRunning: true` (additive) marks the stall notice of a turn that is not over (see below) |
+| `message-late` | `{ "turnId", "fullText" }` | Additive. A stalled turn's answer arrived; always followed by a `message-end` with the same data (see below) |
 
 - `tool`, `tool-result` and `thinking` arrive on **every** engine (a Personal AI
   CLI lane and a coding session alike), so an activity line can
   name what the agent is doing instead of blinking "Thinking…" for minutes.
   Subagent activity is deliberately NOT relayed: a delegated agent's own tool
   calls would overwrite the `Task` row the human needs to see.
-- Nothing is emitted after a turn's `message-end` / `error`.
+- Nothing is emitted after a turn's `message-end` / `error`, with one
+  exception: the stall notice below.
+- **A turn that stalls while its lane keeps running** (no stream progress for
+  15 minutes, the CLI still alive) is not over. Its frames:
+  1. `error` `{ "message", "turnId", "laneStillRunning": true }`, the notice. The
+     turn's guard is released, so the client may send its next message; that
+     turn waits for this one on the lane and says so with `queued`. No error row
+     is written. While it waits, the agent's other conversations are not held
+     behind it.
+  2. When the answer lands (the server waits up to 60 minutes), its row is
+     written under this turn's `turnId`, then `message-late`
+     `{ "turnId", "fullText" }` and `message-end` with the same data. The
+     second one is the ordinary end frame, so a client that ignores
+     `message-late` still ends the turn and refetches `GET .../messages`, which
+     now holds the row.
+  3. If a later turn is running on the conversation at that moment, the server
+     then sends `message-start` `{ "turnId" }` for that later turn: a client that
+     does not compare turn ids reads the late `message-end` as the end of the
+     turn it is streaming, and this puts it back.
+
+  If the lane dies or goes quiet again instead, the error row is written and no
+  frame is sent (the notice already told the user). A lane that went quiet again
+  (or ran past the 60 minutes) may still be in that turn, so the server
+  interrupts it, and a turn waiting behind it is sent only once that turn has
+  ended: it gets its own answer, never the stalled turn's. If the stalled turn
+  has not ended 15 minutes after the interrupt, the waiting turn ends with an
+  ordinary `error` and is not sent. A phone attached to the
+  cloud replica gets the same sequence: the replica keeps listening for a
+  stalled turn's answer after the notice, for up to 65 minutes. A stalled turn
+  the replica did not relay (it was sent to the primary directly) sends its late
+  frames only to clients on the primary; a phone that has since moved to the
+  replica finds the answer in `GET .../messages`.
 - **The live frames and the stored rows describe the same activity**, so a
   finished turn does not lose it: a `thinking` frame becomes a `kind:"thinking"`
   row and a `tool` frame becomes a `kind:"tool"` row on

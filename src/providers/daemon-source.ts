@@ -52,6 +52,7 @@ import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
+import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 
 /**
  * Version stamped into a source-deployed daemon, resolved at string-build time
@@ -199,6 +200,8 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_FIX__', createHostFix.toString()],
     ['__CREATE_FS_LS__', createFsLs.toString()],
     ['__CREATE_CLAUDE_CHECK__', createClaudeCheck.toString()],
+    ['__CREATE_BRIDGE_UPLINK__', createBridgeUplink.toString()],
+    ['__CREATE_LOOP_DRIFT_PROBE__', createLoopDriftProbe.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -310,6 +313,24 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     }
     // fs.ls smoke: the listing budgets ride this text, so a reconstructed copy
     // must still build its lister (the factory touches nothing until called).
+    // Bridge uplink smoke: a reconstructed copy must pace (hold a frame behind
+    // an unconfirmed megabyte) and release it when the marker is echoed.
+    const createUplink = reconstructed['__CREATE_BRIDGE_UPLINK__'] as typeof createBridgeUplink | undefined
+    if (createUplink) {
+      const wrote: string[] = []
+      const up = createUplink({ write: (f) => { wrote.push(f) }, now: () => 0, setTimer: () => null, clearTimer: () => {}, onOverflow: () => {} })
+      const big = 'x'.repeat(1024 * 1024)
+      if (up.send(big) !== 'sent' || up.send('y') !== 'queued') throw new Error('bridge uplink did not hold a frame behind an unconfirmed megabyte')
+      const marker = JSON.parse(wrote[wrote.length - 1]) as { ev?: string; seq?: number }
+      if (marker.ev !== 'bridge-ping') throw new Error('bridge uplink did not ask for an ack when blocked')
+      up.ack(marker.seq)
+      if (wrote[wrote.length - 1] !== 'y') throw new Error('bridge uplink did not release the held frame on ack')
+    }
+    const createDrift = reconstructed['__CREATE_LOOP_DRIFT_PROBE__'] as typeof createLoopDriftProbe | undefined
+    if (createDrift) {
+      const probe = createDrift({ now: () => 0, setInterval: () => null, clearInterval: () => {} })
+      if (probe.max60s() !== 0) throw new Error('loop drift probe built with a nonzero reading')
+    }
     const createLs = reconstructed['__CREATE_FS_LS__'] as typeof createFsLs | undefined
     if (createLs) {
       const ls = createLs({ readdir: async () => [], stat: async () => { throw new Error('unused') } })
@@ -2514,6 +2535,9 @@ function decodeFrame(buf) {
 // and is rejected; those stay reachable only over the trusted SSH path.
 var BRIDGE_ALLOWED_COMMANDS = new Set([
   'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume', 'stt',
+  // The replica says what it can reassemble (chunk size, clamped host-side):
+  // it only shapes how THIS socket's own frames are cut, nothing else.
+  'bridge.peer',
   // Narrow image fetch (extension allowlist + size cap) — lets the cloud box
   // proxy session-referenced pictures to phones. NOT fs.read: a compromised
   // cloud box must never get arbitrary file reads on exec hosts.
@@ -2795,7 +2819,13 @@ function dispatchCommand(ws, id, cmd) {
       }
       return dispatchCommand(ws, id, Object.assign({}, cmd, { cmd: agentRoute.cmd }));
     }
-    case 'ping': return sendOk(ws, id, { pong: true });
+    case 'ping':
+      // From the replica, a ping answers one of our bridge-ping markers: it
+      // confirms every byte written before that marker (bridge-uplink-core.ts).
+      if (ws && ws.origin === 'bridge' && ws === bridgeAdapter && bridgeUplink) bridgeUplink.ack(cmd.ackSeq);
+      return sendOk(ws, id, { pong: true });
+    case 'bridge.peer': return cmdBridgePeer(ws, id, cmd);
+    case 'bridge.status': return cmdBridgeStatus(ws, id);
     case 'service.handover': case 'service.update': return daemonCommands.run(function () { return cmdServiceHandover(ws, id, cmd); });
     case 'hello': return sendOk(ws, id, {
       version: DAEMON_VERSION,
@@ -3680,13 +3710,18 @@ function cmdMobileEvent(ws, id, cmd) {
   if (typeof kind !== 'string' || !kind) {
     return sendError(ws, id, 'mobile-event: missing kind');
   }
-  if (!bridgeAdapter) {
+  if (!bridgeAdapter || !bridgeUplink) {
     return sendOk(ws, id, { relayed: false });
   }
-  try {
-    bridgeAdapter.send(JSON.stringify({ ev: 'mobile-event', kind: kind, data: data == null ? null : data }));
-  } catch {}
-  sendOk(ws, id, { relayed: true });
+  // Truthful ack: queued = paced behind unconfirmed bytes; relayed:false = the
+  // uplink refused it (closing, or over its queue cap).
+  var outcome = bridgeUplink.send(JSON.stringify({ ev: 'mobile-event', kind: kind, data: data == null ? null : data }));
+  sendOk(ws, id, {
+    relayed: outcome !== 'dropped',
+    queued: outcome === 'queued',
+    queuedBytes: bridgeUplink.queuedBytes,
+    connId: bridgeConnId,
+  });
 }
 
 // ACP worker supervision through the acp-daemon-core.cjs sidecar. Twin of the
@@ -8634,6 +8669,19 @@ let bridgeBackoffMs = 1000;
 let bridgeRedialDueAt = null;
 let bridgeGeneration = 0;
 let bridgeLastInbound = 0;
+// Per-connection uplink (pacing + counters) and its identity in the logs; the
+// replica logs the same connId (it rides the hello). Mirror of the standalone.
+let bridgeUplink = null;
+let bridgeConnId = null;
+let bridgeConnSeq = 0;
+let bridgeConnOpenedAt = 0;
+let bridgeLastError = null;
+const createBridgeUplink = (__CREATE_BRIDGE_UPLINK__);
+const bridgeDrift = (__CREATE_LOOP_DRIFT_PROBE__)({
+  now: Date.now,
+  setInterval: function(fn, ms) { return setInterval(fn, ms); },
+  clearInterval: function(t) { clearInterval(t); },
+});
 
 const BRIDGE_BACKOFF_MAX_MS = 60000;
 const BRIDGE_PING_INTERVAL_MS = 30000;
@@ -8715,6 +8763,7 @@ function cmdBridgeConfigure(ws, id, cmd) {
 }
 
 function stopBridge() {
+  if (bridgeAdapter) logBridgeConnClose({ code: null, reason: 'stopped', wasClean: true });
   bridgeGeneration++;
   if (bridgeRedialTimer) { clearTimeout(bridgeRedialTimer); bridgeRedialTimer = null; }
   bridgeRedialDueAt = null;
@@ -8763,15 +8812,60 @@ function scheduleBridgeRedial(gen) {
 
 // Adapter: presents the outbound client socket with the server-side ws shape
 // (send/readyState/close) so handleCommand + subscriber fan-out work as-is.
-function makeBridgeAdapter(client) {
+function makeBridgeAdapter(client, uplink) {
   return {
     // Marks this socket as the PUBLIC cloud relay so handleCommand restricts it
     // to BRIDGE_ALLOWED_COMMANDS (regular SSH clients have no origin property).
     origin: 'bridge',
     get readyState() { return client.readyState; },
-    send(payload) { try { client.send(payload); } catch {} },
+    // Every frame is paced by the uplink (bridge-uplink-core.ts).
+    send(payload) { uplink.send(payload); },
     close() { try { client.close(); } catch {} },
   };
+}
+
+function cmdBridgePeer(ws, id, cmd) {
+  if (ws !== bridgeAdapter || !bridgeUplink) return sendError(ws, id, 'bridge.peer: not the bridge socket');
+  var chunkBytes = bridgeUplink.setChunkBytes(cmd.chunkBytes);
+  logMsg('info', 'bridge: peer reassembles chunks', { connId: bridgeConnId, chunkBytes: chunkBytes });
+  sendOk(ws, id, { chunkBytes: chunkBytes });
+}
+
+function cmdBridgeStatus(ws, id) {
+  sendOk(ws, id, {
+    connected: bridgeAdapter != null,
+    connId: bridgeAdapter != null ? bridgeConnId : null,
+    queuedBytes: bridgeUplink ? bridgeUplink.queuedBytes : 0,
+    inFlightBytes: bridgeUplink ? bridgeUplink.inFlightBytes : 0,
+  });
+}
+
+// One bridge-conn-close line per opened connection (counts and sizes only).
+function logBridgeConnClose(info) {
+  var uplink = bridgeUplink;
+  if (!uplink || !bridgeConnId) return;
+  var snap = uplink.snapshot();
+  var now = Date.now();
+  logMsg('info', 'bridge-conn-close', {
+    connId: bridgeConnId,
+    uptimeMs: now - bridgeConnOpenedAt,
+    code: info.code,
+    reason: String(info.reason || '').slice(0, 120),
+    wasClean: info.wasClean,
+    lastError: bridgeLastError,
+    bytesIn: snap.bytesIn, bytesOut: snap.bytesOut,
+    framesIn: snap.framesIn, framesOut: snap.framesOut,
+    maxOutFrameBytes: snap.maxOutFrameBytes, maxOutFrameKind: snap.maxOutFrameKind,
+    bufferedAmountPeak: snap.bufferedAmountPeak, bufferedAmountAtClose: snap.bufferedAmountAtClose,
+    lastInboundAgeMs: snap.lastInboundAt ? now - snap.lastInboundAt : null,
+    rttMsP50: snap.rttMsP50, rttMsMax: snap.rttMsMax,
+    loopDriftMax60sMs: bridgeDrift.max60s(), loopDriftMax5sMs: bridgeDrift.max5s(),
+    chunkedFrames: snap.chunkedFrames, ackTimeouts: snap.ackTimeouts,
+  });
+  uplink.close();
+  bridgeDrift.stop();
+  bridgeUplink = null;
+  bridgeConnId = null;
 }
 
 function dialBridge(gen) {
@@ -8826,18 +8920,40 @@ function dialBridge(gen) {
   const onOpen = function() {
     if (gen !== bridgeGeneration) { try { client.close(); } catch {} return; }
     if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null; }
+    const dialMs = bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null;
     bridgeDialStartedAt = null;
     bridgeBackoffMs = 1000;
     bridgeLastInbound = Date.now();
-    const adapter = makeBridgeAdapter(client);
+    bridgeConnId = DAEMON_INSTANCE_ID + '.' + (++bridgeConnSeq);
+    bridgeConnOpenedAt = Date.now();
+    bridgeLastError = null;
+    const connId = bridgeConnId;
+    const uplink = createBridgeUplink({
+      write: function(frame) { client.send(frame); },
+      now: Date.now,
+      setTimer: function(fn, ms) { return setTimeout(fn, ms); },
+      clearTimer: function(t) { clearTimeout(t); },
+      onOverflow: function(queuedBytes) {
+        logMsg('error', 'bridge: uplink queue overflow, closing the socket', { connId: connId, queuedBytes: queuedBytes });
+        bridgeLastError = 'uplink queue overflow (daemon closed)';
+        try { client.close(); } catch {}
+      },
+    });
+    bridgeUplink = uplink;
+    const adapter = makeBridgeAdapter(client, uplink);
     bridgeAdapter = adapter;
     wsClients.add(adapter);
+    bridgeDrift.start();
+    logMsg('info', 'bridge-conn-open', { connId: connId, dialMs: dialMs });
+    // uplink: 1 tells the replica it may send bridge.peer and echo ackSeq.
     adapter.send(JSON.stringify({
       ev: 'hello',
       hostAlias: cfg.hostAlias,
       version: DAEMON_VERSION,
       instanceId: DAEMON_INSTANCE_ID,
       sids: [...sessions.keys()],
+      connId: connId,
+      uplink: 1,
     }));
     logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias });
     bridgePingTimer = setInterval(function() {
@@ -8846,20 +8962,25 @@ function dialBridge(gen) {
         logMsg('warn', 'bridge: inbound silence — tearing down', {
           silentMs: Date.now() - bridgeLastInbound,
         });
+        bridgeLastError = 'inbound silence (daemon closed)';
         try { client.close(); } catch {}
         return;
       }
-      adapter.send(JSON.stringify({ ev: 'bridge-ping', ts: Date.now() }));
+      // The keepalive is also an ack marker (bridge-uplink-core.ts).
+      uplink.ping();
     }, BRIDGE_PING_INTERVAL_MS);
   };
 
   const onMessage = function(data) {
     if (gen !== bridgeGeneration || !bridgeAdapter) return;
     bridgeLastInbound = Date.now();
-    handleCommand(bridgeAdapter, typeof data === 'string' ? data : data.toString());
+    const text = typeof data === 'string' ? data : data.toString();
+    if (bridgeUplink) bridgeUplink.noteInbound(Buffer.byteLength(text, 'utf8'));
+    handleCommand(bridgeAdapter, text);
   };
 
-  const onClose = function() {
+  // ws package: (code, reasonBuffer); browser-style: a CloseEvent.
+  const onClose = function(a, b) {
     if (gen !== bridgeGeneration) return;
     // Late close from a socket the dial timeout already abandoned — a newer
     // dial may be in flight; don't clobber its state.
@@ -8873,6 +8994,10 @@ function dialBridge(gen) {
     bridgeDialStartedAt = null;
     if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null; }
     if (bridgeAdapter) {
+      var closeInfo = typeof a === 'number'
+        ? { code: a, reason: b ? String(b) : '', wasClean: null }
+        : { code: a && typeof a.code === 'number' ? a.code : null, reason: a && a.reason ? a.reason : '', wasClean: a && typeof a.wasClean === 'boolean' ? a.wasClean : null };
+      logBridgeConnClose(closeInfo);
       wsClients.delete(bridgeAdapter);
       for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
       bridgeAdapter = null;
@@ -8882,18 +9007,24 @@ function dialBridge(gen) {
     scheduleBridgeRedial(gen);
   };
 
+  // onclose always follows an error; keep what it said for the close line.
+  const onError = function(e) {
+    var m = e && (e.message || (e.error && e.error.message));
+    bridgeLastError = typeof m === 'string' && m ? m.slice(0, 200) : ((e && e.type) || 'error');
+  };
+
   // Support both the ws-package EventEmitter API and the browser-style
   // on* properties (Node 22 global WebSocket).
   if (typeof client.on === 'function') {
     client.on('open', onOpen);
     client.on('message', onMessage);
     client.on('close', onClose);
-    client.on('error', function() { /* close always follows */ });
+    client.on('error', onError);
   } else {
     client.onopen = onOpen;
     client.onmessage = function(e) { onMessage(e.data); };
     client.onclose = onClose;
-    client.onerror = function() { /* close always follows */ };
+    client.onerror = onError;
   }
 }
 

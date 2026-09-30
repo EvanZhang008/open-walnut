@@ -25,6 +25,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { createDevice, _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 import { _resetAuthRateLimitForTesting } from '../../../src/web/middleware/auth-rate-limit.js'
+import { OFFLINE_ANNOUNCE_DELAY_MS } from '../../../src/web/ws/bridge-presence.js'
 
 let server: HttpServer
 let port: number
@@ -433,11 +434,14 @@ describe('bridge lifecycle + proxied send + streaming', () => {
       Authorization: `Bearer ${deviceToken}`,
     })
     try {
-      await sse.waitFor((e) => e.event === 'bridge-offline')
+      // The previous test's daemon closed a moment ago, so this page may open
+      // inside the offline grace window (ws/bridge-presence.ts): it is then told
+      // online first and hears bridge-offline once the host has stayed away.
+      await sse.waitFor((e) => e.event === 'bridge-offline', OFFLINE_ANNOUNCE_DELAY_MS + 3_000)
     } finally {
       sse.close()
     }
-  })
+  }, 30_000)
 
   it('second dial for the same host REPLACES the first (code 4000)', async () => {
     const first = await connectFakeDaemon(machineToken, HOST)

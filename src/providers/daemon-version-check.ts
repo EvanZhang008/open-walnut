@@ -142,6 +142,8 @@ const DAEMON_SOURCE_FILES = [
   'src/core/peers/envelope-kit.ts',
   // git.diff, run host-side: imported by the standalone twin.
   'src/providers/git-diff-core.ts',
+  // The paced bridge uplink and loop-drift probe: same import-or-inline rule.
+  'src/providers/bridge-uplink-core.ts',
 ] as const
 
 /**

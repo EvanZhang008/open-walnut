@@ -209,28 +209,45 @@ async function handleBusEvent(name: string, data: unknown): Promise<void> {
  *  the outbox's projection import (mtime-gated internally) so the replica's
  *  sqlite learns Mac-side tasks without waiting for a git pull. */
 function handleBridgeCacheFrame(kind: 'projection-upsert' | 'transcript-upsert', data: unknown): void {
-  void (async () => {
-    try {
-      const cache = await import('../../core/projection-cache.js')
-      if (kind === 'projection-upsert') {
-        const d = data as { which?: unknown; data?: unknown } | null
-        if (!d || (d.which !== 'sessions' && d.which !== 'tasks') || d.data == null) return
-        await cache.writeProjectionCache(d.which, d.data)
-        if (d.which === 'tasks') {
-          const { importProjectionOnCloud } = await import('../../core/task-outbox.js')
-          await importProjectionOnCloud()
-        }
-      } else {
-        const d = data as { sid?: unknown; data?: unknown } | null
-        if (!d || typeof d.sid !== 'string' || !d.sid || d.data == null) return
-        await cache.writeTranscriptCache(d.sid, d.data)
-      }
-    } catch (err) {
-      log.web.warn('mobile-events: cache frame write failed', {
-        kind, error: err instanceof Error ? err.message : String(err),
-      })
+  void applyBridgeCacheFrame(kind, data).catch((err: unknown) => {
+    log.web.warn('mobile-events: cache frame write failed', {
+      kind, error: err instanceof Error ? err.message : String(err),
+    })
+  })
+}
+
+/**
+ * The awaitable cache write behind both lanes: a `mobile-event` frame off the
+ * bridge, and POST /bridge/ingest (routes/bridge-ingest.ts), which answers only
+ * once the file is written. False = malformed payload, nothing written; throws
+ * when the write itself fails. The task import that follows a tasks projection
+ * runs after, never inside the answer: it is store-wide work, and the pusher
+ * only needs to know the copy landed.
+ */
+export async function applyBridgeCacheFrame(
+  kind: 'projection-upsert' | 'transcript-upsert',
+  data: unknown,
+): Promise<boolean> {
+  const cache = await import('../../core/projection-cache.js')
+  if (kind === 'projection-upsert') {
+    const d = data as { which?: unknown; data?: unknown } | null
+    if (!d || (d.which !== 'sessions' && d.which !== 'tasks') || d.data == null) return false
+    await cache.writeProjectionCache(d.which, d.data)
+    if (d.which === 'tasks') {
+      void import('../../core/task-outbox.js')
+        .then(({ importProjectionOnCloud }) => importProjectionOnCloud())
+        .catch((err: unknown) => {
+          log.web.warn('mobile-events: projection import failed', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
     }
-  })()
+    return true
+  }
+  const d = data as { sid?: unknown; data?: unknown } | null
+  if (!d || typeof d.sid !== 'string' || !/^[A-Za-z0-9_-]+$/.test(d.sid) || d.data == null) return false
+  await cache.writeTranscriptCache(d.sid, d.data)
+  return true
 }
 
 /** Called by bridge-registry when a `mobile-event` frame arrives from the

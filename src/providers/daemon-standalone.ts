@@ -140,6 +140,7 @@ import { spawnBehindRegistry } from './daemon-spawn-barrier.js'
 import { acquireDaemonInstanceLock, type DaemonInstanceLockOwner } from './daemon-instance-lock.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
 import { prepareDaemonServiceHandover, consumeDaemonServiceHandover } from './daemon-service-handover.js'
+import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 
 const daemonCommands = createDaemonCommandDrain()
 const sessionStartGate = new DaemonSessionGate()
@@ -670,6 +671,9 @@ interface WsData {
  */
 const BRIDGE_ALLOWED_COMMANDS = new Set([
   'status', 'appendUserMarker', 'send', 'attach', 'read-history', 'ping', 'bridgeResume', 'stt',
+  // The replica says what it can reassemble (chunk size, clamped host-side):
+  // it only shapes how THIS socket's own frames are cut, nothing else.
+  'bridge.peer',
   // Narrow image fetch (extension allowlist + size cap) — lets the cloud box
   // proxy session-referenced pictures to phones. NOT fs.read: a compromised
   // cloud box must never get arbitrary file reads on exec hosts.
@@ -1864,7 +1868,13 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       }
       return dispatchCommand(ws, id as number, { ...cmd, cmd: route.cmd })
     }
-    case 'ping': return sendOk(ws, id as number, { pong: true })
+    case 'ping':
+      // From the replica, a ping answers one of our bridge-ping markers: it
+      // confirms every byte written before that marker (bridge-uplink-core.ts).
+      if (ws.data?.origin === 'bridge' && ws === bridgeAdapter) bridgeUplink?.ack(cmd.ackSeq)
+      return sendOk(ws, id as number, { pong: true })
+    case 'bridge.peer': return cmdBridgePeer(ws, id as number, cmd)
+    case 'bridge.status': return cmdBridgeStatus(ws, id as number)
     case 'service.handover': case 'service.update': return daemonCommands.run(() => cmdServiceHandover(ws, id, cmd))
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
@@ -2315,11 +2325,18 @@ function cmdMobileEvent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   if (typeof kind !== 'string' || !kind) {
     return sendError(ws, id, 'mobile-event: missing kind')
   }
-  if (!bridgeAdapter) {
+  if (!bridgeAdapter || !bridgeUplink) {
     return sendOk(ws, id, { relayed: false })
   }
-  safeSend(bridgeAdapter, JSON.stringify({ ev: 'mobile-event', kind, data: data ?? null }))
-  sendOk(ws, id, { relayed: true })
+  // Truthful ack: `queued` means paced behind unconfirmed bytes, `relayed:
+  // false` means the uplink refused it (closing or over its queue cap).
+  const outcome = bridgeUplink.send(JSON.stringify({ ev: 'mobile-event', kind, data: data ?? null }))
+  sendOk(ws, id, {
+    relayed: outcome !== 'dropped',
+    queued: outcome === 'queued',
+    queuedBytes: bridgeUplink.queuedBytes,
+    connId: bridgeConnId,
+  })
 }
 
 // ── Agent gateway: on-host unix socket → Mac hub relay ──
@@ -7718,6 +7735,14 @@ let bridgeRedialDueAt: number | null = null
 // queued redials check it and no-op, so an old dial can't fight a new config.
 let bridgeGeneration = 0
 let bridgeLastInbound = 0
+// Per-connection uplink (pacing + counters) and its identity in the logs; the
+// replica logs the same connId (it rides the hello).
+let bridgeUplink: ReturnType<typeof createBridgeUplink> | null = null
+let bridgeConnId: string | null = null
+let bridgeConnSeq = 0
+let bridgeConnOpenedAt = 0
+let bridgeLastError: string | null = null
+const bridgeDrift = createLoopDriftProbe({ now: Date.now, setInterval, clearInterval: (t) => clearInterval(t as ReturnType<typeof setInterval>) })
 
 const BRIDGE_BACKOFF_MAX_MS = 60_000
 const BRIDGE_PING_INTERVAL_MS = 30_000
@@ -7780,6 +7805,7 @@ function cmdBridgeConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
 }
 
 function stopBridge(): void {
+  if (bridgeAdapter) logBridgeConnClose({ code: null, reason: 'stopped', wasClean: true })
   bridgeGeneration++
   if (bridgeRedialTimer) { clearTimeout(bridgeRedialTimer); bridgeRedialTimer = null }
   bridgeRedialDueAt = null
@@ -7819,20 +7845,67 @@ function scheduleBridgeRedial(gen: number): void {
 }
 
 // Adapter: presents the outbound client WebSocket as a ServerWebSocket so
-// handleCommand/addSubscriber/safeSend work unchanged. The client socket
-// buffers internally (browser-style API, never returns 0), so returning
-// payload.length keeps safeSend on its fast path — the Bun drain-queue
-// backpressure dance only applies to real ServerWebSockets.
-function makeBridgeAdapter(client: WebSocket): ServerWebSocket<WsData> {
+// handleCommand/addSubscriber/safeSend work unchanged. Every frame goes through
+// the uplink, which paces it (bridge-uplink-core.ts). The return value follows
+// Bun's send() contract: >0 written now, -1 buffered (the uplink delivers it).
+// Never 0: safeSend would park it in a drain queue that no drain event ever
+// flushes for a client socket, and everything after it would queue there too.
+// A frame the uplink refused is reported where it matters (mobile-event's ack);
+// the uplink closes the socket itself on overflow.
+function makeBridgeAdapter(client: WebSocket, uplink: ReturnType<typeof createBridgeUplink>): ServerWebSocket<WsData> {
   const adapter = {
     data: { origin: 'bridge' } as WsData,
     get readyState() { return client.readyState },
     send(payload: string): number {
-      try { client.send(payload); return payload.length } catch { return 0 }
+      return uplink.send(payload) === 'sent' ? payload.length : -1
     },
     close() { try { client.close() } catch {} },
   }
   return adapter as unknown as ServerWebSocket<WsData>
+}
+
+function cmdBridgePeer(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (ws !== bridgeAdapter || !bridgeUplink) return sendError(ws, id, 'bridge.peer: not the bridge socket')
+  const chunkBytes = bridgeUplink.setChunkBytes(cmd.chunkBytes)
+  logMsg('info', 'bridge: peer reassembles chunks', { connId: bridgeConnId, chunkBytes })
+  sendOk(ws, id, { chunkBytes })
+}
+
+function cmdBridgeStatus(ws: ServerWebSocket<WsData>, id: number) {
+  sendOk(ws, id, {
+    connected: bridgeAdapter != null,
+    connId: bridgeAdapter != null ? bridgeConnId : null,
+    queuedBytes: bridgeUplink?.queuedBytes ?? 0,
+    inFlightBytes: bridgeUplink?.inFlightBytes ?? 0,
+  })
+}
+
+/** One `bridge-conn-close` line per opened connection (counts and sizes only). */
+function logBridgeConnClose(info: { code: number | null; reason: string; wasClean: boolean | null }): void {
+  const uplink = bridgeUplink
+  if (!uplink || !bridgeConnId) return
+  const snap = uplink.snapshot()
+  const now = Date.now()
+  logMsg('info', 'bridge-conn-close', {
+    connId: bridgeConnId,
+    uptimeMs: now - bridgeConnOpenedAt,
+    code: info.code,
+    reason: info.reason.slice(0, 120),
+    wasClean: info.wasClean,
+    lastError: bridgeLastError,
+    bytesIn: snap.bytesIn, bytesOut: snap.bytesOut,
+    framesIn: snap.framesIn, framesOut: snap.framesOut,
+    maxOutFrameBytes: snap.maxOutFrameBytes, maxOutFrameKind: snap.maxOutFrameKind,
+    bufferedAmountPeak: snap.bufferedAmountPeak, bufferedAmountAtClose: snap.bufferedAmountAtClose,
+    lastInboundAgeMs: snap.lastInboundAt ? now - snap.lastInboundAt : null,
+    rttMsP50: snap.rttMsP50, rttMsMax: snap.rttMsMax,
+    loopDriftMax60sMs: bridgeDrift.max60s(), loopDriftMax5sMs: bridgeDrift.max5s(),
+    chunkedFrames: snap.chunkedFrames, ackTimeouts: snap.ackTimeouts,
+  })
+  uplink.close()
+  bridgeDrift.stop()
+  bridgeUplink = null
+  bridgeConnId = null
 }
 
 function dialBridge(gen: number): void {
@@ -7883,19 +7956,41 @@ function dialBridge(gen: number): void {
   client.onopen = () => {
     if (gen !== bridgeGeneration) { try { client.close() } catch {}; return }
     if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null }
+    const dialMs = bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null
     bridgeDialStartedAt = null
     bridgeBackoffMs = 1000
     bridgeLastInbound = Date.now()
-    const adapter = makeBridgeAdapter(client)
+    bridgeConnId = `${DAEMON_INSTANCE_ID}.${++bridgeConnSeq}`
+    bridgeConnOpenedAt = Date.now()
+    bridgeLastError = null
+    const connId = bridgeConnId
+    const uplink = createBridgeUplink({
+      write: (frame) => client.send(frame),
+      now: Date.now,
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+      onOverflow: (queuedBytes) => {
+        logMsg('error', 'bridge: uplink queue overflow, closing the socket', { connId, queuedBytes })
+        bridgeLastError = 'uplink queue overflow (daemon closed)'
+        try { client.close() } catch {}
+      },
+    })
+    bridgeUplink = uplink
+    const adapter = makeBridgeAdapter(client, uplink)
     bridgeAdapter = adapter
     wsClients.add(adapter)
+    bridgeDrift.start()
+    logMsg('info', 'bridge-conn-open', { connId, dialMs })
     // hello registers this host in the cloud bridge registry (first frame).
+    // `uplink: 1` tells the replica it may send bridge.peer and echo ackSeq.
     safeSend(adapter, JSON.stringify({
       ev: 'hello',
       hostAlias: cfg.hostAlias,
       version: DAEMON_VERSION,
       instanceId: DAEMON_INSTANCE_ID,
       sids: [...sessions.keys()],
+      connId,
+      uplink: 1,
     }))
     logMsg('info', 'bridge: connected', { hostAlias: cfg.hostAlias, wsId: wsId(adapter) })
     bridgePingTimer = setInterval(() => {
@@ -7906,10 +8001,12 @@ function dialBridge(gen: number): void {
         logMsg('warn', 'bridge: inbound silence — tearing down', {
           silentMs: Date.now() - bridgeLastInbound,
         })
+        bridgeLastError = 'inbound silence (daemon closed)'
         try { client.close() } catch {}
         return
       }
-      safeSend(adapter, JSON.stringify({ ev: 'bridge-ping', ts: Date.now() }))
+      // The keepalive is also an ack marker (bridge-uplink-core.ts).
+      uplink.ping()
     }, BRIDGE_PING_INTERVAL_MS)
   }
 
@@ -7917,10 +8014,11 @@ function dialBridge(gen: number): void {
     if (gen !== bridgeGeneration || !bridgeAdapter) return
     bridgeLastInbound = Date.now()
     const msg = typeof e.data === 'string' ? e.data : Buffer.from(e.data as ArrayBuffer).toString()
+    bridgeUplink?.noteInbound(Buffer.byteLength(msg, 'utf8'))
     handleCommand(bridgeAdapter, msg)
   }
 
-  client.onclose = () => {
+  client.onclose = (ev?: CloseEvent) => {
     if (gen !== bridgeGeneration) return
     // Late close from a socket the dial timeout already abandoned — a newer
     // dial may be in flight; don't clobber its state.
@@ -7933,13 +8031,21 @@ function dialBridge(gen: number): void {
     if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null }
     bridgeDialStartedAt = null
     if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null }
-    if (bridgeAdapter) { try { handleDisconnect(bridgeAdapter) } catch {}; bridgeAdapter = null }
+    if (bridgeAdapter) {
+      logBridgeConnClose({ code: ev?.code ?? null, reason: ev?.reason ?? '', wasClean: ev?.wasClean ?? null })
+      try { handleDisconnect(bridgeAdapter) } catch {}
+      bridgeAdapter = null
+    }
     bridgeClient = null
     logMsg('info', 'bridge: disconnected — redialing', { nextBackoffMs: bridgeBackoffMs })
     scheduleBridgeRedial(gen)
   }
 
-  client.onerror = () => { /* onclose always follows */ }
+  // onclose always follows; keep what the error said for the close line.
+  client.onerror = (e: Event) => {
+    const m = (e as { message?: unknown }).message
+    bridgeLastError = typeof m === 'string' && m ? m.slice(0, 200) : e.type || 'error'
+  }
 }
 
 // ── Main ──

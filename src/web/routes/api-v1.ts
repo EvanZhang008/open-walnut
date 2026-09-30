@@ -52,7 +52,7 @@ import {
 } from './notes-v2.js'
 import { getNotesTree } from '../../core/notes-tree.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
-import { mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
+import { armLateMirror, mirrorRelayedChatFrame, relayChatTurnToPrimary } from './chat-turn-relay.js'
 import {
   PRIMARY_UNREACHABLE_MESSAGE, cloudTurnRows, mergeRowsByTime, mergeCloudRowsIntoRelayedPage,
 } from './cloud-chat-fallback.js'
@@ -1302,10 +1302,17 @@ function emitSse(conversationId: string, event: string, data: unknown): void {
   // `message-end` by refetching GET /messages, and the release used to happen in the
   // POST handler's `.finally()`, i.e. after the frame: the refetch that the frame
   // triggered still saw `inFlight` rows for a turn the client had just been told was
-  // finished. Exactly one terminal frame is emitted per turn, so an unconditional
-  // delete here cannot take a later turn's entry, and the `.finally()` release stays
-  // as the backstop for a turn that dies without emitting one.
-  if (TURN_TERMINAL_EVENTS.has(event)) activeTurns.delete(conversationId)
+  // finished. The `.finally()` release stays as the backstop for a turn that dies
+  // without emitting one.
+  //
+  // A terminal frame that NAMES a turn releases only that turn. A stalled turn's
+  // late `message-end` (lane-turn-late.ts) can arrive while a later turn is already
+  // running here, and an unconditional delete would unlock that later turn: a
+  // third POST would then join it instead of answering 409.
+  if (TURN_TERMINAL_EVENTS.has(event)) {
+    const named = (data as { turnId?: unknown } | null)?.turnId
+    if (typeof named !== 'string' || activeTurns.get(conversationId) === named) activeTurns.delete(conversationId)
+  }
   emitChannelSse(conversationId, event, data, { reset: event === 'message-start' })
   // Primary box only, and only while a CLOUD-RELAYED turn is armed on this
   // conversation (one Map lookup otherwise): mirror the frame down the bridge
@@ -1322,10 +1329,10 @@ export function closeApiV1Streams(): void {
 // ── No recovery emitter lives here, deliberately ──
 // A turn recovered from disk (core/sessions/lane-orphan-recovery.ts) must NEVER
 // be announced with this channel's terminal frames. `emitSse` passes every frame
-// to mirrorRelayedChatFrame, which re-stamps it with whichever turnId is armed
-// for the conversation right now — so a `message-end` carrying an OLD answer
-// settles the LIVE relayed turn on the replica and the real terminal frame is
-// then dropped. iOS's `message-end` handler ignores turnId altogether and
+// to mirrorRelayedChatFrame, which used to re-stamp it with whichever turnId was
+// armed, so a `message-end` carrying an OLD answer settled the LIVE relayed turn
+// on the replica (it now drops a frame naming an unarmed turn instead). And
+// iOS's `message-end` handler ignores turnId altogether and
 // finalizes whatever is streaming. The recovery path emits an advisory bus event
 // instead (RECOVERED_TURN_EVENT); clients read the adopted message from the
 // store like any other history. Do not add an SSE emit back here.
@@ -1643,6 +1650,25 @@ async function persistAndEmitTurnError(
 }
 
 /**
+ * The error ROW only, for a turn whose terminal SSE frame already went out (a
+ * stall notice): a second `error` frame could land on the phone's NEXT turn.
+ */
+async function persistTurnErrorRow(agentId: string, conversationId: string, errMsg: string): Promise<void> {
+  await chatHistory.addAIMessages(
+    [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
+    { source: 'agent-error', agentId, conversationId },
+  ).catch(() => { /* best-effort */ })
+  broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
+    entry: {
+      role: 'assistant', content: `[Error: ${errMsg}]`, source: 'agent-error',
+      notification: true, timestamp: new Date().toISOString(),
+    },
+    agentId,
+    conversationId,
+  })
+}
+
+/**
  * Write the user's message if the turn died before the eager persist did.
  *
  * A turn normally persists the user message early precisely so it survives a
@@ -1705,7 +1731,11 @@ async function rescueUserMessage(
  *     client's activity line is driven by these frames and it had none, so a
  *     five-minute turn of real work was indistinguishable from a hang.
  *   - turn answer → SSE `message-end` + a normal assistant entry on disk.
- *   - timeout / `session:error` → SSE `error` + the failure persisted on disk.
+ *   - dead CLI / failed send / stall with the CLI gone → SSE `error` + the
+ *     failure persisted on disk.
+ *   - stall with the CLI still running → SSE `error` (the notice, with
+ *     `laneStillRunning`) but NO row; the late answer is filed under this turn
+ *     when it lands, then SSE `message-late` + `message-end` for this turn.
  */
 async function runApiV1LaneTurn(
   agentId: string,
@@ -1727,21 +1757,53 @@ async function runApiV1LaneTurn(
   )
 
   try {
-    const { sessionId, resultText } = await runLaneTurn(agentId, conversationId, message, {
+    const turn = await runLaneTurn(agentId, conversationId, message, {
       source: 'api-v1',
       onSessionId: (sid) => { laneSessionId = sid; relay.setSessionId(sid) },
+      // The lane is still busy with an earlier turn that stalled: this one waits
+      // for it (lane-turn-gate.ts). Say so, or the wait reads as a hang.
+      onQueued: () => emitSse(conversationId, 'queued', { turnId, position: 1 }),
     })
+    const { sessionId, resultText } = turn
 
     // The turn is over: hand the client the reasoning tail BEFORE any terminal
     // frame, then stop relaying.
     relay.settle()
 
     if (resultText === null) {
-      // runLaneTurn degrades instead of rejecting: null is a timeout, a
-      // session:error, or a failed send. All three are "this turn has no answer",
-      // which the client must be told about or its composer stays locked.
-      const errMsg = 'The main AI did not answer this turn (timed out or errored).'
-      log.web.error('api-v1 lane turn failed', { conversationId, turnId, agentId, sessionId })
+      // runLaneTurn degrades instead of rejecting (a dead CLI, a stalled stream,
+      // a failed send). The client must be told or its composer stays locked.
+      const { LANE_STALL_NOTICE, laneFailureMessage, followLateAnswer } = await import('./lane-turn-late.js')
+      if (turn.laneStillRunning && turn.lateResult) {
+        // Stalled but the CLI still runs: SHOW the notice, persist nothing, and
+        // file the late answer under THIS turn when it lands (lane-turn-late.ts).
+        log.web.warn('api-v1 lane turn stalled with the lane still running', { conversationId, turnId, agentId, sessionId })
+        // `laneStillRunning` tells a cloud replica relaying this turn that the
+        // notice is not the end of it: it keeps listening for the late frames
+        // (chat-turn-relay.ts, lateWatch). Clients ignore the extra fields.
+        emitSse(conversationId, 'error', { message: LANE_STALL_NOTICE, turnId, laneStillRunning: true })
+        broadcastEvent(EventNames.AGENT_ERROR, { error: LANE_STALL_NOTICE, agentId, conversationId })
+        const lateDone = followLateAnswer({
+          agentId, conversationId, turnId, laneSessionId: sessionId, late: turn.lateResult,
+          emitSse: (event, data) => {
+            emitSse(conversationId, event, data)
+            // The late `message-end` ends THIS turn, and an app that predates
+            // `message-late` cannot tell it from the end of the turn it is
+            // streaming now. If a later turn is live here, announce it again so it
+            // does not look finished until its own frames arrive.
+            if (event !== 'message-end') return
+            const current = activeTurns.get(conversationId)
+            if (current && current !== turnId) emitSse(conversationId, 'message-start', { turnId: current })
+          },
+          onGiveUp: (errMsg) => persistTurnErrorRow(agentId, conversationId, errMsg),
+        })
+        // A relayed turn's mirror is disarmed when this function returns; keep a
+        // path open for this turn's late frames until the late watch ends.
+        armLateMirror(conversationId, turnId, lateDone)
+        return
+      }
+      const errMsg = laneFailureMessage(turn.failure)
+      log.web.error('api-v1 lane turn failed', { conversationId, turnId, agentId, sessionId, failure: turn.failure })
       await persistAndEmitTurnError(agentId, conversationId, errMsg)
       return
     }

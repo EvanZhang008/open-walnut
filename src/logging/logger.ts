@@ -116,6 +116,25 @@ export async function flushLogBuffer(): Promise<void> {
 }
 
 /**
+ * Write everything buffered so far and resolve once it is on disk, or after
+ * `timeoutMs`. Unlike flushLogBuffer, which returns at once while a timer flush
+ * is running, this waits that flush out and then writes what came after it.
+ * For a caller about to be killed: a launchd job removing itself is SIGTERMed
+ * before `launchctl remove` returns, and the entry it just logged must land.
+ */
+export async function flushLogBufferNow(timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (buffer.length > 0 || flushing) {
+    if (Date.now() >= deadline) return;
+    if (flushing) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      continue;
+    }
+    await flushLogBuffer();
+  }
+}
+
+/**
  * Synchronous flush for process exit — last-resort to avoid losing buffered entries.
  * Only called from beforeExit / exit handlers where async is unreliable.
  */

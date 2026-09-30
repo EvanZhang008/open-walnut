@@ -24,7 +24,8 @@
  *      projection crossed 1MB at 3,079 rows and every push after was dropped.
  *
  * Real files, real fs — constants redirected to a temp dir; only the daemon
- * connection (network) is mocked.
+ * connection (network) is mocked. The push lanes (ingest, the skip record, the
+ * delivery bound, key order) are pinned in projection-push.test.ts.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
@@ -33,10 +34,20 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-projection-cache'));
 
-const sendSpy = vi.fn(async () => ({ ok: true }));
+const sendSpy = vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({ ok: true }));
 let fakeConn: { hasCapability: (c: string) => boolean; send: typeof sendSpy } | null = null;
 vi.mock('../../src/providers/daemon-connection.js', () => ({
   getConnectedDaemonConnection: () => fakeConn,
+}));
+// The ingest lane's network call is stubbed; its per-key serialization is real.
+// Default 'unsupported' = a replica without the route, so the bridge lane runs.
+let ingestOutcome: 'sent' | 'failed' | 'unsupported' = 'unsupported';
+let ingestResting = false;
+const ingestSpy = vi.fn(async (_kind: string, _wire: string): Promise<'sent' | 'failed' | 'unsupported'> => ingestOutcome);
+vi.mock('../../src/core/cloud-ingest.js', async (orig) => ({
+  ...(await orig<typeof import('../../src/core/cloud-ingest.js')>()),
+  postToCloudIngest: (kind: string, wire: string) => ingestSpy(kind, wire),
+  cloudIngestResting: () => ingestResting,
 }));
 
 import {
@@ -49,6 +60,9 @@ import {
   legacyProjectionFilesEnabled,
   pickFresherEnvelope,
   pushProjectionToCloud,
+  pushProjectionToCloudNow,
+  preparePush,
+  runProjectionSelfHealSweep,
   _pendingTranscriptPushSidsForTesting,
   _resetProjectionCacheForTesting,
 } from '../../src/core/projection-cache.js';
@@ -80,6 +94,10 @@ async function wipe(): Promise<void> {
   _resetProjectionCacheForTesting();
   fakeConn = null;
   sendSpy.mockClear();
+  ingestOutcome = 'unsupported';
+  ingestResting = false;
+  ingestSpy.mockReset();
+  ingestSpy.mockImplementation(async () => ingestOutcome);
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
 }
 
@@ -187,13 +205,11 @@ describe('seam read order: fresher of cache vs legacy git file (ties → cache)'
 });
 
 describe('pushProjectionToCloud', () => {
-  const flush = () => new Promise((r) => setTimeout(r, 50));
 
   it('sends a mobile-event frame when the local daemon is bridge-capable — no consumer gate', async () => {
     fakeConn = { hasCapability: (c: string) => c === 'mobile-event', send: sendSpy };
     pushProjectionToCloud('projection-upsert', { which: 'sessions', data: sessionEnvelope('s1') });
-    await flush();
-    expect(sendSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(sendSpy).toHaveBeenCalledTimes(1));
     expect(sendSpy).toHaveBeenCalledWith('mobile-event', {
       kind: 'projection-upsert',
       data: { which: 'sessions', data: sessionEnvelope('s1') },
@@ -201,18 +217,18 @@ describe('pushProjectionToCloud', () => {
   });
 
   it('is a silent no-op with no daemon connection or a pre-mobile-event daemon', async () => {
+    // Awaited (not fire-and-forget): a push still in flight when the next test
+    // swaps in its own daemon would report that test's calls as its own.
     fakeConn = null;
-    pushProjectionToCloud('projection-upsert', { which: 'tasks', data: taskEnvelope('T') });
+    expect(await pushProjectionToCloudNow('projection-upsert', { which: 'tasks', data: taskEnvelope('T') })).toBe('skipped');
     fakeConn = { hasCapability: () => false, send: sendSpy };
-    pushProjectionToCloud('transcript-upsert', { sid: 's1', data: tail('s1') });
-    await flush();
+    expect(await pushProjectionToCloudNow('transcript-upsert', { sid: 's1', data: tail('s1') })).toBe('skipped');
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
   it('skips a transcript payload over the 1MB transcript-lane cap', async () => {
     fakeConn = { hasCapability: () => true, send: sendSpy };
-    pushProjectionToCloud('transcript-upsert', { sid: 's1', data: 'x'.repeat(1_100_000) });
-    await flush();
+    expect(await pushProjectionToCloudNow('transcript-upsert', { sid: 's1', data: 'x'.repeat(1_100_000) })).toBe('skipped');
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
@@ -221,19 +237,17 @@ describe('pushProjectionToCloud', () => {
     // Under the old shared 1MB cap this push was skipped on every export, so
     // the cloud replica served its last-pushed copy indefinitely.
     fakeConn = { hasCapability: () => true, send: sendSpy };
-    pushProjectionToCloud('projection-upsert', { which: 'tasks', data: 'x'.repeat(1_152_724) });
-    await flush();
-    expect(sendSpy).toHaveBeenCalledTimes(1);
-    expect(sendSpy.mock.calls[0]![0]).toBe('mobile-event');
+    expect(await pushProjectionToCloudNow('projection-upsert', { which: 'tasks', data: 'x'.repeat(1_152_724) })).toBe('sent');
+    // (A daemon claiming every capability is also asked for its bridge connection first.)
+    expect(sendSpy.mock.calls.filter((c) => c[0] === 'mobile-event')).toHaveLength(1);
   });
 
   it('still skips a list projection past the list-lane cap', async () => {
     const { PROJECTION_PUSH_MAX_BYTES } = await import('../../src/core/projection-cache.js');
     fakeConn = { hasCapability: () => true, send: sendSpy };
-    pushProjectionToCloud('projection-upsert', {
+    expect(await pushProjectionToCloudNow('projection-upsert', {
       which: 'tasks', data: 'x'.repeat(PROJECTION_PUSH_MAX_BYTES + 1_000),
-    });
-    await flush();
+    })).toBe('skipped');
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
@@ -243,15 +257,124 @@ describe('pushProjectionToCloud', () => {
     const sid = 'stopped-final-tail-sid';
     // Bridge down when the frozen final tail is written…
     fakeConn = null;
-    pushProjectionToCloud('transcript-upsert', { sid, data: tail(sid) });
-    await flush();
+    await pushProjectionToCloudNow('transcript-upsert', { sid, data: tail(sid) });
     expect(_pendingTranscriptPushSidsForTesting().has(sid)).toBe(true);
 
     // …the self-heal sweep's retry (same call shape) succeeds once it is back.
     fakeConn = { hasCapability: () => true, send: sendSpy };
-    pushProjectionToCloud('transcript-upsert', { sid, data: tail(sid) });
-    await flush();
+    await pushProjectionToCloudNow('transcript-upsert', { sid, data: tail(sid) });
     expect(sendSpy).toHaveBeenCalledWith('mobile-event', { kind: 'transcript-upsert', data: { sid, data: tail(sid) } });
     expect(_pendingTranscriptPushSidsForTesting().has(sid)).toBe(false);
+  });
+});
+
+describe('self-heal sweep: unchanged content is not re-sent on the same bridge connection', () => {
+  // Mac uplink, 2026-09-25/26: every 5-minute sweep re-sent ~1.7MB whether or not
+  // anything had changed, and bridge flaps clustered within a second of the ticks.
+  let connId = 'd-1.1';
+  let relayed = true;
+  const mobileEvents = () => sendSpy.mock.calls.filter((c) => c[0] === 'mobile-event');
+  const bridgeAware = (): void => {
+    fakeConn = {
+      hasCapability: (c: string) => c === 'mobile-event' || c === 'bridge-uplink-v1',
+      send: sendSpy,
+    };
+    sendSpy.mockImplementation(async (...args: unknown[]) => {
+      if (args[0] === 'bridge.status') return { ok: true, connected: true, connId };
+      return { ok: true, relayed, connId };
+    });
+  };
+  const seed = async (title = 'T'): Promise<void> => {
+    await writeProjectionCache('sessions', sessionEnvelope('s1'));
+    await writeProjectionCache('tasks', taskEnvelope(title));
+    await writeTranscriptCache('s1', tail('s1'));
+  };
+
+  beforeEach(() => { connId = 'd-1.1'; relayed = true; });
+  afterEach(() => { sendSpy.mockImplementation(async () => ({ ok: true })); vi.useRealTimers(); });
+
+  it('sends everything once, then only what changed, and everything again on a new connection', async () => {
+    bridgeAware();
+    await seed();
+    expect(await runProjectionSelfHealSweep()).toMatchObject({ sent: 3, unchanged: 0 });
+    expect(mobileEvents()).toHaveLength(3);
+
+    expect(await runProjectionSelfHealSweep()).toMatchObject({ sent: 0, unchanged: 3 });
+    expect(mobileEvents()).toHaveLength(3);
+
+    await writeProjectionCache('tasks', taskEnvelope('renamed'));
+    expect(await runProjectionSelfHealSweep()).toMatchObject({ sent: 1, unchanged: 2 });
+    expect(mobileEvents().at(-1)?.[1]).toMatchObject({ kind: 'projection-upsert', data: { which: 'tasks' } });
+
+    connId = 'd-1.2'; // the bridge redialed (or the replica restarted)
+    expect(await runProjectionSelfHealSweep()).toMatchObject({ sent: 3, unchanged: 0 });
+  });
+
+  it('never skips a list for longer than 10 minutes, nor a transcript for longer than 30', async () => {
+    // The replica serves the list's exportedAt as the phone's "Synced X ago".
+    vi.useFakeTimers({ toFake: ['Date'] });
+    bridgeAware();
+    await seed();
+    await runProjectionSelfHealSweep();
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+    expect(await runProjectionSelfHealSweep()).toMatchObject({ sent: 2, unchanged: 1 });
+    vi.setSystemTime(Date.now() + 31 * 60_000);
+    expect(await runProjectionSelfHealSweep()).toMatchObject({ sent: 3, unchanged: 0 });
+  });
+
+  it('a write-time push is skipped too when the bridge already holds that content', async () => {
+    bridgeAware();
+    const payload = { which: 'tasks', data: taskEnvelope('T') };
+    expect(await pushProjectionToCloudNow('projection-upsert', payload)).toBe('sent');
+    const restamped = { which: 'tasks', data: { ...taskEnvelope('T'), exportedAt: '2026-08-10T00:05:00.000Z' } };
+    expect(await pushProjectionToCloudNow('projection-upsert', restamped)).toBe('unchanged');
+    expect(mobileEvents()).toHaveLength(1);
+  });
+
+  it('a daemon without bridge-uplink-v1 gets every push, as before', async () => {
+    fakeConn = { hasCapability: (c: string) => c === 'mobile-event', send: sendSpy };
+    await seed();
+    await runProjectionSelfHealSweep();
+    await runProjectionSelfHealSweep();
+    expect(mobileEvents()).toHaveLength(6);
+    expect(sendSpy.mock.calls.some((c) => c[0] === 'bridge.status')).toBe(false);
+  });
+
+  it('an ack saying nothing was relayed is a failure: the transcript stays owed and nothing is remembered', async () => {
+    bridgeAware();
+    relayed = false;
+    await seed();
+    expect(await runProjectionSelfHealSweep()).toMatchObject({ failed: 3, sent: 0 });
+    expect(_pendingTranscriptPushSidsForTesting().has('s1')).toBe(true);
+    relayed = true;
+    expect(await runProjectionSelfHealSweep()).toMatchObject({ sent: 3 });
+    expect(_pendingTranscriptPushSidsForTesting().has('s1')).toBe(false);
+  });
+});
+
+describe('preparePush: one serialization, a hash blind to exportedAt', () => {
+  it.each([
+    ['a list envelope', { which: 'tasks', data: taskEnvelope('T') }],
+    ['a transcript', { sid: 's1', data: tail('s1') }],
+    ['an envelope with nothing but the stamp', { which: 'sessions', data: { exportedAt: 'z' } }],
+    ['no exportedAt', { which: 'sessions', data: { version: 1, sessions: [] } }],
+    ['a stamp that is undefined', { which: 'sessions', data: { exportedAt: undefined, version: 1 } }],
+    ['no head keys', { data: { exportedAt: 'z', a: [1, 'x"y'] } }],
+    ['a data that is not an object', { which: 'tasks', data: 'x'.repeat(10) }],
+  ])('the wire parses back to the payload: %s', (_label, payload) => {
+    const prepared = preparePush(payload);
+    expect(prepared).not.toBeNull();
+    expect(JSON.parse(prepared!.wire)).toEqual(JSON.parse(JSON.stringify(payload)));
+    expect(Buffer.byteLength(prepared!.wire)).toBe(Buffer.byteLength(JSON.stringify(payload)));
+  });
+
+  it('the same content under a new stamp hashes the same; any other change does not', () => {
+    const a = preparePush({ which: 'tasks', data: taskEnvelope('T') })!;
+    const b = preparePush({ which: 'tasks', data: { ...taskEnvelope('T'), exportedAt: '2026-09-30T00:00:00.000Z' } })!;
+    const c = preparePush({ which: 'tasks', data: taskEnvelope('renamed') })!;
+    const d = preparePush({ which: 'sessions', data: taskEnvelope('T') })!;
+    expect(b.hash).toBe(a.hash);
+    expect(c.hash).not.toBe(a.hash);
+    expect(d.hash).not.toBe(a.hash);
   });
 });
