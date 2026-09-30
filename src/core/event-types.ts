@@ -14,6 +14,7 @@ import type {
   ConversationMeta,
   SessionStatusSnapshot,
   SessionThreadMeta,
+  SessionTurnSpeed,
 } from './types.js';
 
 // ── Task events ──
@@ -236,7 +237,18 @@ export interface SessionResultEvent {
    *  billing totalCost when this is undefined. */
   costDelta?: number;
   duration?: number;
-  usage?: { input_tokens: number; output_tokens: number };
+  /** The CLI's per-turn token counts (result.usage). Cache fields ride along so
+   *  the usage ledger row for the turn carries the real numbers. */
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+  /** Model the turn ran on (the first message's model), for the ledger row. */
+  model?: string;
+  /** Final speed readout of the turn (Walnut-side timing, see SessionTurnSpeed). */
+  speed?: SessionTurnSpeed;
   /** True when a Claude Code team (in_process_teammate) is still active — this is an
    *  intermediate result, not turn-over. Consumers skip NEED_ACTION/triage. */
   teamActive?: boolean;
@@ -666,6 +678,16 @@ export interface SessionUsageUpdateEvent {
    *  model, and a compaction setting is not a property of the model. Absent when
    *  the session compacts only at the model's own limit. */
   autoCompactAt?: number;
+}
+
+/** Live speed readout of the running turn (ttft, generation windows, CLI token
+ *  counts), emitted at every message boundary and throttled between them; the
+ *  `final: true` copy lands right before session:result. Broadcast to the
+ *  browser only; never buffered into the replayable transcript. */
+export interface SessionTurnSpeedEvent {
+  sessionId: string;
+  taskId?: string;
+  speed: SessionTurnSpeed;
 }
 
 /** Applied-settings read-back push: emitted whenever refreshAppliedSettings()
@@ -1207,6 +1229,7 @@ export interface EventPayloadMap {
   'session:system-event': SessionSystemEventPayload;
   'session:background-tasks': SessionBackgroundTasksPayload;
   'session:usage-update': SessionUsageUpdateEvent;
+  'session:turn-speed': SessionTurnSpeedEvent;
   'session:settings-applied': SessionSettingsAppliedEvent;
   'session:model-catalog': SessionModelCatalogEvent;
   'session:side-question-done': SessionSideQuestionDoneEvent;

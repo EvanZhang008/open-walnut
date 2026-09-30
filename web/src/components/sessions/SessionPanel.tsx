@@ -17,6 +17,7 @@ import { usePanelThreads } from '@/hooks/useSessionThreads';
 import { SessionThreadsContext } from '@/contexts/SessionThreadsContext';
 import { releaseSelectionHold, requestSelectionHold } from '@/utils/selection-hold';
 import { SessionRecapTip } from './SessionRecapTip';
+import { SessionSpeedReadout } from './SessionSpeedReadout';
 import { ThreadToastProvider } from './ThreadPanelToast';
 import { ThreadToastBridge } from './ThreadStackFrame';
 import { ThreadModePill } from './ThreadModePill';
@@ -2320,6 +2321,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               so the user re-orients on a long session without re-reading the
               transcript. Hidden while streaming (live output makes it redundant). */}
           <SessionRecapTip sessionId={sessionId} session={session} hidden={isStreaming} />
+          {/* Speed readout of the running / last turn (model, tokens, first token,
+              tok/s, time, cost). Always the same slots in the same order so two
+              panels side by side compare at a glance. */}
+          <SessionSpeedReadout sessionId={sessionId} session={session} />
           {/* A snoozed task stays snoozed through a message: say so where one is written. */}
           <SnoozedComposerNotice task={sessionTask} />
           <ChatInput

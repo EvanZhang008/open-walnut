@@ -1,0 +1,82 @@
+/* Turn speed readout: the one-line row above a session's composer.
+   Owned by components/sessions/SessionSpeedReadout.tsx. The class name
+   .session-speed-readout is load-bearing: e2e specs locate the row by it.
+
+   The slots keep one order on every panel so two panels side by side compare at
+   a glance. The row wraps rather than clips: at two columns on a 1280px window a
+   column is ~300px and the six slots do not fit on one line, and a clipped row
+   lost exactly the two slots at its end (time, cost). Each slot is unbreakable,
+   so a wrap only ever moves whole slots to the next line. Tabular digits keep
+   the ticking clocks from jittering the row's width. */
+
+.session-speed-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  margin: 4px 8px 0;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.session-speed-model {
+  color: var(--fg);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.session-speed-stat {
+  flex: 0 0 auto;
+}
+
+/* The dot separator lives in CSS so the DOM holds only the values. */
+.session-speed-stat::before {
+  content: "·";
+  margin-right: 6px;
+  opacity: 0.55;
+}
+
+.session-speed-label {
+  opacity: 0.75;
+}
+
+/* An estimate (~) and a still-waiting clock read a shade lighter than a final
+   number, so the eye learns which slots have settled. */
+.session-speed-stat.is-estimate,
+.session-speed-stat.is-pending {
+  opacity: 0.7;
+}
+
+.session-speed-readout.is-live .session-speed-model::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+  animation: session-speed-pulse 1.2s ease-in-out infinite;
+}
+
+.session-speed-flag {
+  color: var(--warning, var(--fg-muted));
+}
+
+@keyframes session-speed-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-speed-readout.is-live .session-speed-model::after {
+    animation: none;
+  }
+}

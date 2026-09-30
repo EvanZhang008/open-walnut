@@ -75,6 +75,12 @@ export class UsageTracker {
     // Idempotent migration: add agent_id so spend is attributable per agent (the "By Agent"
     // dashboard view). Old rows have NULL agent_id → surfaced as "unknown".
     try { this.db.exec('ALTER TABLE usage ADD COLUMN agent_id TEXT'); } catch { /* column already exists */ }
+    // Idempotent migration: per-turn speed for CLI session rows (Walnut-side timing).
+    // ttft_ms = turn start → first content delta; generation_ms = summed per-message
+    // message_start → message_stop windows (tool runs excluded), so
+    // output_tokens / generation_ms is the model's decode speed.
+    try { this.db.exec('ALTER TABLE usage ADD COLUMN ttft_ms INTEGER'); } catch { /* column already exists */ }
+    try { this.db.exec('ALTER TABLE usage ADD COLUMN generation_ms INTEGER'); } catch { /* column already exists */ }
 
     return this.db;
   }
@@ -108,8 +114,9 @@ export class UsageTracker {
     const stmt = db.prepare(`
       INSERT INTO usage (id, timestamp, date, source, model, input_tokens, output_tokens,
         cache_creation_input_tokens, cache_read_input_tokens, cost_usd,
-        task_id, session_id, run_id, external_cost_usd, duration_ms, parent_source, agent_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        task_id, session_id, run_id, external_cost_usd, duration_ms, parent_source, agent_id,
+        ttft_ms, generation_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -125,6 +132,8 @@ export class UsageTracker {
       params.duration_ms ?? null,
       params.parent_source ?? null,
       params.agentId ?? null,
+      params.ttft_ms ?? null,
+      params.generation_ms ?? null,
     );
 
     log.usage.debug('recorded usage', {
@@ -149,6 +158,8 @@ export class UsageTracker {
       agentId: params.agentId,
       external_cost_usd: params.external_cost_usd,
       duration_ms: params.duration_ms,
+      ttft_ms: params.ttft_ms,
+      generation_ms: params.generation_ms,
       parent_source: params.parent_source,
     };
   }
@@ -280,7 +291,8 @@ export class UsageTracker {
         input_tokens, output_tokens,
         cache_creation_input_tokens, cache_read_input_tokens,
         cost_usd, task_id, session_id, run_id,
-        external_cost_usd, duration_ms, parent_source, agent_id
+        external_cost_usd, duration_ms, parent_source, agent_id,
+        ttft_ms, generation_ms
       FROM usage
       WHERE source != 'session'
       ORDER BY timestamp DESC
@@ -292,6 +304,7 @@ export class UsageTracker {
       cost_usd: number; task_id: string | null; session_id: string | null;
       run_id: string | null; external_cost_usd: number | null; duration_ms: number | null;
       parent_source: string | null; agent_id: string | null;
+      ttft_ms: number | null; generation_ms: number | null;
     }>;
 
     return rows.map((r) => ({
@@ -311,6 +324,8 @@ export class UsageTracker {
       agentId: r.agent_id ?? undefined,
       external_cost_usd: r.external_cost_usd ?? undefined,
       duration_ms: r.duration_ms ?? undefined,
+      ttft_ms: r.ttft_ms ?? undefined,
+      generation_ms: r.generation_ms ?? undefined,
       parent_source: (r.parent_source as UsageRecord['source']) ?? undefined,
     }));
   }
@@ -461,7 +476,8 @@ export class UsageTracker {
         input_tokens, output_tokens,
         cache_creation_input_tokens, cache_read_input_tokens,
         cost_usd, task_id, session_id, run_id,
-        external_cost_usd, duration_ms, parent_source, agent_id
+        external_cost_usd, duration_ms, parent_source, agent_id,
+        ttft_ms, generation_ms
       FROM usage ${clause}
       ORDER BY timestamp DESC
       LIMIT ?
@@ -472,6 +488,7 @@ export class UsageTracker {
       cost_usd: number; task_id: string | null; session_id: string | null;
       run_id: string | null; external_cost_usd: number | null; duration_ms: number | null;
       parent_source: string | null; agent_id: string | null;
+      ttft_ms: number | null; generation_ms: number | null;
     }>;
     const recent: UsageRecord[] = recentRows.map((r) => ({
       id: r.id, timestamp: r.timestamp, date: r.date,
@@ -484,6 +501,8 @@ export class UsageTracker {
       runId: r.run_id ?? undefined, agentId: r.agent_id ?? undefined,
       external_cost_usd: r.external_cost_usd ?? undefined,
       duration_ms: r.duration_ms ?? undefined,
+      ttft_ms: r.ttft_ms ?? undefined,
+      generation_ms: r.generation_ms ?? undefined,
       parent_source: (r.parent_source as UsageRecord['source']) ?? undefined,
     }));
 

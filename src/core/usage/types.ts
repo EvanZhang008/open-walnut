@@ -37,6 +37,11 @@ export interface UsageRecord {
   agentId?: string;            // which agent spent this (e.g. 'turn-complete-triage', 'note-agent', 'general')
   external_cost_usd?: number;  // Claude Code CLI's self-reported cost
   duration_ms?: number;
+  /** Walnut-side time to first content delta for a CLI session turn (ms). */
+  ttft_ms?: number;
+  /** Walnut-side summed generation windows of the turn's messages (ms); output
+   *  tokens / this = the turn's decode speed. */
+  generation_ms?: number;
   parent_source?: UsageSource;  // which source invoked this (e.g. subagent via 'agent')
 }
 
@@ -113,5 +118,7 @@ export interface RecordParams {
   agentId?: string;            // which agent spent this (e.g. 'turn-complete-triage', 'note-agent', 'general')
   external_cost_usd?: number;
   duration_ms?: number;
+  ttft_ms?: number;
+  generation_ms?: number;
   parent_source?: UsageSource;  // which source invoked this (e.g. subagent via 'agent')
 }

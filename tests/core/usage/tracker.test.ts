@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import Database from 'better-sqlite3';
 import { UsageTracker } from '../../../src/core/usage/tracker.js';
 
 describe('UsageTracker', () => {
@@ -369,5 +370,135 @@ describe('UsageTracker', () => {
       const summary = tracker.getSummary('all');
       expect(summary.api_calls).toBe(1);
     });
+  });
+});
+
+describe('UsageTracker turn speed columns (ttft_ms, generation_ms)', () => {
+  let tmpDir: string;
+  let dbPath: string;
+  const opened: UsageTracker[] = [];
+
+  function openTracker(): UsageTracker {
+    const t = new UsageTracker(dbPath);
+    opened.push(t);
+    return t;
+  }
+
+  beforeEach(() => {
+    tmpDir = path.join(os.tmpdir(), `usage-speed-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    dbPath = path.join(tmpDir, 'usage.sqlite');
+  });
+
+  afterEach(() => {
+    for (const t of opened.splice(0)) t.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('round-trips ttft_ms and generation_ms through record, getRecentRecords and getOverview', () => {
+    const tracker = openTracker();
+    const rec = tracker.record({
+      source: 'agent',
+      model: 'claude-sonnet-5-5',
+      output_tokens: 120,
+      ttft_ms: 850,
+      generation_ms: 3000,
+    });
+    expect(rec.ttft_ms).toBe(850);
+    expect(rec.generation_ms).toBe(3000);
+
+    const [recent] = tracker.getRecentRecords(1);
+    expect(recent.id).toBe(rec.id);
+    expect(recent.ttft_ms).toBe(850);
+    expect(recent.generation_ms).toBe(3000);
+
+    const ov = tracker.getOverview({});
+    const row = ov.recent.find((r) => r.id === rec.id);
+    expect(row).toBeDefined();
+    expect(row!.ttft_ms).toBe(850);
+    expect(row!.generation_ms).toBe(3000);
+  });
+
+  it('a record without speed fields reads back with ttft_ms and generation_ms undefined', () => {
+    const tracker = openTracker();
+    const rec = tracker.record({ source: 'agent', model: 'claude-sonnet-5-5', input_tokens: 10 });
+    expect(rec.ttft_ms).toBeUndefined();
+    expect(rec.generation_ms).toBeUndefined();
+
+    const [recent] = tracker.getRecentRecords(1);
+    expect(recent.ttft_ms).toBeUndefined();
+    expect(recent.generation_ms).toBeUndefined();
+
+    const [overviewRow] = tracker.getOverview({}).recent;
+    expect(overviewRow.ttft_ms).toBeUndefined();
+    expect(overviewRow.generation_ms).toBeUndefined();
+  });
+
+  it('reopening the same database re-runs the migrations without error', () => {
+    const first = openTracker();
+    const a = first.record({ source: 'agent', model: 'model-a', ttft_ms: 100, generation_ms: 200 });
+    first.close();
+
+    const second = openTracker();
+    const b = second.record({ source: 'agent', model: 'model-b', ttft_ms: 300, generation_ms: 400 });
+
+    const rows = second.getRecentRecords(10);
+    expect(rows).toHaveLength(2);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(a.id)?.ttft_ms).toBe(100);
+    expect(byId.get(a.id)?.generation_ms).toBe(200);
+    expect(byId.get(b.id)?.ttft_ms).toBe(300);
+    expect(byId.get(b.id)?.generation_ms).toBe(400);
+  });
+
+  it('a legacy database with only the original columns opens and gains the new columns', () => {
+    // The original schema, before parent_source / agent_id / ttft_ms / generation_ms.
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE usage (
+        id TEXT PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        date TEXT NOT NULL,
+        source TEXT NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0,
+        task_id TEXT,
+        session_id TEXT,
+        run_id TEXT,
+        external_cost_usd REAL,
+        duration_ms INTEGER
+      );
+    `);
+    legacy.prepare(`INSERT INTO usage (id, timestamp, date, source, model, input_tokens, cost_usd)
+      VALUES ('legacy-1', '2026-01-01T00:00:00.000Z', '2026-01-01', 'agent', 'model-old', 50, 0.01)`).run();
+    legacy.close();
+
+    const tracker = openTracker();
+    const rec = tracker.record({ source: 'agent', model: 'model-new', ttft_ms: 700, generation_ms: 1500 });
+
+    const rows = tracker.getRecentRecords(10);
+    expect(rows).toHaveLength(2);
+    const legacyRow = rows.find((r) => r.id === 'legacy-1');
+    expect(legacyRow).toBeDefined();
+    expect(legacyRow!.ttft_ms).toBeUndefined();
+    expect(legacyRow!.generation_ms).toBeUndefined();
+    expect(legacyRow!.agentId).toBeUndefined();
+    expect(legacyRow!.parent_source).toBeUndefined();
+    const newRow = rows.find((r) => r.id === rec.id);
+    expect(newRow!.ttft_ms).toBe(700);
+    expect(newRow!.generation_ms).toBe(1500);
+    tracker.close();
+
+    const check = new Database(dbPath);
+    try {
+      const columns = (check.prepare('PRAGMA table_info(usage)').all() as Array<{ name: string }>).map((c) => c.name);
+      expect(columns).toEqual(expect.arrayContaining(['parent_source', 'agent_id', 'ttft_ms', 'generation_ms']));
+    } finally {
+      check.close();
+    }
   });
 });

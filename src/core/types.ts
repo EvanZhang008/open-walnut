@@ -2101,6 +2101,68 @@ export interface SessionProfile {
   tools?: string[];
 }
 
+/**
+ * One turn's speed readout, measured on Walnut's own clock from the CLI's
+ * partial-message stream (`--include-partial-messages`). Shown as the readout
+ * row above a session's composer; the final copy of the last turn is kept on
+ * the record so a reloaded page still shows it.
+ *
+ * Every duration is Walnut-side: `ttftMs` runs from the turn-start edge (the
+ * FIFO write of the user's message) to the first visible content delta, and
+ * `generationMs` sums, per API message, message_start → message_stop, so time
+ * the CLI spends running tools between messages is NOT generation time while
+ * thinking the model does before its first visible delta IS (those tokens are
+ * in `outputTokens`; see turn-speed.ts). Token counts
+ * are the CLI's own usage numbers, never a character heuristic: `outputTokens`
+ * is the sum of `message_delta.usage.output_tokens` over finished messages
+ * (equal to `result.usage.output_tokens` when the whole turn was observed).
+ */
+export interface SessionTurnSpeed {
+  /** Epoch ms of the turn-start edge; absent when the turn began before this
+   *  server saw the stream (attach after a restart). */
+  startedAt?: number;
+  /** Turn start → first content delta, ms. null until seen / never seen. */
+  ttftMs: number | null;
+  /** Summed generation windows of finished messages, ms. */
+  generationMs: number;
+  /** CLI-reported output tokens of finished messages. */
+  outputTokens: number;
+  /** API messages finished so far. */
+  messages: number;
+  /** Model of the turn's first message (the main lane). */
+  model?: string;
+  /** A message is streaming right now. */
+  inFlight: boolean;
+  /** Text/thinking characters streamed in the open message, for the client's
+   *  interim "~" estimate; 0 when nothing is in flight. */
+  inFlightChars: number;
+  /** ms since the open message's message_start at snapshot time. */
+  inFlightMs: number;
+  /** ms since the open message's first visible delta (0 before it). The
+   *  client's interim rate is inFlightChars over THIS window: characters seen
+   *  say nothing about tokens decoded before the first one appeared. */
+  inFlightVisibleMs: number;
+  /** Characters ÷ 4 for messages that closed WITHOUT a CLI count (a Stop
+   *  mid-stream ends the message before its message_delta arrives). Only ever
+   *  shown with a "~"; absent when every message was counted. */
+  estimatedTokens?: number;
+  /** Per-turn cost in USD. Final: the CLI's own increment. Live: computed from the
+   *  finished messages' usage with the pricing table (`costEstimated`). */
+  costUsd?: number;
+  costEstimated?: boolean;
+  /** Turn wall time per the CLI's result (final only). */
+  durationMs?: number;
+  /** Whole-turn output tokens per the CLI's result (final only). */
+  turnOutputTokens?: number;
+  final: boolean;
+  interrupted?: boolean;
+  /** Walnut did not observe every message of the turn (attached mid-turn or
+   *  replayed stream), so tok/s covers only what it saw. */
+  partial?: boolean;
+  /** Epoch ms when the final snapshot was taken. */
+  endedAt?: number;
+}
+
 export interface SessionRecord {
   claudeSessionId: string;
   taskId: string;
@@ -2279,6 +2341,10 @@ export interface SessionRecord {
   overview?: string;
   /** ISO timestamp of the last overview update. */
   overviewAt?: string;
+  /** Final speed readout of the most recent turn (see SessionTurnSpeed), so a
+   *  reloaded page shows the last turn's numbers until the next turn streams.
+   *  Written once per turn at its result. Spilled into `payload` (no column). */
+  lastTurnSpeed?: SessionTurnSpeed;
   /** Error message when process_status is 'error' — persisted for post-mortem display. */
   errorMessage?: string;
   /** STRUCTURED verdict on an 'error' status: is the cause infrastructure (host
@@ -2336,6 +2402,17 @@ export interface SessionRecord {
    *  garbage from a dead file and MUST be reset instead of vetoing the new
    *  file's evidence (incident 019a7fe5). Spilled into `payload` (no column). */
   streamEpoch?: string;
+
+  /** Highest cumulative `total_cost_usd` already charged for the CLI process
+   *  `costWatermarkPid`. The CLI reports a running total per process, so a
+   *  server instance that re-attaches to a live process (server restart, the
+   *  queue re-creating the runner for a session) must continue from here, or
+   *  the next turn is charged the whole process total again (the readout
+   *  showed $0.18 for a $0.03 turn). Only trusted while `pid` still equals
+   *  `costWatermarkPid`; a fresh process restarts its total at 0. Spilled
+   *  into `payload`. */
+  costWatermark?: number;
+  costWatermarkPid?: number;
 
   /** Launch-config bundle re-applied on every cold resume. Spawn-time CLI flags
    *  (system prompt / MCP mounts / allowedTools) are in-process only, so a

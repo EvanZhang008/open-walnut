@@ -19,6 +19,7 @@ import { initUiPrefsSync } from './utils/ui-prefs-sync';
 import { pressKeepsSelection, selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
 import { initRecapTipStore } from './stores/recap-tip-store';
+import { initTurnSpeedStore } from './stores/turn-speed-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import { installEscapeBeepGuard } from './utils/escape-beep-guard';
 import { initStaleAssetRecovery, initStaleBuildUpgrade } from './utils/stale-assets';
@@ -36,6 +37,7 @@ void initWebPlugins();
 // of component hooks.
 tracePhase('boot:session-status-store', initSessionStatusStore);
 tracePhase('boot:recap-tip-store', initRecapTipStore);
+tracePhase('boot:turn-speed-store', initTurnSpeedStore);
 // Report main-thread blocks >200ms with attribution (rate-limited) — makes
 // starvation windows self-identify in the server log.
 initLongTaskMonitor();

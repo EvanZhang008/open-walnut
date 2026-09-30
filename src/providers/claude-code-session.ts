@@ -65,7 +65,7 @@ import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-re
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingText } from '../core/sessions/launch-naming.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
-import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind } from '../core/types.js'
+import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
 import {
   SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS,
   SESSION_MODE_CLI_MAP, VALID_SESSION_MODE_IDS, sessionModeFromCli,
@@ -74,6 +74,7 @@ import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/workflow-progress.js'
 import type { WorkflowPhaseInfo, WorkflowAgentInfo, SessionBackgroundTasksPayload } from '../core/event-types.js'
 import { recordTurn } from '../core/observability/recorder.js'
+import { TurnSpeedMeter, tokensPerSecond, type TurnSpeedFinal } from '../core/sessions/turn-speed.js'
 import type { SessionServerClient } from './session-server-client.js'
 import { sanitizeInitModel } from '../model/providers/defaults.js'
 import {
@@ -276,7 +277,12 @@ interface StreamResultEvent {
   duration_ms?: number
   total_cost_usd?: number
   num_turns?: number
-  usage?: { input_tokens: number; output_tokens: number }
+  usage?: {
+    input_tokens: number
+    output_tokens: number
+    cache_creation_input_tokens?: number
+    cache_read_input_tokens?: number
+  }
   /** Per-model session accounting. Each entry's contextWindow is the CLI's
    *  getContextWindowForModel(model) — the RAW model window (the exact
    *  denominator the official statusline divides by), NOT the auto-compact
@@ -788,6 +794,78 @@ export class ClaudeCodeSession {
     })
   }
 
+  /** Route one stream_event into the speed meter and emit live readouts:
+   *  at every message boundary, and at most every 400ms between them while a
+   *  message streams (each delta bumps the interim character estimate). */
+  private feedTurnSpeed(innerType: string, inner: {
+    message?: { id?: string; model?: string; usage?: Record<string, number> }
+    delta?: { type?: string; text?: string; thinking?: string; partial_json?: string }
+    usage?: Record<string, number>
+  } | undefined): void {
+    const now = Date.now()
+    if (innerType === 'message_start') {
+      this._speed.messageStart(now, inner?.message?.model, inner?.message?.usage)
+      return
+    }
+    if (innerType === 'content_block_delta') {
+      const d = inner?.delta
+      // Only a delta that carries content is a token: signature_delta and an
+      // empty thinking delta (Bedrock opens a thinking block that way) must not
+      // stamp the first token or open a generation window.
+      const chars = (d?.text ?? d?.thinking ?? d?.partial_json ?? '').length
+      if (chars === 0) return
+      this._speed.delta(now, chars)
+      if (now - this._speedEmitAt >= 400) this.emitTurnSpeed(false)
+      return
+    }
+    if (innerType === 'message_delta') {
+      this._speed.messageUsage(inner?.usage)
+      return
+    }
+    if (innerType === 'message_stop') {
+      this._speed.messageStop(now)
+      this.emitTurnSpeed(false)
+    }
+  }
+
+  private emitTurnSpeed(final: boolean): void {
+    if (!this.claudeSessionId) return
+    if (!final && !this._speed.active) return
+    this._speedEmitAt = Date.now()
+    bus.emit(EventNames.SESSION_TURN_SPEED, {
+      sessionId: this.claudeSessionId,
+      taskId: this.taskId,
+      speed: this._speed.snapshot(this._speedEmitAt),
+    }, ['web-ui'], { source: 'session-runner' })
+  }
+
+  /** Close the turn's speed readout at its result: the final snapshot goes to
+   *  the browser, onto the record (so a reloaded page still shows it) and back
+   *  to the caller for the SESSION_RESULT payload / usage ledger. Undefined when
+   *  no turn was under way (a stray result on an idle meter). */
+  private finalizeTurnSpeed(final: TurnSpeedFinal): SessionTurnSpeed | undefined {
+    if (!this._speed.active) return undefined
+    const speed = this._speed.finish(Date.now(), final)
+    this.emitTurnSpeed(true)
+    const sid = this.claudeSessionId
+    if (sid) {
+      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+        updateSessionRecord(sid, { lastTurnSpeed: speed }),
+      ).catch(() => {})
+    }
+    const tps = tokensPerSecond(speed)
+    log.session.info('turn speed', {
+      sessionId: sid, taskId: this.taskId, model: speed.model,
+      ttftMs: speed.ttftMs, generationMs: speed.generationMs,
+      outputTokens: speed.turnOutputTokens ?? speed.outputTokens,
+      tokensPerSecond: tps === null ? null : Math.round(tps * 10) / 10,
+      durationMs: speed.durationMs, messages: speed.messages,
+      ...(speed.partial ? { partial: true } : {}),
+      ...(speed.interrupted ? { interrupted: true } : {}),
+    })
+    return speed
+  }
+
   /** True when the event being processed sits at or below the consumed watermark —
    *  i.e. it is a REPLAY of something this server already fully processed. Only
    *  meaningful when both sides have positions; without them, returns undefined
@@ -863,6 +941,13 @@ export class ClaudeCodeSession {
   private _firstThinkingTs: number | undefined
   private _firstTextTs: number | undefined
   private _firstToolTs: number | undefined
+  /** The turn's speed readout (ttft, per-message generation windows, the CLI's
+   *  token counts), fed from stream_events on Walnut's clock. Anchored at the
+   *  same two turn-start edges as _turnStartTs; finished at the result. */
+  private _speed = new TurnSpeedMeter()
+  /** Wall clock of the last live session:turn-speed emit (throttle between
+   *  message boundaries; boundaries themselves always emit). */
+  private _speedEmitAt = 0
   private livenessTimer: ReturnType<typeof setInterval> | null = null
   private _outputFile: string | null = null
   private cliCommand: string
@@ -1189,6 +1274,14 @@ export class ClaudeCodeSession {
   ): void {
     const sid = this.claudeSessionId ?? sidHint
     this._turnGen++
+    // A turn walnut did not deliver itself (a message injected straight into
+    // the daemon's FIFO, a queued mid-turn message the CLI picks up after the
+    // previous result) starts its speed meter here; a turn writeMessage already
+    // anchored keeps its earlier, more precise send-time anchor.
+    if (!this._speed.active) {
+      this._speed.startTurn(Date.now())
+      this.emitTurnSpeed(false)
+    }
     if (this._processStatus !== 'running') {
       this._processStatus = 'running'
       // Clear in-memory activity too, not just the persisted column: emitStatusChanged
@@ -1274,6 +1367,15 @@ export class ClaudeCodeSession {
     // is positionally suppressed after a restart.
     this._advanceConsumedOffset()
     this.emitStatusChanged(detachedBgActive || wakeupPending ? 'IN_PROGRESS' : 'NEED_ACTION', outcome?.isError ? (outcome.resultText ?? '').slice(0, 500) || undefined : undefined)
+    // Computed once (the watermark call is not idempotent) and shared with the
+    // speed readout, which closes here for a withheld turn: its subagent
+    // messages streamed past the withheld result, so this idle is its end.
+    const deferredCostDelta = outcome?.totalCost !== undefined ? this.billableCostDelta(outcome.totalCost) : undefined
+    const deferredSpeed = this.finalizeTurnSpeed({
+      durationMs: outcome?.duration,
+      costUsd: deferredCostDelta,
+      interrupted: interrupted || outcome?.interrupted,
+    })
     bus.emit(EventNames.SESSION_RESULT, {
       sessionId: sid, taskId: this.taskId,
       ...(detachedBgActive ? { detachedBgActive: true } : {}),
@@ -1287,11 +1389,13 @@ export class ClaudeCodeSession {
       // the signal; fullText would be pre-error prose.
       result: outcome?.isError ? (outcome.resultText ?? this.fullText) : this.fullText,
       isError: outcome?.isError ?? false,
-      ...(interrupted || outcome?.interrupted ? { interrupted: true } : {}),      ...(outcome?.totalCost !== undefined ? {
+      ...(interrupted || outcome?.interrupted ? { interrupted: true } : {}),
+      ...(outcome?.totalCost !== undefined ? {
         totalCost: outcome.totalCost,
-        costDelta: this.billableCostDelta(outcome.totalCost),
+        costDelta: deferredCostDelta,
       } : {}),
       ...(outcome?.duration !== undefined ? { duration: outcome.duration } : {}),
+      ...(deferredSpeed ? { speed: deferredSpeed, ...(deferredSpeed.model ? { model: deferredSpeed.model } : {}) } : {}),
     }, ['main-ai', 'session-runner'], { source: 'session-runner' })
     // Read back the CLI's true settings (effort + model) at turn-end (fire-and-forget
     // — never blocks completion). Keeps the badge honest across turns: settings can
@@ -1477,7 +1581,20 @@ export class ClaudeCodeSession {
    * Returns 0 for replayed/stale results. See core/usage/cost-watermark.ts.
    */
   private billableCostDelta(totalCostUsd: number | undefined): number {
-    return this._costWatermark.bill(totalCostUsd)
+    const delta = this._costWatermark.bill(totalCostUsd)
+    // Persist the advanced watermark next to the process it belongs to, so an
+    // instance that re-attaches to this same CLI process (the queue re-creates
+    // the runner between turns; a server restart) continues from here instead
+    // of charging the whole process total on its first result. Fire-and-forget:
+    // the in-memory watermark is what this instance bills from.
+    if (delta > 0 && this.claudeSessionId && this.pid !== null) {
+      const sid = this.claudeSessionId
+      const patch = { costWatermark: this._costWatermark.value, costWatermarkPid: this.pid }
+      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+        updateSessionRecord(sid, patch),
+      ).catch(() => {})
+    }
+    return delta
   }
 
   /**
@@ -2199,6 +2316,14 @@ export class ClaudeCodeSession {
     this._firstThinkingTs = undefined
     this._firstTextTs = undefined
     this._firstToolTs = undefined
+    if (initOnly) this._speed.reset()
+    else {
+      this._speed.startTurn(this._turnStartTs!)
+      // The readout flips to live at the send, not at the first delta: a model
+      // whose thinking is not streamed shows nothing for 10s+ and the row would
+      // sit on the previous turn's final numbers the whole time.
+      this.emitTurnSpeed(false)
+    }
     // Fresh process ⇒ the OLD process's background tasks/teams are dead (they
     // were its children). Stale 'running' entries here make
     // hasActiveBackgroundWork() true forever → the new turn's completion is
@@ -2439,6 +2564,10 @@ export class ClaudeCodeSession {
           const outcomeUnknown = isDaemonCommandOutcomeUnknown(err)
           this._processStatus = outcomeUnknown ? 'error' : 'stopped'
           this._activity = undefined
+          // The spawn edge already flipped the readout to live; a start that never
+          // happened (or whose fate is unknown) must not leave it ticking. Should the
+          // buffered start run after all, its init edge starts a fresh meter.
+          this.finalizeTurnSpeed({ interrupted: true })
           this.emitStatusChanged(
             'NEED_ACTION',
             outcomeUnknown ? (err instanceof Error ? err.message : String(err)).slice(0, 500) : undefined,
@@ -2537,6 +2666,13 @@ export class ClaudeCodeSession {
       && record.consumedOffset >= 0
       && record.consumedOffset < Number.MAX_SAFE_INTEGER) {
       session._consumedOffset = record.consumedOffset
+    }
+    // Seed the cost watermark ONLY for the very process it was recorded against:
+    // the CLI's total_cost_usd is cumulative per process, so re-attaching to the
+    // same pid must continue from the last charged total, while a different
+    // (fresh) process starts its total at 0 and keeps the reset watermark.
+    if (record.pid && record.costWatermarkPid === record.pid) {
+      session._costWatermark.seed(record.costWatermark)
     }
 
     // ── resultEmitted recovery after server restart (evidence-based) ──
@@ -3138,9 +3274,20 @@ export class ClaudeCodeSession {
       }
       const eventAt = this._lastJsonlEventTs
       const offset = transport.fileSize
+      const speedBefore = this._speed.snapshot(Date.now())
       undoDispatch = () => {
         if (this._transport === transport && this._turnGen === before._turnGen + 1
-          && this._lastJsonlEventTs === eventAt && transport.fileSize === offset) Object.assign(this, before)
+          && this._lastJsonlEventTs === eventAt && transport.fileSize === offset) {
+          Object.assign(this, before)
+          // The readout flipped to live at the anchor below; put the previous
+          // turn's final back (or close the never-sent turn) so no panel ticks on.
+          if (speedBefore.final) {
+            this._speed.restore(speedBefore)
+            this.emitTurnSpeed(true)
+          } else {
+            this.finalizeTurnSpeed({ interrupted: true })
+          }
+        }
       }
       this._processStatus = 'running'  // Back to running from idle
       this._activity = undefined
@@ -3183,6 +3330,8 @@ export class ClaudeCodeSession {
       this._firstThinkingTs = undefined
       this._firstTextTs = undefined
       this._firstToolTs = undefined
+      this._speed.startTurn(this._turnStartTs)
+      this.emitTurnSpeed(false)  // live from the send (see the spawn edge)
     }
     // A line written behind a running turn waits in the CLI's queue. It needs a uuid
     // for the CLI to name it when a Stop cancels it (uuid-less lines go unlisted).
@@ -3621,6 +3770,10 @@ export class ClaudeCodeSession {
       // delivery stretch so partial streamed text can't suppress the next turn's
       // result-text fallback (#858). Every branch below is terminal for this turn.
       this._emittedAssistantText = false
+      // The speed readout ends here too, or the row ticks "live" forever: a result
+      // the tailer missed is a completed turn measured only in part; anything else
+      // cut the turn short.
+      this.finalizeTurnSpeed(hasResultInFile ? {} : { interrupted: true })
 
       if (hasResultInFile) {
         this._activity = undefined
@@ -3720,6 +3873,9 @@ export class ClaudeCodeSession {
         }
       }
     }
+    // A meter still running here belongs to a turn that was anchored but never
+    // answered (a send whose FIFO write failed, then the process died): end it.
+    this.finalizeTurnSpeed({ interrupted: true })
   }
 
   private stopLivenessMonitor(): void {
@@ -3750,6 +3906,10 @@ export class ClaudeCodeSession {
     // CLI we spawned, and the managed-settings advisory it printed at startup was
     // reported as "Session Error" on a turn that had already succeeded).
     const cleanStderr = stderr ? stripCliStartupNoise(stderr) : ''
+
+    // Whatever the exit means below, a turn still being measured ended without its
+    // result; freeze the readout instead of leaving it ticking on every open panel.
+    this.finalizeTurnSpeed({ interrupted: true })
 
     // A teardown WE asked for (task completed, capacity eviction, idle timeout) is
     // not an error, regardless of the CLI's exit code — SIGINT surfaces as -1 here.
@@ -5859,6 +6019,31 @@ export class ClaudeCodeSession {
         // (Withheld intermediate results broke out earlier and never reach here.)
         this._advanceConsumedOffset()
 
+        // Billable increment, computed ONCE: billableCostDelta advances the
+        // per-process watermark, so a second call for the same total answers 0.
+        // Both result emits below and the speed readout share this value.
+        const costDelta = this.billableCostDelta(result.total_cost_usd)
+        const turnUsage = result.usage
+          ? {
+            input_tokens: result.usage.input_tokens ?? 0,
+            output_tokens: result.usage.output_tokens ?? 0,
+            ...(typeof result.usage.cache_creation_input_tokens === 'number' ? { cache_creation_input_tokens: result.usage.cache_creation_input_tokens } : {}),
+            ...(typeof result.usage.cache_read_input_tokens === 'number' ? { cache_read_input_tokens: result.usage.cache_read_input_tokens } : {}),
+          }
+          : undefined
+        const turnSpeed = this.finalizeTurnSpeed({
+          turnOutputTokens: result.usage?.output_tokens,
+          durationMs: result.duration_ms,
+          costUsd: costDelta,
+          interrupted: userInterrupted,
+        })
+        const turnModel = turnSpeed?.model ?? this._model
+        const resultUsageFields = {
+          ...(turnUsage ? { usage: turnUsage } : {}),
+          ...(turnModel ? { model: turnModel } : {}),
+          ...(turnSpeed ? { speed: turnSpeed } : {}),
+        }
+
         // ── Forensic observability: emit the per-turn wide event + run invariants. ──
         // Single call covers both team + non-team branches (teamActive distinguishes).
         // Fire-and-forget, never throws — must not affect turn completion. This is the
@@ -5956,11 +6141,12 @@ export class ClaudeCodeSession {
             turnGen: this._turnGen,
             result: resultText,
             totalCost: result.total_cost_usd,
-            costDelta: this.billableCostDelta(result.total_cost_usd),
+            costDelta,
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
             teamActive: true,
             ...(userInterrupted ? { interrupted: true } : {}),
+            ...resultUsageFields,
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
 
           // Schedule team-idle check: periodically checks if subagent JSONL files
@@ -5995,13 +6181,14 @@ export class ClaudeCodeSession {
             turnGen: this._turnGen,
             result: resultText,
             totalCost: result.total_cost_usd,
-            costDelta: this.billableCostDelta(result.total_cost_usd),
+            costDelta,
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
             retryExhausted,
             ...(userInterrupted ? { interrupted: true } : {}),
             ...(detachedBgActive ? { detachedBgActive: true } : {}),
             ...(wakeupPending ? { wakeupPending: true } : {}),
+            ...resultUsageFields,
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
           // Turn-end read-back of the CLI's true settings (effort + model, fire-and-
           // forget). Same rationale as _completeTurnOnIdle: keep the badge in sync with
@@ -6299,6 +6486,23 @@ export class ClaudeCodeSession {
         const inner = se.event
         const innerType = inner?.type ?? ''
         if (!innerType) break
+        // Speed readout taps the stream BEFORE the UI fate check: message_stop is
+        // 'drop' for rendering (no payload to show) but it is the edge that closes
+        // a generation window. Replays are excluded so a reattach cannot count a
+        // window twice; without positional evidence (old daemon, no watermark) a
+        // stream arriving after the result with no turn under way is history too.
+        // The meter is an observer: whatever it throws must not cost the event
+        // its rendering.
+        const replayed = this._isReplayedByOffset()
+        const historic = replayed === true || (replayed === undefined && this.resultEmitted && !this._speed.active)
+        if (!historic) {
+          try { this.feedTurnSpeed(innerType, inner) } catch (err) {
+            log.session.warn('turn speed meter threw; event still rendered', {
+              sessionId: this.claudeSessionId, taskId: this.taskId, innerType,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
         const fate = classifyStreamEvent(innerType)
         if (fate === 'drop') break
         if (fate === 'unknown') {

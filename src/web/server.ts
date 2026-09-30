@@ -3876,7 +3876,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
       }
 
-      const { sessionId, taskId, result, isError, totalCost, costDelta, duration, turnGen } = eventData<'session:result'>(event)
+      const { sessionId, taskId, result, isError, totalCost, costDelta, duration, turnGen, usage: turnUsage, model: turnModel, speed: turnSpeed } = eventData<'session:result'>(event)
       log.web.info('session result received', { sessionId, taskId, resultLength: result?.length ?? 0 })
 
       // Record session cost (external Claude Code CLI process).
@@ -3910,13 +3910,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           const sideParentTaskId = sideIds
             ? (await getSessionByClaudeId(sideIds.parentSid).catch(() => null))?.taskId || undefined
             : undefined
+          // The row carries the turn's real numbers when the emitter had them:
+          // the CLI's per-turn token counts and the model it ran on, plus
+          // Walnut's own timing (ttft, generation windows). Legacy payloads fall
+          // back to the bare cost row under the 'claude-code-cli' marker.
           usageTracker.record({
             ...(laneIds ? { source: 'chat' as const, agentId: laneIds.agentId } : { source: 'session' as const }),
-            model: 'claude-code-cli',
+            model: turnModel || 'claude-code-cli',
             sessionId,
             taskId: sideParentTaskId ?? taskId,
             external_cost_usd: costDelta,
             duration_ms: duration,
+            ...(turnUsage ? {
+              input_tokens: turnUsage.input_tokens,
+              output_tokens: turnUsage.output_tokens,
+              cache_creation_input_tokens: turnUsage.cache_creation_input_tokens,
+              cache_read_input_tokens: turnUsage.cache_read_input_tokens,
+            } : {}),
+            ...(turnSpeed && turnSpeed.ttftMs !== null ? { ttft_ms: Math.round(turnSpeed.ttftMs) } : {}),
+            ...(turnSpeed && turnSpeed.generationMs > 0 ? { generation_ms: Math.round(turnSpeed.generationMs) } : {}),
           })
         } catch {}
       }

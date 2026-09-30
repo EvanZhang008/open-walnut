@@ -45,6 +45,20 @@ export class CostWatermark {
     this.watermark = 0;
   }
 
+  /** The highest total billed so far (0 after a reset). Persist it next to the
+   *  process pid so an instance re-attaching to the SAME process can `seed` it. */
+  get value(): number {
+    return this.watermark;
+  }
+
+  /** Resume from a persisted watermark. Ignores anything that is not a finite
+   *  non-negative number: a corrupt value must never suppress real spend. */
+  seed(value: unknown): boolean {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return false;
+    this.watermark = value;
+    return true;
+  }
+
   /** Bill the increment since the last result; advances the watermark. */
   bill(cumulativeTotal: number | undefined): number {
     const r = costIncrement(cumulativeTotal, this.watermark);

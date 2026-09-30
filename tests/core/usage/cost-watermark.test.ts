@@ -84,4 +84,31 @@ describe('CostWatermark (stateful)', () => {
     for (const t of [5.8, 16.3, 28.8]) real += wm.bill(t);
     expect(real).toBeCloseTo(28.8 + 28.8, 6); // run1 final + run2 final
   });
+
+  it('a re-attached instance seeded with the persisted watermark bills only the new turn', () => {
+    // Instance A bills the first turn of a live process and persists its watermark.
+    const a = new CostWatermark();
+    expect(a.bill(0.15)).toBeCloseTo(0.15, 6);
+    expect(a.value).toBeCloseTo(0.15, 6);
+    // Instance B re-attaches to the SAME process (the queue re-created the runner)
+    // and continues from the persisted value: the second result is the increment,
+    // not the whole cumulative total again.
+    const b = new CostWatermark();
+    expect(b.seed(a.value)).toBe(true);
+    expect(b.bill(0.178)).toBeCloseTo(0.028, 6);
+    // Without the seed it would have charged the full 0.178 (the readout bug).
+    expect(new CostWatermark().bill(0.178)).toBeCloseTo(0.178, 6);
+  });
+
+  it('seed() refuses anything that could hide real spend and reset() clears it', () => {
+    const wm = new CostWatermark();
+    for (const bad of [undefined, null, NaN, Infinity, -1, '0.5', {}]) {
+      expect(wm.seed(bad)).toBe(false);
+      expect(wm.value).toBe(0);
+    }
+    expect(wm.seed(0.4)).toBe(true);
+    wm.reset();
+    expect(wm.value).toBe(0);
+    expect(wm.bill(0.3)).toBeCloseTo(0.3, 6);
+  });
 });

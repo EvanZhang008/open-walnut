@@ -1040,6 +1040,8 @@ if (outputFormat === 'stream-json') {
     //     "stream-partial-command-lifecycle" → command_lifecycle started/completed
     //                                       bracket (CLI 2.1.25x; must NOT reach UI)
     //     "stream-partial-signature"      → signature_delta (must NOT reach UI)
+    //     "stream-partial-speed"          → two messages with per-message usage and a
+    //                                       tool gap between them (speed readout)
     //
     //   The full text streamed is 'Hello, world!' split into small deltas.
     if (effectiveMessage.startsWith('stream-partial-')) {
@@ -1058,6 +1060,67 @@ if (outputFormat === 'stream-json') {
         uuid: `mock-lifecycle-${state}`, session_id: outputSessionId,
       });
       if (mode === 'command-lifecycle') emitStream(lifecycle('started'));
+
+      // Two API messages with a tool-shaped gap between them, each with the
+      // real CLI's usage bookkeeping (message_delta.usage.output_tokens per
+      // message, result.usage for the turn). Drives the speed readout: the gap
+      // must not count as generation time, the tokens must be the CLI's counts.
+      // Honours chunk-delay: (default 150ms) so the windows have real width.
+      if (mode === 'speed') {
+        (async () => {
+          const gap = chunkDelayMs > 0 ? chunkDelayMs : 150;
+          const pause = (ms = gap) => new Promise((r) => setTimeout(r, ms));
+          const model = modelFlag || 'mock-model';
+          const first = ['Measuring ', 'the first ', 'message of ', 'this turn. '];
+          const second = ['Then a ', 'second message ', 'after the tool ', 'ran.'];
+          const msg1 = `${msgId}_1`;
+          const msg2 = `${msgId}_2`;
+          // Message 1: text, then a tool call.
+          emitStream(wrap({ type: 'message_start', message: { id: msg1, role: 'assistant', content: [], model, usage: { input_tokens: 12, cache_read_input_tokens: 800, cache_creation_input_tokens: 0, output_tokens: 1 } } }));
+          await pause();
+          emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+          for (const t of first) {
+            emitStream(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } }));
+            await pause();
+          }
+          emitStream(wrap({ type: 'content_block_stop', index: 0 }));
+          emitStream({
+            type: 'assistant',
+            message: { id: msg1, role: 'assistant', model, content: [{ type: 'text', text: first.join('') }, { type: 'tool_use', id: 'toolu_mock_speed', name: 'Bash', input: { command: 'true' } }], stop_reason: 'tool_use', usage: { input_tokens: 12, output_tokens: 30 } },
+            session_id: outputSessionId,
+          });
+          emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { input_tokens: 12, cache_read_input_tokens: 800, output_tokens: 30 } }));
+          emitStream(wrap({ type: 'message_stop' }));
+          // The tool runs: no model output for a while. Much longer than the two
+          // generation windows (~10 pauses), so the gap's exclusion shows even
+          // when a loaded machine stretches every timer.
+          await pause(gap * 20);
+          emitStream({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_mock_speed', content: 'ok' }] }, session_id: outputSessionId });
+          // Message 2: the answer.
+          emitStream(wrap({ type: 'message_start', message: { id: msg2, role: 'assistant', content: [], model, usage: { input_tokens: 14, cache_read_input_tokens: 812, cache_creation_input_tokens: 0, output_tokens: 1 } } }));
+          await pause();
+          emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+          for (const t of second) {
+            emitStream(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: t } }));
+            await pause();
+          }
+          emitStream(wrap({ type: 'content_block_stop', index: 0 }));
+          emitStream({
+            type: 'assistant',
+            message: { id: msg2, role: 'assistant', model, content: [{ type: 'text', text: second.join('') }], stop_reason: 'end_turn', usage: { input_tokens: 14, output_tokens: 20 } },
+            session_id: outputSessionId,
+          });
+          emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 14, cache_read_input_tokens: 812, output_tokens: 20 } }));
+          emitStream(wrap({ type: 'message_stop' }));
+          process.stdout.write(JSON.stringify({
+            type: 'result', subtype: 'success', is_error: false,
+            duration_ms: gap * 30, duration_api_ms: gap * 10, num_turns: 2,
+            result: second.join(''), session_id: outputSessionId, total_cost_usd: 0.0123,
+            usage: { input_tokens: 26, cache_read_input_tokens: 1612, cache_creation_input_tokens: 0, output_tokens: 50 },
+          }) + '\n', () => process.exit(0));
+        })();
+        return;
+      }
 
       // message_start
       emitStream(wrap({ type: 'message_start', message: { id: msgId, role: 'assistant', content: [], model: modelFlag || 'mock-model', usage: { input_tokens: 10, output_tokens: 0 } } }));

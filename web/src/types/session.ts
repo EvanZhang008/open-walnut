@@ -10,8 +10,8 @@ export type SessionProvider = 'cli' | 'sdk' | 'embedded';
  *  server's the moment a third engine landed. SESSION_ENGINE_IDS is the runtime
  *  membership list (validators, catalog defaults). Imported rather than
  *  `export ... from` because SessionRecord below refers to it. */
-import type { SessionEngine } from '@open-walnut/core';
-export type { SessionEngine };
+import type { SessionEngine, SessionTurnSpeed } from '@open-walnut/core';
+export type { SessionEngine, SessionTurnSpeed };
 export { SESSION_ENGINE_IDS } from '@open-walnut/core';
 
 /** A pinned passage inside a message (W3C TextQuoteSelector over the message's
@@ -178,6 +178,9 @@ export interface SessionRecord {
   overview?: string;
   /** ISO timestamp of the last overview update. */
   overviewAt?: string;
+  /** Final speed readout of the most recent turn; the cold-load source for the
+   *  readout row above the composer (live frames come over the WS). */
+  lastTurnSpeed?: SessionTurnSpeed;
 }
 
 export interface SessionSummaryInfo {
