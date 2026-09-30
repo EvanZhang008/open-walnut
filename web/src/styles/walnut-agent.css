@@ -181,6 +181,34 @@
   background: rgba(255, 59, 48, 0.08);
 }
 
+/* ── Session window needs-action frame ──
+   Same rule as the header tint, drawn as a red frame around the WHOLE window:
+   the tint alone was too faint to tell a finished column from a working one.
+   A pseudo-element, not a border on the panel, so the layout never shifts when
+   the state flips, and it paints over the glass header (z-index 30) and the
+   composer card that run edge to edge. It stays below the Ask Walnut drawer
+   (z-index 40). pointer-events:none keeps the edges clickable. No isolation on
+   the panel: that would trap the position:fixed menus inside its stacking. */
+.session-panel.session-panel-needs-action::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 31;
+  border: 2px solid var(--error);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: session-panel-needs-action-in 0.2s ease-out;
+}
+
+@keyframes session-panel-needs-action-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-panel.session-panel-needs-action::after { animation: none; }
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    The Ask Walnut SLOT — the home page's chat spot (P1 of "remove the main
    agent"). It holds one of three bodies (composer / pending / a real

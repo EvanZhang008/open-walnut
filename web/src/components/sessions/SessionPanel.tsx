@@ -1576,6 +1576,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     ];
   };
 
+  // The agent handed this back (turn ended, errored, or waits on a decision).
+  // Drives the header tint AND the red frame around the whole window, which is
+  // the one signal readable at a glance across several columns (2026-09-29
+  // user report: an Idle column did not look ready).
+  const needsAction = !!sessionTask && taskNeedsAction(sessionTask);
+
   return (
     <PlanContentContext.Provider value={planContentValue}>
     <SessionPinsContext.Provider value={pinsApi}>
@@ -1639,7 +1645,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           view stays guttered at 1400px in this slide-out. */}
       <ThreadToastProvider panelRef={panelRef} composerRef={composerWrapRef}>
       <div
-        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}`}
+        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${needsAction ? ' session-panel-needs-action' : ''}`}
         data-session-id={sessionId}
         ref={panelRef}
         // The panel the user last pointed into is "the current session" for
@@ -1652,7 +1658,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             both surfaces. Independent of the walnut amber TITLE — background is
             the state highlight, text color is the origin marker. */}
         <div
-          className={`session-panel-header${sessionTask && taskNeedsAction(sessionTask) ? ' session-panel-header-needs-action' : ''}`}
+          className={`session-panel-header${needsAction ? ' session-panel-header-needs-action' : ''}`}
           ref={glassHeaderRef}
         >
           {/* Two-row header, and the split is deliberate (2026-07-27):
