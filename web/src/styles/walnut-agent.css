@@ -181,32 +181,32 @@
   background: rgba(255, 59, 48, 0.08);
 }
 
-/* ── Session window needs-action frame ──
-   Same rule as the header tint, drawn as a red frame around the WHOLE window:
-   the tint alone was too faint to tell a finished column from a working one.
-   A pseudo-element, not a border on the panel, so the layout never shifts when
-   the state flips, and it paints over the glass header (z-index 30) and the
-   composer card that run edge to edge. It stays below the Ask Walnut drawer
-   (z-index 40). pointer-events:none keeps the edges clickable. No isolation on
-   the panel: that would trap the position:fixed menus inside its stacking. */
-.session-panel.session-panel-needs-action::after {
-  content: '';
+/* ── Session window unread marker (task.unread) ──
+   Two quiet signals that the agent's output is waiting to be read, both gone on
+   the user's first click or keystroke in the window (SessionPanel markRead):
+   the task list's red dot before the title, and a red composer card. A red
+   frame around the whole window did the same job and was too loud (2026-09-29).
+   The dot sits in the header's left padding, like the list row's gutter dot, so
+   the title never shifts when it comes and goes; after the Ask Walnut ≡ button
+   there is no gutter, so it takes a flex slot there instead. */
+.session-panel-title-area:has(> .session-panel-unread-dot) {
+  position: relative;
+}
+.session-panel-title-area > .session-panel-unread-dot {
   position: absolute;
-  inset: 0;
-  z-index: 31;
-  border: 2px solid var(--error);
-  border-radius: inherit;
-  pointer-events: none;
-  animation: session-panel-needs-action-in 0.2s ease-out;
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
 }
-
-@keyframes session-panel-needs-action-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+.session-panel-header-leading + .session-panel-title-area > .session-panel-unread-dot {
+  position: static;
+  transform: none;
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .session-panel.session-panel-needs-action::after { animation: none; }
+/* The card's own border/box-shadow transition fades this in and out. */
+.session-panel.session-panel-unread .session-panel-input .chat-input-box {
+  border-color: rgba(255, 59, 48, 0.6);
+  background-image: linear-gradient(rgba(255, 59, 48, 0.05), rgba(255, 59, 48, 0.05));
+  box-shadow: var(--glass-g4-shadow), 0 0 0 3px rgba(255, 59, 48, 0.14);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

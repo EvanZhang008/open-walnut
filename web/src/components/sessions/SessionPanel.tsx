@@ -60,10 +60,10 @@ import { traceInteraction } from '@/utils/interaction-timer';
 import { clearSessionCaches } from '@/cache/session-cache';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { buildInvestigationClip } from '@/utils/investigation-clipboard';
-import { fetchTask } from '@/api/tasks';
+import { fetchTask, updateTask } from '@/api/tasks';
 import { EditableSessionTitle } from './EditableSessionTitle';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
-import { useStoreTask } from '@/contexts/TasksContext';
+import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
@@ -109,6 +109,8 @@ import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 const SPLIT_MIN_WIDTH = 900;
 /** How long a hidden (kept-alive) VS Code view survives before it is unmounted. */
 const CODE_VIEW_HIDDEN_TTL_MS = 10 * 60_000;
+/** Keys that are not typing, so pressing one alone never marks the task read. */
+const MODIFIER_KEYS = new Set(['Meta', 'Control', 'Alt', 'Shift', 'CapsLock', 'Fn', 'OS']);
 
 interface SessionPanelErrorBoundaryProps {
   sessionId: string;
@@ -437,6 +439,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // fields (`ext`) the minimal list payload drops.
   const [fetchedTask, setFetchedTask] = useState<import('@open-walnut/core').Task | null>(null);
   const storeTask = useStoreTask(session?.taskId);
+  const taskStore = useTasksContextSafe();
+  // The pop-out window's mark-read request in flight (it has no task store).
+  const readRequestRef = useRef<string | null>(null);
   const sessionTask = useMemo(() => {
     if (!storeTask) return fetchedTask;
     if (!fetchedTask || storeTask.ext !== undefined) return storeTask;
@@ -1577,10 +1582,28 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   };
 
   // The agent handed this back (turn ended, errored, or waits on a decision).
-  // Drives the header tint AND the red frame around the whole window, which is
-  // the one signal readable at a glance across several columns (2026-09-29
-  // user report: an Idle column did not look ready).
   const needsAction = !!sessionTask && taskNeedsAction(sessionTask);
+  // Agent output the user has not looked at yet: task.unread, the same red dot
+  // the task list shows. Here it is a dot before the title and a red composer,
+  // so a finished column reads as ready at a glance (2026-09-29: a full red
+  // frame did that but was too loud). The user's first click or keystroke in
+  // this window marks it read, as opening the task row does. Focus alone never
+  // does: a window coming back to the front refocuses the composer by itself.
+  const unread = !!sessionTask?.unread && sessionTask.status !== 'done' && sessionTask.phase !== 'COMPLETE';
+  const markRead = () => {
+    const taskId = sessionTask?.id;
+    if (!unread || !taskId) return;
+    if (taskStore?.tasks.some((t) => t.id === taskId)) {
+      taskStore.update(taskId, { unread: false });
+      return;
+    }
+    if (readRequestRef.current === taskId) return;
+    readRequestRef.current = taskId;
+    updateTask(taskId, { unread: false })
+      .then((task) => setFetchedTask(task))
+      .catch((err) => log.warn('session-panel', 'mark read failed', { sessionId, taskId, error: String(err) }))
+      .finally(() => { readRequestRef.current = null; });
+  };
 
   return (
     <PlanContentContext.Provider value={planContentValue}>
@@ -1645,13 +1668,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           view stays guttered at 1400px in this slide-out. */}
       <ThreadToastProvider panelRef={panelRef} composerRef={composerWrapRef}>
       <div
-        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${needsAction ? ' session-panel-needs-action' : ''}`}
+        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread ? ' session-panel-unread' : ''}`}
         data-session-id={sessionId}
         ref={panelRef}
         // The panel the user last pointed into is "the current session" for
         // actions taken outside any panel (a task row's "Quote in session").
-        onPointerDownCapture={() => setActiveSession(sessionId)}
+        onPointerDownCapture={() => { setActiveSession(sessionId); markRead(); }}
         onFocusCapture={() => setActiveSession(sessionId)}
+        // Typing counts as reading; a bare modifier or a shortcut chord does not.
+        onKeyDownCapture={(e) => { if (!e.metaKey && !e.ctrlKey && !MODIFIER_KEYS.has(e.key)) markRead(); }}
       >
         {/* needs-action: same red tint + same rule (taskNeedsAction) as the pin
             area's cards, so "the agent handed this back" reads identically on
@@ -1885,6 +1910,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               <div className="session-panel-header-leading">{headerLeading}</div>
             )}
             <div className="session-panel-title-area">
+              {unread && (
+                <span
+                  className="task-unread-dot session-panel-unread-dot"
+                  role="img"
+                  aria-label="Unread: agent output you haven't seen"
+                  title="Unread: click this window to mark it read"
+                />
+              )}
               {!loading && session?.taskId && (
                 <TaskQuickActions
                   taskId={session.taskId}
