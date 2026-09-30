@@ -228,6 +228,13 @@ if [[ ! "$DRAIN_SECS" =~ ^[0-9]+$ ]]; then
   echo "WALNUT_DEVPROD_DRAIN_SECS='$DRAIN_SECS' is not a whole number of seconds; using 90." >&2
   DRAIN_SECS=90
 fi
+# How long the outgoing server may take to exit after SIGTERM before SIGKILL
+# (see the kill below). Its own bail is 4s; the rest is slack for a loaded Mac.
+STOP_GRACE_SECS="${WALNUT_DEVPROD_STOP_GRACE_SECS:-8}"
+if [[ ! "$STOP_GRACE_SECS" =~ ^[0-9]+$ ]]; then
+  echo "WALNUT_DEVPROD_STOP_GRACE_SECS='$STOP_GRACE_SECS' is not a whole number of seconds; using 8." >&2
+  STOP_GRACE_SECS=8
+fi
 
 # Echoes the in-flight turn count, or NOTHING when the server does not answer.
 # No jq: a deploy must not depend on it, and the endpoint answers one flat
@@ -540,9 +547,19 @@ if [[ -n "$existing_pids" ]]; then
   # zombies, peak 43 concurrent, load average 94 → macOS killed the user's GUI
   # apps). The server-side fix makes SIGTERM always fatal; this is the belt to
   # that suspenders, and also covers OLD binaries still on disk.
+  #
+  # But the server closes its listener FIRST and only then finishes its
+  # teardown (an import mid-write, embed runs, the stores), bounded by its own
+  # 4s bail (src/commands/web.ts). 2026-09-30: this loop SIGKILLed the outgoing
+  # server a second after the port freed, mid-teardown. So each PID gets
+  # STOP_GRACE_SECS to exit on its own before the SIGKILL.
+  stop_deadline=$(( SECONDS + STOP_GRACE_SECS ))
   for zpid in $existing_pids; do
+    while kill -0 "$zpid" 2>/dev/null && (( SECONDS < stop_deadline )); do
+      sleep 0.2
+    done
     kill -0 "$zpid" 2>/dev/null || continue
-    echo "Server PID $zpid survived SIGTERM — sending SIGKILL." >&2
+    echo "Server PID $zpid did not exit ${STOP_GRACE_SECS}s after SIGTERM; sending SIGKILL." >&2
     kill -9 "$zpid" 2>/dev/null || true
   done
 fi
