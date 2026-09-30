@@ -403,6 +403,39 @@ export interface HostLocalComputeOutput {
 const STREAM_WINDOW = 1024 * 1024;
 const CONTENT_READ_PARALLELISM = 8;
 const TAIL_HASH_BYTES = 4096;
+/** Past this a file is listed without content: no text diff of it is readable. */
+export const MAX_CONTENT_BYTES = 8 * 1024 * 1024;
+/** git's heuristic: a NUL byte in the first 8000 bytes means binary. */
+const BINARY_PROBE_BYTES = 8000;
+
+function looksBinary(buf: Buffer): boolean {
+  return buf.subarray(0, BINARY_PROBE_BYTES).includes(0);
+}
+
+/**
+ * A file too large or binary to diff as text: listed without content, marked
+ * partial so the empty pair is not dropped as a no-op (the diff pane shows "No
+ * textual diff"). Status follows the ops, as reconstructFile would.
+ */
+function contentlessChange(accum: FileAccum): SessionFileChange {
+  let renamedFrom: string | undefined;
+  for (let i = accum.ops.length - 1; i >= 0; i--) {
+    const op = accum.ops[i]!;
+    if (op.kind === 'rename') { renamedFrom = op.from; break; }
+  }
+  const added = accum.ops.some((op) => op.kind === 'write' || op.kind === 'create');
+  const change: SessionFileChange = {
+    filePath: accum.filePath,
+    relPath: accum.filePath,
+    before: '',
+    after: '',
+    status: renamedFrom !== undefined ? 'renamed' : added ? 'added' : 'modified',
+    ops: accum.ops.length,
+    partial: true,
+  };
+  if (renamedFrom !== undefined) change.oldRelPath = renamedFrom;
+  return change;
+}
 
 /**
  * Where a main-transcript parse stopped, so the next compute continues from
@@ -624,36 +657,6 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     return root;
   };
 
-  // 3. Current contents + reconstruction (bounded pool — local fs, still
-  //    keep the daemon's loop responsive).
-  const changesByPath = new Map<string, SessionFileChange>();
-  const entries = [...fileMap.values()];
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < entries.length) {
-      const accum = entries[next++]!;
-      let current: string | null = null;
-      // stat-before-read: transcript ops can name FIFOs/sockets/dirs (a session
-      // that ran mkfifo, or wrote a .pipe path). open() on a writer-less FIFO
-      // blocks a fs-pool thread FOREVER (2026-08-15: wedged all daemon fs RPCs).
-      try {
-        const cst = await fsp.stat(accum.filePath);
-        current = cst.isFile() ? await fsp.readFile(accum.filePath, 'utf-8') : null;
-      } catch { current = null; }
-      const isDeleted = accum.ops[accum.ops.length - 1]?.kind === 'delete';
-      // No .git above the file means git can't have it: skip the two git
-      // spawns (a long session deletes hundreds of scratch files in /tmp).
-      const deletedBefore = isDeleted && await gitRootOf(path.dirname(accum.filePath))
-        ? await readDeletedBeforeHostLocal(accum.filePath) : null;
-      const { renamedFrom, ...recon } = reconstructFile(current, accum, deletedBefore);
-      const change: SessionFileChange = { filePath: accum.filePath, relPath: accum.filePath, ...recon };
-      if (renamedFrom !== undefined) change.oldRelPath = renamedFrom;
-      changesByPath.set(accum.filePath, change);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(CONTENT_READ_PARALLELISM, entries.length) }, worker));
-
-  // 4-6. Group by repo root, drop no-ops/orphans/excluded, order.
   const cwdRepoRoot = effectiveCwd ? await findGitRootHostLocal(effectiveCwd) : null;
   const isUnder = (child: string, ancestor: string): boolean =>
     child === ancestor || child.startsWith(ancestor + path.sep);
@@ -667,16 +670,64 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     return { root: dir, orphan: true };
   };
 
+  // 3. Current contents + reconstruction (bounded pool — local fs, still
+  //    keep the daemon's loop responsive). An out-of-repo file is never shown,
+  //    so it is never read: on 2026-09-30 every compute of one session read a
+  //    676 MB SQLite file it had copied into /tmp, as a string, only to drop it
+  //    (1.3 GB of daemon heap, 2-3 s, on every warm).
+  const changesByPath = new Map<string, SessionFileChange>();
+  const rootByPath = new Map<string, string>();
+  const entries = [...fileMap.values()];
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < entries.length) {
+      const accum = entries[next++]!;
+      if (isExcludedPath(accum.filePath)) continue;
+      const { root, orphan } = await resolveRepoRoot(accum.filePath, accum.cwd);
+      if (orphan) continue;
+      rootByPath.set(accum.filePath, root);
+      let current: string | null = null;
+      let contentless = false;
+      // stat-before-read: transcript ops can name FIFOs/sockets/dirs (a session
+      // that ran mkfifo, or wrote a .pipe path). open() on a writer-less FIFO
+      // blocks a fs-pool thread FOREVER (2026-08-15: wedged all daemon fs RPCs).
+      try {
+        const cst = await fsp.stat(accum.filePath);
+        if (cst.isFile() && cst.size > MAX_CONTENT_BYTES) {
+          contentless = true;
+        } else if (cst.isFile()) {
+          const buf = await fsp.readFile(accum.filePath);
+          if (looksBinary(buf)) contentless = true;
+          else current = buf.toString('utf-8');
+        }
+      } catch { current = null; }
+      if (contentless) {
+        changesByPath.set(accum.filePath, contentlessChange(accum));
+        continue;
+      }
+      const isDeleted = accum.ops[accum.ops.length - 1]?.kind === 'delete';
+      // No .git above the file means git can't have it: skip the two git
+      // spawns (a long session deletes hundreds of scratch files in /tmp).
+      const deletedBefore = isDeleted && await gitRootOf(path.dirname(accum.filePath))
+        ? await readDeletedBeforeHostLocal(accum.filePath) : null;
+      const { renamedFrom, ...recon } = reconstructFile(current, accum, deletedBefore);
+      const change: SessionFileChange = { filePath: accum.filePath, relPath: accum.filePath, ...recon };
+      if (renamedFrom !== undefined) change.oldRelPath = renamedFrom;
+      changesByPath.set(accum.filePath, change);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONTENT_READ_PARALLELISM, entries.length) }, worker));
+
+  // 4-6. Group by repo root, drop no-ops/excluded, order.
   const groupsByRoot = new Map<string, SessionRepoGroup>();
   for (const accum of fileMap.values()) {
     const change = changesByPath.get(accum.filePath);
-    if (!change) continue;
+    const root = rootByPath.get(accum.filePath);
+    if (!change || root === undefined) continue;
     // Drop CLEAN net no-op edits (edited then reverted); keep partial no-ops
     // and structural changes (rename/delete) — same policy as the server path.
     const structural = change.status === 'renamed' || change.status === 'deleted';
     if (change.before === change.after && !change.partial && !structural) continue;
-    const { root, orphan } = await resolveRepoRoot(accum.filePath, accum.cwd);
-    if (orphan) continue; // out-of-repo scratch — git modes can never show it
     change.relPath = path.relative(root, accum.filePath) || path.basename(accum.filePath);
     if (change.oldRelPath && path.isAbsolute(change.oldRelPath)) {
       const relOld = path.relative(root, change.oldRelPath);
