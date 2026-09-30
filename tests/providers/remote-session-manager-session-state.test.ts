@@ -63,8 +63,13 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
       send.mockResolvedValueOnce({ ok: true, stopped: false, reason: 'cron_supervised' })
       expect(await mgr.stopForIdle()).toBe(false)
       expect(mgr.hasPipe).toBe(true)
-      await mgr.interrupt()
+      await mgr.stop('user')
       expect(send.mock.calls[2]).toEqual(['stop', { sid: 'sid-test', reason: 'user', home: WALNUT_HOME, initiator: 'human' }, 10_000])
+      // Interrupt is a process stop that keeps cron supervision armed; a user's
+      // Terminate sends reason 'user' through sessionStops instead (same contract
+      // as session-stop-delivery.test.ts).
+      await mgr.interrupt()
+      expect(send.mock.calls[3]).toEqual(['stop', { sid: 'sid-test', reason: 'maintenance', home: WALNUT_HOME, initiator: 'human' }, 10_000])
     } finally { send.mockRestore() }
   })
 
@@ -72,8 +77,9 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
   it('M1: session_state=dead calls _onExit(exitCode) and clears hasPipe', async () => {
     expect(mgr.hasPipe).toBe(true)
     daemon.emitSessionState('sid-test', 'dead', { exitCode: 42 })
-    await new Promise((r) => setTimeout(r, 30))
-    expect(onExit).toHaveBeenCalledWith(42)
+    // Poll, never a fixed sleep: the frame crosses a real socket, so a busy event
+    // loop runs an expired 30ms timer before it reads the frame.
+    await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith(42))
     expect(mgr.hasPipe).toBe(false)
   })
 
@@ -180,8 +186,10 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     const markers = [{ message: 'original text', messageId: 'qm-marker' }]
     try {
       expect(await mgr.writeMessage('original text', { markers })).toBe(true)
+      // capability=true answers yes to every capability, cron-supervision-v1
+      // included, so the send also carries the stop fence (null: no stop yet).
       expect(send.mock.calls).toEqual(supportsMarkers ? [
-        ['send', { sid: 'sid-test', message: 'prepared text', markers }],
+        ['send', { sid: 'sid-test', message: 'prepared text', stopFence: null, markers }],
       ] : [
         ['send', { sid: 'sid-test', message: 'prepared text' }],
         ['appendUserMarker', { sid: 'sid-test', message: 'original text', messageId: 'qm-marker' }],
