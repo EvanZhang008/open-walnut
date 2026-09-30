@@ -2139,6 +2139,19 @@ usual (absent → `general`).
   `{ "summary", "summary_task_count" }`; nothing to summarize → `422`.
   **REPLICA: 501**.
 
+### Human inbox replies (additive, 2026-09): `clientId` and a recorded `delivery` per turn
+
+`POST /api/v1/human-inbox/:id/human-reply` body `{ "text", "clientId"? }` → `{ letter, delivery }`, and `POST /api/v1/human-inbox/:id/answer` → `{ letter, delivery }`. The human turn is written to the letter thread BEFORE delivery to the origin session is tried, as before. Two additive fields make the outcome durable and a retry safe:
+
+- **`thread[].delivery`** (human turns only) `{ "status", "reason"?, "sessionId"?, "at" }`: how far THIS turn got toward the origin session, so a reader can show it under the reply and still show it after the letter is reopened. It is written as `pending` in the same write that records the turn, and replaced by the attempt's outcome when the attempt ends: `queued` (handed to the session's message queue, which resumes a session that is not running), `deferred` (queued but held: the session waits on a permission prompt; the record is not updated when the prompt is resolved and the reply drains), `skipped` (saved only; `reason` `no_origin_session` or `origin_session_gone`), or `failed` (`reason` bounded to 200 characters). Absent on turns recorded before the field existed; a server from before `pending` existed leaves it absent until the attempt ends.
+- **`clientId`** (human-reply only; 1 to 100 characters of `[A-Za-z0-9._:-]`, starting alphanumeric; anything else is `400 bad_request`): the client's id for the reply, stored as `thread[].clientId`. A repeat with the same id is the same reply: nothing is appended, and the answer is the recorded turn's delivery (a repeat that arrives while the first is still delivering waits for that attempt). Two exceptions deliver the same turn again: a recorded delivery of `failed` (the repeat IS the retry), and a `pending` one with no attempt running (the server died mid-delivery). Without `clientId` every call appends, as before. The response's `delivery` for a repeat carries no `messageId`.
+
+**`202` with a pending delivery.** Both routes wait for the delivery for up to 10s (2s inside their 12s deadline). A delivery that takes longer is not cut short: the route answers `202` with the letter, whose turn carries `delivery.status: "pending"`, and `delivery: { "status": "pending" }`, and the outcome is written onto the turn when the attempt ends. A client shows the reply as on its way and re-reads the letter (`GET /api/v1/human-inbox/:id`) until the turn's `delivery` is final; there is no push for it. A `504 timeout` now means the turn may not be on record yet (the write itself outlasted the deadline), so a client treats it like any lost answer.
+
+A lost answer (a timeout, a dropped connection) does not mean the reply was not recorded: the turn is written first, so it may be on record and delivered. Resending with the same `clientId` is always safe. Editing the words and sending them under a NEW id is not, because the agent would read both; a client re-reads the letter and matches `thread[].clientId` before it offers that. A replica's `503 bridge_offline` is sent both when nothing reached the primary (no bridge) and when the relayed request went out and then failed; only the first proves nothing was recorded.
+
+REPLICA: relayed to the primary over `server.human-inbox.human-reply` (`clientId` included) and `server.human-inbox.answer`. The primary waits up to 7s for the delivery on a relayed call, so its `pending` answer reaches the replica inside the replica's own deadline, and the replica answers `202` for it.
+
 ### GET /api/v1/events (SSE, additive, 2026-08) — live task + session feed
 
 One long-lived SSE stream that pushes slim updates so the app can keep its task list and session list current without polling. Works on BOTH boxes; auth is the standard Bearer.

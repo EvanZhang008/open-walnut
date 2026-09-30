@@ -945,8 +945,8 @@ struct ComposerBar: View {
             Image(systemName: Symbol.voicePending)
                 .font(.caption2)
             Text(voice.pendingCount == 1
-                 ? "1 recording saved — transcription pending"
-                 : "\(voice.pendingCount) recordings saved — transcription pending")
+                 ? "1 recording saved. Transcription is pending."
+                 : "\(voice.pendingCount) recordings saved. Transcription is pending.")
                 .font(.caption)
                 .lineLimit(2)
                 // Row marker lives on the TEXT, not the container — a
@@ -1056,7 +1056,7 @@ struct ComposerBar: View {
             RecordingIndicator(
                 elapsed: voice.elapsed,
                 caption: quickAction.autoSendArmed && !disabled
-                    ? "Recording — stop to send"
+                    ? "Recording. Stop to send"
                     : "Recording…",
                 deliverySource: quickAction.lastConsumedSource
             )
@@ -1851,7 +1851,7 @@ struct ComposerView: View {
             pendingQuestion: chat.pendingQuestion,
             onStop: { await chat.stopTurn() },
             disabled: !connection.online,
-            disabledNotice: connection.online ? nil : "Offline — reconnecting…",
+            disabledNotice: connection.online ? nil : "Offline. Reconnecting…",
             // The send queue's ceiling. Nothing latches it: it is on screen while
             // the queue is full and gone as soon as one message goes out.
             ownerNotice: chat.queueFullNotice,
@@ -1939,6 +1939,9 @@ struct OfflineBanner: View {
     var body: some View {
         Label(text, systemImage: "wifi.slash")
             .font(.footnote)
+            // Wrapped at a large text size the line otherwise ran about 4pt
+            // from the screen edge.
+            .padding(.horizontal, 12)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
             .background(Theme.warning.opacity(0.15))

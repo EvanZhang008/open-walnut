@@ -335,7 +335,7 @@ final class VoiceResilienceTests: XCTestCase {
         XCTAssertEqual(recorder.pendingCount, 0, "it must stop claiming a transcription is pending")
         XCTAssertEqual(recorder.failedCount, 1, "it moves to the couldn't-transcribe row")
         XCTAssertTrue(audioExists(take.id), "retiring a take must NEVER delete the user's audio")
-        XCTAssertEqual(recorder.errorMessage, "Couldn't transcribe that recording — Discard it or keep it for later")
+        XCTAssertEqual(recorder.errorMessage, "Couldn't transcribe that recording. Discard it or keep it for later.")
         XCTAssertTrue(store.pending().first?.isTerminal == true)
     }
 
@@ -363,7 +363,7 @@ final class VoiceResilienceTests: XCTestCase {
         XCTAssertNil(text)
         XCTAssertTrue(audioExists("retired"), "still the user's audio until they discard it")
         XCTAssertEqual(recorder.errorMessage,
-                       "That recording couldn't be transcribed — Discard to clear it",
+                       "That recording couldn't be transcribed. Discard to clear it.",
                        "a Retry tap must never be a silent no-op")
 
         recorder.discardFailed()
@@ -531,7 +531,7 @@ final class VoiceResilienceTests: XCTestCase {
         let text = await recorder.retryPending()
 
         XCTAssertNil(text)
-        XCTAssertEqual(recorder.errorMessage, "Retry interrupted — recording kept")
+        XCTAssertEqual(recorder.errorMessage, "Retry interrupted. Recording kept.")
         XCTAssertTrue(audioExists("torn"))
         XCTAssertEqual(recorder.pendingCount, 1, "a cancellation is not a verdict — it stays retryable")
     }
@@ -808,7 +808,7 @@ final class VoiceResilienceTests: XCTestCase {
         let heldText = await held
 
         XCTAssertNil(tapped)
-        XCTAssertEqual(tapper.errorMessage, "Another upload is in progress — try again in a moment",
+        XCTAssertEqual(tapper.errorMessage, "Another upload is in progress. Try again in a moment.",
                        "a tap must never look like nothing happened")
         XCTAssertEqual(heldText, "the holder wins")
         // The AUTOMATIC path stays silent about the very same refusal.
@@ -1007,7 +1007,7 @@ final class VoiceResilienceTests: XCTestCase {
                        "the server read the file, so offering a Retry would be a lie")
         XCTAssertEqual(store.pending().first?.lastErrorKind, .damaged)
         XCTAssertEqual(recorder.errorMessage,
-                       "That recording is damaged and can't be transcribed — Discard it",
+                       "That recording is damaged and can't be transcribed. Discard it.",
                        "the retired copy must not advise keeping it 'for later' when later cannot help")
         XCTAssertTrue(audioExists("no-moov"), "a verdict is still not permission to delete")
 

@@ -14,7 +14,9 @@
  *   POST   /human-inbox/:id/pin          { pinned }     → { letter }
  *   POST   /human-inbox/:id/archive      { archived }   → { letter }
  *   POST   /human-inbox/:id/answer       { actionId, freeText? } → { letter, delivery }
- *   POST   /human-inbox/:id/human-reply  { text }       → { letter, delivery }
+ *   POST   /human-inbox/:id/human-reply  { text, clientId? } → { letter, delivery }
+ *          (both 202 with `delivery.status: 'pending'` when the turn is on record
+ *          but its delivery has not finished inside the route's budget)
  *
  * The sender is stamped from the `x-walnut-caller-sid` header (set by the ops
  * executor) — never from the body, so a letter can't misattribute itself. The
@@ -34,7 +36,10 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
+import {
+  driveControlRelay, relayControlAction, sendRelayReplyError, sendV1Error as sendError,
+} from './v1-control-relay.js'
+import type { SessionControlAction } from '../../core/sessions/session-controls.js'
 import {
   LETTER_HTML_MAX_BYTES, letterFieldMaxBytes,
   type AgentReplyInput, type NewLetter,
@@ -51,6 +56,31 @@ const SERVER_RELAY_SID = '__server__'
  * (6-per-origin pool: one stuck route fakes an app-wide outage).
  */
 const ROUTE_DEADLINE_MS = 12_000
+
+/**
+ * The answer and human-reply routes stop waiting for the delivery this long
+ * before the deadline, and answer 202 with the recorded turn (`delivery.status:
+ * 'pending'`) instead. The margin covers the letter re-read that goes into that
+ * answer. A 504 at the deadline would tell the client to try again about a turn
+ * that is already on record and still being delivered, which is how a reply gets
+ * threaded twice by a client without a clientId.
+ */
+const DELIVERY_ANSWER_MARGIN_MS = 2_000
+
+/** How long answer / human-reply wait for the delivery. Tests shorten it. */
+let deliveryWaitMs = ROUTE_DEADLINE_MS - DELIVERY_ANSWER_MARGIN_MS
+/** The route deadline in force. Tests shorten it. */
+let routeDeadlineMs = ROUTE_DEADLINE_MS
+
+/** Test seam: shorten the delivery wait (undefined restores the default). */
+export function setDeliveryWaitForTests(ms: number | undefined): void {
+  deliveryWaitMs = ms ?? ROUTE_DEADLINE_MS - DELIVERY_ANSWER_MARGIN_MS
+}
+
+/** Test seam: shorten the route deadline (undefined restores the default). */
+export function setRouteDeadlineForTests(ms: number | undefined): void {
+  routeDeadlineMs = ms ?? ROUTE_DEADLINE_MS
+}
 
 /** LetterError.code → frozen v1 error code. */
 const ERROR_CODES: Record<string, string> = {
@@ -79,14 +109,16 @@ async function guard(
 ): Promise<void> {
   let timer: NodeJS.Timeout | undefined
   const deadline = new Promise<'timeout'>((resolve) => {
-    timer = setTimeout(() => resolve('timeout'), ROUTE_DEADLINE_MS)
+    timer = setTimeout(() => resolve('timeout'), routeDeadlineMs)
     timer.unref?.()
   })
   try {
     const outcome = await Promise.race([fn().then(() => 'done' as const), deadline])
     if (outcome === 'timeout' && !res.headersSent) {
       log.notif.warn('human-inbox: route deadline exceeded', { route: label })
-      sendError(res, 504, 'timeout', `${label} did not finish in ${ROUTE_DEADLINE_MS}ms — try again`)
+      // Only a route that recorded nothing yet gets here with a delivering
+      // write: answer and human-reply answer 202 once their turn is on record.
+      sendError(res, 504, 'timeout', `${label} did not finish in ${routeDeadlineMs}ms. Try again.`)
     }
   } catch (err) {
     const letterErr = asLetterError(err)
@@ -147,6 +179,25 @@ function oversizeField(fields: Record<string, unknown>): { name: string; max: nu
     if (typeof value === 'string' && Buffer.byteLength(value, 'utf-8') > max) return { name, max }
   }
   return null
+}
+
+/** 202 when the turn is on record and its delivery is still running, else 200. */
+function deliveringStatus(result: unknown): number {
+  const delivery = (result as { delivery?: { status?: unknown } } | null)?.delivery
+  return delivery?.status === 'pending' ? 202 : 200
+}
+
+/** A replica's relay of answer / human-reply, keeping the primary's 202. */
+async function relayDelivering(
+  res: Response, action: SessionControlAction, params: Record<string, unknown>,
+): Promise<void> {
+  const reply = await driveControlRelay(res, action, SERVER_RELAY_SID, params)
+  if (!reply) return
+  if (reply.ok === true && reply.result && typeof reply.result === 'object') {
+    res.status(deliveringStatus(reply.result)).json(reply.result)
+    return
+  }
+  sendRelayReplyError(res, reply)
 }
 
 function readBool(res: Response, value: unknown, field: string): boolean | null {
@@ -346,28 +397,34 @@ humanInboxV1Router.post('/human-inbox/:id/archive', async (req: Request, res: Re
 
 // POST /api/v1/human-inbox/:id/answer { actionId, freeText? }
 // The record is written FIRST and the delivery status is reported, never thrown:
-// a dead origin session must not cost the human their answer.
+// a dead origin session must not cost the human their answer. 202 + a pending
+// delivery when the delivery outlasts the route's budget (see DELIVERY_ANSWER_MARGIN_MS).
 humanInboxV1Router.post('/human-inbox/:id/answer', async (req: Request, res: Response, next: NextFunction) => {
+  const answerBy = Date.now() + deliveryWaitMs
   await guard(res, next, 'POST /human-inbox/:id/answer', async () => {
     const b = body(req)
     const id = letterId(req)
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.human-inbox.answer', SERVER_RELAY_SID, { ...b, id }, 200)
+      await relayDelivering(res, 'server.human-inbox.answer', { ...b, id })
       return
     }
     const { answerLetterAndDeliver } = await import('../../core/human-inbox/letter-ops.js')
-    res.json(await answerLetterAndDeliver(id, {
+    const result = await answerLetterAndDeliver(id, {
       actionId: typeof b.actionId === 'string' ? b.actionId : '',
       ...(typeof b.freeText === 'string' ? { freeText: b.freeText } : {}),
       // A request that presented a device token came from a paired device (the phone); the
       // console reaches this over the LAN bypass and has no device name. That is the only
       // device signal this route has, so it is the one the event reports.
-    }, (req as Request & { deviceName?: string }).deviceName ? 'phone' : 'web'))
+    }, (req as Request & { deviceName?: string }).deviceName ? 'phone' : 'web', { answerBy })
+    res.status(deliveringStatus(result)).json(result)
   })
 })
 
-// POST /api/v1/human-inbox/:id/human-reply { text }
+// POST /api/v1/human-inbox/:id/human-reply { text, clientId? }
+// Same contract as answer: 200 with the delivery's outcome, or 202 with the
+// recorded turn and a pending delivery when the delivery outlasts the budget.
 humanInboxV1Router.post('/human-inbox/:id/human-reply', async (req: Request, res: Response, next: NextFunction) => {
+  const answerBy = Date.now() + deliveryWaitMs
   await guard(res, next, 'POST /human-inbox/:id/human-reply', async () => {
     const b = body(req)
     const id = letterId(req)
@@ -377,10 +434,15 @@ humanInboxV1Router.post('/human-inbox/:id/human-reply', async (req: Request, res
       return
     }
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'server.human-inbox.human-reply', SERVER_RELAY_SID, { ...b, id }, 200)
+      await relayDelivering(res, 'server.human-inbox.human-reply', { ...b, id })
       return
     }
     const { humanReplyAndDeliver } = await import('../../core/human-inbox/letter-ops.js')
-    res.json(await humanReplyAndDeliver(id, { text: typeof b.text === 'string' ? b.text : '' }))
+    // `clientId` (optional) makes a retry of the same reply idempotent; see humanReplyAndDeliver.
+    const result = await humanReplyAndDeliver(id, {
+      text: typeof b.text === 'string' ? b.text : '',
+      ...(b.clientId !== undefined ? { clientId: typeof b.clientId === 'string' ? b.clientId : '' } : {}),
+    }, { answerBy })
+    res.status(deliveringStatus(result)).json(result)
   })
 })

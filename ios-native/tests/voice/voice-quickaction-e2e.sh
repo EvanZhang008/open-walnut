@@ -7,7 +7,7 @@
 # What it proves end-to-end (things no unit test can):
 #   1. The quick action lands the app on the CHAT tab already RECORDING — no tap
 #      on the mic button, no tab switch. The recording row's caption reads
-#      "Recording — stop to send", i.e. auto-send is armed.
+#      "Recording. Stop to send", i.e. auto-send is armed.
 #   2. Stopping uploads the take to POST /api/v1/stt/transcribe (verified in the
 #      SERVER's log, not just by a UI guess) — so the mic really captured and the
 #      transcription request really left the phone.
@@ -180,7 +180,7 @@ appId: $BUNDLE
 # No taps at all before this assertion: the launch alone must land on Chat with
 # the mic already open. "stop to send" is the auto-send arming, visible.
 - extendedWaitUntil:
-    visible: "Recording — stop to send"
+    visible: "Recording. Stop to send"
     timeout: 15000
 - takeScreenshot: $WORK/01-recording-armed
 - assertVisible:
@@ -245,7 +245,7 @@ appId: $BUNDLE
 - extendedWaitUntil:
     visible: "Recording…"
     timeout: 15000
-- assertNotVisible: "Recording — stop to send"
+- assertNotVisible: "Recording. Stop to send"
 - takeScreenshot: $WORK/03-manual-take-not-armed
 - tapOn:
     id: "chat.voiceStop"

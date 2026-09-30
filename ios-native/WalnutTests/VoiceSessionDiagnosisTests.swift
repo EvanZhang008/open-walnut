@@ -22,6 +22,35 @@ final class VoiceSessionDiagnosisTests: XCTestCase {
         NSError(domain: NSOSStatusErrorDomain, code: code)
     }
 
+    // MARK: - Copy
+
+    /// Every sentence the mic can show is plain sentences, never a clause after
+    /// an em or en dash (the repo's rule for user-visible text).
+    func testNoVoiceNoticeUsesADash() {
+        let codes: [AVAudioSession.ErrorCode] = [
+            .insufficientPriority, .cannotInterruptOthers, .siriIsRecording, .isBusy,
+            .cannotStartRecording, .mediaServicesFailed, .resourceNotAvailable,
+            .badParam, .incompatibleCategory,
+        ]
+        var notices = codes.map { VoiceSessionDiagnosis.classify(osStatus($0.rawValue)).message }
+        notices.append(VoiceSessionDiagnosis.classify(osStatus(123_456)).message)
+        notices.append(VoiceSessionDiagnosis.classify(NSError(domain: "com.example.other", code: 7)).message)
+        let apiErrors: [APIError] = [
+            .server(status: 503, code: "stt_unavailable", message: "No speech engine is reachable right now",
+                    serverHash: nil, serverContent: nil),
+            .notConfigured, .badResponse, .network(underlying: URLError(.timedOut)),
+        ]
+        notices += apiErrors.map(\.voiceNotice)
+        for notice in notices {
+            XCTAssertFalse(notice.contains("\u{2014}") || notice.contains("\u{2013}"), "a dash in: \(notice)")
+        }
+        XCTAssertEqual(VoiceRecorder.sentence("Voice unavailable: No speech engine is reachable right now")
+                       + " Recording saved.",
+                       "Voice unavailable: No speech engine is reachable right now. Recording saved.")
+        XCTAssertEqual(VoiceRecorder.sentence("Already a sentence."), "Already a sentence.")
+        XCTAssertEqual(VoiceRecorder.sentence("  "), "")
+    }
+
     // MARK: - The exact field failure
 
     /// Regression pin for the incident. The literal 561017449 is spelled out on
@@ -40,7 +69,7 @@ final class VoiceSessionDiagnosisTests: XCTestCase {
         let d = VoiceSessionDiagnosis.classify(osStatus(561_017_449))
 
         XCTAssertEqual(d.reason, "insufficient-priority")
-        XCTAssertEqual(d.message, "Another app is using audio (a call?) — end it and try again")
+        XCTAssertEqual(d.message, "Another app is using audio (a call?). End it and try again.")
         XCTAssertTrue(d.retryable, "a call ending frees the category")
         XCTAssertFalse(d.tryBareConfig, "our options were fine; another app simply outranked us")
     }

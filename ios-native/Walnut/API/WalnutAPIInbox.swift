@@ -10,6 +10,21 @@ import Foundation
 // Sending a letter is an AGENT action (`wn tools call human_inbox_send`) and is
 // deliberately absent here — the phone only reads, answers, and files.
 
+/// The inbox store's network seam, so WalnutTests can drive the REAL optimistic
+/// read / rollback / retry machine against a scripted transport. WalnutAPI is the
+/// live implementation; the requirements match its methods 1:1.
+protocol InboxTransport {
+    func letters(archived: Bool) async throws -> LetterListResponse
+    func letter(id: String) async throws -> Letter
+    func setLetterRead(id: String, read: Bool) async throws -> Letter
+    func setLetterPinned(id: String, pinned: Bool) async throws -> Letter
+    func setLetterArchived(id: String, archived: Bool) async throws -> Letter
+    func answerLetter(id: String, actionId: String, freeText: String?) async throws -> LetterActionResult
+    func replyToLetter(id: String, text: String) async throws -> LetterActionResult
+}
+
+extension WalnutAPI: InboxTransport {}
+
 extension WalnutAPI {
     /// Envelope list (no body content). `archived: true` is the Archived shelf;
     /// the two lists are disjoint, which is why the inbox keeps them apart

@@ -279,7 +279,7 @@ describe('index-resident fields are bounded', () => {
     const answered = await answerLetter(letter.id, { actionId: 'ship', freeText: 'N'.repeat(9_000) });
 
     expect(answered.answered?.freeText?.length).toBe(4_000);
-    expect(answered.thread[0].text.length).toBeLessThanOrEqual(4_000 + 'Ship it — '.length);
+    expect(answered.thread[0].text.length).toBeLessThanOrEqual(4_000 + 'Ship it: '.length);
     const raw = fs.readFileSync(humanInboxPaths.indexFile, 'utf-8');
     expect(raw.length).toBeLessThan(20_000);
   });

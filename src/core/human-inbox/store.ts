@@ -26,6 +26,7 @@ import { ensureLetterBridge, mirrorLetterReadState } from '../notifications/lett
 import { derivePreview, truncatePreview } from './preview.js';
 import {
   BODY_FILE_RE,
+  CLIENT_ID_RE,
   LETTER_ID_RE,
   emptyStore,
   normalizeSender,
@@ -45,6 +46,7 @@ import {
   type LetterThreadEntry,
   type NewLetter,
   type ThreadEntry,
+  type ThreadEntryDelivery,
 } from './types.js';
 
 const INBOX_DIR = path.join(WALNUT_HOME, 'human-inbox');
@@ -787,14 +789,17 @@ export async function answerLetter(
     if (!action) throw invalid(`Unknown actionId: ${actionId}`);
     const at = Date.now();
     // Both spellings of the note live in the index, so both are bounded (the
-    // human's full text, if it was ever that long, is what they typed — the cap
+    // human's full text, if it was ever that long, is what they typed; the cap
     // matches every other thread turn).
     const note = boundThreadText(freeText);
     letter.answered = { actionId: action.id, label: action.label, at, ...(note ? { freeText: note } : {}) };
     letter.thread.push({
       from: 'human',
-      text: note ? `${action.label} — ${note}` : action.label,
+      text: note ? `${action.label}: ${note}` : action.label,
       at,
+      // Recorded with the answer, so a reader never sees an answer with no
+      // delivery state while the attempt runs (answerLetterAndDeliver replaces it).
+      delivery: { status: 'pending', at },
     });
     setReadFlag(letter, true);
     letter.archived = false;
@@ -851,20 +856,104 @@ export async function withdrawLetter(
 }
 
 /** Append the human's free-text reply. Same un-archive + mark-read reasoning. */
-export async function humanReply(id: string, input: { text: string }): Promise<LetterRecord> {
+export async function humanReply(
+  id: string,
+  input: { text: string; clientId?: string },
+): Promise<LetterRecord> {
+  return (await humanReplyTurn(id, input)).record;
+}
+
+/** A human reply as recorded: the letter, which turn is the reply, and whether it was a repeat. */
+export interface HumanReplyTurn {
+  record: LetterRecord;
+  /** Index of the reply in `record.thread`. Turns are appended, never reordered. */
+  turn: number;
+  /** A turn with this `clientId` was already on record, so nothing was appended. */
+  duplicate: boolean;
+}
+
+/**
+ * Append the human's free-text reply, once per `clientId`.
+ *
+ * The id is how a client retries safely. A reply whose response was lost (a
+ * timeout, a dropped relay, a double tap) is sent again with the SAME id, and a
+ * repeat returns the turn already on record instead of threading the words twice.
+ * No id keeps the old behavior: every call appends. An id that fails the shape
+ * rule is refused rather than ignored, because ignoring it would quietly turn a
+ * retry into a duplicate.
+ */
+export async function humanReplyTurn(
+  id: string,
+  input: { text: string; clientId?: string },
+): Promise<HumanReplyTurn> {
   requireValidId(id);
   const text = str(input?.text).trim();
   if (!text) throw invalid('text is required');
   assertBodySize(text, 'text');
-  const record = await withWriteLock(() => withStore((store) => {
+  const clientId = input?.clientId === undefined ? undefined : str(input.clientId);
+  if (clientId !== undefined && !CLIENT_ID_RE.test(clientId)) {
+    throw invalid('clientId must be 1 to 100 characters of letters, digits, and . _ : -');
+  }
+  const out = await withWriteLock(() => withStore((store) => {
     const letter = find(store, id);
-    letter.thread.push({ from: 'human', text: boundThreadText(text), at: Date.now() });
+    const existing = clientId === undefined
+      ? -1
+      : letter.thread.findIndex(t => t.from === 'human' && t.clientId === clientId);
+    if (existing >= 0) return { record: { ...letter }, turn: existing, duplicate: true };
+    const at = Date.now();
+    letter.thread.push({
+      from: 'human',
+      text: boundThreadText(text),
+      at,
+      ...(clientId !== undefined ? { clientId } : {}),
+      // In the same write as the words: a reader that sees this turn before the
+      // attempt ends knows its outcome is still to come (humanReplyAndDeliver
+      // replaces it), instead of seeing a turn with no delivery at all.
+      delivery: { status: 'pending', at },
+    });
     setReadFlag(letter, true);
     letter.archived = false;
-    return { ...letter };
+    return { record: { ...letter }, turn: letter.thread.length - 1, duplicate: false };
   }));
-  void mirrorLetterReadState(record.id, true);
-  return record;
+  if (!out.duplicate) void mirrorLetterReadState(out.record.id, true);
+  return out;
+}
+
+/** Longest `reason` kept on a persisted delivery (an exception message can be long). */
+const DELIVERY_REASON_MAX_CHARS = 200;
+
+/**
+ * Record how far one human turn got toward the origin session.
+ *
+ * Written after the delivery attempt, so a reader can show the status under the
+ * turn and still show it after the letter is closed and reopened. Deliberately
+ * leaves read and archive state alone: the delivery is news about the reply,
+ * not about the letter. Returns what was stored, or null (and writes nothing)
+ * when the turn at that index is not the human turn it was recorded as: a record
+ * that moved under us must never have a status pinned to the wrong words.
+ */
+export async function recordTurnDelivery(
+  id: string,
+  turn: number,
+  expected: { at: number },
+  delivery: ThreadEntryDelivery,
+): Promise<ThreadEntryDelivery | null> {
+  requireValidId(id);
+  const reason = delivery.reason === undefined
+    ? undefined
+    : delivery.reason.slice(0, DELIVERY_REASON_MAX_CHARS);
+  const stored: ThreadEntryDelivery = {
+    status: delivery.status,
+    at: delivery.at,
+    ...(reason !== undefined ? { reason } : {}),
+    ...(delivery.sessionId !== undefined ? { sessionId: delivery.sessionId } : {}),
+  };
+  return withWriteLock(() => withStore((store) => {
+    const entry = find(store, id).thread[turn];
+    if (!entry || entry.from !== 'human' || entry.at !== expected.at) return null;
+    entry.delivery = stored;
+    return { ...stored };
+  }));
 }
 
 /** Paths, for tests and for anything that needs to point at the store on disk. */

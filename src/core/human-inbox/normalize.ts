@@ -16,6 +16,7 @@ import {
   type LetterSender,
   type LetterType,
   type ThreadEntry,
+  type ThreadEntryDelivery,
 } from './types.js';
 import { truncatePreview } from './preview.js';
 
@@ -23,6 +24,10 @@ import { truncatePreview } from './preview.js';
 export const LETTER_ID_RE = /^lt-[0-9a-z]{1,12}-[0-9a-z]{4,12}$/;
 /** Body file names we will open: `<id>.html|.md` or `<id>.r<n>.html|.md`. */
 export const BODY_FILE_RE = /^lt-[0-9a-z]{1,12}-[0-9a-z]{4,12}(?:\.r\d{1,4})?\.(?:html|md)$/;
+/** A human reply's client id, as `POST .../human-reply` accepts `clientId`. */
+export const CLIENT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
+
+const DELIVERY_STATUSES: ReadonlySet<string> = new Set(['pending', 'queued', 'deferred', 'skipped', 'failed']);
 
 export interface LetterStoreFile {
   version: 1;
@@ -72,9 +77,29 @@ function normalizeThread(raw: unknown): ThreadEntry[] {
       ...(e.bodyFormat === 'html' || e.bodyFormat === 'markdown' ? { bodyFormat: e.bodyFormat } : {}),
       ...(typeof e.bodyFile === 'string' ? { bodyFile: e.bodyFile } : {}),
       ...(typeof e.bodyBytes === 'number' && e.bodyBytes >= 0 ? { bodyBytes: e.bodyBytes } : {}),
+      // Human turns only. Both survive a rewrite: dropping `clientId` would let a
+      // retried reply land twice, and dropping `delivery` would make a reopened
+      // letter forget whether the reply reached the agent.
+      ...(from === 'human' && typeof e.clientId === 'string' && CLIENT_ID_RE.test(e.clientId)
+        ? { clientId: e.clientId } : {}),
+      ...(from === 'human' ? normalizeDelivery(e.delivery) : {}),
     });
   }
   return out;
+}
+
+function normalizeDelivery(raw: unknown): { delivery?: ThreadEntryDelivery } {
+  if (!raw || typeof raw !== 'object') return {};
+  const d = raw as Record<string, unknown>;
+  if (typeof d.status !== 'string' || !DELIVERY_STATUSES.has(d.status)) return {};
+  return {
+    delivery: {
+      status: d.status as ThreadEntryDelivery['status'],
+      at: typeof d.at === 'number' ? d.at : 0,
+      ...(typeof d.reason === 'string' ? { reason: d.reason } : {}),
+      ...(typeof d.sessionId === 'string' ? { sessionId: d.sessionId } : {}),
+    },
+  };
 }
 
 /** Also used at send time, so a route can never stamp a sender-less letter. */

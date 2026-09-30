@@ -34,6 +34,15 @@ export { LetterError };
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 
+/**
+ * How long a relayed answer or reply waits for its delivery before the primary
+ * answers with the recorded turn and a `pending` delivery. Well inside the
+ * replica route's own 12s deadline, which also has to cover the bridge round
+ * trip: a replica that timed out first would tell the phone "try again" about a
+ * reply the primary already threaded.
+ */
+const RELAY_DELIVERY_WAIT_MS = 7_000;
+
 function requireId(p: Record<string, unknown>): string {
   const id = str(p.id).trim();
   if (!id) throw new LetterError('id is required', 'invalid', 400);
@@ -106,9 +115,12 @@ export async function handleHumanInboxRelayAction(
       return await answerLetterAndDeliver(requireId(p), {
         actionId: str(p.actionId),
         ...(typeof p.freeText === 'string' ? { freeText: p.freeText } : {}),
-      }, 'relay') as unknown as Record<string, unknown>;
+      }, 'relay', { answerBy: Date.now() + RELAY_DELIVERY_WAIT_MS }) as unknown as Record<string, unknown>;
     case 'human-reply':
-      return await humanReplyAndDeliver(requireId(p), { text: str(p.text) }) as unknown as Record<string, unknown>;
+      return await humanReplyAndDeliver(requireId(p), {
+        text: str(p.text),
+        ...(p.clientId !== undefined ? { clientId: str(p.clientId) } : {}),
+      }, { answerBy: Date.now() + RELAY_DELIVERY_WAIT_MS }) as unknown as Record<string, unknown>;
     default:
       throw new LetterError(`unknown human-inbox action: ${sub}`, 'invalid', 400);
   }

@@ -22,15 +22,36 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-human-inbox-routes'))
 
 /** Captured deliveries — hoisted so the mock factory can close over it. */
-const { deliveries } = vi.hoisted(() => ({
+const { deliveries, hold, holdRecord } = vi.hoisted(() => ({
   deliveries: [] as Array<{ sessionId: string; message: string; source?: string }>,
+  /** Set to a promise to hold the NEXT delivery open until it settles. */
+  hold: { next: null as Promise<void> | null },
+  /** Set to a promise to hold the NEXT human-reply WRITE until it settles. */
+  holdRecord: { next: null as Promise<void> | null },
 }))
+
+// Only a held write is changed: the real store does everything else.
+vi.mock('../../src/core/human-inbox/store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/human-inbox/store.js')>()
+  return {
+    ...actual,
+    humanReplyTurn: async (...args: Parameters<typeof actual.humanReplyTurn>) => {
+      const wait = holdRecord.next
+      holdRecord.next = null
+      if (wait) await wait
+      return actual.humanReplyTurn(...args)
+    },
+  }
+})
 
 vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/core/session-message-queue.js')>()
   return {
     ...actual,
     sendMessageToSession: async (sessionId: string, message: string, opts?: { source?: string }) => {
+      const wait = hold.next
+      hold.next = null
+      if (wait) await wait
       deliveries.push({ sessionId, message, source: opts?.source })
       return { id: `qm-test-${deliveries.length}` }
     },
@@ -39,6 +60,7 @@ vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { setDeliveryWaitForTests, setRouteDeadlineForTests } from '../../src/web/routes/human-inbox-v1.js'
 import { CALLER_SID_HEADER, executeOp } from '../../src/ops/index.js'
 import { LETTER_BODY_MAX_BYTES, LETTER_HTML_MAX_BYTES } from '../../src/core/human-inbox/types.js'
 
@@ -442,6 +464,115 @@ describe('replies in both directions', () => {
     expect(out.delivery.status).toBe('queued')
     expect(deliveries[0].message).toContain('does this explain Tuesday too?')
     expect(deliveries[0].message).toContain('Root cause found')
+  })
+
+  it('a reply sent twice with one clientId threads once, and its delivery survives a reopen', async () => {
+    const id = await sendLetter({ subject: 'Root cause found', type: 'review', markdown: 'the lock is stale' }, SENDER_SID)
+    const body = { text: 'Same fix for Tuesday?', clientId: 'rp-route-1' }
+    const first = await post(`/api/v1/human-inbox/${id}/human-reply`, body)
+    expect(first.status, await first.clone().text()).toBe(200)
+    // A lost response is retried with the same id: the route answers, nothing new is threaded.
+    const again = await post(`/api/v1/human-inbox/${id}/human-reply`, body)
+    expect(again.status, await again.clone().text()).toBe(200)
+    expect(((await again.json()) as { delivery: { status: string } }).delivery.status).toBe('queued')
+    expect(deliveries).toHaveLength(1)
+
+    const { letter } = await getLetter(id)
+    expect(letter.thread).toHaveLength(1)
+    expect(letter.thread[0]).toMatchObject({
+      from: 'human', text: 'Same fix for Tuesday?', clientId: 'rp-route-1',
+      delivery: { status: 'queued', sessionId: SENDER_SID },
+    })
+    expect((await post(`/api/v1/human-inbox/${id}/human-reply`, { text: 'x', clientId: 'no spaces allowed' })).status)
+      .toBe(400)
+  })
+
+  it('a delivery that outlasts the route budget answers 202 with the turn on record as pending, never 504', async () => {
+    // Why: the route used to answer 504 "try again" at its deadline while the
+    // turn was already threaded and still being delivered (2026-09-29 gate P1-A).
+    const id = await sendLetter({ subject: 'Slow origin', type: 'review', markdown: 'x' }, SENDER_SID)
+    let release!: () => void
+    hold.next = new Promise<void>((resolve) => { release = resolve })
+    setDeliveryWaitForTests(150)
+    try {
+      const body = { text: 'Take your time.', clientId: 'rp-route-slow' }
+      const res = await post(`/api/v1/human-inbox/${id}/human-reply`, body)
+      expect(res.status, await res.clone().text()).toBe(202)
+      const out = await res.json() as {
+        letter: { thread: Array<{ clientId?: string; delivery?: { status: string } }> }
+        delivery: { status: string }
+      }
+      expect(out.delivery).toEqual({ status: 'pending' })
+      expect(out.letter.thread[0]).toMatchObject({ clientId: 'rp-route-slow', delivery: { status: 'pending' } })
+
+      // The phone's Retry of the same reply while it is still delivering: 202 again, no second delivery.
+      const again = await post(`/api/v1/human-inbox/${id}/human-reply`, body)
+      expect(again.status, await again.clone().text()).toBe(202)
+
+      release()
+      await vi.waitFor(async () => {
+        const { letter } = await getLetter(id)
+        expect(letter.thread[0]).toMatchObject({ delivery: { status: 'queued', sessionId: SENDER_SID } })
+      })
+      expect(deliveries).toHaveLength(1)
+      const after = await post(`/api/v1/human-inbox/${id}/human-reply`, body)
+      expect(after.status).toBe(200)
+      expect(((await after.json()) as { delivery: { status: string } }).delivery.status).toBe('queued')
+      expect(deliveries).toHaveLength(1)
+    } finally {
+      setDeliveryWaitForTests(undefined)
+      hold.next = null
+      release?.()
+    }
+  })
+
+  it('504 only when nothing was recorded: a write that outlasts the deadline, never a slow delivery', async () => {
+    // The deadline's 504 tells the phone the reply may not be on record. It must
+    // never be sent for a turn that IS on record (that answer is 202), and when
+    // it is sent, the thread must not hold the reply yet (r4 gate, P2-3).
+    const id = await sendLetter({ subject: 'Slow disk', type: 'review', markdown: 'x' }, SENDER_SID)
+    let releaseWrite!: () => void
+    let releaseDelivery!: () => void
+    setRouteDeadlineForTests(400)
+    setDeliveryWaitForTests(200)
+    try {
+      // 1. The write itself is held past the deadline: 504, and nothing threaded.
+      holdRecord.next = new Promise<void>((resolve) => { releaseWrite = resolve })
+      const slowWrite = { text: 'Written late.', clientId: 'rp-route-late-write' }
+      const res = await post(`/api/v1/human-inbox/${id}/human-reply`, slowWrite)
+      expect(res.status, await res.clone().text()).toBe(504)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('timeout')
+      expect((await getLetter(id)).letter.thread).toHaveLength(0)
+
+      // The held write finishes on its own; a Retry with the same id then finds
+      // it and threads nothing twice.
+      releaseWrite()
+      await vi.waitFor(async () => {
+        expect((await getLetter(id)).letter.thread).toHaveLength(1)
+      })
+      const retried = await post(`/api/v1/human-inbox/${id}/human-reply`, slowWrite)
+      expect([200, 202]).toContain(retried.status)
+      expect((await getLetter(id)).letter.thread).toHaveLength(1)
+
+      // 2. The write is quick and the DELIVERY outlasts the same deadline: 202
+      // with the turn on record, never 504.
+      await vi.waitFor(() => expect(deliveries.length).toBeGreaterThanOrEqual(1))
+      hold.next = new Promise<void>((resolve) => { releaseDelivery = resolve })
+      const slowDelivery = await post(`/api/v1/human-inbox/${id}/human-reply`, {
+        text: 'Recorded at once.', clientId: 'rp-route-late-delivery',
+      })
+      expect(slowDelivery.status, await slowDelivery.clone().text()).toBe(202)
+      const thread = (await getLetter(id)).letter.thread as Array<{ clientId?: string; delivery?: { status: string } }>
+      expect(thread.map((t) => t.clientId)).toEqual(['rp-route-late-write', 'rp-route-late-delivery'])
+      releaseDelivery()
+    } finally {
+      setRouteDeadlineForTests(undefined)
+      setDeliveryWaitForTests(undefined)
+      holdRecord.next = null
+      hold.next = null
+      releaseWrite?.()
+      releaseDelivery?.()
+    }
   })
 
   it('an agent thread reply flips the letter back to unread', async () => {

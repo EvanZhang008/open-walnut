@@ -61,7 +61,7 @@ struct LetterMarkdownBody: View {
         let label = alt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
             : alt.trimmingCharacters(in: .whitespacesAndNewlines)
-        var note = AttributedString("Image not loaded — a letter never fetches from another server: \(label)")
+        var note = AttributedString("Image not loaded. A letter never fetches from another server: \(label)")
         note.font = .footnote.italic()
         return note
     }

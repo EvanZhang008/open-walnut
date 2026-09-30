@@ -22,11 +22,36 @@ struct LetterReaderView: View {
     @State private var loading = false
     /// Free-text note attached to a decision ("option B, after the tests pass").
     @State private var decisionNote = ""
-    @State private var replyText = ""
     @State private var busyActionId: String?
-    @State private var sendingReply = false
-    /// Last delivery outcome, shown non-blocking under the thread.
+    /// A problem that belongs to no single reply (a decision the server refused),
+    /// shown non-blocking under the thread. A reply's own outcome is on its
+    /// status line instead (`LetterReplyStatus`).
     @State private var deliveryNote: String?
+    /// Drafts and replies on their way live in the app-wide store, so leaving the
+    /// letter can never lose them.
+    private let replies = LetterReplyStore.shared
+    @State private var replyField = LetterReplyFieldController()
+    @State private var replyFocused = false
+    /// True from the Send tap until the reply is handed to the store: the commit
+    /// step waits on the input session, and a second tap in that window is the
+    /// same send.
+    @State private var committingSend = false
+    /// Walnut's own speech-to-text, the one the chat composer uses.
+    @State private var voice = VoiceRecorder()
+    /// The session a status line opened.
+    @State private var openedSession: WalnutSession?
+    /// Sessions a status line names that the tasks store does not hold, looked
+    /// up by id: found ones open, the rest make the line plain text, so a tap
+    /// never ends in "couldn't open that session".
+    @State private var lookedUpSessions: [String: WalnutSession] = [:]
+    @State private var unopenableSessions: Set<String> = []
+    /// Bumped by each Send (and a Retry of the newest reply): the letter scrolls
+    /// that reply into view wherever the reader was.
+    @State private var followTick = 0
+    /// From a Send at the accessibility sizes until its keyboard is asked to
+    /// leave (see `handOver`); the letter's scroll for that Send waits for it.
+    @State private var keyboardLeavesAfterSend = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// A DEFERRED document (over the server's inline threshold) is streamed to a
     /// local file and rendered from there — never held as a String, so a 100MB
     /// audio digest costs the app nothing beyond one copy chunk.
@@ -43,7 +68,9 @@ struct LetterReaderView: View {
                     if let answer = letter.answered { answeredCard(letter, answer) }
                     bodySection(letter)
                     taskRefs(letter)
-                    if !letter.threadEntries.isEmpty { LetterThreadView(letter: letter) }
+                    if !letter.threadEntries.isEmpty || !replies.pendingReplies(for: letterId).isEmpty {
+                        thread(letter)
+                    }
                     if let note = deliveryNote { deliveryLine(note) }
                 } else if loading {
                     ProgressView().controlSize(.large)
@@ -61,14 +88,43 @@ struct LetterReaderView: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 24)
+            .id(Self.contentId)
         }
+        // Dragging the letter down puts the keyboard away, as in a chat.
+        .scrollDismissesKeyboard(.interactively)
+        // A sent reply and its status line come into view above the reply box.
+        .modifier(LetterFollowsNewestStatus(
+            key: newestStatusKey, target: newestReplyItem?.id, contentId: Self.contentId, sendTick: followTick,
+            keyboardLeaving: keyboardLeavesAfterSend
+        ))
+        // A reply on record whose delivery is still running: re-read the letter
+        // until the outcome is in, so "Sending" turns into what happened.
+        .modifier(LetterDeliveryWatch(
+            waitingKey: deliveryWaitKey,
+            lateKey: deliveryLateKey,
+            reload: { await load() },
+            giveUp: { replies.markDeliveryUnconfirmed(letterId: letterId, entries: turnsAwaitingDelivery) }
+        ))
         .navigationTitle(letter?.kind.label ?? "Letter")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarButtons }
         .safeAreaInset(edge: .bottom) { composer }
+        .navigationDestination(item: $openedSession) { session in
+            SessionConversationView(session: session)
+        }
         .freezeScreen("inbox-letter")
         .task { await load() }
-        .onDisappear { LetterBodyDownload.clearCache() }
+        .task(id: sessionsToLookUp) { await lookUpSessions(sessionsToLookUp) }
+        .onAppear { attachVoice() }
+        .onDisappear {
+            // Opening a reply's session pushes over the reader, which stays in the
+            // stack: its streamed document must still be on disk on the way back.
+            if openedSession == nil { LetterBodyDownload.clearCache() }
+            // Same rule as the chat composer: a view the user left must not keep
+            // the mic open. The take is PRESERVED, never deleted, and comes back
+            // as the saved-recording row.
+            if voice.state == .recording { voice.preserveAndStop(reason: "view-dismissed") }
+        }
     }
 
     // MARK: - Header
@@ -196,7 +252,7 @@ struct LetterReaderView: View {
                 .accessibilityIdentifier("inbox.letter.markdownBody")
         }
         if letter.bodyWasClipped {
-            Text("Only the first \(Letter.phoneBodyCap / 1000)K characters are shown here — open this letter in the web console for the whole document.")
+            Text("Only the first \(Letter.phoneBodyCap / 1000)K characters are shown here. Open this letter in the web console for the whole document.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -288,6 +344,184 @@ struct LetterReaderView: View {
             .accessibilityIdentifier("inbox.letter.delivery")
     }
 
+    // MARK: - Thread + reply status
+
+    private func thread(_ letter: Letter) -> some View {
+        let recipient = recipientName(letter)
+        return LetterThreadView(
+            letter: letter,
+            pending: replies.pendingReplies(for: letterId),
+            status: { entry in turnStatus(entry, recipient: recipient) },
+            pendingStatus: { reply in pendingStatus(reply, recipient: recipient) },
+            onOpenSession: openSession,
+            onRetryTurn: { entry in
+                // The newest reply is scrolled into view; an older one is where
+                // the finger that tapped Retry already is.
+                if newestReplyItem?.id == LetterThreadItem.turn(entry).id {
+                    followTick += 1
+                }
+                Task {
+                    if let result = await replies.retryRecordedTurn(letterId: letterId, entry: entry) {
+                        adopt(result)
+                    } else {
+                        await recheckIfUnconfirmed()
+                    }
+                }
+            },
+            onRetryPending: { clientId in retryPending(clientId) },
+            onEditPending: { clientId in
+                replyField.endEditing()
+                replies.edit(letterId: letterId, clientId: clientId)
+                replyFocused = true
+            }
+        )
+    }
+
+    static let contentId = "letter.content"
+
+    /// The thread's newest reply (recorded or pending), in the order it renders.
+    private var newestReplyItem: LetterThreadItem? {
+        guard let letter else { return nil }
+        return LetterThreadItem.ordered(entries: letter.threadEntries, pending: replies.pendingReplies(for: letterId))
+            .last(where: \.isHuman)
+    }
+
+    /// Changes whenever the newest reply's status line appears or its words
+    /// change: what `LetterFollowsNewestStatus` scrolls into view.
+    private var newestStatusKey: String {
+        guard let letter, let item = newestReplyItem else { return "" }
+        let recipient = recipientName(letter)
+        let line: LetterReplyStatus?
+        switch item {
+        case .pending(let reply): line = pendingStatus(reply, recipient: recipient)
+        case .turn(let entry): line = turnStatus(entry, recipient: recipient)
+        }
+        return "\(item.id)|\(line?.text ?? "")|\(line?.offersRetry == true)|\(line?.isBusy == true)"
+    }
+
+    /// The line under a reply the server does not have yet. A reply whose answer
+    /// was lost reads as on its way while the letter is re-read to find out
+    /// (showing "Not confirmed" for the length of that read was a flash of a
+    /// state that is usually not true), and a Retry, being a new send, reads as
+    /// on its way like any other.
+    private func pendingStatus(_ reply: LetterReplyStore.PendingReply, recipient: String) -> LetterReplyStatus {
+        let unsettled = reply.state == .sending || (reply.mayHaveArrived && replies.isRechecking(letterId: letterId))
+        if unsettled { return .sending(recipient: recipient) }
+        if case .failed(let sentence) = reply.state {
+            return reply.mayHaveArrived ? .unconfirmed(recipient: recipient) : .sendFailed(sentence)
+        }
+        return .sending(recipient: recipient)
+    }
+
+    /// The line under one recorded human turn, or nil when there is nothing true
+    /// to say (an older server that recorded no delivery, and no response of
+    /// this app session that carried one).
+    private func turnStatus(_ entry: LetterThreadEntry, recipient: String) -> LetterReplyStatus? {
+        guard var line = recordedTurnStatus(entry, recipient: recipient) else { return nil }
+        // A Retry on its way, or one whose answer was lost while the letter is
+        // re-read: the line it was tapped on stays, busy.
+        let retryUnsettled = replies.isRechecking(letterId: letterId)
+            && replies.retryError(letterId: letterId, entry: entry)?.mayHaveArrived == true
+        if replies.isRetrying(letterId: letterId, entry: entry) || retryUnsettled { line = line.busy(recipient: recipient) }
+        // Tappable only into a session this phone can open.
+        if let sessionId = line.sessionId, session(for: sessionId) == nil { line = line.withoutSession() }
+        return line
+    }
+
+    private func recordedTurnStatus(_ entry: LetterThreadEntry, recipient: String) -> LetterReplyStatus? {
+        let when = entry.date ?? entry.delivery?.at.map { Date(timeIntervalSince1970: $0 / 1000) }
+        if replies.awaitsDelivery(letterId: letterId, entry: entry) {
+            return replies.isDeliveryUnconfirmed(letterId: letterId, entry: entry)
+                ? .unconfirmed(recipient: recipient, canRetry: entry.clientId != nil)
+                : .sending(recipient: recipient)
+        }
+        guard let delivery = replies.delivery(letterId: letterId, entry: entry) else { return nil }
+        if delivery.status == "failed", let failure = replies.retryError(letterId: letterId, entry: entry) {
+            return failure.mayHaveArrived
+                ? .unconfirmed(recipient: recipient)
+                : .retryFailed(recipient: recipient, at: when, sessionId: delivery.sessionId)
+        }
+        return .recorded(delivery, recipient: recipient, at: when, canRetry: entry.clientId != nil)
+    }
+
+    /// Recorded turns still waiting for their delivery outcome and not yet given
+    /// up on: what `LetterDeliveryWatch` re-reads the letter for.
+    private var turnsAwaitingDelivery: [LetterThreadEntry] {
+        guard let letter else { return [] }
+        return letter.threadEntries.filter { entry in
+            replies.awaitsDelivery(letterId: letterId, entry: entry)
+                && !replies.isDeliveryUnconfirmed(letterId: letterId, entry: entry)
+        }
+    }
+
+    private var deliveryWaitKey: String {
+        turnsAwaitingDelivery.map { LetterThreadItem.turn($0).id }.joined(separator: ",")
+    }
+
+    /// What is still unknown after the backoff: recorded turns shown as "Not
+    /// confirmed", and a reply whose answer was lost. `LetterDeliveryWatch`
+    /// re-reads slowly for these, so a late outcome still shows on its own.
+    private var deliveryLateKey: String {
+        guard let letter else { return "" }
+        var parts = letter.threadEntries.filter { entry in
+            replies.awaitsDelivery(letterId: letterId, entry: entry)
+                && replies.isDeliveryUnconfirmed(letterId: letterId, entry: entry)
+        }.map { LetterThreadItem.turn($0).id }
+        if replies.needsRecheck(letterId: letterId) { parts.append("lost-answer") }
+        return parts.joined(separator: ",")
+    }
+
+    /// The session behind a status line, when this phone can open it.
+    private func session(for id: String) -> WalnutSession? {
+        tasks.sessions.first { $0.id == id } ?? lookedUpSessions[id]
+    }
+
+    /// Session ids the thread's status lines name that are neither in the tasks
+    /// store nor looked up yet.
+    private var sessionsToLookUp: [String] {
+        guard let letter else { return [] }
+        var ids: [String] = []
+        for entry in letter.threadEntries where entry.isHuman {
+            guard let id = replies.delivery(letterId: letterId, entry: entry)?.sessionId, !id.isEmpty,
+                  !ids.contains(id), !unopenableSessions.contains(id), session(for: id) == nil else { continue }
+            ids.append(id)
+        }
+        return ids
+    }
+
+    /// The by-id lookup the board uses, once per session per appearance.
+    private func lookUpSessions(_ ids: [String]) async {
+        guard !ids.isEmpty else { return }
+        let task = letter?.sender?.taskId.flatMap { id in tasks.tasks.first { $0.id == id } }
+        var found: [String: WalnutSession] = [:]
+        var missing: Set<String> = []
+        for id in ids {
+            if let session = await tasks.resolveSession(id: id, task: task) { found[id] = session } else { missing.insert(id) }
+        }
+        // One write, so the lookup does not restart itself halfway through.
+        lookedUpSessions.merge(found) { _, new in new }
+        unopenableSessions.formUnion(missing)
+    }
+
+    /// Who a reply goes to, in the words the Tasks tab uses: the origin task's
+    /// title from the tasks store, else the title stamped on the letter, else
+    /// "the agent".
+    private func recipientName(_ letter: Letter) -> String {
+        let sessionId = letter.sender?.sessionId
+        let session = sessionId.flatMap { sid in tasks.sessions.first { $0.id == sid } }
+        let taskId = letter.sender?.taskId ?? session?.taskId
+        let storeTitle = taskId.flatMap { id in tasks.tasks.first { $0.id == id }?.title } ?? session?.taskTitle
+        return LetterReplyStatus.recipientName(storeTitle: storeTitle, stampedTitle: letter.taskTitle)
+    }
+
+    /// Open the session a status line names. A line is only tappable once the
+    /// session is in hand (`session(for:)`), so there is no failure to report.
+    private func openSession(_ sessionId: String) {
+        guard let session = session(for: sessionId) else { return }
+        deliveryNote = nil
+        openedSession = session
+    }
+
     // MARK: - Toolbar + composer
 
     @ToolbarContentBuilder
@@ -301,7 +535,7 @@ struct LetterReaderView: View {
                         Label(letter.isPinned ? "Unpin" : "Pin", systemImage: letter.isPinned ? "pin.slash" : "pin")
                     }
                     Button {
-                        Task { await inbox.setRead(id: letter.id, read: false) }
+                        inbox.mark(id: letter.id, read: false)
                     } label: {
                         Label("Mark Unread", systemImage: "envelope.badge")
                     }
@@ -321,49 +555,106 @@ struct LetterReaderView: View {
         }
     }
 
+    /// The reply box: voice notices, then either the recording row or the field
+    /// with the mic and send beside it (mic just left of send, as in the chat
+    /// composer).
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Reply to the agent", text: $replyText, axis: .vertical)
-                .lineLimit(1...5)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .accessibilityIdentifier("inbox.letter.replyField")
-            Button {
-                Task { await sendReply() }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(canSend ? Theme.tint : Color(.tertiaryLabel))
+        VStack(spacing: 0) {
+            VoiceNoticeRows(voice: voice, idPrefix: "inbox.letter") { text in insertTranscript(text) }
+            if voice.state == .recording {
+                VoiceRecordingBar(
+                    voice: voice, idPrefix: "inbox.letter",
+                    onCancel: { voice.cancel() },
+                    onStop: {
+                        Task { if let text = await voice.stopAndTranscribe() { insertTranscript(text) } }
+                    }
+                )
+            } else {
+                HStack(alignment: .bottom, spacing: 4) {
+                    LetterReplyField(
+                        text: replyDraft, isFocused: $replyFocused, controller: replyField
+                    )
+                    // A UIKit view has no width of its own to offer the row: take
+                    // what is left beside the mic and send.
+                    .frame(maxWidth: .infinity)
+                    .overlay(alignment: .topLeading) {
+                        // The long placeholder does not fit at the largest
+                        // sizes, and an ellipsis in a placeholder reads as a bug.
+                        //
+                        // Always drawn, hidden by a clear colour. A view that
+                        // appears (inserted, or back from opacity 0, which drops
+                        // it from what is drawn) starts at its FINAL place, so
+                        // when the Send that emptied the field also moved the box
+                        // (the keyboard leaving) the placeholder showed at the
+                        // bottom while the box was still sliding down to it
+                        // (2026-09-29 films, round 4: opacity popped too, a clear
+                        // colour slides with the box).
+                        Text(dynamicTypeSize.isAccessibilitySize ? "Reply" : "Reply to the agent")
+                            .lineLimit(1)
+                            .foregroundStyle(
+                                replyDraft.wrappedValue.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.clear)
+                            )
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, LetterReplyField.verticalInset)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                    .background(
+                        Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
+                    VoiceMicButton(voice: voice, identifier: "inbox.letter.mic")
+                    LetterSendButton(enabled: canSend, action: sendTapped)
+                }
+                .padding(.leading, 12)
+                .padding(.trailing, 6)
+                .padding(.vertical, 6)
             }
-            .buttonStyle(.plain)
-            .disabled(!canSend)
-            .accessibilityIdentifier("inbox.letter.send")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
         .background(.bar)
+        // A group, so the children keep their own identifiers.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("inbox.letter.composer")
+    }
+
+    /// This letter's draft, held by the app-wide store.
+    private var replyDraft: Binding<String> {
+        Binding(
+            get: { replies.draft(for: letterId) },
+            set: { replies.setDraft($0, for: letterId) }
+        )
     }
 
     private var canSend: Bool {
-        !sendingReply && !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !committingSend && !replies.draft(for: letterId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Actions
 
     /// Paint from the row we already have, then read the full letter. Opening
-    /// marks THIS letter read (and nothing else).
+    /// marks THIS letter read (and nothing else), at the open itself, as the
+    /// console's reader does: waiting for the body kept the row and the badge
+    /// unread for as long as a slow relay took to deliver it.
     private func load() async {
         if letter == nil { letter = inbox.letter(id: letterId) }
+        inbox.markReadOnOpen(id: letterId)
         loading = true
         defer { loading = false }
+        let started = Date()
         do {
-            letter = try await inbox.detail(id: letterId)
+            let loaded = try await inbox.detail(id: letterId)
+            // A reply whose response was lost but which the server recorded shows
+            // once, as the recorded turn; one it does not hold gets Edit back.
+            replies.reconcile(letterId: letterId, with: loaded, readStartedAt: started)
+            letter = loaded
             loadError = nil
-            inbox.markReadOnOpen(id: letterId)
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return }
+            // The letter is gone from the server: so are its saved words.
+            if let apiError = error as? APIError, case .server(404, _, _, _, _) = apiError {
+                replies.forget(letterId: letterId)
+            }
             // A failed re-read must not blank a letter already on screen.
             if letter == nil { loadError = error.localizedDescription }
         }
@@ -373,15 +664,21 @@ struct LetterReaderView: View {
         guard busyActionId == nil else { return }
         busyActionId = action.id
         defer { busyActionId = nil }
+        // The note field has the same input session hazard as the reply box: end
+        // editing first so a composition or dictation is committed before it is read.
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        try? await Task.sleep(for: .milliseconds(150))
         let note = decisionNote.trimmingCharacters(in: .whitespacesAndNewlines)
         switch await inbox.answer(id: letterId, actionId: action.id, freeText: note.isEmpty ? nil : note) {
         case .success(let result):
             decisionNote = ""
+            deliveryNote = nil
+            replies.noteAnswerDelivery(result, letterId: letterId)
             adopt(result)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         case .failure(let error):
             // 409 = someone answered from another surface. The buttons must not
-            // stay armed over a decision that is already made — re-read instead.
+            // stay armed over a decision that is already made, so re-read instead.
             if let apiError = error as? APIError, apiError.isConflict {
                 deliveryNote = "This letter was already answered somewhere else."
                 await load()
@@ -391,33 +688,189 @@ struct LetterReaderView: View {
         }
     }
 
-    private func sendReply() async {
-        let text = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !sendingReply else { return }
-        sendingReply = true
-        defer { sendingReply = false }
-        switch await inbox.reply(id: letterId, text: text) {
-        case .success(let result):
-            replyText = ""
-            adopt(result)
-        case .failure(let error):
-            deliveryNote = error.localizedDescription
+    /// Send what the field shows, then empty it for good.
+    ///
+    /// The order is the fix for the reply that stayed in the box after it was
+    /// sent (see `LetterReplyField`): end the input session FIRST, so marked text
+    /// (an IME composition, dictation still publishing) is committed as shown;
+    /// read the committed words; hand them to the store, which empties the draft
+    /// and shows them as a pending reply in the thread; then clear the view
+    /// itself and guard it against the session writing them back.
+    ///
+    /// All of that happens in the tap's own run-loop turn unless dictation is
+    /// running (only dictation can still change the words after Send), so the
+    /// field never shows the sent words for a frame after the tap.
+    private func sendTapped() {
+        guard !committingSend, canSend else { return }
+        if let shown = replyField.readNow(fallback: replies.draft(for: letterId)) {
+            handOver(shown)
+            return
+        }
+        committingSend = true
+        Task { @MainActor in
+            let shown = await replyField.commitAndRead(fallback: replies.draft(for: letterId))
+            committingSend = false
+            handOver(shown)
         }
     }
 
+    private func handOver(_ shown: String) {
+        let text = shown.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        AppLog.info("inbox", "letter reply sent from the reader", [
+            "letterId": letterId, "chars": "\(text.count)",
+        ])
+        replyField.clear(sent: text)
+        // The keyboard stays up for a follow-up, as in the chat composer,
+        // except after a committed composition (its input session must end, so
+        // it leaves now, after the field is cleared) and at the accessibility
+        // sizes, where the keyboard leaves too little room to show the reply and
+        // what happened to it. There it leaves once the reply's line says what
+        // happened, or after `keyboardOutcomeWait`, and the letter moves once,
+        // with the keyboard, to the reply and that line. Leaving at once moved
+        // it twice whenever the answer landed while the keyboard went (film,
+        // 2026-09-29): down with the reply box, then up to the taller line.
+        let leavesWithOutcome = dynamicTypeSize.isAccessibilitySize && !replyField.committedComposition
+        if replyField.committedComposition { replyField.endEditing() }
+        guard let clientId = replies.beginSend(
+            letterId: letterId, text: text, afterTurns: letter?.threadEntries.count
+        ) else {
+            if leavesWithOutcome { replyField.endEditing() }
+            return
+        }
+        if leavesWithOutcome {
+            keyboardLeavesAfterSend = true
+            Task { @MainActor in
+                try? await Task.sleep(for: Self.keyboardOutcomeWait)
+                keyboardLeavesWithTheOutcome()
+            }
+        }
+        // Wherever the reader was, the reply they just sent comes into view.
+        followTick += 1
+        Task { @MainActor in
+            if let result = await replies.deliver(letterId: letterId, clientId: clientId) {
+                adopt(result)
+                keyboardLeavesWithTheOutcome()
+            } else {
+                keyboardLeavesWithTheOutcome()
+                await recheckIfUnconfirmed()
+            }
+        }
+    }
+
+    /// The longest the keyboard waits for a reply's answer after a Send at the
+    /// accessibility sizes. Answers usually take a tenth of that; a slower one
+    /// updates the line later, and the letter follows it then.
+    static let keyboardOutcomeWait: Duration = .milliseconds(500)
+
+    /// The keyboard held after a Send at the accessibility sizes leaves now,
+    /// unless a follow-up is already being typed into the field.
+    private func keyboardLeavesWithTheOutcome() {
+        guard keyboardLeavesAfterSend else { return }
+        keyboardLeavesAfterSend = false
+        if !replyField.holdsWords { replyField.endEditing() }
+    }
+
+    /// Retry a refused reply. It is a new send (`LetterReplyStore.beginRetry`):
+    /// it moves after everything on record, reading "Sending", and the letter
+    /// follows it there as it does after a Send, so its line ends on screen. The
+    /// move is animated: in one frame it left the finger's view (r4 gate, P1).
+    private func retryPending(_ clientId: String) {
+        let moved = withAnimation(.easeInOut(duration: 0.3)) {
+            replies.beginRetry(letterId: letterId, clientId: clientId, afterTurns: letter?.threadEntries.count)
+        }
+        guard moved else { return }
+        // A reply that may already be on record kept its slot: the letter stays
+        // where the finger is unless that slot is the newest.
+        if newestReplyItem?.id == "reply-\(clientId)" { followTick += 1 }
+        Task { @MainActor in
+            if let result = await replies.deliver(letterId: letterId, clientId: clientId) {
+                adopt(result)
+            } else {
+                await recheckIfUnconfirmed()
+            }
+        }
+    }
+
+    /// The answer to a reply was lost, so it may be on record: read the letter
+    /// again, which shows it as recorded if the server has it, or gives Edit
+    /// back if it does not.
+    private func recheckIfUnconfirmed() async {
+        guard replies.needsRecheck(letterId: letterId) else { return }
+        AppLog.info("inbox", "letter reply unconfirmed, re-reading the letter", ["letterId": letterId])
+        replies.beginRecheck(letterId: letterId)
+        await load()
+        replies.endRecheck(letterId: letterId)
+    }
+
+    /// A transcript lands after what is already in the field, editable before
+    /// sending (the chat composer's rule), and the keyboard comes back for it.
+    private func insertTranscript(_ text: String) {
+        replyField.endEditing()
+        replies.appendToDraft(text, for: letterId)
+        replyFocused = true
+    }
+
+    /// Voice wiring, once per appearance. The recorder speaks for THIS letter's
+    /// box: an automatic drain only recovers takes spoken here.
+    private func attachVoice() {
+        voice.surface = "letter:\(letterId)"
+        voice.ownsOrphanTakes = false
+        voice.onAutoStopText = { text in insertTranscript(text) }
+        voice.onDrainedText = { text in insertTranscript(text) }
+        voice.refreshPending()
+        voice.drainPending(trigger: "letter-appear")
+    }
+
     /// Adopt the server's letter, but never trade a body-inlined document for a
-    /// payload that lost it (an older/relayed response) — the reader would blank
-    /// the letter the human is reading. Keep what's on screen and re-read.
+    /// payload that lost it (an older/relayed response), because the reader would
+    /// blank the letter the human is reading. Keep what's on screen and re-read.
     private func adopt(_ result: LetterActionResult) {
-        deliveryNote = result.delivery?.humanText ?? "Saved"
+        inbox.adopt(result)
         guard let updated = result.letter else {
             Task { await load() }
             return
         }
+        replies.reconcile(letterId: letterId, with: updated)
         if updated.body != nil || letter?.body == nil {
             letter = updated
         } else {
             Task { await load() }
         }
+    }
+}
+
+/// The reply box's send button: a round glyph that grows with the text size up
+/// to 44pt, inside a 44pt target.
+private struct LetterSendButton: View {
+    let enabled: Bool
+    let action: () -> Void
+    @ScaledMetric(relativeTo: .body) private var seat: CGFloat = 32
+
+    var body: some View {
+        let size = VoiceGlyphSeat(scaled: seat)
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: size.glyphSize * 1.1, weight: .semibold))
+                .frame(width: size.diameter, height: size.diameter)
+                // The colours change in the frame the field empties, never on
+                // an animation: a Send that also moves the reply box (the
+                // keyboard leaving) ran inside that move, and the arrow stayed
+                // brown for 3 frames after the field was empty (r4 gate, P2-5).
+                // Scoped to these two modifiers, so the button still slides
+                // with the box.
+                .animation(nil) { glyph in
+                    glyph
+                        .foregroundStyle(enabled ? Theme.onTint : Color(.tertiaryLabel))
+                        .background(enabled ? Theme.tint : Color(.tertiarySystemFill), in: Circle())
+                }
+                .frame(width: size.target, height: size.target)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel("Send")
+        .accessibilityIdentifier("inbox.letter.send")
     }
 }

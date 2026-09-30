@@ -47,6 +47,10 @@ final class VoiceRecorder: NSObject {
 
     static let micRouteKey = "walnut.voice.micRoute"
 
+    /// The sentence for a denied microphone. Named, so a notice can offer the
+    /// Settings button beside exactly this one.
+    nonisolated static let microphoneDeniedMessage = "Microphone access denied. Enable it in Settings."
+
     /// Minimum gap between AUTOMATIC drains (`drainPending`). Long enough to
     /// swallow a connectivity flap, short enough that a real reconnect after a
     /// failed attempt is retried within seconds. Manual Retry ignores it.
@@ -156,7 +160,7 @@ final class VoiceRecorder: NSObject {
         ensureObservers()
         errorMessage = nil
         guard await Self.requestPermission() else {
-            errorMessage = "Microphone access denied — enable it in Settings"
+            errorMessage = Self.microphoneDeniedMessage
             return false
         }
         do {
@@ -262,6 +266,10 @@ final class VoiceRecorder: NSObject {
     /// `'!pri'` is arbitration by a higher-priority app; mixability is not the
     /// lever that wins it. See the -50 minefield note above.
     private func activateSession() async throws {
+        // A take that just ended may still be switching the session off (see
+        // `deactivateSessionOffMain`): let it finish, or it would switch off
+        // the session this take is about to use.
+        await deactivation?.value
         let session = AVAudioSession.sharedInstance()
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
         let wantBuiltIn = Self.micRoute == .builtInMic
@@ -491,7 +499,7 @@ final class VoiceRecorder: NSObject {
             // started a moment ago on this one) is mid-upload. Say so, honestly and
             // briefly, instead of returning nil into silence.
             if userInitiated {
-                errorMessage = "Another upload is in progress — try again in a moment"
+                errorMessage = "Another upload is in progress. Try again in a moment."
             }
             return nil
         }
@@ -545,10 +553,10 @@ final class VoiceRecorder: NSObject {
         if userInitiated, parts.isEmpty, errorMessage == nil {
             if attempted == 0, retired > 0 {
                 errorMessage = retired == 1
-                    ? "That recording couldn't be transcribed — Discard to clear it"
-                    : "\(retired) recordings couldn't be transcribed — Discard to clear them"
+                    ? "That recording couldn't be transcribed. Discard to clear it."
+                    : "\(retired) recordings couldn't be transcribed. Discard to clear them."
             } else if failed > 0 {
-                errorMessage = "Transcription didn't go through — recordings kept"
+                errorMessage = "Transcription didn't go through. Recordings kept."
             }
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
@@ -693,7 +701,7 @@ final class VoiceRecorder: NSObject {
                 // banner up forever.
                 return note(
                     .empty, id: id, message: "No speech recognized",
-                    userNotice: "No speech recognized — recording kept",
+                    userNotice: "No speech recognized. Recording kept.",
                     trigger: trigger, extra: ["bytes": "\(data.count)"]
                 )
             }
@@ -710,7 +718,7 @@ final class VoiceRecorder: NSObject {
             return note(
                 VoiceRetryPlan.classify(error), id: id,
                 message: error.localizedDescription,
-                userNotice: "\(error.voiceNotice) — recording saved",
+                userNotice: "\(Self.sentence(error.voiceNotice)) Recording saved.",
                 trigger: trigger
             )
         } catch is CancellationError {
@@ -719,7 +727,7 @@ final class VoiceRecorder: NSObject {
             return note(
                 VoiceRetryPlan.classify(error), id: id,
                 message: (error as NSError).localizedDescription,
-                userNotice: "\(Self.diagnosticMessage(prefix: "Transcription failed", error)) — recording saved",
+                userNotice: "\(Self.sentence(Self.diagnosticMessage(prefix: "Transcription failed", error))) Recording saved.",
                 trigger: trigger, extra: Self.diagnosticMeta(error)
             )
         }
@@ -749,8 +757,8 @@ final class VoiceRecorder: NSObject {
                 // would be advice we know is worthless, since no later attempt can
                 // decode a truncated container.
                 errorMessage = kind == .damaged
-                    ? "That recording is damaged and can't be transcribed — Discard it"
-                    : "Couldn't transcribe that recording — Discard it or keep it for later"
+                    ? "That recording is damaged and can't be transcribed. Discard it."
+                    : "Couldn't transcribe that recording. Discard it or keep it for later."
             } else if let userNotice {
                 errorMessage = userNotice
             }
@@ -779,7 +787,7 @@ final class VoiceRecorder: NSObject {
             message: "upload cancelled"
         )
         if trigger.isUserRetry {
-            errorMessage = "Retry interrupted — recording kept"
+            errorMessage = "Retry interrupted. Recording kept."
         }
         AppLog.info("voice", "upload cancelled — preserved", [
             "id": id, "trigger": trigger.rawValue,
@@ -793,7 +801,24 @@ final class VoiceRecorder: NSObject {
         tickTask = nil
         capture?.stop()
         capture = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        deactivateSessionOffMain()
+    }
+
+    /// The pending `setActive(false)`, awaited by the next activation.
+    @ObservationIgnored private var deactivation: Task<Void, Never>?
+
+    /// `setActive(false)` blocks until the audio server answers. On the main
+    /// thread it froze the recording row on "Recording…" with a stopped timer
+    /// for about 2.9s after Stop or Cancel, because the state change that swaps
+    /// the row could not draw until it returned. So the row changes first and
+    /// the session is switched off on a background thread, one switch-off at a
+    /// time.
+    private func deactivateSessionOffMain() {
+        let previous = deactivation
+        deactivation = Task.detached(priority: .userInitiated) {
+            await previous?.value
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     /// Elapsed-time ticker for the recording row. Display only — there is NO
@@ -892,11 +917,20 @@ final class VoiceRecorder: NSObject {
         }
     }
 
+    /// `text` as a sentence: trimmed, ending in a period unless it already ends
+    /// a sentence, so a notice can be followed by another one. Notices are plain
+    /// sentences, never a clause after a dash.
+    nonisolated static func sentence(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let last = trimmed.last else { return trimmed }
+        return ".!?".contains(last) ? trimmed : trimmed + "."
+    }
+
     /// Domain + code are prepended unconditionally so this is never just
     /// Foundation's generic "The operation couldn't be completed." fallback.
     private static func diagnosticMessage(prefix: String, _ error: Error) -> String {
         let nsError = error as NSError
-        return "\(prefix): \(nsError.domain) \(nsError.code) — \(nsError.localizedDescription)"
+        return "\(prefix): \(nsError.domain) \(nsError.code). \(nsError.localizedDescription)"
     }
 
     private static func diagnosticMeta(_ error: Error, stage: String = "") -> [String: String] {
@@ -968,7 +1002,7 @@ extension VoiceRecorder: AVAudioRecorderDelegate {
         Task { @MainActor in
             guard self.state == .recording else { return }
             self.preserveAndStop(reason: "finish-failed")
-            self.errorMessage = "Recording stopped unexpectedly — saved for retry"
+            self.errorMessage = "Recording stopped unexpectedly. Saved for retry."
             AppLog.error("voice", "finish unsuccessful — partial take preserved", nil)
         }
     }
@@ -983,6 +1017,6 @@ extension APIError {
             return message
         }
         if case .notConfigured = self { return "Not connected to a server" }
-        return "Transcription failed — check your connection"
+        return "Transcription failed. Check your connection."
     }
 }

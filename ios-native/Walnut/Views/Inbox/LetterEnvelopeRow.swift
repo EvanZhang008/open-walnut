@@ -4,15 +4,31 @@ import SwiftUI
 /// system-stamped sender line (session · task · host), the agent's own short
 /// preview, a type badge, and relative time.
 ///
+/// Unread reads at a glance, the same way the console marks it: a filled tint
+/// dot leading the row, and the subject in semibold primary ink (a read row's
+/// subject is regular weight). VoiceOver hears "Unread" first.
+///
 /// Everything shown here comes off the index record, so the list renders with
 /// no body fetch at all — a letter's document is read only when it is opened.
 struct LetterEnvelopeRow: View {
     let letter: Letter
 
+    /// Diameter of the unread dot. 10pt: the 8pt dot in the walnut tint read as a
+    /// bullet rather than a state on a phone held at arm's length.
+    static let unreadDotSize: CGFloat = 10
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// At an accessibility text size the relative time leaves the subject's line
+    /// and goes under it: side by side, measured at the largest size on the pinned
+    /// simulator, the time column left the subject about three letters a line
+    /// ("Wee / kly / dig...").
+    private var timeUnderSubject: Bool { typeSize.isAccessibilitySize }
+
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
             unreadDot
-                .padding(.top, 6)
+                .padding(.top, 5)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
@@ -23,14 +39,14 @@ struct LetterEnvelopeRow: View {
                     }
                     Text(letter.subject.isEmpty ? "(no subject)" : letter.subject)
                         .font(.body.weight(letter.isRead ? .regular : .semibold))
-                        .lineLimit(2)
-                    Spacer(minLength: 6)
-                    if let when = letter.createdDate {
-                        Text(when.formatted(.relative(presentation: .named)))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                        .foregroundStyle(.primary)
+                        .lineLimit(timeUnderSubject ? 6 : 3)
+                    if !timeUnderSubject {
+                        Spacer(minLength: 6)
+                        relativeTime
                     }
                 }
+                if timeUnderSubject { relativeTime }
 
                 Text(senderLine)
                     .font(.caption)
@@ -58,6 +74,15 @@ struct LetterEnvelopeRow: View {
         .accessibilityIdentifier("inbox.row.\(letter.id)")
     }
 
+    @ViewBuilder
+    private var relativeTime: some View {
+        if let when = letter.createdDate {
+            Text(when.formatted(.relative(presentation: .named)))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
     /// Sender first (that is who wrote it), task second — the two facts that
     /// make a letter self-locating without opening it.
     private var senderLine: String {
@@ -67,12 +92,17 @@ struct LetterEnvelopeRow: View {
         return letter.senderName
     }
 
+    /// A read row keeps the dot's width so every subject starts at one edge.
     @ViewBuilder
     private var unreadDot: some View {
         if letter.isRead {
-            Circle().fill(.clear).frame(width: 8, height: 8)
+            Color.clear
+                .frame(width: Self.unreadDotSize, height: Self.unreadDotSize)
+                .accessibilityHidden(true)
         } else {
-            Circle().fill(Theme.tint).frame(width: 8, height: 8)
+            Circle().fill(Theme.tint)
+                .frame(width: Self.unreadDotSize, height: Self.unreadDotSize)
+                .accessibilityLabel("Unread")
                 .accessibilityIdentifier("inbox.row.unread")
         }
     }

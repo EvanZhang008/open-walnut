@@ -63,6 +63,40 @@ export interface ThreadEntry {
    */
   bodyBytes?: number;
   at: number;
+  /**
+   * HUMAN turns only: the client's id for this reply (`POST .../human-reply`
+   * `clientId`). A repeat of the same id is the same reply, never a second turn:
+   * that is what makes a retry after a lost response, or a double tap, safe.
+   */
+  clientId?: string;
+  /**
+   * HUMAN turns only: how far this turn got toward the origin session. Written
+   * as `pending` in the same write that records the turn, then replaced by the
+   * attempt's outcome. Absent on turns recorded before the field existed. A
+   * reader shows it under the turn, so the status is still right after the
+   * letter is closed and reopened, and a reader that sees `pending` knows the
+   * outcome is still to come.
+   */
+  delivery?: ThreadEntryDelivery;
+}
+
+/** The persisted outcome of delivering one human turn (see ThreadEntry.delivery). */
+export interface ThreadEntryDelivery {
+  /**
+   * pending  = recorded, the delivery attempt has not finished yet. A pending
+   *            turn with no attempt running (the process died mid-delivery) is
+   *            delivered again by a repeat of the reply's clientId.
+   * queued   = handed to the session's message queue (a dead CLI is resumed).
+   * deferred = queued but held: the session waits on a permission prompt.
+   * skipped  = saved only: there is no origin session, or it has ended.
+   * failed   = the attempt failed; a repeat of the reply's clientId retries it.
+   */
+  status: 'pending' | 'queued' | 'deferred' | 'skipped' | 'failed';
+  /** Machine-readable why, for 'deferred' | 'skipped' | 'failed'. Bounded. */
+  reason?: string;
+  sessionId?: string;
+  /** When the attempt finished, epoch ms (for `pending`, when the turn was recorded). */
+  at: number;
 }
 
 /** The index record. Bodies live in their own files, never in here. */

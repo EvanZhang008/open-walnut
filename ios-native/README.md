@@ -119,7 +119,7 @@ stop ─▶ VoiceRecorder.stopAndTranscribe ─▶ ChatStore.send (the ordinary 
   preserved audio's later Retry lands in the draft for review instead of sending
   text the user never saw. Audio itself is preserved exactly as always: the
   no-loss contract in `VoiceRecorder` is untouched.
-- The recording row's caption states the consequence: "Recording — stop to send"
+- The recording row's caption states the consequence: "Recording. Stop to send"
   for a quick-action take, plain "Recording…" for an ordinary mic tap.
 
 Tests: `WalnutTests/VoiceQuickActionTests.swift` (routing, TTL, one-shot arming,

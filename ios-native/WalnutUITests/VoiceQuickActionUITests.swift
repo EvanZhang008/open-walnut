@@ -233,7 +233,7 @@ final class VoiceQuickActionUITests: XCTestCase {
         // composer) is asserted below, from the accessibility value, and it holds
         // in both states.
         XCTAssertTrue(
-            ["Recording — stop to send", "Recording…"].contains(caption.label),
+            ["Recording. Stop to send", "Recording…"].contains(caption.label),
             "the recording caption read '\(caption.label)' — neither of the two captions the composer can honestly show, so the arming/offline logic has drifted"
         )
         // WHICH callback delivered it — the assertion this file was missing.

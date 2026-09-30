@@ -21,12 +21,15 @@ import { bus } from '../event-bus.js';
 import {
   answerLetter,
   getLetter,
-  humanReply,
+  humanReplyTurn,
+  recordTurnDelivery,
   sendLetter,
   withdrawLetter,
   LetterError,
 } from './store.js';
-import type { LetterDetail, LetterRecord, LetterSender, NewLetter } from './types.js';
+import type {
+  LetterDetail, LetterRecord, LetterSender, NewLetter, ThreadEntryDelivery,
+} from './types.js';
 
 /** Which edge recorded the answer. `'plugin'` is a sender taking its own question back. */
 export type LetterAnswerSource = 'web' | 'phone' | 'relay' | 'plugin';
@@ -44,8 +47,10 @@ export interface LetterDelivery {
    * queued   = handed to the session message queue (resume revives a dead CLI).
    * deferred = written to the queue but NOT dispatched, because the origin
    *            session is parked on a permission prompt (see deliverLetterToOrigin).
+   * pending  = the answer went out before the attempt finished (see DeliveryWait).
+   *            The turn is on record; its `delivery` gets the outcome later.
    */
-  status: 'queued' | 'deferred' | 'skipped' | 'failed';
+  status: 'pending' | 'queued' | 'deferred' | 'skipped' | 'failed';
   /** Machine-readable why, for 'deferred' | 'skipped' | 'failed'. */
   reason?: string;
   sessionId?: string;
@@ -341,22 +346,44 @@ function emitLetterAnswered(record: LetterRecord, source: LetterAnswerSource): v
   }, ['web-ui'], { source: 'human-inbox' });
 }
 
+/**
+ * How long a caller will wait for the delivery before it is answered anyway.
+ *
+ * The turn is on record before the delivery starts, so an answer that cannot
+ * wait for the delivery is still a true answer: the letter with the turn and a
+ * `pending` delivery. That is what a route with a deadline needs, because the
+ * alternative, a timeout, tells the client "try again" about a reply that is
+ * already threaded and is still being delivered.
+ */
+export interface DeliveryWait {
+  /**
+   * Epoch ms: answer by then with `delivery.status: 'pending'` if the outcome is
+   * not in. A moment already past answers `pending` as soon as the turn is on
+   * record. Absent: wait for the outcome.
+   */
+  answerBy?: number;
+}
+
 /** Human clicked an action: record it first, then deliver the choice. */
 export async function answerLetterAndDeliver(
   id: string,
   input: { actionId: string; freeText?: string },
   source: LetterAnswerSource = 'web',
+  wait: DeliveryWait = {},
 ): Promise<AnsweredLetter> {
   const record = await answerLetter(id, input);
   // BEFORE the delivery await, deliberately: delivery reaches the session tracker and the
   // message queue and can take seconds, and a plugin waiting on this event to run its own
   // approval ledger must not be behind an unrelated session's revival.
   emitLetterAnswered(record, source);
-  const delivery = await deliverLetterToOrigin(record, {
+  // The answer is the thread's newest turn: answerLetter appended it under the lock.
+  const turn = record.thread.length - 1;
+  const attempt = deliverAndRecord(record, turn, {
     choice: record.answered?.label ?? input.actionId,
     text: record.answered?.freeText,
   });
-  return { letter: await withBodies(record), delivery };
+  trackInFlight(`${id}#${turn}`, attempt);
+  return answerWhenDue(record, turn, attempt, wait);
 }
 
 /**
@@ -375,15 +402,125 @@ export async function withdrawLetterAndAnnounce(
   return letter;
 }
 
-/** Human wrote a free-text reply: record first, then deliver. */
+/**
+ * Human wrote a free-text reply: record first (with a `pending` delivery), then
+ * deliver, then record how the delivery went on the turn itself
+ * (`ThreadEntry.delivery`).
+ *
+ * `clientId` makes the whole call idempotent, which is what a client's Retry and
+ * a double tap rely on:
+ *  - a repeat while the first attempt is still delivering waits for THAT attempt
+ *    and answers with its outcome, so the agent is told once;
+ *  - a repeat of a turn whose delivery is on record answers with that record and
+ *    delivers nothing, EXCEPT when the record says `failed`: then the repeat is
+ *    the retry, and the same turn is delivered again;
+ *  - a repeat of a turn still `pending` with no attempt running (the process
+ *    died mid-delivery) delivers it, since nothing says it ever reached the agent.
+ *
+ * `wait.answerBy` bounds the wait for the outcome (see DeliveryWait); the
+ * attempt itself is never cut short, and records its outcome when it ends.
+ */
 export async function humanReplyAndDeliver(
   id: string,
-  input: { text: string },
+  input: { text: string; clientId?: string },
+  wait: DeliveryWait = {},
 ): Promise<AnsweredLetter> {
-  const record = await humanReply(id, input);
-  const last = record.thread[record.thread.length - 1];
-  const delivery = await deliverLetterToOrigin(record, { text: last?.text ?? input.text });
-  return { letter: await withBodies(record), delivery };
+  const { record, turn, duplicate } = await humanReplyTurn(id, input);
+  const entry = record.thread[turn];
+  const key = `${id}#${turn}`;
+  let attempt = inFlightDeliveries.get(key);
+  if (!attempt) {
+    const onRecord = duplicate ? entry?.delivery : undefined;
+    if (onRecord && onRecord.status !== 'failed' && onRecord.status !== 'pending') {
+      return { letter: await withBodies(record), delivery: deliveryFromRecord(onRecord) };
+    }
+    attempt = deliverAndRecord(record, turn, { text: entry?.text ?? input.text });
+    trackInFlight(key, attempt);
+  }
+  return answerWhenDue(record, turn, attempt, wait);
+}
+
+/** Deliveries running now, keyed `<letterId>#<turn>`. See humanReplyAndDeliver. */
+const inFlightDeliveries = new Map<string, Promise<LetterDelivery>>();
+
+/**
+ * Hold an attempt in `inFlightDeliveries` until it ends, whoever is (or is no
+ * longer) waiting for it: a caller answered `pending` has stopped listening, and
+ * a repeat of the reply must still find the attempt rather than start another.
+ */
+function trackInFlight(key: string, attempt: Promise<LetterDelivery>): void {
+  inFlightDeliveries.set(key, attempt);
+  void attempt
+    .catch((err: unknown) => {
+      log.notif.warn('human-inbox: delivery attempt threw', { key, error: errMsg(err) });
+    })
+    .finally(() => {
+      if (inFlightDeliveries.get(key) === attempt) inFlightDeliveries.delete(key);
+    });
+}
+
+/**
+ * The answer for one recorded turn: its delivery outcome, or, when that does not
+ * arrive by `wait.answerBy`, the record as it stands with a `pending`
+ * delivery (the attempt carries on).
+ */
+async function answerWhenDue(
+  record: LetterRecord,
+  turn: number,
+  attempt: Promise<LetterDelivery>,
+  wait: DeliveryWait,
+): Promise<AnsweredLetter> {
+  const outcome = wait.answerBy === undefined
+    ? await attempt
+    : await withTimeout<LetterDelivery | null>(attempt, Math.max(0, wait.answerBy - Date.now()), () => null);
+  if (outcome) return { letter: await withBodies(record), delivery: outcome };
+  log.notif.info('human-inbox: answering before the delivery finished', { letterId: record.id, turn });
+  return { letter: await withBodies(record), delivery: { status: 'pending' } };
+}
+
+/**
+ * Deliver one human turn and write the outcome onto it. The write is best effort:
+ * the human's words are already on record, so a failure here costs the persisted
+ * status (logged), never the reply or the response.
+ */
+async function deliverAndRecord(
+  record: LetterRecord,
+  turn: number,
+  human: { choice?: string; text?: string },
+): Promise<LetterDelivery> {
+  const delivery = await deliverLetterToOrigin(record, human);
+  const entry = record.thread[turn];
+  if (entry) {
+    try {
+      const written = await recordTurnDelivery(record.id, turn, { at: entry.at }, {
+        status: delivery.status,
+        at: Date.now(),
+        ...(delivery.reason !== undefined ? { reason: delivery.reason } : {}),
+        ...(delivery.sessionId !== undefined ? { sessionId: delivery.sessionId } : {}),
+      });
+      // The response carries the same turn the next read returns.
+      if (written) entry.delivery = written;
+      else {
+        log.notif.warn('human-inbox: delivery status not recorded, the turn moved', {
+          letterId: record.id, turn,
+        });
+      }
+    } catch (err) {
+      log.notif.warn('human-inbox: could not record the delivery status', {
+        letterId: record.id, turn, error: errMsg(err),
+      });
+    }
+  }
+  return delivery;
+}
+
+/** The response shape for a delivery read back off the record (no messageId kept). */
+function deliveryFromRecord(d: ThreadEntryDelivery): LetterDelivery {
+  return {
+    status: d.status,
+    ...(d.reason !== undefined ? { reason: d.reason } : {}),
+    ...(d.sessionId !== undefined ? { sessionId: d.sessionId } : {}),
+  };
 }
 
 export { LetterError };

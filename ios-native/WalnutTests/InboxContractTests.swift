@@ -253,14 +253,14 @@ final class InboxContractTests: XCTestCase {
 
         XCTAssertEqual(try delivery(#"{ "status": "queued", "messageId": "qm-1" }"#).humanText,
                        "Sent to the agent")
-        XCTAssertTrue(try delivery(#"{ "status": "deferred", "reason": "origin_awaiting_permission" }"#)
-            .humanText.contains("permission prompt"))
-        XCTAssertTrue(try delivery(#"{ "status": "skipped", "reason": "no_origin_session" }"#)
-            .humanText.contains("no origin session"))
-        XCTAssertTrue(try delivery(#"{ "status": "skipped", "reason": "origin_session_gone" }"#)
-            .humanText.contains("sending session is gone"))
-        XCTAssertTrue(try delivery(#"{ "status": "failed", "reason": "timeout" }"#)
-            .humanText.contains("failed"))
+        XCTAssertEqual(try delivery(#"{ "status": "deferred", "reason": "origin_awaiting_permission" }"#).humanText,
+                       "Queued. The agent is waiting on a permission prompt, and your reply reaches it after that.")
+        XCTAssertEqual(try delivery(#"{ "status": "skipped", "reason": "no_origin_session" }"#).humanText,
+                       "Saved. This letter has no agent session to answer, so nothing was sent.")
+        XCTAssertEqual(try delivery(#"{ "status": "skipped", "reason": "origin_session_gone" }"#).humanText,
+                       "Saved. The agent that wrote this letter has ended, so nothing was sent.")
+        XCTAssertEqual(try delivery(#"{ "status": "failed", "reason": "timeout" }"#).humanText,
+                       "Saved in this letter, but not sent to the agent.")
         // An unknown/absent status must still read as "your answer is on record",
         // because the route wrote the thread entry before it tried to deliver.
         XCTAssertEqual(try delivery(#"{ "status": "invented_later" }"#).humanText, "Saved")
@@ -464,6 +464,8 @@ final class InboxContractTests: XCTestCase {
         // the agent's alt text names it.
         XCTAssertTrue(paragraphs.contains { $0.contains("Image not loaded") && $0.contains("chart") },
                       "a blocked image leaves a visible note, got \(paragraphs)")
+        XCTAssertFalse(paragraphs.contains { $0.contains("\u{2014}") || $0.contains("\u{2013}") },
+                       "a dash in the note the human reads: \(paragraphs)")
     }
 
     func testABareRemoteImageURLIsAlsoRefused() {

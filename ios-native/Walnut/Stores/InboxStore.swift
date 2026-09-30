@@ -9,10 +9,14 @@ import Observation
 /// on pull-to-refresh, and when a letter push arrives (`LetterDeepLink` calls
 /// `refreshFromPush`). A letter is an async artifact — nothing here needs to be
 /// live to the second, and a timer would cost battery for no gain.
+///
+/// Read state follows the console's rules (see `InboxFilter.swift`), and a read
+/// the server did not take is never shown as taken: see "Read writes" below.
 @Observable
 @MainActor
 final class InboxStore {
-    private let api = WalnutAPI()
+    private let api: InboxTransport
+    private let defaults: UserDefaults
     weak var connection: ConnectionStore?
 
     /// False while the app is backgrounded. Every async completion re-checks it
@@ -30,22 +34,87 @@ final class InboxStore {
     var loadingArchived = false
     var errorMessage: String?
 
-    init() {
+    /// The Inbox tab's filter, remembered across launches on this device.
+    var filter: InboxFilter {
+        didSet {
+            guard filter != oldValue else { return }
+            // The keep set belongs to one visit of one filter (the console clears
+            // it when the toggle flips).
+            if !keptReadIds.isEmpty { keptReadIds = [] }
+            defaults.set(filter.rawValue, forKey: InboxFilter.storageKey)
+        }
+    }
+
+    /// Letters read while Unread was on. They stay listed until the filter
+    /// changes or the human leaves the tab, so the row they just opened does not
+    /// vanish from under them (the console's `keptReadIds`).
+    private(set) var keptReadIds: Set<String> = []
+
+    /// Letters whose read write failed for a reason that can pass (no network,
+    /// the Mac out of reach behind the cloud relay) and that will be retried.
+    /// Their rows show the SERVER's answer (unread) meanwhile.
+    private(set) var readRetryIds: Set<String> = []
+
+    /// Automatic retry spacing after a failed read write; after the last one the
+    /// write waits for the next refresh, foreground or pull-to-refresh. Settable
+    /// so tests can run the real ladder on a short clock.
+    @ObservationIgnored var readRetryDelays: [Duration] = [.seconds(2), .seconds(6), .seconds(20), .seconds(60)]
+
+    /// One pending read write per letter. `generation` orders them: a newer tap
+    /// on the same letter supersedes an older write still in the air.
+    private struct ReadIntent {
+        var read: Bool
+        var generation: Int
+        var attempts: Int
+        /// A request for it is on the wire right now.
+        var sending: Bool
+        /// The row shows this value although the server may not have it yet:
+        /// true only for the human's own first attempt, never for a retry.
+        var optimistic: Bool
+        /// What the optimistic flip replaced, for an exact rollback.
+        var before: (read: Bool?, readAt: Double?)
+    }
+    @ObservationIgnored private var readIntents: [String: ReadIntent] = [:]
+    @ObservationIgnored private var readGeneration = 0
+    @ObservationIgnored private var retryTask: Task<Void, Never>?
+
+    /// `transport` nil (production) = a WalnutAPI instance. WalnutTests pass a
+    /// scripted transport and their own defaults suite.
+    init(transport: InboxTransport? = nil, defaults: UserDefaults = .standard) {
+        self.api = transport ?? WalnutAPI()
+        self.defaults = defaults
+        self.filter = InboxFilter(stored: defaults.string(forKey: InboxFilter.storageKey))
         LifecycleHub.shared.register(self)
     }
 
     // MARK: - Derived
 
-    /// Badge count. Derived from the rows we hold rather than trusted from the
-    /// list response, so an optimistic read flip shows up immediately and the
-    /// Archived view (a different array) cannot influence it.
-    var unreadCount: Int { letters.filter { !$0.isRead }.count }
+    /// Badge count: live letters not read yet (the console's Inbox badge rule).
+    /// Derived from the rows held rather than trusted from the list response, so
+    /// an optimistic read flip shows up at once and the Archived view (a
+    /// different array) cannot influence it.
+    var unreadCount: Int { InboxListing.unreadCount(letters) }
 
-    /// Letters still waiting on a decision — the phone's "Needs Action".
-    var awaitingDecisionCount: Int { letters.filter(\.isAwaitingDecision).count }
+    /// Decisions nobody has looked at yet: the Action needed chip's count.
+    var unseenDecisionCount: Int { InboxListing.unseenDecisionCount(letters) }
+
+    /// What a chip shows next to its title, nil for chips without a count.
+    func count(for filter: InboxFilter) -> Int? {
+        InboxListing.count(for: filter, in: letters)
+    }
+
+    /// The live list under the current filter, judged at `nowMs`.
+    func visibleRows(nowMs: Double) -> [Letter] {
+        InboxListing.rows(letters, filter: filter, keep: keptReadIds, nowMs: nowMs)
+    }
 
     func letter(id: String) -> Letter? {
         letters.first { $0.id == id } ?? archivedLetters.first { $0.id == id }
+    }
+
+    /// The human left the Inbox tab: forget which read rows Unread was keeping.
+    func forgetKeptRows() {
+        if !keptReadIds.isEmpty { keptReadIds = [] }
     }
 
     // MARK: - Load
@@ -56,7 +125,7 @@ final class InboxStore {
         isActive = true
         if let cached = await DiskCache.loadAsync([Letter].self, key: "inbox-letters"),
            isActive, letters.isEmpty {
-            letters = cached.sorted(by: Letter.isOrderedBefore)
+            letters = InboxListing.inboxOrder(cached)
         }
         await refresh()
     }
@@ -66,12 +135,14 @@ final class InboxStore {
         loading = true
         defer { loading = false }
         do {
-            let response = try await api.letters()
+            let response = try await api.letters(archived: false)
             guard isActive, !Task.isCancelled else { return }
-            letters = response.letters.sorted(by: Letter.isOrderedBefore)
+            letters = InboxListing.inboxOrder(response.letters.map(overlayInFlightRead))
             errorMessage = nil
             connection?.reportReachability(true, source: "inbox-rest")
             DiskCache.save(letters, key: "inbox-letters")
+            // The server answered, so a read it refused earlier can go again now.
+            flushReadRetries()
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return }
             guard isActive else { return }
@@ -88,7 +159,7 @@ final class InboxStore {
         do {
             let response = try await api.letters(archived: true)
             guard isActive, !Task.isCancelled else { return }
-            archivedLetters = response.letters.sorted(by: Letter.isOrderedBefore)
+            archivedLetters = InboxListing.inboxOrder(response.letters)
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return }
             guard isActive else { return }
@@ -109,7 +180,7 @@ final class InboxStore {
     func detail(id: String) async throws -> Letter {
         do {
             let letter = try await api.letter(id: id)
-            if isActive { merge(letter) }
+            if isActive { merge(overlayInFlightRead(letter)) }
             connection?.reportReachability(true, source: "inbox-rest")
             return letter
         } catch {
@@ -118,21 +189,182 @@ final class InboxStore {
         }
     }
 
-    // MARK: - Human state (optimistic)
+    // MARK: - Read writes
 
-    /// Opening a letter marks THAT letter read — never the whole inbox.
+    /// Opening a letter marks THAT letter read (never the whole inbox) the
+    /// moment it opens, as the console's reader does (not after its body loads:
+    /// on a slow relay that was seconds of a badge that disagreed with the screen).
     /// No-op when it is already read, so scrolling back into a letter doesn't
     /// spend a request.
     func markReadOnOpen(id: String) {
-        guard let current = letter(id: id), !current.isRead else { return }
-        Task { await setRead(id: id, read: true) }
+        mark(id: id, read: true)
     }
 
+    /// The human set a letter read or unread (opening it, a swipe, the reader's
+    /// menu). The console's markLetterRead: a no-op when the row already says so
+    /// (an id the list does not hold yet, e.g. a push deep link, still gets its
+    /// write), and a letter read while Unread is on stays listed until the filter
+    /// changes or the tab is left.
+    func mark(id: String, read: Bool) {
+        if let current = letter(id: id), current.isRead == read { return }
+        if read && filter == .unread { keptReadIds.insert(id) }
+        // The flip happens NOW, in the tap's own turn of the run loop; only the
+        // request waits for a task.
+        let generation = beginRead(id: id, read: read)
+        Task { await sendRead(id: id, generation: generation) }
+    }
+
+    /// Flip read state: optimistic at once (row + badge), then the route.
+    ///
+    /// A failure never leaves a read the server did not take on screen: the row
+    /// goes back to what the server has. A failure that can pass (no network, a 5xx
+    /// such as the cloud relay's `bridge_offline` while the Mac is away, a timeout)
+    /// is retried on `readRetryDelays`, then on the next refresh or foreground, and
+    /// the row flips when a retry lands. A refusal that cannot pass (404, 400) is
+    /// dropped and reported.
     func setRead(id: String, read: Bool) async {
-        await toggle(id: id, apply: { $0.read = read }) {
-            try await self.api.setLetterRead(id: id, read: read)
+        await sendRead(id: id, generation: beginRead(id: id, read: read))
+    }
+
+    /// Record the intent and flip the row; returns the intent's generation.
+    private func beginRead(id: String, read: Bool) -> Int {
+        readGeneration += 1
+        let generation = readGeneration
+        let row = letter(id: id)
+        let flips = row.map { $0.read != read } ?? false
+        readIntents[id] = ReadIntent(
+            read: read, generation: generation, attempts: 0, sending: true,
+            optimistic: flips, before: (row?.read, row?.readAt)
+        )
+        readRetryIds.remove(id)
+        if var row, flips {
+            row.read = read
+            // The console stamps an optimistic flip too (letter-store.ts
+            // mergeLetterPatch): the Action needed grace window starts at the tap.
+            row.readAt = InboxListing.nowMs()
+            merge(row)
+        }
+        return generation
+    }
+
+    /// Send every waiting read write once more. NOT optimistic: the row keeps the
+    /// server's answer until a retry lands, so a flaky relay never makes a row
+    /// flicker between read and unread.
+    func flushReadRetries() {
+        guard isActive else { return }
+        for (id, intent) in readIntents where !intent.sending {
+            var next = intent
+            next.sending = true
+            next.optimistic = false
+            readIntents[id] = next
+            let generation = intent.generation
+            Task { await self.sendRead(id: id, generation: generation) }
         }
     }
+
+    /// One attempt of the pending write for `id`, if it is still the current one.
+    private func sendRead(id: String, generation: Int) async {
+        guard let intent = readIntents[id], intent.generation == generation else { return }
+        do {
+            let updated = try await api.setLetterRead(id: id, read: intent.read)
+            // A newer tap owns the row now; its own answer will settle it.
+            guard readIntents[id]?.generation == generation else { return }
+            readIntents[id] = nil
+            readRetryIds.remove(id)
+            merge(keepingNewerReadStamp(updated))
+            DiskCache.save(letters, key: "inbox-letters")
+            connection?.reportReachability(true, source: "inbox-rest")
+        } catch {
+            // Re-read after the await: a refresh that landed meanwhile moved the
+            // rollback target to the server's newest answer (overlayInFlightRead).
+            guard let intent = readIntents[id], intent.generation == generation else { return }
+            reportIfNetwork(error)
+            // Show the server's answer again, never a read it did not take. Done
+            // even while suspended: one row write is cheap, and a lie left on screen
+            // until the next successful refresh is not.
+            if intent.optimistic, var row = letter(id: id) {
+                row.read = intent.before.read
+                row.readAt = intent.before.readAt
+                merge(row)
+            }
+            if Self.readFailureCanPass(error) {
+                var waiting = intent
+                waiting.sending = false
+                waiting.optimistic = false
+                waiting.attempts += 1
+                readIntents[id] = waiting
+                readRetryIds.insert(id)
+                if isActive { scheduleReadRetry(after: waiting.attempts) }
+                AppLog.warn("inbox", "read write failed, will retry", [
+                    "letterId": id, "read": String(intent.read), "attempt": String(waiting.attempts),
+                    "error": String(describing: error),
+                ])
+            } else {
+                readIntents[id] = nil
+                readRetryIds.remove(id)
+                keptReadIds.remove(id)
+                if isActive { errorMessage = error.localizedDescription }
+                AppLog.error("inbox", "read write refused", [
+                    "letterId": id, "read": String(intent.read), "error": String(describing: error),
+                ])
+            }
+        }
+    }
+
+    /// Worth retrying: the request never got a real answer, or the server (or
+    /// the relay in front of the Mac) said "not now". A 4xx other than 408 is a
+    /// real refusal, and retrying it forever would only hide it.
+    nonisolated static func readFailureCanPass(_ error: Error) -> Bool {
+        guard let apiError = error as? APIError else { return true }
+        switch apiError {
+        case .network, .cancelled, .rateLimited, .badResponse: return true
+        case .server(let status, _, _, _, _): return status >= 500 || status == 408
+        case .notConfigured, .unauthorized: return false
+        }
+    }
+
+    /// Arm (or re-arm) the one retry timer. Past the ladder's end nothing is
+    /// armed: the waiting writes go on the next refresh or foreground instead.
+    private func scheduleReadRetry(after attempts: Int) {
+        guard attempts >= 1, attempts <= readRetryDelays.count else { return }
+        let delay = readRetryDelays[attempts - 1]
+        retryTask?.cancel()
+        retryTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            self?.flushReadRetries()
+        }
+    }
+
+    /// A list or detail read that landed while a user's read write is still on
+    /// the wire describes the server BEFORE that write: keep the row as the human
+    /// just set it until the write answers. Waiting (failed) writes are not
+    /// overlaid: their rows show the server's answer.
+    private func overlayInFlightRead(_ letter: Letter) -> Letter {
+        guard var intent = readIntents[letter.id], intent.sending, intent.optimistic else { return letter }
+        // This read is the newest word from the server, so a failed write rolls
+        // back to IT rather than to what the row said before the tap. Recorded
+        // even when it already agrees with the tap (read on another device).
+        intent.before = (letter.read, letter.readAt)
+        readIntents[letter.id] = intent
+        guard letter.read != intent.read, let current = self.letter(id: letter.id) else { return letter }
+        var row = letter
+        row.read = intent.read
+        row.readAt = current.readAt
+        return row
+    }
+
+    /// The write's answer, keeping a local stamp that is newer than the server's
+    /// (the console's rule in mergeLetterPatch: `readAt` only moves forward).
+    private func keepingNewerReadStamp(_ updated: Letter) -> Letter {
+        guard let local = letter(id: updated.id)?.readAt, let server = updated.readAt,
+              local > server else { return updated }
+        var row = updated
+        row.readAt = local
+        return row
+    }
+
+    // MARK: - Pin / archive (optimistic, reverted on failure)
 
     func setPinned(id: String, pinned: Bool) async {
         await toggle(id: id, apply: { $0.pinned = pinned }) {
@@ -149,14 +381,14 @@ final class InboxStore {
                 var row = letters.remove(at: idx)
                 row.archived = true
                 archivedLetters.insert(row, at: 0)
-                archivedLetters.sort(by: Letter.isOrderedBefore)
+                archivedLetters = InboxListing.inboxOrder(archivedLetters)
             }
         } else {
             if let idx = archivedLetters.firstIndex(where: { $0.id == id }) {
                 var row = archivedLetters.remove(at: idx)
                 row.archived = false
                 letters.append(row)
-                letters.sort(by: Letter.isOrderedBefore)
+                letters = InboxListing.inboxOrder(letters)
             }
         }
         do {
@@ -214,14 +446,11 @@ final class InboxStore {
         if var row = before {
             apply(&row)
             merge(row)
-            // A pin flip changes the order, not just the row.
-            letters.sort(by: Letter.isOrderedBefore)
         }
         do {
             let updated = try await call()
             guard isActive, !Task.isCancelled else { return }
-            merge(updated)
-            letters.sort(by: Letter.isOrderedBefore)
+            merge(overlayInFlightRead(updated))
             DiskCache.save(letters, key: "inbox-letters")
         } catch {
             guard isActive else { return }
@@ -230,30 +459,32 @@ final class InboxStore {
                 return
             }
             if let before { merge(before) }
-            letters.sort(by: Letter.isOrderedBefore)
             reportIfNetwork(error)
             errorMessage = error.localizedDescription
         }
     }
 
     /// Adopt the server's letter from an answer/reply response, if it sent one.
-    private func adopt(_ result: LetterActionResult) {
+    /// Internal (not private) because the reader's reply box sends through
+    /// `LetterReplyStore` and hands the response here.
+    func adopt(_ result: LetterActionResult) {
         guard isActive, let letter = result.letter else { return }
-        merge(letter)
+        merge(overlayInFlightRead(letter))
         DiskCache.save(letters, key: "inbox-letters")
     }
 
     /// Replace the row with the same id, keeping it in whichever list it lives
-    /// in. A body-inlined detail record is stored as-is: the extra fields are
-    /// harmless on a row and save the reader a second fetch.
+    /// in, and keep both lists in inbox order (a pin flip changes the order, not
+    /// just the row). A body-inlined detail record is stored as-is: the extra
+    /// fields are harmless on a row and save the reader a second fetch.
     private func merge(_ letter: Letter) {
         if let idx = letters.firstIndex(where: { $0.id == letter.id }) {
             if letter.isArchived {
                 letters.remove(at: idx)
-                archivedLetters.insert(letter, at: 0)
-                archivedLetters.sort(by: Letter.isOrderedBefore)
+                archivedLetters = InboxListing.inboxOrder([letter] + archivedLetters)
             } else {
                 letters[idx] = letter
+                letters = InboxListing.inboxOrder(letters)
             }
             return
         }
@@ -262,18 +493,15 @@ final class InboxStore {
                 archivedLetters[idx] = letter
             } else {
                 archivedLetters.remove(at: idx)
-                letters.append(letter)
-                letters.sort(by: Letter.isOrderedBefore)
+                letters = InboxListing.inboxOrder(letters + [letter])
             }
             return
         }
         // Unknown id (deep-linked straight from a push before the list landed).
         if letter.isArchived {
-            archivedLetters.insert(letter, at: 0)
-            archivedLetters.sort(by: Letter.isOrderedBefore)
+            archivedLetters = InboxListing.inboxOrder([letter] + archivedLetters)
         } else {
-            letters.append(letter)
-            letters.sort(by: Letter.isOrderedBefore)
+            letters = InboxListing.inboxOrder(letters + [letter])
         }
     }
 
@@ -288,14 +516,20 @@ final class InboxStore {
 }
 
 extension InboxStore: LifecycleSuspendable {
-    /// No streams or timers to tear down — the quiescence contract is purely
-    /// "stop mutating observed state". In-flight requests settle into no-ops.
-    func suspendForBackground() { isActive = false }
+    /// No streams to tear down: the quiescence contract is purely "stop
+    /// mutating observed state". In-flight requests settle into no-ops, and the
+    /// retry timer stops; waiting read writes go again on the next foreground.
+    func suspendForBackground() {
+        isActive = false
+        retryTask?.cancel()
+        retryTask = nil
+    }
 
     func resumeForForeground() {
         isActive = true
         // One REST refresh per foreground: a letter (or an agent's reply to one)
-        // very likely landed while the phone was in the user's pocket.
+        // very likely landed while the phone was in the user's pocket. A refresh
+        // that lands also sends any read write that is still waiting.
         Task { [weak self] in await self?.refresh() }
     }
 }

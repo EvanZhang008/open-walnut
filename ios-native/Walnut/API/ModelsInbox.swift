@@ -90,6 +90,13 @@ struct LetterThreadEntry: Codable, Equatable, Identifiable {
     /// The document was too big to inline; stream it from `bodyUrl` instead.
     let bodyDeferred: Bool?
     let bodyUrl: String?
+    /// Human turns only: the id the phone sent the reply with, so a retry of the
+    /// same reply is recognised as the same turn. Absent on older servers.
+    let clientId: String?
+    /// Human turns only: how far this turn got toward the agent, recorded by the
+    /// server after the delivery attempt. Absent while it runs and on servers
+    /// that predate the field.
+    let delivery: LetterTurnDelivery?
 
     /// Stable within one letter: the store appends turns and never reorders.
     var id: String { "\(from)|\(at ?? 0)|\(bodyFile ?? "")" }
@@ -113,6 +120,11 @@ struct Letter: Codable, Identifiable, Equatable {
     /// Human state. `var` so the store can flip it optimistically; the server
     /// response is still adopted as truth right after.
     var read: Bool?
+    /// When `read` last flipped, epoch ms (server-stamped; the store stamps an
+    /// optimistic flip locally, as the console does). The clock behind a read
+    /// decision's grace window in the Action needed filter. Absent on a letter
+    /// whose read flag never moved, or one read before the server kept the stamp.
+    var readAt: Double?
     var pinned: Bool?
     var archived: Bool?
     let actions: [LetterAction]?
@@ -144,6 +156,34 @@ struct Letter: Codable, Identifiable, Equatable {
     /// An action_required letter nobody has answered yet — a real to-do.
     var isAwaitingDecision: Bool {
         kind == .actionRequired && answered == nil && !isArchived
+    }
+
+    // MARK: - Decision rules (the console's, verbatim: web/src/api/human-inbox.ts)
+
+    /// How long a decision the human has READ but not answered stays listed under
+    /// Action needed. The console's `DECISION_SEEN_GRACE_MS`.
+    static let decisionSeenGraceMs: Double = 5 * 60 * 1000
+
+    /// A decision the human has not looked at yet: what the Action needed COUNT
+    /// holds (the console's `isUnseenDecision`, the Needs Action badge rule).
+    /// Reading a decision is taking it on, so the count drops the moment it is read.
+    var isUnseenDecision: Bool { isAwaitingDecision && !isRead }
+
+    /// When a read, unanswered decision leaves the Action needed LIST, or nil when
+    /// it has no such deadline (unread, answered, archived, or read before the
+    /// server stamped `readAt`, which counts as seen long ago).
+    var decisionGraceEndsAt: Double? {
+        guard isAwaitingDecision, isRead, let readAt else { return nil }
+        return readAt + Self.decisionSeenGraceMs
+    }
+
+    /// Whether the decision is still LISTED under Action needed at `nowMs`:
+    /// unread, or read within the grace window (the console's `isOpenDecision`).
+    func isOpenDecision(nowMs: Double) -> Bool {
+        guard isAwaitingDecision else { return false }
+        if !isRead { return true }
+        guard let endsAt = decisionGraceEndsAt else { return false }
+        return nowMs < endsAt
     }
 
     /// Buttons to render. Empty unless the letter still wants a decision.
@@ -268,25 +308,48 @@ struct LetterDelivery: Codable, Equatable {
     let sessionId: String?
     let messageId: String?
 
-    /// One short line for the reader. Mirrors the console's `deliveryText()`.
+    /// One short line with no recipient and no time. The reader's status line
+    /// under a reply is `LetterReplyStatus`, which names both; this is the
+    /// recipient-free form for anything that only has the delivery.
+    ///
+    /// `queued` means handed to the session's message queue, which resumes a
+    /// session that is not running, so it is honestly "Sent".
     var humanText: String {
         switch status {
         case "queued", "delivered":
             return "Sent to the agent"
         case "deferred":
-            return "Queued — the agent is waiting on a permission prompt, so your answer reaches it when that prompt is resolved"
+            return "Queued. The agent is waiting on a permission prompt, and your reply reaches it after that."
         case "skipped":
-            return reason == "origin_session_gone"
-                ? "Saved — the sending session is gone, so nothing was delivered"
-                : "Saved — this letter has no origin session to answer"
+            switch reason {
+            case "no_origin_session": return "Saved. This letter has no agent session to answer, so nothing was sent."
+            case "origin_session_gone": return "Saved. The agent that wrote this letter has ended, so nothing was sent."
+            default: return "Saved. Nothing was sent to the agent."
+            }
         case "failed":
-            return "Saved, but delivery to the agent failed"
+            return "Saved in this letter, but not sent to the agent."
         default:
             return "Saved"
         }
     }
 
     var isProblem: Bool { status == "failed" }
+}
+
+/// The delivery outcome the server RECORDS on a human thread turn
+/// (`thread[].delivery`), so the status under a reply is still right after the
+/// letter is closed and reopened. Same vocabulary as `LetterDelivery`.
+struct LetterTurnDelivery: Codable, Equatable {
+    let status: String?
+    let reason: String?
+    let sessionId: String?
+    /// When the attempt finished, epoch ms.
+    let at: Double?
+
+    /// The response-shaped delivery this record stands for.
+    var asDelivery: LetterDelivery {
+        LetterDelivery(status: status, reason: reason, sessionId: sessionId, messageId: nil)
+    }
 }
 
 /// POST answer / human-reply → { letter, delivery }. The letter is the SAME

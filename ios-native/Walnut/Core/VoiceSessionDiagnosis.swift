@@ -55,7 +55,7 @@ struct VoiceSessionDiagnosis: Equatable {
         case AVAudioSession.ErrorCode.insufficientPriority.rawValue:
             return .init(
                 reason: "insufficient-priority",
-                message: "Another app is using audio (a call?) — end it and try again",
+                message: "Another app is using audio (a call?). End it and try again.",
                 retryable: true,
                 tryBareConfig: false
             )
@@ -66,7 +66,7 @@ struct VoiceSessionDiagnosis: Equatable {
         case AVAudioSession.ErrorCode.cannotInterruptOthers.rawValue:
             return .init(
                 reason: "cannot-interrupt-others",
-                message: "Audio is in use by another app — open Walnut and try again",
+                message: "Audio is in use by another app. Open Walnut and try again.",
                 retryable: true,
                 tryBareConfig: false
             )
@@ -75,7 +75,7 @@ struct VoiceSessionDiagnosis: Equatable {
         case AVAudioSession.ErrorCode.siriIsRecording.rawValue:
             return .init(
                 reason: "siri-recording",
-                message: "Siri is listening — wait a moment and try again",
+                message: "Siri is listening. Wait a moment and try again.",
                 retryable: true,
                 tryBareConfig: false
             )
@@ -85,7 +85,7 @@ struct VoiceSessionDiagnosis: Equatable {
         case AVAudioSession.ErrorCode.isBusy.rawValue:
             return .init(
                 reason: "busy",
-                message: "The microphone was busy — try again",
+                message: "The microphone was busy. Try again.",
                 retryable: true,
                 tryBareConfig: false
             )
@@ -95,7 +95,7 @@ struct VoiceSessionDiagnosis: Equatable {
         case AVAudioSession.ErrorCode.cannotStartRecording.rawValue:
             return .init(
                 reason: "cannot-start-recording",
-                message: "Recording can't start right now — open Walnut and try again",
+                message: "Recording can't start right now. Open Walnut and try again.",
                 retryable: true,
                 tryBareConfig: false
             )
@@ -105,7 +105,7 @@ struct VoiceSessionDiagnosis: Equatable {
         case AVAudioSession.ErrorCode.mediaServicesFailed.rawValue:
             return .init(
                 reason: "media-services-failed",
-                message: "Audio restarted on this device — try again",
+                message: "Audio restarted on this device. Try again.",
                 retryable: true,
                 tryBareConfig: false
             )
@@ -125,7 +125,7 @@ struct VoiceSessionDiagnosis: Equatable {
         case AVAudioSession.ErrorCode.badParam.rawValue:
             return .init(
                 reason: "bad-param",
-                message: "Recording couldn't start on this device — try again",
+                message: "Recording couldn't start on this device. Try again.",
                 retryable: false,
                 tryBareConfig: true
             )
@@ -135,7 +135,7 @@ struct VoiceSessionDiagnosis: Equatable {
         case AVAudioSession.ErrorCode.incompatibleCategory.rawValue:
             return .init(
                 reason: "incompatible-category",
-                message: "Recording couldn't start on this device — try again",
+                message: "Recording couldn't start on this device. Try again.",
                 retryable: false,
                 tryBareConfig: true
             )
@@ -151,7 +151,7 @@ struct VoiceSessionDiagnosis: Equatable {
     private static func unknown(_ error: NSError) -> VoiceSessionDiagnosis {
         .init(
             reason: "unclassified",
-            message: "Recording failed: \(error.domain) \(error.code) — \(error.localizedDescription)",
+            message: "Recording failed: \(error.domain) \(error.code). \(error.localizedDescription)",
             retryable: false,
             tryBareConfig: true
         )
