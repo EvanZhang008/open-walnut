@@ -175,6 +175,12 @@ export const EventNames = {
   // human attention records banked, and throttled Mac-wide attention.
   TIME_BANKED: 'time:banked',
   TIME_OUTSIDE: 'time:outside',
+
+  // Apple Health (src/core/health/): a sync stored new samples, and the once-per-
+  // wake-date "last night is in" signal a morning routine wakes on. Same audience
+  // as time:banked (global subscribers only); payloads carry dates, never values.
+  HEALTH_INGESTED: 'health:ingested',
+  HEALTH_SLEEP_READY: 'health:sleep-ready',
 } as const;
 
 export type EventName = (typeof EventNames)[keyof typeof EventNames];

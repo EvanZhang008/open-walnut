@@ -37,6 +37,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
+import { requestOrigin } from '../middleware/request-origin.js'
 
 export const routinesV1Router = Router()
 
@@ -72,7 +73,8 @@ async function runLocal(
     res.status(successStatus).json(result)
   } catch (err) {
     if (err instanceof SessionControlError) {
-      sendError(res, err.statusCode, v1ErrorCode(err.statusCode), err.message)
+      // 403 is a check this caller may not run there (check-host-policy.ts).
+      sendError(res, err.statusCode, err.statusCode === 403 ? 'forbidden' : v1ErrorCode(err.statusCode), err.message)
       return
     }
     next(err)
@@ -168,7 +170,9 @@ function callerSid(req: Request): string | undefined {
 // POST /api/v1/routines/check-test { check: {run, cwd?, host?, timeoutSeconds?}, id? }
 // Run a check ONCE on its host, reading and writing no state — this is what
 // `trigger_test` and the form's Test button call. The daemon RPC carries a
-// mandatory deadline: a route waiting on a host must always answer.
+// mandatory deadline: a route waiting on a host must always answer. Every write
+// below that can hand a daemon a command passes the caller's origin, so a check
+// runs only where that caller may run one (check-host-policy.ts).
 routinesV1Router.post('/routines/check-test', async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (CLOUD_MODE) {
@@ -176,7 +180,7 @@ routinesV1Router.post('/routines/check-test', async (req: Request, res: Response
       return
     }
     const { testRoutineCheck } = await import('../../core/routines/trigger-api.js')
-    await runLocal(res, next, 200, () => testRoutineCheck(req.body))
+    await runLocal(res, next, 200, () => testRoutineCheck(req.body, requestOrigin(req), callerSid(req)))
   } catch (err) {
     next(err)
   }
@@ -195,7 +199,7 @@ routinesV1Router.post('/routines/trigger', async (req: Request, res: Response, n
       return
     }
     const { createTriggerRoutine } = await import('../../core/routines/trigger-api.js')
-    await runLocal(res, next, 201, () => createTriggerRoutine(req.body, sid))
+    await runLocal(res, next, 201, () => createTriggerRoutine(req.body, sid, requestOrigin(req)))
   } catch (err) {
     next(err)
   }
@@ -226,7 +230,7 @@ routinesV1Router.post('/routines', async (req: Request, res: Response, next: Nex
       return
     }
     const { createRoutine } = await import('../../core/routines/routines-core.js')
-    await runLocal(res, next, 201, () => createRoutine(req.body))
+    await runLocal(res, next, 201, () => createRoutine(req.body, requestOrigin(req)))
   } catch (err) {
     next(err)
   }
@@ -242,7 +246,7 @@ routinesV1Router.patch('/routines/:id', async (req: Request, res: Response, next
       return
     }
     const { patchRoutine } = await import('../../core/routines/routines-core.js')
-    await runLocal(res, next, 200, () => patchRoutine(id, req.body))
+    await runLocal(res, next, 200, () => patchRoutine(id, req.body, requestOrigin(req)))
   } catch (err) {
     next(err)
   }

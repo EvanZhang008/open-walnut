@@ -1,0 +1,20 @@
+{
+  "id": "morning-brief",
+  "version": 1,
+  "enabledByDefault": false,
+  "about": "Shipped, never installed by the server, and off until the user turns it on. Walnut serves the samples only to sessions on this Mac and never syncs them; the letter it sends is ordinary Walnut content and syncs like any other letter. The phone's Apple Health setup offers it and fills schedule.tz with the phone's IANA zone before POST /api/v1/routines. It wakes on health:sleep-ready (once per wake date); the 11:00 clock run is skipped when no event arrived.",
+  "fill": { "schedule.tz": "the phone's IANA timezone, e.g. America/New_York" },
+  "routine": {
+    "name": "Morning brief",
+    "description": "When last night's sleep arrives from Apple Health, send one info letter: sleep against the 28-night baseline, yesterday, and today's calendar.",
+    "enabled": false,
+    "schedule": { "kind": "cron", "expr": "0 11 * * *", "tz": "UTC" },
+    "wake": { "events": ["health:sleep-ready"], "threshold": 1, "skipWhenIdle": true },
+    "executor": {
+      "type": "walnut-agent",
+      "config": {
+        "instructions": "Write the user's morning brief. 1. Load the morning-brief skill (walnut tools call skill_read {\"dirName\":\"morning-brief\"}) and follow it exactly. 2. Read last night with health_sleep {\"last_nights\":1}, yesterday with day_review, and today with day_review {\"sections\":\"calendar,focus,tasks\"}. 3. Send exactly ONE letter with human_inbox_send, type info. 4. Report sections listed in unavailable as missing; never invent them. 5. Summarize, never paste raw series, and never write health numbers into MEMORY.md or USER.md."
+      }
+    }
+  }
+}

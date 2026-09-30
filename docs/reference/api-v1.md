@@ -31,6 +31,7 @@ Primary-mode refusals carry a `code`: `not_paired` (no credential) or
   - `POST /api/v1/setup/claim` `{ setupToken, deviceName }` → `{ deviceName, token }` (public, one-shot)
 - **Primary mode**: a device token minted on this machine (Settings > Phones &
   Cloud, or `walnut device add <name>`) or a config.yaml `api_keys[]` entry.
+  Apple Health (`/health/*`) is the exception: it takes a device token only.
 
 Auth failures return `401`; repeated failures are rate-limited per IP (`429`).
 
@@ -68,10 +69,12 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `target_archived` \| `self_send` | 409 / 400 | `POST /messages` target is archived, or resolved to the calling session itself |
 | `throttled` \| `queue_full` | 429 | Peer send rate budget (`retryAfterMs`) or the target's queue cap; do not retry in a loop |
 | `unknown_request` \| `not_request_target` \| `origin_session_gone` | 404 / 403 / 410 | `in_reply_to` names no request, names one addressed to another session, or the asking session is gone |
-| `too_large` | 413 | Note content exceeds 2 MB (or an attachment upload exceeds its cap) |
+| `too_large` | 413 | Note content exceeds 2 MB (or an attachment upload exceeds its cap, or a `POST /health/sync` call exceeds 500 items or 192 KB: split it) |
 | `bad_audio` | 422 | `POST /stt/transcribe`: this recording is undecodable (an m4a cut off before it was finalized), so re-uploading the same bytes cannot help. Additive: an older server answers `503 stt_unavailable` for the same case, and a client that treats 4xx as a verdict about the audio simply retires the recording sooner |
 | `stt_unavailable` | 503 | `POST /stt/transcribe`: the service cannot answer right now (no engine configured, engine down, the companion could not reach the primary box and has no key of its own). The recording is worth keeping and retrying |
 | `primary_unreachable` | 503 | `POST /time/heartbeats` did not persist the batch: the primary could not be reached, or it was reached and its day-file write did not land. Keep the batch queued and retry; sample `id`s make the retry a no-op for anything that did land |
+| `primary_unreachable` (health) | 503 | Any `/health/*` call that could not be served by the primary (bridge down, its server down, a primary that predates the action, or a sync whose SQLite transaction did not commit). Nothing was stored; keep the batch and retry |
+| `store_mismatch` | 409 | `POST /health/sync` named a `storeId` the primary no longer has (the health data was deleted). Extra `storeId` is the new id: clear every upload anchor and resync from scratch under it |
 | `internal` | 500 | Unhandled server error |
 
 ## Endpoints
@@ -265,6 +268,10 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | PUT | `/api/v1/projects/:name/metadata` | Merge project settings (501 on REPLICA) |
 | POST | `/api/v1/projects/:name/summary/regenerate` | Rebuild the AI project summary (501 on REPLICA) |
 | POST | `/api/v1/time/heartbeats` | Bank human time-tracking samples (a REPLICA relays them to the primary) |
+| POST | `/api/v1/health/sync` | Upload one batch of Apple Health samples, buckets or deletions (a REPLICA relays it) |
+| GET | `/api/v1/health/status` | Health store id, pause state, coverage, per-type freshness, supported types |
+| PUT | `/api/v1/health/settings` | `paused`, `sleepSourceOrder`, `categories`, `preferredUnits` |
+| DELETE | `/api/v1/health/data` | Delete health data (all, or `categories`), rotate the store id, pause |
 
 ### GET /api/v1/status
 
@@ -2210,6 +2217,61 @@ REPLICA behavior (Class B relay, and NOT `501` like the internal `/api/time` fam
 
 Where it shows up: `GET /api/time/summary` (web console). A day carries `iosMs` and the window carries `totalIosMs` when phone time is present (both omitted at zero). Per-task rows aggregate ACROSS sources: "time on this task" is one number and must not depend on which screen the user held.
 
+### Apple Health (additive, 2026-09): `/health/sync`, `/health/status`, `/health/settings`, `/health/data`
+
+The iPhone reads HealthKit and uploads it to the PRIMARY, which keeps it in `~/.open-walnut/health/health.sqlite`. Walnut never sends the raw samples or that store off the Mac: git-sync ignores the directory, the S3 backup and test-server snapshots exclude it, logs carry counts only, and no route, op or relay serves them to a caller that is not on this Mac (the rule below). What an agent writes ABOUT the data (a chat reply, an inbox letter) is ordinary Walnut content and syncs like any other letter; the shipped routines are off by default and summarize rather than dump series. All four endpoints are Class B relays on a REPLICA (`server.health.sync|status|settings|delete` over `session.control`, 10s budget), and the replica stores nothing. The primary answers those relay actions only when they arrive through its own daemon (`__local__`, the one the replica's bridge uses), never through a remote exec host's daemon.
+
+**Rule: health data is only available to callers on this Mac.** "On this Mac" is the caller's ORIGIN, not the socket. The server reaches its own API over loopback on behalf of callers that are elsewhere (an op that a remote host's session runs through the gateway, an action card clicked on a paired phone, a cloud bridge relay), and every such self-call carries `x-walnut-origin`: `__local__`, `host:<hostKey>`, or `remote-http` (a device token, an API key, or the bridge). Only server code writes it, and it can only lower trust: a loopback request is local only when it sends no such header or `__local__`, and a request from off this machine is `remote-http` whatever it sends. On the primary:
+
+- `/api/v1/health/*` (sync, status, settings, data) answers this Mac and a paired phone's device token only. An API key gets `403 forbidden` (`message: "Apple Health accepts only this Mac and a paired phone's device token. An API key cannot read or change it."`), on a cloud replica as well; a daemon machine token is refused with `401 token_refused` before any route, as everywhere. A self-call made for a caller off this Mac gets `403 forbidden` too. Both refusals use the v1 error shape.
+- `/api/health/*` (the agent reads) answers only a caller whose origin is this Mac. Everyone else gets `403 forbidden` with `message: "Health data is only available to sessions on this Mac"`, including a caller holding a valid device token or API key.
+- The health ops (`health_*`, `day_review`) run only for a caller on this Mac, whatever the entry point: the gateway, `POST /api/v1/actions/invoke`, the plugin op route and its bridge relay, or another op calling them.
+- `POST /api/v1/actions/invoke` refuses any `remote: 'deny'` or `localHostGateway` op with `403 local_only` unless the request comes from this Mac.
+- The `api` passthrough, for a caller off this Mac, refuses every health path and every route that a `remote: 'deny'` op binds or declares (for example `DELETE /api/tasks/:id`, legacy or v1), after resolving dot segments, percent escapes, case, repeated slashes and a trailing slash. The set is read from the op registry, not kept by hand.
+- A plugin's HTTP route runs for whoever requested it. An op it calls and a request it sends back to this server (`walnut.http.fetch` to a loopback name) carry that requester's origin, so a paired phone cannot read health through a plugin's route either.
+- A trigger check is a command, and on this Mac it is a local caller. So a session on another exec host may test, arm or change a check only on its own host (`host` = its alias; with no host, `trigger_test` and `trigger_create` with `session: "this"` use the calling session's host, and anything else means this Mac). A check on this Mac or on a third host is refused before any daemon is asked, from `trigger_test`, `trigger_create`, `POST /routines/check-test`, `POST /routines/trigger`, `POST /routines` and a `PATCH /routines/:id` that changes a check's command, cwd or host (legacy `/api/routines` and `/api/cron` too). The REST routes answer `403`: v1 with `{ "error": { "code": "forbidden", "message" } }`, the legacy routes with `{ "error": message }`. `POST /api/v1/actions/invoke` answers `200` with `{ "ok": false, "error": { "code": "op_failed", "message" } }`. On the gateway, the named op and the `api` passthrough fail with code `internal`. Each message is the same sentence, and it names the caller's own host.
+
+A paired device or an API key can already start work on this Mac (a coding session, or a trigger check), so for those two the health rules only keep a script from reading health by accident.
+
+- A daemon relays `session.control` actions (every `server.*` action and every session control) only for the Mac's own daemon, which is the path the cloud replica's bridge uses. A remote exec host's daemon gets `forbidden` for all of them, so a process on that host cannot run a routine, a check command, a chat turn, a task write or a letter through its daemon. A session there still reaches Walnut through the gateway (`walnut tools call`), which keeps each op's own remote policy.
+
+What the rule does not cover: a session on a host you connect to Walnut can still, through ordinary ops on the gateway, start a session on this Mac (`task_create` or `task_start` naming this Mac, a task in a project whose default host is this Mac, or a routine whose agent runs here) and read files here through the `api` passthrough to the Files routes. Those reach every file on this Mac, the health store included. Connect only hosts you trust as much as the Mac itself.
+
+`POST /api/v1/health/sync`, one type (raw) or one metric (buckets) per call:
+
+```json
+{ "storeId": "hs-…", "device": { "installId": "…", "model": "iPhone", "os": "iOS 26" }, "tz": "America/New_York",
+  "kind": "raw", "type": "sleep",
+  "samples": [ { "uuid": "…", "start": "2026-09-20T23:10:00-04:00", "end": "2026-09-21T03:00:00-04:00", "code": 3,
+                 "source": { "bundleId": "com.apple.health.…", "name": "Watch" }, "device": "Watch", "tz": "…", "meta": { "userEntered": true } } ],
+  "deleted": [ "uuid", "…" ],
+  "resync": { "phase": "begin", "windowStart": "2026-06-23T00:00:00Z", "generation": 7 },
+  "preferredUnits": { "temperature": "degF", "distance": "mi", "energy": "kcal" } }
+```
+
+- `kind: "buckets"` carries `metric` and `buckets: [ { "start", "intervalSec": 300|3600|86400, "sum"|"avg", "min", "max", "count" } ]` (HealthKit statistics, already merged by the Health app).
+- Instants are ISO-8601 with an offset (or epoch ms). Each sample's local date is computed in ITS OWN `tz` (else the batch `tz`), never the Mac's, and durations come from instants, so DST nights are their real length. A sleep sample belongs to the night of wake date D when its END falls in (D-1 18:00, D 18:00] of its own zone: one ending at exactly 18:00 is still D's.
+- Values arrive in ONE canonical unit per metric and are stored as sent: count/min (heart rate, resting, walking, respiratory rate), ms (`hrv_sdnn`), % 0 to 100 (`spo2`), degC (`wrist_temp`), count (`steps`), m (`distance`), kcal (energy), min (exercise, stand, daylight, mindful, workout), dBASPL (audio), mL/(kg·min) (`vo2max`). Sleep uses the HKCategoryValueSleepAnalysis codes: inBed 0, asleepUnspecified 1, awake 2, asleepCore 3, asleepDeep 4, asleepREM 5. `GET /health/status` lists every accepted type under `supported`; a client must not send anything else.
+- Caps: at most **500** items (samples + deleted + buckets) and **192 KB** serialized per call (`HEALTH_MAX_ITEMS_PER_SYNC`, `HEALTH_MAX_SYNC_BYTES` in `src/core/health/catalog.ts`). Over either cap answers `413 too_large` with `maxItems` and `maxBytes`: split the batch, keep the data.
+- Raw rows are insert-or-ignore by `uuid` (a batch posted twice is a no-op); a `deleted` uuid removes its row; buckets are replaced by `(metric, start, intervalSec)`.
+- Resync is mark and sweep per type or metric: `begin` marks every stored row at or after `windowStart` with `generation`, a re-sent row clears its mark, and `end` (same generation) deletes the rows still marked. Without an `end` nothing is swept; a new `begin` replaces an unfinished one. The answer echoes `resync: { phase, generation, marked | swept, stale? }`; `stale: true` means the `end` did not match the open resync and nothing was swept.
+- An item that fails validation is dropped and counted in `rejected`; retrying it cannot help. A type the server does not support answers `unsupported: true` with every item rejected: do NOT advance that type's anchor.
+
+| Status | Meaning |
+|---|---|
+| `200 { accepted, inserted, deleted, storeId, paused, rejected?, unsupported?, categoryDisabled?, resync? }` | The SQLite transaction committed. `paused: true` means nothing new was stored (deletions still apply); `categoryDisabled: true` means that category is switched off in settings. The phone may forget the batch. |
+| `409 store_mismatch` + `storeId` | The data was deleted and the store re-created. Clear every anchor and resync under the new `storeId`. |
+| `413 too_large` | Over the per-call caps: split it. |
+| `503 primary_unreachable` | Nothing stored. Keep the batch queued and retry. |
+
+`GET /api/v1/health/status` → `{ connected, paused, storeId, lastUploadAt, coverage: { from, to }, types: [ { type, category, enabled, lastSampleAt, state: ok|stale|unknown_or_denied } ], sources, sleepSourceOrder, categories, units, preferredUnits, tz, devices, supported: { raw, buckets } }`. `unknown_or_denied` means no sample in 14 days: iOS never tells an app about a denied read.
+
+`PUT /api/v1/health/settings` with any of `{ "paused": bool, "sleepSourceOrder": [bundleId…] | null, "categories": ["sleep","heart","activity","vitals","workouts","mind","audio"], "preferredUnits": {…} }` → the settings view. `sleepSourceOrder` overrides the default sleep source priority. The default follows Apple's Health doc (support.apple.com/108779, 2026-09-14: "When you add a new data source, it appears above all apps and devices that contribute data in Health"): manual entries first, then every source newest-added first, across devices and apps. HealthKit does not expose when a source was added, so Walnut uses the first time it saw the source (`sources[].firstSeenAt` in status), then the later first sample. Invalid shapes answer `400 bad_request`.
+
+`DELETE /api/v1/health/data` with optional `{ "categories": [...] }` → `{ deleted: "all" | [...], storeId, paused: true, removed }`. Any delete rotates the `storeId` and pauses uploads, so the phone's next sync answers `409 store_mismatch` instead of silently refilling what was removed. A full delete removes the database file itself.
+
+Agent reads live on the primary's internal routes (`GET /api/health/status|sleep|daily|series`, callers on this Mac only, 501 on a replica) behind the `health_status`, `health_sleep`, `health_daily`, `health_series` and `day_review` ops. A session on the Mac itself may call them; every other caller is refused (the rule above). A sleep night reads `status: ok`, `in_bed_only` (In Bed samples only, as an iPhone without an Apple Watch records: bedtime, wake and `inBedMin` from the in-bed span, `asleepMin` null, plus a `caveat`), `no_main_night` (naps only) or `missing`. Sleep pieces form one night unless 60 min or more between them has no awake or in-bed record from the same source; recorded awake time inside the night counts as awake. Sleep split off that way but ending on the same wake date within 3 h of the night is reported, never joined: the night carries `unrecordedGaps: [ { side: before|after, start, end, min, unrecordedMin, otherSleepMin } ]` and a `caveat`, and that sleep stays under `naps`. Nothing in the samples tells a real wake from a recording gap (a flat Watch battery), and Apple documents no rule for joining across one, so the agent is told to say the recording has a gap rather than state that night's wake time as fact.
+
 ## Offline write matrix (REPLICA behavior contract, 2026-08)
 
 This section is the contract the iOS optimistic-mutation layer relies on. It answers, per mutation family: what happens on the cloud REPLICA, what happens while the Mac (primary) is unreachable, and how the two stores converge afterward. General model:
@@ -2253,6 +2315,7 @@ Per-family matrix:
 | Start a session for a task (`POST /tasks/:id/start`), send by handle (`POST /messages`) | Class C: `501 not_supported_cloud` | n/a | both need the primary's session-runner, daemons, and request ledger; the phone's own lanes are `POST /sessions` and `POST /sessions/:id/messages`, which relay over the bridge |
 | Notes vault writes (create/update/delete, global notes, tag rename, folder/attachment deletes) | Class A-like: the vault is git-synced data; writes land locally | accepted | git-sync merge on reconnect; optimistic-lock hashes (`expectedHash`) protect against cross-box conflicts |
 | Time heartbeats (`POST /time/heartbeats`) | Class B relay: `204` only once the primary persisted the batch | `503 primary_unreachable`, so the client keeps the batch queued and retries | the primary is the single writer AND the only box that may assign a sample's local day; nothing is ever banked on the replica. Retries are safe because the primary dedupes on each sample's `id` (exactly-once in the rollup; a known-failed day-file write is retried, so the disk is at-least-once) |
+| Apple Health (`POST /health/sync`, `GET /health/status`, `PUT /health/settings`, `DELETE /health/data`) | Class B relay: `200` only once the primary's SQLite transaction committed; `409 store_mismatch` and `413 too_large` pass through unchanged | `503 primary_unreachable`, so the phone keeps the batch queued and retries | the primary is the single writer and the replica keeps nothing (no store, no queue). Retries are safe: raw rows dedupe by HealthKit `uuid`, buckets replace by key, and resync sweeps only on a matching `end` |
 
 Freshness signals a client can rely on:
 

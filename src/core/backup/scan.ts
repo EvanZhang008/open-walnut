@@ -22,6 +22,9 @@ export const EXCLUDED_DIRS = new Set([
   '.smart-env',
   '.git',
   'browser',
+  // Apple Health store: personal health data never leaves the Mac (git-sync
+  // ignores it too). Also keeps health.sqlite out of the sqlite snapshots.
+  'health',
 ]);
 
 const EXCLUDED_FILE_RE = [

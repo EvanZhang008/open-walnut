@@ -1376,8 +1376,18 @@ export class DaemonConnection {
     if (typeof relayId !== 'number' || typeof action !== 'string') return
     let reply: Record<string, unknown>
     try {
+      // Honoured only through the Mac's own daemon (the cloud replica's bridge):
+      // a remote exec host's daemon forwards whatever a process there sends it.
+      const { controlRefusedForHost, controlRelayOrigin } = await import('../core/sessions/control-host-policy.js')
+      const refusal = controlRefusedForHost(action, this.hostKey)
+      if (refusal) {
+        log.session.warn('DaemonConnection: control relay refused for this host', { host: this.hostKey, relayId, action })
+        await this.send('control-result', { relayId, error: refusal, errorKind: 'forbidden' })
+        return
+      }
       const { handleSessionControlRelay } = await import('../core/sessions/session-controls.js')
-      const outcome = await handleSessionControlRelay(action, sessionId, params)
+      // Any op the action runs acts for the relay's sender, never for this Mac.
+      const outcome = await handleSessionControlRelay(action, sessionId, params, controlRelayOrigin(this.hostKey))
       if (outcome.ok) {
         log.session.info('DaemonConnection: control relay handled', { host: this.hostKey, relayId, action, sessionId })
         reply = { relayId, result: outcome.result }

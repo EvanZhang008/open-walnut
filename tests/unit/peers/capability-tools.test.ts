@@ -112,8 +112,8 @@ describe('gateway tools.call — policy gates', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error.code).toBe('bad_request');
-    expect(r.error.message).toContain('local-only');
-    expect(r.error.message).toContain('walnut tools call');
+    expect(r.error.message).toBe('task_delete is local-only because it is destructive. Run it from a session on the Walnut host with `walnut tools call`.');
+    expect(r.error.message).not.toMatch(/[\u2013\u2014]/);
   });
 
   it('rejects a missing/non-string name and non-object args', async () => {

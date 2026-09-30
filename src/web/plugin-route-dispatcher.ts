@@ -1,5 +1,7 @@
 import express, { Router, type Request, type RequestHandler } from 'express'
 import type { IntegrationRegistry } from '../core/integration-registry.js'
+import { ORIGIN_HEADER, withCallerOrigin } from '../lib/caller-origin.js'
+import { requestOrigin } from './middleware/request-origin.js'
 import {
   PluginRuntimeRelayError,
   type PluginHttpRelayRequest,
@@ -85,8 +87,15 @@ export function createPluginRouteDispatcher(
     const rawPluginId = req.params.pluginId
     const pluginId = Array.isArray(rawPluginId) ? rawPluginId[0] : rawPluginId
     const router = routerFor(pluginId)
+    // The route runs for its requester (src/lib/caller-origin.ts): an op it calls
+    // or a request it sends back to this server cannot act as this Mac for a
+    // paired phone, an API key or a relayed request. The header the route reads
+    // says the same, over any value the client sent (a LAN device's spoofed
+    // `__local__` reached a plugin as local), as the bridge relay does.
+    const origin = requestOrigin(req)
+    req.headers[ORIGIN_HEADER] = origin
     if (router) {
-      router(req, res, next)
+      withCallerOrigin(origin, () => router(req, res, next))
       return
     }
     if (!options.relay) {

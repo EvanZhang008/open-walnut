@@ -7,6 +7,7 @@
  * prints the same shape it always did.
  */
 import { executeOp } from '../ops/index.js';
+import { LOCAL_ORIGIN } from '../lib/caller-origin.js';
 import { outputJson } from '../utils/json-output.js';
 import { WAIT_MAX_IDS, evaluateWaitResult, waitManyVerdict } from '../providers/wn-cli.js';
 import type { GlobalOptions } from '../core/types.js';
@@ -40,7 +41,7 @@ export async function runWait(idArg: string | string[], options: WaitOptions, gl
   for (;;) {
     for (const id of ids) {
       if (settled.has(id)) continue;
-      const r = await executeOp(id.startsWith('rq-') ? 'request_get' : 'task_get', { id });
+      const r = await executeOp(id.startsWith('rq-') ? 'request_get' : 'task_get', { id }, { origin: LOCAL_ORIGIN });
       if (!r.ok) {
         // A definite answer (unknown id, server down) — stop, don't spin.
         const message = ids.length > 1 ? `${id}: ${r.message}` : r.message;

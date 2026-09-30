@@ -18,6 +18,8 @@ import { MIN_EVERY_MS } from '../../providers/trigger-check-core.js';
 import type { CronService } from '../cron/index.js';
 import type { CronJob, TriggerCheck } from '../cron/types.js';
 import { requireTriggerDaemon } from './trigger-daemon.js';
+import { assertCheckHostAllowed, checkCommandChanged } from './check-host-policy.js';
+import { REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js';
 
 /** Resolve the live cron service or throw a 503 (server still booting). */
 async function requireCronService(): Promise<CronService> {
@@ -114,12 +116,17 @@ function assertIntervalSchedule(schedule: { kind?: string; everyMs?: number } | 
  *    daemon is the thing that will run this. 400 when it is merely old (the user
  *    can fix that by waiting for the auto-deploy), 503 when it is cold.
  *
+ * Before the daemon is asked, a NEW command (a create, or a change to a saved
+ * check's run, cwd or host) must be one `origin` may run there
+ * (check-host-policy.ts).
+ *
  * Returns the host to push to, or null when the input carries no check.
  */
 async function validateCheckForSave(
   input: { schedule?: unknown; check?: unknown },
   raw: unknown,
   existing?: CronJob,
+  origin?: string,
 ): Promise<string | null> {
   const rawCheck = rawRecord(raw)?.check ?? rawRecord(rawRecord(raw)?.job)?.check;
   if (input.check === null) return null;
@@ -140,6 +147,7 @@ async function validateCheckForSave(
     throw new SessionControlError('check.run is required: a trigger needs a command to run', 400);
   }
   const host = check.host || '__local__';
+  if (checkCommandChanged(check, existing?.check)) assertCheckHostAllowed(host, origin);
   await requireTriggerDaemon(host);
   return host;
 }
@@ -207,7 +215,8 @@ export async function getRoutine(id: string): Promise<{ job: unknown }> {
   return { job };
 }
 
-export async function createRoutine(body: unknown): Promise<{ job: unknown }> {
+/** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
+export async function createRoutine(body: unknown, origin?: string): Promise<{ job: unknown }> {
   const service = await requireCronService();
   const { normalizeCronJobCreate } = await import('../cron/index.js');
   const input = normalizeCronJobCreate(body);
@@ -218,7 +227,7 @@ export async function createRoutine(body: unknown): Promise<{ job: unknown }> {
   }
   await validateExecutorForSave(input);
   assertWakeNotOnCheck(input);
-  const checkHost = await validateCheckForSave(input, body);
+  const checkHost = await validateCheckForSave(input, body, undefined, origin);
   try {
     const job = await service.add(input);
     log.web.info('routine created via shared core', { jobId: job.id, name: job.name, ...(checkHost ? { checkHost } : {}) });
@@ -229,7 +238,8 @@ export async function createRoutine(body: unknown): Promise<{ job: unknown }> {
   }
 }
 
-export async function patchRoutine(id: string, body: unknown): Promise<{ job: unknown }> {
+/** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
+export async function patchRoutine(id: string, body: unknown, origin?: string): Promise<{ job: unknown }> {
   const service = await requireCronService();
   const { normalizeCronJobPatch } = await import('../cron/index.js');
   const patch = normalizeCronJobPatch(body);
@@ -239,7 +249,7 @@ export async function patchRoutine(id: string, body: unknown): Promise<{ job: un
   // also push the host it is leaving, or that daemon keeps polling forever.
   const before = await findJob(service, id);
   assertWakeNotOnCheck(patch, before ?? undefined);
-  await validateCheckForSave(patch, body, before ?? undefined);
+  await validateCheckForSave(patch, body, before ?? undefined, origin);
   try {
     const job = await service.update(id, patch);
     log.web.info('routine updated via shared core', { jobId: id });
@@ -365,10 +375,13 @@ export async function draftRoutineFromText(text: unknown): Promise<{ draft: unkn
 /**
  * Relay dispatcher for the `server.routines[.*]` control actions (cloud
  * REPLICA → primary). `sub` is the action suffix ('list' for the bare name).
+ * `origin` is who the relay acts for: a paired client unless the relay says
+ * otherwise (only the Mac's own daemon relays these, control-host-policy.ts).
  */
 export async function handleRoutinesRelayAction(
   sub: string,
   p: Record<string, unknown>,
+  origin: string = REMOTE_HTTP_ORIGIN,
 ): Promise<Record<string, unknown>> {
   const id = typeof p.id === 'string' ? p.id : '';
   switch (sub) {
@@ -377,19 +390,19 @@ export async function handleRoutinesRelayAction(
     // create one locally.
     case 'check-test': {
       const { testRoutineCheck } = await import('./trigger-api.js');
-      return await testRoutineCheck(p.body) as unknown as Record<string, unknown>;
+      return await testRoutineCheck(p.body, origin) as unknown as Record<string, unknown>;
     }
     case 'trigger': {
       const { createTriggerRoutine } = await import('./trigger-api.js');
-      return await createTriggerRoutine(p.body, typeof p.callerSid === 'string' ? p.callerSid : undefined) as unknown as Record<string, unknown>;
+      return await createTriggerRoutine(p.body, typeof p.callerSid === 'string' ? p.callerSid : undefined, origin) as unknown as Record<string, unknown>;
     }
     case 'list': return await listRoutines(p.includeDisabled === true) as unknown as Record<string, unknown>;
     case 'actions': return await listRoutineActions() as unknown as Record<string, unknown>;
     case 'status': return await getRoutinesStatus();
     case 'executors': return await listRoutineExecutors();
     case 'get': return await getRoutine(id) as unknown as Record<string, unknown>;
-    case 'create': return await createRoutine(p.body) as unknown as Record<string, unknown>;
-    case 'patch': return await patchRoutine(id, p.body) as unknown as Record<string, unknown>;
+    case 'create': return await createRoutine(p.body, origin) as unknown as Record<string, unknown>;
+    case 'patch': return await patchRoutine(id, p.body, origin) as unknown as Record<string, unknown>;
     case 'delete': return await deleteRoutine(id) as unknown as Record<string, unknown>;
     case 'toggle': return await toggleRoutine(id) as unknown as Record<string, unknown>;
     case 'run': return await runRoutineNow(id) as unknown as Record<string, unknown>;

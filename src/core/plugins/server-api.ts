@@ -53,6 +53,8 @@ import '../../ops/index.js'
 import { executeOp } from '../../ops/executor.js'
 import { countOwnerOps, definePluginOp, listOpEntries, type HttpBinding, type WalnutOp } from '../../ops/registry.js'
 import { jsonSchemaToZodShape } from '../../ops/schema-to-zod.js'
+import { LOCAL_ORIGIN } from '../../lib/caller-origin.js'
+import { labelPluginFetch } from './plugin-fetch-origin.js'
 import { registerOwnedMethod } from '../../web/ws/handler.js'
 import { registerOwnedAgent } from '../agent-registry.js'
 import { registerOwnedProviderAdapter } from '../../model/providers/registry.js'
@@ -234,15 +236,20 @@ export function getPluginApiBase(): string | undefined {
 
 // Plugins are full-trust. pluginId stamps provenance and caller identity; it is
 // not an authorization boundary, so every active Plugin sees the core op catalog.
+// `origin` is who the call acts for (src/lib/caller-origin.ts): a plugin's own
+// code passes local, a route passes its request's origin, and a nested call can
+// only lower it.
 export async function callPluginOp<T = unknown>(
   pluginId: string,
   name: string,
-  args: Record<string, unknown> = {},
+  args: Record<string, unknown>,
+  origin: string,
 ): Promise<{ ok: true; result: T } | { ok: false; message: string }> {
   await import('../../ops/index.js')
-  return await executeOp(name, args, {
+  return await executeOp(name, args ?? {}, {
     apiBase: configuredApiBase,
     callerSid: `plugin:${pluginId}`,
+    origin,
   }) as { ok: true; result: T } | { ok: false; message: string }
 }
 
@@ -808,7 +815,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         name: string,
         args: Record<string, unknown> = {},
       ): Promise<{ ok: true; result: T } | { ok: false; message: string }> {
-        return callPluginOp<T>(pluginId, name, args)
+        return callPluginOp<T>(pluginId, name, args, LOCAL_ORIGIN)
       },
       unwrap<T>(result: { ok: true; result: T } | { ok: false; message: string }): T {
         if (!result.ok) throw new Error(result.message)
@@ -892,7 +899,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       async fetch(url: string, init: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; timeoutMs?: number } = {}) {
         const response = await fetch(url, {
           method: init.method,
-          headers: init.headers,
+          headers: labelPluginFetch(url, init.headers),
           body: init.body as BodyInit | undefined,
           signal: AbortSignal.timeout(init.timeoutMs ?? 30_000),
         })

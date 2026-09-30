@@ -69,6 +69,16 @@ export interface WalnutOp {
     args: Record<string, unknown>,
     call: (method: HttpBinding['method'], path: string, body?: unknown) => Promise<unknown>,
   ) => Promise<unknown>
+  /**
+   * The endpoints a `handler` op reaches (templates shaped like `bind.path`),
+   * plus any sibling route that does the same thing (task_delete's batch route).
+   * Every `remote: 'deny'` op declares them, so the `api` passthrough refuses the
+   * same endpoints to a caller the op itself refuses (ops/origin-policy.ts). A
+   * test runs each such handler and holds it to this list.
+   */
+  routes?: ReadonlyArray<Pick<HttpBinding, 'method' | 'path'>>
+  /** With `localHostGateway`: the refusal a caller off this Mac gets. */
+  localOnlyMessage?: string
   /** Reshape a successful bound result (e.g. attach the task-ref citation). */
   mapResult?: (ctx: OpResultContext) => unknown
   /** When a write partly succeeds the result is kept, but every entry point must clearly report the op as failed. */
@@ -88,6 +98,14 @@ export interface WalnutOp {
      * ops). Reads default to allow; writes must choose explicitly.
      */
     remote: 'allow' | 'deny'
+    /**
+     * With `remote: 'deny'`: the gateway still serves a session on the Walnut host
+     * ITSELF (the primary's local daemon) and refuses every remote host. For data
+     * that must never leave this machine but that local sessions (Ask Walnut, a
+     * routine) need to read, such as Apple Health. The executor refuses such an
+     * op for ANY caller off this Mac (src/lib/caller-origin.ts), not only a host.
+     */
+    localHostGateway?: boolean
     /** MCP destructiveHint (irreversible data loss). */
     destructive?: boolean
     /** Its server route rejects replicas; exposed for discovery and generated docs. */

@@ -426,7 +426,9 @@ defineOp({
   title: 'Call any Walnut API endpoint',
   description:
     'Escape hatch for an endpoint with no named operation. `path` must start with /api/. Prefer named ' +
-    'operations because they carry validation, authorization, and product semantics.',
+    'operations because they carry validation, authorization, and product semantics. For a caller that is not on ' +
+    'the Walnut host it refuses every route a local-only operation owns (Apple Health, task deletion); that ' +
+    'refusal is final.',
   input: {
     method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).describe('HTTP method'),
     path: z.string().min(1).describe('Absolute API path starting with /api/'),

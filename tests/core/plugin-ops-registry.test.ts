@@ -59,6 +59,7 @@ import {
 } from '../../src/core/integration-loader.js'
 import { handleGatewayCapability } from '../../src/core/peers/capability-router.js'
 import { PeerThrottle } from '../../src/core/peers/peer-throttle.js'
+import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
 import { createTestPluginApi } from './plugin-test-utils.js'
 
 /** Every owner this file registers an op under. Swept in afterEach, so a new test
@@ -374,10 +375,10 @@ describe('registry.op through a loaded plugin', () => {
 
   it('runs the handler in-process for any caller, and validates args first', async () => {
     // A different plugin id on purpose: pluginId is provenance, not authorization.
-    const ok = await callPluginOp('some-other-plugin', 'ops_demo_ping', { who: 'ada' })
+    const ok = await callPluginOp('some-other-plugin', 'ops_demo_ping', { who: 'ada' }, LOCAL_ORIGIN)
     expect(ok).toEqual({ ok: true, result: { greeting: 'hello ada', pluginId: 'ops-demo' } })
 
-    const bad = await callPluginOp('some-other-plugin', 'ops_demo_ping', {})
+    const bad = await callPluginOp('some-other-plugin', 'ops_demo_ping', {}, LOCAL_ORIGIN)
     expect(bad.ok).toBe(false)
     expect(bad.ok === false && bad.message).toMatch(/who/)
   })
@@ -387,7 +388,7 @@ describe('registry.op through a loaded plugin', () => {
       payload: { any: 1, deep: { kept: true } },
       filter: { project: 'walnut', extra: 7 },
       tag: 42,
-    })
+    }, LOCAL_ORIGIN)
     expect(outcome).toEqual({
       ok: true,
       result: {
@@ -404,7 +405,7 @@ describe('registry.op through a loaded plugin', () => {
     const outcome = await callPluginOp('ops-demo', 'ops_demo_echo', {
       payload: {},
       filter: { project: 'walnut' },
-    })
+    }, LOCAL_ORIGIN)
     expect(outcome.ok).toBe(false)
     expect(outcome.ok === false && outcome.message).toMatch(/tag: Required/)
   })
@@ -428,7 +429,7 @@ describe('registry.op through a loaded plugin', () => {
   })
 
   it('forgets the op when the plugin disposes its own handle', async () => {
-    expect(await callPluginOp('ops-demo', 'ops_demo_drop_ping', {})).toEqual({ ok: true, result: { dropped: true } })
+    expect(await callPluginOp('ops-demo', 'ops_demo_drop_ping', {}, LOCAL_ORIGIN)).toEqual({ ok: true, result: { dropped: true } })
 
     expect(getOp('ops_demo_ping')).toBeUndefined()
     expect((await listPluginOps()).some((entry) => entry.name === 'ops_demo_ping')).toBe(false)
@@ -443,7 +444,7 @@ describe('registry.op through a loaded plugin', () => {
     const occurrences = listOpEntries().filter((entry) => entry.op.name === 'ops_demo_ping')
     expect(occurrences).toHaveLength(1)
     expect(occurrences[0].owner).toBe('ops-demo')
-    expect(await callPluginOp('ops-demo', 'ops_demo_ping', { who: 'ada' }))
+    expect(await callPluginOp('ops-demo', 'ops_demo_ping', { who: 'ada' }, LOCAL_ORIGIN))
       .toEqual({ ok: true, result: { greeting: 'hello ada', pluginId: 'ops-demo' } })
   })
 

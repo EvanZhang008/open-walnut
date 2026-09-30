@@ -196,7 +196,9 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       }
       parsed = args.args
     }
-    const r = await executeOp(name, parsed)
+    // A separate process: the server re-judges its socket, and can only lower this.
+    const { LOCAL_ORIGIN } = await import('../lib/caller-origin.js')
+    const r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN })
     if (!r.ok && r.unreachable) {
       const { callThroughHostDaemon } = await import('./tools-daemon-fallback.js')
       const code = await callThroughHostDaemon(name, parsed)

@@ -3300,6 +3300,13 @@ import { timeV1Router } from './time-v1.js'
 
 apiV1Router.use(timeV1Router)
 
+// ─── Apple Health (the phone uploads HealthKit data to the primary) ────────
+// Same device auth as the rest of /api/v1; a replica relays every call.
+
+import { healthV1Router } from './health-v1.js'
+
+apiV1Router.use(healthV1Router)
+
 // ─── Router-level error handler: frozen error shape ────────────────────────
 
 apiV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

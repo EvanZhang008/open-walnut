@@ -612,6 +612,7 @@ defineOp({
     survivor_id: z.string().min(1).describe('Task id (or unique prefix) that survives the merge'),
     victim_ids: z.array(z.string().min(1)).min(1).describe('Duplicate task ids to merge into the survivor and delete'),
   },
+  routes: [{ method: 'POST', path: '/tasks/:survivor_id/merge' }],
   handler: async (args, call) => {
     const { survivor_id, victim_ids } = args
     const body = await call('POST', `/tasks/${encodeURIComponent(String(survivor_id))}/merge`, {
@@ -639,6 +640,9 @@ defineOp({
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     force: z.boolean().optional().describe('Stop the task\'s active sessions and delete anyway'),
   },
+  // The batch route deletes tasks too. The handler never sends it, but the `api`
+  // passthrough must refuse it with this op (origin-policy.ts).
+  routes: [{ method: 'DELETE', path: '/tasks/:id' }, { method: 'POST', path: '/tasks/batch/delete' }],
   handler: async (args, call) => {
     const { id, force } = args
     await call('DELETE', `/tasks/${encodeURIComponent(String(id))}${force ? '?force=true' : ''}`)

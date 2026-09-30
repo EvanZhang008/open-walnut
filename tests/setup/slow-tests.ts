@@ -67,6 +67,7 @@ export const SLOW_TEST_FILES = [
   'tests/integrations/git-compaction-remote.test.ts', // 13-19s
   'tests/integrations/git-sync.test.ts', // 11s
   'tests/integrations/git-sync-mass-revert-guard.test.ts', // many real repos and commits
+  'tests/integrations/git-sync-health.test.ts', // 6s: real repos, commits and ls-files
   'tests/core/git-versioning.test.ts', // 5s
   'tests/core/plugins/linked-checkout.test.ts', // 4s: bare origin + publisher + linked clone
 
@@ -95,6 +96,8 @@ export const SLOW_TEST_FILES = [
   'tests/core/stt-mlx-daemon-health.test.ts', // 11s: fake mlx daemons on real ports, slow-probe timings
   'tests/core/plugin-sources.test.ts', // 3s
   'tests/core/stt-daemon-source-stdin.test.ts', // 3s: spawns fake python daemons on real ports
+  // 26k heart-rate buckets into a real SQLite store, then a full materialize drain.
+  'tests/core/health/perf.test.ts', // 3.6s
 ] as const
 
 /**

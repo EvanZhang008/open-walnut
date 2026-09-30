@@ -1,0 +1,19 @@
+{
+  "id": "weekly-health-trend",
+  "version": 1,
+  "enabledByDefault": false,
+  "about": "Shipped, never installed by the server, and off until the user turns it on. Walnut serves the samples only to sessions on this Mac and never syncs them; the letter it sends is ordinary Walnut content and syncs like any other letter. Offered by the phone's Apple Health setup, which fills schedule.tz with the phone's IANA zone before POST /api/v1/routines.",
+  "fill": { "schedule.tz": "the phone's IANA timezone, e.g. America/New_York" },
+  "routine": {
+    "name": "Weekly health trend",
+    "description": "Sunday evening: this week's sleep and activity against last week's, next to time on tasks, with small-sample caveats.",
+    "enabled": false,
+    "schedule": { "kind": "cron", "expr": "0 19 * * 0", "tz": "UTC" },
+    "executor": {
+      "type": "walnut-agent",
+      "config": {
+        "instructions": "Write the user's weekly health trend. 1. Load the weekly-health-trend skill (walnut tools call skill_read {\"dirName\":\"weekly-health-trend\"}) and follow it exactly. 2. Compare this week with last week for sleep, activity and time on tasks, counting only recorded nights and days. 3. Say plainly when a week has too few recorded days to call a trend. 4. Send ONE letter with human_inbox_send, type info. 5. Summarize, never paste raw series, and never write health numbers into MEMORY.md or USER.md."
+      }
+    }
+  }
+}

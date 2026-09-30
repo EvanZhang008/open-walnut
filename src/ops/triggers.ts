@@ -67,7 +67,8 @@ defineOp({
     name: z.string().optional().describe('Routine name shown on the Routines page (defaults to the prompt\'s opening words)'),
     session: z.string().optional().describe('"this" (default) = the calling session\'s task; or an explicit task id'),
     cwd: z.string().optional().describe('Working directory for the check (defaults to the calling session\'s cwd)'),
-    host: z.string().optional().describe('Host whose daemon runs the check (defaults to the calling session\'s host)'),
+    host: z.string().optional().describe('Host whose daemon runs the check (defaults to the calling session\'s host). '
+      + 'A session on another host may arm checks only on its own host'),
     timeoutSeconds: z.number().int().positive().optional().describe('Kill the check after this long (default 30, max 300)'),
     maxFiresPerDay: z.number().int().min(0).optional().describe('Daily fire cap (default 24). 0 = unlimited'),
     wait_until: z.string().min(1).optional()
@@ -183,7 +184,8 @@ defineOp({
   input: {
     run: z.string().min(1).describe('The shell command to run once'),
     cwd: z.string().optional().describe('Working directory for the run'),
-    host: z.string().optional().describe('Host whose daemon runs it (default: this machine)'),
+    host: z.string().optional().describe('Host whose daemon runs it (default: the calling session\'s host, else this machine). '
+      + 'A session on another host may run checks only on its own host'),
     timeoutSeconds: z.number().int().positive().optional().describe('Kill it after this long (default 30, max 300)'),
     id: z.string().optional().describe('Existing trigger id — measures newItemCount against ITS seen set'),
   },

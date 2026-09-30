@@ -9,11 +9,20 @@
  * Never throws for expected failures: transport errors, timeouts, and non-2xx
  * statuses come back as `{ ok: false, message }` so every surface renders the
  * same friendly error. Only programmer errors (unknown op) throw.
+ *
+ * Every request carries x-walnut-origin, the class of the caller the op acts
+ * for (src/lib/caller-origin.ts), so a route that trusts this machine can tell a
+ * self-call made for a remote host from a request typed on this Mac. What such a
+ * call may reach is src/ops/origin-policy.ts.
  */
 
 import { z } from 'zod'
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
 import { getSelfApiRoot } from '../lib/self-api-root.js'
+import {
+  ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
+} from '../lib/caller-origin.js'
+import { selfCallRefusal } from './origin-policy.js'
 
 const DEFAULT_API_ROOT = 'http://127.0.0.1:3456'
 const REQUEST_TIMEOUT_MS = 10_000
@@ -42,8 +51,12 @@ export const CALLER_SID_HEADER = 'x-walnut-caller-sid'
  *  senders' fence labels. Same trust level as the sid header: never gated on. */
 export const CALLER_HOST_HEADER = 'x-walnut-caller-host'
 
-/** Who is calling, as far as the transport knows. Labels only — never gated on. */
-interface CallerProvenance { sid?: string; host?: string }
+/**
+ * Who is calling. `sid` and `host` are labels, never gated on. `origin` is the
+ * trust class the self-call carries (src/lib/caller-origin.ts): the receiving
+ * route may LOWER trust on it, never raise it.
+ */
+interface CallerProvenance { sid?: string; host?: string; origin: string }
 
 /**
  * Who is calling, for ops whose server side stamps provenance (the human inbox
@@ -90,7 +103,7 @@ async function rawRequest(
   path: string,
   body: unknown,
   timeoutMs: number,
-  prov?: CallerProvenance,
+  prov: CallerProvenance,
 ): Promise<OpOutcome> {
   const serverRoot = base.replace(/\/api\/v1$/, '')
   const url = path.startsWith('/api/') ? `${serverRoot}${path}` : `${base}${path}`
@@ -100,8 +113,10 @@ async function rawRequest(
       method,
       headers: {
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        ...(prov?.sid ? { [CALLER_SID_HEADER]: prov.sid } : {}),
-        ...(prov?.host ? { [CALLER_HOST_HEADER]: prov.host } : {}),
+        ...(prov.sid ? { [CALLER_SID_HEADER]: prov.sid } : {}),
+        ...(prov.host ? { [CALLER_HOST_HEADER]: prov.host } : {}),
+        // Always sent, so no self-call can reach a loopback-trusting route unlabelled.
+        [ORIGIN_HEADER]: prov.origin,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
@@ -185,17 +200,47 @@ export function materializeBinding(
   return { path: qs ? `${path}?${qs}` : path, body }
 }
 
+export interface ExecuteOpOptions {
+  apiBase?: string
+  callerSid?: string
+  callerHost?: string
+  /**
+   * REQUIRED: who this call acts for (src/lib/caller-origin.ts). `__local__` only
+   * for a caller on this Mac; a gateway call passes its host, a route passes the
+   * request's origin. A missing value runs as the strictest class, and the origin
+   * already in effect (a nested call) can only lower it.
+   */
+  origin: string
+}
+
+/** Why `op` may not run for `origin`, or null. Every entry point meets this check. */
+function originRefusal(op: WalnutOp, origin: string): string | null {
+  if (op.tags.localHostGateway && !isLocalOrigin(origin)) {
+    return `${op.name} refused: ${op.localOnlyMessage ?? 'this data is only available to sessions on this Mac'}`
+  }
+  if (op.tags.remote === 'deny' && isRemoteHostOrigin(origin)) {
+    return `${op.name} is local-only (destructive): a session on another host cannot run it`
+  }
+  return null
+}
+
 /**
- * Execute one op by name. Validates args against the op's zod shape first, so
- * every surface rejects malformed input identically.
+ * Execute one op by name. Refuses an origin the op may not run for, then
+ * validates args against the op's zod shape, so every surface rejects both
+ * identically.
  */
 export async function executeOp(
   name: string,
   rawArgs: Record<string, unknown>,
-  options: { apiBase?: string; callerSid?: string; callerHost?: string } = {},
+  options: ExecuteOpOptions,
 ): Promise<OpOutcome> {
   const op = getOp(name)
   if (!op) return { ok: false, message: `Unknown op: ${name}. Run \`walnut tools list\` for the catalog.` }
+  // Untyped callers (tests, plain JS) may still pass nothing: that runs as the strictest class.
+  options = options ?? ({} as ExecuteOpOptions)
+  const origin = lowerOrigin(options.origin || UNKNOWN_ORIGIN, ambientCallerOrigin())
+  const refused = originRefusal(op, origin)
+  if (refused) return { ok: false, message: refused }
 
   const parsed = z.object(op.input).strict().safeParse(rawArgs ?? {})
   if (!parsed.success) {
@@ -208,6 +253,7 @@ export async function executeOp(
   return runOp(op, args, base, {
     sid: resolveCallerSid(options.callerSid),
     host: options.callerHost?.trim() || undefined,
+    origin,
   })
 }
 
@@ -215,17 +261,21 @@ async function runOp(
   op: WalnutOp,
   args: Record<string, unknown>,
   base: string,
-  prov?: CallerProvenance,
+  prov: CallerProvenance,
 ): Promise<OpOutcome> {
   const timeoutMs = op.timeoutMs ?? REQUEST_TIMEOUT_MS
   if (op.handler) {
     try {
       const call = async (method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> => {
+        const refused = selfCallRefusal(op.name, method, path, prov.origin)
+        if (refused) throw new Error(refused)
         const r = await rawRequest(base, method, path, body, timeoutMs, prov)
         if (!r.ok) throw new Error(r.message)
         return r.result
       }
-      const result = await op.handler(args, call)
+      // A handler that runs another op in-process (a plugin's walnut.ops.call)
+      // acts for the same caller: the nested call cannot climb above this origin.
+      const result = await withCallerOrigin(prov.origin, () => op.handler!(args, call))
       const message = op.resultError?.(result)
       return message ? { ok: false, message, result } : { ok: true, result }
     } catch (err) {
@@ -239,6 +289,8 @@ async function runOp(
   } catch (err) {
     return { ok: false, message: `Invalid arguments for ${op.name}: ${err instanceof Error ? err.message : String(err)}` }
   }
+  const refused = selfCallRefusal(op.name, op.bind!.method, materialized.path, prov.origin)
+  if (refused) return { ok: false, message: refused }
   const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs, prov)
   if (!r.ok) return r
   try {

@@ -18,6 +18,7 @@ import { MIN_EVERY_MS, clampTimeoutSeconds } from '../../providers/trigger-check
 import type { TriggersTestResult } from '../../providers/trigger-check-core.js';
 import { requireTriggerDaemon, triggerHost } from './trigger-daemon.js';
 import { createRoutine } from './routines-core.js';
+import { assertCheckHostAllowed } from './check-host-policy.js';
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -51,14 +52,23 @@ export function parseEveryMs(raw: unknown): number | null {
  * `wouldFire` rather than by the frame's `ok` on purpose: the result carries its
  * own `ok` ("the script ran and parsed"), which would otherwise be confused with
  * the RPC frame's `ok` ("the daemon accepted the command").
+ *
+ * An omitted host is the calling session's, as for `trigger_create`: the script
+ * was written on that session's host. `origin` is who asks (check-host-policy.ts),
+ * checked before any daemon is looked up.
  */
-export async function testRoutineCheck(body: unknown): Promise<{ result: TriggersTestResult }> {
+export async function testRoutineCheck(
+  body: unknown,
+  origin?: string,
+  callerSid?: string,
+): Promise<{ result: TriggersTestResult }> {
   const b = record(body) ?? {};
   const rawCheck = record(b.check);
   if (!rawCheck) throw new SessionControlError('check is required', 400);
   const run = str(rawCheck.run);
   if (!run) throw new SessionControlError('check.run is required', 400);
-  const host = triggerHost(rawCheck.host);
+  const host = triggerHost(str(rawCheck.host) || await callerSessionHost(callerSid));
+  assertCheckHostAllowed(host, origin);
   const conn = await requireTriggerDaemon(host);
   const cwd = str(rawCheck.cwd);
   const check = {
@@ -91,6 +101,14 @@ export async function testRoutineCheck(body: unknown): Promise<{ result: Trigger
     );
   }
   return { result: payload as unknown as TriggersTestResult };
+}
+
+/** The host the calling session runs on, or '' when there is no such session. */
+async function callerSessionHost(callerSid?: string): Promise<string> {
+  if (!callerSid) return '';
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const rec = await getSessionByClaudeId(callerSid).catch(() => null);
+  return rec?.host ?? '';
 }
 
 /** Resolve the task a fire should be delivered to. */
@@ -152,8 +170,9 @@ export const TRIGGER_DESCRIPTION_MAX = 600;
  * what makes `/walnut-trigger` a one-liner from inside a session. The description
  * is the exception: only the author knows what the script watches, and a card
  * that shows a name and `bash …/check.sh` does not tell the user what fires it.
+ * `origin` is who asks (check-host-policy.ts); createRoutine checks it.
  */
-export async function createTriggerRoutine(body: unknown, callerSid?: string): Promise<{
+export async function createTriggerRoutine(body: unknown, callerSid?: string, origin?: string): Promise<{
   job: unknown;
   host: string;
   /** Always null: the daemon owns the clock and reports the real next check. */
@@ -199,6 +218,7 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string): P
 
   const session = str(b.session) || 'this';
   const resolved = await resolveTarget(session, callerSid);
+  // createRoutine asks check-host-policy with `origin` before any daemon lookup.
   const host = triggerHost(str(b.host) || resolved.host);
   const cwd = str(b.cwd) || resolved.cwd || '';
   const name = str(b.name) || defaultTriggerName(prompt);
@@ -218,7 +238,7 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string): P
       ...(b.maxFiresPerDay !== undefined ? { maxFiresPerDay: b.maxFiresPerDay } : {}),
     },
     executor: { type: 'session', config: { target: resolved.target, prompt } },
-  });
+  }, origin);
 
   log.web.info('trigger created', {
     host, target: resolved.target, everyMs,

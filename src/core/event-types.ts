@@ -1147,6 +1147,25 @@ export interface TimeOutsideEvent {
   idleSecs?: number;
 }
 
+/**
+ * A health sync committed new or changed data. `types` are the catalog names
+ * (src/core/health/catalog.ts), `dates` the local days touched. No values ever.
+ */
+export interface HealthIngestedEvent {
+  types: string[];
+  dates: string[];
+}
+
+/**
+ * Fired ONCE per wake date: `ready` when the night's last asleep sample ended at
+ * least 30 min before an upload made at or after 05:00 local, `missing` at 10:30
+ * local when no night arrived.
+ */
+export interface HealthSleepReadyEvent {
+  date: string;
+  status: 'ready' | 'missing';
+}
+
 // ── Master type map: EventName → Payload ──
 
 export interface EventPayloadMap {
@@ -1266,6 +1285,8 @@ export interface EventPayloadMap {
   'quiet:changed': QuietState;
   'time:banked': TimeBankedEvent;
   'time:outside': TimeOutsideEvent;
+  'health:ingested': HealthIngestedEvent;
+  'health:sleep-ready': HealthSleepReadyEvent;
 }
 
 // ── Type-safe helper ──

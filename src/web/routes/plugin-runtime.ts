@@ -463,7 +463,10 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         res.status(404).json({ error: `Active Plugin "${pluginId}" was not found` })
         return
       }
-      res.json(await callPluginOp(pluginId, opName, args))
+      // The op acts for this request's caller: a paired phone or a remote host's
+      // `api` call is not this Mac, and its self-calls say so (src/lib/caller-origin.ts).
+      const { requestOrigin } = await import('../middleware/request-origin.js')
+      res.json(await callPluginOp(pluginId, opName, args, requestOrigin(req)))
     } catch (error) {
       res.status(errorStatus(error)).json({ error: error instanceof Error ? error.message : String(error) })
     }

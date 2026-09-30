@@ -13,6 +13,8 @@ import './work.js'
 import './folders.js'
 import './human-inbox.js'
 import './triggers.js'
+import './health.js'
+import './time.js'
 
 export {
   defineOp,

@@ -19,6 +19,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-ops-registry
 
 import { BUILTIN_SKILLS_DIR, WALNUT_HOME } from '../../src/constants.js'
 import { listOps, materializeBinding, executeOp } from '../../src/ops/index.js'
+import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
 import { PHASE_ORDER } from '../../src/core/phase.js'
 
 describe('ops registry — shape contract', () => {
@@ -488,7 +489,7 @@ describe('ops registry — parity with the live server (P4)', () => {
     expect(id).toBeTruthy()
     const updated = await executeOp('task_update', { id, priority: 'backlog' }, { apiBase: base })
     expect(updated.ok).toBe(true)
-    const deleted = await executeOp('task_delete', { id }, { apiBase: base })
+    const deleted = await executeOp('task_delete', { id }, { apiBase: base, origin: LOCAL_ORIGIN })
     expect(deleted.ok).toBe(true)
   })
 })

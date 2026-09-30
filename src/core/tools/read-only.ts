@@ -14,6 +14,7 @@
  */
 
 import { listOps, opNames, opInputJsonSchema, executeOp, type WalnutOp } from '../../ops/index.js';
+import { LOCAL_ORIGIN } from '../../lib/caller-origin.js';
 import { getPluginTools } from '../plugins/plugin-tools.js';
 import type { ToolDefinition } from '../../model/tools.js';
 
@@ -26,7 +27,9 @@ function opAsTool(op: WalnutOp): ToolDefinition {
     // Read-only by definition, so a batch of them may run concurrently.
     parallelSafe: true,
     execute: async (params) => {
-      const outcome = await executeOp(op.name, params ?? {});
+      // An in-process turn on this Mac (a routine watcher); a caller that started it
+      // from elsewhere still lowers this through the origin in effect.
+      const outcome = await executeOp(op.name, params ?? {}, { origin: LOCAL_ORIGIN });
       // "Error:" prefix is the loop's error signal — it marks the tool_result
       // `is_error` so the model retries or reports instead of trusting the text.
       return outcome.ok ? JSON.stringify(outcome.result, null, 2) : `Error: ${outcome.message}`;

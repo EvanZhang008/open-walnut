@@ -842,7 +842,12 @@ export type SessionControlAction =
   // its rollup and its day files live there — and the day key is the LOCAL day
   // of each sample on the box that validates it, so only the primary (in the
   // user's own timezone) may turn a phone's samples into records.
-  | 'server.time.heartbeats';
+  | 'server.time.heartbeats'
+  // Apple Health (additive 2026-09): the phone's HealthKit uploads, the store's
+  // status/settings, and the privacy delete. The primary is the only box with a
+  // health store; a replica relays every call and keeps nothing. The result is a
+  // `{ status, body }` envelope so a 409 store_mismatch keeps its storeId.
+  | 'server.health.sync' | 'server.health.status' | 'server.health.settings' | 'server.health.delete';
 
 // ── Task op relay payload validation (server.tasks.apply) ───────────────────
 
@@ -933,6 +938,8 @@ export async function handleSessionControlRelay(
   action: string,
   sessionId: unknown,
   params: unknown,
+  /** Who the relay acts for (control-host-policy controlRelayOrigin); ops it runs never rise above it. */
+  origin?: string,
 ): Promise<
   | { ok: true; result: Record<string, unknown> }
   | { ok: false; error: string; errorKind: string; errorCode?: string }
@@ -1169,7 +1176,7 @@ export async function handleSessionControlRelay(
       case 'server.routines.trigger':
       case 'server.routines.draft': {
         const { handleRoutinesRelayAction } = await import('../routines/routines-core.js');
-        result = await handleRoutinesRelayAction(action.slice('server.routines'.length).replace(/^\./, '') || 'list', p);
+        result = await handleRoutinesRelayAction(action.slice('server.routines'.length).replace(/^\./, '') || 'list', p, origin);
         break;
       }
       case 'server.list-dirs': {
@@ -1290,7 +1297,7 @@ export async function handleSessionControlRelay(
       case 'server.plugin-http':
       case 'server.plugin-manage': {
         const { handlePluginControlRelay } = await import('../plugins/plugin-control-relay.js');
-        const outcome = await handlePluginControlRelay(action, p);
+        const outcome = await handlePluginControlRelay(action, p, origin);
         if (!outcome.ok) throw new SessionControlError(outcome.error, outcome.status);
         result = outcome.result;
         break;
@@ -1374,6 +1381,17 @@ export async function handleSessionControlRelay(
       case 'server.time.heartbeats': {
         const { bankHeartbeatSamples } = await import('../time-tracking/ingest.js');
         result = await bankHeartbeatSamples(p.samples) as unknown as Record<string, unknown>;
+        break;
+      }
+      // ── Apple Health: the same function the primary's own v1 routes call ──
+      case 'server.health.sync':
+      case 'server.health.status':
+      case 'server.health.settings':
+      case 'server.health.delete': {
+        const { runHealthAction, isHealthAction } = await import('../health/relay.js');
+        const sub = action.slice('server.health.'.length);
+        if (!isHealthAction(sub)) throw new SessionControlError(`Unknown health action: ${sub}`, 400);
+        result = await runHealthAction(sub, p) as unknown as Record<string, unknown>;
         break;
       }
       // ── Human inbox family: one handler, same functions the routes call ──

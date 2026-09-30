@@ -178,8 +178,13 @@ async function handleToolsCall(
   if (!op) {
     return err('bad_request', `unknown op: ${name} — run \`walnut tools list\``);
   }
-  if (op.tags.remote === 'deny') {
-    return err('bad_request', `${name} is local-only (destructive) — run it on the Walnut host via \`walnut tools call\``);
+  if (op.tags.remote === 'deny' && !(op.tags.localHostGateway && host === '__local__')) {
+    // A host-local read (Apple Health) is refused for what it is, not as "destructive",
+    // and without pointing at a way around the rule.
+    if (op.tags.localHostGateway) {
+      return err('bad_request', `${name} refused: ${op.localOnlyMessage ?? 'this data is only available to sessions on this Mac'}`);
+    }
+    return err('bad_request', `${name} is local-only because it is destructive. Run it from a session on the Walnut host with \`walnut tools call\`.`);
   }
   // Writes ride the same per-sender rate budget; reads are free.
   if (!op.tags.readonly) {
@@ -192,7 +197,12 @@ async function handleToolsCall(
   // server side stamps "who did this" — the human inbox stamps a letter's
   // sender, session_send fences another session's words — get the
   // daemon-resolved sid instead of guessing.
-  const r = await executeOp(name, (args ?? {}) as Record<string, unknown>, { callerSid, callerHost: host });
+  // `origin` is the host's trust class: every loopback self-call the op makes
+  // carries it, so a remote host never reads as this Mac (src/lib/caller-origin.ts).
+  const { hostOrigin } = await import('../../lib/caller-origin.js');
+  const r = await executeOp(name, (args ?? {}) as Record<string, unknown>, {
+    callerSid, callerHost: host, origin: hostOrigin(host),
+  });
   if (!r.ok) return err('internal', r.message, r.result === undefined ? undefined : { detail: r.result });
   // GatewayResponse.result must be an object — wrap non-object op results.
   const result = (typeof r.result === 'object' && r.result !== null && !Array.isArray(r.result))

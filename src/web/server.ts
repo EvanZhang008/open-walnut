@@ -1493,6 +1493,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/context', contextInspectorRouter)
   app.use('/api/usage', usageRouter)
   app.use('/api/time', timeRouter)
+  app.use('/api/health', (await import('./routes/health.js')).healthRouter)
   app.use('/api/images', imagesRouter)
   app.use('/api/local-image', localImageRouter)
   app.use('/api/file-content', fileContentRouter)
@@ -2093,6 +2094,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- Time tracking: agent-time collector (session:result) + rollup warm-up. --
   startTimeTracking()
+  // -- Apple Health: arm the 10:30 missing-night check (only if a store exists). --
+  const { startHealth } = await import('../core/health/index.js')
+  startHealth()
 
   // -- Quiet mode: load persisted holds (a restart mid-focus stays quiet) and arm
   //    the expiry timer, so quiet:changed fires when a hold ends. Fire-and-forget:
@@ -5522,6 +5526,8 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('embedding-sync')
   bus.unsubscribe('setup-health')
   stopTimeTracking()
+  // Awaited so the next start (tests) never finds a store handle or timer still alive.
+  try { (await import('../core/health/index.js')).stopHealth() } catch { /* nothing to stop */ }
   stopQuiet()
   import('../core/overview-maintainer.js')
     .then(({ stopOverviewMaintainer }) => stopOverviewMaintainer())

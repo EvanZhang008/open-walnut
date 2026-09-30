@@ -2,6 +2,7 @@ import { registry } from '../integration-registry.js'
 import { getPluginLifecycleRecords } from '../integration-loader.js'
 import { validatePluginId } from './ids.js'
 import { callPluginOp, getPluginApiBase, listPluginOps } from './server-api.js'
+import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
 
 const OP_NAME_PATTERN = /^[a-z0-9_]{1,128}$/
 const HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'])
@@ -272,13 +273,15 @@ async function managePlugin(params: Record<string, unknown>): Promise<Record<str
   return parsed as Record<string, unknown>
 }
 
-async function relayPluginHttp(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function relayPluginHttp(params: Record<string, unknown>, origin: string): Promise<Record<string, unknown>> {
   const pluginId = pluginIdFrom(params.pluginId)
   requireActivePlugin(pluginId)
   const method = typeof params.method === 'string' ? params.method.toUpperCase() : ''
   if (!HTTP_METHODS.has(method)) throw new PluginControlFailure('Unsupported Plugin HTTP method', 405)
   const pathname = relayPath(params.path)
-  const headers = filterHeaders(params.headers)
+  // A loopback self-call for a client off this Mac: label it, over any header the
+  // client sent (names arrive lowercased), so a plugin route never reads it as local.
+  const headers = { ...filterHeaders(params.headers), [ORIGIN_HEADER]: origin }
   const body = decodeBase64(params.data, params.size)
   if ((method === 'GET' || method === 'HEAD') && body.byteLength > 0) {
     throw new PluginControlFailure(`${method} Plugin requests cannot have a body`, 400)
@@ -305,6 +308,8 @@ async function relayPluginHttp(params: Record<string, unknown>): Promise<Record<
 export async function handlePluginControlRelay(
   action: string,
   paramsInput: unknown,
+  /** The relaying daemon's origin; the relay never acts above a client off this Mac. */
+  relayOrigin?: string,
 ): Promise<PluginControlRelayOutcome> {
   const params = plainObject(paramsInput)
   try {
@@ -323,15 +328,18 @@ export async function handlePluginControlRelay(
         if (serializedSize(args) > MAX_PLUGIN_OP_ARGS_BYTES) {
           throw new PluginControlFailure('Plugin operation arguments are too large', 413)
         }
+        // The relay exists for the cloud bridge: whoever sent it is not on this Mac,
+        // and a remote host's daemon relaying it is lower still.
+        const origin = lowerOrigin(REMOTE_HTTP_ORIGIN, relayOrigin)
         return {
           ok: true,
-          result: await callPluginOp(pluginId, opName, args) as unknown as Record<string, unknown>,
+          result: await callPluginOp(pluginId, opName, args, origin) as unknown as Record<string, unknown>,
         }
       }
       case 'server.plugin-manage':
         return { ok: true, result: await managePlugin(params) }
       case 'server.plugin-http':
-        return { ok: true, result: await relayPluginHttp(params) }
+        return { ok: true, result: await relayPluginHttp(params, lowerOrigin(REMOTE_HTTP_ORIGIN, relayOrigin)) }
       default:
         return { ok: false, status: 400, error: `Unknown Plugin control action: ${action}` }
     }

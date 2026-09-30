@@ -213,7 +213,8 @@ async function applyRecord(
         return;
       }
       const { executeOp } = await import('../ops/index.js');
-      const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host });
+      const { hostOrigin } = await import('../lib/caller-origin.js');
+      const r = await executeOp(record.op, record.args, { callerSid: record.callerSid, callerHost: host, origin: hostOrigin(host) });
       // The server's own words; the log line and the caller's notice name the op.
       if (!r.ok) throw new Error(r.message);
       result.replayed++;

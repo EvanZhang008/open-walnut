@@ -36,6 +36,7 @@ import {
   callPluginOp,
   listPluginOps,
 } from '../../src/core/plugins/server-api.js';
+import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js';
 import { getPluginSkillDirs } from '../../src/core/skill-loader.js';
 import { mailDatabaseForTesting } from '../../src/integrations/mail/db.js';
 import { mailSkillDirForTesting } from '../../src/integrations/mail/index.js';
@@ -113,7 +114,7 @@ async function tool(name: string, input: Record<string, unknown> = {}): Promise<
 
 /** Call the op of the same name, through the host's own op catalogue. */
 async function op(name: string, args: Record<string, unknown> = {}): Promise<string> {
-  const answered = await callPluginOp<string>('mail', name, args);
+  const answered = await callPluginOp<string>('mail', name, args, LOCAL_ORIGIN);
   expect(answered.ok, `op ${name}: ${JSON.stringify(answered)}`).toBe(true);
   return (answered as { ok: true; result: string }).result;
 }

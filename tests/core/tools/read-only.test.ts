@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { listOps, opNames } from '../../../src/ops/index.js';
+import { LOCAL_ORIGIN } from '../../../src/lib/caller-origin.js';
 import {
   getReadOnlyTools,
   getToolSchemas,
@@ -91,7 +92,7 @@ describe('execute routes through executeOp', () => {
 
     const result = await (await tool('task_list')).execute({ project: 'Marina' });
 
-    expect(executeOp).toHaveBeenCalledWith('task_list', { project: 'Marina' });
+    expect(executeOp).toHaveBeenCalledWith('task_list', { project: 'Marina' }, { origin: LOCAL_ORIGIN });
     expect(result).toBe(JSON.stringify({ count: 1, tasks: [{ id: 'abc' }] }, null, 2));
   });
 
@@ -100,7 +101,7 @@ describe('execute routes through executeOp', () => {
 
     await (await tool('project_list')).execute(undefined as never);
 
-    expect(executeOp).toHaveBeenCalledWith('project_list', {});
+    expect(executeOp).toHaveBeenCalledWith('project_list', {}, { origin: LOCAL_ORIGIN });
   });
 
   it('turns a failed op into an "Error:" string — the loop\'s error signal', async () => {

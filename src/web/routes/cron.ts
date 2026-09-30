@@ -15,6 +15,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import type { CronService } from '../../core/cron/index.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
+import { requestOrigin } from '../middleware/request-origin.js'
 import {
   listRoutines, getRoutine, createRoutine, patchRoutine, deleteRoutine,
   toggleRoutine, runRoutineNow, getRoutinesStatus, listRoutineActions,
@@ -34,6 +35,12 @@ export function getCronService(): CronService | null {
 }
 
 // ── Router factory ──
+
+/** The caller's session id, as stamped by the ops executor from WALNUT_SESSION_ID. */
+function callerSid(req: Request): string | undefined {
+  const raw = req.headers['x-walnut-caller-sid']
+  return (Array.isArray(raw) ? raw[0] : raw ?? '').trim() || undefined
+}
 
 /** Map shared-core errors onto this router's legacy `{ error }` shape. */
 function handleCoreError(res: Response, next: NextFunction, err: unknown): void {
@@ -105,10 +112,12 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // POST /api/routines/check-test — run a trigger's check once on its host (the
   // form's Test button). Same core as the /api/v1 twin; the v1 router also
   // carries the cloud relay, which this Mac-only canonical route never needs.
+  // Like every write here that can hand a daemon a command, it passes the
+  // caller's origin (check-host-policy.ts).
   router.post('/check-test', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { testRoutineCheck } = await import('../../core/routines/trigger-api.js')
-      res.json(await testRoutineCheck(req.body))
+      res.json(await testRoutineCheck(req.body, requestOrigin(req), callerSid(req)))
     } catch (err) {
       handleCoreError(res, next, err)
     }
@@ -118,10 +127,8 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // resolves from the caller header the ops executor stamps.
   router.post('/trigger', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const raw = req.headers['x-walnut-caller-sid']
-      const sid = (Array.isArray(raw) ? raw[0] : raw ?? '').trim() || undefined
       const { createTriggerRoutine } = await import('../../core/routines/trigger-api.js')
-      res.status(201).json(await createTriggerRoutine(req.body, sid))
+      res.status(201).json(await createTriggerRoutine(req.body, callerSid(req), requestOrigin(req)))
     } catch (err) {
       handleCoreError(res, next, err)
     }
@@ -139,7 +146,7 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // POST /api/cron — create job
   router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const result = await createRoutine(req.body)
+      const result = await createRoutine(req.body, requestOrigin(req))
       res.status(201).json(result)
     } catch (err) {
       handleCoreError(res, next, err)
@@ -149,7 +156,7 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // PATCH /api/cron/:id — update job
   router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      res.json(await patchRoutine(req.params.id as string, req.body))
+      res.json(await patchRoutine(req.params.id as string, req.body, requestOrigin(req)))
     } catch (err) {
       handleCoreError(res, next, err)
     }

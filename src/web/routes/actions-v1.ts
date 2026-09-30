@@ -22,6 +22,11 @@
  *    future op that forgets the tag is still covered) needs `confirmed: true`,
  *    which the card only sends after its inline confirmation step. So does
  *    anything that executes code or replaces a whole document — see POWERFUL_OPS.
+ *  - a local-only op (`remote: 'deny'` or `localHostGateway`: Apple Health, task
+ *    deletion) runs only for a caller on this Mac. A paired phone or an API key
+ *    holder reaches this route too, and the op then runs over loopback, which
+ *    the health routes would otherwise read as this Mac. The executor carries the
+ *    request's origin on every self-call as well (src/lib/caller-origin.ts).
  *
  * Replica: the executor reaches the op over loopback HTTP, and a cloud replica
  * disables the private-network auth bypass — the call would 401 with a confusing
@@ -33,6 +38,8 @@ import { z } from 'zod'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
+import { HEALTH_LOCAL_ONLY_MESSAGE, LOCAL_ORIGIN } from '../../lib/caller-origin.js'
+import { requestOrigin } from '../middleware/request-origin.js'
 
 export const actionsV1Router = Router()
 
@@ -166,6 +173,14 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
       refuse(res, 400, 'not_invocable', `${tool} cannot be invoked from an action card`, tool)
       return
     }
+    const origin = requestOrigin(req)
+    if ((op.tags.localHostGateway || op.tags.remote === 'deny') && origin !== LOCAL_ORIGIN) {
+      const message = op.tags.localHostGateway
+        ? `${tool} refused: ${op.localOnlyMessage ?? HEALTH_LOCAL_ONLY_MESSAGE}`
+        : `${tool} runs only from the console on this Mac`
+      refuse(res, 403, 'local_only', message, tool)
+      return
+    }
     const needsConfirm = confirmReason(tool, op.tags.destructive === true)
     if (needsConfirm && b.confirmed !== true) {
       refuse(res, 400, 'confirmation_required', needsConfirm, tool)
@@ -184,6 +199,7 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
     const outcome = await executeOp(tool, parsed.data as Record<string, unknown>, {
       apiBase: apiBaseFor(req),
       ...(sid ? { callerSid: sid } : {}),
+      origin,
     })
     const ms = Date.now() - startedAt
 

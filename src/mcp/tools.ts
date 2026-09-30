@@ -15,6 +15,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { getOp, listOps, opNames, executeOp, resolveApiBase } from '../ops/index.js'
+import { LOCAL_ORIGIN } from '../lib/caller-origin.js'
 
 export { resolveApiBase }
 
@@ -67,7 +68,8 @@ export function registerWalnutTools(
       // cost, far cheaper than every op-call spawning a CLI via Bash.
       _meta: { 'anthropic/alwaysLoad': true },
     }, async (args: Record<string, unknown>) => {
-      const r = await executeOp(op.name, args ?? {}, { apiBase: base })
+      // A separate process: the server re-judges its socket, and can only lower this.
+      const r = await executeOp(op.name, args ?? {}, { apiBase: base, origin: LOCAL_ORIGIN })
       return r.ok ? ok(r.result) : r.result !== undefined ? { ...ok(r.result), isError: true } : fail(r.message)
     })
   }
@@ -76,7 +78,7 @@ export function registerWalnutTools(
   server.server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     const op = getOp(params.name)
     if (!op || !callable.has(op.name) || (options.readonly && !op.tags.readonly)) return fail(`Tool ${params.name} not found`)
-    const result = await executeOp(op.name, params.arguments ?? {}, { apiBase: base })
+    const result = await executeOp(op.name, params.arguments ?? {}, { apiBase: base, origin: LOCAL_ORIGIN })
     return result.ok ? ok(result.result)
       : result.result !== undefined ? { ...ok(result.result), isError: true } : fail(result.message)
   })
