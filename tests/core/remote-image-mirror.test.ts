@@ -31,6 +31,8 @@ import {
   sessionMirrorPath,
   resolveSessionMirrorPath,
   clearFailedFetches,
+  startMirrorDownload,
+  awaitPendingMirror,
 } from '../../src/core/remote-image-mirror.js'
 
 const mirrorPath = () => path.join(REMOTE_IMAGES_DIR, 'sess-1', `chart-${Math.random().toString(36).slice(2)}.png`)
@@ -226,5 +228,62 @@ describe('downloadToMirror', () => {
     sendMock.mockResolvedValue({ ok: false, error: 'ENOENT' })
     expect(await downloadToMirror('remotehost', '/tmp/missing.png', p)).toBeNull()
     expect(fs.existsSync(p)).toBe(false)
+  })
+})
+
+describe('startMirrorDownload / awaitPendingMirror (the <img> that beats its bytes)', () => {
+  it('runs one download per slot while it is in flight', async () => {
+    const p = mirrorPath()
+    let finish!: (ok: boolean) => void
+    const download = vi.fn(() => new Promise<boolean>((r) => { finish = r }))
+
+    const first = startMirrorDownload(p, download)
+    const second = startMirrorDownload(p, download)
+    expect(second).toBe(first)
+    expect(download).toHaveBeenCalledTimes(1)
+    finish(true)
+    expect(await first).toBe(true)
+  })
+
+  it('forgets a slot once its download settles, so a failed one can be retried', async () => {
+    const p = mirrorPath()
+    expect(await startMirrorDownload(p, async () => { throw new Error('tunnel dropped') })).toBe(false)
+    expect(await awaitPendingMirror(p)).toBeNull()
+
+    const retry = vi.fn(async () => true)
+    await startMirrorDownload(p, retry)
+    expect(retry).toHaveBeenCalledTimes(1)
+  })
+
+  it('hands a waiter the bytes once the download lands', async () => {
+    const p = mirrorPath()
+    let finish!: () => void
+    startMirrorDownload(p, () => new Promise<boolean>((r) => {
+      finish = () => {
+        fs.mkdirSync(path.dirname(p), { recursive: true })
+        fs.writeFileSync(p, 'landed')
+        r(true)
+      }
+    }))
+    const waiting = awaitPendingMirror(p)
+    finish()
+    expect((await waiting)?.toString()).toBe('landed')
+  })
+
+  it('answers null at once for a slot nothing is downloading', async () => {
+    expect(await awaitPendingMirror(mirrorPath())).toBeNull()
+  })
+
+  it('stops waiting on a download that hangs', async () => {
+    vi.useFakeTimers()
+    try {
+      const p = mirrorPath()
+      startMirrorDownload(p, () => new Promise<boolean>(() => { /* never settles */ }))
+      const waiting = awaitPendingMirror(p)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(await waiting).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

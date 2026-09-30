@@ -20,7 +20,7 @@ import path from 'node:path'
 import { REMOTE_IMAGES_DIR, WALNUT_HOME } from '../constants.js'
 import {
   writeMirrorSidecar, backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored,
-  fetchRecentlyMissing, noteFetchMissing, noteFetchFound, isNotFoundReply,
+  fetchRecentlyMissing, noteFetchMissing, noteFetchFound, isNotFoundReply, startMirrorDownload,
 } from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
@@ -987,8 +987,10 @@ export class RemoteSessionManager implements SessionManager {
         this._imageCache.set(remotePath, localPath)
 
         if (!fs.existsSync(localPath)) {
-          // Download via daemon fs.read (fire-and-forget)
-          this.downloadRemoteFile(remotePath, localPath).catch(() => {})
+          // Download via daemon fs.read (fire-and-forget), published so the <img>
+          // that can arrive before the bytes waits for them (remote-image-mirror.ts).
+          const lp = localPath
+          startMirrorDownload(lp, () => this.downloadRemoteFile(remotePath, lp)).catch(() => {})
         } else {
           // Pre-sidecar mirror file — record origin so it can be revalidated.
           backfillMirrorSidecar(localPath, this.hostKey, remotePath)
@@ -1016,7 +1018,8 @@ export class RemoteSessionManager implements SessionManager {
           this._imageCache.set(`rel:${relName}`, localPath)
 
           if (!fs.existsSync(localPath)) {
-            this.downloadRemoteFile(cwdPath, localPath).catch(() => {})
+            const lp = localPath
+            startMirrorDownload(lp, () => this.downloadRemoteFile(cwdPath, lp)).catch(() => {})
           } else {
             backfillMirrorSidecar(localPath, this.hostKey, cwdPath)
           }
@@ -1216,15 +1219,16 @@ export class RemoteSessionManager implements SessionManager {
    * Download a file from the remote host via daemon fs.read. Records a
    * .src.json sidecar so /api/local-image can later revalidate the mirror
    * against the remote source (regenerated charts must not stay stale).
+   * Resolves true once the bytes are on disk.
    */
-  private async downloadRemoteFile(remotePath: string, localPath: string): Promise<void> {
-    if (!this.conn?.connected) return
+  private async downloadRemoteFile(remotePath: string, localPath: string): Promise<boolean> {
+    if (!this.conn?.connected) return false
     // A path the host already said it does not have is not going to be there this
     // render either, and the rewrite paths re-derive their candidate list from
     // scratch every time. Shared with downloadToMirror so both entry points honour
     // one cache. Only a real not-found is remembered — a transport failure or a
     // local write error says nothing about whether the file exists.
-    if (fetchRecentlyMissing(this.hostKey, remotePath)) return
+    if (fetchRecentlyMissing(this.hostKey, remotePath)) return false
 
     try {
       const dir = path.dirname(localPath)
@@ -1233,7 +1237,7 @@ export class RemoteSessionManager implements SessionManager {
       const result = await this.conn.send('fs.read', { path: remotePath, encoding: 'base64' })
       if (!result.ok || typeof result.data !== 'string') {
         if (isNotFoundReply(result)) noteFetchMissing(this.hostKey, remotePath)
-        return
+        return false
       }
       noteFetchFound(this.hostKey, remotePath)
       const buf = Buffer.from(result.data, 'base64')
@@ -1245,11 +1249,13 @@ export class RemoteSessionManager implements SessionManager {
         remoteMtimeMs: st?.ok && st.exists ? (st.mtimeMs as number) : 0,
         remoteSize: st?.ok && st.exists ? (st.size as number) : buf.length,
       })
+      return true
     } catch (err) {
       log.session.warn('RemoteSessionManager: file download failed', {
         remotePath, localPath,
         error: err instanceof Error ? err.message : String(err),
       })
+      return false
     }
   }
 }

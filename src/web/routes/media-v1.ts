@@ -110,9 +110,19 @@ mediaV1Router.get('/media', async (req: Request, res: Response, next: NextFuncti
       if (st.isFile() && st.size <= MAX_FILE_SIZE) buffer = await fsp.readFile(filePath)
     } catch { /* not local — try the session's host below */ }
 
+    // 1b. Primary: a mirror slot the history rewrite just handed out may still be
+    //     downloading. Wait for its bytes, same as local-image.ts, and then skip
+    //     step 2: it would ask the host for this LOCAL path.
+    let waitedOnPending = false
+    if (!buffer && !CLOUD_MODE) {
+      const { isMirrorPath, hasPendingMirror, awaitPendingMirror } = await import('../../core/remote-image-mirror.js')
+      waitedOnPending = isMirrorPath(filePath) && hasPendingMirror(filePath)
+      if (waitedOnPending) buffer = await awaitPendingMirror(filePath)
+    }
+
     // 2. The session's exec host (daemon channel on primary, bridge on cloud);
     //    cloud also falls back to the primary box for personal-ai-chat images.
-    if (!buffer) {
+    if (!buffer && !waitedOnPending) {
       const hosts: string[] = []
       if (session) {
         const h = await hostForSession(session)

@@ -400,6 +400,51 @@ async function readRemoteBytes(
   return isNotFoundReply(result) ? { missing: true } : { unreachable: true }
 }
 
+// ── Slots whose bytes are still on the way ───────────────────────────
+// The rewrite paths (history replay, the live stream) hand the browser a mirror
+// path in the same breath as they start its download, fire-and-forget, and the
+// <img> for it is requested a few ms later. A tunnel read takes tens to hundreds
+// of ms, so the request routinely came first: /api/local-image found no file,
+// asked the HOST for the mirror path (a local slot no host ever has), and answered
+// 404 — and a browser never retries a failed <img>, so the picture stayed broken
+// until the panel remounted. 2026-09-29: a pasted image in a remote session never
+// showed; its bytes landed 40ms after the 404. The route now waits for the slot's
+// download instead, and a slot minted twice (replay + stream) is read once.
+const pendingDownloads = new Map<string, Promise<boolean>>()
+
+/**
+ * Run `download` for `mirrorPath` unless one is already running for that slot (then
+ * the running one is returned), and publish it so /api/local-image can wait for the
+ * bytes. `download` resolves true once the file is on disk; a throw counts as false.
+ * The entry leaves the moment it settles, so a failed download never stays pending.
+ */
+export function startMirrorDownload(mirrorPath: string, download: () => Promise<boolean>): Promise<boolean> {
+  const key = path.resolve(mirrorPath)
+  const running = pendingDownloads.get(key)
+  if (running) return running
+  const p = download().catch(() => false)
+  pendingDownloads.set(key, p)
+  void p.then(() => { if (pendingDownloads.get(key) === p) pendingDownloads.delete(key) })
+  return p
+}
+
+/** Is a download for this slot running right now? */
+export function hasPendingMirror(mirrorPath: string): boolean {
+  return pendingDownloads.has(path.resolve(mirrorPath))
+}
+
+/**
+ * The bytes of a slot whose download is in flight, once it lands. Null when no
+ * download is running for it, it failed, or it outlasts DOWNLOAD_TIMEOUT_MS (the
+ * same bound a first-time download on the request path has, see above).
+ */
+export async function awaitPendingMirror(mirrorPath: string): Promise<Buffer | null> {
+  const p = pendingDownloads.get(path.resolve(mirrorPath))
+  if (!p) return null
+  if (!(await withTimeout(p, DOWNLOAD_TIMEOUT_MS, false))) return null
+  return fsp.readFile(mirrorPath).catch(() => null)
+}
+
 /**
  * Download a remote file into the mirror and record its sidecar. Returns the
  * bytes, or null on failure. The post-download stat pins the true remote

@@ -36,7 +36,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { findImagePaths, findRelativeImageNames } from '../providers/session-io.js';
 import { REMOTE_IMAGES_DIR } from '../constants.js';
-import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored } from './remote-image-mirror.js';
+import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, startMirrorDownload } from './remote-image-mirror.js';
 import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
 import {
   SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest,
@@ -3097,7 +3097,9 @@ export async function rewriteHistoryRemoteImages(
         cache.set(remotePath, localPath)
 
         if (!fs.existsSync(localPath)) {
-          downloadImageViaDaemon(host, remotePath, localPath).catch(() => {})
+          // Published: the <img> for this slot can arrive before the bytes do.
+          const lp = localPath
+          startMirrorDownload(lp, () => downloadImageViaDaemon(host, remotePath, lp)).catch(() => {})
         } else {
           // Pre-sidecar mirror file: record its origin so /api/local-image can
           // revalidate it (the download-once mirror otherwise stays stale forever).
@@ -3136,12 +3138,12 @@ export async function rewriteHistoryRemoteImages(
 
           if (!fs.existsSync(localPath)) {
             const lp = localPath
-            ;(async () => {
+            startMirrorDownload(lp, async () => {
               for (const candidate of candidates) {
-                const ok = await downloadImageViaDaemon(host, candidate, lp)
-                if (ok) return
+                if (await downloadImageViaDaemon(host, candidate, lp)) return true
               }
-            })().catch(() => {})
+              return false
+            }).catch(() => {})
           } else {
             // Same backfill as the absolute-path branch: best origin guess is
             // the first candidate (tool-input hints beat cwd/tmp fallbacks).

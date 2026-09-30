@@ -8,7 +8,8 @@
  * mirror (with a .src.json sidecar recording their origin). Mirror hits are
  * revalidated against the remote mtime/size before serving, so an image the
  * session regenerated on the remote host shows its NEW bytes — the old
- * download-once behavior served the first version forever.
+ * download-once behavior served the first version forever. A mirror slot whose
+ * download is still in flight is waited for, not answered with a 404.
  *
  * Freshness: responses carry `Cache-Control: no-cache` + a strong ETag. The
  * browser revalidates each render and gets a bodyless 304 unless the bytes
@@ -34,6 +35,8 @@ import {
   revalidateMirror,
   downloadToMirror,
   readMirrorSidecar,
+  awaitPendingMirror,
+  hasPendingMirror,
 } from '../../core/remote-image-mirror.js'
 
 export const localImageRouter = Router()
@@ -125,8 +128,17 @@ localImageRouter.get('/', async (req: Request, res: Response, next: NextFunction
       // File not found locally — try remote fallback
     }
 
+    // A mirror slot a rewrite just handed out may still be downloading: the
+    // <img> routinely arrives before its bytes do. Wait for them instead of
+    // answering a 404 the browser never retries (see remote-image-mirror.ts).
+    // That download is the slot's one real source, so once it was waited on the
+    // host fetches below (which ask the host for this LOCAL path) are skipped:
+    // they cannot succeed and would double the time the <img> is held.
+    const waitedOnPending = !buffer && isMirrorPath(filePath) && hasPendingMirror(filePath)
+    if (waitedOnPending) buffer = await awaitPendingMirror(filePath)
+
     // Remote fallback: serve from the host mirror (revalidated), else download.
-    if (!buffer && host && typeof host === 'string') {
+    if (!buffer && !waitedOnPending && host && typeof host === 'string') {
       const cachePath = hostCachePath(host, filePath)
       const hasCache = await fsp.stat(cachePath).then((s) => s.isFile()).catch(() => false)
       if (hasCache && (await readMirrorSidecar(cachePath))) {
@@ -138,7 +150,7 @@ localImageRouter.get('/', async (req: Request, res: Response, next: NextFunction
 
     // Auto-detect remote session images: /tmp/open-walnut/images/remote/<sessionId>/file.png
     // The path is identical on the remote host (EKS MCP writes there directly).
-    if (!buffer && filePath.startsWith(REMOTE_IMAGES_DIR + '/')) {
+    if (!buffer && !waitedOnPending && filePath.startsWith(REMOTE_IMAGES_DIR + '/')) {
       const relToRemote = filePath.slice(REMOTE_IMAGES_DIR.length + 1)
       const slashIdx = relToRemote.indexOf('/')
       if (slashIdx > 0) {
