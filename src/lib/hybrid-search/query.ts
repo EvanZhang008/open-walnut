@@ -577,23 +577,38 @@ function spellingFixes(db: SearchDb, word: string, own: number, context: readonl
     .sort((a, b) => b[1] - a[1])
     .slice(0, TYPO_CANDIDATES);
   if (context.length > 0) {
-    const together = alongside(db, near.map(([w]) => w), context);
+    const together = alongside(db, near, context, true);
     if (together.length > 0) return together.slice(0, TYPO_MAX_FIXES);
   }
   const minFix = Math.max(TYPO_MIN_FIX_DF, TYPO_MIN_GAIN * (own + 1));
   return near.filter(([, n]) => n >= minFix).slice(0, TYPO_MAX_FIXES).map(([w]) => w);
 }
 
-/** `candidates` that occur in some doc with the `context` words, most often first. */
-function alongside(db: SearchDb, candidates: readonly string[], context: readonly string[]): string[] {
+/** `candidates` (term, doc count) that occur in some doc with the `context`
+ *  words, most often first; `byShare` orders them by the share of the
+ *  candidate's own docs that hold the context instead. A spelling fix wants
+ *  the share: the raw count favoured whatever is common everywhere, and for
+ *  "ddb looes alarm" "looks" sat beside ddb and alarm in 50 docs (of 725),
+ *  "loose" in 7 (of 60), with only two fixes kept. A completion wants the
+ *  count: the commonest ending is usually the word, and the share ordering
+ *  cost the prefix class 4 of its top-8 hits. */
+function alongside(
+  db: SearchDb,
+  candidates: ReadonlyArray<readonly [string, number]>,
+  context: readonly string[],
+  byShare = false,
+): string[] {
   const rest = context.slice(0, 2).map(ftsQuote).join(' AND ');
   const together = db.prepare(
     `SELECT COUNT(*) AS n FROM (SELECT 1 FROM doc_fts WHERE doc_fts MATCH ? LIMIT ${COMPLETION_CONTEXT_CAP})`,
   );
   return candidates
-    .map((term, order) => ({ term, order, n: (together.get(`${ftsQuote(term)} AND ${rest}`) as { n: number }).n }))
+    .map(([term, docs], order) => {
+      const n = (together.get(`${ftsQuote(term)} AND ${rest}`) as { n: number }).n;
+      return { term, order, n, share: n / Math.max(1, docs) };
+    })
     .filter((c) => c.n > 0)
-    .sort((a, b) => b.n - a.n || a.order - b.order)
+    .sort((a, b) => (byShare ? b.share - a.share || b.n - a.n : b.n - a.n) || a.order - b.order)
     .map((c) => c.term);
 }
 
@@ -611,12 +626,12 @@ function completions(db: SearchDb, prefix: string, own: number, others: readonly
   ).all(prefix, `${prefix}\uffff`) as Array<{ term: string; doc: number }>)
     .filter((r) => WORD_RE.test(r.term));
   if (rows.length === 0 || rows[0].doc < TYPO_MIN_GAIN * (own + 1)) return [];
-  const words = rows.map((r) => r.term);
-  const head = words.slice(0, COMPLETION_CANDIDATES);
-  if (others.length === 0) return head.slice(0, COMPLETION_MAX);
+  const counted = rows.map((r) => [r.term, r.doc] as const);
+  const head = counted.slice(0, COMPLETION_CANDIDATES);
+  if (others.length === 0) return head.slice(0, COMPLETION_MAX).map(([w]) => w);
   let together = alongside(db, head, others);
-  if (together.length === 0) together = alongside(db, words.slice(COMPLETION_CANDIDATES), others);
-  return (together.length > 0 ? together : head).slice(0, COMPLETION_MAX);
+  if (together.length === 0) together = alongside(db, counted.slice(COMPLETION_CANDIDATES), others);
+  return (together.length > 0 ? together : head.map(([w]) => w)).slice(0, COMPLETION_MAX);
 }
 
 function compileTerm(

@@ -67,6 +67,25 @@ describe('typos', () => {
     expect(hits.map((h) => h.ref)).toEqual(['rare']);
   });
 
+  it('picks the neighbour that belongs beside the other words, not the one common everywhere', () => {
+    // "looks", "loops" and "loses" each sit beside ddb and alarm in more docs
+    // than "loose" does, and only two fixes are kept; ordered by raw count the
+    // right one was cut and the task was not found at all (real data,
+    // 2026-09-29). Ordered by the share of each word's own docs, it is first.
+    const index = newIndex((i) => (
+      i < 20 ? `it looks like the ddb alarm fired ${i}`
+        : i < 30 ? `the ddb alarm loops every minute ${i}`
+          : i < 40 ? `ddb alarm loses a datapoint ${i}`
+            : i < 100 ? `it looks fine today ${i}`
+              : i < 130 ? `the loop loops ${i}`
+                : i < 160 ? `who loses here ${i}`
+                  : `a loose cable ${i}`), 161);
+    index.upsert({ kind: 'task', ref: 'target', title: 'ES ddb ticket, loose the alarm', updatedAt: DAY });
+    const hits = index.search('ddb looes alarm', { limit: 40 });
+    expect(hits[0]?.ref).toBe('target');
+    expect(hits[0]?.components.coverage).toBe(1);
+  });
+
   it('does not correct a word into a rarer one', () => {
     // "sprint" is common here; "spring" (one edit) exists but is rarer: no fix.
     const index = newIndex((i) => `sprint planning ${i}`);
