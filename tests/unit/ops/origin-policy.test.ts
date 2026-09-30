@@ -10,6 +10,8 @@
  * policy under every canonicalization trick, and the registry ratchet that keeps
  * the local-only route set derived instead of hand kept.
  */
+import http from 'node:http'
+import net, { type AddressInfo } from 'node:net'
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   HEALTH_LOCAL_ONLY_MESSAGE, LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN, UNKNOWN_ORIGIN, ORIGIN_HEADER,
@@ -70,11 +72,47 @@ describe('a request\'s origin', () => {
     expect(requestOrigin(req('127.0.0.1', { [ORIGIN_HEADER]: HOST }))).toBe(HOST)
     expect(requestOrigin(req('127.0.0.1', { [ORIGIN_HEADER]: REMOTE_HTTP_ORIGIN }))).toBe(REMOTE_HTTP_ORIGIN)
     expect(requestOrigin(req('127.0.0.1', { [ORIGIN_HEADER]: '' }))).toBe(UNKNOWN_ORIGIN)
-    // A repeated header reaches the route as an array or a joined string: never local.
+    // A repeated header reaches the route as an array or a joined string: unknown.
     expect(requestOrigin(req('127.0.0.1', { [ORIGIN_HEADER]: [LOCAL_ORIGIN, LOCAL_ORIGIN] }))).toBe(UNKNOWN_ORIGIN)
-    expect(requestOrigin(req('127.0.0.1', { [ORIGIN_HEADER]: `${LOCAL_ORIGIN}, ${LOCAL_ORIGIN}` }))).not.toBe(LOCAL_ORIGIN)
+    expect(requestOrigin(req('127.0.0.1', { [ORIGIN_HEADER]: `${LOCAL_ORIGIN}, ${LOCAL_ORIGIN}` }))).toBe(UNKNOWN_ORIGIN)
     expect(isOnBehalfOfRemote(req('127.0.0.1', { [ORIGIN_HEADER]: HOST }))).toBe(true)
     expect(isOnBehalfOfRemote(req('127.0.0.1'))).toBe(false)
+  })
+
+  it('a header sent more than once is unknown, never one of its parts', async () => {
+    for (const joined of [
+      `${LOCAL_ORIGIN}, ${LOCAL_ORIGIN}`, `${LOCAL_ORIGIN},${LOCAL_ORIGIN}`, `${HOST}, ${LOCAL_ORIGIN}`, `${LOCAL_ORIGIN}, ${HOST}`, `${HOST}, ${HOST}`,
+    ]) {
+      expect(requestOrigin(req('127.0.0.1', { [ORIGIN_HEADER]: joined })), joined).toBe(UNKNOWN_ORIGIN)
+      expect(isOnBehalfOfRemote(req('127.0.0.1', { [ORIGIN_HEADER]: joined })), joined).toBe(true)
+    }
+    expect(requestOrigin(req('127.0.0.1', { [ORIGIN_HEADER]: [HOST, HOST] }))).toBe(UNKNOWN_ORIGIN)
+    // No origin contains a comma, so a comma can only mean the header was repeated.
+    expect(hostOrigin('odd,alias')).toBe('host:odd_alias')
+    expect(requestOrigin(req('127.0.0.1', { [ORIGIN_HEADER]: hostOrigin('odd,alias') }))).toBe('host:odd_alias')
+
+    // On the wire: two header lines, read by Node's own HTTP server as a route sees them.
+    const server = http.createServer((q, s) => {
+      s.end(JSON.stringify({ origin: requestOrigin(q), raw: q.headers[ORIGIN_HEADER] }))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const port = (server.address() as AddressInfo).port
+      const reply = await new Promise<string>((resolve, reject) => {
+        const sock = net.connect(port, '127.0.0.1', () => sock.write(
+          `GET / HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n${ORIGIN_HEADER}: ${LOCAL_ORIGIN}\r\n`
+          + `${ORIGIN_HEADER}: ${LOCAL_ORIGIN}\r\nConnection: close\r\n\r\n`))
+        let text = ''
+        sock.on('data', (chunk) => { text += chunk })
+        sock.on('end', () => resolve(text))
+        sock.on('error', reject)
+      })
+      expect(reply.startsWith('HTTP/1.1 200')).toBe(true)
+      expect(JSON.parse(reply.slice(reply.indexOf('\r\n\r\n') + 4)))
+        .toEqual({ origin: UNKNOWN_ORIGIN, raw: `${LOCAL_ORIGIN}, ${LOCAL_ORIGIN}` })
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
 
   it('a spoofed header cannot RAISE trust: a caller off this machine is remote-http, whatever it claims', () => {

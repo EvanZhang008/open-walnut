@@ -40,8 +40,9 @@ export const HEALTH_LOCAL_ONLY_MESSAGE = 'Health data is only available to sessi
 export function hostOrigin(hostKey: string | undefined): string {
   const key = (hostKey ?? '').trim()
   if (key === LOCAL_ORIGIN) return LOCAL_ORIGIN
-  // Header-safe: anything outside printable ASCII would make fetch throw.
-  return key ? `${HOST_PREFIX}${key.slice(0, 200).replace(/[^\x21-\x7e]/g, '_')}` : UNKNOWN_ORIGIN
+  // Header-safe: anything outside printable ASCII would make fetch throw. No
+  // comma either: a comma in the header means it was sent twice (request-origin.ts).
+  return key ? `${HOST_PREFIX}${key.slice(0, 200).replace(/[^\x21-\x7e]|,/g, '_')}` : UNKNOWN_ORIGIN
 }
 
 export function isLocalOrigin(origin: string | undefined): boolean {
