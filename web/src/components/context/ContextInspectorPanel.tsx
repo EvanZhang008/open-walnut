@@ -13,7 +13,8 @@ interface ContextInspectorPanelProps {
 /** Memoized markdown block for context sections */
 function ContextMarkdown({ content, fallback }: { content: string; fallback?: string }) {
   const text = content || fallback || '';
-  const html = useRenderedMarkdown(text);
+  // The context as the model sees it: task ids stay ids (clickable), no titles.
+  const html = useRenderedMarkdown(text, undefined, undefined, 'links');
   return (
     <div
       className="context-markdown markdown-body"

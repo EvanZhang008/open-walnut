@@ -1857,7 +1857,7 @@ export function FileContentView({
   const markdownHtml = useMemo(() => {
     if (!isMarkdown || !data?.content) return '';
     const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/')) : undefined;
-    return renderMarkdownWithRefs(data.content, dir, host, { imageVersion });
+    return renderMarkdownWithRefs(data.content, dir, host, { imageVersion, taskIds: 'off' });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
   }, [isMarkdown, data, host, filePath, labelsVersion, imageVersion]);
 

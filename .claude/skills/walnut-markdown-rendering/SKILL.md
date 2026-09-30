@@ -68,6 +68,19 @@ Acceptance gate: `tests/web/markdown/link-to-local-path.test.ts` (the report ver
 
 Dev servers print `localhost:5173` / `0.0.0.0:8080` / `127.0.0.1:8000/x` without a scheme, and GFM only autolinks `http(s)://` and `www.`. The inline extension links those, registered on BOTH instances. It requires a port and a word start: the previous token's last char must not be one of `\w : / . @ - [`, so an ssh `-L 8080:localhost:8080` spec, `ws://localhost:1`, `user@localhost:22` stay text; `localhost:8080:host:80` is refused by a lookahead. It returns a plain `link` token, so the renderer adds nothing Walnut-specific: which links open in the session's Web view is decided at click time (see `walnut-web-frontend`, "Service links"). Tests: `tests/web/markdown/bare-loopback-url.test.ts`.
 
+## Bare task ids become pills (`bare-task-ids.ts`)
+
+Models cite other tasks by id (`` `mpwidref-7c2e` confirmed it ``, "written into task mpwidrf2-9b10's report") far more often than by `<task-ref/>`, however the prompt asks. `linkBareTaskIds` runs on marked's OUTPUT, after `linkifyPathsInCode`, in `renderMarkdownWithRefs` and `renderToolResultWithRefs`, so it only adds anchors. Rules it encodes:
+
+- An id links only when the client task store knows it (`lookupTaskLabel`; the store holds the whole board, completed tasks included). That, plus a boundary guard (no `\w - . / @ #` before, no `\w - / @` or `.ext` after), keeps UUID fragments, file names and path segments as text. The lookup marks the id observed, so a message rendered before the task list arrived re-renders with its pills.
+- Prose and a code span holding only the id get the title pill; the id stays the label when the title is already written beside it (`id (Title)`, `Title (id)`), so it is not printed twice. An id inside longer code is linked in place (`a.task-link.task-link-code`, code font kept).
+- Skips complete anchor pairs plus an unclosed trailing `<a …>`, and button / textarea / svg / style and the like.
+- `taskIds` option: `pills` (default, conversation output), `links` (DATA: tool input/results, injected context, the context inspector; every id keeps its own text, so `"depends_on": ["<id>"]` is never rewritten into a title), `off` (file surfaces: Files preview, file diffs). Copy-as-rich-text never gets pills.
+- Tags are split quote-aware, so a `>` inside a model-written attribute value does not end the tag.
+- `useTaskLinkClickFallback` (App.tsx) catches a pill click on any surface that has no `useEntityClickHandler`, so it navigates in-app instead of loading `/tasks/<id>` as a page.
+
+Tests: `tests/web/markdown/bare-task-id.test.ts`, `tests/e2e/browser/bare-task-id-pills.spec.ts` (seed `pw-idref-session`).
+
 ## DOMPurify policy per surface
 
 - Sanitize with `FORCE_BODY: true` on the rich path. Default `false` parses a leading `<style>` into `head` and drops it, and models naturally write style first.
@@ -93,6 +106,7 @@ Every fix here should carry a negative control: neuter the fix and confirm the b
 |---|---|
 | `web/src/utils/markdown.ts` | all markdown rendering; retunes and both `Marked` instances at top and bottom |
 | `web/src/utils/rich-blocks.ts` | chunker, blank-line collapsing, app-block detection |
+| `web/src/utils/bare-task-ids.ts` | bare task ids in rendered output become task pills |
 | `web/src/utils/rich-css-scope.ts` | `<style>` selector rewriting to message scope |
 | `web/src/components/chat/RichBlocks.tsx` | the single render call site; block freezing |
 | `src/core/stream/pending-markup.ts` | unfinished-markup split, shared by client and server |

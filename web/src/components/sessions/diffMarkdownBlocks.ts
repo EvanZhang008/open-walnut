@@ -47,6 +47,9 @@ function countNewlines(s: string): number {
   return n;
 }
 
+/** A diff shows a file's bytes: no task pills for ids inside it. */
+const FILE_RENDER = { taskIds: 'off' } as const;
+
 /**
  * Split markdown into rows for the rendered preview's line-number gutter. Each
  * top-level block (heading, paragraph, blockquote, table, code fence) is one row;
@@ -64,12 +67,12 @@ export function markdownBlocksWithLines(text: string, sessionCwd?: string, host?
   try {
     tokens = marked.lexer(text);
   } catch {
-    return [{ line: 1, html: renderMarkdownWithRefs(text, sessionCwd, host), code: text.trim() }];
+    return [{ line: 1, html: renderMarkdownWithRefs(text, sessionCwd, host, FILE_RENDER), code: text.trim() }];
   }
 
   const lines = text.split('\n');
   const blocks: MarkdownBlock[] = [];
-  const render = (raw: string) => renderMarkdownWithRefs(raw, sessionCwd, host);
+  const render = (raw: string) => renderMarkdownWithRefs(raw, sessionCwd, host, FILE_RENDER);
 
   // Emit one row per list item; recurse into a nested list inside an item. Each
   // item's own "lead" content (everything before its first nested list) renders

@@ -5664,6 +5664,42 @@ select {
   text-decoration: none;
 }
 
+/* A task id linked in place inside code (bare-task-ids.ts): the code keeps its
+   own font and box, the id reads as a link the way a path in code does. The
+   tool-block selectors are repeated so their pill rules lose here too. */
+.markdown-body code a.task-link.task-link-code,
+.chat-tool-block-result code a.task-link.task-link-code {
+  font: inherit;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--accent);
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.markdown-body code a.task-link.task-link-code:hover,
+.chat-tool-block-result code a.task-link.task-link-code:hover {
+  background: none;
+  border-bottom-style: solid;
+  border-bottom-color: var(--accent);
+}
+
+/* ...and in the blue user bubble, where accent text is blue on blue (the
+   2026-08-15 invisible-pill trap): white like the bubble's other links. One
+   class more than the rule above, so source order does not matter. */
+.session-msg-user .markdown-body code a.task-link.task-link-code,
+.chat-message-user .markdown-body code a.task-link.task-link-code {
+  background: none;
+  color: #fff;
+  border-bottom-color: rgba(255, 255, 255, 0.6);
+}
+
+.session-msg-user .markdown-body code a.task-link.task-link-code:hover,
+.chat-message-user .markdown-body code a.task-link.task-link-code:hover {
+  background: none;
+  border-bottom-color: #fff;
+}
+
 .markdown-body a.session-link {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   font-size: 0.9em;

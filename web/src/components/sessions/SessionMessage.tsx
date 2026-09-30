@@ -153,6 +153,10 @@ function EditDiffView({ filePath, oldString, newString, replaceAll, status, resu
   );
 }
 
+/** Tool results and injected context are data: a task id in them stays the id,
+ *  clickable, never swapped for the task's title. */
+const DATA_RENDER = { taskIds: 'links' } as const;
+
 /** Hide the image's parent container on load error (broken remote images, etc.).
  *  Hides .tool-result-image-item if present (caption + img), else hides parent element. */
 const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -313,7 +317,7 @@ function InjectedContextRow({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const labelsVersion = useEntityLabelsVersion();
   const html = useMemo(
-    () => (open ? renderMarkdownWithRefs(text) : ''),
+    () => (open ? renderMarkdownWithRefs(text, undefined, undefined, DATA_RENDER) : ''),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
     [open, text, labelsVersion],
   );
@@ -787,7 +791,7 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
     if (extracted) {
       const images = extracted.imageSrcs.map((src, i) => ({ src, key: `b64-${i}` }));
       const text = extracted.textParts.length > 0
-        ? renderMarkdownWithRefs(extracted.textParts.join('\n').slice(0, 3000))
+        ? renderMarkdownWithRefs(extracted.textParts.join('\n').slice(0, 3000), undefined, undefined, DATA_RENDER)
         : '';
       return { resultImages: images, resultTextHtml: text };
     }
@@ -803,7 +807,7 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
     const images = resolved.length > 0 ? resolved : null;
 
     // 3. Render remaining text as markdown (with truncation)
-    const text = renderMarkdownWithRefs(result.length > 3000 ? result.slice(0, 3000) : result);
+    const text = renderMarkdownWithRefs(result.length > 3000 ? result.slice(0, 3000) : result, undefined, undefined, DATA_RENDER);
     return { resultImages: images, resultTextHtml: text };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
   }, [result, open, sessionCwd, labelsVersion]);

@@ -5,7 +5,7 @@ import {
   subscribeEntityLabels,
   type TaskLabel,
 } from '@/stores/entity-label-store';
-import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { renderMarkdownWithRefs, type RenderMarkdownOptions } from '@/utils/markdown';
 
 /**
  * Subscribe to the entity-label store version. Place this in the LEAF that
@@ -26,12 +26,17 @@ export function useEntityLabelsVersion(): number {
  * use this instead of a hand-rolled useMemo so the version dep can't be
  * forgotten (a missed dep = permanently stale pill on that surface).
  */
-export function useRenderedMarkdown(text: string, sessionCwd?: string, host?: string): string {
+export function useRenderedMarkdown(
+  text: string,
+  sessionCwd?: string,
+  host?: string,
+  taskIds?: RenderMarkdownOptions['taskIds'],
+): string {
   const version = useEntityLabelsVersion();
   return useMemo(
-    () => renderMarkdownWithRefs(text, sessionCwd, host),
+    () => renderMarkdownWithRefs(text, sessionCwd, host, taskIds ? { taskIds } : undefined),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- version invalidates the label lookups inside
-    [text, sessionCwd, host, version],
+    [text, sessionCwd, host, taskIds, version],
   );
 }
 

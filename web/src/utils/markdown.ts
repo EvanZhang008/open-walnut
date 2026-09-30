@@ -14,6 +14,7 @@ import {
 // traversal" each have exactly one definition; the module is dependency-free by
 // contract (no fs, no async, no imports) and is bundled into the browser here.
 import { hasTraversalSegment, parsePathDestination } from '../../../src/providers/path-ref-parse';
+import { linkBareTaskIds, type BareTaskIdMode, type BareTaskIdRenderer } from './bare-task-ids';
 
 /**
  * GFM `del` retuned to require DOUBLE tildes — shared by EVERY renderer here.
@@ -537,6 +538,15 @@ function taskRefHover(id: string): string {
   return resolved.project ? `${resolved.project} / ${resolved.title}` : resolved.title;
 }
 
+/** Pills for bare task ids in rendered output (see bare-task-ids.ts): the same
+ *  anchor a `<task-ref/>` becomes, so one click handler and one style serve both.
+ *  An in-place link inside code keeps the id text and code styling. */
+const bareTaskIdPills: BareTaskIdRenderer = {
+  title: (id) => lookupTaskLabel(id)?.title,
+  anchor: (id, label, inCode) =>
+    `<a href="/tasks/${id}" class="${inCode ? 'task-link task-link-code' : 'task-link'}" data-task-id="${id}" title="${escapeHtmlText(taskRefHover(id))}">${escapeHtmlText(label)}</a>`,
+};
+
 /**
  * Strip entity refs down to plain-text labels (no links) — for plain-text
  * surfaces like the notification feed where anchors can't render. Mirrors the
@@ -717,7 +727,8 @@ export function renderToolResultWithRefs(text: string): string {
     // The marked parser will have HTML-escaped the JSON quotes as &quot;
     const withPills = injectJsonIdLinks(html);
     // Step 4: Linkify file paths inside code blocks (tool results are mostly code)
-    const withCodePaths = linkifyPathsInCode(withPills);
+    // Tool output is data: ids keep their text (see BareTaskIdMode).
+    const withCodePaths = linkBareTaskIds(linkifyPathsInCode(withPills), bareTaskIdPills, 'links');
     // Step 5: Sanitize. Same posture as renderMarkdownWithRefs' default: no
     // `<form>`/`action`/`formaction` (a submit target navigates the whole app
     // away) and no `<style>` — a tool result is not a place anyone authors CSS
@@ -1437,6 +1448,15 @@ export interface RenderMarkdownOptions {
    * produces new image URLs — see proxyImageSrcs for why that is necessary.
    */
   imageVersion?: string | number;
+  /**
+   * What bare task ids the task store knows become (bare-task-ids.ts). `pills`
+   * (default) is for conversation output: a citation shows the task's title.
+   * `links` is for DATA (tool input/results, injected context, the context
+   * inspector): each id keeps its own text and only becomes clickable. `off` is
+   * for file surfaces (the Files preview, a file diff): a file's bytes are the
+   * user's document, not a reply to decorate.
+   */
+  taskIds?: BareTaskIdMode | 'off';
 }
 
 export function renderMarkdownWithRefs(
@@ -1454,7 +1474,8 @@ export function renderMarkdownWithRefs(
   // The posture is part of the identity: the same text renders differently with
   // and without style, so it must not share a cache slot.
   const imageVersion = opts?.imageVersion;
-  const flags = (allowStyle ? 'S\0' : '') + (imageVersion != null ? `V${imageVersion}\0` : '');
+  const taskIds = opts?.taskIds ?? 'pills';
+  const flags = (allowStyle ? 'S\0' : '') + (imageVersion != null ? `V${imageVersion}\0` : '') + (taskIds === 'pills' ? '' : `T${taskIds}\0`);
   const key = host
     ? `${flags}${text}\0${sessionCwd ?? ''}\0${host}`
     : sessionCwd ? `${flags}${text}\0${sessionCwd}` : `${flags}${text}`;
@@ -1481,6 +1502,7 @@ export function renderMarkdownWithRefs(
     }
     let parsed = typeof raw === 'string' ? raw : '';
     parsed = linkifyPathsInCode(parsed, sessionCwd);
+    if (taskIds !== 'off') parsed = linkBareTaskIds(parsed, bareTaskIdPills, taskIds);
     // Models write raw HTML in replies now and we render it natively, so this
     // sanitize call is the boundary for model-authored markup. A `<form>` is the
     // one interactive element that can leave the page: submitting navigates the
@@ -1567,7 +1589,7 @@ export function extractMarkdownFields(
       (v as string).length > MARKDOWN_FIELD_MIN_LENGTH &&
       !MARKDOWN_EXCLUDED_INPUT_KEYS.has(k),
     )
-    .map(([k, v]) => ({ key: k, html: renderMarkdownWithRefs(v as string) }));
+    .map(([k, v]) => ({ key: k, html: renderMarkdownWithRefs(v as string, undefined, undefined, { taskIds: 'links' }) }));
 }
 
 // ── Tool result image detection & rendering ──

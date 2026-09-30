@@ -254,6 +254,67 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Bare task ids in session output (bare-task-id-pills.spec.ts): this
+        // task's session names the two tasks below by id only, the way a model
+        // does, and each id must render as a clickable task pill.
+        id: 'pw-task-idref',
+        title: 'Task id refs fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-idref-session'],
+        active_session_ids: [],
+        session_id: 'pw-idref-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Real id shape (`<base36>-<hex4>`), which only a real task id has: the
+        // pill pass links an id only when the task store knows it.
+        id: 'mpwidref-7c2e',
+        title: 'Quarterly invoice reconciliation',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-idref-target-session'],
+        active_session_ids: [],
+        session_id: 'pw-idref-target-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // A COMPLETED task cited by id links too.
+        id: 'mpwidrf2-9b10',
+        title: 'Rotate the staging API keys',
+        status: 'done',
+        phase: 'COMPLETE',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // The ✦ AI search adopted as a session (search-ask-transcript.spec.ts):
         // its transcript is the prompt Walnut sent + the bare JSON answer, the two
         // messages the transcript renderer cards. Own task + own session so the
@@ -1744,6 +1805,52 @@ await fs.mkdir(serviceFixtureRoot, { recursive: true })
   )
 }
 
+// Bare task ids fixture (bare-task-id-pills.spec.ts). The reply cites other
+// tasks the way the 2026-09-29 report did: an id in backticks, a bare id inside
+// CJK prose, an id beside its own title, an id inside a command, plus id-shaped
+// text that is no task (a UUID, an unknown id), which must stay text.
+const idrefFixtureRoot = path.join(tmpBase, 'projects', 'idref-fixture')
+await fs.mkdir(idrefFixtureRoot, { recursive: true })
+{
+  const encodedCwd = idrefFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-')
+  const jsonlDir = path.join(tmpBase, '.claude', 'projects', encodedCwd)
+  await fs.mkdir(jsonlDir, { recursive: true })
+  const reply = [
+    '`mpwidref-7c2e` confirmed it: same class of problem.',
+    '',
+    // U+4EFB U+52A1 = "task", U+7684 U+62A5 U+544A = "'s report".
+    'These went into \u4EFB\u52A1 mpwidrf2-9b10 \u7684\u62A5\u544A.',
+    '',
+    'From task mpwidrf2-9b10 (Rotate the staging API keys) a reply came back.',
+    '',
+    'Run `walnut task show mpwidref-7c2e` for the details.',
+    '',
+    'Not tasks: trace 550e8400-e29b-41d4-a716-446655440000 and mzzzzzzz-0000.',
+  ].join('\n')
+  const line = (sid: string, ts: number, role: 'user' | 'assistant', text: string) => JSON.stringify({
+    type: role,
+    sessionId: sid,
+    timestamp: new Date(ts).toISOString(),
+    message: role === 'user' ? { role, content: text } : { role, content: [{ type: 'text', text }] },
+  })
+  await fs.writeFile(
+    path.join(jsonlDir, 'pw-idref-session.jsonl'),
+    [
+      line('pw-idref-session', sessionFixtureNow - 25_000, 'user', 'What did `walnut task show mpwidref-7c2e` find?'),
+      line('pw-idref-session', sessionFixtureNow - 22_000, 'assistant', reply),
+      '',
+    ].join('\n'),
+  )
+  await fs.writeFile(
+    path.join(jsonlDir, 'pw-idref-target-session.jsonl'),
+    [
+      line('pw-idref-target-session', sessionFixtureNow - 25_000, 'user', 'Reconcile the invoices'),
+      line('pw-idref-target-session', sessionFixtureNow - 22_000, 'assistant', 'IDREF_TARGET_MARKER: invoices reconciled.'),
+      '',
+    ].join('\n'),
+  )
+}
+
 // Real Claude Code JSONL for pw-vscode-session, so its chat renders an assistant
 // message containing that absolute path — the clickable `a.file-link` the
 // file-view-history spec needs. HOME is the fixture tmpBase (set at the top), so
@@ -2428,6 +2535,19 @@ await fs.writeFile(
         cwd: serviceFixtureRoot,
         title: 'Service preview fixture session',
       },
+      ...(['pw-idref-session', 'pw-idref-target-session'] as const).map((sid) => ({
+        claudeSessionId: sid,
+        taskId: sid === 'pw-idref-session' ? 'pw-task-idref' : 'mpwidref-7c2e',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 20_000).toISOString(),
+        messageCount: 2,
+        cwd: idrefFixtureRoot,
+        title: sid === 'pw-idref-session' ? 'Task id refs fixture session' : 'Invoice reconciliation session',
+      })),
       {
         // The adopted ✦ search (search-ask-transcript.spec.ts). cwd is its own
         // fixture root, which is what encodes the transcript's project dir.

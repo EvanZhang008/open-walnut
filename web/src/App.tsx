@@ -26,6 +26,7 @@ import { CreatePluginPage } from './pages/CreatePluginPage';
 import { PopoutRoot } from './popout/PopoutRoot';
 import { isPopoutPath } from './popout/openPopout';
 import { scheduleNotesPrefetch } from './utils/notes-prefetch';
+import { useTaskLinkClickFallback } from './hooks/useTaskLinkClickFallback';
 
 ensureCoreAppsRegistered();
 
@@ -55,6 +56,8 @@ export function App() {
   const pluginUi = usePluginUi();
   const pluginRuntime = useWebPluginRuntime();
   const apps = useAppCatalog();
+  // A task pill on a surface with no click handler of its own stays in the app.
+  useTaskLinkClickFallback(navigate);
 
   useEffect(() => {
     syncAppCommands(apps.discoverable);
