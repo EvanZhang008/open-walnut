@@ -1,10 +1,15 @@
 /**
- * TRIGGER pill: a task with an armed walnut-trigger shows it next to its title,
- * the way a live CLI cron job shows CRON. The pill is the trigger's own handle:
- * clicking it opens the trigger itself (name, what it does, cadence, the check
- * command and host, the last check the daemon reported) with Run now / Disable / Delete,
+ * TRIGGER pill: a task with a walnut-trigger shows it next to its title, the way
+ * a live CLI cron job shows CRON. The pill is the trigger's own handle: clicking
+ * it opens the trigger itself (name, what it does, cadence, the check command and
+ * host, the last check the daemon reported) with Run check now / Pause / Delete,
  * never a generic page. Rendered on the task rows, the Focus cards and the
  * session header from the one shared routines store.
+ *
+ * A paused trigger stays: the pill turns muted and reads TRIGGER · PAUSED (or
+ * "· 1 PAUSED" beside armed ones), and its flyout row offers Resume. Switching
+ * one off used to make it vanish, which read as a delete. A trigger the server
+ * stopped after its check kept failing stays the same way, marked STOPPED.
  *
  * On a task snoozed until something happens (task.waiting) the same pill reads
  * SNOOZED, in the snooze's amber: a snoozed row shows why it is quiet the way a
@@ -16,18 +21,19 @@
  * <body>, root stops pointerdown propagation (the rows are dnd-kit draggables),
  * outside-click closer exempts `.trigger-jobs-flyout`.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { isTaskWaiting, type Task } from '@open-walnut/core';
 import type { Routine, RoutineAuditEntry } from '@/api/routines';
 import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { removeRoutine, runRoutineNow, toggleRoutine } from '@/stores/routines-store';
+import { removeRoutine, runRoutineNow, setRoutineEnabled } from '@/stores/routines-store';
 import {
   auditClock, auditHistory, describeAuditEntry, describeCheck, describeFireTally, describeLastCheck,
-  describeNextRun, describeSchedule,
+  describeNextRun, describeSchedule, describeTriggerOff, triggerRunState,
 } from '@/utils/routine-format';
+import '@/styles/trigger-state.css';
 import { openSessionOnHome } from '@/utils/open-session';
 import { WaitingLine, waitingBackBy } from '@/components/tasks/TaskStatusControl';
 import '@/styles/routine-description.css';
@@ -39,18 +45,58 @@ export interface TriggerPillProps {
   task?: Task | null;
 }
 
-/** The pill's text: SNOOZED leads on a snoozed task, other triggers ride after it. */
-export function triggerPillLabel(triggerCount: number, snoozedOn?: string | null, triggerIds: readonly string[] = []): string {
-  if (!snoozedOn) return `TRIGGER${triggerCount > 1 ? ` ×${triggerCount}` : ''}`;
-  const others = triggerIds.filter((id) => id !== snoozedOn).length;
-  return `SNOOZED${others ? ` · TRIGGER${others > 1 ? ` ×${others}` : ''}` : ''}`;
+type PillTrigger = Pick<Routine, 'id' | 'enabled'> & { state?: Routine['state'] };
+
+/** "PAUSED" / "STOPPED" for a set of switched-off triggers ("OFF" when they differ). */
+function offWord(off: readonly PillTrigger[]): string {
+  const states = new Set(off.map((r) => triggerRunState(r)));
+  if (states.size !== 1) return 'OFF';
+  return states.has('stopped') ? 'STOPPED' : states.has('paused') ? 'PAUSED' : 'OFF';
+}
+
+/**
+ * The pill's text: SNOOZED leads on a snoozed task, other triggers ride after it.
+ * Switched-off triggers say so: `TRIGGER · PAUSED` when none polls,
+ * `TRIGGER ×3 · 1 PAUSED` when some do.
+ */
+export function triggerPillLabel(triggers: readonly PillTrigger[], snoozedOn?: string | null): string {
+  const others = snoozedOn ? triggers.filter((r) => r.id !== snoozedOn) : triggers;
+  const off = others.filter((r) => !r.enabled);
+  let trigger = '';
+  if (others.length) {
+    trigger = `TRIGGER${others.length > 1 ? ` ×${others.length}` : ''}`;
+    if (off.length === others.length) trigger += ` · ${offWord(off)}`;
+    else if (off.length) trigger += ` · ${off.length} ${offWord(off)}`;
+  }
+  if (!snoozedOn) return trigger;
+  const own = triggers.find((r) => r.id === snoozedOn);
+  const snooze = own && !own.enabled ? `SNOOZED · ${offWord([own])}` : 'SNOOZED';
+  return trigger ? `${snooze} · ${trigger}` : snooze;
 }
 
 /** The hover text: one line per trigger, so the pill alone tells what is polling. */
 export function triggerPillTitle(routines: readonly Routine[], nowMs = Date.now()): string {
   return routines
-    .map((r) => `${r.name}: ${r.description ? `${r.description.replace(/\s+/g, ' ')} · ` : ''}${describeSchedule(r.schedule)}, ${r.check ? describeCheck(r.check) : ''}, ${describeFireTally(r.state, nowMs)}, last check ${describeLastCheck(r.state.lastCheck, nowMs)}`)
+    .map((r) => {
+      const off = describeTriggerOff(r, nowMs);
+      return `${r.name}${off ? ` (${off.toLowerCase()})` : ''}: ${r.description ? `${r.description.replace(/\s+/g, ' ')} · ` : ''}${describeSchedule(r.schedule)}, ${r.check ? describeCheck(r.check) : ''}, ${describeFireTally(r.state, nowMs)}, last check ${describeLastCheck(r.state.lastCheck, nowMs)}`;
+    })
     .join('\n');
+}
+
+/**
+ * The triggers the pill shows. The routine behind a snooze wait that has ended
+ * is switched off by the wait itself (task-waiting.ts), kept only so the session
+ * can re-arm it: not a trigger anyone paused, so it stays hidden. It is known by
+ * its own stamp (waitEndedAtMs) or, for one switched off before that stamp
+ * existed, by the task's ended wait; until the task is known, no switched-off
+ * trigger shows, so none flashes as Paused and then vanishes.
+ */
+export function visibleTaskTriggers(triggers: readonly Routine[], task: Task | null | undefined, taskId: string | null | undefined): Routine[] {
+  const known = !!task && task.id === taskId;
+  const settled = known && task!.waiting && !isTaskWaiting(task!) ? task!.waiting.routine_id : null;
+  if (known && !settled && triggers.every((r) => r.enabled || triggerRunState(r) !== 'wait-ended')) return triggers as Routine[];
+  return triggers.filter((r) => r.enabled || (known && r.id !== settled && triggerRunState(r) !== 'wait-ended'));
 }
 
 /** The prompt a fire injects — what this trigger will say to the session. */
@@ -115,22 +161,24 @@ function AuditRow({ entry, onOpenSession }: { entry: RoutineAuditEntry; onOpenSe
 }
 
 function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSession: (sessionId: string) => void }) {
-  const [busy, setBusy] = useState<'run' | 'disable' | 'delete' | null>(null);
+  const [busy, setBusy] = useState<'run' | 'pause' | 'resume' | 'delete' | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const prompt = promptOf(routine);
   const fireCount = routine.state.fireCount ?? routine.state.fireLog?.length ?? 0;
-  const nextRun = describeNextRun(routine.state);
+  const run = triggerRunState(routine);
+  const off = describeTriggerOff(routine);
+  const nextRun = off ? null : describeNextRun(routine.state);
   // checkLog carries the fires too (a fire absent from it would read as a gap in
   // the clock), and fireLog is the fire-only memory that survives a burst of quiet
   // checks; auditHistory merges them so one fire is one row.
   const history = auditHistory(routine.state);
 
-  // Disable and Delete need no close step: the store drops the routine from the
-  // task's list at once, and the pill closes itself when none is left.
-  const act = async (kind: 'run' | 'disable' | 'delete', fn: () => Promise<unknown>) => {
+  // Delete needs no close step: the store drops the routine from the task's list
+  // at once, and the pill closes itself when none is left. Pause keeps the row.
+  const act = async (kind: 'run' | 'pause' | 'resume' | 'delete', fn: () => Promise<unknown>) => {
     setBusy(kind);
     setError(null);
     try {
@@ -144,10 +192,17 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
   };
 
   return (
-    <li className="trigger-jobs-row" data-routine-id={routine.id}>
+    <li className="trigger-jobs-row" data-routine-id={routine.id} data-state={run}>
       <div className="trigger-jobs-heading">
         <strong>{routine.name}</strong>
-        <span className="trigger-jobs-cadence">{describeSchedule(routine.schedule)}</span>
+        <span className="trigger-jobs-heading-side">
+          {off && (
+            <span className="trigger-jobs-state" data-state={run} data-testid="trigger-jobs-state">
+              {run === 'stopped' ? 'Stopped' : 'Paused'}
+            </span>
+          )}
+          <span className="trigger-jobs-cadence">{describeSchedule(routine.schedule)}</span>
+        </span>
       </div>
       {routine.description && (
         <p className="routine-description trigger-jobs-description" title={routine.description}>{routine.description}</p>
@@ -162,14 +217,35 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
       <div className="trigger-jobs-last" data-outcome={routine.state.lastCheck?.outcome ?? 'none'}>
         last check: {describeLastCheck(routine.state.lastCheck)}
       </div>
+      {/* What switching it back on will do, said before the user presses it. */}
+      {off && (
+        <div className="trigger-jobs-off" data-state={run} data-testid="trigger-jobs-off">
+          {run === 'stopped'
+            ? `${off}. Resume retries the check; one more failure stops it again.`
+            : `${off}: not checking. On Resume, anything that appeared meanwhile arrives once, as one fire.`}
+        </div>
+      )}
       {error && <div className="trigger-jobs-error" role="alert">{error}</div>}
       <div className="trigger-jobs-actions">
-        <button type="button" disabled={busy !== null} onClick={() => void act('run', () => runRoutineNow(routine.id))}>
-          {busy === 'run' ? 'Running…' : 'Run check now'}
-        </button>
-        <button type="button" disabled={busy !== null} onClick={() => void act('disable', () => toggleRoutine(routine.id))}>
-          {busy === 'disable' ? 'Disabling…' : 'Disable'}
-        </button>
+        {off ? (
+          <button
+            type="button"
+            className="trigger-jobs-resume"
+            disabled={busy !== null}
+            onClick={() => void act('resume', () => setRoutineEnabled(routine.id, true))}
+          >
+            {busy === 'resume' ? 'Resuming…' : 'Resume'}
+          </button>
+        ) : (
+          <>
+            <button type="button" disabled={busy !== null} onClick={() => void act('run', () => runRoutineNow(routine.id))}>
+              {busy === 'run' ? 'Running…' : 'Run check now'}
+            </button>
+            <button type="button" disabled={busy !== null} onClick={() => void act('pause', () => setRoutineEnabled(routine.id, false))}>
+              {busy === 'pause' ? 'Pausing…' : 'Pause'}
+            </button>
+          </>
+        )}
         {confirmDelete ? (
           <button
             type="button"
@@ -227,7 +303,8 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
 }
 
 export function TriggerPill({ taskId, task }: TriggerPillProps) {
-  const triggers = useTaskTriggers(taskId);
+  const all = useTaskTriggers(taskId);
+  const triggers = useMemo(() => visibleTaskTriggers(all, task, taskId), [all, task, taskId]);
   const snoozed = !!task && task.id === taskId && isTaskWaiting(task) && !!task.waiting;
   const snoozedOn = snoozed ? task!.waiting!.routine_id : null;
   const [open, setOpen] = useState(false);
@@ -249,8 +326,8 @@ export function TriggerPill({ taskId, task }: TriggerPillProps) {
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
 
-  // The last trigger disabled or deleted from the flyout takes the pill with it,
-  // and so does Unsnooze: a pill that comes back later must not come back open.
+  // The last trigger deleted from the flyout takes the pill with it, and so does
+  // Unsnooze: a pill that comes back later must not come back open.
   useEffect(() => {
     if (open && triggers.length === 0 && !snoozed) setOpen(false);
   }, [open, triggers.length, snoozed]);
@@ -284,13 +361,17 @@ export function TriggerPill({ taskId, task }: TriggerPillProps) {
 
   const condition = snoozed ? task!.waiting!.condition : '';
   const backBy = snoozed ? waitingBackBy(task) : '';
-  const what = snoozed ? `Snoozed until: ${condition}${backBy ? ` (back by ${backBy})` : ''}` : 'Trigger armed';
+  // Nothing on the task polls: the pill goes muted instead of away.
+  const allOff = triggers.length > 0 && triggers.every((r) => !r.enabled);
+  const what = snoozed
+    ? `Snoozed until: ${condition}${backBy ? ` (back by ${backBy})` : ''}`
+    : allOff ? `Trigger ${offWord(triggers).toLowerCase()}` : 'Trigger armed';
   return (
     <>
       <button
         ref={triggerRef}
         type="button"
-        className={`task-trigger-pill${snoozed ? ' is-snoozed' : ''}`}
+        className={`task-trigger-pill${snoozed ? ' is-snoozed' : allOff ? ' is-paused' : ''}`}
         title={snoozed ? [what, triggerPillTitle(triggers)].filter(Boolean).join('\n') : triggerPillTitle(triggers)}
         aria-label={`${what}. ${open ? 'Hide' : 'Show'} ${snoozed ? 'snooze' : 'trigger'} details`}
         aria-haspopup="dialog"
@@ -298,6 +379,8 @@ export function TriggerPill({ taskId, task }: TriggerPillProps) {
         data-testid="task-trigger-pill"
         data-trigger-count={triggers.length}
         data-snoozed={snoozed ? 'true' : undefined}
+        data-paused={allOff ? 'true' : undefined}
+        data-off={allOff ? offWord(triggers).toLowerCase() : undefined}
         onPointerDown={(e) => e.stopPropagation()}
         // WebKit never focuses a button on click, so the mousedown would focus the
         // row around the pill instead; the row then scrolls itself into view between
@@ -307,7 +390,7 @@ export function TriggerPill({ taskId, task }: TriggerPillProps) {
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); }}
       >
-        {triggerPillLabel(triggers.length, snoozedOn, triggers.map((r) => r.id))}
+        {triggerPillLabel(triggers, snoozedOn)}
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(
@@ -315,7 +398,7 @@ export function TriggerPill({ taskId, task }: TriggerPillProps) {
               ref={menuRef}
               className="trigger-jobs-flyout"
               role="dialog"
-              aria-label={snoozed ? 'Snooze and its trigger' : 'Armed triggers'}
+              aria-label={snoozed ? 'Snooze and its trigger' : 'Triggers on this task'}
               data-testid="trigger-jobs-flyout"
               style={menuPlacementStyle(placement)}
               onPointerDown={(e) => e.stopPropagation()}

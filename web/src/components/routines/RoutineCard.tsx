@@ -1,12 +1,16 @@
 import { useState } from 'react';
 import type { Routine } from '@/api/routines';
-import { describeRoutineTiming, describeExecutorBadge, describeCheck, describeFireTally, describeLastCheck } from '@/utils/routine-format';
+import {
+  describeRoutineTiming, describeExecutorBadge, describeCheck, describeFireTally, describeLastCheck,
+  describeTriggerOff, triggerRunState,
+} from '@/utils/routine-format';
 import '@/styles/routine-description.css';
 
 interface RoutineCardProps {
   routine: Routine;
   executorLabels: Record<string, string>;
-  onToggle: (id: string) => void;
+  /** Pause (false) or Resume (true): the state the card asks for, never a flip. */
+  onToggle: (id: string, enabled: boolean) => void;
   onRunNow: (id: string) => void;
   onEdit: (routine: Routine) => void;
   onDelete: (id: string) => void;
@@ -19,8 +23,29 @@ function getStatusClass(r: Routine): string {
   return 'ok';
 }
 
+/**
+ * What the switch of a routine that is off says. A trigger is Paused, Stopped
+ * (the server gave up on its failing check) or just Off (the snooze wait it
+ * ended is over). A plain routine is Paused when someone paused it, and Off
+ * otherwise: a one-time routine switches itself off once it has run.
+ */
+function offLabel(r: Routine): 'Paused' | 'Stopped' | 'Off' {
+  if (r.check) {
+    const run = triggerRunState(r);
+    return run === 'stopped' ? 'Stopped' : run === 'wait-ended' ? 'Off' : 'Paused';
+  }
+  return typeof r.state.pausedAtMs === 'number' ? 'Paused' : 'Off';
+}
+
+/** "Paused 2h ago" / "Stopped after 5 failed checks" / "Wait ended 1h ago", for the timing line. */
+function describeOff(r: Routine): string | null {
+  if (r.enabled) return null;
+  if (r.check) return describeTriggerOff(r);
+  return typeof r.state.pausedAtMs === 'number' ? describeTriggerOff({ enabled: false, state: { pausedAtMs: r.state.pausedAtMs } }) : null;
+}
+
 function getStatusLabel(r: Routine): string {
-  if (!r.enabled) return 'Disabled';
+  if (!r.enabled) return offLabel(r);
   if (r.state.runningAtMs) return 'Running';
   if (r.state.lastStatus === 'error' || r.state.lastCheck?.outcome === 'error') return 'Error';
   if (r.state.lastStatus === 'ok') return 'OK';
@@ -30,6 +55,10 @@ function getStatusLabel(r: Routine): string {
 export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdit, onDelete }: RoutineCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const off = describeOff(routine);
+  // A paused trigger is disarmed on its daemon, which answers a run with
+  // "unknown trigger"; Resume is the way to check it again.
+  const canRunNow = routine.enabled || !routine.check;
 
   return (
     <div className={`cron-job-card card routine-card${!routine.enabled ? ' cron-job-disabled' : ''}`}>
@@ -40,7 +69,9 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
         <div className="cron-job-info">
           <span className="cron-job-name">{routine.name}</span>
           <span className="cron-job-desc text-sm text-muted">
-            {describeRoutineTiming(routine.schedule, routine.state, routine.wake)}
+            {/* A switched-off routine has no next run: say why it is quiet instead. */}
+            {describeRoutineTiming(routine.schedule, routine.enabled ? routine.state : undefined, routine.wake)}
+            {off ? ` · ${off}` : ''}
           </span>
         </div>
         {routine.check && (
@@ -54,10 +85,11 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
         <div className="cron-job-actions">
           <button
             className={`btn btn-sm cron-toggle-btn${routine.enabled ? ' cron-toggle-on' : ''}`}
-            onClick={() => onToggle(routine.id)}
-            title={routine.enabled ? 'Disable' : 'Enable'}
+            onClick={() => onToggle(routine.id, !routine.enabled)}
+            title={routine.enabled ? 'Pause' : offLabel(routine) === 'Off' ? 'Turn on' : 'Resume'}
+            aria-label={`${routine.enabled ? 'Pause' : offLabel(routine) === 'Off' ? 'Turn on' : 'Resume'} ${routine.name}`}
           >
-            {routine.enabled ? 'On' : 'Off'}
+            {routine.enabled ? 'On' : offLabel(routine)}
           </button>
           <div className="cron-menu-wrapper">
             <button
@@ -69,9 +101,11 @@ export function RoutineCard({ routine, executorLabels, onToggle, onRunNow, onEdi
             </button>
             {menuOpen && !confirmDelete && (
               <div className="cron-menu" onMouseLeave={() => setMenuOpen(false)}>
-                <button className="cron-menu-item" onClick={() => { onRunNow(routine.id); setMenuOpen(false); }}>
-                  Run now
-                </button>
+                {canRunNow && (
+                  <button className="cron-menu-item" onClick={() => { onRunNow(routine.id); setMenuOpen(false); }}>
+                    Run now
+                  </button>
+                )}
                 <button className="cron-menu-item" onClick={() => { onEdit(routine); setMenuOpen(false); }}>
                   Edit
                 </button>

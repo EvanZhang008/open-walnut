@@ -17,6 +17,7 @@ import {
   onRoutinesChanged,
   removeRoutine,
   runRoutineNow,
+  setRoutineEnabled,
   subscribeRoutines,
   toggleRoutine,
   updateRoutine,
@@ -30,6 +31,8 @@ interface UseRoutinesReturn {
   create: (input: CreateRoutineInput) => Promise<Routine>;
   update: (id: string, input: UpdateRoutineInput) => Promise<Routine>;
   toggle: (id: string) => Promise<Routine>;
+  /** Pause / Resume: sets the state asked for (a stale card cannot flip it the wrong way). */
+  setEnabled: (id: string, enabled: boolean) => Promise<Routine>;
   remove: (id: string) => Promise<void>;
   runNow: (id: string) => Promise<unknown>;
 }
@@ -61,6 +64,7 @@ export function useRoutines(includeDisabled = true): UseRoutinesReturn {
     create: createRoutine,
     update: updateRoutine,
     toggle: toggleRoutine,
+    setEnabled: setRoutineEnabled,
     remove: removeRoutine,
     runNow: runRoutineNow,
   };

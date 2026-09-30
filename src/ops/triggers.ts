@@ -11,6 +11,7 @@
 import { z } from 'zod'
 import { defineOp, type HttpBinding } from './registry.js'
 import { withOutcome } from './outcome.js'
+import { triggerRunState } from '../core/cron/trigger-run-state.js'
 
 /** Human interval out of a stored `every` schedule. */
 function everyLabel(everyMs: unknown): string {
@@ -32,6 +33,42 @@ const CHECK_CONTRACT =
   + 'five in a row disable the trigger.'
 
 const TRIGGER_LIST_BINDING: HttpBinding = { method: 'GET', path: '/routines' }
+
+/** What resuming does, in one place for both ops and the skill. */
+const RESUME_SEMANTICS =
+  'Resuming picks up where it left off: the daemon kept the trigger\'s seen ids and the script\'s cursor, so '
+  + 'whatever appeared while it was paused arrives as ONE fire on the first check (a few seconds after resume; '
+  + 'up to 200 items, the rest on the next check), ids it delivered in the last 30 days are not delivered again, '
+  + 'and the daily fire cap still applies (a used-up cap holds the backlog until the next day). After about 30 '
+  + 'days paused it may have forgotten what it saw and start over like a new trigger.'
+
+type RoutineJobBody = {
+  job?: {
+    id?: string; name?: string; enabled?: boolean; check?: unknown; schedule?: { everyMs?: number }
+    state?: { pausedAtMs?: number; waitEndedAtMs?: number; consecutiveErrors?: number }
+  }
+}
+
+/** Switch a trigger on or off by id; refuses a routine that is not a trigger. */
+async function setTriggerEnabled(
+  id: string,
+  enabled: boolean,
+  call: (method: HttpBinding['method'], path: string, body?: unknown) => Promise<unknown>,
+): Promise<{ job: NonNullable<RoutineJobBody['job']>; changed: boolean }> {
+  const path = `/routines/${encodeURIComponent(id)}`
+  const current = (await call('GET', path) as RoutineJobBody | undefined)?.job
+  if (!current) throw new Error(`no trigger ${id}; trigger_list shows the ids`)
+  if (!current.check) throw new Error(`${id} ("${current.name ?? ''}") is a scheduled routine, not a trigger`)
+  if (current.enabled === enabled) return { job: current, changed: false }
+  // Resuming it would poll for a task that no longer waits on it, and the wait
+  // would switch it off again; the wait's own re-arm is task_wait.
+  if (enabled && triggerRunState(current) === 'wait-ended') {
+    throw new Error(`${id} ("${current.name ?? ''}") belongs to a snooze wait that is over; re-arm it with `
+      + `task_wait {"condition": "...", "routine_id": "${id}"}, not trigger_resume`)
+  }
+  const updated = (await call('PATCH', path, { enabled }) as RoutineJobBody | undefined)?.job ?? current
+  return { job: updated, changed: true }
+}
 
 defineOp({
   name: 'trigger_create',
@@ -112,11 +149,13 @@ defineOp({
   name: 'trigger_list',
   title: 'List Walnut triggers',
   description:
-    'Every armed and disabled trigger: id, name, description, interval, host, whether it is enabled, how many times '
-    + 'it has fired, the last check the daemon reported (fired with an item count / quiet with a reason / '
-    + 'the error text) and the recent check history. Use it to answer "what are you watching?" and to '
-    + 'check whether a trigger you created is healthy — a trigger disabled with an error is one whose '
-    + 'script kept failing, and one that has never fired may be a script that never says fire.',
+    'Every trigger, polling or not: id, name, description, interval, host, its state ("armed" = polling, '
+    + '"paused" = switched off by someone, with pausedAt; "stopped" = switched off by Walnut after its check '
+    + 'failed 5 times in a row; "wait-ended" = the snooze wait it ended is over, task_wait with the same '
+    + 'routine_id re-arms it), how many times it has fired, the last check the daemon reported (fired with '
+    + 'an item count / quiet with a reason / the error text) and the recent check history. Use it to answer '
+    + '"what are you watching?" and to check whether a trigger you created is healthy; one that has never '
+    + 'fired may be a script that never says fire.',
   input: {},
   bind: TRIGGER_LIST_BINDING,
   handler: async (_args, call) => {
@@ -130,8 +169,8 @@ defineOp({
         schedule?: { everyMs?: number }
         check?: { run?: string; host?: string; cwd?: string }
         state?: {
-          lastCheck?: unknown; nextRunAtMs?: number; fireCount?: number
-          checkLog?: Array<Record<string, unknown>>
+          lastCheck?: unknown; nextRunAtMs?: number; fireCount?: number; pausedAtMs?: number
+          waitEndedAtMs?: number; consecutiveErrors?: number; checkLog?: Array<Record<string, unknown>>
         }
       })
       .filter((job) => job.check && typeof job.check.run === 'string')
@@ -142,6 +181,9 @@ defineOp({
         every: everyLabel(job.schedule?.everyMs),
         host: job.check?.host ?? '__local__',
         enabled: job.enabled === true,
+        state: triggerRunState(job),
+        ...(!job.enabled && typeof job.state?.pausedAtMs === 'number'
+          ? { pausedAt: new Date(job.state.pausedAtMs).toISOString() } : {}),
         run: job.check?.run,
         ...(job.check?.cwd ? { cwd: job.check.cwd } : {}),
         fires: job.state?.fireCount ?? 0,
@@ -212,6 +254,59 @@ defineOp({
       result.parsed
         ? 'Arm it with trigger_create (same run/cwd/host), then tell the user what is watched and how often.'
         : 'Fix the script so its LAST stdout line is one JSON object with a boolean "fire", then test again.',
+    )
+  },
+  tags: { readonly: false, remote: 'allow', destructive: false },
+})
+
+defineOp({
+  name: 'trigger_pause',
+  title: 'Pause a Walnut trigger',
+  description:
+    'Stop a trigger from polling without deleting it: the daemon disarms it but keeps its memory, the task card '
+    + 'keeps showing it as Paused, and trigger_resume turns it back on. Use it for "pause that for now", '
+    + '"stop watching for a while", or before a change that would make the check noisy. Already paused is not '
+    + 'an error. Prefer this over trigger_delete unless the user wants the trigger gone. '
+    + RESUME_SEMANTICS,
+  input: {
+    id: z.string().min(1).describe('Trigger (routine) id, as returned by trigger_create / trigger_list'),
+  },
+  handler: async (args, call) => {
+    const { job, changed } = await setTriggerEnabled(String(args.id), false, call)
+    const state = triggerRunState(job)
+    return withOutcome(
+      { id: job.id ?? args.id, name: job.name, state, changed },
+      changed
+        ? `Paused "${job.name ?? args.id}": the daemon stops checking it within seconds; it stays on the task as Paused.`
+        : state === 'stopped'
+          ? `"${job.name ?? args.id}" was already off: Walnut stopped it after its check kept failing. Nothing changed.`
+          : state === 'wait-ended'
+            ? `"${job.name ?? args.id}" was already off: the snooze wait it belongs to is over. Nothing changed.`
+            : `"${job.name ?? args.id}" was already paused; nothing changed.`,
+      'Tell the user it is paused and that trigger_resume turns it back on.',
+    )
+  },
+  tags: { readonly: false, remote: 'allow', destructive: false },
+})
+
+defineOp({
+  name: 'trigger_resume',
+  title: 'Resume a paused Walnut trigger',
+  description:
+    'Turn a paused (or stopped) trigger back on. ' + RESUME_SEMANTICS + ' A trigger Walnut stopped because its '
+    + 'check kept failing is retried; fix the script first (trigger_test), since one more failure stops it again. '
+    + 'Already running is not an error.',
+  input: {
+    id: z.string().min(1).describe('Trigger (routine) id, as returned by trigger_create / trigger_list'),
+  },
+  handler: async (args, call) => {
+    const { job, changed } = await setTriggerEnabled(String(args.id), true, call)
+    return withOutcome(
+      { id: job.id ?? args.id, name: job.name, state: 'armed', changed },
+      changed
+        ? `Resumed "${job.name ?? args.id}": the first check runs within seconds, every ${everyLabel(job.schedule?.everyMs)} after that.`
+        : `"${job.name ?? args.id}" was already running; nothing changed.`,
+      'Tell the user it is running again. If the script kept failing before, check trigger_list for its next check.',
     )
   },
   tags: { readonly: false, remote: 'allow', destructive: false },

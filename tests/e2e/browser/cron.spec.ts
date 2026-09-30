@@ -134,7 +134,7 @@ test('toggle button disables and enables a job', async ({ page }) => {
     await toggleBtn.click()
 
     // Wait for card to reflect disabled state
-    await expect(toggleBtn).toContainText('Off', { timeout: 5000 })
+    await expect(toggleBtn).toContainText('Paused', { timeout: 5000 })
     await expect(card).toHaveClass(/cron-job-disabled/, { timeout: 5000 })
 
     // Verify via API

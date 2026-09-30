@@ -239,8 +239,12 @@ describe('task_wait: parking the calling session\'s task', () => {
     expect(sent[0]).toContain(`"routine_id":"${routineId}"`)
     const woke = await task(taskId)
     expect(woke.waiting).toMatchObject({ routine_id: routineId, woke_reason: 'fired' })
-    // The trigger stops polling; its dedup state is kept for a re-arm.
-    expect((await routine(routineId)).enabled).toBe(false)
+    // The trigger stops polling; its dedup state is kept for a re-arm. The wait
+    // switched it off, nobody paused it: the task card must not show it as Paused.
+    const off = await routine(routineId)
+    expect(off.enabled).toBe(false)
+    expect(typeof off.state.waitEndedAtMs).toBe('number')
+    expect(off.state.pausedAtMs).toBeUndefined()
     // The delivered turn ends: Need Action with the red dot.
     const back = await until('hand-back after fire', () => task(taskId), (t) => t.phase === 'NEED_ACTION')
     expect(back.unread).toBe(true)
@@ -348,7 +352,9 @@ describe('what else ends a wait', () => {
     t = await task(taskId)
     expect(t.phase).toBe('NEED_ACTION')
     expect(t.waiting).toMatchObject({ woke_reason: 'status-changed' })
-    await until('trigger disabled', () => routine(id), (j) => j?.enabled === false)
+    const off = await until('trigger disabled', () => routine(id), (j) => j?.enabled === false)
+    expect(off.state).toMatchObject({ waitEndedAtMs: expect.any(Number) })
+    expect(off.state.pausedAtMs).toBeUndefined()
     await req('PATCH', `/api/tasks/${taskId}`, { phase: 'TODO' })
   })
 

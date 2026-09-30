@@ -119,11 +119,21 @@ Server side, a check job is never ticked by the cron timer (`findMissedJobs` ski
 
 Shipped at `src/data/skills/walnut-trigger/SKILL.md`. The `/` palette lists every shipped skill by directory name and sends "Apply your walnut-trigger skill now. Request: ...", so no CLI-side install is needed. The skill tells the agent: the contract above, two templates (bash + jq, node), and the order of operations: write the script under `~/.open-walnut/triggers/<slug>/`, run `trigger_test` until it parses, tell the user in one line what will be watched and how often, then `trigger_create` with a required `description` (one or two sentences for the user: what is watched, when it fires, what the session does; at most 600 characters, shown on the trigger card), then report the id and the next check time. Default cadence when the user gave none: every 5 minutes. The composer's "+" menu has a "Set up a trigger" row that starts the message with `/walnut-trigger `.
 
-Ops (`src/ops/triggers.ts`, rendered as CLI, MCP and the in-session gateway by the registry): `trigger_create`, `trigger_list`, `trigger_test`, `trigger_delete`.
+Ops (`src/ops/triggers.ts`, rendered as CLI, MCP and the in-session gateway by the registry): `trigger_create`, `trigger_list`, `trigger_test`, `trigger_pause`, `trigger_resume`, `trigger_delete`.
 
 ## UI
 
 Routines card: a Trigger badge when `check` is set, the `run` command (truncated), host, and the last check (`fired, 2 items, 3m ago` / `quiet, 3m ago` / `error: ...`). The form gains an optional Check section (run, timeout, host) with a Test button, so the manual path exists next to the agent path.
+
+## Pause and resume
+
+A trigger is armed (polling), paused (switched off by a person or an agent: `enabled:false` with `state.pausedAtMs`, stamped by the cron service's `toggle` and `update`), stopped (switched off by the server after `MAX_CONSECUTIVE_CHECK_ERRORS` failed checks in a row, which never passes through `toggle`/`update`, so it carries no `pausedAtMs`), or wait-ended (switched off by the snooze wait it ended, `state.waitEndedAtMs`; `task_wait` with the same `routine_id` re-arms it, and the task card never shows it). A trigger switched off before `pausedAtMs` existed reads as paused unless its errors reached the limit. The one rule is `triggerRunState` (`src/core/cron/trigger-run-state.ts`, shared by `trigger_list` and the web).
+
+Pausing only drops the trigger from the host's `triggers.configure` set, so the daemon disarms it and KEEPS its state file (seen ids, script cursor, unacked fires). A check already running when the pause lands still reports; the server records it but shows no next run and never stops (auto-disables) a paused trigger for it.
+
+Resume: deliver once, no storm. Re-arming reads the kept state file, so the first check (about 5 seconds after resume) runs with the saved cursor and sees everything that appeared while paused; `decideCheck` turns it into ONE fire carrying all the new items (up to `CHECK_ITEMS_CAP` = 200; the unseen rest fire on the next check), drops ids seen in the last 30 days (`SEEN_TTL_MS`, 2000 ids), and still counts against `maxFiresPerDay` (a used-up cap holds the backlog, unseen, until the next day). Unacked fires from before the pause are replayed once and deduped on `(id, epoch, seq)`. The state file is pruned when it has not been written for 30 days, counted from the last check before the pause and applied at the next configure or daemon start, so a pause past that may lose the memory: the trigger then starts over like a new one (its first check may fire on everything the script reports). Resuming a paused trigger starts its error count over (a late failing check from before the pause does not count); resuming a stopped one keeps it, so one more failure stops it again.
+
+UI: the task keeps showing a paused or stopped trigger. The TRIGGER pill reads `TRIGGER · PAUSED` (muted) when nothing on the task is polling, `TRIGGER ×3 · 1 PAUSED` when some are; the flyout row carries a Paused/Stopped badge, no next run, and Resume in place of Pause and Run check now. The routine behind an ended snooze wait is switched off by the wait itself and stays hidden, as before. The Routines card's switch reads On / Paused / Stopped.
 
 ## Boundaries (not in this slice)
 
@@ -134,7 +144,7 @@ Long-running scripts; webhook or event sources; an MCP client; `cron` schedules 
 1. Contract and daemon: shared pure logic in `src/providers/trigger-check-core.ts` (parse, dedup, limits), then both daemon twins (`triggers.configure`, `triggers.test`, `triggers.run`, `triggers.ack`, the scheduler, the runner, events, persistence, boot reload), capability `triggers-v1`.
 2. Server: `check` on `CronJob` with save-time validation, the timer skip, the push module, the event handlers, the `session` executor, `POST /routines/check-test`, ops, the skill.
 3. UI: card badge and last check, form Check section.
-4. Later: daemon-side cron parsing, `trigger_pause`, showing the last fire's items on the card.
+4. Later: daemon-side cron parsing, showing the last fire's items on the card. (`trigger_pause` / `trigger_resume` shipped; see Pause and resume below.)
 
 ## Acceptance matrix
 

@@ -1,0 +1,58 @@
+/* A switched-off trigger on its task (TriggerPill): the pill keeps its place but
+   goes muted and dashed, so "paused" reads apart from "polling" at a glance
+   without looking like a different kind of thing. */
+.task-trigger-pill.is-paused {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--fg-secondary) 55%, transparent);
+  background: transparent;
+  color: var(--fg-secondary);
+}
+.task-trigger-pill.is-paused:hover,
+.task-trigger-pill.is-paused[aria-expanded="true"] {
+  border-color: var(--fg-secondary);
+  background: color-mix(in srgb, var(--fg-secondary) 10%, transparent);
+}
+
+/* The flyout row of a paused or stopped trigger. */
+.trigger-jobs-heading-side {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.trigger-jobs-state {
+  padding: 0 5px;
+  border: 1px dashed color-mix(in srgb, var(--fg-secondary) 55%, transparent);
+  border-radius: 4px;
+  color: var(--fg-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 14px;
+}
+.trigger-jobs-state[data-state="stopped"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--error) 55%, transparent);
+  color: var(--error);
+}
+.trigger-jobs-row[data-state="paused"] .trigger-jobs-tally[data-fired="true"],
+.trigger-jobs-row[data-state="stopped"] .trigger-jobs-tally[data-fired="true"] {
+  color: var(--fg-secondary);
+}
+.trigger-jobs-off { font-size: 11px; color: var(--fg-secondary); }
+.trigger-jobs-off[data-state="stopped"] { color: var(--error); }
+.trigger-jobs-actions button.trigger-jobs-resume {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* Stopped is the server giving up on a failing check: muted like a pause, but red. */
+.task-trigger-pill.is-paused[data-off="stopped"] {
+  border-color: color-mix(in srgb, var(--error) 55%, transparent);
+  color: var(--error);
+}
+.task-trigger-pill.is-paused[data-off="stopped"]:hover,
+.task-trigger-pill.is-paused[data-off="stopped"][aria-expanded="true"] {
+  border-color: var(--error);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+}

@@ -30,7 +30,9 @@ import { listNotifications } from '../../src/core/notifications/store.js'
 import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../src/providers/trigger-check-core.js'
 import { FIRE_DELIVERY_MAX_ATTEMPTS } from '../../src/core/cron/trigger-apply.js'
 import { registerExecutor } from '../../src/core/routines/registry.js'
-import { triggerDefOf } from '../../src/core/routines/trigger-push.js'
+import { compileTriggersForHost, triggerDefOf } from '../../src/core/routines/trigger-push.js'
+import { getOp } from '../../src/ops/index.js'
+import { patchRoutine } from '../../src/core/routines/routines-core.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -458,6 +460,167 @@ describe('trigger.checked from the daemon', () => {
     const note = feed.find((n) => n.dedupKey === `trigger-disabled:${id}`)
     expect(note?.title).toContain('broken watcher')
     expect(note?.body).toContain('jq: command not found')
+  })
+})
+
+describe('pause and resume', () => {
+  const armedIds = async () => ((await compileTriggersForHost('__local__'))?.payload.triggers ?? []).map((t) => t.id)
+  const create = async (name: string) => (await post('/api/v1/routines/trigger', {
+    name, run: 'bash paused.sh', every: '5m', prompt: 'p', session: taskId, description: 'Pause test.',
+  })).json.job.id as string
+  const patch = async (id: string, body: unknown) => {
+    const res = await fetch(apiUrl(`/api/routines/${id}`), {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    })
+    expect(res.status).toBe(200)
+    return await jobState(id)
+  }
+  /** The ops' own executor path: /api/v1 over HTTP, as `walnut tools call` does. */
+  const call = async (method: string, p: string, body?: unknown) => {
+    const res = await fetch(apiUrl(`/api/v1${p}`), {
+      method, headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    const json = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(json?.error?.message ?? json?.error ?? `HTTP ${res.status}`)
+    return json
+  }
+
+  it('toggle off stamps the pause and disarms the trigger; toggle on clears it and re-arms', async () => {
+    const id = await create('toggle pause')
+    try {
+      expect(await armedIds()).toContain(id)
+      const t0 = Date.now()
+      const off = (await post(`/api/routines/${id}/toggle`, {})).json.job
+      expect(off.enabled).toBe(false)
+      expect(off.state.pausedAtMs).toBeGreaterThanOrEqual(t0)
+      expect(off.state.nextRunAtMs).toBeUndefined()
+      expect(await armedIds()).not.toContain(id)
+      const on = (await post(`/api/routines/${id}/toggle`, {})).json.job
+      expect(on.enabled).toBe(true)
+      expect(on.state.pausedAtMs).toBeUndefined()
+      expect(await armedIds()).toContain(id)
+    } finally {
+      await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
+    }
+  })
+
+  it('a PATCH pause keeps its first time through repeats and edits, and a resume clears it', async () => {
+    const id = await create('patch pause')
+    try {
+      const paused = await patch(id, { enabled: false })
+      const at = paused.state.pausedAtMs
+      expect(typeof at).toBe('number')
+      await settle(20)
+      // Pausing again, or editing the words, is not a new pause.
+      expect((await patch(id, { enabled: false })).state.pausedAtMs).toBe(at)
+      const edited = await patch(id, { description: 'New words.' })
+      expect(edited.state.pausedAtMs).toBe(at)
+      expect(edited.enabled).toBe(false)
+      expect(await armedIds()).not.toContain(id)
+      const resumed = await patch(id, { enabled: true })
+      expect(resumed.state.pausedAtMs).toBeUndefined()
+      expect(await armedIds()).toContain(id)
+    } finally {
+      await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
+    }
+  })
+
+  it('a check that was running when the pause landed is recorded, shows no next run, and never stops it', async () => {
+    const id = await create('late check')
+    try {
+      await patch(id, { enabled: false })
+      await handleTriggerChecked('__local__', {
+        type: 'trigger.checked', id, atMs: Date.now(), outcome: 'quiet', reason: 'all-seen',
+        durationMs: 3, nextRunAtMs: Date.now() + 300_000, consecutiveErrors: 0,
+      })
+      let job = await jobState(id)
+      expect(job.state.lastCheck).toMatchObject({ outcome: 'quiet', reason: 'all-seen' })
+      expect(job.state.nextRunAtMs).toBeUndefined()
+      expect(job.enabled).toBe(false)
+      // Late failures past the stop limit: still a pause, and nobody is told it was stopped.
+      for (let i = 1; i <= MAX_CONSECUTIVE_CHECK_ERRORS + 1; i++) {
+        await handleTriggerChecked('__local__', {
+          type: 'trigger.checked', id, atMs: Date.now(), outcome: 'error', error: 'exit 1',
+          durationMs: 3, nextRunAtMs: Date.now() + 300_000, consecutiveErrors: i,
+        })
+      }
+      job = await jobState(id)
+      expect(job.enabled).toBe(false)
+      expect(typeof job.state.pausedAtMs).toBe('number')
+      expect(job.state.nextRunAtMs).toBeUndefined()
+      const { feed } = await listNotifications()
+      expect(feed.find((n) => n.dedupKey === `trigger-disabled:${id}`)).toBeUndefined()
+      // Resume is a fresh start: those late failures cannot stop it on the next one.
+      const resumed = await patch(id, { enabled: true })
+      expect(resumed.state.consecutiveErrors).toBe(0)
+      await handleTriggerChecked('__local__', {
+        type: 'trigger.checked', id, atMs: Date.now(), outcome: 'error', error: 'exit 1',
+        durationMs: 3, nextRunAtMs: Date.now() + 300_000, consecutiveErrors: 1,
+      })
+      expect((await jobState(id)).enabled).toBe(true)
+    } finally {
+      await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
+    }
+  })
+
+  it('a repeated Resume keeps the next run the daemon reported', async () => {
+    const id = await create('repeat resume')
+    try {
+      const reported = Date.now() + 123_456
+      await handleTriggerChecked('__local__', {
+        type: 'trigger.checked', id, atMs: Date.now(), outcome: 'quiet', reason: 'fire-false',
+        durationMs: 3, nextRunAtMs: reported, consecutiveErrors: 0,
+      })
+      expect((await jobState(id)).state.nextRunAtMs).toBe(reported)
+      const again = await patch(id, { enabled: true })
+      expect(again.state.nextRunAtMs).toBe(reported)
+    } finally {
+      await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
+    }
+  })
+
+  it('the trigger behind an ended snooze wait is marked wait-ended, not paused', async () => {
+    const id = await create('ended wait')
+    try {
+      await patchRoutine(id, { enabled: false }, undefined, { offReason: 'wait-ended' })
+      const off = await jobState(id)
+      expect(off.enabled).toBe(false)
+      expect(off.state.pausedAtMs).toBeUndefined()
+      expect(typeof off.state.waitEndedAtMs).toBe('number')
+      expect(await armedIds()).not.toContain(id)
+      const listed = await getOp('trigger_list')!.handler!({}, call) as { triggers: Array<Record<string, unknown>> }
+      expect(listed.triggers.find((t) => t.id === id)).toMatchObject({ state: 'wait-ended' })
+      await expect(getOp('trigger_resume')!.handler!({ id }, call)).rejects.toThrow(/task_wait/)
+      // The wait's own re-arm (task_wait) switches it on through the same patch.
+      const rearmed = await patch(id, { enabled: true })
+      expect(rearmed.state.waitEndedAtMs).toBeUndefined()
+      expect(await armedIds()).toContain(id)
+      // A person pausing it afterwards is a pause again.
+      expect((await patch(id, { enabled: false })).state).toMatchObject({ pausedAtMs: expect.any(Number) })
+    } finally {
+      await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
+    }
+  })
+
+  it('trigger_pause / trigger_resume / trigger_list work end to end over /api/v1', async () => {
+    const id = await create('op pause')
+    try {
+      const paused = await getOp('trigger_pause')!.handler!({ id }, call) as Record<string, unknown>
+      expect(paused).toMatchObject({ id, state: 'paused', changed: true })
+      expect((await jobState(id)).enabled).toBe(false)
+      expect(await armedIds()).not.toContain(id)
+      const listed = await getOp('trigger_list')!.handler!({}, call) as { triggers: Array<Record<string, unknown>> }
+      const row = listed.triggers.find((t) => t.id === id)
+      expect(row).toMatchObject({ state: 'paused', enabled: false })
+      expect(typeof row?.pausedAt).toBe('string')
+      expect(await getOp('trigger_pause')!.handler!({ id }, call)).toMatchObject({ changed: false })
+      const resumed = await getOp('trigger_resume')!.handler!({ id }, call) as Record<string, unknown>
+      expect(resumed).toMatchObject({ id, state: 'armed', changed: true })
+      expect(await armedIds()).toContain(id)
+      await expect(getOp('trigger_pause')!.handler!({ id: 'no-such-trigger' }, call)).rejects.toThrow(/not found/i)
+    } finally {
+      await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
+    }
   })
 })
 

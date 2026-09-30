@@ -178,10 +178,14 @@ export async function applyTriggerChecked(
     );
     // AFTER applyJobResult: its error backoff computes a server-side next run,
     // which for a trigger is always a guess. The daemon's report wins.
-    job.state.nextRunAtMs = Number.isFinite(event.nextRunAtMs) ? event.nextRunAtMs : undefined;
+    // A check that was already running when the trigger was paused still
+    // reports; the daemon has disarmed it, so there is no next run to show.
+    job.state.nextRunAtMs = job.enabled && Number.isFinite(event.nextRunAtMs) ? event.nextRunAtMs : undefined;
 
     let disabled = false;
-    if (event.outcome === 'error' && (job.state.consecutiveErrors ?? 0) >= MAX_CONSECUTIVE_CHECK_ERRORS) {
+    // Only a polling trigger can be stopped: a late error from a check that was
+    // running when someone paused it leaves the pause as it is, with no notice.
+    if (job.enabled && event.outcome === 'error' && (job.state.consecutiveErrors ?? 0) >= MAX_CONSECUTIVE_CHECK_ERRORS) {
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.runningAtMs = undefined;
@@ -397,7 +401,7 @@ export async function applyTriggerFired(
         : undefined;
     }
     const nextRun = Math.max(...batch.map((e) => (Number.isFinite(e.nextRunAtMs) ? e.nextRunAtMs : Number.NEGATIVE_INFINITY)));
-    target.state.nextRunAtMs = Number.isFinite(nextRun) ? nextRun : undefined;
+    target.state.nextRunAtMs = target.enabled && Number.isFinite(nextRun) ? nextRun : undefined;
     await persist(state);
     emit(state, {
       jobId: target.id,

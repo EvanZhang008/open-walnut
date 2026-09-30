@@ -156,14 +156,21 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   });
 }
 
-export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
+export async function update(
+  state: CronServiceState,
+  id: string,
+  patch: CronJobPatch,
+  opts: { offReason?: SwitchOffReason } = {},
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, 'update');
     await ensureLoaded(state, { forceReload: true });
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
+    const wasEnabled = job.enabled;
 
     applyJobPatch(job, patch);
+    if (job.enabled !== wasEnabled) markSwitched(job, now, opts.offReason);
 
     // Fix up anchorMs for 'every' schedules if it's missing or invalid
     if (job.schedule.kind === 'every') {
@@ -183,7 +190,9 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     }
 
     const scheduleChanged = patch.schedule !== undefined;
-    const enabledChanged = patch.enabled !== undefined;
+    // A trigger's next run is the daemon's report; an `enabled` it already had
+    // (a stale Resume, a repeated Pause) must not replace it with a server guess.
+    const enabledChanged = patch.enabled !== undefined && (job.enabled !== wasEnabled || !job.check);
 
     job.updatedAtMs = now;
     if (scheduleChanged || enabledChanged) {
@@ -390,6 +399,33 @@ export async function recordRunOutcome(
   });
 }
 
+/** Why a routine was switched off, when the caller knows it is not a pause. */
+export type SwitchOffReason = 'pause' | 'wait-ended';
+
+/**
+ * A deliberate switch off is a pause and is stamped, so the task card can say
+ * "Paused 2h ago" and tell it apart from a trigger the server stopped after its
+ * check kept failing (which never passes through here). The trigger behind a
+ * snooze wait that has ended is stamped apart: nobody paused it. Switching on
+ * clears both; a resume after a pause starts the error count over, so a check
+ * that was still running and failed while it was off cannot stop it at once.
+ */
+function markSwitched(job: CronJob, now: number, reason: SwitchOffReason = 'pause'): void {
+  if (job.enabled) {
+    if (job.state.pausedAtMs !== undefined) job.state.consecutiveErrors = 0;
+    job.state.pausedAtMs = undefined;
+    job.state.waitEndedAtMs = undefined;
+    return;
+  }
+  if (reason === 'wait-ended') {
+    job.state.waitEndedAtMs = now;
+    job.state.pausedAtMs = undefined;
+  } else {
+    job.state.pausedAtMs = now;
+    job.state.waitEndedAtMs = undefined;
+  }
+}
+
 export async function toggle(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     warnIfDisabled(state, 'toggle');
@@ -399,6 +435,7 @@ export async function toggle(state: CronServiceState, id: string) {
 
     job.enabled = !job.enabled;
     job.updatedAtMs = now;
+    markSwitched(job, now);
     // Deliberate user edit — drop the replay guard so re-enabling schedules fresh.
     replayGuardOf(state).delete(id);
 

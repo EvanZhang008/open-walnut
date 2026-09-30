@@ -70,7 +70,8 @@ async function findRoutine(id: string): Promise<RoutineRef | null> {
 async function setRoutineEnabled(id: string, enabled: boolean, opts: { strict?: boolean } = {}): Promise<void> {
   try {
     const { patchRoutine } = await import('./routines/routines-core.js');
-    await patchRoutine(id, { enabled });
+    // Off here is always a wait that ended, never a pause someone asked for.
+    await patchRoutine(id, { enabled }, undefined, enabled ? undefined : { offReason: 'wait-ended' });
   } catch (err) {
     log.task.warn('wait routine toggle failed', { routineId: id, enabled, error: errText(err) });
     if (opts.strict) {

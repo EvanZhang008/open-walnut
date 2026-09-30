@@ -239,7 +239,16 @@ export async function createRoutine(body: unknown, origin?: string): Promise<{ j
 }
 
 /** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
-export async function patchRoutine(id: string, body: unknown, origin?: string): Promise<{ job: unknown }> {
+/**
+ * `opts.offReason`: why a switch off is not a pause (the server's own code only;
+ * no route passes it). The routine behind an ended snooze wait says 'wait-ended'.
+ */
+export async function patchRoutine(
+  id: string,
+  body: unknown,
+  origin?: string,
+  opts?: { offReason?: 'pause' | 'wait-ended' },
+): Promise<{ job: unknown }> {
   const service = await requireCronService();
   const { normalizeCronJobPatch } = await import('../cron/index.js');
   const patch = normalizeCronJobPatch(body);
@@ -251,7 +260,7 @@ export async function patchRoutine(id: string, body: unknown, origin?: string): 
   assertWakeNotOnCheck(patch, before ?? undefined);
   await validateCheckForSave(patch, body, before ?? undefined, origin);
   try {
-    const job = await service.update(id, patch);
+    const job = await service.update(id, patch, opts);
     log.web.info('routine updated via shared core', { jobId: id });
     pushTriggersFor([before?.check?.host, job.check?.host]);
     return { job };

@@ -133,10 +133,15 @@ function restoreRoutine(before: Routine, index: number): void {
   setSnapshot({ routines });
 }
 
+/** The optimistic half of switching a routine on or off: off is a pause, stamped now. */
+function switchedPatch(before: Routine, enabled: boolean): Partial<Routine> {
+  return { enabled, state: { ...before.state, pausedAtMs: enabled ? undefined : Date.now() } };
+}
+
 export async function toggleRoutine(id: string): Promise<Routine> {
   const index = snapshot.routines.findIndex((r) => r.id === id);
   const before = index === -1 ? null : snapshot.routines[index];
-  if (before) patchRoutine(id, { enabled: !before.enabled });
+  if (before) patchRoutine(id, switchedPatch(before, !before.enabled));
   writesInFlight += 1;
   try {
     const job = await api.toggleRoutine(id);
@@ -144,6 +149,29 @@ export async function toggleRoutine(id: string): Promise<Routine> {
     return job;
   } catch (err) {
     log.warn('routines', 'toggle failed, rolling back', { id, error: String(err).slice(0, 200) });
+    if (before) restoreRoutine(before, index);
+    throw err;
+  } finally {
+    settleWrite();
+  }
+}
+
+/**
+ * Pause or Resume: sets the state asked for rather than flipping it, so a card
+ * that is a moment stale (an agent paused it meanwhile) cannot turn a Pause
+ * into a Resume. Setting the state it already has is a no-op on the server.
+ */
+export async function setRoutineEnabled(id: string, enabled: boolean): Promise<Routine> {
+  const index = snapshot.routines.findIndex((r) => r.id === id);
+  const before = index === -1 ? null : snapshot.routines[index];
+  if (before && before.enabled !== enabled) patchRoutine(id, switchedPatch(before, enabled));
+  writesInFlight += 1;
+  try {
+    const job = await api.updateRoutine(id, { enabled });
+    replaceRoutine(job);
+    return job;
+  } catch (err) {
+    log.warn('routines', 'pause/resume failed, rolling back', { id, enabled, error: String(err).slice(0, 200) });
     if (before) restoreRoutine(before, index);
     throw err;
   } finally {

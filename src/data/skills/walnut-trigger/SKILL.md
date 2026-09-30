@@ -176,8 +176,24 @@ walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/ch
 
 ## Managing them
 
-- `trigger_list`: every trigger with its description, interval, host, and last
-  check (fired with an item count / quiet with a reason / the error).
-- `trigger_delete '{"id":"..."}'`: stop it. The script file stays on disk.
-- The Routines page shows the same thing with an enable toggle, which is the
-  kill switch.
+- `trigger_list`: every trigger with its description, interval, host, state
+  (`armed`, `paused` with `pausedAt`, `stopped` after 5 failed checks in a row,
+  or `wait-ended`), and last check (fired with an item count / quiet with a reason / the
+  error).
+- `trigger_pause '{"id":"..."}'`: stop checking for now. The trigger stays on
+  its task marked Paused, with a Resume button. Use it for "pause that", "stop
+  for a while"; delete only when the user wants it gone.
+- `trigger_resume '{"id":"..."}'`: turn it back on. It picks up where it left
+  off: whatever appeared while it was paused arrives as ONE fire on the first
+  check (a few seconds after resume; up to 200 items, the rest on the next
+  check), ids it delivered in the last 30 days are not delivered again, and the
+  daily fire cap still applies. After about 30 days paused it may have forgotten
+  what it saw and start over like a new trigger. Resuming a stopped trigger
+  retries its check; fix the script first, since one more failure stops it
+  again.
+- A trigger in state `wait-ended` belongs to a snooze wait that is over: re-arm
+  it with `task_wait` and the same `routine_id`, not `trigger_resume`.
+- `trigger_delete '{"id":"..."}'`: remove it for good. The script file stays on
+  disk.
+- The task's TRIGGER pill and the Routines page show the same thing, with Pause
+  and Resume.

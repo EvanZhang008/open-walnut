@@ -256,17 +256,30 @@ test('a task with an armed trigger shows the TRIGGER pill; the pill opens the tr
     await expect(flyout).toContainText('2 triggers on this task')
     await expect(flyout.locator('.trigger-jobs-row')).toHaveCount(2)
 
-    // Disable from the flyout: that trigger leaves the list and the pill counts down;
-    // disabling the last one takes the pill (and the flyout) away. Disabled means
-    // disabled on the server, not hidden in the browser.
-    await flyout.locator('.trigger-jobs-row', { hasText: `${name} b` }).getByRole('button', { name: 'Disable' }).click()
-    await expect(flyout.locator('.trigger-jobs-row')).toHaveCount(1)
-    await expect(pill).toHaveText('TRIGGER')
+    // Pause from the flyout: the trigger STAYS, marked Paused with Resume in place
+    // of Pause and Run check now, and the pill counts it; pausing the last one mutes
+    // the pill instead of taking it away. Paused means disabled on the server, not
+    // hidden in the browser.
+    const rowFirst = flyout.locator(`.trigger-jobs-row[data-routine-id="${first.id}"]`)
+    const rowSecond = flyout.locator(`.trigger-jobs-row[data-routine-id="${second.id}"]`)
+    await rowSecond.getByRole('button', { name: 'Pause' }).click()
+    await expect(rowSecond).toHaveAttribute('data-state', 'paused')
+    await expect(flyout.locator('.trigger-jobs-row')).toHaveCount(2)
+    await expect(rowSecond.getByTestId('trigger-jobs-state')).toHaveText('Paused')
+    await expect(rowSecond.getByRole('button', { name: 'Resume' })).toBeVisible()
+    await expect(rowSecond.getByRole('button', { name: 'Run check now' })).toHaveCount(0)
+    await expect(pill).toHaveText('TRIGGER ×2 · 1 PAUSED')
     await expect.poll(async () => (await getRoutine(second.id))?.enabled).toBe(false)
-    await flyout.getByRole('button', { name: 'Disable' }).click()
-    await expect(flyout).toBeHidden()
-    await expect(row.getByTestId('task-trigger-pill')).toHaveCount(0)
+    await rowFirst.getByRole('button', { name: 'Pause' }).click()
+    await expect(pill).toHaveText('TRIGGER ×2 · PAUSED')
+    await expect(pill).toHaveAttribute('data-paused', 'true')
+    await expect(flyout).toBeVisible()
     await expect.poll(async () => (await getRoutine(first.id))?.enabled).toBe(false)
+    // Resume brings one back; the other stays paused.
+    await rowSecond.getByRole('button', { name: 'Resume' }).click()
+    await expect(rowSecond).toHaveAttribute('data-state', 'armed')
+    await expect(pill).toHaveText('TRIGGER ×2 · 1 PAUSED')
+    await expect.poll(async () => (await getRoutine(second.id))?.enabled).toBe(true)
     // The row itself is still there and untouched.
     await expect(row).toBeVisible()
   } finally {
@@ -351,6 +364,9 @@ test('the flyout\'s Delete asks once, then removes the trigger; an outside click
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: '' })
   const task = await createTask('PW trigger delete task')
+  // Its own neighbour to click: the outside click must not depend on a task some
+  // other spec happened to leave on the fixture.
+  const other = await createTask('PW trigger delete neighbour')
   const name = `PW delete ${Date.now()}`
   const created = await createTriggerFor(task.id, name, `echo '{"fire": false}'`)
   try {
@@ -364,7 +380,7 @@ test('the flyout\'s Delete asks once, then removes the trigger; an outside click
     const flyout = page.getByTestId('trigger-jobs-flyout')
     await expect(flyout).toBeVisible()
     // A click elsewhere (another task's row) closes it and nothing happens to the trigger.
-    await page.locator('.todo-panel-item', { hasText: 'Playwright test task' }).first().click()
+    await taskRow(page, other.title).first().click()
     await expect(flyout).toBeHidden()
     expect((await getRoutine(created.id))?.enabled).toBe(true)
 
@@ -380,6 +396,7 @@ test('the flyout\'s Delete asks once, then removes the trigger; an outside click
   } finally {
     await deleteRoutine(created.id)
     await fetch(`${API}/api/tasks/${task.id}`, { method: 'DELETE' }).catch(() => {})
+    await fetch(`${API}/api/tasks/${other.id}`, { method: 'DELETE' }).catch(() => {})
   }
 })
 

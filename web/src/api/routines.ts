@@ -102,6 +102,10 @@ export type RoutineState = {
   lastError?: string;
   lastDurationMs?: number;
   consecutiveErrors?: number;
+  /** When someone paused it (switched it off); absent while on, and on a trigger the server stopped. */
+  pausedAtMs?: number;
+  /** When the snooze wait this trigger ended switched it off; not a pause. */
+  waitEndedAtMs?: number;
   lastCheck?: RoutineLastCheck;
   /** Trigger audit trail, newest first: recent checks of any outcome. */
   checkLog?: RoutineAuditEntry[];

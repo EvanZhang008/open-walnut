@@ -6,6 +6,9 @@
 
 import type { RoutineAuditEntry, RoutineCheck, RoutineLastCheck, RoutineSchedule, RoutineState, RoutineWake } from '@/api/routines';
 import { describeSpan } from '../../../src/core/cron/trigger-timing';
+import { TRIGGER_STOP_AFTER_ERRORS, triggerRunState } from '../../../src/core/cron/trigger-run-state';
+
+export { triggerRunState };
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -104,6 +107,23 @@ export function describeRoutineTiming(
   const counter = describeWake(wake);
   if (counter) parts.push(`or ${counter}`);
   return parts.join(' · ');
+}
+
+/**
+ * Why a trigger is not polling, for the task card and the Routines card:
+ * "Paused 2h ago" / "Paused" (switched off before the time was kept) /
+ * "Stopped after 5 failed checks" / "Wait ended 1h ago". Null while it polls.
+ */
+export function describeTriggerOff(
+  routine: { enabled?: boolean; state?: RoutineState },
+  nowMs = Date.now(),
+): string | null {
+  const run = triggerRunState(routine);
+  if (run === 'armed') return null;
+  if (run === 'stopped') return `Stopped after ${TRIGGER_STOP_AFTER_ERRORS} failed checks`;
+  if (run === 'wait-ended') return `Wait ended ${describeAgo(routine.state!.waitEndedAtMs!, nowMs)}`;
+  const at = routine.state?.pausedAtMs;
+  return typeof at === 'number' ? `Paused ${describeAgo(at, nowMs)}` : 'Paused';
 }
 
 /** "3m ago" / "just now" / "2h ago" for the card's last-check line. */

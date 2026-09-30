@@ -200,6 +200,19 @@ export type CronJobState = {
   lastError?: string;
   lastDurationMs?: number;
   consecutiveErrors?: number;
+  /**
+   * When a person or an agent switched the routine off (Pause), cleared when it
+   * is switched back on. Absent on a routine that is off for another reason: a
+   * trigger the server stopped after its check kept failing, or one switched off
+   * before this field existed.
+   */
+  pausedAtMs?: number;
+  /**
+   * When the snooze wait this trigger ended switched it off (task-waiting.ts),
+   * cleared when it is switched back on. Not a pause: the session re-arms it with
+   * task_wait and the same routine_id, and the task card does not show it.
+   */
+  waitEndedAtMs?: number;
   /** Check jobs only: what the daemon reported about the most recent run. */
   lastCheck?: TriggerLastCheck;
   /**
