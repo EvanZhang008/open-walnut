@@ -344,6 +344,97 @@ describe('createServerPluginApi', () => {
     expect((await api.tasks.folders()).find((one) => one.id === folder.id)).toMatchObject({ memberCount: 205 })
   })
 
+  /**
+   * A plugin that files into a project with no folder, then cleans up the folder it filed into
+   * before: the batch move lands tasks at the project's top level, and only an empty folder can
+   * be deleted, so a plugin never reshapes work the user filed there.
+   */
+  it('files tasks into a project with no folder in chunks, and deletes only an empty folder', async () => {
+    const { api } = setup()
+    const tm = await import('../../src/core/task-manager.js')
+    const made = await tm.addTasksBulk(Array.from({ length: 203 }, (_, i) => ({
+      title: `Run ${i}`, project: 'Root Import', source: 'local', status: 'todo', phase: 'TODO', priority: 'none',
+    }) as never))
+    const old = await api.tasks.createFolder({ label: 'Old home', project: 'Root Old' })
+    await api.tasks.fileIntoFolder(old.id, made.slice(0, 3).map((task) => ({ id: task.id })))
+    const frames: string[][] = []
+    const groupEvents: unknown[] = []
+    bus.subscribe('test-observer', (event) => {
+      const data = event.data as { task?: unknown; taskIds?: string[] }
+      if (event.name === EventNames.TASK_UPDATED && data.taskIds) frames.push(data.taskIds)
+      if (event.name === EventNames.TASK_GROUPS_CHANGED) groupEvents.push(event.data)
+    }, { global: true, interest: [EventNames.TASK_UPDATED, EventNames.TASK_GROUPS_CHANGED] })
+
+    const result = await api.tasks.fileIntoProject('Root Target', made.map((task) => ({ id: task.id, addTags: ['moved'] })))
+    expect(result).toMatchObject({ skipped: [] })
+    expect(result.filed).toHaveLength(203)
+    expect(frames.map((ids) => ids.length)).toEqual([200, 3])
+    const sample = await api.tasks.get(made[0]!.id)
+    expect(sample).toMatchObject({ project: 'Root Target', tags: ['moved'] })
+    expect(sample?.groupId).toBeUndefined()
+    expect(await tm.getProjectRecord('Root Target')).toMatchObject({ source: 'local' })
+    await expect(api.tasks.fileIntoProject(' ', [{ id: made[0]!.id }])).rejects.toThrow(/cannot be empty/)
+
+    // The old folder is empty now: it can go. One the user still keeps work in cannot.
+    const busy = await api.tasks.createFolder({ label: 'Mine', project: 'Root Target' })
+    await api.tasks.fileIntoFolder(busy.id, [{ id: made[5]!.id }])
+    groupEvents.length = 0
+    await api.tasks.deleteFolder(old.id)
+    expect((await api.tasks.folders()).some((one) => one.id === old.id)).toBe(false)
+    expect(groupEvents).toEqual([expect.objectContaining({ group_id: old.id })])
+    await expect(api.tasks.deleteFolder(busy.id)).rejects.toThrow(/not empty/)
+    expect(await api.tasks.get(made[5]!.id)).toMatchObject({ groupId: busy.id })
+    await expect(api.tasks.deleteFolder('g_missing')).rejects.toThrow(/not found/)
+  })
+
+  it('lists the hosts, runs a script on this machine, and refuses a host it does not know', async () => {
+    const { getConfig } = await import('../../src/core/config-manager.js')
+    vi.mocked(getConfig).mockResolvedValue({
+      plugins: {}, defaults: {},
+      hosts: { devbox: { hostname: 'devbox.example.test', user: 'me', port: 2222, label: 'Dev box' }, hidden: { hostname: 'hidden.example.test', enabled: false } },
+    } as never)
+    try {
+      const { api } = setup()
+      expect(await api.hosts.list()).toEqual([
+        { alias: '__local__', local: true, enabled: true },
+        { alias: 'devbox', label: 'Dev box', local: false, enabled: true, hostname: 'devbox.example.test', user: 'me', port: 2222 },
+        { alias: 'hidden', local: false, enabled: false, hostname: 'hidden.example.test' },
+      ])
+      expect(await api.hosts.get('devbox')).toMatchObject({ hostname: 'devbox.example.test' })
+      expect(await api.hosts.get('nope')).toBeNull()
+
+      const run = await api.hosts.run('__local__', { script: 'printf "%s|" "$@"; echo; echo warn >&2; exit 3', args: ["it's", 'a $HOME'] })
+      expect(run).toEqual({ code: 3, stdout: "it's|a $HOME|\n", stderr: 'warn\n', timedOut: false, truncated: false })
+      await expect(api.hosts.run('nope', { script: 'true' })).rejects.toThrow(/no host named "nope"/)
+    } finally {
+      vi.mocked(getConfig).mockResolvedValue({ plugins: { 'sample-plugin': { color: 'blue' } }, defaults: {} } as never)
+    }
+  })
+
+  it("tells a plugin the importer's tag and projects, and when an import run ends", async () => {
+    const { api, context } = setup()
+    const { externalImportProject } = await import('../../src/core/sessions/external-session-import.js')
+    const { EXTERNAL_SESSION_IMPORT_TAG } = await import('../../src/core/types.js')
+    expect(api.sessionImports.tag).toBe(EXTERNAL_SESSION_IMPORT_TAG)
+    expect(api.sessionImports.projectFor('devbox')).toBe(externalImportProject('devbox'))
+    expect(api.sessionImports.projectFor('__local__')).toBe(externalImportProject('__local__'))
+
+    const runs = vi.fn()
+    api.sessionImports.onRun(runs)
+    const settle = () => new Promise((resolve) => setImmediate(resolve))
+    // The run's one coarse frame counts; a per-task rename from the importer and anyone else's frame do not.
+    bus.emit(EventNames.TASK_UPDATED, {}, [], { source: 'external-session-import' })
+    bus.emit(EventNames.TASK_UPDATED, { task: { id: 'renamed' } }, ['web-ui'], { source: 'external-session-import' })
+    bus.emit(EventNames.TASK_UPDATED, {}, [], { source: 'someone-else' })
+    await settle()
+    expect(runs).toHaveBeenCalledOnce()
+
+    await context.dispose()
+    bus.emit(EventNames.TASK_UPDATED, {}, [], { source: 'external-session-import' })
+    await settle()
+    expect(runs).toHaveBeenCalledOnce()
+  })
+
   it('registers typed multi-point hooks with filters and timeouts', async () => {
     const dispatcher = new HookDispatcher()
     dispatchers.push(dispatcher)

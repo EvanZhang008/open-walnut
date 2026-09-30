@@ -12,9 +12,17 @@ import type {
   ServiceApi,
   StatusItemState,
   ServiceChange,
+  HostInfo,
+  HostRunInput,
+  HostRunResult,
+  TaskFilingInput,
   TaskFilingResult,
   WalnutServerApi,
 } from './server.js'
+
+/** Walnut's importer tag and project names, restated so a fake behaves like the host. */
+const FAKE_IMPORT_TAG = 'walnut:external-sessions'
+const fakeImportProject = (host: string) => host === '__local__' ? 'Imported from this Mac' : `Imported from ${host}`
 
 function disposable(dispose: () => void = () => undefined): Disposable {
   let active = true
@@ -57,6 +65,10 @@ export interface FakeWalnutOptions {
   tasks?: WalnutTask[]
   /** Folders that exist before activate. A task files into one through its `groupId`. */
   folders?: Array<{ id: string; label: string; project: string; parentId?: string }>
+  /** Hosts besides this machine (`__local__`, always present). */
+  hosts?: HostInfo[]
+  /** Answers `hosts.run`. Without one, a run throws: a test must never reach a real host. */
+  runOnHost?: (alias: string, input: HostRunInput) => HostRunResult | Promise<HostRunResult>
   config?: Record<string, unknown>
   overrides?: Partial<WalnutServerApi>
 }
@@ -84,6 +96,10 @@ export interface FakeWalnutResult {
   answerLetter(letterId: string, actionId: string, freeText?: string): Promise<void>
   /** What each status item shows now, by id. A cleared or disposed item is absent. */
   statusItems: Map<string, StatusItemState>
+  /** Every `hosts.run` call, in order. */
+  hostRuns: Array<{ alias: string; input: HostRunInput }>
+  /** Stand in for Walnut's importer finishing a run: fires every `sessionImports.onRun` handler. */
+  importRun(): Promise<void>
 }
 
 export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutResult {
@@ -99,6 +115,10 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const services = new Map<string, ServiceApi>()
   const letters: LetterState[] = []
   const statusItems = new Map<string, StatusItemState>()
+  const hostList: HostInfo[] = [{ alias: '__local__', local: true, enabled: true }, ...(options.hosts ?? []).map((host) => structuredClone(host))]
+  const hostRuns: Array<{ alias: string; input: HostRunInput }> = []
+  const importWatchers = new Set<() => void | Promise<void>>()
+  const importRun = async () => { for (const handler of [...importWatchers]) await handler() }
   const registeredItems = new Set<string>()
   const letterWatchers = new Set<(event: LetterAnsweredEvent) => void | Promise<void>>()
   const answerLetter = async (letterId: string, actionId: string, freeText?: string, source: LetterAnsweredEvent['source'] = 'web') => {
@@ -124,6 +144,43 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   let config = structuredClone(options.config ?? {})
   const controller = new AbortController()
   let nextTask = 1
+
+  /** The host's filing rules, for both targets: with a `groupId` every task joins that
+   *  folder; without one a task keeps its folder unless it changes project. */
+  function fileTasks(items: TaskFilingInput[], place: { project: string; groupId?: string }): TaskFilingResult {
+    const result: TaskFilingResult = { filed: [], skipped: [] }
+    const seen = new Set<string>()
+    const sameProject = (a: string | undefined, b: string) => (a ?? '').toLowerCase() === b.toLowerCase()
+    for (const item of items) {
+      if (seen.has(item.id)) continue
+      seen.add(item.id)
+      const task = taskMap.get(item.id)
+      if (!task) { result.skipped.push({ id: item.id, reason: 'missing' }); continue }
+      if (item.expectProject !== undefined && !sameProject(task.project, item.expectProject)) {
+        result.skipped.push({ id: task.id, reason: 'changed' }); continue
+      }
+      // Same rules as the host: a synced task is only filed, tags are added.
+      const moving = !sameProject(task.project, place.project)
+      const adds = (item.addTags ?? []).filter((tag) => tag.trim() && !(task.tags ?? []).includes(tag))
+      const title = item.title?.trim()
+      const retitle = !!title && title !== task.title && (item.expectTitle === undefined || item.expectTitle === task.title)
+      if (task.source !== 'local' && (moving || adds.length > 0 || retitle)) {
+        result.skipped.push({ id: task.id, reason: 'synced' }); continue
+      }
+      const joining = place.groupId !== undefined && task.groupId !== place.groupId
+      const unfiling = place.groupId === undefined && item.topLevel === true && task.groupId !== undefined
+      if (!moving && !joining && !unfiling && adds.length === 0 && !retitle) continue
+      // A folder never follows a task into another project.
+      if (moving || unfiling) delete task.groupId
+      if (moving) task.project = place.project
+      if (place.groupId !== undefined) task.groupId = place.groupId
+      if (adds.length) task.tags = [...new Set([...(task.tags ?? []), ...adds])]
+      if (retitle) task.title = title!
+      task.updatedAt = new Date().toISOString()
+      result.filed.push(task.id)
+    }
+    return result
+  }
 
   function notifyServices(change: ServiceChange): void {
     for (const watcher of serviceWatchers) void watcher(change)
@@ -301,34 +358,38 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       async fileIntoFolder(folderId, items) {
         const folder = folderMap.get(folderId)
         if (!folder) throw new Error(`Group "${folderId}" not found.`)
-        const result: TaskFilingResult = { filed: [], skipped: [] }
-        const seen = new Set<string>()
-        for (const item of items) {
-          if (seen.has(item.id)) continue
-          seen.add(item.id)
-          const task = taskMap.get(item.id)
-          if (!task) { result.skipped.push({ id: item.id, reason: 'missing' }); continue }
-          const sameProject = (a: string | undefined, b: string) => (a ?? '').toLowerCase() === b.toLowerCase()
-          if (item.expectProject !== undefined && !sameProject(task.project, item.expectProject)) {
-            result.skipped.push({ id: task.id, reason: 'changed' }); continue
-          }
-          // Same rules as the host: a synced task is only filed, tags are added.
-          const moving = !sameProject(task.project, folder.project)
-          const adds = (item.addTags ?? []).filter((tag) => tag.trim() && !(task.tags ?? []).includes(tag))
-          const title = item.title?.trim()
-          const retitle = !!title && title !== task.title && (item.expectTitle === undefined || item.expectTitle === task.title)
-          if (task.source !== 'local' && (moving || adds.length > 0 || retitle)) {
-            result.skipped.push({ id: task.id, reason: 'synced' }); continue
-          }
-          if (!moving && task.groupId === folderId && adds.length === 0 && !retitle) continue
-          if (moving) task.project = folder.project
-          task.groupId = folderId
-          if (adds.length) task.tags = [...new Set([...(task.tags ?? []), ...adds])]
-          if (retitle) task.title = title!
-          task.updatedAt = new Date().toISOString()
-          result.filed.push(task.id)
-        }
-        return result
+        return fileTasks(items, { project: folder.project, groupId: folderId })
+      },
+      async fileIntoProject(project, items) {
+        if (!project?.trim()) throw new Error('Project name cannot be empty.')
+        const known = [...taskMap.values()].find((task) => (task.project ?? '').toLowerCase() === project.trim().toLowerCase())
+        return fileTasks(items, { project: known?.project ?? project.trim() })
+      },
+      async deleteFolder(folderId) {
+        const folder = folderMap.get(folderId)
+        if (!folder) throw new Error(`Folder "${folderId}" not found.`)
+        const busy = [...taskMap.values()].some((task) => task.groupId === folderId)
+          || [...folderMap.values()].some((one) => one.parentId === folderId)
+        if (busy) throw new Error(`Folder "${folder.label}" is not empty; a plugin only deletes an empty folder.`)
+        folderMap.delete(folderId)
+      },
+    },
+    hosts: {
+      async list() { return structuredClone(hostList) },
+      async get(alias) { return structuredClone(hostList.find((host) => host.alias === alias) ?? null) },
+      async run(alias, input) {
+        hostRuns.push({ alias, input: structuredClone(input) })
+        if (!hostList.some((host) => host.alias === alias)) throw new Error(`Walnut has no host named "${alias}" (Settings, Hosts).`)
+        if (!options.runOnHost) throw new Error('hosts.run is not available in the fake plugin api without runOnHost')
+        return await options.runOnHost(alias, input)
+      },
+    },
+    sessionImports: {
+      tag: FAKE_IMPORT_TAG,
+      projectFor: fakeImportProject,
+      onRun(handler) {
+        importWatchers.add(handler)
+        return disposable(() => importWatchers.delete(handler))
       },
     },
     config: {
@@ -519,5 +580,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, importRun }
 }

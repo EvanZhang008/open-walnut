@@ -98,6 +98,9 @@ const FALLBACK_TITLE_RE = new RegExp(
 const LEGACY_HOST_TAG_PREFIX = 'walnut:host:';
 /** v1 project the buckets were filed under; removed once its buckets are gone. */
 const LEGACY_PROJECT = 'Imported Sessions';
+/** The source of the ONE coarse task:updated that ends a run which changed the board
+ *  (plugins hear it through sessionImports.onRun). */
+export const EXTERNAL_IMPORT_EVENT_SOURCE = 'external-session-import';
 
 /**
  * Per-host project the imported tasks live in — the host IS the grouping
@@ -835,7 +838,7 @@ async function runImport(options: ImportExternalSessionsOptions): Promise<Extern
     // One coarse refresh — addTask already emitted per-task events; this nudges
     // list surfaces that coalesce on task:updated (and is the ONLY signal for the
     // sweep/backfill writes, which deliberately emit nothing per row).
-    bus.emit(EventNames.TASK_UPDATED, {}, [], { source: 'external-session-import' });
+    bus.emit(EventNames.TASK_UPDATED, {}, [], { source: EXTERNAL_IMPORT_EVENT_SOURCE });
     log.session.info('imported external sessions', {
       imported: result.imported, retitled: result.retitled, completed: result.completed,
       foldered: result.foldered, removed: result.removed, skipped: result.skipped,

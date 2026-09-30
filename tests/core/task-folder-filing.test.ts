@@ -6,6 +6,9 @@
  * deleted ones refuse, new ones become local), a synced task is only ever filed, the rest
  * of a task's payload survives, and a task that changed since the caller planned is left
  * alone. Folders also follow their project through a rename.
+ *
+ * fileTasksIntoProject (`tasks.fileIntoProject`) is the same write with a project as the
+ * target: a task that moves in lands at the top level, one already there keeps its folder.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -19,6 +22,7 @@ import {
   deleteProject,
   ensureProject,
   fileTasksIntoFolder,
+  fileTasksIntoProject,
   getProjectRecord,
   getTask,
   listGroups,
@@ -159,5 +163,88 @@ describe('fileTasksIntoFolder', () => {
     const task = await localTask('Run', 'Import')
     await expect(fileTasksIntoFolder('g_missing', [{ id: task.id }])).rejects.toThrow(/not found/)
     expect((await getTask(task.id)).group_id).toBeUndefined()
+  })
+})
+
+describe('fileTasksIntoProject', () => {
+  it('moves tasks to the top level of the project, leaving their old folder behind', async () => {
+    await ensureProject('Old', 'local')
+    const oldFolder = await createFolder('Old runs', 'Old')
+    const filed = await localTask('Filed run', 'Old')
+    await fileTasksIntoFolder(oldFolder.group_id, [{ id: filed.id }])
+    const loose = await localTask('Loose run caf\u00e9', 'Import', { tags: ['walnut:external-sessions'] })
+    await updateTask(loose.id, { cwd: '/work/checkout' })
+    await updateTasksBulk([{ id: loose.id, patch: { session_ids: ['sess-1'] } }])
+
+    const result = await fileTasksIntoProject('Robot runs', [
+      { id: filed.id, add_tags: ['ticket:P1'] },
+      { id: loose.id, add_tags: ['ticket:P2'], title: 'Nodes stuck NotReady', expect_project: 'Import', expect_title: 'Loose run caf\u00e9' },
+    ])
+
+    expect(result.project).toBe('Robot runs')
+    expect(result.filed.map((one) => one.id)).toEqual([filed.id, loose.id])
+    const movedFiled = await getTask(filed.id)
+    expect(movedFiled).toMatchObject({ project: 'Robot runs', tags: ['ticket:P1'] })
+    expect(movedFiled.group_id).toBeUndefined()
+    const movedLoose = await getTask(loose.id)
+    expect(movedLoose).toMatchObject({ project: 'Robot runs', title: 'Nodes stuck NotReady', cwd: '/work/checkout', session_ids: ['sess-1'] })
+    expect(movedLoose.group_id).toBeUndefined()
+    expect(movedLoose.tags?.sort()).toEqual(['ticket:P2', 'walnut:external-sessions'])
+    // The old folder is left in place, empty; nothing deletes it behind the user's back.
+    expect((await listGroups()).find((one) => one.group_id === oldFolder.group_id)).toMatchObject({ member_ids: [] })
+    expect(await getProjectRecord('Robot runs')).toMatchObject({ source: 'local' })
+  })
+
+  it('keeps a task already in the project in the folder the user put it in', async () => {
+    await ensureProject('Robot runs', 'local')
+    const mine = await createFolder('Keep an eye on', 'Robot runs')
+    const task = await localTask('Run', 'Robot runs')
+    await fileTasksIntoFolder(mine.group_id, [{ id: task.id }])
+
+    const result = await fileTasksIntoProject('robot RUNS', [{ id: task.id, add_tags: ['ticket:P3'] }])
+
+    expect(result.filed.map((one) => one.id)).toEqual([task.id])
+    expect(await getTask(task.id)).toMatchObject({ project: 'Robot runs', group_id: mine.group_id, tags: ['ticket:P3'] })
+    // Asked again with nothing new: in neither list.
+    expect(await fileTasksIntoProject('Robot runs', [{ id: task.id, add_tags: ['ticket:P3'] }])).toMatchObject({ filed: [], skipped: [] })
+    // Asked for the top level, it leaves the folder and keeps everything else.
+    expect((await fileTasksIntoProject('Robot runs', [{ id: task.id, top_level: true }])).filed.map((one) => one.id)).toEqual([task.id])
+    const unfiled = await getTask(task.id)
+    expect(unfiled).toMatchObject({ project: 'Robot runs', tags: ['ticket:P3'] })
+    expect(unfiled.group_id).toBeUndefined()
+  })
+
+  it('applies the same skips as folder filing', async () => {
+    const synced = await localTask('Synced elsewhere', 'Import')
+    await updateTasksBulk([{ id: synced.id, patch: { source: 'ms-todo' } }])
+    const moved = await localTask('Planned in Import', 'Import')
+    await updateTask(moved.id, { project: 'Mine' })
+
+    const result = await fileTasksIntoProject('Robot runs', [
+      { id: synced.id }, { id: moved.id, expect_project: 'Import' }, { id: 'no-such-task' },
+    ])
+
+    expect(result.filed).toEqual([])
+    expect(result.skipped).toEqual([
+      { id: synced.id, reason: 'synced' }, { id: moved.id, reason: 'changed' }, { id: 'no-such-task', reason: 'missing' },
+    ])
+    expect(await getTask(synced.id)).toMatchObject({ project: 'Import' })
+    expect(await getTask(moved.id)).toMatchObject({ project: 'Mine' })
+  })
+
+  it("follows a renamed project's redirect, and refuses a deleted or empty name", async () => {
+    await localTask('Keeps Team alive', 'Team')
+    await renameProject('Team', 'Team Ops')
+    const task = await localTask('Run', 'Import')
+    const result = await fileTasksIntoProject('Team', [{ id: task.id }])
+    expect(result.project).toBe('Team Ops')
+    expect(await getTask(task.id)).toMatchObject({ project: 'Team Ops' })
+
+    await ensureProject('Gone', 'local')
+    await deleteProject('Gone')
+    const other = await localTask('Other run', 'Import')
+    await expect(fileTasksIntoProject('Gone', [{ id: other.id }])).rejects.toThrow(/was deleted/)
+    await expect(fileTasksIntoProject('  ', [{ id: other.id }])).rejects.toThrow(/cannot be empty/)
+    expect(await getTask(other.id)).toMatchObject({ project: 'Import' })
   })
 })

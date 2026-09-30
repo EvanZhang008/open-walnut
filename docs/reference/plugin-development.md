@@ -160,7 +160,9 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 
 | API | Purpose |
 |---|---|
-| `walnut.tasks` | Read, query, create, update, complete, and delete tasks; list, create and file into folders. |
+| `walnut.tasks` | Read, query, create, update, complete, and delete tasks; file tasks into a project or a folder in batches; list, create and delete folders. |
+| `walnut.hosts` | List the hosts in Settings, Hosts, and run a short script on one (over ssh for a remote host). |
+| `walnut.sessionImports` | The importer of outside sessions: the tag and project it files them under, and a callback when an import run ends. |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
 | `walnut.notifications` | Raise notices (including `kind: 'reminder'` with up to three op buttons), `dismiss` your own, report plugin errors and recover from them, and hold Walnut's quiet mode with `quiet.get/set/clear`. |
 | `walnut.ui` | Show a live status item in the console's left rail: a ring the host ticks from a timer, a label, and a popover with up to three op buttons. |
@@ -184,6 +186,16 @@ There is no supported way to import Walnut's private `src/**` modules. Those pat
 A task carries `groupId` (the folder it is filed in, absent at the project root) and `sessionIds` (every session ever linked to it, which survives completion), so a plugin can find the task behind a session it knows about. To change one tag, pass `addTags` or `removeTags` to `update`: they apply to the tags the task has when the write lands, so a tag someone else changes meanwhile survives. `tags` replaces the whole set and wins over both.
 
 A folder belongs to one project, and moving a task to another project with `update` drops its folder. `folders()` lists every folder, empty ones included. `createFolder({ label, project })` makes one, and creates the project as a local one (no sync provider claims it) when the board has none by that name. `fileIntoFolder(folderId, items)` files tasks: each item moves into the folder's project if it is elsewhere, joins the folder, and takes the item's `addTags` and `title`. Use it for anything past a handful of tasks: `update` rewrites the whole task store once per call, so a plugin filing a thousand tasks one `update` at a time holds the server for minutes, while `fileIntoFolder` writes only the changed rows. It moves only local tasks across projects and reports the rest as skipped (`synced`, `missing`, or `rejected` for a title the owning plugin refuses). Never name a plugin setting `project`: Walnut reads `plugins.<id>.project` as that plugin reserving the project for its own sync.
+
+`fileIntoProject(project, items)` is the same batch with a project as the target: a task that moves in lands at the project's top level, and one already in the project keeps its folder unless its item says `topLevel: true`. The project is created as a local one when the board has none by that name. `deleteFolder(folderId)` removes an empty folder, such as one your plugin filed into before its settings changed; it refuses a folder that still holds a task or another folder, because the user may keep their own work there.
+
+#### Hosts
+
+`walnut.hosts.list()` returns this machine (`__local__`) and every host in Settings, Hosts, with its hostname, user and port. `walnut.hosts.run(alias, { script, args })` runs a POSIX `sh` script on one: over ssh for a remote host (key auth only, it never prompts), directly for this machine. Arguments arrive as `$1`, `$2`, … exactly as passed, so a plugin never quotes anything for a remote shell. The run is bounded: `timeoutMs` (default 60 s, at most 10 minutes) and `maxOutputBytes` (default 8 MB) end it with `timedOut` or `truncated` rather than letting it hang or fill memory. A failure to connect is a nonzero `code` with ssh's words in `stderr`; a host Walnut does not know throws. Keep the work on the host and print a small answer: a script that reads a local database and prints one JSON line costs one connection, where copying the database over costs every byte of it.
+
+#### Outside sessions
+
+Walnut's importer files every session started outside Walnut (in a terminal, or by another tool) as one task, under a project per host. `walnut.sessionImports.projectFor(host)` names that project and `walnut.sessionImports.tag` is the tag on every task the importer still owns; the first message a person sends into the session removes it. `walnut.sessionImports.onRun(handler)` fires once after each import run that changed the board, so a plugin that files imported sessions somewhere else can pick up new ones right away instead of on its next timer.
 
 #### Letters
 

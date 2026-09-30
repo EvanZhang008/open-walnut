@@ -5489,7 +5489,7 @@ export async function addToGroup(
 }
 
 /**
- * One task for fileTasksIntoFolder: the tags to add and the title to set, if any.
+ * One task for fileTasksIntoFolder / fileTasksIntoProject: the tags to add and the title to set, if any.
  * `expect_project` / `expect_title` make the write conditional on what the caller
  * planned from, so a task someone moved or renamed in the meantime is left alone.
  */
@@ -5499,6 +5499,8 @@ export interface TaskFilingItem {
   title?: string;
   expect_project?: string;
   expect_title?: string;
+  /** fileTasksIntoProject only: a task already in the project leaves its folder too. */
+  top_level?: boolean;
 }
 export type TaskFilingSkip = { id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' };
 
@@ -5525,8 +5527,7 @@ export async function fileTasksIntoFolder(
   await ensureInit();
   let createdProject: { name: string; source: TaskSource } | undefined;
   const result = await withWriteLock(async () => {
-    const filed: Task[] = [];
-    const skipped: TaskFilingSkip[] = [];
+    let filing: { filed: Task[]; skipped: TaskFilingSkip[] } = { filed: [], skipped: [] };
     let label = '';
     let project = '';
     // The folder record itself changed (it followed a project redirect).
@@ -5547,54 +5548,107 @@ export async function fileTasksIntoFolder(
           createdGroup = true;
         }
       }
-      const sel = handle.prepare('SELECT * FROM tasks WHERE id = ?');
-      const now = new Date().toISOString();
-      const seen = new Set<string>();
-      for (const item of items) {
-        if (typeof item?.id !== 'string' || seen.has(item.id)) continue;
-        seen.add(item.id);
-        const row = sel.get(item.id) as Record<string, any> | undefined;
-        if (!row) { skipped.push({ id: item.id, reason: 'missing' }); continue; }
-        const task = rowToTask(row);
-        if (item.expect_project !== undefined && !sameProject(task.project, item.expect_project)) {
-          skipped.push({ id: task.id, reason: 'changed' }); continue;
-        }
-        const moving = !sameProject(task.project, project);
-        const adds = (item.add_tags ?? []).filter((tag) => typeof tag === 'string' && tag.trim() && !(task.tags ?? []).includes(tag));
-        const asked = typeof item.title === 'string' ? item.title.trim() : '';
-        const title = asked && asked !== task.title
-          && (item.expect_title === undefined || item.expect_title === task.title) ? asked : '';
-        if (task.source !== 'local' && (moving || adds.length || title)) {
-          skipped.push({ id: task.id, reason: 'synced' }); continue;
-        }
-        if (title && validatePluginContent(task, 'title', title)) { skipped.push({ id: task.id, reason: 'rejected' }); continue; }
-        const patch: Partial<Task> = {};
-        if (moving) patch.project = project;
-        if (task.group_id !== groupId) patch.group_id = groupId;
-        if (adds.length) patch.tags = [...new Set([...(task.tags ?? []), ...adds])];
-        if (title) patch.title = title;
-        const prepared = prepareRawUpdate(task, patch);
-        if (!prepared) continue;
-        prepared.updated_at = now;
-        const patchRow = taskToRow(prepared);
-        // group_id rides the payload column: rebuild it from the merged task so the
-        // other payload fields survive (see updateTasksBulk).
-        if ('payload' in patchRow) patchRow.payload = taskToRow({ ...task, ...prepared }).payload ?? null;
-        const cols = Object.keys(patchRow);
-        handle.prepare(`UPDATE tasks SET ${cols.map((c) => `${c} = @${c}`).join(', ')} WHERE id = @id`).run({ ...patchRow, id: task.id });
-        Object.assign(task, prepared);
-        normalizeNullClears(task);
-        filed.push(task);
-      }
+      filing = fileTasksLocked(handle, items, { project, groupId });
     });
     // Rows are patched in place; the folder or project registry rows this wrote
     // are not in the shadow, so the snapshot (not the shadow) is dropped for them.
-    patchStoreCacheRows(filed.map((t) => t.id));
+    patchStoreCacheRows(filing.filed.map((t) => t.id));
     if (createdGroup || createdProject) invalidateTaskStoreCache();
-    return { group_id: groupId, label, project, filed, skipped };
+    return { group_id: groupId, label, project, ...filing };
   });
   if (createdProject) emitProjectCreated(createdProject.name, createdProject.source);
   return result;
+}
+
+/**
+ * fileTasksIntoFolder's twin for a project with no folder: each task moves into
+ * the project when it is elsewhere and lands at its top level (its old folder
+ * belongs to the old project, so it stays behind), and takes the given tags and
+ * title. A task already in the project keeps whatever folder it sits in there
+ * (it is filed already, and the folder is the user's call) unless its item asks
+ * for `top_level`. Same registry rules
+ * (redirect followed, deleted project refused, unknown name minted local), same
+ * synced-task rule, same skips. The caller emits the task events.
+ */
+export async function fileTasksIntoProject(
+  projectName: string,
+  items: TaskFilingItem[],
+): Promise<{ project: string; filed: Task[]; skipped: TaskFilingSkip[] }> {
+  await ensureInit();
+  const asked = (projectName ?? '').trim();
+  if (!asked) throw new Error('Project name cannot be empty.');
+  let createdProject: { name: string; source: TaskSource } | undefined;
+  const result = await withWriteLock(async () => {
+    let filing: { filed: Task[]; skipped: TaskFilingSkip[] } = { filed: [], skipped: [] };
+    let project = asked;
+    dbTransaction((handle) => {
+      const row = ensureProjectRowLocked(asked, 'local', 'fileTasksIntoProject');
+      if (row.blocked) throw new Error(`Project "${asked}" was deleted; file into a live project.`);
+      if (row.created) createdProject = { name: row.name, source: row.source };
+      project = row.name;
+      filing = fileTasksLocked(handle, items, { project });
+    });
+    patchStoreCacheRows(filing.filed.map((t) => t.id));
+    if (createdProject) invalidateTaskStoreCache();
+    return { project, ...filing };
+  });
+  if (createdProject) emitProjectCreated(createdProject.name, createdProject.source);
+  return result;
+}
+
+/** The row writes both filing calls share, inside their open transaction. With a
+ *  `groupId` every task joins that folder; without one, a task keeps its folder
+ *  unless it changes project (prepareRawUpdate then drops it) or asks for the top level. */
+function fileTasksLocked(
+  handle: Parameters<Parameters<typeof dbTransaction>[0]>[0],
+  items: TaskFilingItem[],
+  place: { project: string; groupId?: string },
+): { filed: Task[]; skipped: TaskFilingSkip[] } {
+  const filed: Task[] = [];
+  const skipped: TaskFilingSkip[] = [];
+  const sel = handle.prepare('SELECT * FROM tasks WHERE id = ?');
+  const now = new Date().toISOString();
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (typeof item?.id !== 'string' || seen.has(item.id)) continue;
+    seen.add(item.id);
+    const row = sel.get(item.id) as Record<string, any> | undefined;
+    if (!row) { skipped.push({ id: item.id, reason: 'missing' }); continue; }
+    const task = rowToTask(row);
+    if (item.expect_project !== undefined && !sameProject(task.project, item.expect_project)) {
+      skipped.push({ id: task.id, reason: 'changed' }); continue;
+    }
+    const moving = !sameProject(task.project, place.project);
+    const unfiling = !place.groupId && item.top_level === true && !!task.group_id;
+    const adds = (item.add_tags ?? []).filter((tag) => typeof tag === 'string' && tag.trim() && !(task.tags ?? []).includes(tag));
+    const asked = typeof item.title === 'string' ? item.title.trim() : '';
+    const title = asked && asked !== task.title
+      && (item.expect_title === undefined || item.expect_title === task.title) ? asked : '';
+    if (task.source !== 'local' && (moving || adds.length || title)) {
+      skipped.push({ id: task.id, reason: 'synced' }); continue;
+    }
+    if (title && validatePluginContent(task, 'title', title)) { skipped.push({ id: task.id, reason: 'rejected' }); continue; }
+    const patch: Partial<Task> = {};
+    if (moving) patch.project = place.project;
+    if (place.groupId && task.group_id !== place.groupId) patch.group_id = place.groupId;
+    // null is the raw path's explicit-clear marker for a payload field.
+    if (unfiling) patch.group_id = null as unknown as undefined;
+    if (adds.length) patch.tags = [...new Set([...(task.tags ?? []), ...adds])];
+    if (title) patch.title = title;
+    const prepared = prepareRawUpdate(task, patch);
+    if (!prepared) continue;
+    prepared.updated_at = now;
+    const patchRow = taskToRow(prepared);
+    // group_id rides the payload column: rebuild it from the merged task so the
+    // other payload fields survive (see updateTasksBulk).
+    if ('payload' in patchRow) patchRow.payload = taskToRow({ ...task, ...prepared }).payload ?? null;
+    const cols = Object.keys(patchRow);
+    handle.prepare(`UPDATE tasks SET ${cols.map((c) => `${c} = @${c}`).join(', ')} WHERE id = @id`).run({ ...patchRow, id: task.id });
+    Object.assign(task, prepared);
+    normalizeNullClears(task);
+    filed.push(task);
+  }
+  return { filed, skipped };
 }
 
 /**

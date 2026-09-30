@@ -127,6 +127,17 @@ export interface TaskService {
    *  `expectProject` / `expectTitle`. A task already filed as asked is in neither list.
    *  Not available on a replica. */
   fileIntoFolder(folderId: string, items: TaskFilingInput[]): Promise<TaskFilingResult>
+  /** `fileIntoFolder` for a project with no folder: each task moves into the project when
+   *  it is elsewhere and lands at its top level, then takes the given tags and title. A
+   *  task already in the project keeps the folder it sits in there, unless its item says
+   *  `topLevel`. The project is created
+   *  (local) when the board has none by that name; a deleted one is refused. Same skips,
+   *  same batch cost. Not available on a replica. */
+  fileIntoProject(project: string, items: TaskFilingInput[]): Promise<TaskFilingResult>
+  /** Delete an EMPTY folder (no tasks, no folders inside), such as one this plugin made and
+   *  has since moved everything out of. Refuses a folder that still holds anything: the
+   *  user may have filed their own work there. Not available on a replica. */
+  deleteFolder(folderId: string): Promise<void>
 }
 
 export interface TaskFilingInput {
@@ -138,12 +149,71 @@ export interface TaskFilingInput {
   expectProject?: string
   /** Rename only if the title is still this one; the rest of the item still applies. */
   expectTitle?: string
+  /** `fileIntoProject` only: a task already in the project leaves its folder too. */
+  topLevel?: boolean
 }
 
 export interface TaskFilingResult {
   /** Tasks this call changed. */
   filed: string[]
   skipped: Array<{ id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' }>
+}
+
+/** A host from Settings, Hosts, or this machine. */
+export interface HostInfo {
+  /** The host's name in Settings, Hosts. This machine is `__local__`. */
+  alias: string
+  label?: string
+  local: boolean
+  /** False when the user hid the host from the session path picker. */
+  enabled: boolean
+  hostname?: string
+  user?: string
+  port?: number
+}
+
+export interface HostRunInput {
+  /** A POSIX sh script, fed to `sh -s` on stdin. At most 1 MB. */
+  script: string
+  /** Positional arguments ($1, $2, …), passed as literal strings: no quoting needed. */
+  args?: string[]
+  /** Default 60 s, at most 10 minutes. */
+  timeoutMs?: number
+  /** Stdout past this ends the run with `truncated`. Default 8 MB, at most 64 MB. */
+  maxOutputBytes?: number
+}
+
+export interface HostRunResult {
+  /** The script's exit code; null when it never ran to an exit (timeout, cap, spawn failure). */
+  code: number | null
+  stdout: string
+  /** The last 4,000 characters. */
+  stderr: string
+  timedOut: boolean
+  truncated: boolean
+}
+
+export interface HostService {
+  /** This machine first, then every host in Settings, Hosts. */
+  list(): Promise<HostInfo[]>
+  get(alias: string): Promise<HostInfo | null>
+  /** Run a short script on a host: over ssh for a remote one (key auth only, it never
+   *  prompts), directly for this machine. The only output is what comes back; a failure to
+   *  connect is a nonzero `code` with ssh's words in `stderr`. Throws for a host Walnut does
+   *  not know. Not available on a replica. */
+  run(alias: string, input: HostRunInput): Promise<HostRunResult>
+}
+
+/** Walnut's importer, which files every outside session (one started in a terminal, or by
+ *  another tool) as one task under a project per host. */
+export interface SessionImportsService {
+  /** The tag on every task the importer made and still owns. The first message a person
+   *  sends into the session removes it: from then on the task is theirs. */
+  readonly tag: string
+  /** The project the importer files a host's sessions under ("Imported from <host>"). */
+  projectFor(host: string): string
+  /** Called after each importer run that changed the board (once per run, not per task). */
+  onRun(handler: () => void | Promise<void>): Disposable
 }
 
 export interface ConfigService {
@@ -1019,6 +1089,8 @@ export interface WalnutServerApi {
   readonly signal: AbortSignal
   readonly log: PluginLogger
   readonly tasks: TaskService
+  readonly hosts: HostService
+  readonly sessionImports: SessionImportsService
   readonly config: ConfigService
   readonly notifications: NotificationService
   readonly ui: UiService

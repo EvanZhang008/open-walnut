@@ -56,6 +56,8 @@ import { jsonSchemaToZodShape } from '../../ops/schema-to-zod.js'
 import { registerOwnedMethod } from '../../web/ws/handler.js'
 import { registerOwnedAgent } from '../agent-registry.js'
 import { registerOwnedProviderAdapter } from '../../model/providers/registry.js'
+import { EXTERNAL_SESSION_IMPORT_TAG } from '../types.js'
+import { EXTERNAL_IMPORT_EVENT_SOURCE, externalImportProject } from '../sessions/external-session-import.js'
 import type {
   AdapterCallOptions,
   ModelResult,
@@ -284,8 +286,20 @@ function publicTask(task: Task) {
   }
 }
 
-/** Tasks per transaction in tasks.fileIntoFolder. */
+/** Tasks per transaction in tasks.fileIntoFolder / fileIntoProject. */
 const FILE_INTO_FOLDER_CHUNK = 200
+
+/** A plugin's filing item in core's shape; anything malformed is dropped, never trusted. */
+function filingItem(item: { id: string; addTags?: string[]; title?: string; expectProject?: string; expectTitle?: string; topLevel?: boolean }) {
+  return {
+    id: item?.id,
+    ...(Array.isArray(item?.addTags) ? { add_tags: item.addTags } : {}),
+    ...(typeof item?.title === 'string' ? { title: item.title } : {}),
+    ...(typeof item?.expectProject === 'string' ? { expect_project: item.expectProject } : {}),
+    ...(typeof item?.expectTitle === 'string' ? { expect_title: item.expectTitle } : {}),
+    ...(item?.topLevel === true ? { top_level: true } : {}),
+  }
+}
 
 function publicFolder(folder: { group_id: string; label: string; project: string; parent_id?: string; member_ids: string[] }) {
   return {
@@ -594,14 +608,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           // of tasks never holds the event loop for the whole batch.
           for (let i = 0; i < items.length; i += FILE_INTO_FOLDER_CHUNK) {
             if (i > 0) await new Promise<void>((resolve) => setImmediate(resolve))
-            const chunk = items.slice(i, i + FILE_INTO_FOLDER_CHUNK).map((item) => ({
-              id: item?.id,
-              ...(Array.isArray(item?.addTags) ? { add_tags: item.addTags } : {}),
-              ...(typeof item?.title === 'string' ? { title: item.title } : {}),
-              ...(typeof item?.expectProject === 'string' ? { expect_project: item.expectProject } : {}),
-              ...(typeof item?.expectTitle === 'string' ? { expect_title: item.expectTitle } : {}),
-            }))
-            const done = await fileTasksIntoFolder(folderId, chunk)
+            const done = await fileTasksIntoFolder(folderId, items.slice(i, i + FILE_INTO_FOLDER_CHUNK).map(filingItem))
             result.skipped.push(...done.skipped)
             if (done.filed.length === 0) continue
             folder = { group_id: done.group_id, label: done.label }
@@ -614,6 +621,72 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           if (folder) bus.emit(EventNames.TASK_GROUPS_CHANGED, folder, ['web-ui'], { source: `plugin/${pluginId}` })
         }
         return result
+      },
+      async fileIntoProject(project: string, items: Array<{ id: string; addTags?: string[]; title?: string; expectProject?: string; expectTitle?: string; topLevel?: boolean }>) {
+        assertPrimaryWrite('tasks.fileIntoProject')
+        if (typeof project !== 'string' || !project.trim()) throw new Error('Project name cannot be empty.')
+        const result: { filed: string[]; skipped: Array<{ id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' }> } = { filed: [], skipped: [] }
+        if (!Array.isArray(items) || items.length === 0) return result
+        const { fileTasksIntoProject } = await import('../task-manager.js')
+        // Same chunking and event shape as fileIntoFolder.
+        for (let i = 0; i < items.length; i += FILE_INTO_FOLDER_CHUNK) {
+          if (i > 0) await new Promise<void>((resolve) => setImmediate(resolve))
+          const done = await fileTasksIntoProject(project, items.slice(i, i + FILE_INTO_FOLDER_CHUNK).map(filingItem))
+          result.skipped.push(...done.skipped)
+          if (done.filed.length === 0) continue
+          result.filed.push(...done.filed.map((task) => task.id))
+          bus.emit(EventNames.TASK_UPDATED, { task: null, taskIds: done.filed.map((task) => task.id), fields: ['project', 'group_id', 'tags', 'title'] }, ['web-ui'], { source: `plugin/${pluginId}` })
+        }
+        return result
+      },
+      async deleteFolder(folderId: string) {
+        assertPrimaryWrite('tasks.deleteFolder')
+        const { listGroups, deleteFolder } = await import('../task-manager.js')
+        const groups = await listGroups()
+        const folder = groups.find((one) => one.group_id === folderId)
+        if (!folder) throw new Error(`Folder "${folderId}" not found.`)
+        if (folder.member_ids.length > 0 || groups.some((one) => one.parent_id === folderId)) {
+          throw new Error(`Folder "${folder.label}" is not empty; a plugin only deletes an empty folder.`)
+        }
+        await deleteFolder(folderId)
+        bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: folderId, label: folder.label }, ['web-ui'], { source: `plugin/${pluginId}` })
+      },
+    },
+
+    hosts: {
+      async list() {
+        const { listPluginHosts } = await import('./plugin-hosts.js')
+        return listPluginHosts()
+      },
+      async get(alias: string) {
+        const { getPluginHost } = await import('./plugin-hosts.js')
+        return getPluginHost(alias)
+      },
+      async run(alias: string, input: { script: string; args?: string[]; timeoutMs?: number; maxOutputBytes?: number }) {
+        // A replica has no ssh of its own to the user's hosts; it reaches them through daemons.
+        if (CLOUD_MODE) throw new Error('hosts.run is not available on a replica.')
+        const { runOnPluginHost } = await import('./plugin-hosts.js')
+        return runOnPluginHost(alias, input)
+      },
+    },
+
+    sessionImports: {
+      tag: EXTERNAL_SESSION_IMPORT_TAG,
+      projectFor(host: string) { return externalImportProject(host) },
+      onRun(handler: () => void | Promise<void>) {
+        assertLive('sessionImports.onRun')
+        const subscriber = `plugin:${pluginId}:imports:${++subscriberSequence}`
+        bus.subscribe(subscriber, async (event) => {
+          // The importer ends a run that changed the board with ONE task:updated carrying no
+          // task; its per-task renames carry one and are not a run.
+          if (event.source !== EXTERNAL_IMPORT_EVENT_SOURCE || (event.data as { task?: unknown } | undefined)?.task) return
+          try { await handler() }
+          catch (error) {
+            context.logger.error('Plugin import-run handler failed', { error: error instanceof Error ? error.message : String(error) })
+            await notifyError('Import-run handler failed', error)
+          }
+        }, { global: true, interest: [EventNames.TASK_UPDATED] })
+        return own(toDisposable(() => bus.unsubscribe(subscriber)))
       },
     },
 
