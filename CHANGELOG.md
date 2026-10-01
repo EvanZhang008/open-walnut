@@ -6,6 +6,8 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-01
+
 ### Added
 
 - **Walnut tells you when a newer release is on npm, and updates itself when restarted.** The
