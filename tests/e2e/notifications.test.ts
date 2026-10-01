@@ -671,6 +671,32 @@ describe('Notification feed API', () => {
       .toBe('recovered');
   });
 
+  it('SESSION FAMILY: a bridge-written card ALONE retires on the next clean result', async () => {
+    // The live shape of a stream-convergence violation: the turn itself ended
+    // cleanly, the sentinel logged 15 s later, and NO Session Error was ever
+    // hand-published for the session. Recovery is an edge the server's tracker
+    // has to have seen fail, so without the bridge telling it, this card sat red
+    // until dismissed by hand (2026-10-01).
+    const sessionId = 'sess-bridge-alone-e2e';
+    const { createSubsystemLogger } = await import('../../src/logging/index.js');
+    createSubsystemLogger('obs').error(
+      'stream-convergence VIOLATION: streamed message(s) missing from persisted history',
+      { sessionId, missing: ['msg_1'], checked: 4, host: '__local__' },
+    );
+    const seen = await pollFeed((f) => f.feed.some((n) => n.recoveryKey === `session:${sessionId}`));
+    const card = seen.feed.find((n) => n.recoveryKey === `session:${sessionId}`)!;
+    expect(card.title).toBe('Some session output may not have been saved');
+    expect(card.resolved).toBeUndefined();
+
+    bus.emit(EventNames.SESSION_RESULT, {
+      sessionId, result: 'ok', isError: false,
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' });
+
+    const settled = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === card.dedupKey && n.resolved === 'recovered'));
+    expect(settled.feed.find((n) => n.dedupKey === card.dedupKey)?.resolved).toBe('recovered');
+  });
+
   it('BUS: a throwing subscriber\'s card retires on the next clean dispatch', async () => {
     // The live feed's `subscriber "main-ai" threw` card. The bus is core and cannot
     // import the store, so this rides the publisher the server injects at startup.

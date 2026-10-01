@@ -252,12 +252,24 @@ function dedupFingerprint(payload: ErrorNotifyPayload): string {
   return redactSensitiveText(`${payload.message}\n${meta}`);
 }
 
+export interface LogErrorBridgeHooks {
+  /**
+   * A card with a recovery key was written. The server marks its session-family
+   * tracker failing from here: recovery is an EDGE (recoverSessionErrors only
+   * publishes for a key it saw fail), so a card the bridge raised on its own (a
+   * stream-convergence violation after an otherwise clean turn) never retired on
+   * the session's next clean result until this told the tracker about it.
+   */
+  onConditionRaised?: (recoveryKey: string) => void;
+}
+
 /**
  * Install the bridge. `broadcast` pushes the new record to connected UIs so the
  * bell updates live (the durable write alone only shows up after a refresh).
  */
 export function installLogErrorNotifications(
   broadcast?: (name: string, data: unknown) => void,
+  hooks?: LogErrorBridgeHooks,
 ): void {
   recentKeys.clear();
   recentKeyConditions.clear();
@@ -352,6 +364,8 @@ export function installLogErrorNotifications(
         ...(recoveryKey ? { recoveryKey } : {}),
         ...(causeKey ? { causeKey } : {}),
       }).then(({ record, outcome }) => {
+        // The card exists (new or folded): the condition it names is failing now.
+        if (recoveryKey) hooks?.onConditionRaised?.(recoveryKey);
         // A first occurrence toasts; a later one (after the TTL window) patches the
         // existing card's count/body in place rather than re-toasting the UI.
         if (!broadcast) return;

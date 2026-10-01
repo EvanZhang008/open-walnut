@@ -221,6 +221,49 @@ describe('log-error → notification bridge', () => {
     const logger = createSubsystemLogger('bridge-test');
     expect(() => logger.error('boom')).not.toThrow();
   });
+
+  describe('onConditionRaised hook (the server marks its recovery tracker from it)', () => {
+    it('fires with the card\'s recovery key once the record is written', async () => {
+      uninstallLogErrorNotifications();
+      const raised: string[] = [];
+      installLogErrorNotifications(undefined, { onConditionRaised: (k) => raised.push(k) });
+      // The stream-convergence shape: an `obs` error naming only a session.
+      createSubsystemLogger('obs').error('stream-convergence VIOLATION: streamed message(s) missing from persisted history', {
+        sessionId: 'sess-hook-1', missing: ['m1'], checked: 3,
+      });
+      await feedAfterFlush();
+      expect(raised).toEqual(['session:sess-hook-1']);
+    });
+
+    it('stays silent for a keyless error and for an opted-out one', async () => {
+      uninstallLogErrorNotifications();
+      const raised: string[] = [];
+      installLogErrorNotifications(undefined, { onConditionRaised: (k) => raised.push(k) });
+      createSubsystemLogger('web').error('no condition here');
+      createSubsystemLogger('session').error('hand-published elsewhere', { sessionId: 's-opt', skipNotify: true });
+      await feedAfterFlush();
+      expect(raised).toEqual([]);
+    });
+
+    it('fires again when a repeat folds into the existing card after the TTL', async () => {
+      uninstallLogErrorNotifications();
+      const raised: string[] = [];
+      installLogErrorNotifications(undefined, { onConditionRaised: (k) => raised.push(k) });
+      const logger = createSubsystemLogger('session');
+      logger.error('turn-complete-summary: self-report UNPARSEABLE', { sessionId: 'sess-hook-2' });
+      await feedAfterFlush();
+      // Shift the clock past the TTL (not the timers — the awaits need real ones).
+      const realNow = Date.now;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 61_000);
+      try {
+        logger.error('turn-complete-summary: self-report UNPARSEABLE', { sessionId: 'sess-hook-2' });
+        await new Promise(r => setTimeout(r, 200));
+      } finally {
+        nowSpy.mockRestore();
+      }
+      expect(raised).toEqual(['session:sess-hook-2', 'session:sess-hook-2']);
+    });
+  });
 });
 
 /**

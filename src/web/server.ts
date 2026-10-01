@@ -1002,7 +1002,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // (no clients yet → no-op).
   {
     const { installLogErrorNotifications } = await import('../core/notifications/log-error-bridge.js')
-    installLogErrorNotifications(broadcastEvent)
+    installLogErrorNotifications(broadcastEvent, {
+      // A session-family card the bridge raised on its own (stream-convergence
+      // after a clean turn, an unparseable self-report) must retire on the
+      // session's next clean result like a hand-published Session Error does:
+      // recoverSessionErrors only publishes for a key this tracker saw fail.
+      onConditionRaised: (key) => {
+        if (key.startsWith('session:') || key.startsWith('task:')) sessionErrorTracker.observe(key, true)
+      },
+    })
 
     // ── Recovery signals for the seams that must not import server.ts ──
     //
