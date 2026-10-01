@@ -46,7 +46,9 @@ async function setup(bridgeOpts: AnyRec = {}, probeOpts: AnyRec = {}) {
 describe('control probe', () => {
   it('says hello as host "probe", answers the ping RPC, and every frame verifies', async () => {
     const { fb, evs } = await setup()
-    await until(() => evs('burst').length >= 1 && fb.stats.verified >= 6)
+    // The probe logs `burst` once its own send buffer drains, before the bridge has
+    // read the 2 MiB frame; on a loaded machine the read lands later, so wait for it.
+    await until(() => evs('burst').length >= 1 && fb.stats.verified >= 6 && fb.stats.maxFrameBytes > 2 * 1024 * 1024)
     expect(fb.stats.hellos).toBe(1)
     expect(fb.events.find((e: AnyRec) => e.ev === 'hello')).toMatchObject({ hostAlias: 'probe' })
     expect(fb.stats.pings).toBeGreaterThan(0)
