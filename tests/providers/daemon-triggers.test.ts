@@ -453,4 +453,65 @@ d('walnut-trigger on a real daemon', () => {
     expect((fire.items as Array<{ id: string }>).map((i) => i.id), 'only the new item').toEqual(['d'])
     expect(await rpc({ cmd: 'triggers.ack', triggerId: 'survivor', seq: 2 })).toMatchObject({ acked: true })
   }, 60_000)
+
+  // 2026-10-01: a chat monitor spent its budget, and every held run still saved
+  // the script's moved cursor, so the messages behind it were never delivered.
+  it('a fire the budget holds keeps the old cursor on disk; a raised cap delivers the held items at once', async () => {
+    const feed = path.join(DAEMON_DIR, 'held-feed.txt')
+    const script = path.join(DAEMON_DIR, 'held-check.sh')
+    // A cursor script: items after the cursor, cursor moved to the newest.
+    fs.writeFileSync(script, [
+      'read -r IN',
+      'C=$(printf \'%s\' "$IN" | sed -n \'s/.*"state":{"c":\\([0-9]*\\)}.*/\\1/p\')',
+      'C=${C:-0}; MAX=$C; ITEMS=""',
+      `while read -r ID TS; do if [ "$TS" -gt "$C" ]; then ITEMS="$ITEMS\${ITEMS:+,}{\\"id\\":\\"$ID\\"}"; MAX=$TS; fi; done < ${feed}`,
+      'if [ -n "$ITEMS" ]; then echo "{\\"fire\\":true,\\"items\\":[$ITEMS],\\"state\\":{\\"c\\":$MAX}}"; else echo "{\\"fire\\":false,\\"state\\":{\\"c\\":$MAX}}"; fi',
+    ].join('\n') + '\n')
+    const arm = (maxFiresPerDay: number) => rpc({
+      cmd: 'triggers.configure',
+      config: { version: 1, triggers: [{ id: 'held', name: 'Held', everyMs: 3_600_000, check: { run: `sh ${script}` }, limits: { maxFiresPerDay } }] },
+    })
+    // A replay of an unacked fire repeats its seq; count fires, not frames.
+    const fires = () => [...new Map(firedFor('held').map((e) => [e.seq, e])).values()]
+    // The clock's own first run (5s after arming) may be in flight; wait it out and ask again.
+    const runOnce = async () => {
+      for (;;) {
+        const before = checkedFor('held').length + firedFor('held').length
+        const reply = await rpc({ cmd: 'triggers.run', triggerId: 'held' })
+        await waitFor(() => (checkedFor('held').length + firedFor('held').length > before ? true : undefined), 15_000, 'the held check')
+        if (reply.started === true) return
+      }
+    }
+
+    fs.writeFileSync(feed, 'm1 1\n')
+    expect(await arm(1)).toMatchObject({ ok: true })
+    await runOnce()
+    const first = fires()[0]
+    expect((first.items as Array<{ id: string }>).map((i) => i.id)).toEqual(['m1'])
+    expect(await rpc({ cmd: 'triggers.ack', triggerId: 'held', seq: first.seq as number })).toMatchObject({ acked: true })
+    expect(readState('held').state).toEqual({ c: 1 })
+    expect(readState('held').budget).toMatchObject({ used: 1 })
+    expect(readState('held')).not.toHaveProperty('day')
+
+    // Spent: two new messages are held, and the cursor on disk stays at m1.
+    fs.writeFileSync(feed, 'm1 1\nm2 2\nm3 3\n')
+    await runOnce()
+    expect(checkedFor('held').at(-1)).toMatchObject({ outcome: 'quiet', reason: 'rate-limited' })
+    expect(readState('held').state).toEqual({ c: 1 })
+    await runOnce()
+    expect(checkedFor('held').at(-1)).toMatchObject({ outcome: 'quiet', reason: 'rate-limited' })
+    expect(readState('held').state).toEqual({ c: 1 })
+    expect(fires()).toHaveLength(1)
+
+    // Raising the cap frees fires at once: the next check delivers BOTH, once.
+    expect(await arm(288)).toMatchObject({ ok: true, changed: true })
+    await runOnce()
+    const second = fires()[1]
+    expect((second.items as Array<{ id: string }>).map((i) => i.id)).toEqual(['m2', 'm3'])
+    expect(await rpc({ cmd: 'triggers.ack', triggerId: 'held', seq: second.seq as number })).toMatchObject({ acked: true })
+    expect(readState('held').state).toEqual({ c: 3 })
+    await runOnce()
+    expect(checkedFor('held').at(-1)).toMatchObject({ outcome: 'quiet', reason: 'fire-false' })
+    expect(fires()).toHaveLength(2)
+  }, 90_000)
 })

@@ -16,7 +16,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
+import { FIRE_BUDGET_UNLIMITED, clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
 import type { TriggerDef, TriggersConfigurePayload } from '../../providers/trigger-check-core.js';
 import { cloudModeSkipsJob } from '../cron/jobs.js';
 import type { CronJob } from '../cron/types.js';
@@ -42,10 +42,21 @@ export function triggerDefOf(job: CronJob, host: string): TriggerDef | null {
       timeoutSeconds: clampTimeoutSeconds(job.check.timeoutSeconds),
     },
     ...(typeof job.check.maxFiresPerDay === 'number'
-      ? { limits: { maxFiresPerDay: Math.max(0, Math.floor(job.check.maxFiresPerDay)) } }
+      ? { limits: { maxFiresPerDay: wireFireCap(job.check.maxFiresPerDay) } }
       : {}),
   };
   return def;
+}
+
+/**
+ * A stored 0 means "no limit", which the daemon has no word for (it refuses a
+ * cap below 1, and always has), so it goes out as a cap nothing reaches. Not the
+ * cadence's own maximum: a Run now, a resume or a daemon restart adds checks, and
+ * a once-a-day trigger would then be held for a day after its one fire.
+ */
+export function wireFireCap(stored: number): number {
+  const cap = Math.max(0, Math.floor(stored));
+  return cap > 0 ? cap : FIRE_BUDGET_UNLIMITED;
 }
 
 export function compileTriggerDefs(jobs: CronJob[], host: string): CompiledTriggers {

@@ -12,6 +12,7 @@ import {
   coerceHostState, buildCheckStdin, runCheckProcess, checkErrorOf, validateTriggerDef, pruneSeen,
   headChars, tailChars,
   CHECK_STDOUT_CAP, CHECK_STATE_CAP, CHECK_INPUT_CAP, CHECK_ITEMS_CAP, MAX_FIRES_PER_DAY_DEFAULT, SEEN_MAX,
+  FIRE_BUDGET_WINDOW_MS, CHECK_ITEMS_PARSE_MAX, fireBudgetNextAtMs, fireBudgetUsed, dayKey,
   PENDING_FIRES_MAX, MIN_EVERY_MS,
   triggersSetHash, triggerStateFileName,
   type TriggerDef,
@@ -46,9 +47,15 @@ describe('parseCheckStdout', () => {
     expect(parseCheckStdout('{"fire": true, "items": [{"id": ""}]}')).toMatchObject({ ok: false, error: expect.stringContaining('items[0].id') });
     const dup = parsedOk('{"fire": true, "items": [{"id": "a", "n": 1}, {"id": "a", "n": 2}, {"id": "b"}]}');
     expect(dup.output.items).toEqual([{ id: 'a', n: 1 }, { id: 'b' }]);
+    // Parsing keeps more than one fire carries (the per-fire cap applies to NEW
+    // items, after dedup); only past CHECK_ITEMS_PARSE_MAX is the tail dropped.
     const many = Array.from({ length: CHECK_ITEMS_CAP + 5 }, (_, i) => ({ id: `i${i}` }));
-    const capped = parsedOk(JSON.stringify({ fire: true, items: many }));
-    expect(capped.output.items).toHaveLength(CHECK_ITEMS_CAP);
+    const kept = parsedOk(JSON.stringify({ fire: true, items: many }));
+    expect(kept.output.items).toHaveLength(CHECK_ITEMS_CAP + 5);
+    expect(kept.itemsTruncated).toBe(false);
+    const huge = Array.from({ length: CHECK_ITEMS_PARSE_MAX + 5 }, (_, i) => ({ id: `${i}` }));
+    const capped = parsedOk(JSON.stringify({ fire: true, items: huge }));
+    expect(capped.output.items).toHaveLength(CHECK_ITEMS_PARSE_MAX);
     expect(capped.itemsTruncated).toBe(true);
   });
 
@@ -120,28 +127,159 @@ describe('decideCheck + applyCheckOutcome', () => {
     expect(state.state).toBeNull();
   });
 
-  it('caps fires per day on the host-local calendar and resets on the next day', () => {
+  it('a spent budget holds the fire, then gives back one fire per 24h / cap (no calendar day)', () => {
     const state = emptyHostState(NOW);
     const p = parsedOk('{"fire": true}');
+    // A burst of the whole budget.
     for (let i = 0; i < MAX_FIRES_PER_DAY_DEFAULT; i++) {
       const d = decideCheck(def, p.output, state, NOW + i);
       expect(d.kind).toBe('fire');
       applyCheckOutcome(state, p.output, d, NOW + i, 1);
     }
     expect(decideCheck(def, p.output, state, NOW + 1000)).toEqual({ kind: 'quiet', reason: 'rate-limited' });
-    // A rate-limited run must not mark anything seen.
+    // A held run marks nothing seen.
     const withItems = parsedOk('{"fire": true, "items": [{"id": "late"}]}');
     const limited = decideCheck(def, withItems.output, state, NOW + 1001);
     expect(limited).toEqual({ kind: 'quiet', reason: 'rate-limited' });
     applyCheckOutcome(state, withItems.output, limited, NOW + 1001, 1);
     expect(state.seen.late).toBeUndefined();
 
-    const tomorrow = NOW + 24 * 60 * 60 * 1000;
-    expect(decideCheck(def, withItems.output, state, tomorrow).kind).toBe('fire');
+    // One fire comes back after 24h / 24 = 1 hour, not at the next midnight.
+    const refill = FIRE_BUDGET_WINDOW_MS / MAX_FIRES_PER_DAY_DEFAULT;
+    const last = NOW + MAX_FIRES_PER_DAY_DEFAULT - 1;
+    // (The burst itself drained a few ms worth, hence "about".)
+    expect(Math.abs(fireBudgetNextAtMs(def, state, NOW + 1001) - (last + refill))).toBeLessThan(50);
+    expect(decideCheck(def, withItems.output, state, last + refill - 1_000).kind).toBe('quiet');
+    const back = decideCheck(def, withItems.output, state, last + refill);
+    expect(back).toMatchObject({ kind: 'fire', items: [{ id: 'late' }] });
+    applyCheckOutcome(state, withItems.output, back, last + refill, 1);
+    expect(state.seen.late).toBe(last + refill);
+    // ...and only one: the next is another refill away.
+    expect(decideCheck(def, p.output, state, last + refill + 60_000).kind).toBe('quiet');
+    expect(decideCheck(def, p.output, state, last + 2 * refill).kind).toBe('fire');
+    // A full window of quiet gives the whole burst back.
+    const rested = last + refill + FIRE_BUDGET_WINDOW_MS;
+    expect(fireBudgetUsed(MAX_FIRES_PER_DAY_DEFAULT, state.budget, rested)).toBe(0);
+
     const custom: TriggerDef = { ...def, limits: { maxFiresPerDay: 1 } };
     const fresh = emptyHostState(NOW);
     applyCheckOutcome(fresh, p.output, decideCheck(custom, p.output, fresh, NOW), NOW, 1);
     expect(decideCheck(custom, p.output, fresh, NOW + 1)).toEqual({ kind: 'quiet', reason: 'rate-limited' });
+    expect(decideCheck(custom, p.output, fresh, NOW + FIRE_BUDGET_WINDOW_MS).kind).toBe('fire');
+  });
+
+  it('a held fire keeps the previous cursor, so the next allowed check delivers the same items', () => {
+    // A cursor script: it reports what came after its cursor and moves the cursor
+    // to the newest item. The 2026-10-01 loss: the held run saved the moved cursor.
+    const feed: Array<{ id: string; ts: number }> = [];
+    const run = (cursor: number) => {
+      const after = feed.filter((m) => m.ts > cursor);
+      const next = after.length ? after[after.length - 1].ts : cursor;
+      return parsedOk(JSON.stringify({ fire: after.length > 0, items: after.map((m) => ({ id: m.id })), state: { ts: next } }));
+    };
+    const cursorOf = (st: ReturnType<typeof emptyHostState>) => ((st.state as { ts?: number } | null)?.ts ?? 0);
+    const capped: TriggerDef = { ...def, limits: { maxFiresPerDay: 2 } };
+    const state = emptyHostState(NOW);
+    const delivered: string[] = [];
+    const tick = (at: number) => {
+      const out = run(cursorOf(state));
+      const d = decideCheck(capped, out.output, state, at);
+      const fire = applyCheckOutcome(state, out.output, d, at, 1);
+      if (fire) delivered.push(...fire.items.map((i) => i.id));
+      return d;
+    };
+    feed.push({ id: 'm1', ts: 1 });
+    expect(tick(NOW).kind).toBe('fire');
+    feed.push({ id: 'm2', ts: 2 });
+    expect(tick(NOW + 300_000).kind).toBe('fire');
+    // The budget is spent: m3 and m4 are held, and the cursor stays at m2.
+    feed.push({ id: 'm3', ts: 3 });
+    expect(tick(NOW + 600_000)).toEqual({ kind: 'quiet', reason: 'rate-limited' });
+    expect(state.state).toEqual({ ts: 2 });
+    feed.push({ id: 'm4', ts: 4 });
+    expect(tick(NOW + 900_000)).toEqual({ kind: 'quiet', reason: 'rate-limited' });
+    expect(state.state).toEqual({ ts: 2 });
+    // The refill (12h for a cap of 2) fires once with BOTH held items.
+    const d = tick(NOW + 300_000 + FIRE_BUDGET_WINDOW_MS / 2);
+    expect(d).toMatchObject({ kind: 'fire', items: [{ id: 'm3' }, { id: 'm4' }] });
+    expect(state.state).toEqual({ ts: 4 });
+    expect(delivered).toEqual(['m1', 'm2', 'm3', 'm4']);
+    // Quiet and all-seen runs still save the cursor: only a held fire keeps the old one.
+    const quiet = parsedOk('{"fire": false, "state": {"ts": 9}}');
+    applyCheckOutcome(state, quiet.output, decideCheck(capped, quiet.output, state, NOW + FIRE_BUDGET_WINDOW_MS), NOW + FIRE_BUDGET_WINDOW_MS, 1);
+    expect(state.state).toEqual({ ts: 9 });
+  });
+
+  it('a backlog longer than one fire is walked: the cursor is kept until the last of it is delivered', () => {
+    // 450 new messages after a long hold, from a cursor script that prints them all.
+    const ids = Array.from({ length: 450 }, (_, i) => `m${i + 1}`);
+    const out = parsedOk(JSON.stringify({ fire: true, items: ids.map((id) => ({ id })), state: { ts: 450 } }));
+    const lenient: TriggerDef = { ...def, limits: { maxFiresPerDay: 288 } };
+    const state = emptyHostState(NOW);
+    state.state = { ts: 0 };
+    const delivered: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const d = decideCheck(lenient, out.output, state, NOW + i * 300_000);
+      expect(d.kind).toBe('fire');
+      const fire = applyCheckOutcome(state, out.output, d, NOW + i * 300_000, 1)!;
+      delivered.push(...fire.items.map((it) => it.id));
+      // The cursor moves only with the fire that carried the last new item.
+      expect(state.state).toEqual(i < 2 ? { ts: 0 } : { ts: 450 });
+      expect(fire.itemsTruncated).toBe(i < 2 ? true : undefined);
+    }
+    expect(delivered).toEqual(ids);
+    expect(decideCheck(lenient, out.output, state, NOW + 900_000)).toEqual({ kind: 'quiet', reason: 'all-seen' });
+  });
+
+  it('a clock that jumped ahead and came back does not freeze the budget', () => {
+    const p = parsedOk('{"fire": true}');
+    const capped: TriggerDef = { ...def, limits: { maxFiresPerDay: 24 } };
+    const state = emptyHostState(NOW);
+    // Spent while the clock read a day ahead.
+    const ahead = NOW + FIRE_BUDGET_WINDOW_MS;
+    for (let i = 0; i < 24; i++) applyCheckOutcome(state, p.output, decideCheck(capped, p.output, state, ahead + i), ahead + i, 1);
+    // Back to the real time: the first check rebases the stamp, and an hour later a fire is back.
+    applyCheckOutcome(state, p.output, decideCheck(capped, p.output, state, NOW), NOW, 1);
+    expect(state.budget.atMs).toBe(NOW);
+    expect(decideCheck(capped, p.output, state, NOW + FIRE_BUDGET_WINDOW_MS / 24 + 1_000).kind).toBe('fire');
+  });
+
+  it('a raised cap takes effect at once; a lowered one holds for one refill, not days', () => {
+    const p = parsedOk('{"fire": true}');
+    const state = emptyHostState(NOW);
+    for (let i = 0; i < 24; i++) applyCheckOutcome(state, p.output, decideCheck(def, p.output, state, NOW + i), NOW + i, 1);
+    expect(decideCheck(def, p.output, state, NOW + 100).kind).toBe('quiet');
+    // 24 -> 288 (the Slack monitor fix): 264 free fires right away.
+    const busy: TriggerDef = { ...def, limits: { maxFiresPerDay: 288 } };
+    expect(decideCheck(busy, p.output, state, NOW + 100).kind).toBe('fire');
+    for (let i = 0; i < 200; i++) applyCheckOutcome(state, p.output, decideCheck(busy, p.output, state, NOW + 200 + i), NOW + 200 + i, 1);
+    expect(state.budget.used).toBeGreaterThan(200);
+    // 288 -> 4 with 224 spent: the spend clamps to the cap, so one refill (6h) frees a fire.
+    const strict: TriggerDef = { ...def, limits: { maxFiresPerDay: 4 } };
+    const at = NOW + 1_000;
+    expect(decideCheck(strict, p.output, state, at).kind).toBe('quiet');
+    const next = fireBudgetNextAtMs(strict, state, at);
+    expect(next).toBeLessThanOrEqual(at + FIRE_BUDGET_WINDOW_MS / 4);
+    // The prediction is what decideCheck then does.
+    expect(decideCheck(strict, p.output, state, next - 1_000).kind).toBe('quiet');
+    expect(decideCheck(strict, p.output, state, next).kind).toBe('fire');
+  });
+
+  it('migrates the old per-day counter: today\'s fires carry over as spent, another day\'s are gone', () => {
+    const today = coerceHostState({ seen: {}, seq: 30, day: { key: dayKey(NOW), fires: 24 } }, NOW);
+    expect(today.budget).toEqual({ used: 24, atMs: NOW });
+    expect('day' in today).toBe(false);
+    const p = parsedOk('{"fire": true}');
+    expect(decideCheck(def, p.output, today, NOW).kind).toBe('quiet');
+    expect(decideCheck(def, p.output, today, NOW + FIRE_BUDGET_WINDOW_MS / 24).kind).toBe('fire');
+    const yesterday = coerceHostState({ seen: {}, day: { key: '2026-09-14', fires: 24 } }, NOW);
+    expect(yesterday.budget).toEqual({ used: 0, atMs: NOW });
+    expect(decideCheck(def, p.output, yesterday, NOW).kind).toBe('fire');
+    // A written budget round-trips; junk in it is a fresh budget.
+    expect(coerceHostState({ budget: { used: 3.5, atMs: NOW - 10 } }, NOW).budget).toEqual({ used: 3.5, atMs: NOW - 10 });
+    expect(coerceHostState({ budget: { used: 'x', atMs: NOW } }, NOW).budget).toEqual({ used: 0, atMs: NOW });
+    // A clock that went backwards drains nothing (and never refunds a negative spend).
+    expect(fireBudgetUsed(24, { used: 5, atMs: NOW + 60_000 }, NOW)).toBe(5);
   });
 
   it('pending fires are at-least-once: kept until acked, oldest dropped past the cap', () => {
@@ -225,10 +363,10 @@ describe('validateTriggerDef', () => {
   });
 });
 
-describe('the daily fire cap', () => {
-  // `decideCheck` gates on `cap > 0`, so a stored 0 would DISABLE the cap - the
-  // opposite of what writing 0 means. It is refused at the door instead.
-  it('refuses a cap below 1 and names the way to say "no limit"', () => {
+describe('the fire budget cap on the wire', () => {
+  // A cap below 1 never crosses the wire (the server sends "no limit" as a
+  // cadence-sized cap), so the daemon refuses one rather than guessing its meaning.
+  it('refuses a cap below 1 and names the default', () => {
     const zero = validateTriggerDef({ id: 'j', everyMs: 60_000, check: { run: 'x' }, limits: { maxFiresPerDay: 0 } });
     expect(zero).toMatchObject({ ok: false, error: expect.stringContaining('at least 1') });
     expect(validateTriggerDef({ id: 'j', everyMs: 60_000, check: { run: 'x' }, limits: { maxFiresPerDay: -3 } })).toMatchObject({ ok: false });

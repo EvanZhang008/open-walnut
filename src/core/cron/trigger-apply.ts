@@ -39,7 +39,15 @@ export interface TriggerCheckedApplied {
   host?: string;
   consecutiveErrors?: number;
   error?: string;
+  /**
+   * The fire budget held this check back and the user has not been told today.
+   * `maxFiresPerDay` is the stored cap (absent = the default), for the notice.
+   */
+  budgetHeld?: { maxFiresPerDay?: number; everyMs?: number };
 }
+
+/** A trigger the fire budget keeps holding is worth one notice a day, not one per check. */
+export const FIRE_BUDGET_NOTICE_EVERY_MS = 24 * 60 * 60 * 1000;
 
 export interface TriggerFiredApplied {
   found: boolean;
@@ -182,6 +190,17 @@ export async function applyTriggerChecked(
     // reports; the daemon has disarmed it, so there is no next run to show.
     job.state.nextRunAtMs = job.enabled && Number.isFinite(event.nextRunAtMs) ? event.nextRunAtMs : undefined;
 
+    // The first held check in a day tells the user; the rest only show on the card.
+    let budgetHeld: TriggerCheckedApplied['budgetHeld'];
+    if (job.enabled && event.outcome === 'quiet' && event.reason === 'rate-limited'
+      && atMs - (job.state.fireBudgetNoticeAtMs ?? 0) >= FIRE_BUDGET_NOTICE_EVERY_MS) {
+      job.state.fireBudgetNoticeAtMs = atMs;
+      budgetHeld = {
+        ...(typeof job.check.maxFiresPerDay === 'number' ? { maxFiresPerDay: job.check.maxFiresPerDay } : {}),
+        ...(job.schedule.kind === 'every' ? { everyMs: job.schedule.everyMs } : {}),
+      };
+    }
+
     let disabled = false;
     // Only a polling trigger can be stopped: a late error from a check that was
     // running when someone paused it leaves the pause as it is, with no notice.
@@ -209,6 +228,7 @@ export async function applyTriggerChecked(
       host: job.check.host,
       consecutiveErrors: job.state.consecutiveErrors ?? 0,
       ...(event.error ? { error: event.error } : {}),
+      ...(budgetHeld ? { budgetHeld } : {}),
     };
   });
 }

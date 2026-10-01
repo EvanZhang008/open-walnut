@@ -210,6 +210,13 @@ export type CronJobState = {
   /** Check jobs only: what the daemon reported about the most recent run. */
   lastCheck?: TriggerLastCheck;
   /**
+   * Check jobs only: when the user was last told this trigger's fire budget is
+   * holding fires back. At most one notice a day, kept here rather than in the
+   * notification's dedupKey so dismissing the notice does not bring it back on
+   * the next held check five minutes later.
+   */
+  fireBudgetNoticeAtMs?: number;
+  /**
    * Check jobs only: the highest fire already processed, as (epoch, seq). The
    * daemon's seq restarts at 0 whenever its state file is recreated (a reboot
    * that cleared its dir, a very old daemon re-arming); the epoch it mints with

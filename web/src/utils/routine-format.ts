@@ -153,7 +153,8 @@ export function describeLastCheck(last: RoutineLastCheck | undefined, nowMs = Da
     const msg = (last.error ?? 'check failed').replace(/\s+/g, ' ').trim();
     return `error: ${msg.length > 80 ? `${msg.slice(0, 80)}…` : msg}, ${ago}`;
   }
-  return last.reason === 'rate-limited' ? `quiet (daily fire limit), ${ago}` : `quiet, ${ago}`;
+  // A held fire is late, not lost: the daemon kept its cursor and fires it later.
+  return last.reason === 'rate-limited' ? `held by the fire budget, ${ago}` : `quiet, ${ago}`;
 }
 
 /** The check command as a one-line label: "$ gh pr view … @ clouddev". */
@@ -205,7 +206,7 @@ export function describeAuditEntry(entry: RoutineAuditEntry): string {
     return `check error: ${msg.length > 90 ? `${clip(msg, 90)}…` : msg}`;
   }
   if (entry.outcome === 'quiet') {
-    if (entry.reason === 'rate-limited') return 'quiet — daily fire limit reached';
+    if (entry.reason === 'rate-limited') return 'held: fire budget used up, it fires on a later check';
     if (entry.reason === 'all-seen') return 'quiet — nothing new (all items already seen)';
     return 'quiet — the script said no';
   }

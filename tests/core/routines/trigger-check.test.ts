@@ -22,7 +22,10 @@ import { findDueJobs, findMissedJobs } from '../../../src/core/cron/timer.js';
 import { compileTriggerDefs, triggerDefOf } from '../../../src/core/routines/trigger-push.js';
 import { buildTriggerMessage, buildScheduledSessionMessage } from '../../../src/core/routines/trigger-envelope.js';
 import { parseWalnutMessage } from '../../../src/core/peers/walnut-message-tag.js';
-import { MIN_EVERY_MS, CHECK_TIMEOUT_MAX_S, CHECK_INPUT_CAP } from '../../../src/providers/trigger-check-core.js';
+import {
+  MIN_EVERY_MS, CHECK_TIMEOUT_MAX_S, CHECK_INPUT_CAP, FIRE_BUDGET_UNLIMITED,
+  applyCheckOutcome, decideCheck, emptyHostState, parseCheckStdout, validateTriggerDef,
+} from '../../../src/providers/trigger-check-core.js';
 import type { CronJob, CronServiceState, CronStoreFile } from '../../../src/core/cron/types.js';
 import { parseEveryMs } from '../../../src/core/routines/trigger-api.js';
 
@@ -210,6 +213,23 @@ describe('compileTriggerDefs', () => {
       check: { run: 'x', timeoutSeconds: CHECK_TIMEOUT_MAX_S },
       limits: { maxFiresPerDay: 7 },
     });
+  });
+
+  it('sends a stored 0 ("no limit") as a cap nothing reaches, which every daemon accepts', () => {
+    // Before: 0 went out as-is, the daemon refused the WHOLE configure, and no
+    // trigger on that host was armed or updated.
+    const daily = triggerJob({ schedule: { kind: 'every', everyMs: 86_400_000 }, check: { run: 'x', host: '__local__', maxFiresPerDay: 0 } });
+    const def = triggerDefOf(daily, '__local__')!;
+    expect(def.limits).toEqual({ maxFiresPerDay: FIRE_BUDGET_UNLIMITED });
+    expect(validateTriggerDef(def)).toMatchObject({ ok: true });
+    // A once-a-day trigger is not held after its one fire when Run now adds a check.
+    const state = emptyHostState(1_000);
+    const fire = parseCheckStdout('{"fire": true}');
+    if (!fire.ok) throw new Error(fire.error);
+    applyCheckOutcome(state, fire.output, decideCheck(def, fire.output, state, 1_000), 1_000, 1);
+    expect(decideCheck(def, fire.output, state, 2_000).kind).toBe('fire');
+    // An absent cap stays absent (the daemon's default).
+    expect(triggerDefOf(triggerJob(), '__local__')!.limits).toBeUndefined();
   });
 
   it('the hash ignores key order and job order, but not content', () => {

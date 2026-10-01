@@ -26,9 +26,29 @@ export const CHECK_STDOUT_CAP = 64 * 1024;
 export const CHECK_STDERR_TAIL = 8 * 1024;
 export const CHECK_INPUT_CAP = 8 * 1024;
 export const CHECK_STATE_CAP = 16 * 1024;
+/** Most NEW items one fire carries; the rest come on the next check (the cursor is kept). */
 export const CHECK_ITEMS_CAP = 200;
+/**
+ * Most items one run may print at all. Items are deduped BEFORE the per-fire cap,
+ * so a backlog longer than one fire can still be walked: the delivered ones are
+ * seen, and the next run's first new ones are the ones that did not fit.
+ */
+export const CHECK_ITEMS_PARSE_MAX = 2000;
 export const CHECK_ITEM_ID_MAX = 200;
+/**
+ * The fire budget: a trigger may fire this many times in a burst, and the budget
+ * refills at the same number per 24 hours (one fire back every 24h / cap). It
+ * used to be a calendar-day counter, which held a busy trigger for the rest of
+ * the host's day once spent (a 5-minute chat monitor on a UTC host went dark at
+ * 17:00 Pacific until midnight UTC).
+ */
 export const MAX_FIRES_PER_DAY_DEFAULT = 24;
+export const FIRE_BUDGET_WINDOW_MS = 24 * 60 * 60 * 1000;
+/**
+ * What a stored 0 ("no limit") is sent as. Every daemon refuses a cap below 1,
+ * and no trigger fires a million times a day, so this never holds a fire.
+ */
+export const FIRE_BUDGET_UNLIMITED = 1_000_000;
 export const SEEN_MAX = 2000;
 export const SEEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const PENDING_FIRES_MAX = 50;
@@ -99,7 +119,7 @@ export interface PendingFire {
   items: TriggerItem[];
   input?: string;
   durationMs: number;
-  /** The script printed more than CHECK_ITEMS_CAP items; the tail was dropped. */
+  /** There were more new items than CHECK_ITEMS_CAP; the rest come on a later check. */
   itemsTruncated?: boolean;
 }
 
@@ -115,7 +135,12 @@ export interface TriggerHostState {
   epoch: string;
   seen: Record<string, number>;
   state: unknown;
-  day: { key: string; fires: number };
+  /**
+   * Fires spent from the budget as of `atMs`. It drains at cap per 24h, so the
+   * value now is `used - elapsed * cap / 24h` (never below 0). Keeping the spend
+   * rather than the tokens left means a raised cap takes effect at once.
+   */
+  budget: { used: number; atMs: number };
   pendingFires: PendingFire[];
   consecutiveErrors: number;
   seq: number;
@@ -125,7 +150,11 @@ export interface TriggerHostState {
 
 export type CheckDecision =
   | { kind: 'quiet'; reason: 'fire-false' | 'all-seen' | 'rate-limited' }
-  | { kind: 'fire'; items: TriggerItem[]; input?: string };
+  /**
+   * `budgetCap` is the cap decideCheck judged by, so the fire is charged to the
+   * same budget. `truncated`: more new items than one fire carries.
+   */
+  | { kind: 'fire'; items: TriggerItem[]; input?: string; budgetCap?: number; truncated?: boolean };
 
 // ── Wire shapes between server and daemon (docs/plan/walnut-trigger.md) ──
 
@@ -217,14 +246,14 @@ export function emptyHostState(nowMs: number): TriggerHostState {
     epoch: newEpoch(),
     seen: {},
     state: null,
-    day: { key: dayKey(nowMs), fires: 0 },
+    budget: { used: 0, atMs: nowMs },
     pendingFires: [],
     consecutiveErrors: 0,
     seq: 0,
   };
 }
 
-/** Local calendar day on the host that runs the check: the daily cap is a human budget. */
+/** Local calendar day on the host: the key of the old per-day counter, read only to migrate it. */
 export function dayKey(nowMs: number): string {
   const d = new Date(nowMs);
   const pad = (n: number) => String(n).padStart(2, '0');
@@ -242,7 +271,6 @@ export function coerceHostState(raw: unknown, nowMs: number): TriggerHostState {
       if (typeof v === 'number' && Number.isFinite(v)) seen[k] = v;
     }
   }
-  const day = r.day && typeof r.day === 'object' ? (r.day as Record<string, unknown>) : {};
   const pending = Array.isArray(r.pendingFires)
     ? (r.pendingFires as unknown[]).filter((p): p is PendingFire =>
         !!p && typeof p === 'object' && typeof (p as PendingFire).seq === 'number' && Array.isArray((p as PendingFire).items))
@@ -253,16 +281,64 @@ export function coerceHostState(raw: unknown, nowMs: number): TriggerHostState {
     epoch: typeof r.epoch === 'string' && r.epoch ? r.epoch : empty.epoch,
     seen,
     state: 'state' in r ? r.state : null,
-    day: {
-      key: typeof day.key === 'string' ? day.key : empty.day.key,
-      fires: typeof day.fires === 'number' ? day.fires : 0,
-    },
+    budget: coerceBudget(r, nowMs),
     pendingFires: pending.slice(-PENDING_FIRES_MAX),
     consecutiveErrors: typeof r.consecutiveErrors === 'number' ? r.consecutiveErrors : 0,
     seq: typeof r.seq === 'number' ? r.seq : 0,
     ...(typeof r.lastRunAtMs === 'number' ? { lastRunAtMs: r.lastRunAtMs } : {}),
     ...(typeof r.lastFireAtMs === 'number' ? { lastFireAtMs: r.lastFireAtMs } : {}),
   };
+}
+
+/**
+ * The budget from disk. A file written before the budget carries the old
+ * `day: {key, fires}` counter: today's fires carry over as spent from now, so an
+ * upgrade neither hands a spent trigger a fresh burst nor holds it longer than
+ * the new rule would; another day's count is simply gone.
+ */
+function coerceBudget(r: Record<string, unknown>, nowMs: number): TriggerHostState['budget'] {
+  const b = r.budget && typeof r.budget === 'object' ? (r.budget as Record<string, unknown>) : null;
+  if (b && typeof b.used === 'number' && Number.isFinite(b.used) && typeof b.atMs === 'number' && Number.isFinite(b.atMs)) {
+    return { used: Math.max(0, b.used), atMs: b.atMs };
+  }
+  const day = r.day && typeof r.day === 'object' ? (r.day as Record<string, unknown>) : null;
+  const fires = day && day.key === dayKey(nowMs) && typeof day.fires === 'number' && Number.isFinite(day.fires)
+    ? Math.max(0, day.fires)
+    : 0;
+  return { used: fires, atMs: nowMs };
+}
+
+/** The cap a def runs under; 0 (never pushed, but harmless) means no budget at all. */
+export function fireBudgetCap(def: TriggerDef): number {
+  return def.limits?.maxFiresPerDay ?? MAX_FIRES_PER_DAY_DEFAULT;
+}
+
+/**
+ * Fires spent as of `nowMs`, after the drain since the last fire. Never above
+ * the cap: a cap lowered after a busy spell holds the trigger for one refill
+ * (24h / cap), not for the days the old spend would take to drain at the new rate.
+ */
+export function fireBudgetUsed(cap: number, budget: TriggerHostState['budget'], nowMs: number): number {
+  if (cap <= 0) return 0;
+  const elapsed = Math.max(0, nowMs - budget.atMs);
+  // Clamp BEFORE draining: clamping after would report a full budget for as long
+  // as the old spend takes to drain at the new, slower rate.
+  return Math.max(0, Math.min(cap, budget.used) - (elapsed * cap) / FIRE_BUDGET_WINDOW_MS);
+}
+
+/** Float slack, so a budget that drained to exactly one free fire is not held by rounding. */
+const BUDGET_EPSILON = 1e-9;
+
+/**
+ * When the next fire is allowed: `nowMs` when one is allowed now. The daemon
+ * checks on its own cadence, so the fire lands on the first check at or after it.
+ */
+export function fireBudgetNextAtMs(def: TriggerDef, state: TriggerHostState, nowMs: number): number {
+  const cap = fireBudgetCap(def);
+  if (cap <= 0) return nowMs;
+  const over = fireBudgetUsed(cap, state.budget, nowMs) - (cap - 1);
+  if (over <= BUDGET_EPSILON) return nowMs;
+  return nowMs + Math.ceil((over * FIRE_BUDGET_WINDOW_MS) / cap);
 }
 
 export function pruneSeen(state: TriggerHostState, nowMs: number): void {
@@ -334,8 +410,8 @@ export function parseCheckStdout(stdout: string): ParsedCheck {
       if (!byId.has(id)) byId.set(id, { ...(it as Record<string, unknown>), id });
     }
     items = [...byId.values()];
-    if (items.length > CHECK_ITEMS_CAP) {
-      items = items.slice(0, CHECK_ITEMS_CAP);
+    if (items.length > CHECK_ITEMS_PARSE_MAX) {
+      items = items.slice(0, CHECK_ITEMS_PARSE_MAX);
       itemsTruncated = true;
     }
   }
@@ -388,26 +464,42 @@ export function newItemsOf(items: TriggerItem[] | undefined, state: TriggerHostS
 /**
  * fire:false is quiet. fire:true with items fires only for ids not yet seen;
  * fire:true with NO items fires every time (the script did its own judging).
- * The daily cap is checked last so a rate-limited run still reports why.
+ * The fire budget is checked last so a held run still reports why
+ * (`rate-limited` on the wire: a fire the budget holds back for a later check).
  */
 export function decideCheck(def: TriggerDef, output: TriggerCheckOutput, state: TriggerHostState, nowMs: number): CheckDecision {
   if (!output.fire) return { kind: 'quiet', reason: 'fire-false' };
   let items: TriggerItem[] = [];
+  let truncated = false;
   if (output.items) {
     items = newItemsOf(output.items, state);
     if (items.length === 0) return { kind: 'quiet', reason: 'all-seen' };
+    if (items.length > CHECK_ITEMS_CAP) {
+      items = items.slice(0, CHECK_ITEMS_CAP);
+      truncated = true;
+    }
   }
-  const cap = def.limits?.maxFiresPerDay ?? MAX_FIRES_PER_DAY_DEFAULT;
-  const firesToday = state.day.key === dayKey(nowMs) ? state.day.fires : 0;
-  if (cap > 0 && firesToday >= cap) return { kind: 'quiet', reason: 'rate-limited' };
-  return { kind: 'fire', items, ...(output.input !== undefined ? { input: output.input } : {}) };
+  if (fireBudgetNextAtMs(def, state, nowMs) > nowMs) return { kind: 'quiet', reason: 'rate-limited' };
+  return {
+    kind: 'fire', items,
+    ...(output.input !== undefined ? { input: output.input } : {}),
+    budgetCap: fireBudgetCap(def),
+    ...(truncated ? { truncated: true } : {}),
+  };
 }
 
 /**
- * Record a completed check. `state` from the script always replaces the stored
- * one when printed (null included); a script that prints no `state` key keeps
- * the previous cursor. Seen ids are written ONLY on a fire, so a rate-limited
- * or quiet run never swallows an item. Returns the queued fire, if any.
+ * Record a completed check. `state` from the script replaces the stored one
+ * when printed (null included); a script that prints no `state` key keeps the
+ * previous cursor. Seen ids are written ONLY on a fire.
+ *
+ * A fire the budget held back keeps the previous cursor too: the script moved
+ * its cursor past the items it just reported, and saving that would lose them
+ * for good, since the next run reads on from the new cursor. Keeping the old one
+ * makes the next allowed check report the same items again (plus anything newer),
+ * so a held fire is late, never lost. A fire that could not carry every new item
+ * keeps it as well, so the next check reports the rest (the delivered ones are
+ * seen by then). Returns the queued fire, if any.
  */
 export function applyCheckOutcome(
   state: TriggerHostState,
@@ -419,14 +511,18 @@ export function applyCheckOutcome(
 ): PendingFire | null {
   state.lastRunAtMs = nowMs;
   state.consecutiveErrors = 0;
-  if (output.hasState) state.state = output.state ?? null;
-  const today = dayKey(nowMs);
-  if (state.day.key !== today) state.day = { key: today, fires: 0 };
+  const held = decision.kind === 'quiet' && decision.reason === 'rate-limited';
+  const partial = decision.kind === 'fire' && (decision.truncated === true || flags.itemsTruncated === true);
+  if (output.hasState && !held && !partial) state.state = output.state ?? null;
+  // A clock that jumped ahead and came back would otherwise freeze the drain
+  // (elapsed stays 0) until it catches up with the stamp.
+  if (state.budget.atMs > nowMs) state.budget = { used: state.budget.used, atMs: nowMs };
   if (decision.kind !== 'fire') return null;
 
   for (const it of decision.items) state.seen[it.id] = nowMs;
   pruneSeen(state, nowMs);
-  state.day.fires += 1;
+  const cap = decision.budgetCap ?? MAX_FIRES_PER_DAY_DEFAULT;
+  state.budget = cap > 0 ? { used: fireBudgetUsed(cap, state.budget, nowMs) + 1, atMs: nowMs } : { used: 0, atMs: nowMs };
   state.lastFireAtMs = nowMs;
   state.seq += 1;
   const fire: PendingFire = {
@@ -434,7 +530,7 @@ export function applyCheckOutcome(
     atMs: nowMs,
     items: decision.items,
     ...(decision.input !== undefined ? { input: decision.input } : {}),
-    ...(flags.itemsTruncated ? { itemsTruncated: true } : {}),
+    ...(flags.itemsTruncated || decision.truncated ? { itemsTruncated: true } : {}),
     durationMs,
   };
   state.pendingFires.push(fire);
@@ -660,11 +756,12 @@ export function validateTriggerDef(raw: unknown): { ok: true; def: TriggerDef } 
     return { ok: false, error: `trigger ${r.id}: check.run is required` };
   }
   const limits = r.limits && typeof r.limits === 'object' ? (r.limits as Record<string, unknown>) : {};
-  // `cap > 0` is what decideCheck tests, so a 0 here would DISABLE the daily cap -
-  // the exact opposite of what someone writing 0 means. Refuse it and name the
-  // way to say "no limit" instead of silently removing a safety valve.
+  // A cap of 0 never crosses the wire: it reads as either "no fires" or "no
+  // limit", and daemons before the budget refuse it. The server sends a stored 0
+  // ("no limit") as FIRE_BUDGET_UNLIMITED (trigger-push.ts) and omits the field
+  // for the default. Refused here so a bad push fails loudly instead of guessing.
   if (typeof limits.maxFiresPerDay === 'number' && Math.floor(limits.maxFiresPerDay) < 1) {
-    return { ok: false, error: `trigger ${r.id}: limits.maxFiresPerDay must be at least 1 (omit it for no limit)` };
+    return { ok: false, error: `trigger ${r.id}: limits.maxFiresPerDay must be at least 1 (omit it for the default of ${MAX_FIRES_PER_DAY_DEFAULT})` };
   }
   return {
     ok: true,

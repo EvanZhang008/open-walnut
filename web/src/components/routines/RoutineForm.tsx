@@ -42,6 +42,12 @@ interface TriggerState {
   expr: string;
   tz: string;
   everyMin: number;
+  /**
+   * The stored interval, kept exact: the field counts whole minutes, so a 10s
+   * or 90s trigger would otherwise be saved as 1 or 2 minutes by an edit that
+   * never touched the interval (raising "Fires per day", say).
+   */
+  everyMsStored?: number;
 }
 
 const localTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -54,6 +60,8 @@ function defaultTrigger(): TriggerState {
 }
 
 const pad = (n: number) => n.toString().padStart(2, '0');
+
+const everyMinOf = (everyMs: number) => Math.max(1, Math.round(everyMs / 60_000));
 
 /** Map an existing schedule back onto the closest preset (else Custom). */
 function scheduleToTrigger(s: RoutineSchedule | undefined): TriggerState {
@@ -68,7 +76,8 @@ function scheduleToTrigger(s: RoutineSchedule | undefined): TriggerState {
   if (s.kind === 'every') {
     t.preset = 'custom';
     t.customKind = 'every';
-    t.everyMin = Math.max(1, Math.round(s.everyMs / 60_000));
+    t.everyMin = everyMinOf(s.everyMs);
+    t.everyMsStored = s.everyMs;
     return t;
   }
   t.tz = s.tz ?? localTz();
@@ -103,6 +112,7 @@ function triggerToSchedule(t: TriggerState): RoutineSchedule | null {
   if (t.preset === 'custom') {
     if (t.customKind === 'every') {
       if (!t.everyMin || t.everyMin <= 0) return null;
+      if (t.everyMsStored && everyMinOf(t.everyMsStored) === t.everyMin) return { kind: 'every', everyMs: t.everyMsStored };
       return { kind: 'every', everyMs: t.everyMin * 60_000 };
     }
     if (!t.expr.trim()) return null;
@@ -121,8 +131,8 @@ interface CheckDraft {
   host: string;
   cwd: string;
   timeoutSeconds: string;
-  /** Not editable here; carried through so a form edit does not reset an agent-set cap. */
-  maxFiresPerDay?: number;
+  /** The fire budget; empty = the default. The server replaces `check` wholesale on save. */
+  maxFiresPerDay: string;
 }
 
 function checkToDraft(c: RoutineCheck | undefined): CheckDraft {
@@ -131,7 +141,7 @@ function checkToDraft(c: RoutineCheck | undefined): CheckDraft {
     host: c?.host && c.host !== '__local__' ? c.host : '',
     cwd: c?.cwd ?? '',
     timeoutSeconds: typeof c?.timeoutSeconds === 'number' ? String(c.timeoutSeconds) : '',
-    ...(typeof c?.maxFiresPerDay === 'number' ? { maxFiresPerDay: c.maxFiresPerDay } : {}),
+    maxFiresPerDay: typeof c?.maxFiresPerDay === 'number' ? String(c.maxFiresPerDay) : '',
   };
 }
 
@@ -139,14 +149,14 @@ function draftToCheck(d: CheckDraft): RoutineCheck | null {
   const run = d.run.trim();
   if (!run) return null;
   const timeout = Number(d.timeoutSeconds);
+  const cap = d.maxFiresPerDay.trim() === '' ? NaN : Number(d.maxFiresPerDay);
   return {
     run,
     host: d.host || '__local__',
     ...(d.cwd.trim() ? { cwd: d.cwd.trim() } : {}),
     ...(d.timeoutSeconds && Number.isFinite(timeout) && timeout > 0 ? { timeoutSeconds: timeout } : {}),
-    // The server replaces `check` wholesale on save, so an omitted cap would
-    // silently become the default.
-    ...(typeof d.maxFiresPerDay === 'number' ? { maxFiresPerDay: d.maxFiresPerDay } : {}),
+    // An empty field is the default (24); 0 means no limit.
+    ...(Number.isFinite(cap) && cap >= 0 ? { maxFiresPerDay: Math.floor(cap) } : {}),
   };
 }
 
@@ -522,7 +532,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                     <div className="routine-trigger-row">
                       <span className="routine-trigger-at">Every</span>
                       <input type="number" min="1" value={trigger.everyMin}
-                        onChange={(e) => setTrigger({ ...trigger, everyMin: Number(e.target.value) })}
+                        onChange={(e) => setTrigger({ ...trigger, everyMin: Number(e.target.value), everyMsStored: undefined })}
                         aria-label="Interval minutes" style={{ width: 88 }} />
                       <span className="routine-trigger-at">minutes</span>
                     </div>
@@ -584,6 +594,19 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                       value={check.timeoutSeconds}
                       onChange={(e) => setCheck({ ...check, timeoutSeconds: e.target.value })}
                       placeholder="30"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="routine-check-fires" title="Up to this many fires in a burst, refilling at this many per day. A held fire arrives later with everything new; nothing is dropped. 0 = no limit.">
+                      Fires per day
+                    </label>
+                    <input
+                      id="routine-check-fires"
+                      type="number"
+                      min="0"
+                      value={check.maxFiresPerDay}
+                      onChange={(e) => setCheck({ ...check, maxFiresPerDay: e.target.value })}
+                      placeholder="24"
                     />
                   </div>
                 </div>

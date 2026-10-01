@@ -33,7 +33,7 @@ describe('describeLastCheck', () => {
     expect(describeLastCheck({ atMs: NOW - 180_000, outcome: 'fired', items: 1 }, NOW)).toBe('fired, 1 item, 3m ago');
     expect(describeLastCheck({ atMs: NOW - 180_000, outcome: 'fired' }, NOW)).toBe('fired, 3m ago');
     expect(describeLastCheck({ atMs: NOW - 180_000, outcome: 'quiet', reason: 'all-seen' }, NOW)).toBe('quiet, 3m ago');
-    expect(describeLastCheck({ atMs: NOW - 180_000, outcome: 'quiet', reason: 'rate-limited' }, NOW)).toBe('quiet (daily fire limit), 3m ago');
+    expect(describeLastCheck({ atMs: NOW - 180_000, outcome: 'quiet', reason: 'rate-limited' }, NOW)).toBe('held by the fire budget, 3m ago');
     expect(describeLastCheck({ atMs: NOW - 180_000, outcome: 'error', error: 'exit 1: boom' }, NOW)).toBe('error: exit 1: boom, 3m ago');
   });
 
@@ -74,7 +74,7 @@ describe('the trigger audit trail as sentences', () => {
     expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'fire-false' }))
       .toBe('quiet — the script said no');
     expect(describeAuditEntry({ atMs: NOW, outcome: 'quiet', reason: 'rate-limited' }))
-      .toBe('quiet — daily fire limit reached');
+      .toBe('held: fire budget used up, it fires on a later check');
     expect(describeAuditEntry({ atMs: NOW, outcome: 'error', error: 'exit 3:\n  boom' }))
       .toBe('check error: exit 3: boom');
     expect(describeAuditEntry({

@@ -26,7 +26,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { setTriggerDaemonLookupForTest, type TriggerDaemon } from '../../src/core/routines/trigger-daemon.js'
 import { handleTriggerChecked, handleTriggerEvent, handleTriggerFired } from '../../src/core/routines/trigger-events.js'
-import { listNotifications } from '../../src/core/notifications/store.js'
+import { dismissNotifications, listNotifications } from '../../src/core/notifications/store.js'
 import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../src/providers/trigger-check-core.js'
 import { FIRE_DELIVERY_MAX_ATTEMPTS } from '../../src/core/cron/trigger-apply.js'
 import { registerExecutor } from '../../src/core/routines/registry.js'
@@ -464,6 +464,62 @@ describe('trigger.checked from the daemon', () => {
     const note = feed.find((n) => n.dedupKey === `trigger-disabled:${id}`)
     expect(note?.title).toContain('broken watcher')
     expect(note?.body).toContain('jq: command not found')
+  })
+
+  it('a check the fire budget holds tells the user once a day, even after they dismiss it', async () => {
+    const created = await post('/api/routines', {
+      name: 'busy chat watcher',
+      schedule: { kind: 'every', everyMs: 300_000 },
+      check: { run: 'bash chat.sh', maxFiresPerDay: 6 },
+      executor: { type: 'session', config: { target: taskId, prompt: 'p' } },
+    })
+    const id = created.json.job.id
+    const held = (atMs: number) => handleTriggerChecked('__local__', {
+      type: 'trigger.checked', id, atMs, outcome: 'quiet', reason: 'rate-limited',
+      durationMs: 9, nextRunAtMs: atMs + 300_000, consecutiveErrors: 0,
+    })
+    const notes = async () => (await listNotifications()).feed.filter((n) => n.dedupKey.startsWith(`trigger-budget-held:${id}:`))
+    try {
+      const t0 = Date.now()
+      await held(t0)
+      const [note] = await notes()
+      expect(note.title).toBe('Trigger "busy chat watcher" is holding fires back')
+      expect(note.severity).toBe('warning')
+      expect(note.body).toBe(
+        'It used its fire budget (6 fires a day), so it now fires at most once every 4 hours. '
+        + 'Nothing is dropped: each fire carries everything new since the last one, it just arrives later. '
+        + 'If this source is this busy, raise "Fires per day" on the trigger in Routines '
+        + '(it checks 288 times a day, so 288 lets every check fire; 0 = no limit).',
+      )
+      const job = await jobState(id)
+      expect(job.state.lastCheck).toMatchObject({ outcome: 'quiet', reason: 'rate-limited' })
+      expect(job.state.fireBudgetNoticeAtMs).toBe(t0)
+
+      // The next held checks that day add nothing, dismissed or not.
+      await held(t0 + 300_000)
+      expect(await notes()).toHaveLength(1)
+      await dismissNotifications({ dedupKeys: [note.dedupKey] })
+      await held(t0 + 600_000)
+      expect(await notes()).toHaveLength(0)
+      // A quiet check of another kind never notifies.
+      await handleTriggerChecked('__local__', {
+        type: 'trigger.checked', id, atMs: t0 + 700_000, outcome: 'quiet', reason: 'all-seen',
+        durationMs: 9, nextRunAtMs: t0 + 1_000_000, consecutiveErrors: 0,
+      })
+      expect(await notes()).toHaveLength(0)
+      // A day later it tells them again.
+      await held(t0 + 24 * 60 * 60 * 1000)
+      expect(await notes()).toHaveLength(1)
+
+      // A paused trigger's late held check is not news.
+      await fetch(apiUrl(`/api/routines/${id}`), {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }),
+      })
+      await held(t0 + 3 * 24 * 60 * 60 * 1000)
+      expect(await notes()).toHaveLength(1)
+    } finally {
+      await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
+    }
   })
 })
 

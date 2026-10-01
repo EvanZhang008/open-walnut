@@ -41,8 +41,22 @@ stdout:  {"fire": true, "items": [{"id": "PR-123#c9", "title": "..."}], "input":
   `state` is never shown to the AI.
 - **Errors.** Non-zero exit, a timeout, no JSON on the last line, or over 64 KB
   of stdout is a check error. Five in a row disable the trigger and notify.
-- **Limits.** 30s timeout (max 300), 24 fires/day, one run at a time, never
-  faster than every 10s.
+- **Limits.** 30s timeout (max 300), one run at a time, never faster than
+  every 10s, and a fire budget: `maxFiresPerDay` (default 24) fires in a burst,
+  refilling at that many per 24 hours, so a spent budget gives back one fire
+  every 24h / cap (an hour at the default). A fire the budget holds back is late,
+  not lost: the daemon keeps your previous `state` cursor and the next allowed
+  check reports the same items again, in one fire with everything newer. One
+  fire carries at most 200 new items; with more, the cursor is kept too and the
+  next check carries the rest. Keep stdout under 64 KB even after a long hold:
+  print the oldest items first, at most a few hundred, and move the cursor only
+  to the last one you printed.
+- **Pick the budget for the source.** A busy source checked often (a chat
+  channel, a mailbox) can fire on most checks, so set `maxFiresPerDay` to the
+  checks per day it runs: 288 for every 5 minutes, 96 for every 15. Keep the
+  default for things that change a few times a day (a PR, a build). `0` = no
+  limit. The user can change it later on the Routines page (Edit, "Fires per
+  day"), and Walnut tells them the first time each day the budget holds a fire.
 
 ## Templates
 
@@ -185,7 +199,8 @@ walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING"}'
   off: whatever appeared while it was paused arrives as ONE fire on the first
   check (a few seconds after resume; up to 200 items, the rest on the next
   check), ids it delivered in the last 30 days are not delivered again, and the
-  daily fire cap still applies. After about 30 days paused it may have forgotten
+  fire budget still applies (a spent budget delivers the backlog on a later
+  check, never drops it). After about 30 days paused it may have forgotten
   what it saw and start over like a new trigger. Resuming a stopped trigger
   retries its check; fix the script first, since one more failure stops it
   again.

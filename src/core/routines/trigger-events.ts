@@ -25,7 +25,7 @@
  * minute and the next attempt goes through the same path.
  */
 
-import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../providers/trigger-check-core.js';
+import { FIRE_BUDGET_WINDOW_MS, MAX_CONSECUTIVE_CHECK_ERRORS, MAX_FIRES_PER_DAY_DEFAULT } from '../../providers/trigger-check-core.js';
 import type { TriggerCheckedEvent, TriggerEvent, TriggerFiredEvent } from '../../providers/trigger-check-core.js';
 import { log } from '../../logging/index.js';
 import type { CronJob } from '../cron/types.js';
@@ -78,6 +78,28 @@ export function promptOf(job: CronJob): string {
   return typeof instructions === 'string' ? instructions : '';
 }
 
+/** "every hour", "every 5 minutes", "every 2.4 hours": how often a spent budget gives back one fire. */
+export function describeRefill(cap: number): string {
+  const minutes = Math.max(1, Math.round(FIRE_BUDGET_WINDOW_MS / Math.max(1, cap) / 60_000));
+  if (minutes < 60) return minutes === 1 ? 'every minute' : `every ${minutes} minutes`;
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  return hours === 1 ? 'every hour' : `every ${hours} hours`;
+}
+
+/**
+ * What the user is told the first time in a day the fire budget holds a trigger
+ * back. With the cadence known it names the number that lets every check fire.
+ */
+export function fireBudgetNoticeBody(cap: number, everyMs?: number): string {
+  const perDay = everyMs && everyMs > 0 ? Math.ceil(FIRE_BUDGET_WINDOW_MS / everyMs) : 0;
+  const suggest = perDay > cap
+    ? ` (it checks ${perDay} times a day, so ${perDay} lets every check fire; 0 = no limit).`
+    : ' (0 = no limit).';
+  return `It used its fire budget (${cap} fire${cap === 1 ? '' : 's'} a day), so it now fires at most once ${describeRefill(cap)}. `
+    + 'Nothing is dropped: each fire carries everything new since the last one, it just arrives later. '
+    + `If this source is this busy, raise "Fires per day" on the trigger in Routines${suggest}`;
+}
+
 async function resolveService() {
   const { getCronService } = await import('../../web/routes/cron.js');
   return getCronService();
@@ -101,6 +123,17 @@ export async function handleTriggerChecked(host: string, event: TriggerCheckedEv
     consecutiveErrors: applied.consecutiveErrors ?? 0,
     disabled: applied.disabled,
   });
+  const heldCap = applied.budgetHeld ? applied.budgetHeld.maxFiresPerDay ?? MAX_FIRES_PER_DAY_DEFAULT : 0;
+  // A stored 0 is "no limit" (sent as a cap nothing reaches), so it has no budget to report.
+  if (applied.budgetHeld && heldCap > 0) {
+    const cap = heldCap;
+    await notifyTrigger({
+      title: `Trigger "${applied.jobName ?? event.id}" is holding fires back`,
+      body: fireBudgetNoticeBody(cap, applied.budgetHeld.everyMs),
+      dedupKey: `trigger-budget-held:${event.id}:${event.atMs}`,
+      severity: 'warning',
+    });
+  }
   if (!applied.disabled) return;
 
   await notifyTrigger({

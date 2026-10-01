@@ -39,7 +39,7 @@ const RESUME_SEMANTICS =
   'Resuming picks up where it left off: the daemon kept the trigger\'s seen ids and the script\'s cursor, so '
   + 'whatever appeared while it was paused arrives as ONE fire on the first check (a few seconds after resume; '
   + 'up to 200 items, the rest on the next check), ids it delivered in the last 30 days are not delivered again, '
-  + 'and the daily fire cap still applies (a used-up cap holds the backlog until the next day). After about 30 '
+  + 'and the fire budget still applies (a spent budget holds the backlog for a later check, it never drops it). After about 30 '
   + 'days paused it may have forgotten what it saw and start over like a new trigger.'
 
 type RoutineJobBody = {
@@ -99,7 +99,7 @@ defineOp({
     host: z.string().optional().describe('Host whose daemon runs the check (defaults to the calling session\'s host). '
       + 'A session on another host may arm checks only on its own host'),
     timeoutSeconds: z.number().int().positive().optional().describe('Kill the check after this long (default 30, max 300)'),
-    maxFiresPerDay: z.number().int().min(0).optional().describe('Daily fire cap (default 24). 0 = unlimited'),
+    maxFiresPerDay: z.number().int().min(0).optional().describe('Fire budget: up to this many fires in a burst, refilling at this many per 24h (default 24, so once an hour once spent; a held fire comes later, never lost). For a busy source checked often (chat, mail) set it to the checks per day, e.g. 288 for every 5m. 0 = unlimited'),
   },
   bind: { method: 'POST', path: '/routines/trigger' },
   mapResult: ({ body }) => {
@@ -194,7 +194,8 @@ defineOp({
     + 'it is safe to run repeatedly. Always do this before trigger_create and keep fixing until '
     + '`parsed` is non-null: `error` names the contract violation (not JSON on the last line, "fire" '
     + 'missing, an item with no id). wouldFire:false with parsed set is a WORKING script that simply has '
-    + 'nothing to report right now. '
+    + 'nothing to report right now, except when newItemCount > 0 for an existing trigger id: then its fire '
+    + 'budget is holding the fire (trigger_list shows reason "rate-limited") and it fires on a later check. '
     + CHECK_CONTRACT,
   input: {
     run: z.string().min(1).describe('The shell command to run once'),
