@@ -8,7 +8,8 @@ import { useLightbox } from '@/hooks/useLightbox';
 import { BackgroundTasksChip, BackgroundTasksPanelHost, type KnownAgent } from './BackgroundTasksPanel';
 import { setLiveLanes, setToolSource } from '@/stores/background-panel-store';
 import { EMPTY_TOOL_SOURCE } from '@/stream/command-view';
-import { SessionMessage, ToolRunShell, StreamRunMembers, streamRunSummary, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
+import { SessionMessage, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
+import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
 import { StreamingLane, streamAgentSettled, knownAgentFromStream } from './LaneTimeline';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
@@ -448,6 +449,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Consumed queueIds already reported to the owner (useSessionSend GC).
   const notifiedConsumedIds = useRef<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The pinned Initial Prompt renders through the same markdown path as every
+  // other user bubble, so its task pills and file links need the same delegate.
+  const handleInitialPromptClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
 
   // ── Message truncation — render only the tail to keep DOM count low ──
   const INITIAL_RENDER_LIMIT = 30;
@@ -3359,10 +3363,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             <div className="session-msg-header">
               <span className="session-initial-prompt-label">Initial Prompt</span>
             </div>
-            <div className="session-msg-content">
+            <div className="session-msg-content" onClick={handleInitialPromptClick}>
               {/* The typed words only: a stored turn can open with a machine block
-                  Walnut prepended, and this preview has no room to fold one. */}
-              <div className="markdown-body">{typedUserText(initialPrompt)}</div>
+                  Walnut prepended, and this preview has no room to fold one.
+                  Markdown, not raw text: a URL the user typed into their prompt
+                  is a link here exactly as it is in the full bubble below. */}
+              <StableMarkdownBody text={typedUserText(initialPrompt)} cwd={sessionCwd} />
             </div>
           </div>
         )}

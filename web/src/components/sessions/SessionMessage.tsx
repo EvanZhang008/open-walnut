@@ -179,7 +179,7 @@ const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
  * messages" destroyed the selection. Subscribes the label store itself, the way
  * RichChunkView does, so memo() can block everything else without going stale.
  */
-const StableMarkdownBody = memo(function StableMarkdownBody({ text, cwd }: { text: string; cwd?: string }) {
+export const StableMarkdownBody = memo(function StableMarkdownBody({ text, cwd }: { text: string; cwd?: string }) {
   const labelsVersion = useEntityLabelsVersion();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the pill lookups inside
   const html = useMemo(() => renderMarkdownWithRefs(text, cwd), [text, cwd, labelsVersion]);

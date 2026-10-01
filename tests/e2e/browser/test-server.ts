@@ -1864,11 +1864,15 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
   await fs.writeFile(
     path.join(jsonlDir, 'pw-vscode-session.jsonl'),
     [
+      // The first user turn carries a bare URL: with 60+ rows below it, the
+      // timeline hides it and shows the pinned "Initial Prompt" bubble instead,
+      // and that bubble must render the URL as a link too
+      // (initial-prompt-links.spec.ts).
       JSON.stringify({
         type: 'user',
         sessionId: 'pw-vscode-session',
         timestamp: new Date(sessionFixtureNow - 40_000).toISOString(),
-        message: { role: 'user', content: 'Where did you put the notes?' },
+        message: { role: 'user', content: 'Where did you put the notes? Ticket: https://example.com/tickets/326fd366-3c61-4fe0-a167-377fbc8783cd Use the `release-notes` skill.' },
       }),
       JSON.stringify({
         type: 'assistant',
