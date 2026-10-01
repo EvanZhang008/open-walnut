@@ -7612,7 +7612,8 @@ export async function addTasksBulk(
     //      OR REPLACE overwrote the earlier row and reported success.
     //   2. A pulled row carrying a remote id a LIVE task already owns would
     //      REPLACE that task — deleting the survivor instead of merely forking it.
-    // A constraint violation is now a loud per-row skip.
+    // A collision on an id WE minted gets a fresh id (the caller asked for a new
+    // task, any id will do); every other constraint violation is a loud per-row skip.
     const insertSql =
       'INSERT INTO tasks (' + insertCols.join(', ') + ') VALUES (' +
       insertCols.map((c) => '@' + c).join(', ') + ')';
@@ -7632,8 +7633,8 @@ export async function addTasksBulk(
           continue;
         }
         const task: Task = {
-          id: td.id ?? generateId(),
           ...td,
+          id: td.id ?? generateId(),
           priority: sanitizePriority(td.priority),
           // Timestamps are non-optional: a row born without them has an LWW
           // threshold of 0, so every future remote echo beats it and the
@@ -7647,22 +7648,31 @@ export async function addTasksBulk(
         for (const col of insertCols) {
           bound[col] = partial[col] === undefined ? null : partial[col];
         }
-        try {
-          stmt.run(bound);
-        } catch (err) {
-          // UNIQUE violation = either a minted-id collision or a remote id a live
-          // task already owns. Both mean "do not write this row"; neither may take
-          // an existing task with it. Skipping keeps the rest of the batch.
-          const message = err instanceof Error ? err.message : String(err);
-          if (/UNIQUE constraint failed/i.test(message)) {
-            log.task.warn('addTasksBulk: skipped row on UNIQUE constraint', {
-              title: task.title, source: task.source, taskId: task.id, error: message,
-            });
-            continue;
+        let inserted = false;
+        for (let attempt = 0; !inserted; attempt++) {
+          try {
+            stmt.run(bound);
+            inserted = true;
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (!td.id && attempt < 5 && /UNIQUE constraint failed: tasks\.id\b/i.test(message)) {
+              task.id = generateId();
+              bound.id = task.id;
+              continue;
+            }
+            // A remote id a live task already owns (or an id collision that kept
+            // recurring): do not write this row, and never take an existing task
+            // with it. Skipping keeps the rest of the batch.
+            if (/UNIQUE constraint failed/i.test(message)) {
+              log.task.warn('addTasksBulk: skipped row on UNIQUE constraint', {
+                title: task.title, source: task.source, taskId: task.id, error: message,
+              });
+              break;
+            }
+            throw err;
           }
-          throw err;
         }
-        created.push(task);
+        if (inserted) created.push(task);
       }
     });
     patchStoreCacheRows(created.map((t) => t.id)); // see patchStoreCacheRows

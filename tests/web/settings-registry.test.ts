@@ -25,8 +25,9 @@ const EXPECTED_IDS = [
   // `stt` is labelled Voice and also carries Text-to-Speech now.
   // No `jev` row: Jev is one runner choice inside Tasks › Smart task creation.
   // Inbox Triage sits directly after Heartbeat: both are "Walnut wakes itself up
-  // and works", and it is the question a reader asks next.
-  'stt', 'audio-capture', 'integrations', 'calendar', 'permissions', 'heartbeat', 'triage', 'search', 'backup',
+  // and works", and it is the question a reader asks next. Mail rules follows
+  // Triage, which reads only Important mail when grouping is on.
+  'stt', 'audio-capture', 'integrations', 'calendar', 'permissions', 'heartbeat', 'triage', 'mail-rules', 'search', 'backup',
   // Phones & Cloud: `devices` is the nav entry, `cloud` renders under it (navHidden).
   'devices', 'cloud', 'remote-hosts', 'advanced',
   // Use an API instead of Claude Code: renders under Advanced (navHidden).

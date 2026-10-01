@@ -8,7 +8,6 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { MailRulesResponse } from '@/api/mail-groups';
-import { FileViewer } from '@/components/common/FileViewer';
 import { log } from '@/utils/log';
 import { SettingsNotice } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -55,6 +54,13 @@ function CopyPathButton({ text }: { text: string }) {
   );
 }
 
+/**
+ * Loaded on the first `Open in Walnut`: the viewer brings the whole file explorer and the
+ * markdown renderer, which the Settings registry (and every module that imports it) must not
+ * load up front. State, not React.lazy, so a chunk a deploy replaced fails here, not the page.
+ */
+type FileViewerComponent = typeof import('@/components/common/FileViewer')['FileViewer'];
+
 export interface MailRulesFileRowProps {
   rules: MailRulesResponse;
   busy: string | null;
@@ -66,7 +72,22 @@ export interface MailRulesFileRowProps {
 
 export function MailRulesFileRow({ rules, busy, onCreate, onReload, onRestore, onBuiltinOnly }: MailRulesFileRowProps) {
   const [viewing, setViewing] = useState(false);
+  const [Viewer, setViewer] = useState<FileViewerComponent | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [openFailed, setOpenFailed] = useState(false);
   const missing = isMissingFileError(rules.error);
+  const open = () => {
+    if (Viewer) { setViewing(true); return; }
+    setOpening(true);
+    setOpenFailed(false);
+    import('@/components/common/FileViewer')
+      .then((m) => { setViewer(() => m.FileViewer); setViewing(true); })
+      .catch((error: unknown) => {
+        log.warn('settings', 'the file viewer failed to load for the rules file', { error: String(error) });
+        setOpenFailed(true);
+      })
+      .finally(() => setOpening(false));
+  };
   return (
     <div className="mail-rules-file" data-testid="mail-rules-file">
       <div className="mail-rules-file-line">
@@ -75,7 +96,7 @@ export function MailRulesFileRow({ rules, busy, onCreate, onReload, onRestore, o
         <span className="mail-rules-file-actions">
           <CopyPathButton text={rules.path} />
           {rules.exists && (
-            <SettingsButton variant="text" data-testid="mail-rules-open" onClick={() => setViewing(true)}>
+            <SettingsButton variant="text" data-testid="mail-rules-open" busy={opening} busyLabel="Opening…" onClick={open}>
               Open in Walnut
             </SettingsButton>
           )}
@@ -88,6 +109,9 @@ export function MailRulesFileRow({ rules, busy, onCreate, onReload, onRestore, o
             Create rules file
           </SettingsButton>
         </div>
+      )}
+      {openFailed && (
+        <SettingsNotice kind="error">Walnut could not load its file viewer. Reload the page and try again.</SettingsNotice>
       )}
       <p className="mail-rules-help">{COPY.commentsNote}</p>
       {rules.error && (
@@ -118,7 +142,7 @@ export function MailRulesFileRow({ rules, busy, onCreate, onReload, onRestore, o
           </div>
         </div>
       )}
-      {viewing && <FileViewer path={rules.path} onClose={() => { setViewing(false); onReload(); }} />}
+      {viewing && Viewer && <Viewer path={rules.path} onClose={() => { setViewing(false); onReload(); }} />}
     </div>
   );
 }

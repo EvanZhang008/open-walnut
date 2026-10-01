@@ -135,9 +135,11 @@ export function refreshStaticMirror(opts: MirrorRefreshOptions): MirrorRefreshRe
   // Copy the current build in, under its own entry hash. Reading the primary
   // first is deliberate: when the primary is already gone this throws and the
   // existing generations are left exactly as they are.
+  let currentId: string | null = null
   try {
     const id = bundleIdInHtml(fs.readFileSync(path.join(staticDir, 'index.html'), 'utf-8'))
     if (!id) throw new Error('index.html names no entry bundle')
+    currentId = id
     const dest = path.join(mirrorDir, GENS_DIR, id)
     if (!isUsableGeneration(dest)) {
       // A half-written directory from a killed deploy must not be adopted as a
@@ -160,7 +162,7 @@ export function refreshStaticMirror(opts: MirrorRefreshOptions): MirrorRefreshRe
   }
 
   try {
-    const kept = evictGenerations({ mirrorDir, now, retentionMs, maxGenerations, maxPreviousBytes })
+    const kept = evictGenerations({ mirrorDir, now, retentionMs, maxGenerations, maxPreviousBytes, currentId })
     result.evicted = kept.evicted
     result.roots = kept.generations.map((g) => g.dir)
     result.generations = kept.generations.length
@@ -214,8 +216,13 @@ function adoptLegacyLayout(mirrorDir: string): void {
   }
 }
 
-/** Every usable generation, newest landing first. */
-function listGenerations(mirrorDir: string): Generation[] {
+/**
+ * Every usable generation: the primary's current build first, then newest landing
+ * first. Landing time alone cannot rank the current build: two refreshes in one
+ * millisecond tie, and a clock stepped back between deploys stamps the new build
+ * older than the one it replaced, so a new load would get the old index.html.
+ */
+function listGenerations(mirrorDir: string, currentId: string | null): Generation[] {
   const gensDir = path.join(mirrorDir, GENS_DIR)
   let names: string[]
   try { names = fs.readdirSync(gensDir) } catch { return [] }
@@ -232,7 +239,7 @@ function listGenerations(mirrorDir: string): Generation[] {
     if (!isUsableGeneration(dir)) continue
     gens.push({ id, dir, landedAt, bytes: dirBytes(dir) })
   }
-  return gens.sort((a, b) => b.landedAt - a.landedAt)
+  return gens.sort((a, b) => Number(b.id === currentId) - Number(a.id === currentId) || b.landedAt - a.landedAt)
 }
 
 function dirBytes(dir: string): number {
@@ -254,6 +261,7 @@ function dirBytes(dir: string): number {
  */
 function evictGenerations(args: {
   mirrorDir: string; now: number; retentionMs: number; maxGenerations: number; maxPreviousBytes: number
+  currentId: string | null
 }): { generations: Generation[]; evicted: number } {
   // Sweep any staging dir a killed deploy left behind, so it cannot accumulate.
   const gensDir = path.join(args.mirrorDir, GENS_DIR)
@@ -264,7 +272,7 @@ function evictGenerations(args: {
     }
   } catch { /* nothing to sweep */ }
 
-  const gens = listGenerations(args.mirrorDir)
+  const gens = listGenerations(args.mirrorDir, args.currentId)
   let evicted = 0
   // The count cap can never push below the floor, however it was configured.
   const maxCount = Math.max(args.maxGenerations, MIN_GENERATIONS)

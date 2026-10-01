@@ -127,6 +127,27 @@ describe('refreshStaticMirror', () => {
     expect(servable('grammar-go-BBB.js')).toBe(true);
   });
 
+  it('serves the current build first even when both builds landed in the same millisecond', () => {
+    const at = 1_790_000_000_000;
+    writeBuild('BUILD1', 'grammar-go-AAA.js');
+    refreshStaticMirror({ staticDir, mirrorDir, now: () => at });
+    writeBuild('BUILD2', 'grammar-go-BBB.js');
+    const r = refreshStaticMirror({ staticDir, mirrorDir, now: () => at });
+    expect(r.generations).toBe(2);
+    expect(fs.readFileSync(path.join(r.indexRoot!, 'index.html'), 'utf-8')).toBe(indexFor('BUILD2'));
+    expect(servable('grammar-go-AAA.js')).toBe(true);
+  });
+
+  it('serves the current build first after the clock stepped back between deploys', () => {
+    const at = 1_790_000_000_000;
+    writeBuild('BUILD1', 'grammar-go-AAA.js');
+    refreshStaticMirror({ staticDir, mirrorDir, now: () => at });
+    writeBuild('BUILD2', 'grammar-go-BBB.js');
+    const r = refreshStaticMirror({ staticDir, mirrorDir, now: () => at - 60_000 });
+    expect(fs.readFileSync(path.join(r.indexRoot!, 'index.html'), 'utf-8')).toBe(indexFor('BUILD2'));
+    expect(r.roots).toHaveLength(2);
+  });
+
   it('does NOT evict a build merely for having been live a long time', () => {
     // The mtime-clock trap: BUILD1 went live four days ago and is replaced now.
     // A window opened ten minutes ago is running it, so this is exactly when its

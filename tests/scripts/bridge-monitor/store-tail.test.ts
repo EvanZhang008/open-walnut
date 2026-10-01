@@ -97,6 +97,33 @@ describe('Tailer', () => {
     expect(await t.read(f, { firstSeen: 'start' })).toEqual(['rotated'])
   })
 
+  it('a file replaced under the same inode number restarts from the top', async () => {
+    // Linux gives a removed file's inode number to the next file created, so a log
+    // removed and recreated at once can look like the same file grown. Rewriting in
+    // place (same inode on every OS) with content longer than the old offset is the
+    // same situation, made deterministic.
+    const f = path.join(dir, 'reused.log')
+    fs.writeFileSync(f, 'x\n')
+    const t = new Tailer({})
+    expect(await t.read(f, { firstSeen: 'start' })).toEqual(['x'])
+    const ino = fs.statSync(f).ino
+    fs.writeFileSync(f, 'rotated\n')
+    expect(fs.statSync(f).ino).toBe(ino)
+    expect(await t.read(f, { firstSeen: 'start' })).toEqual(['rotated'])
+    // An ordinary append to the replacement still reads only the new line.
+    fs.appendFileSync(f, 'next\n')
+    expect(await t.read(f, { firstSeen: 'start' })).toEqual(['next'])
+  })
+
+  it('a cursor saved before the fingerprint existed keeps working', async () => {
+    const f = path.join(dir, 'legacy.log')
+    fs.writeFileSync(f, 'one\ntwo\n')
+    const t = new Tailer({ [f]: { ino: fs.statSync(f).ino, offset: 4 } })
+    expect(await t.read(f)).toEqual(['two'])
+    fs.appendFileSync(f, 'three\n')
+    expect(await t.read(f)).toEqual(['three'])
+  })
+
   it('a filter keeps only matching lines; a missing file is empty and forgets its cursor', async () => {
     const f = path.join(dir, 'd.log')
     fs.writeFileSync(f, '{"msg":"bridge: connected"}\n{"msg":"other"}\n')
