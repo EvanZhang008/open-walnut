@@ -36,8 +36,9 @@ export interface ThreadStackApi {
   popTo: (key: string, via: ThreadNavVia) => void;
   /** One level up (the back button, Esc). */
   back: (via: ThreadNavVia) => void;
-  /** Ask on a passage: a pending page, or the question already about it. */
-  ask: (target: { msgId: string; quote: SessionPinnedQuote }) => void;
+  /** Ask on a passage: a pending page, or the question already about it.
+   *  `focusComposer: false` leaves focus where it is (the comment card takes it). */
+  ask: (target: { msgId: string; quote: SessionPinnedQuote }, opts?: { focusComposer?: boolean }) => void;
   /** Where each page was left (page key), shared with the timeline's landing. */
   landings: Map<string, PageLanding>;
   /** The timeline records the page it is leaving (scrollTop + passage top)
@@ -118,6 +119,9 @@ export interface SessionThreadsApi {
    *  the composer's target. */
   headJump: { threadKey: string; seq: number } | null;
   requestHeadJump: (threadKey: string) => void;
+  /** Send into the composer's target (the comment card's composer): the same
+   *  anchored path the panel's composer takes. False when nothing was sent. */
+  sendToTarget: (text: string) => Promise<boolean>;
   /**
    * Is a real store behind this api? FALSE for the stub, and the gate for every
    * Ask affordance: a timeline mounted without a session record to PATCH (the
@@ -175,6 +179,7 @@ const EMPTY: SessionThreadsApi = {
   requestPinJump: NOOP,
   headJump: null,
   requestHeadJump: NOOP,
+  sendToTarget: async () => false,
   canAsk: false,
 };
 

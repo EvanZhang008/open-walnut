@@ -240,27 +240,37 @@
 /* Under the open list, faded but still focusable (visibility: hidden would blur
    the rail the keyboard just focused, and ArrowDown would go nowhere). */
 .thread-map.is-open .thread-map-rail { opacity: 0; }
+/* Thin lines, nothing else (the rail reads like a minimap): the main
+   conversation 12px, a question 8px stepped in by depth, a pending question
+   dashed, a pin a 5px hairline, a done group 6px and faint. The current row is
+   dark and 2px; an unanswered-but-answered (unread) question adds a dot. */
 .thread-map-mark {
   display: flex;
   align-items: center;
   flex: none;
   height: 14px;
-  padding-left: calc(2px + min(var(--map-depth, 0), 3) * 2px);
+  padding-left: calc(3px + min(var(--map-depth, 0), 3) * 2px);
   color: var(--fg-muted);
 }
-.thread-map-mark .thread-map-num { min-width: 14px; height: 13px; padding: 0 2px; border-radius: 3px; font-size: 9px; }
-.thread-map-mark .thread-map-root-dot { width: 5px; height: 5px; }
-.thread-map-mark .thread-map-pin { width: 9px; height: 9px; }
-.thread-map-mark .thread-map-fold .thread-icon { width: 8px; height: 8px; }
-.thread-map-mark[data-current="true"] .thread-map-num { background: var(--fg); color: var(--bg); }
-.thread-map-mark[data-current="true"] .thread-map-root-dot {
-  box-shadow: 0 0 0 1.5px var(--bg), 0 0 0 3px var(--accent);
+.thread-map-tick {
+  display: block;
+  width: 8px;
+  height: 0;
+  border-top: 1.5px solid currentColor;
+  border-radius: 1px;
+  opacity: 0.7;
 }
+.thread-map-mark[data-kind="root"] .thread-map-tick { width: 12px; }
+.thread-map-mark:is([data-kind="pending"], [data-kind="draft"]) .thread-map-tick { border-top-style: dashed; }
+.thread-map-mark[data-kind="pin"] .thread-map-tick { width: 5px; border-top-width: 1px; opacity: 0.5; }
+.thread-map-mark[data-kind="done-group"] .thread-map-tick { width: 6px; opacity: 0.4; }
+.thread-map-mark[data-current="true"] { color: var(--fg); }
+.thread-map-mark[data-current="true"] .thread-map-tick { border-top-width: 2px; opacity: 1; }
 .thread-map-mark[data-unread="true"]::after {
   content: '';
   width: 4px;
   height: 4px;
-  margin-left: 2px;
+  margin-left: 3px;
   border-radius: 50%;
   background: var(--accent);
 }

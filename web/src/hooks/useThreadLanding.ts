@@ -30,6 +30,13 @@ type Passage = { msgId: string; quote?: SessionPinnedQuote };
 export interface UseThreadLandingArgs {
   sessionId: string;
   enabled: boolean;
+  /**
+   * Conversation Mode: the stack path is the composer's TARGET, not a page, so a
+   * navigation (an Ask, a sidebar row, a turn label, a drawer row) must never
+   * move the timeline. Without this every push landed "a first entry at the
+   * top" and the whole conversation jumped to its first message (2026-09-30).
+   */
+  targetOnly: boolean;
   containerRef: RefObject<HTMLDivElement | null>;
   stack: ThreadStackApi;
   tree: ThreadTree;
@@ -185,6 +192,7 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
   // not replay it over the usual scroll to the bottom).
   const wasEnabled = useRef(enabled);
   const handledSeq = useRef<number | undefined>(enabled ? undefined : stack.nav?.seq);
+  const targetOnly = args.targetOnly;
   useLayoutEffect(() => {
     const nav = stack.nav;
     const el = containerRef.current;
@@ -193,6 +201,9 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
     if (!el) return;
     const fresh = !!nav && nav.seq !== handledSeq.current;
     if (nav) handledSeq.current = nav.seq;
+    // A target change is not a page change: consumed (so a later switch to Tree
+    // Mode does not replay it) and otherwise ignored.
+    if (targetOnly) return;
     if (!enabled && !fresh) return;
     if (!fresh || !nav) {
       const rec = reenabled ? stack.landings.get(stack.currentKey) : undefined;
@@ -218,7 +229,7 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
     // into the render window): hold the position until the box is tall enough.
     if (Math.abs(el.scrollTop - rec.scrollTop) > 1) return holdScroll(el, rec.scrollTop);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per navigation
-  }, [stack.nav?.seq, enabled]);
+  }, [stack.nav?.seq, enabled, targetOnly]);
 
   // Scroll memory: 300ms after scrolling stops, this page's scrollTop is saved
   // (and the stack persisted, so a reload lands here).

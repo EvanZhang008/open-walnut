@@ -196,6 +196,13 @@
 ::highlight(thread-mark-done-330) { background-color: hsl(330 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(330 45% 50% / 0.75); text-underline-offset: 3px; }
 ::highlight(thread-mark-done-188) { background-color: hsl(188 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(188 45% 50% / 0.75); text-underline-offset: 3px; }
 ::highlight(thread-mark-done-214) { background-color: hsl(214 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(214 45% 50% / 0.75); text-underline-offset: 3px; }
+/* Conversation Mode paints every asked passage the same way (no hue tells the
+   questions apart; the number does): a faint grey wash and a grey underline,
+   dotted once the question is done. The comment card opens on a click. */
+::highlight(thread-mark-neutral) { background-color: hsl(0 0% 50% / 0.14); text-decoration: underline 1.5px hsl(0 0% 45% / 0.8); text-underline-offset: 3px; }
+::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 50% / 0.08); text-decoration: underline dotted 1.5px hsl(0 0% 50% / 0.6); text-underline-offset: 3px; }
+[data-theme="dark"] ::highlight(thread-mark-neutral) { background-color: hsl(0 0% 70% / 0.18); text-decoration-color: hsl(0 0% 72% / 0.85); }
+[data-theme="dark"] ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 70% / 0.1); text-decoration-color: hsl(0 0% 65% / 0.6); }
 [data-theme="dark"] ::highlight(thread-mark-280) { background-color: hsl(280 70% 62% / 0.34); text-decoration-color: hsl(280 85% 70%); }
 [data-theme="dark"] ::highlight(thread-mark-done-280) { background-color: hsl(280 10% 68% / 0.2); text-decoration-color: hsl(280 40% 68% / 0.8); }
 [data-theme="dark"] ::highlight(thread-mark-152) { background-color: hsl(152 70% 62% / 0.34); text-decoration-color: hsl(152 85% 70%); }

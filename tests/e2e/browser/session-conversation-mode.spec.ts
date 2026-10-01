@@ -19,7 +19,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, modePill, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, switchView,
+  centreInHistory, modePill, nextQuestionNumber, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, switchView,
 } from './threads-helpers'
 import { buildTaggedSession, TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT, TAGGED_TITLES } from './threads-fixture'
 
@@ -146,6 +146,10 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(row(panel, IDS.Q1.u)).not.toHaveAttribute('data-thread-current', 'true')
     // The composer says where the next message goes.
     await expect(panel.locator('.chat-input-textarea').first()).toHaveAttribute('placeholder', new RegExp(TAGGED_TITLES.Q2))
+    // The row also opened the question's card (session-thread-card.spec.ts
+    // covers it); closed here so the label under it can be clicked.
+    await panel.locator('.thread-card .thread-card-close').click()
+    await expect(panel.locator('.thread-card')).toHaveCount(0)
     // A turn label is the same switch.
     await labelOf(panel, IDS.Q1.u).click()
     await expect(rows.nth(0)).toHaveAttribute('aria-current', 'page')
@@ -198,6 +202,7 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await page.waitForLoadState('networkidle')
     await pinPanelWidth(page, 1100)
     const panel = await openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'linear' })
+    const n = await nextQuestionNumber(request, TAGGED_SESSION)
     await centreInHistory(page, panel, TAGGED_PASSAGE.slice(0, 30))
     await passageRects(panel, TAGGED_PASSAGE.slice(0, 30))
     await selectPassage(page, panel, TAGGED_PASSAGE.slice(0, 30))
@@ -222,31 +227,31 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await box.fill('Which page wins a tie?')
     await box.press('Enter')
     await expect(box).toHaveValue('')
-    // The bubble lands in the conversation under a label numbered 3 (two
-    // questions already carry 1 and 2), and the reply follows it, tag stripped.
+    // The bubble lands in the conversation under a label with the next number
+    // (one past the record's highest), and the reply follows it, tag stripped.
     const bubble = panel.locator('.session-history .session-msg--threaded', { hasText: 'Which page wins a tie?' }).first()
     await expect(bubble).toBeVisible({ timeout: 30_000 })
-    await expect(bubble.locator('.thread-turn-label .thread-map-num')).toHaveText('3')
+    await expect(bubble.locator('.thread-turn-label .thread-map-num')).toHaveText(String(n))
     // The banner rides the send but never the bubble.
-    await expect(bubble).not.toContainText('Question Q3')
+    await expect(bubble).not.toContainText(`Question Q${n}`)
     await expect(bubble).not.toContainText('Begin your reply')
     await expect(history(panel)).toContainText('processed your message', { timeout: 60_000 })
-    await expect.poll(() => history(panel).innerText()).not.toMatch(/\[Q\s?3\]/)
+    await expect.poll(() => history(panel).innerText()).not.toMatch(/\[Q\s?\d+\]/)
     // The reply is filed under the new question: the map's row says answered, no `by order`.
     const rows = map.locator('.thread-map-row[data-kind="thread"]')
     await expect(rows).toHaveCount(3)
-    await expect(rows.nth(2).locator('.thread-map-num')).toHaveText('3')
+    await expect(rows.nth(2).locator('.thread-map-num')).toHaveText(String(n))
     await expect(panel.locator('.thread-turn-label-by')).toHaveCount(0)
     // The record: the question got its number, and the send carried the banner
-    // asking for `[Q3]` (the mock CLI answers it the way a real model does).
-    await expect.poll(async () => (await readRecord(request, TAGGED_SESSION)).threadMeta?.find((m) => (m as { seq?: number }).seq === 3)?.headId, { timeout: 20_000 }).toBeTruthy()
+    // asking for `[Q<n>]` (the mock CLI answers it the way a real model does).
+    await expect.poll(async () => (await readRecord(request, TAGGED_SESSION)).threadMeta?.find((m) => (m as { seq?: number }).seq === n)?.headId, { timeout: 20_000 }).toBeTruthy()
     const sent = await page.evaluate(() => (window as unknown as { __sent: string[] }).__sent.join('\n'))
-    expect(sent).toContain('[Question Q3]')
-    expect(sent).toContain('Begin your reply with the line \\"[Q3]\\"')
+    expect(sent).toContain(`[Question Q${n}]`)
+    expect(sent).toContain(`Begin your reply with the line \\"[Q${n}]\\"`)
     await shot(page, 'ask-in-conversation-mode', panel)
   })
 
-  test('a 480px column: the pill is an icon, the rail carries the same numbers', async ({ page }) => {
+  test('a 480px column: the pill is an icon, the rail is thin lines with no numbers', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await pinPanelWidth(page, 480)
@@ -257,8 +262,19 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(pill).toHaveAttribute('title', 'Switch to Tree Mode')
     const map = panel.locator('.thread-map')
     await expect(map).toHaveAttribute('data-shape', 'rail')
-    const marks = map.locator('.thread-map-mark[data-kind="thread"] .thread-map-num')
-    await expect(marks).toHaveText(['1', '2'])
+    // The rail is a minimap: one thin line per row (root longer), no badge, no dot.
+    await expect(map.locator('.thread-map-mark[data-kind="thread"] .thread-map-tick')).toHaveCount(2)
+    await expect(map.locator('.thread-map-mark .thread-map-num, .thread-map-mark .thread-map-root-dot')).toHaveCount(0)
+    const tick = await map.locator('.thread-map-mark[data-kind="thread"] .thread-map-tick').first().evaluate((el) => {
+      const cs = getComputedStyle(el)
+      const r = el.getBoundingClientRect()
+      return { w: r.width, h: r.height, style: cs.borderTopStyle, colour: cs.borderTopColor }
+    })
+    expect(tick.w).toBeGreaterThanOrEqual(7)
+    expect(tick.h).toBeLessThanOrEqual(3)
+    expect(tick.style).toBe('solid')
+    const [r, g, b] = tick.colour.match(/\d+/g)!.map(Number)
+    expect(Math.max(r, g, b) - Math.min(r, g, b), `tick colour ${tick.colour} is grey`).toBeLessThanOrEqual(12)
     // The labels stay readable at this width: number and title, status as a glyph or word.
     await expect(labelOf(panel, IDS.Q2.u).locator('.thread-map-num')).toHaveText('2')
     await expect(labelOf(panel, IDS.Q2.u).locator('.thread-turn-label-title')).toBeVisible()

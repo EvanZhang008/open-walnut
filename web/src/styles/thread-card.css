@@ -1,0 +1,154 @@
+/* ── The comment card: one question beside its passage (Conversation Mode) ──
+   Lives in a zero-height, positioned layer inside the scroll box, so it scrolls
+   with the text it is about and never floats over the header or the composer.
+   The owner sets top / left / width from the passage; the card clamps its own
+   height and scrolls its body. */
+.thread-card-layer {
+  position: relative;
+  align-self: stretch;
+  height: 0;
+  /* The timeline's flex gap would otherwise add 4px for an empty layer. */
+  margin-bottom: -4px;
+  z-index: 6;
+  overflow: visible;
+  pointer-events: none;
+}
+.thread-card {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  max-height: var(--thread-card-maxh, 60vh);
+  min-height: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  box-shadow: var(--thread-drawer-shadow, 0 10px 30px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06));
+  pointer-events: auto;
+  animation: thread-card-in 120ms ease-out;
+  isolation: isolate;
+}
+@keyframes thread-card-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .thread-card { animation: none; } }
+
+.thread-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  min-width: 0;
+  padding: 8px 8px 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 16px;
+}
+.thread-card-head .thread-map-num { background: var(--fg); color: var(--bg-elevated); }
+.thread-card-head .thread-map-num--new { background: var(--bg-tertiary); color: var(--fg-muted); }
+.thread-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-weight: 600;
+}
+.thread-card-status { flex: none; }
+.thread-card-head-actions { display: inline-flex; align-items: center; gap: 2px; flex: none; margin-left: 2px; }
+.thread-card-head-actions .thread-stack-more { margin: 0; }
+.thread-card-close {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.thread-card-close:hover { background: var(--bg-tertiary); color: var(--fg); }
+.thread-card-close:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.thread-card-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 10px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+/* The timeline's rows, compacted: a question is a plain line with a quiet
+   label, an answer reads as prose. No bubbles, no avatars. */
+.thread-card-turn { display: flex; flex-direction: column; gap: 4px; }
+.thread-card-turn + .thread-card-turn { padding-top: 6px; border-top: 1px dashed var(--border); }
+.thread-card-q {
+  margin: 0;
+  padding: 0 0 0 8px;
+  border-left: 2px solid var(--border);
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.thread-card-body .session-msg { margin: 0; padding: 0; font-size: 13px; line-height: 1.55; }
+.thread-card-body .session-msg-content > :first-child { margin-top: 0; }
+.thread-card-body .session-msg-content > :last-child { margin-bottom: 0; }
+.thread-card-body .markdown-body > :first-child { margin-top: 0; }
+.thread-card-body .markdown-body > :last-child { margin-bottom: 0; }
+.thread-card-empty { color: var(--fg-muted); font-size: 12px; padding: 2px 0; }
+.thread-card-answering {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  padding: 2px 0 2px;
+}
+
+.thread-card-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex: none;
+  padding: 6px 6px 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.thread-card[data-draft="true"] .thread-card-composer { border-top: 0; }
+.thread-card-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 28px;
+  max-height: 112px;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  resize: none;
+  outline: none;
+}
+.thread-card-input::placeholder { color: var(--fg-muted); }
+.thread-card-send {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-bottom: 2px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+  cursor: pointer;
+}
+.thread-card-send:disabled { background: var(--bg-tertiary); color: var(--fg-muted); cursor: default; }
+.thread-card-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

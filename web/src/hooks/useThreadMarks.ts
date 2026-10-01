@@ -33,12 +33,16 @@ export interface ThreadMarkSpec {
   hue: number;
   resolved: boolean;
   title: string;
+  /** Conversation Mode: one neutral paint for every question (no hue). */
+  neutral?: boolean;
 }
 
 export const MARK_PRIORITY = 2;
 
-/** Highlight name per hue and state; globals for every hue live in thread-stack-page.css. */
-export function markHighlightName(hue: number, resolved: boolean): string {
+/** Highlight name per hue and state (neutral: one grey pair); globals for every
+ *  name live in thread-stack-page.css. */
+export function markHighlightName(hue: number, resolved: boolean, neutral = false): string {
+  if (neutral) return `thread-mark${resolved ? '-done' : ''}-neutral`;
   return `thread-mark${resolved ? '-done' : ''}-${hue}`;
 }
 
@@ -73,7 +77,7 @@ function repaintMarks() {
 function setPanelMarks(panelKey: string, marks: ThreadMark[]) {
   const byName = new Map<string, Range[]>();
   for (const m of marks) {
-    const name = markHighlightName(m.hue, m.resolved);
+    const name = markHighlightName(m.hue, m.resolved, m.neutral);
     byName.set(name, [...(byName.get(name) ?? []), m.range]);
   }
   if (byName.size === 0) panelMarks.delete(panelKey); else panelMarks.set(panelKey, byName);
@@ -139,7 +143,7 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
       const out: ThreadMark[] = [];
       for (const s of argsRef.current.specs) {
         const range = argsRef.current.locatePassage({ msgId: s.parentMsgId, quote: s.quote });
-        if (range) out.push({ key: s.key, ...(s.headId ? { headId: s.headId } : {}), range, hue: s.hue, resolved: s.resolved, title: s.title });
+        if (range) out.push({ key: s.key, ...(s.headId ? { headId: s.headId } : {}), range, hue: s.hue, resolved: s.resolved, title: s.title, ...(s.neutral ? { neutral: true } : {}) });
       }
       marks.current = out;
       setPanelMarks(panelKey, out);

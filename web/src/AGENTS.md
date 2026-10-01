@@ -215,6 +215,26 @@ show inline after the open ones, other completed hits that show the query fold i
   main conversation's tail. The mock CLI answers the banner with the tag (`tests/providers/
   mock-claude.mjs` `stripBanners`), so every fixture exercises this path. Ratchets:
   `tests/web/question-tag.test.ts`, `tests/e2e/browser/session-conversation-mode.spec.ts`.
+  **The comment card (2026-09-30).** In Conversation Mode a question is read and asked in a card
+  BESIDE its passage, like a comment in a document (`ThreadCommentCard`, pure parts in
+  `utils/thread-card.ts`, placement in `hooks/useThreadCardPlace.ts`). Open is one flag in
+  `SessionChatHistory` (`cardOpen`); WHICH question is the stack's target, so a sidebar row, a turn
+  label, a drawer row (`requestHeadJump`), a click on the marked passage and an Ask on a selection
+  all open or swap it by moving the target, Esc / an outside click / the mode pill close it, and a
+  pending question promoted by its first send stays on screen. The card shows the question's turns
+  (`cardTurnsOf`: the question without the quote block it was sent with, `questionBodyOf`, then the
+  reply's prose rows with `suppressTools`), the optimistic row and the live text blocks of the turn
+  being answered, and a composer that sends through `threadsApi.sendToTarget` (the same anchored
+  path as the panel's composer). It lives in `.thread-card-layer`, a zero-height positioned box at
+  the top of the scroll content, so `top` is a content coordinate and the card scrolls with its
+  passage; `placeCard` puts it below the passage's last line, right edges aligned, clamped to the
+  layer. Every asked passage wears ONE neutral grey mark (`allPassageMarks`, highlight
+  `thread-mark-neutral`), never a hue. Two rules this slice fixed: `useThreadLanding` takes
+  `targetOnly` and does nothing on a navigation in Conversation Mode (a target change is not a page
+  change; before, every Ask and every sidebar row "landed at the top" and the whole conversation
+  jumped to its first message), and the rail is thin lines (`.thread-map-tick`: root longer,
+  pending dashed, current dark), no number badges and no dot ("just a few lines, like Claude").
+  Ratchets: `tests/web/thread-card.test.ts`, `tests/e2e/browser/session-thread-card.spec.ts`.
   **The question tree is always on screen, never behind a hover or a button** (`ThreadMap`, top
   left of the timeline, in place of the outline rail once a session has a question). Its rows are
   the drawer's All view (`utils/thread-map.ts` → `flattenTree`), so the two never disagree. A box

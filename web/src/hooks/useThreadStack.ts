@@ -273,12 +273,13 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
 
   /** Ask on a passage (spec 5.4): the question already about this exact passage,
    *  or a pending page on top of the page the passage is on. Nothing is written. */
-  const ask = useCallback((target: { msgId: string; quote: SessionPinnedQuote }) => {
+  const ask = useCallback((target: { msgId: string; quote: SessionPinnedQuote }, opts?: { focusComposer?: boolean }) => {
     const a = argsRef.current;
+    const focus = opts?.focusComposer !== false;
     const same = findSamePassageThread(a.tree, a.anchors, a.hiddenKeys, { parent: target.msgId, quote: target.quote });
     if (same) {
       navigate(stackPathOf(a.tree, same), 'same-passage');
-      a.focusComposer();
+      if (focus) a.focusComposer();
       return;
     }
     // A passage in an answer that is still streaming (or not refetched yet) is
@@ -297,7 +298,7 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     };
     const base = known !== undefined ? stackPathOf(a.tree, parentKey) : (s.pending ? s.path.slice(0, -1) : s.path);
     navigate([...(base.length ? base : [ROOT_THREAD_KEY]), pending.pageKey], 'ask', pending);
-    a.focusComposer();
+    if (focus) a.focusComposer();
   }, [navigate]);
 
   const openDraft = useCallback((pageKey: string) => pushTo(pageKey, 'draft'), [pushTo]);

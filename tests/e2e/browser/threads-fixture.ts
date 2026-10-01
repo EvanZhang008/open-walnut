@@ -302,8 +302,10 @@ export const REWRITTEN_LOST_PASSAGE = 'The original wording of this answer said 
 export function buildRewrittenSession(nowMs: number): ThreadsFixtureSession {
   const P = '0199f4';
   const at = new Date(nowMs - 600_000).toISOString();
+  // The root answer must be taller than the panel: the landing spec brings it
+  // to the header's edge, which a root that fits on one screen cannot scroll to.
   const rows = simpleTurns(P, [
-    ['Describe the cache expiry rules.', filler(61, 220)],
+    ['Describe the cache expiry rules.', filler(61, 420)],
     [`> ${REWRITTEN_LOST_PASSAGE}\n\nIs that still true?`, filler(62, 140)],
   ]);
   return {

@@ -36,6 +36,10 @@ import { ThreadQuoteHead } from './ThreadQuoteHead';
 import { ThreadAskedFromList } from './ThreadAskedFromList';
 import { ThreadStackHeader } from './ThreadStackHeader';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
+import { ThreadCommentCard } from './ThreadCommentCard';
+import { ThreadStackMenu } from './ThreadStackMenu';
+import { useThreadCardPlace } from '@/hooks/useThreadCardPlace';
+import { allPassageMarks, cardTurnsOf, questionBodyOf } from '@/utils/thread-card';
 import { headsBySeq, keysBySeq, questionNumbers, tagKeyOfBlocks, withTagAnchors } from '@/utils/question-tag';
 import { ThreadResolvedStrip } from './ThreadResolvedStrip';
 import { useThreadToast } from './ThreadPanelToast';
@@ -1225,13 +1229,31 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [stackMode, currentNode, pagePending, rowIndexOf, messages.length, truncationOffset]);
 
+  /**
+   * The comment card (Conversation Mode): the composer's target shown beside its
+   * passage, like a comment in a document. Open is a flag; WHICH question is the
+   * stack's target, so a sidebar row, a turn label, a drawer row or an Ask all
+   * swap the card by moving the target, Esc on the panel (target cleared) closes
+   * it, and a pending question promoted by its first send stays on screen.
+   */
+  const [cardOpen, setCardOpen] = useState(false);
+  const cardKey = threadsApi.viewMode === 'linear' && cardOpen && threadsApi.currentThreadKey !== ROOT_THREAD_KEY
+    ? threadsApi.currentThreadKey : null;
+  useEffect(() => { setCardOpen(false); }, [sessionId, threadsApi.viewMode]);
+  const closeCard = useCallback(() => setCardOpen(false), []);
+
   /** Ask on a passage (the pill): the stack pushes a pending page in this frame,
    *  or the question already about this passage. Nothing is written yet. */
   const askAboutQuote = useCallback((target: QuotePinTarget) => {
-    // Either view: in Conversation Mode the pending question is the composer's
-    // target and the timeline stays as it is.
+    if (threadsApi.viewMode === 'linear') {
+      // Conversation Mode: the card opens beside the passage with its own
+      // composer focused; the timeline stays where it is.
+      stack.ask({ msgId: target.msgId, quote: target.quote }, { focusComposer: false });
+      setCardOpen(true);
+      return;
+    }
     stack.ask({ msgId: target.msgId, quote: target.quote });
-  }, [stack]);
+  }, [stack, threadsApi.viewMode]);
 
   /** Titles as every question surface shows them (AI title, else the fallback). */
   const titleOfKey = useCallback((key: string): string => {
@@ -1933,11 +1955,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Path A-0: User just sent a message — force follow-bottom so the sent message
   // and subsequent streaming response are visible. Runs before A-1 so isAtBottom
   // is already true when the content-change scroll fires.
+  // A send from the comment card is the exception: the reader is up at the
+  // passage with the card, and the answer arrives in the card, so the timeline
+  // stays where it is (the flag is armed by the card's send, consumed here).
+  const cardSendHold = useRef(false);
   useLayoutEffect(() => {
     const len = optimisticMessages?.length ?? 0;
     if (len > prevOptimisticLen.current) {
-      isAtBottom.current = true;
-      setShowScrollArrow(false);
+      if (cardSendHold.current) {
+        cardSendHold.current = false;
+      } else {
+        isAtBottom.current = true;
+        setShowScrollArrow(false);
+      }
     }
     prevOptimisticLen.current = len;
   }, [optimisticMessages?.length]);
@@ -2613,7 +2643,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (nextQueued && !isStreaming) return optimisticThreadKey(nextQueued);
     return threadTree.latestKey;
   })();
-  const streamThreadKey = stackMode ? liveStreamKey : ROOT_THREAD_KEY;
+  // Both views with questions track which question each turn's output belongs
+  // to: Tree Mode to put it on the right page, Conversation Mode for the card.
+  const trackTurns = stackMode || convMode;
+  const streamThreadKey = trackTurns ? liveStreamKey : ROOT_THREAD_KEY;
   const streamVisible = !stackMode || streamThreadKey === currentKey;
   // Finished turns keep their page until the transcript absorbs them. The CLI
   // answers delivered rows in order, one turn per delivery (rows delivered in the
@@ -2623,7 +2656,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // a new segment is actually recorded.
   const turnBook = useRef<TurnBook>(newTurnBook());
   const turnSegments = turnSegmentsRef;
-  if (stackMode) {
+  if (trackTurns) {
     const book = turnBook.current;
     // Keyed by the row's own identity, never the queue id: a bubble's queue id
     // changes when the server acks it or the queue is rehydrated, and counting one
@@ -2788,6 +2821,35 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     () => (threadMap.shape ? threadCounts(threadTree, threadsApi.metaIndex, pinsApi.pins, threadDerived.live, threadsApi.hiddenKeys) : null),
     [threadMap.shape, threadTree, threadsApi.metaIndex, pinsApi.pins, threadDerived.live, threadsApi.hiddenKeys],
   );
+  /** The passage a question (or a pending question) is about. */
+  const passageOf = useCallback((key: string): { msgId: string; quote?: SessionPinnedQuote } | null => {
+    const pend = stack.pending?.pageKey === key ? stack.pending : undefined;
+    if (pend) return { msgId: pend.parentMsgId, quote: pend.quote };
+    const node = threadTree.byKey.get(key);
+    if (!node?.parent) return null;
+    return { msgId: node.parent, ...(node.quote ? { quote: node.quote } : {}) };
+  }, [stack.pending, threadTree]);
+
+  /**
+   * Open a question's card (Conversation Mode): it becomes the composer's target
+   * and the card shows beside its passage. The timeline moves only when that
+   * passage is off screen (an Ask on a selection has it on screen already; a
+   * sidebar row's question may be a long way off).
+   */
+  const openCard = useCallback((key: string, via: string) => {
+    if (threadsApi.viewMode !== 'linear') { stack.pushTo(key, via); return; }
+    if (key !== stack.currentKey) stack.pushTo(key, via);
+    setCardOpen(true);
+    const passage = passageOf(key);
+    const el = containerRef.current;
+    if (!passage || !el) return;
+    const box = el.getBoundingClientRect();
+    const range = quotePaint.locatePin(passage);
+    const r = range?.getBoundingClientRect();
+    const onScreen = !!r && (r.width || r.height) && r.top >= box.top && r.bottom <= box.bottom - 40;
+    if (!onScreen) jumpToPlace(passage.msgId, passage.quote, `card:${via}`, { armBack: false });
+  }, [threadsApi.viewMode, stack, passageOf, quotePaint, jumpToPlace]);
+
   const activateMapRow = useCallback((row: TreeRow) => {
     switch (row.kind) {
       case 'done-group':
@@ -2803,12 +2865,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         if (row.pinKey) handleTocJump(row.pinKey);
         return;
       case 'root': case 'thread': case 'pending': case 'draft':
-        // Conversation Mode: the row is the composer's target, and the timeline
-        // goes to that question's first turn. Tree Mode: its page.
+        // Conversation Mode: the row is the composer's target, and its card
+        // opens beside the passage. Tree Mode: its page.
         if (convMode) {
-          const node = threadTree.byKey.get(row.key);
-          if (!row.current) stack.pushTo(row.key, 'map');
-          if (row.kind === 'thread' && node) jumpToPlace(node.headId, undefined, 'map-row');
+          if (row.kind === 'root') { if (!row.current) stack.pushTo(row.key, 'map'); closeCard(); return; }
+          openCard(row.key, 'map');
           return;
         }
         if (row.current) return;
@@ -2816,7 +2877,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         return;
       default:
     }
-  }, [handleTocJump, stack, convMode, threadTree, jumpToPlace]);
+  }, [handleTocJump, stack, convMode, openCard, closeCard]);
   const openMapList = useCallback(() => threadsApi.openDrawer(), [threadsApi]);
   const markDoneFromRow = useCallback((key: string) => { void threadsApi.actions?.done(key); }, [threadsApi.actions]);
   const notYetFromRow = useCallback((key: string) => { void threadsApi.actions?.notYet(key); }, [threadsApi.actions]);
@@ -2826,20 +2887,25 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     (p: { msgId: string; quote?: SessionPinnedQuote }) => quotePaint.locatePin(p),
     [quotePaint],
   );
+  // Tree Mode paints the page's child questions in their hue; Conversation Mode
+  // paints every asked passage the same grey, and a click opens its card.
   const markSpecs = useMemo(() => (stackMode
     ? markSpecsFor({ tree: threadTree, currentKey, hiddenKeys: threadsApi.hiddenKeys, index: threadsApi.metaIndex })
-    : NO_MARKS), [stackMode, threadTree, currentKey, threadsApi.hiddenKeys, threadsApi.metaIndex]);
+    : convMode ? allPassageMarks(threadTree, threadsApi.hiddenKeys, threadsApi.metaIndex)
+      : NO_MARKS), [stackMode, convMode, threadTree, currentKey, threadsApi.hiddenKeys, threadsApi.metaIndex]);
   const markTips = useThreadMarks({
-    sessionId, panelKey: quotePanelKey, enabled: stackMode, containerRef, specs: markSpecs,
+    sessionId, panelKey: quotePanelKey, enabled: stackMode || convMode, containerRef, specs: markSpecs,
     renderNonce: `${messages.length}:${truncationOffset}:${currentKey}`,
-    locatePassage, onOpen: (key) => stack.pushTo(key, 'mark'),
+    locatePassage, onOpen: (key) => { if (stackMode) stack.pushTo(key, 'mark'); else openCard(key, 'mark'); },
   });
   useThreadLanding({
-    sessionId, enabled: stackMode, containerRef, stack, tree: threadTree, locatePassage, jumpToPlace, toast, isAtBottom,
+    sessionId, enabled: stackMode, targetOnly: threadsApi.viewMode === 'linear', containerRef, stack, tree: threadTree,
+    locatePassage, jumpToPlace, toast, isAtBottom,
   });
 
-  /** Conversation Mode: the label above a question's user row (the turn head). */
-  const selectTarget = useCallback((key: string) => { stack.pushTo(key, 'label'); }, [stack]);
+  /** Conversation Mode: the label above a question's user row (the turn head)
+   *  opens the question's card. */
+  const selectTarget = useCallback((key: string) => { openCard(key, 'label'); }, [openCard]);
   const turnLabelFor = (rowId: string | undefined, role: string): React.ReactNode => {
     if (!convMode || role !== 'user' || !rowId) return null;
     const info = rowThreadInfo(rowId);
@@ -2860,8 +2926,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     );
   };
 
-  // A drawer row picked in Conversation Mode: land on the question's first turn
-  // (the stack already made it the target). Once per request, like a pin jump.
+  // A drawer row picked in Conversation Mode: the question's card, beside its
+  // passage (the stack already made it the target). Once per request.
   const headJump = threadsApi.headJump;
   const headJumpLandedRef = useRef<typeof headJump>(null);
   useEffect(() => {
@@ -2869,7 +2935,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const node = threadTree.byKey.get(headJump.threadKey);
     if (!node || node.key === ROOT_THREAD_KEY) return;
     headJumpLandedRef.current = headJump;
-    jumpToPlace(node.headId, undefined, 'drawer-row');
+    openCard(node.key, 'drawer-row');
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per request
   }, [headJump?.seq, convMode]);
 
@@ -2988,6 +3054,90 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       );
     }
   });
+
+  // ── The comment card: the target question beside its passage (Conversation Mode).
+  const cardLayerRef = useRef<HTMLDivElement | null>(null);
+  const cardNode = cardKey ? threadTree.byKey.get(cardKey) : undefined;
+  const cardPending = cardKey && stack.pending?.pageKey === cardKey ? stack.pending : undefined;
+  const cardPlace = useThreadCardPlace({
+    key: cardKey,
+    containerRef,
+    layerRef: cardLayerRef,
+    locate: () => {
+      const el = containerRef.current;
+      if (!el || !cardKey) return null;
+      const passage = passageOf(cardKey);
+      if (passage?.quote) {
+        const range = quotePaint.locatePin(passage);
+        if (range) return range;
+      }
+      const esc = (id: string) => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id.replace(/["\\]/g, '\\$&'));
+      for (const id of [passage?.msgId, cardNode?.headId]) {
+        if (!id) continue;
+        const row = el.querySelector<HTMLElement>(`[data-message-id="${esc(id)}"]`);
+        if (row) return row;
+      }
+      return null;
+    },
+  });
+  // A click outside the card (and outside the controls that open one) closes it.
+  useEffect(() => {
+    if (!cardKey) return;
+    const exempt = '.thread-card, .thread-map, .thread-drawer, .thread-menu, .thread-confirm, .quote-pin-pill, .thread-turn-label, .thread-mode-pill, .session-panel-header';
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (!t || t.closest(exempt)) return;
+      setCardOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [cardKey]);
+  const cardTurns = useMemo(() => cardTurnsOf(messages, cardNode), [messages, cardNode]);
+  const cardStatus = cardNode ? viewStatusOf(cardNode, threadsApi.metaIndex, threadDerived.live) : undefined;
+  const cardTitle = cardKey ? displayTitleOf(cardNode, threadsApi.metaIndex) : undefined;
+  const cardBody = cardKey ? (
+    <>
+      {cardTurns.map((t) => (
+        <div key={t.user.msgId ?? t.user.walnutMessageId} className="thread-card-turn">
+          <p className="thread-card-q">{questionBodyOf(typedUserText(t.user.text ?? ''))}</p>
+          {t.replies.map((r) => (
+            <SessionMessage key={r.msgId ?? r.walnutMessageId} message={r} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          ))}
+        </div>
+      ))}
+      {/* Sent, not yet in the transcript: the question as typed, then the answer as it arrives. */}
+      {deduped.filter((m) => m.role === 'user' && m.status !== 'failed' && optimisticThreadKey(m) === cardKey).map((m) => (
+        <div key={`opt-${m.queueId}`} className="thread-card-turn" data-status={m.status}>
+          <p className="thread-card-q">{questionBodyOf(typedUserText(m.text))}</p>
+        </div>
+      ))}
+      {timeline.map((item) => {
+        if (item.kind !== 'block' || item.block.type !== 'text' || pageKeyOfBlock(item.index) !== cardKey) return null;
+        return (
+          <div key={`live-${item.index}`} className="session-msg session-msg-assistant">
+            <div className="session-msg-content">
+              <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isStreaming} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+            </div>
+          </div>
+        );
+      })}
+      {cardTurns.length === 0 && !deduped.some((m) => m.role === 'user' && optimisticThreadKey(m) === cardKey) && (
+        <div className="thread-card-empty">No message in this question yet.</div>
+      )}
+    </>
+  ) : null;
+  const sendFromCard = useCallback(async (text: string) => {
+    cardSendHold.current = true;
+    try { return await threadsApi.sendToTarget(text); } finally { cardSendHold.current = false; }
+  }, [threadsApi.sendToTarget]);
+  const cardMenu = cardKey && cardNode && threadsApi.actions ? (
+    <ThreadStackMenu
+      variant="page" threadKey={cardKey} visibleDescendants={threadsApi.actions.visibleDescendantCount(cardKey)} hiddenCount={0}
+      viewMode="linear" actions={threadsApi.actions} resolved={cardStatus === 'resolved'}
+      onShowInTree={threadsApi.revealInTree} onShowAllInOrder={() => {}}
+      onBackToQuestions={() => threadsApi.setViewMode('stack')} onShowHidden={() => {}}
+    />
+  ) : null;
 
   /** A queued question waits for the one being answered (spec 5.4). */
   const answeringTitle = titleOfKey(liveStreamKey);
@@ -3116,6 +3266,31 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           />
         )}
         <ThreadMarkTipLayer store={markTips} />
+        {/* The comment card's layer: zero height at the top of the content, so a
+            card placed from a passage's content coordinates scrolls with it. */}
+        {cardKey && (
+          <div ref={cardLayerRef} className="thread-card-layer">
+            {cardPlace && (
+              <ThreadCommentCard
+                threadKey={cardKey}
+                draft={!!cardPending && !cardNode}
+                number={questionNumber.get(cardKey)}
+                title={cardPending && !cardNode ? cardPending.title : cardTitle?.title ?? ''}
+                naming={cardTitle?.naming}
+                status={cardStatus}
+                unread={threadsApi.unreadKeys.has(cardKey)}
+                answering={threadDerived.answering.has(cardKey)}
+                canAsk={threadsApi.canAsk}
+                menu={cardMenu}
+                onSend={sendFromCard}
+                onClose={closeCard}
+                style={cardPlace}
+              >
+                {cardBody}
+              </ThreadCommentCard>
+            )}
+          </div>
+        )}
         {/* Quote pins: the pill offered on a text selection, and the popover a
             click on a painted passage opens. Both portal to <body>; they live here
             so ONE listener set covers the whole timeline. Mounted only where pinning

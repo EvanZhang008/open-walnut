@@ -508,6 +508,10 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
           onClick={show}
           onKeyDown={enterList}
         >
+          {/* One thin line per row (the Claude-style minimap): the main conversation
+              a longer one, a question a short one stepped in by depth, a pending
+              question dashed, a pin a hairline. The current row's line is dark. The
+              numbers live in the list, which is one hover away. */}
           {marks.map((row) => (
             <span
               key={row.id}
@@ -518,7 +522,7 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
               data-unread={row.kind === 'thread' && p.unreadKeys.has(row.key) ? 'true' : undefined}
               style={rowStyle(row.depth)}
             >
-              <Lead kind={row.kind} number={row.number} expanded={row.expanded} />
+              <span className="thread-map-tick" aria-hidden="true" />
             </span>
           ))}
           {more > 0 && <span className="thread-map-mark thread-map-mark--more">+{more}</span>}

@@ -421,6 +421,9 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     setHeadJump((prev) => ({ threadKey, seq: (prev?.seq ?? 0) + 1 }));
   }, []);
 
+  /** The comment card's composer: the same send the panel's composer makes. */
+  const sendToTarget = useCallback((text: string) => sendAnchored(text, undefined, false), [sendAnchored]);
+
   const unreadKeys = useMemo(
     () => unreadKeysOf(tree, derived.answeredAt, stack.lastViewedAt, stack.api.currentKey),
     [tree, derived.answeredAt, stack.lastViewedAt, stack.api.currentKey],
@@ -449,10 +452,11 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     requestPinJump,
     headJump,
     requestHeadJump,
+    sendToTarget,
     canAsk: args.canAsk,
   }), [store.anchors, store.add, store.remove, tree, viewMode, setViewMode, stack.enabled, stack.api, meta.index,
     hiddenKeys, actions, derived, unreadKeys, stack.drawer.open, stack.drawer.reveal, retry, pinJump, requestPinJump,
-    headJump, requestHeadJump, args.canAsk]);
+    headJump, requestHeadJump, sendToTarget, args.canAsk]);
 
   // The drawer and its toggle need a real question; a draft-only session keeps
   // its draft row on the page it was asked from (SessionChatHistory).
