@@ -138,12 +138,31 @@ export interface TaskService {
    *  has since moved everything out of. Refuses a folder that still holds anything: the
    *  user may have filed their own work there. Not available on a replica. */
   deleteFolder(folderId: string): Promise<void>
+  /** The board's pin groups (the user's custom tiers beside Focus, Satellite, Backlog and
+   *  Wait), in board order. A group's `id` is what `pinTier` takes. */
+  pinGroups(): Promise<PinGroup[]>
+  /** The pin group with this name, created when the board has none (names are compared
+   *  case-insensitively, so a group the user made by that name is reused). The group is the
+   *  user's from then on: renaming or deleting it is theirs, and this call never does
+   *  either. A name a built-in tier uses, or a reserved one, refuses. Not available on a
+   *  replica. */
+  ensurePinGroup(label: string): Promise<PinGroup>
+}
+
+/** A custom tier on the pinned board. */
+export interface PinGroup {
+  /** `ct_` + 8 characters, stable across renames. */
+  id: string
+  label: string
 }
 
 export interface TaskFilingInput {
   id: string
   /** Plain tags, added to the ones the task has at write time. */
   addTags?: string[]
+  /** Tags to take off; one the task does not carry is ignored. Removals apply before
+   *  additions, so one item can swap a tag for another. */
+  removeTags?: string[]
   title?: string
   /** File only if the task is still in this project (what you planned from). */
   expectProject?: string
@@ -151,6 +170,24 @@ export interface TaskFilingInput {
   expectTitle?: string
   /** `fileIntoProject` only: a task already in the project leaves its folder too. */
   topLevel?: boolean
+  /** Where the task is pinned. A tier (`focus`, `satellite`, `backlog`, `wait`, or a pin
+   *  group id) pins an open task there: one not pinned yet joins the pinned order at the
+   *  bottom (or the top, see `pinAt`), one pinned elsewhere moves tier and keeps its place
+   *  in the order. `null` unpins. Omitted, pins are left alone. A completed task is never
+   *  pinned; an unknown tier refuses the call. Decide for yourself when a pin is yours to
+   *  move: Walnut does not know whether the user placed it. */
+  pinTier?: string | null
+  /** The pin's place in the pinned order, with `pinTier`. `bottom` follows the user's own
+   *  pins, `top` leads them; item order is kept either way, so a batch filed newest-first
+   *  ends with its newest item on top. A new pin goes to the bottom when this is omitted,
+   *  and a pin that already exists keeps its place unless this is given (so a plugin can
+   *  re-sort pins it owns). */
+  pinAt?: 'top' | 'bottom'
+  /** Set when the work really began (ISO 8601, not in the future), for a task whose
+   *  `createdAt` is only when Walnut first saw it: an imported run of a ticket opened a
+   *  week earlier sorts and filters by the ticket's date once this is set. Ignored when it
+   *  is not a valid time. */
+  createdAt?: string
 }
 
 export interface TaskFilingResult {
@@ -214,6 +251,34 @@ export interface SessionImportsService {
   projectFor(host: string): string
   /** Called after each importer run that changed the board (once per run, not per task). */
   onRun(handler: () => void | Promise<void>): Disposable
+  /** Days an imported session may sit idle before the importer completes its task; 0 never. */
+  autoCompleteAfterDays(): Promise<number>
+  /** Keep the importer's lifecycle on imported tasks you file into `project`: one still
+   *  carrying `tag` (nobody has written to it) is completed once its session has been idle
+   *  `autoCompleteAfterDays()`, exactly as in the importer's own project. Without it, moving
+   *  an import out takes it out of that sweep. Released when your plugin stops. */
+  extendTo(project: string): Disposable
+}
+
+export type TagDisplay = 'shown' | 'hidden'
+
+export interface TagDisplayRule {
+  /** One tag, or `<namespace>:*` for every tag starting `<namespace>:`. */
+  pattern: string
+  display: TagDisplay
+  source: 'builtin' | 'user' | 'plugin'
+  pluginId?: string
+  pluginName?: string
+}
+
+/** Which tags a task shows as pills. Every tag stays an ordinary tag (searched, filtered,
+ *  editable); showing is display only. */
+export interface TagService {
+  /** How your own tags show by default, for one tag or `<namespace>:*`. The user's rule for
+   *  the same tags wins; `walnut:*` is Walnut's own. Released when your plugin stops. */
+  setDefaultDisplay(pattern: string, display: TagDisplay): Disposable
+  /** Every rule in force: Walnut's, the user's, and plugin defaults. */
+  displayRules(): Promise<TagDisplayRule[]>
 }
 
 export interface ConfigService {
@@ -1106,6 +1171,7 @@ export interface WalnutServerApi {
   readonly tasks: TaskService
   readonly hosts: HostService
   readonly sessionImports: SessionImportsService
+  readonly tags: TagService
   readonly config: ConfigService
   readonly notifications: NotificationService
   readonly ui: UiService

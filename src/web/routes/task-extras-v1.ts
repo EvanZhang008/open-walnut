@@ -78,6 +78,40 @@ taskExtrasV1Router.get('/tasks/meta/tags', async (_req: Request, res: Response, 
   }
 })
 
+// GET /api/v1/tasks/meta/tag-display — which tags a task shows (core/tag-display-rules.ts):
+// Walnut's own rule, the user's, and plugin defaults. Clients compile them once and filter
+// the pills they draw; `task:tag-display-changed` says when to read them again.
+taskExtrasV1Router.get('/tasks/meta/tag-display', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { listTagDisplayRules } = await import('../../core/tag-display.js')
+    res.json({ rules: await listTagDisplayRules() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PUT /api/v1/tasks/meta/tag-display { pattern, display: 'shown' | 'hidden' | null } — the
+// user's rule for one tag or `<namespace>:*` (null removes it). Answers the rules in force.
+// Primary only: the rules live in the primary's config.yaml.
+taskExtrasV1Router.put('/tasks/meta/tag-display', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (replicaRefused(res, 'Changing which tags show')) return
+    const { pattern, display } = (req.body ?? {}) as { pattern?: unknown; display?: unknown }
+    const { setUserTagDisplay } = await import('../../core/tag-display.js')
+    let rules
+    try {
+      rules = await setUserTagDisplay(pattern, display)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (/tag rule names|display must be|never show as tags/.test(msg)) { sendError(res, 400, 'bad_request', msg); return }
+      throw err
+    }
+    res.json({ rules })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/v1/tasks/meta/sprints (Wave 3) — unique sprint names with task
 // counts, most-used first. Class A.
 taskExtrasV1Router.get('/tasks/meta/sprints', async (_req: Request, res: Response, next: NextFunction) => {
@@ -120,6 +154,10 @@ taskExtrasV1Router.get('/tasks/enriched', async (_req: Request, res: Response, n
 // paths must never be shadowed by an /:id route — this router has none.
 
 // GET /api/v1/tasks/groups — all groups with labels + hidden flag + member ids.
+// REPLICA: its rows are built from the slim projection, which carries no
+// group_id, so its own store knows no folder membership. It serves the listing
+// the primary pushes on its task projection (`groups`), and its own store only
+// when the primary predates that.
 taskExtrasV1Router.get('/tasks/groups', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const { listGroups } = await import('../../core/task-manager.js')

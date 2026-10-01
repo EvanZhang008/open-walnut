@@ -18,8 +18,11 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-folder-
 
 import {
   addTask,
+  completeTask,
+  createCustomTier,
   createFolder,
   deleteProject,
+  ensureCustomTier,
   ensureProject,
   fileTasksIntoFolder,
   fileTasksIntoProject,
@@ -27,6 +30,8 @@ import {
   getTask,
   listGroups,
   renameProject,
+  setFocusTier,
+  togglePin,
   updateTask,
   updateTasksBulk,
   _resetForTesting,
@@ -246,5 +251,133 @@ describe('fileTasksIntoProject', () => {
     await expect(fileTasksIntoProject('Gone', [{ id: other.id }])).rejects.toThrow(/was deleted/)
     await expect(fileTasksIntoProject('  ', [{ id: other.id }])).rejects.toThrow(/cannot be empty/)
     expect(await getTask(other.id)).toMatchObject({ project: 'Import' })
+  })
+})
+
+describe('filing with pin_tier', () => {
+  it('pins open unpinned tasks at the bottom of the board, in item order, moves a pinned one to the asked tier, and never pins a finished one', async () => {
+    const earlier = await localTask('Already on the board', 'Mine', { pinned: false })
+    await togglePin(earlier.id)
+    const [fresh, second, satellite] = await Promise.all(['Fresh run', 'Second run', 'Satellite run'].map((title) => localTask(title, 'Import', { pinned: false })))
+    const waiting = await localTask('Pinned in Wait by the user', 'Import', { pinned: false })
+    await togglePin(waiting.id)
+    await setFocusTier(waiting.id, 'wait')
+    const done = await localTask('Finished run', 'Import', { pinned: false })
+    await completeTask(done.id)
+    // New pins follow every pin on the board, the user's two included.
+    const floor = Math.max((await getTask(earlier.id)).pin_order ?? 0, (await getTask(waiting.id)).pin_order ?? 0)
+
+    const result = await fileTasksIntoProject('Robot runs', [
+      { id: fresh.id, pin_tier: 'focus' },
+      { id: second.id, pin_tier: 'focus', add_tags: ['ticket:P1'] },
+      { id: satellite.id, pin_tier: 'satellite' },
+      { id: waiting.id, pin_tier: 'focus' },
+      { id: done.id, pin_tier: 'focus', add_tags: ['ticket:P2'] },
+    ])
+
+    expect(result.filed.map((one) => one.id)).toEqual([fresh.id, second.id, satellite.id, waiting.id, done.id])
+    expect(await getTask(fresh.id)).toMatchObject({ pinned: true, focus_tier: 'focus', pin_order: floor + 1 })
+    expect(await getTask(second.id)).toMatchObject({ pinned: true, focus_tier: 'focus', pin_order: floor + 2, tags: ['ticket:P1'] })
+    const sat = await getTask(satellite.id)
+    expect(sat).toMatchObject({ pinned: true, pin_order: floor + 3 })
+    expect(sat.focus_tier).toBeUndefined()
+    // A pinned task moves to the asked tier and keeps its place in the order; a finished task
+    // is filed and tagged, never pinned.
+    expect(await getTask(waiting.id)).toMatchObject({ pinned: true, focus_tier: 'focus', project: 'Robot runs', pin_order: floor })
+    const finished = await getTask(done.id)
+    expect(finished).toMatchObject({ project: 'Robot runs', tags: ['ticket:P2'] })
+    expect(finished.pinned).toBeFalsy()
+    // Asked again: nothing to do.
+    expect(await fileTasksIntoProject('Robot runs', [{ id: fresh.id, pin_tier: 'focus' }])).toMatchObject({ filed: [] })
+  })
+
+  it('takes a custom tier, and refuses an unknown one before writing anything', async () => {
+    const { tier } = await createCustomTier('Icebox')
+    const task = await localTask('Run', 'Import', { pinned: false })
+    const other = await localTask('Other run', 'Import', { pinned: false })
+    await expect(fileTasksIntoProject('Robot runs', [{ id: other.id, add_tags: ['ticket:P3'] }, { id: task.id, pin_tier: 'someday' }]))
+      .rejects.toThrow(/unknown pin tier "someday"/)
+    expect(await getTask(other.id)).toMatchObject({ project: 'Import' })
+    expect((await getTask(task.id)).pinned).toBeFalsy()
+
+    await fileTasksIntoFolder((await createFolder('Runs', 'Robot runs')).group_id, [{ id: task.id, pin_tier: tier.id }])
+    expect(await getTask(task.id)).toMatchObject({ pinned: true, focus_tier: tier.id, project: 'Robot runs' })
+  })
+
+  it('unpins with pin_tier null, moves a pin between tiers, and leaves pins alone when the field is absent', async () => {
+    const [a, b, c] = await Promise.all(['A', 'B', 'C'].map((title) => localTask(title, 'Import', { pinned: false })))
+    await fileTasksIntoProject('Robot runs', [{ id: a.id, pin_tier: 'focus' }, { id: b.id, pin_tier: 'focus' }, { id: c.id, pin_tier: 'backlog' }])
+    const orderB = (await getTask(b.id)).pin_order
+    const result = await fileTasksIntoProject('Robot runs', [
+      { id: a.id, pin_tier: null, add_tags: ['aged'] },
+      { id: b.id, pin_tier: 'backlog' },
+      { id: c.id, add_tags: ['kept'] },
+    ])
+    expect(result.filed.map((one) => one.id)).toEqual([a.id, b.id, c.id])
+    const unpinned = await getTask(a.id)
+    expect(unpinned.pinned).toBeFalsy()
+    expect(unpinned.pin_order).toBeUndefined()
+    expect(unpinned.focus_tier).toBeUndefined()
+    expect(unpinned.tags).toEqual(['aged'])
+    expect(await getTask(b.id)).toMatchObject({ pinned: true, focus_tier: 'backlog', pin_order: orderB })
+    expect(await getTask(c.id)).toMatchObject({ pinned: true, focus_tier: 'backlog', tags: ['kept'] })
+    // Unpinning an unpinned task, or moving to the tier it has, is nothing to do.
+    expect(await fileTasksIntoProject('Robot runs', [{ id: a.id, pin_tier: null }, { id: b.id, pin_tier: 'backlog' }])).toMatchObject({ filed: [] })
+    // Satellite is the absence of a tier.
+    await fileTasksIntoProject('Robot runs', [{ id: b.id, pin_tier: 'satellite' }])
+    const sat = await getTask(b.id)
+    expect(sat.pinned).toBe(true)
+    expect(sat.focus_tier).toBeUndefined()
+  })
+
+  it('pins at the top in item order when asked, above every pin so far', async () => {
+    const mine = await localTask('Mine', 'Work', { pinned: false })
+    await togglePin(mine.id)
+    const [newest, older, bottom] = await Promise.all(['Newest', 'Older', 'Bottom'].map((title) => localTask(title, 'Import', { pinned: false })))
+    await fileTasksIntoProject('Robot runs', [
+      { id: newest.id, pin_tier: 'focus', pin_at: 'top' },
+      { id: older.id, pin_tier: 'focus', pin_at: 'top' },
+      { id: bottom.id, pin_tier: 'focus' },
+    ])
+    const order = async (id: string) => (await getTask(id)).pin_order ?? 0
+    expect(await order(newest.id)).toBeLessThan(await order(older.id))
+    expect(await order(older.id)).toBeLessThan(await order(mine.id))
+    expect(await order(mine.id)).toBeLessThan(await order(bottom.id))
+    // The next batch at the top goes above the earlier one.
+    const later = await localTask('Later', 'Import', { pinned: false })
+    await fileTasksIntoProject('Robot runs', [{ id: later.id, pin_tier: 'focus', pin_at: 'top' }])
+    expect(await order(later.id)).toBeLessThan(await order(newest.id))
+    // An existing pin keeps its place without pin_at, and moves when it is given.
+    expect(await fileTasksIntoProject('Robot runs', [{ id: bottom.id, pin_tier: 'focus' }])).toMatchObject({ filed: [] })
+    await fileTasksIntoProject('Robot runs', [{ id: bottom.id, pin_tier: 'focus', pin_at: 'top' }])
+    expect(await order(bottom.id)).toBeLessThan(await order(later.id))
+    expect(await getTask(bottom.id)).toMatchObject({ pinned: true, focus_tier: 'focus' })
+  })
+
+  it('takes tags off, swaps one for another in one item, and sets the creation time once', async () => {
+    const task = await localTask('Run', 'Import', { pinned: false, tags: ['marker', 'ticket:P1'] })
+    const opened = '2026-09-20T08:00:00.000Z'
+    const before = (await getTask(task.id)).created_at
+    await fileTasksIntoProject('Robot runs', [{ id: task.id, remove_tags: ['marker', 'absent'], add_tags: ['severity:2'], created_at: opened }])
+    expect(await getTask(task.id)).toMatchObject({ tags: ['ticket:P1', 'severity:2'], created_at: opened })
+    expect(before).not.toBe(opened)
+    // A removal and an addition of the same tag keeps it; a bad or future time is ignored.
+    await fileTasksIntoProject('Robot runs', [{ id: task.id, remove_tags: ['severity:2'], add_tags: ['severity:2'], created_at: 'not a time' }])
+    expect(await getTask(task.id)).toMatchObject({ tags: ['ticket:P1', 'severity:2'], created_at: opened })
+    const future = new Date(Date.now() + 86_400_000).toISOString()
+    expect(await fileTasksIntoProject('Robot runs', [{ id: task.id, created_at: future }])).toMatchObject({ filed: [] })
+    expect((await getTask(task.id)).created_at).toBe(opened)
+  })
+})
+
+describe('ensureCustomTier', () => {
+  it('reuses a tier by label, case-insensitively, else creates one, and refuses a built-in name', async () => {
+    const made = await ensureCustomTier('Ticket Runs')
+    expect(made.created).toBe(true)
+    const again = await ensureCustomTier('  ticket   runs ')
+    expect(again).toEqual({ tier: made.tier, created: false })
+    const theirs = await createCustomTier('Icebox')
+    expect(await ensureCustomTier('icebox')).toEqual({ tier: theirs.tier, created: false })
+    await expect(ensureCustomTier('Focus')).rejects.toThrow(/built-in tier/)
   })
 })

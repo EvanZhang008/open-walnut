@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { TagChip } from './TagChip';
+import { useShownTags } from './TaskTagPills';
 import { ImportedPill } from './ImportedPill';
 import { TaskSessionPill } from './SessionPill';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
@@ -101,8 +102,8 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
   const navigate = useNavigate();
   const confirm = useConfirm();
   const showPriority = useShowPriority();
-  // Machine tags ("walnut:…") are types with their own pill, not labels to chip.
-  const userTags = (task.tags ?? []).filter((tag) => !tag.startsWith('walnut:'));
+  // Only the tags the display rules show (machine "walnut:…" tags and hidden ones stay off).
+  const userTags = useShownTags(task.tags);
 
   const className = [
     'task-card',

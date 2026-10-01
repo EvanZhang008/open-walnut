@@ -60,7 +60,8 @@ import { registerOwnedMethod } from '../../web/ws/handler.js'
 import { registerOwnedAgent } from '../agent-registry.js'
 import { registerOwnedProviderAdapter } from '../../model/providers/registry.js'
 import { EXTERNAL_SESSION_IMPORT_TAG } from '../types.js'
-import { EXTERNAL_IMPORT_EVENT_SOURCE, externalImportProject } from '../sessions/external-session-import.js'
+import { EXTERNAL_IMPORT_EVENT_SOURCE, extendImportLifecycle, externalImportProject, importAutoCompleteAfterDays } from '../sessions/external-session-import.js'
+import { listTagDisplayRules, setPluginTagDisplay } from '../tag-display.js'
 import type {
   AdapterCallOptions,
   ModelResult,
@@ -285,6 +286,9 @@ function publicTask(task: Task) {
     source: task.source,
     groupId: task.group_id || undefined,
     sessionIds: task.session_ids?.length ? [...task.session_ids] : undefined,
+    pinned: task.pinned ? true : undefined,
+    focusTier: task.pinned && task.focus_tier ? task.focus_tier : undefined,
+    pinOrder: task.pinned && typeof task.pin_order === 'number' ? task.pin_order : undefined,
     dueDate: task.due_date,
     startDate: task.start_date,
     endDate: task.end_date,
@@ -298,15 +302,37 @@ function publicTask(task: Task) {
 const FILE_INTO_FOLDER_CHUNK = 200
 
 /** A plugin's filing item in core's shape; anything malformed is dropped, never trusted. */
-function filingItem(item: { id: string; addTags?: string[]; title?: string; expectProject?: string; expectTitle?: string; topLevel?: boolean }) {
+/** A plugin's filing item as the API takes it (packages/plugin-api TaskFilingInput). */
+type FilingItemInput = {
+  id: string; addTags?: string[]; removeTags?: string[]; title?: string; expectProject?: string; expectTitle?: string
+  topLevel?: boolean; pinTier?: string | null; pinAt?: 'top' | 'bottom'; createdAt?: string
+}
+
+function filingItem(item: FilingItemInput) {
   return {
     id: item?.id,
     ...(Array.isArray(item?.addTags) ? { add_tags: item.addTags } : {}),
+    ...(Array.isArray(item?.removeTags) ? { remove_tags: item.removeTags } : {}),
     ...(typeof item?.title === 'string' ? { title: item.title } : {}),
     ...(typeof item?.expectProject === 'string' ? { expect_project: item.expectProject } : {}),
     ...(typeof item?.expectTitle === 'string' ? { expect_title: item.expectTitle } : {}),
     ...(item?.topLevel === true ? { top_level: true } : {}),
+    ...(item?.pinTier === null ? { pin_tier: null } : {}),
+    ...(typeof item?.pinTier === 'string' && item.pinTier.trim() ? { pin_tier: item.pinTier.trim() } : {}),
+    ...(item?.pinAt === 'top' || item?.pinAt === 'bottom' ? { pin_at: item.pinAt } : {}),
+    ...(typeof item?.createdAt === 'string' ? { created_at: item.createdAt } : {}),
   }
+}
+
+/** The fields a filing chunk may have changed, for the bulk task:updated. */
+function filingFields(items: FilingItemInput[]): string[] {
+  const fields = ['project', 'group_id', 'tags', 'title']
+  if (items.some((item) => typeof item?.createdAt === 'string')) fields.push('created_at')
+  return items.some((item) => item?.pinTier === null || typeof item?.pinTier === 'string') ? [...fields, 'pinned', 'pin_order', 'focus_tier'] : fields
+}
+
+function publicPinGroup(tier: { id: string; label: string }) {
+  return { id: tier.id, label: tier.label }
 }
 
 function publicFolder(folder: { group_id: string; label: string; project: string; parent_id?: string; member_ids: string[] }) {
@@ -332,6 +358,9 @@ function publicTaskSummary(task: Task | SlimTask) {
     source: task.source,
     groupId: task.group_id || undefined,
     sessionIds: task.session_ids?.length ? [...task.session_ids] : undefined,
+    pinned: task.pinned ? true : undefined,
+    focusTier: task.pinned && task.focus_tier ? task.focus_tier : undefined,
+    pinOrder: task.pinned && typeof task.pin_order === 'number' ? task.pin_order : undefined,
     dueDate: task.due_date,
     startDate: task.start_date,
     endDate: task.end_date,
@@ -605,7 +634,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: created.group_id, label: created.label }, ['web-ui'], { source: `plugin/${pluginId}` })
         return publicFolder({ ...created, member_ids: [] })
       },
-      async fileIntoFolder(folderId: string, items: Array<{ id: string; addTags?: string[]; title?: string; expectProject?: string; expectTitle?: string }>) {
+      async fileIntoFolder(folderId: string, items: FilingItemInput[]) {
         assertPrimaryWrite('tasks.fileIntoFolder')
         const result: { filed: string[]; skipped: Array<{ id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' }> } = { filed: [], skipped: [] }
         if (!Array.isArray(items) || items.length === 0) return result
@@ -623,14 +652,14 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
             result.filed.push(...done.filed.map((task) => task.id))
             // The bulk shape (no `task`, a `taskIds` list): the browser refetches once and the
             // indexers re-read exactly these ids, instead of one frame per task.
-            bus.emit(EventNames.TASK_UPDATED, { task: null, taskIds: done.filed.map((task) => task.id), fields: ['project', 'group_id', 'tags', 'title'] }, ['web-ui'], { source: `plugin/${pluginId}` })
+            bus.emit(EventNames.TASK_UPDATED, { task: null, taskIds: done.filed.map((task) => task.id), fields: filingFields(items) }, ['web-ui'], { source: `plugin/${pluginId}` })
           }
         } finally {
           if (folder) bus.emit(EventNames.TASK_GROUPS_CHANGED, folder, ['web-ui'], { source: `plugin/${pluginId}` })
         }
         return result
       },
-      async fileIntoProject(project: string, items: Array<{ id: string; addTags?: string[]; title?: string; expectProject?: string; expectTitle?: string; topLevel?: boolean }>) {
+      async fileIntoProject(project: string, items: FilingItemInput[]) {
         assertPrimaryWrite('tasks.fileIntoProject')
         if (typeof project !== 'string' || !project.trim()) throw new Error('Project name cannot be empty.')
         const result: { filed: string[]; skipped: Array<{ id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' }> } = { filed: [], skipped: [] }
@@ -643,7 +672,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           result.skipped.push(...done.skipped)
           if (done.filed.length === 0) continue
           result.filed.push(...done.filed.map((task) => task.id))
-          bus.emit(EventNames.TASK_UPDATED, { task: null, taskIds: done.filed.map((task) => task.id), fields: ['project', 'group_id', 'tags', 'title'] }, ['web-ui'], { source: `plugin/${pluginId}` })
+          bus.emit(EventNames.TASK_UPDATED, { task: null, taskIds: done.filed.map((task) => task.id), fields: filingFields(items) }, ['web-ui'], { source: `plugin/${pluginId}` })
         }
         return result
       },
@@ -658,6 +687,18 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }
         await deleteFolder(folderId)
         bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: folderId, label: folder.label }, ['web-ui'], { source: `plugin/${pluginId}` })
+      },
+      async pinGroups() {
+        const { getCustomTiers } = await import('../task-manager.js')
+        return (await getCustomTiers()).map(publicPinGroup)
+      },
+      async ensurePinGroup(label: string) {
+        assertPrimaryWrite('tasks.ensurePinGroup')
+        if (typeof label !== 'string' || !label.trim()) throw new Error('Pin group name cannot be empty.')
+        const { ensureCustomTier } = await import('../task-manager.js')
+        const { tier, created } = await ensureCustomTier(label)
+        if (created) context.logger.info('Plugin created a pin group', { tier: tier.id, label: tier.label })
+        return publicPinGroup(tier)
       },
     },
 
@@ -695,6 +736,23 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           }
         }, { global: true, interest: [EventNames.TASK_UPDATED] })
         return own(toDisposable(() => bus.unsubscribe(subscriber)))
+      },
+      autoCompleteAfterDays() {
+        return importAutoCompleteAfterDays()
+      },
+      extendTo(project: string) {
+        assertLive('sessionImports.extendTo')
+        return own(toDisposable(extendImportLifecycle(project)))
+      },
+    },
+
+    tags: {
+      setDefaultDisplay(pattern: string, display: 'shown' | 'hidden') {
+        assertLive('tags.setDefaultDisplay')
+        return own(toDisposable(setPluginTagDisplay(pluginId, pattern, display, options.pluginName)))
+      },
+      async displayRules() {
+        return (await listTagDisplayRules()).map((rule) => ({ ...rule }))
       },
     },
 

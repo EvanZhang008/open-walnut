@@ -21,6 +21,8 @@ export const EventNames = {
   TASK_REORDERED: 'task:reordered',
   TASK_UNBLOCKED: 'task:unblocked',
   TASK_GROUPS_CHANGED: 'task:groups-changed',
+  /** The tag display rules changed (a user rule, or a plugin default came or went). */
+  TASK_TAG_DISPLAY_CHANGED: 'task:tag-display-changed',
   /** Emitted (beside TASK_UPDATED) only when a task's phase actually changed.
    *  Fires from ALL mutation paths — REST PATCH, agent task_update, session
    *  state machine, complete/toggle, bulk, sync pull — so hook consumers

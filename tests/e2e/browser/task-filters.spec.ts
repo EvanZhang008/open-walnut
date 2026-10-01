@@ -125,6 +125,7 @@ const RAIL_SECTION: Record<string, string> = {
   Project: 'q-project', // /tasks surface only
   Source: 'q-source',
   Sprint: 'q-sprint',
+  Tag: 'q-tags',
   Pinned: 'q-flags',
   Blocked: 'q-flags',
   Time: 'q-time',
@@ -460,4 +461,77 @@ test('panel search finds options across dimensions and Enter toggles them', asyn
   await expect(chipStrip(page)).toHaveCount(0)
 
   await page.screenshot({ path: `${SHOTS}/06-search-enter.png`, fullPage: true })
+})
+
+test('the Tags section filters by a tag on both surfaces and its chip removes it', async ({ page }) => {
+  // Two tagged tasks, unpinned so they render in the main list (a REST create
+  // pins by default). No fixture task carries a tag, so with a tag condition on
+  // these are the only candidates. Setup only; the filter is driven by clicks.
+  // Tags of this run only: the chromium and webkit projects share one fixture board.
+  const ns = `sev${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const [TAG2, TAG3] = [`${ns}:2`, `${ns}:3`]
+  const ids: string[] = []
+  for (const tag of [TAG2, TAG3]) {
+    const res = await fetch(`${API}/api/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: `tq tagged ${tag} ${Date.now()}`, source: 'local', project: 'Lantern', tags: [tag], pinned: false }),
+    })
+    if (!res.ok) throw new Error(`seed create failed: ${res.status} ${await res.text()}`)
+    ids.push(((await res.json()) as { task: { id: string } }).task.id)
+  }
+  const [sev2, sev3] = ids
+  const tagChip = (tag: string, surface = HOME) => page.locator(`${surface} .task-filter-chips .tag-chip[title="${tag}"]`)
+
+  try {
+    await openHomePanel(page)
+    await expect(homeRow(page, sev2)).toBeVisible({ timeout: 10_000 })
+    await expect(homeRow(page, sev3)).toBeVisible()
+    await expect(homeRow(page, OPEN_RECENT)).toBeVisible()
+
+    const panel = await openViewPanel(page)
+    const tagsRail = panel.locator('.vd-rail-btn[data-rail-section="q-tags"]')
+    await expect(tagsRail).toContainText('Tags')
+    await toggleQueryChip(panel, 'Tag', TAG2)
+    const tagsField = panel.locator('.vd-query .vd-field', { hasText: 'Tag' })
+    await expect(tagsField.locator(`.vd-cat[data-filter-value="${TAG2}"]`)).toHaveAttribute('aria-pressed', 'true')
+    await expect(tagsField.locator(`.vd-cat[data-filter-value="${TAG3}"]`)).toHaveAttribute('aria-pressed', 'false')
+    await expect(tagsRail.locator('.vd-rail-badge')).toHaveText('1')
+    await expect(panel.getByTestId('vd-sentence').locator(`[data-chip-dim="tagsAny"][data-chip-value="${TAG2}"]`)).toBeVisible()
+    await panel.screenshot({ path: `${SHOTS}/07a-tags-section.png` })
+    await closeViewPanel(page)
+
+    // Only the TAG2 task is left in the whole list.
+    await expect(homeRow(page, sev3)).toHaveCount(0)
+    await expect(homeRow(page, OPEN_RECENT)).toHaveCount(0)
+    const hits = await page.locator('.todo-panel-list .todo-panel-item[data-task-id]')
+      .evaluateAll((rows) => rows.map((r) => r.getAttribute('data-task-id')))
+    expect(hits).toEqual([sev2])
+    await expect(tagChip(TAG2)).toBeVisible()
+    await page.screenshot({ path: `${SHOTS}/07b-tag-filtered.png` })
+
+    // The chip's x drops the condition; both tasks and the fixtures are back.
+    await tagChip(TAG2).locator('.tag-chip-remove').click()
+    await expect(chipStrip(page)).toHaveCount(0)
+    await expect(homeRow(page, sev2)).toBeVisible({ timeout: 10_000 })
+    await expect(homeRow(page, sev3)).toBeVisible()
+    await expect(homeRow(page, OPEN_RECENT)).toBeVisible()
+
+    // /tasks builds its own tag list through the same helper: pick the other tag there.
+    await page.locator('.sidebar a[href="/tasks"]').click()
+    await expect(page.getByTestId('tasks-table')).toBeVisible({ timeout: 20_000 })
+    await expect(tableRow(page, sev2)).toBeVisible({ timeout: 10_000 })
+    const tasksPanel = await openViewPanel(page, TASKS_PAGE)
+    await toggleQueryChip(tasksPanel, 'Tag', TAG3)
+    await closeViewPanel(page)
+    await expect(tableRow(page, sev3)).toBeVisible({ timeout: 10_000 })
+    await expect(tableRow(page, sev2)).toHaveCount(0)
+    await expect(tagChip(TAG3, TASKS_PAGE)).toBeVisible()
+    // /tasks persists its query, so leave it clean for whatever runs next.
+    await tagChip(TAG3, TASKS_PAGE).locator('.tag-chip-remove').click()
+    await expect(tagChip(TAG3, TASKS_PAGE)).toHaveCount(0)
+    await expect(tableRow(page, sev2)).toBeVisible({ timeout: 10_000 })
+  } finally {
+    for (const id of ids) await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => {})
+  }
 })

@@ -137,10 +137,20 @@ interface CallerMe {
 
 /** Filters that already say WHERE to look, so task_list applies no caller default. */
 // Board queries count too: tiers, pins and unread are the human's working set,
-// never a folder's. A title search (`q`) does NOT: it starts near and widens.
+// never a folder's. A lookup (a title search or a tag) does NOT: it starts near and widens.
 const TASK_LIST_PLACEMENT_FILTERS = [
   'project', 'projects', 'group_id', 'ids', 'working_set', 'parent_task_id', 'focus_tier', 'pinned', 'unread',
 ] as const
+
+/** Filters that look for particular tasks: with no hit near the caller, the search widens. */
+const TASK_LIST_LOOKUP_FILTERS = ['q', 'tag', 'tags_any', 'tags_all'] as const
+
+/** The lookup a widened result names, in the caller's own words. */
+function lookupLabel(args: Record<string, unknown>): string {
+  if (args.q !== undefined) return `"${String(args.q)}"`
+  const tags = [args.tag, args.tags_any, args.tags_all].filter((v) => v !== undefined).map(String)
+  return `tag ${tags.join(', ')}`
+}
 
 /** The line a defaulted (not asked-for) scope carries, so the ring is never mistaken for the board. */
 function scopeDefaultHint(scope: string | undefined, you: Record<string, unknown> | undefined): string {
@@ -213,7 +223,7 @@ defineOp({
     // would cap it before the handler could tell the two apart.
     limit: z.number().int().min(1).max(200).optional().describe(`Max rows (1-200), applied after sort. Default ${DEFAULT_TASK_LIST_LIMIT}, EXCEPT working_set=true which returns the whole board unless you pass a limit`),
     fields: z.enum(['list', 'full']).default('list').describe('list = slim rows (default); full = every field including note (heavy — combine with ids or a small limit)'),
-    scope: z.enum(['folder', 'project', 'all']).optional().describe('How far around the caller to look: folder, project, or all (the whole board). From inside a task the DEFAULT is folder (project when your task has no folder); pass all for the board. Elsewhere the default is the whole board'),
+    scope: z.enum(['folder', 'project', 'all']).optional().describe('How far around the caller to look: folder, project, or all (the whole board). From inside a task the DEFAULT is folder (project when your task has no folder); pass all for the board. A lookup (q, tag, tags_any, tags_all) with no hit there widens by itself to your project, then the board. Elsewhere the default is the whole board'),
   },
   // Declared so the route-parity test and the generated docs keep pointing at
   // the real route; the handler below is what actually executes (it needs to
@@ -264,11 +274,13 @@ defineOp({
       return await call('GET', path) as { tasks?: unknown[]; total?: unknown; board?: unknown } | undefined
     }
     let body = await fetchList()
-    // A title search nobody scoped starts near and WIDENS on no hit (folder,
-    // then project, then the board): an agent checking "does this exist yet?"
-    // must not read an empty folder as "no, create it".
+    // A lookup nobody scoped (a title search, a tag) starts near and WIDENS on no
+    // hit (folder, then project, then the board): an agent checking "does this
+    // exist yet?" must not read an empty folder as "no, create it", and one
+    // finding the task a ticket tag names must not stop at its own folder.
     let widenedFrom: string | undefined
-    while (defaulted && args.q !== undefined && Array.isArray(body?.tasks) && body.tasks.length === 0
+    const lookup = TASK_LIST_LOOKUP_FILTERS.some((k) => args[k] !== undefined)
+    while (defaulted && lookup && Array.isArray(body?.tasks) && body.tasks.length === 0
         && (appliedScope === 'folder' || appliedScope === 'project')) {
       widenedFrom ??= appliedScope
       if (appliedScope === 'folder') {
@@ -295,7 +307,7 @@ defineOp({
       : tasks.map(leanTaskRow)
     const hints = [
       widenedFrom
-        ? `Nothing in your ${widenedFrom} matched "${String(args.q)}", so this searched ${appliedScope === 'all' ? 'the whole board' : 'your whole project'}.`
+        ? `Nothing in your ${widenedFrom} matched ${lookupLabel(args)}, so this searched ${appliedScope === 'all' ? 'the whole board' : 'your whole project'}.`
         : defaulted ? scopeDefaultHint(appliedScope as string | undefined, you) : '',
       truncated
         ? `Showing ${tasks.length} of ${total} matching tasks — this result is CUT. `
@@ -678,4 +690,35 @@ defineOp({
     )
   },
   tags: { readonly: false, remote: 'deny', destructive: true },
+})
+
+const TAG_DISPLAY_PATH = '/tasks/meta/tag-display'
+
+defineOp({
+  name: 'tag_display_list',
+  title: 'List which tags a task shows',
+  description:
+    'The rules deciding which tags appear as pills on a task (rows, cards, table, detail badges). ' +
+    'A rule names one tag (`urgent`) or a namespace (`ticket-id:*`, every tag starting `ticket-id:`) ' +
+    'and says shown or hidden; source is builtin (walnut:* machine tags never show), user, or plugin ' +
+    '(with pluginId). The user\'s rule beats a plugin\'s; an exact tag beats its namespace; a tag no rule ' +
+    'names shows. Display only: hidden tags are still searched, filtered (task_list tag) and editable.',
+  input: {},
+  bind: { method: 'GET', path: TAG_DISPLAY_PATH },
+  tags: { readonly: true, remote: 'allow' },
+})
+
+defineOp({
+  name: 'tag_display_set',
+  title: 'Show or hide a tag on tasks',
+  description:
+    'Set the user\'s rule for one tag or a namespace (`<namespace>:*`): shown or hidden on task pills. ' +
+    'display null removes the user\'s rule, so a plugin default (or shown) applies again. walnut:* is ' +
+    'fixed. Returns every rule now in force. Display only: nothing is removed from any task.',
+  input: {
+    pattern: z.string().min(1).describe('One tag (e.g. "urgent") or a namespace as "<namespace>:*" (e.g. "ticket-id:*")'),
+    display: z.enum(['shown', 'hidden']).nullable().describe('shown | hidden, or null to remove your rule'),
+  },
+  bind: { method: 'PUT', path: TAG_DISPLAY_PATH },
+  tags: { readonly: false, remote: 'deny' },
 })

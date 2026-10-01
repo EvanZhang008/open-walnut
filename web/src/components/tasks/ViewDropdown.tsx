@@ -44,6 +44,7 @@ import {
   buildFilterSentence,
   hasActiveTaskQuery,
   searchFilterOptions,
+  tagChipOptions,
   toTaskQuery,
   toggleQueryValue,
   type FilterSearchOption,
@@ -105,6 +106,8 @@ export interface ViewDropdownProps {
   queryProjectOptions?: string[];
   querySourceOptions?: string[];
   querySprintOptions?: string[];
+  /** Every pickable tag, most frequent first (the surface applies the display rules). */
+  queryTagOptions?: string[];
 
   /**
    * View-scoped controls (which list the panel shows, and toggles that only
@@ -176,7 +179,7 @@ export function ViewDropdown({
   dateFilter, onDateFilterChange,
   sortBy, onSortByChange, groupBy, onGroupByChange,
   showCompleted, onShowCompletedChange, onClearAll,
-  query, onQueryChange, queryProjectOptions, querySourceOptions, querySprintOptions,
+  query, onQueryChange, queryProjectOptions, querySourceOptions, querySprintOptions, queryTagOptions,
   viewGroups,
 }: ViewDropdownProps) {
   const [open, setOpen] = useState(false);
@@ -207,6 +210,7 @@ export function ViewDropdown({
   );
   const sourceOptions = useMemo(() => querySourceOptions ?? [], [querySourceOptions]);
   const sprintOptions = useMemo(() => querySprintOptions ?? [], [querySprintOptions]);
+  const tagOptions = useMemo(() => queryTagOptions ?? [], [queryTagOptions]);
 
   // Rail sections, in reading order: Quick filters FIRST (it is the landing
   // page — the most-used controls, one glance away), then the other
@@ -232,6 +236,9 @@ export function ViewDropdown({
       if (projectOptions.length && !hasProjectChips) list.push({ id: 'q-project', name: 'Project', badge: query.projects.length });
       if (sourceOptions.length) list.push({ id: 'q-source', name: 'Source', badge: query.sources.length });
       if (sprintOptions.length) list.push({ id: 'q-sprint', name: 'Sprint', badge: query.sprints.length });
+      // Also kept while a tag is selected but no loaded task carries it any
+      // more, so the condition can still be switched off here.
+      if (tagOptions.length || query.tagsAny.length) list.push({ id: 'q-tags', name: 'Tags', badge: query.tagsAny.length });
       list.push({
         id: 'q-flags', name: 'Pinned / Blocked',
         badge: (query.pinned !== undefined ? 1 : 0) + (query.blocked !== undefined ? 1 : 0),
@@ -245,7 +252,7 @@ export function ViewDropdown({
     // click anyway, so this memo mostly documents the inputs.
   }, [viewGroups?.length, hasProjectChips, hasLegacySelects, hasLegacySortGroup, hasQuery, query,
       activeProject, phaseFilter, dateFilter, showPriority,
-      projectOptions, sourceOptions, sprintOptions]);
+      projectOptions, sourceOptions, sprintOptions, tagOptions]);
 
   const activeSection = sections.find((s) => s.id === section) ?? sections[0];
 
@@ -341,12 +348,12 @@ export function ViewDropdown({
   const searchGroups = useMemo(
     () => {
       if (!hasQuery || !query) return [];
-      const groups = searchFilterOptions(query, { projectOptions, sourceOptions, sprintOptions }, search);
+      const groups = searchFilterOptions(query, { projectOptions, sourceOptions, sprintOptions, tagOptions }, search);
       // A hidden dimension has no rail section to land on, so its search hits
       // would open an empty detail pane.
       return showPriority ? groups : groups.filter((g) => g.options[0]?.section !== 'q-priority');
     },
-    [hasQuery, query, projectOptions, sourceOptions, sprintOptions, search, showPriority],
+    [hasQuery, query, projectOptions, sourceOptions, sprintOptions, tagOptions, search, showPriority],
   );
   const searchFlat = useMemo(() => searchGroups.flatMap((g) => g.options), [searchGroups]);
   const searching = search.trim().length > 0;
@@ -507,6 +514,7 @@ export function ViewDropdown({
                   groupBy={groupBy} onGroupByChange={onGroupByChange}
                   query={query} patchQuery={patchQuery}
                   projectOptions={projectOptions} sourceOptions={sourceOptions} sprintOptions={sprintOptions}
+                  tagOptions={tagOptions}
                 />
               )}
             </div>
@@ -548,7 +556,7 @@ function SectionDetail(props: {
   groupBy?: GroupBy; onGroupByChange?: (v: GroupBy) => void;
   query?: TaskQueryFilterState;
   patchQuery: (patch: Partial<TaskQueryFilterState>) => void;
-  projectOptions: string[]; sourceOptions: string[]; sprintOptions: string[];
+  projectOptions: string[]; sourceOptions: string[]; sprintOptions: string[]; tagOptions: string[];
 }) {
   const { id, query, patchQuery } = props;
 
@@ -728,6 +736,7 @@ function SectionDetail(props: {
           selected={query.sprints}
           onToggle={(v) => patchQuery({ sprints: toggleQueryValue(query.sprints, v) })} />
       )}
+      {id === 'q-tags' && <TagsSection query={query} patchQuery={patchQuery} tagOptions={props.tagOptions} />}
       {id === 'q-flags' && (
         <div className="vd-grid">
           <TriStateField label="Pinned" value={query.pinned} onChange={(v) => patchQuery({ pinned: v })} />
@@ -742,6 +751,25 @@ function SectionDetail(props: {
           onToggle={(v) => { if (v !== query.sort) patchQuery({ sort: v }); }} />
       )}
     </div>
+  );
+}
+
+/** Tag chips (any of them matches), capped; the long tail is reached through the panel search. */
+function TagsSection({ query, patchQuery, tagOptions }: {
+  query: TaskQueryFilterState;
+  patchQuery: (patch: Partial<TaskQueryFilterState>) => void;
+  tagOptions: string[];
+}) {
+  const { options, hidden } = tagChipOptions(query.tagsAny, tagOptions);
+  return (
+    <>
+      <ChipGroup label="Tag" options={options.map((t) => ({ value: t, label: t }))}
+        selected={query.tagsAny}
+        onToggle={(v) => patchQuery({ tagsAny: toggleQueryValue(query.tagsAny, v) })} />
+      {hidden > 0 && (
+        <div className="vd-hint">Search above for the other {hidden} {hidden === 1 ? 'tag' : 'tags'}.</div>
+      )}
+    </>
   );
 }
 

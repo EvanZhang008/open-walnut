@@ -23,6 +23,7 @@ import {
 } from './tasks-table-columns';
 import { TasksColumnsMenu } from './TasksColumnsMenu';
 import { TagChip } from './TagChip';
+import { useShownTags } from './TaskTagPills';
 import { PHASE_LABELS, taskNeedsAction } from '@/utils/session-status';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { visibleInterval } from '@/utils/page-visibility';
@@ -295,6 +296,18 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
  * green check = done), so a task reads the same on both surfaces. A component,
  * not a branch of `row()`, because the colour subscribes to live session status.
  */
+/** The tags the display rules show (hidden ones stay in the tag editor only). */
+function TagsCell({ colId, tags }: { colId: string; tags?: string[] }) {
+  const shown = useShownTags(tags);
+  return (
+    <span data-col={colId} className="tp-cell-tags" title={shown.join(', ')}>
+      {shown.length === 0
+        ? <span className="tp-cell-empty">–</span>
+        : shown.map((tag) => <TagChip key={tag} tag={tag} inline />)}
+    </span>
+  );
+}
+
 function RowCircle({ task, onToggleComplete }: { task: Task; onToggleComplete: (id: string) => void }) {
   const circleClass = useTaskCircle(task);
   const isDone = task.status === 'done';
@@ -581,16 +594,8 @@ export function TasksPageTable({
             <ProjectCell task={t} sourceByName={sourceByName} projectNames={projectNames} onUpdate={onUpdate} />
           </span>
         );
-      case 'tags': {
-        const tags = t.tags ?? [];
-        return (
-          <span key={col.id} data-col={col.id} className="tp-cell-tags" title={tags.join(', ')}>
-            {tags.length === 0
-              ? <span className="tp-cell-empty">–</span>
-              : tags.map((tag) => <TagChip key={tag} tag={tag} inline />)}
-          </span>
-        );
-      }
+      case 'tags':
+        return <TagsCell key={col.id} colId={col.id} tags={t.tags} />;
       case 'created':
       case 'updated':
       case 'completed': {

@@ -122,8 +122,10 @@ import {
   buildTaskQueryContext,
   deriveSourceOptions,
   deriveSprintOptions,
+  deriveTagOptions,
   safeNormalizeTaskQuery,
 } from './task-query-state';
+import { useTagDisplay } from '@/stores/tag-display-store';
 import {
   matchesTaskQuery,
   type NormalizedTaskQuery,
@@ -5096,6 +5098,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   const querySourceOptions = useMemo(() => deriveSourceOptions(tasks), [tasks]);
   const querySprintOptions = useMemo(() => deriveSprintOptions(tasks), [tasks]);
+  const tagDisplay = useTagDisplay().compiled;
+  const queryTagOptions = useMemo(() => deriveTagOptions(tasks, tagDisplay.shown), [tasks, tagDisplay]);
 
   const handleQueryChange = useCallback((next: TaskQueryFilterState) => {
     setTaskQueryState(next);
@@ -7732,6 +7736,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           queryProjectOptions={queryProjectOptions}
           querySourceOptions={querySourceOptions}
           querySprintOptions={querySprintOptions}
+          queryTagOptions={queryTagOptions}
           viewGroups={viewGroups}
         />
         <button

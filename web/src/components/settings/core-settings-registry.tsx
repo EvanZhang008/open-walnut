@@ -22,6 +22,7 @@ import { SearchSection } from './sections/SearchSection'
 import { SessionsSection } from './sections/SessionsSection'
 import { SttSection } from './sections/SttSection'
 import { SuggestAccuracySection } from './sections/SuggestAccuracySection'
+import { TagsSection } from './sections/TagsSection'
 import { TasksSection } from './sections/TasksSection'
 import { TimelineSection } from './sections/TimelineSection'
 import { TriageSection } from './sections/TriageSection'
@@ -136,6 +137,14 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: 'The tiers pinned tasks are sorted into.',
     keywords: ['focus tiers', 'tier', 'pinned'],
     render: () => <FocusTiersSection />,
+  },
+  // Tags: which tags show on tasks. Folded under Tasks with Focus Tiers (`#tags` still works).
+  {
+    owner: 'walnut', id: 'tags', label: 'Tags', title: 'Tags', group: 'configure', navHidden: true,
+    icon: 'checklist', tint: '#AF52DE',
+    description: 'Which tags show on tasks.',
+    keywords: ['tags', 'tag', 'hide tag', 'show tag', 'namespace', 'pill'],
+    render: () => <TagsSection />,
   },
   {
     owner: 'walnut', id: 'sessions', label: 'Sessions', title: 'Sessions', group: 'configure',

@@ -1747,6 +1747,20 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
 
 - `GET /api/v1/tasks/meta/tags` → `200 { "tags": [ { tag, count } ] }` —
   autocomplete catalog. Class A.
+- Tag display (additive, 2026-09): every tag is an ordinary tag (searched, filtered,
+  edited); whether it shows as a pill is a separate, display-only rule, per exact tag or
+  per namespace (`ticket-id:*` covers every tag whose text before its first colon is
+  `ticket-id`). Walnut's machine tags (`walnut:*`) never show, the user's rule wins over a
+  plugin's default, and two plugins disagreeing hide the tag. Clients compile the rule list
+  once and filter the pills they draw, and read it again on open; the web console also hears
+  `task:tag-display-changed` on its socket (not on the v1 SSE feed).
+  - `GET /api/v1/tasks/meta/tag-display` → `200 { "rules": [ { pattern, display:
+    'shown'|'hidden', source: 'builtin'|'user'|'plugin', pluginId?, pluginName? } ] }`.
+    Reads work on both boxes.
+  - `PUT /api/v1/tasks/meta/tag-display` body `{ "pattern", "display": 'shown' | 'hidden' |
+    null }` sets (or, with `null`, removes) the user's rule for one tag or `<namespace>:*`
+    and answers `{ rules }`. A machine-tag pattern or a malformed one → `400 bad_request`.
+    **`501 not_supported_cloud` on a REPLICA**: the rules live in the primary's config.
 - Virtual task groups — **all writes answer `501 not_supported_cloud` on a
   REPLICA** (`group_id` and the group registry are not in the outbox update
   whitelist, so replica-local writes would silently revert; an honest error

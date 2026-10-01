@@ -5529,6 +5529,21 @@ export interface TaskFilingItem {
   expect_title?: string;
   /** fileTasksIntoProject only: a task already in the project leaves its folder too. */
   top_level?: boolean;
+  /** Tags to take off (a tag the task does not carry is ignored). Removals apply before
+   *  additions, so one item can swap a tag for another. */
+  remove_tags?: string[];
+  /** Where the task is pinned: a board tier (focus | satellite | backlog | wait | a custom
+   *  tier id) pins an open task there (one pinned elsewhere moves tier, keeping its place in
+   *  the pinned order), `null` unpins it, and an omitted field leaves pins alone. A completed
+   *  task is never pinned. */
+  pin_tier?: string | null;
+  /** The pin's place in the pinned order: the bottom or the top. A new pin goes to the
+   *  bottom when this is omitted; an existing pin keeps its place unless this is given. */
+  pin_at?: 'top' | 'bottom';
+  /** Set the task's creation time (ISO 8601, not in the future): an imported task's
+   *  `created_at` is the import, and a plugin that knows when the work really began may
+   *  say so. Invalid values are ignored. */
+  created_at?: string;
 }
 export type TaskFilingSkip = { id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' };
 
@@ -5637,6 +5652,45 @@ function fileTasksLocked(
   const sel = handle.prepare('SELECT * FROM tasks WHERE id = ?');
   const now = new Date().toISOString();
   const seen = new Set<string>();
+  // Tiers are checked before any row is written: a tier that does not exist is the
+  // caller's mistake, and the whole chunk refuses rather than pinning some of it.
+  const tiers = new Set(items.map((item) => item?.pin_tier).filter((tier): tier is string => typeof tier === 'string'));
+  if (tiers.size) {
+    const custom = new Set((handle.prepare('SELECT id FROM custom_tiers').all() as Array<{ id: string }>).map((row) => row.id));
+    for (const tier of tiers) {
+      if (tier !== 'satellite' && !BUILTIN_TIER_VALUES.includes(tier) && !custom.has(tier)) {
+        throw new Error(`unknown pin tier "${tier}". Valid tiers: satellite, ${[...BUILTIN_TIER_VALUES, ...custom].join(', ')}`);
+      }
+    }
+  }
+  // New pins keep item order: at the bottom of the pinned order (togglePin's rule), or in a
+  // block above every pin so far when asked for the top. The block is sized by the items
+  // that ask (an item skipped leaves a gap, which the order does not mind), so the batch's
+  // first item is its topmost.
+  let nextPin: number | undefined;
+  let topPin: number | undefined;
+  const topAsked = items.filter((item) => typeof item?.pin_tier === 'string' && item.pin_at === 'top').length;
+  const pinBounds = (): { n: number; max: number; min: number } => {
+    const row = handle.prepare(
+      "SELECT COUNT(*) AS n, MAX(COALESCE(CAST(json_extract(payload, '$.pin_order') AS INTEGER), 0)) AS mx, "
+      + "MIN(COALESCE(CAST(json_extract(payload, '$.pin_order') AS INTEGER), 0)) AS mn FROM tasks WHERE pinned = 1",
+    ).get() as { n: number; mx: number | null; mn: number | null };
+    return { n: row.n, max: row.mx ?? 0, min: row.mn ?? 0 };
+  };
+  const takePinOrder = (at: 'top' | 'bottom'): number => {
+    if (at === 'top') {
+      if (topPin === undefined) { const b = pinBounds(); topPin = b.n > 0 ? b.min - topAsked : 0; }
+      return topPin++;
+    }
+    if (nextPin === undefined) { const b = pinBounds(); nextPin = b.n > 0 ? b.max + 1 : 0; }
+    return nextPin++;
+  };
+  const createdAtOf = (item: TaskFilingItem): string | undefined => {
+    if (typeof item.created_at !== 'string') return undefined;
+    const at = Date.parse(item.created_at);
+    if (!Number.isFinite(at) || at > Date.now()) return undefined;
+    return new Date(at).toISOString();
+  };
   for (const item of items) {
     if (typeof item?.id !== 'string' || seen.has(item.id)) continue;
     seen.add(item.id);
@@ -5648,11 +5702,14 @@ function fileTasksLocked(
     }
     const moving = !sameProject(task.project, place.project);
     const unfiling = !place.groupId && item.top_level === true && !!task.group_id;
-    const adds = (item.add_tags ?? []).filter((tag) => typeof tag === 'string' && tag.trim() && !(task.tags ?? []).includes(tag));
+    const removes = new Set((item.remove_tags ?? []).filter((tag) => typeof tag === 'string' && (task.tags ?? []).includes(tag)));
+    const adds = (item.add_tags ?? []).filter((tag) => typeof tag === 'string' && tag.trim() && (removes.has(tag) || !(task.tags ?? []).includes(tag)));
+    for (const tag of adds) removes.delete(tag);
     const asked = typeof item.title === 'string' ? item.title.trim() : '';
     const title = asked && asked !== task.title
       && (item.expect_title === undefined || item.expect_title === task.title) ? asked : '';
-    if (task.source !== 'local' && (moving || adds.length || title)) {
+    const createdAt = createdAtOf(item);
+    if (task.source !== 'local' && (moving || adds.length || removes.size || title || createdAt)) {
       skipped.push({ id: task.id, reason: 'synced' }); continue;
     }
     if (title && validatePluginContent(task, 'title', title)) { skipped.push({ id: task.id, reason: 'rejected' }); continue; }
@@ -5661,8 +5718,26 @@ function fileTasksLocked(
     if (place.groupId && task.group_id !== place.groupId) patch.group_id = place.groupId;
     // null is the raw path's explicit-clear marker for a payload field.
     if (unfiling) patch.group_id = null as unknown as undefined;
-    if (adds.length) patch.tags = [...new Set([...(task.tags ?? []), ...adds])];
+    if (adds.length || removes.size) patch.tags = [...new Set([...(task.tags ?? []).filter((tag) => !removes.has(tag)), ...adds])];
     if (title) patch.title = title;
+    if (createdAt && createdAt !== task.created_at) patch.created_at = createdAt;
+    // Pin state is the board's, not the task's content: a synced task may take it too.
+    if (item.pin_tier === null && task.pinned) {
+      patch.pinned = false;
+      patch.pin_order = null as unknown as undefined;
+      if (task.focus_tier) patch.focus_tier = null as unknown as undefined;
+    } else if (item.pin_tier && task.phase !== 'COMPLETE') {
+      if (!task.pinned) {
+        patch.pinned = true;
+        patch.pin_order = takePinOrder(item.pin_at === 'top' ? 'top' : 'bottom');
+      } else if (item.pin_at === 'top' || item.pin_at === 'bottom') {
+        patch.pin_order = takePinOrder(item.pin_at);
+      }
+      const tier = item.pin_tier === 'satellite' ? undefined : item.pin_tier;
+      if (tier && task.focus_tier !== tier) patch.focus_tier = tier;
+      // Satellite is stored as no tier; a leftover one would read as its old tier.
+      else if (!tier && task.focus_tier) patch.focus_tier = null as unknown as undefined;
+    }
     const prepared = prepareRawUpdate(task, patch);
     if (!prepared) continue;
     prepared.updated_at = now;
@@ -6802,6 +6877,24 @@ export async function createCustomTier(label: string): Promise<{ tier: CustomTie
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_tiers' }, ['web-ui']);
     return { tier, tiers: store.custom_tiers };
   });
+}
+
+/** The custom tier with this label (labels are unique, compared case-insensitively), or a
+ *  new one. The one way a plugin takes a pin group: one it ensured once stays the user's
+ *  (renaming or deleting it is theirs), and a label the user already uses is reused, never
+ *  doubled. */
+export async function ensureCustomTier(label: string): Promise<{ tier: CustomTierRecord; created: boolean }> {
+  const wanted = (label ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const existing = (await getCustomTiers()).find((t) => t.label.trim().toLowerCase() === wanted);
+  if (existing) return { tier: existing, created: false };
+  try {
+    return { tier: (await createCustomTier(label)).tier, created: true };
+  } catch (err) {
+    // Two ensurers racing for one label: the loser finds the winner's tier.
+    const again = (await getCustomTiers()).find((t) => t.label.trim().toLowerCase() === wanted);
+    if (again) return { tier: again, created: false };
+    throw err;
+  }
 }
 
 /**

@@ -1,8 +1,9 @@
 /**
- * A task's own tags on the Homepage: pills on the row (one, then "+N") and in the
- * detail pane. An id tag like `ticket:V1234567890` reads whole when the row has
- * room, machine tags ("walnut:…") never show as a tag, the pills never starve the
- * title or push the row's controls out, and a tag added elsewhere appears live.
+ * A task's own tags on the Homepage: pills on the row and on a pinned card (two, then
+ * "+N") and in the detail pane. An id tag like `ticket:V1234567890` reads whole when
+ * the row has room, machine tags ("walnut:…") and hidden namespaces never show as a
+ * tag, the pills never starve the title or push the row's controls out, and a tag
+ * added elsewhere appears live.
  */
 import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
@@ -12,7 +13,7 @@ const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const IMPORT_TAG = 'walnut:external-sessions'
 const SHOT_DIR = '/tmp/task-tag-pills'
 
-const litter: { tasks: string[]; projects: string[] } = { tasks: [], projects: [] }
+const litter: { tasks: string[]; projects: string[]; patterns: string[] } = { tasks: [], projects: [], patterns: [] }
 
 async function api<T>(path: string, method: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API}${path}`, {
@@ -60,11 +61,16 @@ async function setColumnWidth(page: Page, width: number | null) {
 }
 
 test.beforeEach(async ({ page }) => {
-  litter.tasks = []; litter.projects = []
+  litter.tasks = []; litter.projects = []; litter.patterns = []
   await isolateUiPrefs(page)
 })
 
 test.afterEach(async () => {
+  for (const pattern of litter.patterns) {
+    await fetch(`${API}/api/v1/tasks/meta/tag-display`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pattern, display: null }),
+    }).catch(() => undefined)
+  }
   for (const id of litter.tasks) await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => undefined)
   for (const name of litter.projects) await fetch(`${API}/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch(() => undefined)
 })
@@ -75,6 +81,19 @@ test('tags show as pills on the row and in the detail pane, and follow live edit
   litter.projects.push(project)
 
   const ticket = await createTask(`[ALARM] canary health check SEV3 ${stamp}`, { project, tags: [IMPORT_TAG, 'ticket:V1234567890'] })
+  // A ticket run as a plugin files it: its ticket, the ticket's full id (hidden by a
+  // namespace rule), its severity; pinned into Focus.
+  // A namespace of this run's own: the chromium and webkit projects share one fixture
+  // server, and one run's cleanup must not show the other's hidden ids.
+  const idNs = `ticket-id-${stamp}`
+  litter.patterns.push(`${idNs}:*`)
+  await api('/api/v1/tasks/meta/tag-display', 'PUT', { pattern: `${idNs}:*`, display: 'hidden' })
+  const sev = await createTask(`[ALARM] event operator aggregate HighSev ${stamp}`, {
+    project, tags: [IMPORT_TAG, 'ticket:P523407866', `${idNs}:c186a5a9-03f2-41d9-bc75-123159a012c4`, 'sev:2'],
+  })
+  const pinnedSev = await createTask(`Pinned ticket run ${stamp}`, {
+    project, pinned: true, focus_tier: 'focus', tags: [IMPORT_TAG, 'ticket:P523407867', `${idNs}:d186a5a9-03f2-41d9-bc75-123159a012c4`, 'sev:2'],
+  })
   const many = await createTask(`Three tags ${stamp}`, { project, tags: ['oncall', 'ticket:P100000001', 'marina'] })
   const plain = await createTask(`No tags ${stamp}`, { project })
   // As dense as a real imported ticket run: a long title, a date pill, the ticket.
@@ -97,33 +116,73 @@ test('tags show as pills on the row and in the detail pane, and follow live edit
   await expect(row(page, ticket).locator('[data-testid="imported-pill"]')).toBeVisible()
   await expect(row(page, ticket).locator('.tag-chip', { hasText: 'walnut' })).toHaveCount(0)
 
-  // One chip on a row, then "+N" naming the rest.
+  // Two chips on a row, then "+N" naming the rest.
   const manyPills = row(page, many).locator('[data-testid="task-tag-pills"] > .tag-chip')
-  await expect(manyPills).toHaveCount(2)
+  await expect(manyPills).toHaveCount(3)
   await expect(manyPills.nth(0)).toHaveText('oncall')
-  await expect(manyPills.nth(1)).toHaveText('+2')
-  await expect(manyPills.nth(1)).toHaveAttribute('title', 'ticket:P100000001, marina')
+  await expect(manyPills.nth(1)).toHaveText('ticket:P100000001')
+  await expect(manyPills.nth(2)).toHaveText('+1')
+  await expect(manyPills.nth(2)).toHaveAttribute('title', 'marina')
   await expect(row(page, plain).locator('[data-testid="task-tag-pills"]')).toHaveCount(0)
+
+  // The ticket and its severity both read; the hidden full id never shows, not even in "+N".
+  const sevPills = row(page, sev).locator('[data-testid="task-tag-pills"] > .tag-chip')
+  await expect(sevPills).toHaveText(['ticket:P523407866', 'sev:2'])
+  // The same on a pinned card in Focus.
+  const card = page.locator(`.todo-focus-card[data-task-id="${pinnedSev}"]`)
+  await expect(card).toBeVisible({ timeout: 15_000 })
+  await expect(card.locator('[data-testid="task-tag-pills"] > .tag-chip')).toHaveText(['ticket:P523407867', 'sev:2'])
+  const cardBox = await card.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const title = el.querySelector('.todo-pinned-title')!.getBoundingClientRect()
+    return { title: title.width, overflow: [...el.children].some((child) => child.getBoundingClientRect().right > r.right + 1) }
+  })
+  expect(cardBox.overflow, 'pinned card overflows').toBe(false)
+  expect(cardBox.title, 'pinned card title keeps room').toBeGreaterThan(80)
 
   // The pills never starve the title: they take at most a third of the row, sit
   // after the title, get less room than it, and every control stays inside the row.
-  const tagged = [ticket, many, longTitle]
+  const tagged = [ticket, many, sev, longTitle]
   await expectTitleFirst(page, tagged)
 
   await fs.mkdir(SHOT_DIR, { recursive: true })
   await row(page, ticket).locator('xpath=..').screenshot({ path: `${SHOT_DIR}/${browserName}-rows.png` })
+  await card.screenshot({ path: `${SHOT_DIR}/${browserName}-pinned-card.png` })
+
+  // A wide column: the whole tag reads, the prefix on the id's line (the chip wraps a
+  // prefix away only when it does not fit, never early).
+  await setColumnWidth(page, 640)
+  await expect.poll(async () => ticketPills.first().evaluate((el) => {
+    const chip = el.getBoundingClientRect()
+    const prefix = el.querySelector('.tag-chip-prefix')!.getBoundingClientRect()
+    const value = el.querySelector('.tag-chip-value') as HTMLElement
+    return prefix.bottom <= chip.bottom + 0.5 && prefix.width > 20 && value.scrollWidth <= value.clientWidth + 1
+  }), { message: 'prefix and id both read in a wide column' }).toBe(true)
 
   // A 300px column (the default at a 1280px window): the chip keeps the id and lets
-  // the "ticket:" prefix go first, and the title still leads.
+  // the "ticket:" prefix go first, all at once, and the title still leads.
   await setColumnWidth(page, 300)
   const squeezed = row(page, longTitle).locator('[data-testid="task-tag-pills"] .tag-chip').first()
   await expect.poll(async () => squeezed.evaluate((el) => {
-    const prefix = (el.querySelector('.tag-chip-prefix') as HTMLElement).getBoundingClientRect().width
+    // The prefix has dropped onto the chip's hidden second line, whole: never a fragment.
+    const chip = el.getBoundingClientRect()
+    const prefix = (el.querySelector('.tag-chip-prefix') as HTMLElement)
+    const box = prefix.getBoundingClientRect()
     const value = (el.querySelector('.tag-chip-value') as HTMLElement).getBoundingClientRect().width
-    return prefix < 12 && value > 30
+    return box.top >= chip.bottom - 1 && prefix.scrollWidth <= prefix.clientWidth + 1 && value > 30
   })).toBe(true)
   await expectTitleFirst(page, tagged)
   await row(page, longTitle).screenshot({ path: `${SHOT_DIR}/${browserName}-squeezed.png` })
+  // In that column a pinned run still reads its severity whole ("sev:2", never a clipped
+  // "se2"): a short tag keeps its text and the ticket chip gives way instead.
+  await expect.poll(async () => card.evaluate((el) => {
+    const sevChip = [...el.querySelectorAll<HTMLElement>('[data-testid="task-tag-pills"] > .tag-chip')][1]
+    if (!sevChip) return 'no severity chip'
+    const parts = [...sevChip.children] as HTMLElement[]
+    const clipped = parts.some((part) => part.scrollWidth > part.clientWidth + 1)
+    return clipped ? `clipped: ${parts.map((part) => `${part.textContent} ${part.clientWidth}/${part.scrollWidth}`).join(', ')}` : 'whole'
+  })).toBe('whole')
+  await card.screenshot({ path: `${SHOT_DIR}/${browserName}-pinned-card-300.png` })
 
   // Very narrow (220px): everything gives way, nothing is pushed out of the row, and
   // the chip stays a readable "V…" instead of a sliver.

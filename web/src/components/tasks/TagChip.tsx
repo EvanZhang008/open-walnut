@@ -6,13 +6,17 @@ interface TagChipProps {
   onRemove?: () => void;  // Show X button when provided
   onClick?: () => void;   // For filter interaction
   active?: boolean;       // Highlight when used as filter
+  /** The display rules keep this tag off task pills (the tag editor still lists it). */
+  hiddenOnTasks?: boolean;
+  /** Never squeezed in a row of pills: a short tag ("sev:2") clipped reads as nonsense. */
+  whole?: boolean;
 }
 
 /**
  * Reusable tag pill component.
  * Parses "key:value" format for visual prefix distinction.
  */
-export function TagChip({ tag, inline, onRemove, onClick, active }: TagChipProps) {
+export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks, whole }: TagChipProps) {
   const colonIdx = tag.indexOf(':');
   const hasPrefix = colonIdx > 0 && colonIdx < tag.length - 1;
   const prefix = hasPrefix ? tag.slice(0, colonIdx) : null;
@@ -23,10 +27,17 @@ export function TagChip({ tag, inline, onRemove, onClick, active }: TagChipProps
     inline && 'tag-chip-inline',
     onClick && 'tag-chip-clickable',
     active && 'tag-chip-active',
+    hiddenOnTasks && 'tag-chip-hidden',
+    whole && 'tag-chip-whole',
   ].filter(Boolean).join(' ');
 
   return (
-    <span className={className} onClick={onClick} title={tag}>
+    <span
+      className={className}
+      onClick={onClick}
+      title={hiddenOnTasks ? `${tag} (not shown on tasks; Settings, Tasks, Tags)` : tag}
+      data-hidden-on-tasks={hiddenOnTasks ? 'true' : undefined}
+    >
       {prefix && <span className="tag-chip-prefix">{prefix}:</span>}
       <span className="tag-chip-value">{value}</span>
       {onRemove && (

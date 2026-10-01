@@ -45,6 +45,13 @@ export interface WalnutTask {
   /** Every provider session ever linked to the task, the current one included. It
    *  outlives completion, which clears the task's live session slot. */
   sessionIds?: string[]
+  /** On the pinned board. */
+  pinned?: boolean
+  /** The pinned task's tier: `focus`, `backlog`, `wait` or a custom tier id. Absent on a
+   *  pinned task means Satellite. */
+  focusTier?: string
+  /** The pinned task's place in the pinned order (ascending = top first), across tiers. */
+  pinOrder?: number
   dueDate?: string
   startDate?: string
   endDate?: string

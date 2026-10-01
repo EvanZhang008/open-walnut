@@ -32,6 +32,30 @@ export function deriveSprintOptions(tasks: readonly Task[]): string[] {
 }
 
 /**
+ * Every tag on the loaded tasks that the display rules show (`shown`, from the
+ * tag display store), most used first, ties by text. Hidden tags (Walnut's own
+ * `walnut:*` machine tags, anything the user or a plugin hid) are not offered:
+ * the panel lists what the board shows. A hidden tag that is already selected
+ * still renders, because the panel puts selected tags in front of this list.
+ */
+export function deriveTagOptions(
+  tasks: readonly Pick<Task, 'tags'>[],
+  shown: (tag: string) => boolean,
+): string[] {
+  const counts = new Map<string, number>();
+  for (const task of tasks) {
+    // A task can repeat a tag; count it once per task.
+    for (const tag of new Set(task.tags ?? [])) {
+      if (tag) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+  return [...counts]
+    .filter(([tag]) => shown(tag))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([tag]) => tag);
+}
+
+/**
  * Normalize a query, degrading to `null` ("no conditions") instead of throwing.
  *
  * A half-typed custom time window is the only realistic thrower and

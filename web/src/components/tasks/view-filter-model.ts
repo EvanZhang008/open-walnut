@@ -340,6 +340,39 @@ export interface FilterSearchLists {
   projectOptions: string[];
   sourceOptions: string[];
   sprintOptions: string[];
+  /** Pickable tags, most frequent first. Optional: a surface without tags omits it. */
+  tagOptions?: string[];
+}
+
+/**
+ * How many tag chips the Tags section draws before the rest are left to the
+ * panel search. A board can carry hundreds of distinct tags (one per ticket id),
+ * and the detail pane is a fixed box: an uncapped chip grid would be a wall.
+ */
+export const TAG_CHIP_CAP = 60;
+
+/**
+ * The tags offered for picking: the selected ones first (a selected tag must
+ * always be toggleable off, even when no loaded task carries it any more, e.g.
+ * restored from the URL), then the board's list, without duplicates.
+ */
+export function tagPickOptions(selected: readonly string[], list: readonly string[]): string[] {
+  return [...new Set([...selected, ...list])];
+}
+
+/**
+ * The Tags section's chips: `tagPickOptions` cut to `cap`, plus how many were
+ * left out. The cap never drops a selected tag, so every active tag condition
+ * stays one click from off.
+ */
+export function tagChipOptions(
+  selected: readonly string[],
+  list: readonly string[],
+  cap: number = TAG_CHIP_CAP,
+): { options: string[]; hidden: number } {
+  const all = tagPickOptions(selected, list);
+  const shown = all.slice(0, Math.max(cap, selected.length));
+  return { options: shown, hidden: all.length - shown.length };
 }
 
 /** Case-insensitive substring match on the option label or its dimension name. */
@@ -362,7 +395,7 @@ export function searchFilterOptions(
 
   const arrayDim = (
     section: string, dimension: string,
-    dim: 'completion' | 'phases' | 'priorities' | 'projects' | 'sources' | 'sprints',
+    dim: ArrayDim,
     options: { value: string; label: string }[],
   ) => {
     push(dimension, options
@@ -381,6 +414,8 @@ export function searchFilterOptions(
   arrayDim('q-priority', 'Priority', 'priorities', QUERY_PRIORITY_OPTIONS);
   arrayDim('q-project', 'Project', 'projects',
     lists.projectOptions.map((p) => ({ value: p, label: p === '' ? 'Inbox' : p })));
+  arrayDim('q-tags', 'Tag', 'tagsAny',
+    tagPickOptions(state.tagsAny, lists.tagOptions ?? []).map((t) => ({ value: t, label: t })));
   arrayDim('q-source', 'Source', 'sources',
     lists.sourceOptions.map((s) => ({ value: s, label: s })));
   arrayDim('q-sprint', 'Sprint', 'sprints',

@@ -10259,6 +10259,8 @@ body.walnut-dragging {
 .vd-rail-badge.vd-set { background: var(--accent); color: white; }
 .vd-detail { overflow-y: auto; padding: 10px 12px; }
 .vd-none { padding: 24px 0; text-align: center; font-size: 12px; color: var(--fg-muted); }
+/* One muted line under a capped chip grid (Tags) pointing at the panel search. */
+.vd-hint { margin-top: 8px; font-size: 11px; color: var(--fg-muted); }
 
 /* Categories: 2-column chip grid */
 .vd-cats {
@@ -12058,10 +12060,14 @@ body.walnut-dragging {
 /* A task's own tags on the Homepage row and detail pane. Wider than the /tasks
    card's 80px chip so an id tag ("ticket:V1234567890") reads whole when there is
    room. On a row the pills take at most a third of it and shrink three times as
-   fast as the title; squeezed, the "ticket:" prefix collapses first, then the id
-   ellipsizes (hover shows the whole tag). The pills and a chip stop at 30px, which
+   fast as the title; squeezed, the "ticket:" prefix drops first (whole, never a
+   fragment), then the id ellipsizes (hover shows the whole tag). The pills and a chip stop at 30px, which
    still reads "V…": any narrower and the chip draws as an empty sliver. (Not
-   min-content: a nowrap chip's min-content is its whole text.) */
+   min-content: a nowrap chip's min-content is its whole text.) A chip whose minimum no
+   longer fits drops out whole: the pills wrap it onto a second line their one-line
+   height hides, rather than cutting it at the edge ("se" of "sev:2"). Each chip starts
+   from its minimum, so a line drops a chip only when minimums do not fit, then grows
+   back towards its whole text. */
 .task-tag-pills {
   display: inline-flex;
   align-items: center;
@@ -12070,24 +12076,53 @@ body.walnut-dragging {
   min-width: 30px;
   max-width: 34%;
   overflow: hidden;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  row-gap: 8px;
+  font-size: 10px;
+  height: calc(1.2em + 4px);
 }
+/* Tighter than a standalone chip, and no gap after the prefix (the tag itself reads
+   "ticket:V1234567890"): on a 306px pinned card that is what lets a ticket id and its
+   severity both read whole. */
 .task-tag-pills .tag-chip-inline {
-  max-width: 150px;
+  max-width: max-content;
   min-width: 30px;
-  flex: 0 1 auto;
+  flex: 1 1 30px;
+  padding: 2px 5px;
+  gap: 0;
+}
+/* Squeezed, the prefix goes all at once: the chip wraps it onto a second line its
+   one-line height hides, instead of clipping it to a fragment glued to the value
+   ("tD5453394"). The value is ordered first in a reversed row, so the prefix still reads
+   before it while it fits. */
+.task-tag-pills .tag-chip-inline:not(.tag-chip-whole) {
+  flex-direction: row-reverse;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: flex-start;
+  box-sizing: border-box;
+  height: calc(1.2em + 4px);
+  /* overflow clips at the padding edge: without a gap the hidden line would start inside
+     the bottom padding and show the tops of its letters. */
+  row-gap: 8px;
+}
+.task-tag-pills .tag-chip-inline:not(.tag-chip-whole) > .tag-chip-value {
+  order: -1;
 }
 .task-tag-pills .tag-chip-prefix {
-  min-width: 0;
-  overflow: hidden;
   white-space: nowrap;
-  flex-shrink: 1000;
+  flex-shrink: 0;
 }
+.task-tag-pills .tag-chip-whole,
+.task-tag-pills .tag-chip-overflow {
+  flex: 0 0 auto;
+}
+/* The cap a long tag (a uuid) stops at; the chip is as wide as its text. */
 .task-tag-pills .tag-chip-value {
   min-width: 0;
+  max-width: 140px;
   white-space: nowrap;
-}
-.task-tag-pills .tag-chip-overflow {
-  flex-shrink: 0;
 }
 /* Beside tags the title starts from a share of the row instead of its leftovers
    (a 306px column with a date pill and the kebab leaves ~140px for title and tags).
@@ -12101,6 +12136,18 @@ body.walnut-dragging {
   flex-wrap: wrap;
   max-width: none;
   overflow: visible;
+  height: auto;
+}
+/* On a pinned card the title has flex: 1 and no basis, so beside tags it would keep
+   nothing: give it a share of the card the way the list row does. Two pills (ticket,
+   severity) fit a 306px column; past that they fold into "+N". */
+.todo-focus-card:has(> .task-tag-pills) > .todo-pinned-title,
+.todo-pinned-card:has(> .task-tag-pills) > .todo-pinned-title {
+  flex-basis: min(35%, 120px);
+}
+.todo-focus-card > .task-tag-pills,
+.todo-pinned-card > .task-tag-pills {
+  max-width: 45%;
 }
 
 /* Deferred-start pill — future start_date; blue tint to read as "scheduled",
@@ -21043,6 +21090,14 @@ td.usage-share-col {
 :root[data-theme="dark"] .tag-chip-active {
   background: rgba(175, 82, 222, 0.35);
   outline-color: rgba(191, 90, 242, 0.5);
+}
+
+/* A tag the display rules keep off task pills: still listed in the tag editor, muted and dashed. */
+.tag-chip-hidden {
+  background: transparent;
+  color: var(--fg-muted);
+  outline: 1px dashed var(--border-strong);
+  outline-offset: -1px;
 }
 
 .tag-chip-remove {

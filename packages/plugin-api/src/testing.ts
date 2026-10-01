@@ -69,6 +69,13 @@ export interface FakeWalnutOptions {
   hosts?: HostInfo[]
   /** Answers `hosts.run`. Without one, a run throws: a test must never reach a real host. */
   runOnHost?: (alias: string, input: HostRunInput) => HostRunResult | Promise<HostRunResult>
+  /** What `sessionImports.autoCompleteAfterDays()` answers. Default 7, the host's default. */
+  importAutoCompleteAfterDays?: number
+  /** Pin groups that exist before activate (`tasks.pinGroups`); their ids are tiers a
+   *  `pinTier` may name besides the built-in ones. */
+  pinGroups?: Array<{ id: string; label: string }>
+  /** Custom tier ids a `pinTier` may name besides the built-in ones (no label; prefer `pinGroups`). */
+  customTiers?: string[]
   config?: Record<string, unknown>
   overrides?: Partial<WalnutServerApi>
 }
@@ -100,6 +107,12 @@ export interface FakeWalnutResult {
   hostRuns: Array<{ alias: string; input: HostRunInput }>
   /** Stand in for Walnut's importer finishing a run: fires every `sessionImports.onRun` handler. */
   importRun(): Promise<void>
+  /** Projects the plugin extended the importer's lifecycle to (`sessionImports.extendTo`), live ones only. */
+  importLifecycleProjects: string[]
+  /** The plugin's live tag display defaults (`tags.setDefaultDisplay`), by pattern. */
+  tagDisplayDefaults: Map<string, 'shown' | 'hidden'>
+  /** The board's pin groups, seeded ones and those the plugin ensured, in order. */
+  pinGroups: Array<{ id: string; label: string }>
 }
 
 export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutResult {
@@ -119,6 +132,11 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const hostRuns: Array<{ alias: string; input: HostRunInput }> = []
   const importWatchers = new Set<() => void | Promise<void>>()
   const importRun = async () => { for (const handler of [...importWatchers]) await handler() }
+  const importLifecycleProjects: string[] = []
+  const tagDisplayDefaults = new Map<string, 'shown' | 'hidden'>()
+  const pinGroups: Array<{ id: string; label: string }> = (options.pinGroups ?? []).map((group) => ({ ...group }))
+  const knownTiers = new Set(['focus', 'satellite', 'backlog', 'wait', ...(options.customTiers ?? []), ...pinGroups.map((group) => group.id)])
+  let nextGroup = 1
   const registeredItems = new Set<string>()
   const letterWatchers = new Set<(event: LetterAnsweredEvent) => void | Promise<void>>()
   const answerLetter = async (letterId: string, actionId: string, freeText?: string, source: LetterAnsweredEvent['source'] = 'web') => {
@@ -152,6 +170,15 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     const seen = new Set<string>()
     const sameProject = (a: string | undefined, b: string) => (a ?? '').toLowerCase() === b.toLowerCase()
     for (const item of items) {
+      if (typeof item.pinTier === 'string' && !knownTiers.has(item.pinTier)) throw new Error(`unknown pin tier "${item.pinTier}"`)
+    }
+    // The pinned order as the host keeps it: a new pin at the bottom, or in a block above
+    // every pin so far when the item asks for the top, item order kept either way.
+    const orders = [...taskMap.values()].filter((task) => task.pinned).map((task) => task.pinOrder ?? 0)
+    const topAsked = items.filter((item) => typeof item.pinTier === 'string' && item.pinAt === 'top').length
+    let nextPin = orders.length ? Math.max(...orders) + 1 : 0
+    let topPin = orders.length ? Math.min(...orders) - topAsked : 0
+    for (const item of items) {
       if (seen.has(item.id)) continue
       seen.add(item.id)
       const task = taskMap.get(item.id)
@@ -161,21 +188,41 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       }
       // Same rules as the host: a synced task is only filed, tags are added.
       const moving = !sameProject(task.project, place.project)
-      const adds = (item.addTags ?? []).filter((tag) => tag.trim() && !(task.tags ?? []).includes(tag))
+      const removes = new Set((item.removeTags ?? []).filter((tag) => (task.tags ?? []).includes(tag)))
+      const adds = (item.addTags ?? []).filter((tag) => tag.trim() && (removes.has(tag) || !(task.tags ?? []).includes(tag)))
+      for (const tag of adds) removes.delete(tag)
       const title = item.title?.trim()
       const retitle = !!title && title !== task.title && (item.expectTitle === undefined || item.expectTitle === task.title)
-      if (task.source !== 'local' && (moving || adds.length > 0 || retitle)) {
+      const createdMs = typeof item.createdAt === 'string' ? Date.parse(item.createdAt) : NaN
+      const createdAt = Number.isFinite(createdMs) && createdMs <= Date.now() ? new Date(createdMs).toISOString() : undefined
+      const redate = !!createdAt && createdAt !== task.createdAt
+      if (task.source !== 'local' && (moving || adds.length > 0 || removes.size > 0 || retitle || redate)) {
         result.skipped.push({ id: task.id, reason: 'synced' }); continue
       }
       const joining = place.groupId !== undefined && task.groupId !== place.groupId
       const unfiling = place.groupId === undefined && item.topLevel === true && task.groupId !== undefined
-      if (!moving && !joining && !unfiling && adds.length === 0 && !retitle) continue
+      const unpinning = item.pinTier === null && !!task.pinned
+      const wantTier = typeof item.pinTier === 'string' && task.phase !== 'COMPLETE'
+        ? (item.pinTier === 'satellite' ? undefined : item.pinTier) : undefined
+      const pinning = typeof item.pinTier === 'string' && task.phase !== 'COMPLETE' && !task.pinned
+      const retiering = typeof item.pinTier === 'string' && task.phase !== 'COMPLETE' && (task.focusTier ?? undefined) !== wantTier
+      const reorder = !!task.pinned && typeof item.pinTier === 'string' && task.phase !== 'COMPLETE' && item.pinAt !== undefined
+      if (!moving && !joining && !unfiling && adds.length === 0 && removes.size === 0 && !retitle && !redate && !unpinning && !pinning && !retiering && !reorder) continue
       // A folder never follows a task into another project.
       if (moving || unfiling) delete task.groupId
       if (moving) task.project = place.project
       if (place.groupId !== undefined) task.groupId = place.groupId
-      if (adds.length) task.tags = [...new Set([...(task.tags ?? []), ...adds])]
+      if (adds.length || removes.size) task.tags = [...new Set([...(task.tags ?? []).filter((tag) => !removes.has(tag)), ...adds])]
       if (retitle) task.title = title!
+      if (redate) task.createdAt = createdAt
+      if (unpinning) { task.pinned = false; delete task.pinOrder; delete task.focusTier }
+      const replacing = !pinning && !!task.pinned && typeof item.pinTier === 'string' && task.phase !== 'COMPLETE' && item.pinAt !== undefined
+      if (pinning) { task.pinned = true; task.pinOrder = item.pinAt === 'top' ? topPin++ : nextPin++ }
+      else if (replacing) task.pinOrder = item.pinAt === 'top' ? topPin++ : nextPin++
+      if (pinning || retiering) {
+        if (wantTier === undefined) delete task.focusTier
+        else task.focusTier = wantTier
+      }
       task.updatedAt = new Date().toISOString()
       result.filed.push(task.id)
     }
@@ -373,6 +420,22 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
         if (busy) throw new Error(`Folder "${folder.label}" is not empty; a plugin only deletes an empty folder.`)
         folderMap.delete(folderId)
       },
+      async pinGroups() {
+        return pinGroups.map((group) => ({ ...group }))
+      },
+      async ensurePinGroup(label) {
+        const wanted = label.replace(/\s+/g, ' ').trim()
+        if (!wanted) throw new Error('Pin group name cannot be empty.')
+        if (['focus', 'satellite', 'backlog', 'wait', 'all', 'recent', 'tasks', 'pinned', 'notes'].includes(wanted.toLowerCase())) {
+          throw new Error(`Tier label "${wanted}" conflicts with a built-in tier`)
+        }
+        const found = pinGroups.find((group) => group.label.trim().toLowerCase() === wanted.toLowerCase())
+        if (found) return { ...found }
+        const group = { id: `ct_test${String(nextGroup++).padStart(4, '0')}`, label: wanted }
+        pinGroups.push(group)
+        knownTiers.add(group.id)
+        return { ...group }
+      },
     },
     hosts: {
       async list() { return structuredClone(hostList) },
@@ -390,6 +453,29 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       onRun(handler) {
         importWatchers.add(handler)
         return disposable(() => importWatchers.delete(handler))
+      },
+      async autoCompleteAfterDays() { return options.importAutoCompleteAfterDays ?? 7 },
+      extendTo(project) {
+        if (!project?.trim()) throw new Error('Project name cannot be empty.')
+        importLifecycleProjects.push(project)
+        return disposable(() => {
+          const at = importLifecycleProjects.indexOf(project)
+          if (at >= 0) importLifecycleProjects.splice(at, 1)
+        })
+      },
+    },
+    tags: {
+      setDefaultDisplay(pattern, display) {
+        if (display !== 'shown' && display !== 'hidden') throw new Error('display must be "shown" or "hidden".')
+        if (!pattern?.trim() || pattern.startsWith('walnut:')) throw new Error(`Not a tag rule: "${pattern}"`)
+        tagDisplayDefaults.set(pattern, display)
+        return disposable(() => { if (tagDisplayDefaults.get(pattern) === display) tagDisplayDefaults.delete(pattern) })
+      },
+      async displayRules() {
+        return [
+          { pattern: 'walnut:*', display: 'hidden' as const, source: 'builtin' as const },
+          ...[...tagDisplayDefaults].map(([pattern, display]) => ({ pattern, display, source: 'plugin' as const, pluginId: options.pluginId ?? 'test-plugin' })),
+        ]
       },
     },
     config: {
@@ -585,5 +671,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, importRun }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, importRun, importLifecycleProjects, tagDisplayDefaults, pinGroups }
 }

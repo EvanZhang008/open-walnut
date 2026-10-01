@@ -14,8 +14,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_TASK_QUERY_FILTER_STATE,
+  TAG_CHIP_CAP,
   buildFilterSentence,
   searchFilterOptions,
+  tagChipOptions,
   type TaskQueryFilterState,
 } from '../../web/src/components/tasks/view-filter-model';
 
@@ -134,5 +136,78 @@ describe('searchFilterOptions', () => {
     const opt = groups.find((g) => g.dimension === 'Time')!.options[0];
     expect(opt.selected).toBe(true);
     expect(opt.toggled.timePreset).toBeNull();
+  });
+
+  describe('tags', () => {
+    const tagLists = { ...lists, tagOptions: ['severity:2', 'urgent', 'ticket:P123'] };
+
+    it('finds a tag by its text, in the Tag group of the q-tags section', () => {
+      const groups = searchFilterOptions(base, tagLists, 'sever');
+      expect(groups).toHaveLength(1);
+      expect(groups[0].dimension).toBe('Tag');
+      expect(groups[0].options).toEqual([
+        expect.objectContaining({ section: 'q-tags', label: 'severity:2', selected: false }),
+      ]);
+    });
+
+    it('the dimension word "tag" lists every tag', () => {
+      const tag = searchFilterOptions(base, tagLists, 'tag').find((g) => g.dimension === 'Tag')!;
+      expect(tag.options.map((o) => o.label)).toEqual(['severity:2', 'urgent', 'ticket:P123']);
+    });
+
+    it('toggling adds the tag to tagsAny, and toggling again removes it', () => {
+      const add = searchFilterOptions(base, tagLists, 'urgent')[0].options[0];
+      expect(add.toggled.tagsAny).toEqual(['urgent']);
+      const remove = searchFilterOptions(add.toggled, tagLists, 'urgent')[0].options[0];
+      expect(remove.selected).toBe(true);
+      expect(remove.toggled.tagsAny).toEqual([]);
+      // Only the tag dimension moves.
+      expect(remove.toggled).toEqual(base);
+    });
+
+    it('offers a selected tag that no loaded task carries, once', () => {
+      const state: TaskQueryFilterState = { ...base, tagsAny: ['gone:7', 'urgent'] };
+      const tag = searchFilterOptions(state, tagLists, 'tag').find((g) => g.dimension === 'Tag')!;
+      expect(tag.options.map((o) => o.label)).toEqual(['gone:7', 'urgent', 'severity:2', 'ticket:P123']);
+      const gone = searchFilterOptions(state, tagLists, 'gone')[0].options[0];
+      expect(gone).toMatchObject({ label: 'gone:7', selected: true });
+      expect(gone.toggled.tagsAny).toEqual(['urgent']);
+    });
+
+    it('a surface without tagOptions still compiles and offers only selected tags', () => {
+      expect(searchFilterOptions(base, lists, 'tag').find((g) => g.dimension === 'Tag')).toBeUndefined();
+      const state: TaskQueryFilterState = { ...base, tagsAny: ['urgent'] };
+      const tag = searchFilterOptions(state, lists, 'urgent')[0];
+      expect(tag.options.map((o) => o.label)).toEqual(['urgent']);
+    });
+  });
+});
+
+describe('tagChipOptions', () => {
+  const many = Array.from({ length: TAG_CHIP_CAP + 5 }, (_, i) => `t${i}`);
+
+  it('puts selected tags first, drops duplicates, and keeps a selected tag absent from the list', () => {
+    expect(tagChipOptions(['urgent', 'gone:7'], ['severity:2', 'urgent'])).toEqual({
+      options: ['urgent', 'gone:7', 'severity:2'],
+      hidden: 0,
+    });
+  });
+
+  it('caps the chips and counts the rest for the search hint', () => {
+    const { options, hidden } = tagChipOptions([], many);
+    expect(options).toHaveLength(TAG_CHIP_CAP);
+    expect(options[0]).toBe('t0');
+    expect(hidden).toBe(5);
+  });
+
+  it('never cuts a selected tag, even one from the long tail', () => {
+    const { options, hidden } = tagChipOptions(['t64'], many);
+    expect(options[0]).toBe('t64');
+    expect(options).toHaveLength(TAG_CHIP_CAP);
+    expect(hidden).toBe(5);
+    // More selected tags than the cap: all of them stay.
+    const all = tagChipOptions(many, many);
+    expect(all.options).toHaveLength(many.length);
+    expect(all.hidden).toBe(0);
   });
 });

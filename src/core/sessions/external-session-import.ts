@@ -37,7 +37,9 @@
  *     renames the task in place (identity, notes, pins, phase all preserved).
  *   - Idle sweep: an imported task whose session has been idle for
  *     `auto_complete_after_days` (default 7) is auto-completed. Rolling: a task
- *     imported today is completed the tick it crosses the line, not before.
+ *     imported today is completed the tick it crosses the line, not before. It
+ *     covers the per-host projects, and any project a plugin that files imports
+ *     elsewhere extended it to (extendImportLifecycle).
  *   - Adoption: the first message anyone sends to the session removes the tag
  *     (adoptImportedTask, called from the send handlers). The task keeps its
  *     project and folder but leaves the imported type: no pill, never swept.
@@ -456,6 +458,39 @@ async function importProjectNames(): Promise<Set<string>> {
   return names;
 }
 
+/** Projects outside the per-host ones whose imported tasks the idle sweep keeps covering
+ *  (lower-cased name → holders). A plugin that files imports into a project of its own
+ *  (plugin API `sessionImports.extendTo`) would otherwise take them out of the sweep's reach,
+ *  and the Imported pill's promise ("completed once idle") would stop being true. */
+const extendedSweepProjects = new Map<string, number>();
+
+/** Keep the idle sweep on imported tasks in `project`; the returned function releases it. */
+export function extendImportLifecycle(project: string): () => void {
+  const key = (project ?? '').trim().toLowerCase();
+  if (!key) throw new Error('Project name cannot be empty.');
+  extendedSweepProjects.set(key, (extendedSweepProjects.get(key) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (extendedSweepProjects.get(key) ?? 1) - 1;
+    if (left > 0) extendedSweepProjects.set(key, left);
+    else extendedSweepProjects.delete(key);
+  };
+}
+
+/** Days an imported session may sit idle before the sweep completes its task (0 = never). */
+export async function importAutoCompleteAfterDays(): Promise<number> {
+  const { getConfig } = await import('../config-manager.js');
+  const days = (await getConfig()).external_session_import?.auto_complete_after_days;
+  return typeof days === 'number' && Number.isFinite(days) && days >= 0 ? days : DEFAULT_AUTO_COMPLETE_AFTER_DAYS;
+}
+
+/** Test seam: forget every extension (module state outlives a test). */
+export function _resetImportLifecycleForTesting(): void {
+  extendedSweepProjects.clear();
+}
+
 function isLegacyBucket(task: Task): boolean {
   return (task.tags ?? []).some((tag) => tag.startsWith(LEGACY_HOST_TAG_PREFIX));
 }
@@ -495,13 +530,13 @@ async function importActivity(task: Task): Promise<{ sessions: Array<{ id: strin
  * task:updated afterwards, which the web answers with a single refetch instead of
  * hundreds of row patches. Adopted tasks (tag gone) are not in `imports`, and a
  * task the user filed into a project of their own is theirs: only tasks still in
- * a per-host import project are swept.
+ * a per-host import project, or in a project a plugin extended the sweep to, are swept.
  */
 async function sweepIdleImports(imports: Task[], idleMs: number, now: number, limit: number): Promise<number> {
   if (!(idleMs > 0)) return 0;
   const { updateTaskRaw } = await import('../task-manager.js');
   const { updateSessionRecordConditionally } = await import('../session-tracker.js');
-  const importProjects = await importProjectNames();
+  const importProjects = new Set([...await importProjectNames(), ...extendedSweepProjects.keys()]);
   const due: Array<{ task: Task; recorded: number; sessions: Array<{ id: string; host: string }> }> = [];
   for (const task of imports) {
     if (task.phase === 'COMPLETE' || isLegacyBucket(task)) continue;

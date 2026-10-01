@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { TagChip } from './TagChip';
 import { fetchTags } from '../../api/tasks';
+import { useTagDisplay } from '@/stores/tag-display-store';
 
 interface TagEditorProps {
   tags: string[];
@@ -10,9 +11,12 @@ interface TagEditorProps {
 
 /**
  * Inline tag editor with autocomplete from existing tags.
- * Enter or comma to confirm, dropdown with suggestions.
+ * Enter or comma to confirm, dropdown with suggestions. Lists EVERY tag, the
+ * ones the display rules keep off task pills too (drawn muted), so a hidden tag
+ * can still be seen and removed.
  */
 export function TagEditor({ tags, onAdd, onRemove }: TagEditorProps) {
+  const { compiled } = useTagDisplay();
   const [input, setInput] = useState('');
   const [suggestions, setSuggestions] = useState<{ tag: string; count: number }[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -108,7 +112,7 @@ export function TagEditor({ tags, onAdd, onRemove }: TagEditorProps) {
     <div className="tag-editor">
       <div className="tag-editor-chips">
         {tags.map(tag => (
-          <TagChip key={tag} tag={tag} onRemove={() => onRemove(tag)} />
+          <TagChip key={tag} tag={tag} onRemove={() => onRemove(tag)} hiddenOnTasks={!compiled.shown(tag)} />
         ))}
         <div className="tag-editor-input-wrapper">
           <input

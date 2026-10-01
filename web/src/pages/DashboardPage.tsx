@@ -29,8 +29,10 @@ import {
   buildTaskQueryContext,
   deriveSourceOptions,
   deriveSprintOptions,
+  deriveTagOptions,
   safeNormalizeTaskQuery,
 } from '@/components/tasks/task-query-state';
+import { useTagDisplay } from '@/stores/tag-display-store';
 import {
   matchesTaskQuery,
   type NormalizedTaskQuery,
@@ -269,6 +271,8 @@ export function DashboardPage() {
   );
   const querySourceOptions = useMemo(() => deriveSourceOptions(tasks), [tasks]);
   const querySprintOptions = useMemo(() => deriveSprintOptions(tasks), [tasks]);
+  const tagDisplay = useTagDisplay().compiled;
+  const queryTagOptions = useMemo(() => deriveTagOptions(tasks, tagDisplay.shown), [tasks, tagDisplay]);
 
   // ── the shared evaluator ──
   //
@@ -437,6 +441,7 @@ export function DashboardPage() {
             queryProjectOptions={queryProjectOptions}
             querySourceOptions={querySourceOptions}
             querySprintOptions={querySprintOptions}
+            queryTagOptions={queryTagOptions}
           />
           {isAll && (
             <>

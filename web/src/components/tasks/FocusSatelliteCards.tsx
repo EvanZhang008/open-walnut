@@ -18,6 +18,7 @@ import { CronPill } from '@/components/sessions/CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
+import { TaskTagPills } from './TaskTagPills';
 import * as ICONS from '../common/Icons';
 
 
@@ -470,6 +471,8 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       >
         {task.title}
       </span>
+      {/* The task's own tags, as on a list row. */}
+      <TaskTagPills tags={task.tags} />
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
       <CronPill sessionId={resolveTaskSessionId(task)} />

@@ -161,9 +161,10 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 
 | API | Purpose |
 |---|---|
-| `walnut.tasks` | Read, query, create, update, complete, and delete tasks; file tasks into a project or a folder in batches; list, create and delete folders. |
+| `walnut.tasks` | Read, query, create, update, complete, and delete tasks; file, tag, pin and date tasks into a project or a folder in batches; list, create and delete folders; list and ensure pin groups. |
 | `walnut.hosts` | List the hosts in Settings, Hosts, and run a short script on one (over ssh for a remote host). |
-| `walnut.sessionImports` | The importer of outside sessions: the tag and project it files them under, and a callback when an import run ends. |
+| `walnut.sessionImports` | The importer of outside sessions: the tag and project it files them under, a callback when an import run ends, its idle window, and a way to keep its lifecycle on tasks you file elsewhere. |
+| `walnut.tags` | Say how your plugin's tags show on tasks: a tag or a `<namespace>:*` can default to hidden (searchable and filterable still, just no pill). |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
 | `walnut.notifications` | Raise notices (including `kind: 'reminder'` with up to three op buttons), `dismiss` your own, report plugin errors and recover from them, and hold Walnut's quiet mode with `quiet.get/set/clear`. |
 | `walnut.ui` | Show a live status item in the console's left rail: a ring the host ticks from a timer, a label, and a popover with up to three op buttons. |
@@ -190,6 +191,10 @@ A folder belongs to one project, and moving a task to another project with `upda
 
 `fileIntoProject(project, items)` is the same batch with a project as the target: a task that moves in lands at the project's top level, and one already in the project keeps its folder unless its item says `topLevel: true`. The project is created as a local one when the board has none by that name. `deleteFolder(folderId)` removes an empty folder, such as one your plugin filed into before its settings changed; it refuses a folder that still holds a task or another folder, because the user may keep their own work there.
 
+A filing item carries more than its place. `removeTags` takes tags off (before `addTags`, so one item swaps a tag for another). `createdAt` sets when the work really began, for a task whose creation time is only when Walnut first saw it: an imported run of a ticket opened a week earlier then sorts and filters by the ticket's date. `pinTier` says where the task is pinned on the board: `focus`, `satellite`, `backlog`, `wait`, or a pin group id pins an open task there (one pinned elsewhere moves tier and keeps its place in the order), `null` unpins, and an omitted field leaves pins alone; a completed task is never pinned. `pinAt` places the pin in the pinned order: `top` above every pin so far, `bottom` below them, item order kept, so a batch filed newest-first ends newest on top. A new pin goes to the bottom without it, and a pin that already exists keeps its place unless it is given, which lets a plugin re-sort the pins it owns. Walnut does not know whether the user placed a pin, so decide for yourself which pins are yours to move: the usual way is a hidden marker tag on the pins you make (see `walnut.tags`), left off any pin you did not make and taken off again when you let a pin go.
+
+A pin group is one of the user's custom tiers beside Focus, Satellite, Backlog and Wait. `pinGroups()` lists them, in board order. `ensurePinGroup(label)` answers the group by that name, creating it when the board has none (names are compared case-insensitively, so a group the user already made by that name is reused, never doubled). The group is the user's from then on: renaming, reordering or deleting it is theirs, and a plugin never does either. Its `id` is what `pinTier` takes.
+
 #### Hosts
 
 `walnut.hosts.list()` returns this machine (`__local__`) and every host in Settings, Hosts, with its hostname, user and port. `walnut.hosts.run(alias, { script, args })` runs a POSIX `sh` script on one: over ssh for a remote host (key auth only, it never prompts), directly for this machine. Arguments arrive as `$1`, `$2`, … exactly as passed, so a plugin never quotes anything for a remote shell. The run is bounded: `timeoutMs` (default 60 s, at most 10 minutes) and `maxOutputBytes` (default 8 MB) end it with `timedOut` or `truncated` rather than letting it hang or fill memory. A failure to connect is a nonzero `code` with ssh's words in `stderr`; a host Walnut does not know throws. Keep the work on the host and print a small answer: a script that reads a local database and prints one JSON line costs one connection, where copying the database over costs every byte of it.
@@ -197,6 +202,12 @@ A folder belongs to one project, and moving a task to another project with `upda
 #### Outside sessions
 
 Walnut's importer files every session started outside Walnut (in a terminal, or by another tool) as one task, under a project per host. `walnut.sessionImports.projectFor(host)` names that project and `walnut.sessionImports.tag` is the tag on every task the importer still owns; the first message a person sends into the session removes it. `walnut.sessionImports.onRun(handler)` fires once after each import run that changed the board, so a plugin that files imported sessions somewhere else can pick up new ones right away instead of on its next timer.
+
+The importer also completes an imported task nobody wrote to once its session has been idle `autoCompleteAfterDays()` days (0 means never), but only in its own projects. A plugin that files imported tasks into a project of its own keeps that promise with `extendTo(project)`: tasks there still carrying the importer's tag are completed on the same clock, and a task someone wrote to is a regular task. Dispose the returned handle to stop; the plugin's own disposal does it too.
+
+#### Tag display
+
+Every tag is an ordinary tag (searched, filtered, edited), and whether it shows as a pill on a task is a separate, display-only rule. `walnut.tags.setDefaultDisplay(pattern, display)` sets your plugin's default for an exact tag or a whole namespace (`ticket-id:*`), so a tag that exists to be searched for (a ticket's UUID) or to mark what your plugin did (a pin marker) never clutters the board. The user's own rule for a pattern (Settings, Tasks, Tags) wins over yours, Walnut's machine tags (`walnut:*`) never show, and two plugins disagreeing on one pattern hide it. The default lives while your plugin does; `displayRules()` lists every rule in force.
 
 #### Letters
 

@@ -52,6 +52,8 @@ export interface TaskReorderedEvent { project: string; taskIds: string[] }
 export interface TaskUnblockedEvent { task: Task; unblockedBy: Task }
 /** Virtual task-group membership or label changed (created / renamed / dissolved). */
 export interface TaskGroupsChangedEvent { group_id?: string; label?: string; dissolved_group_ids?: string[] }
+/** Carries nothing: a listener re-reads the rules (GET /api/v1/tasks/meta/tag-display). */
+export type TaskTagDisplayChangedEvent = Record<string, never>;
 
 // ── Project registry events ──
 
@@ -1205,6 +1207,7 @@ export interface EventPayloadMap {
   'task:reordered': TaskReorderedEvent;
   'task:unblocked': TaskUnblockedEvent;
   'task:groups-changed': TaskGroupsChangedEvent;
+  'task:tag-display-changed': TaskTagDisplayChangedEvent;
 
   'project:created': ProjectCreatedEvent;
   'project:renamed': ProjectRenamedEvent;
