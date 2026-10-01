@@ -306,7 +306,7 @@ function RowCircle({ task, onToggleComplete }: { task: Task; onToggleComplete: (
       aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
       onClick={(e) => { e.stopPropagation(); onToggleComplete(task.id); }}
     >
-      {ICONS.binaryPhaseIcon(isDone)}
+      {ICONS.binaryPhaseIcon(isDone, task.phase)}
     </button>
   );
 }

@@ -45,7 +45,7 @@ const RESUME_SEMANTICS =
 type RoutineJobBody = {
   job?: {
     id?: string; name?: string; enabled?: boolean; check?: unknown; schedule?: { everyMs?: number }
-    state?: { pausedAtMs?: number; waitEndedAtMs?: number; consecutiveErrors?: number }
+    state?: { pausedAtMs?: number; consecutiveErrors?: number }
   }
 }
 
@@ -60,12 +60,6 @@ async function setTriggerEnabled(
   if (!current) throw new Error(`no trigger ${id}; trigger_list shows the ids`)
   if (!current.check) throw new Error(`${id} ("${current.name ?? ''}") is a scheduled routine, not a trigger`)
   if (current.enabled === enabled) return { job: current, changed: false }
-  // Resuming it would poll for a task that no longer waits on it, and the wait
-  // would switch it off again; the wait's own re-arm is task_wait.
-  if (enabled && triggerRunState(current) === 'wait-ended') {
-    throw new Error(`${id} ("${current.name ?? ''}") belongs to a snooze wait that is over; re-arm it with `
-      + `task_wait {"condition": "...", "routine_id": "${id}"}, not trigger_resume`)
-  }
   const updated = (await call('PATCH', path, { enabled }) as RoutineJobBody | undefined)?.job ?? current
   return { job: updated, changed: true }
 }
@@ -86,12 +80,10 @@ defineOp({
     + 'Keep credentials inside the script file: `run` is stored with the routine and shown on its card. '
     + '`description` is required: the card otherwise shows only a name and a script path, which does not '
     + 'tell the user what fires it. '
-    + 'To snooze the task until something happens ("snooze this until CR 1234 is approved"), pass '
-    + '`wait_until` with the condition: the same call parks the task on the new trigger before its first '
-    + 'check runs, so the task stays a quiet To Do (no Need Action, no red dot) until the trigger fires. '
-    + 'Every snooze has a backstop, `wait_ttl` (default 7 days): if the trigger has not fired by then, the '
-    + 'task comes back to the user anyway, in case the check never works. Size it to when the user would '
-    + 'want to hear that it has not happened yet (a build: hours; a review or a reply: a few days).',
+    + 'To snooze the task until something happens ("snooze this until CR 1234 is approved"): create the '
+    + 'trigger, then as the LAST call of the turn set the task to Waiting with task_update '
+    + '{"phase":"WAITING"} (add wait_until, an ISO time, when the user also wants it back by a time). The '
+    + 'fire starts a new turn here, which brings the task back on its own.',
   input: {
     run: z.string().min(1).describe('Shell command that decides whether to fire (e.g. "bash ~/.open-walnut/triggers/pr-comments/check.sh")'),
     every: z.union([z.number().int().positive(), z.string().min(1)])
@@ -108,32 +100,14 @@ defineOp({
       + 'A session on another host may arm checks only on its own host'),
     timeoutSeconds: z.number().int().positive().optional().describe('Kill the check after this long (default 30, max 300)'),
     maxFiresPerDay: z.number().int().min(0).optional().describe('Daily fire cap (default 24). 0 = unlimited'),
-    wait_until: z.string().min(1).optional()
-      .describe('Snooze the target task until this happens, one line in the user\'s words (e.g. "CR 1234 is '
-        + 'approved"); shown on the task. The fire ends the snooze'),
-    wait_ttl: z.union([z.number().int().positive(), z.string().min(1)]).optional()
-      .describe('With wait_until: the backstop, "90m" | "12h" | "3d" (1 minute to 30 days, default 7 days). '
-        + 'If the trigger has not fired by then, the task comes back to the user as Need Action'),
   },
   bind: { method: 'POST', path: '/routines/trigger' },
   mapResult: ({ body }) => {
     const b = (body ?? {}) as {
       job?: { id?: string; name?: string; schedule?: { everyMs?: number } }; host?: string
-      task?: { id?: string; waiting?: { condition?: string; until?: string } }
     }
     const id = b.job?.id ?? ''
     const every = everyLabel(b.job?.schedule?.everyMs)
-    const snoozed = b.task?.waiting?.condition
-    if (snoozed) {
-      return withOutcome(
-        { ...b },
-        `Trigger armed on ${b.host ?? 'its host'} (checks every ${every}), and the task is snoozed until: ${snoozed}. `
-        + 'It stays To Do with no red dot, messages included; the fire lands in this session and ends the snooze'
-        + `${b.task?.waiting?.until ? `, and if it has not fired by ${b.task.waiting.until} the task comes back anyway` : ''}.`,
-        'Tell the user in one line what the task waits for and how often it is checked, then end your turn. '
-        + `Unsnooze with walnut tools call task_stop_waiting '{"task":"${b.task?.id ?? 'this'}"}'.`,
-      )
-    }
     return withOutcome(
       { ...b },
       `Trigger armed on ${b.host ?? 'its host'}: the daemon there runs the check every ${every} and `
@@ -151,8 +125,7 @@ defineOp({
   description:
     'Every trigger, polling or not: id, name, description, interval, host, its state ("armed" = polling, '
     + '"paused" = switched off by someone, with pausedAt; "stopped" = switched off by Walnut after its check '
-    + 'failed 5 times in a row; "wait-ended" = the snooze wait it ended is over, task_wait with the same '
-    + 'routine_id re-arms it), how many times it has fired, the last check the daemon reported (fired with '
+    + 'failed 5 times in a row), how many times it has fired, the last check the daemon reported (fired with '
     + 'an item count / quiet with a reason / the error text) and the recent check history. Use it to answer '
     + '"what are you watching?" and to check whether a trigger you created is healthy; one that has never '
     + 'fired may be a script that never says fire.',
@@ -170,7 +143,7 @@ defineOp({
         check?: { run?: string; host?: string; cwd?: string }
         state?: {
           lastCheck?: unknown; nextRunAtMs?: number; fireCount?: number; pausedAtMs?: number
-          waitEndedAtMs?: number; consecutiveErrors?: number; checkLog?: Array<Record<string, unknown>>
+          consecutiveErrors?: number; checkLog?: Array<Record<string, unknown>>
         }
       })
       .filter((job) => job.check && typeof job.check.run === 'string')
@@ -280,9 +253,7 @@ defineOp({
         ? `Paused "${job.name ?? args.id}": the daemon stops checking it within seconds; it stays on the task as Paused.`
         : state === 'stopped'
           ? `"${job.name ?? args.id}" was already off: Walnut stopped it after its check kept failing. Nothing changed.`
-          : state === 'wait-ended'
-            ? `"${job.name ?? args.id}" was already off: the snooze wait it belongs to is over. Nothing changed.`
-            : `"${job.name ?? args.id}" was already paused; nothing changed.`,
+          : `"${job.name ?? args.id}" was already paused; nothing changed.`,
       'Tell the user it is paused and that trigger_resume turns it back on.',
     )
   },
@@ -328,78 +299,5 @@ defineOp({
     'Trigger deleted. Nothing polls for it any more, and its check script file is untouched.',
     'Nothing else is required.',
   ),
-  tags: { readonly: false, remote: 'allow', destructive: false },
-})
-
-defineOp({
-  name: 'task_wait',
-  title: 'Make a Walnut task wait until a trigger fires',
-  description:
-    'Park a task on an existing trigger until it fires ("wait until CR 1234 is approved"). A NEW snooze is '
-    + 'one call instead: trigger_create with `wait_until`. Use this to keep waiting after a fire that does '
-    + 'not need the user yet (same routine_id), or to park on a trigger that already exists. The task stays '
-    + 'To Do and in every list, but a finished turn no longer hands it back: no Need Action, no red dot, '
-    + 'until the trigger fires, and a message from the user does not end it either. The fire is delivered '
-    + 'into this session with a note; when that turn ends the task goes back to the user as Need Action, '
-    + 'unless you call task_wait again with the same routine_id. Do not set the task to Need Action '
-    + 'yourself afterwards: that ends the wait.',
-  input: {
-    condition: z.string().min(1)
-      .describe('What the task waits for, in the user\'s words, one line (e.g. "CR 1234 is approved")'),
-    routine_id: z.string().min(1).describe('The trigger id trigger_create returned; it must deliver to this task'),
-    ttl: z.union([z.number().int().positive(), z.string().min(1)]).optional()
-      .describe('The backstop, "90m" | "12h" | "3d": if the trigger has not fired by then, the task comes back. '
-        + 'Omitted: a re-arm keeps the backstop it had, a new wait gets 7 days'),
-    task: z.string().optional().describe('"this" (default) = the calling session\'s task, or a task id'),
-  },
-  bind: { method: 'POST', path: '/tasks/:id/wait' },
-  handler: async (args, call) => {
-    const id = typeof args.task === 'string' && args.task.trim() ? args.task.trim() : 'this'
-    const body = await call('POST', `/tasks/${encodeURIComponent(id)}/wait`, {
-      condition: args.condition, routine_id: args.routine_id, ...(args.ttl !== undefined ? { ttl: args.ttl } : {}),
-    }) as { task?: { id?: string; phase?: string; waiting?: { since?: string; until?: string; woke_at?: string; woke_reason?: string } } } | undefined
-    const w = body?.task?.waiting
-    if (w?.woke_reason === 'fired' && w.woke_at && w.since && w.since >= w.woke_at) {
-      // setTaskWaiting found the trigger had fired before this call (its first
-      // check runs seconds after trigger_create): nothing was parked.
-      return withOutcome(
-        { ...(body ?? {}) },
-        `The trigger already fired (${w.woke_at}) before the wait was set, so the task is NOT waiting: `
-        + 'the condition may already be met, and that fire is in this session (now or right after this turn).',
-        'Read that fire and tell the user what it means; the task goes back to them when this turn ends. If it '
-        + 'does not need them yet, call task_wait again with the same routine_id to keep waiting.',
-      )
-    }
-    return withOutcome(
-      { ...(body ?? {}) },
-      `The task is waiting until: ${String(args.condition)}. It stays To Do with no red dot; the trigger's fire `
-      + 'lands in this session and ends the wait'
-      + `${w?.until ? `, and if it has not fired by ${w.until} the task comes back anyway` : ''}.`,
-      'Tell the user in one line what the task waits for, then end your turn. Stop it with '
-      + `walnut tools call task_stop_waiting '{"task":"${body?.task?.id ?? id}"}'.`,
-    )
-  },
-  tags: { readonly: false, remote: 'allow', destructive: false },
-})
-
-defineOp({
-  name: 'task_stop_waiting',
-  title: 'Stop a Walnut task waiting',
-  description:
-    'End a wait set with task_wait: the task stays To Do, and the trigger behind the wait is deleted '
-    + '(its check script file stays on disk). Nothing happens when the task is not waiting.',
-  input: {
-    task: z.string().optional().describe('"this" (default) = the calling session\'s task, or a task id'),
-  },
-  bind: { method: 'DELETE', path: '/tasks/:id/wait' },
-  handler: async (args, call) => {
-    const id = typeof args.task === 'string' && args.task.trim() ? args.task.trim() : 'this'
-    const body = await call('DELETE', `/tasks/${encodeURIComponent(id)}/wait`) as Record<string, unknown> | undefined
-    return withOutcome(
-      { ...(body ?? {}) },
-      'The task is no longer waiting, and its trigger was deleted.',
-      'Nothing else is required.',
-    )
-  },
   tags: { readonly: false, remote: 'allow', destructive: false },
 })

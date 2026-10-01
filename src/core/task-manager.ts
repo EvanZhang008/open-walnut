@@ -7,7 +7,7 @@ import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
-import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES } from './phase.js';
+import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES } from './phase.js';
 import {
   COMPLETION_TO_PHASES,
   compareTasksForQuery,
@@ -3471,6 +3471,17 @@ function isDeliberateSource(source: string): boolean {
 }
 
 /**
+ * The held-phase guard (HELD_PHASES, phase.ts): a background write may move a
+ * WAITING task only to COMPLETE. The TODO or IN_PROGRESS a sync pull offers is
+ * the plugin echoing the legacy phase it was shown, or a remote step that says
+ * nothing about why the task was set aside; a human closing the item remotely
+ * is real and still lands.
+ */
+function heldPhaseBlocks(current: TaskPhase, next: TaskPhase, source: string): boolean {
+  return HELD_PHASES.has(current) && next !== current && !TERMINAL_PHASES.has(next) && !isDeliberateSource(source);
+}
+
+/**
  * Guard: block completing a parent task that still has active (non-COMPLETE) children.
  * Call inside withWriteLock where the store is already loaded.
  */
@@ -3720,6 +3731,10 @@ export interface UpdateTaskInput {
   cwd_missing?: boolean;          // Flag when the cwd no longer exists on disk.
   /** Mark/unmark as an Ask Walnut (Personal-AI) task — see Task.walnut_agent. */
   walnut_agent?: boolean;
+  /** WAITING only: when the wait ends by itself (ISO datetime; '' clears). Kept
+   *  only while the task is WAITING after this update; applyPhase clears it on
+   *  every move out. */
+  wait_until?: string;
 }
 
 // ── Cross-source migration ──
@@ -4080,6 +4095,10 @@ export async function updateTask(
       log.task.warn('terminal phase guard: blocked background phase change', {
         taskId: task.id, currentPhase: task.phase, requestedPhase: updates.phase, source,
       });
+    } else if (heldPhaseBlocks(task.phase, updates.phase, source)) {
+      log.task.info('held phase guard: blocked background phase change', {
+        taskId: task.id, currentPhase: task.phase, requestedPhase: updates.phase, source,
+      });
     } else {
       if (updates.phase === 'COMPLETE') guardActiveChildren(store, task);
       applyPhase(task, updates.phase);
@@ -4093,10 +4112,19 @@ export async function updateTask(
       log.task.warn('terminal phase guard: blocked background status change', {
         taskId: task.id, currentPhase: task.phase, requestedPhase: derivedPhase, source,
       });
+    } else if (heldPhaseBlocks(task.phase, derivedPhase, source)) {
+      log.task.info('held phase guard: blocked background status change', {
+        taskId: task.id, currentPhase: task.phase, requestedPhase: derivedPhase, source,
+      });
     } else {
       if (derivedPhase === 'COMPLETE') guardActiveChildren(store, task);
       applyPhase(task, derivedPhase);
     }
+  }
+  // After the phase: a wait_until on anything but a WAITING task is noise, and
+  // a move out of WAITING already dropped the old one in applyPhase.
+  if (updates.wait_until !== undefined) {
+    task.wait_until = task.phase === 'WAITING' && updates.wait_until ? updates.wait_until : undefined;
   }
   // '' means "clear" for both dates — normalize to undefined so the store never
   // holds an empty string (downstream code checks truthiness AND !== undefined).
@@ -7266,7 +7294,7 @@ function isDayPrecisionEcho(existing: string | undefined, incoming: unknown): bo
 function prepareRawUpdate(
   task: Task,
   updates: Partial<Task>,
-  opts?: { reopenTerminal?: boolean },
+  opts?: { reopenTerminal?: boolean; leaveHeld?: boolean },
 ): Partial<Task> | null {
   const { id: _ignoreId, ...safeUpdates } = updates as Record<string, unknown>;
   if (safeUpdates.priority !== undefined) {
@@ -7308,6 +7336,22 @@ function prepareRawUpdate(
       delete safeUpdates.status;
       delete safeUpdates.completed_at;
     }
+  }
+  // Held-phase guard (raw twin of updateTask's heldPhaseBlocks): a pull may
+  // close a WAITING task, never wake it. The session machine passes leaveHeld:
+  // a new turn or a prompt for the human is exactly the wait's exit.
+  if (HELD_PHASES.has(task.phase) && incomingPhase && incomingPhase !== task.phase
+    && !TERMINAL_PHASES.has(incomingPhase) && !opts?.leaveHeld) {
+    log.task.info('held phase guard (raw): blocked sync phase change', {
+      taskId: task.id, currentPhase: task.phase, requestedPhase: incomingPhase,
+    });
+    delete safeUpdates.phase;
+    delete safeUpdates.status;
+  }
+  // wait_until belongs to WAITING alone (applyPhase does this on the other path).
+  if (task.phase === 'WAITING' && typeof safeUpdates.phase === 'string' && safeUpdates.phase !== 'WAITING'
+    && safeUpdates.wait_until === undefined && task.wait_until !== undefined) {
+    (safeUpdates as Record<string, unknown>).wait_until = null;
   }
 
   // A folder never follows a task across projects (raw twin of the updateTask
@@ -7371,6 +7415,10 @@ export async function updateTaskRaw(
      *  message to a completed task's session reopens the task. Sync pulls and
      *  every other raw caller stay blocked by the terminal guard. */
     reopenTerminal?: boolean;
+    /** Let this write move the task OUT of a held phase (WAITING) to something
+     *  other than COMPLETE. The session machine sets it (a new turn, a prompt
+     *  that needs the human); sync pulls stay blocked by the held-phase guard. */
+    leaveHeld?: boolean;
   },
 ): Promise<{ changed: boolean; task?: Task }> {
   await ensureInit();
@@ -7385,7 +7433,7 @@ export async function updateTaskRaw(
 
     const patch = typeof updates === 'function' ? updates(task) : updates;
     if (!patch) return undefined;
-    const prepared = prepareRawUpdate(task, patch, { reopenTerminal: opts?.reopenTerminal });
+    const prepared = prepareRawUpdate(task, patch, { reopenTerminal: opts?.reopenTerminal, leaveHeld: opts?.leaveHeld });
     if (!prepared) return undefined;
 
     // Build the UPDATE dynamically from the fields that actually changed.

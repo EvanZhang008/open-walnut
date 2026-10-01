@@ -31,9 +31,11 @@ describe('Walnut self-knowledge contract', () => {
     // Every phase the product has is named, and the list is derived — a phase
     // added to phase.ts must reach this prompt without a second edit.
     for (const phase of PHASE_ORDER) expect(prompt).toContain(phase);
-    // (WAIT removed 2026-08-18) — the prompt no longer names a blocked phase;
-    // it teaches that a blocked/parked task is just TODO.
-    expect(prompt).toContain('A blocked or parked task is just TODO');
+    // (WAIT removed 2026-08-18; WAITING added 2026-09-30) — the prompt teaches
+    // the one parked state and its exit, never the retired `WAIT`. (wait_until and
+    // "set it last" live in the task_update schema and the trigger skill: the
+    // bootstrap prompt has a 2,200-char budget.)
+    expect(prompt).toContain('`WAITING` parks it until something happens; any new message brings it back');
     expect(prompt).not.toContain('`WAIT`');
     expect(prompt).toContain('`COMPLETE` when it is finished');
     expect(prompt).toContain('You may set any phase; none is reserved');

@@ -1831,7 +1831,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
   // edges (on the task's phase at dispatch), which the handler reads fresh itself.
   filter: {
     predicate: (ctx) => !('domain' in ctx && ctx.domain === 'task')
-      || ['NEED_ACTION', 'COMPLETE'].includes((ctx as TaskHookContext).newPhase ?? ''),
+      || ['NEED_ACTION', 'WAITING', 'COMPLETE'].includes((ctx as TaskHookContext).newPhase ?? ''),
   },
   handler: async (payload) => {
     const isPhaseEdge = 'domain' in payload && (payload as unknown as TaskHookContext).domain === 'task';

@@ -207,12 +207,6 @@ export type CronJobState = {
    * before this field existed.
    */
   pausedAtMs?: number;
-  /**
-   * When the snooze wait this trigger ended switched it off (task-waiting.ts),
-   * cleared when it is switched back on. Not a pause: the session re-arms it with
-   * task_wait and the same routine_id, and the task card does not show it.
-   */
-  waitEndedAtMs?: number;
   /** Check jobs only: what the daemon reported about the most recent run. */
   lastCheck?: TriggerLastCheck;
   /**

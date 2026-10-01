@@ -38,6 +38,7 @@ import type { QuickStartPath, QuickStartTaskMeta } from '@/components/sessions/S
 import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
 import {
   DEFAULT_META, LEGACY_LAUNCHER_PIN_TIER_KEY, freshLauncherMeta, readLastLaunchPath, rememberLaunchPath,
+  tierLabelOf,
 } from '@/components/sessions/task-meta-constants';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession, QuickStartGateError } from '@/api/sessions';
@@ -355,11 +356,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     for (const [tid, ids] of Object.entries(focusBar.customTierIds)) map[tid] = new Set(ids);
     return map;
   }, [focusBar.customTierIds]);
-  // Display label for a tier value (built-in name capitalized, custom id → its label).
-  const tierLabel = useCallback((tier: string): string => {
-    const custom = focusBar.customTiers.find((t) => t.id === tier);
-    return custom ? custom.label : `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
-  }, [focusBar.customTiers]);
+  // Display label for a tier value (a built-in's board label, custom id → its label).
+  const tierLabel = useCallback((tier: string): string => tierLabelOf(tier, focusBar.customTiers), [focusBar.customTiers]);
   const projectRegistry = useProjectRegistry();
   const { projectByCwd, projectDefaults } = projectRegistry;
   const ordering = useOrdering();

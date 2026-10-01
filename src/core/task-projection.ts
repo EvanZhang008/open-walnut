@@ -72,6 +72,8 @@ export interface ProjectedTask {
   due_date?: string
   start_date?: string
   end_date?: string
+  /** WAITING rows only: when the wait ends by itself (additive, 0.5.2). */
+  wait_until?: string
   created_at: string
   updated_at: string
   completed_at?: string
@@ -131,6 +133,7 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.due_date ? { due_date: t.due_date } : {}),
     ...(t.start_date ? { start_date: t.start_date } : {}),
     ...(t.end_date ? { end_date: t.end_date } : {}),
+    ...(t.phase === 'WAITING' && t.wait_until ? { wait_until: t.wait_until } : {}),
     created_at: t.created_at,
     updated_at: t.updated_at,
     ...(t.completed_at ? { completed_at: t.completed_at } : {}),

@@ -1,39 +1,44 @@
 /**
  * Task status, visible and changeable: the collapsed Status row in the task
- * menu and the clickable status badge in the detail pane. Plus the "snooze until
- * something happens" half of the menu's Start / Snooze until row.
+ * menu, the clickable status badge in the detail pane, the "Something happens…"
+ * row under the menu's Start / Snooze until, and the line above a Waiting
+ * task's composer.
  *
- * All four phases are offered. The row checkbox still toggles To Do / Complete;
- * this is where In Progress and Need Action can be read and set by hand.
+ * All five phases are offered. The row checkbox still toggles To Do / Complete;
+ * this is where Waiting, In Progress and Need Action can be read and set by hand.
  *
- * Waiting on an event is NOT a status (user call 2026-09-28: "keep it todo,
- * still show in Now", and "status is status"). It is the second kind of snooze,
- * next to a time: the Start / Snooze until row holds both, and says what the
- * task is snoozed until. Picking Need Action or Complete ends the wait on the
- * server (applyPhase), so the status options need no special case for it.
+ * Waiting IS a status (2026-09-30): the task is set aside until something
+ * happens. A trigger fire, a message from a human or a peer, or a prompt for the
+ * human moves it to In Progress, and that turn ends as Need Action as usual. Its
+ * optional `wait_until` is the server's own clock on it: picking Waiting opens an
+ * "Until (optional)" row under the options to set one. A Waiting task keeps its
+ * board tier; the Parked TIER is a shelf on the board, a different thing.
  *
  * Overlay rules (web/src/AGENTS.md): the badge's menu is placed by
  * useMenuPlacement, portalled to <body>, stops pointerdown (task rows are dnd
- * draggables) and closes on an outside pointerdown.
+ * draggables) and closes on an outside pointerdown. The until row's calendar is
+ * the date rows' inline DatePicker: it grows the menu the way an opened date row
+ * does, and the menu re-measures itself (useMenuPlacement observes children).
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { isTaskWaiting, type Task, type TaskPhase } from '@open-walnut/core';
+import type { Task, TaskPhase } from '@open-walnut/core';
 import * as ICONS from '../common/Icons';
+import { DatePicker } from '../common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
-import { apiDelete } from '@/api/client';
 import { updateTask as apiUpdateTask } from '@/api/tasks';
 import { requestWaitUntil, WAIT_UNTIL_MENU_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
-// formatDraftDate: the default backstop is exactly 7 days out, which the shared
-// formatter would print as today's weekday.
+// formatDraftDate: a time exactly 7 days out would print as today's weekday with
+// the shared formatter.
 import { formatDraftDate } from '@/components/sessions/draft-decisions';
 import { log } from '@/utils/log';
 import '@/styles/task-status.css';
 
 export const STATUS_OPTIONS: { value: TaskPhase; label: string; icon: ReactNode }[] = [
   { value: 'TODO', label: 'To Do', icon: ICONS.ICON_PHASE_TODO },
+  { value: 'WAITING', label: 'Waiting', icon: ICONS.ICON_PHASE_WAITING },
   { value: 'IN_PROGRESS', label: 'In Progress', icon: ICONS.ICON_PHASE_IN_PROGRESS },
   { value: 'NEED_ACTION', label: 'Need Action', icon: ICONS.ICON_PHASE_NEED_ACTION },
   { value: 'COMPLETE', label: 'Complete', icon: ICONS.ICON_PHASE_COMPLETE },
@@ -51,6 +56,8 @@ export const WAIT_UNTIL_ICON = (
 );
 
 type SetPhase = (id: string, phase: string) => void;
+/** Writes a Waiting task's clock: an ISO datetime, or '' to clear it. */
+type SetWaitUntil = (id: string, waitUntil: string) => void;
 
 /** The caller's setter, else the board store's, else a plain PATCH. */
 function useSetPhase(onSetPhase?: SetPhase): SetPhase {
@@ -65,9 +72,128 @@ function useSetPhase(onSetPhase?: SetPhase): SetPhase {
   }, [onSetPhase, ctx]);
 }
 
-export async function stopWaiting(taskId: string): Promise<void> {
-  log.info('task-status', 'stop waiting', { taskId });
-  await apiDelete(`/api/v1/tasks/${encodeURIComponent(taskId)}/wait`);
+/**
+ * The caller's setter, else the board store's update (which applies it to the
+ * list at once and owns the PATCH), else a plain PATCH. The store's setPhase
+ * knows no wait_until, so this goes through its generic update. Every write
+ * carries `phase: 'WAITING'`: the server keeps a wait_until on a WAITING task
+ * only, and the status write just before it may not have landed yet.
+ */
+function useSetWaitUntil(onSetWaitUntil?: SetWaitUntil): SetWaitUntil {
+  const ctx = useTasksContextSafe();
+  return useCallback((id: string, waitUntil: string) => {
+    log.info('task-status', 'wait until set by hand', { taskId: id, waitUntil });
+    if (onSetWaitUntil) { onSetWaitUntil(id, waitUntil); return; }
+    if (ctx && ctx.tasks.some((t) => t.id === id)) {
+      ctx.update(id, { phase: 'WAITING', wait_until: waitUntil });
+      return;
+    }
+    void apiUpdateTask(id, { phase: 'WAITING', wait_until: waitUntil }).catch((err) => {
+      log.warn('task-status', 'wait until write failed', { taskId: id, waitUntil, error: String(err) });
+    });
+  }, [onSetWaitUntil, ctx]);
+}
+
+/** A Waiting task's clock for display ("Fri 9:00"), '' when it has none. */
+export function formatWaitUntil(iso: string | undefined | null): string {
+  return iso ? formatDraftDate(iso) : '';
+}
+
+/**
+ * The wait_until a date picker pick stands for. A day pick ("2026-10-02") is
+ * 9:00 local that day: the server reads a bare date as UTC midnight, which is
+ * the evening before anywhere west of Greenwich. A time pick passes through.
+ */
+export function waitUntilFromPick(pick: string): string {
+  if (pick.includes('T')) return pick;
+  const [y, m, d] = pick.split('-').map(Number);
+  const at = new Date(y, m - 1, d, 9, 0, 0, 0);
+  return Number.isNaN(at.getTime()) ? pick : at.toISOString();
+}
+
+/** The line above a Waiting task's composer, '' for any other phase. */
+export function waitingLineText(task: Pick<Task, 'phase' | 'wait_until'>): string {
+  if (task.phase !== 'WAITING') return '';
+  return `Waiting until ${formatWaitUntil(task.wait_until) || 'something happens'} · a message here moves it to In Progress`;
+}
+
+/**
+ * Under the status options while the task is (or was just set) Waiting: the
+ * optional time the server wakes it by itself. Collapsed like the date rows,
+ * the inline calendar on click. Picking or clearing a time ends the interaction.
+ */
+function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'wait_until'>; onSet: (waitUntil: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const until = formatWaitUntil(task.wait_until);
+  return (
+    <div className={`task-status-until${open ? ' open' : ''}`} data-testid="task-status-until">
+      <div className="task-status-until-head">
+        <button
+          type="button"
+          className="task-status-until-toggle"
+          aria-expanded={open}
+          data-testid="task-status-until-toggle"
+          title="When the task comes back by itself if nothing has happened by then"
+          onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        >
+          <span className="task-status-until-icon" aria-hidden="true">{ICONS.ICON_CALENDAR}</span>
+          <span className="task-status-until-label">
+            {until ? <>Until: <b>{until}</b></> : 'Until (optional)'}
+          </span>
+          <span className={`task-kebab-status-caret${open ? ' open' : ''}`} aria-hidden="true">{ICONS.CHEVRON_GLYPH}</span>
+        </button>
+        {task.wait_until && (
+          <button
+            type="button"
+            className="task-status-until-clear"
+            data-testid="task-status-until-clear"
+            title="Clear the time: it waits until something happens"
+            onClick={(e) => { e.stopPropagation(); setOpen(false); onSet(''); }}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {open && (
+        <DatePicker
+          date={task.wait_until}
+          inline
+          onChange={(pick) => { setOpen(false); onSet(pick ? waitUntilFromPick(pick) : ''); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The status options, plus the until row once Waiting is picked. The row shows
+ * the moment Waiting is clicked, before the task prop catches up (the plain
+ * PATCH fallback has no optimistic copy); it goes again if the task's phase
+ * then moves anywhere but Waiting.
+ */
+function StatusOptions({ task, onPick, onPickWaiting, onSetWaitUntil }: {
+  task: Pick<Task, 'id' | 'phase' | 'wait_until'>;
+  /** A pick other than Waiting: the caller writes it and closes. */
+  onPick: (phase: TaskPhase) => void;
+  /** Waiting picked: the caller writes it and stays open for the until row. */
+  onPickWaiting: () => void;
+  onSetWaitUntil: (waitUntil: string) => void;
+}) {
+  const [pickedWaiting, setPickedWaiting] = useState(false);
+  useEffect(() => { setPickedWaiting(false); }, [task.phase]);
+  const showUntil = task.phase === 'WAITING' || pickedWaiting;
+  return (
+    <>
+      <StatusPills
+        task={task}
+        onPick={(phase) => {
+          if (phase === 'WAITING') { setPickedWaiting(true); onPickWaiting(); return; }
+          onPick(phase);
+        }}
+      />
+      {showUntil && <WaitUntilRow task={task} onSet={onSetWaitUntil} />}
+    </>
+  );
 }
 
 function StatusPills({ task, onPick }: { task: Pick<Task, 'id' | 'phase'>; onPick: (phase: TaskPhase) => void }) {
@@ -94,89 +220,39 @@ function StatusPills({ task, onPick }: { task: Pick<Task, 'id' | 'phase'>; onPic
   );
 }
 
-/** When a snooze's backstop brings the task back anyway ('' when it has none). */
-export function waitingBackBy(task: Task | null | undefined): string {
-  return task?.waiting?.until ? formatDraftDate(task.waiting.until) : '';
-}
-
-/** What an event-snoozed task waits for ('' when it is not waiting), for the collapsed row. */
-export function waitingSummary(task: Task | null | undefined): string {
-  return task && isTaskWaiting(task) && task.waiting ? task.waiting.condition : '';
-}
-
-/** "Snoozed until: <condition>" with Unsnooze. Renders nothing for a task that is not waiting. */
-export function WaitingLine({ task, compact, note, className, testId }: {
-  task: Task;
-  compact?: boolean;
-  /** A sentence after the condition, in the same line. */
-  note?: string;
-  className?: string;
-  testId?: string;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  if (!isTaskWaiting(task) || !task.waiting) return null;
+/**
+ * Above a Waiting task's composer: what it waits for, and what writing here
+ * does. A message into the session is one of the ways out of Waiting, so a
+ * human about to send one is told so at the moment it matters. No buttons: the
+ * status control is where the status changes.
+ */
+export function WaitingComposerLine({ task }: { task: Task | null | undefined }) {
+  if (!task || task.phase !== 'WAITING') return null;
+  const until = formatWaitUntil(task.wait_until);
   return (
     <div
-      className={`task-waiting-line${compact ? ' is-compact' : ''}${className ? ` ${className}` : ''}`}
-      data-testid={testId ?? 'task-waiting-line'}
+      className="task-waiting-line"
+      data-testid="session-waiting-line"
+      title={task.wait_until
+        ? `Waiting until ${new Date(task.wait_until).toLocaleString()}, or until something happens first`
+        : 'Waiting until something happens (a trigger fires, a message arrives)'}
     >
       <span className="task-waiting-icon" aria-hidden="true">{WAIT_UNTIL_ICON}</span>
-      <span
-        className="task-waiting-text"
-        title={`${task.waiting.condition}${task.waiting.until
-          ? `\nIf it has not happened by ${new Date(task.waiting.until).toLocaleString()}, the task comes back anyway.` : ''}`}
-      >
-        Snoozed until: <b>{task.waiting.condition}</b>
-        {task.waiting.until ? <span className="task-waiting-backstop"> · back by {waitingBackBy(task)}</span> : null}
-        {note ? <span className="task-waiting-note"> · {note}</span> : null}
+      <span className="task-waiting-text">
+        Waiting until <b>{until || 'something happens'}</b>
+        <span className="task-waiting-note"> · a message here moves it to In Progress</span>
       </span>
-      <button
-        type="button"
-        className="task-waiting-stop"
-        disabled={busy}
-        title="Unsnooze: the task stays To Do and its trigger is deleted"
-        onClick={(e) => {
-          e.stopPropagation();
-          setBusy(true);
-          setError(null);
-          stopWaiting(task.id)
-            .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-            .finally(() => setBusy(false));
-        }}
-      >
-        {busy ? 'Unsnoozing…' : 'Unsnooze'}
-      </button>
-      {error && <span className="task-waiting-error" role="alert">{error}</span>}
     </div>
   );
 }
 
 /**
- * Above a waiting task's composer: the snooze still holds. A message no longer
- * ends it (user call 2026-09-29), so a human writing to the session is told so
- * at the moment it matters, next to the one button that does end it.
- */
-export function SnoozedComposerNotice({ task }: { task: Task | null | undefined }) {
-  if (!task || !isTaskWaiting(task)) return null;
-  return (
-    <WaitingLine
-      task={task}
-      className="task-waiting-composer"
-      testId="session-snoozed-notice"
-      note="Messages here don't cancel it"
-    />
-  );
-}
-
-/**
- * The event half of the menu's Start / Snooze until row, under the times: what
- * the task is snoozed until (with Unsnooze), or "Something happens…", which
- * hands the condition to the task's session (utils/wait-until.ts).
+ * The event half of the menu's Start / Snooze until row, under the times:
+ * "Something happens…", which hands the condition to the task's session
+ * (utils/wait-until.ts). Its AI writes the trigger and sets the task to Waiting.
  */
 export function SnoozeUntilEvent({ task, afterAction }: { task: Task; afterAction: () => void }) {
   const navigate = useNavigate();
-  if (isTaskWaiting(task)) return <WaitingLine task={task} compact />;
   if (task.phase === 'COMPLETE') return null;
   return (
     <button
@@ -197,15 +273,19 @@ export function SnoozeUntilEvent({ task, afterAction }: { task: Task; afterActio
   );
 }
 
-/** The task menu's Status row: collapsed to the current status, the four options on click. */
-export function TaskStatusMenuSection({ task, onSetPhase, afterAction }: {
+/** The task menu's Status row: collapsed to the current status, the five options on click. */
+export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterAction }: {
   task: Task;
   onSetPhase?: SetPhase;
+  /** Write wait_until (falls back to the board store, then a plain PATCH). */
+  onSetWaitUntil?: SetWaitUntil;
   afterAction: () => void;
 }) {
   const setPhase = useSetPhase(onSetPhase);
+  const setWaitUntil = useSetWaitUntil(onSetWaitUntil);
   const [open, setOpen] = useState(false);
   const option = STATUS_OPTIONS.find((o) => o.value === task.phase);
+  const until = task.phase === 'WAITING' ? formatWaitUntil(task.wait_until) : '';
   return (
     <>
       <div className="task-kebab-divider" />
@@ -219,14 +299,19 @@ export function TaskStatusMenuSection({ task, onSetPhase, afterAction }: {
           onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         >
           <span className="task-kebab-icon">{option?.icon ?? ICONS.ICON_PHASE_TODO}</span>
-          <span className="task-kebab-status-value">Status: <b>{statusLabel(task.phase)}</b></span>
+          <span className="task-kebab-status-value">
+            Status: <b>{statusLabel(task.phase)}</b>
+            {until ? <span className="task-kebab-status-until"> · until {until}</span> : null}
+          </span>
           <span className={`task-kebab-status-caret${open ? ' open' : ''}`}>{ICONS.CHEVRON_GLYPH}</span>
         </button>
         {open && (
           <div className="task-kebab-status">
-            <StatusPills
+            <StatusOptions
               task={task}
               onPick={(phase) => { if (phase !== task.phase) setPhase(task.id, phase); afterAction(); }}
+              onPickWaiting={() => { if (task.phase !== 'WAITING') setPhase(task.id, 'WAITING'); }}
+              onSetWaitUntil={(waitUntil) => { setWaitUntil(task.id, waitUntil); afterAction(); }}
             />
           </div>
         )}
@@ -236,8 +321,9 @@ export function TaskStatusMenuSection({ task, onSetPhase, afterAction }: {
 }
 
 /** The detail pane's status badge: shows the status, click to change it. */
-export function TaskStatusBadge({ task, onSetPhase }: { task: Task; onSetPhase?: SetPhase }) {
+export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil }: { task: Task; onSetPhase?: SetPhase; onSetWaitUntil?: SetWaitUntil }) {
   const setPhase = useSetPhase(onSetPhase);
+  const setWaitUntil = useSetWaitUntil(onSetWaitUntil);
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -293,9 +379,11 @@ export function TaskStatusBadge({ task, onSetPhase }: { task: Task; onSetPhase?:
         >
           <div className="task-kebab-status">
             <span className="task-kebab-status-label">Status</span>
-            <StatusPills
+            <StatusOptions
               task={task}
               onPick={(phase) => { if (phase !== task.phase) setPhase(task.id, phase); close(); }}
+              onPickWaiting={() => { if (task.phase !== 'WAITING') setPhase(task.id, 'WAITING'); }}
+              onSetWaitUntil={(waitUntil) => { setWaitUntil(task.id, waitUntil); close(); }}
             />
           </div>
         </div>,

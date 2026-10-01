@@ -2,8 +2,9 @@
  * "Snooze until something happens" entry points (the task menu's Start / Snooze
  * until row, the composer "+" menu). Neither sets the wait itself: the row starts
  * a message to the task's own session, whose AI has the context (which CR, which
- * channel, which host) to write the trigger and park the task (walnut-trigger
- * skill, `task_wait`). The user finishes the sentence and sends it.
+ * channel, which host) to write the trigger (walnut-trigger skill) and then set
+ * the task to Waiting. The trigger's fire is a message into that session, which
+ * brings the task back. The user finishes the sentence and sends it.
  *
  * The message names the skill: `/walnut-trigger …` makes Claude Code load it
  * before the first word is read, instead of hoping the model matches "snooze
@@ -27,7 +28,7 @@ export const WAIT_UNTIL_LABEL = 'Snooze until something happens…';
 /** The row under the times in the task menu's Start / Snooze until. */
 export const WAIT_UNTIL_MENU_LABEL = 'Something happens…';
 export const WAIT_UNTIL_TITLE =
-  'Tell the AI what to wait for. It sets up a trigger (walnut-trigger skill); the task stays To Do with no red dot until it fires';
+  'Tell the AI what to wait for. It sets up a trigger (walnut-trigger skill) and puts the task in Waiting until it fires';
 /** Detail: `{ task }`. Heard by MainPage, which opens the bound draft. */
 export const WAIT_UNTIL_EVENT = 'task:wait-until';
 

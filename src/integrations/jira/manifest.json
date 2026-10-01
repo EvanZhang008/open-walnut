@@ -2,6 +2,7 @@
   "id": "jira",
   "name": "Jira",
   "apiVersion": 1,
+  "phases": ["WAITING"],
   "engines": {
     "walnut": ">=0.3.2"
   },

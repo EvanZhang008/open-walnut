@@ -7,6 +7,9 @@ type MSTodoStatus = 'notStarted' | 'inProgress' | 'completed';
 
 export const PHASE_TO_MS_STATUS: Record<TaskPhase, MSTodoStatus> = {
   TODO: 'notStarted',
+  // Parked work is not started as far as To Do can tell; the exact phase rides
+  // the body's `Phase:` header, so a pull on the same version keeps WAITING.
+  WAITING: 'notStarted',
   IN_PROGRESS: 'inProgress',
   NEED_ACTION: 'inProgress',
   COMPLETE: 'completed',

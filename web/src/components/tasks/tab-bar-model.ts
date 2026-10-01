@@ -22,7 +22,7 @@ const BUILT_IN: readonly Omit<TabBarTab, 'custom'>[] = [
   { id: 'focus', label: 'Focus', title: 'Focus: the current sprint, finish these first' },
   { id: 'satellite', label: 'Satellite', title: 'Satellite: needs doing soon' },
   { id: 'backlog', label: 'Backlog', title: 'Backlog: someday work you still want pinned' },
-  { id: 'wait', label: 'Wait', title: 'Wait: pinned, but not being worked on' },
+  { id: 'wait', label: 'Parked', title: 'Parked: pinned, but set aside for now' },
   { id: 'recent', label: 'Recent', title: 'Recent: tasks touched lately' },
 ];
 

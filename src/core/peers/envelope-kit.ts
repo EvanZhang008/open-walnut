@@ -105,6 +105,7 @@ export function createEnvelopeKit(): EnvelopeKit {
   /** A task the target closed itself: said instead of "its turn ended", because
    *  COMPLETE is terminal and no later turn-end edge will ever speak for it. */
   const COMPLETE_LINE = 'It marked its task COMPLETE WITHOUT an explicit reply to your request.';
+  const WAITING_LINE = 'It set its task to WAITING (parked until something happens) WITHOUT an explicit reply to your request.';
 
   /** XML attribute rules, plus: any whitespace run becomes one space, trimmed. */
   function escapeAttr(value: string): string {
@@ -281,6 +282,8 @@ export function createEnvelopeKit(): EnvelopeKit {
       body: [
         outcome === 'completed' && target.phase === 'COMPLETE'
           ? `${COMPLETE_LINE}${pointer || ' Check its output.'}`
+          : outcome === 'completed' && target.phase === 'WAITING'
+            ? `${WAITING_LINE}${pointer || ' Check its output.'}`
           : last && outcome === 'completed'
             ? `Its turn ended WITHOUT an explicit reply to your request.${pointer}`
             : OUTCOME_LINES[outcome],

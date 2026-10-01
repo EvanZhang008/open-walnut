@@ -28,7 +28,7 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
-const TABS = ['All', 'Focus', 'Satellite', 'Backlog', 'Wait', 'Recent'] as const
+const TABS = ['All', 'Focus', 'Satellite', 'Backlog', 'Parked', 'Recent'] as const
 
 function tab(page: Page, name: (typeof TABS)[number]) {
   return page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
@@ -113,7 +113,7 @@ test.describe('todo panel section tabs', () => {
     expect(soloBox!.height).toBeGreaterThan(panelBox!.height * 0.5)
 
     // 2b. Wait tab: now Wait is mounted and Focus is not.
-    await tab(page, 'Wait').click()
+    await tab(page, 'Parked').click()
     await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
     await expect(page.locator('[data-drop-zone="focus-drop-zone"]')).toHaveCount(0)
 
@@ -130,12 +130,12 @@ test.describe('todo panel section tabs', () => {
     await page.goto('/')
     await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
 
-    await tab(page, 'Wait').click()
+    await tab(page, 'Parked').click()
     await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
 
     await page.reload()
     await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
-    await expect(tab(page, 'Wait')).toHaveAttribute('aria-selected', 'true')
+    await expect(tab(page, 'Parked')).toHaveAttribute('aria-selected', 'true')
 
     // A panel that was left on the Notes tab opens on All; the Scratchpad lives in the rail now.
     await page.evaluate(() => localStorage.setItem('walnut-todo-active-section', 'notes'))

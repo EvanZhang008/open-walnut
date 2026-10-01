@@ -2,6 +2,7 @@
   "id": "ms-todo",
   "name": "Microsoft To-Do",
   "apiVersion": 1,
+  "phases": ["WAITING"],
   "engines": {
     "walnut": ">=0.3.2"
   },

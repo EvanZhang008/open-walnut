@@ -30,6 +30,7 @@ import {
 } from './service-registry.js'
 import { clearSkillsCache } from '../skill-loader.js'
 import { toDisposable, type Disposable } from './disposable.js'
+import { registeredSyncOf } from './legacy-phase-sync.js'
 import { createPluginNotifications } from './plugin-notifications.js'
 import { createPluginUi } from './plugin-status-items.js'
 import { bus, EventNames, type BusEvent } from '../event-bus.js'
@@ -958,7 +959,8 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         const internal = adapter as IntegrationSync
         legacyApi.registerSync(internal)
         return own(toDisposable(() => {
-          if (contributions.sync === internal) contributions.sync = null
+          // The loader may keep a phase-projecting wrapper (legacy-phase-sync.ts) in place of the adapter itself.
+          if (registeredSyncOf(contributions.sync) === internal) contributions.sync = null
         }))
       },
       sourceClaim(claim: ProjectClaimFn, options?: { priority?: number }) {

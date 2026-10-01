@@ -1,6 +1,15 @@
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
+/**
+ * The one state field. WAITING (added 0.5.2) is a task set aside until something
+ * happens: a trigger fire, a message, or its optional `wait_until` time. Any new
+ * turn on it goes IN_PROGRESS and hands back as usual; the turn that set it ends
+ * without a hand-back. It is a status, not a board tier: the task stays where it
+ * is pinned. Older clients must treat an unknown phase as TODO (`status` is the
+ * stable 3-state projection and says 'todo' for it).
+ */
 export type TaskPhase =
   | 'TODO'
+  | 'WAITING'
   | 'IN_PROGRESS'
   | 'NEED_ACTION'
   | 'COMPLETE';
@@ -17,45 +26,6 @@ export const VALID_PRIORITIES: readonly TaskPriority[] = ['immediate', 'importan
  * Shared with the web through the `@open-walnut/core` alias.
  */
 export const EXTERNAL_SESSION_IMPORT_TAG = 'walnut:external-sessions';
-
-/** Why a wait ended (TaskWaiting.woke_reason). */
-export type TaskWakeReason = 'fired' | 'message' | 'needs-human' | 'check-failed' | 'status-changed' | 'timed-out';
-
-/**
- * A task parked on a trigger ("wait until CR 1234 is approved"). The task stays
- * TODO and in every view; the only difference is that a finished turn does not
- * hand it back (no NEED_ACTION, no red dot) until the trigger fires and the
- * session decides the human is needed. Not a phase on purpose: WAIT was removed
- * on 2026-08-18 because a parked state with no exit confused humans and agents,
- * and this one always has an exit, the routine.
- *
- * The record outlives the wait: `woke_at` ends it but keeps `routine_id`, so a
- * session that decides to keep waiting re-arms the SAME routine (its dedup state
- * intact) instead of creating one that re-fires on what was already seen.
- */
-export interface TaskWaiting {
-  /** The condition in the user's words, e.g. "CR 1234 is approved". */
-  condition: string;
-  /** The walnut-trigger routine that ends the wait (session executor on this task). */
-  routine_id: string;
-  /** When the wait started (or was last re-armed). */
-  since: string;
-  /** The backstop (ISO): a wait still on at this time ends ('timed-out') and the
-   *  task comes back as Need Action, in case the trigger never fires. */
-  until?: string;
-  /** Set when the wait ended; absent while the task is still waiting. */
-  woke_at?: string;
-  woke_reason?: TaskWakeReason;
-  /** A 'fired' wake only: set once that fire was delivered (or refused for good).
-   *  Until then a replay of it is still the wait's fire; after, a later fire of
-   *  the same trigger is an ordinary one. */
-  settled_at?: string;
-}
-
-/** The task is waiting now: a live wait on an open task. */
-export function isTaskWaiting(task: { waiting?: TaskWaiting | null; phase?: string }): boolean {
-  return !!task.waiting && !task.waiting.woke_at && task.phase !== 'COMPLETE';
-}
 
 /** True for a task the importer still owns (see EXTERNAL_SESSION_IMPORT_TAG). */
 export function isExternalImportTask(task: { tags?: string[] | undefined }): boolean {
@@ -130,8 +100,8 @@ export const PIN_TIER_POLICY: readonly PinTierPolicyEntry[] = [
   },
   {
     tier: 'wait',
-    label: 'Wait',
-    guidance: 'Parked — pinned but blocked or waiting on someone else.',
+    label: 'Parked',
+    guidance: 'Parked — pinned but set aside for now. A board shelf, not a status: a Waiting task stays in its own section.',
   },
 ] as const;
 
@@ -710,9 +680,9 @@ export interface Task {
    *
    * Semantics: "the agent produced something the human has not looked at yet".
    * Set true by the phase machine whenever a session hands work back
-   * (NEED_ACTION — turn finished; WAIT — errored / needs a
-   * decision). Set false the moment the human OPENS the task — that IS the read
-   * event — and on IN_PROGRESS / COMPLETE. See readMarkerForPhase in phase.ts.
+   * (NEED_ACTION — turn finished, errored, or needs a decision). Set false the
+   * moment the human OPENS the task — that IS the read event — and on
+   * IN_PROGRESS / WAITING / COMPLETE. See readMarkerForPhase in phase.ts.
    *
    * Absent means READ, which is why the field is `unread` and not `is_read`: a
    * missing value has to mean "no dot", and `is_read: undefined` would mean the
@@ -745,9 +715,12 @@ export interface Task {
    *  the persona drift repair (which persona to rebuild). Same storage rules as
    *  walnut_agent: payload blob, local-only. */
   agent_id?: string;
-  /** "Wait until" (src/core/task-waiting.ts): the task is parked on a trigger.
-   *  Local-only, payload blob. */
-  waiting?: TaskWaiting;
+  /** WAITING only: when the wait ends by itself (ISO datetime). At that time the
+   *  task's session is woken like a trigger fire (src/core/task-wait-until.ts);
+   *  with no session the task comes back as NEED_ACTION. Absent = wait until
+   *  something else happens. Cleared by every move out of WAITING. Local-only,
+   *  payload blob; never pushed to sync backends. */
+  wait_until?: string;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

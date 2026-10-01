@@ -82,8 +82,8 @@ test('launcher defaults to Focus, and a pick lasts exactly one launch', async ({
   await page.screenshot({ path: '/tmp/launcher-pin-tier/default-focus.png' })
 
   // The pick lands on THIS draft.
-  await tiers.getByRole('button', { name: 'Wait' }).click()
-  await expect(tiers.getByRole('button', { name: 'Wait' })).toHaveAttribute('aria-pressed', 'true')
+  await tiers.getByRole('button', { name: 'Parked' }).click()
+  await expect(tiers.getByRole('button', { name: 'Parked' })).toHaveAttribute('aria-pressed', 'true')
   await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
 
   // 3: THE regression guard. A fresh launcher is back on Focus — the previous
@@ -93,12 +93,12 @@ test('launcher defaults to Focus, and a pick lasts exactly one launch', async ({
   ;({ selector } = await openLauncher(page))
   tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
   await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tiers.getByRole('button', { name: 'Wait' })).toHaveAttribute('aria-pressed', 'false')
+  await expect(tiers.getByRole('button', { name: 'Parked' })).toHaveAttribute('aria-pressed', 'false')
   await page.screenshot({ path: '/tmp/launcher-pin-tier/fresh-back-to-focus.png' })
 
   // Clicking the active tier unpins — and THAT does not persist either.
   await tiers.getByRole('button', { name: 'Focus' }).click()
-  for (const label of ['Focus', 'Satellite', 'Backlog', 'Wait']) {
+  for (const label of ['Focus', 'Satellite', 'Backlog', 'Parked']) {
     await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
   }
   await closeLauncher(page)

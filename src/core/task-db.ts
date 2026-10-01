@@ -93,9 +93,10 @@ const EXPLICIT_TASK_KEYS = new Set<string>([
  * blob either — see the denylist in `taskToRow`. Project is the single grouping
  * layer, so `category` must never come back; `needs_attention` was renamed to
  * `unread` (v6 migration) and an old client spelling it must not resurrect a
- * second read marker beside the real one.
+ * second read marker beside the real one; `waiting` was the pre-0.5.2 "wait
+ * until" record, folded into the WAITING phase (v12 migration).
  */
-const RETIRED_TASK_KEYS = new Set<string>(['category', 'needs_attention']);
+const RETIRED_TASK_KEYS = new Set<string>(['category', 'needs_attention', 'waiting']);
 
 // ── Singleton ──────────────────────────────────────────────────────────────
 let db: DatabaseType | null = null;
@@ -534,7 +535,7 @@ const SCHEMA_SQL = `
  * Exported so migration tests can assert "the DB ended up current" without
  * hardcoding a number that every future bump would break.
  */
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 function runOneTimeMigrations(handle: DatabaseType): void {
   const current = handle.pragma('user_version', { simple: true }) as number;
@@ -630,6 +631,12 @@ function runOneTimeMigrations(handle: DatabaseType): void {
   if (current < 11) {
     // v10 → v11: `AGENT_COMPLETE` → `NEED_ACTION` (phase rename only).
     migrateAgentCompleteToNeedAction(handle);
+  }
+
+  if (current < 12) {
+    // v11 → v12: the pre-0.5.2 `waiting` record (a TODO parked on a trigger)
+    // becomes the WAITING phase; the record itself is retired.
+    migrateWaitingRecordsToPhase(handle);
   }
 
   handle.pragma('user_version = ' + SCHEMA_VERSION);
@@ -1291,6 +1298,52 @@ function migrateAgentCompleteToNeedAction(handle: DatabaseType): void {
 
   if (summary.migrated > 0) {
     log.task.info('task-db v11: AGENT_COMPLETE renamed to NEED_ACTION', summary);
+  }
+}
+
+// ── v12: the `waiting` record → the WAITING phase ────────────────────────────
+
+/**
+ * Before 0.5.2 a task "snoozed until something happens" stayed TODO and carried
+ * a `waiting` payload record (condition, routine_id, since, until, woke_at). The
+ * phase now says it: a LIVE record (no woke_at) on an open task becomes
+ * `phase = 'WAITING'`, with `wait_until` taken from the record's backstop when it
+ * had one; an ended record just goes. Same dual write as v7/v8/v11 (the indexed
+ * column and `$.phase` in the payload), then the key is removed from every
+ * payload so nothing can read it again (it is also a RETIRED_TASK_KEYS entry).
+ * `unread` is cleared on the rows that move: Waiting has no red dot.
+ * `updated_at` untouched (a rename is not an edit).
+ */
+function migrateWaitingRecordsToPhase(handle: DatabaseType): void {
+  const summary = handle.transaction(() => {
+    const live = `payload IS NOT NULL AND json_valid(payload)
+      AND json_type(payload, '$.waiting') = 'object'
+      AND json_extract(payload, '$.waiting.woke_at') IS NULL
+      AND phase != 'COMPLETE'`;
+    const withUntil = handle
+      .prepare(
+        `UPDATE tasks SET payload = json_set(payload, '$.wait_until', json_extract(payload, '$.waiting.until'))
+          WHERE ${live} AND json_type(payload, '$.waiting.until') = 'text'`,
+      )
+      .run().changes;
+    const moved = handle
+      .prepare(
+        `UPDATE tasks SET phase = 'WAITING',
+            payload = json_set(json_remove(payload, '$.unread'), '$.phase', 'WAITING')
+          WHERE ${live}`,
+      )
+      .run().changes;
+    const dropped = handle
+      .prepare(
+        `UPDATE tasks SET payload = json_remove(payload, '$.waiting')
+          WHERE payload IS NOT NULL AND json_valid(payload) AND json_type(payload, '$.waiting') IS NOT NULL`,
+      )
+      .run().changes;
+    return { moved, withUntil, dropped };
+  })();
+
+  if (summary.dropped > 0) {
+    log.task.info('task-db v12: waiting records folded into the WAITING phase', summary);
   }
 }
 

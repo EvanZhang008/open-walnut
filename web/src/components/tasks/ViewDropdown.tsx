@@ -142,6 +142,8 @@ const PANEL_WIDTH = 560;
 const PHASE_OPTIONS = [
   { value: '', label: 'All' },
   { value: 'TODO', label: 'To Do' },
+  // Exact: only the parked tasks ("To Do" still means every open one, Waiting included).
+  { value: 'WAITING', label: 'Waiting' },
   { value: 'COMPLETE', label: 'Complete' },
 ];
 

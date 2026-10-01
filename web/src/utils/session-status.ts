@@ -81,6 +81,7 @@ export const PROCESS_LABELS: Record<ProcessStatus, string> = {
 
 export const PHASE_LABELS: Record<TaskPhase, string> = {
   TODO: 'To Do',
+  WAITING: 'Waiting',
   IN_PROGRESS: 'In Progress',
   NEED_ACTION: 'Need Action',
   COMPLETE: 'Complete',
@@ -139,6 +140,7 @@ export function waitingBadgeTitle(pp: { toolName?: string; receivedAt?: string }
 
 export const PHASE_COLORS: Record<TaskPhase, string> = {
   TODO: '#6b7280',
+  WAITING: '#8b5cf6',
   IN_PROGRESS: '#f59e0b',
   NEED_ACTION: '#3b82f6',
   COMPLETE: '#22c55e',
@@ -162,8 +164,9 @@ export function phasePickerChoices(current?: TaskPhase | string | null): string[
 
 /**
  * Phase-filter matching for the simplified two-state UI:
- * 'TODO' means "not complete" (any phase except COMPLETE), 'COMPLETE' matches
- * exactly. Other filter values (deep links, saved prefs) still match exactly.
+ * 'TODO' means "not complete" (any phase except COMPLETE, WAITING included),
+ * 'COMPLETE' matches exactly. Other filter values (deep links, saved prefs)
+ * still match exactly.
  */
 export function matchesPhaseFilter(filter: string, phase: TaskPhase | string | undefined): boolean {
   if (!filter) return true;
@@ -191,6 +194,7 @@ export function pillPhaseClassSuffix(phase: TaskPhase | string | undefined): str
     case 'NEED_ACTION': return 'agent-complete';
     case 'COMPLETE': return 'completed';
     case 'TODO': return 'agent-complete';
+    case 'WAITING': return 'agent-complete';
     default: return 'agent-complete';
   }
 }

@@ -40,7 +40,7 @@ const BUILTIN_ROWS = [
   { id: 'focus', label: 'Focus', icon: ICON_TIER_FOCUS },
   { id: 'satellite', label: 'Satellite', icon: ICON_TIER_SATELLITE },
   { id: 'backlog', label: 'Backlog', icon: ICON_TIER_BACKLOG },
-  { id: 'wait', label: 'Wait', icon: ICON_TIER_WAIT },
+  { id: 'wait', label: 'Parked', icon: ICON_TIER_WAIT },
 ] as const;
 
 /** Server-enforced too; mirrored here so the input can't even type past it. */

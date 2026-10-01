@@ -534,8 +534,12 @@ defineOp({
   title: 'Update a Walnut task',
   description:
     'Patch any supported task fields. Use phase=NEED_ACTION when work is done and ready to look at, ' +
-    'and phase=COMPLETE when it is finished; a blocked or parked task is just TODO. ' +
-    '`tags` is a full replacement ([] clears). Pass "" to clear due_date/start_date.',
+    'and phase=COMPLETE when it is finished. phase=WAITING parks the task on something that has not ' +
+    'happened yet (a trigger you armed, a reply, a time): it stays in its lists and its board section, the end ' +
+    'of this turn does not hand it back, and the next message into it (a trigger fire, the user, a peer) moves ' +
+    'it to IN_PROGRESS. Set it as the LAST call of the turn. Optional wait_until (ISO datetime) wakes it at ' +
+    'that time when nothing else did. `tags` is a full replacement ([] clears). Pass "" to clear ' +
+    'due_date/start_date/wait_until.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     // No `status` input. It was the more dangerous of the two write paths: a
@@ -543,7 +547,11 @@ defineOp({
     // was only reachable through phase — and status:'done' silently jumped a task
     // to COMPLETE, which is the human's call, not the agent's.
     phase: TASK_PHASE.optional()
-      .describe('Task lifecycle phase — the one state field. NEED_ACTION = handed back to the human'),
+      .describe('Task lifecycle phase — the one state field. NEED_ACTION = handed back to the human; '
+        + 'WAITING = parked until something happens (any new message brings it back)'),
+    wait_until: z.string().optional()
+      .describe('With phase=WAITING: ISO-8601 datetime at which the task is woken if nothing else did. '
+        + '"" clears it (the wait has no end of its own)'),
     priority: PRIORITY.optional(),
     due_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
     start_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
@@ -576,6 +584,9 @@ defineOp({
       + 'Execution is unchanged.'
     const next = body.phase === 'NEED_ACTION'
       ? 'Marked ready for the human to look at. Nothing else is required of you.'
+      : body.phase === 'WAITING'
+        ? 'The task is waiting. End your turn now: the next message into it (a trigger fire, the user, a peer'
+          + `${body.wait_until ? `, or the clock at ${String(body.wait_until)}` : ''}) brings it back to In Progress.`
       : attachment === 'attached'
         ? `Talk to its session: walnut tools call task_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`
         : dispatchHint(taskId(task) || String(id), attachment === 'none')

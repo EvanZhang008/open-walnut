@@ -265,7 +265,7 @@ for (const showPriority of [true, false]) {
     await boot(page, {}, DESKTOP, showPriority)
     const panel = await openDraft(page)
     const menu = await openDraftSettings(panel, 'more')
-    await expect(menu.locator('.task-kebab-tier-btn')).toHaveText(['Focus', 'Satellite', 'Backlog', 'Wait'].map((t) => new RegExp(t)))
+    await expect(menu.locator('.task-kebab-tier-btn')).toHaveText(['Focus', 'Satellite', 'Backlog', 'Parked'].map((t) => new RegExp(t)))
     await expect(menu.getByRole('button', { name: /Don't pin/ })).toHaveCount(0)
     await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Focus/)
     await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pinned')
@@ -347,7 +347,7 @@ test('clicking the lit tier unpins it with no chip, the lit priority accepts, an
   await expect(draftDecisionChip(panel, 'pinTier')).toHaveClass(AI)
   mock.set({ pinTier: 'wait', priority: 'important', due_date: isoDay(3) })
   await typeAndSettle(page, mock, 'fix the flaky login test by friday, soon, blocked')
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Wait/)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Parked/)
   await expect(draftDecisionChip(panel, 'pinTier')).toHaveClass(AI)
 
   // The lit Walnut pick, clicked again, unpins too; the launch then pins nothing.

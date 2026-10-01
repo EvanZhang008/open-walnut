@@ -61,15 +61,27 @@
  * reopens; a late result, a turn start, an error, a permission prompt or an
  * automated send never does).
  *
- * Task Phases (4) — WAIT was removed 2026-08-18 (user call: "blocked on
- * something external" IS just TODO — a separate parked state confused both
- * humans and agents; the Focus Bar's 'wait' PIN TIER still exists for parking
- * and is a different axis entirely):
- *   TODO → IN_PROGRESS → NEED_ACTION → COMPLETE
+ * Held phase: WAITING — set on purpose (the status control, task_update, the
+ * /walnut-trigger snooze), it means "nothing to do until something happens".
+ * The machine leaves it alone on the quiet edges (session:result, session:error,
+ * the reconciler: the turn that SET it ends without a hand-back) and moves it on
+ * the loud ones: any new turn (session:input, session:turn-start: a trigger
+ * fire, a human, a peer) takes it to IN_PROGRESS, a prompt that needs the human
+ * (session:awaiting-human) to NEED_ACTION. Its optional `wait_until` is a server
+ * clock (task-wait-until.ts) that wakes the session the way a trigger would.
+ * Background writes (a sync pull echoing the TODO it was shown) may move it
+ * only to COMPLETE; see the held-phase guard in task-manager.ts.
+ *
+ * Task Phases (5). WAIT (a parked state with no exit) was removed 2026-08-18;
+ * WAITING came back 2026-09-30 as a status with exits, and it is a different
+ * axis from the board's 'wait' PIN TIER (labelled Parked), which a Waiting task
+ * never moves to:
+ *   TODO → IN_PROGRESS → NEED_ACTION → COMPLETE, with WAITING beside TODO
  *
  * Read/unread lifecycle (task.unread — see readMarkerForPhase):
  *   NEED_ACTION                      → unread   (agent handed work back)
  *   IN_PROGRESS                         → read     (new turn supersedes it)
+ *   WAITING                             → read     (set aside on purpose)
  *   COMPLETE                            → read     (applyPhase clears it)
  *   opening the task in the UI          → read     (the actual "read" event)
  * The marker is written in the SAME row update as the phase, so no surface can
@@ -78,19 +90,18 @@
 
 import { log } from '../logging/index.js'
 import type { TaskPhase, TaskStatus, Task } from './types.js';
-import { isTaskWaiting } from './types.js';
-import { endedWait, sameWait, waitEndsOnStatusChange, waitingSessionPhase } from './task-waiting-rules.js'
 
-// ── Phase → Status (4 → 3) ──
+// ── Phase → Status (5 → 3) ──
 
 export const PHASE_TO_STATUS: Record<TaskPhase, TaskStatus> = {
   TODO: 'todo',
+  WAITING: 'todo',
   IN_PROGRESS: 'in_progress',
   NEED_ACTION: 'in_progress',
   COMPLETE: 'done',
 };
 
-// ── Status → Default Phase (3 → 4, for migration) ──
+// ── Status → Default Phase (3 → 5, for migration) ──
 
 export const STATUS_TO_DEFAULT_PHASE: Record<TaskStatus, TaskPhase> = {
   todo: 'TODO',
@@ -102,6 +113,7 @@ export const STATUS_TO_DEFAULT_PHASE: Record<TaskStatus, TaskPhase> = {
 
 export const PHASE_ORDER: TaskPhase[] = [
   'TODO',
+  'WAITING',
   'IN_PROGRESS',
   'NEED_ACTION',
   'COMPLETE',
@@ -125,9 +137,23 @@ export const VALID_PHASES = new Set<string>(PHASE_ORDER);
  *  out of it. */
 export const TERMINAL_PHASES = new Set<TaskPhase>(['COMPLETE']);
 
+/** Phases a BACKGROUND write (a sync pull, a plugin echo, an 'internal' default)
+ *  may not move except to COMPLETE. WAITING is one: it was set on purpose, and
+ *  a sync plugin that never heard of it is shown TODO (legacyPhase) and echoes
+ *  that TODO back on the next pull. Deliberate edits (api/user/agent) and the
+ *  session machine move it freely. Checked in updateTask and prepareRawUpdate. */
+export const HELD_PHASES = new Set<TaskPhase>(['WAITING']);
+
+/** A phase for a reader that predates the current set (plugins without a
+ *  `phases` manifest declaration, old sync bodies): WAITING reads as TODO,
+ *  which is also its `status`. */
+export function legacyPhase(phase: TaskPhase): Exclude<TaskPhase, 'WAITING'> {
+  return phase === 'WAITING' ? 'TODO' : phase;
+}
+
 // ── Core functions ──
 
-/** Derive the 3-state status from a 4-state phase. */
+/** Derive the 3-state status from a phase. */
 export function deriveStatusFromPhase(phase: TaskPhase): TaskStatus {
   return PHASE_TO_STATUS[phase] ?? 'todo';
 }
@@ -150,6 +176,8 @@ export function phaseFromStatus(status: TaskStatus): TaskPhase {
  *
  * READ (nothing new to look at):
  *   - IN_PROGRESS — a fresh turn started; whatever was pending is superseded.
+ *   - WAITING     — set aside on purpose; the red dot would ask for attention
+ *                   the human just said is not needed yet.
  *   - COMPLETE    — finishing a task is itself an act of reading it.
  *
  * TODO leaves the marker untouched: it says nothing about whether the last
@@ -157,7 +185,7 @@ export function phaseFromStatus(status: TaskStatus): TaskPhase {
  */
 export function readMarkerForPhase(phase: TaskPhase): Partial<Task> {
   if (phase === 'NEED_ACTION') return { unread: true }
-  if (phase === 'IN_PROGRESS' || phase === 'COMPLETE') return { unread: false }
+  if (phase === 'IN_PROGRESS' || phase === 'WAITING' || phase === 'COMPLETE') return { unread: false }
   return {}
 }
 
@@ -173,10 +201,8 @@ export function readMarkerForPhase(phase: TaskPhase): Partial<Task> {
  * NEED_ACTION stay dot-less while a session-driven one lit up.
  */
 export function applyPhase(task: Task, phase: TaskPhase): void {
-  // Waiting is TODO; Need Action or Complete ends the wait (task-waiting.ts
-  // disables or deletes its trigger when it sees the record). In Progress keeps
-  // it: a session start on a waiting task writes IN_PROGRESS through here.
-  if (task.waiting && waitEndsOnStatusChange(task, phase)) task.waiting = endedWait(task.waiting, 'status-changed')
+  // wait_until belongs to WAITING alone: any move out of it ends the clock.
+  if (phase !== 'WAITING') task.wait_until = undefined;
   if (task.phase !== phase) {
     task.phase_changed_at = new Date(Math.max(Date.now(), (Date.parse(task.phase_changed_at ?? '') || 0) + 1)).toISOString();
   }
@@ -205,6 +231,8 @@ export function applyPhase(task: Task, phase: TaskPhase): void {
  * WAIT was removed 2026-08-18 ("blocked/parked" is just TODO — the row stays
  * visible and actionable, and the 'wait' PIN TIER covers deliberate parking).
  * Its ancestors (AWAIT_HUMAN_ACTION, HUMAN_VERIFICATION) follow it to TODO.
+ * It does NOT map to today's WAITING: a WAIT row meant "errored / needs a
+ * decision", while WAITING is set on purpose and holds through turn ends.
  * PEER_CODE_REVIEW / RELEASE_IN_PIPELINE pointed at the deleted
  * HUMAN_VERIFIED / POST_WORK_COMPLETED, so they land on NEED_ACTION.
  *
@@ -239,9 +267,10 @@ export function migratePhase(phase: string): TaskPhase | undefined {
 
 // ── Unconditional Session → Phase State Machine ──
 
-/** Session produced result → NEED_ACTION. Unconditional. */
+/** Session produced result → NEED_ACTION. Unconditional, except on a held
+ *  phase: the turn that set WAITING ends without handing the task back. */
 export function sessionResultPhase(current: TaskPhase): TaskPhase | null {
-  if (TERMINAL_PHASES.has(current) || current === 'NEED_ACTION') return null
+  if (TERMINAL_PHASES.has(current) || HELD_PHASES.has(current) || current === 'NEED_ACTION') return null
   return 'NEED_ACTION'
 }
 
@@ -318,7 +347,7 @@ export function sessionTurnStartPhase(current: TaskPhase): TaskPhase | null {
  *  red pill), not the task phase; a dedicated WAIT phase for this was removed
  *  2026-08-18. */
 export function sessionErrorPhase(current: TaskPhase): TaskPhase | null {
-  if (TERMINAL_PHASES.has(current) || current === 'NEED_ACTION') return null
+  if (TERMINAL_PHASES.has(current) || HELD_PHASES.has(current) || current === 'NEED_ACTION') return null
   return 'NEED_ACTION'
 }
 
@@ -378,8 +407,6 @@ interface ApplySessionPhaseOpts {
    *  (sendSourceReopensTerminal), so it may pull a COMPLETE task back to
    *  IN_PROGRESS. Every other trigger ignores it. */
   reopenTerminal?: boolean
-  /** Internal: this call is the one re-run after the task's wait changed under it. */
-  waitRetried?: boolean
 }
 
 /**
@@ -427,39 +454,6 @@ export async function applySessionPhase(
   // turn — was deleted with the trigger's retirement above: triage-sync now
   // never produces a phase, so the gate had nothing left to guard.)
 
-  // A task waiting on a trigger (task-waiting-rules.ts): a finished turn lands on
-  // TODO with no red dot, and a prompt that needs the human ends the wait in the
-  // same write. A message does not: the snooze holds until the trigger fires.
-  const waitDecision = waitingSessionPhase(task, trigger, newPhase)
-  newPhase = waitDecision.newPhase
-  const wakePatch: Partial<Task> = waitDecision.wake && task.waiting
-    ? { waiting: endedWait(task.waiting, waitDecision.wake) }
-    : {}
-  // The wait ends even when the phase does not move (a phase write a guard below
-  // skips): the human is needed now.
-  // Only THAT wait: a re-arm since the read (a new `since`) is newer and wins.
-  const endWaitOnly = async (): Promise<void> => {
-    if (!waitDecision.wake) return
-    await updateTaskRaw(taskId, wakePatch, {
-      emitEvent: true, source,
-      shouldUpdate: (current) => isTaskWaiting(current) && sameWait(current.waiting, task.waiting),
-    }).catch((err) => log.session.warn('task wait end failed', {
-      taskId, trigger, error: err instanceof Error ? err.message : String(err),
-    }))
-    log.session.info('task wait ended', { taskId, trigger, source, reason: waitDecision.wake })
-  }
-  // A waiting task's turn ended quietly: a parent that asked it for a reply must
-  // still hear (session-request-watch only speaks on NEED_ACTION / COMPLETE).
-  if (waitDecision.absorbed && !opts?.waitRetried) {
-    void import('./task-waiting.js')
-      .then((m) => m.notifyParentsOfQuietTurnEnd(taskId, opts?.sessionId))
-      .catch(() => { /* best effort: the request deadline sweeper still settles it */ })
-  }
-  if (!newPhase && waitDecision.wake) {
-    await endWaitOnly()
-    return { changed: false, oldPhase: task.phase }
-  }
-
   const requiresRunning = trigger === 'session:turn-start' || trigger === 'session:human-answered'
   let phaseRunner: typeof import('../providers/claude-code-session.js')['sessionRunner'] | undefined
   if (newPhase && opts?.sessionId
@@ -497,34 +491,29 @@ export async function applySessionPhase(
       // SAFETY: updateTaskRaw skips updateTask's guardActiveChildren (which
       // blocks COMPLETE while children are active). That's fine ONLY because
       // every newPhase computed above is non-terminal (IN_PROGRESS /
-      // NEED_ACTION / WAIT) — applySessionPhase never targets
-      // COMPLETE. If you ever add a COMPLETE transition here, route it through
-      // updateTask or you'll bypass the active-children guard.
+      // NEED_ACTION) — applySessionPhase never targets COMPLETE. If you ever
+      // add a COMPLETE transition here, route it through updateTask or you'll
+      // bypass the active-children guard.
       let skipReason: string | undefined
       const updated = await updateTaskRaw(taskId, {
         phase: newPhase,
         ...readMarkerForPhase(newPhase),
         ...restoreSlot,
-        ...wakePatch,
       }, {
         emitEvent: true, push: true, source,
         // A reopen must also get past updateTaskRaw's own terminal guard (the
         // sync-pull one) and drop completed_at, which only that layer can do
         // consistently for both the phase and the timestamp.
         reopenTerminal: reopensTerminal,
+        // The session machine is the one background writer allowed to end a
+        // WAITING: a new turn or a prompt for the human is exactly its exit.
+        leaveHeld: true,
         shouldUpdate: (current) => {
           oldPhase = current.phase
           if (current.phase === newPhase) return false
           if (TERMINAL_PHASES.has(current.phase) && !reopensTerminal) return false
           if (opts?.shouldApply && !opts.shouldApply(current)) {
             skipReason = 'superseded-snapshot'
-            return false
-          }
-          // The decision above read the task's wait; if that moved since (a
-          // re-arm, a wake), recompute rather than write a stale one.
-          if ((waitDecision.wake || waitDecision.absorbed)
-            && !(sameWait(current.waiting, task.waiting) && isTaskWaiting(current))) {
-            skipReason = 'wait-changed'
             return false
           }
           const live = opts?.sessionId ? phaseRunner?.findSessionByClaudeId(opts.sessionId) : undefined
@@ -541,10 +530,6 @@ export async function applySessionPhase(
         if (skipReason) log.session.info('phase transition skipped', {
           taskId, trigger, source, sessionId: opts?.sessionId, reason: skipReason, turnGen: opts?.turnGen,
         })
-        if (skipReason === 'wait-changed' && !opts?.waitRetried) {
-          return await applySessionPhase(taskId, trigger, source, { ...opts, waitRetried: true })
-        }
-        if (skipReason !== 'wait-changed') await endWaitOnly()
         return { changed: false, oldPhase }
       }
 

@@ -123,16 +123,6 @@ describe('trigger_pause / trigger_resume', () => {
     expect(again.calls.map((c) => c.method)).toEqual(['GET'])
   })
 
-  it('points a wait-ended trigger at task_wait instead of resuming it', async () => {
-    const s = server(trigger(false, { waitEndedAtMs: 1 }))
-    await expect(getOp('trigger_resume')!.handler!({ id: 't1' }, s.call)).rejects.toThrow(/task_wait .*"routine_id": "t1"/)
-    expect(s.calls.map((c) => c.method)).toEqual(['GET'])
-    // Pausing it is a no-op that says what it is.
-    const out = await getOp('trigger_pause')!.handler!({ id: 't1' }, server(trigger(false, { waitEndedAtMs: 1 })).call) as Record<string, unknown>
-    expect(out).toMatchObject({ state: 'wait-ended', changed: false })
-    expect(String(out.outcome)).toContain('snooze wait')
-  })
-
   it('refuses a plain scheduled routine and surfaces an unknown id', async () => {
     const plain = server({ id: 'r1', name: 'Morning digest', enabled: true, state: {}, schedule: { kind: 'every', everyMs: 60_000 } })
     await expect(getOp('trigger_pause')!.handler!({ id: 'r1' }, plain.call)).rejects.toThrow(/not a trigger/)

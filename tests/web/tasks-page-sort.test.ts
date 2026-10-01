@@ -87,15 +87,16 @@ describe('sortTasks', () => {
       .toEqual([mid.id, fresh.id, old.id]);
   });
 
-  it('phase: lifecycle order TODO → IN_PROGRESS → NEED_ACTION → COMPLETE, reversible', () => {
+  it('phase: lifecycle order TODO → WAITING → IN_PROGRESS → NEED_ACTION → COMPLETE, reversible', () => {
     const todo = task({ phase: 'TODO' });
+    const waiting = task({ phase: 'WAITING' });
     const doing = task({ phase: 'IN_PROGRESS' });
     const need = task({ phase: 'NEED_ACTION' });
     const done = task({ phase: 'COMPLETE' });
-    expect(sortTasks([done, need, todo, doing], { key: 'phase', dir: 'asc' }).map((t) => t.phase))
-      .toEqual(['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE']);
-    expect(sortTasks([todo, doing, need, done], { key: 'phase', dir: 'desc' }).map((t) => t.phase))
-      .toEqual(['COMPLETE', 'NEED_ACTION', 'IN_PROGRESS', 'TODO']);
+    expect(sortTasks([done, need, waiting, todo, doing], { key: 'phase', dir: 'asc' }).map((t) => t.phase))
+      .toEqual(['TODO', 'WAITING', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE']);
+    expect(sortTasks([todo, doing, need, waiting, done], { key: 'phase', dir: 'desc' }).map((t) => t.phase))
+      .toEqual(['COMPLETE', 'NEED_ACTION', 'IN_PROGRESS', 'WAITING', 'TODO']);
   });
 
   it('session: running first, sessionless last regardless of direction', () => {

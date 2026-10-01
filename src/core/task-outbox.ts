@@ -108,6 +108,9 @@ const UPDATE_WHITELIST: (keyof Task)[] = [
   // them in `touched` — a legacy full snapshot never carries them (the replica
   // row lacks them unless the phone set them), so old senders can't clobber.
   'focus_tier', 'pin_order', 'depends_on',
+  // WAITING's optional end (0.5.2): the primary's export sets it; a replica row
+  // without it keeps whatever it had, and the raw path drops it on leaving WAITING.
+  'wait_until',
 ];
 
 /**
@@ -459,10 +462,12 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
   // replica's own human-source gate already vetted it (an agent's attempt is
   // skipped there, so its snapshot still carries the terminal phase). Route it
   // through updateTask's human path; the raw path below would block it as if
-  // it were a sync echo.
-  const { phaseFromStatus, TERMINAL_PHASES } = await import('./phase.js');
+  // it were a sync echo. The same for a phone taking a task out of WAITING (the
+  // held-phase guard blocks that on the raw path too).
+  const { phaseFromStatus, TERMINAL_PHASES, HELD_PHASES } = await import('./phase.js');
   const phasePatch = (patch.phase ?? (patch.status ? phaseFromStatus(patch.status) : undefined));
-  if (touched && phasePatch && !TERMINAL_PHASES.has(phasePatch) && TERMINAL_PHASES.has(existing.phase)) {
+  const guarded = TERMINAL_PHASES.has(existing.phase) || HELD_PHASES.has(existing.phase);
+  if (touched && phasePatch && !TERMINAL_PHASES.has(phasePatch) && phasePatch !== existing.phase && guarded) {
     await tm.updateTask(existing.id, { phase: phasePatch }, { source: 'api', asyncPush: true });
     delete patch.phase;
     delete patch.status;
@@ -707,13 +712,14 @@ export async function importProjectionOnCloud(): Promise<number> {
   // PRIMARY's authoritative state — a human reopened the task on the Mac — so
   // route just the phase through the human-source path. Everything else in
   // the patch already landed above.
-  // COMPLETE is the only terminal phase (mirrors TERMINAL_PHASES in phase.ts),
-  // so it is the only phase whose guard the raw path can silently drop.
+  // COMPLETE is the only terminal phase and WAITING the only held one (mirrors
+  // TERMINAL_PHASES / HELD_PHASES in phase.ts): the raw path drops a move out of
+  // either, so both ride the human-source path here.
   for (const { id, patch } of toUpdate) {
     const phase = patch.phase as Task['phase'] | undefined;
     if (!phase || phase === 'COMPLETE') continue;
     const row = local.get(id);
-    if (!row || row.phase !== 'COMPLETE') continue;
+    if (!row || (row.phase !== 'COMPLETE' && row.phase !== 'WAITING') || row.phase === phase) continue;
     await tm.updateTask(id, { phase }, { source: 'api' }).catch((err) => {
       log.task.warn('task-outbox: projection reopen failed', { id, err: String(err) });
     });

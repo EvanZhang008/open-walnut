@@ -64,11 +64,12 @@ describe('completion semantics', () => {
     expect(mapped.slice().sort()).toEqual([...PHASE_ORDER].sort());
   });
 
-  // (WAIT removed 2026-08-18 — five buckets became four; WAIT's in_progress
-  // membership is gone with it.)
-  it('maps all four phases to exactly one completion bucket', () => {
+  // (WAIT removed 2026-08-18; WAITING added 2026-09-30 as a todo bucket: a parked
+  // task is not started as far as "what is open" is concerned.)
+  it('maps all five phases to exactly one completion bucket', () => {
     const expected: Record<TaskPhase, TaskCompletion> = {
       TODO: 'todo',
+      WAITING: 'todo',
       IN_PROGRESS: 'in_progress',
       NEED_ACTION: 'in_progress',
       COMPLETE: 'complete',
@@ -81,6 +82,7 @@ describe('completion semantics', () => {
     }
     // The agent-stopped-but-still-open phase stays in in_progress, so a handed-back
     // task can't vanish from the in_progress bucket.
+    expect(COMPLETION_TO_PHASES.todo).toEqual(['TODO', 'WAITING']);
     expect(COMPLETION_TO_PHASES.in_progress).toEqual(['IN_PROGRESS', 'NEED_ACTION']);
     expect(COMPLETION_TO_PHASES.complete).toEqual(['COMPLETE']);
   });

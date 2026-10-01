@@ -112,7 +112,7 @@ export function describeRoutineTiming(
 /**
  * Why a trigger is not polling, for the task card and the Routines card:
  * "Paused 2h ago" / "Paused" (switched off before the time was kept) /
- * "Stopped after 5 failed checks" / "Wait ended 1h ago". Null while it polls.
+ * "Stopped after 5 failed checks". Null while it polls.
  */
 export function describeTriggerOff(
   routine: { enabled?: boolean; state?: RoutineState },
@@ -121,7 +121,6 @@ export function describeTriggerOff(
   const run = triggerRunState(routine);
   if (run === 'armed') return null;
   if (run === 'stopped') return `Stopped after ${TRIGGER_STOP_AFTER_ERRORS} failed checks`;
-  if (run === 'wait-ended') return `Wait ended ${describeAgo(routine.state!.waitEndedAtMs!, nowMs)}`;
   const at = routine.state?.pausedAtMs;
   return typeof at === 'number' ? `Paused ${describeAgo(at, nowMs)}` : 'Paused';
 }

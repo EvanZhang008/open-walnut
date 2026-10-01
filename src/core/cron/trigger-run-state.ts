@@ -8,8 +8,6 @@
  *                switched off before that field existed
  *   stopped    : switched off by the server after its check failed
  *                TRIGGER_STOP_AFTER_ERRORS times in a row (never stamped paused)
- *   wait-ended : switched off by the snooze wait it ended (state.waitEndedAtMs);
- *                task_wait with the same routine_id re-arms it
  */
 
 /**
@@ -18,16 +16,15 @@
  */
 export const TRIGGER_STOP_AFTER_ERRORS = 5;
 
-export type TriggerRunState = 'armed' | 'paused' | 'stopped' | 'wait-ended';
+export type TriggerRunState = 'armed' | 'paused' | 'stopped';
 
 export interface TriggerRunStateInput {
   enabled?: boolean;
-  state?: { pausedAtMs?: number; waitEndedAtMs?: number; consecutiveErrors?: number };
+  state?: { pausedAtMs?: number; consecutiveErrors?: number };
 }
 
 export function triggerRunState(job: TriggerRunStateInput): TriggerRunState {
   if (job.enabled) return 'armed';
   if (typeof job.state?.pausedAtMs === 'number') return 'paused';
-  if (typeof job.state?.waitEndedAtMs === 'number') return 'wait-ended';
   return (job.state?.consecutiveErrors ?? 0) >= TRIGGER_STOP_AFTER_ERRORS ? 'stopped' : 'paused';
 }

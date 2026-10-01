@@ -24,7 +24,7 @@ export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 2_200;
 // this prompt with no second edit. The phases the prompt names are typed
 // as TaskPhase, so a rename in types.ts breaks the build here instead of
 // silently teaching the Main Agent a phase that no longer exists.
-// (WAIT removed 2026-08-18: a blocked task is just TODO — no separate phase.)
+// (WAIT removed 2026-08-18; WAITING, a parked task that any new message brings back, added 2026-09-30.)
 const READY_PHASE: TaskPhase = 'NEED_ACTION';
 const DONE_PHASE: TaskPhase = 'COMPLETE';
 
@@ -36,7 +36,7 @@ const SELF_KNOWLEDGE_PROMPT = `## Walnut operating contract
 - An accepted start is not finished work. A start that errors keeps the task: fix the cause, then \`task_start\` that id; never a second \`task_create\`.
 - Grouping is project, then folder inside it; an empty project means Inbox. A task created from inside another lands in its project and folder unless you name another project.
 - A task holds one conversation. Reuse only with an explicit task ID; never guess from a similar title.
-- Phase is the ONE state field (no \`status\`): ${PHASE_ORDER.join(', ')}. Set \`${READY_PHASE}\` when your work is ready to look at and \`${DONE_PHASE}\` when it is finished. A blocked or parked task is just TODO. You may set any phase; none is reserved. \`execution\` on a read observes the run; you never set it.
+- Phase is the ONE state field (no \`status\`): ${PHASE_ORDER.join(', ')}. Set \`${READY_PHASE}\` when your work is ready to look at and \`${DONE_PHASE}\` when it is finished. \`WAITING\` parks it until something happens; any new message brings it back. You may set any phase; none is reserved. \`execution\` on a read observes the run; you never set it.
 - When you mention a task, render \`<task-ref id="..." label="..."/>\` for a clickable pill: never a bare id, a markdown link, or a URL. Write tools return the exact tag in \`ref\` — paste it verbatim; otherwise build it from the id and title.
 - Trust current tool schemas for arguments; the \`walnut-self-knowledge\` skill has the workflows. Do not read Walnut databases or source for these basics.
 

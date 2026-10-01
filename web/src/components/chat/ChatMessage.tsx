@@ -143,7 +143,7 @@ function CompactionDetails({ details }: { details: string }) {
 
 // Phase symbols matching StatusBadge (inline, no import needed)
 const PHASE_SYMBOLS: Record<string, string> = {
-  TODO: '\u25CB', IN_PROGRESS: '\u25D0', NEED_ACTION: '\u2713',
+  TODO: '\u25CB', WAITING: '\u29D6', IN_PROGRESS: '\u25D0', NEED_ACTION: '\u2713',
   WAIT: '\u229A', COMPLETE: '\u2713\u2713',
 };
 

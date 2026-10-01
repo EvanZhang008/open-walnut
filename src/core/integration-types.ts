@@ -573,6 +573,11 @@ export interface PluginManifest {
   settingsIn?: PluginSettingsHome;
   /** Per-task fields this plugin exposes to the console (see TaskFieldSpec). */
   taskFields?: TaskFieldSpec[];
+  /** Phases added after the plugin API's first release that this plugin understands
+   *  (today: `WAITING`). A sync plugin that does not list one receives tasks in that
+   *  phase folded onto the legacy bucket (WAITING reads as TODO), so a plugin compiled
+   *  against the older closed set keeps working (see plugins/legacy-phase-sync.ts). */
+  phases?: string[];
   /** How the Settings store describes a plugin that ships in the bundled `plugin-store/`
    *  folder: what installing it adds, and where to read about it. Descriptive only;
    *  junk values are dropped (src/core/plugins/bundled-store.ts parseManifestCatalog). */

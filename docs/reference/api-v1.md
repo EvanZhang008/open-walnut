@@ -114,8 +114,6 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | PUT | `/api/v1/tasks/:id/description` | Set the description |
 | PUT | `/api/v1/tasks/:id/summary` | Set the summary |
 | PUT | `/api/v1/tasks/:id/depends-on` | Replace dependencies |
-| POST | `/api/v1/tasks/:id/wait` | Park a task on a trigger until it fires (`:id` may be `this`; 501 on REPLICA) |
-| DELETE | `/api/v1/tasks/:id/wait` | Stop waiting and delete the trigger behind the wait |
 | PATCH | `/api/v1/tasks/reorder` | Reorder tasks within one project group |
 | POST | `/api/v1/tasks/batch/phase` | Set the phase of many tasks (partial success) |
 | POST | `/api/v1/tasks/batch/delete` | Delete many tasks (partial success) |
@@ -661,8 +659,13 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 - `GET /api/v1/tasks?status=todo|in_progress|done` →
   `{ "tasks": [ProjectedTask], "syncedAt": "<ISO>" }`
 - `ProjectedTask`: `{ id, title, status, phase, priority, project,
-  due_date?, start_date?, created_at, updated_at, completed_at?,
+  due_date?, start_date?, wait_until?, created_at, updated_at, completed_at?,
   pinned?, unread?, tags?, summary? }` — `summary` is truncated to ~500 chars.
+  `phase` is one of `TODO`, `WAITING`, `IN_PROGRESS`, `NEED_ACTION`, `COMPLETE`.
+  `WAITING` was added in 0.5.2 (a task parked until something happens; its
+  `status` is `todo`); a client built before it should treat an unknown phase as
+  `TODO`. `wait_until` (ISO datetime) is present only on a `WAITING` task that
+  has a time at which the server wakes it by itself.
   `category` was removed in projection v2 (2026-08); `project` is the single
   grouping layer (`""` = Inbox). `starred?` was removed in 2026-08 when the
   starred system was retired (pin + focus tier is the working set); it is an
@@ -791,6 +794,16 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   - Additive fields (Wave 1, 2026-08): `start_date` (ISO date/datetime or `""`
     to clear — same gate as `due_date`) and `tags` (array of strings — a FULL
     replace of the task's tags; `[]` clears them).
+  - Waiting (additive, 2026-09): `phase: "WAITING"` parks the task until
+    something happens; it stays in its board tier. A message into its session
+    (a trigger fire, a human, a peer) moves it to `IN_PROGRESS`, and that turn
+    ends as `NEED_ACTION` as usual; a session turn that merely ends, a session
+    error and a sync pull do not move it (a sync pull may only complete it).
+    `wait_until` (ISO datetime, or `""` / `null` to clear) rides with
+    `phase: "WAITING"` or onto a task already waiting (`400` otherwise): at that
+    time the server wakes the task's session with a note, or hands the task back
+    as `NEED_ACTION` + `unread` when it has no session. Any move out of
+    `WAITING` clears `wait_until`.
   - Calendar window (additive, 2026-08): `end_date` joins `start_date` as the
     end of the task's working block, so a client can move or resize a task on a
     calendar with one PATCH. Both accept an ISO-8601 value, and `""` **or**
@@ -872,45 +885,6 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   `{ "content" }` → `200 { "task" }` — replaces that field.
 - `PUT /api/v1/tasks/:id/depends-on` body `{ "depends_on": [ids] }` →
   `200 { "task" }`; a cycle → `409 conflict` + `task_id`/`dep_id`.
-- `POST /api/v1/tasks/:id/wait` (additive, 2026-09) body
-  `{ "condition", "routine_id", "ttl"? }` → `200 { "task" }`. `condition` is one line
-  in the user's words (whitespace folded, at most 300 chars); `routine_id` must
-  be a trigger (a routine with a `check`) whose session executor targets THIS
-  task, which is what `POST /api/v1/routines/trigger` with `session: "this"`
-  makes. `:id` may be `this`: the task of the calling session
-  (`x-walnut-caller-sid`). The task stays `TODO` (a `NEED_ACTION` task moves to
-  `TODO`, `unread` clears) and gains `waiting: { condition, routine_id, since, until }`.
-  While it waits, a finished turn lands on `TODO` instead of `NEED_ACTION`. The
-  wait ends (`waiting.woke_at` + `woke_reason`) when the trigger fires
-  (`fired`: the fire's turn then hands the task back as usual), the session
-  blocks on a human decision (`needs-human`), the status is set to `NEED_ACTION` or `COMPLETE`
-  (`status-changed`; `IN_PROGRESS` keeps it, since a session turn on a waiting
-  task is in progress too), or the trigger is auto-disabled after 5 failing
-  checks (`check-failed`: `NEED_ACTION` + a notification), or its backstop
-  passes (`timed-out`: `NEED_ACTION` + a notification). The backstop is
-  `waiting.until`, set from an optional `ttl` ("90m" / "12h" / "3d" or ms, 1
-  minute to 30 days, else `400`); none given, a re-arm keeps a backstop still
-  ahead and a new wait gets 7 days. The server keeps that clock, not the
-  trigger's host, so it holds when the host is gone. A human or peer
-  message does NOT end it (2026-09-29; `message` is only found on older
-  records): the turn it starts ends on `TODO` like any other. Calling it again with
-  the same `routine_id` re-arms an ended wait; a different id replaces the old
-  trigger. `POST /api/v1/routines/trigger` with `wait_until` (the condition)
-  does both in one call: the trigger is created disabled, the task is parked on
-  it, then it is turned on, so no check can fire before the wait exists; the
-  `201` adds `task`. `wait_ttl` there is the same backstop (`400` without
-  `wait_until`). A blank `wait_until` is `400` before anything is created,
-  and a wait that cannot be set deletes the new trigger and answers its error. When the trigger already fired in the hour before a FIRST wait on it
-  (a new trigger's first check runs seconds after it is created), nothing is
-  parked: the response's `waiting` is already over (`woke_reason: "fired"`,
-  `woke_at` earlier than `since`). Errors: `400` (no condition / no routine id / not a trigger / the
-  trigger targets another task / `this` without a caller), `404` (task or
-  trigger), `409` (task is complete), `503 unavailable` (the trigger could not
-  be turned back on; retry), `501 not_supported_cloud` on REPLICA.
-- `DELETE /api/v1/tasks/:id/wait` (additive, 2026-09) → `200 { "task" }`:
-  removes `waiting` and deletes its trigger; the phase is untouched. A task that
-  is not waiting answers `200` unchanged. Deleting the trigger elsewhere, or
-  completing / deleting the task, also removes the wait.
 - `PATCH /api/v1/tasks/reorder` body `{ "project", "taskIds" }` →
   `200 { "ok": true }` — permutes the given tasks within ONE project group
   (`project: ""` = Inbox; it's a type check, not a truthiness check).
@@ -2350,7 +2324,7 @@ Per-family matrix:
 | Mutation family | Replica behavior | Mac offline | Convergence |
 |---|---|---|---|
 | Task create (`POST /tasks`) | Class A: 201 with the created row from the local store | accepted; op queued | insert-by-same-id on the primary; project registry row auto-minted; primary recomputes `source` |
-| Task PATCH (title/description/status/phase/priority/due_date/start_date/end_date/project/tags/unread) | Class A: 200 with the updated row | accepted; op queued | LWW + `touched` scoping; project move mints the registry row; status→phase derivation runs on the primary too. Both calendar dates are in the op update whitelist, and a `touched` date absent from the snapshot is the explicit clear, so a phone-side reschedule or "off the calendar" reaches the primary intact |
+| Task PATCH (title/description/status/phase/wait_until/priority/due_date/start_date/end_date/project/tags/unread) | Class A: 200 with the updated row | accepted; op queued | LWW + `touched` scoping; project move mints the registry row; status→phase derivation runs on the primary too. Both calendar dates are in the op update whitelist, and a `touched` date absent from the snapshot is the explicit clear, so a phone-side reschedule or "off the calendar" reaches the primary intact |
 | Quick-parse (`POST /tasks/quick-parse`) | stateless LLM call on the replica's own credentials | works (no primary involved) | n/a |
 | Task delete (single + batch) | Class A: 204 / per-task result | accepted; op queued | tombstone prevents projection resurrection; delete blocked by a live session is consumed (row comes back via projection) |
 | Batch phase (`POST /tasks/batch/phase`) | Class A: 200 partial-success shape | accepted; one op per changed task | same as PATCH; COMPLETE additionally clears the pin fields |

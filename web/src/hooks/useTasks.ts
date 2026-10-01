@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
-import { READ_MARKER_KEYS, isTaskWaiting } from '@open-walnut/core';
+import { READ_MARKER_KEYS } from '@open-walnut/core';
 import type { Task } from '@open-walnut/core';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
@@ -115,10 +115,10 @@ function applyToggleComplete(tasks: Task[], id: string): Task[] {
   });
 }
 
-/** Map phases to their corresponding task status. */
+/** Map phases to their corresponding task status (WAITING is a To Do bucket, as on the server). */
 function phaseToStatus(phase: string): 'done' | 'todo' | 'in_progress' {
   if (phase === 'COMPLETE') return 'done';
-  if (phase === 'TODO') return 'todo';
+  if (phase === 'TODO' || phase === 'WAITING') return 'todo';
   return 'in_progress';
 }
 
@@ -136,13 +136,12 @@ function applyPhaseChangeMany(tasks: Task[], ids: Set<string>, phase: string): T
   return tasks.map((t): Task => {
     if (!ids.has(t.id)) return t;
     const base = completing ? clearSessionSlots(t) : t;
-    // Mirrors the server (applyPhase): Need Action or Complete ends a wait. The
-    // write's own task:updated echo is swallowed by the phase echo guard, so
-    // without this the row kept saying "Waiting until" after the change.
-    const waiting = t.waiting && isTaskWaiting(t) && (phase === 'NEED_ACTION' || phase === 'COMPLETE') && phase !== t.phase
-      ? { waiting: { ...t.waiting, woke_at: now, woke_reason: 'status-changed' as const } }
-      : {};
-    return { ...base, ...waiting, phase: phase as Task['phase'], status, completed_at: completing ? now : undefined, updated_at: now };
+    // Mirrors the server (applyPhase): wait_until belongs to WAITING alone, so any
+    // move out of it drops the clock. The write's own task:updated echo is
+    // swallowed by the phase echo guard, so without this the row kept saying
+    // "until Fri 9:00" after the change.
+    const clock = phase === 'WAITING' ? {} : { wait_until: undefined };
+    return { ...base, ...clock, phase: phase as Task['phase'], status, completed_at: completing ? now : undefined, updated_at: now };
   });
 }
 
@@ -150,6 +149,7 @@ function applyPhaseChangeMany(tasks: Task[], ids: Set<string>, phase: string): T
 const OPTIMISTIC_FIELDS = new Set([
   'title', 'status', 'phase', 'priority', 'project',
   'due_date', 'start_date', 'end_date', 'unread', 'parent_task_id',
+  'wait_until',
 ]);
 
 /** Tag INSTRUCTION fields: they carry no value to spread, so the resulting
@@ -258,6 +258,10 @@ function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unk
     if (t.id !== id) return t;
     const tagPatch = hasTagInstruction ? applyTagInstructions(t, updates as TagInstructions) : undefined;
     const next = { ...t, ...filtered, ...tagPatch };
+    // Mirrors task-manager: '' clears wait_until, and only a WAITING task keeps one.
+    if ('wait_until' in filtered || 'phase' in filtered) {
+      next.wait_until = next.phase === 'WAITING' && next.wait_until ? next.wait_until : undefined;
+    }
     return onlyReadMarker ? next : { ...next, updated_at: now };
   });
 }

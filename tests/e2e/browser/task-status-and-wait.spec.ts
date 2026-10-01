@@ -1,24 +1,27 @@
 /**
- * Task status you can see and change, and snoozing until something happens
- * (user asks 2026-09-28, second round: "status is status", Status collapsed by
- * default, and Snooze until holds both kinds of snooze):
+ * Task status you can see and change, Waiting as one of them, and "Snooze until
+ * something happens" (user asks 2026-09-28 to 2026-09-30):
  *
  *  1. The task menu has ONE collapsed Status row ("Status: To Do"); a click opens
- *     all four statuses, the lit one is the current status, a click sets another.
+ *     the five statuses, the lit one is the current status, a click sets another.
  *     The Start row reads "Start / Snooze until".
- *  2. The detail pane's status badge is a button that opens the same four.
- *  3. Start / Snooze until holds the times AND "Something happens…". A snoozed
- *     task stays a plain To Do in the list; the collapsed row says what it waits
- *     for, and the open row (and the detail pane) has Unsnooze. Need Action ends it.
- *     The row carries a SNOOZED pill (the TRIGGER pill's shape, amber) that opens
- *     what it waits for, Unsnooze and the trigger behind it (user ask 2026-09-29).
- *  5. A message does not end the snooze: the session panel says it still holds,
- *     above the composer, with Unsnooze; the turn the message starts ends quietly.
- *  4. "Something happens…" never asks the human to fill a form: it starts a
+ *  2. The detail pane's status badge is a button that opens the same five.
+ *  3. Waiting IS a status (2026-09-30). Picking it keeps the menu open and shows an
+ *     optional "Until" row (the date picker the date rows use); the collapsed row
+ *     says "Status: Waiting · until <time>", the task row swaps its circle for an
+ *     hourglass and carries an "until" chip, the detail pane says "Waiting until",
+ *     and the session's composer has one line about it. A Waiting task stays in
+ *     its board tier (Focus stays Focus). A message into the session moves it to
+ *     In Progress, and the turn ends as Need Action like any other. Picking a
+ *     status by hand ends it and drops the time.
+ *  4. The TRIGGER pill is a plain trigger pill again (no SNOOZED mode); the
+ *     board's `wait` tier reads "Parked".
+ *  5. "Something happens…" never asks the human to fill a form: it starts a
  *     message to the task's AI that names the skill (/walnut-trigger), and the AI
- *     writes the trigger. With a session it leads that session's composer (menu
- *     row and the composer's "+" menu, both idempotent); without one it opens a
- *     draft bound to the task, seeded the same way.
+ *     writes the trigger and sets the task to Waiting. With a session it leads
+ *     that session's composer (menu row and the composer's "+" menu, both
+ *     idempotent); without one it opens a draft bound to the task, seeded the
+ *     same way.
  */
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -29,7 +32,7 @@ import { DRAFT_PANEL } from './draft-helpers'
 import { composerTextarea, openPanels, openPlusMenu } from './engine-settings-popover-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
-const SHOTS = '/tmp/snooze-trigger/shots'
+const SHOTS = '/tmp/waiting-status/shots'
 const PREFIX = '/walnut-trigger Snooze this task until: '
 
 test.setTimeout(150_000)
@@ -138,11 +141,13 @@ test('the task menu shows and sets the status; Start reads "Start / Snooze until
   await expect(menu.getByTestId('task-status-row').getByRole('radio')).toHaveCount(0)
   await expect(toggleOf(menu, 'task-snooze-row')).toHaveText(/^Start \/ Snooze until$/)
   await expect(menu.getByTestId('task-wait-until')).toHaveCount(0)
-  await expect(menu.getByTestId('task-waiting-line')).toHaveCount(0)
+  await expect(menu.getByTestId('task-status-until')).toHaveCount(0)
   await shot(menu, 'menu-collapsed', browserName)
 
   let row = await statusRow(menu)
-  await expect(row.getByRole('radio')).toHaveText(['To Do', 'In Progress', 'Need Action', 'Complete'])
+  await expect(row.getByRole('radio')).toHaveText(['To Do', 'Waiting', 'In Progress', 'Need Action', 'Complete'])
+  // The until row belongs to Waiting alone.
+  await expect(row.getByTestId('task-status-until')).toHaveCount(0)
   await expect(statusPill(row, 'To Do')).toHaveAttribute('aria-checked', 'true')
   await expect(statusPill(row, 'Need Action')).toHaveAttribute('aria-checked', 'false')
   await expectInViewport(page, menu)
@@ -194,7 +199,7 @@ test('the detail pane badge shows the status and changes it', async ({ page, bro
   const menu = page.locator('.task-status-menu')
   await expect(menu).toBeVisible()
   await expect(badge).toHaveAttribute('aria-expanded', 'true')
-  await expect(menu.getByRole('radio')).toHaveCount(4)
+  await expect(menu.getByRole('radio')).toHaveCount(5)
   await expectInViewport(page, menu)
   await shot(detail.locator('.todo-detail-meta'), 'detail-badge', browserName)
   await shot(page, 'detail-badge-menu', browserName)
@@ -219,131 +224,127 @@ test('the detail pane badge shows the status and changes it', async ({ page, bro
   expect((await taskOf(task.id)).phase).toBe('IN_PROGRESS')
 })
 
-test('a snoozed task stays in the list, says what it waits for, and Unsnooze ends it', async ({ page, browserName }) => {
+test('Waiting from the menu: the until row, the collapsed row, the task row and the detail pane all say it', async ({ page, browserName }) => {
   const task = await createTask('Waiting on review')
-  const trigger = await api('POST', '/api/v1/routines/trigger', {
-    run: 'bash ~/.open-walnut/triggers/cr/check.sh', every: '5m', session: task.id,
-    prompt: 'Tell the user what the review said.',
-    description: 'Checks CR 1234 every 5 minutes; fires once when it is approved.',
-  })
-  litterRoutines.push(trigger.job.id)
-  await api('POST', `/api/v1/tasks/${task.id}/wait`, { condition: 'CR 1234 is approved', routine_id: trigger.job.id })
-
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-  // Still a To Do in the list, with no red dot.
-  const menu = await openRowKebab(page, task)
-  // Collapsed, the row already says what the task waits for; the status is To Do.
-  await expect(toggleOf(menu, 'task-snooze-row')).toHaveText(/^Start \/ Snooze until: CR 1234 is approved/)
-  await expect(toggleOf(menu, 'task-status-row')).toHaveText(/^Status: To Do/)
-  await expect(menu.getByTestId('task-waiting-line')).toHaveCount(0)
-  await snoozeRow(menu)
-  const line = menu.getByTestId('task-waiting-line')
-  await expect(line).toContainText('Snoozed until: CR 1234 is approved')
-  await expect(line.getByRole('button', { name: 'Unsnooze' })).toBeVisible()
-  await expect(menu.getByTestId('task-wait-until')).toHaveCount(0)
-  await expectInViewport(page, menu)
-  await shot(menu, 'menu-waiting', browserName)
-  await page.keyboard.press('Escape')
-  await page.mouse.click(5, 5)
-  const rowEl = page.locator(`.todo-panel-item[data-task-id="${task.id}"]`)
-  await expect(rowEl).toBeVisible()
-  await expect(rowEl.locator('.task-unread-dot')).toHaveCount(0)
-
-  // The row says it is snoozed the way a time-snoozed one shows its date: one
-  // SNOOZED pill (not SNOOZED and TRIGGER for the same trigger).
-  const pill = rowEl.getByTestId('task-trigger-pill')
-  await expect(pill).toHaveCount(1)
-  await expect(pill).toHaveText('SNOOZED')
-  await expect(pill).toHaveAttribute('data-snoozed', 'true')
-  await expect(pill).toHaveAttribute('title', /^Snoozed until: CR 1234 is approved/)
-  await shot(rowEl, 'row-snoozed-pill', browserName)
-  await pill.click()
-  const flyout = page.getByTestId('trigger-jobs-flyout')
-  await expect(flyout).toBeVisible()
-  await expect(flyout.getByTestId('trigger-jobs-snooze')).toContainText('Snoozed until: CR 1234 is approved')
-  await expect(flyout.getByTestId('trigger-jobs-snooze').getByRole('button', { name: 'Unsnooze' })).toBeVisible()
-  // The trigger behind it, with its own description, under the snooze.
-  await expect(flyout).toContainText('Checks CR 1234 every 5 minutes')
-  await expectInViewport(page, flyout)
-  await shot(flyout, 'row-snoozed-flyout', browserName)
-  await page.keyboard.press('Escape')
-  await expect(flyout).toHaveCount(0)
-
-  const detail = await openDetail(page, task)
-  const detailLine = detail.getByTestId('task-waiting-line')
-  await expect(detailLine).toContainText('Snoozed until: CR 1234 is approved')
-  // The backstop (a week, none given): if the trigger never fires, the task comes back then.
-  await expect(detailLine).toContainText('· back by ')
-  await shot(detail.locator('.todo-detail-meta'), 'detail-waiting', browserName)
-
-  await detailLine.getByRole('button', { name: 'Unsnooze' }).click()
-  await expect(detail.getByTestId('task-waiting-line')).toHaveCount(0, { timeout: 10_000 })
-  const after = await taskOf(task.id)
-  expect(after.waiting).toBeUndefined()
-  expect(after.phase).toBe('TODO')
-  const routine = await fetch(`${API}/api/routines/${trigger.job.id}`)
-  expect(routine.status).toBe(404)
-})
-
-test('a long condition truncates in the menu instead of widening it', async ({ page, browserName }) => {
-  const task = await createTask('Long wait')
-  const trigger = await api('POST', '/api/v1/routines/trigger', {
-    run: 'bash ~/.open-walnut/triggers/long/check.sh', every: '5m', session: task.id,
-    prompt: 'Tell the user QA signed off.',
-    description: 'Checks for the QA sign-off file every 5 minutes; fires once when it appears.',
-  })
-  litterRoutines.push(trigger.job.id)
-  const condition = 'QA signs off on release 1.2, which is when the file /tmp/qa/release-1.2/signed-off exists on the build host'
-  await api('POST', `/api/v1/tasks/${task.id}/wait`, { condition, routine_id: trigger.job.id })
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-
-  // The same menu with nothing to say is the width to keep, closed and open (an
-  // open date row has its own width: WebKit's date field is wider than Chromium's).
-  const plain = await createTask('Long wait baseline')
-  let menu = await openRowKebab(page, plain)
-  const baseWidth = (await menu.boundingBox())!.width
-  await snoozeRow(menu)
-  await expect(menu.getByTestId('task-wait-until')).toBeVisible()
-  const baseOpenWidth = (await menu.boundingBox())!.width
-  await page.keyboard.press('Escape')
-  await page.mouse.click(5, 5)
-
-  menu = await openRowKebab(page, task)
-  const toggle = menu.getByTestId('task-snooze-row').locator('.task-kebab-date-toggle')
-  await expect(toggle).toHaveAttribute('title', `Start / Snooze until: ${condition}`)
-  expect((await menu.boundingBox())!.width).toBeLessThanOrEqual(baseWidth + 1)
-  await snoozeRow(menu)
-  await expect(menu.getByTestId('task-waiting-line')).toContainText('Snoozed until:')
-  expect((await menu.boundingBox())!.width).toBeLessThanOrEqual(baseOpenWidth + 1)
-  await expectInViewport(page, menu)
-  await shot(menu, 'menu-long-condition', browserName)
-})
-
-test('setting Need Action ends the wait, and the menu says so at once', async ({ page }) => {
-  const task = await createTask('Waiting then started')
-  const trigger = await api('POST', '/api/v1/routines/trigger', {
-    run: 'bash ~/.open-walnut/triggers/deploy/check.sh', every: '5m', session: task.id,
-    prompt: 'Tell the user the deploy finished.',
-    description: 'Checks the deploy every 5 minutes; fires once when it finishes.',
-  })
-  litterRoutines.push(trigger.job.id)
-  await api('POST', `/api/v1/tasks/${task.id}/wait`, { condition: 'the deploy finishes', routine_id: trigger.job.id })
+  // Pinned to Focus: a Waiting task stays where it is.
+  await api('POST', `/api/focus/tasks/${task.id}`)
+  await api('PUT', `/api/focus/tasks/${task.id}/tier`, { tier: 'focus' })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
   let menu = await openRowKebab(page, task)
-  await snoozeRow(menu)
-  await expect(menu.getByTestId('task-waiting-line')).toBeVisible()
-  await statusPill(await statusRow(menu), 'Need Action').click()
-  await expect.poll(async () => (await taskOf(task.id)).waiting?.woke_reason, { timeout: 10_000 }).toBe('status-changed')
+  let row = await statusRow(menu)
+  await statusPill(row, 'Waiting').click()
+  // The menu stays open for the optional time; the status is already written.
+  await expect(menu).toBeVisible()
+  await expect(statusPill(row, 'Waiting')).toHaveAttribute('aria-checked', 'true', { timeout: 10_000 })
+  await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('WAITING')
+  const until = row.getByTestId('task-status-until')
+  await expect(until).toBeVisible()
+  await expect(until.getByTestId('task-status-until-toggle')).toHaveText(/Until \(optional\)/)
+  await expect(until.getByTestId('task-status-until-clear')).toHaveCount(0)
+  await expectInViewport(page, menu)
+  await shot(menu, 'menu-waiting-open', browserName)
+
+  // Pick a time: 2 hours from now, through the same picker the date rows use.
+  await until.getByTestId('task-status-until-toggle').click()
+  await expect(until.locator('.dp-content')).toBeVisible()
+  await expectInViewport(page, menu)
+  await shot(menu, 'menu-waiting-picker', browserName)
+  await until.locator('.dp-pill', { hasText: /^2h$/ }).click()
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await expect.poll(async () => (await taskOf(task.id)).wait_until, { timeout: 10_000 }).toBeTruthy()
+  const waiting = await taskOf(task.id)
+  expect(waiting.phase).toBe('WAITING')
+  expect(waiting.unread).toBeFalsy()
+  const hoursAhead = (Date.parse(waiting.wait_until) - Date.now()) / 3_600_000
+  expect(hoursAhead).toBeGreaterThan(1.9)
+  expect(hoursAhead).toBeLessThan(2.1)
+  // Still pinned to Focus: the status did not move it.
+  expect(waiting.pinned).toBe(true)
+  expect(waiting.focus_tier).toBe('focus')
+
+  // The row: an hourglass instead of the circle, no red dot, an until chip.
+  const rowEl = page.locator(`.todo-panel-item[data-task-id="${task.id}"]`)
+  await expect(rowEl).toBeVisible()
+  await expect(rowEl.locator('.task-unread-dot')).toHaveCount(0)
+  await expect(rowEl.getByTitle('Waiting: click to complete')).toBeVisible()
+  await expect(rowEl.getByTestId('task-row-wait-until')).toHaveText(/^until /)
+  await expect(rowEl.getByTestId('task-trigger-pill')).toHaveCount(0)
+  await shot(rowEl, 'row-waiting', browserName)
+
+  // Reopened: the collapsed row says the status and the time; the until row shows it with Clear.
   menu = await openRowKebab(page, task)
-  await expect(toggleOf(menu, 'task-snooze-row')).toHaveText(/^Start \/ Snooze until$/)
-  await snoozeRow(menu)
-  await expect(menu.getByTestId('task-waiting-line')).toHaveCount(0)
-  await expect(menu.getByTestId('task-wait-until')).toBeVisible()
-  await expect.poll(async () => (await api('GET', `/api/routines/${trigger.job.id}`)).job.enabled, { timeout: 10_000 }).toBe(false)
+  await expect(toggleOf(menu, 'task-status-row')).toHaveText(/^Status: Waiting · until /)
+  row = await statusRow(menu)
+  await expect(row.getByTestId('task-status-until-toggle')).toHaveText(/^Until: /)
+  await shot(menu, 'menu-waiting-until', browserName)
+  await row.getByTestId('task-status-until-clear').click()
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await expect.poll(async () => (await taskOf(task.id)).wait_until, { timeout: 10_000 }).toBeUndefined()
+  expect((await taskOf(task.id)).phase).toBe('WAITING')
+  await expect(rowEl.getByTestId('task-row-wait-until')).toHaveCount(0)
+
+  // The detail pane: the badge reads Waiting; with a time it says so in the meta line.
+  await api('PATCH', `/api/tasks/${task.id}`, { wait_until: new Date(Date.now() + 3 * 3_600_000).toISOString() })
+  const detail = await openDetail(page, task)
+  await expect(detail.getByTestId('task-status-badge')).toHaveText(/Waiting/)
+  await expect(detail.getByTestId('task-detail-wait-until')).toContainText('Waiting until', { timeout: 10_000 })
+  await shot(detail.locator('.todo-detail-meta'), 'detail-waiting', browserName)
+
+  // Picking another status by hand ends the wait and drops the time.
+  await detail.getByTestId('task-status-badge').click()
+  await statusPill(page.locator('.task-status-menu'), 'To Do').click()
+  await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('TODO')
+  expect((await taskOf(task.id)).wait_until).toBeUndefined()
+  await expect(detail.getByTestId('task-detail-wait-until')).toHaveCount(0)
+})
+
+test('the Phase filter can show only Waiting tasks; a Waiting task keeps a plain TRIGGER pill', async ({ page, browserName }) => {
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const waiting = await createTask(`Waitfilter ${stamp} hit`)
+  const plain = await createTask(`Waitfilter ${stamp} miss`)
+  await api('PATCH', `/api/tasks/${waiting.id}`, { phase: 'WAITING' })
+  const trigger = await api('POST', '/api/v1/routines/trigger', {
+    run: 'bash ~/.open-walnut/triggers/cr/check.sh', every: '5m', session: waiting.id,
+    prompt: 'Tell the user what the review said.',
+    description: 'Checks CR 1234 every 5 minutes; fires once when it is approved.',
+  })
+  litterRoutines.push(trigger.job.id)
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+
+  const rowEl = page.locator(`.todo-panel-item[data-task-id="${waiting.id}"]`)
+  const plainRow = page.locator(`.todo-panel-item[data-task-id="${plain.id}"]`)
+  await page.locator('.todo-search-input').fill(`Waitfilter ${stamp}`)
+  await expect(rowEl).toBeVisible({ timeout: 15_000 })
+  await expect(plainRow).toBeVisible()
+  const pill = rowEl.getByTestId('task-trigger-pill')
+  await expect(pill).toHaveText('TRIGGER')
+  await expect(pill).not.toHaveAttribute('data-snoozed', 'true')
+  await shot(rowEl, 'row-waiting-trigger', browserName)
+
+  // The Phase (exact) filter offers Waiting and, during a search, shows the parked
+  // task only. (The toolbar's legacy single-value Phase segment also lists it, but
+  // that segment folds into the plain list, not into search mode, for every phase.)
+  await page.getByRole('button', { name: 'View options' }).click()
+  await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
+  await expect(page.locator('.vd-panel .vd-seg-btn[data-phase-value="WAITING"]')).toHaveText('Waiting')
+  await page.locator('.vd-rail-btn[data-rail-section="q-phase"]').click()
+  const waitingChip = page.locator('.vd-panel .vd-cat[data-filter-value="WAITING"]')
+  await expect(waitingChip).toHaveText('Waiting')
+  await waitingChip.click()
+  await page.keyboard.press('Escape')
+  await expect(rowEl).toBeVisible({ timeout: 15_000 })
+  await expect(plainRow).toHaveCount(0)
+  await shot(page.locator('.todo-panel'), 'filter-waiting-only', browserName)
+  // Chip off: both again.
+  await page.getByRole('button', { name: 'View options' }).click()
+  await page.locator('.vd-rail-btn[data-rail-section="q-phase"]').click()
+  await page.locator('.vd-panel .vd-cat[data-filter-value="WAITING"]').click()
+  await page.keyboard.press('Escape')
+  await expect(rowEl).toBeVisible({ timeout: 15_000 })
+  await expect(plainRow).toBeVisible()
 })
 
 test('"Something happens…" on a task with no session opens a draft bound to it, seeded with the skill', async ({ page, browserName }) => {
@@ -409,50 +410,37 @@ test('"Snooze until something happens" leads the task session\'s composer, from 
   await box.fill('')
 })
 
-test('a message does not end the snooze: the session says it still holds, and Unsnooze there ends it', async ({ page, request, browserName }) => {
-  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'pw-snoozed-session-'))
+test('the composer of a Waiting task says so, and a message moves it to In Progress, then Need Action', async ({ page, request, browserName }) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'pw-waiting-session-'))
   const started = await request.post('/api/sessions/quick-start', { data: { cwd, message: '' } })
   expect(started.ok(), await started.text()).toBeTruthy()
   const { sessionId: sid, taskId } = await started.json() as { sessionId: string; taskId: string }
   litterTasks.push(taskId)
-  // One call: the trigger and the snooze (trigger_create with wait_until).
-  const armed = await api('POST', '/api/v1/routines/trigger', {
-    run: 'bash ~/.open-walnut/triggers/build/check.sh', every: '5m', session: taskId,
-    prompt: 'Tell the user the build result.',
-    description: 'Checks the build every 5 minutes; fires once when it is green.',
-    wait_until: 'the build is green', wait_ttl: '2h',
-  })
-  litterRoutines.push(armed.job.id)
-  expect(armed.task.waiting.condition).toBe('the build is green')
+  const until = new Date(Date.now() + 2 * 3_600_000).toISOString()
+  await api('PATCH', `/api/tasks/${taskId}`, { phase: 'WAITING', wait_until: until })
 
   const [panel] = await openPanels(page, [sid])
-  const notice = panel.getByTestId('session-snoozed-notice')
-  await expect(notice).toBeVisible({ timeout: 15_000 })
-  await expect(notice).toContainText('Snoozed until: the build is green · back by ')
-  await expect(notice).toContainText("· Messages here don't cancel it")
-  // The header's pill says it too.
-  await expect(panel.getByTestId('task-trigger-pill')).toHaveText('SNOOZED')
-  await shot(panel.locator('.session-panel-input'), 'session-snoozed-notice', browserName)
+  const line = panel.getByTestId('session-waiting-line')
+  await expect(line).toBeVisible({ timeout: 15_000 })
+  await expect(line).toContainText('Waiting until ')
+  await expect(line).toContainText('· a message here moves it to In Progress')
+  await expect(line.getByRole('button')).toHaveCount(0)
+  await shot(panel.locator('.session-panel-input'), 'session-waiting-line', browserName)
 
-  // A message: the session answers, and the snooze holds (To Do, no red dot).
+  // A message: In Progress at once, the line goes, and the turn ends as Need Action.
   const box = composerTextarea(panel)
   await box.fill('how is it going?')
   await box.press('Enter')
+  await expect.poll(async () => (await taskOf(taskId)).phase, { timeout: 30_000 }).not.toBe('WAITING')
+  await expect(line).toHaveCount(0, { timeout: 15_000 })
   await expect(panel.getByText(/I processed your message: how is it going\?/).first()).toBeVisible({ timeout: 60_000 })
-  await expect.poll(async () => (await taskOf(taskId)).phase, { timeout: 30_000 }).toBe('TODO')
-  const held = await taskOf(taskId)
-  expect(held.unread).toBeFalsy()
-  expect(held.waiting).toMatchObject({ condition: 'the build is green', routine_id: armed.job.id })
-  expect(held.waiting.woke_at).toBeUndefined()
-  await expect(notice).toBeVisible()
+  await expect.poll(async () => (await taskOf(taskId)).phase, { timeout: 30_000 }).toBe('NEED_ACTION')
+  const after = await taskOf(taskId)
+  expect(after.unread).toBe(true)
+  expect(after.wait_until).toBeUndefined()
   await shot(panel, 'session-after-message', browserName)
 
-  // Unsnooze from the notice: the wait and its trigger are gone, the task stays To Do.
-  await notice.getByRole('button', { name: 'Unsnooze' }).click()
-  await expect(notice).toHaveCount(0, { timeout: 10_000 })
-  await expect(panel.getByTestId('task-trigger-pill')).toHaveCount(0)
-  const after = await taskOf(taskId)
-  expect(after.waiting).toBeUndefined()
-  expect(after.phase).toBe('TODO')
-  expect((await fetch(`${API}/api/routines/${armed.job.id}`)).status).toBe(404)
+  // Without a time the line says so.
+  await api('PATCH', `/api/tasks/${taskId}`, { phase: 'WAITING' })
+  await expect(line).toContainText('Waiting until something happens', { timeout: 15_000 })
 })

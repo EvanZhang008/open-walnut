@@ -147,17 +147,18 @@ describe('TaskActionMenuItems with the draft props', () => {
     expect(formatDate).toHaveBeenCalledWith('2026-09-26', 'due');
   });
 
-  it('Start / Snooze until also says what an event snooze waits for, and shows its row only when open', async () => {
+  it('Start / Snooze until shows the event row only when open, and its label is the date alone', async () => {
     const formatDate = (iso: string, kind: string) => `${kind}:${iso}`;
     const body = createElement('span', { className: 'snooze-event-body' }, 'Something happens…');
     const host = await mount({
       task: { priority: 'none', start_date: '2026-09-25', due_date: null },
       isPinned: true, pinnedTier: 'focus', isDone: false, ...spies(), formatDate,
-      snoozeEvent: { summary: 'CR 1234 is approved', body },
+      snoozeEvent: { body },
     });
     const snooze = host.querySelector('[data-testid="task-snooze-row"]')!;
+    // What a Waiting task waits for is its status now: the Status row says it.
     expect(snooze.querySelector('.task-kebab-date-label')!.textContent)
-      .toBe('Start / Snooze until: start:2026-09-25 · CR 1234 is approved');
+      .toBe('Start / Snooze until: start:2026-09-25');
     expect(host.querySelectorAll('.snooze-event-body')).toHaveLength(0);
     await click(snooze.querySelector('.task-kebab-date-toggle')!);
     expect(host.querySelectorAll('.snooze-event-body')).toHaveLength(1);

@@ -87,7 +87,7 @@ export function AgentSearchResultRows({ rows, onOpenTask, className }: {
               onClick={() => onOpenTask(row.taskId)}
             >
               <span className={`task-phase-icon-btn agent-search-row-circle ${circleClassForPhase(row.phase)}`} aria-hidden="true">
-                {binaryPhaseIcon(isDone)}
+                {binaryPhaseIcon(isDone, row.phase)}
               </span>
               <span className="agent-search-row-title">{row.title ?? row.taskId}</span>
               <span className="agent-search-row-project">{row.project || 'Inbox'}</span>

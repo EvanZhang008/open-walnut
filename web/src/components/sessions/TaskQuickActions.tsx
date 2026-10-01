@@ -20,7 +20,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { MoveToProjectSection, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
-import { SnoozeUntilEvent, TaskStatusMenuSection, waitingSummary } from '@/components/tasks/TaskStatusControl';
+import { SnoozeUntilEvent, TaskStatusMenuSection } from '@/components/tasks/TaskStatusControl';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -33,6 +33,7 @@ const PHASE_ICON: Record<string, ReactNode> = {
 
 const PHASE_LABEL: Record<string, string> = {
   TODO: 'To Do',
+  WAITING: 'Waiting',
   IN_PROGRESS: 'In Progress',
   NEED_ACTION: 'Need Action',
   COMPLETE: 'Complete',
@@ -202,7 +203,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       return {
         ...prev,
         phase: phase as TaskPhase,
-        status: completing ? 'done' as const : phase === 'TODO' ? 'todo' as const : 'in_progress' as const,
+        status: completing ? 'done' as const : phase === 'TODO' || phase === 'WAITING' ? 'todo' as const : 'in_progress' as const,
+        // wait_until belongs to WAITING alone (server applyPhase).
+        ...(phase === 'WAITING' ? {} : { wait_until: undefined }),
         ...(completing ? { completed_at: now, session_id: undefined, plan_session_id: undefined, exec_session_id: undefined, session_status: undefined, plan_session_status: undefined, exec_session_status: undefined, unread: undefined } : {}),
         updated_at: now,
       };
@@ -225,6 +228,19 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     };
     attempt(5);
   }, [task, storeFor]);
+
+  // The status control's "Until" row. Same split as the other writes: this
+  // menu's own copy at once, then the shared store when it carries the row.
+  const handleSetWaitUntil = useCallback((id: string, waitUntil: string) => {
+    setTask(prev => (prev && prev.id === id
+      ? { ...prev, phase: 'WAITING' as TaskPhase, status: 'todo' as const, wait_until: waitUntil || undefined }
+      : prev));
+    const shared = storeFor(id);
+    if (shared) { shared.update(id, { phase: 'WAITING', wait_until: waitUntil }); return; }
+    updateTask(id, { phase: 'WAITING', wait_until: waitUntil }).catch(() => {
+      fetchTask(id).then(setTask).catch(() => {});
+    });
+  }, [storeFor]);
 
   const handleSetPriority = useCallback((priority: TaskPriority) => {
     if (!task) return;
@@ -300,7 +316,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
           }}
           title={isDone ? 'Done — click to reopen' : 'Click to complete'}
         >
-          <span className="task-quick-phase-icon">{ICONS.binaryPhaseIcon(isDone)}</span>
+          <span className="task-quick-phase-icon">{ICONS.binaryPhaseIcon(isDone, task.phase)}</span>
           {!compact && <span className="task-quick-phase-label">{PHASE_LABEL[task.phase] ?? task.phase}</span>}
         </button>
       </div>
@@ -349,7 +365,12 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
           )}
 
           {/* Status: the same collapsed row as the board's task kebab. */}
-          <TaskStatusMenuSection task={task} onSetPhase={(_id, phase) => handlePhaseChange(phase)} afterAction={closeKebab} />
+          <TaskStatusMenuSection
+            task={task}
+            onSetPhase={(_id, phase) => handlePhaseChange(phase)}
+            onSetWaitUntil={handleSetWaitUntil}
+            afterAction={closeKebab}
+          />
 
           {/* Pin / Tier · Priority · Start / Due: the SAME rows as the board's
               task kebab (one definition, TaskKebabMenu.TaskActionMenuItems). */}
@@ -365,7 +386,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
             onSetDate={handleSetDate}
             onSetStartDate={handleSetStartDate}
             afterAction={closeKebab}
-            snoozeEvent={{ summary: waitingSummary(task), body: <SnoozeUntilEvent task={task} afterAction={closeKebab} /> }}
+            snoozeEvent={{ body: <SnoozeUntilEvent task={task} afterAction={closeKebab} /> }}
           />
 
           {/* Move to project — same section as the TodoPanel kebab */}

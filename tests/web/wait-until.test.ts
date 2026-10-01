@@ -8,7 +8,17 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('@/utils/session-status', () => ({ resolveTaskSessionId: () => undefined }));
 
-const { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_SKILL, WAIT_UNTIL_TEXT } = await import('../../web/src/utils/wait-until');
+const { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_SKILL, WAIT_UNTIL_TEXT, WAIT_UNTIL_TITLE } = await import('../../web/src/utils/wait-until');
+
+describe('wait-until row title', () => {
+  // Waiting is a status now (2026-09-30): the skill sets it after the trigger.
+  it('says the task goes to Waiting until the trigger fires', () => {
+    expect(WAIT_UNTIL_TITLE).toBe(
+      'Tell the AI what to wait for. It sets up a trigger (walnut-trigger skill) and puts the task in Waiting until it fires',
+    );
+    expect(WAIT_UNTIL_TITLE).not.toMatch(/stays To Do/);
+  });
+});
 
 describe('wait-until prefix', () => {
   it('names the skill as a leading command by default, and is plain for an ACP engine', () => {

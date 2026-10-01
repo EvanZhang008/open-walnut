@@ -19,7 +19,7 @@ import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { PluginFieldsSection } from './PluginFieldPicker';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
-import { SnoozeUntilEvent, TaskStatusMenuSection, waitingSummary } from './TaskStatusControl';
+import { SnoozeUntilEvent, TaskStatusMenuSection } from './TaskStatusControl';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
 
 type TaskListProjection = Task & {
@@ -75,11 +75,12 @@ const TIER_OPTIONS: { value: FocusTier; label: string; icon: ReactNode }[] = [
   { value: 'focus', label: 'Focus', icon: ICONS.ICON_TIER_FOCUS },
   { value: 'satellite', label: 'Satellite', icon: ICONS.ICON_TIER_SATELLITE },
   { value: 'backlog', label: 'Backlog', icon: ICONS.ICON_TIER_BACKLOG },
-  { value: 'wait', label: 'Wait', icon: ICONS.ICON_TIER_WAIT },
+  { value: 'wait', label: 'Parked', icon: ICONS.ICON_TIER_WAIT },
 ];
 
-// Wait is amber (paused/blocked) — the old grey half-circle was indistinguishable
-// from Satellite's grey outline at a glance. Backlog is teal ("stored, cool").
+// Parked (id `wait`) is amber (set aside): the old grey half-circle was
+// indistinguishable from Satellite's grey outline at a glance. Backlog is teal
+// ("stored, cool").
 const TIER_COLORS: Record<FocusTier, string> = {
   focus: 'var(--accent)',
   satellite: 'var(--tier-satellite, #5856d6)',
@@ -210,9 +211,9 @@ export function TaskActionMenuItems({
   /** Per field, a trailing "Use Walnut's pick: <label>" row. */
   walnutPick?: Partial<Record<DraftTaskField, { label: string; onPick: () => void }>>;
   /** A single real task's second kind of snooze, inside Start / Snooze until:
-   *  `summary` is what it is snoozed until ('' when not waiting), `body` the
-   *  row under the times (TaskStatusControl.SnoozeUntilEvent). */
-  snoozeEvent?: { summary: string; body: ReactNode };
+   *  `body` is the row under the times (TaskStatusControl.SnoozeUntilEvent).
+   *  What a Waiting task waits for is its status now, so the Status row says it. */
+  snoozeEvent?: { body: ReactNode };
 }) {
   // Custom tiers append after the built-ins. Safe hook: kebabs also render on
   // isolated surfaces (tests, popouts) that may sit outside the FocusBarProvider.
@@ -314,10 +315,7 @@ export function TaskActionMenuItems({
           testId="task-snooze-row"
           className="task-snooze-row"
           date={task?.start_date}
-          display={[
-            task?.start_date ? (formatDate ? formatDate(task.start_date, 'start') : formatStartDateDisplay(task.start_date)) : '',
-            snoozeEvent?.summary ?? '',
-          ].filter(Boolean).join(' · ')}
+          display={task?.start_date ? (formatDate ? formatDate(task.start_date, 'start') : formatStartDateDisplay(task.start_date)) : ''}
           onChange={(date) => { onSetStartDate(date); afterAction(); }}
           extra={snoozeEvent?.body}
         />
@@ -753,7 +751,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             onSetDate={onSetDate ? (d) => onSetDate(task.id, d) : undefined}
             onSetStartDate={onSetStartDate ? (d) => onSetStartDate(task.id, d) : undefined}
             afterAction={closeMenu}
-            snoozeEvent={{ summary: waitingSummary(task), body: <SnoozeUntilEvent task={task} afterAction={closeMenu} /> }}
+            snoozeEvent={{ body: <SnoozeUntilEvent task={task} afterAction={closeMenu} /> }}
           />
 
           {/* Move to project — precise alternative to dragging across group headers */}

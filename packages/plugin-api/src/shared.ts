@@ -12,7 +12,19 @@ export interface PluginLogger {
   child(name: string): PluginLogger
 }
 
-export type TaskPhase = 'TODO' | 'IN_PROGRESS' | 'NEED_ACTION' | 'COMPLETE'
+/**
+ * The task lifecycle. `WAITING` (added in 0.5.2) is a task parked until something
+ * happens; it belongs to the `todo` status bucket. A plugin receives it only when
+ * its manifest declares `"phases": ["WAITING"]`; otherwise the host folds it onto
+ * TODO before any call (see `legacyPhase`). Treat an unknown phase as TODO.
+ */
+export type TaskPhase = 'TODO' | 'WAITING' | 'IN_PROGRESS' | 'NEED_ACTION' | 'COMPLETE'
+/** The phase set before WAITING existed, for mappings that must stay exhaustive on the old set. */
+export type LegacyTaskPhase = Exclude<TaskPhase, 'WAITING'>
+/** Fold a phase onto the set every plugin API version has known. */
+export function legacyPhase(phase: TaskPhase): LegacyTaskPhase {
+  return phase === 'WAITING' ? 'TODO' : phase
+}
 export type TaskPriority = 'immediate' | 'important' | 'backlog' | 'none'
 
 export interface WalnutTask {

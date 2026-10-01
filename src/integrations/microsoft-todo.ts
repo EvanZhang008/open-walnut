@@ -1234,8 +1234,8 @@ export function mapToLocal(
   let phase: TaskPhase;
   if (msTask.status === 'completed') {
     phase = 'COMPLETE';
-  } else if (msTask.status === 'notStarted' && parsed?.phase && parsed.phase !== 'TODO') {
-    phase = 'TODO'; // user reopened
+  } else if (msTask.status === 'notStarted' && parsed?.phase && phaseToMsStatus(parsed.phase) !== 'notStarted') {
+    phase = 'TODO'; // user reopened (a WAITING header also pushes as notStarted, so it is not a reopen)
   } else {
     phase = parsed?.phase ?? phaseFromMsStatus(msTask.status);
   }

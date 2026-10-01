@@ -9,6 +9,7 @@ interface StatusBadgeProps {
 
 const phaseSymbols: Record<string, ReactNode> = {
   TODO: phaseIcon('TODO'),
+  WAITING: phaseIcon('WAITING'),
   IN_PROGRESS: phaseIcon('IN_PROGRESS'),
   NEED_ACTION: phaseIcon('NEED_ACTION'),
   COMPLETE: phaseIcon('COMPLETE'),
@@ -16,6 +17,7 @@ const phaseSymbols: Record<string, ReactNode> = {
 
 const phaseLabels: Record<string, string> = {
   TODO: 'To Do',
+  WAITING: 'Waiting',
   IN_PROGRESS: 'In Progress',
   NEED_ACTION: 'Need Action',
   COMPLETE: 'Complete',

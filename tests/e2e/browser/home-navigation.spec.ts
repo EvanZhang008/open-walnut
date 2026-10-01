@@ -191,7 +191,7 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await expect(page.locator('.vd-panel [data-view-option="date"]')).toHaveCount(0);
   await closeViewMenu(page);
   await chooseViewOption(page, 'wait');
-  await expect(page.getByTestId('tier-view-bar')).toContainText('Wait');
+  await expect(page.getByTestId('tier-view-bar')).toContainText('Parked');
   await expect(heading(page, 'focus')).toHaveCount(0);
   await chooseViewOption(page, 'tier-custom');
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('walnut-todo-tier-view-modes') ?? '{}').wait)).toBe('custom');
@@ -200,7 +200,7 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await chooseViewOption(page, 'quick-views');
   await expect(page.locator('.todo-section-tabs')).toHaveCount(0);
   await page.reload();
-  await expect(page.getByTestId('tier-view-bar')).toContainText('Wait', { timeout: 30_000 });
+  await expect(page.getByTestId('tier-view-bar')).toContainText('Parked', { timeout: 30_000 });
   await chooseViewOption(page, 'all');
   await expect(heading(page, 'focus')).toBeAttached();
 
@@ -776,14 +776,14 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   // Out of the box: All is the word alone, Projects and Notes are gone, and the empty tiers hide.
   await expect(tab('All')).toHaveCount(1);
   await expect(tab('All').locator('.todo-section-tab-icon')).toHaveCount(0);
-  await expect.poll(names).toEqual(expect.arrayContaining(['All', 'Focus', 'Wait']));
+  await expect.poll(names).toEqual(expect.arrayContaining(['All', 'Focus', 'Parked']));
   for (const gone of ['Satellite', 'Backlog', 'Tasks', 'Notes', 'Projects', 'Scratchpad']) expect(await names()).not.toContain(gone);
 
   // The bar's own menu: a switch per tab, "Hide empty tabs", and the bar itself.
   await bar.getByRole('button', { name: 'Tab bar options' }).click();
   const menu = page.getByRole('menu', { name: 'Tab bar options' });
   const row = (name: string) => menu.getByRole('menuitemcheckbox', { name, exact: true });
-  for (const name of ['All', 'Focus', 'Satellite', 'Backlog', 'Wait', 'Recent']) await expect(row(name)).toHaveAttribute('aria-checked', 'true');
+  for (const name of ['All', 'Focus', 'Satellite', 'Backlog', 'Parked', 'Recent']) await expect(row(name)).toHaveAttribute('aria-checked', 'true');
   await expect(row('Hide empty tabs')).toHaveAttribute('aria-checked', 'true');
   await expect(row('Show tab bar')).toHaveAttribute('aria-checked', 'true');
   // The switches leave the menu open, so several can be flipped in a row.
@@ -798,13 +798,13 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   await expect(menu).toHaveCount(0);
 
   // The tab the panel is on stays while it is on it; right-clicking the bar opens the same menu.
-  await tab('Wait').click();
+  await tab('Parked').click();
   await tab('Focus').click({ button: 'right' });
-  await row('Wait').click();
+  await row('Parked').click();
   await page.keyboard.press('Escape');
-  await expect(tab('Wait')).toHaveAttribute('aria-selected', 'true');
+  await expect(tab('Parked')).toHaveAttribute('aria-selected', 'true');
   await tab('All').click();
-  await expect.poll(names).not.toContain('Wait');
+  await expect.poll(names).not.toContain('Parked');
 
   // The choices survive a reload.
   const kept = await names();
@@ -890,16 +890,16 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   // With the bar showing the task's tier, Locate goes straight to that tab, from another tier or from All.
   await tab('Focus').click();
   await locate.click();
-  await landedOn('Wait');
+  await landedOn('Parked');
   await tab('All').click();
   await locate.click();
-  await landedOn('Wait');
+  await landedOn('Parked');
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-locate-tier-tab.png`, clip: { x: 0, y: 0, width: 1280, height: 520 } });
 
   // A tier the user took off the bar has no tab to open, so the task is found in All.
   await tab('Focus').click();
   await bar.getByRole('button', { name: 'Tab bar options' }).click();
-  await page.getByRole('menu', { name: 'Tab bar options' }).getByRole('menuitemcheckbox', { name: 'Wait', exact: true }).click();
+  await page.getByRole('menu', { name: 'Tab bar options' }).getByRole('menuitemcheckbox', { name: 'Parked', exact: true }).click();
   await page.keyboard.press('Escape');
   await locate.click();
   await landedOn('All');

@@ -1,5 +1,5 @@
 /**
- * Tier card components and drop zone for Focus / Satellite / Backlog / Wait / custom tiers.
+ * Tier card components and drop zone for Focus / Satellite / Backlog / Parked / custom tiers.
  * Each tier gets a SortableTierCard with a kebab menu (same as regular task items).
  */
 import { useState, useRef, useCallback, useEffect, memo, type CSSProperties, type ReactNode } from 'react';
@@ -191,6 +191,7 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
 
 const PHASE_ICON: Record<string, ReactNode> = {
   TODO: ICONS.ICON_PHASE_TODO,
+  WAITING: ICONS.ICON_PHASE_WAITING,
   IN_PROGRESS: ICONS.ICON_PHASE_IN_PROGRESS,
   NEED_ACTION: ICONS.ICON_PHASE_NEED_ACTION,
   COMPLETE: ICONS.ICON_PHASE_COMPLETE,
@@ -198,6 +199,7 @@ const PHASE_ICON: Record<string, ReactNode> = {
 
 const PHASE_LABEL: Record<string, string> = {
   TODO: 'To Do',
+  WAITING: 'Waiting',
   IN_PROGRESS: 'In Progress',
   NEED_ACTION: 'Need Action',
   COMPLETE: 'Complete',
@@ -446,9 +448,9 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
         aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
-        title={isDone ? 'Done — click to reopen' : 'Click to complete'}
+        title={isDone ? 'Done — click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
       >
-        {ICONS.binaryPhaseIcon(isDone)}
+        {ICONS.binaryPhaseIcon(isDone, task.phase)}
       </button>
       {/* Editable title */}
       <span
@@ -471,7 +473,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
       <CronPill sessionId={resolveTaskSessionId(task)} />
-      <TriggerPill taskId={task.id} task={task} />
+      <TriggerPill taskId={task.id} />
       {/* ▶ — hover-revealed, immediately before the kebab, exactly as on the list
           rows. Hidden in select mode: a press there means "toggle selection", so a
           launch button would be a mis-click trap. */}

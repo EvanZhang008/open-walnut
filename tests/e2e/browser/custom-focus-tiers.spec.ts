@@ -82,7 +82,7 @@ test('settings CRUD: create, rename, and the tier appears across the UI', async 
 
     // Built-ins render as read-only rows.
     const section = page.locator('#focus-tiers')
-    for (const builtin of ['Focus', 'Satellite', 'Wait']) {
+    for (const builtin of ['Focus', 'Satellite', 'Parked']) {
       await expect(section.locator('.focus-tiers-row', { hasText: builtin }).first()).toBeVisible()
     }
 

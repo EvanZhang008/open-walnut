@@ -19,7 +19,7 @@ function priorityRank(t: Task): number {
 }
 
 /** Lifecycle order — the same left-to-right the phase machine walks. */
-const PHASE_RANK: Record<string, number> = { TODO: 0, IN_PROGRESS: 1, NEED_ACTION: 2, COMPLETE: 3 };
+const PHASE_RANK: Record<string, number> = { TODO: 0, WAITING: 1, IN_PROGRESS: 2, NEED_ACTION: 3, COMPLETE: 4 };
 
 /**
  * Compare two optional ISO timestamps; a missing value sinks to the bottom in BOTH
@@ -70,7 +70,7 @@ export function compareTasks(a: Task, b: Task, sort: TpSort): number {
     case 'updated':
       return sign * (a.updated_at || '').localeCompare(b.updated_at || '');
     case 'phase':
-      return sign * ((PHASE_RANK[a.phase] ?? 4) - (PHASE_RANK[b.phase] ?? 4));
+      return sign * ((PHASE_RANK[a.phase] ?? 5) - (PHASE_RANK[b.phase] ?? 5));
     case 'session': {
       const d = sessionRank(a) - sessionRank(b);
       if (sessionRank(a) === 4 || sessionRank(b) === 4) return d;

@@ -32,7 +32,6 @@ import { FIRE_DELIVERY_MAX_ATTEMPTS } from '../../src/core/cron/trigger-apply.js
 import { registerExecutor } from '../../src/core/routines/registry.js'
 import { compileTriggersForHost, triggerDefOf } from '../../src/core/routines/trigger-push.js'
 import { getOp } from '../../src/ops/index.js'
-import { patchRoutine } from '../../src/core/routines/routines-core.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -574,29 +573,6 @@ describe('pause and resume', () => {
       expect((await jobState(id)).state.nextRunAtMs).toBe(reported)
       const again = await patch(id, { enabled: true })
       expect(again.state.nextRunAtMs).toBe(reported)
-    } finally {
-      await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
-    }
-  })
-
-  it('the trigger behind an ended snooze wait is marked wait-ended, not paused', async () => {
-    const id = await create('ended wait')
-    try {
-      await patchRoutine(id, { enabled: false }, undefined, { offReason: 'wait-ended' })
-      const off = await jobState(id)
-      expect(off.enabled).toBe(false)
-      expect(off.state.pausedAtMs).toBeUndefined()
-      expect(typeof off.state.waitEndedAtMs).toBe('number')
-      expect(await armedIds()).not.toContain(id)
-      const listed = await getOp('trigger_list')!.handler!({}, call) as { triggers: Array<Record<string, unknown>> }
-      expect(listed.triggers.find((t) => t.id === id)).toMatchObject({ state: 'wait-ended' })
-      await expect(getOp('trigger_resume')!.handler!({ id }, call)).rejects.toThrow(/task_wait/)
-      // The wait's own re-arm (task_wait) switches it on through the same patch.
-      const rearmed = await patch(id, { enabled: true })
-      expect(rearmed.state.waitEndedAtMs).toBeUndefined()
-      expect(await armedIds()).toContain(id)
-      // A person pausing it afterwards is a pause again.
-      expect((await patch(id, { enabled: false })).state).toMatchObject({ pausedAtMs: expect.any(Number) })
     } finally {
       await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
     }

@@ -24,20 +24,17 @@ function getStatusClass(r: Routine): string {
 }
 
 /**
- * What the switch of a routine that is off says. A trigger is Paused, Stopped
- * (the server gave up on its failing check) or just Off (the snooze wait it
- * ended is over). A plain routine is Paused when someone paused it, and Off
- * otherwise: a one-time routine switches itself off once it has run.
+ * What the switch of a routine that is off says. A trigger is Paused or Stopped
+ * (the server gave up on its failing check). A plain routine is Paused when
+ * someone paused it, and Off otherwise: a one-time routine switches itself off
+ * once it has run.
  */
 function offLabel(r: Routine): 'Paused' | 'Stopped' | 'Off' {
-  if (r.check) {
-    const run = triggerRunState(r);
-    return run === 'stopped' ? 'Stopped' : run === 'wait-ended' ? 'Off' : 'Paused';
-  }
+  if (r.check) return triggerRunState(r) === 'stopped' ? 'Stopped' : 'Paused';
   return typeof r.state.pausedAtMs === 'number' ? 'Paused' : 'Off';
 }
 
-/** "Paused 2h ago" / "Stopped after 5 failed checks" / "Wait ended 1h ago", for the timing line. */
+/** "Paused 2h ago" / "Stopped after 5 failed checks", for the timing line. */
 function describeOff(r: Routine): string | null {
   if (r.enabled) return null;
   if (r.check) return describeTriggerOff(r);

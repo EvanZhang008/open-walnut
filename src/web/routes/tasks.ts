@@ -1329,6 +1329,11 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       res.status(400).json({ error: 'walnut_agent must be a boolean' })
       return
     }
+    if (req.body.wait_until !== undefined
+        && !(typeof req.body.wait_until === 'string' && (req.body.wait_until === '' || Number.isFinite(Date.parse(req.body.wait_until))))) {
+      res.status(400).json({ error: 'wait_until must be an ISO-8601 datetime, or "" to clear' })
+      return
+    }
     if (req.body.parent_task_id !== undefined && typeof req.body.parent_task_id !== 'string') {
       res.status(400).json({ error: 'parent_task_id must be a string (task ID or empty string to remove)' })
       return

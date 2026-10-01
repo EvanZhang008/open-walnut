@@ -36,7 +36,7 @@ const TIERS = [
   { tab: 'Focus' as const, label: 'Add to Focus…', zone: 'focus-drop-zone' },
   { tab: 'Satellite' as const, label: 'Add to Satellite…', zone: 'satellite-drop-zone' },
   { tab: 'Backlog' as const, label: 'Add to Backlog…', zone: 'backlog-drop-zone' },
-  { tab: 'Wait' as const, label: 'Add to Wait…', zone: 'wait-drop-zone' },
+  { tab: 'Parked' as const, label: 'Add to Parked…', zone: 'wait-drop-zone' },
 ]
 
 /** Seed enough pinned cards in `tier` to overflow the panel — the overlap only
@@ -138,7 +138,7 @@ test.describe('tier inline add', () => {
         { tasks: { id: string; title: string }[] }).tasks.find((t) => t.title === title)
       expect(created, 'created task must exist server-side').toBeTruthy()
       const inTier = {
-        Focus: tiers.focus_tasks, Satellite: tiers.satellite_tasks, Backlog: tiers.backlog_tasks, Wait: tiers.wait_tasks,
+        Focus: tiers.focus_tasks, Satellite: tiers.satellite_tasks, Backlog: tiers.backlog_tasks, Parked: tiers.wait_tasks,
       }[tab]
       expect(inTier).toContain(created!.id)
 

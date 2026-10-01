@@ -71,11 +71,12 @@ export class TaskQueryError extends Error {
 
 // This module is imported by the browser bundle, so it may only import from
 // types.ts (types + plain literals). phase.ts pulls in the logger, which pulls
-// in node:fs/os — so PHASE_ORDER can't be reused here and the 4 phases are
+// in node:fs/os — so PHASE_ORDER can't be reused here and the 5 phases are
 // listed literally. tests/core/task-query.test.ts locks this list against
 // PHASE_ORDER so a new phase can't land in one place only.
 export const QUERY_TASK_PHASES: readonly TaskPhase[] = [
   'TODO',
+  'WAITING',
   'IN_PROGRESS',
   'NEED_ACTION',
   'COMPLETE',
@@ -114,7 +115,8 @@ export const MAX_QUERY_LIMIT = 200;
 // rather than disappearing into complete. Don't collapse it into `complete`
 // just because the agent has nothing left to do.
 export const COMPLETION_TO_PHASES: Record<TaskCompletion, readonly TaskPhase[]> = {
-  todo: ['TODO'],
+  // WAITING is not started either: a client asking for "todo" work gets it.
+  todo: ['TODO', 'WAITING'],
   in_progress: ['IN_PROGRESS', 'NEED_ACTION'],
   complete: ['COMPLETE'],
 };

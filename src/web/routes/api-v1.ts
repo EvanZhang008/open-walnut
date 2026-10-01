@@ -2407,7 +2407,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
 })
 
 // PATCH /api/v1/tasks/:id — update task fields from mobile (additive).
-// Allowed fields: { status?, priority?, due_date?, start_date?, end_date?,
+// Allowed fields: { status?, phase?, wait_until?, priority?, due_date?, start_date?, end_date?,
 // project?, title?, description?, tags?, unread? }.
 // Same core path as the web PATCH (updateTask with source 'api' + asyncPush) so
 // hooks/emits/terminal-phase-guard semantics are identical — updateTask emits
@@ -2427,11 +2427,12 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     // without this forward the :id param would swallow it as a task id. Task
     // ids are hex-ish and can never be the literal word "reorder".
     if (id === 'reorder') { next(); return }
-    const { status, phase, priority, due_date: dueDate, start_date: startDate, end_date: endDateRaw,
+    const { status, phase, wait_until: waitUntil, priority, due_date: dueDate, start_date: startDate, end_date: endDateRaw,
       project, title, description, tags,
       unread } = (req.body ?? {}) as {
       status?: unknown
       phase?: unknown
+      wait_until?: unknown
       priority?: unknown
       due_date?: unknown
       start_date?: unknown
@@ -2455,6 +2456,16 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     }
     if (status !== undefined && phase !== undefined) {
       sendError(res, 400, 'bad_request', 'provide status or phase, not both')
+      return
+    }
+    // wait_until is the clock on a WAITING task: it rides with phase=WAITING, or
+    // onto a task already in that phase (checked against the row below).
+    if (waitUntil !== undefined && !isDateFieldValid(waitUntil)) {
+      sendError(res, 400, 'bad_request', 'wait_until must be an ISO-8601 datetime, or "" / null to clear')
+      return
+    }
+    if (waitUntil !== undefined && normalizeDateField(waitUntil) && phase !== undefined && phase !== 'WAITING') {
+      sendError(res, 400, 'bad_request', 'wait_until only applies with phase=WAITING')
       return
     }
     if (priority !== undefined
@@ -2506,11 +2517,18 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 400, 'bad_request', 'unread must be a boolean')
       return
     }
-    if (status === undefined && phase === undefined && priority === undefined && dueDate === undefined
+    if (status === undefined && phase === undefined && waitUntil === undefined && priority === undefined && dueDate === undefined
         && startDate === undefined && endDate === undefined && project === undefined && title === undefined
         && description === undefined && tags === undefined && unread === undefined) {
-      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/priority/due_date/start_date/end_date/project/title/description/tags/unread)')
+      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread)')
       return
+    }
+    if (waitUntil !== undefined && normalizeDateField(waitUntil) && phase === undefined) {
+      const current = await (await import('../../core/task-manager.js')).getTask(id).catch(() => undefined)
+      if (current && current.phase !== 'WAITING') {
+        sendError(res, 400, 'bad_request', 'wait_until only applies to a WAITING task; send phase=WAITING with it')
+        return
+      }
     }
 
     const tm = await import('../../core/task-manager.js')
@@ -2563,6 +2581,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       const patch = {
         ...(status !== undefined ? { status: status as import('../../core/types.js').TaskStatus } : {}),
         ...(phase !== undefined ? { phase: phase as TaskPhase } : {}),
+        ...(waitUntil !== undefined ? { wait_until: normalizeDateField(waitUntil) } : {}),
         ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
         ...(dueDate !== undefined ? { due_date: dueDate as string } : {}),
         // updateTask treats '' as the clear, so a null marker rides as ''.

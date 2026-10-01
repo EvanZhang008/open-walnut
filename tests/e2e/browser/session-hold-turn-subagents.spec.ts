@@ -434,7 +434,7 @@ test('red task rows stay current across tiers, reading races, and reconnects', a
   })
   await openHome(page)
   await expect.poll(() => sockets.length).toBe(1)
-  for (const [tier, index] of [['Focus', 6], ['Satellite', 26], ['Wait', 71], ['Backlog', 94]] as const) {
+  for (const [tier, index] of [['Focus', 6], ['Satellite', 26], ['Parked', 71], ['Backlog', 94]] as const) {
     const id = densityTaskIds[index]
     const update = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'NEED_ACTION', unread: true } })
     expect(update.ok()).toBe(true)

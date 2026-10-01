@@ -7,8 +7,8 @@ description: >-
   "watch for", "keep an eye on", "as soon as X happens", "poll until", or wants
   to be pinged on new mail / PR comments / build results / a file appearing.
   Also when the user says "snooze until", "wait until", "park this until",
-  "come back to this when": trigger_create with wait_until then snoozes the task
-  on the trigger, with no red dot until it fires.
+  "come back to this when": create the trigger, then set the task to Waiting;
+  the fire brings it back.
 ---
 
 # Trigger
@@ -131,45 +131,41 @@ trigger. One or two plain sentences, 600 characters at most, covering three thin
 
 Write it in the language you use with the user.
 
-## Snooze until something happens (park the task on the trigger)
+## Snooze until something happens (the task waits on the trigger)
 
 When the user says "snooze this task until X" or "wait until X" about the task
 this session works on, the task should go quiet until X happens, then come back
 to them. The task menu's "Start / Snooze until › Something happens…" starts that
 message for them as `/walnut-trigger Snooze this task until: X`. Do the steps
-above (script, test, one line to the user), and arm it with `wait_until`, the
-condition in the user's words. That one call creates the trigger and snoozes the
-task on it before its first check runs:
+above (script, test, one line to the user, `trigger_create`), then, as the LAST
+call of your turn, put the task in **Waiting**:
 
 ```
-walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"...","description":"...","wait_until":"CR 1234 is approved","wait_ttl":"3d"}'
+walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING"}'
 ```
 
-- `wait_until` is one line in the user's words; it is shown on the task.
-- `wait_ttl` is the backstop (default 7 days, "90m" / "12h" / "3d", up to 30
-  days): if the trigger has not fired by then, the task comes back to the user
-  anyway, in case the check never works. Size it to when the user would want to
-  hear that it has not happened yet: a build or a deploy, hours; a review or a
-  reply, a few days; a date, just past it. Tell the user the backstop in the
-  same one line.
-- The task stays **To Do** and visible. What changes: when your turn ends it does
-  NOT go to Need Action and gets no red dot. Do not set it to Need Action
-  yourself afterwards: that ends the wait.
+- Waiting is a status. The task stays in every list and in its board section,
+  with an hourglass instead of a red dot, and the end of your turn does not hand
+  it back. The next message into this session (the trigger's fire, the user, a
+  peer task) moves it to In Progress on its own, and that turn ends as Need
+  Action like any other. So: `trigger_create`, one line to the user, `task_update`
+  WAITING, end the turn. Nothing else to wire.
+- Add `wait_until` (an ISO datetime) when the user also wants the task back by a
+  time whether or not X happened ("by Friday either way"): at that time Walnut
+  wakes this session with a note, and the task comes back the normal way.
+  `walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING","wait_until":"2026-10-03T17:00:00-07:00"}'`
+  Without it the task waits until something happens, indefinitely.
 - Make the check fire ONCE per event: give each event an item id (the CR's
   state + revision, the message id), so an unchanged state is quiet.
 - Write the `prompt` for the moment it fires: "Check what changed on CR 1234 and
   tell the user what it means and the next step."
-- When it fires, the message carries a note: the wait is over and the task goes
-  back to the user as Need Action when that turn ends. If the event does not need
-  the user yet (an acknowledgement, an intermediate stage), keep waiting with
-  `task_wait` and the SAME `routine_id`, then end the turn: the trigger keeps what
-  it has seen, and the backstop stays where it was unless you pass `ttl`.
-  `walnut tools call task_wait '{"condition":"CR 1234 is approved","routine_id":"<id>"}'`
-- A message from the user does NOT end the wait: answer it, and the task goes
-  back to its quiet To Do when the turn ends (the user sees "still snoozed" with
-  an Unsnooze button). If the message changes the plan ("don't wait", "wait for
-  X instead"), call `task_stop_waiting` (it also deletes the trigger), then arm
-  the new one if there is one.
+- When it fires and the event does not need the user yet (an acknowledgement, an
+  intermediate stage), say so briefly and set the task to Waiting again as the
+  last call; the trigger keeps polling and keeps what it has seen.
+- When the user writes to this session meanwhile, the task is In Progress again;
+  answer them. If the plan still holds, set it back to Waiting as your last call.
+  If the plan changed ("don't wait", "wait for X instead"), `trigger_delete` the
+  old trigger and arm the new one if there is one.
 - Ask one short question when the condition is ambiguous (which CR, which
   channel, a time that already passed) instead of guessing; you usually know
   from the conversation.
@@ -177,9 +173,8 @@ walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/ch
 ## Managing them
 
 - `trigger_list`: every trigger with its description, interval, host, state
-  (`armed`, `paused` with `pausedAt`, `stopped` after 5 failed checks in a row,
-  or `wait-ended`), and last check (fired with an item count / quiet with a reason / the
-  error).
+  (`armed`, `paused` with `pausedAt`, `stopped` after 5 failed checks in a row),
+  and last check (fired with an item count / quiet with a reason / the error).
 - `trigger_pause '{"id":"..."}'`: stop checking for now. The trigger stays on
   its task marked Paused, with a Resume button. Use it for "pause that", "stop
   for a while"; delete only when the user wants it gone.
@@ -191,8 +186,6 @@ walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/ch
   what it saw and start over like a new trigger. Resuming a stopped trigger
   retries its check; fix the script first, since one more failure stops it
   again.
-- A trigger in state `wait-ended` belongs to a snooze wait that is over: re-arm
-  it with `task_wait` and the same `routine_id`, not `trigger_resume`.
 - `trigger_delete '{"id":"..."}'`: remove it for good. The script file stays on
   disk.
 - The task's TRIGGER pill and the Routines page show the same thing, with Pause

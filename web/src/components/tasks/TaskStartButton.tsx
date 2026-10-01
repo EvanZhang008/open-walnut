@@ -1,7 +1,7 @@
 /**
  * TaskStartButton — the one-click task→session verb ("▶"), rendered just before
  * the kebab on EVERY task surface: the main list rows, the Recent cards, and the
- * pinned tier cards (Focus / Satellite / Backlog / Wait / customs).
+ * pinned tier cards (Focus / Satellite / Backlog / Parked / customs).
  *
  * It lives in its own module because both hosts need it and they already import
  * one another in the other direction (TodoPanel → FocusSatelliteCards), so

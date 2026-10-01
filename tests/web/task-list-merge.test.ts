@@ -176,16 +176,17 @@ describe('mergeFetchedTasks with tasks inserted after the snapshot was taken', (
   });
 });
 
-describe('tasksShallowEqual and task.waiting', () => {
-  it('a change to the wait alone is a visible change (Stop waiting echo, 2026-09-28)', async () => {
+describe('tasksShallowEqual and task.wait_until', () => {
+  it('a change to a Waiting task\'s clock alone is a visible change', async () => {
     const { tasksShallowEqual } = await import('@/hooks/task-list-merge');
-    const waiting = { condition: 'CR 1234 is approved', routine_id: 'r-1', since: '2026-09-28T00:00:00Z' };
-    const a = task({ id: 'w', waiting });
-    expect(tasksShallowEqual(a, { ...a, waiting: { ...waiting } })).toBe(true);
-    // Removed (same updated_at: the write need not bump it).
-    const { waiting: _gone, ...cleared } = a;
+    const a = task({ id: 'w', phase: 'WAITING', wait_until: '2026-10-02T16:00:00.000Z' });
+    expect(tasksShallowEqual(a, { ...a })).toBe(true);
+    // Cleared (same phase and updated_at: the write need not bump it).
+    const { wait_until: _gone, ...cleared } = a;
     expect(tasksShallowEqual(a, cleared as Task)).toBe(false);
-    // Ended.
-    expect(tasksShallowEqual(a, { ...a, waiting: { ...waiting, woke_at: '2026-09-28T01:00:00Z', woke_reason: 'fired' } })).toBe(false);
+    // Moved to another time.
+    expect(tasksShallowEqual(a, { ...a, wait_until: '2026-10-03T16:00:00.000Z' })).toBe(false);
+    // Set on a Waiting task that had none.
+    expect(tasksShallowEqual(cleared as Task, a)).toBe(false);
   });
 });

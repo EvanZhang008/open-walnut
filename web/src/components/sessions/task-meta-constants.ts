@@ -29,8 +29,17 @@ export const TIER_OPTIONS: { value: FocusTier; label: string }[] = [
   { value: 'focus', label: 'Focus' },
   { value: 'satellite', label: 'Satellite' },
   { value: 'backlog', label: 'Backlog' },
-  { value: 'wait', label: 'Wait' },
+  // id `wait`, labelled Parked: a board shelf, not the Waiting status.
+  { value: 'wait', label: 'Parked' },
 ];
+
+/** A tier value as the board names it: a built-in's label (`wait` reads Parked), a custom
+ *  id through the registry when the caller has it, else the id capitalized. */
+export function tierLabelOf(tier: string, customTiers?: ReadonlyArray<{ id: string; label: string }>): string {
+  const custom = customTiers?.find((t) => t.id === tier);
+  if (custom) return custom.label;
+  return TIER_OPTIONS.find((t) => t.value === tier)?.label ?? `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
+}
 
 /** The launcher's RETIRED sticky-tier pref (see freshLauncherMeta for why the
  *  stickiness went away). Nothing reads it; MainPage's mount-time sweep deletes

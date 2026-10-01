@@ -227,6 +227,8 @@ export interface UpdateTaskInput {
   end_date?: string | null;
   /** Read/unread marker — true = agent output the human hasn't opened. */
   unread?: boolean;
+  /** WAITING only: when the server wakes the task by itself (ISO datetime), '' to clear. */
+  wait_until?: string;
   parent_task_id?: string;  // Set parent (task ID) or '' to remove parent
   sprint?: string;  // Set sprint name or '' to clear
   add_tags?: string[];

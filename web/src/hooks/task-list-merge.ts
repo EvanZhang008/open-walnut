@@ -27,6 +27,9 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
     // changes must count as UI-visible diffs — without these keys a task:updated
     // echo whose only change is pin/tier would bail as "shallow equal".
     'pinned', 'focus_tier', 'pin_order',
+    // A Waiting task's clock ("Waiting until Fri 9:00"). Setting or clearing it
+    // keeps the phase, so without it that echo bailed as "equal".
+    'wait_until',
   ];
   for (const k of scalarKeys) if (a[k] !== b[k]) return false;
   const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];
@@ -36,9 +39,6 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
     if (av.length !== bv.length) return false;
     for (let i = 0; i < av.length; i++) if (av[i] !== bv[i]) return false;
   }
-  // An event snooze (task.waiting) drives the "Snoozed until" line. Its writes need
-  // not bump updated_at, so without this the echo of Unsnooze bailed as "equal".
-  if (a.waiting !== b.waiting && JSON.stringify(a.waiting ?? null) !== JSON.stringify(b.waiting ?? null)) return false;
   // Session status slots (nested objects) — compare on the process_status/activity
   // fields we actually render; deeper equality not needed because session:status-changed
   // is a separate WS event that delivers those changes with its own merge path.

@@ -135,7 +135,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                         onClick={() => goTo(sub)}
                       >
                         <span className={`task-phase-icon-btn leader-sub-phase ${taskCircleClass(sub, null)}`} aria-hidden="true">
-                          {binaryPhaseIcon(done)}
+                          {binaryPhaseIcon(done, sub.phase)}
                         </span>
                         <span className="leader-sub-title">{sub.title}</span>
                         {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}

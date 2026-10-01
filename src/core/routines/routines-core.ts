@@ -239,16 +239,7 @@ export async function createRoutine(body: unknown, origin?: string): Promise<{ j
 }
 
 /** `origin`: who asks (a route passes the request's); omitted = the server's own code. */
-/**
- * `opts.offReason`: why a switch off is not a pause (the server's own code only;
- * no route passes it). The routine behind an ended snooze wait says 'wait-ended'.
- */
-export async function patchRoutine(
-  id: string,
-  body: unknown,
-  origin?: string,
-  opts?: { offReason?: 'pause' | 'wait-ended' },
-): Promise<{ job: unknown }> {
+export async function patchRoutine(id: string, body: unknown, origin?: string): Promise<{ job: unknown }> {
   const service = await requireCronService();
   const { normalizeCronJobPatch } = await import('../cron/index.js');
   const patch = normalizeCronJobPatch(body);
@@ -260,7 +251,7 @@ export async function patchRoutine(
   assertWakeNotOnCheck(patch, before ?? undefined);
   await validateCheckForSave(patch, body, before ?? undefined, origin);
   try {
-    const job = await service.update(id, patch, opts);
+    const job = await service.update(id, patch);
     log.web.info('routine updated via shared core', { jobId: id });
     pushTriggersFor([before?.check?.host, job.check?.host]);
     return { job };
@@ -283,9 +274,6 @@ export async function deleteRoutine(id: string): Promise<{ ok: boolean; removed:
   // timer. Its state file stays (a disable must survive a re-enable) and is
   // pruned by age once nothing re-arms it.
   pushTriggersFor([before?.check?.host]);
-  // A task waiting on this trigger stops waiting with it (src/core/task-waiting.ts).
-  const { onRoutineDeleted } = await import('../task-waiting.js');
-  await onRoutineDeleted(before);
   return result;
 }
 

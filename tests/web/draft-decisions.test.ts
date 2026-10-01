@@ -54,7 +54,7 @@ describe('tier chip', () => {
   });
 
   it('each built-in tier reads its own label', () => {
-    for (const [tier, label] of [['focus', 'Focus'], ['satellite', 'Satellite'], ['backlog', 'Backlog'], ['wait', 'Wait']]) {
+    for (const [tier, label] of [['focus', 'Focus'], ['satellite', 'Satellite'], ['backlog', 'Backlog'], ['wait', 'Parked']]) {
       expect(chip(draft({ pinTier: tier }, { ai: ['pinTier'] }), 'pinTier')!.label).toBe(label);
     }
   });

@@ -16,6 +16,8 @@ import type { JiraTransition } from './types.js';
 // 'indeterminate' category and pick an arbitrary transition).
 export const PHASE_TO_JIRA_STATUS: Record<TaskPhase, string> = {
   TODO: 'To Do',
+  // Parked work stays in the not-started column; Jira has no shared "waiting" status.
+  WAITING: 'To Do',
   IN_PROGRESS: 'In Progress',
   NEED_ACTION: 'In Progress',
   COMPLETE: 'Done',

@@ -171,7 +171,7 @@ test('every built-in tier tab exposes its own "+" with its own tier', async ({ p
   await loadHome(page)
 
   for (const [section, label] of [
-    ['focus', 'Focus'], ['satellite', 'Satellite'], ['backlog', 'Backlog'], ['wait', 'Wait'],
+    ['focus', 'Focus'], ['satellite', 'Satellite'], ['backlog', 'Backlog'], ['wait', 'Parked'],
   ] as const) {
     const tab = page.locator('.todo-section-tabs [role="tab"]', { hasText: label }).first()
     await tab.click()
@@ -183,9 +183,10 @@ test('every built-in tier tab exposes its own "+" with its own tier', async ({ p
     const { opacity, hovered } = await restVisibility(plus)
     expect(hovered, `the ${label} "+" was measured under the pointer`).toBe(false)
     expect(opacity, `the ${label} "+" is invisible at rest`).toBeGreaterThan(0.2)
-    // `section` is the tier id the seed must carry — asserted through the label
-    // above, which tierDisplayLabel derives from exactly that id.
-    expect(label.toLowerCase()).toBe(section)
+    // `section` is the tier id the seed must carry, asserted through the label
+    // above, which tierDisplayLabel derives from exactly that id (`wait` is the one
+    // id whose label is a different word: Parked).
+    expect(section === 'wait' ? 'parked' : section).toBe(label.toLowerCase())
   }
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/spec-02-all-tier-tabs-plus.png`, fullPage: false })

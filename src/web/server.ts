@@ -112,7 +112,6 @@ import { sessionLaunchV1Router } from './routes/session-launch-v1.js'
 import { sessionControlV1Router } from './routes/session-control-v1.js'
 import { sessionLifecycleV1Router } from './routes/session-lifecycle-v1.js'
 import { taskV1Router } from './routes/task-v1.js'
-import { taskWaitV1Router } from './routes/task-wait-v1.js'
 import { messagesV1Router } from './routes/messages-v1.js'
 import { personalAiV1Router } from './routes/personal-ai-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
@@ -1450,11 +1449,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     routineWakeHandle = startRoutineWake()
   }
 
-  // ── "Wait until": a finished or deleted task takes its wait trigger with it,
-  // and an ended wait stops its trigger polling (src/core/task-waiting.ts).
+  // ── wait_until: the clock on a WAITING task (src/core/task-wait-until.ts).
   {
-    const { startTaskWaitingWatch } = await import('../core/task-waiting.js')
-    startTaskWaitingWatch()
+    const { startWaitUntilWatch } = await import('../core/task-wait-until.js')
+    startWaitUntilWatch()
   }
 
   // ── walnut-trigger seams (both directions, registered once) ──
@@ -1710,8 +1708,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Task + focus endpoints (additive, Wave 1): detail/delete/star/notes/
   // reorder/batch + pin/tier — A-class (local store; replica rides the outbox).
   app.use('/api/v1', taskV1Router)
-  // "Wait until" (additive): park a task on a trigger / stop waiting.
-  app.use('/api/v1', taskWaitV1Router)
   // Unified send surface (additive): POST /messages (session_send core) +
   // GET /requests/:id (expect_reply status). Primary-only — 501 on a replica.
   app.use('/api/v1', messagesV1Router)
@@ -5416,7 +5412,7 @@ export async function stopServer(): Promise<void> {
   unsubscribeLocalClaude?.()
   unsubscribeLocalClaude = null
   bus.unsubscribe('host-status-defs')
-  bus.unsubscribe('task-waiting') // TASK_WAITING_SUBSCRIBER, core/task-waiting.ts
+  bus.unsubscribe('task-wait-until') // WAIT_UNTIL_SUBSCRIBER, core/task-wait-until.ts
   if (routineWakeHandle) {
     routineWakeHandle.stop()
     routineWakeHandle = null

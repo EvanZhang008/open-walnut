@@ -22,12 +22,18 @@ import {
   TERMINAL_PHASES,
   sendSourceReopensTerminal,
   REOPENING_SEND_SOURCES,
+  HELD_PHASES,
+  legacyPhase,
+  sessionResultPhase,
+  sessionAwaitingHumanPhase,
+  applyPhase,
 } from '../../src/core/phase.js';
+import type { Task } from '../../src/core/types.js';
 
 describe('PHASE_ORDER', () => {
-  // WAIT removed 2026-08-18 — 5 phases became 4.
-  it('has exactly 4 phases', () => {
-    expect(PHASE_ORDER).toHaveLength(4);
+  // WAIT removed 2026-08-18 (5 became 4); WAITING added 2026-09-30 (4 became 5).
+  it('has exactly 5 phases', () => {
+    expect(PHASE_ORDER).toHaveLength(5);
   });
 
   it('starts with TODO and ends with COMPLETE', () => {
@@ -35,8 +41,8 @@ describe('PHASE_ORDER', () => {
     expect(PHASE_ORDER[PHASE_ORDER.length - 1]).toBe('COMPLETE');
   });
 
-  it('is exactly the 4-phase lifecycle, in order', () => {
-    expect(PHASE_ORDER).toEqual(['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE']);
+  it('is exactly the lifecycle, in order, WAITING right after TODO', () => {
+    expect(PHASE_ORDER).toEqual(['TODO', 'WAITING', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE']);
   });
 
   it('does not include INVESTIGATION or HUMAN_VERIFICATION', () => {
@@ -77,8 +83,9 @@ describe('VALID_PHASES', () => {
 });
 
 describe('PHASE_TO_STATUS', () => {
-  it('maps all 4 phases to correct statuses', () => {
+  it('maps all 5 phases to correct statuses', () => {
     expect(PHASE_TO_STATUS.TODO).toBe('todo');
+    expect(PHASE_TO_STATUS.WAITING).toBe('todo');
     expect(PHASE_TO_STATUS.IN_PROGRESS).toBe('in_progress');
     expect(PHASE_TO_STATUS.NEED_ACTION).toBe('in_progress');
     expect(PHASE_TO_STATUS.COMPLETE).toBe('done');
@@ -90,6 +97,19 @@ describe('PHASE_TO_STATUS', () => {
 describe('TERMINAL_PHASES', () => {
   it('is exactly COMPLETE — the only phase background events must not overwrite', () => {
     expect([...TERMINAL_PHASES]).toEqual(['COMPLETE']);
+  });
+});
+
+describe('HELD_PHASES / legacyPhase', () => {
+  it('WAITING is the one held phase, and it folds onto TODO for older readers', () => {
+    expect([...HELD_PHASES]).toEqual(['WAITING']);
+    expect(legacyPhase('WAITING')).toBe('TODO');
+    for (const phase of PHASE_ORDER) if (phase !== 'WAITING') expect(legacyPhase(phase)).toBe(phase);
+  });
+
+  it('WAITING is not WAIT: the retired name still migrates to TODO, the new one survives', () => {
+    expect(migratePhase('WAIT')).toBe('TODO');
+    expect(migratePhase('WAITING')).toBe('WAITING');
   });
 });
 
@@ -158,6 +178,7 @@ describe('migratePhase', () => {
 describe('deriveStatusFromPhase', () => {
   it('derives correct status for all phases', () => {
     expect(deriveStatusFromPhase('TODO')).toBe('todo');
+    expect(deriveStatusFromPhase('WAITING')).toBe('todo');
     expect(deriveStatusFromPhase('IN_PROGRESS')).toBe('in_progress');
     expect(deriveStatusFromPhase('NEED_ACTION')).toBe('in_progress');
     expect(deriveStatusFromPhase('COMPLETE')).toBe('done');
@@ -190,6 +211,10 @@ describe('sessionErrorPhase (WAIT removed 2026-08-18)', () => {
     expect(sessionErrorPhase('NEED_ACTION')).toBeNull();
     expect(sessionErrorPhase('COMPLETE')).toBeNull();
   });
+
+  it('leaves a WAITING task waiting: the failure shows on the session, the wait holds', () => {
+    expect(sessionErrorPhase('WAITING')).toBeNull();
+  });
 });
 
 // The unread dot used to light on WAIT (the error path) as well as
@@ -200,7 +225,46 @@ describe('readMarkerForPhase', () => {
     expect(readMarkerForPhase('NEED_ACTION')).toEqual({ unread: true });
     expect(readMarkerForPhase('IN_PROGRESS')).toEqual({ unread: false });
     expect(readMarkerForPhase('COMPLETE')).toEqual({ unread: false });
+    expect(readMarkerForPhase('WAITING')).toEqual({ unread: false });
     expect(readMarkerForPhase('TODO')).toEqual({});
+  });
+});
+
+// WAITING (2026-09-30): a status the user or the AI sets to park a task until
+// something happens. Nothing automatic moves it except a NEW TURN (a message,
+// a trigger fire) or a prompt for the human; the end of the turn that set it,
+// an error, and the reconciler leave it alone.
+describe('WAITING in the session machine', () => {
+  it('the turn that set it ending does not hand it back', () => {
+    expect(sessionResultPhase('WAITING')).toBeNull();
+  });
+
+  it('a new message (session:input) and a new turn (turn-start) move it to IN_PROGRESS', () => {
+    expect(sessionInputPhase('WAITING')).toBe('IN_PROGRESS');
+    expect(sessionTurnStartPhase('WAITING')).toBe('IN_PROGRESS');
+  });
+
+  it('a prompt that needs the human moves it to NEED_ACTION', () => {
+    expect(sessionAwaitingHumanPhase('WAITING')).toBe('NEED_ACTION');
+  });
+
+  it('every other phase still ends its turn on NEED_ACTION (the hand-back is unchanged)', () => {
+    expect(sessionResultPhase('TODO')).toBe('NEED_ACTION');
+    expect(sessionResultPhase('IN_PROGRESS')).toBe('NEED_ACTION');
+    expect(sessionResultPhase('NEED_ACTION')).toBeNull();
+    expect(sessionResultPhase('COMPLETE')).toBeNull();
+  });
+
+  it('applyPhase clears wait_until on every move out of WAITING and keeps it while waiting', () => {
+    const task = { id: 't', phase: 'WAITING', status: 'todo', wait_until: '2026-10-03T17:00:00.000Z' } as unknown as Task;
+    applyPhase(task, 'WAITING');
+    expect(task.wait_until).toBe('2026-10-03T17:00:00.000Z');
+    for (const next of ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'] as const) {
+      const t = { ...task } as Task;
+      applyPhase(t, next);
+      expect(t.wait_until, next).toBeUndefined();
+      expect(t.phase).toBe(next);
+    }
   });
 });
 

@@ -114,7 +114,7 @@ test('a field the newer trailing parse no longer proposes goes back to its defau
   const panel = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
 
   await typeAndSettle(page, mock, 'wait on the vendor reply by friday')
-  await expectAiChip(panel, 'pinTier', 'Wait')
+  await expectAiChip(panel, 'pinTier', 'Parked')
   await expectAiChip(panel, 'dueDate', `Due ${dayWords(4)}`)
 
   // Both legs answered ok and neither proposes anything: the AI withdrew both.
@@ -210,12 +210,12 @@ test('quick folders still apply their remembered model after AI writes and after
 
   // C11: a More edit of a task field is not a launch edit either.
   const menu = await openDraftSettings(panel, 'more')
-  await tierRow(menu, 'Wait').click()
-  await expectUserChip(panel, 'pinTier', 'Wait')
+  await tierRow(menu, 'Parked').click()
+  await expectUserChip(panel, 'pinTier', 'Parked')
   await draftQuickChipFor(panel, mcps).click()
   await expect(draftCwdPill(panel)).toContainText(basenameOf(mcps))
   await expect(draftModelPill(panel)).toHaveAttribute('data-model', 'haiku')
-  await expectUserChip(panel, 'pinTier', 'Wait')
+  await expectUserChip(panel, 'pinTier', 'Parked')
 })
 
 // ── C18 C19 C18b: the folder picker footer rebases per field ──────────────────
@@ -252,12 +252,12 @@ test('a footer tier edit owns the tier only; an AI due that landed while the pic
   await draftComposer(page).fill(later)
   const picker = await openPicker(page, panel)
   // C18: the footer's tier group, the one tier control the picker has.
-  await picker.getByRole('group', { name: 'Pin new task to tier' }).getByRole('button', { name: 'Wait' }).click()
+  await picker.getByRole('group', { name: 'Pin new task to tier' }).getByRole('button', { name: 'Parked' }).click()
   await expect.poll(() => mock.calls.some((c) => c.text === later && c.at - t0 >= 300), { timeout: 15_000 }).toBe(true)
   await page.waitForTimeout(2_900)
   await confirmPath(page, picker, `${fixtureRoot}/projects/mcps`)
 
-  await expectUserChip(panel, 'pinTier', 'Wait')
+  await expectUserChip(panel, 'pinTier', 'Parked')
   await expectAiChip(panel, 'dueDate', `Due ${dayWords(5)}`)
   await page.screenshot({ path: `${SHOT_DIR}/c18-c19-footer-rebase.png` })
 })

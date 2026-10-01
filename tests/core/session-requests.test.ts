@@ -520,6 +520,15 @@ describe('buildRequestNotification — the quoted last message', () => {
     expect(bare).not.toContain('--- its last message');
   });
 
+  it('says WAITING for a parked task: the child stopped on purpose, its result may be in the quote', () => {
+    const quoted = parseWalnutMessage(buildRequestNotification(request(), 'completed', {
+      ...target, phase: 'WAITING', lastMessage: { text: 'Armed a trigger on the review; waiting.' },
+    }))!.body;
+    expect(quoted.startsWith('It set its task to WAITING (parked until something happens) WITHOUT an explicit reply to your request. Its last message is quoted below.')).toBe(true);
+    const bare = parseWalnutMessage(buildRequestNotification(request(), 'completed', { ...target, phase: 'WAITING' }))!.body;
+    expect(bare.startsWith('It set its task to WAITING (parked until something happens) WITHOUT an explicit reply to your request. Check its output.')).toBe(true);
+  });
+
   it('keeps the other outcome lines and appends the quote after them', () => {
     const body = parseWalnutMessage(buildRequestNotification(request(), 'error', {
       ...target, phase: 'COMPLETE', lastMessage: { text: 'Build failed at step 2.' },

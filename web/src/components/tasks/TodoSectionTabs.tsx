@@ -11,7 +11,7 @@ import { tabBarTabs, visibleTabBarTabs } from './tab-bar-model';
 /**
  * The todo panel's tab bar: one tab per view, the picked view owns the panel below.
  *
- * `all` is a real tab because cross-tier drag (Recent to Focus, Focus to Wait) needs the
+ * `all` is a real tab because cross-tier drag (Recent to Focus, Focus to Parked) needs the
  * source and target regions mounted at the same time; a single tier's tab is for working
  * inside it. Width is the constraint (the panel is often ~420px), so a tier tab is its
  * icon + count and only the ACTIVE tab spells out its name; All is the word itself.
@@ -42,7 +42,7 @@ interface TodoSectionTabsProps {
   counts: Partial<Record<TodoSection, number>>;
   /** False while the tasks are still loading: every count reads 0 then, and no tab is empty yet. */
   countsReady?: boolean;
-  /** User-defined tiers: each gets its own tab between Wait and Recent. */
+  /** User-defined tiers: each gets its own tab between Parked and Recent. */
   customTiers?: CustomTierDef[];
   /** Search mode only: completed-results toggle chip pinned to the strip's right
       edge. The strip is the one row that stays visible while search results own

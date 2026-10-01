@@ -62,6 +62,7 @@ import {
   type DependencyRestore,
 } from './plugins/dependency-gate.js';
 import { validatePluginId } from './plugins/ids.js';
+import { manifestKnowsHeldPhases, wrapSyncForLegacyPhases } from './plugins/legacy-phase-sync.js';
 import { listInstalledBundledDirs, parseManifestCatalog, resolveBundledStoreDir } from './plugins/bundled-store.js';
 import { validatePluginIconPath } from './plugins/plugin-icon.js';
 import { listOwnedSkillDirRecords } from './plugins/skill-registry.js';
@@ -1098,7 +1099,9 @@ function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<s
       if (collected.sync) {
         throw new Error(`Plugin "${manifest.id}" called registerSync() more than once.`);
       }
-      collected.sync = sync;
+      // A plugin that has not declared the newer phases gets tasks projected onto
+      // the phase set it was written against (legacy-phase-sync.ts).
+      collected.sync = manifestKnowsHeldPhases(manifest) ? sync : wrapSyncForLegacyPhases(sync);
     },
 
     registerSourceClaim(fn: ProjectClaimFn, opts?: { priority?: number }) {
@@ -1483,6 +1486,10 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     // Only the one value that changes anything survives; `'plugins'` and junk both read as the default.
     ...(obj.settingsIn === 'app' ? { settingsIn: 'app' as const } : {}),
     taskFields,
+    // Phases the plugin declares it understands (legacy-phase-sync.ts); junk entries are dropped.
+    ...(Array.isArray(obj.phases) && obj.phases.some((p) => typeof p === 'string')
+      ? { phases: (obj.phases as unknown[]).filter((p): p is string => typeof p === 'string') }
+      : {}),
     ...(catalog ? { catalog } : {}),
     ...(icon ? { icon } : {}),
   };

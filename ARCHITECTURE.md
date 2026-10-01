@@ -189,7 +189,7 @@ Nothing guards a token budget any more: the CLI owns each session's context wind
 
 ### Task phase system
 
-`src/core/phase.ts`: 7-state lifecycle: `TODO` → `IN_PROGRESS` → `NEED_ACTION` → `HUMAN_VERIFICATION` → `PEER_CODE_REVIEW` → `RELEASE_IN_PIPELINE` → `COMPLETE`. Phase is source of truth: `applyPhase()` mutates both `task.phase` and `task.status`. `complete_task` sets NEED_ACTION (not COMPLETE); only the human marks fully done.
+`src/core/phase.ts`: 5-state lifecycle: `TODO` → `WAITING` → `IN_PROGRESS` → `NEED_ACTION` → `COMPLETE`. `WAITING` parks a task until something happens (a trigger fire, a message, its optional `wait_until` time); any new turn moves it to `IN_PROGRESS`, and background writers (a sync pull, a reconciler) may only complete it. Phase is source of truth: `applyPhase()` mutates both `task.phase` and `task.status`. Any phase may be set by a human or an agent; `COMPLETE` is terminal only against background writes.
 
 ### Session slots
 

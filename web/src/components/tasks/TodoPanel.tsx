@@ -48,6 +48,7 @@ import {
 } from './tier-separators';
 import { TaskStartButton } from './TaskStartButton';
 import { CronPill } from '@/components/sessions/CronPill';
+import { tierLabelOf } from '@/components/sessions/task-meta-constants';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
@@ -100,7 +101,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { dragBus } from '@/utils/drag-bus';
 import { TaskKebabMenu } from './TaskKebabMenu';
-import { TaskStatusBadge, WaitingLine } from './TaskStatusControl';
+import { TaskStatusBadge, formatWaitUntil } from './TaskStatusControl';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import {
   ViewDropdown,
@@ -313,6 +314,7 @@ function useFrozenWhile<T>(value: T, frozen: boolean): T {
 
 const PHASE_LABEL: Record<string, string> = {
   TODO: 'To Do',
+  WAITING: 'Waiting',
   IN_PROGRESS: 'In Progress',
   NEED_ACTION: 'Need Action',
   COMPLETE: 'Complete',
@@ -369,13 +371,10 @@ class TaskPointerSensor extends PointerSensor {
   }));
 }
 
-/** Human label for a tier value — a built-in name capitalized, a custom id (`ct_*`)
- *  resolved through the registry. Same rule as MainPage.tierLabel; kept local
- *  because the panel must not depend on its host page. */
+/** Human label for a tier value: a built-in's board label (`wait` reads Parked), a
+ *  custom id (`ct_*`) resolved through the registry. Same rule as MainPage.tierLabel. */
 function tierDisplayLabel(tier: string, customTiers?: CustomTierDef[]): string {
-  const custom = customTiers?.find((t) => t.id === tier);
-  if (custom) return custom.label;
-  return `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
+  return tierLabelOf(tier, customTiers);
 }
 
 // Action icons: imported from shared Icons.tsx via ICONS.*
@@ -1234,7 +1233,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           ) : needsAction && (
             <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
           ))}
-          {/* Phase icon — one click toggles To Do ↔ Complete */}
+          {/* Phase icon — one click toggles To Do ↔ Complete (an hourglass while Waiting) */}
           <button
             className={`task-phase-icon-btn ${circleClass}`}
             onClick={(e) => {
@@ -1242,9 +1241,9 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
               onSetPhase(task.id, isDone ? 'TODO' : 'COMPLETE');
             }}
             aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
-            title={isDone ? 'Done — click to reopen' : 'Click to complete'}
+            title={isDone ? 'Done — click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
           >
-            {ICONS.binaryPhaseIcon(isDone)}
+            {ICONS.binaryPhaseIcon(isDone, task.phase)}
           </button>
           <span
             ref={titleRef}
@@ -1262,7 +1261,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             {task.title}
           </span>
           <CronPill sessionId={resolveTaskSessionId(task)} />
-          <TriggerPill taskId={task.id} task={task} />
+          <TriggerPill taskId={task.id} />
           <ImportedPill task={task} />
           <TaskTagPills tags={task.tags} />
           <SubtaskPill task={task} />
@@ -1276,6 +1275,15 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           {dueDateLabel && (
             <span className={`todo-item-due-pill${dueDateOverdue ? ' todo-item-due-overdue' : ''}`} title={task.due_date ? `Due: ${task.due_date}` : undefined}>
               {dueDateLabel}
+            </span>
+          )}
+          {task.phase === 'WAITING' && task.wait_until && (
+            <span
+              className="todo-item-due-pill todo-item-wait-pill"
+              data-testid="task-row-wait-until"
+              title={`Waiting until ${new Date(task.wait_until).toLocaleString()}, or until something happens first`}
+            >
+              until {formatWaitUntil(task.wait_until)}
             </span>
           )}
           {!!task.is_blocked && !isDone && (
@@ -2104,8 +2112,10 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
               {' '}· Due {formatDateTimeDisplay(task.due_date)}
             </span>
           )}
+          {task.phase === 'WAITING' && task.wait_until && (
+            <span data-testid="task-detail-wait-until"> · Waiting until {formatWaitUntil(task.wait_until)}</span>
+          )}
         </div>
-        <WaitingLine task={task} />
       </div>
 
       {parentTask && (
@@ -2733,7 +2743,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       {isPinned && pinnedTier && (
         <span
           className={`todo-recent-tier-dot todo-tier-icon-${isBuiltinTier(pinnedTier) ? pinnedTier : 'custom'}`}
-          title={`Pinned \u2014 ${pinnedTierLabel ?? (pinnedTier === 'focus' ? 'Focus' : pinnedTier === 'backlog' ? 'Backlog' : pinnedTier === 'wait' ? 'Wait' : 'Satellite')}`}
+          title={`Pinned \u2014 ${pinnedTierLabel ?? (pinnedTier === 'focus' ? 'Focus' : pinnedTier === 'backlog' ? 'Backlog' : pinnedTier === 'wait' ? 'Parked' : 'Satellite')}`}
         >
           {ICONS.tierIcon(pinnedTier)}
         </span>
@@ -2753,9 +2763,9 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
         }}
         aria-label={isDone ? 'Reopen (mark To Do)' : 'Mark complete'}
-        title={isDone ? 'Done — click to reopen' : 'Click to complete'}
+        title={isDone ? 'Done — click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
       >
-        {ICONS.binaryPhaseIcon(isDone)}
+        {ICONS.binaryPhaseIcon(isDone, task.phase)}
       </button>
       {/* Editable title */}
       <span
@@ -2953,7 +2963,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [expandProject]);
   // Consume-once acknowledgment from the target InlineAdd (see its effect).
   const clearHeaderAddSignal = useCallback(() => setHeaderAddSignal(null), []);
-  // First visit (nothing stored) starts Backlog + Wait folded: all four tiers are
+  // First visit (nothing stored) starts Backlog + Parked folded: all four tiers are
   // permanent rows now, and the two "someday" ones are the ones a first look does
   // not need open. Every other region stays expanded, and the first chevron click
   // persists whatever the user actually wants.
@@ -3004,7 +3014,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [customTiersLoaded, customTiersLive]);
 
   // ── Section tabs ──
-  // Which of Focus / Satellite / Backlog / Wait / Recent / Tasks / Notes owns the panel
+  // Which of Focus / Satellite / Backlog / Parked / Recent / Tasks / Notes owns the panel
   // right now ('all' = the legacy stacked view, kept for cross-tier drag).
   // `collapsedSections` is still the *within-a-view* chevron state; these two are
   // independent — in single-section mode the region renders regardless of its
@@ -3300,7 +3310,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     else el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, []);
 
-  // Scroll a pinned task into view inside the top Pinned region (Focus/Next/Satellite/Wait).
+  // Scroll a pinned task into view inside the top Pinned region (Focus/Next/Satellite/Parked).
   // Separate from scrollToTask (which targets the lower .todo-panel-list) so the PIN region
   // jumps + highlights too — not just the list below. Double-RAF waits for tier re-render.
   const pinnedScrollRafRef = useRef<number>(0);
@@ -3466,7 +3476,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         });
       }
       // Section tabs make "unmounted" a second way the target can be missing:
-      // a locate into Wait while the Focus tab is showing would scroll to nothing.
+      // a locate into Parked while the Focus tab is showing would scroll to nothing.
       // STAY PUT whenever the current view already shows the task — the stacked
       // view, the Tasks list (pinned tasks are ordinary rows there), and the
       // task's own tier tab all do. Clicking a card must never yank the user to
@@ -3789,7 +3799,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [tasks, pinnedTaskIds, hiddenGroups, taskGroups]);
   const hiddenPinnedGroups = useFrozenWhile(hiddenPinnedGroupsLive, isPinnedDragActive);
 
-  // Split pinned into Focus / Satellite / Backlog / Wait / custom tiers
+  // Split pinned into Focus / Satellite / Backlog / Parked (id `wait`) / custom tiers
   const focusTasksLocal = useMemo(() => {
     if (focusIdsWithGrace.size === 0) return [];
     return pinnedTasks.filter((t) => focusIdsWithGrace.has(t.id));
@@ -7606,7 +7616,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       case 'focus': return { def: { id: 'focus', label: 'Focus' }, visibleIds: visibleFocusIds, display: focusTasksDisplay, groupMeta: focusGroupMeta };
       case 'satellite': return { def: { id: 'satellite', label: 'Satellite' }, visibleIds: visibleSatelliteIds, display: satelliteTasksDisplay, groupMeta: satelliteGroupMeta };
       case 'backlog': return { def: { id: 'backlog', label: 'Backlog' }, visibleIds: visibleBacklogIds, display: backlogTasksDisplay, groupMeta: backlogGroupMeta };
-      case 'wait': return { def: { id: 'wait', label: 'Wait' }, visibleIds: visibleWaitIds, display: waitTasksDisplay, groupMeta: waitGroupMeta };
+      case 'wait': return { def: { id: 'wait', label: 'Parked' }, visibleIds: visibleWaitIds, display: waitTasksDisplay, groupMeta: waitGroupMeta };
       default: {
         const def = (customTiers ?? []).find((d) => d.id === tier);
         const render = customTierRender[tier];
@@ -7655,7 +7665,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const viewGroups: ViewOptionGroup[] = [
     { label: 'Show', options: [
       { id: 'all', label: 'All tasks' }, { id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' },
-      { id: 'backlog', label: 'Backlog' }, { id: 'wait', label: 'Wait' }, ...(customTiers ?? []),
+      { id: 'backlog', label: 'Backlog' }, { id: 'wait', label: 'Parked' }, ...(customTiers ?? []),
       { id: 'recent', label: 'Recent' }, { id: 'tasks', label: 'Projects' },
     ].map((view) => ({ key: view.id, label: view.label, active: effectiveSection === view.id, onSelect: () => handleSectionChange(view.id as TodoSection) })) },
   ];
@@ -7856,7 +7866,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             // what used to give each tier its own little scrollbox.
             style={!isAll ? { flex: '1 1 auto' } : undefined}
           >
-          {/* PINNED section — Focus + Satellite + Backlog + Wait sub-groups. In a single-tier
+          {/* PINNED section — Focus + Satellite + Backlog + Parked sub-groups. In a single-tier
               view the "Pinned" wrapper header is dropped (the tab already names the
               tier) and only that tier's subgroup renders. A pinned query condition
               routes every pin through the list, so the tier area steps aside. */}

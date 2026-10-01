@@ -1,6 +1,14 @@
 /* Task status control (TaskStatusControl.tsx): the Status row of the task menu
-   (collapsed like the date rows), the detail pane's clickable status badge, and
-   the event half of Start / Snooze until. */
+   (collapsed like the date rows), the detail pane's clickable status badge, the
+   event half of Start / Snooze until, and the Waiting line above a composer. */
+
+/* Waiting's one hue: the status pill, the until row and the composer line
+   (globals.css .badge-phase-waiting falls back to the same violet). */
+:root { --phase-waiting: #7c3aed; }
+:root[data-theme="dark"] { --phase-waiting: #a78bfa; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { --phase-waiting: #a78bfa; }
+}
 
 /* The collapsed Status row: the date rows' shape (globals.css .task-kebab-date*),
    under its own classes so specs and styles that mean "a date row" still do. */
@@ -16,6 +24,7 @@
   text-overflow: ellipsis;
 }
 .task-kebab-status-value b { font-weight: 500; color: var(--fg-secondary); }
+.task-kebab-status-until { color: var(--fg-muted); }
 .task-kebab-status-caret {
   display: inline-block;
   flex-shrink: 0;
@@ -38,7 +47,7 @@
   white-space: nowrap;
 }
 
-/* Two columns: four labelled pills in one line would push the menu past 360px. */
+/* Two columns: five labelled pills in one line would push the menu past 360px. */
 .task-status-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -69,6 +78,7 @@
 
 .task-status-pill.is-current { font-weight: 600; border-color: transparent; }
 .task-status-pill-todo.is-current { background: var(--bg-tertiary); color: var(--fg); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.task-status-pill-waiting.is-current { background: color-mix(in srgb, var(--phase-waiting) 14%, transparent); color: var(--phase-waiting); }
 .task-status-pill-in_progress.is-current { background: rgba(0, 122, 255, 0.12); color: var(--accent); }
 .task-status-pill-need_action.is-current { background: rgba(255, 59, 48, 0.12); color: var(--error); }
 .task-status-pill-complete.is-current { background: rgba(52, 199, 89, 0.12); color: var(--success); }
@@ -84,28 +94,45 @@ button.task-status-badge:hover { filter: brightness(0.96); }
 
 .task-status-menu { padding: 4px 0; }
 
-.task-waiting-line {
+/* The status box's until row, under the options while the task is Waiting:
+   the date rows' collapsed shape, and a Clear beside it once a time is set. */
+.task-status-until {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.task-status-until-head { display: flex; align-items: center; gap: 6px; }
+.task-status-until-toggle {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 6px;
-  margin-top: 6px;
+  padding: 3px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
   font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.task-status-until-toggle:hover { background: var(--bg-hover, var(--bg-tertiary)); }
+.task-status-until-icon { display: inline-flex; flex: none; color: var(--phase-waiting); }
+.task-status-until-icon svg { width: 12px; height: 12px; }
+.task-status-until-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--fg-secondary);
 }
-.task-waiting-line.is-compact { margin: 0; padding: 2px 12px 6px; }
-.task-waiting-icon { display: inline-flex; color: var(--accent); }
-.task-waiting-icon svg { width: 13px; height: 13px; }
-.task-waiting-text {
-  min-width: 0;
-  flex: 1 1 120px;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-.task-waiting-text b { color: var(--fg); font-weight: 600; }
-.task-waiting-stop {
+.task-status-until-label b { font-weight: 500; color: var(--fg); }
+.task-status-until-clear {
   flex: none;
   padding: 1px 8px;
   border: 1px solid var(--border);
@@ -116,65 +143,33 @@ button.task-status-badge:hover { filter: brightness(0.96); }
   font-size: 11px;
   cursor: pointer;
 }
-.task-waiting-stop:hover { color: var(--fg); background: var(--bg-tertiary); }
-.task-waiting-error { flex-basis: 100%; color: var(--error); }
+.task-status-until-clear:hover { color: var(--fg); background: var(--bg-tertiary); }
 
 /* The event half of Start / Snooze until, under the calendar: one rule apart from it. */
-.task-kebab-date.open > .task-snooze-event,
-.task-kebab-date.open > .task-waiting-line {
-  border-top: 1px solid var(--border);
-}
-.task-kebab-date.open > .task-waiting-line.is-compact { padding-top: 6px; }
+.task-kebab-date.open > .task-snooze-event { border-top: 1px solid var(--border); }
 
-/* A long condition ("Start / Snooze until: QA signs off (file … exists)") truncates
-   instead of widening the whole menu; the row's title has it whole. */
-.task-snooze-row .task-kebab-date-label b {
-  display: inline-block;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
-}
-/* The line takes the menu's width and wraps inside it, never widens it: a max-width
-   on the text (240px, then 200px) still left the menu 6px wider in WebKit. */
-.task-kebab-date.open > .task-waiting-line.is-compact { contain: inline-size; }
-
-/* Above a waiting task's composer (SnoozedComposerNotice): a calm strip, the
-   snooze's own amber, so it reads as "still snoozed", not as an error. */
-.task-waiting-line.task-waiting-composer {
+/* Above a Waiting task's composer (WaitingComposerLine): one calm violet line,
+   so it reads as "set aside", not as an error. */
+.task-waiting-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0 12px 6px;
   padding: 5px 10px;
-  border: 1px solid color-mix(in srgb, var(--snooze-hue) 35%, transparent);
+  border: 1px solid color-mix(in srgb, var(--phase-waiting) 35%, transparent);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--snooze-hue) 8%, transparent);
-  flex-wrap: nowrap;
+  background: color-mix(in srgb, var(--phase-waiting) 8%, transparent);
+  font-size: 12px;
+  color: var(--fg-secondary);
 }
-.task-waiting-line.task-waiting-composer .task-waiting-icon { color: var(--snooze-hue); }
+.task-waiting-icon { display: inline-flex; flex: none; color: var(--phase-waiting); }
+.task-waiting-icon svg { width: 13px; height: 13px; }
+.task-waiting-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-waiting-text b { color: var(--fg); font-weight: 600; }
 .task-waiting-note { color: var(--fg-muted); }
-
-/* The SNOOZED pill (TriggerPill on a waiting task): the TRIGGER pill's shape,
-   amber instead of blue, so a snoozed row reads apart from a watched one. */
-:root { --snooze-hue: #c26a00; }
-:root[data-theme="dark"] { --snooze-hue: #f5b041; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) { --snooze-hue: #f5b041; }
-}
-.task-trigger-pill.is-snoozed {
-  border-color: color-mix(in srgb, var(--snooze-hue) 45%, transparent);
-  background: color-mix(in srgb, var(--snooze-hue) 10%, transparent);
-  color: var(--snooze-hue);
-}
-.task-trigger-pill.is-snoozed:hover,
-.task-trigger-pill.is-snoozed[aria-expanded="true"] {
-  border-color: var(--snooze-hue);
-  background: color-mix(in srgb, var(--snooze-hue) 18%, transparent);
-}
-/* The flyout's first block on a snoozed task: what it waits for, and Unsnooze. */
-.trigger-jobs-snooze {
-  margin: 0 0 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-.trigger-jobs-snooze .task-waiting-line { margin: 0; }
-.trigger-jobs-snooze .task-waiting-icon { color: var(--snooze-hue); }
-.task-waiting-backstop { color: var(--fg-muted); white-space: nowrap; }

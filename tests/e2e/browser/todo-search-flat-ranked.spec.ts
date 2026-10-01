@@ -110,7 +110,7 @@ test('literal hits lead and survive the server pass; loose hits fold into Relate
   await expect(page.locator('#home-task-navigation .todo-pinned-section')).toHaveCount(0);
   await expect(page.locator('#home-task-navigation .todo-tasks-header')).toHaveCount(0);
   const pinnedRow = page.locator(`.todo-search-results .todo-panel-item[data-task-id="${literalPinned}"]`);
-  await expect(pinnedRow.locator('.todo-search-tier-pill')).toHaveText('Wait');
+  await expect(pinnedRow.locator('.todo-search-tier-pill')).toHaveText('Parked');
   await expect(page.locator(`.todo-search-results .todo-panel-item[data-task-id="${literalPlain}"] .todo-search-tier-pill`)).toHaveCount(0);
   const label = pinnedRow.locator('.todo-search-context-pill');
   await expect(label).toHaveAttribute('title', PROJECT);
