@@ -38,6 +38,7 @@ import { NotificationActionButtons } from './NotificationActionButtons';
 import { QuietToggle } from './QuietToggle';
 import { displayActionsOf } from '@/contexts/notifications/notification-actions';
 import { NotificationSystemPane, useSearchIndexStatus, searchIndexUnhealthy } from './NotificationSystemPane';
+import { updateAvailable, useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { NotificationProblems, useDisabledHosts, useProblemHosts } from './NotificationProblems';
 import { ErrorCategoryTitle } from './ErrorCategoryTitle';
 import { landingSectionFor } from '@/utils/host-banner-placement';
@@ -102,6 +103,10 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   const [errorCategory, setErrorCategory] = useState<string | null>(null);
   const navigate = useNavigate();
   const indexStatus = useSearchIndexStatus(open, section === 'system');
+  // Fetched once per open, like the index status: the System rail wears a quiet
+  // accent dot (not the amber one) when a newer Open Walnut is published.
+  const update = useUpdateStatus(open);
+  const hasUpdate = updateAvailable(update.status);
 
   // Can an error card offer "Ask AI to fix" here? Fetched on open (the /api/config
   // read is memoized for the page lifetime), and absent by default so a cloud
@@ -512,7 +517,7 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
                 pane renders as wrong (git sync, the search index). Zero but
                 still flagged → the old dot. */}
             <RailButton
-              label="System" count={systemIssues} warn dot={systemUnhealthy}
+              label="System" count={systemIssues} warn={systemUnhealthy} dot={systemUnhealthy || hasUpdate}
               active={section === 'system'} onClick={() => pickSection('system')}
             />
             {/* All is the whole feed — its length is history depth, not a

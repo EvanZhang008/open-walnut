@@ -76,6 +76,15 @@ first start downloads the default local embedding model, Qwen3-Embedding-0.6B
 For provider options, remote hosts, and troubleshooting, see
 [Getting Started](GETTING_STARTED.md).
 
+### Updating
+
+Walnut checks npm once a day for a newer release and shows it in the notification
+panel (System) and at the bottom of Settings, with the one command that updates your
+install. `open-walnut update` runs that command for you; `open-walnut update --check`
+only reports, and `open-walnut doctor` carries the same line. Restart the server
+afterwards. A checkout you run from source is never asked to update (pull and build it
+yourself), and `WALNUT_NO_UPDATE_CHECK=1` turns the check off.
+
 ### Set Up with Claude Code
 
 If Claude Code is already configured on your machine, you can ask it to install and

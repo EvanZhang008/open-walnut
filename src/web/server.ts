@@ -1994,6 +1994,24 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
   const label = dev ? 'dev' : 'production'
   log.web.info(`server listening on http://localhost:${port}`, { mode: label, port })
+  // The daily "is a newer open-walnut published?" check: armed after listen so its
+  // first call (20 s out) is clear of the boot fan-out. A source checkout, a
+  // replica, a test and WALNUT_NO_UPDATE_CHECK=1 make start() a no-op.
+  try {
+    const { getUpdateChecker } = await import('../core/self-update/update-check.js')
+    const checker = getUpdateChecker()
+    let announced: string | null = null
+    checker.onChecked((s) => {
+      if (s.error) log.web.debug('update check failed', { error: s.error })
+      if (s.available && s.latest && announced !== s.latest) {
+        announced = s.latest
+        log.web.info('a newer Open Walnut is published', { current: s.current, latest: s.latest, command: s.install.updateCommand })
+      }
+    })
+    checker.start()
+  } catch (err) {
+    log.web.warn('update checker did not start', { error: err instanceof Error ? err.message : String(err) })
+  }
   // Record the REAL port in the instance lock (port 0 resolves at listen time), and
   // re-derive everything computed from the port, including WALNUT_SERVER_URL.
   {
@@ -5340,6 +5358,10 @@ export async function stopServer(): Promise<void> {
     clearInterval(notificationReconcileTimer)
     notificationReconcileTimer = null
   }
+  try {
+    const { resetUpdateChecker } = await import('../core/self-update/update-check.js')
+    resetUpdateChecker()
+  } catch { /* best-effort */ }
   // Close /api/v1 SSE streams so open connections + ping timers don't keep
   // the HTTP server alive (tests / graceful shutdown).
   try { closeApiV1Streams() } catch { /* best-effort */ }

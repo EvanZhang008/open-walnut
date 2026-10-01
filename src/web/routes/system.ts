@@ -70,6 +70,29 @@ systemRouter.get('/health', async (req, res) => {
   res.json(response)
 })
 
+// ── Is a newer Open Walnut published? (src/core/self-update) ──
+
+/** The registry call is 5 s; this is the route's own ceiling so a stalled socket never pins a request. */
+const UPDATE_CHECK_DEADLINE_MS = 8_000
+
+// GET /api/system/update: the cached answer, never a network call.
+systemRouter.get('/update', async (_req, res) => {
+  const { getUpdateChecker } = await import('../../core/self-update/update-check.js')
+  res.json(getUpdateChecker().status())
+})
+
+// POST /api/system/update/check: ask the registry now (the card's "Check now",
+// `walnut update --check`). 202 with the stored status when the check outran the deadline.
+systemRouter.post('/update/check', async (_req, res) => {
+  const { getUpdateChecker } = await import('../../core/self-update/update-check.js')
+  const checker = getUpdateChecker()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), UPDATE_CHECK_DEADLINE_MS) })
+  const done = await Promise.race([checker.checkNow(), deadline])
+  clearTimeout(timer)
+  res.status(done ? 200 : 202).json(done ?? checker.status())
+})
+
 // ── This machine's Claude Code (the setup banner) ──
 
 /** The banner's re-check answers inside this even when the probe hangs (the daemon caps itself at 12s). */

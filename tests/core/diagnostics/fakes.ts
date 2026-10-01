@@ -5,6 +5,7 @@
 import type { DiagnosticsProbes } from '../../../src/core/diagnostics/doctor.js'
 import { summarizeConfig } from '../../../src/core/diagnostics/local-probes.js'
 import type { HostDiagnostics } from '../../../src/core/diagnostics/types.js'
+import type { UpdateStatus } from '../../../src/core/self-update/update-check.js'
 import type { Config } from '../../../src/core/types.js'
 
 export const ENV = {
@@ -28,6 +29,14 @@ export const PREFLIGHT = {
   dtach: { found: true, path: '/opt/homebrew/bin/dtach' },
 }
 
+/** The update check as a test sees it: a source checkout, so nothing was asked. */
+export const UPDATE: UpdateStatus = {
+  enabled: false, reason: 'source',
+  install: { kind: 'source', sourceDir: '/Users/alice/open-walnut', packageRoot: '/Users/alice/open-walnut', manager: null, updateCommand: null },
+  current: '0.4.5', latest: null, available: false, checkedAt: null, error: null, checking: false,
+  packageUrl: 'https://www.npmjs.com/package/open-walnut',
+}
+
 export function fakeProbes(over: Partial<DiagnosticsProbes> = {}): Partial<DiagnosticsProbes> {
   return {
     loginShellPath: async () => '/Users/alice/.local/bin:/opt/homebrew/bin:/usr/bin:/bin',
@@ -46,6 +55,7 @@ export function fakeProbes(over: Partial<DiagnosticsProbes> = {}): Partial<Diagn
     }),
     hosts: async () => [HOST],
     daemonHello: async () => ({ version: '0.4.5', runtime: 'binary' }),
+    update: async () => UPDATE,
     ...over,
   }
 }

@@ -10,6 +10,7 @@
  */
 
 import type { BuildInfo } from '../../lib/build-info.js'
+import type { UpdateStatus } from '../self-update/update-check.js'
 import type { HostReadiness } from '../hosts/host-readiness.js'
 import type { ClaudeKind } from '../../providers/host-runtime-core.js'
 
@@ -110,6 +111,8 @@ export interface DiagnosticsReport {
   /** Who collected it: the running server, or the CLI on its own. */
   collector: 'server' | 'cli'
   build: BuildInfo
+  /** Is a newer open-walnut published (src/core/self-update)? null when the probe did not answer. */
+  update: UpdateStatus | null
   /** null when collected by the CLI with no server running. */
   server: ServerDiagnostics | null
   local: LocalDiagnostics

@@ -21,6 +21,12 @@ function report(): DiagnosticsReport {
     generatedAt: '2026-09-24T12:00:00.000Z',
     collector: 'server',
     build: { version: '0.4.5', commit: 'f19a59b8', branch: 'main', builtAt: '2026-09-24T11:00:00.000Z', dirty: true },
+    update: {
+      enabled: true,
+      install: { kind: 'npm', sourceDir: null, packageRoot: '/usr/local/lib/node_modules/open-walnut', manager: 'npm', updateCommand: 'npm install -g open-walnut@latest' },
+      current: '0.4.5', latest: '0.4.6', available: true, checkedAt: '2026-09-24T11:30:00.000Z', error: null, checking: false,
+      packageUrl: 'https://www.npmjs.com/package/open-walnut',
+    },
     server: {
       node: 'v24.1.0', platform: 'darwin', arch: 'arm64', pid: 4242, nice: 0, port: 3456,
       dataDir: '/Users/alice/.open-walnut', uptimeMs: (3 * 3600 + 12 * 60) * 1000, mode: 'primary',
@@ -69,6 +75,7 @@ function report(): DiagnosticsReport {
 
 const GOLDEN = `Open Walnut doctor (server, 2026-09-24T12:00:00.000Z)
 build      0.4.5  commit f19a59b8+dirty  branch main  built 2026-09-24T11:00:00.000Z
+update     0.4.6 is published  run: npm install -g open-walnut@latest  checked 2026-09-24T11:30:00.000Z
 server     pid 4242  port 3456  node v24.1.0  darwin/arm64  nice 0  up 3h 12m  primary
 data dir   /Users/alice/.open-walnut
 node       v24.1.0  /Users/alice/.nvm/versions/node/v24.1.0/bin/node
@@ -98,7 +105,7 @@ describe('renderDiagnosticsText', () => {
     expect(text.split('\n')).toEqual([
       'Open Walnut host diagnostics (2026-09-24T12:00:00.000Z)',
       'build      0.4.5  commit f19a59b8+dirty  branch main  built 2026-09-24T11:00:00.000Z',
-      ...GOLDEN.split('\n').slice(14, 18),
+      ...GOLDEN.split('\n').slice(15, 19),
       'warnings   1',
       '  - host lab: x',
     ])

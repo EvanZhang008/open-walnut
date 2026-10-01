@@ -654,6 +654,16 @@ select {
   color: #ff3b30;
 }
 
+/* The Open Walnut card (NotificationUpdateCard): a published update is news, not a
+   problem, so it takes the accent the rail dot uses, never the amber or red. */
+.notification-card-icon.update,
+.notification-detail-value.nfc-update-accent { color: var(--accent); }
+.nfc-update-action { margin-left: auto; }
+.nfc-update-command-row { justify-content: flex-start; }
+.nfc-update-command { min-width: 0; }
+.nfc-update-command .setup-command { word-break: break-word; }
+.nfc-update-note { overflow-wrap: anywhere; }
+
 .notification-card-icon.pulsing {
   color: #34c759;
   animation: notification-icon-pulse 1.5s infinite;

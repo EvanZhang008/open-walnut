@@ -144,6 +144,21 @@ export async function runWeb(options: {
   armGracefulSignalExit()
 
   await startServer({ port, dev: !!options.dev })
+
+  // Someone watching `walnut web` in a terminal gets the npm-style one-liner when
+  // the first check (20 s after listen) finds a newer release. A server started by
+  // a service or a deploy script has no TTY and already logs the fact.
+  if (process.stderr.isTTY) {
+    try {
+      const { getUpdateChecker, formatUpdateNotice } = await import('../core/self-update/update-check.js')
+      let off: (() => void) | null = null
+      off = getUpdateChecker().onChecked((status) => {
+        off?.()
+        const notice = formatUpdateNotice(status)
+        if (notice) process.stderr.write(`\n${notice}\n`)
+      })
+    } catch { /* advisory only */ }
+  }
 }
 
 // ── Ephemeral Launcher (parent — exits quickly) ──────────────────────────

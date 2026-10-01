@@ -18,6 +18,7 @@ import {
 import { daemonHello, listHostDiagnostics, localDaemonPreflight, type DaemonHello } from './host-probes.js'
 import { claudeCliFloorFor, configuredClaudeCliFloor, type ClaudeCliFloor } from '../hosts/claude-version-floor.js'
 import type { ConfigDiagnostics, HostDiagnostics, LocalDiagnostics, ServerDiagnostics } from './types.js'
+import type { UpdateStatus } from '../self-update/update-check.js'
 
 type Env = Record<string, string | undefined>
 
@@ -40,6 +41,20 @@ export interface DiagnosticsProbes {
   server: () => ServerDiagnostics
   hosts: () => Promise<HostDiagnostics[]>
   daemonHello: (host: string, timeoutMs: number) => Promise<DaemonHello | null>
+  /** The update status, asking the registry when nothing has been checked yet. */
+  update: () => Promise<UpdateStatus>
+}
+
+/**
+ * The server's shared checker answers from its cache once it has checked; before
+ * that (and always for the CLI, whose process is new) the registry is asked once.
+ */
+async function updateStatus(collector: 'server' | 'cli'): Promise<UpdateStatus> {
+  const { getUpdateChecker, UpdateChecker } = await import('../self-update/update-check.js')
+  const checker = collector === 'cli' ? new UpdateChecker() : getUpdateChecker()
+  const cached = checker.status()
+  if (!cached.enabled || cached.checkedAt) return cached
+  return checker.checkNow()
 }
 
 function portOf(root: string | null): number | null {
@@ -102,5 +117,6 @@ export function defaultDiagnosticsProbes(env: Env = process.env, collector: 'ser
     server: defaultServer,
     hosts: listHostDiagnostics,
     daemonHello,
+    update: () => updateStatus(collector),
   }
 }

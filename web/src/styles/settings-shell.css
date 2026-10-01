@@ -456,3 +456,6 @@
 .settings-folded-header {
   margin-bottom: 22px;
 }
+
+/* "0.6.0 available" on the build line: the accent, so the eye lands on it once. */
+.settings-build-line-update { color: var(--accent); }

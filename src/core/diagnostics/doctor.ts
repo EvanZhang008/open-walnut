@@ -210,11 +210,13 @@ export async function collectDiagnostics(opts: CollectOptions = {}): Promise<Dia
   const now = opts.now ?? (() => new Date())
   const w = { local: [] as string[], config: [] as string[], hosts: [] as string[], server: [] as string[] }
 
-  const [local, config, hosts, server] = await Promise.all([
+  const [local, config, hosts, server, update] = await Promise.all([
     collectLocal(probes, env, { ms: localMs, loginMs }, w.local),
     bounded(w.config, 'config', localMs, probes.config),
     collector === 'server' ? collectHosts(probes, hostMs, w.hosts) : Promise.resolve([]),
     collector === 'server' ? bounded(w.server, 'server', localMs, probes.server) : Promise.resolve(null),
+    // A registry round trip when nothing is cached yet: the remote-host budget, not the local one.
+    bounded(w.server, 'update', hostMs, probes.update),
   ])
   if (collector === 'cli') w.server.push('server: not running, so remote hosts were not checked')
 
@@ -225,7 +227,7 @@ export async function collectDiagnostics(opts: CollectOptions = {}): Promise<Dia
     build = { version: 'unknown', commit: null, branch: null, builtAt: null, dirty: false }
     w.server.push(`build: ${describeError(err)}`)
   }
-  const base = { generatedAt: now().toISOString(), collector, build, server: server ?? null, local, hosts, config: config ?? null }
+  const base = { generatedAt: now().toISOString(), collector, build, update: update ?? null, server: server ?? null, local, hosts, config: config ?? null }
   // Secrets never leave, in any form: fix logs, check errors and claude errors are free text.
   return maskSecrets({ ...base, warnings: [...w.server, ...w.local, ...w.config, ...w.hosts, ...findings(base)] })
 }

@@ -21,6 +21,8 @@ import { useAllHostStatus } from '@/hooks/useHostStatus';
 import { hostProblemOf } from '@open-walnut/host-problem';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { NotificationHostRow } from './NotificationHostRow';
+import { NotificationUpdateCard } from './NotificationUpdateCard';
+import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import '@/styles/attention-banner.css';
 import '@/styles/attention-banner-dense.css';
 import { formatRelative } from '@/contexts/notifications';
@@ -104,6 +106,8 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
   const { health, gitSync, loading } = useSystemHealth();
   const statuses = useAllHostStatus();
   const navigate = useNavigate();
+  // The panel fetched this when it opened (the rail dot needs it); the pane only reads and re-checks.
+  const update = useUpdateStatus(true);
   // Open Settings lands on the host's own Settings row, as the Home card's button does.
   const onOpenSettings = useCallback((alias?: string) => {
     onLeave?.();
@@ -197,6 +201,11 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
           )}
         </div>
       </div>
+
+      {/* Which Open Walnut runs here, and whether npm has a newer one. */}
+      {update.status && (
+        <NotificationUpdateCard status={update.status} checking={update.checking} onCheck={() => { void update.checkNow(); }} />
+      )}
 
       {/* Embedding Search status */}
       {indexStatus && (

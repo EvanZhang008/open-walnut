@@ -41,6 +41,28 @@ function buildValue(r: DiagnosticsReport): string {
   return parts.join('  ')
 }
 
+/** `0.5.1 is the newest release (checked 2026-09-30T…)`, `0.6.0 is published  run: npm install -g …`, or why there is no answer. */
+function updateValue(r: DiagnosticsReport): string {
+  const u = r.update
+  if (!u) return 'not checked'
+  if (!u.enabled) {
+    switch (u.reason) {
+      case 'source': return `not checked: running from a source checkout${u.install.sourceDir ? ` (${u.install.sourceDir})` : ''}`
+      case 'replica': return 'not checked: a cloud replica updates through its own deploy'
+      case 'opted-out': return 'not checked: WALNUT_NO_UPDATE_CHECK is set'
+      case 'unknown-version': return 'not checked: this build has no version'
+      default: return 'not checked'
+    }
+  }
+  if (!u.latest) return u.error ? `could not reach the registry (${u.error})` : 'not checked yet'
+  const parts = u.available
+    ? [`${u.latest} is published`, u.install.updateCommand ? `run: ${u.install.updateCommand}` : `see ${u.packageUrl}`]
+    : [`${u.current} is the newest release`]
+  if (u.checkedAt) parts.push(`checked ${u.checkedAt}`)
+  if (u.error) parts.push(`last attempt failed: ${u.error}`)
+  return parts.join('  ')
+}
+
 function pathValue(p: PathSummary | null): string {
   if (!p) return 'not captured'
   if (p.count === 0) return 'empty'
@@ -169,6 +191,7 @@ export function renderDiagnosticsText(r: DiagnosticsReport, opts: RenderOptions 
   const out = [
     `Open Walnut doctor (${r.collector}, ${r.generatedAt})`,
     line('build', buildValue(r)),
+    line('update', updateValue(r)),
     line('server', serverValue),
   ]
   if (s) out.push(line('data dir', s.dataDir))

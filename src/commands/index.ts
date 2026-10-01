@@ -295,6 +295,15 @@ export function registerCommands(program: Command): void {
     });
 
   program
+    .command('update')
+    .description('Check npm for a newer Open Walnut and install it (a source checkout is told the git steps instead)')
+    .option('--check', 'Only report whether a newer version is published')
+    .action(async (options: Record<string, unknown>, cmd) => {
+      const { runUpdate } = await import('./update.js');
+      await runUpdate(options as { check?: boolean }, cmd.optsWithGlobals());
+    });
+
+  program
     .command('daemon [args...]')
     .description('Manage this host daemon service (status | install | update | uninstall | restart)')
     .allowUnknownOption(true)
