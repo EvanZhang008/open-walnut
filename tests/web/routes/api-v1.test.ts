@@ -332,6 +332,9 @@ describe('tasks (read-only projection)', () => {
     getDb()!.prepare(
       "UPDATE sessions SET last_active_at = '2020-01-01T00:00:00.000Z', started_at = '2020-01-01T00:00:00.000Z' WHERE claude_session_id = 'sess-proj-old'",
     ).run()
+    // A write on the tracker's own connection does not move PRAGMA data_version,
+    // so the cached session store cannot see it; drop the cache the way a write would.
+    st._dropSessionStoreCacheForTesting()
 
     const res = await fetch(apiUrl('/api/v1/sessions'))
     expect(res.status).toBe(200)

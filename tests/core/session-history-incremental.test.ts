@@ -415,6 +415,11 @@ describe('history degrades to a bounded tail at the byte ceiling', () => {
 
     const full = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
     _resetHistoryCacheForTesting();
+    // The full read also leaves a disk snapshot stamped with this file's mtime, and a
+    // read that finds a matching snapshot never opens the file. Move the mtime so the
+    // ceiling path below really reads.
+    const later = new Date(Date.now() + 60_000);
+    await fsp.utimes(jsonlPath(sid), later, later);
 
     await withLimit(1024 * 1024, async () => {
       const msgs = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });

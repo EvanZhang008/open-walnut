@@ -162,12 +162,15 @@ describe('activity detail vs. a stale parse cache', () => {
     expect(body.result!.endsWith(END_MARKER)).toBe(true)
 
     // …and the entry has been rewritten in today's shape, so the next read is a cache
-    // HIT rather than another full parse (the version check is a one-time cost).
-    const rewritten = JSON.parse(await fs.readFile(path.join(HISTORY_CACHE_DIR, `${sid}.json`), 'utf-8')) as {
-      schema?: number; messages: Array<{ tools?: Array<{ resultChars?: number }> }>
-    }
-    expect(rewritten.schema).toBe(2)
-    expect(rewritten.messages.some((m) => m.tools?.some((t) => t.resultChars === RESULT.length))).toBe(true)
+    // HIT rather than another full parse (the version check is a one-time cost). Disk
+    // writes are coalesced for a couple of seconds, so wait for this one to land.
+    await vi.waitFor(async () => {
+      const rewritten = JSON.parse(await fs.readFile(path.join(HISTORY_CACHE_DIR, `${sid}.json`), 'utf-8')) as {
+        schema?: number; messages: Array<{ tools?: Array<{ resultChars?: number }> }>
+      }
+      expect(rewritten.schema).toBe(2)
+      expect(rewritten.messages.some((m) => m.tools?.some((t) => t.resultChars === RESULT.length))).toBe(true)
+    }, { timeout: 10_000, interval: 100 })
   })
 
   it('says truncated, with no cursor, for an unstamped cap-length prefix it cannot re-read', async () => {

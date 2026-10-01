@@ -138,7 +138,9 @@ describe('readSessionHistory with a recorded rewind cut', () => {
 
     // …and with no cut recorded at all, the flag alone filters NOTHING — not even
     // the branch it names. It is spawn plumbing; only inPlaceRewinds can cut.
-    _resetHistoryCacheForTesting();
+    // A changed record with the same file bytes is exactly what the rewind commit
+    // invalidates for (in memory AND the disk snapshot), so do the same here.
+    await invalidateSessionHistoryCaches('s-window');
     mockRecord = { pendingResumeSessionAt: 'u2' };
     expect(textsOf(await read('s-window'))).toEqual(unfiltered(t));
     expect(textsOf(await read('s-window'))).toContain('ABANDONED reply two');

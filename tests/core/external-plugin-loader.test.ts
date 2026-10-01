@@ -157,7 +157,9 @@ afterEach(async () => {
   versionControl.known = true;
   setPluginCodeTimeoutForTesting(null);
   for (const one of loadedRegistries.splice(0)) await disposeLoadedPlugins(one);
-  await fsp.rm(tmpDir, { recursive: true, force: true });
+  // A write a builtin's timer had already started can still land while rm walks the
+  // tree (ENOTEMPTY on the last rmdir, seen in CI); rm's own retries absorb it.
+  await fsp.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 // ── External plugin loading tests ──

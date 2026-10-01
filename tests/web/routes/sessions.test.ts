@@ -44,6 +44,17 @@ vi.mock('../../../src/core/daemon-file-reader.js', async () => {
       async findSession(): Promise<null> {
         return null;
       }
+
+      // The real reader stats before it reads (the big-file path covers local files too).
+      async stat(filePath: string): Promise<{ mtimeMs: number; size: number } | null> {
+        try {
+          const st = await fsp.stat(filePath);
+          return { mtimeMs: st.mtimeMs, size: st.size };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+          throw error;
+        }
+      }
     },
   };
 });

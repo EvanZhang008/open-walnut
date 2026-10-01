@@ -245,7 +245,10 @@ test('C74: an account condition shows the account name, never its id', async ({ 
   await waitRulesCount(1)
   await openRules(page)
   const summary = ruleRows(page).first().getByTestId('mail-rule-summary')
-  await expect(summary).toContainText(ferry.displayName || ferry.address)
+  // The account's display name, unless another account carries the same one (a person's
+  // two mailboxes usually do): then its address says which account it is.
+  const shared = accounts.filter((one) => one.displayName && one.displayName === ferry.displayName).length > 1
+  await expect(summary).toContainText(ferry.displayName && !shared ? ferry.displayName : ferry.address)
   expect(await page.locator(PANEL).innerText()).not.toContain(FERRY)
 })
 

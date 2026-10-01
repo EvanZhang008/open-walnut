@@ -424,8 +424,10 @@ describe('task-db: rowToTask / taskToRow round trip', () => {
     _resetForTesting();
 
     await addTask({ title: 'Another task', project: '', source: 'local' });
+    // An unrelated write leaves this row exactly as stored (writes patch only the rows
+    // they change); the legacy name is read as NEED_ACTION, so it stays red.
     expect(db.prepare('SELECT phase, status, updated_at FROM tasks WHERE id = ?').get('attention')).toEqual({
-      phase: 'NEED_ACTION', status: 'in_progress', updated_at: '2026-01-01T00:00:00Z',
+      phase, status: 'in_progress', updated_at: '2026-01-01T00:00:00Z',
     });
     const attention = await getTask('attention');
     expect(attention.unread).toBe(true);
