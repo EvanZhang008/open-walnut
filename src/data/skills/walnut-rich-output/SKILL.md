@@ -1,5 +1,5 @@
 ---
-name: rich-output
+name: walnut-rich-output
 description: Write replies as rich HTML that the Walnut web console and iOS app render natively while streaming — colored callouts, comparison grids, SVG diagrams, CSS-only steppers/tabs, animations, and sandboxed `html-app` islands for real JavaScript. Load this when explaining something hard (a paper, a codebase, a protocol, a decision) where visual structure beats prose, or when a reply is in rich output mode.
 ---
 

@@ -12,7 +12,7 @@ import { renderSelfKnowledgeContract } from '../self-knowledge-contract.js';
 /** Stable product contract: what Walnut is and how it works. */
 export function buildWorkModesSection(): string {
   // The suggest-card syntax deliberately does NOT live here — it loads on demand
-  // via the shipped `suggest-cards` skill (one index line instead of ~1.1KB in
+  // via the shipped `walnut-suggest-cards` skill (one index line instead of ~1.1KB in
   // every prompt).
   return renderSelfKnowledgeContract();
 }

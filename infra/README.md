@@ -19,7 +19,7 @@ this stack, wait for first boot, claim the box, and wire data sync for you:
   (or a free auto-address), and shows live progress. It survives a tab reload and
   a server restart.
 - **Ask your Personal AI**: "set up my cloud companion". The shipped
-  `setup-cloud-companion` skill drives the same resumable job over
+  `walnut-setup-cloud-companion` skill drives the same resumable job over
   `/api/cloud-setup`, so both surfaces do exactly the same thing.
 
 No domain of your own? Both paths offer an automatic `<dashed-ip>.sslip.io`

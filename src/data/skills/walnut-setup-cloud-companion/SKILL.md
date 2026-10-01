@@ -1,5 +1,5 @@
 ---
-name: setup-cloud-companion
+name: walnut-setup-cloud-companion
 description: >-
   Set up the self-hosted cloud companion — provision a small always-on VM, wire
   data sync to it, and get the user's phone working off Wi-Fi. Use when the user

@@ -12,7 +12,7 @@ import { EventNames } from '../../../src/core/event-bus.js'
 import { getOp } from '../../../src/ops/index.js'
 
 const ROOT = path.resolve(__dirname, '../../../src/data')
-const SKILLS = ['health-sleep-report', 'morning-brief', 'weekly-health-trend']
+const SKILLS = ['walnut-health-sleep-report', 'walnut-morning-brief', 'walnut-weekly-health-trend']
 const TEMPLATES = ['morning-brief', 'weekly-health-trend']
 const DASHES = /[–—]/
 const opsNamed = (text: string): string[] => [...text.matchAll(/tools call ([a-z_]+)/g)].map((m) => m[1])
@@ -74,15 +74,15 @@ describe('Apple Health skills', () => {
   }
 
   it('every sleep skill handles a night with only time in bed, and a date with only naps', () => {
-    for (const dir of ['health-sleep-report', 'morning-brief']) {
+    for (const dir of ['walnut-health-sleep-report', 'walnut-morning-brief']) {
       const flat = fs.readFileSync(path.join(ROOT, 'skills', dir, 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ')
       expect(flat, dir).toMatch(/`in_bed_only`/)
       expect(flat, dir).toMatch(/[Oo]nly time in bed was recorded/)
       expect(flat, dir).toMatch(/`no_main_night`/)
     }
-    const brief = fs.readFileSync(path.join(ROOT, 'skills', 'morning-brief', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ')
+    const brief = fs.readFileSync(path.join(ROOT, 'skills', 'walnut-morning-brief', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ')
     expect(brief).toMatch(/No main night was recorded, only naps/)
-    const weekly = fs.readFileSync(path.join(ROOT, 'skills', 'weekly-health-trend', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ')
+    const weekly = fs.readFileSync(path.join(ROOT, 'skills', 'walnut-weekly-health-trend', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ')
     expect(weekly).toMatch(/only time in bed/)
   })
 
@@ -91,7 +91,7 @@ describe('Apple Health skills', () => {
       const flat = fs.readFileSync(path.join(ROOT, 'skills', dir, 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ')
       expect(flat, dir).toMatch(/`unrecordedGaps`/)
     }
-    for (const dir of ['health-sleep-report', 'morning-brief']) {
+    for (const dir of ['walnut-health-sleep-report', 'walnut-morning-brief']) {
       const flat = fs.readFileSync(path.join(ROOT, 'skills', dir, 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ')
       expect(flat, dir).toMatch(/recording has a gap/)
       expect(flat, dir).toMatch(/wake time/)

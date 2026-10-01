@@ -899,7 +899,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
   const isEphemeral = IS_EPHEMERAL
-  // Own-server URL for agent-facing skills/tools (e.g. the install-plugin skill curls
+  // Own-server URL for agent-facing skills/tools (e.g. the walnut-install-plugin skill curls
   // the REST API). Sandbox/demo servers on other ports inherit the right value.
   // Set again after listen, where port 0 resolves to a real number.
   process.env.WALNUT_SERVER_URL = `http://localhost:${port}`

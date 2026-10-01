@@ -1,5 +1,5 @@
 ---
-name: import-external-sessions
+name: walnut-import-external-sessions
 description: >-
   Import coding-agent sessions started outside Walnut (terminal `claude`,
   Claude Desktop, codex TUI, other SDK apps) into Walnut as tasks. Use when the

@@ -1,5 +1,5 @@
 ---
-name: register-repo
+name: walnut-register-repo-dispatch
 description: >-
   Register a repository: start a Claude Code session that explores the
   codebase and creates a structured profile. Use when the user says

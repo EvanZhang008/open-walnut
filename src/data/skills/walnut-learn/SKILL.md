@@ -1,5 +1,5 @@
 ---
-name: learn
+name: walnut-learn
 description: >-
   Distill a workflow, doc, or conversation into a reusable skill. Use when
   the user says "learn this", "save this as a skill", or wants a procedure

@@ -1,5 +1,5 @@
 ---
-name: weekly-health-trend
+name: walnut-weekly-health-trend
 description: >-
   Compare this week's sleep and activity with last week's, next to how much the
   user worked, with honest small-sample caveats. Use for the Sunday 19:00

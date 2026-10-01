@@ -3,8 +3,8 @@ name: walnut-inbox-triage
 description: >-
   The procedure for ONE Inbox Triage run: what to read, which notes to update,
   and what to ask. Use only when launched as the Inbox Triage agent with a batch
-  of new mail and Slack items. Not for one message, not for triaging tasks (that
-  is the `triage` skill), not for general mail or Slack questions.
+  of new mail and Slack items. Not for one message, not for triaging tasks (the
+  `walnut-triage` skill), not for general mail or Slack questions.
 ---
 
 # One triage run

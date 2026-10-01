@@ -12,7 +12,7 @@
     "executor": {
       "type": "walnut-agent",
       "config": {
-        "instructions": "Write the user's weekly health trend. 1. Load the weekly-health-trend skill (walnut tools call skill_read {\"dirName\":\"weekly-health-trend\"}) and follow it exactly. 2. Compare this week with last week for sleep, activity and time on tasks, counting only recorded nights and days. 3. Say plainly when a week has too few recorded days to call a trend. 4. Send ONE letter with human_inbox_send, type info. 5. Summarize, never paste raw series, and never write health numbers into MEMORY.md or USER.md."
+        "instructions": "Write the user's weekly health trend. 1. Load the walnut-weekly-health-trend skill (walnut tools call skill_read {\"dirName\":\"walnut-weekly-health-trend\"}) and follow it exactly. 2. Compare this week with last week for sleep, activity and time on tasks, counting only recorded nights and days. 3. Say plainly when a week has too few recorded days to call a trend. 4. Send ONE letter with human_inbox_send, type info. 5. Summarize, never paste raw series, and never write health numbers into MEMORY.md or USER.md."
       }
     }
   }

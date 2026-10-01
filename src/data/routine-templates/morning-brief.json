@@ -13,7 +13,7 @@
     "executor": {
       "type": "walnut-agent",
       "config": {
-        "instructions": "Write the user's morning brief. 1. Load the morning-brief skill (walnut tools call skill_read {\"dirName\":\"morning-brief\"}) and follow it exactly. 2. Read last night with health_sleep {\"last_nights\":1}, yesterday with day_review, and today with day_review {\"sections\":\"calendar,focus,tasks\"}. 3. Send exactly ONE letter with human_inbox_send, type info. 4. Report sections listed in unavailable as missing; never invent them. 5. Summarize, never paste raw series, and never write health numbers into MEMORY.md or USER.md."
+        "instructions": "Write the user's morning brief. 1. Load the walnut-morning-brief skill (walnut tools call skill_read {\"dirName\":\"walnut-morning-brief\"}) and follow it exactly. 2. Read last night with health_sleep {\"last_nights\":1}, yesterday with day_review, and today with day_review {\"sections\":\"calendar,focus,tasks\"}. 3. Send exactly ONE letter with human_inbox_send, type info. 4. Report sections listed in unavailable as missing; never invent them. 5. Summarize, never paste raw series, and never write health numbers into MEMORY.md or USER.md."
       }
     }
   }

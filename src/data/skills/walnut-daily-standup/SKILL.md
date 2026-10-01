@@ -1,5 +1,5 @@
 ---
-name: daily-standup
+name: walnut-daily-standup
 description: >-
   Review recent activity and generate a standup update. Use when the user
   asks for a standup, "what did I do yesterday", or a daily summary.

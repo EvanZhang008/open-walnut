@@ -1,5 +1,5 @@
 ---
-name: weekly-review
+name: walnut-weekly-review
 description: >-
   Summarize the week's progress across all projects. Use when the user asks
   for a weekly review, week summary, or "what happened this week".

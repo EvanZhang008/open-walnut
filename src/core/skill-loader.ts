@@ -160,6 +160,47 @@ export interface DiscoveredSkill {
   size: number;
 }
 
+/**
+ * Every shipped skill carries the `walnut-` prefix. These are the directory names the
+ * shipped skills had before the prefix; a routine, a `skill_read`, a saved disabled
+ * entry or a bookmarked `/api/skills/<dirName>` written against the old name still
+ * resolves. A user's own skill under an old name is discovered under that key and
+ * wins, so the alias only applies when nothing is discovered under the asked name.
+ */
+export const LEGACY_SKILL_DIR_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  'daily-standup': 'walnut-daily-standup',
+  'health-sleep-report': 'walnut-health-sleep-report',
+  'import-external-sessions': 'walnut-import-external-sessions',
+  'install-plugin': 'walnut-install-plugin',
+  learn: 'walnut-learn',
+  'morning-brief': 'walnut-morning-brief',
+  'register-repo': 'walnut-register-repo-dispatch',
+  'rich-output': 'walnut-rich-output',
+  'setup-cloud-companion': 'walnut-setup-cloud-companion',
+  'suggest-cards': 'walnut-suggest-cards',
+  triage: 'walnut-triage',
+  'weekly-health-trend': 'walnut-weekly-health-trend',
+  'weekly-review': 'walnut-weekly-review',
+});
+
+/** The discovered key `dirName` stands for: itself when discovered, else its renamed shipped skill. */
+export function resolveSkillDirName(dirName: string, discovered: Map<string, unknown>): string {
+  if (discovered.has(dirName)) return dirName;
+  const renamed = LEGACY_SKILL_DIR_ALIASES[dirName];
+  return renamed && discovered.has(renamed) ? renamed : dirName;
+}
+
+/** A disabled list that also disables the renamed form of every legacy name it holds. */
+export function expandDisabledSkillNames(disabled: Iterable<string>): Set<string> {
+  const set = new Set<string>();
+  for (const name of disabled) {
+    set.add(name);
+    const renamed = LEGACY_SKILL_DIR_ALIASES[name];
+    if (renamed) set.add(renamed);
+  }
+  return set;
+}
+
 async function discoverSkills(dirs: string[]): Promise<Map<string, DiscoveredSkill>> {
   const found = new Map<string, DiscoveredSkill>();
   for (const base of dirs) {
@@ -469,7 +510,7 @@ async function getDisabledSkillSet(): Promise<Set<string>> {
   try {
     const raw = await fsp.readFile(SKILL_SETTINGS_FILE, 'utf-8');
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed.disabled)) return new Set(parsed.disabled);
+    if (Array.isArray(parsed.disabled)) return expandDisabledSkillNames(parsed.disabled);
   } catch {
     // file doesn't exist or invalid — all skills enabled
   }

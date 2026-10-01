@@ -1,5 +1,5 @@
 ---
-name: install-plugin
+name: walnut-install-plugin
 description: Install, configure, verify, update, and remove trusted Walnut Plugins from Git or npm through the Plugin Store REST API. Use when the user explicitly provides a Plugin share snippet, Git URL, or npm package spec and asks to install, update, remove, or diagnose that Plugin.
 ---
 

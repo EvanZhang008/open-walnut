@@ -36,7 +36,7 @@ resumable job behind both (`/api/cloud-setup`, driven by
 
 - **Settings → Cloud Companion** — the wizard.
 - **Ask your Personal AI**: "set up my cloud companion" routes to the shipped
-  `setup-cloud-companion` skill.
+  `walnut-setup-cloud-companion` skill.
 
 The claim step is what mints the device token: the box boots holding a one-shot
 setup token, and `POST /api/v1/setup/claim` trades it for the long-lived device

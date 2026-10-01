@@ -20,6 +20,9 @@ import {
   normalizeSkillType,
   type DiscoveredSkill,
   type SkillType,
+  resolveSkillDirName,
+  expandDisabledSkillNames,
+  LEGACY_SKILL_DIR_ALIASES,
 } from './skill-loader.js';
 
 /** Where a skill's directory lives. One union, so the field and the resolver can't drift. */
@@ -222,7 +225,7 @@ export async function listAllSkills(): Promise<SkillInfo[]> {
   const generation = getSkillsCacheGeneration();
   const dirs = getSearchDirs();
   const [discovered, settings] = await Promise.all([discoverSkills(dirs), readSettings()]);
-  const disabledSet = new Set(settings.disabled);
+  const disabledSet = expandDisabledSkillNames(settings.disabled);
   const key = skillListKey(generation, dirs, discovered);
   const startedAt = Date.now();
 
@@ -250,9 +253,10 @@ export async function listAllSkills(): Promise<SkillInfo[]> {
   return skills.map((s) => ({ ...s, enabled: !disabledSet.has(s.dirName) }));
 }
 
-export async function getSkill(dirName: string): Promise<SkillInfo | null> {
+export async function getSkill(requested: string): Promise<SkillInfo | null> {
   const dirs = getSearchDirs();
   const discovered = await discoverSkills(dirs);
+  const dirName = resolveSkillDirName(requested, discovered);
   const entry = discovered.get(dirName);
   if (!entry) return null;
 
@@ -282,7 +286,7 @@ export async function getSkill(dirName: string): Promise<SkillInfo | null> {
     type: normalizeSkillType(frontmatter.type),
     metadata: frontmatter.metadata,
     eligible,
-    enabled: !settings.disabled.includes(dirName),
+    enabled: !expandDisabledSkillNames(settings.disabled).has(dirName),
     hasReferences,
   };
 }
@@ -329,9 +333,10 @@ export async function createSkill(
   return skill;
 }
 
-export async function updateSkill(dirName: string, content: string): Promise<SkillInfo> {
+export async function updateSkill(requested: string, content: string): Promise<SkillInfo> {
   const dirs = getSearchDirs();
   const discovered = await discoverSkills(dirs);
+  const dirName = resolveSkillDirName(requested, discovered);
   const entry = discovered.get(dirName);
   if (!entry) throw new Error(`Skill not found: ${dirName}`);
 
@@ -356,9 +361,10 @@ export async function updateSkill(dirName: string, content: string): Promise<Ski
   return skill;
 }
 
-export async function deleteSkill(dirName: string): Promise<void> {
+export async function deleteSkill(requested: string): Promise<void> {
   const dirs = getSearchDirs();
   const discovered = await discoverSkills(dirs);
+  const dirName = resolveSkillDirName(requested, discovered);
   const entry = discovered.get(dirName);
   if (!entry) throw new Error(`Skill not found: ${dirName}`);
 
@@ -379,19 +385,25 @@ export async function deleteSkill(dirName: string): Promise<void> {
   clearSkillsCache();
 }
 
-export async function setSkillEnabled(dirName: string, enabled: boolean): Promise<SkillInfo> {
+export async function setSkillEnabled(requested: string, enabled: boolean): Promise<SkillInfo> {
   // Validate skill exists BEFORE modifying settings
   const dirs = getSearchDirs();
   const discovered = await discoverSkills(dirs);
+  const dirName = resolveSkillDirName(requested, discovered);
   if (!discovered.has(dirName)) {
     throw new Error(`Skill not found: ${dirName}`);
   }
 
   const settings = await readSettings();
   const disabledSet = new Set(settings.disabled);
+  // Re-enabling a renamed skill must also drop the entry saved under its old name.
+  const legacyNames = Object.entries(LEGACY_SKILL_DIR_ALIASES)
+    .filter(([, renamed]) => renamed === dirName)
+    .map(([legacy]) => legacy);
 
   if (enabled) {
     disabledSet.delete(dirName);
+    for (const legacy of legacyNames) disabledSet.delete(legacy);
   } else {
     disabledSet.add(dirName);
   }
@@ -407,9 +419,10 @@ export async function setSkillEnabled(dirName: string, enabled: boolean): Promis
 
 // ─── references ─────────────────────────────────────────────────────
 
-export async function listReferences(dirName: string): Promise<{ name: string; size: number }[]> {
+export async function listReferences(requested: string): Promise<{ name: string; size: number }[]> {
   const dirs = getSearchDirs();
   const discovered = await discoverSkills(dirs);
+  const dirName = resolveSkillDirName(requested, discovered);
   const entry = discovered.get(dirName);
   if (!entry) throw new Error(`Skill not found: ${dirName}`);
 
@@ -435,7 +448,7 @@ export async function listReferences(dirName: string): Promise<{ name: string; s
   return files;
 }
 
-export async function getReference(dirName: string, filename: string): Promise<string> {
+export async function getReference(requested: string, filename: string): Promise<string> {
   // Path traversal guard
   if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
     throw new Error('Invalid filename');
@@ -443,6 +456,7 @@ export async function getReference(dirName: string, filename: string): Promise<s
 
   const dirs = getSearchDirs();
   const discovered = await discoverSkills(dirs);
+  const dirName = resolveSkillDirName(requested, discovered);
   const entry = discovered.get(dirName);
   if (!entry) throw new Error(`Skill not found: ${dirName}`);
 

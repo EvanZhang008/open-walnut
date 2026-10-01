@@ -1,5 +1,5 @@
 ---
-name: suggest-cards
+name: walnut-suggest-cards
 description: Emit clickable suggest-action cards in the Walnut web console — buttons wired to real Walnut ops (task triage, focus tier moves, scheduling). Load this BEFORE proposing any one-click action the user should approve rather than type out, e.g. "put this task in Focus?", a daily plan draft, or a batch cleanup with per-item buttons.
 ---
 

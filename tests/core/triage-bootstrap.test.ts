@@ -414,10 +414,10 @@ describe('the shipped skill', () => {
     expect(raw.startsWith('---\n')).toBe(true);
     const front = raw.slice(4, raw.indexOf('\n---', 4));
     expect(front).toContain('name: walnut-inbox-triage');
-    // It must say what it is NOT for; the `triage` skill (task triage) is the
+    // It must say what it is NOT for; the `walnut-triage` skill (task triage) is the
     // nearest neighbour and the one it would otherwise steal queries from.
     expect(front).toContain('Not for');
-    expect(front).toContain('`triage` skill');
+    expect(front).toContain('`walnut-triage` skill');
   });
 
   it('names the memory layers the run must write', async () => {

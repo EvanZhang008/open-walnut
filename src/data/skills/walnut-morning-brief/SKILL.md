@@ -1,5 +1,5 @@
 ---
-name: morning-brief
+name: walnut-morning-brief
 description: >-
   Write the user's morning brief: last night's sleep against their baseline,
   yesterday in one paragraph, and today's calendar and focus, sent as one inbox

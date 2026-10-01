@@ -1,5 +1,5 @@
 ---
-name: health-sleep-report
+name: walnut-health-sleep-report
 description: >-
   Report on the user's recent sleep from Apple Health: the last 7 nights against
   their own 28-night baseline, with plain flags and the prior day's context. Use

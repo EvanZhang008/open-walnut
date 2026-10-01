@@ -1,5 +1,5 @@
 ---
-name: triage
+name: walnut-triage
 description: >-
   Triage and prioritize pending tasks. Use when the user asks to triage,
   review priorities, clean up stale tasks, or decide what to work on next.

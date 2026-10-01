@@ -70,7 +70,7 @@ export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
   + 'For anything needing <script>, emit a ```html-app fenced block '
   + '(rendered in a sandboxed iframe). A short answer needs none of this. '
   + 'Component recipes (steppers, SVG diagrams, animations, islands): '
-  + `\`walnut tools call skill_read '{"dirName":"rich-output"}'\`.`;
+  + `\`walnut tools call skill_read '{"dirName":"walnut-rich-output"}'\`.`;
 
 /** Turning it back OFF. Deliberately terse: the model already has the context. */
 export const RICH_OUTPUT_MODE_OFF_INSTRUCTION =
