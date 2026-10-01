@@ -37,7 +37,11 @@ if (isDevCheckout) {
   // releases only on its own CDN). npm 12 refuses tarball URLs unless allowed
   // (EALLOWREMOTE); npm 11 and older warn on the unknown flag.
   const npmMajor = Number(/\bnpm\/(\d+)\./.exec(process.env.npm_config_user_agent ?? '')?.[1] ?? 0);
-  const webInstall = npmMajor >= 12 ? ['install', '--allow-remote=root'] : ['install'];
+  // `npm ci` at the root (CI, the release jobs) installs exactly the lockfile and
+  // never rewrites it: do the same in web/, or a web/package-lock.json that lags
+  // web/package.json is rewritten mid-release and the build is stamped dirty.
+  const webCommand = process.env.npm_command === 'ci' ? 'ci' : 'install';
+  const webInstall = npmMajor >= 12 ? [webCommand, '--allow-remote=root'] : [webCommand];
   if (!run('npm', webInstall, { cwd: join(root, 'web') })) process.exit(1);
   process.exit(0);
 }

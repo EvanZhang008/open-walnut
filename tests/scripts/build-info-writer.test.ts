@@ -68,6 +68,25 @@ describe('collectBuildInfo', () => {
     expect(info.version).toBe('1.2.4');
   });
 
+  it('a nightly version stamp alone is not dirt, but any other edit still is', () => {
+    const repo = path.join(tmp, 'repo');
+    makeRepo(repo);
+    fs.writeFileSync(path.join(repo, 'package-lock.json'), '{}\n');
+    git(repo, 'add', 'package-lock.json');
+    git(repo, 'commit', '-q', '-m', 'lock');
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ name: 'open-walnut', version: '1.2.4-nightly.20261001.1' }));
+    fs.writeFileSync(path.join(repo, 'package-lock.json'), '{"version":"1.2.4-nightly.20261001.1"}\n');
+    const stamped = { WALNUT_VERSION_STAMPED: '1' };
+    expect(collectBuildInfo(repo, new Date(), stamped).dirty).toBe(false);
+    expect(collectBuildInfo(repo, new Date(), {}).dirty).toBe(true);
+    fs.mkdirSync(path.join(repo, 'src'));
+    fs.writeFileSync(path.join(repo, 'src', 'a.ts'), 'one');
+    git(repo, 'add', 'src/a.ts');
+    git(repo, 'commit', '-q', '-m', 'src');
+    fs.writeFileSync(path.join(repo, 'src', 'a.ts'), 'two');
+    expect(collectBuildInfo(repo, new Date(), stamped).dirty).toBe(true);
+  });
+
   it('a detached HEAD has no branch', () => {
     const repo = path.join(tmp, 'repo');
     const sha = makeRepo(repo);

@@ -6,6 +6,13 @@ breaking changes).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A published build no longer calls itself dirty.** `open-walnut --version` on 0.6.0 reads
+  `33eb1cb+dirty` because the release rewrote a stale `web/package-lock.json` while it built.
+  The lockfile is current again, CI and the release jobs install with `npm ci` (which never
+  rewrites a lockfile), and a nightly's own version stamp does not count as an edit.
+
 ## [0.6.0] - 2026-10-01
 
 ### Added

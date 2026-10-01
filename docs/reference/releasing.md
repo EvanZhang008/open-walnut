@@ -36,7 +36,8 @@ on the machine that runs it.
 
 The push of the tag starts `.github/workflows/release.yml`, job `stable`: it checks the tag
 against `package.json`, checks CI again (`scripts/ci-gate.mjs release HEAD`; a release
-commit only rolls the version and CHANGELOG, so its parent's result counts), installs,
+commit only rolls the version and CHANGELOG, so its parent's result counts), installs with
+`npm ci` (exactly the lockfiles, never rewritten, so the build is not stamped dirty),
 runs `npm run lint`, and runs `npm publish --provenance --access public`. `prepublishOnly` does the real build (`WALNUT_REQUIRE_BUN=1 npm run
 build`, the web app, `scripts/check-publish.mjs` against the tarball), so a publish can
 never ship a stale or partial `dist/`. The job then creates a GitHub Release whose notes

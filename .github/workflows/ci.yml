@@ -35,7 +35,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - run: npm install
+      - run: npm ci
       - run: npm run lint
       - run: npm run build
       - run: npm run test:plugin-packages
@@ -78,7 +78,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - run: npm install
+      - run: npm ci
       # Workspace packages are consumed from their dist/ (demo-plugin-lifecycle loads
       # @open-walnut/plugin-api/dist/react.js); a fresh clone has not built them.
       - run: npm run build:plugins
@@ -118,7 +118,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - run: npm install
+      - run: npm ci
       # Both tiers spawn the session daemon, which the build produces.
       - run: npm run build
       - name: ${{ matrix.tier }} tests
@@ -280,7 +280,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - run: npm install
+      - run: npm ci
       - run: npm run build:daemon
         env:
           WALNUT_REQUIRE_BUN: '1'

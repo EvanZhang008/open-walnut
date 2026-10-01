@@ -78,7 +78,7 @@ jobs:
         with:
           bun-version: latest
       - run: npm install -g npm@12
-      - run: npm install
+      - run: npm ci
       - run: npm run lint
       # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs
       # against the tarball before anything leaves the runner.
@@ -146,11 +146,14 @@ jobs:
       - if: steps.pick.outputs.publish == 'true'
         run: npm install -g npm@12
       - if: steps.pick.outputs.publish == 'true'
-        run: npm install
+        run: npm ci
       # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs.
       - name: Version this nightly and publish it
         if: steps.pick.outputs.publish == 'true'
         id: publish
+        env:
+          # The version stamp below is the only edit; the build must not call itself dirty.
+          WALNUT_VERSION_STAMPED: '1'
         run: |
           version="$(node scripts/nightly-version.mjs)"
           echo "publishing open-walnut@$version from ${{ steps.pick.outputs.sha }}"

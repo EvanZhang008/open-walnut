@@ -9,7 +9,9 @@
  * commit/branch are null outside a git checkout (the npm tarball, a source
  * archive) and branch is null on a detached HEAD (CI, the cloud deploy). dirty
  * counts tracked changes only, like `git describe --dirty`: untracked scratch
- * files do not change what was built from the tree.
+ * files do not change what was built from the tree. The nightly release stamps
+ * its version into package.json and package-lock.json before it builds and sets
+ * WALNUT_VERSION_STAMPED=1, so those two files do not count either.
  *
  * tsup.config.ts calls writeBuildInfo() from onSuccess, after a build succeeds,
  * so `npm run build`, `web:build`, `prepublishOnly` and a bare `npx tsup` all
@@ -70,7 +72,7 @@ function samePath(a, b) {
  * whose top level IS `root` counts: an unpacked tarball sitting inside some
  * other repository must not report that repository's commit.
  */
-export function collectBuildInfo(root, now = new Date()) {
+export function collectBuildInfo(root, now = new Date(), env = process.env) {
   let version = '0.0.0'
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -85,7 +87,8 @@ export function collectBuildInfo(root, now = new Date()) {
     commit = git(root, ['rev-parse', '--short', 'HEAD']) || null
     const ref = git(root, ['rev-parse', '--abbrev-ref', 'HEAD'])
     branch = ref && ref !== 'HEAD' ? ref : null
-    if (commit) dirty = (git(root, ['status', '--porcelain', '--untracked-files=no']) ?? '') !== ''
+    const stamped = env.WALNUT_VERSION_STAMPED === '1' ? [':!package.json', ':!package-lock.json'] : []
+    if (commit) dirty = (git(root, ['status', '--porcelain', '--untracked-files=no', '--', '.', ...stamped]) ?? '') !== ''
   }
   return { version, commit, branch, builtAt: now.toISOString(), dirty }
 }
