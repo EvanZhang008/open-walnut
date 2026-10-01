@@ -35,6 +35,11 @@ export interface MailCapabilities {
    * inbox" rule does. Optional so a provider written before it keeps compiling; absent means no.
    */
   archive?: boolean
+  /**
+   * Can read a meeting invite's place on the calendar and answer it (`inviteDetails` and
+   * `respondToInvite`). Optional like `archive`; absent means the reader offers no Accept button.
+   */
+  rsvp?: boolean
 }
 
 export type AccountSetupFieldKind = 'text' | 'password' | 'select'
@@ -222,6 +227,60 @@ export interface MailEnvelope {
    * only: like `listUnsubscribe` it is NOT part of `envelopeHashOf`.
    */
   bulkHeaders?: { precedence?: string; autoSubmitted?: string }
+  /**
+   * This message is a meeting invite (or its cancellation), when the listing can tell.
+   *
+   * Only a marker: when the meeting is and whether it was answered live on the calendar, which is
+   * asked on open (`inviteDetails`), never cached here, because a calendar answer changes without
+   * the mail changing. Unlike `listUnsubscribe` it IS part of `envelopeHashOf`, but only when present,
+   * so a provider that starts reporting it updates its invites once and every other row not at all.
+   */
+  invite?: MailInviteMarker
+}
+
+/** What the listing said about a meeting message. */
+export interface MailInviteMarker {
+  /** `request`: an invitation or an update to one. `canceled`: the organizer called it off. */
+  kind: 'request' | 'canceled'
+}
+
+/** The three answers a meeting invite takes, in the words calendars use for them. */
+export type MailInviteResponse = 'accept' | 'tentative' | 'decline'
+
+/**
+ * One meeting invite as the account's calendar knows it right now (`inviteDetails`).
+ *
+ * The base caps every string before it reaches a console, because all of it was written by whoever
+ * sent the invite. `canRespond: false` always comes with a `reason` a person can act on ("answer
+ * this series in Outlook"), since a button that is missing without a reason reads as a bug.
+ */
+export interface MailInviteDetails {
+  /** `open`: on the calendar and answerable. `canceled`: called off. `not-found`: no calendar match. */
+  state: 'open' | 'canceled' | 'not-found'
+  subject?: string
+  /** Epoch milliseconds. */
+  start?: number
+  end?: number
+  allDay?: boolean
+  location?: string
+  organizer?: MailAddress
+  /** What this account has answered so far. `organizer` means it is the account's own meeting. */
+  response?: 'none' | 'accepted' | 'tentative' | 'declined' | 'organizer'
+  /** One occurrence of a series, or the series itself. */
+  recurring?: boolean
+  canRespond: boolean
+  /** Why `canRespond` is false, as one sentence for a person. */
+  reason?: string
+}
+
+/** What the base hands `inviteDetails` / `respondToInvite`: the cached message, not just its handle. */
+export interface MailInviteRequest {
+  messageId: string
+  subject: string
+  from: MailAddress
+  /** Epoch milliseconds, as cached. */
+  sentAt: number
+  kind: MailInviteMarker['kind']
 }
 
 /** Headers fetched late for sorting and unsubscribe (`fetchListHeaders`). */
@@ -500,6 +559,22 @@ export interface MailProviderSpec {
     messageIds: string[],
   ): Promise<Array<{ messageId: string; headers: MailListHeaders | null }>>
   setFlag?(accountId: string, messageId: string, flag: string, value: boolean): Promise<void>
+  /**
+   * Where a meeting invite stands on this account's calendar. Read only when `capabilities.rsvp` is
+   * true and the message carries `invite`. Read-only: it MUST NOT answer the invite or mark it read.
+   * A provider may cache its calendar briefly; the base calls this every time a reader opens one.
+   */
+  inviteDetails?(accountId: string, invite: MailInviteRequest): Promise<MailInviteDetails>
+  /**
+   * Answer a meeting invite, which tells the organizer (Outlook: the calendar item's RSVP). Called
+   * only after a person pressed the button for THIS invite. Returns the details as they stand after
+   * the answer. A refusal decided before anything was submitted should say so (`stage: 'before-data'`).
+   */
+  respondToInvite?(
+    accountId: string,
+    invite: MailInviteRequest,
+    response: MailInviteResponse,
+  ): Promise<MailInviteDetails>
   /**
    * Forget this account: drop its config block, delete its secret, close its connection.
    *

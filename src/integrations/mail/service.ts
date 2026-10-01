@@ -30,6 +30,7 @@ import {
 } from './service-body.js'
 import {
   envelopeToDto,
+  inviteMarkerOf,
   parseJson,
   sizeHintOf,
   toDto,
@@ -454,6 +455,32 @@ export class MailService {
       ...(held ? { held } : {}),
       fromAddr: row.from_addr,
       subject: row.subject,
+    }
+  }
+
+  /**
+   * What a provider is handed about one meeting invite (invites.ts), from the CACHED row: the subject
+   * and sender the listing stored, so a provider can find the meeting without re-reading the mail.
+   * `kind` is undefined for a message the listing never called an invite.
+   */
+  async inviteSubject(accountId: string, messageId: string): Promise<{
+    accountId: string
+    messageId: string
+    subject: string
+    from: MailAddress
+    sentAt: number
+    kind?: 'request' | 'canceled'
+  }> {
+    const row = await this.requireMessage(accountId, messageId)
+    const payload = parseJson<MessagePayload>(row.payload, {})
+    const marker = inviteMarkerOf(payload.invite)
+    return {
+      accountId: row.account_id,
+      messageId: row.message_id,
+      subject: row.subject,
+      from: payload.from ?? { address: row.from_addr },
+      sentAt: row.sent_at,
+      ...(marker ? { kind: marker.kind } : {}),
     }
   }
 
@@ -1201,6 +1228,9 @@ export class MailService {
       ...(listUnsubscribe ? { listUnsubscribe } : {}),
       // A sorting signal, carried forward like `listUnsubscribe` (the hash ignores it too).
       ...(envelope.bulkHeaders ?? stored.bulkHeaders ? { bulkHeaders: envelope.bulkHeaders ?? stored.bulkHeaders } : {}),
+      // From the envelope alone, never carried forward: the hash includes it, so a listing that stops
+      // calling this an invite rewrites the row, and the row must then stop saying it is one.
+      ...(inviteMarkerOf(envelope.invite) ? { invite: inviteMarkerOf(envelope.invite)! } : {}),
     }
     return {
       accountId,

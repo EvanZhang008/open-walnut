@@ -85,6 +85,11 @@ export interface MailMessageDto {
   sort?: { group: string; reason: string; why: string; ruleId?: string }
   /** The sender key the group view files this mail under. Only with `group`. */
   senderKey?: string
+  /**
+   * A meeting invite, when the provider's listing said so. Only the marker: the reader asks
+   * `GET /messages/:a/:m/invite` for the time and the current answer, which live on the calendar.
+   */
+  invite?: { kind: 'request' | 'canceled' }
 }
 
 export type MailUnsubscribeAvailability = 'one-click' | 'mailto' | 'link' | 'none'
@@ -359,6 +364,8 @@ export function envelopeHashOf(envelope: MailEnvelope): string {
     envelope.rfcMessageId, envelope.mailboxId, envelope.from, envelope.to, envelope.subject,
     envelope.sentAt, envelope.receivedAt ?? null, [...(envelope.flags ?? [])].sort(),
     envelope.attachments ?? [], envelope.sentAtHeader ?? null,
+    // Appended only when present, so every row that is not an invite keeps the hash it always had.
+    ...(envelope.invite ? [`invite:${envelope.invite.kind}`] : []),
   ])).digest('hex')
 }
 

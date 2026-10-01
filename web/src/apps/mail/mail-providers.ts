@@ -54,6 +54,15 @@ export function mayOfferMarkRead(providers: MailProviderSummary[], accountId: st
   return !store.state.providersKnown;
 }
 
+/**
+ * Should a meeting invite get its card (time, answer, Accept / Tentative / Decline)? Only for a
+ * provider that declares `rsvp`: any other one would answer every click with a 409.
+ */
+export function canAnswerInvites(providers: MailProviderSummary[], accountId: string): boolean {
+  const provider = providers.find((one) => one.id === providerIdOf(accountId));
+  return provider?.capabilities.rsvp === true;
+}
+
 /** The provider behind an account id, re-reading the list once when it is not known yet. */
 export async function providerFor(accountId: string): Promise<ProviderAnswer> {
   const find = () => store.state.providers.find((one) => one.id === providerIdOf(accountId));

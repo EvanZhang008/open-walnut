@@ -22,6 +22,7 @@ import type {
   MailAddress,
   MailAttachmentMeta,
   MailEnvelope,
+  MailInviteMarker,
   MailListUnsubscribe,
   ProviderErrorCode,
 } from './types.js'
@@ -67,6 +68,17 @@ export interface MessagePayload {
   listUnsubscribe?: StoredListUnsubscribe
   /** `Precedence` / `Auto-Submitted` as the listing carried them: a sorting signal only. */
   bulkHeaders?: { precedence?: string; autoSubmitted?: string }
+  /**
+   * A meeting invite, as the listing said. Taken from the envelope every time and NOT carried
+   * forward: it is in the envelope hash, so a listing that stops reporting it rewrites the row.
+   */
+  invite?: MailInviteMarker
+}
+
+/** The marker as the cache may hold it, or undefined for anything that is not one. */
+export function inviteMarkerOf(raw: unknown): MailInviteMarker | undefined {
+  const kind = (raw as { kind?: unknown } | null | undefined)?.kind
+  return kind === 'request' || kind === 'canceled' ? { kind } : undefined
 }
 
 /**
@@ -161,6 +173,7 @@ export function toDto(row: MessageRow): MailMessageDto {
     ...(payload.listUnsubscribe
       ? { unsubscribe: { available: unsubscribeAvailability(payload.listUnsubscribe) } }
       : {}),
+    ...(inviteMarkerOf(payload.invite) ? { invite: inviteMarkerOf(payload.invite)! } : {}),
   }
 }
 
@@ -187,5 +200,6 @@ export function envelopeToDto(
     attachments: envelope.attachments ?? [],
     hasBody,
     threadId: threadIdOf(envelope),
+    ...(inviteMarkerOf(envelope.invite) ? { invite: inviteMarkerOf(envelope.invite)! } : {}),
   }
 }

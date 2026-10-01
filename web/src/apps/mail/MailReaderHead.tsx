@@ -16,11 +16,12 @@ import { formatSize } from '@/utils/format';
 import { openMailForwardComposer, openMailReplyComposer } from './compose/compose-actions';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
 import { attachmentLabel, formatMailDate, isUnread, recipientLabel, senderLabel } from './mail-format';
-import { mayOfferMarkRead } from './mail-providers';
+import { canAnswerInvites, mayOfferMarkRead } from './mail-providers';
 import { bodyQuoteText } from './mail-quote-text';
 import { attachmentKind, senderMark, type AttachmentKind } from './mail-reader-format';
 import { setOpenMessageRead } from './mail-read-flag';
 import { MailTaskButton } from './MailTaskButton';
+import { MailInviteCard } from './MailInviteCard';
 import { MailSortLine } from './MailSortLine';
 import type { MailOpenMessage } from './mail-store';
 import { openFinishUnsubscribeAsk, unsubscribeFromMessage } from './mail-unsubscribe-actions';
@@ -120,6 +121,9 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
         </span>
       </div>
 
+      {message.invite && canAnswerInvites(providers, open.accountId) && (
+        <MailInviteCard accountId={open.accountId} messageId={open.messageId} kind={message.invite.kind} />
+      )}
       <UnsubscribeLine open={open} message={message} accounts={accounts} providers={providers} />
       <MailSortLine open={open} />
 

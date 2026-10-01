@@ -53,6 +53,10 @@ export type {
   MailBody,
   MailCapabilities,
   MailEnvelope,
+  MailInviteDetails,
+  MailInviteMarker,
+  MailInviteRequest,
+  MailInviteResponse,
   MailListUnsubscribe,
   MailPollRequest,
   MailPollResult,
@@ -124,8 +128,14 @@ export type {
  * reports neither behaves exactly as it did, and the console simply offers no unsubscribe action.
  * The base does NOT put the field in the envelope hash, so a provider that starts reporting it does
  * not mass-update every row it has ever cached.
+ *
+ * 1.11.0 adds two optional capabilities. `archive` + `archiveMany` move inbox mail to the account's
+ * archive, still unread, for a "keep out of the Inbox" rule. `rsvp` + `inviteDetails` +
+ * `respondToInvite` show a meeting invite's time and current answer in the reader and send the
+ * person's Accept / Tentative / Decline; `MailEnvelope.invite` marks which messages are invites, and
+ * it IS in the envelope hash, but only when present, so no other row is rewritten.
  */
-export const MAIL_BASE_API_VERSION = '1.10.0'
+export const MAIL_BASE_API_VERSION = '1.11.0'
 
 /**
  * The method bag published as `mail:base`.

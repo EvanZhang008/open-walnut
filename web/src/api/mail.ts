@@ -38,6 +38,10 @@ export interface MailCapabilities {
   sendAsReply: boolean;
   bodies: 'text' | 'html' | 'both';
   attachments: 'none' | 'metadata' | 'download';
+  /** Moves inbox mail to the archive (a "keep out of the Inbox" rule). Absent means no. */
+  archive?: boolean;
+  /** Answers meeting invites (Accept / Tentative / Decline). Absent means no. */
+  rsvp?: boolean;
 }
 
 export type AccountSetupFieldKind = 'text' | 'password' | 'select';
@@ -197,6 +201,32 @@ export interface MailMessageDto {
   sort?: { group: string; label?: string; reason: string; why: string; ruleId?: string };
   /** The sender key the group view files this mail under. Only with `group`. */
   senderKey?: string;
+  /**
+   * A meeting invite, as the provider's listing marked it. Only the marker: the time and the current
+   * answer live on the calendar and come from `readMailInvite`.
+   */
+  invite?: { kind: 'request' | 'canceled' };
+}
+
+export type MailInviteResponse = 'accept' | 'tentative' | 'decline';
+
+/** One invite as the account's calendar knows it right now. Every string was written by the sender. */
+export interface MailInviteDetails {
+  state: 'open' | 'canceled' | 'not-found';
+  subject?: string;
+  /** Epoch milliseconds. */
+  start?: number;
+  end?: number;
+  allDay?: boolean;
+  location?: string;
+  organizer?: MailAddress;
+  response?: 'none' | 'accepted' | 'tentative' | 'declined' | 'organizer';
+  recurring?: boolean;
+  canRespond: boolean;
+  /** Why `canRespond` is false, as one sentence to show. */
+  reason?: string;
+  /** An answer Walnut is still sending for this invite (another tab, or this one before a reopen). */
+  answering?: MailInviteResponse;
 }
 
 export type MailUnsubscribeAvailability = 'one-click' | 'mailto' | 'link' | 'none';
@@ -501,6 +531,33 @@ export function unsubscribeMailMessage(
     input ?? {},
     { quietStatuses: [409, 503] },
   );
+}
+
+/**
+ * Where an invite stands on the calendar. `pending` is the 202: the calendar read outlived the
+ * route's budget and is still running, so asking again in a moment answers from the provider's cache.
+ */
+export function readMailInvite(
+  accountId: string,
+  messageId: string,
+): Promise<{ invite?: MailInviteDetails; pending?: boolean; message?: string }> {
+  // Past the route's 12s budget, so a slow read comes back as its 202 rather than a client timeout.
+  return apiGet(`${messagePath(accountId, messageId)}/invite`, undefined, { quietStatuses: [409, 503], timeoutMs: 20_000 });
+}
+
+/**
+ * Answer an invite. The organizer sees it, so the console sends exactly one per click and the server
+ * refuses a second while one is in flight (409 `in-flight`). `completed: false` is the 202: still
+ * sending, and `readMailInvite` shows the outcome.
+ */
+export function answerMailInvite(
+  accountId: string,
+  messageId: string,
+  response: MailInviteResponse,
+): Promise<{ ok: boolean; invite?: MailInviteDetails; completed?: boolean; message?: string }> {
+  // Past the route's 15s budget. At the client's default 15s the browser gave up a few ms before the
+  // server's 202 arrived, and told the person their answer was not confirmed while it was landing.
+  return apiPost(`${messagePath(accountId, messageId)}/invite`, { response }, { quietStatuses: [409, 503], timeoutMs: 25_000 });
 }
 
 export interface MailDigestResult {

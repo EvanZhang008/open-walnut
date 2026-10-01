@@ -21,6 +21,8 @@ import { registerMailSortRoutes } from './routes-sort.js'
 import { registerMailSortRulesRoutes } from './routes-sort-rules.js'
 import { registerMailSortWriteRoutes } from './routes-sort-write.js'
 import { registerMailWriteRoutes } from './routes-write.js'
+import { registerMailInviteRoutes } from './routes-invite.js'
+import { MailInvites } from './invites.js'
 import { isGroupIdShape } from './sort-classify.js'
 import type { MailSortEngine } from './sort-engine.js'
 import { messageScopeValues, parseMessageScope } from './scope.js'
@@ -486,6 +488,8 @@ export function registerMailRoutes(
   })
 
   registerMailWriteRoutes(walnut, { service, drafts, approvals, sends, unsubscribe })
+  // Meeting invites: the calendar read and the answer (an RSVP the organizer sees).
+  registerMailInviteRoutes(walnut, { invites: new MailInvites({ service, log: walnut.log }) })
   // Inbox sorting: reads (groups, senders, rules) and writes (bulk read, batch unsubscribe, rules).
   registerMailSortRoutes(walnut, { store, sort: deps.sort, providers, ...(deps.filters ? { filters: deps.filters } : {}) })
   registerMailSortRulesRoutes(walnut, { store, sort: deps.sort })

@@ -38,6 +38,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { activateGroups, groupsOn } from './groups-set.mjs';
+import { inviteMessages, inviteMethods, inviteOn } from './invite-set.mjs';
 
 const HOUR = 60 * 60 * 1000;
 
@@ -445,6 +446,7 @@ function ctxMessages() {
 
 if (ctx) MESSAGES.push(...ctxMessages());
 if (unsub) MESSAGES.push(...unsubMessages());
+if (inviteOn) MESSAGES.push(...inviteMessages(now));
 
 /** Read state, as a server holds it. Seeded from the canned envelopes. */
 const seen = new Set(MESSAGES.filter((one) => !one.unreadAtFirstSight).map((one) => one.messageId));
@@ -502,6 +504,8 @@ function envelopeOf(message) {
     // Only when the row declares it. A transport that reports no List-Unsubscribe at all is the
     // ordinary case and must stay indistinguishable from one whose message really has none.
     ...(message.listUnsubscribe ? { listUnsubscribe: message.listUnsubscribe } : {}),
+    // `PW_MAIL_INVITE=1` only: the marker a listing puts on a meeting invite.
+    ...(message.invite ? { invite: message.invite } : {}),
   };
 }
 
@@ -544,7 +548,10 @@ const spec = {
     sendAsReply: true,
     bodies: 'both',
     attachments: 'metadata',
+    // `PW_MAIL_INVITE=1`: this provider answers meeting invites (invite-set.mjs).
+    ...(inviteOn ? { rsvp: true } : {}),
   },
+  ...(inviteOn ? inviteMethods : {}),
   setup: {
     fields: [
       {
@@ -1261,7 +1268,7 @@ export function activate(walnut) {
   // `PW_MAIL_UNSUB=1` wants the same two adopted accounts `PW_MAIL_CTX=1` does, for the same reason: the
   // capability gate on a menu item is only a real question when two accounts disagree about it on one
   // screen. The two flags therefore share this branch, and each adds its own rows above.
-  if (ctx || unsub) {
+  if (ctx || unsub || inviteOn) {
     accounts.push({
       accountId: CTX_WRITER,
       providerId: 'fixture',

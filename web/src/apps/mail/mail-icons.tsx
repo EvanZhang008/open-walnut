@@ -250,6 +250,16 @@ export function ClockIcon({ size = 22 }: IconProps) {
   </>);
 }
 
+/** A meeting invite: a calendar page. */
+export function CalendarIcon({ size = 18 }: IconProps) {
+  return frame(size, <>
+    <rect x="3.5" y="5" width="17" height="15.5" rx="2" />
+    <path d="M3.5 9.5h17" />
+    <path d="M8 3v4" />
+    <path d="M16 3v4" />
+  </>);
+}
+
 /** The reader with nothing in it: an open envelope with a page rising out of it. */
 export function ReaderEmptyIcon({ size = 34 }: IconProps) {
   return frame(size, <>
