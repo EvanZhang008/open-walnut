@@ -52,10 +52,21 @@ async function spawnArgs(taskId: string): Promise<string[]> {
   return args
 }
 
-function settingsEnv(args: string[]): Record<string, string> | undefined {
+function settingsOf(args: string[]): { env?: Record<string, string>; hooks?: Record<string, unknown> } | undefined {
   const i = args.indexOf('--settings')
   if (i < 0) return undefined
-  return (JSON.parse(args[i + 1]) as { env?: Record<string, string> }).env
+  return JSON.parse(args[i + 1]) as { env?: Record<string, string>; hooks?: Record<string, unknown> }
+}
+
+function settingsEnv(args: string[]): Record<string, string> | undefined {
+  return settingsOf(args)?.env
+}
+
+const COMPACT_HOOK = {
+  SessionStart: [{
+    matcher: 'compact',
+    hooks: [{ type: 'command', command: 'walnut tools call open_items \'{"hook":"compact"}\' 2>/dev/null || true', timeout: 20 }],
+  }],
 }
 
 beforeAll(async () => { daemon = await createMockDaemon() })
@@ -86,10 +97,23 @@ describe('local session spawn → launching server URL', () => {
     setSelfApiRoot('http://127.0.0.1:45678')
     const args = await spawnArgs('t-self-url')
     expect(settingsEnv(args)).toEqual({ OPEN_WALNUT_API_URL: 'http://127.0.0.1:45678' })
+    // One settings arg carries both: the env and the post-compaction hook.
+    expect(args.filter((a) => a === '--settings')).toHaveLength(1)
+    expect(settingsOf(args)?.hooks).toEqual(COMPACT_HOOK)
   })
 
-  it('adds no --settings when no server listens here (unchanged argv)', async () => {
+  it('no server listening here: no env, the post-compaction hook still rides', async () => {
     const args = await spawnArgs('t-no-server')
-    expect(args).not.toContain('--settings')
+    expect(settingsOf(args)).toEqual({ hooks: COMPACT_HOOK })
+  })
+
+  it('WALNUT_COMPACT_OPEN_ITEMS=0 turns the hook off (argv unchanged from before it)', async () => {
+    process.env.WALNUT_COMPACT_OPEN_ITEMS = '0'
+    try {
+      const args = await spawnArgs('t-hook-off')
+      expect(args).not.toContain('--settings')
+    } finally {
+      delete process.env.WALNUT_COMPACT_OPEN_ITEMS
+    }
   })
 })

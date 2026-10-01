@@ -66,6 +66,7 @@ import { extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingText } from '../core/sessions/launch-naming.js'
 import { noteSessionProgress } from '../core/sessions/session-progress.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
+import { compactOpenItemsHooks } from './compact-open-items-hook.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
 import {
   SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS,
@@ -2246,8 +2247,14 @@ export class ClaudeCodeSession {
     // merges with ~/.claude/settings.json env and reaches Bash tool children
     // (verified on CLI 2.1.280). Local sessions only (see self-api-root.ts).
     const walnutEnv = walnutApiEnvForSession(host)
-    if (Object.keys(walnutEnv).length > 0) {
-      args.push('--settings', JSON.stringify({ env: walnutEnv }))
+    // Same settings arg carries the post-compaction "what is still open" hook
+    // (compact-open-items-hook.ts), local and remote alike.
+    const sessionSettings: Record<string, unknown> = {}
+    if (Object.keys(walnutEnv).length > 0) sessionSettings.env = walnutEnv
+    const compactHooks = compactOpenItemsHooks()
+    if (compactHooks) sessionSettings.hooks = compactHooks
+    if (Object.keys(sessionSettings).length > 0) {
+      args.push('--settings', JSON.stringify(sessionSettings))
     }
 
     // Both local and SSH sessions use stream-json stdin via SessionIO

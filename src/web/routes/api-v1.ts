@@ -2602,6 +2602,20 @@ apiV1Router.get('/me', async (req: Request, res: Response, next: NextFunction) =
   }
 })
 
+// GET /api/v1/me/open — what is still open for the calling session's task:
+// unfinished subtasks and pending reply requests both ways, plus the `text`
+// block a session reads after its context is compacted (core/sessions/open-items.ts).
+// Empty lists and text '' for a caller with no task. Registry + store reads only.
+apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { collectOpenItems } = await import('../../core/sessions/open-items.js')
+    const rawSid = req.headers['x-walnut-caller-sid']
+    res.json(await collectOpenItems(Array.isArray(rawSid) ? rawSid[0] : rawSid))
+  } catch (err) {
+    next(err)
+  }
+})
+
 /** How far GET /sessions looks, nearest ring first. */
 type SessionScope = 'folder' | 'project' | 'all'
 

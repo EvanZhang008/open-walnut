@@ -948,6 +948,15 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   registry lookup and one task read, no projection export), so an agent-facing
   list can ask it before every query.
   The `task_list` op does exactly that to apply its default folder ring.
+- `GET /api/v1/me/open` (additive, 2026-09-30) → what is still open for the
+  calling session's task: `{ "task"?: { id, title }, "subtasks": [{ id, title,
+  phase }], "moreSubtasks", "waitingOn": [{ id, to, preview, createdAt }],
+  "askedOfYou": [{ id, from, preview, createdAt }], "text" }`. Unfinished direct
+  subtasks (at most 20, the rest counted), the session's reply requests still
+  pending and the requests to it that it has not answered (at most 10 each).
+  `text` is the short block the session reads right after a compaction, through
+  the CLI's SessionStart hook (the `open_items` op in hook mode); `''` when
+  nothing is open. A caller with no task gets empty lists and `''`.
 - `GET /api/v1/sessions?status=running|idle|stopped|error&scope=folder|project|all` →
   `{ "sessions": [ProjectedSession], "you"?: ProjectedSession, "scope": "folder|project|all", "syncedAt": "<ISO>" }`
 - `ProjectedSession`: `{ id, title?, task_id?, task_title?,

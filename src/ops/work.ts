@@ -137,6 +137,34 @@ defineOp({
 });
 
 defineOp({
+  name: 'open_items',
+  title: 'What is still open for your task',
+  description:
+    'Unfinished subtasks of your task, replies you are still waiting for, and requests to you that you have not answered. ' +
+    'Walnut also puts this list into your context after every compaction.',
+  input: {
+    hook: z.enum(['compact']).optional().describe(
+      'Set by Walnut\'s post-compaction hook: answer in the JSON shape a Claude Code SessionStart hook prints'),
+  },
+  bind: { method: 'GET', path: '/me/open' },
+  mapResult: ({ body, args }) => {
+    const open = (body ?? {}) as Record<string, unknown>;
+    const text = typeof open.text === 'string' ? open.text : '';
+    // The hook's stdout becomes context: `additionalContext` when something is
+    // open, and `{}` (nothing injected, no error row) when nothing is.
+    if (args.hook === 'compact') {
+      return text ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } } : {};
+    }
+    return withOutcome(
+      { ...open },
+      text ? 'These are still open for your task.' : 'Nothing is open for your task.',
+      'Read one with task_get; answer a request with task_send in_reply_to.',
+    );
+  },
+  tags: { readonly: true, remote: 'allow' },
+});
+
+defineOp({
   name: 'skill_read',
   title: 'Read a Walnut skill',
   description:
