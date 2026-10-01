@@ -21,7 +21,7 @@ const EXPECTED_IDS = [
   // Sessions = how Walnut runs an engine; Engines = the engine's OWN settings
   // (its command-line config screen's keys) on the host the sessions run on.
   // Engines sits directly after Sessions, which is the next question a reader asks.
-  'tasks', 'focus-tiers', 'sessions', 'engines',
+  'tasks', 'focus-tiers', 'tags', 'sessions', 'engines',
   // `stt` is labelled Voice and also carries Text-to-Speech now.
   // No `jev` row: Jev is one runner choice inside Tasks › Smart task creation.
   // Inbox Triage sits directly after Heartbeat: both are "Walnut wakes itself up
@@ -73,15 +73,17 @@ describe('core settings registry', () => {
       .map((entry) => entry.id)).toEqual(DIAGNOSTICS_IDS)
   })
 
-  it('folds a nav-hidden section under the visible entry directly above it', () => {
+  it('folds a nav-hidden section under the nearest visible entry above it', () => {
     // A navHidden row keeps its #id deep link but has no nav button; it mounts
-    // in the pane of the visible entry directly above it (NAV_OWNER).
+    // in the pane of the nearest visible entry above it (NAV_OWNER), so Tags sits
+    // in the Tasks pane after Focus Tiers.
     const hidden = CORE_SETTINGS_CONTRIBUTIONS.filter((entry) => entry.navHidden).map((entry) => entry.id)
-    expect(hidden).toEqual(['focus-tiers', 'cloud', 'providers'])
+    expect(hidden).toEqual(['focus-tiers', 'tags', 'cloud', 'providers'])
     for (const id of hidden) {
       const idx = CORE_SETTINGS_CONTRIBUTIONS.findIndex((entry) => entry.id === id)
-      expect(CORE_SETTINGS_CONTRIBUTIONS[idx - 1].navHidden).toBeUndefined()
-      expect(CORE_SETTINGS_CONTRIBUTIONS[idx - 1].group).toBe(CORE_SETTINGS_CONTRIBUTIONS[idx].group)
+      const owner = CORE_SETTINGS_CONTRIBUTIONS.slice(0, idx).reverse().find((entry) => !entry.navHidden)
+      expect(owner).toBeDefined()
+      expect(owner!.group).toBe(CORE_SETTINGS_CONTRIBUTIONS[idx].group)
     }
   })
 

@@ -62,7 +62,7 @@ describe('resolvePane', () => {
   })
 
   it('mounts each pane lead first, then its folded sections', () => {
-    expect(sectionsForPane('tasks').map((s) => s.id)).toEqual(['tasks', 'focus-tiers'])
+    expect(sectionsForPane('tasks').map((s) => s.id)).toEqual(['tasks', 'focus-tiers', 'tags'])
     expect(sectionsForPane('devices').map((s) => s.id)).toEqual(['devices', 'cloud'])
     expect(sectionsForPane('advanced').map((s) => s.id)).toEqual(['advanced', 'providers'])
     expect(sectionsForPane('general').map((s) => s.id)).toEqual(['general'])
