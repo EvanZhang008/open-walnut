@@ -1,4 +1,5 @@
-/* Turn speed readout: the one-line row above a session's composer.
+/* Turn speed readout: the one-line row inside the composer's model picker
+   (under the live-settings strip), or standalone when a caller places it so.
    Owned by components/sessions/SessionSpeedReadout.tsx. The class name
    .session-speed-readout is load-bearing: e2e specs locate the row by it.
 
@@ -24,6 +25,22 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* Inside the picker the row matches the live strip above it: same padding,
+   radius and font size, no outer margin (the strip's margin-bottom spaces it). */
+.session-speed-readout-picker {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 16px;
+  background: var(--bg-subtle, rgba(128, 128, 128, 0.08));
+}
+
+.session-speed-kicker {
+  flex: 0 0 auto;
+  opacity: 0.75;
+  margin-right: 2px;
 }
 
 .session-speed-model {

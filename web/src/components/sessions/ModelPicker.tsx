@@ -285,10 +285,14 @@ interface ModelPickerProps {
    *  column CLIPS it — set the ref from the pill's onClick
    *  (`anchorRef.current = e.currentTarget`). */
   anchorRef?: React.RefObject<HTMLElement | null>;
+  /** LIVE session: the turn speed readout (SessionSpeedReadout) rendered under
+   *  the live-settings strip, so the speed of the model sits next to the model
+   *  it describes. A caller without a session omits it. */
+  speedReadout?: React.ReactNode;
 }
 
 export function ModelPicker({
-  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose,
+  currentModel, currentEffort, sessionId, host, cwd, onSwitch, onEffortSwitch, onClose, speedReadout,
   engine = 'claude', onProviderSwitch, providerLockReason, acpCurrentModelId, onAcpSwitch, autoRow,
   anchorRef,
 }: ModelPickerProps) {
@@ -926,6 +930,10 @@ export function ModelPicker({
           </button>
         </div>
       )}
+
+      {/* How fast the last (or running) turn went on this session's model:
+          Walnut's own measurement over the CLI stream, see SessionSpeedReadout. */}
+      {sessionId && speedReadout}
 
       {/* Live details — collapsed by default. Everything here is the CLI's OWN
           accounting pulled on expand: context breakdown (same source as the

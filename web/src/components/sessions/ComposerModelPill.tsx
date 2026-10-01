@@ -17,6 +17,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ModelPicker, acpModelDisplayName } from './ModelPicker';
+import { SessionSpeedReadout } from './SessionSpeedReadout';
 import { modelSupportsEffort, SESSION_EFFORTS } from '@open-walnut/core';
 import type { SessionEffort } from '@open-walnut/core';
 import { setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
@@ -325,6 +326,9 @@ export function ComposerModelPill({
             ? { resolvedLabel: autoResolved, active: !pending.model }
             : undefined}
           anchorRef={pillRef}
+          speedReadout={!pending && sessionId
+            ? <SessionSpeedReadout sessionId={sessionId} session={session} />
+            : undefined}
         />
       )}
     </>

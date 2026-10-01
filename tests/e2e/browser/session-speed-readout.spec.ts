@@ -1,6 +1,7 @@
 /**
- * REAL-PIPELINE Playwright spec for the turn speed readout row above each
- * session panel's composer (SessionSpeedReadout).
+ * REAL-PIPELINE Playwright spec for the turn speed readout row inside each
+ * session panel's model picker (SessionSpeedReadout under the picker's live
+ * strip; the picker opens from the composer's model pill).
  *
  * Nothing about the readout is injected or route-mocked: session:start WS RPC
  * → MockDaemon spawns the mock Claude CLI → real stream_event JSONL → the
@@ -66,6 +67,19 @@ async function startRealSession(page: Page, message: string, taskId: string, mod
  *  only accepts the session THIS test started. Not filtered by id shape: the
  *  server now hands the CLI a UUID via --session-id, so the mock's own
  *  `mock-session-*` ids no longer appear. */
+/** A task of this test's own (titled by browser project), so two projects
+ *  running against the one fixture server never start sessions on the same
+ *  task: a second start on a task ends the first's CLI, which the readout now
+ *  reports as a stopped turn. */
+async function newTask(request: APIRequestContext, title: string): Promise<string> {
+  const res = await request.post('/api/tasks', {
+    data: { title: `${title} (${test.info().project.name})`, source: 'local', project: 'Walnut' },
+  })
+  expect(res.ok(), `create task: ${res.status()}`).toBe(true)
+  const body = await res.json() as { task?: { id: string }; id?: string }
+  return body.task?.id ?? body.id!
+}
+
 async function sessionIdsFor(request: APIRequestContext, taskId: string): Promise<Set<string>> {
   const res = await request.get(`/api/sessions/task/${taskId}`)
   if (!res.ok()) return new Set()
@@ -102,7 +116,23 @@ function columnFor(page: Page, sid: string): Locator {
   return columns(page).filter({ has: page.locator(`.session-panel[data-session-id="${sid}"]`) })
 }
 
-const readoutIn = (col: Locator) => col.getByTestId('session-speed-readout')
+/** The one open model picker (it portals to <body>, so it is never inside a
+ *  column). Exactly one is open at a time: openPicker closes any other first. */
+const picker = (page: Page) => page.locator('.model-picker')
+const readoutIn = (page: Page) => picker(page).getByTestId('session-speed-readout')
+
+/** Open `col`'s model picker from its composer pill and wait for it. */
+async function openPicker(page: Page, col: Locator): Promise<void> {
+  await closePicker(page)
+  await col.locator('.composer-model-pill').first().click()
+  await expect(picker(page)).toHaveCount(1)
+}
+
+async function closePicker(page: Page): Promise<void> {
+  if ((await picker(page).count()) === 0) return
+  await picker(page).locator('.model-picker-close').click()
+  await expect(picker(page)).toHaveCount(0)
+}
 
 /** Pick a panel count through the real Settings UI, then wait for it to reach
  *  config (copied from session-panel-count.spec.ts: the write is a read-modify-
@@ -138,9 +168,9 @@ async function setPanelMode(page: Page, label: '1' | '2' | '3' | '4' | '5' | 'Au
   }
 }
 
-/** Every slot's text in one read, for assertion messages and the report. */
-async function readoutState(col: Locator): Promise<Record<string, string | null>> {
-  const r = readoutIn(col)
+/** Every slot's text in one read (picker open), for assertion messages and the report. */
+async function readoutState(page: Page): Promise<Record<string, string | null>> {
+  const r = readoutIn(page)
   if ((await r.count()) === 0) return { present: null }
   return r.evaluate((el) => {
     const pick = (id: string) => el.querySelector(`[data-testid="${id}"]`)?.textContent?.replace(/\s+/g, ' ').trim() ?? null
@@ -185,8 +215,8 @@ function turnSpeedLogLines(sid: string): string[] {
   return out
 }
 
-async function report(label: string, sid: string, col: Locator): Promise<Record<string, string | null>> {
-  const state = await readoutState(col)
+async function report(label: string, sid: string, page: Page): Promise<Record<string, string | null>> {
+  const state = await readoutState(page)
   const logs = turnSpeedLogLines(sid)
   const text = `${label} ${sid}\nreadout: ${JSON.stringify(state)}\nserver:\n${logs.join('\n') || '(no "turn speed" line)'}`
   console.log(text)
@@ -194,16 +224,17 @@ async function report(label: string, sid: string, col: Locator): Promise<Record<
   return state
 }
 
-/** Screenshot of the session strip only, into the test's own output dir. */
+/** Screenshot of the session strip (and the picker floating over it), into the
+ *  test's own output dir. */
 async function clipShot(page: Page, name: string): Promise<void> {
   const box = await page.locator('.main-page-sessions-area').boundingBox()
   expect(box, 'sessions area has a box').not.toBeNull()
   await page.screenshot({ path: test.info().outputPath(`${name}.png`), clip: box! })
 }
 
-/** The final-numbers contract, identical for both models. Returns tok/s. */
-async function assertFinalReadout(col: Locator, model: string): Promise<number> {
-  const r = readoutIn(col)
+/** The final-numbers contract, identical for both models (picker open). Returns tok/s. */
+async function assertFinalReadout(page: Page, model: string): Promise<number> {
+  const r = readoutIn(page)
   await expect(r).toHaveAttribute('data-live', 'false')
   await expect(r.getByTestId('speed-model')).toHaveText(model)
   // The CLI's own count, and the "~" of the interim estimate is gone.
@@ -234,8 +265,8 @@ test.beforeEach(async ({ page }) => {
 test('two panels side by side show a live readout each, then final numbers', async ({ page, request }) => {
   await setPanelMode(page, '2')
 
-  const TASK_A = 'pw-task-001'
-  const TASK_B = 'pw-task-in-progress'
+  const TASK_A = await newTask(request, 'Speed readout A')
+  const TASK_B = await newTask(request, 'Speed readout B')
   const beforeA = await sessionIdsFor(request, TASK_A)
   const beforeB = await sessionIdsFor(request, TASK_B)
   await startRealSession(page, SPEED_MESSAGE, TASK_A, 'claude-opus-5-5')
@@ -255,44 +286,49 @@ test('two panels side by side show a live readout each, then final numbers', asy
   // Seed order is the strip order: A is the LEFT column.
   await expect(columns(page).first().locator('.session-panel').first()).toHaveAttribute('data-session-id', sidA)
 
-  // Mid-stream: both rows are live at the same time, each naming its own model,
-  // with a first-token slot once the first delta landed.
-  const liveBoth = async () => {
-    const [a, b] = await Promise.all([readoutState(colA), readoutState(colB)])
-    return `${a.live}|${b.live}`
+  // Mid-stream: each panel's picker shows ITS OWN live row (the model it runs,
+  // a first-token slot once the first delta landed). The two turns run for
+  // ~9s, so both pickers can be opened in turn while both are live.
+  const liveIn = async (col: Locator) => {
+    await openPicker(page, col)
+    return readoutState(page)
   }
-  try {
-    await expect.poll(liveBoth, { timeout: 8_000, intervals: [100] }).toBe('true|true')
-  } catch (err) {
-    await report('live-miss-A', sidA, colA)
-    await report('live-miss-B', sidB, colB)
-    throw err
-  }
-  for (const [col, model] of [[colA, 'Opus 5.5'], [colB, 'Sonnet 5.5']] as const) {
-    const r = readoutIn(col)
+  for (const [col, sid, model, label] of [[colA, sidA, 'Opus 5.5', 'A'], [colB, sidB, 'Sonnet 5.5', 'B']] as const) {
+    try {
+      await expect.poll(async () => (await liveIn(col)).live, { timeout: 8_000, intervals: [100] }).toBe('true')
+    } catch (err) {
+      await report(`live-miss-${label}`, sid, page)
+      throw err
+    }
+    const r = readoutIn(page)
     await expect(r).toBeVisible()
     await expect(r.getByTestId('speed-model')).toHaveText(model)
     await expect(r.getByTestId('speed-ttft')).toHaveText(/^first \d/, { timeout: 6_000 })
+    await clipShot(page, `two-panels-live-${label}`)
+    const live = await report(`live-${label}`, sid, page)
+    expect(live.live, `${label} is live while its turn streams`).toBe('true')
   }
-  await clipShot(page, 'two-panels-live')
-  const liveA = await report('live-A', sidA, colA)
-  const liveB = await report('live-B', sidB, colB)
-  expect(liveA.live === 'true' || liveB.live === 'true', 'screenshot caught at least one live row').toBe(true)
 
   // Final: both rows freeze on the turn's own numbers.
-  await expect(readoutIn(colA)).toHaveAttribute('data-live', 'false', { timeout: 20_000 })
-  await expect(readoutIn(colB)).toHaveAttribute('data-live', 'false', { timeout: 20_000 })
-  await report('final-A', sidA, colA)
-  await report('final-B', sidB, colB)
-  const tpsA = await assertFinalReadout(colA, 'Opus 5.5')
-  const tpsB = await assertFinalReadout(colB, 'Sonnet 5.5')
+  await openPicker(page, colA)
+  await expect(readoutIn(page)).toHaveAttribute('data-live', 'false', { timeout: 20_000 })
+  await report('final-A', sidA, page)
+  const tpsA = await assertFinalReadout(page, 'Opus 5.5')
+  await clipShot(page, 'two-panels-final-A')
+  await openPicker(page, colB)
+  await expect(readoutIn(page)).toHaveAttribute('data-live', 'false', { timeout: 20_000 })
+  await report('final-B', sidB, page)
+  const tpsB = await assertFinalReadout(page, 'Sonnet 5.5')
+  await clipShot(page, 'two-panels-final-B')
   test.info().annotations.push({ type: 'tok/s', description: `A (Opus 5.5) ${tpsA}, B (Sonnet 5.5) ${tpsB}` })
   console.log(`observed tok/s: A ${tpsA}, B ${tpsB}`)
-  await clipShot(page, 'two-panels-final')
+  // Closed picker: no readout anywhere on the page (the row is not a panel fixture).
+  await closePicker(page)
+  await expect(page.getByTestId('session-speed-readout')).toHaveCount(0)
 })
 
 test('reload keeps the last turn\'s readout', async ({ page, request }) => {
-  const TASK = 'pw-task-agent-complete'
+  const TASK = await newTask(request, 'Speed readout reload')
   await page.goto('/')
   await page.waitForLoadState('domcontentloaded')
   const before = await sessionIdsFor(request, TASK)
@@ -303,8 +339,10 @@ test('reload keeps the last turn\'s readout', async ({ page, request }) => {
   await page.goto('/')
   const col = columnFor(page, sid)
   await expect(col).toHaveCount(1, { timeout: 30_000 })
-  await expect(readoutIn(col)).toHaveAttribute('data-live', 'false', { timeout: 30_000 })
-  await expect(readoutIn(col).getByTestId('speed-tokens')).toHaveText('50 tok')
+  await openPicker(page, col)
+  await expect(readoutIn(page)).toHaveAttribute('data-live', 'false', { timeout: 30_000 })
+  await expect(readoutIn(page).getByTestId('speed-tokens')).toHaveText('50 tok')
+  await closePicker(page)
 
   // The final is written onto the record asynchronously; the cold load below
   // reads that copy, so wait for it to land first.
@@ -323,12 +361,15 @@ test('reload keeps the last turn\'s readout', async ({ page, request }) => {
   await page.reload()
   const colAfter = columnFor(page, sid)
   await expect(colAfter).toHaveCount(1, { timeout: 30_000 })
-  const r = readoutIn(colAfter)
+  await expect(colAfter.locator('.composer-model-pill').first()).toBeVisible({ timeout: 30_000 })
+  await openPicker(page, colAfter)
+  const r = readoutIn(page)
   await expect(r).toBeVisible({ timeout: 30_000 })
   await expect(r).toHaveAttribute('data-live', 'false')
   await expect(r.getByTestId('speed-tokens')).toHaveText('50 tok')
   await expect(r.getByTestId('speed-model')).toHaveText('Opus 5.5')
-  await report('after-reload', sid, colAfter)
+  await report('after-reload', sid, page)
+  await clipShot(page, 'after-reload')
 })
 
 test('a session with no measured turn shows no readout', async ({ page, request }) => {
@@ -343,9 +384,10 @@ test('a session with no measured turn shows no readout', async ({ page, request 
   await page.goto('/')
   const col = columnFor(page, SID)
   await expect(col).toHaveCount(1, { timeout: 30_000 })
-  // The composer's controls bar renders only once the record has loaded, so the
-  // readout (which sits right above the composer) had its chance to render.
-  await expect(col.locator('.session-mode-bar')).toBeVisible({ timeout: 30_000 })
-  await page.waitForTimeout(1000)
-  await expect(readoutIn(col)).toHaveCount(0)
+  // The picker renders its live strip for any live session; the readout row
+  // under it only exists once a turn was measured, so here there is none.
+  await expect(col.locator('.composer-model-pill').first()).toBeVisible({ timeout: 30_000 })
+  await openPicker(page, col)
+  await expect(picker(page).getByTestId('picker-live-strip')).toBeVisible()
+  await expect(readoutIn(page)).toHaveCount(0)
 })
