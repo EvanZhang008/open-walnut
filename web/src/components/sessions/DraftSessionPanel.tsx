@@ -70,6 +70,7 @@ import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import '@/styles/walnut-agent.css';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
+import { repairHint, type WalnutRepairTarget } from '@/pages/repair-target';
 
 const PLACEHOLDER = 'What should this session do?';
 const HINT = 'Nothing runs yet: send to start, or save it as a todo.';
@@ -82,9 +83,7 @@ const WALNUT_PLACEHOLDER = 'Ask Walnut anything…';
  *  otherwise looks exactly like an ordinary new session, so nothing would tell the
  *  user their sentence is about to be read as a bug report. */
 const REPAIR_PLACEHOLDER =
-  'Describe what’s wrong — e.g. "sessions panel keeps spinning". Paste a screenshot (⌘V) to help.';
-const REPAIR_HINT =
-  'Opens a session in Walnut’s own checkout to fix it — paste a screenshot (⌘V) if you have one.';
+  'Describe what to change or fix, e.g. "sessions panel keeps spinning". Paste a screenshot (⌘V) to help.';
 
 /** The Ask Walnut tab's one-tap composer seeds — prefill only, never auto-send:
  *  the user finishes the sentence (or edits it) and presses Ask themselves.
@@ -282,12 +281,19 @@ interface Props {
   onGateErrorClear?: (draftId: string) => void;
   /** Images of a refused Start, put back into the composer once on mount. */
   restoreImages?: ImageAttachment[];
+  /** "Improve Walnut" quick action: the owner turns THIS draft into the repair
+   *  draft. Omit (no repair target on this install) and the chip never renders. */
+  onImproveWalnut?: (draftId: string) => void;
+  /** Where a repair draft runs (Walnut's source, or the clone a first Start
+   *  makes): the repair hint names it. */
+  repairTarget?: WalnutRepairTarget | null;
 }
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
+  onImproveWalnut, repairTarget,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   // "Start anyway" rides the ordinary send (so images and the settle rules apply) with one flag.
@@ -572,7 +578,10 @@ export function DraftSessionPanel({
           {headerLeading && <div className="session-panel-header-leading">{headerLeading}</div>}
           <div className="session-panel-title-area">
             <span className="session-panel-title">
-              {isFork ? 'Fork Session' : isRepair ? '\u{1F527} Fix Walnut' : isWalnut ? askLabel : 'New Session'}
+              {/* A plain draft makes a task (its "Save as todo" makes nothing else), so
+                  it says so; a BOUND draft adds a session to an existing task and
+                  creates none, so it keeps "New Session" beside its "for:" line. */}
+              {isFork ? 'Fork Session' : isRepair ? '\u{1F527} Fix Walnut' : isWalnut ? askLabel : isBound ? 'New Session' : 'New task'}
             </span>
             <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Draft</span>
             {isBound && (
@@ -649,6 +658,23 @@ export function DraftSessionPanel({
                 </button>
               </div>
             )}
+            {/* "Improve Walnut": the way into Walnut's own source for a user who
+                never cloned it (an npm install gets the clone on Start). Turns THIS
+                draft into the repair draft, so it shows only while there is nothing
+                typed to lose, and only where the owner has a repair target. */}
+            {showTabs && !isBound && onImproveWalnut && !text.trim() && (
+              <div className="draft-walnut-suggests draft-improve-walnut-row" role="group" aria-label="Quick actions">
+                <button
+                  type="button"
+                  className="session-action-chip"
+                  data-testid="draft-improve-walnut"
+                  title="Open a session in Walnut's own source code to change or fix Walnut"
+                  onClick={() => { onImproveWalnut(draft.id); focusComposer(); }}
+                >
+                  {'\u{1F527}'} Improve Walnut
+                </button>
+              </div>
+            )}
             {/* Composer seeds — prefill, never send. Only while the composer is
                 EMPTY: prefill is replace-only (ChatInput contract), so a visible
                 chip next to typed text is an invitation to silently destroy it. */}
@@ -682,7 +708,7 @@ export function DraftSessionPanel({
           </div>
         ) : (
           <div className="draft-quick-hint">
-            {isFork ? FORK_HINT : isRepair ? REPAIR_HINT : isBound ? BOUND_HINT : HINT}
+            {isFork ? FORK_HINT : isRepair ? repairHint(repairTarget) : isBound ? BOUND_HINT : HINT}
           </div>
         )}
       </div>

@@ -10,7 +10,9 @@
  *
  * Extras: ghost-text inline completion (ArrowRight accepts), Option+Backspace
  * deletes the last path segment, "create & start" for nonexistent leaf dirs,
- * hidden dirs shown only when the typed segment starts with '.'.
+ * hidden dirs shown only when the typed segment starts with '.'. Plain Enter
+ * drills, uses the typed folder, or creates it (path-selector/enter-action.ts); a
+ * tab with no history leads its home listing with Quick access (quick-access.ts).
  */
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
@@ -20,7 +22,9 @@ import type { WorkingDirEntry } from '@/api/sessions';
 import type { TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { usedEngineIds, type LaunchEngine, type LaunchMemory } from '@/utils/engines';
-import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, liveListingPrefix, type InputState } from './path-selector/input-model';
+import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, liveListingPrefix, HOME_LISTING_DIR, type InputState } from './path-selector/input-model';
+import { enterAction } from './path-selector/enter-action';
+import { buildQuickAccessSections } from './path-selector/quick-access';
 import { rankCandidates, buildSections, type Candidate, type RankedItem } from './path-selector/ranking';
 import { useLiveDirs, type HostLiveState } from './path-selector/useLiveDirs';
 import type { HostDot } from '@open-walnut/host-problem';
@@ -322,6 +326,22 @@ export function SessionPathSelector({
     }
   }, [editMode, hostFilter, editingPath, byHost, fillPath]);
 
+  // Each host's resolved home, learned from a `~/` listing. The rewrite above turns
+  // '~/' into '/Users/alice/', and Quick access must still know that is the home.
+  const [homeByHost, setHomeByHost] = useState<ReadonlyMap<string, string>>(() => new Map());
+  useEffect(() => {
+    if (activePath !== HOME_LISTING_DIR) return;
+    let next: Map<string, string> | null = null;
+    for (const [key, s] of byHost) {
+      if (s.status !== 'done' || !s.exists || !s.parent || s.parent.startsWith('~')) continue;
+      const home = s.parent.replace(/\/+$/, '') || '/';
+      if (homeByHost.get(key) === home) continue;
+      next ??= new Map(homeByHost);
+      next.set(key, home);
+    }
+    if (next) setHomeByHost(next);
+  }, [activePath, byHost, homeByHost]);
+
   const currentHost = hostOfTab(hostFilter);
   const currentHostLabel = hostTabs.find(t => t.key === hostFilter)?.label;
   // Alias → label for the per-host rows ("Big remote host", not "clouddev-2").
@@ -397,7 +417,11 @@ export function SessionPathSelector({
       hostGrouping: pathMode && hostFilter === 'all',
       hostActivity,
     });
-    if (pathMode || !homeWord) return built;
+    // No history on this tab and the input lists the home: lead with Quick access.
+    const quick = inputState.kind === 'dir-browse' && hostFiltered.length === 0
+      ? buildQuickAccessSections({ dir: inputState.dir, byHost, homeByHost, hostLabels, perHost: hostFilter === 'all' && byHost.size > 1 })
+      : [];
+    if (pathMode || !homeWord) return quick.length ? [...quick, ...built] : built;
     // Bare word: history matches first, then the matching home folders.
     const home = buildHomeFolderSections({
       word: homeWord, byHost, hostLabels, history: historyByKey,
@@ -405,7 +429,7 @@ export function SessionPathSelector({
       perHost: hostFilter === 'all',
     });
     return home.length ? [...built, ...home] : built;
-  }, [dirs, hostFilter, inputState, pathMode, byHost, hostTabs, homeWord, hostLabels, tabsModel.removedHosts]);
+  }, [dirs, hostFilter, inputState, pathMode, byHost, hostTabs, homeWord, hostLabels, tabsModel.removedHosts, homeByHost]);
 
   // History cap (path-selector/history-cap.ts): up to 8 rows (as many as fit above
   // the HOME FOLDERS header, at least 3) + 'Show N more' when home folders follow.
@@ -429,6 +453,14 @@ export function SessionPathSelector({
   const ghostAutoIdx = useMemo(() => {
     if (!editMode) return -1;
     const scan = flatItems.slice(0, 10);
+    // A segment that already names a folder exactly: highlight that folder. Enter
+    // uses it (enter-action.ts), so a sibling's ghost ('app' + '-old') must not sit
+    // on the highlight and suggest Enter opens the sibling.
+    if (inputState.kind === 'segment' && inputState.partial) {
+      const partial = inputState.partial;
+      const exact = scan.findIndex(r => r.depth === 1 && r.cwd.slice(r.cwd.lastIndexOf('/') + 1) === partial);
+      if (exact >= 0) return exact;
+    }
     for (let i = 0; i < scan.length; i++) {
       if (ghostSuffix(inputState, scan[i].cwd)) return i;
     }
@@ -491,8 +523,11 @@ export function SessionPathSelector({
   // keyed on byHost — progressive per-host arrivals must not yank the cursor.
   // Also clears the "user drove the cursor with ↑↓" flag so the ghost row can
   // re-take the highlight for the freshly-typed segment.
+  // A dir-browse listing ('/a/b/') highlights no row (-1): plain Enter uses the typed
+  // folder itself (enter-action.ts), and the first ↓ lands on the first row.
   const manualNavRef = useRef(false);
-  useEffect(() => { setSelectedIdx(0); setSelectionByHover(false); manualNavRef.current = false; }, [active, hostFilter, editMode]);
+  const noDefaultRow = editMode && preState.kind === 'dir-browse';
+  useEffect(() => { setSelectedIdx(noDefaultRow ? -1 : 0); setSelectionByHover(false); manualNavRef.current = false; }, [active, hostFilter, editMode, noDefaultRow]);
 
   // Auto-highlight the row that prefix-completes the typed segment, so the grey
   // ghost preview lands on the row the user will Tab into. Skip once the user has
@@ -604,6 +639,13 @@ export function SessionPathSelector({
   // Item interaction: live dir → drill deeper (stay in picker); history → fill path.
   const drillOrFill = useCallback((d: RankedItem) => {
     if (isMoreRow(d)) { showMoreHistory(); return; }
+    // The folder being listed (Quick access's home row): nothing deeper to open, so use it.
+    const listed = byHost.get(d.host ?? '__local__');
+    if (editMode && d.source === 'live' && inputState.kind === 'dir-browse' && listed?.status === 'done'
+      && (listed.parent.replace(/\/+$/, '') || '/') === d.cwd) {
+      handleSelect(d);
+      return;
+    }
     if (!editMode) {
       setEditMode(true);
       setSelectedIdx(0);
@@ -614,7 +656,7 @@ export function SessionPathSelector({
     } else {
       fillPath(d.cwd);
     }
-  }, [editMode, hostFilter, fillPath, showMoreHistory]);
+  }, [editMode, hostFilter, fillPath, showMoreHistory, byHost, inputState, handleSelect]);
 
   // Dismiss by clicking outside / Esc.
   const handleDismiss = useCallback(() => {
@@ -666,13 +708,19 @@ export function SessionPathSelector({
         e.preventDefault();
         confirmCurrent();
       } else if (e.key === 'Enter') {
-        // Enter: always select/autocomplete (never sends). Follows the highlighted
-        // row, which the ghost effect keeps on the predicted completion.
+        // Enter: select or use path (path-selector/enter-action.ts). A row picked
+        // with ↑↓, or the completion of a partial segment, is drilled into as
+        // before; a typed path that is itself a folder is used; a missing one
+        // takes the create row when that is all there is.
         e.preventDefault();
-        if (flatItems.length > 0) {
-          drillOrFill(flatItems[Math.min(selectedIdx, flatItems.length - 1)]);
-        }
-        // If no items, Enter does nothing (path is incomplete)
+        const sel = flatItems[Math.min(selectedIdx, flatItems.length - 1)];
+        const action = enterAction({
+          editMode, validity, hasRows: selectedIdx >= 0 && !!sel, manualNav: manualNavRef.current,
+          inputKind: inputState.kind, hasCreateOption: !!(createOption && createTarget),
+        });
+        if (action === 'drill' && sel) drillOrFill(sel);
+        else if (action === 'confirm') handleConfirm();
+        else if (action === 'create') handleCreate();
       } else if (e.key === 'Escape') {
         e.preventDefault();
         setEditMode(false);
@@ -714,7 +762,8 @@ export function SessionPathSelector({
         // deeper than one level, even when the highlighted row is a deep path.
         // Full-row cwd is the last resort (fuzzy/substring hits, no segment rule).
         e.preventDefault();
-        const sel = flatItems[selectedIdx];
+        // No highlight (a dir-browse listing): Tab still completes the first row.
+        const sel = flatItems[Math.max(selectedIdx, 0)];
         if (sel) {
           const oneLevel = segmentCompletion(inputState, sel.cwd);
           fillPath(oneLevel ?? (sel.cwd.endsWith('/') ? sel.cwd : sel.cwd + '/'));
@@ -746,7 +795,7 @@ export function SessionPathSelector({
         handleDismiss();
       }
     }
-  }, [editMode, flatItems, selectedIdx, handleDismiss, confirmCurrent, handleSelect, drillOrFill, hostFilter, hostTabs, ghost, editingPath, inputState, fillPath]);
+  }, [editMode, flatItems, selectedIdx, handleDismiss, confirmCurrent, handleSelect, drillOrFill, hostFilter, hostTabs, ghost, editingPath, inputState, fillPath, validity, createOption, createTarget, handleConfirm, handleCreate]);
 
   // Close on outside click — saves edits when editing an existing selection (see handleDismiss).
   useEffect(() => {
@@ -793,9 +842,13 @@ export function SessionPathSelector({
   const emptyHint = homeWord
     ? `No history or home folder matches "${homeWord}". Type a path (e.g. ~/projects) to browse.`
     : editMode
-    ? (anyLoading ? 'Listing directories...' : 'No matches. Press ⇧Enter or click Go to use this path.')
+    ? (anyLoading ? 'Listing directories...'
+      : validity === 'valid' ? 'No matches. Press Enter to use this path.'
+      : validity === 'missing'
+        ? (createOption && createTarget ? 'Folder does not exist. Press Enter to create it and start here.' : 'Folder not found. Pick a host tab to create it.')
+      : 'No matches. Press ⇧Enter to use this path.')
     : dirs.length === 0
-      ? 'No session history yet — type a path (e.g. ~/projects) to browse.'
+      ? 'No session history yet. Type a path (e.g. ~/projects) to browse.'
       : 'No paths match your search.';
 
   const panel = (
@@ -812,7 +865,7 @@ export function SessionPathSelector({
       <div className="sps-header">
         <span className="sps-header-title">Start a coding session</span>
         <span className="sps-header-hint">
-          Runs Claude Code in the folder you pick — a task is created automatically to track it.
+          Runs Claude Code in the folder you pick. A task is created automatically to track it.
         </span>
       </div>
       <div className="sps-search" style={{ '--sps-status-w': statusBtnWidth ? `${statusBtnWidth + 20}px` : '0px' } as React.CSSProperties}>
@@ -821,7 +874,7 @@ export function SessionPathSelector({
           value={editMode ? editingPath : query}
           ghost={ghost}
           editing={editMode}
-          placeholder={editMode ? 'Type your path... (Enter select, ⇧Enter start session, Esc back)' : 'Type a path — start a Claude Code session there directly'}
+          placeholder={editMode ? 'Type your path... (Enter select, ⇧Enter start session, Esc back)' : 'Type a path to start a Claude Code session there directly'}
           onChange={v => {
             if (editMode) { setEditingPath(v); return; }
             // Path-like input flips straight into edit mode (shell mental model) —
@@ -848,9 +901,9 @@ export function SessionPathSelector({
             disabled={validity === 'missing' && !createOption}
             onClick={confirmCurrent}
             title={
-              validity === 'valid' ? 'Folder exists — start session here (⇧Enter)'
+              validity === 'valid' ? 'Folder exists: start session here (Enter)'
               : validity === 'missing'
-                ? (createOption ? "Folder doesn't exist — create the folder, then start a session in it (⇧Enter)" : 'Folder not found on any host — pick a host tab to create it')
+                ? (createOption ? "Folder doesn't exist: create the folder, then start a session in it (Enter)" : 'Folder not found on any host: pick a host tab to create it')
               : 'Start session (⇧Enter)'
             }
           >
@@ -868,7 +921,7 @@ export function SessionPathSelector({
           at the ugly name and cares. */}
       {hostTabs.find(t => t.key === hostFilter)?.rawName && (
         <div className="sps-raw-host-nudge">
-          Auto-discovered host —{' '}
+          Auto-discovered host:{' '}
           <a
             href="/settings#remote-hosts"
             onClick={(e) => {
@@ -907,7 +960,7 @@ export function SessionPathSelector({
       {/* Key hints live here (not in the placeholder) so the placeholder can say
           what the popover is FOR — new users scan purpose first, keys later. */}
       <div className="sps-keys-hint">
-        <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> select · <kbd>→</kbd> complete · <kbd>⇧Enter</kbd> start session · <kbd>Esc</kbd> close
+        <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> select or use path · <kbd>→</kbd> complete · <kbd>⇧Enter</kbd> start session · <kbd>Esc</kbd> close
       </div>
 
       {/* Task metadata footer — applied to the new task on quick-start.

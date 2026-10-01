@@ -15,7 +15,7 @@
 import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import {
-  CHAT_VISIBLE_KEY, banner, connected, failed, hideTaskPanel, isolatePrefs, now, resetServerHostFixture, row,
+  CHAT_VISIBLE_KEY, banner, chatShownLayout, connected, failed, hideTaskPanel, isolatePrefs, now, resetServerHostFixture, row,
   showTaskPanel, signedOut,
 } from './host-problems-helpers'
 import { loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
@@ -69,7 +69,7 @@ test.describe('the first host row is always readable (N1, N2)', () => {
   for (const size of sizes) {
     test(`BP-N1: ${size.name}, a local sign-in over four host problems: the first host row shows its headline and a whole button`, async ({ page }) => {
       await page.setViewportSize({ width: size.width, height: size.height })
-      await bpSetup(page, { hosts: fixtureHosts(), local: 'sign-in', ...(size.narrow ? { before: chatHidden } : {}) })
+      await bpSetup(page, { hosts: fixtureHosts(), local: 'sign-in', before: size.narrow ? chatHidden : chatShownLayout })
       await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
       await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible()
       await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
@@ -82,7 +82,7 @@ test.describe('the first host row is always readable (N1, N2)', () => {
 
     test(`BP-N2: ${size.name}, four host problems: row 1's headline and a whole button show without scrolling`, async ({ page }) => {
       await page.setViewportSize({ width: size.width, height: size.height })
-      await bpSetup(page, { hosts: fixtureHosts(), ...(size.narrow ? { before: chatHidden } : {}) })
+      await bpSetup(page, { hosts: fixtureHosts(), before: size.narrow ? chatHidden : chatShownLayout })
       await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
       await page.waitForTimeout(400)
       expect(await firstRowSeen(banner(page))).toMatchObject({ headline: true, button: true, host: 'keybox' })
@@ -400,7 +400,8 @@ test.describe('the card only changed place (N5, N18)', () => {
   })
 
   test('BP-N18: showing the task panel: the card never rewraps at a growing width', async ({ page }) => {
-    await bpSetup(page, { hosts: fixtureHosts() })
+    // The slot is shown, so the card comes BACK from it while the panel grows.
+    await bpSetup(page, { hosts: fixtureHosts(), before: chatShownLayout })
     await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(['keybox', 'certbox', 'netbox', 'signbox'])
     const finalWidth = (await banner(page).boundingBox())!.width
     await hideTaskPanel(page)

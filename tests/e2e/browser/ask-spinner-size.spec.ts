@@ -21,8 +21,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { openAskWalnutDrawer } from './draft-helpers'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import { MailFixtureServer, folderRow, openMail } from './mail-review-helpers'
 
 const SHOTS = process.env.ASK_SPINNER_SHOTS ?? '/tmp/ask-spinner/run'
@@ -81,7 +80,8 @@ async function record(page: Page, name: string, status: Locator, container: Loca
 }
 
 test.describe('the Ask slot and drawer', () => {
-  test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
+  // The slot starts hidden until opened.
+  test.beforeEach(async ({ page }) => { await openChatOnLoad(page) })
 
   test('the slot while the board loads, and the drawer opened then', async ({ page }) => {
     const board = gate()

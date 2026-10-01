@@ -7,6 +7,7 @@ import { promisify } from 'node:util'
 import { expect, test } from './shortcut-test-fixture'
 import { type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { openChatOnLoad } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/walnut-plugin-demo'
 /** Where the update-status design shots land (light, dark, narrow); read by the reviewers. */
@@ -222,6 +223,8 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
+  // The plugin's command runs from the Ask Walnut composer, which starts hidden until opened.
+  await openChatOnLoad(page)
   await page.goto(`http://127.0.0.1:${fixturePort}/`)
   await openSettings(page)
   await page.getByTestId('settings-nav-plugin-store').click()
@@ -1262,6 +1265,8 @@ test.describe('update status', () => {
 test('reloads, isolates a render crash, restores, adapts to mobile, and disables cleanly', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
+  // The Ask Walnut composer is used below, and it starts hidden until opened.
+  await openChatOnLoad(page)
   await page.goto(`http://127.0.0.1:${fixturePort}/`)
   await openDemo(page)
 

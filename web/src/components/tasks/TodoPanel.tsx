@@ -67,6 +67,7 @@ import {
 } from './search-results';
 import { arrangeSearchResults, taskMatchesLiterally } from './search-relevance';
 import '@/styles/todo-search.css';
+import '@/styles/todo-empty-board.css';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
 import { SessionRecapLine } from '@/components/sessions/SessionRecapTip';
 import {
@@ -2505,19 +2506,24 @@ function InlineAdd({ onAdd, label = 'Add to Focus…', openSignal, onOpenSignalC
   );
 }
 
-// ── NewProjectRow — "＋ New Project" at the very bottom of the grouped list.
+// ── NewProjectRow: the project name entry at the very bottom of the grouped list.
+// Opened from the Projects heading's "New project..." menu item and mounted only
+// while it is open (a permanent dashed "New Project" button used to be the one
+// visible control on an empty board, which read as "make a project first").
 // Visually separated from task rows (hairline + dashed outline, folder icon):
 // this creates a CONTAINER, not a task. On create the caller re-renders the
 // group list; the row itself never moves (it's static DOM below the groups), so
-// no scroll compensation is needed here — the new empty group appears above it. ──
-function NewProjectRow({ onCreated, onError }: { onCreated: (name: string) => void; onError?: (msg: string) => void }) {
-  const [open, setOpen] = useState(false);
+// no scroll compensation is needed here: the new empty group appears above it.
+// Esc, a blur with no name, and a successful create all end it via `onClose`. ──
+function NewProjectRow({ onCreated, onError, onClose }: { onCreated: (name: string) => void; onError?: (msg: string) => void; onClose: () => void }) {
   const [value, setValue] = useState('');
   const [source, setSource] = useState('local');
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
+  // Mounted = asked for (the menu item), so the caret goes straight into the name.
+  // focus() also scrolls the row into view at the bottom of a long list.
+  useEffect(() => { inputRef.current?.focus(); }, []);
 
   const submit = async () => {
     const name = value.trim();
@@ -2525,9 +2531,7 @@ function NewProjectRow({ onCreated, onError }: { onCreated: (name: string) => vo
     setBusy(true);
     try {
       const res = await createProject(name, source === 'local' ? undefined : source);
-      setValue('');
-      setSource('local');
-      setOpen(false);
+      onClose();
       onCreated(res.name); // canonical spelling from the server (NOCASE registry)
     } catch (err) {
       // Keep the input open with the text so the user can fix the name (e.g.
@@ -2542,16 +2546,6 @@ function NewProjectRow({ onCreated, onError }: { onCreated: (name: string) => vo
     }
   };
 
-  if (!open) {
-    return (
-      <div className="todo-new-project-wrap">
-        <button type="button" className="todo-new-project-btn" onClick={() => setOpen(true)}>
-          <span className="todo-new-project-icon">{ICONS.ICON_FOLDER}</span>
-          <span>New Project</span>
-        </button>
-      </div>
-    );
-  }
   return (
     <div className="todo-new-project-wrap">
       <div className="todo-new-project-input-row">
@@ -2561,14 +2555,15 @@ function NewProjectRow({ onCreated, onError }: { onCreated: (name: string) => vo
           type="text"
           value={value}
           disabled={busy}
-          placeholder="Project name — Enter to create, Esc to cancel"
+          aria-label="New project name"
+          placeholder="Project name (Enter to create)"
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return;
             if (e.key === 'Enter') { e.preventDefault(); void submit(); }
-            if (e.key === 'Escape') { e.preventDefault(); setValue(''); setSource('local'); setOpen(false); }
+            if (e.key === 'Escape') { e.preventDefault(); onClose(); }
           }}
-          onBlur={() => { if (!value.trim()) setOpen(false); }}
+          onBlur={() => { if (!value.trim()) onClose(); }}
         />
       </div>
       {/* provider claim — default Local; chips preventDefault pointerdown so a
@@ -5806,6 +5801,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // registry projects stay hidden (the panel is a work list, not a registry
   // browser — the /tasks rail shows the full registry).
   const [freshProjects, setFreshProjects] = useState<string[]>([]);
+  // The bottom name-entry row is mounted only while this is set (the Projects
+  // heading's "New project..." sets it; the row's Esc / empty blur / create clears it).
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const closeNewProject = useCallback(() => setNewProjectOpen(false), []);
   // Prune against the registry: a fresh project later renamed/deleted (kebab)
   // must not resurrect as a phantom empty group. Only after the first fetch
   // resolves — pruning against a still-empty registry would wipe a name the
@@ -7555,6 +7554,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // behind a chevron the user folded before searching.
   const tasksCollapsed = isAll && !isSearchMode && collapsedSections.has('tasks');
   const tasksVisible = showSection('tasks');
+  // The project name row lives in the grouped list: when that list goes away
+  // (folded, flat, a search), the request ends with it instead of popping back
+  // with the caret on the next unfold.
+  const newProjectRowHost = tasksVisible && !tasksCollapsed && !isSearchMode && groupBy !== 'none';
+  useEffect(() => { if (!newProjectRowHost) setNewProjectOpen(false); }, [newProjectRowHost]);
   // "Collapse all" for the Pinned heading's menu: folds every tier at once.
   const allTiersFolded = allTierKeys.every((tier) => collapsedSections.has(tier));
   const setAllTiersFolded = (fold: boolean) => {
@@ -8093,6 +8097,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           { key: 'folds', divider: true },
           { key: 'collapse-all', label: allCollapsed ? 'Expand all projects' : 'Collapse all projects', onSelect: handleCollapseExpandAll, when: groupBy === 'project' },
           { key: 'collapse', label: tasksCollapsed ? 'Expand Projects' : 'Collapse Projects', onSelect: () => toggleSection('tasks') },
+          // Container creation, kept off the list itself: the row it opens lives at the
+          // bottom of the grouped list, so a folded Projects section unfolds first.
+          { key: 'new-project-divider', divider: true, when: groupBy !== 'none' },
+          { key: 'new-project', label: 'New project…', when: groupBy !== 'none', onSelect: () => {
+            if (tasksCollapsed) toggleSection('tasks');
+            setNewProjectOpen(true);
+          } },
         ]} />
       )}
 
@@ -8134,7 +8145,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               )}
           </div>
         )}
-        {!loading && !isSearchMode && filtered.length === 0 && (
+        {/* An EMPTY board (no task at all, not a filter's empty answer) says what
+            to do first, and that no project is needed before it. A board whose
+            tasks are all elsewhere (pinned above, filtered out) keeps the plain
+            line. A project just made from the menu draws its own empty group. */}
+        {!loading && !isSearchMode && filtered.length === 0 && tasks.length === 0 && freshProjects.length === 0 && (
+          <div className="empty-state todo-empty-board" data-testid="todo-empty-board">
+            <p className="todo-empty-board-title">No tasks yet</p>
+            <p className="text-sm">Start with New task above. Projects are created for you as you go.</p>
+          </div>
+        )}
+        {!loading && !isSearchMode && filtered.length === 0 && tasks.length > 0 && (
           <div className="empty-state" style={{ padding: '24px 8px' }}>
             <p className="text-sm">No tasks found</p>
           </div>
@@ -8418,10 +8439,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             </DragOverlay>
 
             {/* Container creation, clearly apart from task rows (hairline + dashed
-                outline). The new empty group appears directly above this row —
-                see freshProjects in the grouped memo. */}
-            <NewProjectRow
+                outline), mounted only while "New project…" asked for it. The new
+                empty group appears directly above this row (see freshProjects in
+                the grouped memo). */}
+            {newProjectOpen && <NewProjectRow
               onError={onOperationError}
+              onClose={closeNewProject}
               onCreated={(name) => {
                 setFreshProjects((prev) => (prev.includes(name) ? prev : [...prev, name]));
                 projectRegistry.refresh();
@@ -8429,7 +8452,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 // is the first task's title.
                 handleHeaderAddTask(name);
               }}
-            />
+            />}
           </DndContext>
         )}
       </div>

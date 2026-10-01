@@ -20,6 +20,7 @@
  * that spec's own fixture server, since the shared :3457 fixture installs no plugins.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { openChatOnLoad } from './draft-helpers'
 import fs from 'node:fs/promises'
 
 const SHOT_DIR = '/tmp/action-cards-time'
@@ -86,6 +87,8 @@ test.describe('suggest action cards', () => {
     // The op has not run yet — otherwise "it worked" would prove nothing.
     expect(await pinnedIds(request)).not.toContain(taskId)
 
+    // The card renders in the Ask Walnut slot, which starts hidden until opened.
+    await openChatOnLoad(page)
     await page.goto('/')
     await page.waitForLoadState('networkidle')
 

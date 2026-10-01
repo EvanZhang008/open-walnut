@@ -143,8 +143,9 @@ test('exact typed segment + deep highlighted row: Tab descends ONE level, never 
   await expect(page.locator('.sps-path-list .sps-path-item').first()).toBeVisible()
   await input(page).press('Tab')
   await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/walnut/`)
-  // Now browsing walnut/'s children — its real subdir shows
-  await expect(page.locator('.sps-path-list .sps-path-item', { hasText: 'walnut/web' })).toBeVisible()
+  // Now browsing walnut/'s children: its real subdir shows, found by its full path
+  // (a trailing-slash listing highlights no row, so every row reads relative "…/web/")
+  await expect(page.locator('.sps-path-list .sps-path-item .sps-path-cwd[title$="/walnut/web/"]')).toBeVisible()
 })
 
 test('Tab case-corrects: lowercase typed segment completes to the REAL-cased dir', async ({ page }) => {
@@ -160,8 +161,8 @@ test('Tab case-corrects: lowercase typed segment completes to the REAL-cased dir
   await expect(page.locator('.sps-ghost-text')).toHaveText('apsDev')
   await input(page).press('Tab')
   await expect(input(page)).toHaveValue(`${fixtureRoot}/projects/AcmeCapsDev/`)
-  // We're now correctly inside it — its real child lists
-  await expect(page.locator('.sps-path-list .sps-path-item', { hasText: 'AcmeCapsDev/src' })).toBeVisible()
+  // We're now correctly inside it: its real child lists (full path in the title)
+  await expect(page.locator('.sps-path-list .sps-path-item .sps-path-cwd[title$="/AcmeCapsDev/src/"]')).toBeVisible()
 
   // Backspacing after the completion must not teleport the caret / rewrite the
   // input: delete one char → exactly one char shorter, caret stays put.
@@ -288,7 +289,12 @@ test('keyboard matrix: Enter drills into a live dir, Esc backs out, ⇧Enter con
   const list = page.locator('.sps-path-list')
   await expect(list.locator('.sps-path-item').first()).toBeVisible()
 
-  // Enter on the selected (first) item — walnut (live+history) → drills to walnut/
+  // A trailing-slash listing highlights no row (plain Enter would use the typed
+  // folder itself, see path-picker-enter.spec.ts). ↓ picks the first row, walnut
+  // (live+history), and Enter drills into it.
+  await expect(list.locator('.sps-path-item.active')).toHaveCount(0)
+  await input(page).press('ArrowDown')
+  await expect(list.locator('.sps-path-item').first()).toHaveClass(/active/)
   await input(page).press('Enter')
   await expect(input(page)).toHaveValue(new RegExp('projects/walnut/?$'))
 

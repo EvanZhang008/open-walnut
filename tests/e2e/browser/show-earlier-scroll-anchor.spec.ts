@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { openChatOnLoad } from './draft-helpers';
 
 const SESSION_ID = 'pw-vscode-session';
 const TASK_ID = 'pw-task-vscode';
@@ -300,6 +301,8 @@ test('embedded Ask conversation keeps the same bottom clearance in both themes',
     }
     await route.fulfill({ response, json: body });
   });
+  // The embedded Ask conversation is the Ask Walnut slot's, which starts hidden until opened.
+  await openChatOnLoad(page);
   const column = await openSession(page, baseURL!);
   const panel = page.locator(`.ask-walnut-session .session-panel[data-session-id="${SESSION_ID}"]`);
   await expect(panel).toBeVisible();

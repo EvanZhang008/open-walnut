@@ -1044,9 +1044,12 @@ export async function quickStartSession(opts: {
   if (clientSessionId) payload.sessionId = clientSessionId;
   // 60s, not the 15s default: quick-start spawns a real CLI process (slow under
   // load) AND creates durable state (task + session) — it must not share the
-  // lightweight-GET timeout budget.
+  // lightweight-GET timeout budget. A repair may first CLONE Walnut's source
+  // (an npm install, the first time), which the server allows 300s for: the same
+  // budget as the notification card's fix (api/notifications.ts).
+  const timeoutMs = opts.intent === 'fix-walnut' ? 330_000 : 60_000;
   try {
-    const result = await apiPost<{ taskId: string; task: unknown; sessionId?: string }>('/api/sessions/quick-start', payload, { timeoutMs: 60_000 });
+    const result = await apiPost<{ taskId: string; task: unknown; sessionId?: string }>('/api/sessions/quick-start', payload, { timeoutMs });
     seedTaskSessionStatuses(result.task, 'rest:task');
     invalidateWorkingDirsCache(); // new session → new path entry
     if (opts.createCwd) invalidateLiveDirCache(); // the dir now exists — stale "missing" entries lie

@@ -19,6 +19,9 @@
  *      so imported sessions behave exactly like native ones — status circle,
  *      click-through, resume.
  *   4. Import each candidate as a `stopped` session record with its real title.
+ *   5. Record the run's folders in frequent-dirs (one write), so a user whose
+ *      history lives in their own Claude Code install finds those folders as
+ *      quick paths in the folder picker.
  *
  * Lifecycle of an imported task (all of it runs inside the SAME 10-minute tick;
  * there is no second timer and no model call anywhere in this file):
@@ -53,6 +56,7 @@ import { isExcludedExternalCwd, isSyntheticUserText, type ExternalSessionCandida
 import { ENGINE_REGISTRY, engineCaps, normalizeEngine } from '../agents/engine-registry.js';
 import { EXTERNAL_SESSION_IMPORT_TAG, isExternalImportTask, type Task } from '../types.js';
 import { readMarkerForPhase } from '../phase.js';
+import type { DirectoryUse } from '../frequent-dirs.js';
 
 /** Daemon capability gating the scan RPC. */
 const SCAN_CAPABILITY = 'external-scan-v1';
@@ -865,6 +869,8 @@ async function scanAndImport(
   // transcript yields a real title.
   const retitleable = await retitleableSessions();
   const knownSessionIds = [...await listAllSessionIds()].filter((id) => !retitleable.has(id));
+  // Folders of the sessions imported this run, for the picker's quick paths.
+  const uses: DirectoryUse[] = [];
 
   for (const host of scannable) {
     const hostExclusions = excludedCwds[host] ?? [];
@@ -901,6 +907,12 @@ async function scanAndImport(
           result.projectByHost[host] = externalImportProject(host);
           // Classified by the current rule just now: nothing for the audit to ask.
           auditedSessions.add(candidate.sessionId);
+          if (candidate.cwd) {
+            uses.push({
+              cwd: candidate.cwd, host: host === '__local__' ? null : host,
+              project: externalImportProject(host), usedAt: candidate.lastActiveAt,
+            });
+          }
         }
       } catch (err) {
         result.skipped++;
@@ -910,6 +922,18 @@ async function scanAndImport(
         });
       }
     }
+  }
+
+  // Their folders become the picker's quick paths (a native start records its own
+  // at spawn; an import never spawns). One write per run, and a failure here never
+  // fails the import.
+  if (uses.length > 0) {
+    const { recordDirectoryUses } = await import('../frequent-dirs.js');
+    await recordDirectoryUses(uses).catch((err) => {
+      log.session.warn('external import could not record folders for the picker', {
+        count: uses.length, error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 }
 

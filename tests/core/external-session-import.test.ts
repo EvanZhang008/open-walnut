@@ -1174,3 +1174,67 @@ describe('importExternalSessions — removes imports that were never outside ses
     await expect(getTask(done.id)).rejects.toThrow();
   });
 });
+
+describe('importExternalSessions: imported folders feed the folder picker', () => {
+  interface StoredDir { cwd: string; host: string | null; count: number; lastUsed: string; projectVotes: Record<string, number> }
+  async function storedDirs(): Promise<StoredDir[]> {
+    const { FREQUENT_DIRS_FILE } = await import('../../src/constants.js');
+    return (JSON.parse(await fsp.readFile(FREQUENT_DIRS_FILE, 'utf-8')) as { directories: StoredDir[] }).directories;
+  }
+  const byKey = (dirs: StoredDir[]) => new Map(dirs.map((d) => [`${d.host ?? '__local__'}::${d.cwd}`, d]));
+
+  it('a fresh install: the first run builds the store from sessions, each session counted once', async () => {
+    configHosts = { buildbox: { hostname: 'cloud.example' } };
+    setHost('__local__', { candidates: [
+      candidate({ sessionId: 'fd-1', cwd: '/Users/dev/proj' }),
+      candidate({ sessionId: 'fd-2', cwd: '/Users/dev/proj' }),
+      candidate({ sessionId: 'fd-3', cwd: '/Users/dev/other' }),
+      candidate({ sessionId: 'fd-4', cwd: undefined }),
+    ] });
+    setHost('buildbox', { candidates: [candidate({ sessionId: 'fd-r1', cwd: '/home/dev/api' })] });
+
+    expect((await importExternalSessions()).imported).toBe(5);
+    const dirs = byKey(await storedDirs());
+    expect(dirs.get('__local__::/Users/dev/proj')).toMatchObject({ count: 2, host: null });
+    expect(dirs.get('__local__::/Users/dev/other')).toMatchObject({ count: 1, host: null });
+    // A remote session keeps its host, so the picker offers it on that host's tab.
+    expect(dirs.get('buildbox::/home/dev/api')).toMatchObject({ count: 1, host: 'buildbox' });
+    expect(dirs.size).toBe(3); // the session with no cwd adds nothing
+  });
+
+  it('an existing store: one entry per new folder, dated by the session, never double counted', async () => {
+    const { FREQUENT_DIRS_FILE } = await import('../../src/constants.js');
+    await fsp.writeFile(FREQUENT_DIRS_FILE, JSON.stringify({
+      version: 1, compiledAt: '2026-09-01T00:00:00.000Z',
+      directories: [{ cwd: '/Users/dev/proj', host: null, count: 3, lastUsed: '2026-09-01T00:00:00.000Z', projectVotes: { Mine: 3 } }],
+    }));
+    excludedCwds = { __local__: ['/Users/dev/probes'] };
+    setHost('__local__', { candidates: [
+      candidate({ sessionId: 'ex-1', cwd: '/Users/dev/proj', lastActiveAt: '2026-08-10T12:00:00.000Z' }),
+      candidate({ sessionId: 'ex-2', cwd: '/Users/dev/newdir', lastActiveAt: '2026-08-11T09:30:00.000Z' }),
+      candidate({ sessionId: 'ex-3', cwd: '/Users/dev/probes/p1' }),
+    ] });
+
+    const first = await importExternalSessions();
+    expect(first.imported).toBe(2);
+    let dirs = byKey(await storedDirs());
+    const proj = dirs.get('__local__::/Users/dev/proj')!;
+    expect(proj.count).toBe(4);
+    // An older session never makes a folder look less recent than it was.
+    expect(proj.lastUsed).toBe('2026-09-01T00:00:00.000Z');
+    expect(proj.projectVotes).toEqual({ Mine: 3, [externalImportProject('__local__')]: 1 });
+    // A new folder is dated by when its session last ran, not by the import tick.
+    expect(dirs.get('__local__::/Users/dev/newdir')).toMatchObject({
+      count: 1, host: null, lastUsed: '2026-08-11T09:30:00.000Z',
+      projectVotes: { [externalImportProject('__local__')]: 1 },
+    });
+    // An excluded folder was never imported, so the picker never offers it either.
+    expect(dirs.has('__local__::/Users/dev/probes/p1')).toBe(false);
+
+    // The next tick re-offers nothing new: the store is unchanged.
+    expect((await importExternalSessions()).imported).toBe(0);
+    dirs = byKey(await storedDirs());
+    expect(dirs.get('__local__::/Users/dev/proj')!.count).toBe(4);
+    expect(dirs.get('__local__::/Users/dev/newdir')!.count).toBe(1);
+  });
+});

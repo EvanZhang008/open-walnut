@@ -9,6 +9,8 @@ import { fetchSttStatus, type SttStatus } from '@/api/stt';
 import { visibleInterval } from '@/utils/page-visibility';
 
 interface SttStatusState {
+  /** The engine the status is about (null when none is configured) */
+  engine: string | null;
   /** An STT engine is configured in settings */
   isConfigured: boolean;
   /** The configured engine is available (binary/model found) */
@@ -126,5 +128,5 @@ export function useSttStatus(): SttStatusState {
         ? status.error ?? 'STT engine not available'
         : null;
 
-  return { isConfigured, isAvailable, error, isLoading: loading };
+  return { engine: status?.engine ?? null, isConfigured, isAvailable, error, isLoading: loading };
 }

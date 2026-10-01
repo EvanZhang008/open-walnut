@@ -20,7 +20,7 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { openAskWalnutDrawer } from './draft-helpers'
+import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import { expectTaskInTier } from './draft-outcome-helpers'
 
 const API = 'http://localhost:3457'
@@ -35,6 +35,8 @@ test('fix walnut inherits the launcher tier instead of carrying its own', async 
   // server would fill with ITS default) and that the task lands where the
   // launcher's default says. The model half of the parity (folder launch memory,
   // not a forced Auto) is covered by the draft launch-memory specs.
+  // Fix Walnut lives in the Ask Walnut drawer; the slot starts hidden until opened.
+  await openChatOnLoad(page)
   await page.goto('/')
 
   const drawer = await openAskWalnutDrawer(page)

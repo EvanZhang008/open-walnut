@@ -132,10 +132,9 @@ export interface DraftColumn {
    *  picker: without it the launch silently targeted a nonexistent cwd. */
   createCwd?: boolean;
   /** Launch intent. 'fix-walnut' → the server wraps the message in its repair
-   *  briefing (and titles/files the task as a repair). Currently set by NO draft
-   *  UI (the in-draft chip was removed with the v4 layout — the repair entry point
-   *  is the chat pill); the field + its forwarding in handleDraftStart stay so a
-   *  future entry point needs no plumbing. */
+   *  briefing (and titles/files the task as a repair) and runs it in Walnut's own
+   *  source. Set by the Ask Walnut drawer's "Fix Walnut" and by a plain draft's
+   *  "Improve Walnut" chip (both through MainPage's repair seed). */
   intent?: 'fix-walnut';
   /** This draft is BOUND to an existing task (task row ▶ Start on a title-only
    *  task): the launch reuses that task instead of minting a new one, so there is

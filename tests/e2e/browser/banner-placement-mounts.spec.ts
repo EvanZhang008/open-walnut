@@ -17,7 +17,7 @@
 import fs from 'node:fs'
 import { test, expect } from '@playwright/test'
 import {
-  anyBanner, banner, connected, hideTaskPanel, outdated, resetServerHostFixture, row, showTaskPanel,
+  anyBanner, banner, chatShownLayout, connected, hideTaskPanel, outdated, resetServerHostFixture, row, showTaskPanel,
 } from './host-problems-helpers'
 import { openBell, panelBanner, slotBanner, tasksBanner } from './host-problems-fixture-helpers'
 import { openDraft } from './draft-helpers'
@@ -37,7 +37,8 @@ test.beforeAll(async ({ request }) => {
 
 test.describe('the task panel is the Home mount', () => {
   test('BP-C1: default Home: exactly one card, in the task panel after the toolbar and before the list; none in the slot', async ({ page }) => {
-    await bpSetup(page)
+    // The slot is shown, so "none in the slot" is a claim about a mounted slot.
+    await bpSetup(page, { before: chatShownLayout })
     await expectTasksCard(page)
     await expect(page.locator('.main-page-chat [data-testid="attention-banner"]')).toHaveCount(0)
     const order = await banner(page).evaluate((card) => {
@@ -126,7 +127,8 @@ test.describe('the notification panel never takes the card', () => {
   })
 
   test('BP-C7: task panel toggles, panel opens and a trip to /notes never put two cards on the page', async ({ page }) => {
-    await bpSetup(page, { probe: true })
+    // With the slot shown, each Hide moves the card into it: the move under test.
+    await bpSetup(page, { probe: true, before: chatShownLayout })
     await expectTasksCard(page)
     for (let i = 0; i < 3; i++) { await hideTaskPanel(page); await showTaskPanel(page) }
     await expect(banner(page)).toHaveCount(1)
@@ -156,7 +158,7 @@ test.describe('the notification panel never takes the card', () => {
 
 test.describe('fallback mounts while the task panel is hidden', () => {
   test('BP-C13: the toolbar Hide task panel moves the card to the slot; the rail toggle brings it back', async ({ page }) => {
-    await bpSetup(page)
+    await bpSetup(page, { before: chatShownLayout })
     await expectTasksCard(page)
     await toolbarHide(page).click()
     await expect(slotBanner(page)).toHaveCount(1)
@@ -208,7 +210,8 @@ test.describe('empty, and the first frame after a move', () => {
   })
 
   test('BP-C44: in the first frame after Hide task panel no card is left inside the task panel', async ({ page }) => {
-    await bpSetup(page)
+    // The slot is shown, so the card has somewhere to move in that frame.
+    await bpSetup(page, { before: chatShownLayout })
     await expectTasksCard(page)
     expect(await countInFirstFrameAfterClick(page, toolbarHide(page), '.todo-panel [data-testid="attention-banner"]')).toBe(0)
     await showTaskPanel(page)
@@ -239,7 +242,7 @@ test.describe('empty, and the first frame after a move', () => {
       const ctx = await browser.newContext()
       const page = await ctx.newPage()
       try {
-        await bpSetup(page, { probe: true })
+        await bpSetup(page, { probe: true, before: chatShownLayout })
         await expectTasksCard(page)
         for (let i = 0; i < 3; i++) { await hideTaskPanel(page); await showTaskPanel(page) }
         for (let i = 0; i < 3; i++) { await openSystemHosts(page); await closePanel(page, 'escape') }

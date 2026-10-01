@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
-import { openDraftOnCwd } from './draft-helpers'
+import { openChatOnLoad, openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/session-status-store'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -40,6 +40,9 @@ test.beforeAll(async () => {
  * from the draft's own composer instead of the main chat one.
  */
 async function openCodexQuickStart(page: Page): Promise<Locator> {
+  // expectTaskMenuStatus dismisses the task menu with a click on the chat spot, so
+  // the Ask Walnut slot is open here (it starts hidden until opened).
+  await openChatOnLoad(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   return openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Codex' })

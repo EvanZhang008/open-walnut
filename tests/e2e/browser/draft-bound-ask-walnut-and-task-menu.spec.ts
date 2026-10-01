@@ -23,7 +23,7 @@ import { test, expect, type Page } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftDecisionChip, draftDecisionChips,
   draftMoreButton, draftPanel, draftPanels, draftProjectPill, draftTaskMenu, isoDay, loadHome, mockQuickParse,
-  openAskWalnutDrawer, openDraft, openDraftOnCwd, openDraftSettings, patchClientConfig, tasksTitled,
+  openAskWalnutDrawer, openChatOnLoad, openDraft, openDraftOnCwd, openDraftSettings, patchClientConfig, tasksTitled,
   watchForbiddenRequests, draftSend,
 } from './draft-helpers'
 import { expectTaskInTier, pinnedTierOf } from './draft-outcome-helpers'
@@ -293,6 +293,8 @@ test('the Ask Walnut tab gets a More-only row that never parses; Fix Walnut and 
   // Parse ON (page-local) so "the tab never parses" is a real claim, not the default.
   await patchClientConfig(page, { quickParse: true })
   const parse = await mockQuickParse(page, { pinTier: 'satellite', due_date: isoDay(3) })
+  // The chat slot's draft is under test too, and the slot starts hidden until opened.
+  await openChatOnLoad(page)
   await loadHome(page)
 
   const panel = await openDraft(page)

@@ -45,8 +45,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { DRAFT_PANEL, loadHome, openAskWalnutDrawer, openDraft } from './draft-helpers'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { DRAFT_PANEL, loadHome, openAskWalnutDrawer, openChatOnLoad, openDraft } from './draft-helpers'
 
 const SCREENSHOT_DIR = process.env.ASK_SLOT_SHOT_DIR ?? '/tmp/ask-walnut-slot'
 
@@ -79,11 +78,12 @@ test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
 
-// The chat spot's open/hidden state is a ui-prefs-mirrored localStorage key. Two
-// tests below hide the slot and bring it back; a failure in between would leave
-// `open-walnut-home-chat-visible = false` on the SHARED fixture server, and every
-// later spec that waits for the slot would boot with the chat hidden.
-test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
+// The chat spot starts hidden on a browser that never chose, and every test here
+// is about the slot, so each boots as a user who opened it once (`openChatOnLoad`).
+// The key is ui-prefs-mirrored, which is why that helper also isolates the mirror:
+// two tests below hide the slot and bring it back, and a failure in between must
+// not leave `open-walnut-home-chat-visible = false` on the SHARED fixture server.
+test.beforeEach(async ({ page }) => { await openChatOnLoad(page) })
 
 // ── Slot locators (the DOM contract) ─────────────────────────────────────────
 
@@ -552,7 +552,7 @@ test('Fix Walnut re-arms a pristine draft that is already open', async ({ page }
   await openDraft(page)
   const draft = page.locator(DRAFT_PANEL)
   await expect(draft).toHaveCount(1, { timeout: 20_000 })
-  await expect(draft.locator('.session-panel-title')).toHaveText('New Session')
+  await expect(draft.locator('.session-panel-title')).toHaveText('New task')
   await expectChatSpotYielded(page)
 
   // 2. Give the chat its spot back by hand (this cancels the borrow), so the slot's

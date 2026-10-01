@@ -18,6 +18,13 @@ vi.mock('../../../src/constants.js', () => createMockConstants());
 // The host Start gate has its own tests (tests/core/sessions/host-start-gate.test.ts);
 // these launches are the ones past it.
 vi.mock('../../../src/core/sessions/host-start-gate.js', () => ({ hostStartGate: async () => null }));
+// A fix-walnut launch runs in Walnut's source, and this install shape has none
+// (no WALNUT_INSTALL_DIR), so the real lookup would CLONE upstream. Where a repair
+// runs is quick-start-fix-walnut.test.ts's subject; here it is a fixed answer.
+vi.mock('../../../src/core/self-repair/walnut-source.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/core/self-repair/walnut-source.js')>();
+  return { ...actual, ensureWalnutSource: async () => ({ source: { dir: '/tmp', kind: 'configured' as const }, cloned: false }) };
+});
 
 vi.mock('../../../src/utils/session-liveness.js', () => ({
   isSessionProcessAlive: async () => false,

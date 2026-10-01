@@ -72,7 +72,7 @@ describe('setup banner for this machine\'s Claude Code', () => {
     const html = render({ hasReadyProvider: true, claudeCliAvailable: false, localClaude: local({ claude: { found: false }, problems: [MISSING] }) })
     expect(html).toContain('data-testid="setup-banner-install"')
     expect(html).toContain('data-testid="setup-banner-fix"')
-    expect(text(html)).toContain('Ask Walnut runs on Claude Code. It is not installed on this computer yet.')
+    expect(text(html)).toContain('Walnut runs on Claude Code. It is not installed on this computer yet.')
     expect(text(html)).toContain('Install Claude Code')
     expect(text(html)).toContain(`Or install it yourself:${INSTALL}`)
     expect(html).toContain('Open API settings')

@@ -9,18 +9,30 @@
  *      while still honoring an explicit client pick, including `pinTier: null`
  *      to opt out,
  *   4. reject unknown intent values with 400,
- *   5. leave plain quick-starts (no intent) untouched.
+ *   5. leave plain quick-starts (no intent) untouched,
+ *   6. run in Walnut's own source: a client folder that is a Walnut checkout is
+ *      kept, any other folder is replaced by ensureWalnutSource()'s answer (on an
+ *      npm install, the clone it makes), and its refusal is the response.
  *
  * Also covers GET /api/config `installDir` exposure (drives the UI pill).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-fixwalnut', {
   WALNUT_INSTALL_DIR: '/fake/walnut-checkout',
 }));
+
+// ensureWalnutSource is the real one unless a test says otherwise, so no test here
+// can ever run a real `git clone`: the clone cases replace it for one call.
+vi.mock('../../../src/core/self-repair/walnut-source.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/core/self-repair/walnut-source.js')>();
+  return { ...actual, ensureWalnutSource: vi.fn(actual.ensureWalnutSource) };
+});
 
 vi.mock('../../../src/utils/session-liveness.js', () => ({
   isSessionProcessAlive: async () => false,
@@ -53,6 +65,9 @@ import { errorHandler } from '../../../src/web/middleware/error-handler.js';
 import { getTask, _resetForTesting as resetTaskManager } from '../../../src/core/task-manager.js';
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+import { ensureWalnutSource, WalnutSourceError } from '../../../src/core/self-repair/walnut-source.js';
+
+const ensureSource = vi.mocked(ensureWalnutSource);
 
 function createApp() {
   const app = express();
@@ -228,6 +243,116 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
     expect(res.status).toBe(200);
     const task = await getTask(res.body.taskId);
     expect(task!.title).toBe(`Fix Walnut: ${'x'.repeat(60)}`);
+  });
+});
+
+describe('POST /api/sessions/quick-start: intent=fix-walnut runs in Walnut source', () => {
+  let scratch = '';
+  beforeEach(async () => {
+    ensureSource.mockClear();
+    scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-fixwalnut-src-'));
+  });
+  afterEach(async () => {
+    await fs.rm(scratch, { recursive: true, force: true });
+  });
+
+  /** A folder isWalnutCheckout accepts: package.json naming open-walnut + a .git. */
+  async function makeCheckout(dir: string): Promise<string> {
+    await fs.mkdir(path.join(dir, '.git'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'open-walnut' }));
+    return dir;
+  }
+
+  it('an install with no checkout launches in the clone ensureWalnutSource made', async () => {
+    const cloneDir = path.join(scratch, 'open-walnut');
+    ensureSource.mockResolvedValueOnce({ source: { dir: cloneDir, kind: 'clone' }, cloned: true });
+    const app = createApp();
+    const capture = captureSessionStart();
+    try {
+      const res = await request(app)
+        .post('/api/sessions/quick-start')
+        // The draft points at the clone-to-be, which does not exist yet.
+        .send({ cwd: cloneDir, message: 'the board flickers', intent: 'fix-walnut' });
+
+      expect(res.status).toBe(200);
+      expect(ensureSource).toHaveBeenCalledTimes(1);
+      expect(capture.get()!.cwd).toBe(cloneDir);
+      const task = await getTask(res.body.taskId);
+      expect(task!.title).toBe('Fix Walnut: the board flickers');
+    } finally {
+      capture.dispose();
+    }
+  });
+
+  it('a folder that is not a checkout is replaced by the known source', async () => {
+    const source = await makeCheckout(path.join(scratch, 'source'));
+    ensureSource.mockResolvedValueOnce({ source: { dir: source, kind: 'configured' }, cloned: false });
+    const app = createApp();
+    const capture = captureSessionStart();
+    try {
+      const res = await request(app)
+        .post('/api/sessions/quick-start')
+        .send({ cwd: path.join(scratch, 'somewhere-else'), message: 'fix the picker', intent: 'fix-walnut' });
+
+      expect(res.status).toBe(200);
+      expect(capture.get()!.cwd).toBe(source);
+    } finally {
+      capture.dispose();
+    }
+  });
+
+  it('a failed clone answers with its status and message, and starts nothing', async () => {
+    const message = 'Cloning Walnut\'s source failed: network unreachable. You can clone it yourself: git clone https://example.invalid/open-walnut.git /x';
+    ensureSource.mockRejectedValueOnce(new WalnutSourceError(message, 502));
+    const app = createApp();
+    const capture = captureSessionStart();
+    try {
+      const res = await request(app)
+        .post('/api/sessions/quick-start')
+        .send({ cwd: path.join(scratch, 'open-walnut'), message: 'anything', intent: 'fix-walnut' });
+
+      expect(res.status).toBe(502);
+      expect(res.body.error).toBe(message);
+      expect(capture.get()).toBeNull();
+    } finally {
+      capture.dispose();
+    }
+  });
+
+  it('a refusal (no git, occupied clone path) keeps its 503', async () => {
+    ensureSource.mockRejectedValueOnce(new WalnutSourceError('No Walnut source checkout and git is not installed.', 503));
+    const res = await request(createApp())
+      .post('/api/sessions/quick-start')
+      .send({ cwd: path.join(scratch, 'open-walnut'), message: 'anything', intent: 'fix-walnut' });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toContain('git is not installed');
+  });
+
+  it('a client folder that is itself a Walnut checkout is kept, with no source lookup or clone', async () => {
+    const own = await makeCheckout(path.join(scratch, 'my-walnut-clone'));
+    const app = createApp();
+    const capture = captureSessionStart();
+    try {
+      const res = await request(app)
+        .post('/api/sessions/quick-start')
+        .send({ cwd: own, message: 'tweak the header', intent: 'fix-walnut' });
+
+      expect(res.status).toBe(200);
+      expect(capture.get()!.cwd).toBe(own);
+      expect(ensureSource).not.toHaveBeenCalled();
+    } finally {
+      capture.dispose();
+    }
+  });
+
+  it('a plain quick-start never asks for the Walnut source', async () => {
+    const res = await request(createApp())
+      .post('/api/sessions/quick-start')
+      .send({ cwd: path.join(scratch, 'plain'), message: 'no intent' });
+
+    expect(res.status).toBe(200);
+    expect(ensureSource).not.toHaveBeenCalled();
   });
 });
 

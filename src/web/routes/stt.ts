@@ -13,7 +13,8 @@ import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
 import { startMicRecording, stopMicRecording, isMicRecording } from '../../core/stt/mic-record.js';
 import { cleanupTranscript, warmupCleanup, isCleanupAvailable } from '../../core/stt/cleanup-mlx.js';
 import { detectSystem } from '../../core/stt/detect.js';
-import { installViaBrew, downloadGgmlModel, MODEL_CATALOG, VAD_MODEL, getModelDir, SHERPA_MODEL_CATALOG, downloadSherpaModel, getSherpaModelDir, findSherpaModels, type SetupEvent } from '../../core/stt/setup.js';
+import { installViaBrew, downloadGgmlModel, MODEL_CATALOG, VAD_MODEL, getModelDir, SHERPA_MODEL_CATALOG, downloadSherpaModel, getSherpaModelDir, findSherpaModels, BREW_PACKAGES, type SetupEvent } from '../../core/stt/setup.js';
+import { setupMlxEnv, downloadMlxModel, isAllowedMlxModel, DEFAULT_MLX_MODEL } from '../../core/stt/setup-mlx.js';
 import { log } from '../../logging/index.js';
 
 export const sttRouter = Router();
@@ -575,80 +576,87 @@ sttRouter.get('/detect', async (_req: Request, res: Response, next: NextFunction
 });
 
 /**
+ * The setup step a POST /api/stt/setup body asks for, or an error message.
+ * Every step is an async generator of SetupEvents; `signal` aborts the ones
+ * that can stop cleanly (downloads, the Python env) when the client leaves.
+ */
+function setupSteps(body: Record<string, unknown>, signal: AbortSignal): AsyncGenerator<SetupEvent> | string {
+  const { action } = body;
+  if (action === 'install_brew_pkg') {
+    const { pkg } = body;
+    if (!pkg || typeof pkg !== 'string') return 'Missing "pkg" field';
+    // Only allow known safe packages
+    if (!BREW_PACKAGES.has(pkg)) return `Package not allowed: ${pkg}`;
+    return installViaBrew(pkg);
+  }
+  if (action === 'download_ggml_model') {
+    const { model } = body;
+    if (!model || typeof model !== 'string') return 'Missing "model" field';
+    const catalogEntry = MODEL_CATALOG.find(m => m.name === model);
+    if (!catalogEntry) return `Unknown model: ${model}. Available: ${MODEL_CATALOG.map(m => m.name).join(', ')}`;
+    return downloadGgmlModel(catalogEntry.url, getModelDir(), catalogEntry.filename, { signal });
+  }
+  if (action === 'download_vad_model') {
+    return downloadGgmlModel(VAD_MODEL.url, getModelDir(), VAD_MODEL.filename, { signal });
+  }
+  if (action === 'download_sherpa_model') {
+    const { model } = body;
+    if (!model || typeof model !== 'string') return 'Missing "model" field';
+    const catalogEntry = SHERPA_MODEL_CATALOG.find(m => m.name === model);
+    if (!catalogEntry) return `Unknown sherpa model: ${model}`;
+    return downloadSherpaModel(catalogEntry);
+  }
+  if (action === 'setup_mlx_env') return setupMlxEnv({ signal });
+  if (action === 'download_mlx_model') {
+    const { model } = body;
+    if (model !== undefined && !isAllowedMlxModel(model)) return `Model not allowed: ${String(model)}`;
+    return downloadMlxModel({ signal, model: (model as string | undefined) ?? DEFAULT_MLX_MODEL });
+  }
+  return `Unknown action: ${String(action)}`;
+}
+
+/**
  * POST /api/stt/setup
- * SSE stream for installing binaries or downloading models.
- * Body: { action: 'install_brew_pkg', pkg: string } | { action: 'download_ggml_model', model: string }
+ * SSE stream for installing binaries, creating the MLX Python env, or
+ * downloading models.
+ * Body: { action: 'install_brew_pkg', pkg } | { action: 'download_ggml_model', model }
+ *     | { action: 'download_vad_model' } | { action: 'download_sherpa_model', model }
+ *     | { action: 'setup_mlx_env' } | { action: 'download_mlx_model', model? }
+ *
+ * Streaming is the whole point, so the response must never be buffered: the
+ * compression middleware buffers a brotli/gzip stream until res.end(), which
+ * held every progress event of a 1.6 GB download back until it finished (the
+ * bar sat at 0% throughout). `no-transform` opts out of compression and of any
+ * proxy transform, and each event is flushed as it is written.
  */
 sttRouter.post('/setup', express.json(), async (req: Request, res: Response) => {
-  const { action } = req.body;
-
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
+  // The tab closed (or the client aborted): stop the work nobody will see. Not
+  // `req.on('close')`, which fires as soon as the request BODY is consumed.
+  const gone = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) gone.abort(); });
+
   const send = (data: SetupEvent | Record<string, unknown>) => {
+    if (res.writableEnded || res.destroyed) return;
     res.write(`data: ${JSON.stringify(data)}\n\n`);
+    (res as Response & { flush?: () => void }).flush?.();
   };
 
   try {
-    if (action === 'install_brew_pkg') {
-      const { pkg } = req.body;
-      if (!pkg || typeof pkg !== 'string') {
-        send({ type: 'error', message: 'Missing "pkg" field' });
-        res.end();
-        return;
-      }
-      // Only allow known safe packages
-      const allowed = new Set(['ffmpeg', 'whisper-cpp']);
-      if (!allowed.has(pkg)) {
-        send({ type: 'error', message: `Package not allowed: ${pkg}` });
-        res.end();
-        return;
-      }
-      for await (const event of installViaBrew(pkg)) {
-        send(event);
-      }
-    } else if (action === 'download_ggml_model') {
-      const { model } = req.body;
-      if (!model || typeof model !== 'string') {
-        send({ type: 'error', message: 'Missing "model" field' });
-        res.end();
-        return;
-      }
-      const catalogEntry = MODEL_CATALOG.find(m => m.name === model);
-      if (!catalogEntry) {
-        send({ type: 'error', message: `Unknown model: ${model}. Available: ${MODEL_CATALOG.map(m => m.name).join(', ')}` });
-        res.end();
-        return;
-      }
-      const destDir = getModelDir();
-      for await (const event of downloadGgmlModel(catalogEntry.url, destDir, catalogEntry.filename)) {
-        send(event);
-      }
-    } else if (action === 'download_vad_model') {
-      const destDir = getModelDir();
-      for await (const event of downloadGgmlModel(VAD_MODEL.url, destDir, VAD_MODEL.filename)) {
-        send(event);
-      }
-    } else if (action === 'download_sherpa_model') {
-      const { model } = req.body;
-      if (!model || typeof model !== 'string') {
-        send({ type: 'error', message: 'Missing "model" field' });
-        res.end();
-        return;
-      }
-      const catalogEntry = SHERPA_MODEL_CATALOG.find(m => m.name === model);
-      if (!catalogEntry) {
-        send({ type: 'error', message: `Unknown sherpa model: ${model}` });
-        res.end();
-        return;
-      }
-      for await (const event of downloadSherpaModel(catalogEntry)) {
-        send(event);
-      }
+    const steps = setupSteps((req.body ?? {}) as Record<string, unknown>, gone.signal);
+    if (typeof steps === 'string') {
+      send({ type: 'error', message: steps });
     } else {
-      send({ type: 'error', message: `Unknown action: ${action}` });
+      // No break on abort: leaving the loop would return() the generator and
+      // kill the step. A step that takes the signal stops itself; a brew
+      // install deliberately runs to the end (see installViaBrew), and send()
+      // is a no-op once the client is gone.
+      for await (const event of steps) send(event);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -656,7 +664,8 @@ sttRouter.post('/setup', express.json(), async (req: Request, res: Response) => 
     send({ type: 'error', message: msg });
   }
 
-  res.end();
+  if (gone.signal.aborted) log.stt.info(`Setup "${String(req.body?.action)}" ended after the client went away`);
+  if (!res.writableEnded) res.end();
 });
 
 /**

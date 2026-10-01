@@ -23,7 +23,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
-import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
+import { REAL_PANEL, draftComposer, openChatOnLoad, openDraftOnCwd } from './draft-helpers'
 import { selectSection } from './todo-panel-helpers'
 import { sessionResultPhase } from '../../../src/core/phase'
 
@@ -228,6 +228,8 @@ test('the Ask Walnut slot shows the same markers, in dark mode, and a click in i
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await page.emulateMedia({ colorScheme: 'dark' })
+  // The Ask Walnut slot starts hidden until opened.
+  await openChatOnLoad(page)
   await openHome(page)
 
   const draft = page.locator('[data-testid="ask-walnut-draft"] .chat-input-textarea')

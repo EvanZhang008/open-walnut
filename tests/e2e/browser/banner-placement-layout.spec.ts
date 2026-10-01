@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, type Locator } from '@playwright/test'
 import {
-  anyBanner, banner, connected, failed, hideTaskPanel, isolatePrefs, now, resetServerHostFixture, routeHealth, row,
+  anyBanner, banner, chatShownLayout, connected, failed, hideTaskPanel, isolatePrefs, now, resetServerHostFixture, routeHealth, row,
   showTaskPanel, signedOut, slotLayout, Hosts,
 } from './host-problems-helpers'
 import { openBell, panelBanner, slotBanner } from './host-problems-fixture-helpers'
@@ -417,7 +417,8 @@ test.describe('height changes wait for the pointer; Errors; the announcer', () =
   })
 
   test('BP-C64: one announcer for the page, none inside the card; opening System and hiding the task panel say nothing; a new problem is announced', async ({ page }) => {
-    const h = await bpSetup(page, { hosts: [failed('keybox', 'Key box', 'auth')] })
+    // The slot is shown, so hiding the task panel MOVES the card (the quiet move under test).
+    const h = await bpSetup(page, { hosts: [failed('keybox', 'Key box', 'auth')], before: chatShownLayout })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await expect(page.locator('.attention-banner [aria-live]')).toHaveCount(0)
     const announcer = page.locator('[data-testid="host-banner-announcer"]')

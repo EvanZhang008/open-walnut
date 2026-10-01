@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page, type Locator } from '@playwright/test'
-import { openAskWalnutDrawer } from './draft-helpers'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import type { SessionCronJob, SessionCronMetadata } from '../../../src/core/types'
 import type { SessionSupervision } from '../../../web/src/api/sessions'
 
@@ -193,7 +192,8 @@ const issues = new WeakMap<Page, { errors: string[]; checks: Promise<void>[] }>(
 
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
 test.beforeEach(async ({ page }) => {
-  await isolateUiPrefs(page)
+  // Both home surfaces are under test, and the Ask Walnut slot starts hidden until opened.
+  await openChatOnLoad(page)
   await page.addInitScript(() => localStorage.setItem('open-walnut-agent-search', '0'))
   const observed = { errors: [] as string[], checks: [] as Promise<void>[] }
   issues.set(page, observed)

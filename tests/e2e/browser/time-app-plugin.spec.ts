@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
+import { openChatOnLoad } from './draft-helpers'
 
 /**
  * The Time plugin App — the ONLY Time UI. It began as a port of the console's Time
@@ -247,6 +248,8 @@ test('the App declares its own surface: a Settings → Plugins row, no Sidebar r
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
+  // The Ask Walnut composer is used below, and it starts hidden until opened.
+  await openChatOnLoad(page)
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
   await expandSidebar(page)

@@ -180,13 +180,13 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
       {header}
       {install?.fixable ? (
         <p className="setup-lead">
-          Ask Walnut runs on <strong>Claude Code</strong>. {problem && problem.kind !== 'claude_missing'
+          Walnut runs on <strong>Claude Code</strong>. {problem && problem.kind !== 'claude_missing'
             ? <InlineCodeText text={problem.message} />
             : 'It is not installed on this computer yet.'}
         </p>
       ) : (
         <p className="setup-lead">
-          Ask Walnut runs on <strong>Claude Code</strong>. {problem && <><InlineCodeText text={problem.message} />{' '}</>}Install it, run <code>claude</code> once to sign in, then reload this page:
+          Walnut runs on <strong>Claude Code</strong>. {problem && <><InlineCodeText text={problem.message} />{' '}</>}Install it, run <code>claude</code> once to sign in, then reload this page:
         </p>
       )}
       {install?.fixable && <FixRow view={install} label="Install Claude Code" pending={pending} error={error}

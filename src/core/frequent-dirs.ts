@@ -162,6 +162,55 @@ export async function recordDirectory(cwd: string, host: string | null, project?
   })
 }
 
+/** One directory use for recordDirectoryUses. */
+export interface DirectoryUse {
+  cwd: string
+  host: string | null
+  project?: string
+  /** When the use happened (ISO). Default now; an older time never moves lastUsed back. */
+  usedAt?: string
+}
+
+/**
+ * Record several uses in ONE read and ONE write (the external-session import files
+ * a whole tick of sessions at once, many of them days old). `usedAt` keeps an old
+ * session from ranking as if it ran just now. A store that does not exist yet is
+ * compiled from sessions.json, which already holds these sessions, so nothing is
+ * added on top of that compile (it would count each of them twice).
+ */
+export async function recordDirectoryUses(uses: readonly DirectoryUse[]): Promise<void> {
+  const kept = uses.filter(u => u.cwd && !(!u.host && path.resolve(u.cwd) === path.resolve(WALNUT_HOME)))
+  if (kept.length === 0) return
+  return withWriteLock(async () => {
+    let store = readStore()
+    if (!store) {
+      await compileFromSessionsInternal()
+      if (readStore()) return
+      store = { version: 1, compiledAt: new Date().toISOString(), directories: [] }
+    }
+    const now = new Date().toISOString()
+    for (const use of kept) {
+      const at = use.usedAt && Number.isFinite(Date.parse(use.usedAt)) ? new Date(use.usedAt).toISOString() : now
+      const key = `${use.cwd}::${use.host ?? '__local__'}`
+      const entry = store.directories.find(d => `${d.cwd}::${d.host ?? '__local__'}` === key)
+      if (entry) {
+        entry.count++
+        if (!(Date.parse(entry.lastUsed) >= Date.parse(at))) entry.lastUsed = at
+        if (use.project) {
+          entry.projectVotes ??= {}
+          entry.projectVotes[use.project] = (entry.projectVotes[use.project] ?? 0) + 1
+        }
+      } else {
+        store.directories.push({
+          cwd: use.cwd, host: use.host, count: 1, lastUsed: at,
+          projectVotes: use.project ? { [use.project]: 1 } : {},
+        })
+      }
+    }
+    writeStore(store)
+  })
+}
+
 /**
  * Record the launch config picked for a directory (called on quick-start).
  * Always overwrites: launching with Auto/Claude (all-undefined prefs) CLEARS

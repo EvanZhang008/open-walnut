@@ -1,27 +1,31 @@
 /**
- * STT setup helpers — brew install packages, download ggml/sherpa models.
+ * STT setup helpers: brew install packages, download ggml/sherpa models.
+ * The Qwen3-ASR (MLX) env and model live in setup-mlx.ts.
  */
 
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdir, stat, rename, unlink, readdir } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
+import { once } from 'node:events';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { pipeline } from 'node:stream/promises';
 import { log } from '../../logging/index.js';
 import { sttSpawnEnv } from './spawn-env.js';
+import { runStreaming, creepingProgress, type SetupEvent, type StreamRunResult } from './setup-stream.js';
+
+export type { SetupEvent } from './setup-stream.js';
 
 const execFileAsync = promisify(execFile);
 
-export interface SetupEvent {
-  type: 'progress' | 'log' | 'done' | 'error';
-  message?: string;
-  /** 0-100 for downloads */
-  percent?: number;
-  /** For done events */
-  path?: string;
-}
+/** Brew packages the setup route may install. */
+export const BREW_PACKAGES = new Set(['ffmpeg', 'whisper-cpp', 'uv']);
+
+/**
+ * A slow link must still show life: a download reports at least this often,
+ * even when its percent has not moved (or the size is unknown).
+ */
+export const PROGRESS_HEARTBEAT_MS = 2_000;
 
 export interface ModelCatalogEntry {
   name: string;
@@ -154,7 +158,9 @@ export function getModelDir(): string {
 }
 
 /**
- * Install a package via Homebrew. Yields progress events.
+ * Install a package via Homebrew. Yields progress events as they happen.
+ * Deliberately NOT stopped when the client goes away: killing brew mid-install
+ * can leave a half-linked keg, and a finished install is harmless.
  */
 export async function* installViaBrew(pkg: string): AsyncGenerator<SetupEvent> {
   // Augmented PATH: under launchd/systemd the inherited PATH misses Homebrew.
@@ -181,59 +187,54 @@ export async function* installViaBrew(pkg: string): AsyncGenerator<SetupEvent> {
   yield { type: 'log', message: `Installing ${pkg} via Homebrew...` };
   yield { type: 'progress', percent: 5, message: `brew install ${pkg}` };
 
-  const child = spawn('brew', ['install', pkg], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 600_000, // 10 min max
+  const run = runStreaming('brew', ['install', pkg], {
     env,
+    label: 'brew',
+    timeoutMs: 600_000, // 10 min max
+    logLines: false,
+    tickMs: 3000,
+    onTick: creepingProgress(5, 5, 90, `Installing ${pkg}...`),
   });
+  let result: IteratorResult<SetupEvent, StreamRunResult>;
+  while (!(result = await run.next()).done) yield result.value;
+  const { code, lastLine, timedOut } = result.value;
 
-  let lastLine = '';
-
-  const processLine = (line: string) => {
-    if (line.trim()) {
-      lastLine = line.trim();
-      log.stt.info(`[brew] ${lastLine}`);
-    }
-  };
-
-  child.stdout?.on('data', (chunk: Buffer) => {
-    chunk.toString().split('\n').forEach(processLine);
-  });
-  child.stderr?.on('data', (chunk: Buffer) => {
-    chunk.toString().split('\n').forEach(processLine);
-  });
-
-  // Emit periodic progress
-  let progressInterval: ReturnType<typeof setInterval> | undefined;
-  let percent = 10;
-  const progressGen = {
-    events: [] as SetupEvent[],
-  };
-
-  progressInterval = setInterval(() => {
-    if (percent < 90) percent += 5;
-    progressGen.events.push({ type: 'progress', percent, message: lastLine || `Installing ${pkg}...` });
-  }, 3000);
-
-  const exitCode = await new Promise<number>((resolve) => {
-    child.on('close', (code) => resolve(code ?? 1));
-    child.on('error', () => resolve(1));
-  });
-
-  clearInterval(progressInterval);
-
-  // Yield any accumulated progress events
-  for (const evt of progressGen.events) {
-    yield evt;
-  }
-
-  if (exitCode !== 0) {
-    yield { type: 'error', message: `brew install ${pkg} failed (exit ${exitCode}): ${lastLine}` };
+  if (code !== 0) {
+    const why = timedOut ? 'timed out after 10 minutes' : `exit ${code}`;
+    yield { type: 'error', message: `brew install ${pkg} failed (${why}): ${lastLine}` };
     return;
   }
 
   yield { type: 'progress', percent: 100, message: `${pkg} installed` };
   yield { type: 'done', message: `${pkg} installed successfully` };
+}
+
+export function formatMb(bytes: number): string {
+  return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+/**
+ * Decide whether a download step reports now: every 2 percent points, and at
+ * least every PROGRESS_HEARTBEAT_MS either way, so a slow link or a response
+ * with no Content-Length still shows the megabytes arriving.
+ */
+export function progressGate(heartbeatMs = PROGRESS_HEARTBEAT_MS, now: () => number = Date.now) {
+  let lastPercent = -1;
+  let lastAt = -Infinity; // the first call always reports
+  return (percent: number | undefined): boolean => {
+    const t = now();
+    const moved = percent !== undefined && percent - lastPercent >= 2;
+    if (!moved && t - lastAt < heartbeatMs) return false;
+    if (percent !== undefined) lastPercent = percent;
+    lastAt = t;
+    return true;
+  };
+}
+
+export interface DownloadOptions {
+  /** Aborted when nobody is listening any more (the tab closed). */
+  signal?: AbortSignal;
+  heartbeatMs?: number;
 }
 
 /**
@@ -243,6 +244,7 @@ export async function* downloadGgmlModel(
   url: string,
   destDir: string,
   filename: string,
+  opts: DownloadOptions = {},
 ): AsyncGenerator<SetupEvent> {
   await mkdir(destDir, { recursive: true });
 
@@ -264,7 +266,15 @@ export async function* downloadGgmlModel(
 
   log.stt.info(`Downloading model: ${url} → ${destPath}`);
 
-  const res = await fetch(url, { signal: AbortSignal.timeout(1800_000) }); // 30 min timeout
+  const timeout = AbortSignal.timeout(1800_000); // 30 min
+  const signal = opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout;
+  let res: Response;
+  try {
+    res = await fetch(url, { signal });
+  } catch (err) {
+    yield { type: 'error', message: `Download failed: ${err instanceof Error ? err.message : String(err)}` };
+    return;
+  }
   if (!res.ok) {
     yield { type: 'error', message: `Download failed: HTTP ${res.status} ${res.statusText}` };
     return;
@@ -278,27 +288,37 @@ export async function* downloadGgmlModel(
   }
 
   const writeStream = createWriteStream(tmpPath);
+  let writeError: Error | null = null;
+  writeStream.on('error', (e) => { writeError = e; });
+  // The file is opened asynchronously: unlinking before that open lands would
+  // let the open re-create the partial file, so wait for the stream to close.
+  const discardPartial = async () => {
+    if (!writeStream.closed) {
+      writeStream.destroy();
+      await once(writeStream, 'close').catch(() => {});
+    }
+    await unlink(tmpPath).catch(() => {});
+  };
   let downloaded = 0;
-  let lastPercent = 0;
+  let settled = false;
+  const shouldReport = progressGate(opts.heartbeatMs);
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      writeStream.write(value);
+      // Respect backpressure: a fast link must not pile the whole file up in memory.
+      if (writeError) throw writeError;
+      // events.once rejects on 'error' and removes both listeners either way.
+      if (!writeStream.write(value)) await once(writeStream, 'drain');
       downloaded += value.length;
 
-      if (contentLength > 0) {
-        const percent = Math.round((downloaded / contentLength) * 100);
-        if (percent - lastPercent >= 2) {
-          lastPercent = percent;
-          yield {
-            type: 'progress',
-            percent,
-            message: `${(downloaded / 1e6).toFixed(1)} / ${(contentLength / 1e6).toFixed(0)} MB`,
-          };
-        }
+      const percent = contentLength > 0 ? Math.min(99, Math.round((downloaded / contentLength) * 100)) : undefined;
+      if (shouldReport(percent)) {
+        yield contentLength > 0
+          ? { type: 'progress', percent, message: `${formatMb(downloaded)} / ${(contentLength / 1e6).toFixed(0)} MB` }
+          : { type: 'progress', message: `${formatMb(downloaded)} downloaded` };
       }
     }
 
@@ -309,15 +329,23 @@ export async function* downloadGgmlModel(
 
     // Atomic rename
     await rename(tmpPath, destPath);
+    settled = true;
 
     log.stt.info(`Model downloaded: ${destPath} (${(downloaded / 1e6).toFixed(0)} MB)`);
     yield { type: 'progress', percent: 100, message: `Download complete` };
     yield { type: 'done', message: `${filename} downloaded`, path: destPath };
   } catch (err) {
-    writeStream.destroy();
-    await unlink(tmpPath).catch(() => {});
+    settled = true;
+    await discardPartial();
     const msg = err instanceof Error ? err.message : String(err);
     yield { type: 'error', message: `Download failed: ${msg}` };
+  } finally {
+    // Stopped early (the consumer went away between two events): release the
+    // socket and the partial file.
+    if (!settled) {
+      reader.cancel().catch(() => {});
+      await discardPartial();
+    }
   }
 }
 

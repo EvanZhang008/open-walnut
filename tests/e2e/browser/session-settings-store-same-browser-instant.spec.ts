@@ -15,6 +15,7 @@
  * arrived via the round-trip or its echo.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { openChatOnLoad } from './draft-helpers'
 
 // Both tests drive the same fixture session's mode; serial keeps the second from
 // starting on a mode the first left behind mid-flight.
@@ -167,6 +168,8 @@ test('the chat lane composer and the session column move together, both ways', a
   expect(reset.ok()).toBe(true)
 
   await pinLaneToFixtureSession(page)
+  // The lane composer is the Ask Walnut slot's, which starts hidden until opened.
+  await openChatOnLoad(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   const lanePill = modePill(page.locator('.main-page-chat'))

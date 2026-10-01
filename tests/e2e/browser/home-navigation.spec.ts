@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { isolateUiPrefs, openListProject } from './todo-panel-helpers';
+import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
 
 const SHOTS = '/tmp/walnut-home-navigation';
@@ -973,6 +974,8 @@ test('Locate never moves or opens a session column, in an unlocked column or the
     if (route.request().method() !== 'GET') return route.continue();
     await route.fulfill({ json: { pinned_tasks: ['pw-task-store-sync'], focus_tasks: ['pw-task-store-sync'], satellite_tasks: [], backlog_tasks: [], wait_tasks: [], custom_tier_tasks: {} } });
   });
+  // The Ask Walnut slot is one of the two surfaces under test, and it starts hidden until opened.
+  await openChatOnLoad(page);
   await boot(page, baseURL!);
   const card = navigation(page).locator('.todo-pinned-section [data-task-id="pw-task-store-sync"]');
   await expect(card).toBeVisible({ timeout: 30_000 });

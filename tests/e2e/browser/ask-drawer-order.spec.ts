@@ -33,8 +33,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page, type Request, type WebSocket } from '@playwright/test'
-import { openAskWalnutDrawer } from './draft-helpers'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import {
   ASK_WALNUT_PROJECT, GENERAL_AGENT_ID, askProjectFor, buildAskList, matchesAskQuery,
   type AskTaskLike,
@@ -52,7 +51,8 @@ test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
 
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
-test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
+// The drawer lives in the Ask Walnut slot, which starts hidden until opened.
+test.beforeEach(async ({ page }) => { await openChatOnLoad(page) })
 
 const drawer = (page: Page): Locator => page.locator('[data-testid="ask-walnut-drawer"]')
 const rows = (page: Page): Locator => page.locator('[data-testid="ask-walnut-drawer-item"]')

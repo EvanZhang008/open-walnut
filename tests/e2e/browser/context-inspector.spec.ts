@@ -16,7 +16,7 @@
  * and the slot below stays usable while it is open.
  */
 import { expect, test, type Page } from '@playwright/test'
-import { loadHome, openAskWalnutDrawer } from './draft-helpers'
+import { loadHome, openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 
 /** Unique per run: the fixture server is shared and survives across runs. */
 const STAMP = Date.now().toString(36)
@@ -102,6 +102,9 @@ async function launchAsk(page: Page, prompt: string): Promise<string> {
 test.setTimeout(120_000)
 
 // ── Open and close ───────────────────────────────────────────────────────────
+
+// The inspector is reached from the Ask Walnut slot, which starts hidden until opened.
+test.beforeEach(async ({ page }) => { await openChatOnLoad(page) })
 
 test('the Context row is in the Ask Walnut drawer', async ({ page }) => {
   await loadHome(page)

@@ -28,6 +28,7 @@ import {
   applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, followProjectRegistryChange,
   refreshFolderProject, withDirLaunchMemory, suggestDiff,
   type DraftColumn, type DraftParseInput, type DraftParseKind, type DraftTaskField, type DraftTaskFieldPatch,
+  type ProjectDefaultLookup,
 } from '@/components/sessions/draft-column';
 import {
   applyDraftPathPick, applyDraftTaskFieldEdit, applyTierSeed, enterWalnutDraft, launchMetaFor, leaveWalnutDraft,
@@ -44,7 +45,7 @@ import { fetchProjectDetail, saveProjectMetadata } from '@/api/projects';
 import { adoptAgentSearchSession } from '@/api/agentSearch';
 import { fetchTask, recordSuggestFeedback, updateTask, SUGGEST_RULES_VERSION } from '@/api/tasks';
 import { isBuiltinTier } from '@/api/focus';
-import { fetchConfig, fetchInstallDir } from '@/api/config';
+import { fetchConfig, fetchSelfRepair, invalidateSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { AskWalnutSlot, showAskInSlot } from '@/components/chat/AskWalnutSlot';
 import { agentOfTask, slotAgents } from '@/components/chat/ask-walnut-slot-model';
@@ -76,6 +77,10 @@ import {
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
+import {
+  HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, firstDraftDecisionReady, readHomeChatVisible, shouldAutoOpenFirstDraft,
+} from './home-panel-flags';
+import { deriveRepairTarget, type WalnutRepairTarget } from './repair-target';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 
 const SS_TASK_KEY = 'open-walnut-home-focused-task';
@@ -85,8 +90,9 @@ const SS_TODO_SCROLL_KEY = 'walnut-home-todo-scroll';
 // Panel visibility is a layout preference, so it lives in localStorage (and rides
 // the ui-prefs mirror like the other layout keys), NOT sessionStorage: the Mac app
 // drops sessionStorage on every relaunch and page-process recycle, which used to
-// bring the chat back no matter how the user had left it.
-const LS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
+// bring the chat back no matter how the user had left it. The chat starts HIDDEN
+// until the user opens it (see home-panel-flags.ts).
+const LS_CHAT_VISIBLE_KEY = LS_HOME_CHAT_VISIBLE_KEY;
 const LS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
 const LS_ROUTINES_VISIBLE_KEY = 'open-walnut-home-routines-visible';
 const LS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
@@ -210,6 +216,93 @@ function mapDrafts(prev: DraftColumn[], fn: (d: DraftColumn) => DraftColumn): Dr
   return out ?? prev;
 }
 
+/**
+ * Rewrite an existing draft row with a seed: openDraftColumn's reuse of a pristine
+ * leftmost draft, and "Improve Walnut" turning the draft it sits on into the repair
+ * draft. One rule set for both, so a reused column and a converted one launch alike.
+ */
+function rebindDraftToSeed(d: DraftColumn, seed: DraftSeed, projectDefault: ProjectDefaultLookup): DraftColumn {
+  // The composer is empty, but its debounced 'clear' may not have run
+  // yet: take back what the old text decided (AI project, folder, task
+  // fields) BEFORE the seed lands, so a stale ✦ never rides the reuse.
+  // The same rules as the debounce, so model/engine stay put.
+  let next = applyDraftParse(d, {}, projectDefault, { kind: 'clear' });
+  // A seeded rebind resets the mode: the seed decides the shape (a
+  // fork can't be walnut at all; a task/project seed starts on Start
+  // Task like every fresh column, the user re-picks Ask Walnut if that
+  // is what they want). On a reuse this is normally unreachable (the toggle
+  // marks the draft userTouched, so a seed opens a fresh column instead);
+  // "Improve Walnut" from the Ask Walnut tab takes it.
+  if (next.walnut) {
+    next = leaveWalnutDraft(next);
+    delete next.walnut;
+  }
+  next = { ...next };
+  if (seed.project !== undefined) {
+    next.project = seed.project;
+    // A "+" seed outranks a previous AI guess but NOT the user's own
+    // pick; otherwise reusing the column would silently move a project
+    // they chose by hand.
+    if (d.projectSource !== 'user') next.projectSource = 'seed';
+  }
+  // Tier seed (pin-tier header "+"): owned by the seed unless the user
+  // already picked a tier by hand (see DraftSeed.pinTier). The model
+  // seed (fork) is launch memory, so it still yields to metaTouched.
+  if (seed.pinTier) next = applyTierSeed(next, seed.pinTier);
+  if (seed.model && !d.metaTouched) next.meta = { ...next.meta, model: seed.model };
+  if (seed.taskId || seed.forkOf) {
+    if (seed.taskId) {
+      next.taskId = seed.taskId;
+      next.boundTaskTitle = seed.boundTaskTitle;
+    }
+    // Rebinding as a fork drops any previous task binding (and vice
+    // versa via the assignments above): the two are exclusive exits.
+    if (seed.forkOf) { next.forkOf = seed.forkOf; delete next.taskId; delete next.boundTaskTitle; }
+  }
+  // The launch TARGET (folder + intent) rides on any seed that carries
+  // one, not just a task/fork rebind. "Fix Walnut" is the seed with a
+  // folder and no binding: while this branch skipped it, clicking Fix
+  // Walnut with a pristine draft leftmost reused that draft and left it a
+  // plain "New Session" pointing nowhere: the repair briefing never
+  // reached quick-start, and the caller's engine/model reset then hit an
+  // ordinary draft. Only a TASK's/fork-source's own folder is a pin; a ▶
+  // that fell back to the launch memory hands the folder over as a mere
+  // starting point, so a project default may still refine it.
+  if (seed.cwd) {
+    next.cwd = seed.cwd;
+    next.host = seed.host ?? null;
+    next.hostLabel = seed.hostLabel;
+    next.cwdPinned = seed.cwdPinned === true;
+    // The folder this draft now "opened with": a later 'clear' of an AI
+    // folder goes back here, not to the pre-seed one.
+    next.openedCwd = next.cwd;
+    next.openedHost = next.host;
+    if (!next.metaTouched) next.meta = withDirLaunchMemory(next.meta, next.cwd, next.host);
+  }
+  // A seeded rebind rewrites the intent too, in both directions: reusing
+  // a pristine repair draft for a project "+" must not keep launching a
+  // repair.
+  if (seed.intent) next.intent = seed.intent; else delete next.intent;
+  return next;
+}
+
+/** The repair draft seed: Walnut's own source, pinned (the target, not a suggestion). */
+function repairDraftSeed(target: WalnutRepairTarget): DraftSeed {
+  return { cwd: target.dir, host: null, cwdPinned: true, intent: 'fix-walnut' };
+}
+
+/**
+ * The repair briefing is written for the native CLI, so a repair draft never keeps
+ * an explicitly picked engine (they are all ACP-backed), model included, since a
+ * set `engine` is by definition non-default. Gated on `intent`: only the row that
+ * actually became the repair draft is touched.
+ */
+function withoutRepairEngine(d: DraftColumn): DraftColumn {
+  return d.intent === 'fix-walnut' && d.meta.engine
+    ? { ...d, meta: { ...d.meta, engine: undefined, model: undefined } }
+    : d;
+}
+
 /** What a refused Start brings back: the draft row itself, the composer text, the images. */
 interface GatedRestore { draft: DraftColumn; composerText: string; images?: ImageAttachment[] }
 
@@ -250,7 +343,7 @@ interface MainPageProps {
 export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { health, loading: healthLoading } = useSystemHealth();
   const { notify } = useNotifications();
-  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder, moveFolderToProject } = useTasksContext();
+  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, completedHidden, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, folderMeta, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden, createFolder, deleteFolder, moveFolderToProject } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -322,9 +415,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     navigateRef?.current?.(`/settings${hash ?? ''}`);
   }, [navigateRef]);
 
-  // Chat panel visibility — toggle via Focus Dock "Chat" button or Sidebar toggle
+  // Chat panel visibility: toggle via the Focus Dock "Walnut" cell or the Sidebar
+  // "Ask Walnut" toggle. Hidden until the user opens it.
   const [chatVisible, setChatVisible] = useState<boolean>(
-    () => localStorage.getItem(LS_CHAT_VISIBLE_KEY) !== 'false'
+    () => readHomeChatVisible(localStorage)
   );
   // Ref mirror for the []-dep handlers (openDraftColumn, the dock toggle).
   const chatVisibleRef = useRef(chatVisible);
@@ -535,10 +629,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Session finder — search existing sessions by title/task/cwd/host and open
   // one as a column. Toggled by ⌘⇧O.
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
-  // Walnut's own source checkout (null on npm installs / cloud) — drives the
-  // fix-walnut pill. Fetched once; the API layer caches for the page lifetime.
-  const [walnutInstallDir, setWalnutInstallDir] = useState<string | null>(null);
-  useEffect(() => { fetchInstallDir().then(setWalnutInstallDir); }, []);
+  // Where a repair runs (repair-target.ts): Walnut's own source, or on an npm
+  // install the clone a first repair makes. null = no repair possible here (cloud
+  // replica, no git), and then every Fix / Improve Walnut entry hides. Fetched
+  // once; the API layer shares the answer for the page lifetime.
+  const [selfRepairInfo, setSelfRepairInfo] = useState<SelfRepairInfo | null>(null);
+  useEffect(() => { void fetchSelfRepair().then(setSelfRepairInfo); }, []);
+  const walnutRepairTarget = useMemo(() => deriveRepairTarget(selfRepairInfo), [selfRepairInfo]);
   // Warm the working-dirs module cache ONCE, so that by the time a draft column
   // opens, its recent-folder chips and its per-directory launch memory can be read
   // SYNCHRONOUSLY (peekWorkingDirs) — the draft-OPEN path itself is contractually
@@ -780,7 +877,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // transient (drafts don't survive a reload), so a reload must bring the chat
     // back rather than leave it hidden with no draft to give it back. The
     // broadcast stays the ACTUAL state so the sidebar/dock toggles read true.
-    persistPanelFlag(LS_CHAT_VISIBLE_KEY, chatBorrowedByDraftRef.current ? true : chatVisible, true);
+    // The default is HIDDEN, so an explicit open stores 'true' (and survives a
+    // reload) while a browser that never touched it keeps no key.
+    persistPanelFlag(LS_CHAT_VISIBLE_KEY, chatBorrowedByDraftRef.current ? true : chatVisible, HOME_CHAT_VISIBLE_DEFAULT);
     window.dispatchEvent(new CustomEvent('main:chat-visible', { detail: { visible: chatVisible } }));
   }, [chatVisible]);
 
@@ -1004,70 +1103,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // A seed only reaches this block on a PRISTINE draft (leftmostTouched
         // gated above) — the per-field guards below are belt-and-braces.
         if (seed) {
-          setDraftColumns(prev => prev.map(d => {
-            if (d.id !== leftmostDraft.id) return d;
-            // The composer is empty, but its debounced 'clear' may not have run
-            // yet: take back what the old text decided (AI project, folder, task
-            // fields) BEFORE the seed lands, so a stale ✦ never rides the reuse.
-            // The same rules as the debounce, so model/engine stay put.
-            let next = applyDraftParse(d, {}, draftProjectDefault, { kind: 'clear' });
-            // A seeded rebind resets the mode: the seed decides the shape (a
-            // fork can't be walnut at all; a task/project seed starts on Start
-            // Task like every fresh column, the user re-picks Ask Walnut if that
-            // is what they want). Normally unreachable: the toggle marks the
-            // draft userTouched, so a seed opens a fresh column instead.
-            if (next.walnut) {
-              next = leaveWalnutDraft(next);
-              delete next.walnut;
-            }
-            next = { ...next };
-            if (seed.project !== undefined) {
-              next.project = seed.project;
-              // A "+" seed outranks a previous AI guess but NOT the user's own
-              // pick — otherwise reusing the column would silently move a project
-              // they chose by hand.
-              if (d.projectSource !== 'user') next.projectSource = 'seed';
-            }
-            // Tier seed (pin-tier header "+"): owned by the seed unless the user
-            // already picked a tier by hand (see DraftSeed.pinTier). The model
-            // seed (fork) is launch memory, so it still yields to metaTouched.
-            if (seed.pinTier) next = applyTierSeed(next, seed.pinTier);
-            if (seed.model && !d.metaTouched) next.meta = { ...next.meta, model: seed.model };
-            if (seed.taskId || seed.forkOf) {
-              if (seed.taskId) {
-                next.taskId = seed.taskId;
-                next.boundTaskTitle = seed.boundTaskTitle;
-              }
-              // Rebinding as a fork drops any previous task binding (and vice
-              // versa via the assignments above) — the two are exclusive exits.
-              if (seed.forkOf) { next.forkOf = seed.forkOf; delete next.taskId; delete next.boundTaskTitle; }
-            }
-            // The launch TARGET (folder + intent) rides on any seed that carries
-            // one, not just a task/fork rebind. "Fix Walnut" is the seed with a
-            // folder and no binding: while this branch skipped it, clicking Fix
-            // Walnut with a pristine draft leftmost reused that draft and left it a
-            // plain "New Session" pointing nowhere — the repair briefing never
-            // reached quick-start, and the caller's engine/model reset then hit an
-            // ordinary draft. Only a TASK's/fork-source's own folder is a pin; a ▶
-            // that fell back to the launch memory hands the folder over as a mere
-            // starting point, so a project default may still refine it.
-            if (seed.cwd) {
-              next.cwd = seed.cwd;
-              next.host = seed.host ?? null;
-              next.hostLabel = seed.hostLabel;
-              next.cwdPinned = seed.cwdPinned === true;
-              // The folder this draft now "opened with": a later 'clear' of an AI
-              // folder goes back here, not to the pre-seed one.
-              next.openedCwd = next.cwd;
-              next.openedHost = next.host;
-              if (!next.metaTouched) next.meta = withDirLaunchMemory(next.meta, next.cwd, next.host);
-            }
-            // A seeded rebind rewrites the intent too, in both directions: reusing
-            // a pristine repair draft for a project "+" must not keep launching a
-            // repair.
-            if (seed.intent) next.intent = seed.intent; else delete next.intent;
-            return next;
-          }));
+          setDraftColumns(prev => mapDraft(prev, leftmostDraft.id, d => rebindDraftToSeed(d, seed, draftProjectDefault)));
         }
         return leftmostDraft.id;
       }
@@ -1137,6 +1173,33 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // on every draft keystroke.
   }, [draftProjectDefault]);
   openDraftColumnRef.current = openDraftColumn;
+
+  // First open of an EMPTY board: one "New task" draft column, the same one the
+  // toolbar's New task opens, so a new user lands on the place a task is made
+  // instead of an empty list (rules in shouldAutoOpenFirstDraft). Decided ONCE per
+  // page load, the first time the board is settled: a board that empties later
+  // never grows a column by itself. A reload decides again, and drafts never
+  // survive one, so that is still one column, not two.
+  const firstDraftDecidedRef = useRef(false);
+  useEffect(() => {
+    if (firstDraftDecidedRef.current) return;
+    const input = {
+      visible, tasksLoading: loading, tasksError: !!tasksError, urlPending: !!urlSync.pending,
+      taskCount: tasks.length, completedHidden,
+      columnCount: sessionColumns.length, draftCount: draftColumns.length,
+      chatVisible, narrowLayout: window.matchMedia('(max-width: 768px)').matches,
+    };
+    if (!firstDraftDecisionReady(input)) return;
+    firstDraftDecidedRef.current = true;
+    if (!shouldAutoOpenFirstDraft(input)) return;
+    // Opened for the user, not by them: never take the caret from a field they are
+    // already typing in (the search box, a rename) when the list lands.
+    const active = document.activeElement as HTMLElement | null;
+    const typing = !!active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+    const draftId = openDraftColumn();
+    if (typing) setFocusDraftId(prev => (prev === draftId ? null : prev));
+    log.info('home', 'opened a first draft on an empty board', { draftId, typing });
+  }, [visible, loading, tasksError, urlSync.pending, tasks.length, completedHidden, sessionColumns.length, draftColumns.length, chatVisible, openDraftColumn]);
 
   /** Drop a draft's client-side state: the row, its persisted composer text and
    *  its focus claim. The strip SLOT is handled by the caller, because the two
@@ -1671,31 +1734,43 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // spot now belongs to the Ask Walnut slot, and openDraftColumn already borrows
   // that spot (chatBorrowedByDraftRef) so the repair composer gets the room a
   // launcher needs and hands it back on close.
-  const walnutInstallDirRef = useRef(walnutInstallDir);
-  walnutInstallDirRef.current = walnutInstallDir;
+  //
+  // The target is `walnutRepairTarget`: on an npm install that is the clone the
+  // first Start makes, so those installs get the entry too.
+  const walnutRepairTargetRef = useRef(walnutRepairTarget);
+  walnutRepairTargetRef.current = walnutRepairTarget;
   const handleFixWalnut = useCallback(() => {
-    const dir = walnutInstallDirRef.current;
-    if (!dir) return; // the button is hidden when null; belt-and-braces
+    const target = walnutRepairTargetRef.current;
+    if (!target) return; // the entry is hidden when null; belt-and-braces
     // `cwdPinned`: the checkout is the target, not a suggestion — no async seed
     // (a project default) may move it.
-    const draftId = openDraftColumn({ cwd: dir, host: null, cwdPinned: true, intent: 'fix-walnut' });
+    const draftId = openDraftColumn(repairDraftSeed(target));
     // openDraftColumn applies the directory's launch MEMORY to the row (a fresh
-    // column, or a pristine leftmost draft it reused). The repair briefing is
-    // written for the native CLI, so a memory carrying ANY explicitly-picked
-    // engine (they are all ACP-backed) must not be inherited — model included,
-    // since a set `engine` is by definition non-default. Cleared right after the
-    // open rather than special-cased inside it: this is the one caller with that
-    // rule. `metaTouched` is false here by construction (a seed never latches it),
-    // so there is no user pick to overwrite.
+    // column, or a pristine leftmost draft it reused); withoutRepairEngine drops a
+    // remembered engine from it. Cleared right after the open rather than
+    // special-cased inside it. `metaTouched` is false here by construction (a seed
+    // never latches it), so there is no user pick to overwrite.
     //
     // Gated on `intent` as well as the id: the row must be the one that ACTUALLY
     // became the repair draft. A refused reuse (a hand-edited draft leftmost) hands
     // back a different id, and wiping a bystander's engine/model would be a silent
     // edit of a draft the user configured.
-    setDraftColumns(prev => prev.map(d => (d.id === draftId && d.intent === 'fix-walnut' && d.meta.engine
-      ? { ...d, meta: { ...d.meta, engine: undefined, model: undefined } }
-      : d)));
+    setDraftColumns(prev => mapDraft(prev, draftId, withoutRepairEngine));
   }, [openDraftColumn]);
+
+  // "Improve Walnut" chip on a plain draft: THIS draft becomes the repair draft,
+  // through the same rewrite a reused column gets (rebindDraftToSeed) and the same
+  // engine rule as Fix Walnut. The chip shows only while the composer is empty and
+  // only when a target exists.
+  const handleImproveWalnut = useCallback((draftId: string) => {
+    const target = walnutRepairTargetRef.current;
+    if (!target) return;
+    log.info('home', 'draft turned into a Walnut repair draft', {
+      draftId, dir: target.dir, cloneNeeded: target.cloneNeeded,
+    });
+    setDraftColumns(prev => mapDraft(prev, draftId,
+      d => withoutRepairEngine(rebindDraftToSeed(d, repairDraftSeed(target), draftProjectDefault))));
+  }, [draftProjectDefault]);
 
   // Auto-open session panel when a quick-start or fork session resolves.
   // Strategy: listen to task:updated events (fires after linkSession persists the
@@ -2322,6 +2397,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Fired here, well before any draft opens, so the open path stays
         // network-free; failure just leaves the chips hidden.
         void fetchWorkingDirs().catch(() => { /* chips stay hidden until the next launch */ });
+        // A repair Start with no checkout cloned one: the shared answer still says
+        // "not on this computer yet", so drop it and read where the source is now.
+        if (qsp.intent === 'fix-walnut' && walnutRepairTargetRef.current?.cloneNeeded) {
+          invalidateSelfRepair();
+          void fetchSelfRepair().then(setSelfRepairInfo);
+        }
         // No Personal AI notification here anymore. Title AND project are both
         // server-side now: the session-auto-title hook titles from the
         // user's first message (CLI generate_session_title), and quick-start
@@ -2881,7 +2962,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           tasksLoading={loading}
           inspectorOpen={inspector.isOpen}
           onToggleInspector={inspector.toggle}
-          {...(walnutInstallDir ? { onFixWalnut: handleFixWalnut } : {})}
+          {...(walnutRepairTarget ? { onFixWalnut: handleFixWalnut } : {})}
           onCloseChat={() => setChatVisible(false)}
           // The inspector describes the session actually on screen.
           onSelectionChange={setAskSlotSelection}
@@ -3016,6 +3097,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     gateError={draftGateErrors[sid]}
                     onGateErrorClear={clearDraftGateError}
                     restoreImages={draftRestoreImages[sid]}
+                    // "Improve Walnut" quick action + where a repair draft runs.
+                    onImproveWalnut={walnutRepairTarget ? handleImproveWalnut : undefined}
+                    repairTarget={walnutRepairTarget}
                   />
                 ) : null
               ) : isPending && pendingMeta ? (

@@ -1,0 +1,19 @@
+/* The home task panel on a board with no tasks at all (TodoPanel). Centered and
+   muted like every .empty-state; the heading is the one line in the panel's own
+   text color, so the first screen reads as a starting point, not an error. */
+.todo-empty-board {
+  padding: 28px 16px;
+}
+
+.todo-empty-board-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.todo-empty-board .text-sm {
+  margin: 0 auto;
+  max-width: 260px;
+  line-height: 1.45;
+}

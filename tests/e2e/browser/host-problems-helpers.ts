@@ -240,6 +240,16 @@ export async function slotLayout(page: Page): Promise<void> {
   await page.addInitScript(([t, c]) => { localStorage.setItem(t, 'false'); localStorage.setItem(c, 'true') }, [TODO_VISIBLE_KEY, CHAT_VISIBLE_KEY])
 }
 
+/**
+ * The layout of a user who opened the chat once: the task panel AND the Ask Walnut
+ * slot. The slot starts hidden on a browser that never chose, so a spec about the
+ * card moving into the slot says so (call before the first load). Absent-only, so a
+ * spec's own close survives its reloads.
+ */
+export async function chatShownLayout(page: Page): Promise<void> {
+  await page.addInitScript((c) => { if (localStorage.getItem(c) === null) localStorage.setItem(c, 'true') }, CHAT_VISIBLE_KEY)
+}
+
 /** No page mount at all: the task panel and the slot both hidden (call before the first load). */
 export async function bareLayout(page: Page): Promise<void> {
   await page.addInitScript(([t, c]) => { localStorage.setItem(t, 'false'); localStorage.setItem(c, 'false') }, [TODO_VISIBLE_KEY, CHAT_VISIBLE_KEY])

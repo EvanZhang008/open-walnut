@@ -11,7 +11,7 @@
  */
 import fs from 'node:fs/promises'
 import { test, expect, type Page } from '@playwright/test'
-import { draftComposer, openDraftOnCwd } from './draft-helpers'
+import { draftComposer, openChatOnLoad, openDraftOnCwd } from './draft-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SCREENSHOT_DIR = '/tmp/error-notification-routing'
@@ -28,6 +28,9 @@ test.beforeAll(async () => {
 })
 
 async function startFailingQuickSession(page: Page): Promise<void> {
+  // The main chat is open (it starts hidden until opened), so "never in main chat"
+  // is a claim about a mounted chat.
+  await openChatOnLoad(page)
   await page.goto('/')
   await expect(page.locator('.main-page')).toBeVisible()
 

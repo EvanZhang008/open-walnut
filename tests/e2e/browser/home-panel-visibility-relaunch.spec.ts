@@ -25,7 +25,7 @@
 import fs from 'node:fs/promises'
 import { expect, seedShortcutBars, test } from './shortcut-test-fixture'
 import { type Browser, type BrowserContext, type Page } from '@playwright/test'
-import { DRAFT_PANEL, openDraft } from './draft-helpers'
+import { DRAFT_PANEL, openChatOnLoad, openDraft } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 const SCREENSHOT_DIR = process.env.HOME_PANEL_SHOT_DIR ?? '/tmp/home-panel-visibility'
@@ -60,7 +60,7 @@ const slot = (page: Page) => page.locator('[data-testid="ask-walnut-slot"]')
  *  Ask Walnut tasks, the New composer when it has none (its × hides the slot too
  *  when there is no conversation to go back to; see AskWalnutSlot's closeDraft). */
 const slotPanel = (page: Page) => page.locator('[data-testid="ask-walnut-session"], [data-testid="ask-walnut-draft"]').first()
-const sidebarChat = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Chat' })
+const sidebarChat = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Ask Walnut' })
 const sidebarTodo = (page: Page) => page.locator('.sidebar-panel-toggle', { hasText: 'Task panel' })
 const sidebarAgenda = (page: Page) => page.locator('[data-testid="sidebar-toggle-calendar"]')
 const dockChat = (page: Page) => page.locator('.dock-chat-item')
@@ -125,49 +125,57 @@ async function relaunch(browser: Browser, page: Page): Promise<Page> {
 
 // ── Scenarios ────────────────────────────────────────────────────────────────
 
-test('a chat closed with its × stays closed after a relaunch, and reopened stays open', async ({ browser, page }) => {
+test('the chat starts hidden; opened it survives a relaunch, and closed with its × it stays closed', async ({ browser, page }) => {
+  // A new install: hidden, and nothing stored for it (home-panel-flags.ts).
   await boot(page)
-  await expectChatOpen(page)
-  expect(await stored(page, CHAT_KEY)).not.toBe('false')
-
-  // Close it the way a user does: the × on the slot's panel (session or New state).
-  await expect(slotPanel(page)).toBeVisible({ timeout: 60_000 })
-  await slotPanel(page).locator('.session-panel-close').click()
   await expectChatHidden(page)
-  await expect.poll(() => stored(page, CHAT_KEY)).toBe('false')
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/1-chat-closed.png` })
+  expect(await stored(page, CHAT_KEY)).toBeNull()
 
-  // Relaunch #1: still closed.
+  // Relaunch #1 without a choice: still the default.
   let next = await relaunch(browser, page)
   await expectChatHidden(next)
-  expect(await stored(next, CHAT_KEY)).toBe('false')
-  await next.screenshot({ path: `${SCREENSHOT_DIR}/2-chat-closed-after-relaunch.png` })
+  expect(await stored(next, CHAT_KEY)).toBeNull()
 
-  // Reopen from the sidebar, then relaunch #2: open.
+  // Open it from the sidebar, then relaunch #2: the explicit open is kept.
   await sidebarChat(next).click()
   await expectChatOpen(next)
   await expect.poll(() => stored(next, CHAT_KEY)).toBe('true')
   next = await relaunch(browser, next)
   await expectChatOpen(next)
-  await next.screenshot({ path: `${SCREENSHOT_DIR}/3-chat-open-after-relaunch.png` })
+  await next.screenshot({ path: `${SCREENSHOT_DIR}/1-chat-open-after-relaunch.png` })
 
-  // Repeat: two toggles in a row, the LAST state is what a relaunch restores.
+  // Close it the way a user does: the × on the slot's panel (session or New state).
+  await expect(slotPanel(next)).toBeVisible({ timeout: 60_000 })
+  await slotPanel(next).locator('.session-panel-close').click()
+  await expectChatHidden(next)
+  await expect.poll(() => stored(next, CHAT_KEY)).toBe('false')
+  await next.screenshot({ path: `${SCREENSHOT_DIR}/2-chat-closed.png` })
+
+  // Relaunch #3: still closed.
+  next = await relaunch(browser, next)
+  await expectChatHidden(next)
+  expect(await stored(next, CHAT_KEY)).toBe('false')
+  await next.screenshot({ path: `${SCREENSHOT_DIR}/3-chat-closed-after-relaunch.png` })
+
+  // Repeat: toggles in a row, the LAST state is what a relaunch restores.
+  await dockChat(next).click()
+  await expectChatOpen(next)
   await dockChat(next).click()
   await expectChatHidden(next)
   await dockChat(next).click()
+  await expectChatOpen(next)
+  next = await relaunch(browser, next)
   await expectChatOpen(next)
   await dockChat(next).click()
   await expectChatHidden(next)
   next = await relaunch(browser, next)
   await expectChatHidden(next)
-
-  // Leave the context as it started.
-  await sidebarChat(next).click()
-  await expectChatOpen(next)
   await next.context().close()
 })
 
 test('a draft borrowing the chat spot does not persist as "chat closed"', async ({ browser, page }) => {
+  // The borrow only exists while the chat is open, so this user opened it once.
+  await openChatOnLoad(page)
   await boot(page)
   await expectChatOpen(page)
 
@@ -175,9 +183,8 @@ test('a draft borrowing the chat spot does not persist as "chat closed"', async 
   await openDraft(page)
   await expect(page.locator(DRAFT_PANEL)).toHaveCount(1, { timeout: 20_000 })
   await expect.poll(() => chatSpotWidth(page), { timeout: 15_000 }).toBeLessThanOrEqual(1)
-  // The stored PREFERENCE is still open: the borrow is transient. (No key at all
-  // is the untouched default, which is also "open".)
-  expect(await stored(page, CHAT_KEY)).not.toBe('false')
+  // The stored PREFERENCE is still open: the borrow is transient.
+  expect(await stored(page, CHAT_KEY)).toBe('true')
 
   // Drafts do not survive a relaunch, so the chat must come back on its own.
   const next = await relaunch(browser, page)
@@ -222,7 +229,9 @@ test.describe('at phone width', () => {
 
   test('a Todo hidden elsewhere gives its height to the chat instead of an invisible band', async ({ page }) => {
     // The state arrives from another device through the mirror; here it is seeded
-    // straight into localStorage, which is what the boot merge produces.
+    // straight into localStorage, which is what the boot merge produces. The chat
+    // is open (this user opened it once), so the freed height has somewhere to go.
+    await openChatOnLoad(page)
     await page.addInitScript(([key]) => { localStorage.setItem(key, 'false') }, [TODO_KEY])
     await page.goto('/')
     await page.waitForLoadState('networkidle')

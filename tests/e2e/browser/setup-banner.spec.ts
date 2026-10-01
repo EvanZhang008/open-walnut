@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page, type TestInfo } from '@playwright/test'
-import { openAskWalnutDrawer } from './draft-helpers'
+import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import { showEverything } from './todo-panel-helpers'
 
 const ready = { hasReadyProvider: true, claudeCliAvailable: true }
@@ -10,6 +10,8 @@ test.use({ viewport: { width: 1280, height: 860 }, deviceScaleFactor: 1 })
 const shots = `/tmp/walnut-setup-banner-${Date.now()}`
 test.beforeAll(async () => { await fs.mkdir(shots, { recursive: true }) })
 test.beforeEach(async ({ page }) => {
+  // Every scenario reads the Ask Walnut slot, which starts hidden until opened.
+  await openChatOnLoad(page)
   await page.routeWebSocket('**/ws*', ws => {
     const server = ws.connectToServer()
     server.onMessage(message => {

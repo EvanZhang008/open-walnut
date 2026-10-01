@@ -66,7 +66,8 @@ import {
   getSubagentHistoryPayload, executeCompactSession,
 } from '../../core/sessions/session-extras.js'
 import { filterSessionsByQuery } from '../../core/session-search.js'
-import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
+import { CLOUD_MODE, QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
+import { ensureWalnutSource, isWalnutCheckout, WalnutSourceError } from '../../core/self-repair/walnut-source.js'
 import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
 import { resolveDefaultEngine } from '../../core/agents/default-engine.js'
 import { splitAcpModelId } from '../../providers/acp-session.js'
@@ -387,7 +388,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // but its spawn does not; remote callers should send absolute paths.)
     // Ask Walnut ignores any client cwd: the Personal AI's home is a server fact
     // (same directory a main-chat lane spawns in), not a client choice.
-    const cwd = isWalnutAgent
+    let cwd = isWalnutAgent
       ? ASK_LAUNCH_CWD
       : !host && (rawCwd === '~' || rawCwd.startsWith('~/'))
         ? path.join(os.homedir(), rawCwd.slice(1))
@@ -540,6 +541,25 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     if (refused) {
       res.status(409).json(refused)
       return
+    }
+
+    // A local repair runs in Walnut's own source. A client folder that already is
+    // a Walnut checkout is kept (the user may keep their own clone), with no clone
+    // and no source lookup; any other folder is replaced by the source the server
+    // knows, which on an npm install means cloning upstream first (minutes, once;
+    // concurrent Starts share the clone). A remote-host repair keeps the client's
+    // folder: no local check can say what lives on another machine. Before the
+    // images are written, so a refused repair leaves nothing behind.
+    if (intent === 'fix-walnut' && !host && (CLOUD_MODE || !isWalnutCheckout(cwd))) {
+      try {
+        cwd = (await ensureWalnutSource()).source.dir
+      } catch (err) {
+        if (err instanceof WalnutSourceError) {
+          res.status(err.statusCode).json({ error: err.message })
+          return
+        }
+        throw err
+      }
     }
 
     // Process attached images — save to disk and build session-friendly context.

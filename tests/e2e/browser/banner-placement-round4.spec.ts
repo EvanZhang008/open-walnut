@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { banner, connected, failed, isolatePrefs, resetServerHostFixture, routeHealth, row, signedOut } from './host-problems-helpers'
+import { banner, chatShownLayout, connected, failed, isolatePrefs, resetServerHostFixture, routeHealth, row, signedOut } from './host-problems-helpers'
 import { loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
   BP_SHOTS, bellDot, bpSetup, expectHomeCardStill, markHomeCard, openRow, openSystemHosts, pickRail, problemHosts, railButton,
@@ -292,7 +292,7 @@ test.describe('signals and the panel (N3-14, N3-15, N3-22, C42)', () => {
   })
 
   test('BP-R4-N3-22: with the task panel hidden, the slot card keeps its rows near their words (at most 720px)', async ({ page }) => {
-    await bpSetup(page)
+    await bpSetup(page, { before: chatShownLayout })
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await toolbarHide(page).click()
     const slot = page.locator('[data-testid="attention-banner"][data-mount="slot"]')

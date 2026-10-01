@@ -93,7 +93,7 @@ test('"+" opens a focused draft column with no network in the open path', async 
   const panel = draftPanel(page)
   await expect(panel).toBeVisible({ timeout: 10_000 })
   // Nothing runs server-side yet, and the header says so in the user's words.
-  await expect(panel.locator('.session-panel-title')).toHaveText('New Session')
+  await expect(panel.locator('.session-panel-title')).toHaveText('New task')
   await expect(panel.locator('.session-panel-badge').first()).toHaveText('Draft')
 
   // THE requirement: not one request between the click and the visible column.

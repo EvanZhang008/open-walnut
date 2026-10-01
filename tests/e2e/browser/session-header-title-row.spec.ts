@@ -13,8 +13,8 @@
  * instead of the full text.
  */
 import { expect, test, type Page } from '@playwright/test'
-import { openAskWalnutDrawer } from './draft-helpers'
-import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
+import { presetPanelView } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -33,7 +33,10 @@ async function openHomepageSession(page: Page) {
 }
 
 async function openHome(page: Page) {
-  await isolateUiPrefs(page)
+  // Every header here is measured in the layout these specs were written for: the
+  // Ask Walnut slot beside the columns (it starts hidden until opened), and one test
+  // reads the slot's own panel.
+  await openChatOnLoad(page)
   await presetPanelView(page)
   await page.setContent(`<a href="${test.info().project.use.baseURL}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut' }).click()

@@ -11,6 +11,7 @@ import type { ImageAttachment } from '@/api/chat';
 import type { UseFocusBarReturn } from '@/hooks/useFocusBar';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { ICON_CHAT } from '@/components/common/Icons';
+import { readHomeChatVisible } from '@/pages/home-panel-flags';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useDragGesture } from '@/hooks/useDragGesture';
 
@@ -203,6 +204,7 @@ const ChatDockItem = memo(function ChatDockItem({ isActive }: ChatDockItemProps)
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); emitDockActivateChat(); } }}
       title="Ask Walnut"
+      aria-label="Ask Walnut"
     >
       <span className="dock-chat-icon">{ICON_CHAT}</span>
       {/* The dock cell is 56px wide, so the label is the short form; the title
@@ -307,10 +309,10 @@ export function FocusDock({ focusBar, onQuickAddToFocus }: FocusDockProps) {
 
   // Self-manage active state by listening to custom events
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  // Track main chat panel visibility (toggled via Chat button). Same localStorage
-  // key MainPage persists, so the dock starts in step after a relaunch.
+  // Track main chat panel visibility (toggled via the Ask Walnut cell). The same
+  // reader MainPage uses, so the dock starts in step after a relaunch.
   const [chatVisible, setChatVisible] = useState<boolean>(
-    () => localStorage.getItem('open-walnut-home-chat-visible') !== 'false'
+    () => readHomeChatVisible(localStorage)
   );
 
   useEffect(() => {

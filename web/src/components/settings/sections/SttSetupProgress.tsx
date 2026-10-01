@@ -1,134 +1,54 @@
 /**
- * SSE-based setup progress component.
- * Runs a sequence of setup steps (brew install / model download),
- * showing live progress for each.
+ * Live progress of an STT setup job (brew installs, the Python environment,
+ * model downloads): one row per step, then one row of actions. The steps run in
+ * stt-setup-job.ts, outside React, so this view can unmount and mount again
+ * without touching them.
+ *
+ * Class names are `stt-run-*`, NOT the old `stt-setup-progress`/`stt-setup-step`:
+ * globals.css still styles those as a bordered, padded box from before the
+ * settings redesign, which pushed the bar and tags past the card's edge.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { startSetup, type SetupEvent } from '@/api/stt';
+import type { SttSetupJob, StepStatus } from './stt-setup-job';
 import { SettingsRow, SettingsTag } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 
-interface SetupStep {
-  action: string;
-  params: Record<string, string>;
-  label: string;
-}
-
 interface Props {
-  steps: SetupStep[];
-  onComplete: () => void;
+  job: SttSetupJob;
+  /** Legacy install banner: the finished job waits for this click. Without it, finishing applies on its own. */
+  onDone?: () => void;
+  onRetry: () => void;
   onCancel: () => void;
 }
 
-interface StepState {
-  label: string;
-  status: 'pending' | 'running' | 'done' | 'error';
-  percent: number;
-  message: string;
-  logs: string[];
-}
+const STEP_TAG: Record<StepStatus, string> = {
+  done: 'Done',
+  error: 'Failed',
+  running: 'Running',
+  pending: 'Waiting',
+};
 
-export function SttSetupProgress({ steps, onComplete, onCancel }: Props) {
-  const [stepStates, setStepStates] = useState<StepState[]>(
-    steps.map(s => ({ label: s.label, status: 'pending', percent: 0, message: '', logs: [] }))
-  );
-  const [currentIdx, setCurrentIdx] = useState(0);
-  const [finished, setFinished] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const runningRef = useRef(false);
-
-  const updateStep = useCallback((idx: number, update: Partial<StepState>) => {
-    setStepStates(prev => prev.map((s, i) => i === idx ? { ...s, ...update } : s));
-  }, []);
-
-  useEffect(() => {
-    if (runningRef.current) return;
-    runningRef.current = true;
-
-    const runSteps = async () => {
-      for (let i = 0; i < steps.length; i++) {
-        setCurrentIdx(i);
-        updateStep(i, { status: 'running', percent: 0, message: 'Starting...' });
-
-        const controller = new AbortController();
-        abortRef.current = controller;
-
-        let stepFailed = false;
-
-        await startSetup(
-          steps[i].action,
-          steps[i].params,
-          (event: SetupEvent) => {
-            if (event.type === 'progress') {
-              updateStep(i, {
-                percent: event.percent ?? 0,
-                message: event.message ?? '',
-              });
-            } else if (event.type === 'log') {
-              setStepStates(prev => prev.map((s, idx) =>
-                idx === i ? { ...s, logs: [...s.logs, event.message ?? ''] } : s
-              ));
-            } else if (event.type === 'done') {
-              updateStep(i, { status: 'done', percent: 100, message: event.message ?? 'Done' });
-            } else if (event.type === 'error') {
-              updateStep(i, { status: 'error', message: event.message ?? 'Failed' });
-              stepFailed = true;
-            }
-          },
-          controller.signal,
-        );
-
-        abortRef.current = null;
-
-        if (stepFailed) {
-          setFailed(true);
-          return;
-        }
-
-        // Ensure step is marked done if SSE didn't send explicit done event
-        setStepStates(prev => {
-          const s = prev[i];
-          if (s.status === 'running') {
-            return prev.map((st, idx) => idx === i ? { ...st, status: 'done', percent: 100 } : st);
-          }
-          return prev;
-        });
-      }
-
-      setFinished(true);
-    };
-
-    runSteps();
-
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, []); // Run once on mount
-
-  const handleCancel = () => {
-    abortRef.current?.abort();
-    onCancel();
-  };
-
+export function SttSetupProgress({ job, onDone, onRetry, onCancel }: Props) {
+  const finished = job.status === 'done';
+  const failed = job.status === 'failed';
   return (
-    <div className="stt-setup-progress settings-rows-contents">
-      {stepStates.map((step, i) => (
+    <div className="stt-run settings-rows-contents" data-testid="stt-setup-progress" data-status={job.status}>
+      {job.states.map((step, i) => (
         <SettingsRow
           key={i}
           indent
-          className={`stt-setup-step stt-step-${step.status}`}
+          className="stt-run-step"
+          data-step-status={step.status}
           label={step.label}
           help={step.message && step.status !== 'pending' ? step.message : undefined}
           state={step.status === 'error' ? 'warning' : undefined}
           control={
             step.status === 'running' ? (
-              <span className="settings-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={step.percent}>
-                <span className="settings-progress-track stt-progress-bar-track">
-                  <span className="settings-progress-fill stt-progress-bar-fill" style={{ width: `${step.percent}%` }} />
+              <span className="settings-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={step.percent ?? undefined}>
+                <span className="settings-progress-track">
+                  <span className="settings-progress-fill" style={{ width: `${step.percent ?? 0}%` }} />
                 </span>
-                <span className="settings-progress-pct">{step.percent}%</span>
+                <span className="settings-progress-pct">{step.percent === null ? '' : `${step.percent}%`}</span>
               </span>
             ) : (
               <SettingsTag tone={step.status === 'done' ? 'success' : step.status === 'error' ? 'warning' : 'neutral'}>
@@ -140,23 +60,16 @@ export function SttSetupProgress({ steps, onComplete, onCancel }: Props) {
       ))}
       <SettingsRow
         indent
-        className="stt-setup-actions"
-        label={finished ? 'Setup finished' : failed ? 'Setup stopped' : 'Setting up'}
+        className="stt-run-actions"
+        label={finished ? (onDone ? 'Setup finished' : 'Turning dictation on...') : failed ? 'Setup stopped' : 'Setting up'}
         control={
           <span className="settings-control-cluster">
-            {finished && <SettingsButton variant="primary" onClick={onComplete}>Done, apply config</SettingsButton>}
-            {failed && <SettingsButton onClick={onComplete}>Retry</SettingsButton>}
-            {!finished && <SettingsButton onClick={handleCancel}>Cancel</SettingsButton>}
+            {finished && onDone && <SettingsButton variant="primary" onClick={onDone}>Done, apply config</SettingsButton>}
+            {failed && <SettingsButton variant="primary" onClick={onRetry}>Retry</SettingsButton>}
+            {!finished && <SettingsButton onClick={onCancel}>{failed ? 'Close' : 'Cancel'}</SettingsButton>}
           </span>
         }
       />
     </div>
   );
 }
-
-const STEP_TAG: Record<string, string> = {
-  done: 'Done',
-  error: 'Failed',
-  running: 'Running',
-  pending: 'Waiting',
-};

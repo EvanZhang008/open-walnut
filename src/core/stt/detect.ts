@@ -8,6 +8,9 @@ import { stat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { sttSpawnEnv } from './spawn-env.js';
+import {
+  DEFAULT_MLX_MODEL, findPython3, findUv, getMlxVenvDir, getMlxVenvPython, isHfModelCached, parseVersion, pythonImportsMlxAudio,
+} from './setup-mlx.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -37,12 +40,27 @@ export interface GgmlModel {
   sizeBytes: number;
 }
 
+/** The Walnut-managed Qwen3-ASR (MLX) environment. */
+export interface MlxDetection {
+  venvPath: string;
+  pythonPath: string;
+  /** The venv's python exists and imports mlx_audio. */
+  ready: boolean;
+  /** The default model has a snapshot with weights in the hub cache. */
+  modelCached: boolean;
+}
+
 export interface DetectionResult {
+  /** The SERVER's platform: the engine runs where the server runs, not in the browser. */
+  platform: { os: NodeJS.Platform; arch: string };
   ffmpeg: DetectionItem;
   whisperCli: DetectionItem;
   whisperServer: DetectionItem;
   sherpaOnnxNode: DetectionItem;
   homebrew: DetectionItem;
+  uv: DetectionItem;
+  python3: DetectionItem;
+  mlx: MlxDetection;
   models: GgmlModel[];
   vadModel: GgmlModel | null;
   recommendation: Recommendation | null;
@@ -139,6 +157,34 @@ export async function detectHomebrew(): Promise<DetectionItem> {
   const { found, path } = await whichBinary('brew');
   if (!found) return { name: 'homebrew', found: false };
   return { name: 'homebrew', found: true, path };
+}
+
+export async function detectUv(): Promise<DetectionItem> {
+  const path = await findUv();
+  if (!path) return { name: 'uv', found: false };
+  let version: string | undefined;
+  try {
+    const { stdout } = await execFileAsync(path, ['--version'], { timeout: 5000 });
+    version = parseVersion(stdout)?.join('.');
+  } catch { /* found but not runnable: version stays unknown */ }
+  return { name: 'uv', found: true, path, version };
+}
+
+export async function detectPython3(): Promise<DetectionItem> {
+  const py = await findPython3();
+  if (!py) return { name: 'python3', found: false };
+  return { name: 'python3', found: true, path: py.path, version: py.version };
+}
+
+/** The managed venv and the default model. The import check runs once per scan. */
+export async function detectMlx(): Promise<MlxDetection> {
+  const venvPath = getMlxVenvDir();
+  const pythonPath = getMlxVenvPython(venvPath);
+  const [ready, modelCached] = await Promise.all([
+    pythonImportsMlxAudio(pythonPath),
+    isHfModelCached(DEFAULT_MLX_MODEL),
+  ]);
+  return { venvPath, pythonPath, ready, modelCached };
 }
 
 /** Scan common directories for ggml model files */
@@ -239,17 +285,21 @@ export function getRecommendation(result: Pick<DetectionResult, 'ffmpeg' | 'whis
 
 /** Run full system detection */
 export async function detectSystem(): Promise<DetectionResult> {
-  const [ffmpeg, whisperCli, whisperServer, sherpaOnnxNode, homebrew, models, vadModel] = await Promise.all([
+  const [ffmpeg, whisperCli, whisperServer, sherpaOnnxNode, homebrew, uv, python3, mlx, models, vadModel] = await Promise.all([
     detectFfmpeg(),
     detectWhisperCli(),
     detectWhisperServer(),
     detectSherpaOnnxNode(),
     detectHomebrew(),
+    detectUv(),
+    detectPython3(),
+    detectMlx(),
     findGgmlModels(),
     findVadModel(),
   ]);
 
   const recommendation = getRecommendation({ ffmpeg, whisperCli, sherpaOnnxNode, homebrew, models });
+  const platform = { os: process.platform, arch: process.arch };
 
-  return { ffmpeg, whisperCli, whisperServer, sherpaOnnxNode, homebrew, models, vadModel, recommendation };
+  return { platform, ffmpeg, whisperCli, whisperServer, sherpaOnnxNode, homebrew, uv, python3, mlx, models, vadModel, recommendation };
 }

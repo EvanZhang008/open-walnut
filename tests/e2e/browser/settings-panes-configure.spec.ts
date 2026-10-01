@@ -860,7 +860,7 @@ test('C8 + C10 + C80: configure panes use sentence case, no dashes, no decorativ
   }
   for (const f of ['GeneralSection.tsx', 'TasksSection.tsx', 'SmartTaskCreation.tsx', 'JevSettings.tsx', 'FocusTiersSection.tsx',
     'SessionsSection.tsx', 'EnginesSection.tsx', 'EngineSettingRows.tsx', 'AdvancedSection.tsx', 'ProvidersSection.tsx', 'HooksSection.tsx',
-    'IntegrationsSection.tsx', 'HeartbeatSection.tsx', 'TriageSection.tsx', 'SearchSection.tsx', 'SttSection.tsx', 'SttDetectionPanel.tsx', 'SttSetupProgress.tsx']) {
+    'IntegrationsSection.tsx', 'HeartbeatSection.tsx', 'TriageSection.tsx', 'SearchSection.tsx', 'SttSection.tsx', 'SttDetectionPanel.tsx', 'SttSetupProgress.tsx', 'SttSetupRow.tsx', 'SttModelRows.tsx']) {
     const code = src(f).replace(/\/\/.*$|\/\*[\s\S]*?\*\//gm, '')
     expect(code, `${f}: dashes`).not.toMatch(DASHES)
     expect(code, `${f}: symbols`).not.toMatch(BANNED_SYMBOLS)

@@ -27,12 +27,13 @@ import { useAttentionDots } from '@/hooks/useAttentionDots';
 import { useLocalClaudeRecheck } from '@/utils/local-claude-recheck';
 import { hostSettingsHref } from '@/utils/host-settings-nav';
 import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
+import { HOME_CHAT_VISIBLE_DEFAULT, readHomeChatVisible } from '@/pages/home-panel-flags';
 import '@/styles/attention-banner.css';
 import '@/styles/bell-dot.css';
 
 // Twins of MainPage's keys: localStorage, so the toggles read the same state the
 // page restores after a relaunch (sessionStorage dies with the Mac app's web view).
-const LS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
+// The chat's key and its hidden-by-default rule come from the one shared reader.
 const LS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
 const LS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
 const LS_SCRATCHPAD_VISIBLE_KEY = 'open-walnut-home-scratchpad-visible';
@@ -96,7 +97,7 @@ export function Sidebar({
 
   // Panel visibility state — synced from MainPage via custom events
   const [chatVisible, setChatVisible] = useState<boolean>(
-    () => localStorage.getItem(LS_CHAT_VISIBLE_KEY) !== 'false'
+    () => readHomeChatVisible(localStorage)
   );
   const [todoVisible, setTodoVisible] = useState<boolean>(
     () => localStorage.getItem(LS_TODO_VISIBLE_KEY) !== 'false'
@@ -110,7 +111,7 @@ export function Sidebar({
 
   useEffect(() => {
     const handleChatVisible = (e: Event) => {
-      setChatVisible((e as CustomEvent).detail?.visible ?? true);
+      setChatVisible((e as CustomEvent).detail?.visible ?? HOME_CHAT_VISIBLE_DEFAULT);
     };
     const handleTodoVisible = (e: Event) => {
       setTodoVisible((e as CustomEvent).detail?.visible ?? true);
@@ -163,10 +164,11 @@ export function Sidebar({
       <button
         className={`sidebar-link sidebar-panel-toggle${chatVisible ? ' active' : ''}`}
         onClick={handleToggleChat}
-        title={collapsed ? 'Chat' : undefined}
+        aria-label="Ask Walnut"
+        title={collapsed ? 'Ask Walnut' : undefined}
       >
         <ChatBubbleIcon />
-        <span className="sidebar-label">Chat</span>
+        <span className="sidebar-label">Ask Walnut</span>
       </button>
       <button
         className={`sidebar-link sidebar-panel-toggle${calendarPanelVisible ? ' active' : ''}`}

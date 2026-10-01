@@ -258,7 +258,10 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
         </div>
       )}
 
-      {!loading && !loadError && totalItems === 0 && liveNotes.length === 0 && !createOption && (
+      {/* The hint says what Enter does, so it stays under a create row and under a
+          "does not exist" / "no subdirectories" note; a host still connecting or
+          down speaks for itself. */}
+      {!loading && !loadError && totalItems === 0 && liveNotes.every(n => n.kind === 'empty' || n.kind === 'missing') && (
         <div className="sps-empty">{emptyHint}</div>
       )}
 

@@ -53,13 +53,29 @@ export interface Recommendation {
   missingSteps: string[];
 }
 
+/** The Walnut-managed Qwen3-ASR (MLX) environment on the server. */
+export interface MlxDetection {
+  venvPath: string;
+  pythonPath: string;
+  /** The venv's python exists and imports mlx_audio. */
+  ready: boolean;
+  /** The default model's weights are in the Hugging Face cache. */
+  modelCached: boolean;
+}
+
 export interface DetectionResult {
+  /** The server's platform (the engine runs there, not in the browser). */
+  platform: { os: string; arch: string };
   ffmpeg: DetectionItem;
   whisperCli: DetectionItem;
   whisperServer: DetectionItem;
   sherpaOnnxNode: DetectionItem;
   homebrew: DetectionItem;
+  uv: DetectionItem;
+  python3: DetectionItem;
+  mlx: MlxDetection;
   models: GgmlModel[];
+  vadModel?: GgmlModel | null;
   recommendation: Recommendation | null;
 }
 
@@ -273,8 +289,9 @@ export function fetchSttDetection(): Promise<DetectionResult> {
 }
 
 /**
- * Start a setup action (brew install or model download) via SSE.
- * Returns an EventSource-like reader that yields SetupEvents.
+ * Start a setup action (brew install, Python env, model download) via SSE and
+ * call onEvent for each event as it arrives. Without a signal the call gives up
+ * after an hour (the longest step, the Qwen3-ASR download, allows 60 minutes).
  */
 export async function startSetup(
   action: string,
@@ -286,7 +303,7 @@ export async function startSetup(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, ...params }),
-    signal: signal ?? AbortSignal.timeout(1800_000), // 30 min for large downloads
+    signal: signal ?? AbortSignal.timeout(3_600_000),
   });
 
   if (!res.ok) {
@@ -378,6 +395,16 @@ export function deleteSherpaModel(name: string): Promise<void> {
 export function fetchSherpaModels(): Promise<{ models: { name: string; dirName: string; path: string }[] }> {
   return apiGet<{ models: { name: string; dirName: string; path: string }[] }>('/api/stt/sherpa-models');
 }
+
+/** Qwen3-ASR, the MLX engine's default model (mirrors DEFAULT_MLX_MODEL on the server). */
+export const DEFAULT_MLX_MODEL = 'mlx-community/Qwen3-ASR-1.7B-8bit';
+export const MLX_MODEL = {
+  name: DEFAULT_MLX_MODEL,
+  displayName: 'Qwen3-ASR 1.7B (8-bit)',
+  // The hub repo's total (2,467,859,030 bytes), shown as the 2.3 GB it takes on disk.
+  sizeLabel: '2.3 GB',
+  description: 'Chinese, English and mixed speech',
+} as const;
 
 /** Known model catalog — mirrored from server for UI display */
 export const MODEL_CATALOG: ModelCatalogEntry[] = [

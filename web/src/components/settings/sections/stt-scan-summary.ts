@@ -7,6 +7,7 @@ import type { DetectionResult } from '@/api/stt';
 
 export function sttScanSummary(d: DetectionResult): string {
   const engines: string[] = [];
+  if (d.mlx?.ready) engines.push('Qwen3-ASR');
   if (d.whisperCli.found) engines.push('whisper-cli');
   if (d.whisperServer?.found) engines.push('whisper-server');
   if (d.sherpaOnnxNode?.found) engines.push('Sherpa-ONNX');
