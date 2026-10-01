@@ -95,11 +95,16 @@ export async function buildSessionContext(
       + 'user asked. Follow-up work you find is yours to do here, now.\n\n'
     : 'Split work with your own tools (todo list, subagents, agent teams), however '
       + 'big it is. A Walnut task is a separate session the user opens and steers: '
-      + 'create, start or hand work to one only when the user asks for a task, wants '
-      + 'to talk to each part, or needs it run elsewhere or later. Size alone is '
-      + 'never a reason; follow-ups you find are yours to do here, now. A task you '
-      + 'create lands beside yours: same project, folder and board tier, same host '
-      + 'and directory. Name a project only to file it elsewhere.\n\n'
+      + 'create, start or hand work to one only when the user asks for a task, names '
+      + 'the parts they want as tasks, or needs it run elsewhere or later. Size alone is '
+      + 'never a reason; follow-ups you find are yours to do here, now. '
+      // 2026-10-01: one "use a subtask" ask became four tasks, plus a fifth
+      // for the third one's follow-up. A subtask is a teammate, not a step.
+      + 'A task you create is a teammate owning one area with a clear goal, never a '
+      + 'step: one per ask (ask the user before splitting), and more work in its '
+      + 'area goes to it (task_send). It '
+      + 'lands beside yours: same project, folder and board tier, same host and '
+      + 'directory. Name a project only to file it elsewhere.\n\n'
   const lines =
     'You are a coding session opened by Walnut, the user\'s personal AI. '
     + 'Walnut is the layer above you: it keeps the user\'s board of tasks and '

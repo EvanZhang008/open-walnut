@@ -342,6 +342,38 @@ describe('task_create says where the task landed', () => {
     expect(withMessage.outcome).not.toContain('full text is in the description')
   })
 
+  it('names the other open subtasks the caller leads, and where more work for them goes', async () => {
+    // A subtask owns an area (2026-10-01: a fourth task was opened for the
+    // third one's follow-up). The outcome puts the team in view at every create.
+    const team = [
+      { id: 't_oven', title: 'Fix the oven door', phase: 'IN_PROGRESS' },
+      { id: 't_fly', title: 'Print the flyers', phase: 'NEED_ACTION' },
+    ]
+    const one = await createRunner({ created: { task: TASK, placement: { ...PLACED, parent_task_id: 't_caller', open_subtasks: team.slice(0, 1) } } })
+      .speak({ title: TASK.title, record_only: true })
+    expect(one.outcome).toBe('Filed in project marina, folder "Fixture work" (new, holding your task and this one), '
+      + 'as a subtask of your task. Your task also leads 1 other open subtask: "Fix the oven door" (t_oven, IN_PROGRESS). '
+      + 'Each owns its area: more work in one of those areas goes to that task with task_send, not to a new task. '
+      + 'Placeholder saved. Work was explicitly not started.')
+    expect((one.placement as Record<string, unknown>).open_subtasks).toEqual(team.slice(0, 1))
+    // Five named at most; the rest counted, with where to read them.
+    const many = Array.from({ length: 7 }, (_, i) => ({ id: `t_${i}`, title: `Shelf ${i}`, phase: 'TODO' }))
+    const lots = await createRunner({ created: { task: TASK, placement: { ...PLACED, open_subtasks: many, more_open_subtasks: 3 } } })
+      .speak({ title: TASK.title, record_only: true })
+    expect(lots.outcome).toContain('Your task also leads 10 other open subtasks: "Shelf 0" (t_0, TODO); ')
+    expect(lots.outcome).toContain('"Shelf 4" (t_4, TODO); and 5 more (open_items lists them). Each owns its area')
+    expect(lots.outcome).not.toContain('Shelf 5')
+    // A long legacy title is cut on a code point, never mid surrogate pair.
+    const long = `${'a'.repeat(58)}\u{1F35E}\u{1F35E}tail`
+    const cut = await createRunner({ created: { task: TASK, placement: { ...PLACED, open_subtasks: [{ id: 't_l', title: long, phase: 'TODO' }] } } })
+      .speak({ title: TASK.title, record_only: true })
+    expect(cut.outcome).toContain(`"${'a'.repeat(58)}\u{1F35E}…" (t_l, TODO)`)
+    // No team, no sentence.
+    const none = await createRunner({ created: { task: TASK, placement: { ...PLACED, open_subtasks: [] } } })
+      .speak({ title: TASK.title, record_only: true })
+    expect(none.outcome).not.toContain('also leads')
+  })
+
   it('passes a grouping warning through, and says nothing for a server too old to report placement', async () => {
     const warned = await createRunner({
       created: { task: TASK, placement: { project: 'marina', folder_created: false, inherited_from: 't_caller', warning: 'The task was created but could not be put in a folder: gone' } },

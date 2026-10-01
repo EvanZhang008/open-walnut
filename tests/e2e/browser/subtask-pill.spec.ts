@@ -2,8 +2,10 @@
  * The "Sub" pill (web/src/components/tasks/SubtaskPill.tsx): a task with a
  * parent_task_id carries it on its pinned card and on its list row, a top-level
  * task never does, and clicking it leads to the parent. Its twin, the
- * "Leader · N" pill (LeaderPill.tsx), sits on the parent and lists every
+ * "Leader · N" pill (LeaderPill.tsx), sits on the parent and lists every OPEN
  * subtask, the ones in other projects included; a row leads to that subtask.
+ * A finished subtask is not counted or listed, and a parent whose subtasks are
+ * all finished has no pill.
  *
  * Why it matters: whatever a session files is that session's SUBTASK
  * (caller-placement.ts), wherever it lands: new tasks land pinned in Satellite,
@@ -218,6 +220,65 @@ test('a subtask in another project is a top-level row there, and its Sub pill le
 })
 
 
+test('the Leader pill counts and lists only open subtasks, and leaves when the last one finishes', async ({ page, browserName }) => {
+  // User report 2026-10-01: a leader read `Leader · 8` and listed all eight
+  // subtasks while most were done. Finished work is history, not a team.
+  test.setTimeout(120_000)
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const project = `Leader open ${stamp}`
+  const parent = await createTask(`Bakery relaunch ${stamp}`, { project, pinned: false })
+  const openA = await createTask(`Bake the tasting box ${stamp}`, { project, pinned: false, parent_task_id: parent })
+  const openB = await createTask(`Print the flyers ${stamp}`, { project: `Leader open far ${stamp}`, pinned: false, parent_task_id: parent })
+  const finished = await createTask(`Order the oven part ${stamp}`, { project, pinned: false, parent_task_id: parent })
+  const complete = async (id: string) => {
+    const res = await fetch(`${API}/api/tasks/${id}/complete`, { method: 'POST' })
+    expect(res.ok).toBe(true)
+  }
+  await complete(finished)
+
+  await presetPanelView(page, { section: 'all', project: '' })
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.goto('/')
+  const row = (id: string) => page.locator(`.todo-panel-item[data-task-id="${id}"]`)
+  await expect(row(parent)).toBeVisible({ timeout: 90_000 })
+  const leaderPill = row(parent).locator('[data-testid="leader-pill"]')
+  await expect(leaderPill).toHaveText('Leader · 2')
+  await expect(leaderPill).toHaveAttribute('title', 'Leads 2 open subtasks (1 done). Click to list them.')
+
+  await leaderPill.click()
+  const flyout = page.locator('[data-testid="leader-subtasks-flyout"]')
+  await expect(flyout).toBeVisible()
+  await expect(flyout.locator('.leader-subtasks-title')).toHaveText(`2 open subtasks of “Bakery relaunch ${stamp}”`)
+  const rows = flyout.locator('[data-testid="leader-sub-row"]')
+  await expect(rows).toHaveCount(2)
+  await expect(flyout.locator(`[data-testid="leader-sub-row"][data-task-id="${finished}"]`)).toHaveCount(0)
+  await expect(flyout.locator(`[data-testid="leader-sub-row"][data-task-id="${openA}"]`)).toBeVisible()
+  await expect(flyout.locator(`[data-testid="leader-sub-row"][data-task-id="${openB}"]`)).toBeVisible()
+  const box = (await flyout.boundingBox())!
+  const rowBox = (await row(parent).boundingBox())!
+  const vp = page.viewportSize()!
+  const x = Math.max(0, Math.min(rowBox.x, box.x) - 8), y = Math.max(0, Math.min(rowBox.y, box.y) - 8)
+  await fs.mkdir(SHOT_DIR, { recursive: true })
+  await page.screenshot({
+    path: `${SHOT_DIR}/${browserName}-leader-open-only.png`,
+    clip: { x, y, width: Math.min(vp.width - x, Math.max(rowBox.x + rowBox.width, box.x + box.width) - x + 8), height: Math.min(vp.height - y, Math.max(rowBox.y + rowBox.height, box.y + box.height) - y + 8) },
+  })
+
+  // One more finishes while the flyout is open: the count and the list follow live.
+  await complete(openA)
+  await expect(leaderPill).toHaveText('Leader · 1')
+  await expect(rows).toHaveCount(1)
+  await expect(flyout.locator('.leader-subtasks-title')).toHaveText(`Open subtask of “Bakery relaunch ${stamp}”`)
+
+  // The last one finishes: no open subtask, no pill, and the flyout goes with it.
+  await complete(openB)
+  await expect(leaderPill).toHaveCount(0)
+  await expect(flyout).toHaveCount(0)
+  await expect(row(parent)).toBeVisible()
+  await row(parent).screenshot({ path: `${SHOT_DIR}/${browserName}-leader-all-done.png` })
+})
+
+
 test('a parent\'s session header carries the Leader pill, and its list leads to each subtask', async ({ page, browserName }) => {
   // A Personal AI ask is never a board row: the session header is where a parent
   // that lives in the chat slot shows its team. The seeded "Model switch test
@@ -239,7 +300,11 @@ test('a parent\'s session header carries the Leader pill, and its list leads to 
   await expect(panel).toBeVisible({ timeout: 15_000 })
   const header = panel.locator('.session-panel-title-meta')
   const leader = header.locator('[data-testid="leader-pill"]')
-  await expect(leader).toHaveText('Leader · 2')
+  // The chromium and webkit projects share one fixture board, and the Focus test
+  // below files its own subtask under this same fixture parent, so the count is
+  // at least this test's two; the flyout below names both of them.
+  await expect(leader).toHaveText(/^Leader · \d+$/)
+  expect(Number(await leader.getAttribute('data-subtask-count'))).toBeGreaterThanOrEqual(2)
   await expectTriggerShape(leader)
   // It has no parent of its own, so no Sub pill in its header.
   await expect(header.locator('[data-testid="subtask-pill"]')).toHaveCount(0)
@@ -247,7 +312,7 @@ test('a parent\'s session header carries the Leader pill, and its list leads to 
   await leader.click()
   const flyout = page.locator('[data-testid="leader-subtasks-flyout"]')
   await expect(flyout).toBeVisible()
-  await expect(flyout.locator('[data-testid="leader-sub-row"]')).toHaveCount(2)
+  await expect(flyout.locator(`[data-testid="leader-sub-row"][data-task-id="${near}"]`)).toBeVisible()
   await expect(flyout.locator(`[data-testid="leader-sub-row"][data-task-id="${far}"] .leader-sub-place`)).toHaveText(`Sub pill C ${stamp}`)
   const box = (await flyout.boundingBox())!
   const vp = page.viewportSize()!
@@ -290,7 +355,10 @@ test('a subtask a Focus task\'s session files is born in Focus, not Satellite', 
     const res = await fetch(`${API}/api/v1/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': 'pw-model-switch-session' },
-      body: JSON.stringify({ title: `Split off from Focus ${stamp}` }),
+      // group_id "": no folder. A worker's create otherwise puts the shared
+      // fixture parent into a new folder that outlives this test, and the other
+      // engine's run then finds the parent's row folded inside it.
+      body: JSON.stringify({ title: `Split off from Focus ${stamp}`, group_id: '' }),
     })
     expect(res.status).toBe(201)
     const created = await res.json() as { task: { id: string }; placement: { tier?: string; parent_task_id?: string } }

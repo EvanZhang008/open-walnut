@@ -692,7 +692,8 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   "priority"?, "due_date"?, "start_date"?, "end_date"?, "description"?,
   "pinned"?, "focus_tier"?, "group_id"?, "launch_cwd"?, "launch_host"? }` → `201 { "task": ProjectedTask,
   "placement": { "project", "group_id"?, "group_label"?, "folder_created",
-  "inherited_from"?, "parent_task_id"?, "cwd"?, "warning"? } }`.
+  "inherited_from"?, "parent_task_id"?, "cwd"?, "tier"?, "title_shortened_from"?,
+  "open_subtasks"?, "more_open_subtasks"?, "warning"? } }`.
   Same creation semantics as the web quick-add: omitted/empty `project` =
   config default → Inbox; a new project name auto-creates its registry row;
   **Caller placement (additive, 2026-09-23):** when the `x-walnut-caller-sid`
@@ -739,6 +740,16 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   below a top-level task; a create that would go deeper answers
   `409 subtask_too_deep` and files nothing (`src/core/sessions/subtask-limits.ts`).
   Creates with no caller (the board, the phone, the CLI) are never limited.
+  Team list (additive, 2026-10-01): when the new task became the caller's
+  subtask, `placement.open_subtasks` lists the caller's OTHER open subtasks as
+  `{ id, title, phase }`, most recently touched first, at most 10
+  (`placement.more_open_subtasks` counts the rest); absent when there are none.
+  A subtask owns an area, so a session filing more work sees the team it already
+  leads and sends work for one of those areas there instead.
+  Title brake (additive, 2026-09-30): a title over 60 characters from a session
+  caller is cut to its head, the long form is stored as the description when the
+  body has none, and `placement.title_shortened_from` holds what was sent
+  (`src/core/sessions/task-title-brake.ts`).
   `priority` one of `immediate|important|backlog|none` (default from config).
   `start_date` / `end_date` (additive, 2026-08) let a client create a task
   already scheduled on the calendar (tapping a day, dragging a time range);

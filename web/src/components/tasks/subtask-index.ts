@@ -52,13 +52,27 @@ export function subtasksOf(tasks: readonly Task[], parentId: string): Task[] {
   return index.get(parentId) ?? [];
 }
 
-/** Hover text of the Leader pill. */
-export function leaderPillTitle(subtasks: readonly Task[]): string {
-  const n = subtasks.length;
-  const open = subtasks.filter((t) => !isDone(t)).length;
-  const noun = n === 1 ? 'subtask' : 'subtasks';
-  const openNote = open < n ? ` (${open} open)` : '';
-  return `Leads ${n} ${noun}${openNote}. Click to list them.`;
+/**
+ * The subtasks of `parentId` still open (not COMPLETE), in any project. The
+ * Leader pill counts and lists these only: a leader that ran eight subtasks and
+ * has two left reads `Leader · 2`, not a history of everything it ever filed
+ * (2026-10-01 user report). Finished ones stay reachable through the board.
+ */
+export function openSubtasksOf(tasks: readonly Task[], parentId: string): Task[] {
+  return subtasksOf(tasks, parentId).filter((t) => !isDone(t));
+}
+
+/** How many of `parentId`'s subtasks are finished (the pill's hover says so). */
+export function doneSubtaskCount(tasks: readonly Task[], parentId: string): number {
+  return subtasksOf(tasks, parentId).filter(isDone).length;
+}
+
+/** Hover text of the Leader pill: the open subtasks, and how many are done. */
+export function leaderPillTitle(open: readonly Task[], done = 0): string {
+  const n = open.length;
+  const noun = n === 1 ? 'open subtask' : 'open subtasks';
+  const doneNote = done > 0 ? ` (${done} done)` : '';
+  return `Leads ${n} ${noun}${doneNote}. Click to list them.`;
 }
 
 /**

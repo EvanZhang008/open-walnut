@@ -112,14 +112,16 @@ describe('buildSessionContext (identity note)', () => {
   it('a worker splits work with its own tools and makes a Walnut task only on the user\'s signal', async () => {
     // The user's rule (2026-09-25): most work follows the session's native
     // subagents / agent teams; a Walnut task is for a user who asked for one,
-    // wants to talk to each part, or needs it run elsewhere or later. Size is
-    // never the trigger, because "big" is a judgment a model gets wrong both ways.
+    // names the parts they want as tasks, or needs it run elsewhere or later.
+    // Size is never the trigger, because "big" is a judgment a model gets wrong
+    // both ways. ("Wants to talk to each part" read as a license to split one
+    // ask by sentence, 2026-10-01.)
     for (const id of ['', await seedTask('marina')]) {
       const { systemPrompt } = await buildSessionContext(id)
       expect(systemPrompt).not.toMatch(/create tasks/i)
       expect(systemPrompt).toMatch(/split work with your own tools \(todo list, subagents, agent teams\), however big it is/i)
       expect(systemPrompt).toMatch(/a Walnut task is a separate session the user opens and steers/i)
-      expect(systemPrompt).toMatch(/only when the user asks for a task, wants to talk to each part, or needs it run elsewhere or later/i)
+      expect(systemPrompt).toMatch(/only when the user asks for a task, names the parts they want as tasks, or needs it run elsewhere or later/i)
       expect(systemPrompt).toMatch(/size alone is never a reason/i)
       expect(systemPrompt).toMatch(/follow-ups you find are yours to do here, now/i)
       expect(systemPrompt).not.toMatch(/unless the user asked/i)
@@ -159,9 +161,20 @@ describe('buildSessionContext (identity note)', () => {
     // Without this an agent "helps" by naming a project it guessed, which files
     // the work away from the folder the user put the caller in.
     const { systemPrompt } = await buildSessionContext('')
-    expect(systemPrompt).toMatch(/a task you create lands beside yours: same project, folder and board tier/i)
+    expect(systemPrompt).toMatch(/it lands beside yours: same project, folder and board tier/i)
     expect(systemPrompt).toMatch(/same host and directory/i)
     expect(systemPrompt).toMatch(/name a project only to file it elsewhere/i)
+  })
+
+  it('says a task you create is a teammate owning an area, one per ask, and its follow-ups go to it', async () => {
+    // 2026-10-01: one "use a subtask" ask was split into a task per sentence,
+    // and the third one's follow-up became a fourth task in the second's area.
+    const { systemPrompt } = await buildSessionContext('')
+    expect(systemPrompt).toMatch(/a task you create is a teammate owning one area with a clear goal, never a step/i)
+    expect(systemPrompt).toMatch(/one per ask \(ask the user before splitting\), and more work in its area goes to it \(task_send\)/i)
+    // The signal is the user naming the parts, not "talking to each part".
+    expect(systemPrompt).toMatch(/names the parts they want as tasks/i)
+    expect(systemPrompt).not.toMatch(/talk to each part/i)
   })
 
   it('names the parent of a subtask and says which messages are its', async () => {
@@ -209,6 +222,9 @@ describe('buildSessionContext (identity note)', () => {
     // 1450 → 1600 (2026-09-30) for the two words: "subagent" is the Agent tool,
     // "subtask" is a Walnut task. The user says both; a session heard the first
     // and filed the second.
-    expect(systemPrompt.length).toBeLessThan(1600)
+    // 1600 → 1700 (2026-10-01) for what a created task is: a teammate owning one
+    // area, one per ask, its follow-ups sent to it. A session decides that at its
+    // first create; the user saw five tasks where one was asked for.
+    expect(systemPrompt.length).toBeLessThan(1700)
   })
 })

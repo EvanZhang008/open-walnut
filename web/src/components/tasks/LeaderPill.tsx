@@ -7,17 +7,21 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { locateTaskOnHome } from '@/utils/open-session';
 import { PHASE_LABELS, resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
-import { leaderPillTitle, subtaskPlaceLabel, subtasksOf } from './subtask-index';
+import { doneSubtaskCount, leaderPillTitle, openSubtasksOf, subtaskPlaceLabel } from './subtask-index';
 import '@/styles/subtask-pill.css';
 
 /**
- * "Leader · N" pill: this task has subtasks, and the pill lists them.
+ * "Leader · N" pill: this task has subtasks still open, and the pill lists them.
+ * N counts the OPEN ones only, and the flyout lists only those: a finished
+ * subtask is history, not work the leader is waiting on (2026-10-01: a leader
+ * read `Leader · 8` and listed all eight while most were done). No open
+ * subtask, no pill.
  *
  * The twin of the Sub pill (SubtaskPill.tsx). The board nests a subtask under
  * its leader only inside one project, and the pinned tiers show every task as
  * a flat card, so a leader whose work went to another project (or is pinned)
- * had nothing but a count. The flyout lists EVERY subtask, wherever it lives
- * (its project named when it is not the leader's), with its phase; a row is
+ * had nothing but a count. The flyout lists every open subtask, wherever it
+ * lives (its project named when it is not the leader's), with its phase; a row is
  * the same locate a Sub pill does, so the user can walk the whole team from
  * the leader's row.
  *
@@ -43,9 +47,11 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
 
-  const subtasks = store ? subtasksOf(store.tasks, task.id) : [];
+  const subtasks = store ? openSubtasksOf(store.tasks, task.id) : [];
+  const done = store ? doneSubtaskCount(store.tasks, task.id) : 0;
 
-  // The last subtask deleted or re-parented while the flyout is open takes the pill with it.
+  // The last open subtask finished, deleted or re-parented while the flyout is
+  // open takes the pill with it.
   useEffect(() => {
     if (open && subtasks.length === 0) setOpen(false);
   }, [open, subtasks.length]);
@@ -89,7 +95,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
         ref={triggerRef}
         type="button"
         className={`task-team-pill todo-item-leader-pill${className ? ` ${className}` : ''}`}
-        title={leaderPillTitle(subtasks)}
+        title={leaderPillTitle(subtasks, done)}
         aria-label={open ? 'Leads subtasks. Hide them' : 'Leads subtasks. List them'}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -118,24 +124,23 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
               onClick={(e) => e.stopPropagation()}
             >
               <div className="leader-subtasks-title">
-                {subtasks.length === 1 ? 'Subtask' : `${subtasks.length} subtasks`} of &ldquo;{task.title}&rdquo;
+                {subtasks.length === 1 ? 'Open subtask' : `${subtasks.length} open subtasks`} of &ldquo;{task.title}&rdquo;
               </div>
               <ul className="leader-subtasks-list">
                 {subtasks.map((sub) => {
-                  const done = sub.phase === 'COMPLETE' || sub.status === 'done';
                   const place = subtaskPlaceLabel(sub, task.project);
                   return (
                     <li key={sub.id}>
                       <button
                         type="button"
-                        className={`leader-sub-row${done ? ' is-done' : ''}`}
+                        className="leader-sub-row"
                         data-testid="leader-sub-row"
                         data-task-id={sub.id}
                         title={`Go to "${sub.title}"`}
                         onClick={() => goTo(sub)}
                       >
                         <span className={`task-phase-icon-btn leader-sub-phase ${taskCircleClass(sub, null)}`} aria-hidden="true">
-                          {binaryPhaseIcon(done, sub.phase)}
+                          {binaryPhaseIcon(false, sub.phase)}
                         </span>
                         <span className="leader-sub-title">{sub.title}</span>
                         {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}

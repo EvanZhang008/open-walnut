@@ -144,8 +144,6 @@
   white-space: nowrap;
 }
 
-.leader-sub-row.is-done .leader-sub-title { color: var(--fg-muted); }
-
 .leader-sub-place {
   flex: 0 1 auto;
   max-width: 40%;

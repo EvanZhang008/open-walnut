@@ -2346,6 +2346,15 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         const { listFolderLabels } = await import('../../core/task-manager.js')
         folderLabel = (await listFolderLabels().catch(() => new Map<string, string>())).get(task.group_id)
       }
+      // The caller's OTHER open subtasks: a subtask owns an area, so a session
+      // filing more work sees the team it already leads, and work that belongs
+      // to one of those areas goes there with task_send (2026-10-01: a leader
+      // opened a fourth task for its third one's follow-up).
+      const team = decision.parentTaskId && task.parent_task_id === decision.parentTaskId
+        ? await (await import('../../core/sessions/open-items.js'))
+          .listOpenSubtasks(task.parent_task_id, { exclude: task.id, max: 10 })
+          .catch(() => undefined)
+        : undefined
       log.web.info('task created via api-v1', {
         taskId: task.id, project: task.project, groupId: task.group_id,
         ...(decision.inheritedFrom ? { placedBeside: decision.inheritedFrom, folderCreated } : {}),
@@ -2376,6 +2385,12 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
           // The long title the session sent, when the brake cut it (the
           // response's task.title is the cut; the board refines it shortly).
           ...(titleShortenedFrom ? { title_shortened_from: titleShortenedFrom } : {}),
+          // The caller's other open subtasks, most recently touched first (at
+          // most 10; `more_open_subtasks` counts the rest). Absent when none.
+          ...(team && team.subtasks.length > 0 ? {
+            open_subtasks: team.subtasks,
+            ...(team.more > 0 ? { more_open_subtasks: team.more } : {}),
+          } : {}),
           ...(folderWarning || parentWarning || tierWarning ? {
             warning: [
               folderWarning ? `The task was created but could not be put in a folder: ${folderWarning}` : '',

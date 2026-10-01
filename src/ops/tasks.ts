@@ -410,6 +410,9 @@ interface Placement {
   tier?: string
   /** The long title you sent; the server cut it to a few words (task.title). */
   title_shortened_from?: string
+  /** Your task's other open subtasks (the team you already lead), newest first. */
+  open_subtasks?: { id: string; title: string; phase: string }[]
+  more_open_subtasks?: number
   warning?: string
 }
 
@@ -436,17 +439,36 @@ function titleCutSentence(p: Placement | undefined, task: Record<string, unknown
   return `Title shortened to "${String(task?.title ?? '')}" (${p.title_shortened_from.length} chars sent, a few words expected${kept}). `
 }
 
+/**
+ * The team the caller already leads, named after every create: a subtask owns
+ * an area, so work that belongs to one of these goes there, not to a new task.
+ */
+function teamSentence(p: Placement | undefined): string {
+  const team = p?.open_subtasks
+  if (!team?.length) return ''
+  const total = team.length + (p?.more_open_subtasks ?? 0)
+  const shown = team.slice(0, 5)
+  // Code points, so a cut never splits a surrogate pair.
+  const short = (s: string) => { const c = Array.from(s); return c.length > 60 ? `${c.slice(0, 59).join('')}…` : s }
+  const list = shown.map((t) => `"${short(t.title)}" (${t.id}, ${t.phase})`).join('; ')
+  const more = total > shown.length ? `; and ${total - shown.length} more (open_items lists them)` : ''
+  return `Your task also leads ${total} other open subtask${total === 1 ? '' : 's'}: ${list}${more}. `
+    + 'Each owns its area: more work in one of those areas goes to that task with task_send, not to a new task. '
+}
+
 defineOp({
   name: 'task_create',
   title: 'Create and start a task (record_only to defer)',
   description:
     'Create a task AND START WORK by default, in one call. A task is a separate session on the user\'s ' +
     'board that they open, message and steer. From a coding session, create one only on the user\'s signal: ' +
-    'they ask for a task, want to talk to or steer each part themselves, or need it to run where your ' +
+    'they ask for a task, name the parts they want as separate tasks, or need it to run where your ' +
     'session cannot (another host, later, after this session ends); record_only=true when they only want ' +
     'it written down (a placeholder, nothing runs). Otherwise do the work with your own tools (todo list, ' +
     'subagents, agent teams) however big it is: size alone is never a reason, and follow-ups you find are ' +
-    'yours to do here. Words: a "subagent" is Claude Code\'s Agent tool inside your session, never a ' +
+    'yours to do here. A task is a teammate that owns one area with a clear goal, never a step: one task ' +
+    'per ask (ask the user before splitting), and more work in an area goes to the task that owns ' +
+    'it (task_send; a finished one reopens). The result lists the other open subtasks you lead. Words: a "subagent" is Claude Code\'s Agent tool inside your session, never a ' +
     'Walnut task; a "subtask" or "task" is a Walnut task, which this creates. In Walnut\'s own chat, where ' +
     'you dispatch, the user asking for the work is the signal. Pass message for the instruction and cwd/host ' +
     'to override project defaults. Keep the returned task id: task_send adds context, task_history ' +
@@ -512,6 +534,7 @@ defineOp({
     }
     const extra = placement ? { placement } : {}
     const where = placementSentence(placement) + titleCutSentence(placement, task, fields.description !== undefined)
+      + teamSentence(placement)
     if (recordOnly) {
       return withOutcome(
         withRef({ ...view, execution: { state: 'not_started' } }, { ...extra, execution: { state: 'not_started' } }),

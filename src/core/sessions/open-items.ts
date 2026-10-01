@@ -65,6 +65,22 @@ async function partyOf(sessionId: string): Promise<string> {
   return caller?.kind === 'session' && caller.record.taskId ? caller.record.taskId : `session ${sessionId.slice(0, 8)}`;
 }
 
+/**
+ * A task's unfinished direct subtasks, most recently touched first, at most
+ * `max` of them (`more` counts the rest). Also what a session's `task_create`
+ * result lists, so a session filing more work sees the team it already leads.
+ */
+export async function listOpenSubtasks(
+  parentId: string, opts: { exclude?: string; max?: number } = {},
+): Promise<{ subtasks: OpenSubtask[]; more: number }> {
+  const tm = await import('../task-manager.js');
+  const children = (await tm.getChildTasks(parentId).catch(() => []))
+    .filter((t) => t.phase !== 'COMPLETE' && t.id !== opts.exclude)
+    .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
+  const subtasks = children.slice(0, opts.max ?? MAX_SUBTASKS).map((t) => ({ id: t.id, title: t.title, phase: t.phase }));
+  return { subtasks, more: children.length - subtasks.length };
+}
+
 /** Everything still open for the calling session. Never throws: a reminder is best effort. */
 export async function collectOpenItems(callerSid: string | undefined, now = Date.now()): Promise<OpenItems> {
   const sid = (callerSid ?? '').trim();
@@ -79,10 +95,7 @@ export async function collectOpenItems(callerSid: string | undefined, now = Date
     const task = await tm.getTask(caller.record.taskId).catch(() => undefined);
     if (!task) return EMPTY;
 
-    const children = (await tm.getChildTasks(task.id).catch(() => []))
-      .filter((t) => t.phase !== 'COMPLETE')
-      .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
-    const subtasks = children.slice(0, MAX_SUBTASKS).map((t) => ({ id: t.id, title: t.title, phase: t.phase }));
+    const { subtasks, more: moreSubtasks } = await listOpenSubtasks(task.id);
 
     const requests = await import('../session-requests.js');
     const sent = (await requests.pendingRequestsFromSession(sid).catch(() => [] as SessionRequest[])).slice(0, MAX_REQUESTS);
@@ -100,7 +113,7 @@ export async function collectOpenItems(callerSid: string | undefined, now = Date
 
     const items: OpenItems = {
       task: { id: task.id, title: task.title },
-      subtasks, moreSubtasks: children.length - subtasks.length, waitingOn, askedOfYou, text: '',
+      subtasks, moreSubtasks, waitingOn, askedOfYou, text: '',
     };
     items.text = formatOpenItems(items, now);
     return items;

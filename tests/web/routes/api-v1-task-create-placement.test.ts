@@ -127,7 +127,11 @@ describe('callers that are not workers keep the old defaults', () => {
     // Naming a project: that project, and still this conversation's subtask.
     const named = await post({ title: 'Rotate the token', project: 'acme' }, sid)
     expect(named.json.task.project).toBe('acme')
-    expect(named.json.placement).toEqual({ project: 'acme', folder_created: false, parent_task_id: ask.id })
+    // It also lists the ask's other open subtask: the dentist call.
+    expect(named.json.placement).toEqual({
+      project: 'acme', folder_created: false, parent_task_id: ask.id,
+      open_subtasks: [{ id: json.task.id, title: 'Track the dentist call', phase: 'TODO' }],
+    })
     expect((await getTask(named.json.task.id)).parent_task_id).toBe(ask.id)
   })
 })
@@ -425,6 +429,51 @@ describe('the board tier: a worker\'s new task is born where the caller sits', (
     expect(stored.pinned).toBe(true)
     expect(stored.focus_tier).toBeUndefined()
     expect(r.json.placement.tier).toBeUndefined()
+  })
+})
+
+describe('the team a session already leads (placement.open_subtasks)', () => {
+  // 2026-10-01: a leader filed a fourth task for its third one's follow-up, in
+  // the second one's area. Every create from a session names the caller's other
+  // open subtasks, so the owner of an area is in view at the next create.
+  it('the first create lists none; later creates list the open ones, newest first, never the new task', async () => {
+    const { sid } = await seedCaller('bakery')
+    const first = await post({ title: 'Bake the tasting box' }, sid)
+    expect(first.json.placement.open_subtasks).toBeUndefined()
+    const second = await post({ title: 'Print the flyers', project: 'flyers' }, sid)
+    expect(second.json.placement.open_subtasks).toEqual([{ id: first.json.task.id, title: 'Bake the tasting box', phase: 'TODO' }])
+    expect(second.json.placement.more_open_subtasks).toBeUndefined()
+    const third = await post({ title: 'Book the market stall' }, sid)
+    expect(third.json.placement.open_subtasks.map((t: { id: string }) => t.id))
+      .toEqual(expect.arrayContaining([first.json.task.id, second.json.task.id]))
+    expect(third.json.placement.open_subtasks).toHaveLength(2)
+  })
+
+  it('a finished subtask is not listed', async () => {
+    const { sid } = await seedCaller('bakery')
+    const done = await post({ title: 'Order the oven part' }, sid)
+    const open = await post({ title: 'Fix the oven door' }, sid)
+    await updateTaskRaw(done.json.task.id, { phase: 'COMPLETE' })
+    const next = await post({ title: 'Clean the oven' }, sid)
+    expect(next.json.placement.open_subtasks).toEqual([{ id: open.json.task.id, title: 'Fix the oven door', phase: 'TODO' }])
+  })
+
+  it('lists at most 10 and counts the rest', async () => {
+    const { sid } = await seedCaller('bakery')
+    for (let i = 0; i < 12; i += 1) await post({ title: `Shelf ${i}` }, sid)
+    const last = await post({ title: 'Shelf labels' }, sid)
+    expect(last.json.placement.open_subtasks).toHaveLength(10)
+    expect(last.json.placement.more_open_subtasks).toBe(2)
+  })
+
+  it('no caller (the phone, the web UI): no list, even for a task that has subtasks', async () => {
+    const { task: caller, sid } = await seedCaller('bakery')
+    await post({ title: 'Sweep the floor' }, sid)
+    const human = await post({ title: 'Buy flour' })
+    expect(human.json.placement.open_subtasks).toBeUndefined()
+    // A human filing a subtask by hand names the parent; no team list either.
+    const byHand = await post({ title: 'Mop the floor', parent_task_id: caller.id })
+    expect(byHand.json.placement.open_subtasks).toBeUndefined()
   })
 })
 
