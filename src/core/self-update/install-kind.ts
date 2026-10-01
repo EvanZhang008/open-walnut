@@ -37,8 +37,25 @@ export interface DetectInstallInputs {
   packageRoot: string | null
 }
 
-/** The manager's global install of one spec (`@latest`, `@nightly`, `@0.6.0`), as argv: no shell. */
-export function managerArgv(manager: PackageManager, spec: string): { file: string; args: string[] } {
+/**
+ * The packages whose install scripts a working install needs: this package's
+ * own postinstall plus package.json `allowScripts` (better-sqlite3 and node-pty
+ * fetch their native binaries in theirs). npm 12 runs no dependency install
+ * script it was not allowed to, and a global install has no project
+ * package.json to allow them in.
+ */
+export const INSTALL_SCRIPT_PACKAGES = [
+  PACKAGE_NAME,
+  '@homebridge/node-pty-prebuilt-multiarch',
+  'better-sqlite3',
+  'esbuild',
+  'onnxruntime-node',
+  'protobufjs',
+  'screencapturekit-audio-capture',
+  'sharp',
+] as const
+
+function installArgv(manager: PackageManager, spec: string): { file: string; args: string[] } {
   switch (manager) {
     case 'pnpm': return { file: 'pnpm', args: ['add', '-g', spec] }
     case 'bun': return { file: 'bun', args: ['add', '-g', spec] }
@@ -47,8 +64,20 @@ export function managerArgv(manager: PackageManager, spec: string): { file: stri
   }
 }
 
+/**
+ * The manager's global install of one spec (`@latest`, `@nightly`, `@0.6.0`), as argv: no shell.
+ * npm gets `--allow-scripts`: without it npm 12 installs a Walnut whose database cannot open.
+ * npm 10 ignores the flag and npm 11 only warns about it.
+ */
+export function managerArgv(manager: PackageManager, spec: string): { file: string; args: string[] } {
+  const argv = installArgv(manager, spec)
+  if (manager !== 'npm') return argv
+  return { ...argv, args: [...argv.args, `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(',')}`] }
+}
+
+/** The command a person types. Short on purpose: a start after a plain npm 12 install repairs the native modules itself. */
 export function managerCommand(manager: PackageManager, tag: 'latest' | 'nightly' = 'latest'): string {
-  const { file, args } = managerArgv(manager, `${PACKAGE_NAME}@${tag}`)
+  const { file, args } = installArgv(manager, `${PACKAGE_NAME}@${tag}`)
   return [file, ...args].join(' ')
 }
 

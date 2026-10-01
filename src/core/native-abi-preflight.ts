@@ -24,6 +24,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { log } from '../logging/index.js';
+import { INSTALL_SCRIPT_PACKAGES } from './self-update/install-kind.js';
 
 /**
  * Native addons that must load before the server accepts traffic. Only
@@ -39,9 +40,20 @@ const NATIVE_MODULES = ['better-sqlite3'] as const;
  */
 const REBUILD_MARKER = 'rebuilding native module';
 
+/** The install that runs every script a working Walnut needs (INSTALL_SCRIPT_PACKAGES in self-update/install-kind.ts). */
+const REINSTALL_HINT = `npm install -g open-walnut --allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(',')}`;
+
+/**
+ * Why a load failed, when a rebuild can fix it: `abi` = compiled for another
+ * Node; `unbuilt` = the install script that fetches or compiles the binary
+ * never ran (npm 12 runs a dependency's install script only when allowed, and
+ * a global install has no project to allow it in; `--ignore-scripts` too).
+ */
+type Repair = 'abi' | 'unbuilt';
+
 type ProbeResult =
   | { ok: true }
-  | { ok: false; abiMismatch: boolean; message: string };
+  | { ok: false; repair: Repair | null; message: string };
 
 /**
  * Load a native module for real. `better-sqlite3` resolves its `.node` lazily
@@ -61,13 +73,15 @@ function probe(moduleName: string): ProbeResult {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const code = (err as NodeJS.ErrnoException | null)?.code ?? '';
-    // An ABI mismatch is repairable by recompiling. Anything else (missing file,
-    // corrupt install, SQLITE_CANTOPEN) is not, and must not trigger a rebuild.
+    // An ABI mismatch or a binary that was never built is repairable by
+    // `npm rebuild`. Anything else (a corrupt install, SQLITE_CANTOPEN) is not,
+    // and must not trigger a rebuild.
     const abiMismatch =
       /NODE_MODULE_VERSION/i.test(message) ||
       /compiled against a different Node\.js version/i.test(message) ||
       code === 'ERR_DLOPEN_FAILED';
-    return { ok: false, abiMismatch, message };
+    const unbuilt = /Could not locate the bindings file/i.test(message);
+    return { ok: false, repair: abiMismatch ? 'abi' : unbuilt ? 'unbuilt' : null, message };
   }
 }
 
@@ -117,7 +131,7 @@ export function ensureNativeModulesLoadable(): boolean {
     const first = probe(moduleName);
     if (first.ok) continue;
 
-    if (!first.abiMismatch) {
+    if (!first.repair) {
       // Not an ABI problem — rebuilding would waste a minute and fix nothing.
       log.web.error('native module failed to load (not an ABI mismatch — not rebuilding)', {
         module: moduleName,
@@ -128,7 +142,10 @@ export function ensureNativeModulesLoadable(): boolean {
     }
 
     const repoRoot = findRepoRoot(moduleName);
-    log.web.warn('native module ABI mismatch — attempting in-place rebuild', {
+    const unbuilt = first.repair === 'unbuilt';
+    log.web.warn(unbuilt
+      ? 'native module was never built; running its install scripts in place'
+      : 'native module ABI mismatch — attempting in-place rebuild', {
       module: moduleName,
       nodeVersion: process.versions.node,
       abi: process.versions.modules,
@@ -138,23 +155,32 @@ export function ensureNativeModulesLoadable(): boolean {
 
     if (!repoRoot) {
       // eslint-disable-next-line no-console
-      console.error(
-        `\n⚠️  ${moduleName} was compiled for a different Node ABI and the repo root`
-        + `\n    could not be located, so it cannot be rebuilt automatically.`
-        + `\n    Fix: npm rebuild ${moduleName}\n`,
+      console.error(unbuilt
+        ? `\n⚠️  ${moduleName} was installed without its native binary, and the package`
+          + `\n    that holds it could not be located to finish the install.`
+          + `\n    Fix: ${REINSTALL_HINT}\n`
+        : `\n⚠️  ${moduleName} was compiled for a different Node ABI and the repo root`
+          + `\n    could not be located, so it cannot be rebuilt automatically.`
+          + `\n    Fix: npm rebuild ${moduleName}\n`,
       );
       allOk = false;
       continue;
     }
 
     // eslint-disable-next-line no-console
-    console.error(
-      `\n⏳ ${REBUILD_MARKER} ${moduleName} for Node ${process.versions.node}`
-      + ` (NODE_MODULE_VERSION ${process.versions.modules})…`
-      + `\n   Compiling from source — this can take a minute on first run.\n`,
+    console.error(unbuilt
+      ? `\n⏳ ${REBUILD_MARKER} ${moduleName}: its install step never ran (npm 12 runs`
+        + `\n   a dependency's install script only when allowed). Running the install`
+        + `\n   scripts package.json allows, once; this can take a minute.\n`
+      : `\n⏳ ${REBUILD_MARKER} ${moduleName} for Node ${process.versions.node}`
+        + ` (NODE_MODULE_VERSION ${process.versions.modules})…`
+        + `\n   Compiling from source — this can take a minute on first run.\n`,
     );
 
-    const res = spawnSync('npm', ['rebuild', moduleName], {
+    // A skipped install skipped every dependency's script (node-pty's binary too),
+    // so a bare `npm rebuild` finishes all of them; package.json `allowScripts`
+    // is what lets npm 12 run them here.
+    const res = spawnSync('npm', unbuilt ? ['rebuild'] : ['rebuild', moduleName], {
       cwd: repoRoot,
       stdio: 'inherit',
       timeout: 300_000,
@@ -169,11 +195,12 @@ export function ensureNativeModulesLoadable(): boolean {
         reason: why,
       });
       // eslint-disable-next-line no-console
-      console.error(
-        `\n⚠️  Rebuild of ${moduleName} ${why}.`
-        + `\n    Common causes: no C++ toolchain (run: xcode-select --install), or`
-        + `\n    node-gyp needs network access to fetch headers for this Node version.`
-        + `\n    Workaround: run the server under the Node the module was built for.\n`,
+      console.error(unbuilt
+        ? `\n⚠️  Finishing the install of ${moduleName} ${why}. Fix: ${REINSTALL_HINT}\n`
+        : `\n⚠️  Rebuild of ${moduleName} ${why}.`
+          + `\n    Common causes: no C++ toolchain (run: xcode-select --install), or`
+          + `\n    node-gyp needs network access to fetch headers for this Node version.`
+          + `\n    Workaround: run the server under the Node the module was built for.\n`,
       );
       allOk = false;
       continue;
@@ -196,6 +223,10 @@ export function ensureNativeModulesLoadable(): boolean {
       module: moduleName,
       error: after.message,
     });
+    if (unbuilt) {
+      // eslint-disable-next-line no-console
+      console.error(`\n⚠️  ${moduleName} still has no native binary. Fix: ${REINSTALL_HINT}\n`);
+    }
     allOk = false;
   }
 

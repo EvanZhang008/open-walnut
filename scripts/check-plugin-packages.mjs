@@ -25,12 +25,15 @@ function run(args, cwd, capture = false) {
   return result.stdout ?? ''
 }
 
+// npm 11 and older print an array of packs, npm 12 an object keyed by package
+// name; npm's own notices can come before either.
 function parsePack(raw) {
-  const start = raw.indexOf('[')
-  const end = raw.lastIndexOf(']')
+  const start = raw.search(/^[[{]/m)
+  const end = Math.max(raw.lastIndexOf(']'), raw.lastIndexOf('}'))
   if (start < 0 || end < start) throw new Error('npm pack did not return JSON')
-  const records = JSON.parse(raw.slice(start, end + 1))
-  if (!Array.isArray(records) || records.length !== 1) throw new Error('npm pack returned an unexpected result')
+  const parsed = JSON.parse(raw.slice(start, end + 1))
+  const records = Array.isArray(parsed) ? parsed : Object.values(parsed)
+  if (records.length !== 1) throw new Error('npm pack returned an unexpected result')
   return records[0]
 }
 

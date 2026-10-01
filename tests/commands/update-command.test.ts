@@ -10,6 +10,9 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-update-cmd')
 
 import { parseChannel, planUpdate, runUpdateWith, type UpdateDeps } from '../../src/commands/update.js'
 import type { UpdateStatus } from '../../src/core/self-update/update-check.js'
+import { INSTALL_SCRIPT_PACKAGES } from '../../src/core/self-update/install-kind.js'
+
+const ALLOW = `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(',')}`
 
 const NPM_UP_TO_DATE: UpdateStatus = {
   enabled: true,
@@ -65,17 +68,17 @@ describe('planUpdate', () => {
 
   it('a nightly build installs the exact newer nightly and says so', () => {
     const plan = planUpdate(NIGHTLY_NEWER, { check: false })
-    expect(plan.install).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.1-nightly.20261002.1'] })
+    expect(plan.install).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.1-nightly.20261002.1', ALLOW] })
     expect(plan.lines[0]).toBe('A newer Open Walnut is available on the nightly channel: 0.6.1-nightly.20261001.4 → 0.6.1-nightly.20261002.1.')
     expect(planUpdate(NIGHTLY_NEWER, { check: true }).lines[1]).toBe('Run: npm install -g open-walnut@nightly')
   })
 
   it('installs the exact newer version through the manager that installed Walnut', () => {
     const plan = planUpdate(NPM_NEWER, { check: false })
-    expect(plan.install).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0'] })
+    expect(plan.install).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0', ALLOW] })
     expect(plan.lines).toEqual([
       'A newer Open Walnut is available: 0.5.1 → 0.6.0.',
-      'Running: npm install -g open-walnut@0.6.0',
+      `Running: npm install -g open-walnut@0.6.0 ${ALLOW}`,
     ])
   })
 
@@ -122,7 +125,7 @@ describe('runUpdateWith', () => {
     const { d, out, run } = deps(NPM_NEWER, { serverRunning: async () => true })
     const code = await runUpdateWith({}, { json: false }, d)
     expect(code).toBe(0)
-    expect(run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0'])
+    expect(run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', ALLOW])
     expect(out[2]).toBe('Installed Open Walnut 0.6.0.')
     expect(out[3]).toContain('still runs 0.5.1 until it is restarted')
   })

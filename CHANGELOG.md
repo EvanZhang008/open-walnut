@@ -255,6 +255,11 @@ breaking changes).
 
 ### Fixed
 
+- **Installing with npm 12 gives a working Walnut.** npm 12 runs a dependency's install script
+  only when it is allowed, and better-sqlite3 fetches its binary in one, so a plain
+  `npm install -g open-walnut` left a Walnut that could not open its database. The first start
+  now finishes that install itself (about 15 seconds, once), and the update Walnut runs allows
+  the scripts it needs. A checkout installs under npm 12 too.
 - **The Changed view shows a rewritten file as modified, with its old lines.** When a session
   replaced an existing file with Write, the view listed it as a new file and showed only added
   lines, so whatever the rewrite removed was missing from the review. It now uses the original

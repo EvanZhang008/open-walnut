@@ -77,6 +77,8 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 | **Disk space** | ~2 GB free | — | For the embedding model (~640 MB) and search index |
 
 > **Native modules**: Open Walnut uses `better-sqlite3` (for search index) and `sharp` (for image processing). Both ship prebuilt binaries for macOS, Linux, and Windows — no compiler needed in most cases. If prebuilds fail on your platform, you may need Python 3 and a C++ compiler (`xcode-select --install` on macOS, `build-essential` on Ubuntu).
+>
+> npm 12 runs a dependency's install script only when it is allowed, and that script is what fetches the better-sqlite3 binary. After a plain `npm install -g open-walnut` with npm 12, the first `open-walnut web` notices the missing binary and finishes the install itself (about 15 seconds, once). `open-walnut update` and the update on start pass the flag that allows it.
 
 ### Older Linux (glibc before 2.29)
 

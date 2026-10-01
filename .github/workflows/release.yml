@@ -20,7 +20,10 @@ name: Release
 # One-time setup on npmjs.com, package open-walnut > Settings > Trusted publisher:
 # GitHub Actions, owner EvanZhang008, repository open-walnut, workflow release.yml.
 # `--provenance` attaches the build attestation npm shows on the package page.
-# Trusted publishing needs npm 11.5.1 or newer, so the job updates npm first.
+# Trusted publishing needs npm 11.5.1 or newer, so the job updates npm first. It
+# pins the major: npm 12 changed install defaults (tarball URL dependencies and
+# dependency install scripts, docs/reference/releasing.md "npm 12") and stopped
+# the 0.6.0 publish, so a new major is taken on purpose.
 
 on:
   push:
@@ -74,7 +77,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - run: npm install -g npm@latest
+      - run: npm install -g npm@12
       - run: npm install
       - run: npm run lint
       # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs
@@ -120,6 +123,12 @@ jobs:
           elif [ "$last" = "$green" ] && [ "${{ inputs.force }}" != "true" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "that commit is already the last nightly; nothing to publish"
+          elif [ "${{ inputs.force }}" != "true" ] && [ "$last" != "none" ] && ! git merge-base --is-ancestor "$last" "$green"; then
+            # The runs list can lag a finished run by a minute or two, so "newest green"
+            # may be an older commit; a nightly must never move installs backwards
+            # (`force` overrides, for a nightly tag left on a rewritten history).
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "$green is not newer than the last nightly; nothing to publish"
           else
             git checkout --quiet "$green"
             echo "publish=true" >> "$GITHUB_OUTPUT"
@@ -135,7 +144,7 @@ jobs:
         with:
           bun-version: latest
       - if: steps.pick.outputs.publish == 'true'
-        run: npm install -g npm@latest
+        run: npm install -g npm@12
       - if: steps.pick.outputs.publish == 'true'
         run: npm install
       # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs.

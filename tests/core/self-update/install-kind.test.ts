@@ -3,12 +3,14 @@
  * the source checkout wins over everything but the replica, and a global
  * install's manager is read off where the package landed.
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-install-kind'))
 
-import { detectInstall, managerArgv, managerCommand, managerFromPath } from '../../../src/core/self-update/install-kind.js'
+import { detectInstall, INSTALL_SCRIPT_PACKAGES, managerArgv, managerCommand, managerFromPath } from '../../../src/core/self-update/install-kind.js'
 
 describe('managerFromPath', () => {
   it('names the manager a global install path belongs to', () => {
@@ -39,7 +41,7 @@ describe('managerCommand and managerArgv', () => {
   })
 
   it('argv is the same words without a shell', () => {
-    expect(managerArgv('npm', 'open-walnut@0.6.0')).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0'] })
+    expect(managerArgv('npm', 'open-walnut@0.6.0')).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0', `--allow-scripts=${INSTALL_SCRIPT_PACKAGES.join(',')}`] })
     expect(managerArgv('pnpm', 'open-walnut@0.6.0')).toEqual({ file: 'pnpm', args: ['add', '-g', 'open-walnut@0.6.0'] })
     expect(managerArgv('bun', 'open-walnut@0.6.0')).toEqual({ file: 'bun', args: ['add', '-g', 'open-walnut@0.6.0'] })
     expect(managerArgv('yarn', 'open-walnut@0.6.0')).toEqual({ file: 'yarn', args: ['global', 'add', 'open-walnut@0.6.0'] })
@@ -80,5 +82,32 @@ describe('detectInstall', () => {
   it('reads the process defaults from constants when called bare', () => {
     // The mocked constants have no install dir and no package root: an "other" install, not a crash.
     expect(detectInstall().kind).toBe('other')
+  })
+})
+
+// npm 12 runs no dependency install script that is not allowed. A dependency
+// whose script fetches its binary (better-sqlite3, node-pty) then installs
+// without it, and Walnut cannot open its database: every such dependency must be
+// allowed in package.json (a checkout, `npm rebuild` in the package) and named
+// by the global install the updater runs.
+describe('install scripts a working install needs', () => {
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { allowScripts?: Record<string, boolean> }
+  const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8')) as {
+    packages: Record<string, { hasInstallScript?: boolean; dev?: boolean }>
+  }
+  const allowed = Object.entries(pkg.allowScripts ?? {}).filter(([, v]) => v === true).map(([k]) => k)
+
+  it('package.json allows every runtime dependency that has an install script', () => {
+    const needed = new Set<string>()
+    for (const [key, meta] of Object.entries(lock.packages)) {
+      if (!key || !meta.hasInstallScript || meta.dev) continue
+      needed.add(key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length))
+    }
+    expect([...needed].filter((name) => !(name in (pkg.allowScripts ?? {}))).sort()).toEqual([])
+  })
+
+  it('the updater names this package and exactly the allowed ones', () => {
+    expect([...INSTALL_SCRIPT_PACKAGES].sort()).toEqual(['open-walnut', ...allowed].sort())
   })
 })

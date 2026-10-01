@@ -50,8 +50,10 @@ So the CHANGELOG discipline is the release discipline: write the user-facing ent
 Job `nightly` of the same workflow runs on a schedule (`17 5,17 * * *` UTC) and by hand
 (`workflow_dispatch`, with a `force` input for a republish). It asks for the newest commit
 on `main` whose CI run passed (`scripts/ci-gate.mjs last-green main`), and does nothing
-when there is none among the last 30 runs or when that commit is already the `nightly`
-tag. Otherwise it checks that commit out, installs, sets the version with
+when there is none among the last 30 runs, when that commit is already the `nightly` tag,
+or when it is not a descendant of that tag (GitHub's runs list can show a finished run as
+still running for a minute or two, so the newest green may be an older commit, and a
+nightly must never move installs backwards). Otherwise it checks that commit out, installs, sets the version with
 `scripts/nightly-version.mjs` (next patch of `package.json`, `-nightly.<UTC day>.<run
 number>`), publishes under `--tag nightly`, and moves the `nightly` tag to the commit. It
 does not rerun the tests: CI already ran them on that exact commit, and a red `main` simply
@@ -77,7 +79,7 @@ the same work, so a release always outranks the nightlies before it; and the ide
 ## Authentication: npm trusted publishing
 
 No npm token is stored in the repository or in GitHub secrets. The workflow has
-`permissions: id-token: write` (and `actions: read`, for the CI check), and npm (11.5.1 or newer; the job updates it) exchanges
+`permissions: id-token: write` (and `actions: read`, for the CI check), and npm (11.5.1 or newer; the jobs install npm 12) exchanges
 the GitHub OIDC token for a short-lived publish credential. `--provenance` attaches the
 build attestation that npm shows on the package page.
 
@@ -93,6 +95,27 @@ or on npmjs.com: package `open-walnut` > Settings > Trusted publisher > GitHub A
 with the repository and the workflow file name `release.yml` (no environment). Until that
 is done, the publish step fails with an authentication error and nothing else happens;
 re-run the job afterwards (`gh run rerun <run-id> --failed`) and it publishes.
+
+## npm 12
+
+npm 12 changed two install defaults that Walnut depends on, and the 0.6.0 publish stopped
+on the first one:
+
+- **Tarball URL dependencies are refused** (`EALLOWREMOTE`). `web/` takes `xlsx` from the
+  SheetJS CDN on purpose (current releases are not on the registry), so
+  `scripts/postinstall.mjs` passes `--allow-remote=root` to the `web/` install under npm 12.
+- **A dependency's install script runs only when allowed.** better-sqlite3 and node-pty
+  fetch their native binaries in theirs, so without it Walnut cannot open its database.
+  `allowScripts` in `package.json` allows them for a checkout and for `npm rebuild` inside
+  the installed package. A global install has no project to allow them in, so the update
+  that `open-walnut web` and `open-walnut update` run passes `--allow-scripts` with the same
+  list (`INSTALL_SCRIPT_PACKAGES` in `src/core/self-update/install-kind.ts`; a test keeps it,
+  `allowScripts` and the lockfile in step). A plain `npm install -g open-walnut` still
+  lands without the binaries; the first start notices (`src/core/native-abi-preflight.ts`)
+  and runs `npm rebuild` in the package once, which takes about 15 seconds.
+
+The release jobs install `npm@12`, not `npm@latest`, so the next major is taken on purpose
+rather than discovered in a publish.
 
 ## How an install learns about a release
 

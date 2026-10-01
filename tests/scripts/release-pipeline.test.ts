@@ -231,7 +231,7 @@ describe('release.yml', () => {
     expect(doc.permissions.actions).toBe('read')
     expect(text).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN|registry-url/)
     expect(runs('stable')).toContain('npm publish --provenance --access public')
-    expect(runs('stable')).toContain('npm install -g npm@latest')
+    expect(runs('stable')).toContain('npm install -g npm@12')
     expect(runs('nightly')).toContain('npm publish --tag nightly --provenance --access public')
     expect(runs('nightly')).toContain('node scripts/nightly-version.mjs')
   })
@@ -252,6 +252,8 @@ describe('release.yml', () => {
     const pick = doc.jobs.nightly!.steps.find((s) => s.id === 'pick')
     expect(pick?.run).toContain('refs/tags/nightly')
     expect(pick?.run).toContain('git checkout --quiet "$green"')
+    // Never older than the last nightly (the runs list can lag a finished run).
+    expect(pick?.run).toContain('git merge-base --is-ancestor "$last" "$green"')
     const publish = doc.jobs.nightly!.steps.find((s) => s.name?.includes('publish it'))
     expect(publish?.if).toBe("steps.pick.outputs.publish == 'true'")
     expect(runs('nightly')).toContain('git tag -f nightly "${{ steps.pick.outputs.sha }}"')

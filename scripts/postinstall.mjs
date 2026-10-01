@@ -33,7 +33,12 @@ function run(cmd, args, opts = {}) {
 if (isDevCheckout) {
   // ── Dev chain (strict) ──
   if (!run('npx', ['patch-package'])) process.exit(1);
-  if (!run('npm', ['install'], { cwd: join(root, 'web') })) process.exit(1);
+  // web/ takes xlsx as a tarball URL on purpose (SheetJS publishes current
+  // releases only on its own CDN). npm 12 refuses tarball URLs unless allowed
+  // (EALLOWREMOTE); npm 11 and older warn on the unknown flag.
+  const npmMajor = Number(/\bnpm\/(\d+)\./.exec(process.env.npm_config_user_agent ?? '')?.[1] ?? 0);
+  const webInstall = npmMajor >= 12 ? ['install', '--allow-remote=root'] : ['install'];
+  if (!run('npm', webInstall, { cwd: join(root, 'web') })) process.exit(1);
   process.exit(0);
 }
 

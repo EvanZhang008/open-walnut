@@ -104,7 +104,9 @@ if (serverMtime - spaMtime > 60 * 60 * 1000) {
 // Tarball audit: the daemon mach-o binaries (~280MB) must never ship; the
 // runnable artifacts must. npm pack --dry-run --json gives the exact list.
 const packJson = execFileSync('npm', ['pack', '--dry-run', '--json'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-const [pack] = JSON.parse(packJson);
+// npm 11 and older print an array of packs, npm 12 an object keyed by package name.
+const packed = JSON.parse(packJson);
+const [pack] = Array.isArray(packed) ? packed : Object.values(packed);
 const files = pack.files.map((f) => f.path);
 
 const mustInclude = [

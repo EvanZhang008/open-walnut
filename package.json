@@ -38,6 +38,15 @@
   "engines": {
     "node": ">=22"
   },
+  "allowScripts": {
+    "@homebridge/node-pty-prebuilt-multiarch": true,
+    "better-sqlite3": true,
+    "esbuild": true,
+    "onnxruntime-node": true,
+    "protobufjs": true,
+    "screencapturekit-audio-capture": true,
+    "sharp": true
+  },
   "files": [
     "bin",
     "dist",

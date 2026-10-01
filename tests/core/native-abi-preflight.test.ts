@@ -139,6 +139,33 @@ describe('native ABI preflight', () => {
     expect(logged.some(l => l.level === 'error' && /still fails to load/.test(l.msg))).toBe(true)
   })
 
+  // npm 12 runs a dependency's install script only when allowed, and a global
+  // install has no project to allow it in: better-sqlite3 lands with no binary.
+  it('finishes an install whose scripts never ran with a bare npm rebuild', async () => {
+    requireState.failures = [new Error('Could not locate the bindings file. Tried:\n → /repo/node_modules/better-sqlite3/build/better_sqlite3.node')]
+    const { ensureNativeModulesLoadable } = await loadSubject()
+
+    expect(ensureNativeModulesLoadable()).toBe(true)
+    expect(spawnCalls).toEqual([{ cmd: 'npm', args: ['rebuild'] }])
+    expect(logged.some(l => l.level === 'warn' && /never built/.test(l.msg))).toBe(true)
+  })
+
+  it('names the reinstall that allows the scripts when finishing the install fails', async () => {
+    requireState.failures = [new Error('Could not locate the bindings file. Tried:')]
+    spawnState.status = 1
+    const printed: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => {
+      printed.push(a.map(String).join(' '))
+    })
+    const { ensureNativeModulesLoadable } = await loadSubject()
+    const ok = ensureNativeModulesLoadable()
+    spy.mockRestore()
+
+    expect(ok).toBe(false)
+    expect(printed.join('\n')).toContain('npm install -g open-walnut --allow-scripts=open-walnut,')
+    expect(printed.join('\n')).toContain('better-sqlite3')
+  })
+
   it('announces the rebuild with the marker the desktop launcher greps for', async () => {
     requireState.failures = [abiError()]
     const printed: string[] = []
