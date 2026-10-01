@@ -17,7 +17,6 @@ import {
   canonicalJsonlPath,
   remoteJsonlPath,
   subagentDirPath,
-  remoteSubagentDirPath,
   findLocalJsonlPath,
   readSessionJsonlContent,
   readSubagentContents,
@@ -73,20 +72,6 @@ describe('subagentDirPath', () => {
   it('builds local subagent directory path', () => {
     const result = subagentDirPath('sess1', '/test');
     expect(result).toBe(path.join(CLAUDE_HOME, 'projects', '-test', 'sess1', 'subagents'));
-  });
-});
-
-describe('remoteSubagentDirPath', () => {
-  it('builds remote subagent path with cwd', () => {
-    expect(remoteSubagentDirPath('sess1', '/test')).toBe(
-      '~/.claude/projects/-test/sess1/subagents',
-    );
-  });
-
-  it('builds glob path without cwd', () => {
-    expect(remoteSubagentDirPath('sess1')).toBe(
-      '~/.claude/projects/*/sess1/subagents',
-    );
   });
 });
 
@@ -323,5 +308,37 @@ describe('tilde expansion', () => {
 
   it('handles bare ~', () => {
     expect(tildeToHome('~')).toBe('$HOME');
+  });
+});
+
+// Claude Code hashes a project folder whose encoded cwd exceeds 200 chars, so for
+// such a session the only ways to its JSONL are a remembered path or a find.
+describe('readSessionJsonlContent knownPath (hashed-cwd session)', () => {
+  const LONG_CWD = '/Users/test/' + Array.from({ length: 12 }, (_, i) => `deeply-nested-folder-${i}`).join('/');
+  const SID = 'known-path-sid';
+  const HASHED = encodeProjectPath(LONG_CWD).slice(0, 200) + '-q9w8e7';
+
+  async function stage(): Promise<void> {
+    const dir = path.join(tmpBase, 'projects', HASHED);
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(path.join(dir, `${SID}.jsonl`), JSON.stringify({ type: 'user', cwd: LONG_CWD, message: { role: 'user', content: 'hi' } }) + '\n');
+  }
+
+  it('reads the remembered path directly instead of searching', async () => {
+    await stage();
+    const known = `~/.claude/projects/${HASHED}/${SID}.jsonl`;
+    const result = await readSessionJsonlContent(SID, LONG_CWD, undefined, undefined, { knownPath: known });
+    expect(result?.content).toContain('"hi"');
+    // A find answers with the absolute path; the tilde form proves the direct read.
+    expect(result?.resolvedRemotePath).toBe(known);
+  });
+
+  it('still finds the file when the remembered path went stale', async () => {
+    await stage();
+    const result = await readSessionJsonlContent(SID, LONG_CWD, undefined, undefined, {
+      knownPath: `~/.claude/projects/gone-folder/${SID}.jsonl`,
+    });
+    expect(result?.content).toContain('"hi"');
+    expect(result?.resolvedRemotePath).toBe(path.join(tmpBase, 'projects', HASHED, `${SID}.jsonl`));
   });
 });

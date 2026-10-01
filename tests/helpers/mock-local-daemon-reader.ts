@@ -44,30 +44,36 @@ async function resolveTilde(p: string): Promise<string> {
   return p; // already absolute
 }
 
-/** Expand a single glob `*` segment by scanning the parent dir (mirrors fs.find maxDepth). */
+/**
+ * Expand a glob the way the real `DaemonFileReader.readFile` does: only a `*` in the
+ * FILE NAME is a pattern (fs.find under the literal parent dir, depth 2, name-substring
+ * match on the name with its `*`s removed). A `*` in a folder segment stays a literal
+ * folder name, so nothing matches. Expanding folder globs here would let a test pass
+ * for a read that returns nothing in production.
+ */
 async function expandGlob(absPattern: string): Promise<string | null> {
-  // Only the single-`*`-dir form used by remoteJsonlPath: .../projects/*/<file>
-  const star = absPattern.indexOf('*');
-  if (star === -1) return absPattern;
-  const before = absPattern.slice(0, star); // .../projects/
-  const after = absPattern.slice(star + 1); // /<sid>.jsonl  (leading slash)
-  const parent = before.replace(/\/$/, '');
-  let dirs: string[];
-  try {
-    dirs = await fsp.readdir(parent);
-  } catch {
+  const dir = path.dirname(absPattern);
+  if (dir.includes('*')) return null;
+  const needle = path.basename(absPattern).replace(/\*/g, '');
+  async function walk(d: string, depth: number): Promise<string | null> {
+    if (depth > 2) return null;
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = await fsp.readdir(d, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isFile() && e.name.includes(needle)) return full;
+      if (e.isDirectory()) {
+        const hit = await walk(full, depth + 1);
+        if (hit) return hit;
+      }
+    }
     return null;
   }
-  for (const d of dirs) {
-    const candidate = path.join(parent, d, after.replace(/^\//, ''));
-    try {
-      await fsp.access(candidate);
-      return candidate;
-    } catch {
-      // keep scanning
-    }
-  }
-  return null;
+  return walk(dir, 0);
 }
 
 /**
@@ -105,17 +111,19 @@ class MockLocalDaemonFileReader {
     return maxReadBytes();
   }
 
-  private async resolve(remotePath: string): Promise<string | null> {
+  /** `glob`: only readFile expands a pattern (as in the real reader); every other
+   *  method takes a `*` literally, so the path simply does not exist. */
+  private async resolve(remotePath: string, glob = false): Promise<string | null> {
     if (this.host !== '__local__') {
       throw new Error(`MockLocalDaemonFileReader only serves __local__, got host=${this.host}`);
     }
     const abs = await resolveTilde(remotePath);
-    if (abs.includes('*')) return expandGlob(abs);
+    if (glob && abs.includes('*')) return expandGlob(abs);
     return abs;
   }
 
   async readFile(remotePath: string): Promise<string | null> {
-    const abs = await this.resolve(remotePath);
+    const abs = await this.resolve(remotePath, true);
     if (!abs) return null;
     let size: number;
     try {

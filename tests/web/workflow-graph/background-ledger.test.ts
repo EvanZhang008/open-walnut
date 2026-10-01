@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { fmtElapsed, fmtTokens, rowActivity, rowElapsedMs, buildAgentMeta } from '@/components/sessions/background-ledger';
+import { fmtElapsed, fmtTokens, rowActivity, rowElapsedMs, buildAgentMeta, agentResultText } from '@/components/sessions/background-ledger';
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
 
 function task(p: Partial<BackgroundTask>): BackgroundTask {
@@ -145,5 +145,36 @@ describe('fmtTokens', () => {
     expect(fmtTokens(9_949_999)).toBe('9.9M');
     expect(fmtTokens(9_950_000)).toBe('10M');
     expect(fmtTokens(123_400_000)).toBe('123M');
+  });
+});
+
+describe('agentResultText', () => {
+  // The three launch notes the CLI's Agent tool writes (AgentTool mapToolResultToToolResultBlockParam).
+  const ASYNC_NOTE = 'Async agent launched successfully.\nagentId: a6f8ed691cfeb0395 (internal ID - do not mention to user.)\noutput_file: /tmp/x/tasks/a6f8ed691cfeb0395.output';
+  const REMOTE_NOTE = 'Remote agent launched in CCR.\ntaskId: t1\nsession_url: https://example.test/s\noutput_file: /tmp/x/t1.output';
+  const TEAMMATE_NOTE = 'Spawned successfully.\nagent_id: researcher@team\nname: researcher\nteam_name: team';
+
+  it('drops each launch note: it is not the agent\'s result', () => {
+    expect(agentResultText(ASYNC_NOTE)).toBeUndefined();
+    expect(agentResultText(REMOTE_NOTE)).toBeUndefined();
+    expect(agentResultText(TEAMMATE_NOTE)).toBeUndefined();
+  });
+
+  it('keeps an answer, including an older CLI\'s sync answer with no background flag', () => {
+    expect(agentResultText('Explorer 0 report.')).toBe('Explorer 0 report.');
+    expect(agentResultText('The fleet is healthy.\nagentId: a1b2c3 (for resuming)')).toBe('The fleet is healthy.\nagentId: a1b2c3 (for resuming)');
+  });
+
+  it('keeps the error of a launch that failed', () => {
+    expect(agentResultText('Agent type not found: nope')).toBe('Agent type not found: nope');
+  });
+
+  it('keeps text that only mentions a launch later on', () => {
+    expect(agentResultText('Summary: the job was Spawned successfully. elsewhere')).toBe('Summary: the job was Spawned successfully. elsewhere');
+  });
+
+  it('is undefined with no result at all', () => {
+    expect(agentResultText(undefined)).toBeUndefined();
+    expect(agentResultText('')).toBeUndefined();
   });
 });

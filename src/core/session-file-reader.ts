@@ -61,30 +61,12 @@ export function subagentDirPath(sessionId: string, cwd: string): string {
   return path.join(CLAUDE_HOME, 'projects', encoded, sessionId, 'subagents');
 }
 
-/** Build the remote subagents directory path (tilde-based). */
-export function remoteSubagentDirPath(sessionId: string, cwd?: string): string {
-  if (cwd) {
-    const encoded = encodeProjectPath(cwd);
-    return `~/.claude/projects/${encoded}/${sessionId}/subagents`;
-  }
-  return `~/.claude/projects/*/${sessionId}/subagents`;
-}
-
 /** Build the dynamic-workflow run-manifest directory (local absolute).
  *  Claude Code writes one `wf_<runId>.json` per workflow run here, plus a
  *  `subagents/workflows/wf_<runId>/` dir holding per-agent transcripts. */
 export function workflowManifestDirPath(sessionId: string, cwd: string): string {
   const encoded = encodeProjectPath(cwd);
   return path.join(CLAUDE_HOME, 'projects', encoded, sessionId, 'workflows');
-}
-
-/** Build the remote workflow run-manifest directory (tilde-based). */
-export function remoteWorkflowManifestDirPath(sessionId: string, cwd?: string): string {
-  if (cwd) {
-    const encoded = encodeProjectPath(cwd);
-    return `~/.claude/projects/${encoded}/${sessionId}/workflows`;
-  }
-  return `~/.claude/projects/*/${sessionId}/workflows`;
 }
 
 // ── Async file-existence check ──
@@ -132,6 +114,8 @@ export interface SessionFileReader {
    *  Returns { content, path } or null. Used to resolve the project dir when cwd
    *  is unknown/unsafe, without a caller-side fs scan. */
   findSession(sessionId: string): Promise<{ content: string; path: string } | null>;
+  /** The same find, path only (no read of the transcript). */
+  findSessionPath(sessionId: string, timeoutMs?: number): Promise<string | null>;
 }
 
 // ── Factory ──
@@ -279,7 +263,7 @@ export async function readSessionJsonlContent(
   cwd?: string,
   host?: string,
   outputFile?: string,
-  opts?: { throwOnReadFailure?: boolean; localDaemonError?: string },
+  opts?: { throwOnReadFailure?: boolean; localDaemonError?: string; knownPath?: string },
 ): Promise<ReadSessionResult | null> {
   const { SESSION_STREAMS_DIR } = await import('../constants.js');
   const skipDaemonRead = !host && !!opts?.localDaemonError;
@@ -324,12 +308,14 @@ export async function readSessionJsonlContent(
     const READ_TIMEOUT = host ? 120_000 : 30_000;
     const { DaemonFileReader } = await import('./daemon-file-reader.js');
     const reader = new DaemonFileReader(daemonHost);
-    // Claude Code hashes cwds whose encoded form exceeds 200 chars; we don't
-    // replicate that hashing, so the computed exactPath will be wrong. In that
-    // case, skip the exact-path attempt and fall through to glob/find.
+    // Direct paths first: where an earlier read found this file (`knownPath`),
+    // then the cwd-encoded path. Claude Code hashes a cwd whose encoded form
+    // exceeds 200 chars, which we don't replicate, so such a cwd has no encoded
+    // path and only a remembered path spares the fs.find over every project dir.
+    // No `projects/*/` glob: the reader expands a `*` only in the file name.
     const cwdSafeForExactPath = cwd ? isSafeForProjectEncoding(cwd) : false;
     const exactPath = cwdSafeForExactPath ? remoteJsonlPath(sessionId, cwd!) : null;
-    const globPath = remoteJsonlPath(sessionId); // ~/.claude/projects/*/${sessionId}.jsonl
+    const directPaths = [...new Set([opts?.knownPath, exactPath].filter((p): p is string => !!p))];
     // Truthful source label: the transport is always the daemon now, but 'local'
     // vs 'remote' still tells diagnostics which machine the file lived on.
     const srcLabel: ReadSessionResult['source'] = host ? 'remote' : 'local';
@@ -337,19 +323,14 @@ export async function readSessionJsonlContent(
     try {
       const result = await Promise.race([
         (async () => {
-          // Try exact encoded path first.
-          if (exactPath) {
-            const content = await reader.readFile(exactPath);
-            if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel, exactPath, content.length);
-            // Exact path missed — fall through to glob/find. This happens when
+          for (const directPath of directPaths) {
+            const content = await reader.readFile(directPath);
+            if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel, directPath, content.length);
+            // A direct path missed: fall through to find. This happens when
             // the cwd in the session record is a symlink (e.g. /home/user →
             // /local/home/user) and Claude Code stored the file under the
-            // resolved path's encoding.
+            // resolved path's encoding, or a remembered path went stale.
           }
-          // cwd unknown OR unsafe-for-encoding (>200 chars, hashed by Claude Code):
-          // fall back to glob, then find.
-          const content = await reader.readFile(globPath);
-          if (content) return withFoundCwd(await mergeSyntheticFromLocalStreams(content), srcLabel, undefined, content.length);
           const findResult = await reader.findSession(sessionId);
           if (findResult) return withFoundCwd(await mergeSyntheticFromLocalStreams(findResult.content), srcLabel, findResult.path, findResult.content.length);
           return null;
@@ -429,6 +410,55 @@ export async function readSubagentContents(
   return readSubagentContentsViaDaemon(sessionId, cwd, host ?? '__local__');
 }
 
+/** Where a session's own JSONL lives, for the readers of its sibling files: the
+ *  path the caller already knows (the history reader caches it), and where to
+ *  report a path a find had to learn. A hashed-cwd session's find walks all of
+ *  `~/.claude/projects` (seconds on a busy host), so it should happen once. */
+export interface SessionJsonlHint {
+  path?: string;
+  onFound?: (jsonlPath: string) => void;
+}
+
+/** Deadline for the path-only find a data-dir lookup may need: the subagent and
+ *  workflow routes poll it, and an answer must not wait on a whole-tree walk. */
+const DATA_DIR_FIND_TIMEOUT_MS = 15_000;
+
+/**
+ * The places a session's data dir (`~/.claude/projects/<enc>/<sid>`, holding
+ * `subagents/` and `workflows/`) may be, in the order to try, without reading
+ * anything: the folder of the JSONL an earlier read found (it also covers a
+ * symlinked cwd, which Claude Code encodes by its resolved path), then the
+ * cwd-encoded tilde path when cwd is known + safe (where a cwd migration moved
+ * the files when the remembered path went stale). With neither, one path-only
+ * fs.find, never a read of the transcript itself, which can be tens of MB.
+ * Readers take the first candidate that holds the file.
+ */
+export async function sessionDataDirCandidates(
+  sessionId: string,
+  cwd: string | undefined,
+  host: string,
+  jsonl?: SessionJsonlHint,
+): Promise<string[]> {
+  const dirs: string[] = [];
+  if (jsonl?.path) dirs.push(jsonl.path.replace(/\.jsonl$/, ''));
+  if (cwd && isSafeForProjectEncoding(cwd)) dirs.push(`~/.claude/projects/${encodeProjectPath(cwd)}/${sessionId}`);
+  if (dirs.length > 0) return [...new Set(dirs)];
+  const reader = await createFileReader(host);
+  try {
+    // ~/.claude/projects/<enc>/<sid>.jsonl
+    const found = await reader.findSessionPath(sessionId, DATA_DIR_FIND_TIMEOUT_MS);
+    if (found) {
+      jsonl?.onFound?.(found);
+      return [found.replace(/\.jsonl$/, '')];
+    }
+  } catch (err) {
+    log.session.debug('session data dir resolve via fs.find failed', {
+      host, sessionId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return [];
+}
+
 /**
  * Read a single subagent JSONL file by agentId.
  * Returns the raw content string, or null if not found.
@@ -438,53 +468,41 @@ export async function readSingleSubagentContent(
   agentId: string,
   cwd?: string,
   host?: string,
+  jsonl?: SessionJsonlHint,
 ): Promise<string | null> {
   // DAEMON-UNIFORM: local and remote both read the single subagent file via the
-  // daemon. cwd known + safe → exact tilde path; else a glob the daemon's
-  // fs.find expands. (__local__ resolves ~ to the same ~/.claude the fs bypass used.)
-  const filename = `agent-${agentId}.jsonl`;
+  // daemon. Never a `projects/*/` glob: the reader expands a `*` only in the file
+  // name, so a glob in the folder part matches nothing.
+  const daemonHost = host ?? '__local__';
   const { DaemonFileReader } = await import('./daemon-file-reader.js');
-  const reader = new DaemonFileReader(host ?? '__local__');
-  const readerPath = cwd && isSafeForProjectEncoding(cwd)
-    ? `${remoteSubagentDirPath(sessionId, cwd)}/${filename}`
-    : `~/.claude/projects/*/${sessionId}/subagents/${filename}`;
-  try {
-    return await reader.readFile(readerPath);
-  } catch (err) {
-    log.session.debug('single subagent read via daemon failed', {
-      host: host ?? '__local__', sessionId, agentId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
+  const reader = new DaemonFileReader(daemonHost);
+  for (const dir of await sessionDataDirCandidates(sessionId, cwd, daemonHost, jsonl)) {
+    try {
+      const content = await reader.readFile(`${dir}/subagents/agent-${agentId}.jsonl`);
+      if (content) return content;
+    } catch (err) {
+      log.session.debug('single subagent read via daemon failed', {
+        host: daemonHost, sessionId, agentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
+  return null;
 }
 
 /**
- * Resolve a session's subagents/ directory path (no reads). When cwd is known +
- * safe, the tilde path is exact. Otherwise resolve the canonical JSONL location
- * via fs.find (one RPC, path only) and derive the sibling subagents/ dir.
- * Exported for session-changes' per-file subagent cache, which lists the dir
- * itself and selectively reads only new/grown files.
+ * Resolve a session's subagents/ directory path (no reads): the cwd-encoded path
+ * when cwd is known + safe, else one path-only fs.find. Exported for
+ * session-changes' per-file subagent cache, which lists the dir itself and
+ * selectively reads only new/grown files.
  */
 export async function resolveSubagentDir(
   sessionId: string,
   cwd: string | undefined,
   host: string,
 ): Promise<string | null> {
-  if (cwd && isSafeForProjectEncoding(cwd)) {
-    return remoteSubagentDirPath(sessionId, cwd);
-  }
-  const { DaemonFileReader } = await import('./daemon-file-reader.js');
-  const reader = new DaemonFileReader(host);
-  try {
-    const found = await reader.findSessionPath(sessionId); // ~/.claude/projects/<enc>/<sid>.jsonl
-    if (found) return found.replace(/\.jsonl$/, '') + '/subagents';
-  } catch (err) {
-    log.session.debug('subagent dir resolve via fs.find failed', {
-      host, sessionId, error: err instanceof Error ? err.message : String(err),
-    });
-  }
-  return null;
+  const [dir] = await sessionDataDirCandidates(sessionId, cwd, host);
+  return dir ? `${dir}/subagents` : null;
 }
 
 async function readSubagentContentsViaDaemon(
@@ -549,6 +567,7 @@ export async function readWorkflowManifest(
   sessionId: string,
   cwd?: string,
   host?: string,
+  jsonl?: SessionJsonlHint,
 ): Promise<WorkflowManifest | null> {
   // DAEMON-UNIFORM: local and remote both list/read through the daemon (tilde
   // paths). When cwd is known + safe, the cwd-encoded path is authoritative — do
@@ -556,19 +575,10 @@ export async function readWorkflowManifest(
   // panel hook fetches /workflow unconditionally) and the common case is "session
   // never ran a workflow"; a full ~/.claude/projects scan per page-load is the
   // exact O(N)-syscall regression the project keeps fixing. Only fall back to a
-  // find-based resolve when cwd is genuinely unknown.
+  // find-based resolve (path only) when cwd is unknown or hashed.
   const reader = await createFileReader(host);
-  const dirs: string[] = [];
-  if (cwd && isSafeForProjectEncoding(cwd)) {
-    dirs.push(remoteWorkflowManifestDirPath(sessionId, cwd));
-  } else {
-    try {
-      const found = await reader.findSession?.(sessionId);
-      if (found) dirs.push(found.path.replace(/\.jsonl$/, '') + '/workflows');
-    } catch {
-      // find failed — nothing to read
-    }
-  }
+  const dirs = (await sessionDataDirCandidates(sessionId, cwd, host ?? '__local__', jsonl))
+    .map((dir) => `${dir}/workflows`);
 
   for (const dir of dirs) {
     let entries: string[];
@@ -632,6 +642,7 @@ export async function readWorkflowSubagentContent(
   agentId: string,
   cwd?: string,
   host?: string,
+  jsonl?: SessionJsonlHint,
 ): Promise<string | null> {
   const filename = `agent-${agentId}.jsonl`;
   const reader = await createFileReader(host);
@@ -640,17 +651,8 @@ export async function readWorkflowSubagentContent(
   // dirs) through the daemon. cwd-encoded path is authoritative when known; else
   // resolve via fs.find — same O(N)-syscall avoidance as readWorkflowManifest, no
   // caller-side fs scan.
-  const parents: string[] = [];
-  if (cwd && isSafeForProjectEncoding(cwd)) {
-    parents.push(`${remoteSubagentDirPath(sessionId, cwd)}/workflows`);
-  } else {
-    try {
-      const found = await reader.findSession(sessionId);
-      if (found) parents.push(found.path.replace(/\.jsonl$/, '') + '/subagents/workflows');
-    } catch {
-      // find failed — nothing to read
-    }
-  }
+  const parents = (await sessionDataDirCandidates(sessionId, cwd, host ?? '__local__', jsonl))
+    .map((dir) => `${dir}/subagents/workflows`);
 
   for (const parent of parents) {
     let runDirs: string[];

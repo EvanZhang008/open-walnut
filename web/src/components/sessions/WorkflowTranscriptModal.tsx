@@ -143,8 +143,10 @@ export function TranscriptBody({ target, sessionId }: { target: TranscriptTarget
         .then((res) => {
           if (cancelled) return;
           setMessages(res.messages);
-          // Only a finished agent's transcript is complete enough to cache.
-          if (!live) setSubagentCache(sessionId, cacheKey, res.messages);
+          // Only a finished agent's transcript is complete enough to cache, and
+          // never an empty one: a read that missed would pin "no transcript" for
+          // the page's lifetime.
+          if (!live && res.messages.length > 0) setSubagentCache(sessionId, cacheKey, res.messages);
           log.info('workflow', `loaded subagent transcript ${target.agentId}: ${res.messages.length} msgs`, { sessionId });
         })
         .catch((err) => {

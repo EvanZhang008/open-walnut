@@ -10,6 +10,7 @@ import { useEntityLabelsVersion, useRenderedMarkdown } from '@/hooks/useEntityLa
 import { useStableHtml } from '@/hooks/useStableHtml';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { BackgroundTasksChip, type KnownAgent } from './BackgroundTasksPanel';
+import { agentResultText } from './background-ledger';
 import { MessageMetaRow, UUID_RE } from './MessageMetaRow';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
@@ -941,7 +942,7 @@ export function knownAgentFromTool(tool: SessionHistoryTool): KnownAgent {
     // runs, so result-presence is not "finished"; the parser's bgTaskFinished stamp
     // is (task-notification for background agents, the settled tool_result for sync ones).
     finished: !!tool.bgTaskFinished,
-    result: tool.result || undefined,
+    result: agentResultText(tool.result),
     promptInput: tool.input,
     preloaded: tool.childMessages?.length ? tool.childMessages : undefined,
   };

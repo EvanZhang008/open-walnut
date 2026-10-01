@@ -23,6 +23,7 @@ import {
   readWorkflowSubagentContent,
   remoteJsonlPath,
   type ReadSessionResult,
+  type SessionJsonlHint,
 } from './session-file-reader.js';
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
 import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
@@ -255,6 +256,19 @@ function setResolvedRemotePath(sessionId: string, host: string, fullPath: string
     const oldest = remoteResolvedPaths.keys().next().value;
     if (oldest) remoteResolvedPaths.delete(oldest);
   }
+}
+/** The cache as a hint for the readers of the session's sibling files
+ *  (subagents/, workflows/): they read from it and fill it. */
+function sessionJsonlHint(sessionId: string, host: string | undefined): SessionJsonlHint {
+  const daemonHost = host ?? '__local__';
+  const hint: SessionJsonlHint = {
+    path: getResolvedRemotePath(sessionId, daemonHost),
+    onFound: (fullPath) => {
+      hint.path = fullPath;
+      setResolvedRemotePath(sessionId, daemonHost, fullPath);
+    },
+  };
+  return hint;
 }
 
 /**
@@ -1580,10 +1594,11 @@ export async function readSingleSubagentHistory(
   host?: string,
   workflow?: boolean,
 ): Promise<SessionHistoryMessage[]> {
+  const jsonl = sessionJsonlHint(sessionId, host);
   const content = workflow
-    ? (await readWorkflowSubagentContent(sessionId, agentId, cwd, host))
-        ?? (await readSingleSubagentContent(sessionId, agentId, cwd, host)) // fall back to flat layout
-    : await readSingleSubagentContent(sessionId, agentId, cwd, host);
+    ? (await readWorkflowSubagentContent(sessionId, agentId, cwd, host, jsonl))
+        ?? (await readSingleSubagentContent(sessionId, agentId, cwd, host, jsonl)) // fall back to flat layout
+    : await readSingleSubagentContent(sessionId, agentId, cwd, host, jsonl);
   if (!content) return [];
   try {
     return parseSessionMessages(content);
@@ -1612,7 +1627,7 @@ export async function reconstructWorkflowProgress(
   cwd?: string,
   host?: string,
 ): Promise<SessionBackgroundTasksPayload | null> {
-  const manifest = await readWorkflowManifest(sessionId, cwd, host);
+  const manifest = await readWorkflowManifest(sessionId, cwd, host, sessionJsonlHint(sessionId, host));
   if (!manifest) return null;
 
   const phases = new Map<number, WorkflowPhaseInfo>();
@@ -2355,6 +2370,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   try {
     result = await readSessionJsonlContent(sessionId, cwd, host, outputFile, {
       throwOnReadFailure: true, localDaemonError: localDaemonDown,
+      knownPath: getResolvedRemotePath(sessionId, host ?? '__local__'),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

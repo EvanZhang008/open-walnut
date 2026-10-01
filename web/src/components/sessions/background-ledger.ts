@@ -76,3 +76,17 @@ export function buildAgentMeta(task: BackgroundTask, now: number): string[] {
   if (activity) out.push(activity);
   return out;
 }
+
+/** The CLI's Agent tool answers a launch (background, remote, teammate) with a note
+ *  addressed to the model (ids, an output-file path, instructions), never with
+ *  anything the agent said. Matched by text, not by `run_in_background`: older CLIs
+ *  ran an agent synchronously when the flag was absent, and their result is the
+ *  agent's answer. */
+const LAUNCH_NOTE_RE = /^\s*(?:Async agent launched successfully\.|Remote agent launched\b|Spawned successfully\.\s*\n\s*agent_id:)/;
+
+/** The text the reader may show as an agent's Result: its tool_result, unless that
+ *  is a launch note. */
+export function agentResultText(result: string | undefined): string | undefined {
+  if (!result || LAUNCH_NOTE_RE.test(result)) return undefined;
+  return result;
+}

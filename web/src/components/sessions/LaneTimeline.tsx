@@ -21,6 +21,7 @@ import { useMemo } from 'react';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { KnownAgent } from './BackgroundTasksPanel';
+import { agentResultText } from './background-ledger';
 import { groupLaneChildren } from '@/stream/group-blocks';
 import { laneRows, type ToolBlock } from '@/stream/lane-rows';
 import { useLiveAgentsForSession } from '@/stores/background-agents-store';
@@ -188,7 +189,7 @@ export function knownAgentFromStream(taskBlock: ToolBlock): KnownAgent {
     finished,
     failed,
     running: !finished,
-    result: taskBlock.result || undefined,
+    result: agentResultText(taskBlock.result),
     promptInput: taskBlock.input,
   };
 }
