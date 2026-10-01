@@ -12,6 +12,7 @@
  *   OIDC (no token), gates the tag on package.json and on CI, and publishes the
  *   newest green commit as the nightly.
  */
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -19,6 +20,7 @@ import { parse as parseYaml } from 'yaml'
 import { nextVersion, rollChangelog, setManifestVersion } from '../../scripts/release.mjs'
 import { nightlyVersion } from '../../scripts/nightly-version.mjs'
 import { pickLastGreen, releaseGateRev, verdictOf } from '../../scripts/ci-gate.mjs'
+import { releaseNotes } from '../../scripts/release-notes.mjs'
 import { compareVersions } from '../../src/core/self-update/version-compare.js'
 import { channelOf } from '../../src/core/self-update/update-check.js'
 
@@ -123,6 +125,22 @@ describe('nightlyVersion', () => {
     expect(channelOf(c)).toBe('nightly')
     // After the 0.5.2 release the next nightly is a 0.5.3 prerelease, above 0.5.2.
     expect(compareVersions(nightlyVersion('0.5.2', new Date('2026-10-03T00:00:00Z'), 1), '0.5.2')).toBeGreaterThan(0)
+  })
+})
+
+describe('releaseNotes', () => {
+  it('is the body of the version\'s section, up to the next one', () => {
+    const rolled = rollChangelog(CHANGELOG, '0.5.2', '2026-10-01')
+    expect(releaseNotes(rolled, '0.5.2')).toBe('### Added\n\n- A thing.\n\n### Fixed\n\n- Another.')
+    expect(releaseNotes(rolled, '0.5.1')).toBe('### Changed\n\n- Old.')
+    expect(releaseNotes(rolled, '9.9.9')).toBeNull()
+    expect(releaseNotes(rolled, 'Unreleased')).toBeNull()
+  })
+
+  it('runs as the workflow calls it, with the version as the first argument', () => {
+    const out = execFileSync(process.execPath, [path.resolve(__dirname, '../../scripts/release-notes.mjs'), 'v0.5.1'], { encoding: 'utf8' })
+    expect(out.trim().length).toBeGreaterThan(20)
+    expect(out).not.toContain('See CHANGELOG.md.')
   })
 })
 
@@ -237,6 +255,12 @@ describe('release.yml', () => {
     const publish = doc.jobs.nightly!.steps.find((s) => s.name?.includes('publish it'))
     expect(publish?.if).toBe("steps.pick.outputs.publish == 'true'")
     expect(runs('nightly')).toContain('git tag -f nightly "${{ steps.pick.outputs.sha }}"')
+  })
+
+  it('the GitHub Release notes come from the tested script, after the publish', () => {
+    expect(runs('stable')).toContain('node scripts/release-notes.mjs "$version" > release-notes.md')
+    expect(text).not.toContain('node -e')
+    expect(stepIndex('stable', 'release-notes.mjs')).toBeGreaterThan(stepIndex('stable', 'npm publish'))
   })
 
   it('package.json exposes the release command', () => {

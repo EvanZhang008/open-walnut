@@ -60,8 +60,8 @@ jobs:
       - name: The tag names the version package.json carries
         run: |
           version="$(node -p "require('./package.json').version")"
-          if [ "v$version" != "${{ github.ref_name }}" ]; then
-            echo "tag ${{ github.ref_name }} but package.json is $version (cut releases with: npm run release -- <bump>)" >&2
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME but package.json is $version (cut releases with: npm run release -- <bump>)" >&2
             exit 1
           fi
       # A release commit only rolls the version and CHANGELOG, so its parent's CI
@@ -85,14 +85,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          node -e '
-            const fs = require("fs");
-            const [,, version] = process.argv;
-            const text = fs.readFileSync("CHANGELOG.md", "utf8");
-            const re = new RegExp("^## \\[" + version.replace(/\./g, "\\.") + "\\][^\n]*\n([\\s\\S]*?)(?=^## \\[|$(?![\\s\\S]))", "m");
-            const m = re.exec(text);
-            fs.writeFileSync("release-notes.md", (m ? m[1] : "See CHANGELOG.md.").trim() + "\n");
-          ' "$version"
+          node scripts/release-notes.mjs "$version" > release-notes.md
           gh release create "${GITHUB_REF_NAME}" --title "Open Walnut ${version}" --notes-file release-notes.md
 
   nightly:
