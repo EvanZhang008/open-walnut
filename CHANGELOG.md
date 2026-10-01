@@ -31,17 +31,17 @@ breaking changes).
   `npm install -g open-walnut@nightly` follows the repository without waiting for a release.
   Both channels publish only commits CI passed, since every install updates itself on restart.
   See [Releasing](docs/reference/releasing.md).
-- **Snooze a task until something happens.** The task menu's `Start / Snooze until` row offers
+- **Park a task until something happens: a Waiting status.** A task can now be Waiting, from the
+  status control (with an optional `Until` time), the task menu's Status row, or an agent's
+  `task_update` with `phase: "WAITING"`. It keeps its place on the board with an hourglass, an
+  `until` chip and a Waiting line above its composer, and the end of the turn that set it, a
+  session error or a restart leave it alone. Any new turn wakes it: a trigger firing, a message from
+  you or another task, or the `Until` time passing (its session is woken, or a task with no session
+  comes back as Need Action with a red dot). The task menu's `Start / Snooze until` row offers
   `Something happens...` beside a time, and the composer's `+` menu has `Snooze until something
   happens...`: either one asks the task's own session to write a small check, create a trigger and
-  park the task, so there is no form to fill. A snoozed task stays To Do in every list with no red
-  dot, and its row, Focus card and session header wear an amber `SNOOZED` pill that opens what it
-  waits for, Unsnooze and the trigger. Messages to its session do not cancel it (the panel says so
-  above the composer); the trigger firing, a prompt that needs you, setting Need Action or Complete,
-  5 failing checks or Unsnooze do. Every snooze has a backstop, 7 days unless set otherwise (1
-  minute to 30 days), after which the task comes back as Need Action with a `Snooze ran out` notice.
-  Agents snooze in one call with `wait_until` (and `wait_ttl`) on `trigger_create`, and the task
-  menu gains a Status row with all four phases.
+  set the task Waiting, so there is no form to fill. The board's Wait tier is now labelled Parked,
+  and a sync plugin that does not declare the new status sees a Waiting task as To Do.
 - **A session's questions stay on screen, and each answer lands under the question it answers.** The
   timeline's top-left corner now holds the question list in place of the outline: a labelled tree
   (Main conversation, each question with its number and a status word such as Waiting, Answered or
@@ -54,9 +54,10 @@ breaking changes).
   question send asks the model to begin its reply with a `[Qn]` tag, which Walnut hides and files
   the answer by, so an answer no longer jumps to the main conversation once the transcript catches
   up, or leaves half of itself pinned at the bottom.
-- **Every session panel shows how fast its turn ran.** A row above the composer gives the model,
-  output tokens, time to first token, tokens per second, the turn's wall time and its cost: live
-  while the turn streams, frozen on the final numbers after, and back after a reload. Two panels
+- **The model picker shows how fast a session's turn ran.** Inside the Switch Model popover, under
+  the live settings, a row gives the model, output tokens, time to first token, tokens per second,
+  the turn's wall time and its cost: `This turn` while it streams, `Last turn` with the final
+  numbers after, and back after a reload. Two panels
   side by side compare two models on the same prompt. The numbers are Walnut's own measurements of
   Claude Code's stream (tokens per second counts generation time only, tool runs excluded), and a
   live estimate carries `~` until the CLI's own count replaces it. Usage records now keep each
@@ -266,6 +267,10 @@ breaking changes).
   daemon first. A task also keeps its link to its session when the CLI stops, so a parent waiting on
   a child that errored is no longer told the child completed, and a task whose session has ended
   deletes without forcing. Retry after a failed resume now resends the message.
+- **The Changed view shows a file a session rewrote as modified.** A Write over an existing file was
+  listed as added, and every line the rewrite removed was missing from the review; it is now shown
+  as modified against the original. The collapsed tool line counts files instead of calls, so six
+  edits to one file no longer read `edited 6 files`.
 - **A session's conversation no longer drops rows or pictures.** A message sent while a tool was
   running vanished from the history and left its Delivered bubble pinned below later turns. A local
   session whose daemon was slow showed only the live turn or `cached history`, with each load taking
