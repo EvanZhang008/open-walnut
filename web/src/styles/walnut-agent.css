@@ -192,9 +192,11 @@
 .session-panel-title-area:has(> .session-panel-unread-dot) {
   position: relative;
 }
+/* -6px: 5px from the phase circle's ink, the task list's dot-to-circle gap
+   (the circle's button pads it 6px). */
 .session-panel-title-area > .session-panel-unread-dot {
   position: absolute;
-  left: -10px;
+  left: -6px;
   top: 50%;
   transform: translateY(-50%);
 }
@@ -207,6 +209,8 @@
 .session-panel-header-leading + .session-panel-title-area > .session-panel-unread-dot {
   position: static;
   transform: none;
+  /* The row's 6px gap plus the button's 6px padding, less the list's 5px. */
+  margin-right: -7px;
 }
 /* The card's own border/box-shadow transition fades this in and out. */
 .session-panel.session-panel-unread .session-panel-input .chat-input-box {

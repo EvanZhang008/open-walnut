@@ -9850,6 +9850,9 @@ body.walnut-dragging {
 
 .task-quick-phase-icon {
   font-size: 12px;
+  /* Flex, not inline: an inline SVG sits on the text baseline, which put the
+     circle 2px above every other item on the session header's title row. */
+  display: inline-flex;
 }
 
 .task-quick-phase-label {
@@ -14918,7 +14921,9 @@ body.walnut-dragging {
   font-size: 16px;
   font-weight: 700;
   cursor: pointer;
-  padding: 0;
+  /* The ⋮ glyph's ink sits 0.75px below its line box (measured, Chromium and
+     WebKit); lifting the content box puts it on the row's center line. */
+  padding: 0 0 1.5px;
   line-height: 1;
   letter-spacing: 1px;
   opacity: 0;

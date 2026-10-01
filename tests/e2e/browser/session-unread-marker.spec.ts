@@ -135,11 +135,12 @@ test('an unread session window shows a dot and a red composer until the user cli
   await expect.poll(async () => (await readTask(page, taskA)).phase, { timeout: 20_000 }).toBe(HANDBACK_PHASE)
   await expectMarked(page, panelA, taskA)
   expect(await panelA.evaluate((el) => getComputedStyle(el, '::after').content)).toBe('none')
-  // The dot lives in the header's left padding: left of the phase circle, and
-  // inside the panel.
+  // The dot lives in the header's left padding: left of the phase circle (the
+  // drawn circle, not its padded button), and inside the panel. Exact spacing and
+  // centering are pinned by session-header-alignment.spec.ts.
   const panelBox = (await panelA.boundingBox())!
   const dotBox = (await dot(panelA).boundingBox())!
-  const circleBox = (await panelA.locator('.session-panel-title-area .task-quick-phase-btn').first().boundingBox())!
+  const circleBox = (await panelA.locator('.session-panel-title-area .task-quick-phase-btn svg').first().boundingBox())!
   expect(dotBox.x).toBeGreaterThan(panelBox.x)
   expect(dotBox.x + dotBox.width).toBeLessThanOrEqual(circleBox.x)
   await page.screenshot({ path: shot('1-unread') })
