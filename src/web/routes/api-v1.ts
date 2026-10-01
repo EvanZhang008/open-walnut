@@ -2459,7 +2459,9 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       return
     }
     // wait_until is the clock on a WAITING task: it rides with phase=WAITING, or
-    // onto a task already in that phase (checked against the row below).
+    // onto a task already in that phase (checked against the row below). Left
+    // out on the move into WAITING, the store sets 3 days from now; "" / null
+    // asks for no clock at all.
     if (waitUntil !== undefined && !isDateFieldValid(waitUntil)) {
       sendError(res, 400, 'bad_request', 'wait_until must be an ISO-8601 datetime, or "" / null to clear')
       return

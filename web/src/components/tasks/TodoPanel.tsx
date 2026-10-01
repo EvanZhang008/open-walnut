@@ -2982,12 +2982,26 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const prompt = usePrompt();
   const confirm = useConfirm();
   const [showCompleted, setShowCompleted] = useState(false);
+  // Waiting tasks are parked: out of the list, the tier cards and Recent by
+  // default (user ruling 2026-10-01, "I don't want to see the wait one"). They
+  // come back with this toggle or a phase filter that NAMES Waiting; search
+  // always finds them (it ignores every view toggle, see searchMatches).
+  const [showWaiting, setShowWaiting] = useState(false);
   const [phaseFilter, setPhaseFilter] = useState('');
   // Canonical composable query (src/core/task-query.ts) — the same model REST
   // and the agent tool use. Starts neutral: the legacy showCompleted toggle
   // still owns "hide done" on this surface, so seeding a completion condition
   // here would double-apply it and fight the toggle.
   const [taskQueryState, setTaskQueryState] = useState<TaskQueryFilterState>(DEFAULT_TASK_QUERY_FILTER_STATE);
+  const waitingRevealed = showWaiting || phaseFilter === 'WAITING' || taskQueryState.phases.includes('WAITING');
+  /** The list's hiding rule for a parked task; the pins, Recent and the focus
+   *  override read the same predicate so "would the list hide this?" cannot
+   *  drift from "does the list hide it". Read via a ref by the focus effect. */
+  const hiddenAsWaiting = useCallback(
+    (t: Task): boolean => t.phase === 'WAITING' && !waitingRevealed,
+    [waitingRevealed],
+  );
+  const hiddenAsWaitingRef = useRef<(t: Task) => boolean>(() => false);
   /** An explicit pinned condition (Yes OR No) routes pinned tasks through the
    *  normal filtered list and suppresses the separate Focus/Pinned area — no
    *  duplicate rows, and a completed-but-pinned task becomes reachable. */
@@ -3584,6 +3598,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const isDone = task.status === 'done';
     const wouldBeHidden =
       (isDone && !completedBypassRef.current(task) && !showCompleted && phaseFilter !== 'COMPLETE') ||
+      hiddenAsWaitingRef.current(task) ||
       !matchesQueryRef.current(task) ||
       (!!dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks));
 
@@ -3699,6 +3714,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const EXIT_ANIM_MS = 450;
   const EXIT_SLACK_MS = 150;
   const recentlyCompletedRef = useRef<Set<string>>(new Set());
+  // A task just set to Waiting leaves the list the same way (it is hidden by
+  // default): same batch deadline, same fade, keyed on phase_changed_at the way
+  // completion is keyed on completed_at. Shares the timers below.
+  const recentlyParkedRef = useRef<Set<string>>(new Set());
   const graceDeadlineRef = useRef(0);
   const graceExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const graceClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -3726,6 +3745,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [isInCompletionGrace],
   );
 
+  /** The Waiting twin: a task whose phase_changed_at is inside the window (the
+   *  optimistic write stamps it, the server echo carries its own), or one the
+   *  batch effect already holds. Only a WAITING task ever qualifies. */
+  const isInParkingGrace = useCallback((t: Task): boolean => {
+    if (t.phase !== 'WAITING' || !t.phase_changed_at) return false;
+    const elapsed = Date.now() - new Date(t.phase_changed_at).getTime();
+    return elapsed >= 0 && elapsed < GRACE_MS;
+  }, []);
+  const keepWhileParking = useCallback(
+    (t: Task): boolean => t.phase === 'WAITING' && (recentlyParkedRef.current.has(t.id) || isInParkingGrace(t)),
+    [isInParkingGrace],
+  );
+
   /** (Re)arm the two shared batch timers against the current deadline. Called on
    *  every deadline extension — a batch mid-fade snaps back to fully visible and
    *  holds again, which is exactly the "wait for the latest one" contract. */
@@ -3739,6 +3771,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }, Math.max(0, untilDeadline - (EXIT_ANIM_MS + EXIT_SLACK_MS)));
     graceClearTimerRef.current = setTimeout(() => {
       recentlyCompletedRef.current.clear();
+      recentlyParkedRef.current.clear();
       graceDeadlineRef.current = 0;
       graceExitTimerRef.current = null;
       graceClearTimerRef.current = null;
@@ -3760,6 +3793,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           extended = true;
         }
       }
+      // A task just parked joins the same batch (it is about to leave the list too).
+      if (task.phase === 'WAITING' && task.phase_changed_at && !recentlyParkedRef.current.has(task.id)) {
+        const parkedAt = new Date(task.phase_changed_at).getTime();
+        const elapsed = Date.now() - parkedAt;
+        if (elapsed >= 0 && elapsed < GRACE_MS) {
+          recentlyParkedRef.current.add(task.id);
+          graceDeadlineRef.current = Math.max(graceDeadlineRef.current, parkedAt + GRACE_MS);
+          extended = true;
+        }
+      }
     }
     // Reopened tasks leave the batch immediately (they're visible again anyway).
     let removed = false;
@@ -3770,8 +3813,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         removed = true;
       }
     }
+    for (const taskId of recentlyParkedRef.current) {
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task || task.phase !== 'WAITING') {
+        recentlyParkedRef.current.delete(taskId);
+        removed = true;
+      }
+    }
     if (extended) armGraceTimers();
-    else if (removed && recentlyCompletedRef.current.size === 0) {
+    else if (removed && recentlyCompletedRef.current.size === 0 && recentlyParkedRef.current.size === 0) {
       // Batch emptied by reopens — disarm so the stale timers don't flash graceExiting.
       if (graceExitTimerRef.current) { clearTimeout(graceExitTimerRef.current); graceExitTimerRef.current = null; }
       if (graceClearTimerRef.current) { clearTimeout(graceClearTimerRef.current); graceClearTimerRef.current = null; }
@@ -3915,6 +3965,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // in Focus/Satellite must surface even when the task is done, while the
   // everyday tier view stays clutter-free (grace still covers the completion
   // animation there).
+  // A Waiting pin keeps its tier but is not DRAWN there by default either (the
+  // same rule as the list: hiddenAsWaiting, plus the parking grace so a card set
+  // to Waiting from its menu fades out instead of popping).
   const pinnedTasksLive = useMemo(() => {
     if (pinnedIdsWithGrace.size === 0) return [];
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
@@ -3924,8 +3977,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         && (isSearchMode
           || (t.status !== 'done' && t.phase !== 'COMPLETE')
           || keepWhileCompleting(t))
+        && (isSearchMode || !hiddenAsWaiting(t) || keepWhileParking(t))
         && !(t.group_id && hiddenGroups?.has(t.group_id)));
-  }, [tasks, pinnedIdsWithGrace, hiddenGroups, keepWhileCompleting, recentTick, isSearchMode]);
+  }, [tasks, pinnedIdsWithGrace, hiddenGroups, keepWhileCompleting, hiddenAsWaiting, keepWhileParking, recentTick, isSearchMode]);
   const pinnedTasks = useFrozenWhile(pinnedTasksLive, isPinnedDragActive);
 
   // Hidden groups that HAVE pinned members — these were collapsed out of the tiers
@@ -4015,11 +4069,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return tasks
       .filter(t => {
         const isDone = t.status === 'done' || t.phase === 'COMPLETE';
-        return isDone ? (isSearchMode || showCompleted || keepWhileCompleting(t)) : true;
+        if (isDone) return isSearchMode || showCompleted || keepWhileCompleting(t);
+        return isSearchMode || !hiddenAsWaiting(t) || keepWhileParking(t);
       })
       .sort((a, b) => recentTime(b).localeCompare(recentTime(a)))
       .slice(0, 50);
-  }, [tasks, showCompleted, keepWhileCompleting, recentTick, recentSortMode, isSearchMode]);
+  }, [tasks, showCompleted, keepWhileCompleting, hiddenAsWaiting, keepWhileParking, recentTick, recentSortMode, isSearchMode]);
   const recentTasks = useFrozenWhile(recentTasksLive, isPinnedDragActive);
 
   // Stable sensor config — inline objects in useSensor destabilize dnd-kit's internal
@@ -5339,13 +5394,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const projectCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const t of tasks) {
-      if (t.status !== 'done' || showCompleted) {
+      if ((t.status !== 'done' || showCompleted) && !hiddenAsWaiting(t)) {
         const key = t.project || INBOX_TAB;
         counts[key] = (counts[key] ?? 0) + 1;
       }
     }
     return counts;
-  }, [tasks, showCompleted]);
+  }, [tasks, showCompleted, hiddenAsWaiting]);
 
   // Value lists for the query panel — derived from the loaded tasks (plus the
   // registry for projects, so a zero-task project is still selectable).
@@ -5474,7 +5529,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   useLayoutEffect(() => {
     matchesQueryRef.current = matchesQuery;
     completedBypassRef.current = completedBypass;
-  }, [matchesQuery, completedBypass]);
+    hiddenAsWaitingRef.current = hiddenAsWaiting;
+  }, [matchesQuery, completedBypass, hiddenAsWaiting]);
 
   const filterResult = useMemo(() => {
     // matchedIds: the REAL hits. Everything the user is told (result count,
@@ -5489,6 +5545,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         // + exit animation) before hiding them.
         if (!keepWhileCompleting(t)) return false;
       }
+      // Parked tasks leave the same way, after the same grace.
+      if (hiddenAsWaiting(t) && !keepWhileParking(t)) return false;
 
       // Every task-row condition, shared with REST / the agent tool / /tasks.
       if (!matchesQuery(t)) return false;
@@ -5517,10 +5575,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // never make its whole subtree count as matches, or the result count and the
     // chips would over-report. Only the completed-hiding rule applies to them.
     const result = withSubtaskContext(tasks, matchedList, (t) =>
-      completedBypass(t) || showCompleted || t.status !== 'done' || phaseFilter === 'COMPLETE' || keepWhileCompleting(t));
+      (completedBypass(t) || showCompleted || t.status !== 'done' || phaseFilter === 'COMPLETE' || keepWhileCompleting(t))
+      && (!hiddenAsWaiting(t) || keepWhileParking(t)));
     return { list: result, matchedIds };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- focusOverrideRef/fadingOverrideRef read via _overrideTick
-  }, [tasks, showCompleted, phaseFilter, matchesQuery, completedBypass, taskQueryState.pinned, dateFilter, _tick, _overrideTick, recentTick, activeProject]);
+  }, [tasks, showCompleted, phaseFilter, matchesQuery, completedBypass, hiddenAsWaiting, keepWhileParking, taskQueryState.pinned, dateFilter, _tick, _overrideTick, recentTick, activeProject]);
 
   /**
    * Rows to RENDER = real hits + their descendant context, minus the pins the
@@ -5549,6 +5608,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Search mode keeps completed tasks visible, so no exit animation there either
   // (otherwise the row fades out then pops back when the grace timer clears).
   const completedWillHide = !showCompleted && phaseFilter !== 'COMPLETE' && !isSearchMode;
+  // The parked twin, and one answer for every row: "is this row on its way out?"
+  const waitingWillHide = !waitingRevealed && !isSearchMode;
+  const isRowVanishing = useCallback((t: Task): boolean => graceExiting && (
+    (recentlyCompletedRef.current.has(t.id) && completedWillHide)
+    || (recentlyParkedRef.current.has(t.id) && waitingWillHide)
+  ), [graceExiting, completedWillHide, waitingWillHide]);
+  // Parked tasks the default view hides right now: the reveal toggle's count.
+  const hiddenWaitingCount = useMemo(
+    () => (waitingRevealed || isSearchMode ? 0 : tasks.reduce((n, t) => n + (t.phase === 'WAITING' ? 1 : 0), 0)),
+    [tasks, waitingRevealed, isSearchMode],
+  );
 
   // The list arrives with a recent window of completed tasks (useTasks); the
   // first view that shows completed rows loads the rest of the archive once.
@@ -5571,6 +5641,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const reasons: string[] = [];
     const isDone = task.status === 'done';
     if (isDone && !completedBypass(task) && !showCompleted && phaseFilter !== 'COMPLETE') reasons.push('hidden by completed filter');
+    if (hiddenAsWaiting(task)) reasons.push('waiting (hidden by default)');
     if (phaseFilter && !matchesPhaseFilter(phaseFilter, task.phase)) reasons.push(`phase ≠ ${phaseFilter}`);
     if (dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks)) reasons.push(`outside "${DATE_LABELS[dateFilter] || dateFilter}" date filter`);
     // Canonical query conditions get ONE combined reason: they're composable, so
@@ -5581,7 +5652,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       reasons.push(window ? `outside the active filters (${window})` : 'outside the active filters');
     }
     return reasons.length > 0 ? reasons.join(' · ') : undefined;
-  }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, dateFilter, completedBypass, matchesCanonicalQuery, taskQueryState]);
+  }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, dateFilter, completedBypass, hiddenAsWaiting, matchesCanonicalQuery, taskQueryState]);
 
   // Every REFINEMENT the user set, and nothing that is mere navigation:
   //   • the full canonical query (including its own `projects` condition, which
@@ -7845,7 +7916,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       out.push(
         <SortableTierCard key={task.id} task={task} tier={tier} isFocused={focusedTaskId === task.id}
-          isVanishing={keepWhileCompleting(task) && graceExiting}
+          isVanishing={graceExiting && (keepWhileCompleting(task) || (keepWhileParking(task) && waitingWillHide))}
           isSessionOpen={openSessionTaskIds?.has(task.id) ?? false}
           isDetailOpen={focusedTaskId === task.id && !suppressDetail}
           onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask}
@@ -7873,7 +7944,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       out.push(runAddRow(tier, lastScope));
     }
     return out;
-  }, [movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, folderTargetId]);
+  }, [movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, keepWhileParking, waitingWillHide, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, folderTargetId]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -8037,9 +8108,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onGroupByChange={(v) => { setGroupBy(v); persistGroupBy(v); }}
           showCompleted={showCompleted}
           onShowCompletedChange={(v) => { setShowCompleted(v); clearFocusOverride(); }}
+          showWaiting={showWaiting}
+          waitingCount={hiddenWaitingCount}
+          onShowWaitingChange={(v) => { setShowWaiting(v); clearFocusOverride(); }}
           onClearAll={() => {
             setActiveProject(''); persistTab(''); onProjectChange?.('');
             setPhaseFilter('');
+            setShowWaiting(false);
             setDateFilter(''); persistDateFilter('');
             setTaskQueryState((prev) => ({ ...DEFAULT_TASK_QUERY_FILTER_STATE, sort: prev.sort }));
             clearFocusOverride();
@@ -8135,6 +8210,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             onClick={() => { setShowCompleted(!showCompleted); clearFocusOverride(); }}
           >
             ✓ Done
+          </button>
+          <button
+            type="button"
+            className={`todo-minibar-btn${showWaiting ? ' on' : ''}`}
+            title={showWaiting ? 'Hide waiting tasks' : 'Show waiting tasks (parked until something happens)'}
+            data-testid="todo-minibar-waiting"
+            onClick={() => { setShowWaiting(!showWaiting); clearFocusOverride(); }}
+          >
+            ⧗ Waiting{hiddenWaitingCount > 0 ? ` (${hiddenWaitingCount})` : ''}
           </button>
           <button
             type="button"
@@ -8313,7 +8397,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         key={task.id}
                         task={task}
                         isFocused={focusedTaskId === task.id}
-                        isVanishing={keepWhileCompleting(task) && !showCompleted && graceExiting}
+                        isVanishing={graceExiting && ((keepWhileCompleting(task) && !showCompleted) || (keepWhileParking(task) && waitingWillHide))}
                         isSessionOpen={openSessionTaskIds?.has(task.id) ?? false}
                         isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                         onClick={handlePinnedCardClick}
@@ -8514,7 +8598,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       isFocused={focusedTaskId === task.id}
                       isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                       isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                      isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide && graceExiting}
+                      isVanishing={isRowVanishing(task)}
                       isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                       onClick={handleTaskClick}
                       isSelected={selectedIds.has(task.id)}
@@ -8583,7 +8667,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   isFocused={focusedTaskId === task.id}
                   isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                  isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide && graceExiting}
+                  isVanishing={isRowVanishing(task)}
                   isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                   depth={depthMap.get(task.id) ?? 0}
                   childCount={trueChildCountMap.get(task.id)}
@@ -8684,7 +8768,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 isFocused={focusedTaskId === task.id}
                                 isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                                 isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                                isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide && graceExiting}
+                                isVanishing={isRowVanishing(task)}
                                 isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                                 depth={depthMap.get(task.id) ?? 0}
                                 childCount={trueChildCountMap.get(task.id)}

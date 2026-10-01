@@ -13,6 +13,18 @@ export type TaskPhase =
   | 'IN_PROGRESS'
   | 'NEED_ACTION'
   | 'COMPLETE';
+/**
+ * How long a task waits when it enters WAITING without a `wait_until` of its
+ * own: a snooze is never silent forever by default, so a trigger that never
+ * fires still hands the task back. An explicit time (shorter or longer) or an
+ * explicit empty value (wait until something happens) wins. Shared with the
+ * web through the `@open-walnut/core` alias so the optimistic row shows the
+ * same clock the server stores.
+ */
+export const DEFAULT_WAIT_DAYS = 3;
+export function defaultWaitUntil(nowMs: number = Date.now()): string {
+  return new Date(nowMs + DEFAULT_WAIT_DAYS * 86_400_000).toISOString();
+}
 export type TaskPriority = 'immediate' | 'important' | 'backlog' | 'none';
 /** Canonical list of valid priority values — use for runtime validation. */
 export const VALID_PRIORITIES: readonly TaskPriority[] = ['immediate', 'important', 'backlog', 'none'] as const;
@@ -717,9 +729,10 @@ export interface Task {
   agent_id?: string;
   /** WAITING only: when the wait ends by itself (ISO datetime). At that time the
    *  task's session is woken like a trigger fire (src/core/task-wait-until.ts);
-   *  with no session the task comes back as NEED_ACTION. Absent = wait until
-   *  something else happens. Cleared by every move out of WAITING. Local-only,
-   *  payload blob; never pushed to sync backends. */
+   *  with no session the task comes back as NEED_ACTION. A task entering WAITING
+   *  without one gets `defaultWaitUntil()` (3 days out); an explicit empty value
+   *  waits until something else happens. Cleared by every move out of WAITING.
+   *  Local-only, payload blob; never pushed to sync backends. */
   wait_until?: string;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;

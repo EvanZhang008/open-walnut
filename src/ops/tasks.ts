@@ -58,6 +58,17 @@ function sessionState(task: unknown): 'attached' | 'none' | 'unknown' {
   return reported ? 'none' : 'unknown'
 }
 
+/**
+ * The clock clause of a WAITING outcome. The server fills a default wait_until
+ * when the caller named none, so the stored task, not the request, says when
+ * the task comes back by itself; "" asked for no clock and gets no clause.
+ */
+function waitClockNote(task: unknown, requested: unknown): string {
+  const stored = (task as { wait_until?: unknown } | undefined)?.wait_until
+  const until = typeof stored === 'string' && stored ? stored : typeof requested === 'string' && requested ? requested : ''
+  return until ? `, or the clock at ${until}` : ''
+}
+
 const SORT = z.enum(['updated_desc', 'created_desc', 'completed_desc', 'priority', 'title_asc', 'pin_order'])
 const TIME_BASIS = z.enum(['created', 'updated', 'created_or_updated', 'due', 'completed'])
 
@@ -549,9 +560,9 @@ defineOp({
     'and phase=COMPLETE when it is finished. phase=WAITING parks the task on something that has not ' +
     'happened yet (a trigger you armed, a reply, a time): it stays in its lists and its board section, the end ' +
     'of this turn does not hand it back, and the next message into it (a trigger fire, the user, a peer) moves ' +
-    'it to IN_PROGRESS. Set it as the LAST call of the turn. Optional wait_until (ISO datetime) wakes it at ' +
-    'that time when nothing else did. `tags` is a full replacement ([] clears). Pass "" to clear ' +
-    'due_date/start_date/wait_until.',
+    'it to IN_PROGRESS. Set it as the LAST call of the turn. wait_until (ISO datetime) wakes it at ' +
+    'that time when nothing else did; left out, a task entering WAITING gets 3 days from now, and "" means ' +
+    'no clock at all. `tags` is a full replacement ([] clears). Pass "" to clear due_date/start_date.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     // No `status` input. It was the more dangerous of the two write paths: a
@@ -563,7 +574,7 @@ defineOp({
         + 'WAITING = parked until something happens (any new message brings it back)'),
     wait_until: z.string().optional()
       .describe('With phase=WAITING: ISO-8601 datetime at which the task is woken if nothing else did. '
-        + '"" clears it (the wait has no end of its own)'),
+        + 'Left out when entering WAITING = 3 days from now; "" = no clock (the wait has no end of its own)'),
     priority: PRIORITY.optional(),
     due_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
     start_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
@@ -598,7 +609,7 @@ defineOp({
       ? 'Marked ready for the human to look at. Nothing else is required of you.'
       : body.phase === 'WAITING'
         ? 'The task is waiting. End your turn now: the next message into it (a trigger fire, the user, a peer'
-          + `${body.wait_until ? `, or the clock at ${String(body.wait_until)}` : ''}) brings it back to In Progress.`
+          + `${waitClockNote(task, body.wait_until)}) brings it back to In Progress.`
       : attachment === 'attached'
         ? `Talk to its session: walnut tools call task_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`
         : dispatchHint(taskId(task) || String(id), attachment === 'none')

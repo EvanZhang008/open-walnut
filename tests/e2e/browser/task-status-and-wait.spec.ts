@@ -239,10 +239,17 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
   await expect(menu).toBeVisible()
   await expect(statusPill(row, 'Waiting')).toHaveAttribute('aria-checked', 'true', { timeout: 10_000 })
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('WAITING')
+  // No time named: the server (and the optimistic row) put the default clock on
+  // it, 3 days out, and the until row already shows it with the no-limit button.
   const until = row.getByTestId('task-status-until')
   await expect(until).toBeVisible()
-  await expect(until.getByTestId('task-status-until-toggle')).toHaveText(/Until \(optional\)/)
-  await expect(until.getByTestId('task-status-until-clear')).toHaveCount(0)
+  await expect(until.getByTestId('task-status-until-toggle')).toHaveText(/^Until: /)
+  await expect(until.getByTestId('task-status-until-clear')).toHaveText('No limit')
+  await expect.poll(async () => (await taskOf(task.id)).wait_until, { timeout: 10_000 }).toBeTruthy()
+  const parked = await taskOf(task.id)
+  const daysAhead = (Date.parse(parked.wait_until) - Date.now()) / 86_400_000
+  expect(daysAhead).toBeGreaterThan(2.99)
+  expect(daysAhead).toBeLessThan(3.01)
   await expectInViewport(page, menu)
   await shot(menu, 'menu-waiting-open', browserName)
 
@@ -273,7 +280,8 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
   await expect(rowEl.getByTestId('task-trigger-pill')).toHaveCount(0)
   await shot(rowEl, 'row-waiting', browserName)
 
-  // Reopened: the collapsed row says the status and the time; the until row shows it with Clear.
+  // Reopened: the collapsed row says the status and the time; "No limit" drops
+  // the clock on purpose (an explicit empty value, not the default again).
   menu = await openRowKebab(page, task)
   await expect(toggleOf(menu, 'task-status-row')).toHaveText(/^Status: Waiting · until /)
   row = await statusRow(menu)
@@ -284,6 +292,10 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
   await expect.poll(async () => (await taskOf(task.id)).wait_until, { timeout: 10_000 }).toBeUndefined()
   expect((await taskOf(task.id)).phase).toBe('WAITING')
   await expect(rowEl.getByTestId('task-row-wait-until')).toHaveCount(0)
+  menu = await openRowKebab(page, task)
+  row = await statusRow(menu)
+  await expect(row.getByTestId('task-status-until-toggle')).toHaveText(/^Until: no time limit/)
+  await page.keyboard.press('Escape')
 
   // The detail pane: the badge reads Waiting; with a time it says so in the meta line.
   await api('PATCH', `/api/tasks/${task.id}`, { wait_until: new Date(Date.now() + 3 * 3_600_000).toISOString() })
@@ -298,6 +310,87 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('TODO')
   expect((await taskOf(task.id)).wait_until).toBeUndefined()
   await expect(detail.getByTestId('task-detail-wait-until')).toHaveCount(0)
+})
+
+test('Waiting tasks are out of the list and the tiers by default; "Show waiting" brings them back; parking a card fades it out', async ({ page, browserName }) => {
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  // Both are born pinned (Satellite) like every interactive create; the parked
+  // one moves to Focus: a Waiting pin keeps its tier but is not drawn there.
+  const parked = await createTask(`Hidewait ${stamp} parked`)
+  const plain = await createTask(`Hidewait ${stamp} plain`)
+  await api('PUT', `/api/focus/tasks/${parked.id}/tier`, { tier: 'focus' })
+  await api('PATCH', `/api/tasks/${parked.id}`, { phase: 'WAITING' })
+  expect((await taskOf(parked.id)).focus_tier).toBe('focus')
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+
+  const anyParked = page.locator(`[data-task-id="${parked.id}"]`)
+  const plainCard = page.locator(`.todo-pinned-card[data-task-id="${plain.id}"]`)
+  await expect(plainCard).toBeVisible({ timeout: 15_000 })
+  await expect(anyParked).toHaveCount(0)
+  await shot(page.locator('.todo-panel'), 'show-waiting-off', browserName)
+
+  // View options → "Show waiting (N)" reveals it, in its own tier, with the hourglass.
+  await page.getByRole('button', { name: 'View options' }).click()
+  const showWaiting = page.locator('.vd-footer').getByTestId('vd-show-waiting')
+  await expect(showWaiting).toContainText('Show waiting (')
+  await showWaiting.locator('input').check()
+  await page.keyboard.press('Escape')
+  // (The Focus tier draws rows, Satellite draws cards: match on the task id alone.)
+  await expect(anyParked).toHaveCount(1, { timeout: 15_000 })
+  await expect(anyParked).toBeVisible()
+  await expect(anyParked.getByTitle('Waiting: click to complete')).toBeVisible()
+  await shot(page.locator('.todo-panel'), 'show-waiting-on', browserName)
+  await page.getByRole('button', { name: 'View options' }).click()
+  await page.locator('.vd-footer').getByTestId('vd-show-waiting').locator('input').uncheck()
+  await page.keyboard.press('Escape')
+  await expect(anyParked).toHaveCount(0)
+
+  // Search always finds it (search ignores every view toggle).
+  await page.locator('.todo-search-input').fill(`Hidewait ${stamp}`)
+  await expect(page.locator(`.todo-panel-item[data-task-id="${parked.id}"]`)).toBeVisible({ timeout: 15_000 })
+  await page.locator('.todo-search-input').fill('')
+  await expect(anyParked).toHaveCount(0)
+
+  // Parking a visible card from its menu: it holds for the grace, fades, then leaves.
+  await plainCard.getByRole('button', { name: 'More actions' }).click()
+  const menu = page.locator('.task-kebab-menu:visible')
+  const row = await statusRow(menu)
+  await statusPill(row, 'Waiting').click()
+  await expect(plainCard).toBeVisible()
+  await expect.poll(async () => (await taskOf(plain.id)).phase, { timeout: 10_000 }).toBe('WAITING')
+  await page.keyboard.press('Escape')
+  // Held for the grace window (the same 3s a completed row gets), then gone.
+  // (The fade class itself lives for ~600ms, too short to assert through polling.)
+  await page.waitForTimeout(1_200)
+  await expect(plainCard).toBeVisible()
+  await expect(plainCard).toHaveCount(0, { timeout: 8_000 })
+  // A message-free way back: the status by hand.
+  await api('PATCH', `/api/tasks/${plain.id}`, { phase: 'TODO' })
+  await expect(plainCard).toBeVisible({ timeout: 15_000 })
+})
+
+test('the Projects view minibar has a Waiting toggle with the hidden count', async ({ page, browserName }) => {
+  // The minibar lives on the Projects view of the tab bar (off by default in this fixture).
+  await page.addInitScript(() => localStorage.setItem('walnut-todo-quick-views-visible', 'true'))
+  await presetPanelView(page, { section: 'tasks' })
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const parked = await createTask(`Minibarwait ${stamp}`)
+  await api('PATCH', `/api/tasks/${parked.id}`, { phase: 'WAITING' })
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  const rowEl = page.locator(`.todo-panel-item[data-task-id="${parked.id}"]`)
+  const toggle = page.getByTestId('todo-minibar-waiting')
+  await expect(toggle).toBeVisible({ timeout: 15_000 })
+  await expect(toggle).toHaveText(/^⧗ Waiting \(\d+\)$/)
+  await expect(rowEl).toHaveCount(0)
+  await toggle.click()
+  await expect(toggle).toHaveClass(/\bon\b/)
+  await expect(toggle).toHaveText('⧗ Waiting')
+  await expect(rowEl).toBeVisible({ timeout: 15_000 })
+  await shot(page.locator('.todo-minibar'), 'minibar-waiting-on', browserName)
+  await toggle.click()
+  await expect(rowEl).toHaveCount(0)
 })
 
 test('the Phase filter can show only Waiting tasks; a Waiting task keeps a plain TRIGGER pill', async ({ page, browserName }) => {
@@ -440,7 +533,11 @@ test('the composer of a Waiting task says so, and a message moves it to In Progr
   expect(after.wait_until).toBeUndefined()
   await shot(panel, 'session-after-message', browserName)
 
-  // Without a time the line says so.
+  // Parked again with no time named: the default 3-day clock shows; an explicit
+  // "" (no limit) is the one way to a wait with no time at all, and the line says so.
   await api('PATCH', `/api/tasks/${taskId}`, { phase: 'WAITING' })
+  await expect(line).toContainText(/^Waiting until \S/, { timeout: 15_000 })
+  await expect(line).not.toContainText('something happens')
+  await api('PATCH', `/api/tasks/${taskId}`, { wait_until: '' })
   await expect(line).toContainText('Waiting until something happens', { timeout: 15_000 })
 })

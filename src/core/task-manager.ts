@@ -6,7 +6,7 @@ import { generateId, isLegacyInboxGroup, isRetiredQuickStartGroup } from '../uti
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES } from './phase.js';
 import {
   COMPLETION_TO_PHASES,
@@ -4075,6 +4075,7 @@ export async function updateTask(
     }
     task.group_id = gid;
   }
+  const phaseBefore = task.phase;
   if (updates.phase !== undefined && VALID_PHASES.has(updates.phase)) {
     // CAS guard: if caller specified ifPhase, only apply phase change if current phase matches
     if (eventOptions?.ifPhase && task.phase !== eventOptions.ifPhase) {
@@ -4122,9 +4123,13 @@ export async function updateTask(
     }
   }
   // After the phase: a wait_until on anything but a WAITING task is noise, and
-  // a move out of WAITING already dropped the old one in applyPhase.
+  // a move out of WAITING already dropped the old one in applyPhase. A task
+  // ENTERING WAITING with no clock named gets the default one; '' names "none"
+  // on purpose, and a task already waiting keeps whatever it has.
   if (updates.wait_until !== undefined) {
     task.wait_until = task.phase === 'WAITING' && updates.wait_until ? updates.wait_until : undefined;
+  } else if (task.phase === 'WAITING' && phaseBefore !== 'WAITING') {
+    task.wait_until = defaultWaitUntil();
   }
   // '' means "clear" for both dates — normalize to undefined so the store never
   // holds an empty string (downstream code checks truthiness AND !== undefined).
@@ -7441,10 +7446,13 @@ function prepareRawUpdate(
     delete safeUpdates.phase;
     delete safeUpdates.status;
   }
-  // wait_until belongs to WAITING alone (applyPhase does this on the other path).
+  // wait_until belongs to WAITING alone (applyPhase does this on the other path),
+  // and a task entering WAITING with no clock named gets the default one.
   if (task.phase === 'WAITING' && typeof safeUpdates.phase === 'string' && safeUpdates.phase !== 'WAITING'
     && safeUpdates.wait_until === undefined && task.wait_until !== undefined) {
     (safeUpdates as Record<string, unknown>).wait_until = null;
+  } else if (task.phase !== 'WAITING' && safeUpdates.phase === 'WAITING' && safeUpdates.wait_until === undefined) {
+    (safeUpdates as Record<string, unknown>).wait_until = defaultWaitUntil();
   }
 
   // A folder never follows a task across projects (raw twin of the updateTask

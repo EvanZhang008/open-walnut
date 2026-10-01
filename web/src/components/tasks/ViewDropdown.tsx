@@ -93,6 +93,11 @@ export interface ViewDropdownProps {
 
   showCompleted?: boolean;
   onShowCompletedChange?: (v: boolean) => void;
+  /** Waiting tasks are hidden by default; this reveals them. `waitingCount` is
+   *  how many the default view hides right now (shown next to the label). */
+  showWaiting?: boolean;
+  waitingCount?: number;
+  onShowWaitingChange?: (v: boolean) => void;
   onClearAll: () => void;
 
   /**
@@ -178,7 +183,7 @@ export function ViewDropdown({
   phaseFilter, onPhaseFilterChange,
   dateFilter, onDateFilterChange,
   sortBy, onSortByChange, groupBy, onGroupByChange,
-  showCompleted, onShowCompletedChange, onClearAll,
+  showCompleted, onShowCompletedChange, showWaiting, waitingCount, onShowWaitingChange, onClearAll,
   query, onQueryChange, queryProjectOptions, querySourceOptions, querySprintOptions, queryTagOptions,
   viewGroups,
 }: ViewDropdownProps) {
@@ -197,10 +202,11 @@ export function ViewDropdown({
   const hasLegacySortGroup = onSortByChange !== undefined && onGroupByChange !== undefined;
   const hasProjectChips = projects !== undefined && onProjectChange !== undefined;
   const hasShowCompleted = onShowCompletedChange !== undefined;
+  const hasShowWaiting = onShowWaitingChange !== undefined;
   const hasQuery = !!query && !!onQueryChange;
 
   const queryActive = !!query && hasActiveTaskQuery(query);
-  const hasActiveFilter = !!(phaseFilter || dateFilter || activeProject || showCompleted) || queryActive;
+  const hasActiveFilter = !!(phaseFilter || dateFilter || activeProject || showCompleted || showWaiting) || queryActive;
 
   // Memoized: the fallback branches allocate, and these arrays feed the
   // sections/search memos below — fresh identities would defeat both.
@@ -520,14 +526,20 @@ export function ViewDropdown({
             </div>
           </div>
 
-          {/* ── Footer: show-completed toggle + clear. Gated as a whole so a
-                surface with neither control doesn't render an empty strip. ── */}
-          {(hasShowCompleted || hasActiveFilter) && (
+          {/* ── Footer: show-completed / show-waiting toggles + clear. Gated as a
+                whole so a surface with none of them doesn't render an empty strip. ── */}
+          {(hasShowCompleted || hasShowWaiting || hasActiveFilter) && (
             <div className="vd-footer">
               {hasShowCompleted && (
                 <label className="vd-check">
                   <input type="checkbox" checked={!!showCompleted} onChange={() => onShowCompletedChange!(!showCompleted)} />
                   Show completed
+                </label>
+              )}
+              {hasShowWaiting && (
+                <label className="vd-check" data-testid="vd-show-waiting">
+                  <input type="checkbox" checked={!!showWaiting} onChange={() => onShowWaitingChange!(!showWaiting)} />
+                  Show waiting{waitingCount ? ` (${waitingCount})` : ''}
                 </label>
               )}
               {hasActiveFilter && (

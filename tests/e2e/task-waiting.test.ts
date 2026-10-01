@@ -174,13 +174,24 @@ afterAll(async () => {
 })
 
 describe('task_update phase=WAITING from the session', () => {
-  it('parks the task: Waiting, todo bucket, no red dot, and tells the session to end its turn', async () => {
+  it('parks the task: Waiting, todo bucket, no red dot, the default 3-day clock, and tells the session to end its turn', async () => {
+    const before = Date.now()
     const out = await park()
     expect(JSON.stringify(out)).toContain('End your turn now')
     const v1 = await req('GET', `/api/v1/tasks?status=todo`)
     const row = v1.json.tasks.find((t: any) => t.id === taskId)
     expect(row).toMatchObject({ phase: 'WAITING', status: 'todo' })
-    expect(row.wait_until).toBeUndefined()
+    // No wait_until named: the default clock, so a snooze is never silent forever.
+    const ahead = Date.parse(row.wait_until) - before
+    expect(ahead).toBeGreaterThanOrEqual(3 * 86_400_000)
+    expect(ahead).toBeLessThan(3 * 86_400_000 + 60_000)
+    // The outcome names the stored clock, not the request (which named none).
+    expect(JSON.stringify(out)).toContain(`or the clock at ${row.wait_until}`)
+    expect(trackedWaitUntil().has(taskId)).toBe(true)
+    // "" asks for no clock on purpose.
+    await park({ wait_until: '' })
+    expect((await task(taskId)).wait_until).toBeUndefined()
+    expect(trackedWaitUntil().has(taskId)).toBe(false)
   })
 
   it('the turn that set it ending, a session error and the reconciler leave it waiting', async () => {

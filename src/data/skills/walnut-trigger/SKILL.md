@@ -144,17 +144,20 @@ call of your turn, put the task in **Waiting**:
 walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING"}'
 ```
 
-- Waiting is a status. The task stays in every list and in its board section,
-  with an hourglass instead of a red dot, and the end of your turn does not hand
-  it back. The next message into this session (the trigger's fire, the user, a
+- Waiting is a status. The task keeps its board section but leaves the default
+  task list (the user reveals waiting tasks with "Show waiting"), shows an
+  hourglass instead of a red dot, and the end of your turn does not hand it
+  back. The next message into this session (the trigger's fire, the user, a
   peer task) moves it to In Progress on its own, and that turn ends as Need
   Action like any other. So: `trigger_create`, one line to the user, `task_update`
   WAITING, end the turn. Nothing else to wire.
-- Add `wait_until` (an ISO datetime) when the user also wants the task back by a
-  time whether or not X happened ("by Friday either way"): at that time Walnut
-  wakes this session with a note, and the task comes back the normal way.
+- Every wait has a clock. Without `wait_until` the task comes back by itself
+  3 days from now, whether or not X happened: Walnut wakes this session with a
+  note and the task returns the normal way. Set `wait_until` (an ISO datetime)
+  when the user named a time ("by Friday either way", "give it a week"), shorter
+  or longer than the default:
   `walnut tools call task_update '{"id":"<this task's id>","phase":"WAITING","wait_until":"2026-10-03T17:00:00-07:00"}'`
-  Without it the task waits until something happens, indefinitely.
+  Pass `"wait_until":""` only when the user explicitly wants no time limit.
 - Make the check fire ONCE per event: give each event an item id (the CR's
   state + revision, the message id), so an unchanged state is quiet.
 - Write the `prompt` for the moment it fires: "Check what changed on CR 1234 and

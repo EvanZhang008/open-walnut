@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
-import { READ_MARKER_KEYS } from '@open-walnut/core';
+import { READ_MARKER_KEYS, defaultWaitUntil } from '@open-walnut/core';
 import type { Task } from '@open-walnut/core';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
@@ -136,13 +136,34 @@ function applyPhaseChangeMany(tasks: Task[], ids: Set<string>, phase: string): T
   return tasks.map((t): Task => {
     if (!ids.has(t.id)) return t;
     const base = completing ? clearSessionSlots(t) : t;
-    // Mirrors the server (applyPhase): wait_until belongs to WAITING alone, so any
-    // move out of it drops the clock. The write's own task:updated echo is
+    // Mirrors the server (applyPhase + updateTask): wait_until belongs to WAITING
+    // alone, so any move out of it drops the clock, and a move INTO it with no
+    // clock named gets the default one. The write's own task:updated echo is
     // swallowed by the phase echo guard, so without this the row kept saying
-    // "until Fri 9:00" after the change.
-    const clock = phase === 'WAITING' ? {} : { wait_until: undefined };
-    return { ...base, ...clock, phase: phase as Task['phase'], status, completed_at: completing ? now : undefined, updated_at: now };
+    // "until Fri 9:00" after the change (or never learned the default).
+    const clock = waitClockPatch(t, phase, undefined);
+    return { ...base, ...clock, ...phaseStamp(t, phase, now), status, completed_at: completing ? now : undefined, updated_at: now };
   });
+}
+
+/** `phase_changed_at` moves with the phase, as the server stamps it (the list's
+ *  "just parked" grace reads it the way the completion grace reads completed_at). */
+function phaseStamp(t: Task, phase: string, now: string): Pick<Task, 'phase' | 'phase_changed_at'> {
+  return { phase: phase as Task['phase'], phase_changed_at: t.phase === phase ? t.phase_changed_at : now };
+}
+
+/**
+ * The wait_until a phase write lands on, mirroring task-manager.updateTask:
+ * only a WAITING task keeps one; a task entering WAITING with none named gets
+ * `defaultWaitUntil()`; '' names "no clock" on purpose; a task already waiting
+ * keeps its clock unless the write names one.
+ */
+function waitClockPatch(t: Task, phase: string | undefined, named: unknown): { wait_until: string | undefined } {
+  const nextPhase = phase ?? t.phase;
+  if (nextPhase !== 'WAITING') return { wait_until: undefined };
+  if (named !== undefined) return { wait_until: typeof named === 'string' && named ? named : undefined };
+  if (t.phase !== 'WAITING') return { wait_until: defaultWaitUntil() };
+  return { wait_until: t.wait_until };
 }
 
 /** Only spread direct-value task fields for optimistic update (not instruction fields like add_tags). */
@@ -258,9 +279,12 @@ function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unk
     if (t.id !== id) return t;
     const tagPatch = hasTagInstruction ? applyTagInstructions(t, updates as TagInstructions) : undefined;
     const next = { ...t, ...filtered, ...tagPatch };
-    // Mirrors task-manager: '' clears wait_until, and only a WAITING task keeps one.
+    // Mirrors task-manager: only a WAITING task keeps a wait_until, a move into
+    // WAITING with none named gets the default, '' names "no clock".
     if ('wait_until' in filtered || 'phase' in filtered) {
-      next.wait_until = next.phase === 'WAITING' && next.wait_until ? next.wait_until : undefined;
+      const phase = typeof filtered.phase === 'string' ? filtered.phase : undefined;
+      Object.assign(next, waitClockPatch(t, phase, filtered.wait_until));
+      if (phase !== undefined) Object.assign(next, phaseStamp(t, phase, now));
     }
     return onlyReadMarker ? next : { ...next, updated_at: now };
   });

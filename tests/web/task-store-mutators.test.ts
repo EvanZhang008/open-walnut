@@ -315,3 +315,41 @@ describe('deleteTask()', () => {
     await expect(store.deleteTask('task-1')).resolves.toBe(false)
   })
 })
+
+// The Waiting clock prediction mirrors task-manager.updateTask: the PATCH
+// response is dropped and the write's own echo is swallowed, so a wrong guess
+// here is what the row shows until the next refetch.
+describe('the optimistic Waiting clock', () => {
+  const DAY_MS = 86_400_000
+  const isDefaultClock = (iso: string | undefined, before: number) =>
+    !!iso && Date.parse(iso) - before >= 3 * DAY_MS && Date.parse(iso) - before < 3 * DAY_MS + 60_000
+
+  it('setPhase(WAITING) on a To Do task predicts the 3-day default and stamps phase_changed_at', () => {
+    const before = Date.now()
+    const store = mount([task({ phase_changed_at: '2026-09-01T00:00:00.000Z' })])
+    store.setPhase('task-1', 'WAITING')
+    const row = rows()[0]
+    expect(row.phase).toBe('WAITING')
+    expect(row.status).toBe('todo')
+    expect(isDefaultClock(row.wait_until, before), row.wait_until).toBe(true)
+    expect(Date.parse(row.phase_changed_at!)).toBeGreaterThanOrEqual(before)
+  })
+
+  it('update({phase: WAITING, wait_until}) keeps the named time; "" means no clock', () => {
+    const store = mount([task()])
+    store.update('task-1', { phase: 'WAITING', wait_until: '2026-10-06T10:00:00.000Z' })
+    expect(rows()[0].wait_until).toBe('2026-10-06T10:00:00.000Z')
+    store.update('task-1', { wait_until: '' })
+    expect(rows()[0]).toMatchObject({ phase: 'WAITING', wait_until: undefined })
+  })
+
+  it('a task already waiting keeps its clock on a same-phase write, and loses it on the way out', () => {
+    const store = mount([task({ phase: 'WAITING', wait_until: '2026-10-06T10:00:00.000Z', phase_changed_at: '2026-09-01T00:00:00.000Z' })])
+    store.setPhase('task-1', 'WAITING')
+    expect(rows()[0]).toMatchObject({ wait_until: '2026-10-06T10:00:00.000Z', phase_changed_at: '2026-09-01T00:00:00.000Z' })
+    store.update('task-1', { title: 'Renamed while parked' })
+    expect(rows()[0].wait_until).toBe('2026-10-06T10:00:00.000Z')
+    store.setPhase('task-1', 'IN_PROGRESS')
+    expect(rows()[0]).toMatchObject({ phase: 'IN_PROGRESS', wait_until: undefined })
+  })
+})

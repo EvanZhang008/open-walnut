@@ -10,9 +10,11 @@
  * Waiting IS a status (2026-09-30): the task is set aside until something
  * happens. A trigger fire, a message from a human or a peer, or a prompt for the
  * human moves it to In Progress, and that turn ends as Need Action as usual. Its
- * optional `wait_until` is the server's own clock on it: picking Waiting opens an
- * "Until (optional)" row under the options to set one. A Waiting task keeps its
- * board tier; the Parked TIER is a shelf on the board, a different thing.
+ * `wait_until` is the server's own clock on it: picking Waiting opens an "Until"
+ * row under the options; the server fills 3 days from now when none is named
+ * (DEFAULT_WAIT_DAYS), the row sets another time or no time limit. A Waiting
+ * task keeps its board tier; the Parked TIER is a shelf on the board, a
+ * different thing. The task list hides Waiting tasks by default.
  *
  * Overlay rules (web/src/AGENTS.md): the badge's menu is placed by
  * useMenuPlacement, portalled to <body>, stops pointerdown (task rows are dnd
@@ -23,7 +25,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import type { Task, TaskPhase } from '@open-walnut/core';
+import { DEFAULT_WAIT_DAYS, type Task, type TaskPhase } from '@open-walnut/core';
 import * as ICONS from '../common/Icons';
 import { DatePicker } from '../common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
@@ -119,12 +121,15 @@ export function waitingLineText(task: Pick<Task, 'phase' | 'wait_until'>): strin
 
 /**
  * Under the status options while the task is (or was just set) Waiting: the
- * optional time the server wakes it by itself. Collapsed like the date rows,
- * the inline calendar on click. Picking or clearing a time ends the interaction.
+ * time the server wakes it by itself. Collapsed like the date rows, the inline
+ * calendar on click. Picking or clearing a time ends the interaction. Before
+ * the task prop carries the server's default (the plain-PATCH fallback has no
+ * optimistic copy) the label says what that default will be.
  */
-function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'wait_until'>; onSet: (waitUntil: string) => void }) {
+function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait_until'>; onSet: (waitUntil: string) => void }) {
   const [open, setOpen] = useState(false);
   const until = formatWaitUntil(task.wait_until);
+  const noClockLabel = task.phase === 'WAITING' ? 'Until: no time limit' : `Until: ${DEFAULT_WAIT_DAYS} days (default)`;
   return (
     <div className={`task-status-until${open ? ' open' : ''}`} data-testid="task-status-until">
       <div className="task-status-until-head">
@@ -138,7 +143,7 @@ function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'wait_until'>; 
         >
           <span className="task-status-until-icon" aria-hidden="true">{ICONS.ICON_CALENDAR}</span>
           <span className="task-status-until-label">
-            {until ? <>Until: <b>{until}</b></> : 'Until (optional)'}
+            {until ? <>Until: <b>{until}</b></> : noClockLabel}
           </span>
           <span className={`task-kebab-status-caret${open ? ' open' : ''}`} aria-hidden="true">{ICONS.CHEVRON_GLYPH}</span>
         </button>
@@ -147,10 +152,10 @@ function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'wait_until'>; 
             type="button"
             className="task-status-until-clear"
             data-testid="task-status-until-clear"
-            title="Clear the time: it waits until something happens"
+            title="No time limit: it waits until something happens"
             onClick={(e) => { e.stopPropagation(); setOpen(false); onSet(''); }}
           >
-            Clear
+            No limit
           </button>
         )}
       </div>

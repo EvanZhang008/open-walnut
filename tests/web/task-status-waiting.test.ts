@@ -142,10 +142,19 @@ describe('TaskStatusMenuSection and Waiting', () => {
     await click(pill(host, 'WAITING'));
     expect(s.onSetPhase).toHaveBeenCalledWith('task-1', 'WAITING');
     expect(s.afterAction).not.toHaveBeenCalled();
-    // Shown before the task prop catches up (no optimistic copy on the plain PATCH path).
+    // Shown before the task prop catches up (no optimistic copy on the plain PATCH
+    // path): the row names the default clock the server is about to set.
     const until = host.querySelector('[data-testid="task-status-until"]')!;
     expect(until).toBeTruthy();
-    expect(until.textContent).toContain('Until (optional)');
+    expect(until.textContent).toContain('Until: 3 days (default)');
+    expect(until.querySelector('[data-testid="task-status-until-clear"]')).toBeNull();
+  });
+
+  it('a Waiting task without a clock says so (an explicit no-limit, not the default again)', async () => {
+    const host = await mount(TaskStatusMenuSection, { task: task({ phase: 'WAITING' }), ...spies() });
+    await open(host);
+    const until = host.querySelector('[data-testid="task-status-until"]')!;
+    expect(until.textContent).toContain('Until: no time limit');
     expect(until.querySelector('[data-testid="task-status-until-clear"]')).toBeNull();
   });
 
@@ -177,7 +186,7 @@ describe('TaskStatusMenuSection and Waiting', () => {
     expect(s.onSetPhase).not.toHaveBeenCalled();
   });
 
-  it('a Waiting task with a time reads it on the collapsed row, and Clear writes ""', async () => {
+  it('a Waiting task with a time reads it on the collapsed row, and "No limit" writes ""', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 8, 29, 10, 0));
     const s = spies();
@@ -187,6 +196,7 @@ describe('TaskStatusMenuSection and Waiting', () => {
     await open(host);
     expect(pill(host, 'WAITING')!.getAttribute('aria-checked')).toBe('true');
     expect(host.querySelector('[data-testid="task-status-until"]')!.textContent).toContain('Until: Fri 13:27');
+    expect(host.querySelector('[data-testid="task-status-until-clear"]')!.textContent).toBe('No limit');
     await click(host.querySelector('[data-testid="task-status-until-clear"]'));
     expect(s.onSetWaitUntil).toHaveBeenCalledWith('task-1', '');
     expect(s.afterAction).toHaveBeenCalledTimes(1);

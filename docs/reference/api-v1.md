@@ -665,7 +665,8 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `WAITING` was added in 0.5.2 (a task parked until something happens; its
   `status` is `todo`); a client built before it should treat an unknown phase as
   `TODO`. `wait_until` (ISO datetime) is present only on a `WAITING` task that
-  has a time at which the server wakes it by itself.
+  has a time at which the server wakes it by itself (3 days from the move into
+  `WAITING` unless the writer named a time or asked for none).
   `category` was removed in projection v2 (2026-08); `project` is the single
   grouping layer (`""` = Inbox). `starred?` was removed in 2026-08 when the
   starred system was retired (pin + focus tier is the working set); it is an
@@ -799,11 +800,13 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
     (a trigger fire, a human, a peer) moves it to `IN_PROGRESS`, and that turn
     ends as `NEED_ACTION` as usual; a session turn that merely ends, a session
     error and a sync pull do not move it (a sync pull may only complete it).
-    `wait_until` (ISO datetime, or `""` / `null` to clear) rides with
+    `wait_until` (ISO datetime, or `""` / `null` for no clock) rides with
     `phase: "WAITING"` or onto a task already waiting (`400` otherwise): at that
     time the server wakes the task's session with a note, or hands the task back
-    as `NEED_ACTION` + `unread` when it has no session. Any move out of
-    `WAITING` clears `wait_until`.
+    as `NEED_ACTION` + `unread` when it has no session. A move into `WAITING`
+    that names no `wait_until` gets one 3 days out (`DEFAULT_WAIT_DAYS`), so a
+    wait is never open-ended unless asked for. Any move out of `WAITING` clears
+    `wait_until`.
   - Calendar window (additive, 2026-08): `end_date` joins `start_date` as the
     end of the task's working block, so a client can move or resize a task on a
     calendar with one PATCH. Both accept an ISO-8601 value, and `""` **or**
