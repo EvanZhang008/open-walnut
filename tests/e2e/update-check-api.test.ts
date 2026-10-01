@@ -43,11 +43,11 @@ beforeAll(async () => {
     if (answer === 'hang') return; // never answers; the checker's own deadline ends it
     if (typeof answer === 'number') { res.statusCode = answer; res.end('{}'); return; }
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ name: 'open-walnut', version: answer, _path: req.url }));
+    res.end(JSON.stringify({ latest: answer, _path: req.url }));
   });
   await new Promise<void>((resolve) => registry.listen(0, '127.0.0.1', resolve));
   const addr = registry.address();
-  registryUrl = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}/open-walnut/latest`;
+  registryUrl = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}/-/package/open-walnut/dist-tags`;
 
   server = await startServer({ port: 0, dev: true });
   const saddr = server.address();
@@ -81,7 +81,7 @@ describe('update check API', () => {
 
     const checked = await api('POST', '/api/system/update/check');
     expect(checked.status).toBe(200);
-    expect(checked.data).toMatchObject({ available: true, latest: '0.9.0', error: null });
+    expect(checked.data).toMatchObject({ available: true, channel: 'stable', latest: '0.9.0', tags: { latest: '0.9.0', nightly: null }, error: null });
     expect(checked.data.install.updateCommand).toBe('npm install -g open-walnut@latest');
     expect(typeof checked.data.checkedAt).toBe('string');
     expect(registryHits).toBe(1);

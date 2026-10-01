@@ -41,7 +41,7 @@ function buildValue(r: DiagnosticsReport): string {
   return parts.join('  ')
 }
 
-/** `0.5.1 is the newest release (checked 2026-09-30T…)`, `0.6.0 is published  run: npm install -g …`, or why there is no answer. */
+/** `0.5.1 is the newest  checked 2026-09-30T…`, `0.6.0 is published  run: npm install -g …`, or why there is no answer. */
 function updateValue(r: DiagnosticsReport): string {
   const u = r.update
   if (!u) return 'not checked'
@@ -55,9 +55,10 @@ function updateValue(r: DiagnosticsReport): string {
     }
   }
   if (!u.latest) return u.error ? `could not reach the registry (${u.error})` : 'not checked yet'
+  const channel = u.channel === 'nightly' ? ' on nightly' : ''
   const parts = u.available
-    ? [`${u.latest} is published`, u.install.updateCommand ? `run: ${u.install.updateCommand}` : `see ${u.packageUrl}`]
-    : [`${u.current} is the newest release`]
+    ? [`${u.latest} is published${channel}`, u.install.updateCommand ? `run: ${u.install.updateCommand}` : `see ${u.packageUrl}`]
+    : [`${u.current} is the newest${channel}`]
   if (u.checkedAt) parts.push(`checked ${u.checkedAt}`)
   if (u.error) parts.push(`last attempt failed: ${u.error}`)
   return parts.join('  ')

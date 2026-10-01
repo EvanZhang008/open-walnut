@@ -37,11 +37,17 @@ export function updateCardView(s: UpdateStatus): UpdateCardView {
         return { tone: 'neutral', icon: '○', statusLabel: 'Status', status: 'Not checked', statusClass: '', canCheck: false };
     }
   }
-  const checked = s.checkedAt ? `Checked ${formatRelative(s.checkedAt)}` : undefined;
+  const nightly = s.channel === 'nightly';
+  const checked = s.checkedAt ? `Checked ${formatRelative(s.checkedAt)}${nightly ? ' (nightly channel)' : ''}` : undefined;
   if (s.available && s.latest) {
+    const note = !s.install.updateCommand
+      ? `No package manager found for this install; see ${s.packageUrl}`
+      : s.autoUpdate
+        ? 'Installs itself the next time open-walnut web starts, or run the command now'
+        : 'Restart Walnut after installing';
     return {
-      tone: 'update', icon: '↑', statusLabel: 'Update', status: `${s.latest} available`, statusClass: 'accent',
-      note: s.install.updateCommand ? 'Restart Walnut after installing' : `No package manager found for this install; see ${s.packageUrl}`,
+      tone: 'update', icon: '↑', statusLabel: 'Update', status: `${s.latest} available${nightly ? ' (nightly)' : ''}`, statusClass: 'accent',
+      note,
       ...(s.install.updateCommand ? { command: s.install.updateCommand } : {}),
       canCheck: true,
     };

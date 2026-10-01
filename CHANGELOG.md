@@ -6,6 +6,31 @@ breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **Walnut tells you when a newer release is on npm, and updates itself when restarted.** The
+  server asks the registry once a day (20 seconds after it starts, then every 24 hours, never
+  during startup) and shows the answer where the version already lives: an `Open Walnut` card in
+  the notification panel's System section (the version, `Up to date` or `0.6.0 available` with
+  the one command that updates this install and a Copy button, `Check now`), a quiet accent dot
+  on the System rail, an `0.6.0 available` segment on the Settings build line, and an `update`
+  line in `open-walnut doctor`. `open-walnut update` installs the newer version through the
+  package manager that installed Walnut (`--check` only reports, `--channel stable|nightly`
+  follows the other channel), and `open-walnut web` installs a published update before it
+  starts, then starts again as the new code (Settings > General > `Install updates on start`,
+  config `updates.auto`, or `WALNUT_NO_AUTO_UPDATE=1`; off when the install directory is not
+  writable, with the `sudo` command printed instead). A checkout run from source and a cloud
+  replica never check or update; `WALNUT_NO_UPDATE_CHECK=1` turns the check off anywhere. The
+  running server never replaces its own files: an update is applied by a restart.
+- **A nightly channel and a one-command release.** `npm run release -- patch|minor|major` rolls
+  the Unreleased section of this file under the new version, bumps `package.json`, commits,
+  tags `vX.Y.Z` and pushes; GitHub Actions publishes the tag to npm through trusted publishing
+  (no token in the repository, provenance attached) and opens a GitHub Release with that
+  section as notes. Twice a day the same workflow publishes `main` as
+  `X.Y.(Z+1)-nightly.YYYYMMDD.N` under the `nightly` dist-tag when `main` moved and the quick
+  test baseline passes, so `npm install -g open-walnut@nightly` follows the repository without
+  waiting for a release. See [Releasing](docs/reference/releasing.md).
+
 ### Changed
 
 - **Host problems show the moment the notifications panel opens.** A remote host that cannot be

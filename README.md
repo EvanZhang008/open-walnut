@@ -78,12 +78,18 @@ For provider options, remote hosts, and troubleshooting, see
 
 ### Updating
 
-Walnut checks npm once a day for a newer release and shows it in the notification
-panel (System) and at the bottom of Settings, with the one command that updates your
-install. `open-walnut update` runs that command for you; `open-walnut update --check`
-only reports, and `open-walnut doctor` carries the same line. Restart the server
-afterwards. A checkout you run from source is never asked to update (pull and build it
+Walnut checks npm once a day for a newer release and shows it in the notification panel
+(System) and at the bottom of Settings, with the one command that updates your install.
+Restarting applies it: `open-walnut web` installs a newer published version before it
+starts (Settings > General > `Install updates on start`, or `updates.auto: false` in
+config.yaml, or `WALNUT_NO_AUTO_UPDATE=1`, to turn that off). `open-walnut update` does the
+same right away, `open-walnut update --check` only reports, and `open-walnut doctor` carries
+the same line. A checkout you run from source is never asked to update (pull and build it
 yourself), and `WALNUT_NO_UPDATE_CHECK=1` turns the check off.
+
+Two channels are published: `latest` is a tagged release, and `nightly` is `main` twice a
+day once the quick test baseline passes. `npm install -g open-walnut@nightly` switches an
+install to the nightly channel; it then follows nightly until you install `@latest` again.
 
 ### Set Up with Claude Code
 

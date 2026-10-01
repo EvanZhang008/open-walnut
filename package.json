@@ -61,6 +61,7 @@
     "docs:check": "node scripts/generate-ops-docs.mjs --check --repo-only && node scripts/check-plugin-doc-snippets.mjs",
     "test:plugin-packages": "npm run build:plugins && vitest run --config vitest.focus.config.ts tests/core/plugin-package-metadata.test.ts tests/core/plugin-cli-dev.test.ts tests/core/plugin-cli-scaffold.test.ts tests/core/plugin-publish-check.test.ts && node scripts/check-plugin-packages.mjs",
     "dev": "tsup --watch",
+    "release": "node scripts/release.mjs",
     "test": "node scripts/test-parallel.mjs",
     "test:quick": "npm run docs:check && vitest run --config vitest.quick.config.ts",
     "search:eval": "tsx scripts/search-eval.mjs",

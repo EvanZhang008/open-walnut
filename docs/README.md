@@ -49,6 +49,9 @@ must live under one of these top-level categories instead of directly under
 
 ## References
 
+- [Releasing](reference/releasing.md): the stable and nightly channels, `npm run release`,
+  the GitHub Actions publish through npm trusted publishing, and how installs learn about and
+  apply updates.
 - [Testing pipeline](reference/testing-pipeline.md) - the four layers, which one
   to run when, the known-failure baseline, and the free CI setup.
 - [Heartbeat example](reference/heartbeat-example.md)

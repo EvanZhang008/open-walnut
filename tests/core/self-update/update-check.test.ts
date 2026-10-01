@@ -13,7 +13,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-update-ch
 
 import {
   DEFAULT_REGISTRY_URL, FIRST_CHECK_DELAY_MS, RETRY_AFTER_FAILURE_MS, UPDATE_CHECK_INTERVAL_MS,
-  UpdateChecker, disabledReason, fetchLatestVersion, formatUpdateNotice, getUpdateChecker, resetUpdateChecker,
+  UpdateChecker, channelOf, disabledReason, fetchDistTags, formatUpdateNotice, getUpdateChecker, resetUpdateChecker,
   updateCheckOptedOut, type UpdateStatus,
 } from '../../../src/core/self-update/update-check.js'
 import type { InstallInfo } from '../../../src/core/self-update/install-kind.js'
@@ -26,8 +26,8 @@ const SOURCE: InstallInfo = { kind: 'source', sourceDir: '/Users/alice/open-waln
 const REPLICA: InstallInfo = { ...NPM, kind: 'replica', manager: null, updateCommand: null }
 const OTHER: InstallInfo = { kind: 'other', sourceDir: null, packageRoot: '/opt/open-walnut', manager: null, updateCommand: null }
 
-/** A fetch that answers the registry's /latest document with one version, or fails as asked. */
-function registry(answer: string | { status: number } | Error | 'hang') {
+/** A fetch that answers the registry's dist-tags document (`latest`, and `nightly` when given), or fails as asked. */
+function registry(answer: string | { latest: string; nightly?: string } | { status: number } | Error | 'hang') {
   const calls: string[] = []
   const impl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     calls.push(String(input))
@@ -37,8 +37,9 @@ function registry(answer: string | { status: number } | Error | 'hang') {
       })
     }
     if (answer instanceof Error) throw answer
-    if (typeof answer === 'object') return new Response('nope', { status: answer.status })
-    return new Response(JSON.stringify({ name: 'open-walnut', version: answer }), { status: 200, headers: { 'content-type': 'application/json' } })
+    if (typeof answer === 'object' && 'status' in answer) return new Response('nope', { status: answer.status })
+    const tags = typeof answer === 'string' ? { latest: answer } : answer
+    return new Response(JSON.stringify(tags), { status: 200, headers: { 'content-type': 'application/json' } })
   }) as unknown as typeof fetch
   return { impl, calls }
 }
@@ -93,20 +94,34 @@ describe('disabledReason', () => {
   })
 })
 
-describe('fetchLatestVersion', () => {
-  it('returns the version field', async () => {
-    const r = registry('0.6.0')
-    await expect(fetchLatestVersion('http://stub/latest', r.impl)).resolves.toBe('0.6.0')
-    expect(r.calls).toEqual(['http://stub/latest'])
+describe('channelOf', () => {
+  it('a nightly build follows nightly, everything else follows latest', () => {
+    expect(channelOf('0.5.2-nightly.20261001.7')).toBe('nightly')
+    expect(channelOf('0.5.1')).toBe('stable')
+    expect(channelOf('1.0.0-rc.1')).toBe('stable')
+    expect(channelOf('garbage')).toBe('stable')
+  })
+})
+
+describe('fetchDistTags', () => {
+  it('returns latest and nightly; a missing or malformed nightly is null', async () => {
+    const r = registry({ latest: '0.6.0', nightly: '0.6.1-nightly.20261001.3' })
+    await expect(fetchDistTags('http://stub/dist-tags', r.impl)).resolves.toEqual({ latest: '0.6.0', nightly: '0.6.1-nightly.20261001.3' })
+    expect(r.calls).toEqual(['http://stub/dist-tags'])
+    await expect(fetchDistTags('http://stub', registry('0.6.0').impl)).resolves.toEqual({ latest: '0.6.0', nightly: null })
+    const odd = vi.fn(async () => new Response(JSON.stringify({ latest: '0.6.0', nightly: 'soon' }), { status: 200 })) as unknown as typeof fetch
+    await expect(fetchDistTags('http://stub', odd)).resolves.toEqual({ latest: '0.6.0', nightly: null })
   })
 
-  it('rejects on a bad status, a bodiless answer and a timeout', async () => {
-    await expect(fetchLatestVersion('http://stub', registry({ status: 503 }).impl)).rejects.toThrow('HTTP 503')
+  it('rejects on a bad status, an answer without latest, non-JSON and a timeout', async () => {
+    await expect(fetchDistTags('http://stub', registry({ status: 503 }).impl)).rejects.toThrow('HTTP 503')
     const empty = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch
-    await expect(fetchLatestVersion('http://stub', empty)).rejects.toThrow('no version')
+    await expect(fetchDistTags('http://stub', empty)).rejects.toThrow('no latest version')
+    const notVersion = vi.fn(async () => new Response(JSON.stringify({ latest: 'latest' }), { status: 200 })) as unknown as typeof fetch
+    await expect(fetchDistTags('http://stub', notVersion)).rejects.toThrow('no latest version')
     const html = vi.fn(async () => new Response('<html>', { status: 200 })) as unknown as typeof fetch
-    await expect(fetchLatestVersion('http://stub', html)).rejects.toThrow()
-    await expect(fetchLatestVersion('http://stub', registry('hang').impl, 20)).rejects.toMatchObject({ name: 'TimeoutError' })
+    await expect(fetchDistTags('http://stub', html)).rejects.toThrow()
+    await expect(fetchDistTags('http://stub', registry('hang').impl, 20)).rejects.toMatchObject({ name: 'TimeoutError' })
   })
 })
 
@@ -123,8 +138,38 @@ describe('UpdateChecker', () => {
 
   it('starts unknown: enabled, nothing checked, nothing available', () => {
     const { checker } = make('0.6.0')
-    expect(checker.status()).toMatchObject({ enabled: true, current: '0.5.1', latest: null, available: false, checkedAt: null, error: null, checking: false })
+    expect(checker.status()).toMatchObject({ enabled: true, current: '0.5.1', channel: 'stable', latest: null, tags: { latest: null, nightly: null }, available: false, checkedAt: null, error: null, checking: false })
     expect(checker.status().reason).toBeUndefined()
+  })
+
+  it('a nightly build follows the nightly tag, and its command installs @nightly', async () => {
+    const r = registry({ latest: '0.6.0', nightly: '0.6.1-nightly.20261002.1' })
+    const checker = new UpdateChecker({ fetch: r.impl, registryUrl: 'http://stub', current: '0.6.1-nightly.20261001.4', currentKnown: true, env: ENV, now: NOW,
+      install: { ...NPM, updateCommand: 'npm install -g open-walnut@nightly' } })
+    const s = await checker.checkNow()
+    expect(s).toMatchObject({ channel: 'nightly', latest: '0.6.1-nightly.20261002.1', available: true, tags: { latest: '0.6.0', nightly: '0.6.1-nightly.20261002.1' } })
+    expect(formatUpdateNotice(s)).toBe('A newer Open Walnut is available: 0.6.1-nightly.20261001.4 → 0.6.1-nightly.20261002.1 (nightly). Run: npm install -g open-walnut@nightly')
+    // The stable release 0.6.0 is older than this nightly: not offered on this channel.
+    const stable = new UpdateChecker({ fetch: r.impl, registryUrl: 'http://stub', current: '0.6.1-nightly.20261001.4', currentKnown: true, env: ENV, channel: 'stable', install: NPM })
+    expect((await stable.checkNow())).toMatchObject({ channel: 'stable', latest: '0.6.0', available: false })
+  })
+
+  it('a stable build never sees the nightly tag, even when it is newer', async () => {
+    const r = registry({ latest: '0.5.1', nightly: '0.5.2-nightly.20261001.1' })
+    const checker = new UpdateChecker({ fetch: r.impl, registryUrl: 'http://stub', current: '0.5.1', currentKnown: true, env: ENV, install: NPM })
+    expect(await checker.checkNow()).toMatchObject({ channel: 'stable', latest: '0.5.1', available: false })
+  })
+
+  it('a nightly build whose tag is gone (no nightly published) has nothing to compare with', async () => {
+    const checker = new UpdateChecker({ fetch: registry('0.6.0').impl, registryUrl: 'http://stub', current: '0.5.2-nightly.20261001.1', currentKnown: true, env: ENV, install: NPM })
+    expect(await checker.checkNow()).toMatchObject({ channel: 'nightly', latest: null, available: false, error: null, tags: { latest: '0.6.0', nightly: null } })
+  })
+
+  it('the default install detection names the channel tag in the command', () => {
+    const nightly = new UpdateChecker({ current: '0.5.2-nightly.20261001.1', currentKnown: true, env: ENV })
+    expect(nightly.status().channel).toBe('nightly')
+    // The mocked constants give no package root, so there is no command; the kind is what the test can pin.
+    expect(nightly.status().install.kind).toBe('other')
   })
 
   it('a newer release is available with the install command', async () => {

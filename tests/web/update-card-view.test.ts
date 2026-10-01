@@ -13,7 +13,7 @@ const NPM = { kind: 'npm' as const, sourceDir: null, packageRoot: '/usr/local/li
 
 function status(over: Partial<UpdateStatus>): UpdateStatus {
   return {
-    enabled: true, install: NPM, current: '0.5.1', latest: '0.5.1', available: false,
+    enabled: true, install: NPM, current: '0.5.1', channel: 'stable', latest: '0.5.1', tags: { latest: '0.5.1', nightly: null }, available: false,
     checkedAt: new Date(Date.now() - 90_000).toISOString(), error: null, checking: false,
     packageUrl: 'https://www.npmjs.com/package/open-walnut', ...over,
   };
@@ -23,6 +23,20 @@ describe('updateCardView', () => {
   it('a newer release: accent tone, the version, the install command, the restart note, Check now', () => {
     const v = updateCardView(status({ latest: '0.6.0', available: true }));
     expect(v).toMatchObject({ tone: 'update', statusLabel: 'Update', status: '0.6.0 available', statusClass: 'accent', command: 'npm install -g open-walnut@latest', note: 'Restart Walnut after installing', canCheck: true });
+  });
+
+  it('with update-on-start on, the note says the next start installs it', () => {
+    const v = updateCardView(status({ latest: '0.6.0', available: true, autoUpdate: true }));
+    expect(v.note).toBe('Installs itself the next time open-walnut web starts, or run the command now');
+    expect(v.command).toBe('npm install -g open-walnut@latest');
+  });
+
+  it('a nightly build names its channel', () => {
+    const nightly = status({ current: '0.6.1-nightly.20261001.4', channel: 'nightly', latest: '0.6.1-nightly.20261002.1', tags: { latest: '0.6.0', nightly: '0.6.1-nightly.20261002.1' }, available: true, install: { ...NPM, updateCommand: 'npm install -g open-walnut@nightly' } });
+    expect(updateCardView(nightly)).toMatchObject({ status: '0.6.1-nightly.20261002.1 available (nightly)', command: 'npm install -g open-walnut@nightly' });
+    const current = updateCardView(status({ current: '0.6.1-nightly.20261002.1', channel: 'nightly', latest: '0.6.1-nightly.20261002.1' }));
+    expect(current.status).toBe('Up to date');
+    expect(current.note).toMatch(/^Checked 1m ago \(nightly channel\)$/);
   });
 
   it('a newer release with no manager: the package page instead of a command', () => {

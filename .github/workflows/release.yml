@@ -1,0 +1,140 @@
+name: Release
+
+# Two channels, one workflow (docs/reference/releasing.md):
+#
+#   stable   a `vX.Y.Z` tag, cut locally by `npm run release -- patch|minor|major`
+#            (scripts/release.mjs: CHANGELOG rolled, version bumped, one commit,
+#            one tag). Published as dist-tag `latest`, plus a GitHub Release whose
+#            notes are that version's CHANGELOG section.
+#   nightly  main, on a schedule (and by hand): when main moved since the last
+#            nightly, build it, run the quick test baseline, publish it as
+#            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`, and move the
+#            `nightly` tag to the published commit. Nothing is committed: the
+#            version lives in the registry, not in package.json.
+#
+# Authentication is npm trusted publishing (OIDC): no token is stored anywhere.
+# One-time setup on npmjs.com, package open-walnut > Settings > Trusted publisher:
+# GitHub Actions, owner EvanZhang008, repository open-walnut, workflow release.yml.
+# `--provenance` attaches the build attestation npm shows on the package page.
+# Trusted publishing needs npm 11.5.1 or newer, so the job updates npm first.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  schedule:
+    # Twice a day, off the hour (GitHub drops exact-hour crons under load).
+    - cron: '17 5,17 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Publish a nightly even when main has not moved since the last one'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  stable:
+    name: Publish stable (${{ github.ref_name }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm install -g npm@latest
+      - name: The tag names the version package.json carries
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "${{ github.ref_name }}" ]; then
+            echo "tag ${{ github.ref_name }} but package.json is $version (cut releases with: npm run release -- <bump>)" >&2
+            exit 1
+          fi
+      - run: npm install
+      - run: npm run lint
+      # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs
+      # against the tarball before anything leaves the runner.
+      - run: npm publish --provenance --access public
+      - name: GitHub Release with this version's CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          node -e '
+            const fs = require("fs");
+            const [,, version] = process.argv;
+            const text = fs.readFileSync("CHANGELOG.md", "utf8");
+            const re = new RegExp("^## \\[" + version.replace(/\./g, "\\.") + "\\][^\n]*\n([\\s\\S]*?)(?=^## \\[|$(?![\\s\\S]))", "m");
+            const m = re.exec(text);
+            fs.writeFileSync("release-notes.md", (m ? m[1] : "See CHANGELOG.md.").trim() + "\n");
+          ' "$version"
+          gh release create "${GITHUB_REF_NAME}" --title "Open Walnut ${version}" --notes-file release-notes.md
+
+  nightly:
+    name: Publish nightly from main
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Did main move since the last nightly?
+        id: moved
+        run: |
+          git fetch --quiet origin 'refs/tags/nightly:refs/tags/nightly' 2>/dev/null || true
+          last="$(git rev-parse -q --verify refs/tags/nightly 2>/dev/null || echo none)"
+          head="$(git rev-parse HEAD)"
+          echo "last nightly: $last"
+          echo "main:         $head"
+          if [ "$last" = "$head" ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "main has not moved since the last nightly; nothing to publish"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v5
+        if: steps.moved.outputs.publish == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        if: steps.moved.outputs.publish == 'true'
+        with:
+          bun-version: latest
+      - if: steps.moved.outputs.publish == 'true'
+        run: npm install -g npm@latest
+      - if: steps.moved.outputs.publish == 'true'
+        run: npm install
+      - if: steps.moved.outputs.publish == 'true'
+        run: npm run lint
+      # The same gate CI's blocking tier uses: the baseline, not raw pass/fail.
+      - if: steps.moved.outputs.publish == 'true'
+        run: npm run test:baseline -- --maxWorkers=1
+      - name: Version this nightly and publish it
+        if: steps.moved.outputs.publish == 'true'
+        run: |
+          version="$(node scripts/nightly-version.mjs)"
+          echo "publishing open-walnut@$version"
+          npm version "$version" --no-git-tag-version
+          npm publish --tag nightly --provenance --access public
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+        id: publish
+      - name: Move the nightly tag to this commit
+        if: steps.moved.outputs.publish == 'true'
+        run: |
+          git tag -f nightly HEAD
+          git push --force origin refs/tags/nightly
+      - if: steps.moved.outputs.publish == 'true'
+        run: echo "published open-walnut@${{ steps.publish.outputs.version }} (dist-tag nightly) from $(git rev-parse --short HEAD)"

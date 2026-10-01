@@ -33,7 +33,7 @@ export const PREFLIGHT = {
 export const UPDATE: UpdateStatus = {
   enabled: false, reason: 'source',
   install: { kind: 'source', sourceDir: '/Users/alice/open-walnut', packageRoot: '/Users/alice/open-walnut', manager: null, updateCommand: null },
-  current: '0.4.5', latest: null, available: false, checkedAt: null, error: null, checking: false,
+  current: '0.4.5', channel: 'stable', latest: null, tags: { latest: null, nightly: null }, available: false, checkedAt: null, error: null, checking: false,
   packageUrl: 'https://www.npmjs.com/package/open-walnut',
 }
 

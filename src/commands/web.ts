@@ -74,6 +74,32 @@ export async function runWeb(options: {
   // Note: ephemeral WALNUT_HOME guard is in constants.ts (must run at import time,
   // before any derived paths are computed). See resolveWalnutHome() there.
 
+  // Update on restart (src/core/self-update/startup-update.ts): an npm install with
+  // a newer release published installs it now, before anything is listening, and
+  // this process becomes a thin parent of the new one. Every other case (a source
+  // checkout, updates.auto: false, no newer release, the registry down, a
+  // read-only prefix) falls through and starts as it is.
+  {
+    const { updateOnStart, installDirWritable, runInherited, reexecSelf } = await import('../core/self-update/startup-update.js')
+    const { UpdateChecker } = await import('../core/self-update/update-check.js')
+    const outcome = await updateOnStart({
+      checkNow: () => new UpdateChecker().checkNow(),
+      configAuto: async () => {
+        const { getConfig } = await import('../core/config-manager.js')
+        return (await getConfig()).updates?.auto
+      },
+      env: process.env,
+      writable: installDirWritable,
+      run: runInherited,
+      reexec: reexecSelf,
+      err: (line) => process.stderr.write(`${line}\n`),
+    })
+    if (outcome.kind === 'reexeced') {
+      process.exitCode = outcome.exitCode
+      return
+    }
+  }
+
   // Native addons (better-sqlite3) are compiled against one Node ABI. If the
   // running Node differs, the task store can't open and startup dies with an
   // opaque "prewarm failed". Repair it in place instead of requiring a Node

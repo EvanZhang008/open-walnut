@@ -8,16 +8,22 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-update-cmd'))
 
-import { installArgv, planUpdate, runUpdateWith, type UpdateDeps } from '../../src/commands/update.js'
+import { parseChannel, planUpdate, runUpdateWith, type UpdateDeps } from '../../src/commands/update.js'
 import type { UpdateStatus } from '../../src/core/self-update/update-check.js'
 
 const NPM_UP_TO_DATE: UpdateStatus = {
   enabled: true,
   install: { kind: 'npm', sourceDir: null, packageRoot: '/usr/local/lib/node_modules/open-walnut', manager: 'npm', updateCommand: 'npm install -g open-walnut@latest' },
-  current: '0.5.1', latest: '0.5.1', available: false, checkedAt: '2026-09-30T10:00:00.000Z', error: null, checking: false,
+  current: '0.5.1', channel: 'stable', latest: '0.5.1', tags: { latest: '0.5.1', nightly: null }, available: false,
+  checkedAt: '2026-09-30T10:00:00.000Z', error: null, checking: false,
   packageUrl: 'https://www.npmjs.com/package/open-walnut',
 }
-const NPM_NEWER: UpdateStatus = { ...NPM_UP_TO_DATE, latest: '0.6.0', available: true }
+const NPM_NEWER: UpdateStatus = { ...NPM_UP_TO_DATE, latest: '0.6.0', tags: { latest: '0.6.0', nightly: null }, available: true }
+const NIGHTLY_NEWER: UpdateStatus = {
+  ...NPM_UP_TO_DATE, current: '0.6.1-nightly.20261001.4', channel: 'nightly', latest: '0.6.1-nightly.20261002.1',
+  tags: { latest: '0.6.0', nightly: '0.6.1-nightly.20261002.1' }, available: true,
+  install: { ...NPM_UP_TO_DATE.install, updateCommand: 'npm install -g open-walnut@nightly' },
+}
 const SOURCE: UpdateStatus = {
   ...NPM_UP_TO_DATE, enabled: false, reason: 'source', latest: null, checkedAt: null,
   install: { kind: 'source', sourceDir: '/Users/alice/open-walnut', packageRoot: '/Users/alice/open-walnut', manager: null, updateCommand: null },
@@ -26,12 +32,12 @@ const REPLICA: UpdateStatus = { ...SOURCE, reason: 'replica', install: { ...SOUR
 const OTHER_NEWER: UpdateStatus = { ...NPM_NEWER, install: { kind: 'other', sourceDir: null, packageRoot: '/opt/open-walnut', manager: null, updateCommand: null } }
 const UNREACHABLE: UpdateStatus = { ...NPM_UP_TO_DATE, latest: null, checkedAt: null, error: 'fetch failed' }
 
-describe('installArgv', () => {
-  it('spells each manager\'s global install as argv (no shell)', () => {
-    expect(installArgv('npm', 'open-walnut@0.6.0')).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0'] })
-    expect(installArgv('pnpm', 'open-walnut@0.6.0')).toEqual({ file: 'pnpm', args: ['add', '-g', 'open-walnut@0.6.0'] })
-    expect(installArgv('bun', 'open-walnut@0.6.0')).toEqual({ file: 'bun', args: ['add', '-g', 'open-walnut@0.6.0'] })
-    expect(installArgv('yarn', 'open-walnut@0.6.0')).toEqual({ file: 'yarn', args: ['global', 'add', 'open-walnut@0.6.0'] })
+describe('parseChannel', () => {
+  it('accepts stable and nightly, nothing else', () => {
+    expect(parseChannel(undefined)).toBeUndefined()
+    expect(parseChannel('stable')).toBe('stable')
+    expect(parseChannel('nightly')).toBe('nightly')
+    expect(() => parseChannel('beta')).toThrow('--channel must be stable or nightly')
   })
 })
 
@@ -48,8 +54,20 @@ describe('planUpdate', () => {
     expect(planUpdate(REPLICA, { check: false })).toMatchObject({ exitCode: 0, lines: [expect.stringContaining('cloud replica')] })
   })
 
-  it('says when the current release is the newest', () => {
-    expect(planUpdate(NPM_UP_TO_DATE, { check: false })).toEqual({ exitCode: 0, lines: ['Open Walnut 0.5.1 is the newest release.'] })
+  it('says when the current release is the newest, and names the other channel when it has one', () => {
+    expect(planUpdate(NPM_UP_TO_DATE, { check: false })).toEqual({ exitCode: 0, lines: ['Open Walnut 0.5.1 is the newest (0.5.1).'] })
+    const withNightly = planUpdate({ ...NPM_UP_TO_DATE, tags: { latest: '0.5.1', nightly: '0.5.2-nightly.20261001.1' } }, { check: false })
+    expect(withNightly.lines).toEqual([
+      'Open Walnut 0.5.1 is the newest (0.5.1).',
+      'The nightly channel is at 0.5.2-nightly.20261001.1: walnut update --channel nightly',
+    ])
+  })
+
+  it('a nightly build installs the exact newer nightly and says so', () => {
+    const plan = planUpdate(NIGHTLY_NEWER, { check: false })
+    expect(plan.install).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.1-nightly.20261002.1'] })
+    expect(plan.lines[0]).toBe('A newer Open Walnut is available on the nightly channel: 0.6.1-nightly.20261001.4 → 0.6.1-nightly.20261002.1.')
+    expect(planUpdate(NIGHTLY_NEWER, { check: true }).lines[1]).toBe('Run: npm install -g open-walnut@nightly')
   })
 
   it('installs the exact newer version through the manager that installed Walnut', () => {
@@ -87,15 +105,16 @@ function deps(status: UpdateStatus, over: Partial<UpdateDeps> = {}) {
   const out: string[] = []
   const err: string[] = []
   const run = vi.fn(async () => 0)
+  const checkNow = vi.fn(async () => status)
   const d: UpdateDeps = {
-    checkNow: async () => status,
+    checkNow,
     run,
     serverRunning: async () => false,
     out: (l) => out.push(l),
     err: (l) => err.push(l),
     ...over,
   }
-  return { d, out, err, run }
+  return { d, out, err, run, checkNow }
 }
 
 describe('runUpdateWith', () => {
@@ -145,6 +164,16 @@ describe('runUpdateWith', () => {
     expect(await runUpdateWith({}, { json: false }, d)).toBe(1)
     expect(out).toEqual([])
     expect(err[0]).toContain('Could not reach the npm registry')
+  })
+
+  it('--channel is handed to the check; a bad channel is exit 2 before any network', async () => {
+    const { d, checkNow } = deps(NPM_UP_TO_DATE)
+    await runUpdateWith({ check: true, channel: 'nightly' }, { json: false }, d)
+    expect(checkNow).toHaveBeenCalledWith('nightly')
+    const bad = deps(NPM_UP_TO_DATE)
+    expect(await runUpdateWith({ channel: 'beta' }, { json: false }, bad.d)).toBe(2)
+    expect(bad.checkNow).not.toHaveBeenCalled()
+    expect(bad.err[0]).toContain('--channel must be stable or nightly')
   })
 
   it('--json prints the status with the plan', async () => {

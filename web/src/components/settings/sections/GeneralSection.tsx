@@ -9,6 +9,7 @@ import { useTheme, type ThemePreference } from '@/hooks/useTheme';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { UI_ONLY_CATEGORIES, setShowUiOnlyCategory, type UiOnlyCategory } from '@/hooks/useDeveloperSettings';
+import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import '@/styles/settings-sections-configure.css';
 
 export type SaveOpts = { rowKey?: string };
@@ -146,6 +147,32 @@ function ChatNotificationRow({ category, config, save }: { category: UiOnlyCateg
 }
 
 /**
+ * Update on start (config `updates.auto`): only an npm install has anything to
+ * install, so the row is absent on a source checkout, a replica and an unpacked
+ * bundle, where the same words would promise something that never happens.
+ */
+function UpdateOnStartRow({ config, save }: { config: Config; save: ReturnType<typeof useSerialSave> }) {
+  const { status } = useUpdateStatus(true);
+  const rowKey = 'general.updates-auto';
+  const setting = useOptimisticSetting<boolean>(
+    config.updates?.auto !== false,
+    (v) => save((c) => ({ updates: { ...(c.updates ?? {}), auto: v } }), { rowKey }),
+    { rowKey },
+  );
+  if (status?.install.kind !== 'npm') return null;
+  return (
+    <SettingsRow
+      label="Install updates on start"
+      help="Installs a newer release from npm when open-walnut web starts."
+      htmlFor="settings-updates-auto"
+      error={setting.error}
+      data-testid="settings-updates-auto-row"
+      control={<ToggleSwitch id="settings-updates-auto" checked={setting.value} busy={setting.busy} onChange={setting.set} />}
+    />
+  );
+}
+
+/**
  * Appearance and the person. Appearance and Focus bar are browser prefs (local
  * storage, no config write) that ui-prefs sync copies to every window of this
  * Walnut, so their help says so; every other row is a config row via onSave.
@@ -226,6 +253,7 @@ export function GeneralSection({ config, onSave }: Props) {
             />
           }
         />
+        <UpdateOnStartRow config={config} save={save} />
       </SettingsGroup>
       <SettingsGroup heading="Chat notifications" footer="Background notifications that appear in chat.">
         {UI_ONLY_CATEGORIES.map((cat) => (

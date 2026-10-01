@@ -15,13 +15,21 @@ export interface UpdateInstallInfo {
   updateCommand: string | null;
 }
 
+export type UpdateChannel = 'stable' | 'nightly';
+
 export interface UpdateStatus {
   enabled: boolean;
   reason?: UpdateCheckDisabledReason;
   install: UpdateInstallInfo;
   current: string;
+  /** Which dist-tag this install follows: a `-nightly.*` build follows nightly, a release follows latest. */
+  channel: UpdateChannel;
+  /** The newest version on this channel, or null before the first successful check. */
   latest: string | null;
+  tags: { latest: string | null; nightly: string | null };
   available: boolean;
+  /** `open-walnut web` installs a newer release before it starts (config `updates.auto`, default on). Route-only. */
+  autoUpdate?: boolean;
   checkedAt: string | null;
   error: string | null;
   checking: boolean;

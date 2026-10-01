@@ -5,10 +5,13 @@
  * release feed at a fixed cadence and shows a quiet pill; Codex and Gemini ask
  * the registry's `/latest` document and print the install command):
  *
- *   - ONE small GET of `registry.npmjs.org/open-walnut/latest`, 5 s deadline,
- *     20 s after listen (never in the boot fan-out) and then daily. A failure
- *     keeps the last good answer and retries in an hour. In memory only: the
- *     server is long-lived, and a restart re-asks once.
+ *   - ONE small GET of the package's dist-tags (`latest`, `nightly`), 5 s
+ *     deadline, 20 s after listen (never in the boot fan-out) and then daily. A
+ *     failure keeps the last good answer and retries in an hour. In memory only:
+ *     the server is long-lived, and a restart re-asks once.
+ *   - Two channels, read off the installed version: `x.y.z-nightly.*` follows
+ *     the `nightly` tag (main, published on a schedule), anything else follows
+ *     `latest` (a tagged release). The update command names the same tag.
  *   - Nothing is downloaded or installed. The status says what is newer and
  *     which command updates THIS install; the user runs it (or `walnut update`).
  *   - A source checkout and a cloud replica never check (install-kind.ts). Tests
@@ -21,9 +24,23 @@
 
 import { getVersion, isVersionKnown } from '../version.js'
 import { detectInstall, PACKAGE_PAGE_URL, type InstallInfo } from './install-kind.js'
-import { isNewer } from './version-compare.js'
+import { isNewer, parseVersion } from './version-compare.js'
 
-export const DEFAULT_REGISTRY_URL = 'https://registry.npmjs.org/open-walnut/latest'
+export const DEFAULT_REGISTRY_URL = 'https://registry.npmjs.org/-/package/open-walnut/dist-tags'
+
+export type UpdateChannel = 'stable' | 'nightly'
+export type DistTags = { latest: string | null; nightly: string | null }
+
+/** The dist-tag a channel follows. */
+export function tagForChannel(channel: UpdateChannel): 'latest' | 'nightly' {
+  return channel === 'nightly' ? 'nightly' : 'latest'
+}
+
+/** A nightly build carries `nightly` among its prerelease identifiers; everything else is stable. */
+export function channelOf(version: string): UpdateChannel {
+  const parsed = parseVersion(version)
+  return parsed?.prerelease.some((id) => id === 'nightly') ? 'nightly' : 'stable'
+}
 export const REGISTRY_TIMEOUT_MS = 5_000
 export const FIRST_CHECK_DELAY_MS = 20_000
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -37,8 +54,12 @@ export interface UpdateStatus {
   reason?: UpdateCheckDisabledReason
   install: InstallInfo
   current: string
-  /** The newest published version the last successful check saw; null before the first. */
+  /** Which dist-tag this install follows, and the version that tag names right now. */
+  channel: UpdateChannel
+  /** The newest version on this channel that the last successful check saw; null before the first. */
   latest: string | null
+  /** Every channel's version from the last successful check (the card and doctor name the other one). */
+  tags: DistTags
   available: boolean
   /** ISO time of the last successful check. */
   checkedAt: string | null
@@ -54,6 +75,8 @@ export interface UpdateCheckerOptions {
   registryUrl?: string
   current?: string
   currentKnown?: boolean
+  /** Follow this channel instead of the installed version's (`walnut update --channel`). */
+  channel?: UpdateChannel
   install?: InstallInfo
   env?: Record<string, string | undefined>
   now?: () => Date
@@ -83,18 +106,23 @@ export function disabledReason(
   return null
 }
 
-/** The registry's `/latest` document, reduced to the one field used. */
-export async function fetchLatestVersion(
+/** The registry's dist-tags document (`{ latest, nightly, ... }`), reduced to the two tags followed. */
+export async function fetchDistTags(
   url: string, fetchImpl: typeof fetch, timeoutMs = REGISTRY_TIMEOUT_MS,
-): Promise<string> {
+): Promise<DistTags> {
   const res = await fetchImpl(url, {
     headers: { accept: 'application/json', 'user-agent': `open-walnut/${getVersion()}` },
     signal: AbortSignal.timeout(timeoutMs),
   })
   if (!res.ok) throw new Error(`registry answered HTTP ${res.status}`)
-  const body = (await res.json()) as { version?: unknown }
-  if (typeof body?.version !== 'string' || !body.version.trim()) throw new Error('registry answer had no version')
-  return body.version.trim()
+  const body = (await res.json()) as Record<string, unknown> | null
+  const tag = (name: string): string | null => {
+    const v = body?.[name]
+    return typeof v === 'string' && parseVersion(v) ? v.trim() : null
+  }
+  const tags = { latest: tag('latest'), nightly: tag('nightly') }
+  if (!tags.latest) throw new Error('registry answer had no latest version')
+  return tags
 }
 
 export class UpdateChecker {
@@ -106,7 +134,8 @@ export class UpdateChecker {
   private readonly disabled: UpdateCheckDisabledReason | null
   private readonly install: InstallInfo
   private readonly current: string
-  private latest: string | null = null
+  private readonly channel: UpdateChannel
+  private tags: DistTags = { latest: null, nightly: null }
   private checkedAt: string | null = null
   private error: string | null = null
   private inflight: Promise<UpdateStatus> | null = null
@@ -122,20 +151,24 @@ export class UpdateChecker {
     this.now = opts.now ?? (() => new Date())
     this.setTimer = opts.setTimer ?? ((fn, ms) => { const h = setTimeout(fn, ms); h.unref?.(); return h })
     this.clearTimer = opts.clearTimer ?? ((h) => clearTimeout(h as NodeJS.Timeout))
-    this.install = opts.install ?? detectInstall()
     this.current = opts.current ?? getVersion()
+    this.channel = opts.channel ?? channelOf(this.current)
+    this.install = opts.install ?? detectInstall(undefined, this.channel)
     const known = opts.currentKnown ?? isVersionKnown()
     this.disabled = disabledReason(this.install, env, known, this.registryUrl)
   }
 
   status(): UpdateStatus {
-    const available = this.latest !== null && isNewer(this.latest, this.current)
+    const latest = this.tags[tagForChannel(this.channel)]
+    const available = latest !== null && isNewer(latest, this.current)
     return {
       enabled: this.disabled === null,
       ...(this.disabled ? { reason: this.disabled } : {}),
       install: this.install,
       current: this.current,
-      latest: this.latest,
+      channel: this.channel,
+      latest,
+      tags: this.tags,
       available,
       checkedAt: this.checkedAt,
       error: this.error,
@@ -164,8 +197,7 @@ export class UpdateChecker {
   /** The fetch and the bookkeeping; never throws. The server logs the outcome through onChecked. */
   private async run(): Promise<void> {
     try {
-      const latest = await fetchLatestVersion(this.registryUrl, this.fetchImpl)
-      this.latest = latest
+      this.tags = await fetchDistTags(this.registryUrl, this.fetchImpl)
       this.checkedAt = this.now().toISOString()
       this.error = null
     } catch (err) {
@@ -229,7 +261,8 @@ export function setUpdateCheckerForTest(checker: UpdateChecker): void {
  */
 export function formatUpdateNotice(status: UpdateStatus): string | null {
   if (!status.available || !status.latest) return null
-  const head = `A newer Open Walnut is available: ${status.current} → ${status.latest}.`
+  const channel = status.channel === 'nightly' ? ' (nightly)' : ''
+  const head = `A newer Open Walnut is available: ${status.current} → ${status.latest}${channel}.`
   if (status.install.updateCommand) return `${head} Run: ${status.install.updateCommand}`
   return `${head} See ${status.packageUrl}`
 }

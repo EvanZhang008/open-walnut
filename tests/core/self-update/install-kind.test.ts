@@ -8,7 +8,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-install-kind'))
 
-import { detectInstall, managerCommand, managerFromPath } from '../../../src/core/self-update/install-kind.js'
+import { detectInstall, managerArgv, managerCommand, managerFromPath } from '../../../src/core/self-update/install-kind.js'
 
 describe('managerFromPath', () => {
   it('names the manager a global install path belongs to', () => {
@@ -29,12 +29,20 @@ describe('managerFromPath', () => {
   })
 })
 
-describe('managerCommand', () => {
+describe('managerCommand and managerArgv', () => {
   it('spells each manager\'s global install of the latest release', () => {
     expect(managerCommand('npm')).toBe('npm install -g open-walnut@latest')
     expect(managerCommand('pnpm')).toBe('pnpm add -g open-walnut@latest')
     expect(managerCommand('bun')).toBe('bun add -g open-walnut@latest')
     expect(managerCommand('yarn')).toBe('yarn global add open-walnut@latest')
+    expect(managerCommand('npm', 'nightly')).toBe('npm install -g open-walnut@nightly')
+  })
+
+  it('argv is the same words without a shell', () => {
+    expect(managerArgv('npm', 'open-walnut@0.6.0')).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0'] })
+    expect(managerArgv('pnpm', 'open-walnut@0.6.0')).toEqual({ file: 'pnpm', args: ['add', '-g', 'open-walnut@0.6.0'] })
+    expect(managerArgv('bun', 'open-walnut@0.6.0')).toEqual({ file: 'bun', args: ['add', '-g', 'open-walnut@0.6.0'] })
+    expect(managerArgv('yarn', 'open-walnut@0.6.0')).toEqual({ file: 'yarn', args: ['global', 'add', 'open-walnut@0.6.0'] })
   })
 })
 
@@ -60,6 +68,8 @@ describe('detectInstall', () => {
     expect(info).toMatchObject({ kind: 'npm', manager: 'npm', updateCommand: 'npm install -g open-walnut@latest', packageRoot: npmRoot })
     const bun = detectInstall({ cloud: false, installDir: null, packageRoot: '/Users/alice/.bun/install/global/node_modules/open-walnut' })
     expect(bun).toMatchObject({ kind: 'npm', manager: 'bun', updateCommand: 'bun add -g open-walnut@latest' })
+    const nightly = detectInstall({ cloud: false, installDir: null, packageRoot: npmRoot }, 'nightly')
+    expect(nightly.updateCommand).toBe('npm install -g open-walnut@nightly')
   })
 
   it('is "other" for a package root with no checkout and no node_modules parent, or no root at all', () => {

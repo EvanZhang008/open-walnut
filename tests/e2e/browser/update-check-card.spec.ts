@@ -27,8 +27,11 @@ interface WireUpdate {
   reason?: string
   install: { kind: string; sourceDir: string | null; packageRoot: string | null; manager: string | null; updateCommand: string | null }
   current: string
+  channel: 'stable' | 'nightly'
   latest: string | null
+  tags: { latest: string | null; nightly: string | null }
   available: boolean
+  autoUpdate: boolean
   checkedAt: string | null
   error: string | null
   checking: boolean
@@ -37,11 +40,13 @@ interface WireUpdate {
 
 const NPM_INSTALL = { kind: 'npm', sourceDir: null, packageRoot: '/usr/local/lib/node_modules/open-walnut', manager: 'npm', updateCommand: 'npm install -g open-walnut@latest' }
 const base = (over: Partial<WireUpdate>): WireUpdate => ({
-  enabled: true, install: NPM_INSTALL, current: '0.5.1', latest: '0.5.1', available: false,
+  enabled: true, install: NPM_INSTALL, current: '0.5.1', channel: 'stable', latest: '0.5.1', tags: { latest: '0.5.1', nightly: null },
+  available: false, autoUpdate: false,
   checkedAt: new Date(Date.now() - 5 * 60_000).toISOString(), error: null, checking: false,
   packageUrl: 'https://www.npmjs.com/package/open-walnut', ...over,
 })
-const NEWER = base({ latest: '0.9.0', available: true })
+const NEWER = base({ latest: '0.9.0', tags: { latest: '0.9.0', nightly: null }, available: true })
+const NEWER_AUTO = base({ latest: '0.9.0', tags: { latest: '0.9.0', nightly: null }, available: true, autoUpdate: true })
 const CURRENT = base({})
 const UNREACHABLE = base({ latest: null, checkedAt: null, error: 'fetch failed' })
 
@@ -165,4 +170,45 @@ test('UC-6: an up-to-date install adds nothing to the Settings build line', asyn
   await loadApp(page, '/settings')
   await expect(page.getByTestId('settings-build-line')).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('settings-build-line-update')).toHaveCount(0)
+})
+
+test('UC-7: with update-on-start on, the card says the next start installs it (the command stays for now)', async ({ page }) => {
+  await routeUpdate(page, NEWER_AUTO)
+  await loadApp(page)
+  const c = await openSystem(page)
+  await expect(c.getByTestId('nfc-update-note')).toHaveText('Installs itself the next time open-walnut web starts, or run the command now')
+  await expect(c.getByTestId('nfc-update-command')).toHaveText('npm install -g open-walnut@latest')
+  await c.screenshot({ path: `${SHOTS}/uc7-auto-on.png` })
+})
+
+test('UC-8: Settings > General shows "Install updates on start" for an npm install, saves both states, and hides it on a source checkout', async ({ page, request }) => {
+  await routeUpdate(page, CURRENT)
+  await loadApp(page, '/settings')
+  await page.getByTestId('settings-nav-general').click()
+  const row = page.getByTestId('settings-updates-auto-row')
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  const toggle = row.getByRole('switch')
+  // Default on: config.yaml has no updates block yet.
+  await expect(toggle).toHaveAttribute('aria-checked', 'true')
+  await row.screenshot({ path: `${SHOTS}/uc8-settings-row.png` })
+
+  const saved = page.waitForResponse((r) => r.url().includes('/api/config') && r.request().method() !== 'GET' && r.ok())
+  await toggle.click()
+  await saved
+  await expect(toggle).toHaveAttribute('aria-checked', 'false')
+  // The server has it: the real config, read back.
+  await expect.poll(async () => ((await (await request.get('/api/config')).json()) as { config: { updates?: { auto?: boolean } } }).config.updates?.auto).toBe(false)
+
+  const savedAgain = page.waitForResponse((r) => r.url().includes('/api/config') && r.request().method() !== 'GET' && r.ok())
+  await toggle.click()
+  await savedAgain
+  await expect(toggle).toHaveAttribute('aria-checked', 'true')
+  await expect.poll(async () => ((await (await request.get('/api/config')).json()) as { config: { updates?: { auto?: boolean } } }).config.updates?.auto).toBe(true)
+})
+
+test('UC-9: the row is absent when Walnut runs from a source checkout (the fixture server as it is)', async ({ page }) => {
+  await loadApp(page, '/settings')
+  await page.getByTestId('settings-nav-general').click()
+  await expect(page.getByTestId('settings-appearance-row')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('settings-updates-auto-row')).toHaveCount(0)
 })

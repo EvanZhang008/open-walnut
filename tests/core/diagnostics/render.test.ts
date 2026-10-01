@@ -24,7 +24,8 @@ function report(): DiagnosticsReport {
     update: {
       enabled: true,
       install: { kind: 'npm', sourceDir: null, packageRoot: '/usr/local/lib/node_modules/open-walnut', manager: 'npm', updateCommand: 'npm install -g open-walnut@latest' },
-      current: '0.4.5', latest: '0.4.6', available: true, checkedAt: '2026-09-24T11:30:00.000Z', error: null, checking: false,
+      current: '0.4.5', channel: 'stable', latest: '0.4.6', tags: { latest: '0.4.6', nightly: null }, available: true,
+      checkedAt: '2026-09-24T11:30:00.000Z', error: null, checking: false,
       packageUrl: 'https://www.npmjs.com/package/open-walnut',
     },
     server: {

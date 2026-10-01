@@ -37,13 +37,19 @@ export interface DetectInstallInputs {
   packageRoot: string | null
 }
 
-export function managerCommand(manager: PackageManager): string {
+/** The manager's global install of one spec (`@latest`, `@nightly`, `@0.6.0`), as argv: no shell. */
+export function managerArgv(manager: PackageManager, spec: string): { file: string; args: string[] } {
   switch (manager) {
-    case 'pnpm': return `pnpm add -g ${PACKAGE_NAME}@latest`
-    case 'bun': return `bun add -g ${PACKAGE_NAME}@latest`
-    case 'yarn': return `yarn global add ${PACKAGE_NAME}@latest`
-    default: return `npm install -g ${PACKAGE_NAME}@latest`
+    case 'pnpm': return { file: 'pnpm', args: ['add', '-g', spec] }
+    case 'bun': return { file: 'bun', args: ['add', '-g', spec] }
+    case 'yarn': return { file: 'yarn', args: ['global', 'add', spec] }
+    default: return { file: 'npm', args: ['install', '-g', spec] }
   }
+}
+
+export function managerCommand(manager: PackageManager, tag: 'latest' | 'nightly' = 'latest'): string {
+  const { file, args } = managerArgv(manager, `${PACKAGE_NAME}@${tag}`)
+  return [file, ...args].join(' ')
 }
 
 /** The manager a global install path belongs to; null when the path has no node_modules parent. */
@@ -58,12 +64,12 @@ export function managerFromPath(packageRoot: string): PackageManager | null {
 
 export function detectInstall(inputs: DetectInstallInputs = {
   cloud: CLOUD_MODE, installDir: WALNUT_INSTALL_DIR, packageRoot: WALNUT_PACKAGE_ROOT,
-}): InstallInfo {
+}, channel: 'stable' | 'nightly' = 'stable'): InstallInfo {
   const base = { sourceDir: null, packageRoot: inputs.packageRoot, manager: null, updateCommand: null }
   // A replica's status can be read over the internet (with a device token); its paths stay home.
   if (inputs.cloud) return { ...base, kind: 'replica', packageRoot: null }
   if (inputs.installDir) return { ...base, kind: 'source', sourceDir: inputs.installDir }
   const manager = inputs.packageRoot ? managerFromPath(inputs.packageRoot) : null
-  if (manager) return { ...base, kind: 'npm', manager, updateCommand: managerCommand(manager) }
+  if (manager) return { ...base, kind: 'npm', manager, updateCommand: managerCommand(manager, channel === 'nightly' ? 'nightly' : 'latest') }
   return { ...base, kind: 'other' }
 }

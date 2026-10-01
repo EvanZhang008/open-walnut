@@ -1338,6 +1338,13 @@ export interface Config {
   self_repair?: {
     source_dir?: string;
   };
+  /** Updates of Walnut itself (src/core/self-update). */
+  updates?: {
+    /** `open-walnut web` installs a newer published release before it starts, when this
+     *  is an npm install whose directory the process can write. Default: true. The
+     *  running server never replaces its own files; it only reports (see the System card). */
+    auto?: boolean;
+  };
   ui?: {
     /** How many session panels to show side-by-side: 'auto' (breakpoint-driven) or
      *  an explicit count as a decimal string — the UI offers '1'..'5'. Default: '2'.
