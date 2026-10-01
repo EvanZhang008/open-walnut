@@ -321,6 +321,27 @@ describe('task_create says where the task landed', () => {
     expect(failed.placement).toEqual(PLACED)
   })
 
+  it('says when the server cut a long title, and where the long form went', async () => {
+    // The brake (task-title-brake.ts) rewrites; the outcome is how the model
+    // learns the title it should quote, and that its text was kept.
+    const long = 'Bakery website launch: build the home page and the menu page, wire the order form to the mailbox'
+    const cutTask = { ...TASK, title: 'Bakery website launch' }
+    const bare = await createRunner({ created: { task: cutTask, placement: { ...PLACED, title_shortened_from: long } } })
+      .speak({ title: long, record_only: true })
+    expect(bare.outcome).toBe('Filed in project marina, folder "Fixture work" (new, holding your task and this one), '
+      + `beside your task. Title shortened to "Bakery website launch" (${long.length} chars sent, a few words expected; `
+      + 'the full text is in the description). Placeholder saved. Work was explicitly not started.')
+    expect(rec(bare.task).title).toBe('Bakery website launch')
+    const withDesc = await createRunner({ created: { task: cutTask, placement: { ...PLACED, title_shortened_from: long } } })
+      .speak({ title: long, description: 'Ship before the weekend market.', record_only: true })
+    expect(withDesc.outcome).toContain('a few words expected). Placeholder saved.')
+    expect(withDesc.outcome).not.toContain('full text is in the description')
+    // A message becomes the description too, so the long form is not repeated there.
+    const withMessage = await createRunner({ created: { task: cutTask, placement: { ...PLACED, title_shortened_from: long } } })
+      .speak({ title: long, message: 'Start with the home page.' })
+    expect(withMessage.outcome).not.toContain('full text is in the description')
+  })
+
   it('passes a grouping warning through, and says nothing for a server too old to report placement', async () => {
     const warned = await createRunner({
       created: { task: TASK, placement: { project: 'marina', folder_created: false, inherited_from: 't_caller', warning: 'The task was created but could not be put in a folder: gone' } },
@@ -849,6 +870,15 @@ describe('request_get', () => {
 })
 
 describe('task_update writes the board, not the execution', () => {
+  it('names the cut when the server shortened a long title', async () => {
+    const r = runner('task_update', async () => ({
+      task: { id: TASK.id, title: 'Bakery website launch' }, title_shortened_from: 'Bakery website launch: build the home page and the menu page, wire the order form',
+    }))
+    const updated = await r.speak({ id: TASK.id, title: 'Bakery website launch: build the home page and the menu page, wire the order form' })
+    expect(updated.outcome).toContain('Title shortened to "Bakery website launch" (a few words expected).')
+    expect(rec(updated.task).title).toBe('Bakery website launch')
+  })
+
   it('says the write started and stopped nothing, and invents no attachment', async () => {
     const r = runner('task_update', async () => ({ task: { id: TASK.id, phase: 'NEED_ACTION' } }))
     const updated = await r.speak({ id: TASK.id, phase: 'NEED_ACTION' })

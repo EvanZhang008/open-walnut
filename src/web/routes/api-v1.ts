@@ -2262,11 +2262,26 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     // A worker's new task is born in the caller's board tier (Focus work stays
     // Focus) unless the body names `pinned` or a `focus_tier`.
     const tier = inheritedTier({ pinned, focus_tier: focusTier }, caller)
+    // A session's long title is cut to its head here and refined in the
+    // background; the long form becomes the description when there was none.
+    // A human's title (no caller) is theirs (task-title-brake.ts).
+    const { needsShortening, heuristicShortTitle, refineShortTitle } =
+      await import('../../core/sessions/task-title-brake.js')
+    let finalTitle = title.trim()
+    let titleShortenedFrom: string | undefined
+    if ('session' in caller && needsShortening(finalTitle)) {
+      titleShortenedFrom = finalTitle
+      finalTitle = heuristicShortTitle(finalTitle)
+    }
+    // A blank description counts as none: the long form is what the session wrote.
+    const finalDescription = titleShortenedFrom && !(typeof description === 'string' && description.trim())
+      ? titleShortenedFrom
+      : description as string | undefined
     try {
       // asyncPush like the web create path: the client renders the task
       // immediately, so don't block the response on an external sync push.
       const createInput = {
-        title: title.trim(),
+        title: finalTitle,
         ...(decision.project !== undefined ? { project: decision.project } : {}),
         ...(stampedCwd ? { cwd: stampedCwd } : {}),
         ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
@@ -2275,7 +2290,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         // date" — no need for a separate branch.
         ...(startDate !== undefined ? { start_date: normalizeDateField(startDate) } : {}),
         ...(endDate !== undefined ? { end_date: normalizeDateField(endDate) } : {}),
-        ...(description !== undefined ? { description } : {}),
+        ...(finalDescription !== undefined ? { description: finalDescription } : {}),
         asyncPush: true,
       }
       // Human/AI create surface (phone Quick Add, `walnut add`, the task_create
@@ -2335,8 +2350,13 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         taskId: task.id, project: task.project, groupId: task.group_id,
         ...(decision.inheritedFrom ? { placedBeside: decision.inheritedFrom, folderCreated } : {}),
         ...(task.parent_task_id ? { parentTaskId: task.parent_task_id } : {}),
+        ...(titleShortenedFrom ? { titleCutFrom: titleShortenedFrom.length } : {}),
       })
       bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'api-v1' })
+      if (titleShortenedFrom) {
+        void refineShortTitle(task.id, finalTitle, titleShortenedFrom,
+          description !== undefined ? description as string : undefined)
+      }
       // Project-only projection, same as GET /tasks (see the note there).
       // `placement` (additive) says where the task landed and why, because the
       // projection carries no folder.
@@ -2353,6 +2373,9 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
           // The board tier taken from the caller: a tier id, 'satellite', or
           // 'unpinned'. Absent when the body chose, or nothing was inherited.
           ...(tier && !tierWarning ? { tier: !task.pinned ? 'unpinned' : task.focus_tier || 'satellite' } : {}),
+          // The long title the session sent, when the brake cut it (the
+          // response's task.title is the cut; the board refines it shortly).
+          ...(titleShortenedFrom ? { title_shortened_from: titleShortenedFrom } : {}),
           ...(folderWarning || parentWarning || tierWarning ? {
             warning: [
               folderWarning ? `The task was created but could not be put in a folder: ${folderWarning}` : '',
@@ -2518,6 +2541,23 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         }
       }
     }
+    // A session renaming a task to a long title meets the same brake as a
+    // create (task-title-brake.ts); the caller is looked up only for a long one.
+    let patchTitle = typeof title === 'string' ? title.trim() : undefined
+    let titleShortenedFrom: string | undefined
+    if (patchTitle !== undefined) {
+      const { needsShortening, heuristicShortTitle } = await import('../../core/sessions/task-title-brake.js')
+      if (needsShortening(patchTitle)) {
+        const { resolveCallerPlacement } = await import('../../core/sessions/caller-placement.js')
+        const rawSid = req.headers['x-walnut-caller-sid']
+        const caller = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
+          .catch(() => ({ kind: 'unknown' as const }))
+        if ('session' in caller) {
+          titleShortenedFrom = patchTitle
+          patchTitle = heuristicShortTitle(patchTitle)
+        }
+      }
+    }
     try {
       let updated
       const patch = {
@@ -2529,7 +2569,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         ...(startDate !== undefined ? { start_date: normalizeDateField(startDate) } : {}),
         ...(endDate !== undefined ? { end_date: normalizeDateField(endDate) } : {}),
         ...(project !== undefined ? { project: project as string } : {}),
-        ...(title !== undefined ? { title: (title as string).trim() } : {}),
+        ...(patchTitle !== undefined ? { title: patchTitle } : {}),
         ...(tags !== undefined ? { set_tags: tags as string[] } : {}),
         ...(unread !== undefined ? { unread: unread as boolean } : {}),
       }
@@ -2555,8 +2595,16 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         sendError(res, 500, 'internal', 'update produced no task row')
         return
       }
-      log.web.info('task updated via api-v1', { taskId: updated.id, fields: Object.keys(req.body ?? {}) })
-      res.json({ task: projectTask(updated) })
+      log.web.info('task updated via api-v1', {
+        taskId: updated.id, fields: Object.keys(req.body ?? {}),
+        ...(titleShortenedFrom ? { titleCutFrom: titleShortenedFrom.length } : {}),
+      })
+      if (titleShortenedFrom && patchTitle !== undefined) {
+        const { refineShortTitle } = await import('../../core/sessions/task-title-brake.js')
+        void refineShortTitle(updated.id, patchTitle, titleShortenedFrom)
+      }
+      // `title_shortened_from` (additive): the long title the session sent.
+      res.json({ task: projectTask(updated), ...(titleShortenedFrom ? { title_shortened_from: titleShortenedFrom } : {}) })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (/No task found matching/i.test(msg)) {

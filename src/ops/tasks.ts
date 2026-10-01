@@ -385,6 +385,8 @@ interface Placement {
   parent_task_id?: string
   /** The board tier taken from your task: a tier id, 'satellite' or 'unpinned'. */
   tier?: string
+  /** The long title you sent; the server cut it to a few words (task.title). */
+  title_shortened_from?: string
   warning?: string
 }
 
@@ -404,6 +406,12 @@ function placementSentence(p: Placement | undefined): string {
   const warning = p.warning ? ` ${p.warning}.` : ''
   return `Filed in ${project}${folder}${why}${tier}.${warning} `
 }
+/** One sentence when the server cut a long title (Walnut titles are a few words). */
+function titleCutSentence(p: Placement | undefined, task: Record<string, unknown> | undefined, hadDescription: boolean): string {
+  if (!p?.title_shortened_from) return ''
+  const kept = hadDescription ? '' : '; the full text is in the description'
+  return `Title shortened to "${String(task?.title ?? '')}" (${p.title_shortened_from.length} chars sent, a few words expected${kept}). `
+}
 
 defineOp({
   name: 'task_create',
@@ -415,8 +423,9 @@ defineOp({
     'session cannot (another host, later, after this session ends); record_only=true when they only want ' +
     'it written down (a placeholder, nothing runs). Otherwise do the work with your own tools (todo list, ' +
     'subagents, agent teams) however big it is: size alone is never a reason, and follow-ups you find are ' +
-    'yours to do here. In Walnut\'s own chat, where you dispatch, the user asking for the work is the ' +
-    'signal. Pass message for the instruction and cwd/host ' +
+    'yours to do here. Words: a "subagent" is Claude Code\'s Agent tool inside your session, never a ' +
+    'Walnut task; a "subtask" or "task" is a Walnut task, which this creates. In Walnut\'s own chat, where ' +
+    'you dispatch, the user asking for the work is the signal. Pass message for the instruction and cwd/host ' +
     'to override project defaults. Keep the returned task id: task_send adds context, task_history ' +
     'reads the conversation, task_get reports execution. If starting fails the task still exists; ' +
     'fix the cause and use task_start with that id, never create a duplicate. Placement: called from ' +
@@ -430,7 +439,7 @@ defineOp({
     '(Focus work stays Focus); elsewhere it is pinned in Satellite. pinned or focus_tier override that; ' +
     'focus_tier changes board position, not execution.',
   input: {
-    title: z.string().min(1).describe('Task title (required)'),
+    title: z.string().min(1).describe('Task title: a few words naming the specific subject, like a commit subject (under 60 characters; the server cuts a longer one from a session). The brief goes in message or description'),
     project: z.string().optional().describe('Project name; "" for the Inbox. Omit to use your own task\'s project (from inside a task) or the Inbox (elsewhere)'),
     group_id: z.string().optional().describe('Folder id (g_...) inside the target project; "" for no folder. Omit to join your own task\'s folder (a new one when it has none) when the task lands in your project'),
     priority: PRIORITY.optional().describe('immediate | important | backlog | none'),
@@ -479,7 +488,7 @@ defineOp({
       ...(placement?.parent_task_id ? { parent_task_id: placement.parent_task_id } : {}),
     }
     const extra = placement ? { placement } : {}
-    const where = placementSentence(placement)
+    const where = placementSentence(placement) + titleCutSentence(placement, task, fields.description !== undefined)
     if (recordOnly) {
       return withOutcome(
         withRef({ ...view, execution: { state: 'not_started' } }, { ...extra, execution: { state: 'not_started' } }),
@@ -539,7 +548,7 @@ defineOp({
     due_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
     start_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
     project: z.string().optional().describe('Project name; "" = Inbox'),
-    title: z.string().optional().describe('New title (non-empty, <= 500 chars)'),
+    title: z.string().optional().describe('New title: a few words (under 60 characters from a session, the server cuts a longer one; <= 500)'),
     description: z.string().optional().describe('Replaces the description (write-only)'),
     tags: z.array(z.string()).optional().describe('FULL replacement of the task tags'),
   },
@@ -553,14 +562,17 @@ defineOp({
       throw new Error('task_update needs at least one field to change besides `id`.')
     }
     const patched = await call('PATCH', `/tasks/${encodeURIComponent(String(id))}`, body) as
-      { task?: unknown } | undefined
+      { task?: unknown; title_shortened_from?: string } | undefined
     const task = patched?.task
     const changed = Object.keys(body).join(', ')
     // A phase write is bookkeeping. It does not start work, and it does not
     // stop a session that is already running — the single most common wrong
     // assumption about this op.
     const attachment = sessionState(task)
-    const outcome = `Task fields updated (${changed}). No session was started or stopped by this. `
+    const cut = patched?.title_shortened_from
+      ? `Title shortened to "${String((task as Record<string, unknown> | undefined)?.title ?? '')}" (a few words expected). `
+      : ''
+    const outcome = `Task fields updated (${changed}). ${cut}No session was started or stopped by this. `
       + 'Execution is unchanged.'
     const next = body.phase === 'NEED_ACTION'
       ? 'Marked ready for the human to look at. Nothing else is required of you.'

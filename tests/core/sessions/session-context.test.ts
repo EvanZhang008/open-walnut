@@ -126,6 +126,17 @@ describe('buildSessionContext (identity note)', () => {
     }
   })
 
+  it('pins the two words for every reader: a subagent is the Agent tool, a subtask is a Walnut task', async () => {
+    // 2026-09-30: asked to "use a subagent", a session filed a Walnut subtask.
+    // Both a worker and an ask get the same two definitions.
+    const { task: ask } = await addTask({ title: 'Chat', project: 'Ask Walnut', walnut_agent: true })
+    for (const id of ['', await seedTask('marina'), ask.id]) {
+      const { systemPrompt } = await buildSessionContext(id)
+      expect(systemPrompt).toMatch(/a "subagent" is Claude Code's Agent tool inside this session, never a Walnut task/)
+      expect(systemPrompt).toMatch(/a "subtask" or "task" is a Walnut task/)
+    }
+  })
+
   it('an ask (the Personal AI dispatcher) keeps the plain "only when the user asked" line', async () => {
     // Asking the dispatcher for work IS the signal; its persona decides, so the
     // worker's split rule (and its "however big" nudge) must not reach it.
@@ -195,6 +206,9 @@ describe('buildSessionContext (identity note)', () => {
     // 1300 → 1450 (2026-09-25) for which tool splits the work: native subagents
     // and agent teams by default, a Walnut task only on the user's signal. A
     // session decides that before its first split, so it cannot wait for the manual.
-    expect(systemPrompt.length).toBeLessThan(1450)
+    // 1450 → 1600 (2026-09-30) for the two words: "subagent" is the Agent tool,
+    // "subtask" is a Walnut task. The user says both; a session heard the first
+    // and filed the second.
+    expect(systemPrompt.length).toBeLessThan(1600)
   })
 })
