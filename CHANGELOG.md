@@ -252,6 +252,13 @@ breaking changes).
 
 ### Fixed
 
+- **The Changed view shows a rewritten file as modified, with its old lines.** When a session
+  replaced an existing file with Write, the view listed it as a new file and showed only added
+  lines, so whatever the rewrite removed was missing from the review. It now uses the original
+  file Claude Code records with each Write.
+- **The collapsed tool line counts files, not calls.** Six edits to one file read
+  `edited 6 files` beside a Changed view listing one file; it now reads `edited a file`. Reads
+  are counted the same way.
 - **A server restart no longer marks live sessions stopped or hands back tasks still working.** A
   session whose turn ended during a restart was marked `stopped` while its Claude Code was still
   running, so the next message took a slow resume, and a long turn with a background command started

@@ -70,7 +70,9 @@ export interface SessionChangesResult {
 
 export type FileOp =
   | { kind: 'edit'; oldString: string; newString: string; replaceAll: boolean }
-  | { kind: 'write'; content: string }
+  // `original`: the file as it was before this Write, when the CLI recorded one
+  // (its tool result is `type: 'update'` with `originalFile`). Absent = a create.
+  | { kind: 'write'; content: string; toolUseId?: string; original?: string }
   | { kind: 'create' }
   | { kind: 'delete' }
   | { kind: 'rename'; from: string };
@@ -88,22 +90,63 @@ interface RawLine {
   message?: {
     content?: string | Array<{
       type?: string;
+      id?: string;
       name?: string;
       input?: Record<string, unknown>;
+      tool_use_id?: string;
     }>;
   };
+  toolUseResult?: unknown;
+}
+
+/**
+ * A Write over an existing file: the CLI answers it with `toolUseResult`
+ * `{ type: 'update', filePath, originalFile }` on the user line that carries the
+ * tool_result. Attach that original to the matching write op so `before` is the
+ * real old file, not an empty one. A create (`type: 'create'`) or an older
+ * transcript without the field leaves the op as a create. Returns the path it
+ * changed, if any. The op is replaced, not mutated: a cloned map shares op
+ * objects with the cached one it came from.
+ */
+function attachWriteOriginal(raw: RawLine, fileMap: Map<string, FileAccum>): string | null {
+  const r = raw.toolUseResult as { type?: unknown; filePath?: unknown; originalFile?: unknown } | null;
+  if (!r || typeof r !== 'object' || r.type !== 'update') return null;
+  if (typeof r.filePath !== 'string' || typeof r.originalFile !== 'string') return null;
+  const blocks = raw.message?.content;
+  if (!Array.isArray(blocks)) return null;
+  const ids = new Set(blocks.filter((b) => b.type === 'tool_result' && b.tool_use_id).map((b) => b.tool_use_id!));
+  const ops = fileMap.get(r.filePath)?.ops;
+  if (!ops || ids.size === 0) return null;
+  for (let i = ops.length - 1; i >= 0; i--) {
+    const op = ops[i]!;
+    if (op.kind === 'write' && op.toolUseId && ids.has(op.toolUseId)) {
+      ops[i] = { ...op, original: r.originalFile };
+      return r.filePath;
+    }
+  }
+  return null;
 }
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
-/** Extract file ops from one JSONL content string, appending to `fileMap`. */
-export function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAccum>): void {
+/**
+ * Extract file ops from one JSONL content string, appending to `fileMap`.
+ * Returns the paths whose EARLIER Write op learned its original file here (its
+ * tool result can land in a later chunk than the tool_use).
+ */
+export function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAccum>): Set<string> {
+  const originalsAttached = new Set<string>();
   for (const line of content.split('\n')) {
     if (!line) continue;
     let raw: RawLine;
     try {
       raw = JSON.parse(line);
     } catch {
+      continue;
+    }
+    if (raw.type === 'user') {
+      const attached = attachWriteOriginal(raw, fileMap);
+      if (attached) originalsAttached.add(attached);
       continue;
     }
     if (raw.type !== 'assistant') continue;
@@ -158,7 +201,7 @@ export function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAc
 
       if (block.name === 'Write') {
         if (typeof input.content === 'string') {
-          accum.ops.push({ kind: 'write', content: input.content });
+          accum.ops.push({ kind: 'write', content: input.content, toolUseId: block.id });
         }
       } else if (block.name === 'Edit') {
         if (typeof input.old_string === 'string' && typeof input.new_string === 'string') {
@@ -193,6 +236,7 @@ export function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAc
       fileMap.set(filePath, accum);
     }
   }
+  return originalsAttached;
 }
 
 /**
@@ -283,11 +327,14 @@ export function reconstructFile(
   }
 
   // `before`: reverse-apply ops newest→oldest onto `after`. rename/create are
-  // content-boundary markers, not text edits.
+  // content-boundary markers, not text edits. A Write over an existing file
+  // restores the file it replaced; older ops then reverse onto that.
   let before = after;
   for (let i = ops.length - 1; i >= 0; i--) {
     const op = ops[i]!;
-    if (op.kind === 'write' || op.kind === 'create') {
+    if (op.kind === 'write') {
+      before = op.original ?? '';
+    } else if (op.kind === 'create') {
       before = '';
     } else if (op.kind === 'rename' || op.kind === 'delete') {
       if (op.kind === 'delete') before = '';
@@ -423,7 +470,9 @@ function contentlessChange(accum: FileAccum): SessionFileChange {
     const op = accum.ops[i]!;
     if (op.kind === 'rename') { renamedFrom = op.from; break; }
   }
-  const added = accum.ops.some((op) => op.kind === 'write' || op.kind === 'create');
+  // The OLDEST content boundary decides: a create, or a Write with no recorded original.
+  const first = accum.ops.find((op) => op.kind === 'write' || op.kind === 'create');
+  const added = !!first && !(first.kind === 'write' && first.original !== undefined);
   const change: SessionFileChange = {
     filePath: accum.filePath,
     relPath: accum.filePath,

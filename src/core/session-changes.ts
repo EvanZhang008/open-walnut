@@ -328,7 +328,7 @@ function fileMapChars(fileMap: Map<string, FileAccum>): number {
   for (const accum of fileMap.values()) {
     for (const op of accum.ops) {
       if (op.kind === 'edit') n += op.oldString.length + op.newString.length;
-      else if (op.kind === 'write') n += op.content.length;
+      else if (op.kind === 'write') n += op.content.length + (op.original?.length ?? 0);
     }
   }
   return n;
@@ -885,7 +885,9 @@ async function computeSessionChangesInner(
                 changedPaths.add(p);
                 for (const op of a.ops) if (op.kind === 'rename') changedPaths.add(op.from);
               }
-              collectOpsFromJsonl(complete, prior.mainFileMap);
+              // A Write's tool result can land in this block after its tool_use
+              // was parsed in an earlier one: only the cached map holds that op.
+              for (const p of collectOpsFromJsonl(complete, prior.mainFileMap)) changedPaths.add(p);
               const lastLine = lastLineOf(complete);
               prior.lastLineStart = prior.parsedBytes + Buffer.byteLength(complete, 'utf-8')
                 - Buffer.byteLength(lastLine, 'utf-8') - 1;
@@ -906,7 +908,7 @@ async function computeSessionChangesInner(
               const tempTail = new Map<string, FileAccum>();
               collectOpsFromJsonl(tail, tempTail);
               for (const p of tempTail.keys()) changedPaths.add(p);
-              collectOpsFromJsonl(tail, fileMap);
+              for (const p of collectOpsFromJsonl(tail, fileMap)) changedPaths.add(p);
             }
             effectiveCwd = prior.effectiveCwd ?? cwd;
             parseMode = 'incremental';

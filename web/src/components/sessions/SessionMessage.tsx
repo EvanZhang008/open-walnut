@@ -29,6 +29,7 @@ import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
 import { SearchAnswerCard } from './SearchAnswerCard';
+import { toolRunPhrase } from './tool-run-phrase';
 import { splitSearchAnswerMessage } from '@open-walnut/search-transcript';
 import { log } from '@/utils/log';
 
@@ -343,43 +344,7 @@ function InjectedContextRow({ text }: { text: string }) {
 // read a file ›". Click expands the individual tool cards. Task/Agent groups
 // and plan cards stay standalone — only generic tools merge.
 
-/** Phrase category per tool name; unknown tools fall into 'other'. */
-function toolPhraseCategory(name: string): string {
-  switch (name) {
-    case 'Bash': case 'BashOutput': case 'KillShell': return 'command';
-    case 'Read': return 'read';
-    case 'Edit': case 'Write': case 'NotebookEdit': return 'edit';
-    case 'Grep': case 'Glob': case 'WebSearch': return 'search';
-    case 'WebFetch': return 'fetch';
-    case 'Skill': return 'skill';
-    case 'TodoWrite': case 'TaskCreate': case 'TaskUpdate': return 'todo';
-    default: return 'other';
-  }
-}
-
-/** "Ran 3 commands, read a file" — categories in first-appearance order. */
-export function toolRunPhrase(names: string[]): string {
-  const counts = new Map<string, number>();
-  for (const n of names) {
-    const cat = toolPhraseCategory(n);
-    counts.set(cat, (counts.get(cat) ?? 0) + 1);
-  }
-  const parts: string[] = [];
-  for (const [cat, n] of counts) {
-    switch (cat) {
-      case 'command': parts.push(n === 1 ? 'ran a command' : `ran ${n} commands`); break;
-      case 'read': parts.push(n === 1 ? 'read a file' : `read ${n} files`); break;
-      case 'edit': parts.push(n === 1 ? 'edited a file' : `edited ${n} files`); break;
-      case 'search': parts.push(n === 1 ? 'searched files' : `ran ${n} searches`); break;
-      case 'fetch': parts.push(n === 1 ? 'fetched a page' : `fetched ${n} pages`); break;
-      case 'skill': parts.push(n === 1 ? 'launched a skill' : `launched ${n} skills`); break;
-      case 'todo': parts.push('updated tasks'); break;
-      default: parts.push(n === 1 ? 'used a tool' : `used ${n} tools`); break;
-    }
-  }
-  const phrase = parts.join(', ');
-  return phrase.charAt(0).toUpperCase() + phrase.slice(1);
-}
+export { toolRunPhrase };
 
 /** Shared merged-row shell: muted phrase line + expandable children. */
 export function ToolRunShell({ phrase, failCount, running, children }: {
@@ -503,7 +468,7 @@ export const SystemGroupRun = memo(function SystemGroupRun({ members }: { member
 function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
   tools: SessionHistoryTool[];
 } & Omit<SessionToolCallProps, 'tool'>) {
-  const phrase = toolRunPhrase(tools.map(t => t.name));
+  const phrase = toolRunPhrase(tools);
   const failCount = tools.filter(t => t.isError).length;
   return (
     <ToolRunShell phrase={phrase} failCount={failCount}>
@@ -588,7 +553,7 @@ export type StreamRunMember = StreamingBlock & { type: 'tool_call' | 'thinking' 
 export function streamRunSummary(members: readonly StreamRunMember[]): { phrase: string; failCount: number } {
   const tools = members.filter((b): b is StreamingBlock & { type: 'tool_call' } => b.type === 'tool_call');
   return {
-    phrase: toolRunPhrase(tools.map(b => b.name ?? 'unknown')),
+    phrase: toolRunPhrase(tools.map(b => ({ name: b.name ?? 'unknown', input: b.input }))),
     failCount: tools.filter(b => b.status === 'error').length,
   };
 }
@@ -663,8 +628,8 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
   const allTools = messages.flatMap(m => m.tools ?? []);
   const trailingTools = trailingBlocks.filter((b): b is StreamingBlock & { type: 'tool_call' } => b.type === 'tool_call');
   const phrase = toolRunPhrase([
-    ...allTools.map(t => t.name),
-    ...trailingTools.map(b => b.name ?? 'unknown'),
+    ...allTools,
+    ...trailingTools.map(b => ({ name: b.name ?? 'unknown', input: b.input })),
   ]);
   const failCount = allTools.filter(t => t.isError).length
     + trailingTools.filter(b => b.status === 'error').length;

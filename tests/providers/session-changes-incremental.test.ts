@@ -149,6 +149,28 @@ describe('changes compute continues from where the last one stopped', () => {
     expect(holder.state!.fileMap.get(path.join(repo, 'a.ts'))!.ops).toHaveLength(3)
   })
 
+  it('a Write over an existing file gets its before even when its result arrives in a later compute', async () => {
+    const p = path.join(repo, 'page.html')
+    const writeUse = line({ type: 'assistant', cwd: repo, message: { content: [{ type: 'tool_use', id: 'w1', name: 'Write', input: { file_path: p, content: 'new\n' } }] } })
+    const writeRes = line({
+      type: 'user', cwd: repo,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'w1', content: 'ok' }] },
+      toolUseResult: { type: 'update', filePath: p, content: 'new\n', structuredPatch: [], originalFile: 'old\n' },
+    })
+    fs.writeFileSync(transcript, user() + writeUse)
+    disk('page.html', 'new\n')
+    const holder: { state?: MainParseState } = {}
+    expect((await compute(holder))!.result.groups[0]!.files[0]!.status).toBe('added')
+
+    // The result line lands torn first, then whole.
+    fs.appendFileSync(transcript, writeRes.slice(0, 50))
+    expect((await compute(holder))!.result).toEqual(await fresh())
+    fs.appendFileSync(transcript, writeRes.slice(50))
+    const result = (await compute(holder))!.result
+    expect(result).toEqual(await fresh())
+    expect(result.groups[0]!.files[0]!.status).toBe('modified')
+  })
+
   it('a compute that fails before it finishes leaves the saved state as it was', async () => {
     fs.writeFileSync(transcript, user() + write('a.ts', 'a1\n'))
     disk('a.ts', 'a1\n')

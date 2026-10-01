@@ -292,6 +292,93 @@ describe('computeSessionChanges — granularity & multi-edit-of-same-region', ()
   });
 });
 
+/** A Write tool_use with a known id (its tool result names it). */
+function writeToolUse(cwd: string, id: string, file: string, content: string) {
+  return { type: 'assistant', cwd, message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Write', input: { file_path: file, content } }] } };
+}
+
+/** The CLI's answer to a Write: `update` + originalFile over an existing file, `create` otherwise. */
+function writeResult(cwd: string, id: string, file: string, content: string, original: string | null) {
+  return {
+    type: 'user',
+    cwd,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] },
+    toolUseResult: original === null
+      ? { type: 'create', filePath: file, content, structuredPatch: [], originalFile: null }
+      : { type: 'update', filePath: file, content, structuredPatch: [], originalFile: original },
+  };
+}
+
+describe('computeSessionChanges — Write over an existing file', () => {
+  it('shows the replaced file as the before (modified), not an empty create', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const file = path.join(repo, 'index.html');
+    await putFile(file, '<h1>Todo</h1>\n<ul id="list"></ul>\n<script>render()</script>\n');
+
+    await writeSessionJsonl('s1', repo, [
+      writeToolUse(repo, 'w1', file, '<h1>Todo</h1>\n<ul id="list"></ul>\n<script>render()</script>\n'),
+      writeResult(repo, 'w1', file, '<h1>Todo</h1>\n<ul id="list"></ul>\n<script>render()</script>\n', '<h1>Todo</h1>\n<ul id="list"></ul>\n'),
+    ]);
+
+    const change = (await computeSessionChanges('s1', repo)).groups[0].files[0];
+    expect(change.before).toBe('<h1>Todo</h1>\n<ul id="list"></ul>\n');
+    expect(change.status).toBe('modified');
+    expect(change.partial).toBe(false);
+  });
+
+  it('reverses an Edit made BEFORE the Write onto the replaced file', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const file = path.join(repo, 'a.ts');
+    await putFile(file, 'rewritten\n');
+
+    await writeSessionJsonl('s1', repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: file, old_string: 'v = 1', new_string: 'v = 2' } }]),
+      writeToolUse(repo, 'w1', file, 'rewritten\n'),
+      writeResult(repo, 'w1', file, 'rewritten\n', 'const v = 2;\n'),
+    ]);
+
+    const change = (await computeSessionChanges('s1', repo)).groups[0].files[0];
+    expect(change.before).toBe('const v = 1;\n'); // as the session first found it
+    expect(change.status).toBe('modified');
+  });
+
+  it('a file this session created and later rewrote is still added', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const file = path.join(repo, 'new.ts');
+    await putFile(file, 'v2\n');
+
+    await writeSessionJsonl('s1', repo, [
+      writeToolUse(repo, 'w1', file, 'v1\n'),
+      writeResult(repo, 'w1', file, 'v1\n', null),
+      writeToolUse(repo, 'w2', file, 'v2\n'),
+      writeResult(repo, 'w2', file, 'v2\n', 'v1\n'),
+    ]);
+
+    const change = (await computeSessionChanges('s1', repo)).groups[0].files[0];
+    expect(change.before).toBe('');
+    expect(change.status).toBe('added');
+  });
+
+  it('an original reported for a different tool_use is not attached', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const file = path.join(repo, 'b.ts');
+    await putFile(file, 'new\n');
+
+    await writeSessionJsonl('s1', repo, [
+      writeToolUse(repo, 'w1', file, 'new\n'),
+      writeResult(repo, 'other-id', file, 'new\n', 'old\n'),
+    ]);
+
+    const change = (await computeSessionChanges('s1', repo)).groups[0].files[0];
+    expect(change.before).toBe('');
+    expect(change.status).toBe('added');
+  });
+});
+
 describe('computeSessionChanges — MultiEdit', () => {
   it('applies edits[] in order and reverses them', async () => {
     const repo = path.join(workRoot, 'repo');
@@ -754,6 +841,35 @@ describe('computeSessionChanges — incremental parse cache', () => {
     expect(paths).toContain(f2); // from the appended bytes
     expect(res2.fileCount).toBe(2);
   });
+
+  // The tool_use line is COMPLETE (newline-terminated) in the first compute, so
+  // it lives in the cached op map, and the next block holds only its result:
+  // nothing in that block names a new op, yet the file's before changed.
+  for (const resultTerminated of [true, false]) {
+    it(`a Write whose tool result lands after the compute that parsed its tool_use gets its before (result line ${resultTerminated ? 'complete' : 'still being written'})`, async () => {
+      const repo = path.join(workRoot, 'repo');
+      await gitInit(repo);
+      const file = path.join(repo, 'page.html');
+      await putFile(file, 'new page\n');
+
+      const sid = `inc-write-split-${resultTerminated}-${Date.now()}`;
+      const p = jsonlAbs(sid, repo);
+      await fsp.mkdir(path.dirname(p), { recursive: true });
+      await fsp.writeFile(p, [
+        { type: 'user', cwd: repo, message: { role: 'user', content: 'go' } },
+        writeToolUse(repo, 'w1', file, 'new page\n'),
+      ].map((l) => JSON.stringify(l) + '\n').join(''));
+      const res1 = await computeSessionChanges(sid, repo);
+      expect(res1.groups[0].files[0].status).toBe('added'); // no result yet
+
+      await fsp.appendFile(p, JSON.stringify(writeResult(repo, 'w1', file, 'new page\n', 'old page\n')) + (resultTerminated ? '\n' : ''));
+      const later = new Date(Date.now() + 5_000);
+      await fsp.utimes(p, later, later);
+      const change = (await computeSessionChanges(sid, repo)).groups[0].files[0];
+      expect(change.before).toBe('old page\n');
+      expect(change.status).toBe('modified');
+    });
+  }
 
   it('repeated appends accumulate correctly (multi-round incremental)', async () => {
     const repo = path.join(workRoot, 'repo');
