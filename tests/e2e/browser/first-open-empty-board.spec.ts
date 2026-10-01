@@ -20,10 +20,10 @@
  * Runs on chromium AND webkit (`PW_WEBKIT=1 … --project webkit`): the Mac app is a
  * WKWebView, and the caret landing in the draft is part of the claim.
  *
- * The same first draft carries ONE quick-action row under the cards, on either tab:
- * Walnut's seeds (a seed taken from Start Task moves the draft to Ask Walnut first)
- * and "Customize Walnut", which turns the draft into the repair draft and says where
- * Walnut's code lives. Line icons, never emoji. The fixture server
+ * The quick-action row under the cards belongs to the tab that is up: Start Task
+ * offers "Customize Walnut", which turns the draft into the repair draft and says
+ * where Walnut's code lives; Ask Walnut offers Walnut's seeds. Line icons, never
+ * emoji. The fixture server
  * runs from this checkout, so its `selfRepair.source` is that checkout; the npm
  * install shape (no source yet, a clone on the first Start) is the same server's
  * /api/config answer rewritten for this page. Start is answered by the spec, so no
@@ -315,14 +315,13 @@ test('Customize Walnut turns the first draft into a repair draft in Walnut\'s ow
   const starts = await captureQuickStart(page)
   await openFirstScreen(page, baseURL!)
 
-  // The new user's first draft offers it, last in the quick-action row under the
-  // two cards, with the Walnut seeds before it. Every chip carries a line icon.
+  // The new user's first draft (Start Task tab) offers it as that tab's quick
+  // action under the two cards; the Walnut seeds belong to the other tab. Every
+  // chip and card carries a line icon.
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
   await expect(customizeChip(page)).toHaveText('Customize Walnut', { timeout: 15_000 })
-  await expect(quickActions(page).locator('.session-action-chip')).toHaveText([
-    'Which task is\u2026', 'Schedule my day', 'What ran today', 'Customize Walnut',
-  ])
-  await expect(quickActions(page).locator('.session-action-chip .session-action-chip-ic svg')).toHaveCount(4)
+  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Customize Walnut'])
+  await expect(quickActions(page).locator('.session-action-chip .session-action-chip-ic svg')).toHaveCount(1)
   expect(await quickActions(page).innerText()).not.toMatch(/\p{Extended_Pictographic}/u)
   expect(await drafts(page).locator('.draft-intent-cards').innerText()).not.toMatch(/\p{Extended_Pictographic}/u)
   await expect(drafts(page).locator('.draft-intent-cards .draft-intent-ic svg, .draft-intent-cards .draft-intent-ic img')).toHaveCount(2)
@@ -358,40 +357,34 @@ test('Customize Walnut turns the first draft into a repair draft in Walnut\'s ow
   expect(errors).toEqual([])
 })
 
-test('Customize Walnut from the Ask Walnut tab leaves that mode for the repair draft', async ({ page, baseURL }) => {
+test('each tab has its own quick actions: Ask Walnut the seeds, Start Task Customize Walnut', async ({ page, baseURL }) => {
   await emptyBoardFor(page)
   await openFirstScreen(page, baseURL!)
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
+  await expect(customizeChip(page)).toBeVisible({ timeout: 15_000 })
+  // Ask Walnut: the seeds, no Customize chip.
   await drafts(page).locator('.draft-intent-card-walnut').click()
   await expect(drafts(page)).toHaveClass(/draft-session-panel-walnut/)
-  await expect(quickActions(page)).toBeVisible()
-  await customizeChip(page).click()
-  await expect(drafts(page).locator('.session-panel-title')).toHaveText(FIX_TITLE)
-  await expect(drafts(page)).not.toHaveClass(/draft-session-panel-walnut/)
-  // A repair has a folder; an ask has none, so the pill is back.
-  await expect(folderPill(page)).toBeVisible()
-  await expect(drafts(page).locator('.draft-walnut-suggests')).toHaveCount(0)
-})
-
-test('a Walnut seed taken from the Start Task tab moves the draft to Ask Walnut and prefills it', async ({ page, baseURL }) => {
-  await emptyBoardFor(page)
-  await openFirstScreen(page, baseURL!)
-  await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
-  // Start Task is the preselected tab; the seeds sit under it anyway.
-  await expect(drafts(page).locator('.draft-intent-card').first()).toHaveAttribute('aria-pressed', 'true')
-  await expect(drafts(page)).not.toHaveClass(/draft-session-panel-walnut/)
+  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Which task is\u2026', 'Schedule my day', 'What ran today'])
+  await expect(quickActions(page).locator('.session-action-chip .session-action-chip-ic svg')).toHaveCount(3)
+  expect(await quickActions(page).innerText()).not.toMatch(/\p{Extended_Pictographic}/u)
+  await expect(customizeChip(page)).toHaveCount(0)
+  // A seed prefills the composer on this tab and sends nothing; typed text hides the row.
   await quickActions(page).getByRole('button', { name: 'Schedule my day' }).click()
-  // The one tab that can answer it is up, the text is in the composer, nothing was sent.
-  await expect(drafts(page)).toHaveClass(/draft-session-panel-walnut/)
-  await expect(drafts(page).locator('.draft-intent-card-walnut')).toHaveAttribute('aria-pressed', 'true')
   await expect(draftComposer(page)).toHaveValue('Schedule my day')
-  await expect(draftComposer(page)).toBeFocused()
-  // Typed text hides the row (prefill is replace-only); clearing brings it back.
+  await expect(drafts(page)).toHaveClass(/draft-session-panel-walnut/)
   await expect(quickActions(page)).toHaveCount(0)
   await draftComposer(page).fill('')
   await expect(quickActions(page)).toBeVisible()
-  await expect(drafts(page).locator('.session-panel-title')).toHaveText('Ask Walnut')
-  await shot(page, 'seed-from-start-task-tab')
+  await shot(page, 'ask-walnut-tab-quick-actions')
+  // Back on Start Task: Customize Walnut again, and taking it makes the repair draft.
+  await drafts(page).locator('.draft-intent-card').first().click()
+  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Customize Walnut'])
+  await customizeChip(page).click()
+  await expect(drafts(page).locator('.session-panel-title')).toHaveText(FIX_TITLE)
+  await expect(drafts(page)).not.toHaveClass(/draft-session-panel-walnut/)
+  await expect(folderPill(page)).toBeVisible()
+  await expect(drafts(page).locator('.draft-walnut-suggests')).toHaveCount(0)
 })
 
 test('an npm install sees where the clone will land, and Start targets it', async ({ page, baseURL }) => {
@@ -436,11 +429,12 @@ test('no repair possible here: no Customize Walnut chip and no drawer entry', as
   await openFirstScreen(page, baseURL!)
   await configRead
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
-  // The intent cards and the seeds are up, so the chip would be too by now.
+  // The intent cards are up, so the chip row would be too by now; with no repair
+  // target the Start Task tab has no quick-action row at all.
   await expect(drafts(page).locator('.draft-intent-cards')).toBeVisible()
-  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Which task is\u2026', 'Schedule my day', 'What ran today'])
   await page.waitForTimeout(1_000)
   await expect(customizeChip(page)).toHaveCount(0)
+  await expect(quickActions(page)).toHaveCount(0)
 
   // The drawer's entry follows the same answer.
   await page.evaluate((key) => localStorage.setItem(key, 'true'), CHAT_VISIBLE_KEY)

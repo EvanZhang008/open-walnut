@@ -74,6 +74,8 @@
    was, in the muted ink so the title below stays the loudest line. */
 .draft-intent-ic { display: block; height: 24px; margin-bottom: 10px; color: var(--fg-muted); }
 .draft-intent-ic svg, .draft-intent-walnut-mark { width: 24px; height: 24px; display: block; }
+/* The Walnut mark is an app icon: rounded like one (iOS corner ratio, ~22%). */
+.draft-intent-walnut-mark { border-radius: 5.5px; }
 .draft-intent-card.is-active .draft-intent-ic { color: var(--accent); }
 .draft-intent-card-walnut.is-active .draft-intent-ic { color: var(--walnut-accent); }
 .draft-intent-t { display: block; font-weight: 700; font-size: 14px; margin-bottom: 5px; color: var(--fg); }
