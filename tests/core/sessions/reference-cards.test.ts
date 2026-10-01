@@ -47,8 +47,7 @@ const TASK: TaskCard = {
   phase: 'IN_PROGRESS',
   project: 'Marina',
   description: 'Parse the vendor feed   and reconcile\nthe slip numbers.',
-  sessionId: 'sess-aaa',
-  sessionStatus: 'running',
+  state: 'running',
 };
 
 const PROJECT_SUMMARY = 'Notes about the vendor feed.';
@@ -90,9 +89,9 @@ describe('buildReferenceCards', () => {
 
     expect(block.split('\n')[0]).toBe(REFERENCE_CARDS_OPEN);
     expect(block.split('\n').at(-1)).toBe(REFERENCE_CARDS_CLOSE);
-    expect(block).toContain('use task_get / session_send / project_list for more');
+    expect(block).toContain('use task_get / task_send for more');
     expect(cardLines(block)).toEqual([
-      `- task ${TASK.id} "Ship the marina importer" · phase IN_PROGRESS · project Marina · session sess-aaa (running) · Parse the vendor feed and reconcile the slip numbers.`,
+      `- task ${TASK.id} "Ship the marina importer" · phase IN_PROGRESS · project Marina · running · Parse the vendor feed and reconcile the slip numbers.`,
       '- session sess-aaa "importer debug" · idle · task mr1a2b3c-4d5e · host devbox · last active 2026-09-04T10:00:00.000Z',
       PROJECT_LINE,
     ]);

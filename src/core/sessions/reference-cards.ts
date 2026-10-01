@@ -2,13 +2,15 @@
  * Reference cards — the context block that rides a human message carrying entity
  * refs.
  *
- * The web composer lets the human drop a pill into what they type
- * (`<task-ref/>`, `<session-ref/>`, `<project-ref/>`). The pill's markup reaches
- * the CLI unchanged, but the markup alone is an opaque id: the model would have
- * to spend a tool call (task_get / session_send / project_list) just to learn
- * what the human pointed AT, and in practice it often answers without asking. So
- * the send path appends a compact card per referenced entity — one line each,
- * resolved from the local store, costing no round trip.
+ * The web composer lets the human drop a task pill into what they type
+ * (`<task-ref/>`; `<session-ref/>` and `<project-ref/>` still arrive from older
+ * messages and from agents). The pill's markup reaches the CLI unchanged, but
+ * the markup alone is an opaque id: the model would have to spend a tool call
+ * (task_get) just to learn what the human pointed AT, and in practice it often
+ * answers without asking. So the send path appends a compact card per
+ * referenced entity — one line each, resolved from the local store, costing no
+ * round trip. A task is one thing with one runtime: its card carries the task's
+ * run state ("running", "waiting on you"), never a second id to address.
  *
  * Same three conventions as the output-mode wrapper (./output-mode.ts), for the
  * same reasons:
@@ -53,8 +55,9 @@ export interface TaskCard {
   phase: string;
   project: string;
   description?: string;
-  sessionId?: string;
-  sessionStatus?: string;
+  /** The task's run state when it is doing something: 'running', or
+   *  'waiting on you' (blocked on a permission or a question). */
+  state?: 'running' | 'waiting on you';
 }
 
 export interface SessionCard {
@@ -98,18 +101,34 @@ export interface ReferenceCardLoaders {
 export const defaultReferenceCardLoaders: ReferenceCardLoaders = {
   async loadTasks(ids: string[]): Promise<TaskCard[]> {
     const { listTasksByIds } = await import('../task-manager.js');
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
     const tasks = await listTasksByIds(ids);
-    return tasks.map((task) => ({
-      id: task.id,
-      title: task.title,
-      phase: task.phase,
-      // '' means Inbox — the renderer prints the word, the card keeps the raw value.
-      project: task.project || '',
-      // `summary` is the derived short text ("what the session did"); it is the
-      // better one-liner when the human never wrote a description.
-      ...(task.description || task.summary ? { description: task.description || task.summary } : {}),
-      ...(task.session_id ? { sessionId: task.session_id } : {}),
-      ...(task.session_status?.process_status ? { sessionStatus: task.session_status.process_status } : {}),
+    return Promise.all(tasks.map(async (task) => {
+      // The run state lives on the task's runtime record (the store row carries
+      // no live status). Best-effort: a registry hiccup drops the state, not the card.
+      let state: TaskCard['state'];
+      if (task.session_id) {
+        try {
+          const record = await getSessionByClaudeId(task.session_id);
+          if (record?.pendingPermission) state = 'waiting on you';
+          else if (record?.process_status === 'running') state = 'running';
+        } catch (err) {
+          log.session.debug('reference card task state unavailable', {
+            taskId: task.id, error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      return {
+        id: task.id,
+        title: task.title,
+        phase: task.phase,
+        // '' means Inbox — the renderer prints the word, the card keeps the raw value.
+        project: task.project || '',
+        // `summary` is the derived short text ("what the task did"); it is the
+        // better one-liner when the human never wrote a description.
+        ...(task.description || task.summary ? { description: task.description || task.summary } : {}),
+        ...(state ? { state } : {}),
+      };
     }));
   },
 
@@ -178,7 +197,7 @@ function renderTaskCard(card: TaskCard): string {
     head('task', card.id, card.title),
     card.phase ? `phase ${card.phase}` : '',
     `project ${card.project || 'Inbox'}`,
-    card.sessionId ? `session ${card.sessionId}${card.sessionStatus ? ` (${card.sessionStatus})` : ''}` : '',
+    card.state ?? '',
     condense(card.description),
   )}`;
 }
@@ -286,7 +305,7 @@ export async function buildReferenceCards(
     REFERENCE_CARDS_OPEN,
     // Naming the tools is what keeps the block SHORT: it is a summary, and the
     // model needs to know where the rest lives.
-    'Referenced by the user (Walnut context; use task_get / session_send / project_list for more):',
+    'Referenced by the user (Walnut context; use task_get / task_send for more):',
     ...lines,
     REFERENCE_CARDS_CLOSE,
   ].join('\n');

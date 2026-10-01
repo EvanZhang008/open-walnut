@@ -1,6 +1,6 @@
 /**
  * Unit tests for the "@" palette's task ranking (mention-entities.ts): the
- * task row with its session folded in, the instant local fuzzy layer, how the
+ * task row and its run state, the instant local fuzzy layer, how the
  * hybrid-search hits (task hits AND transcript hits) fold into it, and the
  * shared row budget that keeps Tasks and Files visible at once.
  */
@@ -22,6 +22,7 @@ const task = (over: Partial<MentionEntity>): MentionEntity => ({
   title: 'Untitled',
   meta: 'TODO · Inbox',
   active: true,
+  state: 'idle',
   recencyKey: '2026-08-01T00:00:00Z',
   ...over,
 });
@@ -35,28 +36,26 @@ const storeTask = (over: Partial<Task>): Task => ({
 const SESSION = '9af9e0b9-1111-2222-3333-444444444444';
 
 describe('taskEntity', () => {
-  it('a task without a session: phase · project, no dot', () => {
+  it('a task that never ran: phase · project, idle', () => {
     const e = taskEntity(storeTask({}));
-    expect(e).toMatchObject({ id: 'mt1', title: 'A task', meta: 'IN_PROGRESS · walnut', live: false, active: true });
-    expect(e.sessionId).toBeUndefined();
-    expect(e.status).toBeUndefined();
+    expect(e).toMatchObject({ id: 'mt1', title: 'A task', meta: 'IN_PROGRESS · walnut', state: 'idle', live: false, active: true });
   });
 
-  it('a task with a running session carries it: "running" in the meta, a running dot, ranked live', () => {
+  it('a running task: "running" in the meta, a running dot, ranked live', () => {
     const e = taskEntity(storeTask({ session_id: SESSION }), { process_status: 'running' });
-    expect(e).toMatchObject({ sessionId: SESSION, status: 'running', live: true, meta: 'IN_PROGRESS · walnut · running' });
+    expect(e).toMatchObject({ state: 'running', live: true, meta: 'IN_PROGRESS · walnut · running' });
   });
 
-  it('a session blocked on a permission is "waiting on you", whatever its process status', () => {
+  it('a task blocked on a permission is "waiting on you", whatever its process status', () => {
     const e = taskEntity(storeTask({ session_id: SESSION }), { process_status: 'idle', pendingPermissionTool: 'Bash' });
-    expect(e).toMatchObject({ status: 'waiting', live: true, meta: 'IN_PROGRESS · walnut · waiting on you' });
+    expect(e).toMatchObject({ state: 'waiting', live: true, meta: 'IN_PROGRESS · walnut · waiting on you' });
   });
 
-  it('the live store wins over the enrichment snapshot; without either the snapshot speaks; a session with no status is idle', () => {
+  it('the live store wins over the enrichment snapshot; without either the snapshot speaks; a stopped task is idle', () => {
     const snap = storeTask({ session_id: SESSION, session_status: { process_status: 'running' } });
-    expect(taskEntity(snap, { process_status: 'stopped' })).toMatchObject({ status: 'stopped', live: false, meta: 'IN_PROGRESS · walnut' });
-    expect(taskEntity(snap, null)).toMatchObject({ status: 'running', live: true });
-    expect(taskEntity(storeTask({ session_id: SESSION }), null)).toMatchObject({ status: 'idle', live: false });
+    expect(taskEntity(snap, { process_status: 'stopped' })).toMatchObject({ state: 'idle', live: false, meta: 'IN_PROGRESS · walnut' });
+    expect(taskEntity(snap, null)).toMatchObject({ state: 'running', live: true });
+    expect(taskEntity(storeTask({ session_id: SESSION }), null)).toMatchObject({ state: 'idle', live: false });
   });
 
   it('Inbox for no project, (untitled) for no title, pinned from pinned or the focus tier, complete is not active', () => {
@@ -112,22 +111,22 @@ describe('taskIdOfHit / hitsAsTasks', () => {
   const sessionHit = (owner: string, sid: string, title: string): EntitySearchHit =>
     ({ type: 'session', id: owner, title, summary: 'transcript snippet', phase: 'IN_PROGRESS', project: 'walnut', ref: `<session-ref id="${sid}" label="${title}"/>` });
 
-  it('a task hit is its own id; a transcript hit is the task that owns the session; an orphan session is nobody', () => {
+  it('a task hit is its own id; a transcript hit is its task; a transcript with no task is nothing', () => {
     expect(taskIdOfHit(taskHit('mt1', 'T'))).toBe('mt1');
     expect(taskIdOfHit(sessionHit('mt1', SESSION, 'S'))).toBe('mt1');
     expect(taskIdOfHit(sessionHit(SESSION, SESSION, 'orphan'))).toBeNull();
     expect(taskIdOfHit({ type: 'memory', id: '/notes/x.md', title: 'x', summary: '' })).toBeNull();
   });
 
-  it('folds a task hit and its transcript hit into ONE row at the first position, borrowing the local row\'s live meta', () => {
+  it('folds a task hit and its transcript hit into ONE row at the first position, borrowing the local row\'s live state', () => {
     const local = new Map<string, MentionEntity>([
-      ['mt1', task({ id: 'mt1', title: 'Local title', meta: 'IN_PROGRESS · walnut · running', sessionId: SESSION, status: 'running', live: true })],
+      ['mt1', task({ id: 'mt1', title: 'Local title', meta: 'IN_PROGRESS · walnut · running', state: 'running', live: true })],
     ]);
     const hits = [sessionHit('mt1', SESSION, 'Session title'), taskHit('mt2', 'Second'), taskHit('mt1', 'Local title')];
     const out = hitsAsTasks(hits, local);
     expect(out.map((e) => e.id)).toEqual(['mt1', 'mt2']);
-    expect(out[0]).toMatchObject({ title: 'Local title', status: 'running', live: true, summary: 'transcript snippet' });
-    expect(out[1]).toMatchObject({ title: 'Second', meta: 'IN_PROGRESS · walnut', active: true, summary: 'Second summary' });
+    expect(out[0]).toMatchObject({ title: 'Local title', state: 'running', live: true, summary: 'transcript snippet' });
+    expect(out[1]).toMatchObject({ title: 'Second', meta: 'IN_PROGRESS · walnut', active: true, state: 'idle', summary: 'Second summary' });
   });
 
   it('a transcript hit on a task the browser does not hold still becomes that task\'s row, named by the later task hit', () => {
@@ -136,11 +135,11 @@ describe('taskIdOfHit / hitsAsTasks', () => {
     expect(out[0]).toMatchObject({ id: 'mt9', title: 'Real task title', meta: 'TODO · Inbox', summary: 'transcript snippet' });
   });
 
-  it('drops orphan sessions, the caller\'s own task, and the caller\'s own transcript', () => {
+  it('drops transcripts with no task and the caller\'s own task, by task hit or by its transcript', () => {
     const out = hitsAsTasks(
-      [sessionHit(SESSION, SESSION, 'orphan'), taskHit('self', 'Me'), sessionHit('self', 'self-sid', 'My transcript'), taskHit('mt2', 'Peer')],
+      [sessionHit(SESSION, SESSION, 'no task'), taskHit('self', 'Me'), sessionHit('self', 'self-sid', 'My transcript'), taskHit('mt2', 'Peer')],
       new Map(),
-      { taskId: 'self', sessionId: 'self-sid' },
+      'self',
     );
     expect(out.map((e) => e.id)).toEqual(['mt2']);
   });

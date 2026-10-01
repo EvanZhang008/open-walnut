@@ -1,15 +1,15 @@
 /**
  * MentionPalette — the unified "@" popup: ONE panel, Tasks + Files.
  *
- *   Tasks — picking a row INSERTS A `<task-ref/>` pill into the message. The
- *           message still goes to the CURRENT session; its agent gets a compact
- *           reference card appended server-side (the task, its session and that
- *           session's status) and decides what to do (read the task, message
- *           its session, …). Nothing is routed by the composer. There is no
- *           Sessions group and no Projects group: every session belongs to a
- *           task, so the task row carries it (a status dot, "running" /
- *           "waiting on you" in the meta line), and a project is reached
- *           through its tasks.
+ *   Tasks — ONE level. A task and its session are one thing here (the session
+ *           is the task's runtime), so a row is a task with its run state: a
+ *           dot (running / waiting on you / idle) and the state's word in the
+ *           meta line. Picking a row INSERTS A `<task-ref/>` pill into the
+ *           message; the message still goes to the CURRENT session, whose
+ *           agent gets a compact reference card appended server-side (the
+ *           task and its state) and reaches the task with task_get /
+ *           task_send. Nothing is routed by the composer. No Sessions group,
+ *           no Projects group: a project is reached through its tasks.
  *   Files — picked row inserts a Claude-Code-native `@path`; the query doubles
  *           as a path (the part before the last "/" navigates, the tail
  *           filters), exactly like the old FileMentionPopup.
@@ -130,8 +130,8 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     ref,
   ) {
     // ---- Tasks group: instant local layer --------------------------------
-    // The status epoch is a dependency so a session that starts or stops while
-    // the palette is open moves its task's dot (the store is WS-fed).
+    // The status epoch is a dependency so a task that starts or stops running
+    // while the palette is open moves its dot (the store is WS-fed).
     const tasksCtx = useTasksContextSafe();
     const statusEpoch = useSessionStatusEpoch();
     const { taskEntities, selfTaskId } = useMemo(() => {
@@ -152,8 +152,8 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     const search = useEntitySearch(query, entitiesEnabled && order === 'entities-first');
     const searchCurrent = search.forQuery === query.trim() && search.forQuery !== '';
     const serverTasks = useMemo<MentionEntity[]>(
-      () => (searchCurrent ? hitsAsTasks(search.hits, taskById, { taskId: selfTaskId, sessionId: selfSessionId }) : []),
-      [search.hits, searchCurrent, taskById, selfTaskId, selfSessionId],
+      () => (searchCurrent ? hitsAsTasks(search.hits, taskById, selfTaskId) : []),
+      [search.hits, searchCurrent, taskById, selfTaskId],
     );
 
     const rankedTasks = useMemo<RankedEntity[]>(
@@ -310,11 +310,6 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     // ---- Render ----------------------------------------------------------
     const renderEntityRow = (row: Extract<Row, { kind: 'entity' }>) => {
       const { entity, positions, matchField, source } = row.ranked;
-      // A task with a session shows that session's state as the dot; one
-      // without shows the plain task glyph.
-      const dotClass = entity.sessionId
-        ? (entity.status === 'waiting' ? 'waiting' : entity.status === 'running' ? 'running' : entity.status === 'error' ? 'error' : 'idle')
-        : null;
       // A purely semantic hit has nothing to highlight: show the snippet that
       // matched instead, so the row explains itself.
       const semanticOnly = source === 'server' && positions.length === 0 && !!entity.summary;
@@ -324,14 +319,12 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
           className={`mention-row mention-row-task${row.key === selectedKey ? ' selected' : ''}`}
           data-selected={row.key === selectedKey || undefined}
           data-kind="task"
-          data-session-status={entity.sessionId ? entity.status : undefined}
+          data-state={entity.state}
           onMouseEnter={() => setSelectedKey(row.key)}
           onMouseDown={(e) => { e.preventDefault(); pick(row); }}
           title={`${entity.title} — ${entity.meta}`}
         >
-          {dotClass
-            ? <span className={`mention-dot ${dotClass}`} />
-            : <span className="mention-kind mention-kind-task" aria-hidden="true">▢</span>}
+          <span className={`mention-dot ${entity.state}`} />
           <span className="mention-main">
             <span className="mention-title">
               {matchField === 'title'

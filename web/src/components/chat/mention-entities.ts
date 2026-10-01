@@ -1,12 +1,13 @@
 /**
  * "@" mention entities — pure ranking logic behind the palette's Tasks group.
  *
- * The palette lists TASKS only. A session is never a separate row: every
- * session belongs to a task, so the task row carries it (status dot, "running"
- * / "waiting on you" in its meta line), and picking the row INSERTS A
- * `<task-ref/>` pill into the message. The server's reference card for a task
- * names its session and that session's status, so the receiving agent still
- * learns which session to talk to. Nothing is routed by the composer.
+ * The palette lists TASKS, one level, nothing else. A task and its session are
+ * one thing here: the session is the task's runtime (the task's single session
+ * slot), so a task's run state (running, waiting on you, idle) is the task's
+ * own state, drawn as the row's dot and named in its meta line. Picking a row
+ * INSERTS A `<task-ref/>` pill into the message; the server's reference card
+ * for a task carries that state, and the agent reaches the task with task_get /
+ * task_send. Nothing is routed by the composer.
  *
  * Two result layers feed one list:
  *   - LOCAL: an in-memory fuzzy pass over the task list the browser already
@@ -14,9 +15,8 @@
  *     every keystroke;
  *   - SERVER: `/api/search` hybrid hits (full-text + vector) that arrive a
  *     beat later and RE-RANK the list: a semantic hit ("login bug" → "OAuth
- *     callback 401") lands on top even though no character matched. A hit on a
- *     session's transcript folds into the task that owns the session
- *     (hitsAsTasks), so transcript matches still find their task.
+ *     callback 401") lands on top even though no character matched. A hit in a
+ *     task's transcript is a hit on that task (hitsAsTasks).
  * mergeServerHits bands them (agreed → server-only → local-only), so the list
  * only ever gets smarter and never drops a row the user could already see.
  */
@@ -26,23 +26,24 @@ import { extractEntityRefs } from '@/utils/entity-ref-tags';
 import type { EntitySearchHit } from '@/stores/mention-search';
 import { fuzzyMatch } from './session-mention';
 
+/** A task's run state: running, blocked on the human, or neither. */
+export type MentionRunState = 'running' | 'waiting' | 'idle';
+
 export interface MentionEntity {
   /** Task id. */
   id: string;
   title: string;
   /** One-line secondary text ("IN_PROGRESS · walnut · running"). */
   meta: string;
-  /** Sort hints for the EMPTY query: pinned first, then a live session, then
-   *  not-complete, then recency. */
+  /** Sort hints for the EMPTY query: pinned first, then live (running or
+   *  waiting), then not-complete, then recency. */
   pinned?: boolean;
   live?: boolean;
   active?: boolean;
   /** Comparable recency key (ISO timestamp or any lexically ordered string). */
   recencyKey?: string;
-  /** The task's session, when it has one. */
-  sessionId?: string;
-  /** That session's status for the dot: running / waiting / error / idle / stopped. */
-  status?: string;
+  /** The row's dot. */
+  state: MentionRunState;
   /** Server search snippet — shown when the row is a semantic hit so the user
    *  sees WHY it matched even without highlighted characters. */
   summary?: string;
@@ -57,39 +58,44 @@ export interface RankedEntity {
   source: 'local' | 'server' | 'both';
 }
 
-/** What the live status store knows about a task's session. */
+/** What the live status store knows about a task's runtime. */
 export interface TaskLiveStatus {
   process_status?: string;
   pendingPermissionTool?: string | null;
 }
 
 /**
- * The palette's row for a task, its session folded in. `live` (the WS-fed
- * store) wins over the task's enrichment snapshot, which can be a poll old.
+ * A task's run state. `live` (the WS-fed store) wins over the task's
+ * enrichment snapshot, which can be a poll old; a task that never ran is idle.
  */
+export function taskRunState(t: Task, live?: TaskLiveStatus | null): MentionRunState {
+  const s = resolveTaskSessionId(t) ? (live ?? t.session_status ?? null) : null;
+  if (s?.pendingPermissionTool) return 'waiting';
+  return s?.process_status === 'running' ? 'running' : 'idle';
+}
+
+const STATE_WORD: Record<MentionRunState, string> = { running: 'running', waiting: 'waiting on you', idle: '' };
+
+/** The palette's row for a task. */
 export function taskEntity(t: Task, live?: TaskLiveStatus | null): MentionEntity {
-  const sessionId = resolveTaskSessionId(t);
-  const s = sessionId ? (live ?? t.session_status ?? null) : null;
-  const waiting = !!s?.pendingPermissionTool;
-  const status = waiting ? 'waiting' : s?.process_status;
-  const liveWord = waiting ? 'waiting on you' : status === 'running' ? 'running' : '';
+  const state = taskRunState(t, live);
   return {
     id: t.id,
     title: t.title || '(untitled)',
-    meta: [t.phase, t.project || 'Inbox', liveWord].filter(Boolean).join(' · '),
+    meta: [t.phase, t.project || 'Inbox', STATE_WORD[state]].filter(Boolean).join(' · '),
     pinned: !!t.pinned || t.focus_tier === 'focus',
-    live: status === 'running' || waiting,
+    live: state !== 'idle',
     active: t.phase !== 'COMPLETE',
     recencyKey: t.updated_at ?? '',
-    ...(sessionId ? { sessionId, status: status ?? 'idle' } : {}),
+    state,
   };
 }
 
 /**
- * The task a slim search hit stands for. A session row carries the id of the
- * task that OWNS the transcript in `id` and the session's own id only inside
- * `ref` (src/web/routes/search.ts); the two are equal exactly when no task owns
- * the session, and such a session has no row in a tasks-only palette.
+ * The task a slim search hit stands for. A transcript row carries its task's
+ * id in `id` and the transcript's own id only inside `ref`
+ * (src/web/routes/search.ts); the two are equal exactly when the transcript
+ * has no task, and then there is nothing to list.
  */
 export function taskIdOfHit(h: EntitySearchHit): string | null {
   if (h.type === 'task') return h.id || null;
@@ -99,36 +105,27 @@ export function taskIdOfHit(h: EntitySearchHit): string | null {
   return h.id || null;
 }
 
-/** The session id a session hit names, when its ref carries one. */
-function sessionIdOfHit(h: EntitySearchHit): string | null {
-  if (h.type !== 'session' || !h.ref) return null;
-  const ref = extractEntityRefs(h.ref)[0];
-  return ref && ref.kind === 'session' ? ref.id : null;
-}
-
 /**
- * Server hits as task entities, in server order, one row per task: a task hit
- * and a hit on its session's transcript collapse into one row (the first wins
- * the position, a task hit's phase/project and the local row's live meta win
- * the content). A local row for the task, when the browser holds one, lends
- * its meta and session so the folded row looks like its neighbours. The task
- * the user is already talking from (`self`: its id, and its session's id for a
- * transcript hit) is never offered.
+ * Server hits as task rows, in server order, one row per task: a hit on the
+ * task and a hit in its transcript are the same task (the first wins the
+ * position; a task hit's phase/project and the local row's live meta win the
+ * content). A local row for the task, when the browser holds one, lends its
+ * meta and state so the row looks like its neighbours. The task the user is
+ * already talking from (`selfTaskId`) is never offered.
  */
 export function hitsAsTasks(
   hits: EntitySearchHit[],
   local: Map<string, MentionEntity>,
-  self: { taskId?: string | null; sessionId?: string | null } = {},
+  selfTaskId?: string | null,
 ): MentionEntity[] {
   const byId = new Map<string, MentionEntity>();
   for (const h of hits) {
     const taskId = taskIdOfHit(h);
-    if (!taskId || taskId === self.taskId) continue;
-    if (self.sessionId && sessionIdOfHit(h) === self.sessionId) continue;
+    if (!taskId || taskId === selfTaskId) continue;
     const known = local.get(taskId);
     const seen = byId.get(taskId);
     if (seen) {
-      // A task hit arriving after its session hit still owns the row's text.
+      // A task hit arriving after its transcript hit still owns the row's text.
       if (h.type === 'task' && !known) {
         byId.set(taskId, { ...seen, title: h.title || seen.title, meta: hitMeta(h), summary: seen.summary ?? h.summary });
       }
@@ -141,6 +138,7 @@ export function hitsAsTasks(
         title: h.title || '(untitled)',
         meta: hitMeta(h),
         active: h.phase !== 'COMPLETE',
+        state: 'idle',
         summary: h.summary,
       });
   }

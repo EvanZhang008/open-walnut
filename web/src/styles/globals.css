@@ -7495,7 +7495,6 @@ select {
 }
 .mention-dot.running { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
 .mention-dot.waiting { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent); }
-.mention-dot.error { background: var(--error); }
 .mention-dot.idle { background: var(--fg-muted); opacity: 0.55; }
 .mention-ficon { flex-shrink: 0; width: 16px; text-align: center; font-size: 13px; }
 .mention-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -7571,14 +7570,6 @@ select {
   margin-right: 2px;
 }
 
-.mention-kind {
-  flex-shrink: 0;
-  width: 16px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-.mention-kind-task { color: var(--accent); }
 /* A purely semantic hit has no highlighted characters: the snippet says WHY. */
 .mention-summary { opacity: 0.85; font-style: italic; }
 /* Hybrid search in flight for this query: a quiet pulse in the group head. */

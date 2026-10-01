@@ -1,14 +1,14 @@
 /**
  * REAL-PIPELINE Playwright spec for the composer's "@" palette listing TASKS
- * only (MentionPalette): no Sessions group, no Projects group. A session is
- * never its own row; the task that owns it carries it (a status dot and
- * "waiting on you" / "running" in the meta line), and the `<task-ref/>` the
- * pick inserts reaches the agent as a reference card that names the session.
+ * only (MentionPalette), one level: no Sessions group, no Projects group. A
+ * row is a task with its run state (a dot and "waiting on you" / "running" in
+ * the meta line), and the `<task-ref/>` the pick inserts reaches the agent as a
+ * reference card that carries that state.
  *
- * Nothing is route-mocked: two real sessions (session:start WS RPC → MockDaemon
- * → the mock Claude CLI), one parked on a permission prompt so its live state
- * is stable, one idle; a third task has no session at all. The palette opens
- * in the idle session's column, so that session's own task must be absent.
+ * Nothing is route-mocked: two tasks really run (session:start WS RPC →
+ * MockDaemon → the mock Claude CLI), one parked on a permission prompt so its
+ * live state is stable, one idle; a third task never ran. The palette opens in
+ * the idle task's column, so that task itself must be absent.
  */
 import { test, expect, type Page, type APIRequestContext, type Locator } from '@playwright/test'
 
@@ -130,20 +130,19 @@ test('the "@" palette lists tasks only, a task carries its session, and the pick
   expect(groupNames).toContain('Tasks')
   await expect(palette.locator('.mention-row-session, .mention-row-project, [data-group="session"], [data-group="project"]')).toHaveCount(0)
 
-  // The task whose session is parked on a permission carries it: a waiting dot
-  // and "waiting on you" in its meta. The plain task shows the task glyph. The
+  // The task parked on a permission: a waiting dot and "waiting on you" in its
+  // meta. The task that never ran: the same row shape, an idle dot. The
   // column's own task is never offered.
   const waitingRow = palette.locator('.mention-row-task').filter({ hasText: `${tag} waiting` })
-  await expect(waitingRow).toHaveAttribute('data-session-status', 'waiting')
+  await expect(waitingRow).toHaveAttribute('data-state', 'waiting')
   await expect(waitingRow.locator('.mention-dot.waiting')).toBeVisible()
   await expect(waitingRow.locator('.mention-meta')).toContainText('waiting on you')
   const plainRow = palette.locator('.mention-row-task').filter({ hasText: `${tag} plain` })
-  await expect(plainRow).toBeVisible()
-  await expect(plainRow.locator('.mention-kind-task')).toBeVisible()
-  await expect(plainRow.locator('.mention-dot')).toHaveCount(0)
+  await expect(plainRow).toHaveAttribute('data-state', 'idle')
+  await expect(plainRow.locator('.mention-dot.idle')).toBeVisible()
+  await expect(plainRow.locator('.mention-meta')).toHaveText('TODO · Walnut')
   await expect(palette.locator('.mention-row-task').filter({ hasText: `${tag} self` })).toHaveCount(0)
-  // The live-first ordering: the task with the waiting session sits above the
-  // plain one.
+  // The live-first ordering: the waiting task sits above the idle one.
   const titles = await palette.locator('.mention-row-task .mention-title').allTextContents()
   expect(titles.findIndex((t) => t.includes(`${tag} waiting`))).toBeLessThan(titles.findIndex((t) => t.includes(`${tag} plain`)))
 
@@ -156,11 +155,13 @@ test('the "@" palette lists tasks only, a task carries its session, and the pick
   await page.keyboard.press('Enter')
 
   // The sent message shows the task as a pill, and the agent's copy carried the
-  // reference card: the mock CLI echoes its whole input, so the reply names the
-  // task AND its session.
+  // reference card: the mock CLI echoes its whole input, so the reply shows the
+  // task line with its run state, one id, no second one to address.
   const panel = col.locator('.session-panel')
   await expect(panel.locator(`a.task-link[data-task-id="${waitingTask}"]`).first()).toBeVisible({ timeout: 30_000 })
   await expect(panel).toContainText(`task ${waitingTask}`, { timeout: 60_000 })
-  await expect(panel).toContainText(`session ${waitingSid}`)
+  await expect(panel).toContainText('project Walnut · waiting on you')
+  await expect(panel).toContainText('use task_get / task_send for more')
+  await expect(panel).not.toContainText(`session ${waitingSid}`)
   await expect(panel).not.toContainText('session-ref id=')
 })
