@@ -9,7 +9,8 @@
   "include": [
     "plugin-api-contract.ts",
     "plugin-web-api-contract.ts",
-    "../../src/types/**/*.d.ts"
+    "../../src/types/**/*.d.ts",
+    "../../src/integrations/mail-imap/*.d.ts"
   ],
   "exclude": [
     "../../dist"
