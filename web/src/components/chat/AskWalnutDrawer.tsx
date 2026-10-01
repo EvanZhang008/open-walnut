@@ -36,6 +36,7 @@ import {
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
+import { ICON_SLIDERS } from '@/components/common/Icons';
 import type { AskAgent } from './ask-walnut-slot-model';
 
 /** A row in the drawer's list. The just-launched task is not in the store yet,
@@ -366,9 +367,9 @@ export function AskWalnutDrawer({
                 className="ask-walnut-drawer-link"
                 data-testid="ask-walnut-fix"
                 onClick={act(onFixWalnut)}
-                title="Describe what's broken — opens a session in Walnut's own checkout"
+                title="Open a session in Walnut's own source code to change or fix Walnut"
               >
-                <span aria-hidden="true">{'\u{1F527}'}</span> Fix Walnut
+                <span className="ask-walnut-drawer-link-ic" aria-hidden="true">{ICON_SLIDERS}</span> Customize Walnut
               </button>
             )}
           </div>

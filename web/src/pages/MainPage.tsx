@@ -187,7 +187,7 @@ interface DraftSeed {
   /** Preselect this model (fork: the source session's). Applied like pinTier —
    *  WITHOUT metaTouched, so it reads as a default, not a user edit. */
   model?: string;
-  /** Launch intent ("Fix Walnut"): forwarded to quick-start on Start, where it
+  /** Launch intent ("Customize Walnut"): forwarded to quick-start on Start, where it
    *  turns the launch into a repair (server-side briefing + task title/project).
    *  Only ever set together with a pinned `cwd`. */
   intent?: 'fix-walnut';
@@ -218,7 +218,7 @@ function mapDrafts(prev: DraftColumn[], fn: (d: DraftColumn) => DraftColumn): Dr
 
 /**
  * Rewrite an existing draft row with a seed: openDraftColumn's reuse of a pristine
- * leftmost draft, and "Improve Walnut" turning the draft it sits on into the repair
+ * leftmost draft, and "Customize Walnut" turning the draft it sits on into the repair
  * draft. One rule set for both, so a reused column and a converted one launch alike.
  */
 function rebindDraftToSeed(d: DraftColumn, seed: DraftSeed, projectDefault: ProjectDefaultLookup): DraftColumn {
@@ -232,7 +232,7 @@ function rebindDraftToSeed(d: DraftColumn, seed: DraftSeed, projectDefault: Proj
   // Task like every fresh column, the user re-picks Ask Walnut if that
   // is what they want). On a reuse this is normally unreachable (the toggle
   // marks the draft userTouched, so a seed opens a fresh column instead);
-  // "Improve Walnut" from the Ask Walnut tab takes it.
+  // "Customize Walnut" from the Ask Walnut tab takes it.
   if (next.walnut) {
     next = leaveWalnutDraft(next);
     delete next.walnut;
@@ -260,7 +260,7 @@ function rebindDraftToSeed(d: DraftColumn, seed: DraftSeed, projectDefault: Proj
     if (seed.forkOf) { next.forkOf = seed.forkOf; delete next.taskId; delete next.boundTaskTitle; }
   }
   // The launch TARGET (folder + intent) rides on any seed that carries
-  // one, not just a task/fork rebind. "Fix Walnut" is the seed with a
+  // one, not just a task/fork rebind. "Customize Walnut" is the seed with a
   // folder and no binding: while this branch skipped it, clicking Fix
   // Walnut with a pristine draft leftmost reused that draft and left it a
   // plain "New Session" pointing nowhere: the repair briefing never
@@ -631,7 +631,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   // Where a repair runs (repair-target.ts): Walnut's own source, or on an npm
   // install the clone a first repair makes. null = no repair possible here (cloud
-  // replica, no git), and then every Fix / Improve Walnut entry hides. Fetched
+  // replica, no git), and then every Customize Walnut entry hides. Fetched
   // once; the API layer shares the answer for the page lifetime.
   const [selfRepairInfo, setSelfRepairInfo] = useState<SelfRepairInfo | null>(null);
   useEffect(() => { void fetchSelfRepair().then(setSelfRepairInfo); }, []);
@@ -1725,7 +1725,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     openDraftColumn({ pinTier: tier });
   }, [openDraftColumn]);
 
-  // "Fix Walnut" → a DRAFT COLUMN pre-armed on Walnut's own checkout
+  // "Customize Walnut" (the drawer entry) → a DRAFT COLUMN pre-armed on Walnut's own checkout
   // (server-authoritative), carrying the repair intent. The user only describes
   // what's broken; `handleDraftStart` forwards `intent` to quick-start, which is
   // what makes the server wrap the message in its repair briefing.
@@ -1758,11 +1758,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setDraftColumns(prev => mapDraft(prev, draftId, withoutRepairEngine));
   }, [openDraftColumn]);
 
-  // "Improve Walnut" chip on a plain draft: THIS draft becomes the repair draft,
-  // through the same rewrite a reused column gets (rebindDraftToSeed) and the same
-  // engine rule as Fix Walnut. The chip shows only while the composer is empty and
-  // only when a target exists.
-  const handleImproveWalnut = useCallback((draftId: string) => {
+  // "Customize Walnut" quick action on a plain draft: THIS draft becomes the repair
+  // draft, through the same rewrite a reused column gets (rebindDraftToSeed) and
+  // the same engine rule as the drawer's entry. The chip shows only while the
+  // composer is empty and only when a target exists.
+  const handleCustomizeWalnut = useCallback((draftId: string) => {
     const target = walnutRepairTargetRef.current;
     if (!target) return;
     log.info('home', 'draft turned into a Walnut repair draft', {
@@ -3097,8 +3097,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     gateError={draftGateErrors[sid]}
                     onGateErrorClear={clearDraftGateError}
                     restoreImages={draftRestoreImages[sid]}
-                    // "Improve Walnut" quick action + where a repair draft runs.
-                    onImproveWalnut={walnutRepairTarget ? handleImproveWalnut : undefined}
+                    // "Customize Walnut" quick action + where a repair draft runs.
+                    onCustomizeWalnut={walnutRepairTarget ? handleCustomizeWalnut : undefined}
                     repairTarget={walnutRepairTarget}
                   />
                 ) : null

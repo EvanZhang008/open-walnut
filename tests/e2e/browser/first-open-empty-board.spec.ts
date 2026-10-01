@@ -20,8 +20,10 @@
  * Runs on chromium AND webkit (`PW_WEBKIT=1 … --project webkit`): the Mac app is a
  * WKWebView, and the caret landing in the draft is part of the claim.
  *
- * The same first draft carries ONE quick action, "Improve Walnut", which turns it
- * into the repair draft and says where Walnut's code lives. The fixture server
+ * The same first draft carries ONE quick-action row under the cards, on either tab:
+ * Walnut's seeds (a seed taken from Start Task moves the draft to Ask Walnut first)
+ * and "Customize Walnut", which turns the draft into the repair draft and says where
+ * Walnut's code lives. Line icons, never emoji. The fixture server
  * runs from this checkout, so its `selfRepair.source` is that checkout; the npm
  * install shape (no source yet, a clone on the first Start) is the same server's
  * /api/config answer rewritten for this page. Start is answered by the spec, so no
@@ -143,7 +145,8 @@ async function captureQuickStart(page: Page): Promise<Array<Record<string, unkno
   return bodies
 }
 
-const improveChip = (page: Page) => drafts(page).getByTestId('draft-improve-walnut')
+const customizeChip = (page: Page) => drafts(page).getByTestId('draft-customize-walnut')
+const quickActions = (page: Page) => drafts(page).locator('.draft-walnut-suggests[aria-label="Quick actions"]')
 const draftHint = (page: Page) => drafts(page).locator('.draft-quick-hint')
 const folderPill = (page: Page) => drafts(page).getByRole('button', { name: /^Folder and host: / })
 
@@ -294,14 +297,14 @@ test('a user who opened the chat keeps it, and the empty board then opens no dra
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
 })
 
-// ── "Improve Walnut": the way into Walnut's own source ───────────────────────
+// ── "Customize Walnut": the way into Walnut's own source ─────────────────────
 
-const FIX_TITLE = '\u{1F527} Fix Walnut'
+const FIX_TITLE = 'Customize Walnut'
 const NPM_CLONE_DIR = '/tmp/pw-npm-home/open-walnut'
 const NPM_REPO_URL = 'https://example.invalid/open-walnut.git'
 const npmInstall: SelfRepair = { available: true, source: null, cloneDir: NPM_CLONE_DIR, repoUrl: NPM_REPO_URL }
 
-test('Improve Walnut turns the first draft into a repair draft in Walnut\'s own source', async ({ page, baseURL }) => {
+test('Customize Walnut turns the first draft into a repair draft in Walnut\'s own source', async ({ page, baseURL }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   // The fixture server runs from this checkout: that checkout is the source.
@@ -312,21 +315,29 @@ test('Improve Walnut turns the first draft into a repair draft in Walnut\'s own 
   const starts = await captureQuickStart(page)
   await openFirstScreen(page, baseURL!)
 
-  // The new user's first draft offers it, under the two cards.
+  // The new user's first draft offers it, last in the quick-action row under the
+  // two cards, with the Walnut seeds before it. Every chip carries a line icon.
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
-  await expect(improveChip(page)).toHaveText('\u{1F527} Improve Walnut', { timeout: 15_000 })
-  await shot(page, 'improve-walnut-chip')
+  await expect(customizeChip(page)).toHaveText('Customize Walnut', { timeout: 15_000 })
+  await expect(quickActions(page).locator('.session-action-chip')).toHaveText([
+    'Which task is\u2026', 'Schedule my day', 'What ran today', 'Customize Walnut',
+  ])
+  await expect(quickActions(page).locator('.session-action-chip .session-action-chip-ic svg')).toHaveCount(4)
+  expect(await quickActions(page).innerText()).not.toMatch(/\p{Extended_Pictographic}/u)
+  expect(await drafts(page).locator('.draft-intent-cards').innerText()).not.toMatch(/\p{Extended_Pictographic}/u)
+  await expect(drafts(page).locator('.draft-intent-cards .draft-intent-ic svg, .draft-intent-cards .draft-intent-ic img')).toHaveCount(2)
+  await shot(page, 'customize-walnut-chip')
   // Taking it rewrites THIS draft, so it never sits beside typed text.
   await draftComposer(page).fill('half a thought')
-  await expect(improveChip(page)).toHaveCount(0)
+  await expect(customizeChip(page)).toHaveCount(0)
   await draftComposer(page).fill('')
-  await expect(improveChip(page)).toBeVisible()
+  await expect(customizeChip(page)).toBeVisible()
 
-  await improveChip(page).click()
+  await customizeChip(page).click()
   // The same column, now the repair draft: no cards, no chip, and it says where.
   await expect(drafts(page)).toHaveCount(1)
   await expect(drafts(page).locator('.session-panel-title')).toHaveText(FIX_TITLE)
-  await expect(improveChip(page)).toHaveCount(0)
+  await expect(customizeChip(page)).toHaveCount(0)
   await expect(drafts(page).locator('.draft-intent-cards')).toHaveCount(0)
   await expect(draftHint(page)).toHaveText(
     `Opens a session in Walnut's own source at ${source}. Describe what to change or fix; paste a screenshot (\u2318V) if you have one.`,
@@ -334,7 +345,7 @@ test('Improve Walnut turns the first draft into a repair draft in Walnut\'s own 
   await expect(folderPill(page).locator('.draft-pill-name')).toHaveText(path.basename(source))
   await expect(folderPill(page)).toHaveAttribute('aria-label', new RegExp(`^Folder and host: ${source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} on `))
   await expect(draftComposer(page)).toBeFocused()
-  await shot(page, 'improve-walnut-repair-draft')
+  await shot(page, 'customize-walnut-repair-draft')
 
   // Start is a repair launch at that folder, on this computer.
   await draftComposer(page).fill('make the header calmer')
@@ -347,13 +358,14 @@ test('Improve Walnut turns the first draft into a repair draft in Walnut\'s own 
   expect(errors).toEqual([])
 })
 
-test('Improve Walnut from the Ask Walnut tab leaves that mode for the repair draft', async ({ page, baseURL }) => {
+test('Customize Walnut from the Ask Walnut tab leaves that mode for the repair draft', async ({ page, baseURL }) => {
   await emptyBoardFor(page)
   await openFirstScreen(page, baseURL!)
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
   await drafts(page).locator('.draft-intent-card-walnut').click()
-  await expect(drafts(page).locator('.draft-walnut-suggests[aria-label="Ask Walnut suggestions"]')).toBeVisible()
-  await improveChip(page).click()
+  await expect(drafts(page)).toHaveClass(/draft-session-panel-walnut/)
+  await expect(quickActions(page)).toBeVisible()
+  await customizeChip(page).click()
   await expect(drafts(page).locator('.session-panel-title')).toHaveText(FIX_TITLE)
   await expect(drafts(page)).not.toHaveClass(/draft-session-panel-walnut/)
   // A repair has a folder; an ask has none, so the pill is back.
@@ -361,19 +373,40 @@ test('Improve Walnut from the Ask Walnut tab leaves that mode for the repair dra
   await expect(drafts(page).locator('.draft-walnut-suggests')).toHaveCount(0)
 })
 
+test('a Walnut seed taken from the Start Task tab moves the draft to Ask Walnut and prefills it', async ({ page, baseURL }) => {
+  await emptyBoardFor(page)
+  await openFirstScreen(page, baseURL!)
+  await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
+  // Start Task is the preselected tab; the seeds sit under it anyway.
+  await expect(drafts(page).locator('.draft-intent-card').first()).toHaveAttribute('aria-pressed', 'true')
+  await expect(drafts(page)).not.toHaveClass(/draft-session-panel-walnut/)
+  await quickActions(page).getByRole('button', { name: 'Schedule my day' }).click()
+  // The one tab that can answer it is up, the text is in the composer, nothing was sent.
+  await expect(drafts(page)).toHaveClass(/draft-session-panel-walnut/)
+  await expect(drafts(page).locator('.draft-intent-card-walnut')).toHaveAttribute('aria-pressed', 'true')
+  await expect(draftComposer(page)).toHaveValue('Schedule my day')
+  await expect(draftComposer(page)).toBeFocused()
+  // Typed text hides the row (prefill is replace-only); clearing brings it back.
+  await expect(quickActions(page)).toHaveCount(0)
+  await draftComposer(page).fill('')
+  await expect(quickActions(page)).toBeVisible()
+  await expect(drafts(page).locator('.session-panel-title')).toHaveText('Ask Walnut')
+  await shot(page, 'seed-from-start-task-tab')
+})
+
 test('an npm install sees where the clone will land, and Start targets it', async ({ page, baseURL }) => {
   await emptyBoardFor(page)
   await selfRepairAs(page, npmInstall, null)
   const starts = await captureQuickStart(page)
   await openFirstScreen(page, baseURL!)
-  await expect(improveChip(page)).toBeVisible({ timeout: 15_000 })
-  await improveChip(page).click()
+  await expect(customizeChip(page)).toBeVisible({ timeout: 15_000 })
+  await customizeChip(page).click()
   await expect(drafts(page).locator('.session-panel-title')).toHaveText(FIX_TITLE)
   await expect(draftHint(page)).toHaveText(
     `Walnut's source is not on this computer yet. Start clones ${NPM_REPO_URL} into ${NPM_CLONE_DIR} first, then opens a session there.`,
   )
   await expect(folderPill(page).locator('.draft-pill-name')).toHaveText('open-walnut')
-  await shot(page, 'improve-walnut-clone-hint')
+  await shot(page, 'customize-walnut-clone-hint')
 
   await draftComposer(page).fill('first repair on an npm install')
   await draftComposer(page).press('Enter')
@@ -382,7 +415,7 @@ test('an npm install sees where the clone will land, and Start targets it', asyn
   expect(starts[0].cwd).toBe(NPM_CLONE_DIR)
 })
 
-test('an npm install also gets Fix Walnut in the Ask Walnut drawer', async ({ page, baseURL }) => {
+test('an npm install also gets Customize Walnut in the Ask Walnut drawer', async ({ page, baseURL }) => {
   await emptyBoardFor(page)
   await selfRepairAs(page, npmInstall, null)
   await page.addInitScript((key) => { if (localStorage.getItem(key) === null) localStorage.setItem(key, 'true') }, CHAT_VISIBLE_KEY)
@@ -396,17 +429,18 @@ test('an npm install also gets Fix Walnut in the Ask Walnut drawer', async ({ pa
   await expect(draftHint(page)).toContainText(`into ${NPM_CLONE_DIR} first`)
 })
 
-test('no repair possible here: no Improve Walnut chip and no Fix Walnut entry', async ({ page, baseURL }) => {
+test('no repair possible here: no Customize Walnut chip and no drawer entry', async ({ page, baseURL }) => {
   await emptyBoardFor(page)
   const configRead = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/config' && r.request().method() === 'GET')
   await selfRepairAs(page, { ...npmInstall, available: false, reason: 'no-git' }, null)
   await openFirstScreen(page, baseURL!)
   await configRead
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
-  // The intent cards are up, so the chip row would be too by now.
+  // The intent cards and the seeds are up, so the chip would be too by now.
   await expect(drafts(page).locator('.draft-intent-cards')).toBeVisible()
+  await expect(quickActions(page).locator('.session-action-chip')).toHaveText(['Which task is\u2026', 'Schedule my day', 'What ran today'])
   await page.waitForTimeout(1_000)
-  await expect(improveChip(page)).toHaveCount(0)
+  await expect(customizeChip(page)).toHaveCount(0)
 
   // The drawer's entry follows the same answer.
   await page.evaluate((key) => localStorage.setItem(key, 'true'), CHAT_VISIBLE_KEY)

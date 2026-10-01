@@ -1,5 +1,5 @@
 /**
- * Where an "Improve Walnut" / "Fix Walnut" draft points: Walnut's own source.
+ * Where a "Customize Walnut" draft points: Walnut's own source.
  *
  * GET /api/config carries `selfRepair` (server: core/self-repair/walnut-source.ts).
  * Its `source` is the checkout to edit (the running checkout, a configured one, or

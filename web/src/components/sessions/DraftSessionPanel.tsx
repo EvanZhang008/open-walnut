@@ -66,6 +66,7 @@ import {
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 import { GENERAL_AGENT_ID } from '@/components/chat/ask-walnut-slot-model';
 import { TaskQuickActions } from './TaskQuickActions';
+import * as ICONS from '@/components/common/Icons';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import '@/styles/walnut-agent.css';
@@ -79,21 +80,24 @@ const BOUND_WALNUT_HINT = 'Ask Walnut about this task: type what you need, or se
 const FORK_HINT = 'Forks the source conversation into a sibling session: type where it should go next, or send with nothing typed to just branch.';
 const FORK_PLACEHOLDER = 'Message for the forked session (optional)';
 const WALNUT_PLACEHOLDER = 'Ask Walnut anything…';
-/** "Fix Walnut": the guidance the old chat-anchored repair bar carried. The draft
+/** "Customize Walnut" (the repair draft): the guidance the old chat-anchored repair bar carried. The draft
  *  otherwise looks exactly like an ordinary new session, so nothing would tell the
  *  user their sentence is about to be read as a bug report. */
 const REPAIR_PLACEHOLDER =
   'Describe what to change or fix, e.g. "sessions panel keeps spinning". Paste a screenshot (⌘V) to help.';
 
-/** The Ask Walnut tab's one-tap composer seeds — prefill only, never auto-send:
- *  the user finishes the sentence (or edits it) and presses Ask themselves.
- *  The inserted text must MATCH the label (minus the ellipsis) — a chip that
- *  inserts less than it promises reads as a bug. The first is a deliberate
- *  stem (trailing space, ellipsis label); the other two are complete asks. */
-const WALNUT_SUGGESTS: readonly { label: string; text: string }[] = [
-  { label: '🔍 Which task is…', text: 'Which task is ' },
-  { label: '🗓 Schedule my day', text: 'Schedule my day' },
-  { label: '🧠 What ran today', text: 'What ran today?' },
+/** The quick actions under the intent cards: Walnut's one-tap composer seeds.
+ *  Prefill only, never auto-send: the user finishes the sentence (or edits it)
+ *  and presses Ask themselves. Taken from the Start Task tab, a seed first moves
+ *  the draft to Ask Walnut, the one tab that can answer it. The inserted text
+ *  must MATCH the label (minus the ellipsis): a chip that inserts less than it
+ *  promises reads as a bug. The first is a deliberate stem (trailing space,
+ *  ellipsis label); the other two are complete asks. Line icons, not emoji, like
+ *  every other control. */
+const WALNUT_SUGGESTS: readonly { label: string; icon: ReactNode; text: string }[] = [
+  { label: 'Which task is…', icon: ICONS.ICON_SEARCH, text: 'Which task is ' },
+  { label: 'Schedule my day', icon: ICONS.ICON_CALENDAR, text: 'Schedule my day' },
+  { label: 'What ran today', icon: ICONS.ICON_SECTION_RECENT, text: 'What ran today?' },
 ];
 
 /** Trailing debounce after the user pauses. Shorter than QuickTaskComposer's
@@ -281,9 +285,9 @@ interface Props {
   onGateErrorClear?: (draftId: string) => void;
   /** Images of a refused Start, put back into the composer once on mount. */
   restoreImages?: ImageAttachment[];
-  /** "Improve Walnut" quick action: the owner turns THIS draft into the repair
+  /** "Customize Walnut" quick action: the owner turns THIS draft into the repair
    *  draft. Omit (no repair target on this install) and the chip never renders. */
-  onImproveWalnut?: (draftId: string) => void;
+  onCustomizeWalnut?: (draftId: string) => void;
   /** Where a repair draft runs (Walnut's source, or the clone a first Start
    *  makes): the repair hint names it. */
   repairTarget?: WalnutRepairTarget | null;
@@ -293,7 +297,7 @@ export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
   onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
-  onImproveWalnut, repairTarget,
+  onCustomizeWalnut, repairTarget,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   // "Start anyway" rides the ordinary send (so images and the settle rules apply) with one flag.
@@ -348,7 +352,7 @@ export function DraftSessionPanel({
   // (tasks, schedule) give way to the agent's own description.
   const askAgent = isWalnut && draft.agent && draft.agent.id !== GENERAL_AGENT_ID ? draft.agent : null;
   const askLabel = askAgent ? `Ask ${askAgent.name}` : 'Ask Walnut';
-  // "Fix Walnut": pre-armed on Walnut's own checkout with the repair intent. No
+  // "Customize Walnut": pre-armed on Walnut's own checkout with the repair intent. No
   // mode fork: an Ask Walnut launch has no cwd and would drop the repair.
   const isRepair = draft.intent === 'fix-walnut';
   const showTabs = !isFork && !isRepair && !!onWalnutToggle;
@@ -581,7 +585,7 @@ export function DraftSessionPanel({
               {/* A plain draft makes a task (its "Save as todo" makes nothing else), so
                   it says so; a BOUND draft adds a session to an existing task and
                   creates none, so it keeps "New Session" beside its "for:" line. */}
-              {isFork ? 'Fork Session' : isRepair ? '\u{1F527} Fix Walnut' : isWalnut ? askLabel : isBound ? 'New Session' : 'New task'}
+              {isFork ? 'Fork Session' : isRepair ? 'Customize Walnut' : isWalnut ? askLabel : isBound ? 'New Session' : 'New task'}
             </span>
             <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Draft</span>
             {isBound && (
@@ -638,7 +642,7 @@ export function DraftSessionPanel({
                   className={`draft-intent-card${!isWalnut ? ' is-active' : ''}`}
                   onClick={() => { if (isWalnut) { onWalnutToggle?.(draft.id, false); focusComposer(); } }}
                 >
-                  <span className="draft-intent-ic" aria-hidden="true">🛠</span>
+                  <span className="draft-intent-ic" aria-hidden="true">{ICONS.ICON_TERMINAL}</span>
                   <span className="draft-intent-t">Start Task</span>
                   <span className="draft-intent-d">A coding session in any folder, with any agent: Claude, Codex, and more.</span>
                 </button>
@@ -648,30 +652,15 @@ export function DraftSessionPanel({
                   className={`draft-intent-card draft-intent-card-walnut${isWalnut ? ' is-active' : ''}`}
                   onClick={() => { if (!isWalnut) { onWalnutToggle?.(draft.id, true); focusComposer(); } }}
                 >
-                  <span className="draft-intent-ic" aria-hidden="true">🥜</span>
+                  <span className="draft-intent-ic" aria-hidden="true">
+                    <img src="/walnut-icon.png" alt="" className="draft-intent-walnut-mark" />
+                  </span>
                   <span className="draft-intent-t">Ask Walnut</span>
                   <span className="draft-intent-d">
                     {isBound
                       ? 'Hand this task to Walnut: plan it, research it, or organize it with your tasks, notes and memory in reach.'
                       : 'A quick session with Walnut: organize tasks, plan your day, configure Walnut, ask or search anything.'}
                   </span>
-                </button>
-              </div>
-            )}
-            {/* "Improve Walnut": the way into Walnut's own source for a user who
-                never cloned it (an npm install gets the clone on Start). Turns THIS
-                draft into the repair draft, so it shows only while there is nothing
-                typed to lose, and only where the owner has a repair target. */}
-            {showTabs && !isBound && onImproveWalnut && !text.trim() && (
-              <div className="draft-walnut-suggests draft-improve-walnut-row" role="group" aria-label="Quick actions">
-                <button
-                  type="button"
-                  className="session-action-chip"
-                  data-testid="draft-improve-walnut"
-                  title="Open a session in Walnut's own source code to change or fix Walnut"
-                  onClick={() => { onImproveWalnut(draft.id); focusComposer(); }}
-                >
-                  {'\u{1F527}'} Improve Walnut
                 </button>
               </div>
             )}
@@ -691,18 +680,40 @@ export function DraftSessionPanel({
             {/* Not on a bound draft: "plan my day" / "organize tasks" seeds have
                 nothing to do with the one task this column is about. */}
             {intro}
-            {isWalnut && !intro && !askAgent && !isBound && !text.trim() && (
-              <div className="draft-walnut-suggests" role="group" aria-label="Ask Walnut suggestions">
+            {/* ONE quick-action row under the cards, whichever tab is up: the
+                Walnut seeds, then "Customize Walnut", the way into Walnut's own
+                source for a user who never cloned it (an npm install gets the
+                clone on Start). That one turns THIS draft into the repair draft,
+                so like the seeds it shows only while there is nothing typed to
+                lose, and only where the owner has a repair target. */}
+            {(showTabs || isWalnut) && !intro && !askAgent && !isBound && !text.trim() && (
+              <div className="draft-walnut-suggests" role="group" aria-label="Quick actions">
                 {WALNUT_SUGGESTS.map((s) => (
                   <button
                     key={s.label}
                     type="button"
                     className="session-action-chip"
-                    onClick={() => setPrefill((p) => ({ text: s.text, nonce: p.nonce + 1 }))}
+                    onClick={() => {
+                      if (!isWalnut) onWalnutToggle?.(draft.id, true);
+                      setPrefill((p) => ({ text: s.text, nonce: p.nonce + 1 }));
+                    }}
                   >
+                    <span className="session-action-chip-ic" aria-hidden="true">{s.icon}</span>
                     {s.label}
                   </button>
                 ))}
+                {showTabs && onCustomizeWalnut && (
+                  <button
+                    type="button"
+                    className="session-action-chip"
+                    data-testid="draft-customize-walnut"
+                    title="Open a session in Walnut's own source code to change or fix Walnut"
+                    onClick={() => { onCustomizeWalnut(draft.id); focusComposer(); }}
+                  >
+                    <span className="session-action-chip-ic" aria-hidden="true">{ICONS.ICON_SLIDERS}</span>
+                    Customize Walnut
+                  </button>
+                )}
               </div>
             )}
           </div>

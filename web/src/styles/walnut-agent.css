@@ -70,7 +70,12 @@
   outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: 2px;
 }
-.draft-intent-ic { display: block; font-size: 22px; margin-bottom: 10px; }
+/* Card glyphs are line icons (and the Walnut mark), sized like a 22px emoji
+   was, in the muted ink so the title below stays the loudest line. */
+.draft-intent-ic { display: block; height: 24px; margin-bottom: 10px; color: var(--fg-muted); }
+.draft-intent-ic svg, .draft-intent-walnut-mark { width: 24px; height: 24px; display: block; }
+.draft-intent-card.is-active .draft-intent-ic { color: var(--accent); }
+.draft-intent-card-walnut.is-active .draft-intent-ic { color: var(--walnut-accent); }
 .draft-intent-t { display: block; font-weight: 700; font-size: 14px; margin-bottom: 5px; color: var(--fg); }
 .draft-intent-d { display: block; font-size: 12px; color: var(--fg-muted); line-height: 1.5; }
 .draft-intent-card.is-active {
@@ -119,12 +124,19 @@
   justify-content: center;
 }
 .draft-walnut-suggests .session-action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 3px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
   font-size: 11px;
   color: var(--fg);
 }
+/* The chip's line icon: muted until hover, when it takes the chip's accent. */
+.draft-walnut-suggests .session-action-chip-ic { display: inline-flex; color: var(--fg-muted); }
+.draft-walnut-suggests .session-action-chip-ic svg { width: 12px; height: 12px; }
+.draft-walnut-suggests .session-action-chip:hover .session-action-chip-ic { color: inherit; }
 .draft-walnut-suggests .session-action-chip:hover {
   border-color: var(--walnut-accent);
   color: var(--walnut-accent);
@@ -538,6 +550,8 @@
   cursor: pointer;
 }
 .ask-walnut-drawer-link:hover { color: var(--fg); background: var(--hover-bg); }
+.ask-walnut-drawer-link-ic { display: inline-flex; }
+.ask-walnut-drawer-link-ic svg { width: 12px; height: 12px; }
 .ask-walnut-drawer-link.is-active { color: var(--walnut-accent); }
 .ask-walnut-drawer-new {
   display: flex;

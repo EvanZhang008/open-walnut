@@ -568,7 +568,7 @@ test('Fix Walnut re-arms a pristine draft that is already open', async ({ page }
   await openAskWalnutDrawer(page)
   await drawerFix(page).click()
   await expect(draft).toHaveCount(1)
-  await expect(draft.locator('.session-panel-title')).toHaveText('\u{1F527} Fix Walnut')
+  await expect(draft.locator('.session-panel-title')).toHaveText('Customize Walnut')
 
   // 4. And the launch it produces is a real repair launch — the payload is the
   //    contract that makes the server wrap the message in its repair briefing.
