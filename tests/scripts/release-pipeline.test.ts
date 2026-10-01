@@ -6,16 +6,19 @@
  * - scripts/nightly-version.mjs: the nightly version shape and its ordering
  *   against the stable release it precedes (the update checker's comparator is
  *   the judge, so a nightly can never be told it is newer than its own release).
+ * - scripts/ci-gate.mjs: what counts as "CI passed" on a commit, which commit a
+ *   release tag is judged by, and which commit the nightly publishes.
  * - .github/workflows/release.yml: parses, publishes with provenance through
- *   OIDC (no token), gates the tag on package.json, and gates nightly on main
- *   having moved.
+ *   OIDC (no token), gates the tag on package.json and on CI, and publishes the
+ *   newest green commit as the nightly.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { nextVersion, rollChangelog } from '../../scripts/release.mjs'
+import { nextVersion, rollChangelog, setManifestVersion } from '../../scripts/release.mjs'
 import { nightlyVersion } from '../../scripts/nightly-version.mjs'
+import { pickLastGreen, releaseGateRev, verdictOf } from '../../scripts/ci-gate.mjs'
 import { compareVersions } from '../../src/core/self-update/version-compare.js'
 import { channelOf } from '../../src/core/self-update/update-check.js'
 
@@ -123,12 +126,81 @@ describe('nightlyVersion', () => {
   })
 })
 
+describe('setManifestVersion', () => {
+  it('changes the version lines and nothing else, the lock\'s root package included', () => {
+    const pkg = `${JSON.stringify({ name: 'open-walnut', version: '0.5.1', scripts: { a: 'b' } }, null, 2)}\n`
+    expect(setManifestVersion(pkg, '0.5.2')).toBe(pkg.replace('"version": "0.5.1"', '"version": "0.5.2"'))
+    const lock = `${JSON.stringify({ name: 'open-walnut', version: '0.5.1', lockfileVersion: 3, packages: { '': { name: 'open-walnut', version: '0.5.1' }, 'node_modules/x': { version: '0.5.1' } } }, null, 2)}\n`
+    const out = JSON.parse(setManifestVersion(lock, '0.5.2'))
+    expect(out.version).toBe('0.5.2')
+    expect(out.packages[''].version).toBe('0.5.2')
+    expect(out.packages['node_modules/x'].version).toBe('0.5.1')
+  })
+
+  it('refuses a file outside npm\'s layout instead of reformatting it', () => {
+    expect(() => setManifestVersion('{"name":"open-walnut","version":"0.5.1"}', '0.5.2')).toThrow('layout')
+  })
+
+  it('the repository manifests are in that layout', () => {
+    for (const f of ['package.json', 'package-lock.json']) {
+      const text = fs.readFileSync(path.resolve(__dirname, '../..', f), 'utf8')
+      expect(() => setManifestVersion(text, '9.9.9')).not.toThrow()
+    }
+  })
+})
+
+describe('ci-gate', () => {
+  const run = (id: number, sha: string, created: string, status: string, conclusion: string | null) => ({
+    id, head_sha: sha, created_at: created, status, conclusion, html_url: `https://example.test/runs/${id}`,
+  })
+  const gate = (conclusion: string) => [{ name: 'Test (quick)', conclusion: 'failure' }, { name: 'CI OK', conclusion }]
+
+  it('judges a commit by the CI OK job of its newest run', () => {
+    expect(verdictOf([], () => [])).toEqual({ verdict: 'none', url: null })
+    expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'in_progress', null)], () => []).verdict).toBe('pending')
+    expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'failure')], () => gate('success')).verdict).toBe('green')
+    expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'success')], () => gate('failure')).verdict).toBe('red')
+    expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'cancelled')], () => []).verdict).toBe('cancelled')
+    // No gate job (an older workflow): the run's own conclusion.
+    expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'success')], () => []).verdict).toBe('green')
+    // A rerun is a newer run for the same commit and wins.
+    const jobs = (id: number) => (id === 2 ? gate('success') : gate('failure'))
+    expect(verdictOf([run(1, 'a', '2026-10-01T00:00:00Z', 'completed', 'failure'), run(2, 'a', '2026-10-01T01:00:00Z', 'completed', 'success')], jobs))
+      .toEqual({ verdict: 'green', url: 'https://example.test/runs/2' })
+  })
+
+  it('a release commit (only the release files) is judged by its parent', () => {
+    expect(releaseGateRev(['package.json', 'package-lock.json', 'CHANGELOG.md'])).toBe('parent')
+    expect(releaseGateRev(['CHANGELOG.md'])).toBe('parent')
+    expect(releaseGateRev(['package.json', 'src/cli.ts'])).toBe('self')
+    expect(releaseGateRev([])).toBe('self')
+  })
+
+  it('the nightly takes the newest green commit, skipping red, running and cancelled ones', () => {
+    const runs = [
+      run(5, 'e', '2026-10-01T05:00:00Z', 'in_progress', null),
+      run(4, 'd', '2026-10-01T04:00:00Z', 'completed', 'cancelled'),
+      run(3, 'c', '2026-10-01T03:00:00Z', 'completed', 'failure'),
+      run(2, 'b', '2026-10-01T02:00:00Z', 'completed', 'success'),
+      run(1, 'a', '2026-10-01T01:00:00Z', 'completed', 'success'),
+    ]
+    const jobs = (id: number) => (id === 3 ? gate('failure') : gate('success'))
+    expect(pickLastGreen(runs, jobs)).toBe('b')
+    expect(pickLastGreen(runs.slice(0, 3), jobs)).toBeNull()
+    // Report-only failures fail the run but not the gate: still green.
+    expect(pickLastGreen([run(3, 'c', '2026-10-01T03:00:00Z', 'completed', 'failure')], () => gate('success'))).toBe('c')
+  })
+})
+
 describe('release.yml', () => {
-  const doc = parseYaml(fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/release.yml'), 'utf8')) as {
+  const text = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/release.yml'), 'utf8')
+  const doc = parseYaml(text) as {
     on: Record<string, unknown>
     permissions: Record<string, string>
-    jobs: Record<string, { if?: string; steps: Array<{ run?: string; name?: string; if?: string }> }>
+    jobs: Record<string, { if?: string; steps: Array<{ run?: string; name?: string; if?: string; id?: string }> }>
   }
+  const runs = (job: string) => doc.jobs[job]!.steps.map((s) => s.run ?? '').join('\n')
+  const stepIndex = (job: string, needle: string) => doc.jobs[job]!.steps.findIndex((s) => (s.run ?? '').includes(needle))
 
   it('runs on release tags, a schedule and by hand', () => {
     expect(doc.on.push).toEqual({ tags: ['v*.*.*'] })
@@ -138,25 +210,33 @@ describe('release.yml', () => {
 
   it('publishes through OIDC with provenance and never a stored token', () => {
     expect(doc.permissions['id-token']).toBe('write')
-    const text = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/release.yml'), 'utf8')
+    expect(doc.permissions.actions).toBe('read')
     expect(text).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN|registry-url/)
-    const stableRuns = doc.jobs.stable!.steps.map((s) => s.run ?? '').join('\n')
-    expect(stableRuns).toContain('npm publish --provenance --access public')
-    expect(stableRuns).toContain('npm install -g npm@latest')
-    const nightlyRuns = doc.jobs.nightly!.steps.map((s) => s.run ?? '').join('\n')
-    expect(nightlyRuns).toContain('npm publish --tag nightly --provenance --access public')
-    expect(nightlyRuns).toContain('node scripts/nightly-version.mjs')
-    expect(nightlyRuns).toContain('npm run test:baseline')
+    expect(runs('stable')).toContain('npm publish --provenance --access public')
+    expect(runs('stable')).toContain('npm install -g npm@latest')
+    expect(runs('nightly')).toContain('npm publish --tag nightly --provenance --access public')
+    expect(runs('nightly')).toContain('node scripts/nightly-version.mjs')
   })
 
-  it('a stable publish is gated on the tag naming package.json\'s version; nightly on main having moved', () => {
+  it('a stable publish needs the tag to name package.json\'s version and CI to have passed, both before publishing', () => {
     expect(doc.jobs.stable!.if).toContain("startsWith(github.ref, 'refs/tags/v')")
-    const gate = doc.jobs.stable!.steps.find((s) => s.name?.includes('tag names the version'))
-    expect(gate?.run).toContain('exit 1')
-    const moved = doc.jobs.nightly!.steps.find((s) => s.name?.includes('Did main move'))
-    expect(moved?.run).toContain('refs/tags/nightly')
+    const tagGate = doc.jobs.stable!.steps.find((s) => s.name?.includes('tag names the version'))
+    expect(tagGate?.run).toContain('exit 1')
+    const ci = stepIndex('stable', 'node scripts/ci-gate.mjs release HEAD')
+    const publish = stepIndex('stable', 'npm publish')
+    expect(ci).toBeGreaterThan(-1)
+    expect(ci).toBeLessThan(publish)
+  })
+
+  it('the nightly publishes the newest commit CI passed, without rerunning the tests', () => {
+    expect(runs('nightly')).toContain('node scripts/ci-gate.mjs last-green main')
+    expect(runs('nightly')).not.toContain('test:baseline')
+    const pick = doc.jobs.nightly!.steps.find((s) => s.id === 'pick')
+    expect(pick?.run).toContain('refs/tags/nightly')
+    expect(pick?.run).toContain('git checkout --quiet "$green"')
     const publish = doc.jobs.nightly!.steps.find((s) => s.name?.includes('publish it'))
-    expect(publish?.if).toBe("steps.moved.outputs.publish == 'true'")
+    expect(publish?.if).toBe("steps.pick.outputs.publish == 'true'")
+    expect(runs('nightly')).toContain('git tag -f nightly "${{ steps.pick.outputs.sha }}"')
   })
 
   it('package.json exposes the release command', () => {

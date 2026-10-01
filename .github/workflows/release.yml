@@ -6,11 +6,15 @@ name: Release
 #            (scripts/release.mjs: CHANGELOG rolled, version bumped, one commit,
 #            one tag). Published as dist-tag `latest`, plus a GitHub Release whose
 #            notes are that version's CHANGELOG section.
-#   nightly  main, on a schedule (and by hand): when main moved since the last
-#            nightly, build it, run the quick test baseline, publish it as
-#            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`, and move the
-#            `nightly` tag to the published commit. Nothing is committed: the
-#            version lives in the registry, not in package.json.
+#   nightly  on a schedule (and by hand): the newest commit on main that CI
+#            passed, when it is not the last nightly already. Published as
+#            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`, then the
+#            `nightly` tag moves to it. Nothing is committed: the version lives in
+#            the registry, not in package.json.
+#
+# Both channels publish only commits CI passed (scripts/ci-gate.mjs reads the CI
+# workflow's `CI OK` job), because every npm install updates itself on restart.
+# The nightly does not rerun the tests: CI already ran them on that exact commit.
 #
 # Authentication is npm trusted publishing (OIDC): no token is stored anywhere.
 # One-time setup on npmjs.com, package open-walnut > Settings > Trusted publisher:
@@ -38,6 +42,7 @@ concurrency:
 permissions:
   contents: write
   id-token: write
+  actions: read
 
 jobs:
   stable:
@@ -46,14 +51,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - run: npm install -g npm@latest
       - name: The tag names the version package.json carries
         run: |
           version="$(node -p "require('./package.json').version")"
@@ -61,6 +64,17 @@ jobs:
             echo "tag ${{ github.ref_name }} but package.json is $version (cut releases with: npm run release -- <bump>)" >&2
             exit 1
           fi
+      # A release commit only rolls the version and CHANGELOG, so its parent's CI
+      # result is the one that counts; any other tagged commit needs its own.
+      - name: CI passed on the released code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/ci-gate.mjs release HEAD
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm install -g npm@latest
       - run: npm install
       - run: npm run lint
       # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs
@@ -90,51 +104,61 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-      - name: Did main move since the last nightly?
-        id: moved
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: The newest commit on main that CI passed, if it is new
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          green="$(node scripts/ci-gate.mjs last-green main)"
           git fetch --quiet origin 'refs/tags/nightly:refs/tags/nightly' 2>/dev/null || true
-          last="$(git rev-parse -q --verify refs/tags/nightly 2>/dev/null || echo none)"
-          head="$(git rev-parse HEAD)"
-          echo "last nightly: $last"
-          echo "main:         $head"
-          if [ "$last" = "$head" ] && [ "${{ inputs.force }}" != "true" ]; then
+          last="$(git rev-parse -q --verify 'refs/tags/nightly^{commit}' 2>/dev/null || echo none)"
+          echo "newest green on main: ${green:-none}"
+          echo "last nightly:         $last"
+          if [ -z "$green" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "main has not moved since the last nightly; nothing to publish"
+            echo "no recent commit on main passed CI; nothing to publish"
+          elif ! git cat-file -e "$green:scripts/nightly-version.mjs" 2>/dev/null; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "$green predates the nightly pipeline; nothing to publish"
+          elif [ "$last" = "$green" ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "that commit is already the last nightly; nothing to publish"
           else
+            git checkout --quiet "$green"
             echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "sha=$green" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/setup-node@v5
-        if: steps.moved.outputs.publish == 'true'
+        if: steps.pick.outputs.publish == 'true'
         with:
           node-version: 22
           cache: npm
       - uses: oven-sh/setup-bun@v2
-        if: steps.moved.outputs.publish == 'true'
+        if: steps.pick.outputs.publish == 'true'
         with:
           bun-version: latest
-      - if: steps.moved.outputs.publish == 'true'
+      - if: steps.pick.outputs.publish == 'true'
         run: npm install -g npm@latest
-      - if: steps.moved.outputs.publish == 'true'
+      - if: steps.pick.outputs.publish == 'true'
         run: npm install
-      - if: steps.moved.outputs.publish == 'true'
-        run: npm run lint
-      # The same gate CI's blocking tier uses: the baseline, not raw pass/fail.
-      - if: steps.moved.outputs.publish == 'true'
-        run: npm run test:baseline -- --maxWorkers=1
+      # prepublishOnly builds (WALNUT_REQUIRE_BUN=1) and runs scripts/check-publish.mjs.
       - name: Version this nightly and publish it
-        if: steps.moved.outputs.publish == 'true'
+        if: steps.pick.outputs.publish == 'true'
+        id: publish
         run: |
           version="$(node scripts/nightly-version.mjs)"
-          echo "publishing open-walnut@$version"
+          echo "publishing open-walnut@$version from ${{ steps.pick.outputs.sha }}"
           npm version "$version" --no-git-tag-version
           npm publish --tag nightly --provenance --access public
           echo "version=$version" >> "$GITHUB_OUTPUT"
-        id: publish
       - name: Move the nightly tag to this commit
-        if: steps.moved.outputs.publish == 'true'
+        if: steps.pick.outputs.publish == 'true'
         run: |
-          git tag -f nightly HEAD
+          git tag -f nightly "${{ steps.pick.outputs.sha }}"
           git push --force origin refs/tags/nightly
-      - if: steps.moved.outputs.publish == 'true'
-        run: echo "published open-walnut@${{ steps.publish.outputs.version }} (dist-tag nightly) from $(git rev-parse --short HEAD)"
+      - if: steps.pick.outputs.publish == 'true'
+        run: echo "published open-walnut@${{ steps.publish.outputs.version }} (dist-tag nightly) from ${{ steps.pick.outputs.sha }}"
