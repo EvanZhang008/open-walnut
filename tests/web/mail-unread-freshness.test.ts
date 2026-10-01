@@ -28,6 +28,7 @@ import {
   pairKey,
   patch,
 } from '../../web/src/apps/mail/mail-store';
+import { GROUPED_PREF_KEY, resetGroupedPrefForTests } from '../../web/src/apps/mail/mail-grouped-pref';
 import { syncLineFor } from '../../web/src/apps/mail/mail-sync-line';
 import { UNREAD_CHECK_SAFETY_MS } from '../../web/src/apps/mail/mail-unread-checking';
 
@@ -78,7 +79,7 @@ function envelope(accountId: string, messageId: string, mailboxId: string) {
   };
 }
 
-function installStorage(): void {
+function installStorage(): Map<string, string> {
   const kept = new Map<string, string>();
   vi.stubGlobal('window', {
     localStorage: {
@@ -87,6 +88,7 @@ function installStorage(): void {
       removeItem: (key: string) => { kept.delete(key) },
     },
   });
+  return kept;
 }
 
 beforeEach(() => {
@@ -119,7 +121,10 @@ beforeEach(() => {
     if (url.includes('/mail/drafts')) return json({ drafts: [] });
     return json({ error: 'not-found', message: url }, 404);
   }));
-  installStorage();
+  // These cases grade the ordinary inbox list; with grouping on (the default) an inbox draws the
+  // grouped list and reads /groups instead, so the switch is set to All mail here.
+  installStorage().set(GROUPED_PREF_KEY, JSON.stringify({ on: false }));
+  resetGroupedPrefForTests();
   patch({
     loaded: true,
     accounts: accounts() as never,

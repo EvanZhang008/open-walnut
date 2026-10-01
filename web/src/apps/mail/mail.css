@@ -32,14 +32,55 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 232px 336px minmax(0, 1fr);
+  position: relative;
+  --mail-accounts-default: 232px;
+  --mail-list-default: 336px;
+  /* A dragged width (`--mail-*-w`, set inline by MailApp) wins over the default. The list is also
+     capped so the reader keeps 380px (READER_MIN in mail-pane-widths.ts) when the window gets
+     narrower than it was during the drag; the floor of 260px is the list's own minimum. */
+  --mail-accounts-col: var(--mail-accounts-w, var(--mail-accounts-default));
+  --mail-list-col: min(var(--mail-list-w, var(--mail-list-default)), max(260px, calc(100% - var(--mail-accounts-col) - 380px)));
+  grid-template-columns: var(--mail-accounts-col) var(--mail-list-col) minmax(0, 1fr);
 }
 
 /* The reader is the pane that needs the room, and the window also holds the app's sidebar, so the
    two left columns give some back before the drill breakpoint takes over (see MailApp.tsx). */
 @media (max-width: 1360px) {
-  .mail-console { grid-template-columns: 204px 300px minmax(0, 1fr); }
+  .mail-console { --mail-accounts-default: 204px; --mail-list-default: 300px; }
 }
+
+/* The splitters (MailPaneSplitter.tsx): out of the grid, straddling a column's right edge. The
+   `.mail-console > *` pane rules below must not reach them, hence the child selector here too. */
+.mail-console > .mail-pane-splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 6;
+  width: 9px;
+  margin-left: -4px;
+  display: block;
+  border: none;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.mail-console > .mail-pane-splitter-accounts { left: var(--mail-accounts-col); }
+.mail-console > .mail-pane-splitter-list { left: calc(var(--mail-accounts-col) + var(--mail-list-col)); }
+.mail-pane-splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 3px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s;
+  pointer-events: none;
+}
+.mail-pane-splitter:hover::after,
+.mail-pane-splitter.dragging::after,
+.mail-pane-splitter:focus-visible::after { opacity: 0.55; }
 
 .mail-console > * {
   min-width: 0;

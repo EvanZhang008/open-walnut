@@ -78,6 +78,13 @@ export interface MailMessageDto {
    * their mind. Both arrive with the ladder.
    */
   unsubscribe?: MailUnsubscribeDto
+  /**
+   * Where inbox sorting put this mail, with the why-line sentence. ONLY on a page asked for with
+   * `group`: All mail pages and every other folder keep the old shape.
+   */
+  sort?: { group: string; reason: string; why: string; ruleId?: string }
+  /** The sender key the group view files this mail under. Only with `group`. */
+  senderKey?: string
 }
 
 export type MailUnsubscribeAvailability = 'one-click' | 'mailto' | 'link' | 'none'
@@ -245,6 +252,14 @@ export interface IngestResult {
   added: number
   updated: number
   headlines: Array<{ from: string; subject: string }>
+  /**
+   * Of `added`, how many landed in Important or are not sorted yet, with their headlines. What a
+   * `messages-received` announces when grouping is on (Inbox Triage reads only those).
+   */
+  importantAdded?: number
+  importantHeadlines?: Array<{ from: string; subject: string }>
+  /** Folders whose group counts this page moved. */
+  sortedPairs?: Array<{ accountId: string; mailboxId: string }>
 }
 
 export interface RetentionLimits {

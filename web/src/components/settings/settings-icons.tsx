@@ -16,6 +16,7 @@ export type SettingsGlyphName =
   | 'hand-raised' | 'heart-pulse' | 'tray' | 'magnifier' | 'archive-box'
   | 'phone' | 'server-stack' | 'sliders' | 'bar-chart' | 'target' | 'display'
   | 'ladybug' | 'layers' | 'cloud' | 'key' | 'arrow-up-right' | 'circle-x'
+  | 'filter'
 
 export const SETTINGS_ICONS: Readonly<Record<SettingsGlyphName, ReactNode>> = {
   'two-person': (
@@ -103,6 +104,12 @@ export const SETTINGS_ICONS: Readonly<Record<SettingsGlyphName, ReactNode>> = {
     <>
       <path d="M4 13.5l2.2-7.4A1.5 1.5 0 0 1 7.6 5h8.8a1.5 1.5 0 0 1 1.4 1.1l2.2 7.4V18a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18z" />
       <path d="M4 13.5h4.5l1 2h5l1-2H20" />
+    </>
+  ),
+  // A funnel: Mail rules sorts mail into groups (not the tray of Inbox Triage).
+  filter: (
+    <>
+      <path d="M4 5.5h16l-6.2 7.3v5.4l-3.6 1.8v-7.2z" />
     </>
   ),
   magnifier: (

@@ -5,10 +5,13 @@ import { AddAccountDialog } from './AddAccountDialog';
 import { MailAccountsPane } from './MailAccountsPane';
 import { MailMessageList } from './MailMessageList';
 import { MailAskDrawer } from './MailAskDrawer';
+import { MailGroupsLearnHost } from './MailGroupsLearnHost';
+import { MailPaneSplitter } from './MailPaneSplitter';
 import { MailReader } from './MailReader';
 import { ComposerPanel } from './compose/ComposerPanel';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
 import { openMailDeepLink, refreshMailAll } from './mail-actions';
+import { paneStyle, readPaneWidths, writePaneWidths, type MailPaneId, type PaneWidths } from './mail-pane-widths';
 import { useMailConsole } from './useMailConsole';
 import './mail.css';
 import './mail-compose.css';
@@ -95,9 +98,39 @@ function useMailDeepLink(search: string, ready: boolean): void {
   }, [search, ready]);
 }
 
+const PANE_CLASS: Record<MailPaneId, string> = { accounts: 'mail-accounts-pane', list: 'mail-list-pane' };
+
+/** The two left columns' dragged widths: live while dragging, persisted when a drag settles. */
+function usePaneWidths() {
+  const [widths, setWidths] = useState<PaneWidths>(readPaneWidths);
+  const consoleRef = useRef<HTMLDivElement | null>(null);
+  const saved = useRef(widths);
+  const measure = useCallback((id: MailPaneId) => {
+    const box = consoleRef.current;
+    const column = box?.querySelector<HTMLElement>(`:scope > .${PANE_CLASS[id]}`);
+    const other = box?.querySelector<HTMLElement>(`:scope > .${PANE_CLASS[id === 'accounts' ? 'list' : 'accounts']}`);
+    if (!box || !column || !other) return null;
+    return { width: column.getBoundingClientRect().width, room: box.clientWidth - other.getBoundingClientRect().width };
+  }, []);
+  const live = useCallback((id: MailPaneId, width: number) => setWidths((now) => ({ ...now, [id]: width })), []);
+  const done = useCallback((id: MailPaneId, width: number) => {
+    saved.current = { ...saved.current, [id]: width };
+    writePaneWidths(saved.current);
+    setWidths(saved.current);
+  }, []);
+  const reset = useCallback((id: MailPaneId) => {
+    const { [id]: _gone, ...rest } = saved.current;
+    saved.current = rest;
+    writePaneWidths(rest);
+    setWidths(rest);
+  }, []);
+  return { widths, consoleRef, measure, live, done, reset };
+}
+
 export function MailApp(props: AppComponentProps) {
   const mail = useMailConsole();
   const narrow = useNarrowViewport();
+  const panes = usePaneWidths();
   const [adding, setAdding] = useState(false);
   const [showMailboxes, setShowMailboxes] = useState(false);
   // Only once the accounts are in: the deep link reads one message and then selects its mailbox, and
@@ -184,7 +217,19 @@ export function MailApp(props: AppComponentProps) {
 
   return (
     <div className="mail-app mail-app-panes" data-testid="mail-app">
-      <div className="mail-console" data-narrow-pane={pane}>
+      <div className="mail-console" data-narrow-pane={pane} ref={panes.consoleRef} style={narrow ? undefined : paneStyle(panes.widths)}>
+        {/* First in the DOM so the reader stays `:last-child`; absolutely placed, so no grid cell. */}
+        {!narrow && (['accounts', 'list'] as MailPaneId[]).map((id) => (
+          <MailPaneSplitter
+            key={id}
+            id={id}
+            width={panes.widths[id]}
+            onWidth={(width) => panes.live(id, width)}
+            onDone={(width) => panes.done(id, width)}
+            onReset={() => panes.reset(id)}
+            measure={() => panes.measure(id)}
+          />
+        ))}
         <MailAccountsPane
           accounts={mail.accounts}
           mailboxes={mail.mailboxes}
@@ -223,6 +268,8 @@ export function MailApp(props: AppComponentProps) {
         )}
       </div>
       {dialog}
+      {/* The correction card and Sort senders: portalled, opened from the grouped list via the bus. */}
+      <MailGroupsLearnHost />
     </div>
   );
 }

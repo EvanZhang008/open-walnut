@@ -937,6 +937,21 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       },
     },
 
+    // One short answer on the user's own main provider (see plugin-fast-text.ts). Loaded lazily so
+    // the plugin api module does not pull the model layer in at import time.
+    model: {
+      async fastText(request: {
+        system: string
+        messages: Array<{ role: 'user' | 'assistant'; content: string }>
+        maxTokens: number
+        signal?: AbortSignal
+      }): Promise<string> {
+        assertLive('model.fastText')
+        const { pluginFastText } = await import('./plugin-fast-text.js')
+        return pluginFastText(request)
+      },
+    },
+
     registry: {
       sync(adapter: unknown) {
         assertLive('registry.sync')

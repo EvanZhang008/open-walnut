@@ -36,6 +36,7 @@ import {
   MailServiceError,
   providerErrorCode,
   reasonOf,
+  withBudget,
   type MailSyncHost,
   type MailSyncLimits,
 } from './contract.js'
@@ -136,6 +137,11 @@ function countsOf(rows: MailboxRow[]): string {
     .join('\u0001')
 }
 
+/** Which folders there are and what each is for: moves only when a folder comes, goes or changes role. */
+function rolesOf(rows: MailboxRow[]): string {
+  return rows.map((row) => `${row.mailbox_id}\u0000${row.role ?? ''}`).sort().join('\u0001')
+}
+
 /**
  * The order one wide sweep visits its containers: every inbox first, then the rest from `from`.
  *
@@ -161,6 +167,18 @@ function sweepOrder(
     containers: [...mailboxes.filter(inbox), ...rest.slice(at), ...rest.slice(0, at)],
     rotated: rest.length,
   }
+}
+
+/** How long one `categoryHints` call may take; a slow answer keeps the last hints. */
+export const CATEGORY_HINTS_BUDGET_MS = 10_000
+
+/** The slice of `MailSortEngine` the poll loop uses. */
+export interface MailSyncSortHook {
+  groupedOn(): boolean
+  refreshIdentities(): Promise<void>
+  applyCategoryHints(accountId: string, mailboxId: string, lists: { promotions: string[]; social: string[] }): Promise<number>
+  /** A folder appeared, went, or changed role: the engine's inbox / sent sets are stale. */
+  foldersChanged?(): void
 }
 
 export class MailSync {
@@ -205,10 +223,43 @@ export class MailSync {
      * retention is what the budget is allowed to eat and this is not.
      */
     digest?: { maybeSend(deadlineAt?: number): Promise<unknown> }
+    /**
+     * Inbox sorting. Optional: without it every received mail counts as Important, exactly as
+     * before. With it, a tick refreshes the provider's own category hints (Gmail tabs) and, when
+     * grouping is on, `messages-received` announces only the mail that landed in Important.
+     */
+    sort?: MailSyncSortHook
   }) {}
 
   get polling(): boolean {
     return this.timer !== null
+  }
+
+  /**
+   * The provider's own category verdicts (Gmail tabs) for the inbox, once per tick, read-only.
+   * Bounded: a slow or failing answer keeps the hints already stored, and never fails the poll.
+   */
+  private async refreshCategoryHints(accountId: string, spec: MailProviderSpec, mailboxId: string, first: boolean): Promise<void> {
+    const sort = this.deps.sort
+    if (!sort) return
+    // Again after the pages: a Cc seen in this tick's mail changes how the account is matched.
+    await sort.refreshIdentities().catch(() => undefined)
+    if (!spec.categoryHints) return
+    try {
+      const lists = await withBudget(
+        Promise.resolve().then(() => spec.categoryHints!(accountId, mailboxId)),
+        CATEGORY_HINTS_BUDGET_MS,
+      )
+      if (!lists) return
+      const moved = await sort.applyCategoryHints(accountId, mailboxId, lists)
+      if (moved > 0 || first) {
+        this.deps.walnut.log.debug?.('mail category hints applied', { accountId, mailboxId, moved })
+      }
+    } catch (error) {
+      this.deps.walnut.log.warn('mail category hints failed; keeping the last ones', {
+        accountId, error: reasonOf(error).slice(0, 200),
+      })
+    }
   }
 
   get lastTick(): number {
@@ -437,8 +488,10 @@ export class MailSync {
     }
 
     let accounts = (await this.deps.store.listAccounts()).filter((row) => row.state !== 'disabled')
-    if (options.only) accounts = accounts.filter((row) => row.account_id === options.only)
+    // Pruned against EVERY live account, before `only` narrows the list: a one-account refresh used
+    // to dispose every other account's watch, so their new mail waited for the next full tick.
     this.pruneWatches(new Set(accounts.map((row) => row.account_id)))
+    if (options.only) accounts = accounts.filter((row) => row.account_id === options.only)
 
     // Round robin from where the last tick stopped, so a slow first account cannot starve the
     // rest for as long as it stays slow.
@@ -500,6 +553,10 @@ export class MailSync {
       const spec = this.deps.service.provider(accountId)
       state.polls += 1
       this.ensureWatch(accountId, spec)
+      // Who the account is, before any of its mail is sorted (a local read). Without it a new
+      // account's first backfill was sorted knowing no address of its own, so nothing was "to me",
+      // and all of it was sorted again once the end of the tick learned the address.
+      await this.deps.sort?.refreshIdentities().catch(() => undefined)
 
       const mailboxes = await this.refreshMailboxes(accountId, spec, state, force)
       const wide = force || state.polls % NON_INBOX_EVERY === 1
@@ -516,6 +573,8 @@ export class MailSync {
       // Counted separately from `added`: a message appearing in Sent is one the user sent, and
       // announcing it as "received" is wrong in the one place a human reads the number.
       let received = 0
+      let receivedImportant = 0
+      const importantHeadlines: Array<{ from: string; subject: string }> = []
       let visited = 0
       /** Non-inbox containers visited, which is what the rotation cursor counts. */
       let visitedRotated = 0
@@ -573,6 +632,8 @@ export class MailSync {
         if (mailbox.role === ('inbox' satisfies MailboxRole)) {
           received += outcome.added
           headlines.push(...outcome.headlines)
+          receivedImportant += outcome.importantAdded
+          importantHeadlines.push(...outcome.importantHeadlines)
           inboxPolled = !outcome.missing
         } else {
           visitedRotated += 1
@@ -610,7 +671,20 @@ export class MailSync {
 
       // One event per account per tick, and none at all for the first backfill: "you have 4812
       // new messages" is the account being added, not news.
-      if (state.backfilled) this.deps.events.messagesReceived(accountId, received, headlines)
+      // With grouping on, the count and headlines are Important's only (Inbox Triage reads them, and a
+      // pager burst is not "new mail that needs you"); `importantAdded` rides the event either way.
+      if (state.backfilled) {
+        const grouped = this.deps.sort?.groupedOn() ?? false
+        this.deps.events.messagesReceived(
+          accountId,
+          grouped ? receivedImportant : received,
+          grouped ? importantHeadlines : headlines,
+          receivedImportant,
+        )
+      }
+      if (inbox && this.deps.sort && Date.now() < deadlineAt) {
+        await this.refreshCategoryHints(accountId, spec, inbox.mailbox_id, !state.backfilled)
+      }
       if (exhausted) state.backfilled = true
       // EVERY container the sweep reached failed, so whatever is wrong is the account's, not one
       // folder's, and it gets the backoff. One folder refusing while the inbox and ten others
@@ -710,9 +784,13 @@ export class MailSync {
         })
       }
     }
+    const rolesBefore = rolesOf(rows)
     rows = await this.deps.store.listMailboxes(accountId)
     // Said only when a number moved: a re-list that changed nothing is most of them.
     if (countsOf(rows) !== countsBefore) this.deps.events.mailboxCounts(accountId)
+    // A new account's Inbox must count as an inbox from its first poll (sorting, summaries and
+    // "keep out of the Inbox" all ask), not a minute later when the engine's cache expires.
+    if (rolesOf(rows) !== rolesBefore) this.deps.sort?.foldersChanged?.()
     return rows
   }
 
@@ -728,6 +806,9 @@ export class MailSync {
     exhausted: boolean
     /** The provider says this container is not there. Reported so a caller can say so. */
     missing: boolean
+    /** Of `added`, the mail that landed in Important (or is not sorted yet). */
+    importantAdded: number
+    importantHeadlines: Array<{ from: string; subject: string }>
   }> {
     const startedAt = Date.now()
     let cursor = mailbox.cursor ?? undefined
@@ -736,6 +817,8 @@ export class MailSync {
     let exhausted = false
     let missing = false
     const headlines: Array<{ from: string; subject: string }> = []
+    let importantAdded = 0
+    const importantHeadlines: Array<{ from: string; subject: string }> = []
 
     for (let page = 0; page < MAX_PAGES_PER_TICK; page += 1) {
       if (Date.now() >= deadlineAt) break
@@ -779,6 +862,9 @@ export class MailSync {
       added += ingested.added
       updated += ingested.updated
       headlines.push(...ingested.headlines)
+      // No engine (or it could not sort this page): every new row is Important, as before.
+      importantAdded += ingested.importantAdded ?? (ingested.sortedPairs ? 0 : ingested.added)
+      importantHeadlines.push(...(ingested.importantHeadlines ?? (ingested.sortedPairs ? [] : ingested.headlines)))
       cursor = result.cursor
       await this.deps.store.setMailboxCursor(accountId, mailbox.mailbox_id, cursor ?? null, Date.now())
       if (!result.more) { exhausted = true; break }
@@ -788,7 +874,7 @@ export class MailSync {
       { accountId, mailboxId: mailbox.mailbox_id, added, updated, tookMs: Date.now() - startedAt },
       cursor ?? null,
     )
-    return { added, updated, headlines, exhausted, missing }
+    return { added, updated, headlines, exhausted, missing, importantAdded, importantHeadlines }
   }
 
   private async onGoodPoll(accountId: string, state: AccountState): Promise<void> {

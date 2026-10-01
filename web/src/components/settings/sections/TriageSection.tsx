@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
@@ -72,6 +73,10 @@ export function TriageSection({ config, onSave }: Props) {
 
   return (
     <SectionCard id="triage" title="Inbox Triage" onSave={handleSubmit} showSave={false}>
+      {/* The other half of the Mail rules cross-link: Triage reads what grouping left in Important. */}
+      <p className="settings-row-help triage-mail-rules-link" data-testid="triage-mail-rules-link">
+        Walnut sorts mail into groups first. <Link to="/settings#mail-rules">Open Mail rules</Link>
+      </p>
       <SettingsGroup>
         <SettingsRow label="Inbox triage" help="Works through new mail and Slack against your projects and tasks." htmlFor="inbox-triage-enabled"
           error={enabled.error}

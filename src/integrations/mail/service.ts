@@ -120,6 +120,13 @@ export interface UnsubscribeSubject {
   subject: string
 }
 
+/** The slice of `MailSortEngine` the service uses; structural so tests can pass a fake. */
+export interface MailServiceSortHook {
+  prepareIngest(accountId: string, envelopes: ReadonlyArray<MailEnvelope>): Promise<(write: MessageWrite) => NonNullable<MessageWrite['sort']> & { moveOut?: string }>
+  sortDtoOf(row: MessageRow): NonNullable<MailMessageDto['sort']>
+  notifyGroupsChanged(pairs: ReadonlyArray<{ accountId: string; mailboxId: string }>): void
+}
+
 export class MailService {
   /** Per account: the last `send` verdict and when it was learned. See `sendCapabilityOf`. */
   private readonly sendCache = new Map<string, { send: boolean; at: number }>()
@@ -137,10 +144,19 @@ export class MailService {
      * own seam rather than the whole `MailEvents`, because this is the only thing a read path announces.
      */
     events?: { unreadReconciled(event: UnreadCheckSettled): void }
+    /**
+     * Optional: inbox sorting (sort-engine.ts). Ingest classifies each written row in the same
+     * statement, a `group` page carries the `sort` DTO field, and read-flag changes tell it which
+     * folders' group counts moved.
+     */
+    sort?: MailServiceSortHook
+    /** Optional: "keep out of the inbox" rules (mail-filter-moves.ts); ingest queues what they decide. */
+    filters?: { queue(requests: Array<{ accountId: string; messageId: string; mailboxId: string; ruleId: string }>): Promise<number> }
     /** Optional: an address a body offered and the base refused (debug), a body retired because its row moved (info). */
     log?: {
       debug(message: string, fields?: Record<string, unknown>): void
       info?(message: string, fields?: Record<string, unknown>): void
+      warn?(message: string, fields?: Record<string, unknown>): void
     }
   }) {
     this.unreadChecks = new UnreadChecks({
@@ -465,6 +481,10 @@ export class MailService {
     scope?: MessageScopeRole
     /** A human pressed Refresh: the page's unread checks skip the shared clock (never the one-in-flight rule). */
     fresh?: boolean
+    /** One sort group (`important` includes rows not sorted yet); adds `sort` + `senderKey` to each DTO. */
+    group?: string
+    /** With `group`: one sender key. */
+    sender?: string
   }): Promise<{ messages: MailMessageDto[]; nextBefore?: string; checking?: FolderPair[] }> {
     const roleRows = query.scope ? await this.deps.store.mailboxesByRole(query.scope) : undefined
     const pairs = roleRows?.map((row) => ({ accountId: row.account_id, mailboxId: row.mailbox_id }))
@@ -478,7 +498,14 @@ export class MailService {
       await this.checkPageUnread(pagePairs, query.limit, !!query.fresh, badges)
     }
     const rows = await this.deps.store.listMessages({ ...query, ...(pairs ? { pairs } : {}) })
-    const messages = await this.decorate(rows)
+    const decorated = await this.decorate(rows)
+    // `sort` only when the page asked for a group: All mail and other folders keep their old shape.
+    const sort = query.group ? this.deps.sort : undefined
+    const messages = sort
+      ? decorated.map((dto, index) => ({
+        ...dto, sort: sort.sortDtoOf(rows[index]!), senderKey: rows[index]!.sender_key ?? 'unknown',
+      }))
+      : decorated
     // Named AFTER the read, so a check that has already finished is not reported as running: whatever it
     // changed is in these rows or, if it landed after them, was announced anyway (a clear always is).
     // From here on each named check announces its end, whatever it finds.
@@ -690,8 +717,44 @@ export class MailService {
     // report a mailbox as it was before this very call.
     if (wasRead !== read) {
       await this.deps.store.bumpMailboxUnread(accountId, row.mailbox_id, read ? -1 : 1)
+      this.deps.sort?.notifyGroupsChanged([{ accountId, mailboxId: row.mailbox_id }])
     }
     return { ...(await this.oneWithTaskId(row)), flags: [...flags] }
+  }
+
+  /**
+   * Many read flags in one provider call (`markReadMany`), then the same local bookkeeping as
+   * `markRead`: flags, `seen`, and the folder counter only for flags that actually moved. Throws
+   * `unsupported-bulk` when the provider has no bulk call (the caller falls back to `markRead`).
+   */
+  async markReadMany(
+    accountId: string,
+    messageIds: ReadonlyArray<string>,
+    read: boolean,
+  ): Promise<Array<{ messageId: string; ok: boolean; reason?: string }>> {
+    const spec = this.provider(accountId)
+    if (!spec.capabilities.markRead || !spec.markReadMany) {
+      throw new MailServiceError('unsupported-bulk', `This account cannot change many read flags at once (${spec.label}).`, 409)
+    }
+    if (messageIds.length === 0) return []
+    const outcomes = await callProvider('read flags', () => spec.markReadMany!(accountId, [...messageIds], read))
+    const byId = new Map(outcomes.map((one) => [one.messageId, one]))
+    const rows = await this.deps.store.messagesByIds(accountId, messageIds.filter((id) => byId.get(id)?.ok))
+    const deltas = new Map<string, number>()
+    for (const row of rows) {
+      const flags = new Set(parseJson<string[]>(row.flags_json, []))
+      const wasRead = flags.has('\\Seen')
+      if (read) flags.add('\\Seen')
+      else flags.delete('\\Seen')
+      await this.deps.store.setMessageFlags(row.rowid, JSON.stringify([...flags]), this.now)
+      if (wasRead !== read) deltas.set(row.mailbox_id, (deltas.get(row.mailbox_id) ?? 0) + (read ? -1 : 1))
+    }
+    for (const [mailboxId, delta] of deltas) await this.deps.store.bumpMailboxUnread(accountId, mailboxId, delta)
+    if (deltas.size > 0) this.deps.sort?.notifyGroupsChanged([...deltas.keys()].map((mailboxId) => ({ accountId, mailboxId })))
+    return messageIds.map((messageId) => {
+      const one = byId.get(messageId)
+      return one ? { messageId, ok: one.ok, ...(one.reason ? { reason: one.reason } : {}) } : { messageId, ok: false, reason: 'no answer' }
+    })
   }
 
   // ── writes the poller drives ──
@@ -705,6 +768,32 @@ export class MailService {
     // that `retain` (which iterates accounts) can never see again: a leak nothing collects.
     if (!(await this.deps.store.accountExists(accountId))) return result
     const known = await this.deps.store.knownMessages(accountId, envelopes.map((one) => one.messageId))
+    // The sort verdict rides the same INSERT/UPDATE as the envelope, so a new mail is in its group
+    // from its first frame. A sorting failure never blocks ingest: the row stays NULL (Important)
+    // and the background recompute sorts it.
+    const changing = this.deps.sort
+      ? envelopes.filter((one) => known.get(one.messageId)?.envelope_hash !== envelopeHashOf(one))
+      : []
+    const sortOf = this.deps.sort && changing.length > 0
+      ? await this.deps.sort.prepareIngest(accountId, changing).catch((error) => {
+        this.deps.log?.debug('mail sort unavailable for this page', { accountId, error: String(error) })
+        return undefined
+      })
+      : undefined
+    const sorted = new Map<string, { accountId: string; mailboxId: string }>()
+    // New inbox mail a "keep out of the inbox" rule decides: moved to the archive after the page.
+    const moveOut: Array<{ accountId: string; messageId: string; mailboxId: string; ruleId: string }> = []
+    const withSort = (write: MessageWrite): MessageWrite => {
+      if (!sortOf) return write
+      try {
+        const { moveOut: ruleId, ...sort } = sortOf(write)
+        sorted.set(`${accountId}\u0000${write.mailboxId}`, { accountId, mailboxId: write.mailboxId })
+        if (ruleId) moveOut.push({ accountId, messageId: write.messageId, mailboxId: write.mailboxId, ruleId })
+        return { ...write, sort }
+      } catch {
+        return write
+      }
+    }
     for (const envelope of envelopes) {
       const existing = known.get(envelope.messageId)
       const hash = envelopeHashOf(envelope)
@@ -730,7 +819,7 @@ export class MailService {
         const carried = retire
           ? { snippet: '', payload: JSON.stringify(payloadForRetiredBody(parseJson<MessagePayload>(existing.payload, {}))) }
           : existing
-        const write = this.toWrite(accountId, envelope, hash, carried)
+        const write = withSort(this.toWrite(accountId, envelope, hash, carried))
         await this.deps.store.updateMessage(existing.rowid, write, this.now)
         // Only the envelope fields are re-indexed, and ONLY when there is no stored body: an
         // envelope-only update used to overwrite the FTS row with an empty `body_text`, so a
@@ -739,11 +828,27 @@ export class MailService {
         result.updated += 1
         continue
       }
-      const write = this.toWrite(accountId, envelope, hash, existing)
+      const write = withSort(this.toWrite(accountId, envelope, hash, existing))
       const rowid = await this.deps.store.insertMessage(write, this.now)
       await this.reindex(rowid, write)
       result.added += 1
       result.headlines.push({ from: write.fromAddr, subject: write.subject })
+      // Important for triage and the arrival highlight: Important itself (mail still waiting for the
+      // model sits there too), and anything the engine could not classify (NULL reads as Important).
+      const group = write.sort?.group
+      if (!group || group === 'important') {
+        result.importantAdded = (result.importantAdded ?? 0) + 1
+        ;(result.importantHeadlines ??= []).push({ from: write.fromAddr, subject: write.subject })
+      }
+    }
+    if (sorted.size > 0) {
+      result.sortedPairs = [...sorted.values()]
+      this.deps.sort?.notifyGroupsChanged(result.sortedPairs)
+    }
+    if (moveOut.length > 0 && this.deps.filters) {
+      await this.deps.filters.queue(moveOut).catch((error) => {
+        this.deps.log?.warn?.('mail filter moves not queued', { accountId, error: String(error).slice(0, 200) })
+      })
     }
     return result
   }
@@ -1094,6 +1199,8 @@ export class MailService {
       // that rewrites a row is never ABOUT it, and rebuilding the blob from the envelope alone
       // erased what a body read had taught. See `unsubscribeForUpdate`.
       ...(listUnsubscribe ? { listUnsubscribe } : {}),
+      // A sorting signal, carried forward like `listUnsubscribe` (the hash ignores it too).
+      ...(envelope.bulkHeaders ?? stored.bulkHeaders ? { bulkHeaders: envelope.bulkHeaders ?? stored.bulkHeaders } : {}),
     }
     return {
       accountId,

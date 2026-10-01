@@ -132,6 +132,22 @@ export function TwistIcon({ size = 12 }: IconProps) {
   return frame(size, <path d="M9 6l6 6-6 6" />);
 }
 
+/** A plain check: a group's `Mark N read`. */
+export function CheckIcon({ size = 14 }: IconProps) {
+  return frame(size, <path d="M5 12.5l4.5 4.5L19 7.5" />);
+}
+
+/** Three dots: a group's actions menu. Filled, so the dots read at 14px. */
+export function MoreIcon({ size = 14 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="5.5" cy="12" r="1.7" />
+      <circle cx="12" cy="12" r="1.7" />
+      <circle cx="18.5" cy="12" r="1.7" />
+    </svg>
+  );
+}
+
 export function SearchIcon({ size = 14 }: IconProps) {
   return frame(size, <>
     <circle cx="11" cy="11" r="6.5" />

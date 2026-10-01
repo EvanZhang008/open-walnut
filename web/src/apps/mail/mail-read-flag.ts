@@ -11,6 +11,7 @@
 import { mailFailure, markMailMessageRead, type MailMessageDto } from '@/api/mail';
 import { log } from '@/utils/log';
 import { providerFor } from './mail-providers';
+import { applySeenToGroupedRows, groupedRowOf, replaceGroupedRow } from './mail-groups-store';
 import { forgetFlipCounted, noteFlipCounted } from './mail-seen-clock';
 import {
   SEEN,
@@ -227,7 +228,8 @@ function heldRow(message: MailMessageDto): MailMessageDto | null {
   const key = handle(message);
   return state.messages.find((one) => handle(one) === key)
     ?? state.search.messages.find((one) => handle(one) === key)
-    ?? (state.open?.message && handle(state.open) === key ? state.open.message : null);
+    ?? (state.open?.message && handle(state.open) === key ? state.open.message : null)
+    ?? groupedRowOf(message);
 }
 
 /** The two numbers a flip moves, as they stand now. Written back verbatim on a refusal. */
@@ -270,6 +272,7 @@ function heldSeen(message: MailMessageDto): boolean {
   const held = state.messages.find((one) => handle(one) === key)
     ?? state.search.messages.find((one) => handle(one) === key)
     ?? (state.open && handle(state.open) === key ? state.open.message : undefined)
+    ?? groupedRowOf(message)
     ?? message;
   return held.flags.includes(SEEN);
 }
@@ -334,6 +337,8 @@ function applySeen(
         : account
     )),
   });
+  // The grouped inbox's row, group and sender counts move in the same frame (spec 9.3a).
+  applySeenToGroupedRows(message, seen);
   publishBadge();
 }
 
@@ -385,4 +390,5 @@ function replaceMessage(message: MailMessageDto): void {
     },
     open: state.open && handle(state.open) === handle(message) ? { ...state.open, message } : state.open,
   });
+  replaceGroupedRow(message);
 }

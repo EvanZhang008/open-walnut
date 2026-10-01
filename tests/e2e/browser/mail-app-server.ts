@@ -132,7 +132,22 @@ const writes503 = process.env.PW_MAIL_WRITES_503 === '1'
  */
 const withUnsub = process.env.PW_MAIL_UNSUB === '1'
 
-const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx || withUnsub
+/**
+ * `PW_MAIL_GROUPS=1`: the inbox-sorting message set (two adopted accounts, marina and ferry, see
+ * `fixtures/mail-fixture-provider/groups-set.mjs`). `PW_MAIL_GROUPS_DENSE=1` is the same two accounts
+ * at 1,500 rows each. Both imply the canned provider link and serve `/__fixture/*` on this port.
+ *
+ * `PW_MAIL_RULE_MODEL=canned|invalid|down|slow` (default `down`) replaces the host's `model.fastText`
+ * seam, so a test server NEVER reaches a real model: `canned` answers a rule matching the corrected
+ * mail's sender with `addressedToMe: false`, `invalid` answers text that is not JSON, `down` throws,
+ * `slow` answers after 15 s. Every call is counted (`GET /__fixture/model-calls`).
+ */
+const withGroupsDense = process.env.PW_MAIL_GROUPS_DENSE === '1'
+const withGroups = process.env.PW_MAIL_GROUPS === '1' || withGroupsDense
+const ruleModelMode = (['canned', 'invalid', 'down', 'slow'] as const)
+  .find((mode) => mode === process.env.PW_MAIL_RULE_MODEL) ?? 'down'
+
+const withProvider = process.env.PW_MAIL_PROVIDER === '1' || withCtx || withUnsub || withGroups
 if (withProvider) {
   const providerSource = path.join(repoRoot, 'tests/e2e/browser/fixtures/mail-fixture-provider')
   await fs.access(path.join(providerSource, 'server.mjs'))
@@ -177,6 +192,64 @@ DaemonConnection.prototype.send = function (command, payload, ...rest) {
   return daemonSend.call(this, command, payload, ...rest)
 }
 
+const groupsSet = await import('./fixtures/mail-fixture-provider/groups-set.mjs')
+const { handleGroupsFixture } = await import('./fixtures/mail-fixture-provider/groups-endpoints.mjs')
+
+// The rule model AND the labeling model, faked for EVERY run (not only grouping ones): a fixture never
+// calls a real model. Labeling calls are told apart by their system prompt (groups-labeler.mjs).
+const { setPluginFastTextOverride } = await import('../../../src/core/plugins/plugin-fast-text.js')
+const { fixtureLabelAnswer, fixtureSummaryAnswer, isLabelRequest, isSummaryRequest } = await import('./fixtures/mail-fixture-provider/groups-labeler.mjs')
+setPluginFastTextOverride(async (request) => {
+  const user = request.messages.find((one) => one.role === 'user')?.content ?? ''
+  if (isLabelRequest(request) || isSummaryRequest(request)) {
+    const state = groupsSet.groupsState() as { labelCalls?: unknown[]; summaryCalls?: unknown[]; labelMode?: string }
+    const mode = state.labelMode ?? process.env.PW_MAIL_LABEL_MODEL ?? 'ok'
+    const summary = isSummaryRequest(request)
+    const calls = summary ? (state.summaryCalls ??= []) : (state.labelCalls ??= [])
+    calls.push({ mode, at: Date.now(), user })
+    if (mode === 'slow') await new Promise((resolve) => setTimeout(resolve, 8_000))
+    return summary ? fixtureSummaryAnswer(user, mode) : fixtureLabelAnswer(user, mode)
+  }
+  groupsSet.groupsState().modelCalls.push({ mode: ruleModelMode, at: Date.now(), user })
+  if (ruleModelMode === 'down') throw new Error('The fixture model is down.')
+  if (ruleModelMode === 'invalid') return 'Sure! Here is a rule: from the sender, probably.'
+  if (ruleModelMode === 'slow') {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, 15_000)
+      request.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('aborted')) }, { once: true })
+    })
+  }
+  let parsed: { target?: string; mail?: { fromAddr?: string; fromName?: string } } = {}
+  try { parsed = JSON.parse(user) } catch { /* canned answers even a message it cannot read */ }
+  const from = parsed.mail?.fromAddr || parsed.mail?.fromName || 'unknown'
+  return JSON.stringify({ when: { from, addressedToMe: false }, then: parsed.target ?? 'Important' })
+})
+
+// Unsubscribe targets, for grouping runs: every request is logged and answered here. The guard still
+// judges each url (the resolver answers a documentation address, never loopback); the setter only
+// installs inside a test runner, so the runner's own signal is raised for that one call.
+if (withGroups) {
+  const { setUnsubscribeHttpForTesting } = await import('../../../src/integrations/mail/unsubscribe-http.js')
+  const previousEnv = process.env.NODE_ENV
+  process.env.NODE_ENV = 'test'
+  try {
+    setUnsubscribeHttpForTesting({
+      lookup: async () => [{ address: '203.0.113.10', family: 4 }],
+      fetch: async (url, init) => {
+        const delay = groupsSet.groupsState().unsubDelayMs ?? 0
+        if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+        groupsSet.groupsState().unsubLog.push({ kind: 'https', method: String(init.method ?? 'GET'), url, at: Date.now() })
+        return new Response('<html><body><p>You have been unsubscribed.</p></body></html>', {
+          status: 200, headers: { 'content-type': 'text/html' },
+        })
+      },
+    })
+  } finally {
+    if (previousEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previousEnv
+  }
+}
+
 const { startServer, stopServer } = await import('../../../src/web/server.js')
 const apiServer = await startServer({ port: 0, dev: true })
 const apiAddress = apiServer.address()
@@ -205,6 +278,13 @@ function mailFixtureSeams() {
   return {
     name: 'walnut-mail-fixture-seams',
     configureServer(server: { middlewares: { use: (fn: (req: any, res: any, next: () => void) => void) => void } }) {
+      // The grouping fixture's own endpoints, on this port (spec helpers call them here).
+      if (withGroups) {
+        server.middlewares.use((req, res, next) => {
+          if (!String(req.url ?? '').startsWith('/__fixture/')) return next()
+          if (!handleGroupsFixture(req, res)) next()
+        })
+      }
       if (!writes503 && !withCtx) return
       server.middlewares.use((req, res, next) => {
         const url: string = req.url ?? ''
@@ -244,6 +324,9 @@ function mailFixtureSeams() {
 }
 
 const { createServer: createViteServer } = await import('vite')
+// The page's own Origin restated as the API's, as test-server.ts does: without it the server refuses
+// every browser write and the WebSocket upgrade as cross-site (403 "came from another site").
+const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
 const viteServer = await createViteServer({
   root: path.join(repoRoot, 'web'),
   plugins: [mailFixtureSeams()],
@@ -252,8 +335,8 @@ const viteServer = await createViteServer({
     port,
     strictPort: true,
     proxy: {
-      '/api': { target: apiTarget, changeOrigin: true },
-      '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true },
+      '/api': { target: apiTarget, changeOrigin: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
+      '/ws': { target: apiTarget.replace(/^http/, 'ws'), ws: true, configure: (proxy) => restateOwnOrigin(proxy, apiTarget) },
     },
   },
   logLevel: 'warn',
@@ -315,6 +398,10 @@ const fixture = {
     ? ['ctx-fetch-ok', 'ctx-fetch-running', 'ctx-fetch-unknown', 'ctx-fetch-stopped', 'ctx-fetch-failed']
     : [],
   ctxTaskRow,
+  groups: withGroups,
+  groupsDense: withGroupsDense,
+  ruleModel: ruleModelMode,
+  groupsAccounts: withGroups ? { marina: groupsSet.MARINA, ferry: groupsSet.FERRY } : null,
   outbox: path.join(tmpBase, 'mail-fixture-sends.json'),
   denseOutbox: path.join(tmpBase, 'mail-dense-sends.json'),
 }

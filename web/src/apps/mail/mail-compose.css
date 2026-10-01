@@ -163,6 +163,21 @@
 
 .mail-compose-new:hover:not(:disabled) { background: var(--accent-hover); }
 
+/* A folder column dragged narrow keeps the button whole: the label goes, the icon stays (the name is
+   in `aria-label` and `title`). Queried on the head, not the pane, so the pane gets no containment.
+   The default column under 1360px (204px, a 183px head) is tightened rather than stripped: the label
+   needs ~85px and the head 191px at full spacing, 180px tightened. A container query cannot restyle
+   the container itself, so the head's own gap stays and the buttons give the room. */
+.mail-accounts-pane > .mail-pane-head { container-type: inline-size; }
+.mail-compose-new-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 205px) {
+  .mail-compose-new { gap: 5px; padding-inline: 7px; }
+  .mail-accounts-pane .mail-pane-head .mail-icon-btn { width: 24px; }
+}
+@container (max-width: 179px) {
+  .mail-compose-new-label { display: none; }
+}
+
 .mail-compose-new:disabled {
   opacity: 1;
   cursor: default;

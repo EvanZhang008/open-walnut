@@ -106,7 +106,7 @@ export class MailFixtureServer {
  * one retry is the honest repair; a shell that is still absent after it FAILS, carrying whatever the
  * page reported, because a real mount crash must stay loud rather than become a retry that hides it.
  */
-async function shellUp(page: Page, port: number): Promise<void> {
+export async function shellUp(page: Page, port: number): Promise<void> {
   const said: string[] = []
   const hear = (text: string): void => { if (said.length < 12) said.push(text) }
   page.on('pageerror', (error) => hear(`[pageerror] ${error.message}`))

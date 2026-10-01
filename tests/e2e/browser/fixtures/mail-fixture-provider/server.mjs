@@ -37,6 +37,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { activateGroups, groupsOn } from './groups-set.mjs';
+
 const HOUR = 60 * 60 * 1000;
 
 /** Where a send is recorded. The fixture home is thrown away with the run. */
@@ -1254,6 +1256,8 @@ function adopted(one) {
 
 export function activate(walnut) {
   const base = walnut.services.require('mail:base');
+  // `PW_MAIL_GROUPS=1` / `PW_MAIL_GROUPS_DENSE=1`: the inbox-sorting set, its own two accounts (groups-set.mjs).
+  if (groupsOn) return activateGroups(base);
   // `PW_MAIL_UNSUB=1` wants the same two adopted accounts `PW_MAIL_CTX=1` does, for the same reason: the
   // capability gate on a menu item is only a real question when two accounts disagree about it on one
   // screen. The two flags therefore share this branch, and each adds its own rows above.

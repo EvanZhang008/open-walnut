@@ -1066,6 +1066,21 @@ export interface RegistryService {
   skill(definition: PluginSkillDefinition): Disposable
 }
 
+/**
+ * One short text answer from the host's own configured model, on its fast tier.
+ *
+ * The host picks the provider (always the user's configured main one) and the model; a plugin
+ * cannot name either, so whatever it sends never leaves the provider the user chose.
+ */
+export interface ModelService {
+  fastText(request: {
+    system: string
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>
+    maxTokens: number
+    signal?: AbortSignal
+  }): Promise<string>
+}
+
 export interface UnsafeServerHost {
   readonly database: unknown
   readonly bus: unknown
@@ -1103,6 +1118,7 @@ export interface WalnutServerApi {
   readonly secrets: SecretService
   readonly timers: TimerService
   readonly registry: RegistryService
+  readonly model: ModelService
   readonly unsafe: UnsafeServerHost
 }
 

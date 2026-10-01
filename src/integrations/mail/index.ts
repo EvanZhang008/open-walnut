@@ -9,11 +9,12 @@ import { MailApprovals } from './approvals.js'
 import { MailBodyStore } from './bodies.js'
 import { reconcileBodyRevision } from './body-revision.js'
 import { reconcileIdentityRevision } from './identity-revision.js'
-import type { MailAccountDto } from './contract.js'
+import { providerIdOf, type MailAccountDto } from './contract.js'
 import { openMailDatabase } from './db.js'
 import { MailDigest } from './digest.js'
 import { MailDrafts } from './drafts.js'
 import { MailEvents } from './events.js'
+import { MailFilterMover } from './mail-filter-moves.js'
 import { MailMessageTasks } from './message-tasks.js'
 import { createMailOps } from './ops.js'
 import { MailProviderRegistry, PROVIDERS_CHANGED_EVENT } from './provider-registry.js'
@@ -21,6 +22,7 @@ import { MailRetention } from './retention.js'
 import { registerMailRoutes } from './routes.js'
 import { MailSends } from './sends.js'
 import { MailService } from './service.js'
+import { MailSortEngine } from './sort-engine.js'
 import { MailStore } from './store.js'
 import { MailSync, mailSyncForTesting, setActiveMailSync } from './sync.js'
 import { createMailTools } from './tools.js'
@@ -117,6 +119,43 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const db = openMailDatabase(walnut)
   const store = new MailStore(db)
   const bodies = new MailBodyStore(walnut.storage.dataDir)
+  // Inbox sorting. Built before the service because ingest classifies each row it writes. The rules
+  // file lives in this plugin's data dir; its poll is a HOST timer so teardown cancels it.
+  const sort = new MailSortEngine({
+    store,
+    events,
+    dataDir: walnut.storage.dataDir,
+    interval: (handler, ms) => walnut.timers.interval(handler, ms),
+    canMarkRead: (accountId) => {
+      const spec = providers.get(providerIdOf(accountId))
+      return !!spec?.capabilities.markRead && typeof spec.markRead === 'function'
+    },
+    // The model labels unread mail through the HOST's call (the user's own main provider).
+    ...(typeof walnut.model?.fastText === 'function' ? { model: (request) => walnut.model.fastText(request) } : {}),
+    timeout: (handler, ms) => walnut.timers.timeout(handler, ms),
+    log: walnut.log,
+  })
+  // "Keep out of the inbox" rules: ingest queues the new mail they decide, this moves it to the archive.
+  const filters = new MailFilterMover({
+    store,
+    bodies,
+    providers,
+    groupsChanged: (pairs) => sort.notifyGroupsChanged(pairs, false),
+    onSettled: (event) => events.filtered(event),
+    // Asked once the rules are loaded; a sort engine that could not start keeps every move.
+    ruleLive: async (ruleId) => {
+      try { await sort.ready() } catch { return true }
+      return sort.isFilterRule(ruleId)
+    },
+    timeout: (handler, ms) => walnut.timers.timeout(handler, ms),
+    log: walnut.log,
+  })
+  sort.setMoveSink((requests) => {
+    void filters.queue(requests).catch((error) => walnut.log.warn('mail filter moves not queued', { error: String(error).slice(0, 200) }))
+  })
+  // A retry waiting when Walnut stopped has no timer any more: pick the ledger up again (the primary
+  // only; a replica moves no mail).
+  if (!walnut.replica) filters.schedule(30_000)
   // Late-bound like `forgetCapabilities`: the poll loop is built from the service. An unread check that
   // cleared rows moved the folder's own count too, so the loop re-lists that account's folders next.
   let relistDue: (accountId: string) => void = () => undefined
@@ -131,6 +170,8 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
       },
     },
     log: walnut.log,
+    sort,
+    filters,
   })
   forgetCapabilities = (accountId) => service.forgetCapabilities(accountId)
   // The write path. `letters` is the host's, and it is the ONLY way this plugin asks the human
@@ -181,6 +222,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     accounts: () => service.listAccounts({ capabilities: false }),
     config: walnut.config,
     log: walnut.log,
+    sort,
   })
   // One direction only: `accounts` reaches the loop (setup kicks a poll, a delete forgets the
   // account's backoff), and the loop no longer reaches back, because health writes now go
@@ -200,7 +242,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // The digest rides the tick rather than a timer of its own: "is today's due" is a clock question,
   // and this plugin already owns exactly one timer. A replica arms no tick at all, which is also how
   // the digest stays off there without a second replica check.
-  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest })
+  sync = new MailSync({ walnut, store, service, retention, events, sends, approvals, digest, sort })
   relistDue = (accountId) => sync.markRelistDue(accountId)
   setActiveMailSync(sync)
 
@@ -285,7 +327,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   }))
   registerMailRoutes(walnut, {
     store, service, accounts, providers, sync, drafts, approvals, sends, messageTasks, digest,
-    unsubscribe,
+    unsubscribe, sort, events, filters,
   })
 
   // The phantom-provider sweep. A provider plugin normally disposes its own registration, and
@@ -404,6 +446,10 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   })
 
   sync.start()
+  // The rules, identities and backfill load in the background; a replica sorts nothing.
+  if (!walnut.replica) {
+    void sort.start().catch((error) => walnut.log.warn('mail sorting could not start yet', { error: String(error) }))
+  }
   walnut.log.info('Mail base ready', { providers: providers.size, replica: walnut.replica })
 
   // The only teardown edge. `dispose` closes THIS instance, so a reload cannot have the old
@@ -423,6 +469,10 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
       })
       await queue.catch(() => undefined)
       await sync.stop()
+      sort.setMoveSink(null)
+      filters.dispose()
+      sort.dispose()
+      events.dispose()
       // Only if it is still ours: a reload has already installed the NEW activation's loop by
       // the time the old one's dispose runs, and clearing unconditionally would blind the test
       // seam to the live instance.

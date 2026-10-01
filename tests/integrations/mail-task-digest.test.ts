@@ -398,6 +398,9 @@ beforeAll(async () => {
   });
   expect(created.status).toBe(201);
   await waitForMessages(MESSAGE_COUNT, 60_000);
+  // The rows land before the first sync's body prefetch, and the snippets come from the bodies: let
+  // that sync end (a tick that is not forced queues behind it and polls nothing that is not due).
+  await mailSyncForTesting()!.runTick({});
 }, 180_000);
 
 afterAll(async () => {
@@ -693,6 +696,10 @@ describe('the daily digest letter', () => {
 
   it('sends one letter, listing the newest unread and counting the rest', async () => {
     await reboot(DIGEST_CONFIG);
+    // The plain letter, from All mail. Grouped, it lists Important and one line per group instead
+    // (mail-sort-summary.test.ts), and this fixture's mail is all sorted into groups. The switch is
+    // stored in the mail database, so it holds for the rest of this file.
+    expect((await api('PUT', '/groups/pref', { on: false })).status).toBe(200);
     events.length = 0;
     await mailSyncForTesting()!.runTick({ force: true });
 

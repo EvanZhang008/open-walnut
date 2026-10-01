@@ -65,6 +65,8 @@ export interface MessagePayload {
    * no upgrade rewrites a mailbox to backfill it.
    */
   listUnsubscribe?: StoredListUnsubscribe
+  /** `Precedence` / `Auto-Submitted` as the listing carried them: a sorting signal only. */
+  bulkHeaders?: { precedence?: string; autoSubmitted?: string }
 }
 
 /**

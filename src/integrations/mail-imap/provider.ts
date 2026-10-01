@@ -33,6 +33,7 @@ import type {
 } from '../mail/api.js'
 import {
   CONNECT_TIMEOUT_MS,
+  hasCapability,
   ImapConnection,
   ImapPool,
   providerError,
@@ -42,14 +43,18 @@ import {
   type ImapMailboxInfo,
 } from './client.js'
 import { accountIdFor, ImapAccountStore, PROVIDER_ID } from './config.js'
-import { decodeCursor, decodeMessageId, encodeCursor, mailboxRole } from './coords.js'
+import { decodeCursor, decodeMessageId, encodeCursor, encodeMessageId, mailboxRole } from './coords.js'
 import {
+  BULK_HEADERS,
   hasTextPart,
+  LATE_HEADER_FIELDS,
+  lateHeadersOf,
   LIST_HEADERS,
   MAX_SOURCE_BYTES,
   parseListUnsubscribe,
   parseMime,
   toEnvelope,
+  uidChunks,
 } from './mime.js'
 import { advanceCursor, hasMore, planPoll } from './poll-range.js'
 import { createImapSender } from './provider-send.js'
@@ -64,7 +69,11 @@ import { verifySmtp, type SmtpSecurity } from './smtp.js'
  * headers were not read at poll time can only learn them when its body is fetched, which for old
  * mail nobody opens is never.
  */
-const WANTED_HEADERS = ['message-id', 'references', 'in-reply-to', 'date', 'reply-to', ...LIST_HEADERS]
+// BULK_HEADERS ride the same request; like the list headers they stay OUT of the envelope hash.
+const WANTED_HEADERS = ['message-id', 'references', 'in-reply-to', 'date', 'reply-to', ...LIST_HEADERS, ...BULK_HEADERS]
+
+/** Gmail's own category searches: one per category, 10 s for the pair, read only. */
+const CATEGORY_HINT_BUDGET_MS = 10_000
 
 interface ProviderLog {
   debug(message: string, meta?: Record<string, unknown>): void
@@ -163,6 +172,32 @@ const CAPABILITIES: MailCapabilities = {
   sendAsReply: true,
   bodies: 'both',
   attachments: 'metadata',
+  // `UID MOVE` into the account's archive folder (`archiveTarget`); an account without one answers
+  // every id as failed, with the reason.
+  archive: true,
+}
+
+/** An IMAP server without RFC 6851 MOVE: nothing is moved there (see `archiveMany`). */
+export const NO_MOVE = 'This mail server cannot move mail (it has no MOVE command).'
+/** The folder's UIDVALIDITY changed since the handle was made: its UIDs may name other mail now. */
+export const FOLDER_RESET = 'This folder was reset on the mail server; the mail is looked at again after the next check.'
+
+/**
+ * The folder "archive" means on this server: a `\Archive` folder first, then Gmail's All Mail
+ * (`\All`, where moving out of INBOX is exactly Gmail's own Archive), then a folder the name table
+ * or the config calls `archive`. Undefined: the account has none, and nothing is moved.
+ */
+export function archiveTarget(
+  boxes: ReadonlyArray<{ path: string; name?: string; specialUse?: string; flags?: Iterable<string> }>,
+  roles: Record<string, string> = {},
+): string | undefined {
+  const flagsOf = (one: (typeof boxes)[number]) => [
+    ...(one.specialUse ? [one.specialUse] : []), ...(one.flags ? [...one.flags] : []),
+  ].map((flag) => flag.toLowerCase())
+  return (boxes.find((one) => roles[one.path] === 'archive')
+    ?? boxes.find((one) => flagsOf(one).includes('\\archive'))
+    ?? boxes.find((one) => flagsOf(one).includes('\\all'))
+    ?? boxes.find((one) => mailboxRole(one, roles) === 'archive'))?.path
 }
 
 export function createImapProvider(deps: {
@@ -534,6 +569,140 @@ export function createImapProvider(deps: {
           ? client.messageFlagsAdd(String(coord.uid), ['\\Seen'], { uid: true })
           : client.messageFlagsRemove(String(coord.uid), ['\\Seen'], { uid: true })
       })
+    },
+
+    /** `UID STORE +FLAGS (\Seen)` (or `-FLAGS`) per folder, 200 UIDs a command. */
+    async markReadMany(accountId: string, messageIds: string[], read: boolean) {
+      const byFolder = new Map<string, Array<{ messageId: string; uid: number }>>()
+      const out: Array<{ messageId: string; ok: boolean; reason?: string }> = []
+      for (const messageId of messageIds) {
+        const coord = decodeMessageId(messageId)
+        if (!coord) { out.push({ messageId, ok: false, reason: 'not an IMAP message handle' }); continue }
+        const list = byFolder.get(coord.mailbox) ?? []
+        list.push({ messageId, uid: coord.uid })
+        byFolder.set(coord.mailbox, list)
+      }
+      const connection = await pool.for(accountId)
+      for (const [mailbox, items] of byFolder) {
+        for (const set of uidChunks(items.map((one) => one.uid))) {
+          const inSet = new Set(set.split(',').map(Number))
+          const chunk = items.filter((one) => inSet.has(one.uid))
+          try {
+            await connection.run(`read flags in ${mailbox}`, async (client) => {
+              await openMailbox(client, mailbox)
+              return read
+                ? client.messageFlagsAdd(set, ['\\Seen'], { uid: true })
+                : client.messageFlagsRemove(set, ['\\Seen'], { uid: true })
+            })
+            for (const one of chunk) out.push({ messageId: one.messageId, ok: true })
+          } catch (error) {
+            const reason = String((error as Error)?.message ?? error).slice(0, 200)
+            for (const one of chunk) out.push({ messageId: one.messageId, ok: false, reason })
+          }
+        }
+      }
+      return out
+    },
+
+    /**
+     * `UID MOVE` (RFC 6851) into the archive folder, per source folder, 200 UIDs a command. A server
+     * without MOVE is refused (`NO_MOVE`), never emulated. Flags travel with the message, so unread
+     * mail stays unread. Mail already in the archive folder counts as moved. A handle made under
+     * another UIDVALIDITY is refused (`FOLDER_RESET`): after a reset the same UID can be another mail.
+     */
+    async archiveMany(accountId: string, messageIds: string[]) {
+      const out: Array<{ messageId: string; ok: boolean; reason?: string }> = []
+      const byFolder = new Map<string, { mailbox: string; uidValidity: string; items: Array<{ messageId: string; uid: number }> }>()
+      for (const messageId of messageIds) {
+        const coord = decodeMessageId(messageId)
+        if (!coord) { out.push({ messageId, ok: false, reason: 'not an IMAP message handle' }); continue }
+        const key = `${coord.mailbox}\u0000${coord.uidValidity}`
+        const group = byFolder.get(key) ?? { mailbox: coord.mailbox, uidValidity: coord.uidValidity, items: [] }
+        group.items.push({ messageId, uid: coord.uid })
+        byFolder.set(key, group)
+      }
+      if (byFolder.size === 0) return out
+      const entry = await accountOf(accountId)
+      const connection = await pool.for(accountId)
+      const boxes = await connection.run('a mailbox list', (client) => client.list())
+      const target = archiveTarget(boxes, entry.roles)
+      for (const { mailbox, uidValidity, items } of byFolder.values()) {
+        if (!target || mailbox === target) {
+          for (const one of items) {
+            out.push(target
+              ? { messageId: one.messageId, ok: true }
+              : { messageId: one.messageId, ok: false, reason: 'This account has no Archive folder.' })
+          }
+          continue
+        }
+        for (const set of uidChunks(items.map((one) => one.uid))) {
+          const inSet = new Set(set.split(',').map(Number))
+          const chunk = items.filter((one) => inSet.has(one.uid))
+          try {
+            // A refusal is RETURNED, never thrown: a throw inside `run` reads as a dead connection, and
+            // the pool would drop the socket and back the whole account off.
+            const refused = await connection.run(`moving mail from ${mailbox} to ${target}`, async (client) => {
+              if (typeof client.messageMove !== 'function') return 'This IMAP client cannot move mail.'
+              // Checked BEFORE the call: without MOVE, imapflow falls back to COPY + \Deleted + EXPUNGE, and
+              // it deletes even when the copy failed, and a server without UIDPLUS expunges every
+              // \Deleted mail in the folder, not only these. Neither risk is worth an archive.
+              if (!hasCapability(client, 'MOVE')) return NO_MOVE
+              const opened = await openMailbox(client, mailbox)
+              if (String(opened.uidValidity) !== uidValidity) return FOLDER_RESET
+              // A refused MOVE resolves to false (and a folder that did not open to undefined), not a throw.
+              const moved = await client.messageMove(set, target, { uid: true })
+              return moved ? null : 'The mail server refused to move this mail.'
+            })
+            for (const one of chunk) out.push(refused ? { messageId: one.messageId, ok: false, reason: refused } : { messageId: one.messageId, ok: true })
+          } catch (error) {
+            const reason = String((error as Error)?.message ?? error).slice(0, 200)
+            for (const one of chunk) out.push({ messageId: one.messageId, ok: false, reason })
+          }
+        }
+      }
+      return out
+    },
+
+    /**
+     * Gmail's own Promotions / Social verdicts for one folder, when the server says it is Gmail
+     * (`X-GM-EXT-1`). Two `UID SEARCH X-GM-RAW` commands; nothing is stored or flagged.
+     */
+    async categoryHints(accountId: string, mailboxId: string) {
+      const connection = await pool.for(accountId)
+      return connection.run(`category hints for ${mailboxId}`, async (client) => {
+        if (!hasCapability(client, 'X-GM-EXT-1') || typeof client.search !== 'function') return { promotions: [], social: [] }
+        const info = await openMailbox(client, mailboxId)
+        const ids = async (category: string) => {
+          const uids = await client.search!({ gmraw: `category:${category}` }, { uid: true })
+          return (uids || []).map((uid) => encodeMessageId(mailboxId, String(info.uidValidity), uid))
+        }
+        return { promotions: await ids('promotions'), social: await ids('social') }
+      }, CATEGORY_HINT_BUDGET_MS)
+    },
+
+    /**
+     * The list and bulk headers of a few cached messages, via `BODY.PEEK[HEADER.FIELDS (...)]`
+     * (imapflow's `headers` query): a PEEK, so `\Seen` never changes. `null` = fetched, nothing there.
+     */
+    async fetchListHeaders(accountId: string, mailboxId: string, messageIds: string[]) {
+      const uids = new Map<number, string>()
+      for (const messageId of messageIds) {
+        const coord = decodeMessageId(messageId)
+        if (coord && coord.mailbox === mailboxId) uids.set(coord.uid, messageId)
+      }
+      if (uids.size === 0) return []
+      const connection = await pool.for(accountId)
+      const found = new Map<string, ReturnType<typeof lateHeadersOf>>()
+      await connection.run(`list headers in ${mailboxId}`, async (client) => {
+        await openMailbox(client, mailboxId)
+        for (const set of uidChunks([...uids.keys()])) {
+          for await (const message of client.fetch(set, { uid: true, headers: [...LATE_HEADER_FIELDS] }, { uid: true })) {
+            const messageId = uids.get(message.uid)
+            if (messageId) found.set(messageId, lateHeadersOf(message.headers))
+          }
+        }
+      })
+      return [...uids.values()].filter((id) => found.has(id)).map((messageId) => ({ messageId, headers: found.get(messageId) ?? null }))
     },
 
     /**

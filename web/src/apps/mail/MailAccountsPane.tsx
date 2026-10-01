@@ -408,11 +408,12 @@ export function MailAccountsPane({
           className="mail-compose-new"
           data-testid="mail-compose-new"
           title={composeTitle}
+          aria-label="New message"
           disabled={!composeAccount || !canCompose}
           onClick={() => { if (composeAccount) void openMailComposer(composeAccount); }}
         >
           <ComposeIcon />
-          New message
+          <span className="mail-compose-new-label">New message</span>
         </button>
         <button
           type="button"

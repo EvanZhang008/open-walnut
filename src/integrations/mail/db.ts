@@ -286,6 +286,109 @@ CREATE INDEX IF NOT EXISTS unsubscribes_by_list ON unsubscribes (account_id, lis
 `
 
 /**
+ * v9 is inbox sorting: each message's group, the reason, the rules revision that produced it, and
+ * the sender key the group view files it under.
+ *
+ * NO BACKFILL HERE, deliberately: classifying 25k rows means parsing every payload, and that does
+ * not belong inside the call that opens the database. Every existing row starts with
+ * `sort_rev IS NULL` and the background recompute (sort-recompute.ts) fills them in batches. Until
+ * then a NULL group reads as Important everywhere (`sort_group = 'important' OR sort_group IS
+ * NULL`), so no mail is hidden while sorting catches up.
+ *
+ * None of these columns, and none of `mail_sort_hints`, feed `envelopeHashOf`: a verdict or a
+ * late-fetched header is not news about the envelope.
+ */
+const SCHEMA_V9 = `
+ALTER TABLE messages ADD COLUMN sort_group  TEXT;
+ALTER TABLE messages ADD COLUMN sort_reason TEXT;
+ALTER TABLE messages ADD COLUMN sort_rev    TEXT;
+ALTER TABLE messages ADD COLUMN sender_key  TEXT;
+CREATE INDEX IF NOT EXISTS messages_by_group
+  ON messages (account_id, mailbox_id, sort_group, seen, sent_at DESC);
+CREATE INDEX IF NOT EXISTS messages_by_group_sender
+  ON messages (account_id, mailbox_id, sort_group, sender_key, sent_at DESC);
+
+CREATE TABLE IF NOT EXISTS mail_sort_hints (
+  account_id TEXT NOT NULL,
+  mailbox_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  gmail_category TEXT,
+  list_headers_json TEXT,
+  headers_checked_at INTEGER,
+  PRIMARY KEY (account_id, mailbox_id, message_id)
+);
+`
+
+/**
+ * v10 is AI labeling of unread mail: the model's own verdict per message (kept apart from the final
+ * `sort_group`, which also weighs the person's rules), the display label of the row's group, and the
+ * person's renames.
+ *
+ * - `ai_rev` is the labeling revision the verdict was made under; NULL = never labeled. A row the
+ *   model answered nothing usable for is still stamped (verdict columns NULL), so it is not asked
+ *   about again under the same revision.
+ * - `sort_label` is what the group row calls the group this mail is in (the model's words, a rule's
+ *   `then`, or the sender), so a group read never has to parse a payload for its name.
+ * - `mail_sort_labels` holds only renames: the person's own name for a group id wins over the model's.
+ *
+ * No backfill, same as v9: the recompute and the labeler fill these in the background. The one
+ * write is a plain UPDATE (no payload parse): v9's fixed buckets (`notifications`, `promotions`,
+ * `group-mail`, `unsorted`) are not group ids any more, so they go back to NULL ("still sorting",
+ * shown in Important) instead of drawing as groups that cannot be opened until the recompute
+ * reaches them.
+ */
+const SCHEMA_V10 = `
+ALTER TABLE messages ADD COLUMN ai_label     TEXT;
+ALTER TABLE messages ADD COLUMN ai_important INTEGER;
+ALTER TABLE messages ADD COLUMN ai_why       TEXT;
+ALTER TABLE messages ADD COLUMN ai_rev       TEXT;
+ALTER TABLE messages ADD COLUMN sort_label   TEXT;
+UPDATE messages SET sort_group = NULL WHERE sort_group IS NOT NULL AND sort_group <> 'important';
+
+CREATE TABLE IF NOT EXISTS mail_sort_labels (
+  group_id   TEXT PRIMARY KEY,
+  label      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+`
+
+/**
+ * v11: the one-line summary under each group (sort-group-summary.ts), and the ledger of the mail a
+ * "keep out of the inbox" rule moved to the archive (mail-filter-moves.ts).
+ *
+ * - `mail_group_summaries` is keyed by group id across every inbox. `basis` and `newest_rowid`
+ *   describe the unread set the line was written for; an empty `summary` = asked, nothing usable came
+ *   back (not asked again until the set changes).
+ * - `mail_filter_moves` holds one row per message a rule asked to move, so a failure is retried a
+ *   bounded number of times (`attempts`) and a message that keeps coming back to the inbox is moved a
+ *   bounded number of times (`moves`), never forever. `status` is `queued`, `moved` or `failed`;
+ *   `failed` rows are kept (the rules list counts them).
+ */
+const SCHEMA_V11 = `
+CREATE TABLE IF NOT EXISTS mail_group_summaries (
+  group_id     TEXT PRIMARY KEY,
+  summary      TEXT NOT NULL,
+  basis        TEXT NOT NULL,
+  newest_rowid INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mail_filter_moves (
+  account_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  mailbox_id TEXT NOT NULL,
+  rule_id    TEXT NOT NULL,
+  status     TEXT NOT NULL,
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  moves      INTEGER NOT NULL DEFAULT 0,
+  reason     TEXT,
+  at         INTEGER NOT NULL,
+  PRIMARY KEY (account_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS mail_filter_moves_by_status ON mail_filter_moves(status, at);
+`
+
+/**
  * Exported for the ONE test that has to reach a version older than the current schema: the v7
  * backfill can only be graded on a database that already holds v6 rows, so that test migrates to 6,
  * writes flags, then migrates the rest of the way. Nothing else should read this.
@@ -299,6 +402,9 @@ export const MAIL_MIGRATIONS: Array<{ version: number; sql: string }> = [
   { version: 6, sql: SCHEMA_V6 },
   { version: 7, sql: SCHEMA_V7 },
   { version: 8, sql: SCHEMA_V8 },
+  { version: 9, sql: SCHEMA_V9 },
+  { version: 10, sql: SCHEMA_V10 },
+  { version: 11, sql: SCHEMA_V11 },
 ]
 
 /**
@@ -313,7 +419,7 @@ export const MAIL_MIGRATIONS: Array<{ version: number; sql: string }> = [
 export const MESSAGE_COLUMNS =
   'rowid, account_id, message_id, rfc_message_id, mailbox_id, thread_id, from_addr, subject,'
   + ' snippet, sent_at, received_at, flags_json, attachments_json, body_ref, body_bytes,'
-  + ' payload, updated_at, envelope_hash, body_error'
+  + ' payload, updated_at, envelope_hash, body_error, sort_group, sort_reason, sender_key, sort_label, ai_why'
 
 /** One budget per call, shared by the open and the statement. */
 const CALL_DEADLINE_MS = 5_000

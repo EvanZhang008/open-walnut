@@ -13,6 +13,7 @@ import { GeneralSection } from './sections/GeneralSection'
 import { HeartbeatSection } from './sections/HeartbeatSection'
 import { HooksSection } from './sections/HooksSection'
 import { IntegrationsSection } from './sections/IntegrationsSection'
+import { MailRulesSection } from './sections/MailRulesSection'
 import { PermissionsSection } from './sections/PermissionsSection'
 import { PluginStoreSection } from './sections/PluginStoreSection'
 import { ProvidersSection } from './sections/ProvidersSection'
@@ -231,6 +232,17 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
       'mail', 'slack', 'inbox', 'assist', 'mark read', 'interval',
     ],
     render: ({ config, saveSection }) => <TriageSection config={config} onSave={saveSection} />,
+  },
+  // Mail rules: how the Mail app sorts an inbox into Important and groups. Right after Inbox Triage,
+  // which reads only Important when grouping is on; a different icon (a funnel, not the tray) and a
+  // different sentence, so the two are never mistaken for one another. With the Mail plugin off the
+  // section says so itself (`This panel is from Mail, which is off.`).
+  {
+    owner: 'walnut', id: 'mail-rules', label: 'Mail rules', title: 'Mail rules', group: 'configure',
+    icon: 'filter', tint: '#5AC8FA',
+    description: 'Sorts your inbox into Important and groups with rules you control.',
+    keywords: ['mail', 'inbox', 'group', 'sort', 'rules', 'important', 'notifications', 'newsletters'],
+    render: () => <MailRulesSection />,
   },
   {
     owner: 'walnut', id: 'search', label: 'Search', title: 'Search', group: 'configure',

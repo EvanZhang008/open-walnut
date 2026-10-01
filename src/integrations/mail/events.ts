@@ -30,7 +30,18 @@ export const MAIL_EVENT = {
   unsubscribed: 'unsubscribed',
   unreadReconciled: 'unread-reconciled',
   mailboxCounts: 'mailbox-counts',
+  groupsChanged: 'groups-changed',
+  sortProgress: 'sort-progress',
+  sorted: 'sorted',
+  rulesChanged: 'rules-changed',
+  bulkProgress: 'bulk-progress',
+  bulkDone: 'bulk-done',
+  unsubBatch: 'unsub-batch',
+  filtered: 'filtered',
 } as const
+
+/** How long `groups-changed` pairs are gathered before one event goes out. */
+export const GROUPS_CHANGED_COALESCE_MS = 500
 
 /** At most this many subject lines ride a `messages-received`. */
 export const MAX_HEADLINES = 5
@@ -52,6 +63,59 @@ export interface MailMessagesReceivedEvent {
   accountId: string
   count: number
   headlines: MailHeadline[]
+  /**
+   * How many of the new mails landed in Important (or are not sorted yet). With grouping on,
+   * `count` and `headlines` already cover only those; this field rides every event regardless.
+   */
+  importantAdded: number
+}
+
+export interface MailGroupsChangedEvent {
+  pairs: Array<{ accountId: string; mailboxId: string }>
+}
+
+/** A "keep out of the inbox" batch settled (mail-filter-moves.ts): the moved mail left the inbox. */
+export interface MailFilteredEvent {
+  accountId: string
+  moved: number
+  failed: number
+  /** The moved messages (at most 200), so an open list drops their rows at once. */
+  messageIds: string[]
+}
+
+export interface MailSortProgressEvent {
+  done: number
+  total: number
+  rulesRev: string
+}
+
+export interface MailRulesChangedEvent {
+  rulesRev: string
+  fileRev: string
+  error?: { line?: number; rule?: { index: number; id?: string }; message: string; since: number }
+}
+
+export interface MailBulkProgressEvent {
+  jobId: string
+  done: number
+  failed: number
+  total: number
+}
+
+export interface MailBulkDoneEvent {
+  jobId: string
+  changedCount: number
+  failedCount: number
+  changedIds?: Array<{ accountId: string; messageId: string }>
+  stopped?: boolean
+}
+
+export interface MailUnsubBatchEvent {
+  batchId: string
+  index: number
+  status: string
+  message: string
+  url?: string
 }
 
 export interface MailAccountHealthEvent {
@@ -168,6 +232,9 @@ export class MailEvents {
    */
   private readonly accountListeners = new Set<(event: MailAccountChangedEvent) => void>()
 
+  private readonly pendingPairs = new Map<string, { accountId: string; mailboxId: string }>()
+  private groupsTimer: ReturnType<typeof setTimeout> | null = null
+
   constructor(private readonly emit: Emit) {}
 
   onAccountsChanged(handler: (event: MailAccountChangedEvent) => void): Disposable {
@@ -194,13 +261,70 @@ export class MailEvents {
   }
 
   /** One per account per tick, or nothing. Never per message, never during a backfill. */
-  messagesReceived(accountId: string, count: number, headlines: MailHeadline[]): void {
-    if (count <= 0) return
+  messagesReceived(accountId: string, count: number, headlines: MailHeadline[], importantAdded = count): void {
+    if (count <= 0 && importantAdded <= 0) return
     this.emit(MAIL_EVENT.messagesReceived, {
       accountId,
       count,
       headlines: headlines.slice(0, MAX_HEADLINES),
+      importantAdded,
     } satisfies MailMessagesReceivedEvent)
+  }
+
+  /**
+   * Group counts moved for these folders. Coalesced: pairs gathered over 500 ms go out as ONE event,
+   * because an ingest page, a bulk read and a recompute batch can each touch the same folders.
+   */
+  groupsChanged(pairs: ReadonlyArray<{ accountId: string; mailboxId: string }>): void {
+    for (const pair of pairs) this.pendingPairs.set(`${pair.accountId}\u0000${pair.mailboxId}`, { ...pair })
+    if (this.pendingPairs.size === 0 || this.groupsTimer) return
+    this.groupsTimer = setTimeout(() => this.flushGroupsChanged(), GROUPS_CHANGED_COALESCE_MS)
+    this.groupsTimer.unref?.()
+  }
+
+  /** Sends whatever `groupsChanged` has gathered now (tests, teardown). */
+  flushGroupsChanged(): void {
+    if (this.groupsTimer) clearTimeout(this.groupsTimer)
+    this.groupsTimer = null
+    if (this.pendingPairs.size === 0) return
+    const pairs = [...this.pendingPairs.values()]
+    this.pendingPairs.clear()
+    this.emit(MAIL_EVENT.groupsChanged, { pairs } satisfies MailGroupsChangedEvent)
+  }
+
+  sortProgress(event: MailSortProgressEvent): void {
+    this.emit(MAIL_EVENT.sortProgress, event)
+  }
+
+  sorted(rulesRev: string): void {
+    this.emit(MAIL_EVENT.sorted, { rulesRev })
+  }
+
+  rulesChanged(event: MailRulesChangedEvent): void {
+    this.emit(MAIL_EVENT.rulesChanged, event)
+  }
+
+  bulkProgress(event: MailBulkProgressEvent): void {
+    this.emit(MAIL_EVENT.bulkProgress, event)
+  }
+
+  bulkDone(event: MailBulkDoneEvent): void {
+    this.emit(MAIL_EVENT.bulkDone, event)
+  }
+
+  unsubBatch(event: MailUnsubBatchEvent): void {
+    this.emit(MAIL_EVENT.unsubBatch, event)
+  }
+
+  filtered(event: MailFilteredEvent): void {
+    this.emit(MAIL_EVENT.filtered, event)
+  }
+
+  /** Drops a pending coalesced event: a disposed activation must not emit. */
+  dispose(): void {
+    if (this.groupsTimer) clearTimeout(this.groupsTimer)
+    this.groupsTimer = null
+    this.pendingPairs.clear()
   }
 
   /**

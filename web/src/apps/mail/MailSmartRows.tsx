@@ -39,6 +39,7 @@ import type { SmartPrefId } from './mail-sidebar-prefs';
 import { folderFetchAnswerOf, folderFetchSentence } from './mail-folder-context-items';
 import { useMailFolderContextMenu } from './MailFolderContextMenu';
 import { TwistIcon } from './mail-icons';
+import { MailInboxBadge } from './MailGroupedHeader';
 
 interface Props {
   accounts: MailAccountDto[];
@@ -213,9 +214,9 @@ function SmartRow({
               aria-label={degraded}
             />
           )}
-          {unread > 0 && (
-            <span className="mail-unread-badge" data-testid="mail-smart-unread">{formatCount(unread)}</span>
-          )}
+          {spec.role === 'inbox'
+            ? <MailInboxBadge scope={{ role: 'inbox' }} providerUnread={unread} testId="mail-smart-unread" />
+            : unread > 0 && <span className="mail-unread-badge" data-testid="mail-smart-unread">{formatCount(unread)}</span>}
         </button>
       </div>
       {open && (
@@ -311,11 +312,11 @@ function SmartRow({
                       role="img"
                     />
                   )}
-                  {childUnread > 0 && (
-                    <span className="mail-unread-badge" data-testid="mail-smart-child-unread">
-                      {formatCount(childUnread)}
-                    </span>
-                  )}
+                  <MailInboxBadge
+                    scope={spec.role === 'inbox' ? pair : null}
+                    providerUnread={childUnread}
+                    testId="mail-smart-child-unread"
+                  />
                 </button>
               </li>
             );

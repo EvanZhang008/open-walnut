@@ -17,7 +17,9 @@
 import { wsClient } from '@/api/ws';
 import { getWebPluginRuntimeSnapshot, subscribeWebPluginRuntime } from '@/plugins/runtime-store';
 import { loadMailBadgeSource, onMailEvent } from './mail-actions';
-import { setMailBadgeHandle, type MailBadgeHandle } from './mail-store';
+import { readGroupedPref, subscribeGroupedPref } from './mail-grouped-pref';
+import { loadGroupedRailBadge, railValue, setRailListener } from './mail-groups-store';
+import { publishBadge, setMailBadgeHandle, type MailBadgeHandle } from './mail-store';
 
 const PREFIX = 'plugin:mail:';
 
@@ -73,6 +75,26 @@ export function ensureMailLive(): void {
 
 /** Called once at app boot by `core-apps.tsx`, which owns the registry handle. */
 export function attachMailBadge(handle: MailBadgeHandle): void {
-  setMailBadgeHandle(handle);
+  // While grouping is on the rail counts Important unread only (spec 9.3), from the grouped store;
+  // the provider sum `publishBadge` computes is used as before when it is off. One handle, so the
+  // rail switches in the same frame as the sidebar badges when the switch flips.
+  let lastProvider: number | null = null;
+  const grouped = () => {
+    const value = railValue();
+    handle.setBadge(value && value > 0 ? value : null);
+  };
+  setMailBadgeHandle({
+    setBadge(value) {
+      lastProvider = value;
+      if (readGroupedPref()) { if (railValue() !== null) grouped(); return; }
+      handle.setBadge(value);
+    },
+  });
+  setRailListener(() => { if (readGroupedPref() && railValue() !== null) grouped(); });
+  subscribeGroupedPref(() => {
+    if (!readGroupedPref()) { handle.setBadge(lastProvider); publishBadge(); return; }
+    grouped();
+    if (railValue() === null) void loadGroupedRailBadge();
+  });
   ensureMailLive();
 }

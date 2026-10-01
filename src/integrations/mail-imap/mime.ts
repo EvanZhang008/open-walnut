@@ -17,8 +17,12 @@ import {
   type MailAttachmentMeta,
   type MailEnvelope,
   type MailListUnsubscribe,
+  type MailProviderSpec,
 } from '../mail/api.js'
 import type { ImapFetchedMessage } from './client.js'
+
+/** The base's late-header shape, read off the contract (`fetchListHeaders`) rather than restated. */
+export type LateHeaders = NonNullable<Awaited<ReturnType<NonNullable<MailProviderSpec['fetchListHeaders']>>>[number]['headers']>
 import { encodeMessageId } from './coords.js'
 
 /**
@@ -67,6 +71,48 @@ export function setMimeParserForTesting(fake: SimpleParser | null): void {
  * mailparser. A list that drifted would mean new mail learned a field old mail never could.
  */
 export const LIST_HEADERS = ['list-unsubscribe', 'list-unsubscribe-post', 'list-id'] as const
+
+/**
+ * `Precedence` and `Auto-Submitted`: two sorting signals (a bulk sender, an automated notice). The poll
+ * asks for them with the list headers; like those they are NOT part of the envelope hash, so rows
+ * cached before this existed are never rewritten to learn them.
+ */
+export const BULK_HEADERS = ['precedence', 'auto-submitted'] as const
+
+/** Every header a late `fetchListHeaders` asks for (always with `BODY.PEEK`, never setting `\Seen`). */
+export const LATE_HEADER_FIELDS = [...LIST_HEADERS, ...BULK_HEADERS] as const
+
+/** `{ precedence, autoSubmitted }`, lowercased; `Auto-Submitted: no` means "not automated" and is dropped. */
+export function bulkHeadersOf(headers: Record<string, string>): { precedence?: string; autoSubmitted?: string } | undefined {
+  const precedence = (headers.precedence ?? '').trim().toLowerCase().split(/[\s;]/)[0] ?? ''
+  const auto = (headers['auto-submitted'] ?? '').trim().toLowerCase().split(/[\s;]/)[0] ?? ''
+  const autoSubmitted = auto && auto !== 'no' ? auto : ''
+  if (!precedence && !autoSubmitted) return undefined
+  return { ...(precedence ? { precedence } : {}), ...(autoSubmitted ? { autoSubmitted } : {}) }
+}
+
+/** The late-fetched headers of one message as the base stores them, or `null` when it carried none. */
+export function lateHeadersOf(raw: Buffer | string | undefined): LateHeaders | null {
+  const headers = parseHeaders(raw)
+  const listUnsubscribe = parseListUnsubscribe(headers)
+  const bulk = bulkHeadersOf(headers)
+  const post = (headers['list-unsubscribe-post'] ?? '').trim()
+  const out = {
+    ...(listUnsubscribe ? { listUnsubscribe } : {}),
+    ...(post && listUnsubscribe ? { listUnsubscribePost: post } : {}),
+    ...(listUnsubscribe?.listId ? { listId: listUnsubscribe.listId } : {}),
+    ...(bulk?.precedence ? { precedence: bulk.precedence } : {}),
+    ...(bulk?.autoSubmitted ? { autoSubmitted: bulk.autoSubmitted } : {}),
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+/** UIDs in sets of at most `size`, as IMAP sequence-set strings (`4,7,9`). */
+export function uidChunks(uids: ReadonlyArray<number>, size = 200): string[] {
+  const out: string[] = []
+  for (let at = 0; at < uids.length; at += size) out.push(uids.slice(at, at + size).join(','))
+  return out
+}
 
 /**
  * Parse one raw message.
@@ -411,6 +457,7 @@ export function toEnvelope(mailbox: string, uidValidity: string, message: ImapFe
   const inReplyTo = messageIdList(headers['in-reply-to'])[0] ?? message.envelope?.inReplyTo
   const replyTo = replyToList(headers['reply-to'])
   const listUnsubscribe = parseListUnsubscribe(headers)
+  const bulkHeaders = bulkHeadersOf(headers)
   return {
     messageId: encodeMessageId(mailbox, uidValidity, message.uid),
     rfcMessageId: message.envelope?.messageId ?? headers['message-id'] ?? '',
@@ -431,5 +478,6 @@ export function toEnvelope(mailbox: string, uidValidity: string, message: ImapFe
     attachments: attachmentsFromStructure(message.bodyStructure),
     ...(typeof message.size === 'number' ? { bodyBytes: message.size } : {}),
     ...(listUnsubscribe ? { listUnsubscribe } : {}),
+    ...(bulkHeaders ? { bulkHeaders } : {}),
   }
 }

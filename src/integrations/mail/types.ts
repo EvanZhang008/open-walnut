@@ -30,6 +30,11 @@ export interface MailCapabilities {
   sendAsReply: boolean
   bodies: 'text' | 'html' | 'both'
   attachments: 'none' | 'metadata' | 'download'
+  /**
+   * Can move inbox mail to the account's archive (`archiveMany`), which is what a "keep out of the
+   * inbox" rule does. Optional so a provider written before it keeps compiling; absent means no.
+   */
+  archive?: boolean
 }
 
 export type AccountSetupFieldKind = 'text' | 'password' | 'select'
@@ -212,6 +217,20 @@ export interface MailEnvelope {
    * tick, and old mail learns it the first time its body is fetched (`MailBody.listUnsubscribe`).
    */
   listUnsubscribe?: MailListUnsubscribe
+  /**
+   * `Precedence` / `Auto-Submitted`, lowercased, when the listing carried them. A sorting signal
+   * only: like `listUnsubscribe` it is NOT part of `envelopeHashOf`.
+   */
+  bulkHeaders?: { precedence?: string; autoSubmitted?: string }
+}
+
+/** Headers fetched late for sorting and unsubscribe (`fetchListHeaders`). */
+export interface MailListHeaders {
+  listUnsubscribe?: MailListUnsubscribe
+  listUnsubscribePost?: string
+  listId?: string
+  precedence?: string
+  autoSubmitted?: string
 }
 
 export interface OutgoingMail {
@@ -443,6 +462,43 @@ export interface MailProviderSpec {
   search?(accountId: string, query: string, limit: number): Promise<MailEnvelope[]>
   watch?(accountId: string, onHint: (hint: MailWatchHint) => void): Disposable
   markRead?(accountId: string, messageId: string, read: boolean): Promise<void>
+  /**
+   * Set or clear `\Seen` on many messages at once (IMAP: `UID STORE` in UID sets).
+   *
+   * Optional. Returns one outcome per requested id, in any order; an id missing from the answer
+   * counts as failed. Without it the base walks `markRead` per message with a small concurrency.
+   */
+  markReadMany?(
+    accountId: string,
+    messageIds: string[],
+    read: boolean,
+  ): Promise<Array<{ messageId: string; ok: boolean; reason?: string }>>
+  /**
+   * Move inbox messages to the account's archive (IMAP: the `\Archive` folder, or Gmail's All Mail;
+   * Outlook: its Archive folder). Read only when `capabilities.archive` is true.
+   *
+   * MUST NOT change the read flag: mail a rule keeps out of the inbox stays unread where it lands.
+   * One outcome per requested id, in any order; an id missing from the answer counts as failed. A
+   * message already in the archive counts as moved.
+   */
+  archiveMany?(
+    accountId: string,
+    messageIds: string[],
+  ): Promise<Array<{ messageId: string; ok: boolean; reason?: string }>>
+  /**
+   * The provider's own category verdicts for one mailbox (Gmail tabs), as message ids.
+   * Read-only, never changes a flag. Optional; absent means "no signal".
+   */
+  categoryHints?(accountId: string, mailboxId: string): Promise<{ promotions: string[]; social: string[] }>
+  /**
+   * The list headers of a few cached messages whose listing never carried them. MUST NOT set
+   * `\Seen` (IMAP: `BODY.PEEK[HEADER.FIELDS ...]`). `headers: null` = fetched, nothing there.
+   */
+  fetchListHeaders?(
+    accountId: string,
+    mailboxId: string,
+    messageIds: string[],
+  ): Promise<Array<{ messageId: string; headers: MailListHeaders | null }>>
   setFlag?(accountId: string, messageId: string, flag: string, value: boolean): Promise<void>
   /**
    * Forget this account: drop its config block, delete its secret, close its connection.

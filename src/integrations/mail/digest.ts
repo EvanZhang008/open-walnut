@@ -40,6 +40,7 @@ import type { MailAccountDto } from './contract.js'
 import type { MailEvents } from './events.js'
 import { mailAccountLink } from './message-tasks.js'
 import type { MailStore } from './store.js'
+import type { MailSortEngine } from './sort-engine.js'
 
 /** The meta row that answers "has today's digest gone out". A local `YYYY-MM-DD`. */
 export const DIGEST_DAY_KEY = 'last_digest_day'
@@ -253,6 +254,44 @@ export function renderDigest(blocks: DigestAccountBlock[], now: number): Rendere
   }
 }
 
+/** One group's line in a grouped digest: `Ticket updates: 11 unread`. */
+export interface DigestGroupLine {
+  label: string
+  unread: number
+}
+
+/**
+ * The grouped-mode letter (spec 9.3): `3 need you, a middle dot, 19 sorted into groups`, the Important unread
+ * listed per account exactly as the plain digest lists mail, then one line per group with unread.
+ * Pure, like `renderDigest`.
+ */
+export function renderGroupedDigest(blocks: DigestAccountBlock[], groups: DigestGroupLine[], now: number): RenderedDigest {
+  const need = blocks.reduce((sum, block) => sum + block.unread, 0)
+  const sorted = groups.reduce((sum, group) => sum + group.unread, 0)
+  const headline = `${need} need you \u00b7 ${sorted} sorted into groups`
+  const groupLines = groups.map((group) => `- ${escapeMarkdown(clipChars(group.label, NAME_CHARS))}: ${group.unread} unread`)
+  const tail = groupLines.length > 0 ? ['### Sorted into groups', '', ...groupLines].join('\n') : ''
+  const sections: string[] = []
+  let used = bytes(tail) + 2
+  for (const block of blocks) {
+    const section = renderBlock(block, now, DIGEST_MAX_BYTES - used, sections.length === 0)
+    if (!section) break
+    sections.push(section)
+    used += bytes(section) + 2
+  }
+  const dropped = blocks.length - sections.length
+  if (dropped > 0) sections.push(`and ${plural(dropped, 'more account')}`)
+  if (blocks.length === 0) sections.push('Nothing needs you.')
+  if (tail) sections.push(tail)
+  return {
+    subject: `Mail digest: ${headline}`,
+    markdown: sections.join('\n\n'),
+    text: `${headline}.`,
+    unread: need + sorted,
+    accounts: blocks.length,
+  }
+}
+
 /** Just the letter seam this needs, so a test can hand it one function. */
 export interface DigestLetters {
   send(input: {
@@ -293,6 +332,8 @@ export interface MailDigestDeps {
     warn(message: string, meta?: Record<string, unknown>): void
   }
   now?: () => number
+  /** Inbox sorting; when grouping is on the digest lists Important mail and one line per group. */
+  sort?: MailSortEngine
 }
 
 export class MailDigest {
@@ -321,8 +362,8 @@ export class MailDigest {
     const today = localDay(at)
     if ((await this.deps.store.tasks.getMeta(DIGEST_DAY_KEY)) === today) return null
 
-    const { blocks, complete } = await this.collect(config.maxItems, deadlineAt)
-    const rendered = renderDigest(blocks, at)
+    const { blocks, complete, groups } = await this.collect(config.maxItems, deadlineAt)
+    const rendered = groups ? renderGroupedDigest(blocks, groups, at) : renderDigest(blocks, at)
     if (rendered.unread === 0) {
       if (!complete) {
         this.deps.log.debug('mail digest deferred, the cache read ran out of budget', { day: today })
@@ -355,8 +396,8 @@ export class MailDigest {
    */
   async sendNow(deadlineAt?: number): Promise<DigestResult> {
     const config = readDigestConfig(await this.deps.config.get())
-    const { blocks, complete } = await this.collect(config.maxItems, deadlineAt)
-    const rendered = renderDigest(blocks, this.now)
+    const { blocks, complete, groups } = await this.collect(config.maxItems, deadlineAt)
+    const rendered = groups ? renderGroupedDigest(blocks, groups, this.now) : renderDigest(blocks, this.now)
     if (rendered.unread === 0) {
       if (!complete) {
         return { letterId: null, unread: 0, accounts: 0, incomplete: true, message: DIGEST_INCOMPLETE_MESSAGE }
@@ -394,10 +435,12 @@ export class MailDigest {
   private async collect(maxItems: number, deadlineAt?: number): Promise<{
     blocks: DigestAccountBlock[]
     complete: boolean
+    groups?: DigestGroupLine[]
   }> {
     // The CHEAP shape: names and counts, no provider call. A digest must never be the reason a mail
     // server is contacted, and `listAccounts()` asks each provider what that account can do.
     const accounts = await this.deps.accounts()
+    if (this.deps.sort?.groupedOn()) return this.collectGrouped(accounts, maxItems, deadlineAt)
     const counts = await this.deps.store.unreadByAccount()
     const blocks: DigestAccountBlock[] = []
     for (const account of accounts) {
@@ -425,6 +468,55 @@ export class MailDigest {
       })
     }
     return { blocks, complete: true }
+  }
+
+  /**
+   * Grouped mode (spec 9.3): the accounts' IMPORTANT unread, listed one by one, and one line per
+   * group. Every number is the cached one, the same figure the sidebar badge shows in this mode.
+   */
+  private async collectGrouped(
+    accounts: MailAccountDto[],
+    maxItems: number,
+    deadlineAt?: number,
+  ): Promise<{ blocks: DigestAccountBlock[]; complete: boolean; groups: DigestGroupLine[] }> {
+    const sort = this.deps.sort!
+    const inbox = await this.deps.store.mailboxesByRole('inbox')
+    const pairs = inbox.map((row) => ({ accountId: row.account_id, mailboxId: row.mailbox_id }))
+    const [counts, unreadGroups] = await Promise.all([
+      this.deps.store.sort.groupCounts(pairs),
+      this.deps.store.sort.unreadGroups(pairs),
+    ])
+    const important = new Map<string, number>()
+    for (const row of counts) {
+      const unread = Number(row.unread) || 0
+      if (row.grp === 'important') important.set(row.account_id, (important.get(row.account_id) ?? 0) + unread)
+    }
+    const byGroup = new Map<string, { label: string; unread: number }>()
+    for (const row of unreadGroups) {
+      const held = byGroup.get(row.grp)
+      byGroup.set(row.grp, { label: held?.label ?? sort.labelOf(row.grp, row.label), unread: (held?.unread ?? 0) + (Number(row.unread) || 0) })
+    }
+    const blocks: DigestAccountBlock[] = []
+    for (const account of accounts) {
+      if (deadlineAt !== undefined && Date.now() >= deadlineAt) return { blocks, complete: false, groups: [] }
+      const unread = important.get(account.accountId) ?? 0
+      if (unread <= 0) continue
+      // Important is a small set; the newest unread inbox rows, filtered to it, in date order.
+      const rows = (await this.deps.store.tasks.unreadInboxMessages(account.accountId, Math.max(maxItems * 20, 200)))
+        .filter((row) => !row.sort_group || row.sort_group === 'important')
+        .slice(0, maxItems)
+      blocks.push({
+        accountId: account.accountId,
+        label: account.displayName || account.address || account.accountId,
+        unread: Math.max(unread, rows.length),
+        items: rows.map((row) => ({ sender: senderOf(row.payload, row.from_addr), subject: row.subject, sentAt: row.sent_at })),
+      })
+    }
+    // Unread groups only, biggest first (the letter's job is "how much is waiting where").
+    const groups = [...byGroup.values()]
+      .filter((group) => group.unread > 0)
+      .sort((a, b) => b.unread - a.unread || a.label.localeCompare(b.label))
+    return { blocks, complete: true, groups }
   }
 }
 

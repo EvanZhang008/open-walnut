@@ -475,6 +475,13 @@ describe('the first sync', () => {
   });
 
   it('is a no-op the second time, down to updated_at, and emits nothing', async () => {
+    // The previous case waited for the rows, not for the sync the account setup kicked: let it end
+    // (a tick that is not forced polls nothing that is not due), and any sort it started with it.
+    await mailSyncForTesting()!.runTick({});
+    await (mailSyncForTesting() as unknown as { deps: { sort?: { idle(): Promise<void> } } }).deps.sort?.idle();
+    // The first backfill was sorted knowing the account's own address, so none of it had to be
+    // sorted again (it used to be, whole, once the end of that tick learned the address).
+    expect(eventsOf('sort-progress')).toEqual([]);
     const before = await rows<{ message_id: string; updated_at: number }>(
       'SELECT message_id, updated_at FROM messages ORDER BY message_id',
     );
@@ -504,7 +511,14 @@ describe('new mail', () => {
     }
     events.length = 0;
 
-    await sendJson('POST', '/refresh', { accountId: ACCOUNT_ID });
+    // All mail, not Grouped: grouped, the event carries Important's mail only, and this fixture's
+    // mail (the account's own address writing out) is never Important.
+    await sendJson('PUT', '/groups/pref', { on: false });
+    try {
+      await sendJson('POST', '/refresh', { accountId: ACCOUNT_ID });
+    } finally {
+      await sendJson('PUT', '/groups/pref', { on: true });
+    }
 
     const received = eventsOf('messages-received');
     expect(received).toHaveLength(1);
@@ -1496,6 +1510,53 @@ describe('deleting an account', () => {
     const health = await getJson<Record<string, unknown>>('/health');
     expect(health.body).toMatchObject({ ok: true, accounts: 0, db: 'ready', polling: true, replica: false });
     expect(health.body.lastTickAt).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Refreshing ONE account leaves every other account's watch armed. It used to prune the watches
+ * against the narrowed list, so adopting or refreshing account B disposed A's watch, and A's new
+ * mail waited for the next full tick instead of arriving on the hint.
+ */
+describe('a one-account refresh', () => {
+  it('keeps the other accounts\' watches', async () => {
+    const armed = new Map<string, number>();
+    const host = {
+      replica: false,
+      log: { debug: () => undefined, info: () => undefined, warn: () => undefined },
+      config: { get: async () => ({}), onChange: () => ({ dispose: () => undefined }) },
+      timers: {
+        interval: () => ({ dispose: () => undefined }),
+        timeout: () => ({ dispose: () => undefined }),
+      },
+      notifications: { error: async () => undefined, recover: async () => undefined },
+    } satisfies MailSyncHost;
+    const spec = {
+      capabilities: { watch: true },
+      watch: (accountId: string) => {
+        armed.set(accountId, (armed.get(accountId) ?? 0) + 1);
+        return { dispose: () => { armed.set(accountId, (armed.get(accountId) ?? 0) - 1) } };
+      },
+      listMailboxes: async () => [],
+    };
+    // Everything else answers "nothing": the assertion is about the watches alone.
+    const nothing = new Proxy({}, { get: () => async () => [] });
+    const sync = new MailSync({
+      walnut: host,
+      store: new Proxy({}, {
+        get: (_target, name) => name === 'listAccounts'
+          ? async () => [{ account_id: 'fake:a', state: 'active' }, { account_id: 'fake:b', state: 'active' }]
+          : async () => [],
+      }) as never,
+      service: { provider: () => spec } as never,
+      retention: { retain: async () => ({ messagesDeleted: 0, bodiesDropped: 0, incomplete: false }) } as never,
+      events: nothing as never,
+    });
+
+    await sync.refresh('fake:a');
+    await sync.refresh('fake:b');
+    expect(Object.fromEntries(armed)).toEqual({ 'fake:a': 1, 'fake:b': 1 });
+    await sync.stop();
   });
 });
 

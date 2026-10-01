@@ -4,6 +4,7 @@
  * Split out of `MailMessageList` when the right-click menu landed: the row is the surface that
  * carries the gesture, and the list that draws it is a different job (paging, filtering, headers).
  */
+import type { ReactNode } from 'react';
 import type { MailAccountDto, MailMessageDto } from '@/api/mail';
 import { formatMailTime, isUnread, rowRecipientLabel, senderLabel } from './mail-format';
 import { openMailMessage } from './mail-actions';
@@ -46,7 +47,7 @@ export function isOpenRow(snapshot: MailSnapshot, message: MailMessageDto): bool
  * a merged list would have been a column of noise, and the mailbox is not the question anyway (the
  * row is already under a header naming the role). It REPLACES the old slot rather than adding a line.
  */
-export function MailRow({ message, selected, accounts, outbound, menu, flagFailed }: {
+export function MailRow({ message, selected, accounts, outbound, menu, flagFailed, footer }: {
   message: MailMessageDto;
   selected: boolean;
   accounts: MailAccountDto[] | null;
@@ -55,6 +56,8 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
   menu: MailRowMenuHandle;
   /** The provider's own reason, per pair, for the last read flip it refused. */
   flagFailed: Record<string, string>;
+  /** A last line under the snippet (the grouped inbox's why line). */
+  footer?: ReactNode;
 }) {
   const unread = isUnread(message.flags);
   const pair = pairKey(message.accountId, message.messageId);
@@ -177,6 +180,7 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
         )}
       </span>
       <span className="mail-row-snippet">{message.snippet}</span>
+      {footer}
     </div>
   );
 }

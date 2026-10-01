@@ -21,6 +21,7 @@ import { bodyQuoteText } from './mail-quote-text';
 import { attachmentKind, senderMark, type AttachmentKind } from './mail-reader-format';
 import { setOpenMessageRead } from './mail-read-flag';
 import { MailTaskButton } from './MailTaskButton';
+import { MailSortLine } from './MailSortLine';
 import type { MailOpenMessage } from './mail-store';
 import { openFinishUnsubscribeAsk, unsubscribeFromMessage } from './mail-unsubscribe-actions';
 import {
@@ -120,6 +121,7 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
       </div>
 
       <UnsubscribeLine open={open} message={message} accounts={accounts} providers={providers} />
+      <MailSortLine open={open} />
 
       {details && extras.length > 0 && (
         <dl className="mail-reader-detail-rows" data-testid="mail-reader-detail-rows">

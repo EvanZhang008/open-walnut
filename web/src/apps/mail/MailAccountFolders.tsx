@@ -35,6 +35,7 @@ import { folderFetchAnswerOf, folderFetchSentence } from './mail-folder-context-
 import { readUnreadOnly, subscribeUnreadOnly, unreadOnlyVersion } from './mail-unread-filter';
 import { useMailFolderContextMenu } from './MailFolderContextMenu';
 import { DraftsIcon, MailboxRoleIcon, TwistIcon } from './mail-icons';
+import { MailInboxBadge } from './MailGroupedHeader';
 
 interface Props {
   account: MailAccountDto;
@@ -379,7 +380,9 @@ function FolderRow({
           eight on All Inboxes (the one number the group exists to answer) was the fourth smallest. The
           number is still exact and still on screen, because unread that only Walnut can see is the thing
           this pane must never hide; it just stops being the brightest thing in the column. */}
-      {mailbox.unread > 0 && (
+      {mailbox.role === 'inbox' ? (
+        <MailInboxBadge scope={{ accountId, mailboxId: mailbox.mailboxId }} providerUnread={mailbox.unread} testId="mail-mailbox-unread" />
+      ) : mailbox.unread > 0 && (
         <span
           className={`mail-unread-badge${QUIET_ROLES.has(mailbox.role) ? ' quiet' : ''}`}
           data-testid="mail-mailbox-unread"

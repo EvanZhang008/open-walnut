@@ -41,6 +41,9 @@ import { noteRecentFolder, readSelectedPref, writeSelectedPref } from './mail-si
 import { arrivalsAfterOpen, folderLabel, smartPairs, smartRowVisible, type SmartRole } from './mail-smart';
 import { applyMessageTask, invalidateLetterList } from './mail-task-actions';
 import { onMailUnsubscribed } from './mail-unsubscribe-actions';
+import { readGroupedPref } from './mail-grouped-pref';
+import { arrivalCount, onGroupsEvent, reloadListOnScreen } from './mail-groups-live';
+import { groupedRows, loadGroupedRailBadge } from './mail-groups-store';
 import { keepOpenRow, readUnreadOnly, writeUnreadOnly } from './mail-unread-filter';
 import { noteUnreadChecking, settleUnreadCheck } from './mail-unread-checking';
 import {
@@ -984,7 +987,7 @@ export function openMailMessage(
   // Reading a message is using its identity, which is what makes New message from a merged list write
   // as the account whose mail is on screen rather than as whichever account happens to be listed first.
   noteMailIdentity(accountId);
-  const known = [...store.state.messages, ...store.state.search.messages]
+  const known = [...store.state.messages, ...store.state.search.messages, ...groupedRows()]
     .find((one) => one.messageId === messageId && one.accountId === accountId) ?? null;
   patch({
     // The Ask drawer sits in this pane too, so opening a message closes it. The person asked for the
@@ -1238,6 +1241,7 @@ export function loadMailBadgeSource(): Promise<void> {
     // No pick: this runs in a tab that never opened Mail, and picking a row reads that row's page for a
     // pane nobody is looking at. The console's own open resolves the row (see `openMailConsole`).
     await loadEveryMailboxList(false, false);
+    if (readGroupedPref()) await loadGroupedRailBadge();
   });
 }
 
@@ -1316,6 +1320,7 @@ export function onMailEvent(name: string, data: unknown): void {
     messageId?: string;
     taskId?: string;
     added?: number;
+    importantAdded?: number;
     /** `unsubscribed` carries these two. See the branch below. */
     status?: string;
     method?: string;
@@ -1344,6 +1349,7 @@ export function onMailEvent(name: string, data: unknown): void {
   // card is the one screen where staleness reads as "did my mail go or not", and the handler makes
   // no request unless it is about the draft on screen or the console has already loaded its list.
   if (name === 'draft-changed' || name === 'send-settled') { onMailDraftEvent(name, data); return; }
+  if (onGroupsEvent(name, data)) return;
 
   if (!store.state.loaded) { void loadAccounts(true); return; }
 
@@ -1357,7 +1363,7 @@ export function onMailEvent(name: string, data: unknown): void {
   // into `done` with `scope: 'list'` and only the server's own ledger query knows which those are.
   if (name === 'unsubscribed') {
     onMailUnsubscribed(payload);
-    if (payload.status === 'done') void loadMailMessages(true);
+    if (payload.status === 'done') reloadListOnScreen(() => { void loadMailMessages(true); });
     return;
   }
   // Mail read somewhere else, found out late: an unread check (the poll loop's, or one a page started and
@@ -1370,7 +1376,7 @@ export function onMailEvent(name: string, data: unknown): void {
     settleUnreadCheck(payload.accountId, payload.mailboxId);
     if ((payload.cleared ?? 0) <= 0) return;
     void loadAccounts(true);
-    if (eventIsForPageOnScreen(payload.accountId, payload.mailboxId)) void loadMailMessages(true);
+    if (eventIsForPageOnScreen(payload.accountId, payload.mailboxId)) reloadListOnScreen(() => { void loadMailMessages(true); });
     return;
   }
   // A folder's own count moved with no row changing (mail read on a phone lowers the inbox count while
@@ -1383,9 +1389,9 @@ export function onMailEvent(name: string, data: unknown): void {
     clearRefreshNoteFor(payload.accountId);
     void loadAccounts(true);
     // Noted BEFORE the mailbox read, so it rides in the same patch as the rows it promotes.
-    noteArrival(payload.accountId, payload.mailboxId, payload.added);
+    noteArrival(payload.accountId, payload.mailboxId, arrivalCount(payload));
     if (payload.accountId) void loadMailboxesFor(payload.accountId, true);
-    if (eventIsForPageOnScreen(payload.accountId, payload.mailboxId)) void loadMailMessages(true);
+    if (eventIsForPageOnScreen(payload.accountId, payload.mailboxId)) reloadListOnScreen(() => { void loadMailMessages(true); });
   }
 }
 

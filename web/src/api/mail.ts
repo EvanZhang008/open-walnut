@@ -193,6 +193,10 @@ export interface MailMessageDto {
    * `done`/`attempt` are derived per read from its own ledger, so a stale `done` is impossible.
    */
   unsubscribe?: MailUnsubscribeDto;
+  /** Where inbox sorting put this mail. Only on a page asked for with `group`. */
+  sort?: { group: string; label?: string; reason: string; why: string; ruleId?: string };
+  /** The sender key the group view files this mail under. Only with `group`. */
+  senderKey?: string;
 }
 
 export type MailUnsubscribeAvailability = 'one-click' | 'mailto' | 'link' | 'none';
@@ -383,6 +387,10 @@ export function listMailMessages(query: {
   scope?: 'role:inbox' | 'role:sent' | 'role:drafts';
   /** A human pressed Refresh: the server's unread check for this page skips its one-minute clock. */
   fresh?: boolean;
+  /** Only this sort group (`important` includes mail not sorted yet). Adds `sort` to each DTO. */
+  group?: string;
+  /** With `group`: only this sender key. */
+  sender?: string;
 }): Promise<MailMessagePage> {
   const params: Record<string, string> = {};
   if (query.accountId) params.account = query.accountId;
@@ -392,6 +400,8 @@ export function listMailMessages(query: {
   if (query.unread) params.unread = '1';
   if (query.scope) params.scope = query.scope;
   if (query.fresh) params.fresh = '1';
+  if (query.group) params.group = query.group;
+  if (query.group && query.sender) params.sender = query.sender;
   return apiGet(`${BASE}/messages`, params, QUIET);
 }
 

@@ -38,6 +38,8 @@ import { useMailRowContextMenu, type MailRowMenuHandle } from './MailRowContextM
 import { MailDraftsList } from './compose/MailDraftsList';
 import { GroupHeader, MailSmartDraftsSections } from './MailSmartDraftsSections';
 import { BackIcon, SearchIcon } from './mail-icons';
+import { MailGroupedList, MailGroupsFallback, useGroupedMode } from './MailGroupedList';
+import { MailViewMenu } from './MailGroupedHeader';
 
 interface Props {
   snapshot: MailSnapshot;
@@ -57,6 +59,9 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
     subscribeUnreadOnly,
     () => readUnreadOnly(accountId, mailboxId),
   );
+  // Grouped inbox (spec 8): only an inbox or All Inboxes with the switch on and no search running.
+  const groupedMode = useGroupedMode(snapshot);
+  const grouped = groupedMode?.on && !groupedMode.failed ? groupedMode : null;
   // Switching mailbox drops the search MODE in the store, so leaving the words in the box would
   // show a query next to results that are not its results. The unread filter is REMEMBERED per
   // mailbox instead of dropped.
@@ -150,7 +155,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
   // loaded here are unread" above its first row (one live provider reports unread on its Sent folder, so
   // suppressing this at zero alone did not answer it). NOT at zero either: the chip that states the mailbox
   // rows' number is suppressed there, so there is no second number on screen to reconcile.
-  const unreadGap = !!section && !draftsView && !outbound && !search.active && !filtering
+  const unreadGap = !!section && !draftsView && !outbound && !search.active && !filtering && !grouped
     && section.unread > 0 && section.unread !== unreadOnScreen;
   // One account of a merged list has stopped polling: its cached mail is still listed (it is real), and
   // the row's warning dot marks it, but a dot is not a sentence.
@@ -194,6 +199,9 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
         )}
       </div>
 
+      {grouped ? (
+        <MailGroupedList snapshot={snapshot} scope={grouped.scope} menu={menu} name={section?.name ?? ''} />
+      ) : <>
       {search.active && (
         <p className="mail-search-meta" data-testid="mail-search-meta">
           {search.loading ? 'Searching…' : (
@@ -251,8 +259,11 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
               {unreadChipLabel(formatCount(section.unread), unreadOnly)}
             </button>
           )}
+          {/* An inbox in All mail mode: the way back to Grouped, on the same line as the grouped header's. */}
+          {groupedMode && <MailViewMenu grouped={false} warn={groupedMode.failed} />}
         </p>
       )}
+      {groupedMode && <MailGroupsFallback mode={groupedMode} />}
 
       {/* The pane's own state lines, which are NOT answers to a gesture: they belong to the list and
           stay in the flow. */}
@@ -332,12 +343,13 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
           />
         ))}
       </div>
+      </>}
       {/* A SIBLING of the rows, never inside one: the menu portals to <body> for stacking, but React
           events still bubble through the owning tree, so a press inside it would reach the row's own
           click handler and open the message this menu exists to leave closed. */}
       {menu.node}
 
-      {!search.active && snapshot.nextBefore !== null && rows.length > 0 && (
+      {!grouped && !search.active && snapshot.nextBefore !== null && rows.length > 0 && (
         <button
           type="button"
           className="mail-load-older"

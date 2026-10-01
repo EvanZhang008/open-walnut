@@ -180,10 +180,23 @@ describe('the optimistic read flip has one home', () => {
   });
 
   it('applySeen and the SEEN flag are only patched in mail-read-flag.ts', () => {
+    // The grouped inbox keeps its own copies of rows (mail-groups-store.ts); it patches their flags
+    // only when mail-read-flag.ts tells it to, which the next case pins.
     const found = mailSources()
       .filter(({ file }) => file !== 'mail-read-flag.ts' && file !== 'mail-store.ts' && file !== 'mail-format.ts')
+      .filter(({ file }) => file !== 'mail-groups-store.ts')
       .flatMap(({ file, text }) => hits(file, text, /applySeen|flags:\s*\[/));
     expect(found).toEqual([]);
+  });
+
+  it('the grouped rows flip only when mail-read-flag.ts says so, or after a bulk job the server finished', () => {
+    const callers = (name: string) => mailSources()
+      .filter(({ file }) => file !== 'mail-groups-store.ts')
+      .filter(({ text }) => new RegExp(`\\b${name}\\(`).test(text))
+      .map(({ file }) => file);
+    expect(callers('applySeenToGroupedRows')).toEqual(['mail-read-flag.ts']);
+    expect(callers('replaceGroupedRow')).toEqual(['mail-read-flag.ts']);
+    expect(callers('restyleRows')).toEqual(['mail-bulk-read.ts']);
   });
 });
 

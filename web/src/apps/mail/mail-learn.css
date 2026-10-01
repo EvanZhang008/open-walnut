@@ -1,0 +1,143 @@
+/* The correction card and the group cards. Tokens only, no fixed colours. */
+
+.mail-correct {
+  width: min(360px, calc(100vw - 24px));
+  box-sizing: border-box;
+  overflow-y: auto;
+  background: var(--card-bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow-hover);
+  padding: 12px;
+  font-size: 13px;
+}
+
+.mail-correct-step { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.mail-correct-title { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.mail-correct-choices { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+.mail-correct-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 24px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-width: 0;
+}
+.mail-correct-choice:hover { background: var(--accent-subtle); }
+.mail-correct-choice input[type='radio'] { margin: 3px 0 0; flex-shrink: 0; accent-color: var(--accent); }
+.mail-correct-choice-label,
+.mail-correct-summary { min-width: 0; overflow-wrap: anywhere; }
+
+.mail-correct-new-group { padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
+.mail-correct-input,
+.mail-correct-why {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+}
+.mail-correct-why { resize: vertical; min-height: 44px; }
+.mail-correct-why-label { color: var(--fg-secondary); margin-top: 4px; }
+.mail-correct-counter { align-self: flex-end; color: var(--fg-muted); font-size: 12px; }
+.mail-correct-field-error { margin: 0; color: var(--error); overflow-wrap: anywhere; }
+.mail-correct-loading { margin: 0; color: var(--fg-muted); }
+
+.mail-correct-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.mail-correct-actions .btn { min-height: 24px; }
+
+.mail-correct-link {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  min-height: 24px;
+  font: inherit;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+.mail-correct-link:hover { text-decoration: underline; }
+.mail-correct-link:disabled { color: var(--fg-muted); cursor: default; text-decoration: none; }
+
+.mail-correct :focus-visible,
+.mail-learn-dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.mail-correct-option { display: flex; flex-direction: column; gap: 0; min-width: 0; }
+.mail-correct-matches {
+  padding-left: 28px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.mail-correct-moves-bold { font-weight: 700; color: var(--fg); }
+.mail-correct-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+  font-size: 11px;
+  line-height: 16px;
+  vertical-align: 1px;
+}
+
+/* The model's cell is reserved at two lines (summary + matches) so nothing under it moves (C81). */
+.mail-correct-model-cell { min-height: 44px; display: flex; flex-direction: column; justify-content: flex-start; }
+.mail-correct-model-wait,
+.mail-correct-model-failed {
+  margin: 0;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 2px 4px 2px 28px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.mail-correct-model-wait { display: flex; align-items: flex-start; gap: 6px; padding-left: 8px; }
+.mail-correct-spinner {
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  flex-shrink: 0;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: mail-correct-spin 0.9s linear infinite;
+}
+@keyframes mail-correct-spin { to { transform: rotate(360deg); } }
+
+.mail-correct-sample-list {
+  list-style: none;
+  margin: 2px 0 4px 28px;
+  padding: 4px 6px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.mail-correct-sample { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.mail-correct-sample-sender { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-correct-sample-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-correct-sample-meta { color: var(--fg-muted); }
+.mail-correct-shadow { margin: 0; padding-left: 28px; font-size: 12px; color: var(--fg-secondary); overflow-wrap: anywhere; }
+.mail-correct-recipients { margin: 0; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mail-correct-spinner { animation: none; }
+}

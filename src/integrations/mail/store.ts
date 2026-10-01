@@ -1,4 +1,7 @@
 import { MESSAGE_COLUMNS, type MailDatabase, type MailDbStatus } from './db.js'
+import { MailSortStore } from './sort-store.js'
+import { MailSummaryStore } from './sort-store-summary.js'
+import { MailMoveStore } from './store-moves.js'
 import { MailTaskStore } from './store-tasks.js'
 import { MailWriteStore } from './store-write.js'
 
@@ -59,6 +62,13 @@ export interface MessageRow extends Record<string, unknown> {
   envelope_hash: string | null
   /** A ProviderErrorCode when this body can never be fetched, else null. See SCHEMA_V3. */
   body_error: string | null
+  /** Inbox sorting (SCHEMA_V9). NULL until classified; a NULL group reads as Important. */
+  sort_group?: string | null
+  sort_reason?: string | null
+  sender_key?: string | null
+  /** The display label of the row's group and the model's reason (SCHEMA_V10). */
+  sort_label?: string | null
+  ai_why?: string | null
 }
 
 /** What one batched "do I already have these?" lookup answers per message. */
@@ -91,6 +101,11 @@ export interface MessageWrite {
   attachmentsJson: string
   payload: string
   envelopeHash: string
+  /**
+   * The sort verdict, written in the SAME statement as the envelope so a new mail is in its group
+   * from the first frame. Absent (no engine) leaves the columns NULL for the recompute to fill.
+   */
+  sort?: { group: string; reason: string; rev: string; senderKey: string; label: string }
 }
 
 export interface DraftRow extends Record<string, unknown> {
@@ -236,9 +251,21 @@ export class MailStore {
    */
   readonly tasks: MailTaskStore
 
+  /** Inbox sorting's queries (group counts, senders, bulk selection), in sort-store.ts. */
+  readonly sort: MailSortStore
+
+  /** Each group's one-line summary: the unread sets, the newest mails, the stored lines. */
+  readonly summaries: MailSummaryStore
+
+  /** The ledger of mail a "keep out of the inbox" rule moved, in store-moves.ts. */
+  readonly moves: MailMoveStore
+
   constructor(private readonly db: MailDatabase) {
     this.write = new MailWriteStore(db)
     this.tasks = new MailTaskStore(db)
+    this.sort = new MailSortStore(db)
+    this.summaries = new MailSummaryStore(db)
+    this.moves = new MailMoveStore(db)
   }
 
   get status(): MailDbStatus {
@@ -354,7 +381,12 @@ export class MailStore {
     )
   }
 
-  /** Never touches `cursor` or `last_sync_at`: a mailbox re-list must not void a cursor. */
+  /**
+   * Never touches `cursor` or `last_sync_at`: a mailbox re-list must not void a cursor.
+   * Only for an account that still has its mirror row, checked in the same statement: a folder list
+   * that was in flight when the human deleted the account would otherwise leave folder rows that
+   * nothing iterates (retention walks accounts) and that a re-added account would inherit.
+   */
   async upsertMailbox(row: {
     accountId: string
     mailboxId: string
@@ -365,10 +397,10 @@ export class MailStore {
   }): Promise<void> {
     await this.db.run(
       'INSERT INTO mailboxes (account_id, mailbox_id, name, role, unread, total)'
-      + ' VALUES (?, ?, ?, ?, ?, ?)'
+      + ' SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM accounts WHERE account_id = ?)'
       + ' ON CONFLICT(account_id, mailbox_id) DO UPDATE SET name = excluded.name,'
       + ' role = excluded.role, unread = excluded.unread, total = excluded.total',
-      [row.accountId, row.mailboxId, row.name, row.role, row.unread, row.total],
+      [row.accountId, row.mailboxId, row.name, row.role, row.unread, row.total, row.accountId],
     )
   }
 
@@ -451,13 +483,15 @@ export class MailStore {
     const result = await this.db.run(
       'INSERT INTO messages (account_id, message_id, rfc_message_id, mailbox_id, thread_id,'
       + ' from_addr, subject, snippet, sent_at, received_at, flags_json, attachments_json,'
-      + ' payload, updated_at, envelope_hash, seen)'
-      + ` VALUES (${placeholders(16)})`,
+      + ' payload, updated_at, envelope_hash, seen, sort_group, sort_reason, sort_rev, sender_key, sort_label)'
+      + ` VALUES (${placeholders(21)})`,
       [
         write.accountId, write.messageId, write.rfcMessageId, write.mailboxId, write.threadId,
         write.fromAddr, write.subject, write.snippet, write.sentAt, write.receivedAt,
         write.flagsJson, write.attachmentsJson, write.payload, now, write.envelopeHash,
         seenOf(write.flagsJson),
+        write.sort?.group ?? null, write.sort?.reason ?? null, write.sort?.rev ?? null, write.sort?.senderKey ?? null,
+        write.sort?.label ?? null,
       ],
     )
     return Number(result.lastInsertRowid)
@@ -467,11 +501,15 @@ export class MailStore {
     await this.db.run(
       'UPDATE messages SET rfc_message_id = ?, mailbox_id = ?, thread_id = ?, from_addr = ?,'
       + ' subject = ?, snippet = ?, sent_at = ?, received_at = ?, flags_json = ?, seen = ?,'
-      + ' attachments_json = ?, payload = ?, updated_at = ?, envelope_hash = ? WHERE rowid = ?',
+      + ' attachments_json = ?, payload = ?, updated_at = ?, envelope_hash = ?'
+      + (write.sort ? ', sort_group = ?, sort_reason = ?, sort_rev = ?, sender_key = ?, sort_label = ?' : '')
+      + ' WHERE rowid = ?',
       [
         write.rfcMessageId, write.mailboxId, write.threadId, write.fromAddr, write.subject,
         write.snippet, write.sentAt, write.receivedAt, write.flagsJson, seenOf(write.flagsJson),
-        write.attachmentsJson, write.payload, now, write.envelopeHash, rowid,
+        write.attachmentsJson, write.payload, now, write.envelopeHash,
+        ...(write.sort ? [write.sort.group, write.sort.reason, write.sort.rev, write.sort.senderKey, write.sort.label] : []),
+        rowid,
       ],
     )
   }
@@ -504,6 +542,10 @@ export class MailStore {
      * no rows: falling through to "no filter" would answer the unified inbox with every folder.
      */
     pairs?: Array<{ accountId: string; mailboxId: string }>
+    /** A sort group. `important` includes rows not classified yet (NULL-safe, see SCHEMA_V9). */
+    group?: string
+    /** With `group`: one sender key. */
+    sender?: string
   }): Promise<MessageRow[]> {
     if (query.pairs && query.pairs.length === 0) return Promise.resolve([])
     const where: string[] = []
@@ -522,6 +564,11 @@ export class MailStore {
     // Ahead of the cursor so the three equality terms sit together and `messages_by_unread` can
     // serve the seek: account, mailbox, seen, then the range on sent_at.
     if (query.unread) where.push('seen = 0')
+    if (query.group) {
+      if (query.group === 'important') where.push("(sort_group = 'important' OR sort_group IS NULL)")
+      else { where.push('sort_group = ?'); params.push(query.group) }
+      if (query.sender) { where.push('sender_key = ?'); params.push(query.sender) }
+    }
     if (query.before) {
       // The third layer exists only when the token carries an account, so a two-segment cursor (and
       // the legacy bare number) compares exactly the two fields it always did.
@@ -565,6 +612,16 @@ export class MailStore {
       `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE account_id = ? AND thread_id = ?`
       + ' ORDER BY sent_at ASC, message_id ASC LIMIT ?',
       [accountId, threadId, limit],
+    )
+  }
+
+  /** Many rows of one account in ONE query (bulk read). Missing ids are simply absent. */
+  messagesByIds(accountId: string, messageIds: ReadonlyArray<string>): Promise<MessageRow[]> {
+    if (messageIds.length === 0) return Promise.resolve([])
+    return this.db.all<MessageRow>(
+      `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE account_id = ?`
+      + ' AND message_id IN (SELECT value FROM json_each(?))',
+      [accountId, JSON.stringify(messageIds)],
     )
   }
 

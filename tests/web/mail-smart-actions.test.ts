@@ -41,6 +41,7 @@ import {
   patch,
 } from '../../web/src/apps/mail/mail-store';
 import { readUnreadOnly } from '../../web/src/apps/mail/mail-unread-filter';
+import { GROUPED_PREF_KEY, resetGroupedPrefForTests } from '../../web/src/apps/mail/mail-grouped-pref';
 
 /** Two accounts whose inbox ids differ for the same role, which is the whole reason for pairs. */
 const A = 'fake:one';
@@ -141,6 +142,7 @@ beforeEach(() => {
     let body: unknown = null;
     if (typeof init?.body === 'string') body = JSON.parse(init.body);
     calls.push({ url, method, body });
+    if (url.includes('/mail/groups/pref')) return json({ on: false });
     if (url.includes('/mail/mailboxes/fetch')) return json({ ok: true, fetched: true, added: 1 });
     if (url.includes('/mail/messages')) {
       const params = query(url);
@@ -166,7 +168,11 @@ beforeEach(() => {
     if (url.includes('/mail/drafts')) return json({ drafts: [] });
     return json({ error: 'not-found', message: url }, 404);
   }));
-  installStorage();
+  // These cases grade the ordinary merged list. With grouping on (the default) an inbox draws the
+  // grouped list instead, which refreshes itself and counts only Important arrivals, so the switch is
+  // set to All mail here, as a person who reads that list has it.
+  installStorage().set(GROUPED_PREF_KEY, JSON.stringify({ on: false }));
+  resetGroupedPrefForTests();
   // Seeded rather than fetched: these cases grade what the actions do with the rows, not the boot
   // sequence that reads them.
   patch({

@@ -15,7 +15,14 @@ import type { MailDigest } from './digest.js'
 import type { MailDrafts } from './drafts.js'
 import type { MailMessageTasks } from './message-tasks.js'
 import type { MailProviderRegistry } from './provider-registry.js'
+import type { MailEvents } from './events.js'
+import type { MailFilterMover } from './mail-filter-moves.js'
+import { registerMailSortRoutes } from './routes-sort.js'
+import { registerMailSortRulesRoutes } from './routes-sort-rules.js'
+import { registerMailSortWriteRoutes } from './routes-sort-write.js'
 import { registerMailWriteRoutes } from './routes-write.js'
+import { isGroupIdShape } from './sort-classify.js'
+import type { MailSortEngine } from './sort-engine.js'
 import { messageScopeValues, parseMessageScope } from './scope.js'
 import type { MailSends } from './sends.js'
 import type { MailService } from './service.js'
@@ -142,6 +149,9 @@ export function registerMailRoutes(
     messageTasks: MailMessageTasks
     digest: MailDigest
     unsubscribe: MailUnsubscribe
+    sort: MailSortEngine
+    events: MailEvents
+    filters?: MailFilterMover
   },
 ): void {
   const {
@@ -355,9 +365,21 @@ export function registerMailRoutes(
         json: { error: 'invalid', message: 'scope covers every account; do not also pass account' },
       }
     }
+    // Inbox sorting's two filters. `sender` means nothing without `group`, so alone it is refused
+    // rather than ignored (a page that silently dropped it would look like the whole group).
+    const group = firstQuery(request.query.group)
+    const sender = firstQuery(request.query.sender)
+    if (group !== undefined && !isGroupIdShape(group)) {
+      return { status: 400, json: { error: 'invalid', message: 'group must be a group id' } }
+    }
+    if (sender !== undefined && group === undefined) {
+      return { status: 400, json: { error: 'invalid', message: 'sender needs group' } }
+    }
     try {
       return {
         json: await service.listMessages({
+          ...(group ? { group } : {}),
+          ...(group && sender ? { sender } : {}),
           ...(account ? { accountId: account } : {}),
           ...(firstQuery(request.query.mailbox) ? { mailboxId: firstQuery(request.query.mailbox)! } : {}),
           limit: intQuery(request.query.limit, DEFAULT_PAGE, MAX_PAGE),
@@ -464,6 +486,13 @@ export function registerMailRoutes(
   })
 
   registerMailWriteRoutes(walnut, { service, drafts, approvals, sends, unsubscribe })
+  // Inbox sorting: reads (groups, senders, rules) and writes (bulk read, batch unsubscribe, rules).
+  registerMailSortRoutes(walnut, { store, sort: deps.sort, providers, ...(deps.filters ? { filters: deps.filters } : {}) })
+  registerMailSortRulesRoutes(walnut, { store, sort: deps.sort })
+  registerMailSortWriteRoutes(walnut, {
+    walnut, store, service, providers, unsubscribe, events: deps.events, sort: deps.sort,
+    ...(deps.filters ? { filters: deps.filters } : {}),
+  })
 
   walnut.http.route('get', '/health', async () => {
     if (primaryOnly()) return PRIMARY_ONLY

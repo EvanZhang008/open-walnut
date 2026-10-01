@@ -100,6 +100,11 @@ export interface ImapClient {
   messageFlagsAdd(range: string, flags: string[], options?: unknown): Promise<boolean>
   messageFlagsRemove(range: string, flags: string[], options?: unknown): Promise<boolean>
   /**
+   * `UID SEARCH`. Optional in this structural slice because only the Gmail category hint uses it
+   * (`{ gmraw: 'category:promotions' }` is imapflow's `X-GM-RAW`). Read only: it never changes a flag.
+   */
+  search?(query: unknown, options?: unknown): Promise<number[] | false>
+  /**
    * Put a message INTO a mailbox. The only write this provider makes that is not a flag.
    *
    * Used for the Sent copy: SMTP delivers the message and says nothing to IMAP, so unless the
@@ -107,6 +112,12 @@ export interface ImapClient {
    * bytes. `date` is the message's own Date header, so the copy sorts where the human expects.
    */
   append(path: string, content: Buffer | string, flags?: string[], date?: Date): Promise<unknown>
+  /**
+   * `UID MOVE`. Optional in this structural slice: only a "keep out of the inbox" rule moves mail,
+   * into the archive folder. Resolves false when the server refuses. The caller checks the MOVE
+   * capability first, because imapflow's COPY + EXPUNGE fallback is not safe (provider.ts).
+   */
+  messageMove?(range: string, destination: string, options?: unknown): Promise<unknown>
   on(event: string, listener: (payload: unknown) => void): unknown
   removeAllListeners?(event?: string): unknown
 }
@@ -235,7 +246,7 @@ function withDeadline<T>(work: Promise<T>, ms: number, what: string): Promise<T>
   })
 }
 
-function hasCapability(client: ImapClient, name: string): boolean {
+export function hasCapability(client: ImapClient, name: string): boolean {
   const capabilities = client.capabilities
   if (!capabilities) return false
   const wanted = name.toUpperCase()

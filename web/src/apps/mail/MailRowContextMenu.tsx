@@ -38,6 +38,7 @@ import { finishUnsubscribePreset, MAIL_ASK_PRESETS } from './mail-ask';
 import { unsubscribeFromMessage } from './mail-unsubscribe-actions';
 import { unsubscribeHandsOverToAsk } from './mail-unsubscribe-state';
 import { bodyQuoteText } from './mail-quote-text';
+import { groupedRowOf } from './mail-groups-store';
 
 /** The row a right-click landed on. The PAIR, because that is a message's identity. */
 export interface MailRowMenuTarget {
@@ -256,9 +257,12 @@ function readFailed(row: MailMessageDto, text: string | null): boolean {
   return !!note && note.pair === pairKey(row.accountId, row.messageId);
 }
 
-/** The row the snapshot holds for that pair, from the page or from the search results. */
+/**
+ * The row for that pair: from the grouped inbox's pages first (only those carry `sort`, which the two
+ * corrections need), then the page, then the search results.
+ */
 function liveRow(snapshot: MailSnapshot, target: MailRowMenuTarget): MailMessageDto | null {
   const matches = (one: MailMessageDto) =>
     one.accountId === target.accountId && one.messageId === target.messageId;
-  return snapshot.messages.find(matches) ?? snapshot.search.messages.find(matches) ?? null;
+  return groupedRowOf(target) ?? snapshot.messages.find(matches) ?? snapshot.search.messages.find(matches) ?? null;
 }

@@ -366,7 +366,9 @@ describe('the one place that writes a read flag (C21)', () => {
       // brace or a comma.
       return /[{,]\s*flags:|\.flags\s*=[^=]|\.flags\.(push|splice|pop|shift)/.test(source);
     });
-    expect(writers).toEqual([`${MAIL_DIR}/mail-read-flag.ts`]);
+    // `withFlags` is the grouped pages' one row-copy helper; its callers are pinned in
+    // mail-context-ratchet.test.ts (only mail-read-flag.ts, or a bulk job the server finished).
+    expect([...writers].sort()).toEqual([`${MAIL_DIR}/mail-groups-pages.ts`, `${MAIL_DIR}/mail-read-flag.ts`]);
   });
 });
 

@@ -25,6 +25,7 @@ import { isUnread, rowRecipientLabel, senderLabel } from './mail-format';
 import { mayOfferMarkRead } from './mail-providers';
 import { unsubscribeIsDirect, unsubscribeRowState } from './mail-unsubscribe-state';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
+import { groupsViewKey, requestMailCorrect } from './mail-groups-bus';
 
 /** What the menu's items call. The row is passed back so a handler never has to find it again. */
 export interface MessageMenuActions {
@@ -219,6 +220,41 @@ export function mailRowLink(accountId: string, messageId: string, origin: string
   return new URL(`/mail?${query.toString()}`, origin).toString();
 }
 
+/** The row menu's two corrections, exported for the specs that click them. */
+export const NOT_IMPORTANT_ITEM = 'Not important…';
+export const IMPORTANT_ITEM = 'Important…';
+
+/**
+ * Opens the correction card for a grouped row with `preset` picked, anchored on the row itself (the
+ * menu is gone by then). Returns false when the row is not on screen, so there is nothing to anchor on.
+ */
+export function openMailCorrection(
+  message: MailMessageDto,
+  merged: boolean,
+  preset: 'important' | 'not-important',
+  root: Pick<Document, 'querySelector'> | null = typeof document === 'undefined' ? null : document,
+): boolean {
+  if (!message.sort || !root) return false;
+  const esc = (value: string) => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, '\\$&'));
+  const row = root.querySelector(
+    `[data-testid="mail-row"][data-account-id="${esc(message.accountId)}"][data-message-id="${esc(message.messageId)}"]`,
+  ) as HTMLElement | null;
+  if (!row) return false;
+  const scope = merged ? { role: 'inbox' as const } : { accountId: message.accountId, mailboxId: message.mailboxId };
+  requestMailCorrect({
+    accountId: message.accountId,
+    messageId: message.messageId,
+    groupId: message.sort.group,
+    ...(message.sort.label ? { groupLabel: message.sort.label } : {}),
+    scope,
+    viewKey: groupsViewKey(scope),
+    anchor: row,
+    returnFocus: row,
+    preset,
+  });
+  return true;
+}
+
 /**
  * The message row's menu, top to bottom.
  *
@@ -352,6 +388,14 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
       when: !draftsView && !!address,
       label: 'Find mail from this sender',
       onSelect: () => actions.onSearchSender(address),
+    },
+    {
+      // Only on a row of a grouped list (the page was asked for with `group`, so `sort` is set). The
+      // one that says the opposite of where the mail is now; the card itself offers every group.
+      key: 'correct-group',
+      when: !!message.sort && !outbound && !draftsView,
+      label: message.sort?.group === 'important' ? NOT_IMPORTANT_ITEM : IMPORTANT_ITEM,
+      onSelect: () => { openMailCorrection(message, merged, message.sort?.group === 'important' ? 'not-important' : 'important'); },
     },
     {
       key: 'copy-link',

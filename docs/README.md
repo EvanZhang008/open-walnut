@@ -86,4 +86,6 @@ must live under one of these top-level categories instead of directly under
   NEW session every run, with notes as the memory that carries across runs
 - [Leaving a mailing list](plan/mail-unsubscribe.md) - the unsubscribe ladder,
   its SSRF guard and its ledger
+- [The grouped inbox](plan/mail-grouping.md) - who decides where mail goes, the
+  line under each group, and Keep out of Inbox (Walnut moves the mail, no server rule)
 - [Memory v2 plan](plan/validated-snacking-ocean.md)

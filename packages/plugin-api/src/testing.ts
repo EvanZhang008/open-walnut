@@ -576,6 +576,11 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       command: () => disposable(),
       skill: () => disposable(),
     },
+    // Throws by default: a plugin test must never reach a real model, so one that needs an
+    // answer passes `overrides.model` with its own canned `fastText`.
+    model: {
+      fastText: async () => { throw new Error('model.fastText is not available in the fake plugin api') },
+    },
     unsafe: { database: undefined, bus: undefined, walnutHome: '/tmp/fake-walnut', host: undefined },
     ...options.overrides,
   }
