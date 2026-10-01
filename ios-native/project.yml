@@ -18,7 +18,16 @@ targets:
     type: application
     platform: iOS
     sources:
-      - Walnut
+      - path: Walnut
+        excludes:
+          - Support/PrivacyInfo.xcprivacy
+      # The privacy manifest ships in the app bundle (App Store requirement):
+      # no tracking, no collected data, and a reason for each required-reason
+      # API the app calls (UserDefaults CA92.1, file timestamps C617.1 for the
+      # app's own caches and recordings, uptime clock 35F9.1 for the freeze
+      # watchdog).
+      - path: Walnut/Support/PrivacyInfo.xcprivacy
+        buildPhase: resources
     # Hosted unit tests: `xcodebuild test -scheme Walnut` runs WalnutTests
     # (correctness + rendering-perf regression gates) on a simulator.
     scheme:
@@ -39,12 +48,15 @@ targets:
         # cloud servers are HTTPS and unaffected.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        # QR pairing (setup screen scans the wn://pair code) + note photo
-        # attachments (editor photo menu → Take Photo).
-        NSCameraUsageDescription: Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to notes.
+        # QR pairing (setup screen scans the wn://pair code) + photo attachments:
+        # the chat composer's camera button and the note editor's Take Photo.
+        NSCameraUsageDescription: Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to chats and notes.
         # Voice input: the composer mic button records speech and transcribes
         # it to text on your Walnut server.
-        NSMicrophoneUsageDescription: Walnut uses the microphone for voice input — speech is transcribed to text by your own Walnut server.
+        NSMicrophoneUsageDescription: Walnut uses the microphone for voice input. Your speech is turned into text by your own Walnut server.
+        # Pairing with a Walnut server on the same Wi-Fi (an http://192.168.x.x
+        # or .local address) is local network access, which iOS asks about.
+        NSLocalNetworkUsageDescription: Walnut connects to the Walnut server you run on your local network.
         # Tasks-tab calendar view: device calendar events render read-only in
         # the day agenda next to your Walnut tasks. Read access only; nothing
         # is written to your calendars. (Deployment target is iOS 18, so only

@@ -773,11 +773,11 @@ enum APIError: Error, LocalizedError {
                code == NSURLErrorSecureConnectionFailed
                 || code == NSURLErrorTimedOut
                 || code == NSURLErrorNetworkConnectionLost {
-                return "Network hiccup — we retried automatically but it didn't go through. Please try again."
+                return "Network hiccup. We retried automatically but it didn't go through. Please try again."
             }
             return underlying.localizedDescription
-        case .unauthorized: return "Unauthorized — check your device token"
-        case .rateLimited: return "Too many requests — try again in a moment"
+        case .unauthorized: return "Unauthorized. Check your device token."
+        case .rateLimited: return "Too many requests. Try again in a moment."
         case .server(_, _, let message, _, _): return message
         case .badResponse: return "Unexpected server response"
         }

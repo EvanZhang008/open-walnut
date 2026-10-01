@@ -5,11 +5,15 @@ import UIKit
 /// layering. Colors adapt to light/dark automatically via dynamic providers.
 enum Theme {
     /// Primary walnut-brown tint (light #8B5A2B / dark #C99659).
-    static let tint = Color(dynamic: UIColor(light: 0x8B5A2B, dark: 0xC99659))
+    static let tint = Color(dynamic: tintColor)
     /// Text/icon color drawn on top of the tint.
     static let onTint = Color(dynamic: UIColor(light: 0xFFFFFF, dark: 0x1C1207))
     /// Soft tinted fill for chips, hero icons, selected rows.
-    static let tintSoft = Color(dynamic: UIColor(light: 0xF4ECE3, dark: 0x2E2418))
+    static let tintSoft = Color(dynamic: tintSoftColor)
+    /// The two above as UIKit colours, so a test can resolve a scheme and measure
+    /// the contrast of text drawn in one over the other.
+    static let tintColor = UIColor(light: 0x8B5A2B, dark: 0xC99659)
+    static let tintSoftColor = UIColor(light: 0xF4ECE3, dark: 0x2E2418)
 
     static let success = Color(dynamic: UIColor(light: 0x34C759, dark: 0x30D158))
     static let warning = Color(dynamic: UIColor(light: 0xFF9F0A, dark: 0xFFD60A))

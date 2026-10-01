@@ -138,7 +138,7 @@ struct TaskDetailSheet: View {
     static func friendlyEditError(_ error: Error) -> String {
         guard let apiError = error as? APIError else { return error.localizedDescription }
         switch apiError.code {
-        case "conflict": return "Couldn't save — this task is managed by a sync source. \(apiError.localizedDescription)"
+        case "conflict": return "Couldn't save: this task is managed by a sync source. \(apiError.localizedDescription)"
         case "not_found": return "This task no longer exists on the server."
         default: return apiError.localizedDescription
         }

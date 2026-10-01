@@ -328,7 +328,7 @@ final class HTMLPreviewLoader {
         self.navigator = navigator
         navigator.loader = self
         webView.navigationDelegate = navigator
-        webView.load(Self.request(url: url, token: token, ignoringCache: false))
+        webView.walnutLoad(Self.request(url: url, token: token, ignoringCache: false))
         observeOffset()
     }
 
@@ -359,7 +359,7 @@ final class HTMLPreviewLoader {
         restoreAttempts = 0
         // Cache-busting matters: WebKit is entitled to keep the 404 (and its
         // body) and answer the retry from its own cache without a round trip.
-        webView.load(Self.request(url: url, token: token, ignoringCache: true))
+        webView.walnutLoad(Self.request(url: url, token: token, ignoringCache: true))
     }
 
     /// Keep the bank current. `.new` only (no `.initial`): the value the scroll

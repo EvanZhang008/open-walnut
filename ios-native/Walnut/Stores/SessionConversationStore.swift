@@ -222,8 +222,8 @@ final class SessionConversationStore {
 
     /// Notice shown under the composer when it can't send.
     var composerNotice: String? {
-        if offline { return "\(hostLabel) unreachable — read-only" }
-        if dead { return "Session can't be woken — reopen it from your desktop" }
+        if offline { return "\(hostLabel) unreachable, read-only" }
+        if dead { return "Session can't be woken. Reopen it from your desktop." }
         return nil
     }
 
@@ -960,7 +960,7 @@ final class SessionConversationStore {
         // this store talks to the session's host right now. A sticky offline
         // flag from an earlier bridge-offline must not survive it: nothing on
         // the primary stream ever cleared the flag, so the page stayed
-        // "unreachable — read-only" on a healthy session (2026-08-16 field
+        // "unreachable, read-only" on a healthy session (2026-08-16 field
         // report, plain claude session).
         if offline { offline = false }
         // Snapshot content is PROOF a turn ran — retire the pre-spawn wait
@@ -1055,7 +1055,7 @@ final class SessionConversationStore {
             // banner would be a lie there. Wording stays cause-neutral: the
             // phone can't distinguish bad-path from SSH failure from eviction.
             if awaitingFirstTurn && errorMessage == nil && historyMessages.isEmpty {
-                errorMessage = "The session ended before it could start — open it on your desktop to see why."
+                errorMessage = "The session ended before it could start. Open it on your desktop to see why."
             }
             awaitingFirstTurn = false
             setStreaming(false)

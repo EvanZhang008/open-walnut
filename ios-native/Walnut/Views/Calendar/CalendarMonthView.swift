@@ -294,7 +294,7 @@ struct CalendarAccessDeniedHint: View {
         HStack(spacing: 8) {
             Image(systemName: "calendar.badge.exclamationmark")
                 .foregroundStyle(.secondary)
-            Text("Calendar events hidden — allow access in Settings.")
+            Text("Calendar events hidden. Allow access in Settings.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()

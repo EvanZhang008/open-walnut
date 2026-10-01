@@ -298,7 +298,7 @@ final class SSEClient: @unchecked Sendable {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 3600
         config.timeoutIntervalForResource = 86_400
-        let session = URLSession(configuration: config)
+        let session = URLSession(configuration: DemoMode.configured(config))
         guard installSession(session, generation: streamGeneration) else {
             session.invalidateAndCancel()
             throw CancellationError()

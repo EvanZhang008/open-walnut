@@ -1113,7 +1113,7 @@ final class ChatStore {
     func retry(_ message: ChatMessage) async {
         guard message.failed == true else { return }
         guard !sending, !streaming else {
-            errorMessage = "Still replying — retry when the turn finishes."
+            errorMessage = "Still replying. Retry when the turn finishes."
             return
         }
         // Rebuild the attached images from the retained JPEG datas so retry
@@ -2200,7 +2200,7 @@ final class ChatStore {
             await refreshConversations()
             return nil
         } catch let error as APIError where error.isConflict {
-            return "The main conversation can't be deleted — it receives notifications and scheduled routines."
+            return "The main conversation can't be deleted: it receives notifications and scheduled routines."
         } catch {
             return error.localizedDescription
         }
@@ -2244,4 +2244,27 @@ final class ChatStore {
 extension ChatStore: LifecycleSuspendable {
     func suspendForBackground() { closeStream() }
     func resumeForForeground() { resumeStream() }
+}
+
+// MARK: - Disconnect: forget everything this store holds
+
+extension ChatStore {
+    /// Drop every conversation, message, banked send and attached image, so a
+    /// re-pair starts empty (`LocalDataReset`). Same file for the private state.
+    func eraseLocalState() {
+        closeStream()
+        _ = setQueue([])
+        conversations = []
+        activeID = nil
+        messages = []
+        hasOlder = false
+        agents = []
+        activeAgentID = Self.mainAgentID
+        localRowConversation.removeAll()
+        sentImages.removeAll()
+        liveTurnID = nil
+        stallNotice = nil
+        errorMessage = nil
+        pendingQuestion = false
+    }
 }

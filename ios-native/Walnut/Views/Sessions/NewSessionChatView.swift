@@ -337,7 +337,7 @@ struct NewSessionChatView: View {
         } catch let APIError.server(_, code, _, _, _) where code == "not_supported_cloud" {
             options = nil
             DiskCache.remove(key: Self.optionsCacheKey)
-            loadFailed = "This cloud companion is too old to create sessions — update it, or connect to your primary box directly."
+            loadFailed = "This cloud companion is too old to create sessions. Update it, or connect to your primary box directly."
         } catch {
             // Degrade, don't block: the picker still accepts a typed path.
             if options == nil {

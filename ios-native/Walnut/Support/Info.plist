@@ -30,9 +30,11 @@
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Walnut shows your calendar events alongside tasks in the calendar view. Events are read-only and never leave your device.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to notes.</string>
+	<string>Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to chats and notes.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Walnut connects to the Walnut server you run on your local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Walnut uses the microphone for voice input — speech is transcribed to text by your own Walnut server.</string>
+	<string>Walnut uses the microphone for voice input. Your speech is turned into text by your own Walnut server.</string>
 	<key>UIApplicationShortcutItems</key>
 	<array>
 		<dict>

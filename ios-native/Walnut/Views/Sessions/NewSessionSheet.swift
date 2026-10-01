@@ -38,10 +38,10 @@ struct NewSessionSheet: View {
             switch self {
             case .plan: return "Read-only: the agent proposes a plan first."
             case .default: return "Asks before anything sensitive."
-            case .dontAsk: return "Never prompts — denies whatever isn't pre-approved."
+            case .dontAsk: return "Never prompts. Denies whatever isn't pre-approved."
             case .accept: return "File edits are auto-accepted; commands still ask."
             case .auto: return "Classifies each action and auto-allows the safe ones."
-            case .bypass: return "Full autonomy — no permission prompts."
+            case .bypass: return "Full autonomy, no permission prompts."
             }
         }
     }
@@ -207,14 +207,14 @@ struct NewSessionSheet: View {
             Text("Working Path")
         } footer: {
             if suggestions.isEmpty && options != nil {
-                Text("No recent paths on this host yet — type one.")
+                Text("No recent paths on this host yet. Type one.")
             }
         }
     }
 
     private var messageSection: some View {
         Section {
-            TextField("Optional — leave empty to start idle", text: $message, axis: .vertical)
+            TextField("Optional. Leave empty to start idle", text: $message, axis: .vertical)
                 .lineLimit(3...6)
                 .accessibilityIdentifier("newSession.message")
         } header: {
@@ -344,7 +344,7 @@ struct NewSessionSheet: View {
             options = nil
             DiskCache.remove(key: Self.optionsCacheKey)
             startBlockedReason = nil
-            loadFailed = "This cloud companion is too old to create sessions — update it, or connect the app to your primary box directly."
+            loadFailed = "This cloud companion is too old to create sessions. Update it, or connect the app to your primary box directly."
         } catch let APIError.server(_, code, msg, _, _) where code == "session_launch_needs_upgrade" || code == "bridge_offline" {
             // Transient/self-healing cloud-relay states: the daemon upgrades
             // on the next primary reconnect / the bridge redials. Keep the
@@ -424,9 +424,9 @@ struct NewSessionSheet: View {
     static func createErrorMessage(code: String, serverMessage: String?) -> String {
         switch code {
         case "not_supported_cloud":
-            return "This cloud companion is too old to create sessions — update it, or connect directly to your primary box."
+            return "This cloud companion is too old to create sessions. Update it, or connect directly to your primary box."
         case "session_launch_needs_upgrade":
-            return "Your primary box's daemon needs an update for mobile session launch — it updates automatically on its next reconnect. Try again in a minute."
+            return "Your primary box's daemon needs an update for mobile session launch. It updates automatically on its next reconnect. Try again in a minute."
         case "bridge_offline":
             return BridgeOfflineCopy.message(serverMessage: serverMessage)
         default:

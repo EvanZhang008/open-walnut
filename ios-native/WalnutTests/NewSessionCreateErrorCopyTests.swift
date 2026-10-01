@@ -76,7 +76,7 @@ final class NewSessionCreateErrorCopyTests: XCTestCase {
     /// message must not change what they say.
     func testNotSupportedCloudIgnoresWhateverTheServerSaid() {
         let expected =
-            "This cloud companion is too old to create sessions — update it, or connect directly to your primary box."
+            "This cloud companion is too old to create sessions. Update it, or connect directly to your primary box."
         XCTAssertEqual(message("not_supported_cloud", "session launch not supported in cloud mode"), expected)
         XCTAssertEqual(message("not_supported_cloud", ""), expected)
         XCTAssertEqual(message("not_supported_cloud", nil), expected)
@@ -84,7 +84,7 @@ final class NewSessionCreateErrorCopyTests: XCTestCase {
 
     func testSessionLaunchNeedsUpgradeIgnoresWhateverTheServerSaid() {
         let expected =
-            "Your primary box's daemon needs an update for mobile session launch — it updates automatically on its next reconnect. Try again in a minute."
+            "Your primary box's daemon needs an update for mobile session launch. It updates automatically on its next reconnect. Try again in a minute."
         XCTAssertEqual(message("session_launch_needs_upgrade", "daemon capability session.launch missing"), expected)
         XCTAssertEqual(message("session_launch_needs_upgrade", ""), expected)
         XCTAssertEqual(message("session_launch_needs_upgrade", nil), expected)

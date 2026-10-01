@@ -379,7 +379,7 @@ struct FileReadFailure: Equatable {
             // "couldn't reach", which reads as a verdict about the request rather
             // than about the link between two machines — and the contract test
             // asks for the word for exactly that reason.
-            return "Walnut couldn't reach \(hostLabel) just now, so it can't say what is at that path. The host being unreachable does NOT mean the file is gone — try again once it is back."
+            return "Walnut couldn't reach \(hostLabel) just now, so it can't say what is at that path. The host being unreachable does NOT mean the file is gone. Try again once it is back."
         case .transportFailed:
             return "Your phone couldn't reach the Walnut server, so nothing has been said about this file yet. Try again when you're back online."
         case .notAuthorised:

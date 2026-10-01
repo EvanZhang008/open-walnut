@@ -284,13 +284,13 @@ struct RoutinesView: View {
         guard let apiError = error as? APIError else { return error.localizedDescription }
         switch apiError.code {
         case "session_control_needs_upgrade":
-            return "Your primary box is upgrading for mobile routines — try again in a minute."
+            return "Your primary box is upgrading for mobile routines. Try again in a minute."
         case "bridge_offline":
             return BridgeOfflineCopy.message(apiError)
         case "not_found":
             return "This routine no longer exists on the server."
         case "internal" where apiError.localizedDescription.contains("not running"):
-            return "The routines engine is still starting — try again in a moment."
+            return "The routines engine is still starting. Try again in a moment."
         default:
             return apiError.localizedDescription
         }

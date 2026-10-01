@@ -81,6 +81,8 @@ tests/MEMORY_V2_*_PLAN.md
 
 # Local demo assets (4K video, clips, thumbnails, launch kit) — large + local-only, never committed
 demo/
+# The iOS app's demo mode is source code, and macOS git matches `demo/` case-insensitively.
+!ios-native/Walnut/Demo/
 
 # Local-only maintainer scripts (sensitive-content scanners — contain private grep patterns, never commit)
 scripts/local/

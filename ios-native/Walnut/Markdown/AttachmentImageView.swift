@@ -74,7 +74,7 @@ private final class CappedDownloadDelegate: NSObject, URLSessionDataDelegate, @u
                     return
                 }
                 self.continuation = continuation
-                let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+                let session = URLSession(configuration: DemoMode.configured(.default), delegate: self, delegateQueue: nil)
                 self.session = session
                 let task = session.dataTask(with: request)
                 self.dataTask = task
@@ -531,5 +531,17 @@ struct ImageViewer: View {
                     withAnimation(.snappy) { dismissDrag = 0 }
                 }
             }
+    }
+}
+
+// MARK: - Disconnect
+
+extension AttachmentLoader {
+    /// Forget every downloaded picture, in memory and on disk (`LocalDataReset`).
+    func eraseAll() {
+        for task in inflight.values { task.cancel() }
+        inflight = [:]
+        memory.removeAllObjects()
+        try? FileManager.default.removeItem(at: diskDirectory)
     }
 }

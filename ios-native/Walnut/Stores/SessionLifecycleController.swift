@@ -119,7 +119,7 @@ final class SessionLifecycleController {
         await run {
             let result = try await self.api.restartSession(id: self.sessionId)
             self.confirmation = result.pendingMessages > 0
-                ? "Session restarted — \(result.pendingMessages) queued message(s) will re-deliver."
+                ? "Session restarted. \(result.pendingMessages) queued message(s) will re-deliver."
                 : "Session restarted."
             return true
         }
@@ -131,7 +131,7 @@ final class SessionLifecycleController {
         await run {
             let result = try await self.api.retrySession(id: self.sessionId)
             switch result.status {
-            case "reconnected": self.confirmation = "Reconnected — the process was still alive."
+            case "reconnected": self.confirmation = "Reconnected: the process was still alive."
             case "resuming": self.confirmation = "Resuming the session…"
             case "pending": self.confirmation = "A fresh session is starting on this task."
             default: self.confirmation = "Retry accepted."
@@ -227,11 +227,11 @@ final class SessionLifecycleController {
         guard let apiError = error as? APIError else { return error.localizedDescription }
         switch apiError.code {
         case "session_control_needs_upgrade":
-            return "Your primary box is upgrading for mobile session control — try again in a minute."
+            return "Your primary box is upgrading for mobile session control. Try again in a minute."
         case "bridge_offline":
             return BridgeOfflineCopy.message(apiError)
         case "cron_owner":
-            return "This session owns scheduled routines — force-terminate to kill it anyway."
+            return "This session owns scheduled routines. Force-terminate to stop it anyway."
         case "not_found":
             return "This session no longer exists on the server."
         default:

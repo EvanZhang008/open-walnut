@@ -267,7 +267,7 @@ enum CalendarChrome {
         if event.isAllDay { return "All day" }
         let start = event.start.formatted(date: .omitted, time: .shortened)
         let end = event.end.formatted(date: .omitted, time: .shortened)
-        return "\(start) – \(end)"
+        return "\(start) to \(end)"
     }
 }
 

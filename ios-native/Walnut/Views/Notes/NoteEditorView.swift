@@ -162,7 +162,7 @@ struct NoteDetailView: View {
                 draftConflict = nil
             }
         } message: {
-            Text("A draft from an interrupted save doesn't match the current server version — the note changed elsewhere too. Keeping the server version stores your draft for recovery.")
+            Text("A draft from an interrupted save doesn't match the current server version: the note changed elsewhere too. Keeping the server version stores your draft for recovery.")
         }
     }
 
@@ -171,7 +171,7 @@ struct NoteDetailView: View {
     private var editor: some View {
         VStack(spacing: 0) {
             if !connection.online {
-                OfflineBanner(text: "Offline — edits may not save")
+                OfflineBanner(text: "Offline: edits may not save")
             }
             WysiwygEditor(
                 attributedText: $attributedText,

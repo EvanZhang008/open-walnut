@@ -566,3 +566,20 @@ extension LetterReplyStore: LifecycleSuspendable {
     func suspendForBackground() { persistNow() }
     func resumeForForeground() {}
 }
+
+// MARK: - Disconnect
+
+extension LetterReplyStore {
+    /// Forget every draft and unsent reply, on disk too (`LocalDataReset`).
+    func eraseAll() {
+        drafts = [:]
+        draftTimes = [:]
+        pending = [:]
+        retryingTurns = []
+        responseDeliveries = [:]
+        turnRetryErrors = [:]
+        rechecking = []
+        unconfirmedTurns = []
+        defaults?.removeObject(forKey: Self.storageKey)
+    }
+}

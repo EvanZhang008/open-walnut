@@ -129,7 +129,7 @@ struct FolderContentView: View {
     private var list: some View {
         List {
             if !connection.online {
-                OfflineBanner(text: "Offline — notes are read-only from cache")
+                OfflineBanner(text: "Offline: notes are read-only from cache")
                     .listRowInsets(EdgeInsets())
             }
             if isRoot && !notes.pinned.isEmpty {

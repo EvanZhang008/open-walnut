@@ -34,7 +34,7 @@ struct CalendarFilterSheet: View {
                     Toggle("Hide overdue", isOn: $filter.hidesOverdue)
                         .accessibilityIdentifier("calendar.filter.overdue")
                 } footer: {
-                    Text("Overdue tasks are shown by default — a calendar should say what slipped.")
+                    Text("Overdue tasks are shown by default, so the calendar says what slipped.")
                 }
 
                 Section {

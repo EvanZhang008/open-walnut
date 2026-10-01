@@ -170,6 +170,11 @@ final class TasksStore {
     var taskTierOrder: [String: [String]] = [:] {
         didSet { tiersGen &+= 1 }
     }
+    /// Every pinned task id in the server's pin order (`pinned_tasks`, sorted by
+    /// `pin_order`), from the last split. Not observed: no view draws it. A tier
+    /// move reads it to place the row where the server will put it, because the
+    /// server keeps a task's `pin_order` when its tier changes.
+    @ObservationIgnored var pinnedOrder: [String] = []
     /// Custom tier registry (ct_* id → label), refreshed with the split.
     var customTiers: [FocusTierInfo] = [] {
         didSet { tiersGen &+= 1 }
@@ -615,6 +620,7 @@ final class TasksStore {
                 // agrees (pin_order = max + 1), so this is not a guess, it is
                 // the same answer arriving a round trip earlier.
                 taskTierOrder[tier, default: []].append(created.id)
+                if !pinnedOrder.contains(created.id) { pinnedOrder.append(created.id) }
             }
             pendingCreated.append(PendingCreated(task: row, createdAt: Date()))
             persistPending()
@@ -833,12 +839,16 @@ final class TasksStore {
         // that band — the server's pin_order is max+1, so the optimistic row
         // must go last or it would visibly hop when the split lands.
         taskTiers[task.id] = pinned ? "satellite" : nil
+        // The pin order follows: a new pin is the newest (last), an unpin leaves it.
+        let originalPinnedOrder = pinnedOrder
         if pinned {
             taskTierOrder["satellite", default: []].append(task.id)
+            if !pinnedOrder.contains(task.id) { pinnedOrder.append(task.id) }
         } else {
             for (key, ids) in taskTierOrder where ids.contains(task.id) {
                 taskTierOrder[key] = ids.filter { $0 != task.id }
             }
+            pinnedOrder.removeAll { $0 == task.id }
         }
         do {
             _ = pinned
@@ -851,6 +861,7 @@ final class TasksStore {
             apply(task.pinned) // rollback
             taskTiers[task.id] = originalTier
             taskTierOrder = originalOrder
+            pinnedOrder = originalPinnedOrder
             if let apiError = error as? APIError, apiError.isConflict {
                 return "Completed tasks can't be pinned."
             }
@@ -893,7 +904,7 @@ final class TasksStore {
             if result.failed.isEmpty { return nil }
             rollback(result.failed.compactMap(\.id))
             let reason = result.failed.first?.error ?? "unknown error"
-            return "\(result.changed.count) updated, \(result.failed.count) failed — \(reason)"
+            return "\(result.changed.count) updated, \(result.failed.count) failed: \(reason)"
         } catch {
             rollback(taskIds)
             return error.localizedDescription
@@ -927,7 +938,7 @@ final class TasksStore {
             if isActive { DiskCache.save(tasks, key: "tasks-list") }
             if result.failed.isEmpty { return nil }
             let reason = result.failed.first?.error ?? "unknown error"
-            return "\(result.deleted.count) deleted, \(result.failed.count) failed — \(reason)"
+            return "\(result.deleted.count) deleted, \(result.failed.count) failed: \(reason)"
         } catch {
             restore(Set(taskIds))
             return error.localizedDescription
@@ -1327,5 +1338,35 @@ enum TaskFilter: String, CaseIterable, Identifiable {
         case .allOpen: return "all"
         case .done: return "done"
         }
+    }
+}
+
+// MARK: - Disconnect: forget everything this store holds
+
+extension TasksStore {
+    /// Drop every task, session and board overlay, including optimistic creates
+    /// and in-flight edits, so a re-pair never shows the old server's rows
+    /// (`LocalDataReset`). Same file for the private overlays.
+    func eraseLocalState() {
+        pendingCreated = []
+        userTouchedIds = []
+        inFlightEdits = [:]
+        tasks = []
+        sessions = []
+        syncedAt = nil
+        sessionsSyncedAt = nil
+        sessionIdsByTask = [:]
+        taskTiers = [:]
+        taskTierOrder = [:]
+        pinnedOrder = []
+        customTiers = []
+        taskFolders = []
+        lastCreatedTaskId = nil
+        deleteNeedsForceIds = []
+        errorMessage = nil
+        transientError = nil
+        transientNotice = nil
+        notSyncedYet = false
+        sessionsNotSyncedYet = false
     }
 }

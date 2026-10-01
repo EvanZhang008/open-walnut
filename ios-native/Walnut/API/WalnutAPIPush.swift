@@ -38,6 +38,32 @@ extension WalnutAPI {
         )
     }
 
+    /// `DELETE /api/push/register {token}`: the paired server drops this
+    /// install's push row. The server and bearer are arguments, not `AppConfig`,
+    /// because Disconnect captures them before it clears the pairing and
+    /// `sendAbsolute` reads `AppConfig` at call time.
+    func unregisterPushToken(token: String, server: URL, bearer: String, timeout: TimeInterval) async throws {
+        let request = try Self.unregisterPushRequest(token: token, server: server, bearer: bearer, timeout: timeout)
+        struct Ack: Decodable { let ok: Bool? }
+        let (data, response) = try await perform(request)
+        _ = try Self.decode(Ack.self, data: data, response: response)
+    }
+
+    /// The exact request `unregisterPushToken` sends, split out so its shape is
+    /// testable without a network.
+    static func unregisterPushRequest(token: String, server: URL, bearer: String, timeout: TimeInterval) throws -> URLRequest {
+        guard let url = URL(string: server.absoluteString + "/api/push/register") else {
+            throw APIError.notConfigured
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = timeout
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["token": token])
+        return request
+    }
+
     /// What `GET /api/push/status` says about the box that SENDS.
     ///
     /// Every field is optional on purpose. An older primary answers this route

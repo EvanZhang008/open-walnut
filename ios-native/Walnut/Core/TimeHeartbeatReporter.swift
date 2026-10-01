@@ -415,3 +415,20 @@ final class TimeHeartbeatReporter: LifecycleSuspendable {
 
     func queuedSampleCount() async -> Int { await store.queuedCount }
 }
+
+// MARK: - Disconnect
+
+extension TimeHeartbeatReporter {
+    /// Drop banked attention time that was never sent: it belongs to a server
+    /// this phone is no longer paired with (`LocalDataReset`). The clock keeps
+    /// running, so a window opens again at once while the app is on screen.
+    func eraseLocalData() {
+        cancelRetry()
+        window = nil
+        let store = self.store
+        appendStoreWork { await store.eraseAll() }
+        if isActive {
+            window = AttentionWindowMachine.Window(target: AttentionContext.shared.current, startedAt: clock())
+        }
+    }
+}

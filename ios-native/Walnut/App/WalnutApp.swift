@@ -59,6 +59,9 @@ struct WalnutApp: App {
         notes.connection = connection
         tasks.connection = connection
         inbox.connection = connection
+        // The demo's in-process server must claim URLSession.shared before
+        // anything can use it (a no-op for every real server).
+        DemoMode.registerGlobally()
         _connection = State(initialValue: connection)
         _chat = State(initialValue: chat)
         _notes = State(initialValue: notes)
@@ -68,7 +71,9 @@ struct WalnutApp: App {
         // registration and one notification observer. No network, no disk, no
         // WKWebView until a file is actually previewed — so it is safe on the
         // launch path that must report syncDiskLoads=0.
-        _filePreview = State(initialValue: FilePreviewDock())
+        let filePreview = FilePreviewDock()
+        LocalDataReset.register(tasks: tasks, chat: chat, notes: notes, inbox: inbox, filePreview: filePreview)
+        _filePreview = State(initialValue: filePreview)
     }
 
     var body: some Scene {
@@ -129,6 +134,7 @@ struct RootView: View {
         // First-frame budget proof (see LaunchTrace): must report
         // syncDiskLoads=0, i.e. nothing on this path waited on disk.
         .onAppear { LaunchTrace.markFirstFrame() }
+        .demoModeChrome()
         // Report model/OS once per launch. Also the BACKFILL path: devices
         // paired before /devices/self existed get labelled on their next open.
         // Gated: a background/prewarm launch must not start network work.
@@ -170,6 +176,9 @@ struct RootView: View {
                 // `when-inactive` mode, where it's what keeps a letter quiet
                 // while the user is already looking at Walnut.
                 PushRegistration.shared.reportActive(true)
+                // A permission ask held back because the server could not send
+                // yet is tried again on every return to the foreground.
+                PushRegistration.shared.recheckOnForeground()
             } else if phase == .background {
                 LifecycleHub.shared.suspendAll()
                 // Release the lease immediately so the very next letter buzzes,
@@ -341,6 +350,7 @@ struct MainTabView: View {
                 let started = Date()
                 await connection.refreshStatus()
                 await chat.initialize()
+                DemoEntry.didHydrateChat(chat)
                 await notes.initialize()
                 await tasks.initialize()
                 await inbox.initialize()

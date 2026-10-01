@@ -473,7 +473,7 @@ struct TasksView: View {
     private var calendarSurface: some View {
         VStack(spacing: 0) {
             if !connection.online {
-                OfflineBanner(text: "Offline — tasks are read-only from cache")
+                OfflineBanner(text: "Offline: tasks are read-only from cache")
                     .padding(.horizontal, 12)
                     .padding(.top, 4)
             }
@@ -570,7 +570,7 @@ struct TasksView: View {
                 }
             List {
                 if !connection.online {
-                    OfflineBanner(text: "Offline — tasks are read-only from cache")
+                    OfflineBanner(text: "Offline: tasks are read-only from cache")
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                 }
@@ -1442,12 +1442,12 @@ struct TasksView: View {
     /// actually happened and point at where the results are.
     static func emptyPlaceholder(filter: TaskFilter, query: String) -> String {
         if !query.isEmpty {
-            return "No local matches — see Server Search below."
+            return "No local matches. See Server Search below."
         }
         switch filter {
         case .today: return "Nothing due today."
         case .inProgress: return "No tasks in progress."
-        case .sessions: return "Nothing pinned yet — pin a task to put it on the board."
+        case .sessions: return "Nothing pinned yet. Pin a task to put it on the board."
         case .calendar: return "" // calendar renders its own grid, never this
         case .allOpen: return "No open tasks."
         case .done: return "No recent completions."
@@ -1757,7 +1757,7 @@ struct TasksView: View {
         if dateFilter == .now {
             return "Nothing to do right now: every task starts later. Pick All in the filter menu to see them."
         }
-        return "Nothing pinned yet — pin a task to put it on the board."
+        return "Nothing pinned yet. Pin a task to put it on the board."
     }
 
     /// A tapped tier token. The DECISION is `BoardModel.action` (pure, tested);

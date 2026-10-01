@@ -374,7 +374,7 @@ struct GlobalSearchSection: View {
                 searchedQuery = newQuery
                 unavailableNotice = nil
             } catch let error as APIError where error.isNotSupportedCloud {
-                unavailableNotice = "Global search needs your Mac online — notes search still works."
+                unavailableNotice = "Global search needs your Mac online. Notes search still works."
             } catch let error as APIError where error.isCancelled {
                 return
             } catch {

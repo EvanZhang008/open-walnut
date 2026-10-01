@@ -149,7 +149,7 @@ final class ChatMessagesLoadFailureVisibleTests: XCTestCase {
         store.select(conversation)
         await poll("the first page") { !store.messages.isEmpty }
 
-        let sendError = "Still replying — retry when the turn finishes."
+        let sendError = "Still replying. Retry when the turn finishes."
         store.errorMessage = sendError
         await store.loadMessages(conversation)
         XCTAssertEqual(store.errorMessage, sendError,

@@ -36,7 +36,7 @@ struct SessionQueueSheet: View {
                     }
                 } else if messages.isEmpty {
                     Section {
-                        Text("No queued messages — everything you sent has been delivered.")
+                        Text("No queued messages. Everything you sent has been delivered.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 24)
@@ -220,7 +220,7 @@ struct SideQuestionsSheet: View {
                     Section { retryBlock(loadError) { Task { await load() } } }
                 } else if questions.isEmpty {
                     Section {
-                        Text("No side questions yet. Ask one above — the session answers without derailing its main work.")
+                        Text("No side questions yet. Ask one above: the session answers without derailing its main work.")
                             .foregroundStyle(.secondary)
                             .font(.subheadline)
                     }
@@ -327,7 +327,7 @@ struct SideQuestionsSheet: View {
                 "sessionId": sessionId, "questionId": answered.id,
             ])
         } catch let error as APIError where error.code == "bad_gateway" || (error.code == "http_error") {
-            askError = "The session isn't reachable right now — it may be asleep. Wake it and try again."
+            askError = "The session isn't reachable right now. It may be asleep. Wake it and try again."
         } catch {
             askError = SessionControlsSheet.friendlyControlError(error)
         }

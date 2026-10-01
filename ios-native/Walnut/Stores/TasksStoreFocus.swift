@@ -155,6 +155,7 @@ extension TasksStore {
         if map != taskTiers { taskTiers = map }
         let order = Self.tierOrder(from: split)
         if order != taskTierOrder { taskTierOrder = order }
+        pinnedOrder = split.pinnedTasks
         // UNCONDITIONAL, unlike the two adoptions above, and the asymmetry is the point.
         // Their guards protect the OBSERVED properties: adopting an identical value would
         // bump `tiersGen` and throw away the board's band memo for nothing. A file has no
@@ -190,15 +191,19 @@ extension TasksStore {
         noteUserTouched(taskId)
         let original = taskTiers[taskId]
         taskTiers[taskId] = tier
-        // Optimistic order: the row leaves its old band and joins the FOOT of the
-        // new one, which is where the server will put it (pin_order = max + 1).
-        // Without this the row would render under the new heading at whatever
-        // position the tasks-list sort implies, then hop when the split lands.
+        // Optimistic order: the row leaves its old band and joins the new one at
+        // the place the server will give it. A tier move keeps the task's
+        // `pin_order`, and every band is sorted by it, so the row lands among the
+        // new band's rows by pin order. It used to join the FOOT of the band,
+        // which the server never does: the row hopped when the answer landed,
+        // right under the reader's next tap.
         let originalOrder = taskTierOrder
         for (key, ids) in taskTierOrder where ids.contains(taskId) {
             taskTierOrder[key] = ids.filter { $0 != taskId }
         }
-        taskTierOrder[tier, default: []].append(taskId)
+        taskTierOrder[tier] = Self.inPinOrder(
+            (taskTierOrder[tier] ?? []) + [taskId], pinnedOrder: pinnedOrder
+        )
         do {
             let split = try await transport.setTaskFocusTier(id: taskId, tier: tier)
             guard isActive else { return nil }
@@ -214,6 +219,20 @@ extension TasksStore {
             }
             return error.localizedDescription
         }
+    }
+
+    /// `ids` sorted the way the server sorts a band: by `pin_order`, read off the
+    /// split's `pinned_tasks`. An id the split has not listed yet (a pin made since
+    /// the last split) sorts last, in the order given, which is where its
+    /// `pin_order = max + 1` puts it.
+    static func inPinOrder(_ ids: [String], pinnedOrder: [String]) -> [String] {
+        var rank: [String: Int] = [:]
+        for (index, id) in pinnedOrder.enumerated() where rank[id] == nil { rank[id] = index }
+        return ids.enumerated().sorted { a, b in
+            let ra = rank[a.element] ?? Int.max
+            let rb = rank[b.element] ?? Int.max
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
     }
 
     /// Every pickable tier for menus: built-ins first, then custom tiers.

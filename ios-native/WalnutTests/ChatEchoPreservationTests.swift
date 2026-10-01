@@ -455,7 +455,7 @@ final class TasksEmptyPlaceholderTests: XCTestCase {
         // that it is empty — an empty board with no next step read as broken.
         XCTAssertEqual(
             TasksView.emptyPlaceholder(filter: .sessions, query: ""),
-            "Nothing pinned yet — pin a task to put it on the board."
+            "Nothing pinned yet. Pin a task to put it on the board."
         )
         XCTAssertEqual(TasksView.emptyPlaceholder(filter: .allOpen, query: ""), "No open tasks.")
     }
@@ -464,7 +464,7 @@ final class TasksEmptyPlaceholderTests: XCTestCase {
         for filter in [TaskFilter.sessions, .allOpen, .today, .inProgress, .done] {
             XCTAssertEqual(
                 TasksView.emptyPlaceholder(filter: filter, query: "AMD"),
-                "No local matches — see Server Search below.",
+                "No local matches. See Server Search below.",
                 "filter \(filter) must not show its own empty copy while searching"
             )
         }

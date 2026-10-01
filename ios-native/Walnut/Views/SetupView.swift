@@ -78,7 +78,7 @@ struct SetupView: View {
                 }
             Text("Walnut")
                 .font(.largeTitle.bold())
-            Text("Your Personal AI — tasks, notes, and conversations, everywhere.")
+            Text("Your Personal AI for tasks, notes and conversations, everywhere.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -152,6 +152,8 @@ struct SetupView: View {
             .font(.subheadline.weight(.medium))
             .frame(maxWidth: .infinity)
             .padding(.top, 4)
+
+            DemoEntryButton(disabled: busy)
         }
     }
 
@@ -160,7 +162,7 @@ struct SetupView: View {
         switch testResult {
         case .success(let status):
             Label(
-                "Connected — \(status.mode.rawValue) · v\(status.version)",
+                "Connected: \(status.mode.rawValue) · v\(status.version)",
                 systemImage: "checkmark.circle.fill"
             )
             .font(.footnote)
@@ -206,12 +208,21 @@ struct SetupView: View {
             alertMessage = "Enter your Walnut server URL."
             return
         }
+        // A server on this same machine trusts loopback callers, so its status
+        // check passes with no token at all and the phone "paired" with nothing
+        // that names it: every device-scoped call after that was refused (400 on
+        // `POST /devices/self`). Pairing always needs a device token.
+        let deviceToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !deviceToken.isEmpty else {
+            alertMessage = "Enter the device token from \"walnut device add\", or scan the QR code from your console."
+            return
+        }
         busy = true
         Task {
             do {
                 try await connection.connect(
                     serverURL: serverURL,
-                    token: token.trimmingCharacters(in: .whitespacesAndNewlines),
+                    token: deviceToken,
                     deviceName: deviceName.isEmpty ? nil : deviceName
                 )
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -251,7 +262,7 @@ struct SetupView: View {
         if let name = pair.name { deviceName = name }
         if let server = pair.server { serverURL = server }
         if serverURL.trimmingCharacters(in: .whitespaces).isEmpty {
-            alertMessage = "Token filled in — enter the server address and connect."
+            alertMessage = "Token filled in. Enter the server address and connect."
             return
         }
         // A scanned console QR carries server+token — pairing is one tap: none.

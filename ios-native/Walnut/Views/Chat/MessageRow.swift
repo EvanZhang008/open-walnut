@@ -219,7 +219,7 @@ struct MessageRow: View {
                         }
                         .foregroundStyle(Theme.warning)
                     } else {
-                        Label("Not sent — tap to retry", systemImage: "exclamationmark.circle.fill")
+                        Label("Not sent. Tap to retry.", systemImage: "exclamationmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(Theme.danger)
                     }
@@ -569,7 +569,7 @@ struct NotificationCard: View {
                     if head.isEmpty { return rest }
                     if head.hasPrefix("("), head.hasSuffix(")") {
                         let label = String(head.dropFirst().dropLast())
-                        return rest.isEmpty ? label : "\(label) — \(rest)"
+                        return rest.isEmpty ? label : "\(label): \(rest)"
                     }
                 }
                 return text.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -12,7 +12,7 @@ struct WalnutAPI {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         config.waitsForConnectivity = false
-        session = URLSession(configuration: config)
+        session = URLSession(configuration: DemoMode.configured(config))
     }
 
     // MARK: - Endpoints

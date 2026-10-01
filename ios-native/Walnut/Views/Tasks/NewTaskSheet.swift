@@ -165,8 +165,8 @@ struct NewTaskSheet: View {
             Text("Quick Add")
         } footer: {
             Text(parsedNewProject
-                 ? "Parsed — \"\(project)\" is a new project and will be created."
-                 : "AI fills the form below — review, then Add.")
+                 ? "Parsed. \"\(project)\" is a new project and will be created."
+                 : "AI fills the form below. Review it, then Add.")
         }
     }
 
@@ -206,7 +206,7 @@ struct NewTaskSheet: View {
         } catch let error as APIError where error.isCancelled {
             return
         } catch {
-            parseError = "Couldn't parse that — fill the form manually or try rewording."
+            parseError = "Couldn't parse that. Fill the form manually or try rewording."
             AppLog.warn("tasks", "quick-parse failed", ["error": error.localizedDescription])
         }
     }
@@ -316,7 +316,7 @@ struct NewTaskSheet: View {
             Text("Pin")
         } footer: {
             Text(pin == .unspecified
-                 ? "Default — lands on the pinned board in Satellite."
+                 ? "Default: lands on the pinned board in Satellite."
                  : (pin == .notPinned
                     ? "Stays off the pinned board."
                     : "Born in this tier, in one write."))

@@ -74,7 +74,7 @@ struct CalendarListView: View {
                                     Image(systemName: "plus.circle")
                                         .font(.caption)
                                         .foregroundStyle(Theme.tint)
-                                    Text("Nothing on this day — add something")
+                                    Text("Nothing on this day. Add something.")
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
                                     Spacer(minLength: 0)

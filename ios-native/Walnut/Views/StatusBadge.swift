@@ -18,7 +18,7 @@ struct StatusBadge: View {
         switch connection.status?.mode {
         case .live: return "Live"
         case .replica: return "Replica"
-        case nil: return "—"
+        case nil: return "Unknown"
         }
     }
 

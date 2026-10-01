@@ -136,7 +136,7 @@ struct SessionDirectoryList: View {
     private var listBody: some View {
         List {
             if isStandIn, let namedFile {
-                Label("\(namedFile) is a file, not a folder — showing \(root), with it highlighted.",
+                Label("\(namedFile) is a file, not a folder. Showing \(root), with it highlighted.",
                       systemImage: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -414,7 +414,7 @@ struct SessionFileViewer: View {
                     .foregroundStyle(.secondary)
             }
             if content.truncated == true {
-                Label("Large file — showing the first 512 KB.", systemImage: "scissors")
+                Label("Large file: showing the first 512 KB.", systemImage: "scissors")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -458,7 +458,7 @@ struct SessionFileViewer: View {
                 if payload.error == nil {
                     content = payload
                     healedPath = healed.path
-                    healedNotice = "The path in the message wasn't there — opened \(healed.path) instead."
+                    healedNotice = "The path in the message wasn't there, so \(healed.path) opened instead."
                     anchorLine = healed.line ?? anchorLine
                     anchorEndLine = healed.endLine ?? anchorEndLine
                     loaded = true

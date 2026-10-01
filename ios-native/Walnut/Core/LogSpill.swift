@@ -248,3 +248,19 @@ final class LogSpill: @unchecked Sendable {
         return (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
     }
 }
+
+// MARK: - Disconnect
+
+extension LogSpill {
+    /// Empty the queue in place: unsent lines are about the server this phone
+    /// just left, and must not be uploaded to the next one.
+    func discardAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        try? Data().write(to: fileURL, options: .atomic)
+        fileSize = 0
+        cursor = 0
+        dropped = 0
+        writeCursorLocked()
+    }
+}

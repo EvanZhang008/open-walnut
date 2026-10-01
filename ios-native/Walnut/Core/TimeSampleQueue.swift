@@ -352,3 +352,15 @@ actor TimeSampleStore {
         return String(describing: error)
     }
 }
+
+// MARK: - Disconnect
+
+extension TimeSampleStore {
+    /// Forget the queue and its install id together (the two halves of every
+    /// sample id must live and die together), on disk too.
+    func eraseAll() {
+        state = TimeSampleQueueState()
+        loaded = true
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+}

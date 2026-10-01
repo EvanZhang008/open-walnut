@@ -188,7 +188,7 @@ enum TimelineHostedCell {
                         }
                         .foregroundStyle(Theme.warning)
                     } else {
-                        Label("Not sent — tap to retry", systemImage: "exclamationmark.circle.fill")
+                        Label("Not sent. Tap to retry.", systemImage: "exclamationmark.circle.fill")
                             .font(.caption)
                             .foregroundStyle(Theme.danger)
                     }
@@ -1472,14 +1472,14 @@ struct TimelineActivitySheet: View {
     /// The ONE failure sentence in the drawer. It says what happened and what the
     /// reader is looking at instead, and it never suggests an action — there is
     /// nothing the reader can do about a compacted transcript.
-    static let goneText = "The server no longer keeps the full text of this step — "
-        + "this is the excerpt it saved."
+    static let goneText = "The server no longer keeps the full text of this step. "
+        + "This is the excerpt it saved."
 
     /// What the app knows when a fetch did not land: the row carries a ref, so what is
     /// on screen is a prefix and it may stop mid-word. Deliberately says nothing about
     /// WHY — a status code is not something the reader can act on, and the retry button
     /// beside it (when retrying can help) is the actionable half.
-    static let excerptOnly = "Excerpt only — the rest of this step could not be loaded."
+    static let excerptOnly = "Excerpt only. The rest of this step could not be loaded."
 
     /// Both numbers are UTF-16 code units, the units the server counts in (see
     /// `TimelineDrawerSection`) — so `shown` is `section.shownChars`, never a

@@ -116,3 +116,16 @@ extension ComposerDrafts: LifecycleSuspendable {
     func suspendForBackground() { persistNow() }
     func resumeForForeground() {}
 }
+
+// MARK: - Disconnect
+
+extension ComposerDrafts {
+    /// Forget every draft and attached picture, on disk too (`LocalDataReset`).
+    func clearAll() {
+        persistTask?.cancel()
+        persistTask = nil
+        text = [:]
+        images = [:]
+        UserDefaults.standard.removeObject(forKey: Self.storageKey)
+    }
+}

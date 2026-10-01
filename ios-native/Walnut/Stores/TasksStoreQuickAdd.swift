@@ -201,6 +201,7 @@ extension TasksStore {
         if !(taskTierOrder[landed]?.contains(taskId) ?? false) {
             taskTierOrder[landed, default: []].append(taskId)
         }
+        if !pinnedOrder.contains(taskId) { pinnedOrder.append(taskId) }
         // Flip the row's pinned flag too (the parse-tier path arrives with an
         // unpinned local row; the badge needs pinned==true to render).
         if let idx = tasks.firstIndex(where: { $0.id == taskId }), tasks[idx].pinned != true {
@@ -216,6 +217,7 @@ extension TasksStore {
         } catch {
             taskTiers[taskId] = nil
             taskTierOrder[landed] = taskTierOrder[landed]?.filter { $0 != taskId }
+            pinnedOrder.removeAll { $0 == taskId }
             AppLog.warn("tasks", "quick-add pin failed", ["taskId": taskId, "error": error.localizedDescription])
         }
     }

@@ -1409,7 +1409,7 @@ final class TaskBoardModelTests: XCTestCase {
         )
         XCTAssertEqual(
             TasksView.boardEmptyText(query: "", dateFilter: .all),
-            "Nothing pinned yet — pin a task to put it on the board."
+            "Nothing pinned yet. Pin a task to put it on the board."
         )
         // A live query outranks both: the user typed something, that is the reason.
         for filter in BoardDateFilter.allCases {
@@ -2376,9 +2376,10 @@ final class TaskBoardTierOrderTests: XCTestCase {
         }
     }
 
-    /// The move: the row leaves its old band and joins the FOOT of the new one,
-    /// which is where the server's `pin_order = max + 1` will put it — so the row
-    /// does not visibly hop when the authoritative split lands.
+    /// The move: the row leaves its old band and joins the new one. With no split
+    /// adopted yet the store has no pin order to read, so the row goes last, in the
+    /// order given (here it is also the newest pin, which is where the server puts
+    /// it). `TierMovePinOrderTests` covers a move into the middle of a band.
     func testMovingATierPutsTheRowAtTheFootOfItsNewBand() async {
         let mock = MockTaskTransport()
         // Server answers with the row already in wait, last.

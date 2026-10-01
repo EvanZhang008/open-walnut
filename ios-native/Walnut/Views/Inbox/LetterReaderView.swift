@@ -59,6 +59,14 @@ struct LetterReaderView: View {
     @State private var deferredBodyLoading = false
     @State private var deferredBodyError: String?
 
+    /// The reader's title: the letter's kind until it is answered, then the same
+    /// "Answered" the inbox row shows. "Action needed" over a letter whose action
+    /// was already taken told the reader to do something already done.
+    static func title(for letter: Letter?) -> String {
+        guard let letter else { return "Letter" }
+        return letter.answered != nil ? "Answered" : letter.kind.label
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
@@ -105,7 +113,7 @@ struct LetterReaderView: View {
             reload: { await load() },
             giveUp: { replies.markDeliveryUnconfirmed(letterId: letterId, entries: turnsAwaitingDelivery) }
         ))
-        .navigationTitle(letter?.kind.label ?? "Letter")
+        .navigationTitle(Self.title(for: letter))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarButtons }
         .safeAreaInset(edge: .bottom) { composer }

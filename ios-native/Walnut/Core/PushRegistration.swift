@@ -25,6 +25,11 @@ import UserNotifications
 ///    token on reinstall and can rotate it at any time, so the token is uploaded
 ///    whenever it differs from the last one this install successfully sent, and
 ///    whenever the paired server changes.
+///  - **Nothing is asked of iOS unless the paired server can send.** The ask and
+///    the registration both wait for `GET /api/push/status` to report
+///    `apns.configured`. A server without an APNs key (or one that cannot be
+///    reached right now) gets no prompt and no token; the check runs again on the
+///    next foreground. The demo never asks at all.
 @Observable
 @MainActor
 final class PushRegistration {
@@ -55,7 +60,7 @@ final class PushRegistration {
             case .always:
                 return "Every letter your agents write shows up as a notification, even while you're using Walnut."
             case .whenInactive:
-                return "Letters only notify when Walnut isn't open on this phone — like Slack. While you're in the app, the Inbox badge is the only signal."
+                return "Letters only notify when Walnut isn't open on this phone, like Slack. While you're in the app, the Inbox badge is the only signal."
             }
         }
     }
@@ -141,7 +146,186 @@ final class PushRegistration {
     /// stores do) and re-pairing needs no re-wiring here.
     private let api = WalnutAPI()
 
-    private init() {}
+    /// The iOS calls, behind a seam so tests can count them.
+    private let system: PushSystem
+    /// `GET /api/push/status`, behind a seam for the same reason.
+    private let fetchStatus: @MainActor () async throws -> WalnutAPI.PushStatus
+
+    /// `DELETE /api/push/register`, behind a seam so tests can stand in for the
+    /// server (reachable, unreachable) and prove the demo calls nothing.
+    private let unregister: Unregister
+
+    private convenience init() {
+        let api = WalnutAPI()
+        self.init(
+            system: LivePushSystem(),
+            fetchStatus: { try await api.pushStatus() },
+            unregister: { call in
+                try await api.unregisterPushToken(
+                    token: call.token, server: call.server, bearer: call.bearer,
+                    timeout: PushRegistration.defaultUnregisterDeadline
+                )
+            }
+        )
+    }
+
+    /// Tests only: a registration with fake iOS calls and a fake server answer.
+    init(
+        system: PushSystem,
+        fetchStatus: @escaping @MainActor () async throws -> WalnutAPI.PushStatus,
+        unregister: @escaping Unregister = { _ in }
+    ) {
+        self.system = system
+        self.fetchStatus = fetchStatus
+        self.unregister = unregister
+    }
+
+    // MARK: - Can the paired server send? (the gate)
+
+    /// What the paired server said the last time it was asked.
+    enum ServerSendAnswer: Equatable {
+        /// Not asked yet for this pairing.
+        case unknown
+        /// `apns.configured: true`: notifications can arrive.
+        case canSend
+        /// The server answered and has no APNs key (or predates the field).
+        case cannotSend
+        /// The question could not be answered (offline, a relay down, an error).
+        case unreachable
+    }
+
+    private(set) var serverSendAnswer: ServerSendAnswer = .unknown
+    /// A permission ask or a registration was held back by the gate; the next
+    /// foreground tries again.
+    private(set) var deferredUntilServerCanSend = false
+
+    /// Pure: read a status answer the way the gate does.
+    nonisolated static func sendAnswer(for status: WalnutAPI.PushStatus) -> ServerSendAnswer {
+        status.apns?.configured == true ? .canSend : .cannotSend
+    }
+
+    /// Ask the paired server whether it can deliver a notification. Asked fresh
+    /// each time (one small GET), because the answer changes the moment someone
+    /// adds the APNs key on the server.
+    private func serverCanSend() async -> Bool {
+        guard AppConfig.isConfigured, !DemoMode.isActive else { return false }
+        do {
+            let status = try await fetchStatus()
+            serverSendAnswer = Self.sendAnswer(for: status)
+        } catch {
+            serverSendAnswer = .unreachable
+            AppLog.info("push", "push status unavailable, not asking iOS", ["error": String(describing: error)])
+        }
+        return serverSendAnswer == .canSend
+    }
+
+    /// Foreground: try again whatever the gate held back.
+    func recheckOnForeground() {
+        guard deferredUntilServerCanSend, AppConfig.isConfigured, !DemoMode.isActive else { return }
+        Task { await self.retryDeferred() }
+    }
+
+    /// Tests await this; the app goes through `recheckOnForeground`.
+    func retryDeferred() async {
+        guard deferredUntilServerCanSend else { return }
+        deferredUntilServerCanSend = false
+        if askWasDeferred {
+            askWasDeferred = false
+            await requestPermissionAndRegister()
+        } else {
+            await refreshAuthorization()
+        }
+    }
+
+    /// Whether the deferred work is the permission ASK (versus a re-register).
+    private var askWasDeferred = false
+
+    // MARK: - Disconnect: tell the server, then stop APNs
+
+    /// What Disconnect hands the paired server: this install's token, and the
+    /// address and bearer it was paired with, captured before they are cleared.
+    struct Unregistration: Equatable {
+        let token: String
+        let server: URL
+        let bearer: String
+    }
+
+    typealias Unregister = @MainActor (Unregistration) async throws -> Void
+
+    nonisolated static let defaultUnregisterDeadline: TimeInterval = 3
+    /// How long the server call may run before it is abandoned. Tests shorten it.
+    var unregisterDeadline = PushRegistration.defaultUnregisterDeadline
+
+    /// The token to unregister: the one APNs handed this launch, else the one the
+    /// memo says was uploaded to THIS server (a launch where APNs has not
+    /// answered yet still knows what the server holds).
+    nonisolated static func tokenToUnregister(deviceToken: String?, memo: String?, server: URL?) -> String? {
+        if let deviceToken, !deviceToken.isEmpty { return deviceToken }
+        guard let memo, let separator = memo.lastIndex(of: "|") else { return nil }
+        guard String(memo[..<separator]) == (server?.absoluteString ?? "unpaired") else { return nil }
+        let token = String(memo[memo.index(after: separator)...])
+        return token.isEmpty ? nil : token
+    }
+
+    /// Disconnect, BEFORE the credentials are cleared: ask the paired server to
+    /// drop this install's push row (`DELETE /api/push/register`), then stop APNs
+    /// delivery to this install. Without it a disconnected phone kept getting the
+    /// old server's notifications, and the old server kept a row for it.
+    ///
+    /// Never blocks Disconnect: the server call runs in the background under a
+    /// short deadline, and an unreachable server only means its row stays until
+    /// its next send is refused. The demo registered nothing, so it calls nothing.
+    /// Returns the background call so tests can wait for it.
+    @discardableResult
+    func unregisterFromServer() -> Task<Void, Never>? {
+        guard !DemoMode.isActive else { return nil }
+        let server = AppConfig.serverURL
+        let memo = UserDefaults.standard.string(forKey: Self.uploadedTokenKey)
+        let token = Self.tokenToUnregister(deviceToken: deviceToken, memo: memo, server: server)
+        let bearer = AppConfig.token
+        system.unregisterForRemoteNotifications()
+        deviceToken = nil
+        UserDefaults.standard.removeObject(forKey: Self.uploadedTokenKey)
+        guard let token, let server, let bearer, !bearer.isEmpty else {
+            AppLog.info("push", "disconnect: no token to unregister on the server", [:])
+            return nil
+        }
+        let call = Unregistration(token: token, server: server, bearer: bearer)
+        let deadline = unregisterDeadline
+        let unregister = self.unregister
+        return Task {
+            let work = Task { try await unregister(call) }
+            let timer = Task {
+                try? await Task.sleep(for: .seconds(deadline))
+                work.cancel()
+            }
+            let result = await work.result
+            timer.cancel()
+            switch result {
+            case .success:
+                AppLog.info("push", "disconnect: server dropped this install's token", [
+                    "tokenPrefix": String(token.prefix(12)),
+                ])
+            case .failure(let error):
+                AppLog.info("push", "disconnect: token unregister skipped", [
+                    "tokenPrefix": String(token.prefix(12)),
+                    "error": String(describing: error),
+                ])
+            }
+        }
+    }
+
+    /// Disconnect: this pairing's answers no longer apply (`LocalDataReset`).
+    func forgetServer() {
+        serverSendAnswer = .unknown
+        deferredUntilServerCanSend = false
+        askWasDeferred = false
+        serverDeliverable = nil
+        lastError = nil
+        launchReconcileDone = false
+        activeRefreshTimer?.invalidate()
+        activeRefreshTimer = nil
+    }
 
     // MARK: - Pure helpers (unit-testable)
 
@@ -175,19 +359,27 @@ final class PushRegistration {
     /// "APNs stayed silent" and "the memo already matched" all look identical —
     /// exactly the silent failure this whole change exists to remove.
     func refreshAuthorization() async {
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        authorization = settings.authorizationStatus
+        let status = await system.authorizationStatus()
+        authorization = status
         // Already granted from a previous launch: re-register so a rotated token
-        // is picked up. Registration itself never prompts.
-        let granted = settings.authorizationStatus == .authorized
-            || settings.authorizationStatus == .provisional
-        if granted { UIApplication.shared.registerForRemoteNotifications() }
+        // is picked up. Registration itself never prompts, but it still waits
+        // for a server that can send: a token is no use to one that cannot.
+        let granted = status == .authorized || status == .provisional
+        var branch = granted ? "registering" : "not-granted"
+        if granted {
+            if await serverCanSend() {
+                system.registerForRemoteNotifications()
+            } else {
+                branch = DemoMode.isActive ? "demo" : "server-cannot-send"
+                if !DemoMode.isActive { deferredUntilServerCanSend = true }
+            }
+        }
         let memo = Self.describeMemo(UserDefaults.standard.string(forKey: Self.uploadedTokenKey))
         AppLog.info("push", "registration refresh", [
-            "authorization": Self.statusName(settings.authorizationStatus),
+            "authorization": Self.statusName(status),
             // `registering` means APNs was asked; the next line to look for is
             // `apns token minted`. Its absence is APNs silence, not our decision.
-            "branch": granted ? "registering" : "not-granted",
+            "branch": branch,
             "paired": AppConfig.isConfigured ? "true" : "false",
             "server": AppConfig.serverURL?.absoluteString ?? "unpaired",
             "memoServer": memo.server,
@@ -201,8 +393,9 @@ final class PushRegistration {
     /// the stored decision without re-prompting, so callers don't have to track
     /// whether the ask already happened.
     func requestPermissionAndRegister() async {
-        let center = UNUserNotificationCenter.current()
-        let current = await center.notificationSettings().authorizationStatus
+        // The demo has no server that could ever send, so it never asks.
+        guard !DemoMode.isActive else { return }
+        let current = await system.authorizationStatus()
         authorization = current
         // Denied is Settings-only to recover from — asking again does nothing but
         // waste a round trip, and must NOT be reported as an error.
@@ -210,14 +403,24 @@ final class PushRegistration {
             AppLog.info("push", "notification permission previously denied", [:])
             return
         }
+        // A prompt for notifications that cannot arrive is a wasted ask, and iOS
+        // only asks once. Hold it until the paired server can send.
+        guard await serverCanSend() else {
+            deferredUntilServerCanSend = true
+            askWasDeferred = true
+            AppLog.info("push", "permission ask held: the paired server cannot send yet", [
+                "answer": String(describing: serverSendAnswer),
+            ])
+            return
+        }
         do {
-            let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
-            authorization = await center.notificationSettings().authorizationStatus
+            let granted = try await system.requestAuthorization()
+            authorization = await system.authorizationStatus()
             AppLog.info("push", "notification permission answered", ["granted": granted ? "true" : "false"])
             guard granted else { return }
             // Only now mint a token: a token for a device that can display
             // nothing is a token that produces silent pushes.
-            UIApplication.shared.registerForRemoteNotifications()
+            system.registerForRemoteNotifications()
         } catch {
             lastError = String(describing: error)
             AppLog.warn("push", "notification permission request failed", ["error": lastError ?? ""])
@@ -341,7 +544,7 @@ final class PushRegistration {
         } else {
             // No token in hand this launch; ask APNs to deliver it again, which
             // re-enters didRegister → upload. Never prompts.
-            UIApplication.shared.registerForRemoteNotifications()
+            system.registerForRemoteNotifications()
         }
     }
 
@@ -496,5 +699,36 @@ extension QuickActionDelegate {
         Task { @MainActor in
             PushRegistration.shared.didFailToRegister(error: error)
         }
+    }
+}
+
+// MARK: - The iOS side, behind a seam
+
+/// The iOS calls push registration makes. Tests swap in a fake so they can
+/// prove when a prompt, a registration or an unregistration did (and did not)
+/// happen.
+@MainActor
+protocol PushSystem {
+    func authorizationStatus() async -> UNAuthorizationStatus
+    func requestAuthorization() async throws -> Bool
+    func registerForRemoteNotifications()
+    func unregisterForRemoteNotifications()
+}
+
+struct LivePushSystem: PushSystem {
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    func requestAuthorization() async throws -> Bool {
+        try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+    }
+
+    func registerForRemoteNotifications() {
+        UIApplication.shared.registerForRemoteNotifications()
+    }
+
+    func unregisterForRemoteNotifications() {
+        UIApplication.shared.unregisterForRemoteNotifications()
     }
 }

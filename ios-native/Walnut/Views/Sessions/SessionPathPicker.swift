@@ -137,13 +137,13 @@ struct SessionPathPicker: View {
         let failures = live.filter { if case .failed = $0.value.status { return true } else { return false } }
         if !failures.isEmpty {
             Text(failures.count == 1
-                 ? "\(hostLabel(failures.keys.first!)) didn't answer — you can still type a path."
-                 : "\(failures.count) hosts didn't answer — you can still type a path.")
+                 ? "\(hostLabel(failures.keys.first!)) didn't answer. You can still type a path."
+                 : "\(failures.count) hosts didn't answer. You can still type a path.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("pathPicker.degraded")
         } else if options == nil {
-            Text("No recent folders yet — type an absolute path.")
+            Text("No recent folders yet. Type an absolute path.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("pathPicker.noOptions")

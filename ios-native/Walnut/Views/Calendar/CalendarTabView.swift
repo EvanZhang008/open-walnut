@@ -240,7 +240,7 @@ struct CalendarTabView: View {
             let endText = calendar.isDate(selectedDay, equalTo: end, toGranularity: .month)
                 ? end.formatted(.dateTime.day())
                 : end.formatted(.dateTime.month(.abbreviated).day())
-            return "\(startText) – \(endText)"
+            return "\(startText) to \(endText)"
         }
     }
 

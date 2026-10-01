@@ -30,6 +30,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                DemoSettingsSection()
                 serverSection
                 serverInfoSection
                 automationSection
@@ -64,15 +65,22 @@ struct SettingsView: View {
                     connection.disconnect()
                 }
             } message: {
-                Text("Removes the server URL and device token from this phone.")
+                Text("Removes the server address and device token, and erases what Walnut keeps on this phone: drafts, unsent messages, downloaded images, voice recordings and logs.")
             }
         }
     }
 
+    /// The Address row's value. The demo is not a server, so its placeholder
+    /// address is never shown as one.
+    static func addressText(_ serverURL: String) -> String {
+        if serverURL.isEmpty { return "Not configured" }
+        return DemoMode.isDemoURL(serverURL) ? DemoMode.addressLabel : serverURL
+    }
+
     private var serverSection: some View {
         Section("Server") {
-            LabeledContent("Address", value: connection.serverURL.isEmpty ? "Not configured" : connection.serverURL)
-            LabeledContent("Device", value: connection.deviceName.isEmpty ? "—" : connection.deviceName)
+            LabeledContent("Address", value: Self.addressText(connection.serverURL))
+            LabeledContent("Device", value: connection.deviceName.isEmpty ? "Not set" : connection.deviceName)
             LabeledContent("Token", value: "••••••••••••")
             LabeledContent("Status") {
                 StatusBadge()
@@ -200,7 +208,7 @@ struct SettingsView: View {
         } footer: {
             Text(micRoute == VoiceRecorder.MicRoute.builtInMic.rawValue
                 ? "Recording always uses the iPhone's built-in microphone, even when AirPods or a headset are connected."
-                : "Recording follows the system's audio routing — AirPods or a headset mic are used when connected.")
+                : "Recording follows the system's audio routing: AirPods or a headset mic are used when connected.")
         }
     }
 
@@ -334,7 +342,7 @@ struct SettingsView: View {
     private static func describe(_ outcome: (uploaded: Int, drained: Bool)) -> String {
         if outcome.uploaded == 0 {
             return outcome.drained
-                ? "Nothing pending — already up to date."
+                ? "Nothing pending, already up to date."
                 : "Could not reach the server. Logs are saved and will upload automatically."
         }
         let lines = "\(outcome.uploaded) line\(outcome.uploaded == 1 ? "" : "s")"
@@ -349,7 +357,7 @@ struct SettingsView: View {
         Task {
             await connection.refreshStatus()
             if let status = connection.status, connection.online {
-                testResult = "Connected — \(status.mode.rawValue) · v\(status.version)"
+                testResult = "Connected: \(status.mode.rawValue) · v\(status.version)"
             } else {
                 testResult = "Could not reach the server"
             }

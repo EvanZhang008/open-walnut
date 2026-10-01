@@ -580,3 +580,17 @@ final class AppLog: @unchecked Sendable {
         return spill.unreadBytes + stagedCount * Self.averageLineBytes
     }
 }
+
+// MARK: - Disconnect
+
+extension AppLog {
+    /// Drop every log line kept on the phone, staged and on disk
+    /// (`LocalDataReset`). Logging carries on into the emptied queue.
+    func discardLocalLogs() {
+        lock.lock()
+        staged.removeAll()
+        lock.unlock()
+        spill.discardAll()
+        try? FileManager.default.removeItem(at: Self.legacyPersistURL)
+    }
+}

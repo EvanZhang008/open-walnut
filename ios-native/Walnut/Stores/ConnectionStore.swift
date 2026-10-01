@@ -206,9 +206,15 @@ final class ConnectionStore {
     func disconnect() {
         probeTask?.cancel()
         probeTask = nil
+        // First, while the pairing still exists: the server is asked (in the
+        // background, under a short deadline) to drop this install's push token,
+        // and APNs delivery to this install stops.
+        PushRegistration.shared.unregisterFromServer()
         LifecycleHub.shared.teardownAll()
+        let wasDemo = DemoMode.isActive
         AppConfig.clear()
         DiskCache.clearAll()
+        LocalDataReset.eraseAll(reason: wasDemo ? "leave-demo" : "disconnect")
         isConfigured = false
         serverURL = ""
         deviceName = ""

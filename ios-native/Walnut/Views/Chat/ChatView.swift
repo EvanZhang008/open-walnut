@@ -101,7 +101,7 @@ struct ChatView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if !connection.online {
-                    OfflineBanner(text: "Offline — showing cached data")
+                    OfflineBanner(text: "Offline: showing cached data")
                 }
                 if let error = chat.errorMessage {
                     ErrorBanner(text: error) { chat.errorMessage = nil }
@@ -360,7 +360,7 @@ struct ChatView: View {
             Image(systemName: "questionmark.bubble.fill")
                 .font(.subheadline)
                 .foregroundStyle(Theme.tint)
-            Text("\(chat.activeAgentName) has a question — reply below to answer.")
+            Text("\(chat.activeAgentName) has a question. Reply below to answer.")
                 .font(.footnote)
                 .lineLimit(2)
             Spacer()

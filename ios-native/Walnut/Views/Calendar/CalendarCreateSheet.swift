@@ -93,7 +93,7 @@ struct CalendarCreateSheet: View {
                     }
                 } footer: {
                     Text(isAllDay
-                         ? "An all-day task rides the band above the hours — no fake clock time."
+                         ? "An all-day task rides the band above the hours, with no clock time."
                          : "A timed task becomes a block you can see and tap on the day.")
                 }
 

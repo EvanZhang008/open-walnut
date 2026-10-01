@@ -170,8 +170,8 @@ struct SessionControlsSheet: View {
             // Codex/ACP sessions report `applied` instead of `appliedLive` —
             // both mean the switch took effect immediately.
             confirmation = (result.appliedLive == true || result.applied == true)
-                ? "Switched to \(Self.shortName(name, in: options)) — applied to the running session."
-                : "Switched to \(Self.shortName(name, in: options)) — takes effect when the session next wakes."
+                ? "Switched to \(Self.shortName(name, in: options)), applied to the running session."
+                : "Switched to \(Self.shortName(name, in: options)). It takes effect when the session next wakes."
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } catch {
             errorMessage = Self.friendlyControlError(error)
@@ -228,11 +228,11 @@ struct SessionControlsSheet: View {
                 )
             }
             if result.overridden == true, let effective = result.effectiveEffort {
-                confirmation = "Requested \(result.effort) — the session is actually using \(effective) (overridden)."
+                confirmation = "Requested \(result.effort), but the session is actually using \(effective) (overridden)."
             } else {
                 confirmation = result.appliedLive == true
-                    ? "Effort set to \(result.effort) — applied live."
-                    : "Effort set to \(result.effort) — takes effect when the session next wakes."
+                    ? "Effort set to \(result.effort), applied live."
+                    : "Effort set to \(result.effort). It takes effect when the session next wakes."
             }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } catch {
@@ -327,7 +327,7 @@ struct SessionControlsSheet: View {
         } header: {
             Text("Fork")
         } footer: {
-            Text("Creates a sibling task with a copy of this conversation — the original keeps running untouched.")
+            Text("Creates a sibling task with a copy of this conversation. The original keeps running untouched.")
         }
     }
 
@@ -386,7 +386,7 @@ struct SessionControlsSheet: View {
         guard let apiError = error as? APIError else { return error.localizedDescription }
         switch apiError.code {
         case "session_control_needs_upgrade":
-            return "Your primary box's daemon is upgrading for mobile session control — try again in a minute."
+            return "Your primary box's daemon is upgrading for mobile session control. Try again in a minute."
         case "bridge_offline":
             return BridgeOfflineCopy.message(apiError)
         case "conflict":

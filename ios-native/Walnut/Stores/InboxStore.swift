@@ -533,3 +533,22 @@ extension InboxStore: LifecycleSuspendable {
         Task { [weak self] in await self?.refresh() }
     }
 }
+
+// MARK: - Disconnect: forget everything this store holds
+
+extension InboxStore {
+    /// Drop every letter and pending read, so a re-pair starts empty
+    /// (`LocalDataReset`).
+    func eraseLocalState() {
+        retryTask?.cancel()
+        retryTask = nil
+        readIntents = [:]
+        keptReadIds = []
+        readRetryIds = []
+        letters = []
+        archivedLetters = []
+        errorMessage = nil
+        loading = false
+        loadingArchived = false
+    }
+}

@@ -1061,7 +1061,7 @@ struct NotificationStyling {
                     if head.isEmpty { return rest }
                     if head.hasPrefix("("), head.hasSuffix(")") {
                         let label = String(head.dropFirst().dropLast())
-                        return rest.isEmpty ? label : "\(label) — \(rest)"
+                        return rest.isEmpty ? label : "\(label): \(rest)"
                     }
                 }
                 return text.trimmingCharacters(in: .whitespacesAndNewlines)

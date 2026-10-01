@@ -105,3 +105,15 @@ enum DurableStore {
     }
     #endif
 }
+
+// MARK: - Disconnect
+
+extension DurableStore {
+    /// Disconnect is the one deliberate wholesale wipe of this store: what it
+    /// holds was for a server this phone no longer talks to (`LocalDataReset`).
+    static func eraseAll() {
+        ioQueue.sync(flags: .barrier) {
+            try? FileManager.default.removeItem(at: directory)
+        }
+    }
+}
