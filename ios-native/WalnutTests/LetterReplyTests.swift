@@ -579,6 +579,19 @@ final class LetterThreadOrderTests: XCTestCase {
         XCTAssertEqual(items.filter(\.isHuman).count, 4)
     }
 
+    /// The row a Retry moves is found, so it can be drawn lifted while it moves
+    /// (build 84 gate, P3); a row that only came or went is no move.
+    func testTheRowARetryMovesDownIsFound() {
+        let moved = LetterThreadItem.movedDown
+        XCTAssertEqual(moved(["a", "r", "b", "c"], ["a", "b", "c", "r"]), "r")
+        XCTAssertEqual(moved(["r", "a"], ["a", "r"]), "r", "a swap of two: the one now lower moved")
+        XCTAssertNil(moved(["a", "b"], ["a", "b", "c"]), "a new reply at the end")
+        XCTAssertNil(moved(["a", "r", "b"], ["a", "b"]), "a reply that went")
+        XCTAssertNil(moved(["a", "b"], ["a", "b"]))
+        XCTAssertEqual(moved(["a", "r", "b"], ["a", "b", "r", "new"]), "r", "a move and a new row together")
+        XCTAssertNil(moved(["a", "b", "c", "d"], ["b", "a", "d", "c"]), "two moves are not one row moving")
+    }
+
     /// A reply saved before `afterTurns` existed is slotted by its send time.
     func testAReplySavedBeforeSlotsIsPlacedByItsTime() throws {
         let entries = [try turn("agent", "a", at: 1_000), try turn("agent", "b", at: 3_000)]
@@ -601,6 +614,64 @@ final class VoiceNoticeCopyTests: XCTestCase {
         XCTAssertNil(VoiceNoticeCopy.savedCore("Recording too short"), "an error that saved nothing stands alone")
     }
 
+    /// A take the recorder gave up on and its "couldn't be transcribed" row are one
+    /// notice (r5 gate follow-up): the sentence said it, then the row said it again.
+    func testATakeTheRecorderGaveUpOnAndItsRowAreOneNotice() {
+        let gaveUp = "Couldn't transcribe that recording. Discard it or keep it for later."
+        let one = VoiceNoticeCopy.retiredTake(error: gaveUp, count: 1)
+        XCTAssertEqual(one.full, gaveUp)
+        XCTAssertEqual(one.short, "Could not transcribe.")
+        let two = VoiceNoticeCopy.retiredTake(error: gaveUp, count: 2)
+        // One sentence for both takes: "Couldn't transcribe that recording. 2
+        // recordings kept." read as one take kept twice (build 84 gate, P3).
+        XCTAssertEqual(two.full, "Couldn't transcribe 2 recordings. They are kept.",
+                       "a sentence about one take says how many the Discard clears")
+        XCTAssertEqual(two.short, "2 could not be transcribed.")
+        // The plain row the merged notice leaves when dismissed does not read
+        // the same at the accessibility sizes (build 84 gate, P2).
+        XCTAssertEqual(VoiceNoticeCopy.failed(count: 1).short, "1 recording not transcribed.")
+        XCTAssertEqual(VoiceNoticeCopy.failed(count: 2).short, "2 recordings not transcribed.")
+        for count in [1, 2, 12] {
+            XCTAssertNotEqual(VoiceNoticeCopy.failed(count: count).short,
+                              VoiceNoticeCopy.retiredTake(error: gaveUp, count: count).short, "count \(count)")
+        }
+        let counted = "2 recordings couldn't be transcribed. Discard to clear them."
+        XCTAssertEqual(VoiceNoticeCopy.retiredTake(error: counted, count: 2).full, counted,
+                       "a sentence that already gives the count stands as it is")
+        let damaged = "That recording is damaged and can't be transcribed. Discard it."
+        XCTAssertEqual(VoiceNoticeCopy.retiredTake(error: damaged, count: 1).full, damaged)
+
+        // Which row an error rides on.
+        let home = VoiceNoticeRows.errorHome
+        XCTAssertEqual(home(gaveUp, false, true), .retiredTake)
+        XCTAssertEqual(home(gaveUp, true, true), .retiredTake, "a waiting take elsewhere keeps its own row")
+        XCTAssertEqual(home(gaveUp, false, false), .alone, "no given-up row to join")
+        XCTAssertEqual(home("No speech recognized. Recording kept.", true, true), .savedTake)
+        XCTAssertEqual(home("No speech recognized. Recording kept.", false, true), .alone)
+        XCTAssertEqual(home("Recording too short", true, true), .alone)
+        XCTAssertEqual(home(VoiceRecorder.microphoneDeniedMessage, true, true), .alone)
+        for saved in VoiceNoticeCopy.savedSuffixes {
+            XCTAssertNil(VoiceNoticeCopy.retiredCore("Something failed.\(saved)"), "a saved take read as given up")
+        }
+    }
+
+    /// The notice's buttons wrap onto a new line rather than run past the screen:
+    /// at the largest text size "Open Settings" and the dismiss beside it were
+    /// 425pt on a 402pt screen (build 84 gate, P2).
+    func testTheNoticeButtonsWrapToTheWidthOffered() {
+        let settings = CGSize(width: 330, height: 60), dismiss = CGSize(width: 44, height: 44)
+        let wide = WrappingRow.lines(fitting: 402, sizes: [settings, dismiss], spacing: 8)
+        XCTAssertEqual(wide.map(\.indices), [[0, 1]])
+        XCTAssertEqual(wide.first?.width, 382)
+        XCTAssertEqual(wide.first?.height, 60)
+        let narrow = WrappingRow.lines(fitting: 370, sizes: [settings, dismiss], spacing: 8)
+        XCTAssertEqual(narrow.map(\.indices), [[0], [1]])
+        XCTAssertTrue(narrow.allSatisfy { $0.width <= 370 })
+        let three = WrappingRow.lines(fitting: 200, sizes: Array(repeating: CGSize(width: 60, height: 44), count: 3), spacing: 8)
+        XCTAssertEqual(three.map(\.indices), [[0, 1, 2]], "196pt fits in 200")
+        XCTAssertTrue(WrappingRow.lines(fitting: 100, sizes: [], spacing: 8).isEmpty)
+    }
+
     func testTheShortFormsAreOneShortSentence() {
         XCTAssertEqual(VoiceNoticeCopy.error(VoiceRecorder.microphoneDeniedMessage).short, "Microphone is off.")
         XCTAssertEqual(VoiceNoticeCopy.error(VoiceRecorder.microphoneDeniedMessage).full, VoiceRecorder.microphoneDeniedMessage)
@@ -611,6 +682,8 @@ final class VoiceNoticeCopyTests: XCTestCase {
         let all = [
             VoiceNoticeCopy.pending(count: 1), .pending(count: 3), .failed(count: 1), .failed(count: 2),
             .error(VoiceRecorder.microphoneDeniedMessage), .savedTake(error: "x. Recording kept.", count: 1),
+            .retiredTake(error: "x. Discard it.", count: 1), .retiredTake(error: "x. Discard it.", count: 12),
+            .failed(count: 12),
         ]
         for copy in all {
             for text in [copy.full, copy.short] {

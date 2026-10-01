@@ -28,13 +28,24 @@ struct LetterThreadView: View {
     var onRetryPending: (String) -> Void = { _ in }
     var onEditPending: (String) -> Void = { _ in }
 
+    /// The gap between replies.
+    static let rowSpacing: CGFloat = 10
+
+    /// How long a Retry's move down the thread takes (the reader animates it).
+    static let moveDuration: Double = 0.3
+
+    /// The reply a Retry is moving right now, drawn lifted off the page until
+    /// the move ends.
+    @State private var movingId: String?
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let items = LetterThreadItem.ordered(entries: letter.threadEntries, pending: pending)
+        VStack(alignment: .leading, spacing: Self.rowSpacing) {
             Divider()
             Text("Thread")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            ForEach(LetterThreadItem.ordered(entries: letter.threadEntries, pending: pending)) { item in
+            ForEach(items) { item in
                 VStack(alignment: .leading, spacing: 5) {
                     switch item {
                     case .turn(let entry):
@@ -57,14 +68,59 @@ struct LetterThreadView: View {
                         )
                     }
                 }
+                // A Retry sends an older refused reply to the end, past the rows
+                // after it, and the reader animates that move. The row travels as
+                // ONE opaque piece drawn over the rows it passes: its words and
+                // buttons change in place at once, and only the row's position is
+                // animated. Animated leaf by leaf, the old red line and its Retry
+                // and Edit faded out where they had been while the other rows slid
+                // through them, text over text for about 100ms (r5 gate, P2).
+                // The page colour reaches half the row spacing past each edge, so
+                // a row it covers is cut in the gap between replies, never flush
+                // against its words (a covered "2:00 AM" read as its own line).
+                // While it moves it is a card with a hairline edge, so the row
+                // passing over the others reads as one piece on top of them
+                // (build 84 gate, P3); once in place it is flat page again. No
+                // shadow: a shadow on a moving layer is redrawn every frame, and
+                // on black it is not seen anyway.
+                .background { rowBackground(item, lifted: item.id == movingId) }
+                .transaction { $0.animation = nil }
+                .geometryGroup()
+                .zIndex(item.isSending || item.id == movingId ? 1 : 0)
                 // What a Send scrolls to: this reply and its status line.
                 .id(item.id)
+            }
+        }
+        .onChange(of: items.map(\.id)) { old, new in
+            guard let moved = LetterThreadItem.movedDown(old: old, new: new),
+                  items.first(where: { $0.id == moved })?.isSending == true
+            else { return }
+            movingId = moved
+            Task { @MainActor in
+                // A little past the move: its first frame is drawn a frame or two
+                // after this change, and a card put down at exactly the duration
+                // left the row flat for its last few points of travel.
+                try? await Task.sleep(for: .seconds(Self.moveDuration + 0.1))
+                if movingId == moved { movingId = nil }
             }
         }
         // `.contain` first: an identifier on a plain container is stamped onto
         // every child, which erased the turn and status-line identifiers.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inbox.letter.thread")
+    }
+
+    @ViewBuilder
+    private func rowBackground(_ item: LetterThreadItem, lifted: Bool) -> some View {
+        let edge = Self.rowSpacing / 2
+        if lifted {
+            let card = RoundedRectangle(cornerRadius: 12 + edge, style: .continuous)
+            card.fill(Color(.systemBackground))
+                .overlay { card.strokeBorder(Color(.separator), lineWidth: 1) }
+                .padding(-edge)
+        } else if item.isSending {
+            Color(.systemBackground).padding(.vertical, -edge)
+        }
     }
 
     private func header(isHuman: Bool, date: Date?) -> some View {
@@ -117,6 +173,8 @@ struct LetterThreadView: View {
 
     /// A reply the server does not have yet: the human's words, as they will read
     /// once recorded, so the bubble does not jump when the recorded turn replaces it.
+    /// Full opacity while sending too: the status line under it says "Sending", and
+    /// a see-through bubble let the rows a Retry moves it past show through it.
     private func pendingBubble(_ reply: LetterReplyStore.PendingReply) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             header(isHuman: true, date: reply.createdAt)
@@ -128,7 +186,6 @@ struct LetterThreadView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .opacity(reply.state == .sending ? 0.7 : 1)
     }
 }
 
@@ -164,6 +221,30 @@ enum LetterThreadItem: Identifiable, Equatable {
         case .turn(let entry): return entry.isHuman
         case .pending: return true
         }
+    }
+
+    /// A reply on its way to the server: the one kind of row that moves down the
+    /// thread (a Retry sends it after everything on record), so it is drawn on top.
+    var isSending: Bool {
+        if case .pending(let reply) = self { return reply.state == .sending }
+        return false
+    }
+
+    /// The one row that moved down past others between two orderings (a Retry
+    /// sends a refused reply after everything on record), or nil. Rows that came
+    /// or went are ignored: only a change in the order of the rows in both counts.
+    static func movedDown(old: [String], new: [String]) -> String? {
+        let both = Set(old).intersection(new)
+        let before = old.filter(both.contains)
+        let after = new.filter(both.contains)
+        guard before != after else { return nil }
+        for (index, id) in before.enumerated() {
+            guard let later = after.firstIndex(of: id), later > index else { continue }
+            var rest = before
+            rest.remove(at: index)
+            if rest == after.filter({ $0 != id }) { return id }
+        }
+        return nil
     }
 
     /// Recorded turns in the server's order, each pending reply in its slot (see

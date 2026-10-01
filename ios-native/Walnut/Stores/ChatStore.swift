@@ -428,6 +428,8 @@ final class ChatStore {
         clearLiveThinking()
         activity = nil
         errorMessage = nil
+        forgetLiveTurn()
+        stallNotice = nil
         initialPaintDone = false
         messages = []
         // `hasOlder` belongs to the conversation that was on screen, and NOTHING
@@ -522,19 +524,6 @@ final class ChatStore {
             // one), so pull-to-refresh visibly resolves instead of leaving a stale
             // complaint above a transcript that is now correct.
             retractMessagesLoadFailure()
-            // Carry local-only bubbles across the replace — server history
-            // doesn't know about them and a refetch must never erase them.
-            // Besides failed/in-flight optimistic bubbles, this keeps
-            // SOLIDIFIED local echoes (the `local-…` user bubble after its 202,
-            // and finalizeTurn's `turn-…` provisional reply) that the fetch
-            // doesn't contain yet: a cloud replica's GET /messages serves a
-            // LAGGING copy until git-sync converges, and adopting that copy
-            // wholesale erased the user's just-sent message AND the fresh
-            // reply right after the turn ended (2026-08-23 dogfood round 10).
-            let localOnly = Self.carryLocalRows(
-                current: messages, fetched: fetched,
-                conversationID: id, owners: localRowConversation
-            )
             // The verdict is the FULL list's answer, banked for the watchdog
             // before anything is dropped (see `lastFetchSettledTurn`).
             let settled = Self.turnSettled(history: fetched, watched: watchedUserText)
@@ -547,6 +536,19 @@ final class ChatStore {
             let installed = (streaming && !settled)
                 ? Self.settledRows(fetched, watched: watchedUserText)
                 : fetched
+            // Carry local-only bubbles across the replace — server history
+            // doesn't know about them and a refetch must never erase them.
+            // Besides failed/in-flight optimistic bubbles, this keeps
+            // SOLIDIFIED local echoes (the `local-…` user bubble after its 202,
+            // and finalizeTurn's `turn-…` provisional reply) that the fetch
+            // doesn't contain yet: a cloud replica's GET /messages serves a
+            // LAGGING copy until git-sync converges, and adopting that copy
+            // wholesale erased the user's just-sent message AND the fresh
+            // reply right after the turn ended (2026-08-23 dogfood round 10).
+            let localOnly = Self.carryLocalRows(
+                current: messages, fetched: fetched, installed: installed,
+                conversationID: id, owners: localRowConversation
+            )
             let wasAtBottom = bottomPinned
             let changed = installed.count + localOnly.count != messages.count
                 || installed.last?.id != messages.dropLast(localOnly.count).last?.id
@@ -673,8 +675,17 @@ final class ChatStore {
     /// recorded owner counts as this conversation's: the store tags every local
     /// row it invents and drops the whole map on a switch, so untagged means
     /// canonical (or a caller with no conversation scope, e.g. a pure-logic test).
+    ///
+    /// `installed` is what the caller puts on screen from this fetch (a mid-turn
+    /// install leaves out the rows the server flags in flight); nil means the
+    /// whole fetch. A stalled turn's late answer (`lateAnswerPrefix`) is judged
+    /// against it, not the fetch: that answer can come back flagged in flight
+    /// while a later turn runs, and retiring the local row for a row the install
+    /// then drops left no answer on screen until the later turn ended (build 84
+    /// gate, P2).
     nonisolated static func carryLocalRows(
         current: [ChatMessage], fetched: [ChatMessage],
+        installed: [ChatMessage]? = nil,
         conversationID: String? = nil,
         owners: [String: String] = [:],
         now: Date = Date()
@@ -729,6 +740,20 @@ final class ChatStore {
             // window slid) must self-heal rather than duplicate forever.
             if let created = parseISO.date(from: row.createdAt),
                now.timeIntervalSince(created) > localEchoTTL {
+                continue
+            }
+            if row.id.hasPrefix(lateAnswerPrefix) {
+                // Retired only once an installed row carries its text, so the
+                // answer is on screen exactly once at every point. Entity refs
+                // are normalized on both sides, as finalizeTurn's duplicate check
+                // does. It takes nothing from `retireBudget`: that belongs to the
+                // turn that just ended.
+                let text = MarkdownParser.replaceEntityRefs(row.text, bold: false)
+                let landed = (installed ?? fetched).contains {
+                    $0.role == "assistant" && $0.kind == nil
+                        && MarkdownParser.replaceEntityRefs($0.text, bold: false) == text
+                }
+                if !landed { out.append(row) }
                 continue
             }
             if row.id.hasPrefix("turn-") {
@@ -1468,6 +1493,7 @@ final class ChatStore {
         streaming = false
         clearLiveThinking()
         activity = nil
+        forgetLiveTurn()
     }
 
     private func resumeStream() {
@@ -1546,6 +1572,7 @@ final class ChatStore {
             if handled.toolName == "user_ask" { pendingQuestion = true }
             return
         }
+        if routeTurnFrame(event.event, data: data, conversationID: conversationID) { return }
         switch event.event {
         case "message-start":
             setStreaming(true)
@@ -1599,6 +1626,136 @@ final class ChatStore {
             return "An attached image was rejected by the model (too large). Update the server so it downscales attachments, then try again."
         }
         return raw
+    }
+
+    // MARK: - Turn-aware frames (a stalled turn's late answer)
+
+    /// The turn the live region is streaming, from its `message-start`. Only a
+    /// start proves which turn is live: a send's own turn id is not compared,
+    /// so an end that names a turn nobody started still ends the turn on screen
+    /// (the server starts a turn sent after a stall before the stalled turn's
+    /// late end can arrive).
+    @ObservationIgnored private var liveTurnID: String?
+    /// The stall notice on screen, and the turn it is about.
+    @ObservationIgnored private var stallNotice: (turnID: String, text: String)?
+
+    /// No turn is live any more (it ended, stopped, or the stream closed). The
+    /// stall notice is kept: its turn's answer can still arrive, on replay too.
+    private func forgetLiveTurn() {
+        liveTurnID = nil
+    }
+
+    /// The fields the turn-aware frames carry. All optional: `error` names its
+    /// turn only on newer servers, and a frame with no turn to compare keeps its
+    /// old meaning.
+    private struct TurnFrame: Decodable {
+        let turnId: String?
+        let fullText: String?
+        let message: String?
+        let laneStillRunning: Bool?
+    }
+
+    /// Frames that name their turn, read against the turn on screen. True when
+    /// the frame was handled here; false leaves it to the ordinary arms.
+    ///
+    /// A turn can stall while its lane keeps running (docs/reference/api-v1.md,
+    /// "A turn that stalls"): an `error` with `laneStillRunning: true` is a notice,
+    /// the next message may be sent, and the stalled turn's answer can land much
+    /// later as `message-late` then `message-end`, while that next turn streams.
+    /// The server then sends the streaming turn's `message-start` again. Read
+    /// without turn ids, the late end finalized the streaming turn, the repeated
+    /// start wiped its text, and the notice stayed up after the answer came.
+    private func routeTurnFrame(_ name: String, data: Data, conversationID: String) -> Bool {
+        guard name == "message-start" || name == "message-end" || name == "message-late" || name == "error"
+        else { return false }
+        let frame = try? JSONDecoder().decode(TurnFrame.self, from: data)
+        let turnID = frame?.turnId
+        switch name {
+        case "message-start":
+            // The turn already streaming, started again: the same turn, so its
+            // text, reasoning and tools stay. The start does end its wait: the
+            // server queued it behind the stalled turn and starts it again once
+            // that turn's answer is in, so "Waiting for another task" goes, and
+            // the row says what the stream says (a running tool, else Thinking),
+            // as at an ordinary start.
+            if let turnID, turnID == liveTurnID, streaming {
+                setActivity(live.activityLabel)
+                return true
+            }
+            liveTurnID = turnID
+            return false
+        case "message-late":
+            // Always followed by the ordinary `message-end`, which lands the answer.
+            if let turnID { retractStallNotice(for: turnID) }
+            return true
+        case "message-end":
+            if let turnID { retractStallNotice(for: turnID) }
+            if let turnID, let live = liveTurnID, turnID != live, streaming {
+                landLateAnswer(frame?.fullText ?? "", turnID: turnID, conversationID: conversationID)
+                return true
+            }
+            liveTurnID = nil
+            return false
+        default: // "error"
+            guard frame?.laneStillRunning == true else {
+                liveTurnID = nil
+                return false
+            }
+            noteStalledTurn(turnID, message: frame?.message)
+            return true
+        }
+    }
+
+    /// A turn that went quiet while its lane still runs: not a failed turn. The
+    /// composer takes the next message (it waits for this turn on the lane), and
+    /// the notice stays until this turn's answer lands.
+    private func noteStalledTurn(_ turnID: String?, message: String?) {
+        AppLog.info("chat", "turn stalled, its lane is still running", ["turnId": turnID ?? "-"])
+        if turnID == nil || liveTurnID == nil || turnID == liveTurnID {
+            setStreaming(false)
+            setActivity(nil)
+            pendingQuestion = false
+            liveTurnID = nil
+        }
+        let text = Self.readableTurnError(message)
+        errorMessage = text
+        stallNotice = turnID.map { ($0, text) }
+        scheduleQueueDrain()
+    }
+
+    private func retractStallNotice(for turnID: String) {
+        guard let notice = stallNotice, notice.turnID == turnID else { return }
+        stallNotice = nil
+        if errorMessage == notice.text { errorMessage = nil }
+    }
+
+    /// The id prefix of a late answer's local row (see `landLateAnswer`).
+    nonisolated static let lateAnswerPrefix = "turn-late-"
+
+    /// An earlier turn's answer, ending while a later turn streams: its own row,
+    /// above the streaming turn's question (where history puts it), with the
+    /// live region left exactly as it was. The refetch then brings the
+    /// canonical row, which the server wrote before sending the frame. The
+    /// local row stays until a row the timeline INSTALLS carries the answer
+    /// (`carryLocalRows`): mid-turn the server can flag that row in flight, and
+    /// an install leaves it out.
+    private func landLateAnswer(_ fullText: String, turnID: String, conversationID: String) {
+        AppLog.info("chat", "a stalled turn's answer arrived during a later turn", [
+            "turnId": turnID, "liveTurnId": liveTurnID ?? "-",
+        ])
+        if !fullText.isEmpty, !messages.contains(where: { $0.role == "assistant" && $0.text == fullText }) {
+            let id = Self.lateAnswerPrefix + turnID
+            let row = ChatMessage(
+                id: id, role: "assistant", text: fullText,
+                createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
+            )
+            let question = watchedUserText.flatMap { watched in
+                messages.lastIndex { $0.role == "user" && $0.text == watched }
+            }
+            messages.insert(row, at: question ?? messages.endIndex)
+            localRowConversation[id] = conversationID
+        }
+        trackTask { [weak self] in await self?.loadMessages(conversationID) }
     }
 
     /// Buffer a streamed text delta and schedule a coalesced flush. SwiftUI
@@ -1762,6 +1919,7 @@ final class ChatStore {
     /// whose `message-end` was lost, and this is that turn.
     private func adoptLostTurnEnd() {
         streaming = false
+        forgetLiveTurn()
         streamText = ""
         streamTextTruncated = false
         // Canonical history already landed, so the reasoning's handoff is
@@ -1931,6 +2089,7 @@ final class ChatStore {
             streamTextTruncated = false
             activity = nil
             pendingQuestion = false
+            forgetLiveTurn()
             turnWatchdog?.cancel()
             turnWatchdog = nil
             // A STOP STILL DELIVERS THE QUEUE, one turn at a time, and that is a

@@ -72,6 +72,25 @@ final class VoiceResilienceTests: XCTestCase {
         FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("\(id).m4a").path)
     }
 
+    /// The recorder's sentence about a take it gave up on is shown ONCE, as the
+    /// notice of the "couldn't be transcribed" row, never above that row saying the
+    /// same thing (r5 gate follow-up). Checked against the recorder's real output,
+    /// so a reworded sentence that the notices no longer recognise fails here.
+    @MainActor
+    private func assertOneRetiredNotice(_ recorder: VoiceRecorder, line: UInt = #line) {
+        guard let message = recorder.errorMessage else {
+            return XCTFail("no sentence to show", line: line)
+        }
+        XCTAssertEqual(
+            VoiceNoticeRows.errorHome(
+                message, showsPending: recorder.pendingCount > 0, showsFailed: recorder.failedCount > 0
+            ),
+            .retiredTake, "\"\(message)\" would show above the row that says the same", line: line
+        )
+        XCTAssertEqual(VoiceNoticeCopy.retiredTake(error: message, count: recorder.failedCount).full, message,
+                       "one take: the recorder's own sentence", line: line)
+    }
+
     // MARK: - Store basics
 
     func testStorePreservePendingAndDiscard() {
@@ -336,6 +355,7 @@ final class VoiceResilienceTests: XCTestCase {
         XCTAssertEqual(recorder.failedCount, 1, "it moves to the couldn't-transcribe row")
         XCTAssertTrue(audioExists(take.id), "retiring a take must NEVER delete the user's audio")
         XCTAssertEqual(recorder.errorMessage, "Couldn't transcribe that recording. Discard it or keep it for later.")
+        assertOneRetiredNotice(recorder)
         XCTAssertTrue(store.pending().first?.isTerminal == true)
     }
 
@@ -365,6 +385,7 @@ final class VoiceResilienceTests: XCTestCase {
         XCTAssertEqual(recorder.errorMessage,
                        "That recording couldn't be transcribed. Discard to clear it.",
                        "a Retry tap must never be a silent no-op")
+        assertOneRetiredNotice(recorder)
 
         recorder.discardFailed()
         XCTAssertFalse(audioExists("retired"), "Discard is the exit the old row never offered")
@@ -512,6 +533,69 @@ final class VoiceResilienceTests: XCTestCase {
 
         recorder.discardFailed()
         XCTAssertFalse(audioExists("doomed"))
+    }
+
+    /// Discarding the takes takes the sentence about them with it. It used to
+    /// stay, alone now, with the mic-slash glyph, saying a recording was saved or
+    /// could be kept after it was deleted (build 84 gate, P1).
+    @MainActor
+    func testDiscardTakesTheSentenceAboutItsTakesWithIt() async {
+        let recorder = VoiceRecorder(store: store)
+        recorder.uploadOverride = { _ in
+            throw APIError.server(status: 503, code: "stt_unavailable",
+                                  message: "engine down", serverHash: nil, serverContent: nil)
+        }
+        _ = beginTake(recorder)
+        _ = await recorder.stopAndTranscribe()
+        let saved = recorder.errorMessage ?? ""
+        XCTAssertTrue(VoiceRecorder.isAboutKeptTakes(saved), "the recorder's sentence: \(saved)")
+        recorder.discardPending()
+        XCTAssertEqual(recorder.pendingCount, 0)
+        XCTAssertNil(recorder.errorMessage, "\"\(saved)\" outlived the take it was about")
+
+        recorder.uploadOverride = { _ in "" }
+        let take = beginTake(recorder)
+        _ = await recorder.stopAndTranscribe()
+        _ = await recorder.retryPending()
+        XCTAssertEqual(recorder.failedCount, 1)
+        let gaveUp = recorder.errorMessage ?? ""
+        XCTAssertTrue(VoiceRecorder.isAboutGivenUpTakes(gaveUp), "the recorder's sentence: \(gaveUp)")
+        recorder.discardFailed()
+        XCTAssertFalse(audioExists(take.id))
+        XCTAssertNil(recorder.errorMessage, "\"\(gaveUp)\" outlived the take it was about")
+    }
+
+    /// A sentence that is not about the discarded takes stays: a denied
+    /// microphone, and the other row's sentence.
+    @MainActor
+    func testDiscardKeepsASentenceThatIsNotAboutItsTakes() {
+        let recorder = VoiceRecorder(store: store)
+        for id in ["waiting", "doomed"] {
+            try! Data(repeating: 6, count: 2_000).write(to: store.newRecordingURL(id: id))
+        }
+        store.preserve(id: "waiting", reason: "transcribe-failed")
+        store.noteAttempt(id: "doomed", reason: "transcribe-failed", kind: .empty, message: "no speech")
+        store.noteAttempt(id: "doomed", reason: "transcribe-failed", kind: .empty, message: "no speech")
+        recorder.refreshPending()
+
+        recorder.errorMessage = "That recording couldn't be transcribed. Discard to clear it."
+        recorder.discardPending()
+        XCTAssertEqual(recorder.errorMessage, "That recording couldn't be transcribed. Discard to clear it.",
+                       "the given-up take is still there, and so is its sentence")
+
+        recorder.errorMessage = VoiceRecorder.microphoneDeniedMessage
+        recorder.discardFailed()
+        XCTAssertEqual(recorder.failedCount, 0)
+        XCTAssertEqual(recorder.errorMessage, VoiceRecorder.microphoneDeniedMessage)
+
+        try! Data(repeating: 6, count: 2_000).write(to: store.newRecordingURL(id: "again"))
+        store.preserve(id: "again", reason: "transcribe-failed")
+        recorder.refreshPending()
+        recorder.discardPending()
+        XCTAssertEqual(recorder.errorMessage, VoiceRecorder.microphoneDeniedMessage,
+                       "a denied microphone is not about a take")
+        XCTAssertFalse(VoiceRecorder.isAboutKeptTakes(VoiceRecorder.microphoneDeniedMessage))
+        XCTAssertFalse(VoiceRecorder.isAboutGivenUpTakes(VoiceRecorder.microphoneDeniedMessage))
     }
 
     // MARK: - Cancellation is never silent on a user tap
@@ -1009,6 +1093,7 @@ final class VoiceResilienceTests: XCTestCase {
         XCTAssertEqual(recorder.errorMessage,
                        "That recording is damaged and can't be transcribed. Discard it.",
                        "the retired copy must not advise keeping it 'for later' when later cannot help")
+        assertOneRetiredNotice(recorder)
         XCTAssertTrue(audioExists("no-moov"), "a verdict is still not permission to delete")
 
         // And a second drain does not touch it again.

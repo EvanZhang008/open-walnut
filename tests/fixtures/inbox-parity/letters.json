@@ -1,0 +1,935 @@
+{
+ "_comment": "Invented letters for the iOS/web inbox parity check. Expected verdicts are produced by running the WEB functions (tests/web/inbox-ios-parity.test.ts); InboxFilterParityTests replays them on the phone's rules. Patch values of null delete the key; a patch for an unknown id adds that letter.",
+ "letters": [
+  {
+   "id": "lt-parity-000",
+   "subject": "Nightly build finished: 3 flaky tests quarantined, \u6784\u5efa\u65f6\u95f4\u7f29\u77ed\u4e86 40% compared with last week",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 0. \u9884\u89c8\u6587\u5b57 0.",
+   "sender": {
+    "sessionId": "sess-parity-0",
+    "sessionTitle": "Nightly build watcher",
+    "taskTitle": "Keep the build green",
+    "host": "devbox"
+   },
+   "createdAt": 1799999820000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1800001620000
+  },
+  {
+   "id": "lt-parity-001",
+   "subject": "Pick a rollout window for the marina search index rebuild \u5468\u56db\u665a\u4e0a\u8fd8\u662f\u5468\u516d\u65e9\u4e0a",
+   "type": "action_required",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 1. \u9884\u89c8\u6587\u5b57 1.",
+   "sender": {
+    "sessionId": "sess-parity-1",
+    "sessionTitle": "Home admin helper",
+    "taskTitle": "Household paperwork",
+    "host": ""
+   },
+   "createdAt": 1799997600000,
+   "read": false,
+   "pinned": false,
+   "archived": false,
+   "actions": [
+    {
+     "id": "yes",
+     "label": "Yes"
+    },
+    {
+     "id": "no",
+     "label": "No"
+    }
+   ]
+  },
+  {
+   "id": "lt-parity-002",
+   "subject": "Draft ready: onboarding checklist v2 \u9700\u8981\u4f60\u770b\u4e00\u4e0b\u7b2c\u4e09\u8282 before Friday",
+   "type": "review",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 2. \u9884\u89c8\u6587\u5b57 2.",
+   "sender": {
+    "sessionId": "sess-parity-2",
+    "sessionTitle": "Notes gardener",
+    "taskTitle": "Tidy the notes vault",
+    "host": ""
+   },
+   "createdAt": 1799995380000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799997180000
+  },
+  {
+   "id": "lt-parity-003",
+   "subject": "Done: migrated 1,204 notes to the new folder layout \u5168\u90e8\u5b8c\u6210 with zero conflicts",
+   "type": "completion",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 3. \u9884\u89c8\u6587\u5b57 3.",
+   "sender": {
+    "sessionId": "sess-parity-3",
+    "sessionTitle": "Travel planner",
+    "taskTitle": "Plan the spring trip",
+    "host": "devbox"
+   },
+   "createdAt": 1799993160000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799994960000
+  },
+  {
+   "id": "lt-parity-004",
+   "subject": "Weekly digest \u672c\u5468\u6458\u8981: 12 tasks closed, 4 opened, 2 waiting on you",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 4. \u9884\u89c8\u6587\u5b57 4.",
+   "sender": {
+    "sessionId": "sess-parity-4",
+    "sessionTitle": "Reading assistant",
+    "taskTitle": "Weekly reading",
+    "host": ""
+   },
+   "createdAt": 1799990940000,
+   "read": true,
+   "pinned": true,
+   "archived": false,
+   "readAt": 1799992740000
+  },
+  {
+   "id": "lt-parity-005",
+   "subject": "Heads up: the acme staging box rebooted overnight \u5df2\u81ea\u52a8\u6062\u590d\u6240\u6709\u4f1a\u8bdd",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 5. \u9884\u89c8\u6587\u5b57 5.",
+   "sender": {
+    "sessionId": "sess-parity-0",
+    "sessionTitle": "Nightly build watcher",
+    "taskTitle": "Keep the build green",
+    "host": ""
+   },
+   "createdAt": 1799988720000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799990520000
+  },
+  {
+   "id": "lt-parity-006",
+   "subject": "Approve the dependency bump for the charting library \u8fd8\u662f\u5148\u7b49\u4e0b\u4e00\u4e2a\u8865\u4e01\u7248\u672c?",
+   "type": "action_required",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 6. \u9884\u89c8\u6587\u5b57 6.",
+   "sender": {
+    "sessionId": "sess-parity-1",
+    "sessionTitle": "Home admin helper",
+    "taskTitle": "Household paperwork",
+    "host": "devbox"
+   },
+   "createdAt": 1799986500000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "actions": [
+    {
+     "id": "yes",
+     "label": "Yes"
+    },
+    {
+     "id": "no",
+     "label": "No"
+    }
+   ],
+   "readAt": 1799988300000,
+   "answered": {
+    "actionId": "yes",
+    "label": "Yes",
+    "at": 1799994000000
+   }
+  },
+  {
+   "id": "lt-parity-007",
+   "subject": "Calendar sync caught up after the time zone change \u65f6\u533a\u5207\u6362\u540e\u65e5\u5386\u5df2\u540c\u6b65",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 7. \u9884\u89c8\u6587\u5b57 7.",
+   "sender": {
+    "sessionId": "sess-parity-2",
+    "sessionTitle": "Notes gardener",
+    "taskTitle": "Tidy the notes vault",
+    "host": ""
+   },
+   "createdAt": 1799984280000,
+   "read": false,
+   "pinned": false,
+   "archived": false
+  },
+  {
+   "id": "lt-parity-008",
+   "subject": "Please review the new empty-state copy for the Notes tab \u6587\u6848\u6709\u4e09\u79cd\u5907\u9009",
+   "type": "review",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 8. \u9884\u89c8\u6587\u5b57 8.",
+   "sender": {
+    "sessionId": "sess-parity-3",
+    "sessionTitle": "Travel planner",
+    "taskTitle": "Plan the spring trip",
+    "host": ""
+   },
+   "createdAt": 1799982060000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799983860000
+  },
+  {
+   "id": "lt-parity-009",
+   "subject": "Disk usage on the build cache crossed 80 percent \u5efa\u8bae\u6e05\u7406\u65e7\u7684\u7f13\u5b58\u76ee\u5f55",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 9. \u9884\u89c8\u6587\u5b57 9.",
+   "sender": {
+    "sessionId": "sess-parity-4",
+    "sessionTitle": "Reading assistant",
+    "taskTitle": "Weekly reading",
+    "host": "devbox"
+   },
+   "createdAt": 1799979840000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799981640000
+  },
+  {
+   "id": "lt-parity-010",
+   "subject": "Finished the flaky-test sweep: 7 fixed, 2 still open \u5269\u4e0b\u4e24\u4e2a\u9700\u8981\u66f4\u591a\u65e5\u5fd7",
+   "type": "completion",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 10. \u9884\u89c8\u6587\u5b57 10.",
+   "sender": {
+    "sessionId": "sess-parity-0",
+    "sessionTitle": "Nightly build watcher",
+    "taskTitle": "Keep the build green",
+    "host": ""
+   },
+   "createdAt": 1799977620000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799979420000
+  },
+  {
+   "id": "lt-parity-011",
+   "subject": "Morning summary \u65e9\u95f4\u6458\u8981 for Tuesday: three meetings, one deadline, no blockers",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 11. \u9884\u89c8\u6587\u5b57 11.",
+   "sender": {
+    "sessionId": "sess-parity-1",
+    "sessionTitle": "Home admin helper",
+    "taskTitle": "Household paperwork",
+    "host": ""
+   },
+   "createdAt": 1799975400000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799977200000
+  },
+  {
+   "id": "lt-parity-012",
+   "subject": "Should the heron importer skip files over 50 MB? \u5927\u6587\u4ef6\u73b0\u5728\u4f1a\u62d6\u6162\u6574\u4e2a\u5bfc\u5165",
+   "type": "action_required",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 12. \u9884\u89c8\u6587\u5b57 12.",
+   "sender": {
+    "sessionId": "sess-parity-2",
+    "sessionTitle": "Notes gardener",
+    "taskTitle": "Tidy the notes vault",
+    "host": "devbox"
+   },
+   "createdAt": 1799973180000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "actions": [
+    {
+     "id": "yes",
+     "label": "Yes"
+    },
+    {
+     "id": "no",
+     "label": "No"
+    }
+   ],
+   "readAt": 1799974980000
+  },
+  {
+   "id": "lt-parity-013",
+   "subject": "Search latency p90 back under 120 ms after the index compaction \u538b\u7f29\u540e\u6062\u590d\u6b63\u5e38",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 13. \u9884\u89c8\u6587\u5b57 13.",
+   "sender": {
+    "sessionId": "sess-parity-3",
+    "sessionTitle": "Travel planner",
+    "taskTitle": "Plan the spring trip",
+    "host": ""
+   },
+   "createdAt": 1799970960000,
+   "read": false,
+   "pinned": false,
+   "archived": false
+  },
+  {
+   "id": "lt-parity-014",
+   "subject": "The kestrel report generator now runs in 9 s instead of 41 s \u4f18\u5316\u4e86\u4e09\u5904\u67e5\u8be2",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 14. \u9884\u89c8\u6587\u5b57 14.",
+   "sender": {
+    "sessionId": "sess-parity-4",
+    "sessionTitle": "Reading assistant",
+    "taskTitle": "Weekly reading",
+    "host": ""
+   },
+   "createdAt": 1799968740000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799970540000
+  },
+  {
+   "id": "lt-parity-015",
+   "subject": "Review the proposed folder names for the photo archive \u7167\u7247\u5f52\u6863\u7684\u547d\u540d\u65b9\u6848",
+   "type": "review",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 15. \u9884\u89c8\u6587\u5b57 15.",
+   "sender": {
+    "sessionId": "sess-parity-0",
+    "sessionTitle": "Nightly build watcher",
+    "taskTitle": "Keep the build green",
+    "host": "devbox"
+   },
+   "createdAt": 1799966520000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799968320000
+  },
+  {
+   "id": "lt-parity-016",
+   "subject": "New device paired: tablet in the study \u4e66\u623f\u7684\u5e73\u677f\u5df2\u5b8c\u6210\u914d\u5bf9",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 16. \u9884\u89c8\u6587\u5b57 16.",
+   "sender": {
+    "sessionId": "sess-parity-1",
+    "sessionTitle": "Home admin helper",
+    "taskTitle": "Household paperwork",
+    "host": ""
+   },
+   "createdAt": 1799964300000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799966100000
+  },
+  {
+   "id": "lt-parity-017",
+   "subject": "Backup rotation verified: 30 daily, 12 monthly snapshots \u5907\u4efd\u8f6e\u6362\u6821\u9a8c\u901a\u8fc7",
+   "type": "completion",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 17. \u9884\u89c8\u6587\u5b57 17.",
+   "sender": {
+    "sessionId": "sess-parity-2",
+    "sessionTitle": "Notes gardener",
+    "taskTitle": "Tidy the notes vault",
+    "host": ""
+   },
+   "createdAt": 1799962080000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799963880000
+  },
+  {
+   "id": "lt-parity-018",
+   "subject": "Reminder: the certificate for the demo site expires in 12 days \u8bc1\u4e66\u8fd8\u6709\u5341\u4e8c\u5929\u5230\u671f",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 18. \u9884\u89c8\u6587\u5b57 18.",
+   "sender": {
+    "sessionId": "sess-parity-3",
+    "sessionTitle": "Travel planner",
+    "taskTitle": "Plan the spring trip",
+    "host": "devbox"
+   },
+   "createdAt": 1799959860000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799961660000
+  },
+  {
+   "id": "lt-parity-019",
+   "subject": "Merge the two duplicate 'Groceries' projects into one? \u4e24\u4e2a\u540c\u540d\u9879\u76ee\u8981\u5408\u5e76\u5417",
+   "type": "action_required",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 19. \u9884\u89c8\u6587\u5b57 19.",
+   "sender": {
+    "sessionId": "sess-parity-4",
+    "sessionTitle": "Reading assistant",
+    "taskTitle": "Weekly reading",
+    "host": ""
+   },
+   "createdAt": 1799957640000,
+   "read": false,
+   "pinned": false,
+   "archived": false,
+   "actions": [
+    {
+     "id": "yes",
+     "label": "Yes"
+    },
+    {
+     "id": "no",
+     "label": "No"
+    }
+   ]
+  },
+  {
+   "id": "lt-parity-020",
+   "subject": "Reading list \u9605\u8bfb\u6e05\u5355: five saved articles about offline-first sync",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 20. \u9884\u89c8\u6587\u5b57 20.",
+   "sender": {
+    "sessionId": "sess-parity-0",
+    "sessionTitle": "Nightly build watcher",
+    "taskTitle": "Keep the build green",
+    "host": ""
+   },
+   "createdAt": 1799955420000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799957220000
+  },
+  {
+   "id": "lt-parity-021",
+   "subject": "Weather alert for the weekend hike \u5468\u672b\u5f92\u6b65\u6709\u96f7\u9635\u96e8\u9884\u8b66, plan B is the museum",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 21. \u9884\u89c8\u6587\u5b57 21.",
+   "sender": {
+    "sessionId": "sess-parity-1",
+    "sessionTitle": "Home admin helper",
+    "taskTitle": "Household paperwork",
+    "host": "devbox"
+   },
+   "createdAt": 1799953200000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799955000000
+  },
+  {
+   "id": "lt-parity-022",
+   "subject": "Transcription of the Monday voice memo is ready \u5468\u4e00\u8bed\u97f3\u5907\u5fd8\u5f55\u5df2\u8f6c\u5199",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 22. \u9884\u89c8\u6587\u5b57 22.",
+   "sender": {
+    "sessionId": "sess-parity-2",
+    "sessionTitle": "Notes gardener",
+    "taskTitle": "Tidy the notes vault",
+    "host": ""
+   },
+   "createdAt": 1799950980000,
+   "read": true,
+   "pinned": true,
+   "archived": false,
+   "readAt": 1799952780000
+  },
+  {
+   "id": "lt-parity-023",
+   "subject": "Look over the budget sheet before it goes to the family group \u9884\u7b97\u8868\u8bf7\u8fc7\u76ee",
+   "type": "review",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 23. \u9884\u89c8\u6587\u5b57 23.",
+   "sender": {
+    "sessionId": "sess-parity-3",
+    "sessionTitle": "Travel planner",
+    "taskTitle": "Plan the spring trip",
+    "host": ""
+   },
+   "createdAt": 1799948760000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799950560000
+  },
+  {
+   "id": "lt-parity-024",
+   "subject": "Library due dates: two books due Thursday \u5468\u56db\u6709\u4e24\u672c\u4e66\u5230\u671f",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 24. \u9884\u89c8\u6587\u5b57 24.",
+   "sender": {
+    "sessionId": "sess-parity-4",
+    "sessionTitle": "Reading assistant",
+    "taskTitle": "Weekly reading",
+    "host": "devbox"
+   },
+   "createdAt": 1799946540000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799948340000
+  },
+  {
+   "id": "lt-parity-025",
+   "subject": "The plant watering schedule moved to every 4 days \u6d47\u6c34\u5468\u671f\u6539\u6210\u56db\u5929\u4e00\u6b21",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 25. \u9884\u89c8\u6587\u5b57 25.",
+   "sender": {
+    "sessionId": "sess-parity-0",
+    "sessionTitle": "Nightly build watcher",
+    "taskTitle": "Keep the build green",
+    "host": ""
+   },
+   "createdAt": 1799944320000,
+   "read": false,
+   "pinned": false,
+   "archived": false
+  },
+  {
+   "id": "lt-parity-026",
+   "subject": "Tax documents folder organised by year \u5df2\u6309\u5e74\u4efd\u6574\u7406\u5b8c\u7a0e\u52a1\u6587\u4ef6",
+   "type": "completion",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 26. \u9884\u89c8\u6587\u5b57 26.",
+   "sender": {
+    "sessionId": "sess-parity-1",
+    "sessionTitle": "Home admin helper",
+    "taskTitle": "Household paperwork",
+    "host": ""
+   },
+   "createdAt": 1799942100000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799943900000
+  },
+  {
+   "id": "lt-parity-027",
+   "subject": "Price drop on the saved espresso grinder \u6536\u85cf\u7684\u78e8\u8c46\u673a\u964d\u4ef7\u4e86 18%",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 27. \u9884\u89c8\u6587\u5b57 27.",
+   "sender": {
+    "sessionId": "sess-parity-2",
+    "sessionTitle": "Notes gardener",
+    "taskTitle": "Tidy the notes vault",
+    "host": "devbox"
+   },
+   "createdAt": 1799939880000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799941680000
+  },
+  {
+   "id": "lt-parity-028",
+   "subject": "Keep or cancel the unused streaming subscription? \u8fd9\u4e2a\u8ba2\u9605\u4e09\u4e2a\u6708\u6ca1\u7528\u4e86",
+   "type": "action_required",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 28. \u9884\u89c8\u6587\u5b57 28.",
+   "sender": {
+    "sessionId": "sess-parity-3",
+    "sessionTitle": "Travel planner",
+    "taskTitle": "Plan the spring trip",
+    "host": ""
+   },
+   "createdAt": 1799937660000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "actions": [
+    {
+     "id": "yes",
+     "label": "Yes"
+    },
+    {
+     "id": "no",
+     "label": "No"
+    }
+   ],
+   "readAt": 1799939460000
+  },
+  {
+   "id": "lt-parity-029",
+   "subject": "Your photo backup finished \u7167\u7247\u5907\u4efd\u5b8c\u6210: 2,318 new items",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 29. \u9884\u89c8\u6587\u5b57 29.",
+   "sender": {
+    "sessionId": "sess-parity-4",
+    "sessionTitle": "Reading assistant",
+    "taskTitle": "Weekly reading",
+    "host": ""
+   },
+   "createdAt": 1799935440000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799937240000
+  },
+  {
+   "id": "lt-parity-030",
+   "subject": "Flight check-in opens tomorrow at 9:00 \u660e\u5929\u4e5d\u70b9\u5f00\u653e\u503c\u673a",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 30. \u9884\u89c8\u6587\u5b57 30.",
+   "sender": {
+    "sessionId": "sess-parity-0",
+    "sessionTitle": "Nightly build watcher",
+    "taskTitle": "Keep the build green",
+    "host": "devbox"
+   },
+   "createdAt": 1799933220000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799935020000
+  },
+  {
+   "id": "lt-parity-031",
+   "subject": "Recipe collection \u98df\u8c31\u5408\u96c6: added 6 soups from the saved links",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 31. \u9884\u89c8\u6587\u5b57 31.",
+   "sender": {
+    "sessionId": "sess-parity-1",
+    "sessionTitle": "Home admin helper",
+    "taskTitle": "Household paperwork",
+    "host": ""
+   },
+   "createdAt": 1799931000000,
+   "read": false,
+   "pinned": false,
+   "archived": false
+  },
+  {
+   "id": "lt-parity-032",
+   "subject": "Proofread the invitation text \u9080\u8bf7\u51fd\u6587\u5b57\u8bf7\u6821\u5bf9 (English and Chinese versions)",
+   "type": "review",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 32. \u9884\u89c8\u6587\u5b57 32.",
+   "sender": {
+    "sessionId": "sess-parity-2",
+    "sessionTitle": "Notes gardener",
+    "taskTitle": "Tidy the notes vault",
+    "host": ""
+   },
+   "createdAt": 1799928780000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799930580000
+  },
+  {
+   "id": "lt-parity-033",
+   "subject": "Neighborhood cleanup moved to Sunday 10:00 \u793e\u533a\u6e05\u6d01\u6d3b\u52a8\u6539\u5230\u5468\u65e5\u4e0a\u5348",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 33. \u9884\u89c8\u6587\u5b57 33.",
+   "sender": {
+    "sessionId": "sess-parity-3",
+    "sessionTitle": "Travel planner",
+    "taskTitle": "Plan the spring trip",
+    "host": "devbox"
+   },
+   "createdAt": 1799926560000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799928360000
+  },
+  {
+   "id": "lt-parity-034",
+   "subject": "Bike service reminder \u81ea\u884c\u8f66\u4fdd\u517b\u63d0\u9192: chain and brakes",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 34. \u9884\u89c8\u6587\u5b57 34.",
+   "sender": {
+    "sessionId": "sess-parity-4",
+    "sessionTitle": "Reading assistant",
+    "taskTitle": "Weekly reading",
+    "host": ""
+   },
+   "createdAt": 1799924340000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799926140000
+  },
+  {
+   "id": "lt-parity-035",
+   "subject": "Imported 64 contacts from the old phone \u65e7\u624b\u673a\u901a\u8baf\u5f55\u5df2\u5bfc\u5165",
+   "type": "completion",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 35. \u9884\u89c8\u6587\u5b57 35.",
+   "sender": {
+    "sessionId": "sess-parity-0",
+    "sessionTitle": "Nightly build watcher",
+    "taskTitle": "Keep the build green",
+    "host": ""
+   },
+   "createdAt": 1799922120000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799923920000
+  },
+  {
+   "id": "lt-parity-036",
+   "subject": "Language practice streak: 21 days \u8fde\u7eed\u7ec3\u4e60\u4e8c\u5341\u4e00\u5929",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 36. \u9884\u89c8\u6587\u5b57 36.",
+   "sender": {
+    "sessionId": "sess-parity-1",
+    "sessionTitle": "Home admin helper",
+    "taskTitle": "Household paperwork",
+    "host": "devbox"
+   },
+   "createdAt": 1799919900000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799921700000
+  },
+  {
+   "id": "lt-parity-037",
+   "subject": "School newsletter summary \u5b66\u6821\u901a\u8baf\u6458\u8981: field trip forms due Monday",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 37. \u9884\u89c8\u6587\u5b57 37.",
+   "sender": {
+    "sessionId": "sess-parity-2",
+    "sessionTitle": "Notes gardener",
+    "taskTitle": "Tidy the notes vault",
+    "host": ""
+   },
+   "createdAt": 1799917680000,
+   "read": false,
+   "pinned": false,
+   "archived": false
+  },
+  {
+   "id": "lt-parity-038",
+   "subject": "Choose a date for the dentist follow-up \u7259\u533b\u590d\u8bca\u9009\u54ea\u4e00\u5929? Tue 3 pm or Thu 10 am",
+   "type": "action_required",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 38. \u9884\u89c8\u6587\u5b57 38.",
+   "sender": {
+    "sessionId": "sess-parity-3",
+    "sessionTitle": "Travel planner",
+    "taskTitle": "Plan the spring trip",
+    "host": ""
+   },
+   "createdAt": 1799915460000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "actions": [
+    {
+     "id": "yes",
+     "label": "Yes"
+    },
+    {
+     "id": "no",
+     "label": "No"
+    }
+   ],
+   "readAt": 1799917260000
+  },
+  {
+   "id": "lt-parity-039",
+   "subject": "A very long subject line that keeps going to test wrapping at the largest text size \u8fd9\u662f\u4e00\u4e2a\u975e\u5e38\u957f\u7684\u6807\u9898\u7528\u6765\u6d4b\u8bd5\u6700\u5927\u5b57\u53f7\u4e0b\u7684\u6362\u884c\u6548\u679c and it still continues",
+   "type": "info",
+   "bodyFormat": "markdown",
+   "textPreview": "Short preview for letter 39. \u9884\u89c8\u6587\u5b57 39.",
+   "sender": {
+    "sessionId": "sess-parity-4",
+    "sessionTitle": "Reading assistant",
+    "taskTitle": "Weekly reading",
+    "host": "devbox"
+   },
+   "createdAt": 1799913240000,
+   "read": true,
+   "pinned": false,
+   "archived": false,
+   "readAt": 1799915040000
+  }
+ ],
+ "scenarios": [
+  {
+   "name": "as-listed",
+   "nowMs": 1800000000000,
+   "keep": [],
+   "patch": {}
+  },
+  {
+   "name": "decision-read-inside-grace",
+   "nowMs": 1800000000000,
+   "keep": [],
+   "patch": {
+    "lt-parity-012": {
+     "read": true,
+     "readAt": 1799999880000
+    },
+    "lt-parity-019": {
+     "read": true,
+     "readAt": 1799999580000
+    },
+    "lt-parity-028": {
+     "read": true,
+     "readAt": null
+    }
+   }
+  },
+  {
+   "name": "grace-window-over",
+   "nowMs": 1800000360000,
+   "keep": [],
+   "patch": {
+    "lt-parity-012": {
+     "read": true,
+     "readAt": 1799999880000
+    }
+   }
+  },
+  {
+   "name": "read-while-unread-filter-on",
+   "nowMs": 1800000000000,
+   "keep": [
+    "lt-parity-007",
+    "lt-parity-013"
+   ],
+   "patch": {
+    "lt-parity-007": {
+     "read": true,
+     "readAt": 1799999940000
+    },
+    "lt-parity-013": {
+     "read": true,
+     "readAt": 1799999940000
+    }
+   }
+  },
+  {
+   "name": "new-unread-letter-arrives",
+   "nowMs": 1800000000000,
+   "keep": [
+    "lt-parity-007"
+   ],
+   "patch": {
+    "lt-parity-007": {
+     "read": true,
+     "readAt": 1799999940000
+    },
+    "lt-parity-022": {
+     "read": false
+    },
+    "lt-parity-900": {
+     "id": "lt-parity-900",
+     "subject": "Just arrived \u521a\u5230\u7684\u4fe1",
+     "type": "action_required",
+     "bodyFormat": "markdown",
+     "textPreview": "",
+     "sender": {
+      "sessionId": "sess-parity-new",
+      "host": ""
+     },
+     "createdAt": 1799999990000,
+     "read": false,
+     "pinned": false,
+     "archived": false,
+     "actions": [
+      {
+       "id": "ok",
+       "label": "OK"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "same-stamp-ties-keep-server-order",
+   "nowMs": 1800000000000,
+   "keep": [],
+   "patch": {
+    "lt-parity-011": {
+     "createdAt": 1799977620000
+    },
+    "lt-parity-023": {
+     "pinned": true,
+     "createdAt": 1799990940000
+    }
+   }
+  },
+  {
+   "name": "archived-letter-never-counts",
+   "nowMs": 1800000000000,
+   "keep": [],
+   "patch": {
+    "lt-parity-001": {
+     "archived": true
+    }
+   }
+  },
+  {
+   "name": "everything-read",
+   "nowMs": 1800000000000,
+   "keep": [],
+   "patch": {
+    "lt-parity-001": {
+     "read": true,
+     "readAt": 1799996400000
+    },
+    "lt-parity-007": {
+     "read": true,
+     "readAt": 1799996400000
+    },
+    "lt-parity-013": {
+     "read": true,
+     "readAt": 1799996400000
+    },
+    "lt-parity-019": {
+     "read": true,
+     "readAt": 1799996400000
+    },
+    "lt-parity-025": {
+     "read": true,
+     "readAt": 1799996400000
+    },
+    "lt-parity-031": {
+     "read": true,
+     "readAt": 1799996400000
+    },
+    "lt-parity-037": {
+     "read": true,
+     "readAt": 1799996400000
+    }
+   }
+  }
+ ]
+}

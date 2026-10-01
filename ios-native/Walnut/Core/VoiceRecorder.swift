@@ -51,6 +51,24 @@ final class VoiceRecorder: NSObject {
     /// Settings button beside exactly this one.
     nonisolated static let microphoneDeniedMessage = "Microphone access denied. Enable it in Settings."
 
+    /// How this recorder ends a sentence about takes it KEPT for a retry, and one
+    /// about takes it GAVE UP on. The notices show such a sentence as one notice
+    /// with those takes' row (`VoiceNoticeCopy`), and discarding the takes takes
+    /// the sentence with them: once the recordings are gone it is false (build 84
+    /// gate, P1). Any other sentence (a denied microphone) is not about a take.
+    nonisolated static let keptTakeEndings = [" Recording saved.", " Saved for retry.", " Recording kept.", " Recordings kept."]
+    nonisolated static let givenUpTakeEndings = [
+        " Discard it or keep it for later.", " Discard it.", " Discard to clear it.", " Discard to clear them.",
+    ]
+
+    nonisolated static func isAboutKeptTakes(_ message: String) -> Bool {
+        keptTakeEndings.contains { message.hasSuffix($0) }
+    }
+
+    nonisolated static func isAboutGivenUpTakes(_ message: String) -> Bool {
+        givenUpTakeEndings.contains { message.hasSuffix($0) }
+    }
+
     /// Minimum gap between AUTOMATIC drains (`drainPending`). Long enough to
     /// swallow a connectivity flap, short enough that a real reconnect after a
     /// failed attempt is retried within seconds. Manual Retry ignores it.
@@ -605,6 +623,7 @@ final class VoiceRecorder: NSObject {
             store.discard(id: rec.id)
         }
         refreshPending()
+        if pendingCount == 0, let message = errorMessage, Self.isAboutKeptTakes(message) { errorMessage = nil }
     }
 
     /// Delete the takes that couldn't be transcribed — the primary action on
@@ -619,6 +638,7 @@ final class VoiceRecorder: NSObject {
             store.discard(id: rec.id)
         }
         refreshPending()
+        if failedCount == 0, let message = errorMessage, Self.isAboutGivenUpTakes(message) { errorMessage = nil }
     }
 
     // MARK: - Internals

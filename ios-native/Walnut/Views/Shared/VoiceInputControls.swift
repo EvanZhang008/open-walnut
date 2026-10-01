@@ -15,8 +15,9 @@ import SwiftUI
 // notices put their buttons on a row of their own and scroll inside a capped
 // height, so the reply box under them never leaves the screen.
 //
-// Used by the letter reply box. The chat composer keeps its own copy of these
-// rows (ComposerView.swift), so nothing here changes how it behaves.
+// Used by the letter reply box. The chat composer (ComposerView.swift) keeps its
+// own mic and recording row, and shows its voice notices with `VoiceNoticeRows`,
+// so a change to the notices changes both boxes.
 
 /// The smallest target a finger can reliably hit.
 let voiceControlTarget: CGFloat = 44
@@ -181,7 +182,10 @@ struct VoiceRecordingIndicator: View {
 ///
 /// A failed transcription and the take it saved are ONE notice: the error
 /// sentence already says the recording was saved, and a second row saying "1
-/// recording saved" was the same news twice.
+/// recording saved" was the same news twice. The same goes for a take the
+/// recorder gave up on: its sentence ("Couldn't transcribe that recording...")
+/// and the "1 recording couldn't be transcribed" row are one notice with that
+/// row's Discard (r5 gate follow-up). `errorHome` decides which.
 ///
 /// The sentences are the label colour (the secondary grey measured 3.39:1 on the
 /// bar), and every action is a capsule like the reply line's Retry and Edit.
@@ -208,12 +212,25 @@ struct VoiceNoticeRows: View {
     private var showsPending: Bool { voice.state == .idle && voice.pendingCount > 0 }
     private var showsFailed: Bool { voice.state == .idle && voice.failedCount > 0 }
 
-    /// The error, when it is about a take that is saved and waiting: shown as one
-    /// notice together with that take's Retry and Discard.
-    private var savedTakeError: String? {
-        guard showsPending, let message = voice.errorMessage,
-              VoiceNoticeCopy.savedCore(message) != nil else { return nil }
-        return message
+    /// Where the recorder's error is shown: on its own, or as one notice with the
+    /// row it is about.
+    enum ErrorHome: Equatable {
+        case alone
+        /// About a take that is saved and waiting: one notice with its Retry and Discard.
+        case savedTake
+        /// About a take the recorder gave up on: one notice with its Discard.
+        case retiredTake
+    }
+
+    /// Pure, so the merge is unit-tested against the recorder's real sentences.
+    nonisolated static func errorHome(_ message: String, showsPending: Bool, showsFailed: Bool) -> ErrorHome {
+        if showsPending, VoiceNoticeCopy.savedCore(message) != nil { return .savedTake }
+        if showsFailed, VoiceNoticeCopy.retiredCore(message) != nil { return .retiredTake }
+        return .alone
+    }
+
+    private func home(of message: String) -> ErrorHome {
+        Self.errorHome(message, showsPending: showsPending, showsFailed: showsFailed)
     }
 
     private var hasNotice: Bool { voice.errorMessage != nil || showsPending || showsFailed }
@@ -242,23 +259,27 @@ struct VoiceNoticeRows: View {
     @ViewBuilder
     private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let message = savedTakeError {
+            if let message = voice.errorMessage, home(of: message) == .savedTake {
                 let copy = VoiceNoticeCopy.savedTake(error: message, count: voice.pendingCount)
-                notice(symbol: "waveform.badge.exclamationmark", copy: copy, textId: "\(idPrefix).voiceError") {
+                notice(
+                    symbol: "waveform.badge.exclamationmark", copy: copy, textId: "\(idPrefix).voiceError",
+                    dismissible: true
+                ) {
                     retryPendingButton
                     discardPendingButton
-                    dismissErrorButton
                 }
             } else {
-                if let message = voice.errorMessage {
-                    notice(symbol: "mic.slash", copy: VoiceNoticeCopy.error(message), textId: "\(idPrefix).voiceError") {
+                if let message = voice.errorMessage, home(of: message) == .alone {
+                    notice(
+                        symbol: "mic.slash", copy: VoiceNoticeCopy.error(message), textId: "\(idPrefix).voiceError",
+                        dismissible: true
+                    ) {
                         if message == VoiceRecorder.microphoneDeniedMessage,
                            let settings = URL(string: UIApplication.openSettingsURLString) {
                             ActionCapsuleButton(title: "Open Settings", identifier: "\(idPrefix).voiceOpenSettings") {
                                 openURL(settings)
                             }
                         }
-                        dismissErrorButton
                     }
                 }
                 if showsPending {
@@ -273,27 +294,44 @@ struct VoiceNoticeRows: View {
                 }
             }
             if showsFailed {
-                notice(
-                    symbol: "waveform.slash",
-                    copy: VoiceNoticeCopy.failed(count: voice.failedCount),
-                    textId: "\(idPrefix).voiceFailedRow"
-                ) {
-                    if voice.recoverableFailedCount > 0 {
-                        ActionCapsuleButton(
-                            title: "Try again", prominent: false, identifier: "\(idPrefix).voiceRetryFailed"
-                        ) {
-                            Task {
-                                if let text = await voice.retryPending(includeRetired: true) { onRecovered(text) }
-                            }
-                        }
+                if let message = voice.errorMessage, home(of: message) == .retiredTake {
+                    // Dismiss leaves the plain row below, so the takes are still offered.
+                    let copy = VoiceNoticeCopy.retiredTake(error: message, count: voice.failedCount)
+                    notice(
+                        symbol: "waveform.slash", copy: copy, textId: "\(idPrefix).voiceError", dismissible: true
+                    ) {
+                        failedButtons
                     }
-                    ActionCapsuleButton(title: "Discard", prominent: false, identifier: "\(idPrefix).voiceDiscardFailed") {
-                        voice.discardFailed()
+                } else {
+                    notice(
+                        symbol: "waveform.slash",
+                        copy: VoiceNoticeCopy.failed(count: voice.failedCount),
+                        textId: "\(idPrefix).voiceFailedRow"
+                    ) {
+                        failedButtons
                     }
                 }
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// A given-up take's actions: Try again only for takes the attempt ceiling
+    /// retired (nothing judged that audio), and Discard.
+    @ViewBuilder
+    private var failedButtons: some View {
+        if voice.recoverableFailedCount > 0 {
+            ActionCapsuleButton(
+                title: "Try again", prominent: false, identifier: "\(idPrefix).voiceRetryFailed"
+            ) {
+                Task {
+                    if let text = await voice.retryPending(includeRetired: true) { onRecovered(text) }
+                }
+            }
+        }
+        ActionCapsuleButton(title: "Discard", prominent: false, identifier: "\(idPrefix).voiceDiscardFailed") {
+            voice.discardFailed()
+        }
     }
 
     private var retryPendingButton: some View {
@@ -323,13 +361,25 @@ struct VoiceNoticeRows: View {
         .accessibilityIdentifier("\(idPrefix).voiceErrorDismiss")
     }
 
-    /// One notice: glyph and sentence, then its buttons. Side by side at the
-    /// usual sizes; at the accessibility sizes the short sentence, with the
-    /// buttons on a row of their own right under it, because beside a sentence
-    /// that large they are squeezed into a column of single letters.
+    /// Holds the dismiss button's place on a notice that has none, so every
+    /// notice's actions end at the same column: a Discard next to the screen edge
+    /// jumped 50pt when the dismiss beside it took its sentence away (build 84 gate).
+    private var dismissSlot: some View {
+        Image(systemName: "xmark").font(.callout.weight(.semibold)).modifier(VoiceTarget())
+            .hidden()
+            .accessibilityHidden(true)
+    }
+
+    /// One notice: glyph and sentence, then its buttons, then the dismiss when
+    /// the sentence can be put away. Side by side at the usual sizes; at the
+    /// accessibility sizes the short sentence, with the buttons on rows of their
+    /// own right under it, because beside a sentence that large they are squeezed
+    /// into a column of single letters. The rows wrap: an "Open Settings" capsule
+    /// and a dismiss side by side were wider than the screen (build 84 gate, P2).
     @ViewBuilder
     private func notice<Buttons: View>(
-        symbol: String, copy: VoiceNoticeCopy, textId: String, @ViewBuilder buttons: () -> Buttons
+        symbol: String, copy: VoiceNoticeCopy, textId: String, dismissible: Bool = false,
+        @ViewBuilder buttons: () -> Buttons
     ) -> some View {
         let sentence = HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: symbol).font(.caption2).foregroundStyle(.secondary)
@@ -345,17 +395,78 @@ struct VoiceNoticeRows: View {
         if stacked {
             VStack(alignment: .leading, spacing: 2) {
                 sentence.padding(.top, 6)
-                HStack(spacing: 8) { buttons() }
+                WrappingRow(spacing: 8, lineSpacing: 2) {
+                    buttons()
+                    if dismissible { dismissErrorButton }
+                }
             }
             .padding(.horizontal, 16)
         } else {
             HStack(spacing: 6) {
                 sentence
                 buttons()
+                if dismissible { dismissErrorButton } else { dismissSlot }
             }
             .padding(.leading, 16)
             .padding(.trailing, 6)
         }
+    }
+}
+
+/// Views left to right, starting a new line when the next one does not fit the
+/// width offered. Each line's views are centred on one another.
+struct WrappingRow: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 2
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let lines = Self.lines(fitting: proposal.width ?? .infinity, subviews, spacing: spacing)
+        let width = lines.map(\.width).max() ?? 0
+        let height = lines.map(\.height).reduce(0, +) + lineSpacing * CGFloat(max(lines.count - 1, 0))
+        return CGSize(width: proposal.width.map { min(width, $0) } ?? width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for line in Self.lines(fitting: bounds.width, subviews, spacing: spacing) {
+            var x = bounds.minX
+            for index in line.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(
+                    at: CGPoint(x: x, y: y + (line.height - size.height) / 2),
+                    anchor: .topLeading, proposal: ProposedViewSize(size)
+                )
+                x += size.width + spacing
+            }
+            y += line.height + lineSpacing
+        }
+    }
+
+    struct Line: Equatable {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    /// Pure over the views' sizes, so the wrapping is unit-tested.
+    nonisolated static func lines(fitting maxWidth: CGFloat, sizes: [CGSize], spacing: CGFloat) -> [Line] {
+        var lines: [Line] = []
+        var line = Line()
+        for (index, size) in sizes.enumerated() {
+            if !line.indices.isEmpty, line.width + spacing + size.width > maxWidth {
+                lines.append(line)
+                line = Line()
+            }
+            line.width = line.indices.isEmpty ? size.width : line.width + spacing + size.width
+            line.height = max(line.height, size.height)
+            line.indices.append(index)
+        }
+        if !line.indices.isEmpty { lines.append(line) }
+        return lines
+    }
+
+    private static func lines(fitting maxWidth: CGFloat, _ subviews: Subviews, spacing: CGFloat) -> [Line] {
+        lines(fitting: maxWidth, sizes: subviews.map { $0.sizeThatFits(.unspecified) }, spacing: spacing)
     }
 }
 
@@ -366,7 +477,7 @@ struct VoiceNoticeCopy: Equatable {
     let short: String
 
     /// The recorder's endings for an error whose take was kept for a retry.
-    static let savedSuffixes = [" Recording saved.", " Saved for retry.", " Recording kept.", " Recordings kept."]
+    static let savedSuffixes = VoiceRecorder.keptTakeEndings
 
     /// `message` without its saved-take ending, or nil when it has none.
     static func savedCore(_ message: String) -> String? {
@@ -396,6 +507,31 @@ struct VoiceNoticeCopy: Equatable {
         )
     }
 
+    /// The recorder's endings for an error about a take it gave up on: the advice
+    /// after the sentence that says the take cannot be transcribed.
+    static let retiredSuffixes = VoiceRecorder.givenUpTakeEndings
+
+    /// `message` without its given-up ending, or nil when it has none.
+    static func retiredCore(_ message: String) -> String? {
+        for suffix in retiredSuffixes where message.hasSuffix(suffix) {
+            return String(message.dropLast(suffix.count))
+        }
+        return nil
+    }
+
+    /// A take the recorder gave up on and the row of such takes, as one notice.
+    /// The recorder's own sentence when it speaks for all of them (one take, or a
+    /// sentence that already gives the count). Otherwise one sentence for all of
+    /// them: "Couldn't transcribe that recording. 2 recordings kept." read as if
+    /// one take had been kept twice (build 84 gate, P3).
+    static func retiredTake(error: String, count: Int) -> VoiceNoticeCopy {
+        let speaksForAll = count <= 1 || error.hasPrefix("\(count) ")
+        return .init(
+            full: speaksForAll ? error : "Couldn't transcribe \(count) recordings. They are kept.",
+            short: count <= 1 ? "Could not transcribe." : "\(count) could not be transcribed."
+        )
+    }
+
     static func pending(count: Int) -> VoiceNoticeCopy {
         .init(
             full: count == 1
@@ -408,7 +544,9 @@ struct VoiceNoticeCopy: Equatable {
     static func failed(count: Int) -> VoiceNoticeCopy {
         .init(
             full: count == 1 ? "1 recording couldn't be transcribed" : "\(count) recordings couldn't be transcribed",
-            short: count == 1 ? "Could not transcribe." : "\(count) could not be transcribed."
+            // Not the merged notice's "Could not transcribe.": at the
+            // accessibility sizes the two read the same (build 84 gate, P2).
+            short: count == 1 ? "1 recording not transcribed." : "\(count) recordings not transcribed."
         )
     }
 

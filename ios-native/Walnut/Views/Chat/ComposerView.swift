@@ -274,17 +274,12 @@ struct ComposerBar: View {
                     refusedNotice = nil
                 }
             }
-            if let voiceError = voice.errorMessage {
-                noticeRow(voiceError, icon: Symbol.voiceErrorNotice) {
-                    voice.errorMessage = nil
-                }
-            }
             if let imageNotice {
                 noticeRow(imageNotice, icon: Symbol.imageNotice) {
                     self.imageNotice = nil
                 }
             }
-            // Camera access denied. The same row the image and voice notices use —
+            // Camera access denied. The same row the image notice uses:
             // the mic's "enable it in Settings" line is the precedent, and a
             // permission dead end deserves the same non-modal, dismissible shape
             // rather than an alert that interrupts a half-typed message.
@@ -300,20 +295,20 @@ struct ComposerBar: View {
                     self.cameraNotice = nil
                 }
             }
-            // Preserved voice takes (failed upload / interruption / crash /
-            // view dismissal) — non-modal retry affordance. Audio is never
-            // deleted until it transcribes or the user explicitly discards.
+            // What the recorder has to say, right above the input: its error
+            // (a denied microphone, a failed transcription), then preserved takes
+            // (failed upload / interruption / crash / view dismissal) offered back
+            // with Retry and Discard. Audio is never deleted until it transcribes
+            // or the user explicitly discards.
             //
-            // TWO rows, because they are two different situations and one row
-            // saying "pending" for both is the defect: a take waiting for the
-            // network gets a Retry, a take the engine has already answered on
-            // gets the truth and a Discard.
-            if voice.state == .idle, voice.pendingCount > 0 {
-                pendingVoiceRow
-            }
-            if voice.state == .idle, voice.failedCount > 0 {
-                failedVoiceRow
-            }
+            // The letter reply box's rows (`VoiceNoticeRows`), so both boxes say
+            // the same thing the same way: a failed transcription and the take it
+            // saved are ONE notice, not an error line over a "1 recording saved"
+            // row with the same news, and every action is a capsule at 4.5:1 or
+            // better (the old grey "Retry" measured 3.36:1, r5 gate). A take
+            // waiting for the network still gets Retry, and a take the engine has
+            // already answered on still gets the truth and a Discard.
+            VoiceNoticeRows(voice: voice, idPrefix: "chat") { text in appendToDraft(text) }
             if voice.state == .recording {
                 recordingRow
             } else {
@@ -783,7 +778,6 @@ struct ComposerBar: View {
         static let cancel = "xmark"
         static let removeImage = "xmark.circle.fill"
         static let offlineNotice = "exclamationmark.circle"
-        static let voiceErrorNotice = "mic.slash"
         static let imageNotice = "photo.badge.exclamationmark"
         /// The padlock, NOT a slashed camera: `camera.slash` is not in the catalog
         /// (only `camera.macro.slash`), and the padlock is the honest subject
@@ -792,14 +786,11 @@ struct ComposerBar: View {
         /// The send queue is full. A tray, not a warning triangle: nothing is
         /// wrong, there is simply no more room until one goes out.
         static let queueFullNotice = "tray.full"
-        static let voicePending = "waveform.badge.exclamationmark"
-        static let voiceFailed = "waveform.slash"
-        static let discard = "trash"
+        // The voice notices' glyphs are `VoiceNoticeRows`' own (VoiceInputControls.swift).
 
         static let all = [
             plus, photo, camera, mic, send, stop, confirm, cancel, removeImage,
-            offlineNotice, voiceErrorNotice, imageNotice, cameraDeniedNotice,
-            queueFullNotice, voicePending, voiceFailed, discard,
+            offlineNotice, imageNotice, cameraDeniedNotice, queueFullNotice,
         ]
     }
 
@@ -867,8 +858,8 @@ struct ComposerBar: View {
     ///
     /// DELIBERATELY NO IDENTIFIER ON THE HSTACK. An id here would flatten onto
     /// every descendant and clobber `chat.plus` / `composer.modelPill` /
-    /// `chat.mic` / `chat.send` (the lesson `pendingVoiceRow` records, learned when
-    /// Maestro stopped finding `chat.voiceRetry`), and the `children: .contain`
+    /// `chat.mic` / `chat.send` (the lesson the old saved-voice row recorded, learned
+    /// when Maestro stopped finding `chat.voiceRetry`), and the `children: .contain`
     /// that makes a container id safe would still add an accessibility element no
     /// flow asks for. The row's existence is already observable through
     /// `chat.mic`, which is always on it. Leaving the wrapper bare keeps this
@@ -929,104 +920,6 @@ struct ComposerBar: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
         }
-    }
-
-    /// Saved-but-untranscribed recordings that STILL HAVE A REAL CHANCE: retry /
-    /// discard, styled like the notice rows (non-modal, dismiss-optional —
-    /// matches the failed-send bubble's Retry pattern).
-    ///
-    /// "Pending" is now a claim this row has to earn. It appears only for takes
-    /// whose failures were transport-shaped (offline, sleeping Mac, dropped
-    /// upload), which really are pending — the auto-drain will pick them up on
-    /// the next foreground or reconnect without the user doing anything, and
-    /// Retry is the manual version of the same thing.
-    private var pendingVoiceRow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: Symbol.voicePending)
-                .font(.caption2)
-            Text(voice.pendingCount == 1
-                 ? "1 recording saved. Transcription is pending."
-                 : "\(voice.pendingCount) recordings saved. Transcription is pending.")
-                .font(.caption)
-                .lineLimit(2)
-                // Row marker lives on the TEXT, not the container — a
-                // container-level identifier flattens onto every child in the
-                // accessibility tree and clobbers the buttons' own ids
-                // (Maestro then can't find chat.voiceRetry).
-                .accessibilityIdentifier("chat.voicePendingRow")
-            Spacer(minLength: 0)
-            Button("Retry") {
-                Task {
-                    if let text = await voice.retryPending() {
-                        appendToDraft(text)
-                    }
-                }
-            }
-            .font(.caption.weight(.semibold))
-            .accessibilityIdentifier("chat.voiceRetry")
-            Button {
-                voice.discardPending()
-            } label: {
-                Image(systemName: Symbol.discard)
-                    .font(.caption2)
-            }
-            .accessibilityLabel("Discard saved recordings")
-            .accessibilityIdentifier("chat.voiceDiscardPending")
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
-    }
-
-    /// Takes the engine has answered on and cannot transcribe.
-    ///
-    /// The row this one replaces said "transcription pending" about audio that
-    /// was never going to be transcribed, offered Retry as the primary action,
-    /// and reproduced the same empty answer on every tap — a banner with no exit
-    /// (the 2026-08-30 report). So: the copy states the outcome, DISCARD is the
-    /// primary action, and there is no Retry, because retrying identical bytes
-    /// through the same engine is precisely the loop that never ended.
-    ///
-    /// Discard is the only button, not an automatic deletion: the audio is still
-    /// the user's, and "we couldn't read it, so we threw it away" is the one
-    /// thing this store must never do.
-    private var failedVoiceRow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: Symbol.voiceFailed)
-                .font(.caption2)
-            Text(voice.failedCount == 1
-                 ? "1 recording couldn't be transcribed"
-                 : "\(voice.failedCount) recordings couldn't be transcribed")
-                .font(.caption)
-                .lineLimit(2)
-                .accessibilityIdentifier("chat.voiceFailedRow")
-            Spacer(minLength: 0)
-            // Secondary, and only for takes the ATTEMPT CEILING retired: nothing
-            // ever judged that audio, so a woken Mac can still transcribe it and
-            // refusing the attempt would turn a noisy banner into lost words. A
-            // verdict-retired take gets no Retry at all — a third identical
-            // answer is the loop this row exists to end.
-            if voice.recoverableFailedCount > 0 {
-                Button("Try again") {
-                    Task {
-                        if let text = await voice.retryPending(includeRetired: true) {
-                            appendToDraft(text)
-                        }
-                    }
-                }
-                .font(.caption)
-                .accessibilityIdentifier("chat.voiceRetryFailed")
-            }
-            Button("Discard") {
-                voice.discardFailed()
-            }
-            .font(.caption.weight(.semibold))
-            .accessibilityLabel("Discard recordings that couldn't be transcribed")
-            .accessibilityIdentifier("chat.voiceDiscardFailed")
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
     }
 
     /// Recording in progress: cancel × — pulsing dot + elapsed — stop ✓.
@@ -1743,8 +1636,8 @@ struct ComposerBar: View {
         if useLongDraftEditor { longDraftFocused = true } else { focused = true }
     }
 
-    /// The shared one-line explanation row (offline, voice error, skipped images,
-    /// camera denied).
+    /// The shared one-line explanation row (offline, a refused send, skipped images,
+    /// camera denied). Voice has its own rows, `VoiceNoticeRows`.
     ///
     /// TWO LINES ONLY AT ORDINARY SIZES. `lineLimit(2)` is the right cap while a
     /// caption line fits ~40 characters, and it is a truncation machine once the user

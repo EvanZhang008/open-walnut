@@ -841,6 +841,139 @@ final class LetterReplyUITests: XCTestCase {
         XCTAssertFalse(app.buttons["inbox.letter.voiceRetry"].exists, "the recovered take is still offered")
     }
 
+    /// A take the engine heard nothing in twice is given up on. Its sentence and
+    /// the "1 recording couldn't be transcribed" row were two notices with the same
+    /// news (r5 gate follow-up): now one, with the row's Discard, and Dismiss
+    /// leaves the plain row so the take is still offered.
+    @MainActor
+    func testATakeGivenUpOnIsOneNoticeWithItsDiscard() async throws {
+        let stub = try await prepared()
+        try await stub.call("POST", "__stub/stt?mode=empty")
+        let app = try launchPaired()
+        openLetter(app, Self.letterA)
+        enter("Before", app)
+        try await record(app, stub, seconds: 2.5, shot: "voice-7-recording-heard-nothing")
+        let error = element(app, "inbox.letter.voiceError")
+        XCTAssertTrue(error.waitForExistence(timeout: 20), "no notice for a take heard as nothing")
+        // The first empty answer earns one retry: the take is saved and waiting.
+        let retry = app.buttons["inbox.letter.voiceRetry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5), "the take was not offered back: \(error.label)")
+        retry.tap()
+        // The recorder's two sentences for a take it gave up on (an attempt that
+        // retired it, or a Retry that found it already retired).
+        let gaveUp = [
+            "Couldn't transcribe that recording. Discard it or keep it for later.",
+            "That recording couldn't be transcribed. Discard to clear it.",
+        ]
+        XCTAssertTrue(waitUntil(timeout: 20) { error.exists && gaveUp.contains(error.label) },
+                      "the notice reads \(error.label)")
+        XCTAssertFalse(element(app, "inbox.letter.voiceFailedRow").exists, "the given-up take is announced twice")
+        XCTAssertFalse(element(app, "inbox.letter.voicePendingRow").exists)
+        let discard = app.buttons["inbox.letter.voiceDiscardFailed"]
+        XCTAssertTrue(discard.exists, "the given-up take cannot be discarded")
+        XCTAssertGreaterThanOrEqual(discard.frame.height, 44, "Discard is \(discard.frame)")
+        XCTAssertFalse(app.buttons["inbox.letter.voiceRetryFailed"].exists, "a take heard as nothing twice is offered again")
+        XCTAssertFalse(app.buttons["inbox.letter.voiceRetry"].exists)
+        XCTAssertEqual(fieldText(replyField(app)), "Before")
+        try await stub.screenshot(app, "voice-8-given-up-one-notice")
+
+        app.buttons["inbox.letter.voiceErrorDismiss"].tap()
+        XCTAssertTrue(element(app, "inbox.letter.voiceFailedRow").waitForExistence(timeout: 5),
+                      "the take went away with the sentence")
+        XCTAssertFalse(error.exists)
+        app.buttons["inbox.letter.voiceDiscardFailed"].tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !self.element(app, "inbox.letter.voiceNotices").exists },
+                      "a notice stayed after Discard")
+        XCTAssertEqual(fieldText(replyField(app)), "Before")
+        let state = try await stub.state()
+        XCTAssertEqual(state.sttCalls, 2, "one upload for the take and one for its Retry, none after")
+    }
+
+    /// Discard and the trash, tapped ON the notice with nothing dismissed first,
+    /// take the notice away, in the letter's reply box and in the chat composer.
+    /// They deleted the take and left its sentence, now false, under the
+    /// mic-slash glyph (build 84 gate, P1). The dismiss also leaves the plain
+    /// row's Discard where the notice had it: it jumped 50pt to the screen edge.
+    @MainActor
+    func testDiscardOnAVoiceNoticeTakesTheNoticeAwayInBothBoxes() async throws {
+        let stub = try await prepared()
+        let app = try launchPaired()
+        openLetter(app, Self.letterA)
+        try await assertDiscardsTakeTheirNoticeAway(app, stub, box: "inbox.letter", mic: "inbox.letter.mic")
+        openChat(app)
+        try await assertDiscardsTakeTheirNoticeAway(app, stub, box: "chat", mic: "chat.mic")
+    }
+
+    @MainActor
+    private func assertDiscardsTakeTheirNoticeAway(
+        _ app: XCUIApplication, _ stub: LetterStub, box: String, mic: String
+    ) async throws {
+        let notices = element(app, "\(box).voiceNotices")
+        let error = element(app, "\(box).voiceError")
+        func left() -> String { error.exists ? "\"\(error.label)\"" : "(no sentence)" }
+
+        // A take that was not transcribed: the trash on its notice.
+        try await stub.call("POST", "__stub/stt?mode=unavailable")
+        try await record(app, stub, box: box, mic: mic, seconds: 2, shot: "\(box)-discard-1-recording")
+        XCTAssertTrue(error.waitForExistence(timeout: 20), "no notice for a take that was not transcribed")
+        let trash = app.buttons["\(box).voiceDiscardPending"]
+        XCTAssertTrue(trash.waitForExistence(timeout: 5), "the saved take has no trash: \(left())")
+        try await stub.screenshot(app, "\(box)-discard-2-saved")
+        trash.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !notices.exists }, "a notice stayed after the trash: \(left())")
+        try await stub.screenshot(app, "\(box)-discard-3-after-trash")
+
+        // A take given up on: Discard on its notice.
+        try await stub.call("POST", "__stub/stt?mode=empty")
+        try await giveUpOnATake(app, stub, box: box, mic: mic)
+        let discard = app.buttons["\(box).voiceDiscardFailed"]
+        try await stub.screenshot(app, "\(box)-discard-4-given-up")
+        discard.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !notices.exists }, "a notice stayed after Discard: \(left())")
+        try await stub.screenshot(app, "\(box)-discard-5-after-discard")
+
+        // The dismiss leaves the plain row, with its Discard in the same place.
+        try await giveUpOnATake(app, stub, box: box, mic: mic)
+        let before = discard.frame
+        app.buttons["\(box).voiceErrorDismiss"].tap()
+        XCTAssertTrue(element(app, "\(box).voiceFailedRow").waitForExistence(timeout: 5), "the take went with the sentence")
+        try await Task.sleep(for: .milliseconds(500))
+        let after = discard.frame
+        let window = app.windows.firstMatch.frame
+        diagnoseValue(app, "\(box)-discard-column", "merged=\(before) plain=\(after) window=\(window)")
+        XCTAssertEqual(after.maxX, before.maxX, accuracy: 0.5, "Discard moved from \(before) to \(after)")
+        XCTAssertLessThanOrEqual(after.maxX, window.maxX - voiceTarget, "Discard sits in the dismiss column: \(after)")
+        try await stub.screenshot(app, "\(box)-discard-6-plain-row")
+        discard.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !notices.exists }, "a notice stayed after the plain row's Discard: \(left())")
+    }
+
+    /// Record a take the engine hears nothing in, and Retry it once: the
+    /// recorder gives up on it, and says so in one notice with its Discard.
+    @MainActor
+    private func giveUpOnATake(_ app: XCUIApplication, _ stub: LetterStub, box: String, mic: String) async throws {
+        let error = element(app, "\(box).voiceError")
+        try await record(app, stub, box: box, mic: mic, seconds: 2, shot: "\(box)-give-up-recording")
+        let retry = app.buttons["\(box).voiceRetry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 20), "the first empty answer was not offered a retry")
+        retry.tap()
+        let discard = app.buttons["\(box).voiceDiscardFailed"]
+        XCTAssertTrue(discard.waitForExistence(timeout: 20), "the take was not given up on")
+        XCTAssertTrue(error.exists, "the given-up take has no sentence")
+        XCTAssertFalse(element(app, "\(box).voiceFailedRow").exists, "the given-up take is announced twice")
+    }
+
+    private let voiceTarget: CGFloat = 44
+
+    @MainActor
+    func openChat(_ app: XCUIApplication) {
+        dismissKeyboard(app)
+        let tab = app.tabBars.buttons["Chat"]
+        XCTAssertTrue(tab.waitForExistence(timeout: 20), "no Chat tab")
+        tab.tap()
+        XCTAssertTrue(element(app, "chat.mic").waitForExistence(timeout: 20), "the chat composer has no mic")
+    }
+
     /// Gate: at the largest size a voice notice filled the screen, its Retry was
     /// a column of single letters, and the field, mic and send went under the
     /// tab bar. The notices now scroll inside a capped height, their buttons get
@@ -928,6 +1061,53 @@ final class LetterReplyUITests: XCTestCase {
         XCTAssertFalse(app.buttons["inbox.letter.voiceStop"].exists, "a recording row opened without a microphone")
         XCTAssertEqual(fieldText(replyField(app)), "Typed first")
         try await stub.screenshot(app, "voice-6-mic-denied")
+
+        // At the largest size neither box is wider than the screen: "Open
+        // Settings" and the dismiss beside it were, which pushed the chat
+        // composer to 425pt on a 402pt screen (build 84 gate, P2).
+        let large = try launchPaired(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        openLetter(large, Self.letterA)
+        large.buttons["inbox.letter.mic"].tap()
+        try await assertTheDeniedNoticeFits(large, stub, box: "inbox.letter",
+                                            others: ["inbox.letter.replyField", "inbox.letter.mic", "inbox.letter.send"])
+        openChat(large)
+        large.buttons["chat.mic"].tap()
+        try await assertTheDeniedNoticeFits(large, stub, box: "chat", others: ["chat.composer", "chat.mic", "chat.plus"])
+    }
+
+    @MainActor
+    private func assertTheDeniedNoticeFits(
+        _ app: XCUIApplication, _ stub: LetterStub, box: String, others: [String]
+    ) async throws {
+        let error = element(app, "\(box).voiceError")
+        XCTAssertTrue(error.waitForExistence(timeout: 15), "no permission message in \(box)")
+        try await Task.sleep(for: .seconds(1))
+        try await stub.screenshot(app, "\(box)-mic-denied-axxxl")
+        let window = app.windows.firstMatch.frame
+        let ids = ["\(box).voiceNotices", "\(box).voiceError", "\(box).voiceOpenSettings", "\(box).voiceErrorDismiss"] + others
+        let frames = ids.map { ($0, element(app, $0).frame) }
+        diagnoseValue(app, "\(box)-denied-axxxl-frames",
+                      "window=\(window) " + frames.map { "\($0.0)=\($0.1)" }.joined(separator: " "))
+        for (id, frame) in frames {
+            XCTAssertGreaterThan(frame.width, 0, "no \(id)")
+            XCTAssertGreaterThanOrEqual(frame.minX, window.minX - 0.5, "\(id) \(frame) starts left of the screen")
+            XCTAssertLessThanOrEqual(frame.maxX, window.maxX + 0.5, "\(id) \(frame) runs past the screen (\(window.width)pt)")
+        }
+        // Both actions work, tapped. (Not `isHittable`: it answers false for the
+        // chat composer's controls under the conversation's scroll view, where a
+        // tap lands fine.) Settings coming forward is read as this app leaving the
+        // foreground: attaching to another app is what the launch ratchet forbids.
+        app.buttons["\(box).voiceOpenSettings"].tap()
+        XCTAssertTrue(waitUntil(timeout: 15) {
+            app.state == .runningBackground || app.state == .runningBackgroundSuspended
+        }, "Open Settings did not open Settings from \(box)")
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "the app did not come back from Settings")
+        let dismiss = app.buttons["\(box).voiceErrorDismiss"]
+        XCTAssertTrue(dismiss.waitForExistence(timeout: 10), "the notice went away while in Settings")
+        dismiss.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !self.element(app, "\(box).voiceNotices").exists },
+                      "the dismiss did not put the notice away in \(box)")
     }
 
     // MARK: - Appearance
@@ -1155,24 +1335,28 @@ final class LetterReplyUITests: XCTestCase {
         _ = waitUntil(timeout: 3) { !app.keyboards.element.exists }
     }
 
-    /// Tap the mic, record, stop.
+    /// Tap the mic, record, stop. `box` is the text box's identifier prefix:
+    /// the letter's reply box, or "chat" for the chat composer.
     @MainActor
-    func record(_ app: XCUIApplication, _ stub: LetterStub, seconds: Double, shot: String) async throws {
-        let mic = app.buttons["inbox.letter.mic"]
-        XCTAssertTrue(mic.waitForExistence(timeout: 10), "no mic in the reply box")
+    func record(
+        _ app: XCUIApplication, _ stub: LetterStub, box: String = "inbox.letter", mic: String = "inbox.letter.mic",
+        seconds: Double, shot: String
+    ) async throws {
+        let mic = app.buttons[mic]
+        XCTAssertTrue(mic.waitForExistence(timeout: 10), "no mic in \(box)")
         mic.tap()
-        let stop = app.buttons["inbox.letter.voiceStop"]
-        XCTAssertTrue(stop.waitForExistence(timeout: 15), "no recording row: \(voiceError(app))")
-        XCTAssertTrue(app.buttons["inbox.letter.voiceCancel"].exists, "no cancel on the recording row")
-        XCTAssertTrue(element(app, "inbox.letter.voiceRecordingCaption").exists)
+        let stop = app.buttons["\(box).voiceStop"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 15), "no recording row: \(voiceError(app, box: box))")
+        XCTAssertTrue(app.buttons["\(box).voiceCancel"].exists, "no cancel on the recording row")
+        XCTAssertTrue(element(app, "\(box).voiceRecordingCaption").exists)
         try await Task.sleep(for: .seconds(seconds))
         try await stub.screenshot(app, shot)
         stop.tap()
     }
 
     @MainActor
-    private func voiceError(_ app: XCUIApplication) -> String {
-        let error = element(app, "inbox.letter.voiceError")
+    private func voiceError(_ app: XCUIApplication, box: String = "inbox.letter") -> String {
+        let error = element(app, "\(box).voiceError")
         return error.exists ? error.label : "(no voice error shown)"
     }
 

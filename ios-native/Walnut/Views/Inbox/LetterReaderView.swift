@@ -777,7 +777,7 @@ struct LetterReaderView: View {
     /// follows it there as it does after a Send, so its line ends on screen. The
     /// move is animated: in one frame it left the finger's view (r4 gate, P1).
     private func retryPending(_ clientId: String) {
-        let moved = withAnimation(.easeInOut(duration: 0.3)) {
+        let moved = withAnimation(.easeInOut(duration: LetterThreadView.moveDuration)) {
             replies.beginRetry(letterId: letterId, clientId: clientId, afterTurns: letter?.threadEntries.count)
         }
         guard moved else { return }
