@@ -26,13 +26,159 @@ breaking changes).
   the Unreleased section of this file under the new version, bumps `package.json`, commits,
   tags `vX.Y.Z` and pushes; GitHub Actions publishes the tag to npm through trusted publishing
   (no token in the repository, provenance attached) and opens a GitHub Release with that
-  section as notes. Twice a day the same workflow publishes `main` as
-  `X.Y.(Z+1)-nightly.YYYYMMDD.N` under the `nightly` dist-tag when `main` moved and the quick
-  test baseline passes, so `npm install -g open-walnut@nightly` follows the repository without
-  waiting for a release. See [Releasing](docs/reference/releasing.md).
+  section as notes. Twice a day the same workflow publishes the newest commit on `main` that CI
+  passed as `X.Y.(Z+1)-nightly.YYYYMMDD.N` under the `nightly` dist-tag, so
+  `npm install -g open-walnut@nightly` follows the repository without waiting for a release.
+  Both channels publish only commits CI passed, since every install updates itself on restart.
+  See [Releasing](docs/reference/releasing.md).
+- **Snooze a task until something happens.** The task menu's `Start / Snooze until` row offers
+  `Something happens...` beside a time, and the composer's `+` menu has `Snooze until something
+  happens...`: either one asks the task's own session to write a small check, create a trigger and
+  park the task, so there is no form to fill. A snoozed task stays To Do in every list with no red
+  dot, and its row, Focus card and session header wear an amber `SNOOZED` pill that opens what it
+  waits for, Unsnooze and the trigger. Messages to its session do not cancel it (the panel says so
+  above the composer); the trigger firing, a prompt that needs you, setting Need Action or Complete,
+  5 failing checks or Unsnooze do. Every snooze has a backstop, 7 days unless set otherwise (1
+  minute to 30 days), after which the task comes back as Need Action with a `Snooze ran out` notice.
+  Agents snooze in one call with `wait_until` (and `wait_ttl`) on `trigger_create`, and the task
+  menu gains a Status row with all four phases.
+- **A session's questions stay on screen, and each answer lands under the question it answers.** The
+  timeline's top-left corner now holds the question list in place of the outline: a labelled tree
+  (Main conversation, each question with its number and a status word such as Waiting, Answered or
+  To check, pins, `N done` groups) when the panel is 640px or wider, and a rail of thin lines that
+  opens the same tree on hover, focus or tap when it is narrower or you hide the tree. One header
+  pill switches between Conversation Mode, the new default where every row stays in order with one
+  label per question's turns, and Tree Mode, a page per question as before. In Conversation Mode a
+  question opens as a comment card under the passage it is about, with its answers, the live reply
+  and its own composer, and picking a question no longer scrolls the conversation away. Each
+  question send asks the model to begin its reply with a `[Qn]` tag, which Walnut hides and files
+  the answer by, so an answer no longer jumps to the main conversation once the transcript catches
+  up, or leaves half of itself pinned at the bottom.
+- **Every session panel shows how fast its turn ran.** A row above the composer gives the model,
+  output tokens, time to first token, tokens per second, the turn's wall time and its cost: live
+  while the turn streams, frozen on the final numbers after, and back after a reload. Two panels
+  side by side compare two models on the same prompt. The numbers are Walnut's own measurements of
+  Claude Code's stream (tokens per second counts generation time only, tool runs excluded), and a
+  live estimate carries `~` until the CLI's own count replaces it. Usage records now keep each
+  turn's token counts, model, first-token time and generation time, and the second turn of a session
+  is no longer charged the whole session's cost so far ($0.18 shown for a $0.03 turn).
+- **Task ids a session writes become clickable task pills.** Sessions mostly write a task's id in
+  prose, in backticks or inside a command, and it used to stay dead text. Every id your board knows,
+  completed tasks included, now shows as a pill with the task's current title (or keeps the id as
+  its label when the title is already written beside it), and an id inside longer code is linked in
+  place. Tool input and output link the id without renaming it, file previews and diffs are left
+  alone, and unknown ids, file names and path segments stay text.
+- **The Mail app opens on a grouped inbox.** Unread automated mail collapses into one line per
+  group, named by your own configured model with a one-line summary under it, and mail meant for you
+  sits under Important, one row each; a group with nothing unread is hidden. `Mark N read` and a
+  batch unsubscribe checklist run only when you click them. Sorting follows your rules first
+  (Settings > Mail rules), then the model, then sender signals, and telling Walnut a group is
+  important or not, with a reason, is saved as a rule. `Keep out of Inbox` on a group moves its new
+  mail (and, if you ask, what is unread now) to the archive, still unread; Walnut cannot create a
+  rule on your mail server, so it does the move while it runs. The folder and message list columns
+  resize by drag or keyboard and remember their width, refreshing one account no longer pauses
+  new-mail watching for the others, and a `mailto` link the account cannot send offers Copy address
+  and the mail app link.
+- **Dictation sets itself up in one click.** Settings > Voice lists three engines: Qwen3-ASR (Apple
+  Silicon, recommended), Whisper, and an OpenAI-compatible API. On a fresh install the recommended
+  engine is preselected and one `Set up` row runs the whole chain (Homebrew installs ffmpeg and
+  whisper-cpp, or a Python environment gets mlx-audio), downloads the default model with real
+  progress and writes the config. Each engine shows one default model with the rest behind `Show all
+  models`, and the mic button says `Set up dictation` until it works. A model download no longer
+  sits at 0% until it is complete, and a cancelled download removes its partial files. Whisper CLI
+  and sherpa-onnx keep working, but are offered only while they are the active engine.
+- **A remote host keeps answering its sessions while Walnut is away.** Every `walnut` call a session
+  made used to go through the Walnut server, so with the Mac asleep or the server restarting, two
+  sessions on the same dev box could not even message each other. Walnut now keeps each host's
+  daemon a copy of its sessions, their tasks and their pending reply requests. With no server
+  connected the daemon answers `task_get`, `task_list`, `session_list`, `request_get` and
+  `task_send` between sessions on that host itself, queues `task_update` and `task_complete`, and
+  says what works offline for anything else. When the server is back it reads the daemon's journal
+  first: replies land, queued writes replay unless the task changed since, and each session is told
+  which of its writes did not land. A session on the Mac falls back to its own daemon the same way
+  when the server does not answer at all.
+- **After a compaction, a session is reminded of what is still open.** A compaction summary is the
+  model's own writing, and it can drop a subtask that is still running. Right after every compaction
+  (automatic or `/compact`), each Claude Code session now runs a hook that puts the task's
+  unfinished subtasks, the replies it is still waiting for and the requests to it that it has not
+  answered into context: a few lines, with no extra turn. Nothing open means nothing is added, and
+  the hook never leaves an error row. `WALNUT_COMPACT_OPEN_ITEMS=0` turns it off; the `open_items`
+  op and `GET /api/v1/me/open` give the same list.
+- **Moving work between projects takes its folders along.** Dragging a task onto a folder, an empty
+  folder row or (in the pinned tiers) a card of another project now moves the task into that project
+  and folder, after the same confirm as a project move; the drop used to light up and then refuse.
+  Agents, the CLI and MCP get `folder_list`, `folder_move` (a folder, its subfolders and every task
+  in them, to another project) and `folder_add_tasks`. Renaming a project now carries its folders
+  with it, where a folder used to keep naming the old project.
+- **The session menu says when the session started, when it was last active, and where it runs.** A
+  footer at the bottom of the panel's menu reads `Created` and `Updated` as relative times (the
+  exact time on hover) and `Host` (`Local`, or the host alias with the full hostname on hover), in
+  place of the old `SSH: <host>` line.
+- **Sonnet 5.5 is in the model catalog** for Bedrock, the Anthropic API and OpenRouter, with 1M
+  context (on Bedrock too), 128K output and adaptive thinking. Sonnet 5.5 and Sonnet 5 are priced at
+  $2 / $10 per million input / output tokens (cache write $2.50, cache read $0.20); Sonnet 5 had no
+  price before.
+- **On the phone, reply to a letter by voice and see when the reply reached the agent.** The letter
+  reply box has the chat composer's mic. Send clears the box at once, and the reply reads `Sending
+  to <session>...` until the server records the delivery, then `Sent to <session> · <time>`; a
+  refused reply keeps Retry and Edit, and a resend never makes a second reply. The inbox list gains
+  a filter row (All, Unread, Action needed and the letter types). Voice notices in the chat composer
+  and the reply box now say one thing with their actions beside it, and wrap instead of pushing the
+  composer off screen at the largest text sizes.
+- **Plugins can show a live item in the rail, file tasks in bulk and run scripts on a host.**
+  `walnut.ui.statusItem` puts a small item at the bottom of the left rail, above Voice: a title, a
+  detail line, a timer the browser ticks, a glyph and up to three buttons bound to the plugin's own
+  ops. `tasks.fileIntoFolder`, `tasks.fileIntoProject`, `tasks.createFolder` and
+  `tasks.deleteFolder` (empty folders only) file hundreds of tasks in seconds instead of one
+  whole-store write each, leave alone a task the user changed after the plugin planned, and
+  `TaskPatch` gains `addTags` and `removeTags`. `walnut.hosts.list/get/run` runs a POSIX `sh` script
+  on a host from Settings with bounded time and output, `walnut.sessionImports` exposes the session
+  importer's tag, project and runs, and `model.fastText` asks the user's own main provider for one
+  short answer. The Rhythm plugin uses the rail item for a stand-up ring: `Start break` or `Stand up
+  now` starts a break that counts down (`stand_break_minutes`, 10 by default), and a `Break over`
+  notice sounds when it ends.
+- **Some actions now answer only to this Mac.** Every request now carries where it came from: a
+  task delete (single or batch) is refused for a caller that is not on this Mac, and a trigger check
+  from a session on a remote host runs only on that host. The server also gains storage for Apple
+  Health data sent by a paired phone (`/api/v1/health/*`, under `health/` in the data directory),
+  readable only from this Mac and that phone and never synced to the cloud companion, backed up or
+  copied into test-server snapshots. Agents on this Mac read it through `health_status`,
+  `health_sleep`, `health_series`, `day_review` and `time_summary`; the phone side comes in a later
+  release, and the morning brief and weekly health trend routines ship switched off.
 
 ### Changed
 
+- **A new user's first screen opens on a New task draft.** An empty board used to show only a dashed
+  `New Project` button beside an Ask Walnut chat column, and nobody could tell whether a project had
+  to come first. Now the Ask Walnut slot starts hidden (opening it is remembered, and the sidebar
+  toggle says `Ask Walnut`), an empty board opens one `New task` draft and says projects are created
+  as you go, and `New project...` moves into the Projects heading menu. Each draft tab has its own
+  quick actions, drawn as line icons: Ask Walnut offers three starter questions, and Start Task
+  offers `Customize Walnut`, a coding session in Walnut's own source that also works on an npm
+  install (it clones the source into `~/open-walnut` when there is no checkout). In the folder
+  picker, Enter takes a typed folder that exists, creates a missing one when offered, or opens the
+  highlighted row; a user with no history sees the home folder and the common work folders, and
+  sessions imported from an existing Claude Code install add their folders as quick paths.
+- **The draft column has one way to start: the send arrow.** The `Start ↵` and `Fork ↵` buttons only
+  clicked the composer's send arrow, so they are gone; the arrow (or Enter) starts, forks or asks,
+  and its tooltip says which. The no-run exit is now `Save as todo` (it was `Create task for
+  later`). A draft bound to a task, or a fork, may still send with an empty composer; a plain draft
+  needs words, so a stray Enter never starts Claude Code on nothing.
+- **A session that needs you shows the board's red dot and a red composer.** The session header now
+  carries the task list's own marker before the title: a solid red dot while the output is unread,
+  and a hollow ring once it is read but the task still needs you. The composer card turns soft red
+  while unread. Both clear on your first click or keystroke in that window (a window coming to the
+  front does not count), on a new turn, or when the task completes; the ring stays until you reply
+  or complete the task. The items of the header's title row also sit on one center line now.
+- **Search finds what people type, not only what titles say.** Questions, one-letter typos, other
+  word forms, full-width characters and an unfinished last word now find the document whose title
+  spells it properly: over 300 real titles rewritten that way, a question found its target in the
+  top 8 90% of the time (was 71%), a typo 87% (74%) and full-width input 94% (29%), and the first
+  words of a title rank that task first far more often. A name typed as one word finds text that
+  writes it as two (`nightwatch` finds `Night Watch`), versions and dates match across separators
+  (`4.8` and `4-8`), and a spelling fix is chosen by which word fits the rest of the query. A match
+  spelled as typed still ranks first, and keyword search is about twice as fast at the median (68ms
+  to 32ms).
 - **Host problems show the moment the notifications panel opens.** A remote host that cannot be
   reached, or a Claude Code that is missing or not signed in, now counts as an error: it leads the
   All view the panel opens on, and the Errors view, as the same row as on the Home card (the
@@ -42,9 +188,84 @@ breaking changes).
   once. A problem dismissed on the Home card stays out of these views too. System is back to
   long-running status: its `Remote hosts` list still names every host once (dismissed ones
   included), and its badge no longer counts hosts. A pending ask still opens Needs Action first.
+- **Starting a session in a folder files it into that folder's own project.** The task goes to the
+  project whose default folder is exactly this folder; otherwise Walnut creates a project named
+  after the folder. When that name is taken, the name grows: the parent folder in front, then the
+  host for a remote folder, then a number. The server picks the name and creates the project in one
+  step, so two same-named folders started together never share a project, and the draft's project
+  pill shows the same name before you start.
+- **A session's subtasks get their own subfolder, and the board draws folders nested.** A task a
+  session files from inside its task joins the caller's folder only when everything in it is the
+  caller or its subtasks; otherwise the subtask gets a subfolder named after the caller, and the
+  caller moves in with the subtasks it already had. A caller with no folder still gets a new folder
+  holding both. On the Homepage board a subfolder sits inside its parent folder, stepped in 16px per
+  level, and folding a folder hides its subfolders.
+- **A task title a session writes is a few words.** A title over 60 characters from a session (a
+  worker, or a Personal AI ask) is cut to its head at once, the long form becomes the description
+  when there was none, and Walnut's fast model then refines the short title in the background.
+  Titles you type, and the phone's, are never touched. Session prompts now also say that a
+  "subagent" is Claude Code's own Agent tool and never a Walnut task, after a session asked to use a
+  subagent filed a Walnut subtask with a 140-character title.
+- **Pausing a trigger keeps it on its task, with Resume.** Disable on a task's trigger flyout made
+  the trigger vanish, so it read as Delete. It is now Pause, there and on the Routines page: the
+  pill turns muted and reads `TRIGGER · PAUSED`, the row shows a Paused badge and Resume, and Delete
+  stays a separate confirmed action. Resume delivers whatever appeared while it was paused as one
+  fire, and starts the error count over. A trigger the server stopped after 5 failed checks shows
+  the same way, marked Stopped. Agents get `trigger_pause` and `trigger_resume`, and `trigger_list`
+  reports each trigger's state.
+- **Task rows show their tags.** A Homepage row shows a task's own tags as chips (one chip plus
+  `+N`, every tag in the detail pane), with Walnut's machine tags hidden, and the chips shrink
+  before the title or the row's controls do, at any column width.
+- **The Ask drawer and the phone's chat list agree on which tasks are asks.** Both now read one
+  server rule (`GET /api/v1/asks`), which answers in about 3ms on a board of 6,000 tasks. While the
+  drawer is open its order and times hold still and a new ask reads `New`; reopening shows the true
+  order.
+- **Every skill Walnut ships is now named `walnut-<thing>`.** The prefix tells them apart from your
+  own skills and Claude Code's. The 13 that had bare names (`triage`, `learn`, `morning-brief`,
+  `rich-output` and others) moved. The old names keep working in routines, skill reads, saved enable
+  and disable choices and `/api/skills/<name>` links, and your own skill under an old name still
+  wins.
+
+### Performance
+
+- **The console stays responsive on a board with thousands of tasks.** Profiles of a server with
+  6,500 tasks found 40% of its main thread copying and rewriting the whole task table on every
+  single-row change, a second copy of the task store inside a sync plugin, and one sync tick that
+  held the server for 16 seconds, so every page timed out at once. Row writes now patch the cached
+  rows, built-in plugins share the server's own stores, and sync hands the server back between rows:
+  reading a task went from 54ms to 1 to 2ms, and the list from up to 290ms to under 50ms. The board
+  loads only the last 7 days of completed tasks (on one board, 6.8 MB per load had been almost all
+  old completions) and fetches the rest the first time a view shows completed rows; statuses load
+  for open tasks only, and a page load asks for the config once instead of five times. The skill
+  list, the ffmpeg and keychain checks and the recovery of a missing session record no longer block
+  the server.
+- **The session daemon stays responsive with very large transcripts.** A daemon restart used to
+  replay every live session's stream from the start before it listened (2.5 minutes with a 1.76 GB
+  stream, with every local session unreachable meanwhile); it now resumes from a checkpoint, which
+  takes a 594 MB stream from 8 seconds to 12ms. The Changed view reads only what was appended since
+  its last pass, answers an unchanged session from a light copy, skips files outside every repo, and
+  lists a binary file or one over 8 MB without content (`No textual diff`), where one session had
+  cost 1.6 GB of memory per refresh. The scan for sessions started outside Walnut no longer freezes
+  the daemon for up to 75 seconds every ten minutes. Catch-up replays stop at 8 MB and history and
+  status reads at 32 MB (a longer history shows its newest part, and a capped replay says how much
+  it skipped), and the daemon no longer runs a blocking `ps` for every session each second.
 
 ### Fixed
 
+- **A server restart no longer marks live sessions stopped or hands back tasks still working.** A
+  session whose turn ended during a restart was marked `stopped` while its Claude Code was still
+  running, so the next message took a slow resume, and a long turn with a background command started
+  earlier was handed back as Need Action, then flipped back 30 seconds later. Both now ask the
+  daemon first. A task also keeps its link to its session when the CLI stops, so a parent waiting on
+  a child that errored is no longer told the child completed, and a task whose session has ended
+  deletes without forcing. Retry after a failed resume now resends the message.
+- **A session's conversation no longer drops rows or pictures.** A message sent while a tool was
+  running vanished from the history and left its Delivered bubble pinned below later turns. A local
+  session whose daemon was slow showed only the live turn or `cached history`, with each load taking
+  15 to 23 seconds; it now keeps its timeline and heals on retry, and the server no longer launches
+  a second daemon that cannot start. A new session shows its first message from the click instead of
+  `Claude Code is working...` over an empty timeline for up to 13 seconds, and an image in a
+  remote-host session shows on its first render instead of as a broken icon.
 - **A failed dictation no longer loses the end of what you said.** When the final pass of a
   dictation failed after its live draft was already in the text box, the error was dropped because a
   draft existed, and the rest of the recording was gone: no message, no Retry, no entry in the voice
@@ -61,6 +282,41 @@ breaking changes).
   second look, a real restart waits for the old engine to exit first, a request whose connection
   drops is retried once on a fresh engine, and a live preview the browser already dropped no longer
   takes a turn on the model ahead of the words you are waiting for.
+- **A remote host comes back soon after you renew its SSH login.** Walnut now notices a renewed
+  certificate or agent key (and, with the new `ssh_login_files` setting, an SSH proxy's own login
+  file) and redials a waiting host at once, and its retries keep a 5 minute pace instead of going
+  hourly. An SSH proxy whose own login expired reads as a login problem with its own next step, not
+  as a passing failure retried every 3 seconds for hours. Every ssh call now ends at its deadline (a
+  proxy had kept a 5 second probe open for 11 minutes), a session's Reconnect really dials the host
+  and shows why it failed, and a host whose name is an ordinary word, such as `server`, no longer
+  garbles Walnut's own error messages.
+- **Semantic search works on an npm install, and can no longer crash the server.** An npm-installed
+  Walnut never found its embedding worker, so it ran keyword-only search and never downloaded the
+  model. Separately, stopping an embedding worker in the middle of a run aborted the whole server
+  (when a Mac woke and every timer fired at once, and at some shutdowns); a worker now finishes its
+  run before it exits, and the idle reaper skips a busy one.
+- **The phone's connection through the cloud companion drops far less, and a late answer still
+  reaches the phone.** The Mac to cloud bridge dropped about 50 times a day, mostly in the middle of
+  the 1.7 MB the Mac re-sent every 5 minutes. Bulk uploads now go as their own gzipped request
+  (about 150 KB), unchanged content is not re-sent, and `Synced X ago` stays within 10 minutes. On
+  the phone, a chat turn that goes quiet shows a stall notice and unlocks the composer, its late
+  answer lands in place when it arrives, and a follow-up never picks up the previous turn's answer.
+- **A test server can no longer stop your real sessions.** A test server running over a copied
+  sessions database once ended live Claude Code processes from its orphan sweep, because a pid in a
+  record says nothing about who started the process. The server never signals a CLI itself now:
+  every stop goes through the daemon that spawned it, which refuses a stop from another Walnut. Test
+  servers (`open-walnut web --ephemeral`) refuse the production data directory, forget every
+  inherited pid at boot, end their terminals when they exit, and a killed one's data snapshot
+  (several GB) is removed within the hour.
+- **Resuming a session whose model was retired keeps the same model family.** A session keeps the
+  exact model it started with, so once that version left the host's model menu, a resume let Claude
+  Code swap in its first allowed model with a `restricted by your organization` warning. Walnut now
+  moves a retired Claude version to the one current model of the same family, and the picker shows
+  it.
+- **Notice and rail buttons answer the click at once.** A toast's button and a rail item's button
+  used to wait for their action before closing, which under load took seconds and looked broken.
+  Both now close on the click; the rail item shows it is working, and a failure comes back as an
+  error toast or reopens the item with the reason.
 
 ## [0.5.1] - 2026-09-28
 
