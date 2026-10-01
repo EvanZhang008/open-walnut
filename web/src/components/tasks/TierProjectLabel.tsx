@@ -24,7 +24,9 @@
  *    pointerdown itself — that IS the mechanism that keeps pressing "+" from
  *    folding the project, so no target sniffing is needed here.
  */
-import { type HTMLAttributes } from 'react';
+import { type CSSProperties, type HTMLAttributes } from 'react';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import * as ICONS from '../common/Icons';
 import { useProjectContextMenu } from './ProjectContextMenu';
 
@@ -32,6 +34,10 @@ export interface TierProjectLabelRowProps {
   /** '' = Inbox (a legal drag participant and a legal fold target; it just has
    *  no registry row, so the menu's rename/delete/detail rows drop out). */
   project: string;
+  /** Its id in the tier's sortable items (tierLabelId). The row is displaced with
+   *  the cards during a card drag and measured as a drop target, but it is never a
+   *  dnd-kit drag source: project reordering stays the native drag below. */
+  sortableId: string;
   /** Cards this project has in THIS tier. Tier-local on purpose, same rule as the
    *  folder chip's badge: a number counting rows the tier can't show at all would
    *  jump around for no visible reason. Rows hidden by a COLLAPSED folder still
@@ -62,10 +68,20 @@ export interface TierProjectLabelRowProps {
 }
 
 export function TierProjectLabelRow({
-  project, count, collapsed, inert, dropIndicator, dragProps,
+  project, sortableId, count, collapsed, inert, dropIndicator, dragProps,
   onToggleCollapse, onAddTask, onAddSeparator, onAddFolder, onAddSession,
   isFavorite, onToggleFavorite, onViewDetails, onMoveUp, onMoveDown,
 }: TierProjectLabelRowProps) {
+  // Only the node, the transform and the transition: no attributes or listeners, so
+  // dnd-kit never starts a drag here and the native project drag keeps the row.
+  const { setNodeRef, transform, transition } = useSortable({
+    id: sortableId,
+    data: { type: 'tier-project-label', project },
+    disabled: { draggable: true, droppable: false },
+  });
+  const sortStyle: CSSProperties | undefined = transform
+    ? { transform: CSS.Transform.toString(transform), transition }
+    : transition ? { transition } : undefined;
   const projectMenu = useProjectContextMenu({
     onToggleCollapse,
     onNewTask: onAddTask,
@@ -85,6 +101,8 @@ export function TierProjectLabelRow({
   return (
     <>
       <div
+        ref={setNodeRef}
+        style={sortStyle}
         // The REAL project name, which the visible text isn't: Inbox renders as
         // "Inbox" but is stored as ''. Anything matching projects (a separator's
         // boundary, a test) needs the stored value.

@@ -404,6 +404,18 @@ export interface FolderMeta {
   memberCount: number;
 }
 
+/** `rootId` and every folder under it, by the registry's parent links. */
+export function folderSubtreeIds(rootId: string, meta: Record<string, FolderMeta>): Set<string> {
+  const out = new Set([rootId]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [gid, m] of Object.entries(meta)) {
+      if (m.parent_id && out.has(m.parent_id) && !out.has(gid)) { out.add(gid); grew = true; }
+    }
+  }
+  return out;
+}
+
 export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskGroups, setTaskGroups] = useState<Record<string, string>>({});
@@ -962,10 +974,14 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
 
     // Optimistic local state: move task to the new project + reposition.
     // Also capture the new group order for the subsequent reorder API call.
+    // Another project also takes the task out of its folder (the server does the
+    // same, and its echo is eaten by the guard above).
     let newGroupOrder: string[] = [];
     setTasks((prev) => {
       const result = prev.map((t) =>
-        t.id === taskId ? { ...t, project } : t
+        t.id !== taskId ? t
+          : (t.project || '').toLowerCase() === project.toLowerCase() ? { ...t, project }
+          : { ...t, project, group_id: undefined }
       );
       let final: Task[];
       if (insertNearTaskId) {
@@ -1316,20 +1332,22 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   }, [onOpError, refetchGroups]);
 
   // Move a whole folder across projects. Optimistic on the two things the UI reads
-  // to place a folder row (its own project + every member's project); nested
-  // subfolders and their members ride the server's `task:groups-changed` event,
-  // since only the server knows the subtree.
+  // to place a folder row, for the folder's whole subtree as the registry knows it:
+  // each folder's project and every member's project (the server moves the same
+  // subtree; its `task:groups-changed` event settles anything the registry missed).
   //
   // Three things this path is careful about:
   //  · It SNAPSHOTS what it overwrites and restores it on failure (same duty as
   //    create's tmp-row removal). Without that, a rejected move left the folder
   //    and its members drawn under a project the server never accepted.
-  //  · `parent_id` is dropped, not carried: a moved folder becomes TOP-LEVEL in
+  //  · The root's `parent_id` is dropped, not carried: it becomes TOP-LEVEL in
   //    the destination (its old parent stays behind), so keeping the stale id
   //    would nest it under a folder in another project until the refetch landed.
   //  · No success refetch — the WS `task:groups-changed` handler above already
   //    refetches both the task list and the folder registry.
   const movingFolders = useRef<Set<string>>(new Set());
+  const folderMetaNow = useRef(folderMeta);
+  folderMetaNow.current = folderMeta;
   const moveFolderToProjectCb = useCallback((groupId: string, project: string): Promise<boolean> => {
     // One move per folder at a time: a second one would snapshot the FIRST
     // move's optimistic state as "previous" and restore that on failure.
@@ -1338,19 +1356,27 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       return Promise.resolve(false);
     }
     movingFolders.current.add(groupId);
-    let prevMeta: FolderMeta | undefined;
+    // The server moves the folder's whole subtree (its subfolders and their cards).
+    const subtree = folderSubtreeIds(groupId, folderMetaNow.current);
+    let prevMeta: Record<string, FolderMeta> = {};
     let prevProjects: Array<[string, string]> = [];
     setFolderMeta((prev) => {
-      const cur = prev[groupId];
-      if (!cur) return prev;
-      prevMeta = cur;
-      const next: FolderMeta = { ...cur, project };
-      delete next.parent_id;
-      return { ...prev, [groupId]: next };
+      if (!prev[groupId]) return prev;
+      prevMeta = {};
+      const nextMeta = { ...prev };
+      for (const gid of subtree) {
+        const cur = prev[gid];
+        if (!cur) continue;
+        prevMeta[gid] = cur;
+        const next: FolderMeta = { ...cur, project };
+        if (gid === groupId) delete next.parent_id;
+        nextMeta[gid] = next;
+      }
+      return nextMeta;
     });
     setTasks((prev) => {
-      prevProjects = prev.filter((t) => t.group_id === groupId).map((t) => [t.id, t.project ?? '']);
-      return prev.map((t) => (t.group_id === groupId ? { ...t, project } : t));
+      prevProjects = prev.filter((t) => t.group_id && subtree.has(t.group_id)).map((t) => [t.id, t.project ?? '']);
+      return prev.map((t) => (t.group_id && subtree.has(t.group_id) ? { ...t, project } : t));
     });
     return tasksApi.moveFolderToProject(groupId, project)
       .then((res) => {
@@ -1363,9 +1389,13 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         return true;
       })
       .catch((err) => {
-        if (prevMeta) {
-          const restoreMeta = prevMeta;
-          setFolderMeta((prev) => (prev[groupId] ? { ...prev, [groupId]: restoreMeta } : prev));
+        const restoreMeta = prevMeta;
+        if (Object.keys(restoreMeta).length) {
+          setFolderMeta((prev) => {
+            const next = { ...prev };
+            for (const [gid, meta] of Object.entries(restoreMeta)) if (next[gid]) next[gid] = meta;
+            return next;
+          });
         }
         if (prevProjects.length) {
           const restore = new Map(prevProjects);

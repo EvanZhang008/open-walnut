@@ -10,7 +10,7 @@ import type { FocusTier } from '@/api/focus';
 import { useSortable } from '@dnd-kit/sortable';
 import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { groupSortableId } from './tier-group-sentinels';
+import { groupSortableId, intoFolderId, joinCardId } from './tier-group-sentinels';
 import { useFolderContextMenu } from './FolderContextMenu';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
@@ -48,7 +48,7 @@ export { groupSortableId } from './tier-group-sentinels';
  *    node measures as 0x0 at the viewport origin, which is a drop target at (0,0)
  *    rather than a useful rect. See the `disabled` argument below.
  */
-export function GroupChip({ groupId, tier, label, project, showProjectPrefix, count, depth = 0, collapsed, projectCollapsed, inert, onRename, onDissolve, onHide, onToggleCollapse, onMoveToProject }: {
+export function GroupChip({ groupId, tier, label, project, showProjectPrefix, count, depth = 0, collapsed, projectCollapsed, inert, isDropTarget, onRename, onDissolve, onHide, onToggleCollapse, onMoveToProject }: {
   groupId: string;
   tier: FocusTier;
   label: string;
@@ -80,13 +80,16 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
    *  title — it still IS a foldable folder) but the collapse GESTURE is refused
    *  while the sentinel handoff owns the pointer. */
   inert?: boolean;
+  /** The live drag is aimed INTO this folder (pointer on the chip): the row lights
+   *  up and nothing else moves, see intoFolderId. */
+  isDropTarget?: boolean;
   onRename?: (groupId: string, label: string) => void;
   onDissolve?: (groupId: string) => void;
   onHide?: (groupId: string) => void;
   onToggleCollapse?: (groupId: string) => void;
   onMoveToProject?: (groupId: string, project: string) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
     id: groupSortableId(groupId, tier),
     data: { type: 'group', groupId, tier },
     // Hidden chip → droppable OFF. dnd-kit measures every ENABLED droppable, and a
@@ -99,6 +102,15 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
     // only stops the measurement.
     disabled: { draggable: false, droppable: !!projectCollapsed },
   });
+  // The SAME node is also the "into this folder" target. Two droppables on one
+  // element: the sortable one means "a slot above this folder", this one means "in
+  // it", and pinnedCollision picks between them from where the pointer sits.
+  const { setNodeRef: setIntoRef } = useDroppable({
+    id: intoFolderId(groupId, tier),
+    data: { type: 'folder-into', groupId, tier },
+    disabled: !!projectCollapsed,
+  });
+  const setNodeRef = useCallback((node: HTMLElement | null) => { setSortableRef(node); setIntoRef(node); }, [setSortableRef, setIntoRef]);
   const folderMenu = useFolderContextMenu({
     onRename,
     onToggleCollapse,
@@ -132,7 +144,8 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
       style={style}
       data-group-id={groupId}
       data-folder-depth={depth || undefined}
-      className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}${canCollapse ? ' task-group-chip-clickable' : ''}${projectCollapsed ? ' tier-project-collapsed' : ''}`}
+      className={`task-group-chip${isDragging ? ' task-group-chip-dragging' : ''}${canCollapse ? ' task-group-chip-clickable' : ''}${projectCollapsed ? ' tier-project-collapsed' : ''}${isDropTarget ? ' task-group-chip-drop' : ''}`}
+      data-drop-target={isDropTarget ? 'folder' : undefined}
       title={canCollapse
         ? `Folder — click to ${collapsed ? 'expand' : 'collapse'}, press and drag to move the whole folder`
         : 'Folder — press and drag to move the whole folder'}
@@ -281,7 +294,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
   const {
     attributes,
     listeners,
-    setNodeRef,
+    setNodeRef: setSortableRef,
     transform,
     transition,
     isDragging,
@@ -300,6 +313,14 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       droppable: !!(folderCollapsed || projectCollapsed),
     },
   });
+  // The same node is also "put it with this card" (joinCardId): the card's middle,
+  // where the pinned collision names it instead of the sortable id.
+  const { setNodeRef: setJoinRef } = useDroppable({
+    id: joinCardId(task.id, tier),
+    data: { type: 'card-join', taskId: task.id, tier },
+    disabled: !!(folderCollapsed || projectCollapsed),
+  });
+  const setNodeRef = useCallback((node: HTMLElement | null) => { setSortableRef(node); setJoinRef(node); }, [setSortableRef, setJoinRef]);
 
   // Editable title state
   const [isEditing, setIsEditing] = useState(false);

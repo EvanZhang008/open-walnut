@@ -10982,8 +10982,14 @@ body.walnut-dragging {
   cursor: grabbing;
 }
 
-/* Floating card during cross-container drag */
+/* Floating card during a pinned drag. COMPACT (the title, capped) and placed
+   beside the pointer (ghostBesideCursor), never a full-width copy of the row:
+   that copy sat exactly on the row the drop was aimed at and hid its highlight. */
 .todo-pinned-card-dragging {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  max-width: 260px;
   background: var(--bg);
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   border: 1px solid var(--accent, #007aff);
@@ -10993,6 +10999,17 @@ body.walnut-dragging {
   font-size: 12px;
   opacity: 0.92;
   cursor: grabbing;
+}
+.todo-pinned-card-dragging .todo-pinned-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The ghost's invisible frame: exactly the dragged row's box (the overlay sizes
+   itself to it). dnd-kit measures this, not the ghost, as the collision rect. */
+.todo-pinned-drag-frame {
+  width: 100%;
+  height: 100%;
 }
 
 /* Floating stacked preview while dragging a WHOLE GROUP (chip grip). Names the
@@ -11576,11 +11593,18 @@ body.walnut-dragging {
   opacity: 0.7;
 }
 .task-group-chip-empty:hover { opacity: 1; border-color: var(--group-outline); }
+/* A drag aimed INTO this folder (the empty folder row of the list, the chip of a
+   pinned tier): the row alone lights up, nothing around it moves. */
 .task-group-chip-drop {
   opacity: 1;
   border: 1.5px solid var(--accent);
   background: rgba(0, 122, 255, 0.08);
+  color: var(--accent);
 }
+/* The border takes the padding's room: the row must not grow under a live drag
+   (dnd-kit measured the rows at drag start). The empty-folder row has its own
+   dashed border already and keeps its padding. */
+.task-group-chip-drop:not(.task-group-chip-empty) { padding: 2.5px 6.5px 1.5px; }
 .task-group-chip-empty-hint {
   font-size: 11px;
   font-style: italic;
@@ -13930,10 +13954,10 @@ body.walnut-dragging {
   padding: 3px 0;
 }
 
-/* Minimal project labels inside Pinned tiers: slim, and deliberately NOT a dnd-kit
-   sortable/droppable (the card DnD must ignore them). They ARE interactive, though:
-   a click folds the run, a native HTML5 drag reorders projects, a right-click opens
-   the project menu. */
+/* Minimal project labels inside Pinned tiers: slim. A label rides the card drag as a
+   sortable row (it slides with its run and takes drops) but never starts one. It is
+   interactive too: a click folds the run, a native HTML5 drag reorders projects, a
+   right-click opens the project menu. */
 .tier-project-label {
   display: flex;
   align-items: center;

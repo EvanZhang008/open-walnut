@@ -317,6 +317,9 @@
 .home-navigation-scroll.is-stacked .todo-pinned-subgroup-heading { top: 26px; z-index: 2; }
 .home-navigation-scroll.is-stacked .todo-tasks-section:has(> .todo-tasks-header) .todo-group-project-header { top: 26px; z-index: 2; }
 .home-navigation-scroll.is-stacked .tier-project-label { top: 52px; }
+/* A pinned drag measures every row where it sits in the list, so a label stuck over the rows
+   passing under it would take drops aimed at them: while a drag runs, labels stay in place. */
+.home-navigation-scroll .todo-pinned-wrapper-dragging .tier-project-label { position: relative; top: auto; }
 /* The shadows only paint the gutters. List rows reach into the left one, so a click there beside
    a stuck heading would land on a row hidden under it: these make the gutters part of it. */
 .home-navigation-scroll.is-stacked .todo-tasks-section > .navigation-heading.todo-tasks-header::before,

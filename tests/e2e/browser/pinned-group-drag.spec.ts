@@ -130,17 +130,17 @@ test('dragging a whole group opens a slot — siblings displace', async ({ page 
   await expect(a1Card).toBeVisible({ timeout: 15_000 })
   expect(await ownFocusOrder(page, ids)).toEqual(ids)
 
-  // Both chips must be real, addressable rows — the chip is what carries the
-  // whole-group drag handle.
+  // Both chips must be real, addressable rows: the chip itself is the whole-group
+  // drag handle.
   const chipA = scope.locator(`.task-group-chip[data-group-id="${gidA}"]`)
   const chipB = scope.locator(`.task-group-chip[data-group-id="${gidB}"]`)
   await expect(chipA).toBeVisible()
   await expect(chipB).toBeVisible()
 
-  const gripBox = await chipB.locator('.task-group-chip-grip').boundingBox()
+  const handleBox = await chipB.locator('.task-group-chip-label').boundingBox()
   const a1Box = await a1Card.boundingBox()
   const chipABox = await chipA.boundingBox()
-  expect(gripBox).not.toBeNull()
+  expect(handleBox).not.toBeNull()
   expect(a1Box).not.toBeNull()
   expect(chipABox).not.toBeNull()
 
@@ -155,11 +155,12 @@ test('dragging a whole group opens a slot — siblings displace', async ({ page 
   // At rest B sits below A.
   expect(await top(chipB)).toBeGreaterThan(await top(a1Card))
 
-  await page.mouse.move(gripBox!.x + gripBox!.width / 2, gripBox!.y + gripBox!.height / 2)
+  await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2)
   await page.mouse.down()
-  // Past the activation constraint, then up onto Group A's chip (= "land above A").
-  await page.mouse.move(gripBox!.x + gripBox!.width / 2, gripBox!.y + gripBox!.height / 2 + 10)
-  await page.mouse.move(chipABox!.x + chipABox!.width / 2, chipABox!.y + chipABox!.height / 2, { steps: 14 })
+  // Past the activation constraint, then up onto the TOP band of Group A's chip
+  // (= "land above A"; the rest of that row means "into A").
+  await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2 + 10)
+  await page.mouse.move(chipABox!.x + chipABox!.width / 2, chipABox!.y + 3, { steps: 14 })
   await page.waitForTimeout(600)
   await page.screenshot({ path: '/tmp/pinned-group-drag/mid-drag.png' })
 
