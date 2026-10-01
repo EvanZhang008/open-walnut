@@ -72,11 +72,14 @@ describe('tier chip', () => {
     expect(c.title).toBe('Pinned tier: Focus. Set by you. Click to change.');
   });
 
-  it('a fresh draft shows the effective Focus tier without claiming a user or AI decision', () => {
-    const defaultChip = chip(draft({ pinTier: 'focus' }), 'pinTier')!;
-    expect(defaultChip).toMatchObject({ key: 'Pinned:', label: 'Focus', source: 'default', ai: false });
-    expect(defaultChip.title).toBe('Pinned tier: Focus. Default for new tasks. Click to change.');
-    expect(chip(draft({ pinTier: 'focus' }, { owner: { dueDate: 'user' } }), 'pinTier')!.source).toBe('default');
+  it('a fresh draft shows no chip for the Focus default nobody decided', () => {
+    expect(chip(draft({ pinTier: 'focus' }), 'pinTier')).toBeUndefined();
+    // Another field's owner does not make the tier a decision.
+    expect(chip(draft({ pinTier: 'focus' }, { owner: { dueDate: 'user' } }), 'pinTier')).toBeUndefined();
+    // A non-default tier with no owner is still shown, as the default source.
+    const c = chip(draft({ pinTier: 'backlog' }), 'pinTier')!;
+    expect(c).toMatchObject({ key: 'Pinned:', label: 'Backlog', source: 'default', ai: false });
+    expect(c.title).toBe('Pinned tier: Backlog. Default for new tasks. Click to change.');
   });
 
   it('an explicitly unpinned tier shows no chip', () => {
@@ -203,7 +206,8 @@ describe('unread chip and order', () => {
     );
     expect(dec.draftDecisionChips(d, ctx()).map((c) => c.field))
       .toEqual(['pinTier', 'priority', 'startDate', 'dueDate', 'unread']);
-    expect(dec.draftDecisionChips(draft({}), ctx()).map((c) => c.field)).toEqual(['pinTier']);
+    // A fresh draft (Focus default, nothing decided) has no chips at all.
+    expect(dec.draftDecisionChips(draft({}), ctx()).map((c) => c.field)).toEqual([]);
   });
 
   it('tier and priority name their field, so two chips that share a value word stay distinct', () => {

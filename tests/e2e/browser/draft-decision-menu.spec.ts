@@ -83,13 +83,12 @@ const activeTag = (page: Page) => page.evaluate(() => {
 })
 
 // C3 C4 C35 C62: the empty draft and the row structure.
-test('a fresh draft shows its Focus tier; a landed parse orders legend, chips, then the bar', async ({ page }) => {
+test('a fresh draft shows no chip for its Focus default; a landed parse orders legend, chips, then the bar', async ({ page }) => {
   const mock = await boot(page, D1)
   const panel = await openDraft(page)
-  await expect(draftDecisionChips(panel)).toHaveCount(1)
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
-  await expect(draftDecisionChip(panel, 'pinTier')).not.toHaveClass(AI)
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveAttribute('title', 'Pinned tier: Focus. Default for new tasks. Click to change.')
+  // The default tier nobody decided is not a decision (user: "if it is default, don't show").
+  await expect(panel.locator('.draft-composer-bar')).toBeVisible()
+  await expect(draftDecisionChips(panel)).toHaveCount(0)
   await expect(panel.locator('.draft-decisions-key')).toHaveCount(0)
   // No project chip yet: the project follows the folder, and there is none.
   await expect(draftPills(panel)).toHaveCount(1)
@@ -288,12 +287,13 @@ for (const showPriority of [true, false]) {
   })
 }
 
-test('a fresh Focus chip reflects unpinning and re-pinning before the task is created', async ({ page, browserName }) => {
+test('a fresh draft\'s Focus default has no chip; the menu still shows it lit, and a user pick gets a chip', async ({ page, browserName }) => {
   await boot(page, {})
   const panel = await openDraft(page)
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
+  await expect(panel.locator('.draft-composer-bar')).toBeVisible()
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveCount(0)
   await page.screenshot({ path: `${SHOT_DIR}/fresh-focus-${browserName}.png` })
-  let menu = await openDraftSettings(panel, 'pinTier')
+  let menu = await openDraftSettings(panel, 'more')
   await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Focus/)
   await menu.locator('.task-kebab-tier-btn[aria-pressed="true"]').click()
   await expect(draftDecisionChip(panel, 'pinTier')).toHaveCount(0)
@@ -456,8 +456,7 @@ for (const reduced of [false, true]) {
     // A withdrawal is instant (no fade-out showing a decision that no longer holds).
     mock.set({})
     await typeAndSettle(page, mock, 'fix the flaky login test')
-    await expect(draftDecisionChips(panel)).toHaveCount(1, { timeout: 1_000 })
-    await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
+    await expect(draftDecisionChips(panel)).toHaveCount(0, { timeout: 1_000 })
   })
 }
 

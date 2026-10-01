@@ -3,8 +3,10 @@
  * shows, in which order, with which words. Pure (no React); DraftDecisionRow only
  * renders what this returns.
  *
- * The effective tier is always shown when pinned, including the Focus default;
- * other fields appear when set. Fixed order: tier, priority, start, due, unread.
+ * A chip shows a DECISION: a tier someone set (the user, the AI, a section's +),
+ * never the Focus default nobody touched (user, 2026-09-30: "if it is default,
+ * don't show"); other fields appear when set. Fixed order: tier, priority,
+ * start, due, unread.
  * A chip marks ✦ only when the AI owns the field (isAiOwned). Words come from the same tables the
  * menu renders (TIER_OPTIONS, PRIORITY_OPTIONS, the app's custom tier labels):
  * never a second copy here, or the chip and the menu stop agreeing.
@@ -16,7 +18,7 @@
  */
 
 import { formatDateTimeDisplay, parseDateLocal } from '@/components/common/DatePicker';
-import { PRIORITY_OPTIONS, TIER_OPTIONS, tierColor } from './task-meta-constants';
+import { DEFAULT_META, PRIORITY_OPTIONS, TIER_OPTIONS, tierColor } from './task-meta-constants';
 import type { DraftColumn, DraftOwnedField, DraftTaskField } from './draft-column';
 import { isAiOwned } from './draft-ownership';
 
@@ -160,8 +162,11 @@ function tierChip(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionChip 
 function tierChipValue(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionChip | null {
   const tier = draft.meta.pinTier;
   // Not pinned says nothing (user, 2026-09-25: a "Not pinned" chip is noise;
-  // the lit tier's second click is how it got here).
+  // the lit tier's second click is how it got here). Neither does the default
+  // tier nobody decided: a fresh draft lands in Focus, and saying so on every
+  // draft is noise too. A user who PICKS Focus still sees it ("Set by you.").
   if (!tier) return null;
+  if (tier === DEFAULT_META.pinTier && sourceOf(draft, 'pinTier') === 'default') return null;
   const builtin = BUILTIN_TIER_LABEL.get(tier);
   if (builtin) {
     return chipOf(draft, 'pinTier', builtin, { kind: 'tier', tier, color: tierColor(tier) },

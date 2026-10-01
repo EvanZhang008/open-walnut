@@ -642,7 +642,7 @@ export function DraftSessionPanel({
                 >
                   <span className="draft-intent-ic" aria-hidden="true">{ICONS.ICON_TERMINAL}</span>
                   <span className="draft-intent-t">Start Task</span>
-                  <span className="draft-intent-d">A coding session in any folder, with any agent: Claude, Codex, and more.</span>
+                  <span className="draft-intent-d">A coding session with Claude Code, Codex, OpenCode, etc.</span>
                 </button>
                 <button
                   type="button"
@@ -656,8 +656,8 @@ export function DraftSessionPanel({
                   <span className="draft-intent-t">Ask Walnut</span>
                   <span className="draft-intent-d">
                     {isBound
-                      ? 'Hand this task to Walnut: plan it, research it, or organize it with your tasks, notes and memory in reach.'
-                      : 'A quick session with Walnut: organize tasks, plan your day, configure Walnut, ask or search anything.'}
+                      ? 'Hand this task to Walnut: plan it, research it, or organize it.'
+                      : 'Search tasks, find notes, schedule your day, quick questions, etc.'}
                   </span>
                 </button>
               </div>

@@ -244,8 +244,8 @@ test('a plain draft has no header ⋮; More ends the pills row, sets tier + unre
   expect(last?.tag).toBe('BUTTON')
   expect(last?.cls).toMatch(/\bdraft-more-btn\b/)
   expect(last).toMatchObject({ text: 'More', label: 'Task settings', popup: 'dialog' })
-  await expect(draftDecisionChips(panel)).toHaveCount(1)
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText('Pinned: Focus')
+  // The Focus default nobody decided has no chip.
+  await expect(draftDecisionChips(panel)).toHaveCount(0)
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/05-plain-draft-more.png` })
 
   const menu = await openDraftSettings(panel, 'more')
