@@ -84,7 +84,9 @@
 
 .chat-plus-group > .chat-plus-menu {
   width: max-content;
-  max-width: min(260px, calc(100vw - 16px));
+  /* Wide enough for the longest built-in row ("Snooze until something happens…")
+     on one line; globals.css keeps every row to one line and ellipsizes past this. */
+  max-width: min(300px, calc(100vw - 16px));
   min-width: 180px;
   left: auto;
   bottom: auto;

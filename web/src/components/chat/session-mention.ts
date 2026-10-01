@@ -1,12 +1,15 @@
 /**
- * "@" mention — routing + the fuzzy matcher shared by every palette group.
+ * "@" mention — routing + the fuzzy matcher shared by both palette groups.
  *
- * The "@" popup is ONE unified palette: Walnut entities (Tasks / Sessions /
- * Projects, each pick INSERTS A REFERENCE pill) plus Files (Claude Code's own
- * `@path` convention). routeMention decides which half leads from the shape of
- * the query alone: a path-shaped query means the user is typing a path, so
- * Files lead and directory navigation keeps working; anything else leads with
- * the entities. Ranking itself lives in mention-entities.ts.
+ * The "@" popup is ONE unified palette: Tasks (a pick INSERTS A `<task-ref/>`
+ * pill; a task row carries its session) plus Files (Claude Code's own `@path`
+ * convention). routeMention decides which half leads from the shape of the
+ * query alone: a path-shaped query means the user is typing a path, so Files
+ * lead and directory navigation keeps working; anything else leads with the
+ * tasks. Ranking itself lives in mention-entities.ts.
+ *
+ * SessionMentionCandidate / resolveRefInIndex serve the session-envelope and
+ * provenance cards (a peer's short id → its session and task), not the palette.
  */
 
 export interface SessionMentionCandidate {
@@ -44,9 +47,8 @@ export type MentionRoute =
  *  - "@?…"        → the recent-folders popup (unchanged legacy mode);
  *  - path-shaped  → unified palette, FILES first ("/" or "~" means the user is
  *    clearly typing a path — descend into it, don't fight them);
- *  - otherwise    → unified palette, ENTITIES first (tasks / sessions /
- *    projects are what a bare "@" is most often reaching for; Files stay
- *    visible right below).
+ *  - otherwise    → unified palette, TASKS first (a task is what a bare "@"
+ *    is most often reaching for; Files stay visible right below).
  * Position in the message deliberately does not matter: a reference is a
  * reference wherever it sits.
  */

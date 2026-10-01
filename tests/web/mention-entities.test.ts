@@ -1,18 +1,23 @@
 /**
- * Unit tests for the "@" palette's entity ranking (mention-entities.ts): the
- * instant local fuzzy layer, how the hybrid-search hits fold into it, and the
- * shared row budget that keeps every non-empty group visible at once.
+ * Unit tests for the "@" palette's task ranking (mention-entities.ts): the
+ * task row with its session folded in, the instant local fuzzy layer, how the
+ * hybrid-search hits (task hits AND transcript hits) fold into it, and the
+ * shared row budget that keeps Tasks and Files visible at once.
  */
 import { describe, it, expect } from 'vitest';
+import type { Task } from '../../src/core/types';
 import {
   rankEntities,
   mergeServerHits,
   groupRowBudget,
+  taskEntity,
+  taskIdOfHit,
+  hitsAsTasks,
   type MentionEntity,
 } from '../../web/src/components/chat/mention-entities';
+import type { EntitySearchHit } from '../../web/src/stores/mention-search';
 
 const task = (over: Partial<MentionEntity>): MentionEntity => ({
-  kind: 'task',
   id: 'mt000000-0000',
   title: 'Untitled',
   meta: 'TODO · Inbox',
@@ -21,15 +26,55 @@ const task = (over: Partial<MentionEntity>): MentionEntity => ({
   ...over,
 });
 
+const storeTask = (over: Partial<Task>): Task => ({
+  id: 'mt1', title: 'A task', phase: 'IN_PROGRESS', status: 'in_progress', project: 'walnut',
+  created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-02T00:00:00Z', session_ids: [],
+  ...over,
+} as Task);
+
+const SESSION = '9af9e0b9-1111-2222-3333-444444444444';
+
+describe('taskEntity', () => {
+  it('a task without a session: phase · project, no dot', () => {
+    const e = taskEntity(storeTask({}));
+    expect(e).toMatchObject({ id: 'mt1', title: 'A task', meta: 'IN_PROGRESS · walnut', live: false, active: true });
+    expect(e.sessionId).toBeUndefined();
+    expect(e.status).toBeUndefined();
+  });
+
+  it('a task with a running session carries it: "running" in the meta, a running dot, ranked live', () => {
+    const e = taskEntity(storeTask({ session_id: SESSION }), { process_status: 'running' });
+    expect(e).toMatchObject({ sessionId: SESSION, status: 'running', live: true, meta: 'IN_PROGRESS · walnut · running' });
+  });
+
+  it('a session blocked on a permission is "waiting on you", whatever its process status', () => {
+    const e = taskEntity(storeTask({ session_id: SESSION }), { process_status: 'idle', pendingPermissionTool: 'Bash' });
+    expect(e).toMatchObject({ status: 'waiting', live: true, meta: 'IN_PROGRESS · walnut · waiting on you' });
+  });
+
+  it('the live store wins over the enrichment snapshot; without either the snapshot speaks; a session with no status is idle', () => {
+    const snap = storeTask({ session_id: SESSION, session_status: { process_status: 'running' } });
+    expect(taskEntity(snap, { process_status: 'stopped' })).toMatchObject({ status: 'stopped', live: false, meta: 'IN_PROGRESS · walnut' });
+    expect(taskEntity(snap, null)).toMatchObject({ status: 'running', live: true });
+    expect(taskEntity(storeTask({ session_id: SESSION }), null)).toMatchObject({ status: 'idle', live: false });
+  });
+
+  it('Inbox for no project, (untitled) for no title, pinned from pinned or the focus tier, complete is not active', () => {
+    expect(taskEntity(storeTask({ project: '', title: '', phase: 'COMPLETE', focus_tier: 'focus' })))
+      .toMatchObject({ title: '(untitled)', meta: 'COMPLETE · Inbox', pinned: true, active: false });
+  });
+});
+
 describe('rankEntities', () => {
-  it('empty query: pinned first, then active, then most recent', () => {
+  it('empty query: pinned first, then a live session, then active, then most recent', () => {
     const items = [
       task({ id: 'a', title: 'Old done', active: false, recencyKey: '2026-08-20T00:00:00Z' }),
       task({ id: 'b', title: 'Recent active', recencyKey: '2026-08-28T00:00:00Z' }),
       task({ id: 'c', title: 'Pinned but older', pinned: true, recencyKey: '2026-08-10T00:00:00Z' }),
       task({ id: 'd', title: 'Older active', recencyKey: '2026-08-15T00:00:00Z' }),
+      task({ id: 'e', title: 'Running, oldest', live: true, recencyKey: '2026-08-05T00:00:00Z' }),
     ];
-    expect(rankEntities('', items).map((r) => r.entity.id)).toEqual(['c', 'b', 'd', 'a']);
+    expect(rankEntities('', items).map((r) => r.entity.id)).toEqual(['c', 'e', 'b', 'd', 'a']);
     expect(rankEntities('', items)[0]).toMatchObject({ matchField: null, positions: [], source: 'local' });
   });
 
@@ -44,19 +89,60 @@ describe('rankEntities', () => {
     expect(ranked[0].positions).toEqual([4, 5, 6, 7, 8]);
   });
 
-  it('matches the id too (a session by its 8-char prefix, a task by its id)', () => {
+  it('matches the task id too', () => {
     const items: MentionEntity[] = [
-      { kind: 'session', id: '9af9e0b9-1111-2222-3333-444444444444', title: 'Auth middleware', meta: '' },
       task({ id: 'mtcki5d9-e29d', title: 'Something else' }),
+      task({ id: 'mt000000-0000', title: 'Other' }),
     ];
-    expect(rankEntities('9af9e', items)[0]).toMatchObject({ matchField: 'id', entity: { kind: 'session' } });
     expect(rankEntities('mtcki', items)[0]).toMatchObject({ matchField: 'id', entity: { id: 'mtcki5d9-e29d' } });
+    expect(rankEntities('mtcki', items)).toHaveLength(1);
   });
 
   it('respects the limit', () => {
     const items = Array.from({ length: 20 }, (_, i) => task({ id: `t${i}`, title: `auth task ${i}` }));
     expect(rankEntities('auth', items, { limit: 3 })).toHaveLength(3);
     expect(rankEntities('', items, { limit: 5 })).toHaveLength(5);
+  });
+});
+
+describe('taskIdOfHit / hitsAsTasks', () => {
+  const taskHit = (id: string, title: string, over: Partial<EntitySearchHit> = {}): EntitySearchHit =>
+    ({ type: 'task', id, title, summary: `${title} summary`, phase: 'IN_PROGRESS', project: 'walnut', ref: `<task-ref id="${id}" label="${title}"/>`, ...over });
+  // The slim contract: a session row's `id` is its OWNING task, the ref names the session.
+  const sessionHit = (owner: string, sid: string, title: string): EntitySearchHit =>
+    ({ type: 'session', id: owner, title, summary: 'transcript snippet', phase: 'IN_PROGRESS', project: 'walnut', ref: `<session-ref id="${sid}" label="${title}"/>` });
+
+  it('a task hit is its own id; a transcript hit is the task that owns the session; an orphan session is nobody', () => {
+    expect(taskIdOfHit(taskHit('mt1', 'T'))).toBe('mt1');
+    expect(taskIdOfHit(sessionHit('mt1', SESSION, 'S'))).toBe('mt1');
+    expect(taskIdOfHit(sessionHit(SESSION, SESSION, 'orphan'))).toBeNull();
+    expect(taskIdOfHit({ type: 'memory', id: '/notes/x.md', title: 'x', summary: '' })).toBeNull();
+  });
+
+  it('folds a task hit and its transcript hit into ONE row at the first position, borrowing the local row\'s live meta', () => {
+    const local = new Map<string, MentionEntity>([
+      ['mt1', task({ id: 'mt1', title: 'Local title', meta: 'IN_PROGRESS · walnut · running', sessionId: SESSION, status: 'running', live: true })],
+    ]);
+    const hits = [sessionHit('mt1', SESSION, 'Session title'), taskHit('mt2', 'Second'), taskHit('mt1', 'Local title')];
+    const out = hitsAsTasks(hits, local);
+    expect(out.map((e) => e.id)).toEqual(['mt1', 'mt2']);
+    expect(out[0]).toMatchObject({ title: 'Local title', status: 'running', live: true, summary: 'transcript snippet' });
+    expect(out[1]).toMatchObject({ title: 'Second', meta: 'IN_PROGRESS · walnut', active: true, summary: 'Second summary' });
+  });
+
+  it('a transcript hit on a task the browser does not hold still becomes that task\'s row, named by the later task hit', () => {
+    const out = hitsAsTasks([sessionHit('mt9', SESSION, 'Old session name'), taskHit('mt9', 'Real task title', { phase: 'TODO', project: '' })], new Map());
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ id: 'mt9', title: 'Real task title', meta: 'TODO · Inbox', summary: 'transcript snippet' });
+  });
+
+  it('drops orphan sessions, the caller\'s own task, and the caller\'s own transcript', () => {
+    const out = hitsAsTasks(
+      [sessionHit(SESSION, SESSION, 'orphan'), taskHit('self', 'Me'), sessionHit('self', 'self-sid', 'My transcript'), taskHit('mt2', 'Peer')],
+      new Map(),
+      { taskId: 'self', sessionId: 'self-sid' },
+    );
+    expect(out.map((e) => e.id)).toEqual(['mt2']);
   });
 });
 
@@ -106,11 +192,9 @@ describe('mergeServerHits', () => {
 });
 
 describe('groupRowBudget', () => {
-  it('one group takes the whole panel; more groups share it so all stay visible', () => {
+  it('one group takes the whole panel; Tasks and Files together share it so both stay visible', () => {
     expect(groupRowBudget(0)).toEqual({ entity: 12, files: 12 });
     expect(groupRowBudget(1)).toEqual({ entity: 12, files: 12 });
     expect(groupRowBudget(2)).toEqual({ entity: 5, files: 5 });
-    expect(groupRowBudget(3)).toEqual({ entity: 3, files: 4 });
-    expect(groupRowBudget(4)).toEqual({ entity: 2, files: 3 });
   });
 });

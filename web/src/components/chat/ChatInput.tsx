@@ -14,8 +14,6 @@ import { composeWithRefs, cutSpan, splitComposerRefs, type ComposerRefSplit } fr
 import { relativeTo } from './mention-path';
 import { routeMention } from './session-mention';
 import { detectMention } from './mention-trigger';
-import { ensureSessionMentionIndex } from '@/stores/session-mention-index';
-import { ensureProjectsIndex } from '@/stores/mention-search';
 import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
@@ -121,11 +119,11 @@ interface ChatInputProps {
   mentionCwd?: string;
   /** SSH host for "@" mentions (undefined = local). */
   mentionHost?: string;
-  /** Enables the Walnut entity groups (Tasks / Sessions / Projects) in the "@"
-   *  palette. Picking one INSERTS a reference pill into the message — nothing
-   *  is routed; the current session's agent decides what to do with it. */
+  /** Enables the Tasks group in the "@" palette. Picking a task INSERTS a
+   *  reference pill into the message — nothing is routed; the current
+   *  session's agent decides what to do with it. */
   enableEntityMention?: boolean;
-  /** The session this composer talks to — excluded from the session group. */
+  /** The session this composer talks to — its task is left out of the Tasks group. */
   sessionMentionSelfId?: string;
   /** External prefill: text to drop into the input (e.g. an agent-builder template). */
   prefillText?: string;
@@ -546,8 +544,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionCommands]);
 
-  // "@" mention state — ONE unified palette (Tasks / Sessions / Projects +
-  // Files groups; see MentionPalette) plus the legacy "@?" recents popup.
+  // "@" mention state — ONE unified palette (Tasks + Files groups; see
+  // MentionPalette) plus the legacy "@?" recents popup.
   // mentionAtIndexRef / mentionEndRef bracket the "@query" span in `value` so
   // selection can splice without relying on the live caret (unreliable for
   // mouse-driven picks). routeMention decides the surface + leading half per
@@ -1037,10 +1035,6 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             ? override.order
             : enableEntityMention ? route.order : 'files-first';
           setMentionOrder(order);
-          if (enableEntityMention) {
-            void ensureSessionMentionIndex();
-            void ensureProjectsIndex();
-          }
         }
         setMentionQuery(m.query);
         setMentionOpen(true);
@@ -1511,10 +1505,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                       onClick={() => insertShortcut('@')}
                       type="button"
                       role="menuitem"
-                      title="Type @ to reference a task, session or project; the agent gets its context and decides what to do"
+                      title="Type @ to reference a task; the agent gets its context (and its session) and decides what to do"
                     >
                       <span className="chat-plus-menu-key">@</span>
-                      <span>Reference a task, session or project</span>
+                      <span>Reference a task</span>
                     </button>
                   )}
                   {mentionCwd && (

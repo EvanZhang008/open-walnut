@@ -842,11 +842,13 @@ sessionsRouter.get('/recent', async (req: Request, res: Response, next: NextFunc
   }
 })
 
-// GET /api/sessions/mention-index — light projection powering the composer's
-// "@" session picker. The picker filters IN THE BROWSER on every keystroke, so
-// it needs the whole candidate set once, small and fast: no live-status enrich
-// (the client's WS-fed status store is fresher), no hostname enrich, no recap /
-// summary / status_history baggage. ~110 bytes/row vs ~2KB on /recent.
+// GET /api/sessions/mention-index — light projection of every listable session,
+// read by the chat's session-envelope and provenance cards (a peer's short id →
+// its session and task). The client resolves IN THE BROWSER, so it needs the
+// whole candidate set once, small and fast: no live-status enrich (the client's
+// WS-fed status store is fresher), no hostname enrich, no recap / summary /
+// status_history baggage. ~110 bytes/row vs ~2KB on /recent. The composer's "@"
+// palette lists tasks only and does not read this.
 sessionsRouter.get('/mention-index', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const requested = req.query.limit ? parseInt(req.query.limit as string, 10) : 800
@@ -862,7 +864,7 @@ sessionsRouter.get('/mention-index', async (req: Request, res: Response, next: N
         lastActiveAt: s.lastActiveAt ?? '',
         // Owning task — the chat's session-envelope card resolves a peer's short
         // id here and shows its task pill, so the receiving human sees WHICH task
-        // messaged them. ~20 extra bytes/row; the "@" palette ignores it.
+        // messaged them. ~20 extra bytes/row.
         taskId: s.taskId ?? '',
       }))
     res.json({ sessions })

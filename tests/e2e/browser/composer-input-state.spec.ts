@@ -96,12 +96,19 @@ async function openComposer(page: Page, cwd = '/fixture', host?: string) {
     const dir = new URL(route.request().url()).searchParams.get('path')
     return route.fulfill({ json: { path: dir, entries: dir === '/fixture' ? [{ name: 'src', type: 'dir' }] : [{ name: 'sample.ts', type: 'file', size: 12 }] } })
   })
-  await page.route('**/api/projects', route => route.fulfill({ json: {
-    projects: [{ name: 'Example', source: 'local', favorite: true, counts: { active: 1, todo: 1, done: 0 } }],
-    inbox: { counts: { active: 0, todo: 0, done: 0 } },
-  } }))
-  await page.route('**/api/sessions/mention-index', route => route.fulfill({ json: { sessions: [] } }))
-  await page.route('**/api/search?**', route => route.fulfill({ json: { results: [] } }))
+  // The fixture mounts ChatInput without a TasksContext, so the palette's Tasks
+  // group is fed by the hybrid search alone: a task hit, and a hit on a session's
+  // transcript whose slim row names the task that owns it (`id`), which the
+  // palette folds into that task's row. No Sessions or Projects group exists.
+  await page.route('**/api/search?**', route => {
+    const q = new URL(route.request().url()).searchParams.get('q') ?? ''
+    const results = /example/i.test(q) ? [
+      { type: 'task', id: 'mt-example', title: 'Example', summary: 'An example task', phase: 'IN_PROGRESS', project: 'Demo', ref: '<task-ref id="mt-example" label="Example"/>' },
+      { type: 'session', id: 'mt-example', title: 'Example session', summary: 'transcript', phase: 'IN_PROGRESS', project: 'Demo', ref: '<session-ref id="11111111-2222-3333-4444-555555555555" label="Example session"/>' },
+      { type: 'session', id: 'mt-other', title: 'Example work (transcript)', summary: 'from a transcript', phase: 'TODO', ref: '<session-ref id="66666666-7777-8888-9999-000000000000" label="Example work"/>' },
+    ] : []
+    return route.fulfill({ json: { results } })
+  })
   await page.setContent('<a href="/">Open composer</a>')
   await page.getByRole('link').evaluate((el, url) => { (el as HTMLAnchorElement).href = url },
     `http://localhost:${process.env.PW_TEST_PORT ?? 3457}/__composer-input-test?cwd=${encodeURIComponent(cwd)}${host ? `&host=${encodeURIComponent(host)}` : ''}`)
@@ -413,11 +420,18 @@ test('file navigation, reference selection and removal keep prose and payload al
   await page.getByRole('button', { name: 'Refresh status' }).click()
   await expect(input).toHaveValue('Read @/fixture/src/sample.ts please')
   await input.fill('Review @Example')
-  await picker.locator('.mention-row-project').click()
+  // Tasks only: the task hit and its transcript hit are ONE row, the other
+  // transcript hit is its owning task's row, and there is no Sessions / Projects
+  // group to pick from.
+  await expect(picker.locator('.mention-row-task')).toHaveCount(2)
+  await expect(picker.locator('.mention-group-name')).toHaveText(['Tasks', 'Files'])
+  await expect(picker.locator('.mention-row-task').first()).toContainText('IN_PROGRESS · Demo')
+  await expect(picker.locator('.mention-row-task').nth(1)).toContainText('TODO · Inbox')
+  await picker.locator('.mention-row-task').first().click()
   await expect(input).toHaveValue('Review ')
   await expect(page.locator('.composer-ref-title')).toHaveText('Example')
   await input.pressSequentially('carefully')
-  await expect(page.getByTestId('mirror')).toHaveText('<project-ref id="Example" label="Example"/> Review carefully')
+  await expect(page.getByTestId('mirror')).toHaveText('<task-ref id="mt-example" label="Example"/> Review carefully')
   await page.getByRole('button', { name: 'Remove reference to Example' }).click()
   await expect(input).toHaveValue('Review carefully')
   await expect(page.getByTestId('mirror')).toHaveText('Review carefully')

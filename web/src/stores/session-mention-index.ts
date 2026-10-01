@@ -1,12 +1,11 @@
 /**
- * In-memory session index powering the composer's "@" session picker.
+ * In-memory session index: one light fetch (/api/sessions/mention-index — id,
+ * title, host, status, lastActiveAt, taskId only; no live-status/hostname
+ * enrichment) cached module-wide with a short TTL, read synchronously.
  *
- * The picker must filter with ZERO per-keystroke latency, so the candidate set
- * lives in the browser: one light fetch (/api/sessions/mention-index — id,
- * title, host, status, lastActiveAt only; no live-status/hostname enrichment)
- * cached module-wide with a short TTL. Live process status is merged at render
- * time from the WS-fed sessionStatusStore, so the dots stay fresh without
- * refetching.
+ * It resolves a peer's short session id for the chat's session-envelope and
+ * provenance cards (resolveRefInIndex). The composer's "@" palette no longer
+ * reads it: that palette lists tasks only, and a task row carries its session.
  */
 
 import { apiGet } from '@/api/client';
