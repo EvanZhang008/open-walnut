@@ -64,7 +64,7 @@ import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
-import { launchNamingText } from '../core/sessions/launch-naming.js'
+import { launchNamingPlainText } from '../core/sessions/launch-naming.js'
 import { noteSessionProgress } from '../core/sessions/session-progress.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import { compactOpenItemsHooks } from './compact-open-items-hook.js'
@@ -9372,8 +9372,9 @@ export class SessionRunner {
     const sid = await this.acpContract(session).establish()
     this.acpSessions.set(sid, session)
 
-    // The human's words, never the wire message — see core/sessions/launch-naming.ts.
-    const naming = launchNamingText(data.message, data.namingMessage)
+    // The human's words, never the wire message, with a reference read as its
+    // label — see core/sessions/launch-naming.ts.
+    const naming = launchNamingPlainText(data.message, data.namingMessage)
     const title = data.title ?? naming.slice(0, 120)
     // Persist the draft's model choice ONLY when the adapter's `model` config
     // option actually advertises the base id — that is the exact gate
@@ -9747,9 +9748,9 @@ export class SessionRunner {
       }
     }
 
-    // Every name below reads the human's words, never the wire message — see
-    // core/sessions/launch-naming.ts.
-    const naming = launchNamingText(message, data.namingMessage)
+    // Every name below reads the human's words, never the wire message, with a
+    // reference read as its label — see core/sessions/launch-naming.ts.
+    const naming = launchNamingPlainText(message, data.namingMessage)
 
     // Use agent-provided title if available, otherwise auto-generate
     if (data.title) {
@@ -10111,8 +10112,9 @@ export class SessionRunner {
       }
     }
 
-    // The human's words, never the wire message — see core/sessions/launch-naming.ts.
-    const naming = launchNamingText(message, data.namingMessage)
+    // The human's words, never the wire message, with a reference read as its
+    // label — see core/sessions/launch-naming.ts.
+    const naming = launchNamingPlainText(message, data.namingMessage)
     let sessionTitle: string
     if (data.title) {
       sessionTitle = data.title

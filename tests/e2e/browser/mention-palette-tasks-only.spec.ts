@@ -9,8 +9,17 @@
  * MockDaemon → the mock Claude CLI), one parked on a permission prompt so its
  * live state is stable, one idle; a third task never ran. The palette opens in
  * the idle task's column, so that task itself must be absent.
+ *
+ * The second test opens the same palette in a DRAFT column (a session that does
+ * not exist yet): the Tasks group is there too, the pick lands in the box as its
+ * `@[title]` token, and the LAUNCH message reaches the agent with the reference
+ * card (quick-start appends it, as session:send does for a later message) while
+ * the session's own title reads the task's words, never the markup.
  */
+import { discoverFixtureRoot, draftComposer, loadHome, openDraftOnCwd, REAL_PANEL } from './draft-helpers'
 import { test, expect, type Page, type APIRequestContext, type Locator } from '@playwright/test'
+import fs from 'node:fs/promises'
+import { presetPanelView } from './todo-panel-helpers'
 
 const COLUMNS_KEY = 'open-walnut-home-session-columns'
 let rpcSeq = 0
@@ -146,12 +155,18 @@ test('the "@" palette lists tasks only, a task carries its session, and the pick
   const titles = await palette.locator('.mention-row-task .mention-title').allTextContents()
   expect(titles.findIndex((t) => t.includes(`${tag} waiting`))).toBeLessThan(titles.findIndex((t) => t.includes(`${tag} plain`)))
 
-  // Pick the waiting task: the "@query" becomes a reference chip, the prose stays.
+  // Pick the waiting task: the "@query" becomes the reference's `@[title]`
+  // token IN the box, where the "@" was, and the sentence continues after it.
   await waitingRow.click()
   await expect(palette).toHaveCount(0)
-  await expect(col.locator('.composer-ref-title')).toHaveText(`${tag} waiting (${test.info().project.name})`)
-  await expect(textarea).toHaveValue('')
-  await page.keyboard.type('look at this one')
+  const token = `@[${tag} waiting (${test.info().project.name})]`
+  await expect(textarea).toHaveValue(`${token} `)
+  // `echo-input`: the mock CLI quotes its whole input back, reference card
+  // included, where a plain echo reads like a model and leaves the card out.
+  await page.keyboard.type('look at this one echo-input')
+  await expect(textarea).toHaveValue(`${token} look at this one echo-input`)
+  await fs.mkdir(`/tmp/wn-inline-ref/${test.info().project.name}`, { recursive: true })
+  await col.locator('.session-panel-input').screenshot({ path: `/tmp/wn-inline-ref/${test.info().project.name}/00-session-inline-token.png` })
   await page.keyboard.press('Enter')
 
   // The sent message shows the task as a pill, and the agent's copy carried the
@@ -164,4 +179,92 @@ test('the "@" palette lists tasks only, a task carries its session, and the pick
   await expect(panel).toContainText('use task_get / task_send for more')
   await expect(panel).not.toContainText(`session ${waitingSid}`)
   await expect(panel).not.toContainText('session-ref id=')
+})
+
+test('a draft column offers the same Tasks group, and a Start carrying a reference hands the agent its card', async ({ page, request }) => {
+  test.setTimeout(240_000)
+  const tag = `pw-draftref-${Date.now().toString(36)}`
+  const referenced = await newTask(request, `${tag} target`)
+  const fixtureRoot = await discoverFixtureRoot()
+  await loadHome(page)
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
+
+  const input = draftComposer(page)
+  await input.click()
+  await page.keyboard.type(`please read @${tag}`)
+  const palette = page.locator('.draft-session-panel .mention-palette')
+  await expect(palette).toBeVisible({ timeout: 10_000 })
+  const groupNames = await palette.locator('.mention-group-name').allTextContents()
+  expect(groupNames, `groups: ${groupNames.join(',')}`).toContain('Tasks')
+  const row = palette.locator('.mention-row-task').filter({ hasText: `${tag} target` })
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  const shots = `/tmp/wn-inline-ref/${test.info().project.name}`
+  await fs.mkdir(shots, { recursive: true })
+  await page.locator('.draft-session-panel').screenshot({ path: `${shots}/01-draft-palette-tasks.png` })
+  await row.click()
+  await expect(palette).toHaveCount(0)
+  const token = `@[${tag} target (${test.info().project.name})]`
+  await expect(input).toHaveValue(`please read ${token} `)
+  await page.keyboard.type('first echo-input')
+  await expect(input).toHaveValue(`please read ${token} first echo-input`)
+  await page.locator('.draft-session-panel').screenshot({ path: `${shots}/02-draft-inline-token.png` })
+
+  const quickStartResponse = page.waitForResponse((response) =>
+    response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/sessions/quick-start')
+  await page.keyboard.press('Enter')
+  const quickStart = await quickStartResponse
+  expect(quickStart.status()).toBe(200)
+  const { taskId } = await quickStart.json() as { taskId: string }
+  const sid = await waitForNewSessionId(request, taskId, new Set())
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
+  await expect(panel).toBeVisible({ timeout: 30_000 })
+
+  // The launch bubble shows the task as a pill; the mock CLI echoes its whole
+  // input, so the reply carries the reference card quick-start appended, and the
+  // card block itself never shows as the human's words.
+  await expect(panel.locator(`a.task-link[data-task-id="${referenced}"]`).first()).toBeVisible({ timeout: 30_000 })
+  await expect(panel).toContainText(`task ${referenced}`, { timeout: 60_000 })
+  await expect(panel).toContainText('use task_get / task_send for more')
+  const humanBubble = panel.locator('.session-msg-user').filter({ hasText: 'please read' })
+  await expect(humanBubble).toContainText('first')
+  await expect(humanBubble).not.toContainText('walnut-refs')
+  await panel.screenshot({ path: `${shots}/03-launched-session-pill-and-card.png` })
+
+  // The new task's title and the session's title read the words, not the markup.
+  const task = await (await request.get(`/api/tasks/${taskId}`)).json() as { task: { title: string; description?: string } }
+  expect(task.task.title).not.toContain('<task-ref')
+  const session = await (await request.get(`/api/sessions/${sid}`)).json() as { session: { title?: string } }
+  expect(session.session.title ?? '').not.toContain('<task-ref')
+  expect(session.session.title ?? '').not.toContain('walnut-refs')
+})
+
+test('a bound draft never offers the task it will attach to', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  const tag = `pw-boundref-${Date.now().toString(36)}`
+  const fixtureRoot = await discoverFixtureRoot()
+  const cwd = `${fixtureRoot}/projects/walnut`
+  const own = await request.post('/api/tasks', { data: { title: `${tag} self`, source: 'local', project: 'Walnut', cwd } })
+  expect(own.ok(), await own.text()).toBe(true)
+  const ownId = ((await own.json()) as { task: { id: string } }).task.id
+  await newTask(request, `${tag} other`)
+
+  await page.setViewportSize({ width: 2400, height: 1000 })
+  await presetPanelView(page, { section: 'all', project: '' })
+  await loadHome(page)
+  // The task row's ▶ on a title-only task opens a draft BOUND to it.
+  const row = page.locator(`#home-task-navigation [data-task-id="${ownId}"]`).first()
+  await expect(row).toBeVisible({ timeout: 25_000 })
+  await row.hover()
+  await row.locator('.task-start-btn').click()
+  const panel = page.locator('.draft-session-panel')
+  await expect(panel).toBeVisible({ timeout: 10_000 })
+  await expect(panel.locator('.draft-bound-task')).toContainText(`${tag} self`)
+
+  const input = draftComposer(page)
+  await input.click()
+  await page.keyboard.type(`@${tag}`)
+  const palette = panel.locator('.mention-palette')
+  await expect(palette).toBeVisible({ timeout: 10_000 })
+  await expect(palette.locator('.mention-row-task').filter({ hasText: `${tag} other` })).toBeVisible({ timeout: 15_000 })
+  await expect(palette.locator('.mention-row-task').filter({ hasText: `${tag} self` })).toHaveCount(0)
 })

@@ -37,4 +37,12 @@ describe('detectMention', () => {
     expect(caretAtEnd(`@${words}`, 0)).toBeNull();
     expect(caretAtEnd(`@${'x'.repeat(70)} y`, 0)).toBeNull();
   });
+
+  it('a reference token already in the box is not a lookup', () => {
+    // composer-refs.ts shows a picked task as `@[title]`; a caret right after it
+    // (the trailing space deleted, or a click) must not reopen the palette.
+    expect(caretAtEnd('see @[Foo]')).toBeNull();
+    expect(caretAtEnd('see @[Fix the thing]', 4)).toBeNull();
+    expect(detectMention('see @[Foo] and @oau', 'see @[Foo] and @oau'.length)).toEqual({ atIndex: 15, query: 'oau' });
+  });
 });

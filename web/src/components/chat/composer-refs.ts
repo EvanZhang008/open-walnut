@@ -1,42 +1,82 @@
 /**
- * The composer's chips-and-prose split.
+ * The composer's inline references.
  *
  * An entity reference (`<task-ref id="…" label="…"/>` and its session/project
  * siblings) is markup the CLI reads, not something a human should have to look
- * at while typing. So the textarea holds prose ONLY and every reference lives
- * beside it as a chip; the message that goes out is the two composed back
- * together, tags first.
+ * at while typing. So the textarea shows every reference as a readable inline
+ * token, `@[Fix the thing]`, sitting IN the sentence where the user put it (the
+ * same place a file reference's `@path` sits), and the message that goes out
+ * has each token swapped back for its tag.
  *
- * This module is the one place that knows how to move between the two shapes:
+ * A token carries the label only; the tag it stands for lives in a side table
+ * (`RefTable`, label → tag) that the composer keeps beside the text. The table is
+ * rebuilt from the tags whenever text arrives from outside (a persisted draft, a
+ * prefill, a paste, a restore after a failed send), so no path needs to know
+ * about it. A token whose label the table does not know is just the user's own
+ * text and is sent as typed.
  *
- *   splitComposerRefs(text, existing) → { refs, body }   text → chips + prose
- *   composeWithRefs(refs, body)       → string           chips + prose → message
+ *   inlineRefs(text, table)   → { body, table }   tags → tokens (text → box)
+ *   composeRefs(body, table)  → string            tokens → tags (box → message)
  *
- * Every path that can put text into the box (draft restore, prefill, an "@"
- * pick, a paste, a restore after a failed send) runs through the split, which is
- * what keeps the invariant true: a tag can never become visible in the textarea.
+ * History: from 2026-09-10 to 2026-10-02 a reference was a chip in a strip ABOVE
+ * the textarea and the message was composed "tags first, then prose". The user
+ * asked for the reference to be in the box itself, with the words (2026-10-02).
  *
  * PURE MODULE: no React, no DOM. It has to load in a bare node test.
  */
 import { extractEntityRefs } from '@/utils/entity-ref-tags';
-import { splitLeadingCommand } from './leading-command';
 
-export interface ComposerRefSplit {
-  /** Tag strings, verbatim, in the order they were referenced. */
-  refs: string[];
-  /** What the textarea shows: prose with no tags in it. */
+/** label → tag, in insertion order. */
+export type RefTable = ReadonlyMap<string, string>;
+
+export interface InlineRefSplit {
+  /** What the textarea shows: prose with `@[label]` tokens, no tags. */
   body: string;
+  /** Every label the body may carry, with the tag it stands for. */
+  table: RefTable;
+}
+
+/** Matches one `@[label]` token; the label never contains a bracket or a newline. */
+const TOKEN_RE = /@\[([^\[\]\n\r]+)\]/g;
+
+/** Dedupe key for a tag: kind+id, never the label (a task can be renamed). */
+function refKey(tag: string): string | null {
+  const m = extractEntityRefs(tag)[0];
+  return m ? `${m.kind}:${m.id}` : null;
+}
+
+/** The text a token shows for a tag: its label (its id when unlabeled), with
+ *  the characters the token syntax reserves replaced and whitespace collapsed. */
+function tokenLabel(tag: string): string {
+  const m = extractEntityRefs(tag)[0];
+  const raw = (m?.label || m?.id || '').replace(/[\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+  return raw || 'reference';
+}
+
+/** `@[label]` */
+export function refToken(label: string): string {
+  return `@[${label}]`;
 }
 
 /**
- * Dedupe key for a tag. The same entity referenced twice is one chip, so the key
- * is kind+id and never the label (a task can be renamed between two picks).
- * A string that is not a tag at all keys on itself rather than collapsing with
- * every other unparseable entry.
+ * The label a tag gets in `table`: the one it already has when the same entity
+ * is there; otherwise its own label, made unique against a different entity that
+ * happens to carry the same words (two tasks titled alike) by appending the id's
+ * tail.
  */
-function refKey(tag: string): string {
+function labelFor(tag: string, table: ReadonlyMap<string, string>): string {
+  const key = refKey(tag);
+  for (const [label, known] of table) {
+    if (key !== null && refKey(known) === key && tokenLabel(known) === tokenLabel(tag)) return label;
+  }
+  const base = tokenLabel(tag);
+  const taken = (label: string) => table.has(label) && refKey(table.get(label)!) !== key;
+  if (!taken(base)) return base;
   const m = extractEntityRefs(tag)[0];
-  return m ? `${m.kind}:${m.id}` : tag;
+  const tail = (m?.id ?? '').slice(-4) || '2';
+  let candidate = `${base} · ${tail}`;
+  for (let n = 2; taken(candidate); n++) candidate = `${base} · ${tail}${n}`;
+  return candidate;
 }
 
 /**
@@ -63,48 +103,60 @@ export function cutSpan(text: string, start: number, end: number): { text: strin
 }
 
 /**
- * Lift every reference tag in `text` out into `refs` and return the prose that
- * remains. `existing` are the chips already standing (they keep their order and
- * lead the list); a tag repeating one of them is dropped.
+ * Replace every reference tag in `text` with its inline token, in place, and
+ * return the table that maps the tokens back. `existing` is the table the
+ * composer already holds: its entries stay (a token already in the box must keep
+ * resolving), and a tag for an entity it knows reuses that entity's label.
  */
-export function splitComposerRefs(text: string, existing: readonly string[] = []): ComposerRefSplit {
+export function inlineRefs(text: string, existing: RefTable = new Map()): InlineRefSplit {
   const found = extractEntityRefs(text);
-  const refs: string[] = [];
-  const seen = new Set<string>();
-  for (const tag of existing) {
-    const key = refKey(tag);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    refs.push(tag);
-  }
+  const table = new Map(existing);
+  if (found.length === 0) return { body: text, table };
+  let body = '';
+  let last = 0;
   for (const m of found) {
-    const key = `${m.kind}:${m.id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    refs.push(text.slice(m.start, m.end));
+    const tag = text.slice(m.start, m.end);
+    const label = labelFor(tag, table);
+    if (!table.has(label)) table.set(label, tag);
+    body += text.slice(last, m.start) + refToken(label);
+    last = m.end;
   }
-  // Back to front so the spans found in the original text stay valid.
-  let body = text;
-  for (let i = found.length - 1; i >= 0; i--) {
-    body = cutSpan(body, found[i].start, found[i].end).text;
-  }
-  return { refs, body };
+  body += text.slice(last);
+  return { body, table };
 }
 
 /**
- * The message (and the persisted draft): tags first, then the prose. Tags lead
- * so the agent reads the references before the sentence about them, and so the
- * draft round-trips through `splitComposerRefs` back to the same chips.
- *
- * The one exception is prose that starts with a slash command: an engine runs
- * `/name` only as the message's first word, so the command stays first and the
- * tags ride in its arguments (`/name <tags> rest`, which splits back the same).
+ * The message (and the persisted draft): the prose with each known token swapped
+ * back for its tag, trimmed. Tokens the table does not know are the user's text
+ * and go out as typed.
  */
-export function composeWithRefs(refs: readonly string[], body: string): string {
+export function composeRefs(body: string, table: RefTable): string {
   const prose = body.trim();
-  if (refs.length === 0) return prose;
-  const tags = refs.join(' ');
-  const lead = splitLeadingCommand(prose);
-  if (lead) return lead.rest ? `${lead.command} ${tags} ${lead.rest}` : `${lead.command} ${tags}`;
-  return prose ? `${tags} ${prose}` : tags;
+  if (table.size === 0 || !prose.includes('@[')) return prose;
+  return prose.replace(TOKEN_RE, (whole, label: string) => table.get(label) ?? whole);
+}
+
+/** Every known token in `body`, with its `[start, end)` span, in order. */
+export function listInlineRefs(body: string, table: RefTable): Array<{ label: string; tag: string; start: number; end: number }> {
+  const out: Array<{ label: string; tag: string; start: number; end: number }> = [];
+  for (const m of body.matchAll(TOKEN_RE)) {
+    const tag = table.get(m[1]);
+    if (!tag) continue;
+    out.push({ label: m[1], tag, start: m.index ?? 0, end: (m.index ?? 0) + m[0].length });
+  }
+  return out;
+}
+
+/**
+ * The known token that ends exactly at `caret`, if any: Backspace right after a
+ * reference removes the whole token, the way a chip's × did, instead of leaving
+ * `@[Fix the thin` behind.
+ */
+export function tokenEndingAt(body: string, caret: number, table: RefTable): { start: number; end: number } | null {
+  if (caret <= 0 || body[caret - 1] !== ']') return null;
+  const open = body.lastIndexOf('@[', caret - 1);
+  if (open === -1) return null;
+  const label = body.slice(open + 2, caret - 1);
+  if (!label || /[\[\]\n\r]/.test(label) || !table.has(label)) return null;
+  return { start: open, end: caret };
 }

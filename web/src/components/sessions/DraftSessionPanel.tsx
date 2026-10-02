@@ -863,6 +863,11 @@ export function DraftSessionPanel({
           sessionCommandsStatus={slashCommandsStatus}
           mentionCwd={draft.cwd || undefined}
           mentionHost={draft.host ?? undefined}
+          // The same "@" palette a running session has: Tasks and Files. A
+          // picked task lands in the text as `@[title]`; the launch message
+          // carries the tag and the server appends its reference card.
+          enableEntityMention
+          mentionSelfTaskId={draft.taskId}
           // Shift+Tab cycles the permission mode, as it does in a running session.
           onToggleMode={showModePill ? cycleDraftMode : undefined}
           controlsSlot={(

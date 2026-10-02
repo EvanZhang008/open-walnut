@@ -671,11 +671,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     text: () => {
       // An EMPTY live box wins over the mirror: ChatInput writes the mirror in a
       // passive effect, so an Esc pressed right after Enter could still read the
-      // sent words and refuse to pop (seen under machine load). Reference chips
-      // sit outside the box, so a chips-only draft still reads through the mirror.
+      // sent words and refuse to pop (seen under machine load). A reference sits
+      // in the box as its `@[label]` token, so an empty box is an empty draft.
       const wrap = composerWrapRef.current;
       const box = wrap?.querySelector<HTMLTextAreaElement>('textarea.chat-input-textarea');
-      if (box && box.value.trim() === '' && !wrap?.querySelector('.composer-refs')) return '';
+      if (box && box.value.trim() === '') return '';
       return composerTextRef.current;
     },
   }), []);

@@ -299,6 +299,17 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   // configuration Walnut wrapped around it. Taken post-spill on purpose, so a
   // spilled launch is still named by its pointer text exactly as before.
   const namingMessage = sessionMessage;
+  // Reference cards, exactly as session:send appends them to a later message
+  // (reference-cards.ts): a `<task-ref/>` the composer put in the launch message
+  // is an opaque id to the model until the card names the task and its state.
+  // After the naming capture, so no title reads the card; before the prefixes,
+  // so the human's words stay first. Slash commands are exempt for the same
+  // reason as on the send path. Best-effort: buildReferenceCards never throws.
+  if (!message.startsWith('/')) {
+    const { buildReferenceCards, appendReferenceCards } = await import('./reference-cards.js');
+    const refCards = await buildReferenceCards(message);
+    if (refCards) sessionMessage = appendReferenceCards(sessionMessage, refCards);
+  }
   if (messagePrefix) {
     sessionMessage = messagePrefix + sessionMessage;
   }

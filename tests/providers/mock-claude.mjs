@@ -381,9 +381,14 @@ function stripInputDecorations(text, hadQuestion) {
 // (`[permission-mode:…] [cwd:…] …`), which only the provider and e2e node tests
 // read; a UI test or a demo then sees a reply shaped like a model's.
 const plainEcho = process.env.MOCK_CLAUDE_PLAIN_ECHO === '1';
+// `echo-input` anywhere in the user's words: the reply quotes the input VERBATIM,
+// decorations included. A fixture that must prove what the agent was handed (the
+// reference card appended to a launch or a send) reads it from this reply.
+let rawEcho = false;
 function computeMessageParts() {
   slowDelayMs = 0;
   const bare = stripInputDecorations(stripBanners(message), questionSeq !== null);
+  rawEcho = /(^|\s)echo-input(\s|$)/.test(bare);
   effectiveMessage = bare;
   const slowMatch = bare.match(/^slow:(\d+)\s+(.*)/);
   if (slowMatch) {
@@ -412,7 +417,7 @@ function computeMessageParts() {
   const bypassCapabilityPart = dangerouslySkipPermissions ? ' [dangerously-skip-permissions:true]' : '';
   const tagPart = questionSeq ? `[Q${questionSeq}]\n` : '';
   const flags = plainEcho ? '' : `${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
-  resultText = `${tagPart}Hello! I processed your message: ${effectiveMessage}${flags}`;
+  resultText = `${tagPart}Hello! I processed your message: ${rawEcho ? message : effectiveMessage}${flags}`;
 }
 computeMessageParts();
 

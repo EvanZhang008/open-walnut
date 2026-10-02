@@ -4,10 +4,11 @@
  *   Tasks — ONE level. A task and its session are one thing here (the session
  *           is the task's runtime), so a row is a task with its run state: a
  *           dot (running / waiting on you / idle) and the state's word in the
- *           meta line. Picking a row INSERTS A `<task-ref/>` pill into the
- *           message; the message still goes to the CURRENT session, whose
- *           agent gets a compact reference card appended server-side (the
- *           task and its state) and reaches the task with task_get /
+ *           meta line. Picking a row INSERTS an inline `@[title]` reference
+ *           where the "@" was (a `<task-ref/>` tag in the sent message, see
+ *           composer-refs.ts); the message still goes to the CURRENT session,
+ *           whose agent gets a compact reference card appended server-side
+ *           (the task and its state) and reaches the task with task_get /
  *           task_send. Nothing is routed by the composer. No Sessions group,
  *           no Projects group: a project is reached through its tasks.
  *   Files — picked row inserts a Claude-Code-native `@path`; the query doubles
@@ -80,6 +81,8 @@ interface MentionPaletteProps {
   entitiesEnabled: boolean;
   /** Never offer the task the user is already talking to (by its session). */
   selfSessionId?: string;
+  /** Same, for a composer that has a task but no session yet (a bound draft). */
+  selfTaskId?: string;
   /** Root for the Files group; undefined → files group hidden. */
   cwd?: string;
   host?: string;
@@ -126,7 +129,7 @@ const FILE_SOLO_LIMIT = 12;
 
 export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPaletteProps>(
   function MentionPalette(
-    { query, order, entitiesEnabled, selfSessionId, cwd, host, onPickRef, onPickFile, onNavigate, onClose },
+    { query, order, entitiesEnabled, selfSessionId, selfTaskId, cwd, host, onPickRef, onPickFile, onNavigate, onClose },
     ref,
   ) {
     // ---- Tasks group: instant local layer --------------------------------
@@ -134,26 +137,26 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     // while the palette is open moves its dot (the store is WS-fed).
     const tasksCtx = useTasksContextSafe();
     const statusEpoch = useSessionStatusEpoch();
-    const { taskEntities, selfTaskId } = useMemo(() => {
-      if (!entitiesEnabled || !tasksCtx) return { taskEntities: [] as MentionEntity[], selfTaskId: null as string | null };
-      let selfId: string | null = null;
+    const { taskEntities, ownTaskId } = useMemo(() => {
+      if (!entitiesEnabled || !tasksCtx) return { taskEntities: [] as MentionEntity[], ownTaskId: selfTaskId ?? null };
+      let selfId: string | null = selfTaskId ?? null;
       const out: MentionEntity[] = [];
       for (const t of tasksCtx.tasks) {
         const sid = resolveTaskSessionId(t);
-        if (selfSessionId && sid === selfSessionId) { selfId = t.id; continue; }
+        if ((selfSessionId && sid === selfSessionId) || (selfTaskId && t.id === selfTaskId)) { selfId = t.id; continue; }
         out.push(taskEntity(t, sessionStatusStore.getStatus(sid)));
       }
-      return { taskEntities: out, selfTaskId: selfId };
+      return { taskEntities: out, ownTaskId: selfId };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [entitiesEnabled, tasksCtx, selfSessionId, statusEpoch]);
+    }, [entitiesEnabled, tasksCtx, selfSessionId, selfTaskId, statusEpoch]);
     const taskById = useMemo(() => new Map(taskEntities.map((e) => [e.id, e])), [taskEntities]);
 
     // ---- Tasks group: hybrid search layer (debounced, folded in) ---------
     const search = useEntitySearch(query, entitiesEnabled && order === 'entities-first');
     const searchCurrent = search.forQuery === query.trim() && search.forQuery !== '';
     const serverTasks = useMemo<MentionEntity[]>(
-      () => (searchCurrent ? hitsAsTasks(search.hits, taskById, selfTaskId) : []),
-      [search.hits, searchCurrent, taskById, selfTaskId],
+      () => (searchCurrent ? hitsAsTasks(search.hits, taskById, ownTaskId) : []),
+      [search.hits, searchCurrent, taskById, ownTaskId],
     );
 
     const rankedTasks = useMemo<RankedEntity[]>(

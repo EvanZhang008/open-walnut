@@ -15,6 +15,7 @@
  * the load-bearing half: a caller that prepends nothing sends no
  * `namingMessage`, and its titles must stay byte-identical to before.
  */
+import { stripEntityRefs } from '../../utils/entity-refs.js';
 
 /**
  * The human's words when the launcher supplied them, else the message itself.
@@ -27,4 +28,15 @@
  */
 export function launchNamingText(message: string, namingMessage?: string): string {
   return namingMessage?.trim() ? namingMessage : message;
+}
+
+/**
+ * The same words for a PLAIN-TEXT name (a session title, a task description):
+ * a reference the composer put in the message (`<task-ref id label/>`, the
+ * `@[title]` token the user saw) reads as its label there, never as markup that
+ * an 80-character cut would leave half-open. The launch-prompt bubble keeps the
+ * tags, because it renders them as pills.
+ */
+export function launchNamingPlainText(message: string, namingMessage?: string): string {
+  return stripEntityRefs(launchNamingText(message, namingMessage));
 }

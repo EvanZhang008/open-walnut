@@ -30,6 +30,9 @@ export function detectMention(
   const before = at === 0 ? '' : text[at - 1];
   if (before && !/\s/.test(before)) return null;
   const query = text.slice(at + 1, caret);
+  // `@[label]` is a reference already in the box (composer-refs.ts), not a
+  // lookup: a caret right after one must not reopen the palette.
+  if (query.startsWith('[')) return null;
   if (!/\s/.test(query)) return { atIndex: at, query };
   // Whitespace inside the query: only allowed while the palette is already open
   // for this very "@", and only in the shape of words separated by single spaces.

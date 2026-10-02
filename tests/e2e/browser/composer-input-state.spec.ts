@@ -172,8 +172,10 @@ test('long Unicode drafts survive reload, switching, rejection and retry', async
 
 test('normalization, prefills and command insertion preserve state', async ({ page }) => {
   const input = await openComposer(page)
+  // A bare tag becomes its inline token (an unlabeled tag shows its id); the
+  // token alone is a complete message and goes out as the tag.
   await input.fill('<task-ref id="test-task"/>')
-  await expect(input).toHaveValue('')
+  await expect(input).toHaveValue('@[test-task]')
   await expect(page.getByTestId('mirror')).toContainText('<task-ref')
   await input.press('Enter')
   await expect(input).toHaveValue('')
@@ -428,15 +430,46 @@ test('file navigation, reference selection and removal keep prose and payload al
   await expect(picker.locator('.mention-row-task').first()).toContainText('IN_PROGRESS · Demo')
   await expect(picker.locator('.mention-row-task').nth(1)).toContainText('TODO · Inbox')
   await picker.locator('.mention-row-task').first().click()
-  await expect(input).toHaveValue('Review ')
-  await expect(page.locator('.composer-ref-title')).toHaveText('Example')
+  // The pick lands IN the box as a readable token where the "@" was, like a
+  // file's @path; the payload carries the tag in that place.
+  await expect(input).toHaveValue('Review @[Example] ')
+  await expect(picker).toBeHidden()
   await input.pressSequentially('carefully')
-  await expect(page.getByTestId('mirror')).toHaveText('<task-ref id="mt-example" label="Example"/> Review carefully')
-  await page.getByRole('button', { name: 'Remove reference to Example' }).click()
+  await expect(page.getByTestId('mirror')).toHaveText('Review <task-ref id="mt-example" label="Example"/> carefully')
+  // A caret right after the token does not reopen the palette.
+  await input.press('Home')
+  await input.press('End')
+  await expect(picker).toBeHidden()
+  // Backspace right after the token removes the whole token, not one bracket.
+  const tokenEnd = 'Review @[Example]'.length
+  await input.evaluate((el: HTMLTextAreaElement, pos: number) => el.setSelectionRange(pos, pos), tokenEnd)
+  await input.press('Backspace')
   await expect(input).toHaveValue('Review carefully')
   await expect(page.getByTestId('mirror')).toHaveText('Review carefully')
   await input.press('Enter')
   await expect(page.getByTestId('sent')).toHaveText(JSON.stringify(['Review carefully']))
+})
+
+test('a reference token survives a reload and a pasted tag becomes a token', async ({ page }) => {
+  const input = await openComposer(page)
+  await input.fill('Review @Example')
+  const picker = page.getByRole('listbox', { name: 'Mention picker' })
+  await picker.locator('.mention-row-task').first().click()
+  await expect(input).toHaveValue('Review @[Example] ')
+  await input.pressSequentially('now')
+  // The draft is persisted in its composed form and comes back as the same token.
+  const composed = 'Review <task-ref id="mt-example" label="Example"/> now'
+  await expect(page.getByTestId('mirror')).toHaveText(composed)
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('input-state:a'))).toBe(composed)
+  await page.reload()
+  await expect(input).toHaveValue('Review @[Example] now')
+  await expect(page.getByTestId('mirror')).toHaveText(composed)
+  // Raw markup typed or pasted into the box becomes its token too.
+  await input.fill('see <task-ref id="mt-other" label="Other one"/> please')
+  await expect(input).toHaveValue('see @[Other one] please')
+  await expect(page.getByTestId('mirror')).toHaveText('see <task-ref id="mt-other" label="Other one"/> please')
+  await input.press('Enter')
+  await expect(page.getByTestId('sent')).toHaveText(JSON.stringify(['see <task-ref id="mt-other" label="Other one"/> please']))
 })
 
 test('browser IME composition survives store refresh before committing and sending', async ({ page, browserName }) => {

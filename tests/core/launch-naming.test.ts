@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { launchNamingText } from '../../src/core/sessions/launch-naming.js';
+import { launchNamingPlainText, launchNamingText } from '../../src/core/sessions/launch-naming.js';
 import { buildAskProfilePrefix, ASK_PROFILE_BANNER_OPEN } from '../../src/core/sessions/ask-profile-prefix.js';
 
 describe('launchNamingText', () => {
@@ -39,5 +39,19 @@ describe('launchNamingText', () => {
     // task's own title when the text is empty, which is the behaviour to preserve.
     expect(launchNamingText('', undefined)).toBe('');
     expect(launchNamingText('', '')).toBe('');
+  });
+});
+
+describe('launchNamingPlainText', () => {
+  it('reads a reference as its label, so a title cut never leaves markup half-open', () => {
+    const words = 'look at <task-ref id="mt-1" label="Fix login"/> and <session-ref id="s-1" label="Plan: auth"/> first';
+    expect(launchNamingPlainText(words)).toBe('look at Fix login and Plan: auth first');
+    // The naming text wins over the wire message here too.
+    expect(launchNamingPlainText('wire with cards', words)).toBe('look at Fix login and Plan: auth first');
+  });
+
+  it('is the same text as launchNamingText when nothing is referenced', () => {
+    expect(launchNamingPlainText('fix the failing test')).toBe('fix the failing test');
+    expect(launchNamingPlainText('', '')).toBe('');
   });
 });

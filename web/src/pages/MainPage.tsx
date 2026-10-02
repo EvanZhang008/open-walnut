@@ -3,6 +3,7 @@ import type { NavigateFunction } from 'react-router-dom';
 import type { SessionMode, Task } from '@open-walnut/core';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { launchEngineForHost, normalizeEngine } from '@/utils/engines';
+import { stripEntityRefsToText } from '@/utils/markdown';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { seedDraftComposer, waitUntilPrefix, WAIT_UNTIL_EVENT } from '@/utils/wait-until';
@@ -2652,7 +2653,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const handleDraftSaveAsTask = useCallback(async (draftId: string, text: string) => {
     const draft = draftColumnsRef.current.find(d => d.id === draftId);
     const [firstLine, ...rest] = text.split('\n');
-    const title = firstLine.trim();
+    // A task title is plain text: a reference the composer put on the first line
+    // ("@[Fix login]" in the box, a <task-ref/> tag here) becomes its label.
+    const title = stripEntityRefsToText(firstLine).trim();
     if (!title) return;   // button is disabled on empty, but a whitespace-only body can still reach here
     const description = rest.join('\n').trim();
     const { tierKnown: knownTier } = draftParseOptsRef.current;

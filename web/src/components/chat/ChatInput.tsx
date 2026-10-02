@@ -9,8 +9,7 @@ import { CommandPalette, type PaletteItem } from './CommandPalette';
 import { detectSlashCommand } from './slash-trigger';
 import { FileMentionPopup, type FileMentionHandle } from './FileMentionPopup';
 import { MentionPalette, type MentionPaletteHandle } from './MentionPalette';
-import { ComposerRefStrip } from './ComposerRefStrip';
-import { composeWithRefs, cutSpan, splitComposerRefs, type ComposerRefSplit } from './composer-refs';
+import { composeRefs, cutSpan, inlineRefs, tokenEndingAt, type InlineRefSplit, type RefTable } from './composer-refs';
 import { relativeTo } from './mention-path';
 import { routeMention } from './session-mention';
 import { detectMention } from './mention-trigger';
@@ -48,14 +47,14 @@ function getMaxHeight(el: HTMLTextAreaElement): number {
 }
 
 /**
- * Read the persisted draft and split it into chips + prose. The draft is stored
- * in its composed form (one key, tags first), so a draft written by another
- * surface (composer-insert.ts parks a quoted reference there when no panel is
- * mounted) comes back as a chip instead of raw markup in the box.
+ * Read the persisted draft and turn its tags into inline tokens. The draft is
+ * stored in its composed form (one key, tags in place), so a draft written by
+ * another surface (composer-insert.ts parks a quoted reference there when no
+ * panel is mounted) comes back as `@[label]` instead of raw markup in the box.
  */
-function readDraftSplit(key: string | undefined): ComposerRefSplit {
-  if (!key) return { refs: [], body: '' };
-  try { return splitComposerRefs(localStorage.getItem(key) ?? ''); } catch { return { refs: [], body: '' }; }
+function readDraftSplit(key: string | undefined): InlineRefSplit {
+  if (!key) return { body: '', table: new Map() };
+  try { return inlineRefs(localStorage.getItem(key) ?? ''); } catch { return { body: '', table: new Map() }; }
 }
 
 interface ChatInputProps {
@@ -119,12 +118,16 @@ interface ChatInputProps {
   mentionCwd?: string;
   /** SSH host for "@" mentions (undefined = local). */
   mentionHost?: string;
-  /** Enables the Tasks group in the "@" palette. Picking a task INSERTS a
-   *  reference pill into the message — nothing is routed; the current
-   *  session's agent decides what to do with it. */
+  /** Enables the Tasks group in the "@" palette. Picking a task INSERTS an
+   *  inline `@[title]` reference where the "@" was (a `<task-ref/>` tag in the
+   *  sent message) — nothing is routed; the current session's agent decides
+   *  what to do with it. */
   enableEntityMention?: boolean;
   /** The session this composer talks to — its task is left out of the Tasks group. */
   sessionMentionSelfId?: string;
+  /** A composer with no session yet but a task it will attach to (a bound
+   *  draft) — that task is left out of the Tasks group. */
+  mentionSelfTaskId?: string;
   /** External prefill: text to drop into the input (e.g. an agent-builder template). */
   prefillText?: string;
   /** Bump this (monotonic, >0) to apply prefillText — replaces the input + focuses,
@@ -203,37 +206,35 @@ interface ChatInputProps {
   plusMenuActions?: PlusMenuAction[];
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, compact, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   /**
-   * The entity references attached to this message, as tag strings in order.
-   * INVARIANT: `value` (what the textarea shows) never contains a ref tag. The
-   * tags live here and only rejoin the text when the message is composed
-   * (`composeWithRefs`). Every write to `value` goes through `applyText`.
+   * What each `@[label]` token in the box stands for (composer-refs.ts).
+   * INVARIANT: `value` (what the textarea shows) never contains a ref tag; a tag
+   * is shown as its token and rejoins the text only when the message is composed
+   * (`composeRefs`). Every write to `value` goes through `applyText`. A ref, not
+   * state: nothing renders from it, and the composed text is derived from `value`,
+   * which changes whenever the table does.
    */
-  const [refs, setRefs] = useState<string[]>(initialDraft.refs);
-  // Mirrors for effects keyed on something else (the prefill effect is keyed on
+  const tableRef = useRef<RefTable>(initialDraft.table);
+  // Mirror for effects keyed on something else (the prefill effect is keyed on
   // its nonce, so reading state there would read a stale render's values).
   const valueRef = useRef(value);
   valueRef.current = value;
-  const refsRef = useRef(refs);
-  refsRef.current = refs;
 
   /**
    * The ONE normalizer every text-mutating path goes through: any ref tag in the
-   * candidate text is lifted into a chip and the box keeps the prose. Pass
-   * `keepRefs: false` for paths that replace the whole composer (switching
-   * sessions, a replacing prefill, a restore after a failed send): there the
-   * standing chips belong to the text being thrown away.
+   * candidate text becomes an inline token and the table learns what it stands
+   * for. Pass `keepRefs: false` for paths that replace the whole composer
+   * (switching sessions, a replacing prefill, a restore after a failed send):
+   * there the standing table belongs to the text being thrown away.
    */
-  const applyText = useCallback((candidate: string, opts?: { keepRefs?: boolean }): ComposerRefSplit => {
-    const split = splitComposerRefs(candidate, opts?.keepRefs === false ? [] : refsRef.current);
-    const prev = refsRef.current;
-    const same = split.refs.length === prev.length && split.refs.every((t, i) => t === prev[i]);
-    if (!same) { refsRef.current = split.refs; setRefs(split.refs); }
+  const applyText = useCallback((candidate: string, opts?: { keepRefs?: boolean }): InlineRefSplit => {
+    const split = inlineRefs(candidate, opts?.keepRefs === false ? new Map() : tableRef.current);
+    tableRef.current = split.table;
     valueRef.current = split.body;
     const el = textareaRef.current;
     if (el && el.value !== split.body) el.value = split.body;
@@ -331,10 +332,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       next = typed ? `${prefillText}${typed}` : prefillText;
     }
     // A prefill often IS a reference ("Quote in session" appends a `<task-ref/>`),
-    // so it lands as a chip and only the prose reaches the box. 'replace' throws
-    // the typed text away, and its chips with it.
+    // so it lands as an inline `@[label]` token. 'replace' throws the typed text
+    // away, and its reference table with it.
     const split = applyText(next, { keepRefs: prefillMode !== 'replace' });
-    const composed = composeWithRefs(split.refs, split.body);
+    const composed = composeRefs(split.body, split.table);
     // Persist immediately (don't rely on the later-declared debounced saveDraft).
     try { if (draftKeyRef.current) localStorage.setItem(draftKeyRef.current, composed); } catch { /* unavailable */ }
     // Focus + caret-to-end, RETRIED until the box is actually focusable. A
@@ -350,12 +351,12 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       if (!el) return;
       if (el.offsetParent === null && frames++ < 20) { raf = requestAnimationFrame(tryFocus); return; }
       el.focus();
-      // End of the prose for an append (a chip landing must not move the caret
-      // off the sentence in progress); end of the injected block otherwise,
-      // clamped because lifting its tags out made the body shorter.
+      // End of the prose for an append (the token landed at the end of the
+      // sentence in progress); end of the injected block otherwise, measured in
+      // its inline form because a tag shrinks to its token.
       const caret = prefillMode === 'append'
         ? split.body.length
-        : Math.min(prefillText.length, split.body.length);
+        : Math.min(inlineRefs(prefillText, split.table).body.length, split.body.length);
       el.setSelectionRange(caret, caret);
       el.style.height = 'auto';
       el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
@@ -464,8 +465,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const onValueChangeRef = useRef(onValueChange);
   onValueChangeRef.current = onValueChange;
   useEffect(() => {
-    onValueChangeRef.current?.(composeWithRefs(refs, value));
-  }, [value, refs]);
+    onValueChangeRef.current?.(composeRefs(value, tableRef.current));
+  }, [value]);
 
   // Re-fit when the textarea's WIDTH changes (panel resize / composer overlay
   // reflow re-wraps lines). Width-guarded so our own height writes don't loop.
@@ -628,10 +629,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     }, 300);
   }, []);
 
-  /** Persist the draft in its composed form (chips + prose): ONE key, and it
-   *  splits back into the same chips on the next mount. */
-  const saveComposed = useCallback((body: string, refsNow: readonly string[] = refsRef.current) => {
-    saveDraft(composeWithRefs(refsNow, body));
+  /** Persist the draft in its composed form (tags in place of the tokens): ONE
+   *  key, and it comes back as the same tokens on the next mount. */
+  const saveComposed = useCallback((body: string, table: RefTable = tableRef.current) => {
+    saveDraft(composeRefs(body, table));
   }, [saveDraft]);
 
   const clearDraft = useCallback(() => {
@@ -648,8 +649,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     setValue('');
     valueRef.current = '';
     if (textareaRef.current) textareaRef.current.value = '';
-    setRefs([]);
-    refsRef.current = [];
+    tableRef.current = new Map();
     setImages([]);
     closePalette();
     closeMention();
@@ -670,7 +670,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // hard guarantee: the user's input must never silently disappear.
   const restoreInput = (text: string, imgs: ImageAttachment[]) => {
     // `text` is the composed message that failed to send, so its tags go back to
-    // being chips. The box was reset on dispatch, hence keepRefs: false.
+    // being tokens. The box was reset on dispatch, hence keepRefs: false.
     const split = applyText(text, { keepRefs: false });
     setImages(imgs);
     saveDraft(text);
@@ -708,10 +708,12 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const handleSend = () => {
-    // The message = the chips, then the prose. A reference with no words is a
-    // complete message ("look at this task"), so refs alone are sendable.
+    // The message = the prose with each `@[label]` token swapped for its tag. A
+    // reference with no words is a complete message ("look at this task").
     const body = value.trim();
-    const text = composeWithRefs(refs, value);
+    const text = composeRefs(value, tableRef.current);
+    // A token the table knows was swapped, so the message carries a reference.
+    const hasRefs = text !== body;
     if ((!text && images.length === 0 && !allowEmptySend) || disabled || queueFull) return;
 
     // Sending is the user saying they are done talking. Stop the mic and drop the
@@ -721,10 +723,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     dictationSpanRef.current = null;
     lastDictationRef.current = null;
 
-    // Control commands: intercepted by UI, not sent as text to Claude. Judged on
-    // the PROSE and only with no chips attached. A message carrying references
-    // is a message, and swallowing it as a command would drop them.
-    if (isSessionMode && refs.length === 0 && body === '/model' && onControlCommand) {
+    // Control commands: intercepted by UI, not sent as text to Claude. Only with
+    // no reference in the text: a message carrying references is a message, and
+    // swallowing it as a command would drop them.
+    if (isSessionMode && !hasRefs && body === '/model' && onControlCommand) {
       onControlCommand('model');
       resetInput();
       return;
@@ -732,7 +734,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
     // In session mode, slash commands are sent as regular text (to Claude Code)
     // Only intercept in main chat mode (showCommands + no sessionCommands)
-    if (showCommands && !isSessionMode && refs.length === 0 && body.startsWith('/')) {
+    if (showCommands && !isSessionMode && !hasRefs && body.startsWith('/')) {
       const spaceIndex = body.indexOf(' ');
       const name = spaceIndex === -1 ? body.slice(1) : body.slice(1, spaceIndex);
       const args = spaceIndex === -1 ? undefined : body.slice(spaceIndex + 1).trim() || undefined;
@@ -843,40 +845,48 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     if (ta) { ta.focus(); ta.setSelectionRange(newCaret, newCaret); }
   }, [value, saveComposed, mentionCwd, enableEntityMention, applyText]);
 
-  // Entity pick: the "@query" span leaves the text and the reference becomes a
-  // chip above it (the tag rejoins the text only when the message is composed,
-  // where the bubble renders it as a pill and the server appends a reference
-  // card). The caret stays where the words were, ready for the sentence.
+  // Entity pick: the "@query" span becomes the reference's inline `@[label]`
+  // token, right where the "@" was, with a space after it, exactly like a file
+  // pick (the tag replaces the token only when the message is composed, where
+  // the bubble renders it as a pill and the server appends a reference card).
+  // The caret lands after the token, ready for the rest of the sentence.
   const handlePickRef = useCallback((tag: string) => {
     const at = mentionAtIndexRef.current;
     const end = mentionEndRef.current;
     if (!tag || at < 0 || end < at) { closeMention(); return; }
-    const cut = cutSpan(value, at, end);
-    // The tag rides the candidate text so the ONE normalizer lifts it into a
-    // chip (and drops it if this entity is already attached).
-    const split = applyText(cut.text + tag);
-    saveComposed(split.body, split.refs);
+    const tail = value.slice(end);
+    // The tag rides the candidate text so the ONE normalizer turns it into the
+    // token and teaches the table what it stands for. Head and tail hold no tag
+    // (they are already in box form), so only the tag changes length.
+    const sep = /^\s/.test(tail) ? '' : ' ';
+    const split = applyText(value.slice(0, at) + tag + sep + tail);
+    saveComposed(split.body, split.table);
     closeMention();
+    const newCaret = split.body.length - tail.length;
     const ta = textareaRef.current;
     if (ta) {
       ta.focus();
-      ta.setSelectionRange(cut.caret, cut.caret);
+      ta.setSelectionRange(newCaret, newCaret);
     }
   }, [value, applyText, saveComposed, closeMention]);
 
-  // × on a reference chip: detach that one reference. The prose is untouched.
-  const handleRemoveRef = useCallback((index: number) => {
-    const next = refsRef.current.filter((_, i) => i !== index);
-    refsRef.current = next;
-    setRefs(next);
-    saveComposed(valueRef.current, next);
-    const ta = textareaRef.current;
-    if (ta) {
-      ta.focus();
-      const caret = ta.value.length;
-      ta.setSelectionRange(caret, caret);
-    }
-  }, [saveComposed]);
+  // Backspace right after a `@[label]` token removes the whole token (what the
+  // old chip's × did), never a stranded `@[Fix the thin`. Anywhere else the key
+  // is the browser's.
+  const handleBackspaceOverRef = useCallback((e: KeyboardEvent): boolean => {
+    const el = textareaRef.current;
+    if (!el || el.selectionStart !== el.selectionEnd) return false;
+    const span = tokenEndingAt(valueRef.current, el.selectionStart, tableRef.current);
+    if (!span) return false;
+    e.preventDefault();
+    const cut = cutSpan(valueRef.current, span.start, span.end);
+    applyText(cut.text);
+    saveComposed(cut.text);
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+    el.setSelectionRange(cut.caret, cut.caret);
+    return true;
+  }, [applyText, saveComposed]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
     // Shift+Tab: caller-defined mode cycle (sessions: permission mode)
@@ -885,6 +895,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       onToggleMode?.();
       return;
     }
+
+    if (e.key === 'Backspace' && !mentionOpenRef.current && !e.nativeEvent.isComposing && handleBackspaceOverRef(e)) return;
 
     // "@" mention keyboard nav (takes priority over the "/" palette; mutually
     // exclusive by trigger character). Unified palette: ↑/↓ move · ⇥ jump group ·
@@ -983,10 +995,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
   const handleChange = (newValue: string) => {
     // A pasted ref tag (someone copies a pill's markup, or a draft written by
-    // another surface arrives through here) becomes a chip: the box holds prose.
+    // another surface arrives through here) becomes its inline token.
     const split = applyText(newValue);
     handleInput();
-    saveComposed(split.body, split.refs);
+    saveComposed(split.body, split.table);
     if (split.body !== newValue) {
       // The text just moved under every span the detectors below rely on, so
       // stop here: caret to the end of the prose, popups closed.
@@ -1008,8 +1020,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       // single spaces (multi-word lookups for the hybrid search); a closed
       // palette keeps the strict no-whitespace trigger.
       const openAt = enableEntityMention && mentionOpenRef.current ? mentionAtIndexRef.current : -1;
-      // No tag can be in the text here (they are chips), so an "@" is always a
-      // real trigger. The old "is this @ inside a pill's label" guard is gone.
+      // No tag can be in the text here (they are `@[label]` tokens, which
+      // detectMention knows not to read as a lookup), so any other "@" is a
+      // real trigger.
       const m = detectMention(newValue, caret, openAt);
       if (m) {
         // Don't reopen a popup the user just dismissed with Esc for this same "@".
@@ -1263,7 +1276,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
 
   const handleInterruptSend = () => {
     setSendMenuOpen(false);
-    const text = composeWithRefs(refs, value);
+    const text = composeRefs(value, tableRef.current);
     if ((!text && images.length === 0) || disabled || !onInterruptSend) return;
     dispatchSend(onInterruptSend, text, images);
   };
@@ -1273,7 +1286,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     onStop?.();
   };
 
-  const hasInput = !!(value.trim() || refs.length > 0 || images.length > 0);
+  const hasInput = !!(value.trim() || images.length > 0);
   const canSend = !disabled && !queueFull && (hasInput || !!allowEmptySend);
 
   // Claude-style primary action swap: while a turn is streaming and the composer is
@@ -1354,6 +1367,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           order={mentionOrder}
           entitiesEnabled={!!enableEntityMention}
           selfSessionId={sessionMentionSelfId}
+          selfTaskId={mentionSelfTaskId}
           cwd={mentionCwd}
           host={mentionHost}
           onPickRef={handlePickRef}
@@ -1411,10 +1425,6 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               <span className="pill-title">{focusedTask.title}</span>
             </div>
           )}
-          {/* The references attached to this message. Rendered whenever there
-              are any, even where the "@" entity palette is off: a reference
-              quoted in from elsewhere must never be invisible yet sent. */}
-          {refs.length > 0 && <ComposerRefStrip tags={refs} onRemove={handleRemoveRef} />}
           {/* Image preview area */}
           {images.length > 0 && (
             <div className="chat-image-previews">
