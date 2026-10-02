@@ -113,12 +113,36 @@ describe('playwright admission gate', () => {
     release(b)
   })
 
+  /** Run `fn` with the given env vars removed, restoring them afterwards. */
+  function withoutEnv<T>(names: string[], fn: () => T): T {
+    const saved = names.map((n) => [n, process.env[n]] as const)
+    for (const n of names) delete process.env[n]
+    try {
+      return fn()
+    } finally {
+      for (const [n, v] of saved) if (v !== undefined) process.env[n] = v
+    }
+  }
+
   it('caps workers well below the old half-the-cores default', () => {
-    const workers = perRunWorkers()
+    // The local (shared machine) path. CI is unset here because a CI runner takes
+    // the fixed cap below, whatever its core count.
+    const workers = withoutEnv(['CI', 'PW_WORKERS'], () => perRunWorkers())
     expect(workers).toBeGreaterThanOrEqual(1)
     // The bug was 7 workers × ~385 MB on this 14-core box. The cap is 4.
     expect(workers).toBeLessThanOrEqual(4)
     expect(workers).toBeLessThan(Math.max(2, Math.floor(os.cpus().length / 2)))
+  })
+
+  it('a CI runner, which runs nothing else, takes the fixed cap of 4', () => {
+    const prev = process.env.CI
+    process.env.CI = 'true'
+    try {
+      expect(withoutEnv(['PW_WORKERS'], () => perRunWorkers())).toBe(4)
+    } finally {
+      if (prev === undefined) delete process.env.CI
+      else process.env.CI = prev
+    }
   })
 
   it('honors an explicit PW_WORKERS override', () => {

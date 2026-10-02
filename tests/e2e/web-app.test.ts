@@ -47,6 +47,24 @@ function waitForWsMessage(ws: WebSocket, timeoutMs = 3000): Promise<Record<strin
   });
 }
 
+/** The first frame for event `name`. Other events may arrive before it. */
+function waitForWsEvent(ws: WebSocket, name: string, timeoutMs = 3000): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (data: unknown) => {
+      const frame = JSON.parse(String(data)) as Record<string, unknown>;
+      if (frame.type !== 'event' || frame.name !== name) return;
+      clearTimeout(timer);
+      ws.off('message', onMessage);
+      resolve(frame);
+    };
+    const timer = setTimeout(() => {
+      ws.off('message', onMessage);
+      reject(new Error(`WS timeout waiting for ${name}`));
+    }, timeoutMs);
+    ws.on('message', onMessage);
+  });
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -149,9 +167,11 @@ describe('Task lifecycle E2E', () => {
     const completeRes = await fetch(apiUrl(`/api/tasks/${childId}/complete`), { method: 'POST' });
     expect(completeRes.status).toBe(200);
 
-    // Delete child task
+    // Delete child task: 204 No Content, like every task DELETE (task-delete.test.ts)
     const delRes = await fetch(apiUrl(`/api/tasks/${childId}`), { method: 'DELETE' });
-    expect(delRes.status).toBe(200);
+    expect(delRes.status).toBe(204);
+    const goneRes = await fetch(apiUrl(`/api/tasks/${childId}`));
+    expect(goneRes.status).toBe(404);
   });
 
   it('complete task', async () => {
@@ -267,13 +287,16 @@ describe('WebSocket real-time E2E', () => {
     const { task } = await createRes.json() as { task: { id: string } };
 
     const ws = await connectWs();
-    const msgPromise = waitForWsMessage(ws);
+    // Completion also emits task:phase-changed (hook system, 8eef31aa), which
+    // can reach the socket first, so wait for the named event.
+    const msgPromise = waitForWsEvent(ws, 'task:completed');
 
     await fetch(apiUrl(`/api/tasks/${task.id}/complete`), { method: 'POST' });
 
     const frame = await msgPromise;
     expect(frame.type).toBe('event');
     expect(frame.name).toBe('task:completed');
+    expect((frame.data as { task?: { id?: string } } | undefined)?.task?.id).toBe(task.id);
 
     ws.close();
     await delay(50);

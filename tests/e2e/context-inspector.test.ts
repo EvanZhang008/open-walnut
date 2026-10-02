@@ -2,10 +2,13 @@
  * E2E tests for the Context Inspector feature.
  *
  * Spins up a real server with Express + WebSocket, then tests:
- * - GET /api/context returns all sections
+ * - GET /api/context returns the launch-config sections of the session that answers
  * - Token counts are consistent
- * - All tools are listed
- * - API messages section reflects chat history state
+ *
+ * Every chat turn runs in a `claude` CLI session (dae90b5d), so the tool list,
+ * the message transcript and the compaction summary live in the CLI and are not
+ * sections here any more; tests/web/routes/context-inspector.test.ts pins the
+ * per-section contract in detail.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -50,39 +53,17 @@ describe('Context Inspector E2E', () => {
     expect(body.totalTokens).toBeGreaterThan(0);
   });
 
-  it('returns all general-agent sections', async () => {
+  it('returns exactly the launch-config sections', async () => {
     const res = await fetch(apiUrl('/api/context'));
     const body = await res.json();
-    const sectionNames = Object.keys(body.sections);
+    const sectionNames = Object.keys(body.sections).sort();
 
-    expect(sectionNames).toContain('modelConfig');
-    expect(sectionNames).toContain('roleAndRules');
-    expect(sectionNames).toContain('skills');
-    expect(sectionNames).toContain('compactionSummary');
-    expect(sectionNames).toContain('taskProjects');
-    expect(sectionNames).toContain('userProfile');
-    expect(sectionNames).toContain('globalMemory');
-    expect(sectionNames).toContain('notesContext');
-    expect(sectionNames).toContain('dailyLogs');
-    expect(sectionNames).toContain('tools');
-    expect(sectionNames).toContain('apiMessages');
-    // projectSummaries was removed (2026-07): memory/projects/ is retired as a
-    // prompt source, so the Personal AI no longer gets an always-empty section.
-    expect(sectionNames).not.toContain('projectSummaries');
-    expect(sectionNames).toHaveLength(11);
-  });
-
-  it('tools section contains known tools', async () => {
-    const res = await fetch(apiUrl('/api/context'));
-    const body = await res.json();
-    const tools = body.sections.tools.content as Array<{ name: string }>;
-
-    const names = tools.map((t) => t.name);
-    expect(names).toContain('task_query');
-    expect(names).toContain('task_create');
-    expect(names).toContain('task_search');
-    expect(names).toContain('memory_notes_search');
-    expect(names).toContain('session_start');
+    expect(sectionNames).toEqual(['globalMemory', 'modelConfig', 'roleAndRules', 'skills']);
+    // The session CLI owns these, so a zeroed copy would read as "the model got
+    // none of that" (removed in dae90b5d).
+    for (const removed of ['tools', 'apiMessages', 'compactionSummary', 'taskProjects', 'userProfile', 'notesContext', 'dailyLogs', 'projectSummaries']) {
+      expect(sectionNames).not.toContain(removed);
+    }
   });
 
   it('roleAndRules section is non-empty and describes Walnut', async () => {
@@ -94,27 +75,19 @@ describe('Context Inspector E2E', () => {
     expect(role).toContain('Walnut');
   });
 
-  it('totalTokens is close to the sum of all section tokens', async () => {
+  it('totalTokens is the system prompt, which already contains memory and skills', async () => {
     const res = await fetch(apiUrl('/api/context'));
     const body = await res.json();
+    const { sections, totalTokens } = body;
 
-    const sum = Object.values(body.sections).reduce(
-      (acc: number, s: unknown) => acc + (s as { tokens: number }).tokens,
-      0,
-    );
-    // totalTokens uses estimateFullPayload() on the assembled prompt which includes
-    // additional headers/delimiters not counted in individual section estimates.
-    // Allow up to 5% divergence.
-    expect(body.totalTokens).toBeGreaterThanOrEqual(sum * 0.95);
-    expect(body.totalTokens).toBeLessThanOrEqual(sum * 1.05);
-  });
-
-  it('apiMessages starts empty with no prior chat', async () => {
-    const res = await fetch(apiUrl('/api/context'));
-    const body = await res.json();
-
-    expect(body.sections.apiMessages.count).toBe(0);
-    expect(body.sections.apiMessages.content).toEqual([]);
+    expect(totalTokens).toBe(sections.roleAndRules.tokens);
+    // Skills and standing memory are substrings of that same prompt, so each is
+    // part of the total rather than an addition to it.
+    expect(sections.skills.tokens).toBeGreaterThan(0);
+    expect(sections.globalMemory.tokens).toBeGreaterThan(0);
+    expect(sections.skills.tokens).toBeLessThan(totalTokens);
+    expect(sections.globalMemory.tokens).toBeLessThan(totalTokens);
+    expect(sections.modelConfig.tokens).toBe(0);
   });
 
   it('subsequent requests return consistent structure', async () => {
@@ -125,7 +98,8 @@ describe('Context Inspector E2E', () => {
 
     // Same section keys
     expect(Object.keys(body1.sections).sort()).toEqual(Object.keys(body2.sections).sort());
-    // Same tool count
-    expect(body1.sections.tools.count).toBe(body2.sections.tools.count);
+    // Same prompt: no conversation has a session yet, so both describe the next spawn.
+    expect(body1.engine).toBe(body2.engine);
+    expect(body1.totalTokens).toBe(body2.totalTokens);
   });
 });

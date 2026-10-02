@@ -70,6 +70,10 @@ export class MockDaemon {
   /** Command log for test assertions. `connIndex` = arrival socket (0-based,
    *  connection order) so bulk-channel tests can assert routing. */
   private _commandHistory: Array<{ cmd: string; payload: Record<string, unknown>; timestamp: number; connIndex: number }> = []
+  /** User lines cmdSend actually wrote to a live FIFO. A `send` in the command
+   *  log may have failed (ENXIO once the CLI exited) and been retried, so the
+   *  log alone over-counts deliveries. Cleared with the command log. */
+  private _fifoWrites: Array<{ sid: string; message: string; timestamp: number }> = []
   /** Connection-order index per live socket (never reused). */
   private _connIndices = new WeakMap<WebSocket, number>()
   private _connSeq = 0
@@ -522,6 +526,7 @@ export class MockDaemon {
       const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
       fs.writeSync(fd, Buffer.from(payload + '\n'))
       fs.closeSync(fd)
+      this._fifoWrites.push({ sid, message, timestamp: Date.now() })
       this.sendOk(ws, id, { ok: true })
     } catch (err) {
       this.sendError(ws, id, `write failed: ${(err as Error).message}`)
@@ -928,9 +933,15 @@ export class MockDaemon {
       .map(({ payload, timestamp, connIndex }) => ({ payload, timestamp, connIndex }))
   }
 
+  /** `send` messages that reached a live FIFO, oldest first. */
+  getFifoWrites(): Array<{ sid: string; message: string; timestamp: number }> {
+    return [...this._fifoWrites]
+  }
+
   /** Clear recorded command history (useful between assertions in the same test). */
   clearCommandHistory(): void {
     this._commandHistory = []
+    this._fifoWrites = []
   }
 
   /** Number of currently-open WS client connections. */

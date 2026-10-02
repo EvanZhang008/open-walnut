@@ -9,7 +9,7 @@
  *   2. Path traversal protection — slug validation on all routes
  *   3. YAML parsing — multiline fields, special characters, tech_stack arrays
  *   4. CWD→repo matching — exact match, prefix match, longest prefix, no match
- *   5. Session context injection — matched repo appears in system prompt
+ *   5. Session context: a matched repo is NOT injected into the system prompt
  *   6. Edge cases — large YAML, empty hosts, .yml extension
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -383,10 +383,11 @@ describe('Session context injection', () => {
     await fs.rm(testPath, { recursive: true, force: true })
   })
 
-  // buildSessionContext is a no-op as of 2026-06-18 — Walnut no longer injects
-  // repository (or any other) context into a session's system prompt. Repo
-  // matching itself (findRepoByPath, tested above) still works; it's just no
-  // longer fed into the system prompt. These tests pin the no-op contract.
+  // Walnut stopped injecting repository (or any task/memory) context into a
+  // session's system prompt on 2026-06-18; since 0a49aad2 the prompt is a short
+  // identity note about Walnut and the task, and the cwd plays no part in it.
+  // Repo matching itself (findRepoByPath, tested above) still works; it's just
+  // not fed into the system prompt. These tests pin that contract.
   it('does not inject repo context even when CWD matches a configured repo', async () => {
     const { buildSessionContext } = await import('../../src/core/sessions/session-context.js')
 
@@ -399,12 +400,16 @@ describe('Session context injection', () => {
 
     const ctx = await buildSessionContext(taskId, testPath)
 
-    expect(ctx.systemPrompt).toBe('')
+    // The identity note names the task, and nothing about the matched repo.
+    expect(ctx.systemPrompt).toContain('opened by Walnut')
+    expect(ctx.systemPrompt).toContain('Context injection test task')
     expect(ctx.systemPrompt).not.toContain('repository_context')
     expect(ctx.systemPrompt).not.toContain('Context Test Repo')
+    expect(ctx.systemPrompt).not.toContain('cargo build')
+    expect(ctx.systemPrompt).not.toContain(testPath)
   })
 
-  it('returns an empty prompt when CWD does not match any repo', async () => {
+  it('gives the same prompt whether or not the CWD matches a repo', async () => {
     const { buildSessionContext } = await import('../../src/core/sessions/session-context.js')
 
     const createRes = await api('POST', '/api/tasks', {
@@ -414,8 +419,10 @@ describe('Session context injection', () => {
     const createBody = await createRes.json()
     const taskId = createBody.task.id
 
-    const ctx = await buildSessionContext(taskId, '/tmp/no-repo-here')
+    const matched = await buildSessionContext(taskId, testPath)
+    const unmatched = await buildSessionContext(taskId, '/tmp/no-repo-here')
 
-    expect(ctx.systemPrompt).toBe('')
+    expect(unmatched.systemPrompt).not.toBe('')
+    expect(unmatched.systemPrompt).toBe(matched.systemPrompt)
   })
 })

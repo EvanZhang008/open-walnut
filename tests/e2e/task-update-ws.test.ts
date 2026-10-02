@@ -8,7 +8,8 @@
  * These tests verify:
  *   1. updateTask() emits task:updated via WebSocket
  *   2. Phase rollback emits task:updated with source tag
- *   3. extraTargets adds destinations to the bus event
+ *   3. A REST PATCH's bus event goes to 'web-ui' only (the in-process agent's
+ *      'main-agent' destination was removed in 152d1aee: nothing subscribes to it)
  *   4. Exactly one task:updated WS event is emitted per PATCH (no double-emission)
  */
 
@@ -194,14 +195,14 @@ describe('updateTask() centralized TASK_UPDATED emission', () => {
   });
 
   /**
-   * Test 3: When PATCH /api/tasks/:id is used, tasks.ts passes
-   *         extraTargets: ['main-agent'].  The bus event should therefore be
-   *         delivered to BOTH 'web-ui' and 'main-agent'.  We verify by
-   *         subscribing a test observer directly on the bus and checking the
+   * Test 3: The bus event a REST PATCH produces is addressed to 'web-ui'.
+   *         PATCH used to add extraTargets: ['main-agent'] for the in-process
+   *         agent; 152d1aee removed that dead destination everywhere. Checked
+   *         by subscribing a test observer directly on the bus and reading the
    *         event's destinations array.
    */
-  it('PATCH via REST includes main-agent in bus event destinations', async () => {
-    const task = await createTask('extraTargets test task');
+  it('PATCH via REST addresses its bus event to web-ui only', async () => {
+    const task = await createTask('Bus destinations test task');
 
     const { bus } = await import('../../src/core/event-bus.js');
 
@@ -230,15 +231,11 @@ describe('updateTask() centralized TASK_UPDATED emission', () => {
       // At least one event should have been captured for this task
       expect(capturedDestinations.length).toBeGreaterThanOrEqual(1);
 
-      // The event emitted by updateTask() must include both 'web-ui' and 'main-agent'
-      const found = capturedDestinations.find(
-        (d) => d.includes('web-ui') && d.includes('main-agent'),
-      );
-      expect(
-        found,
-        `Expected a bus event with destinations containing both 'web-ui' and 'main-agent'. ` +
-        `Captured: ${JSON.stringify(capturedDestinations)}`,
-      ).toBeDefined();
+      // Every event emitted for this PATCH goes to the web UI, and to no
+      // destination nobody subscribes to.
+      for (const destinations of capturedDestinations) {
+        expect(destinations, `Captured: ${JSON.stringify(capturedDestinations)}`).toEqual(['web-ui']);
+      }
     } finally {
       bus.unsubscribe(subscriberName);
     }

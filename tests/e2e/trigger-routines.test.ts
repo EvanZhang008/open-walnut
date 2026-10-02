@@ -90,23 +90,28 @@ async function jobState(id: string) {
   return json.job
 }
 
-/** Envelopes the server has actually written toward a session's CLI. */
 /**
- * Every envelope that reached a daemon, by EITHER route. A cold `--resume` can
- * carry the message on the spawn itself (`start.message`) or defer it to a `send`
- * once the CLI is up, and which one happens depends on timing, not on intent:
- * scanning only `send` made this suite pass in one checkout and fail in another
- * for the same product behaviour.
+ * Every envelope that reached a session's CLI, by EITHER route. A cold `--resume`
+ * can carry the message on the spawn itself (`start.message`) or defer it to a
+ * `send` once the CLI is up, and which one happens depends on timing, not on
+ * intent: scanning only `send` made this suite pass in one checkout and fail in
+ * another for the same product behaviour.
+ *
+ * A `send` counts only when the daemon wrote it to a live FIFO. The mock CLI
+ * exits at the end of each turn, so a fire landing as a turn ends goes mid-turn
+ * write (ENXIO), then processNext (ENXIO), then a resume plus its deferred
+ * send: three `send` commands in the log for one delivery.
  */
 function envelopeCarriersToDaemon(): Array<{ cmd: string; sid: string; text: string }> {
-  return [...daemon.getCommandHistoryFor('send'), ...daemon.getCommandHistoryFor('start')]
+  const written = daemon.getFifoWrites().map((w) => ({ cmd: 'send', sid: w.sid, text: w.message }))
+  const spawned = daemon.getCommandHistoryFor('start')
     .filter((c) => c.payload.deferMessage !== true)
     .map((c) => ({
-      cmd: c.cmd,
+      cmd: 'start',
       sid: String(c.payload.sid ?? ''),
-      text: String(c.payload.text ?? c.payload.message ?? ''),
+      text: String(c.payload.message ?? ''),
     }))
-    .filter((c) => c.text.includes('<walnut-message kind="trigger"'))
+  return [...written, ...spawned].filter((c) => c.text.includes('<walnut-message kind="trigger"'))
 }
 
 function envelopesSentToDaemon(): string[] {

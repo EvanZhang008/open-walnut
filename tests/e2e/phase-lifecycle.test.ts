@@ -202,7 +202,8 @@ describe('Phase lifecycle E2E', () => {
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string };
     expect(body.error).toContain('phase must be one of');
-    expect(body.error).not.toContain('WAIT');
+    // The retired WAIT is not offered (WAITING, the held status, is a different word).
+    expect(body.error).not.toMatch(/\bWAIT\b/);
 
     // The task is untouched — no half-applied write.
     const fetched = await getTask(task.id);

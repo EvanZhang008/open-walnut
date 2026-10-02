@@ -1,12 +1,18 @@
 /**
  * E2E tests for memory lifecycle — real server + search + file I/O.
  *
- * What's real: Express server, search function (brute-force), memory file I/O.
+ * What's real: Express server, search function (the hybrid index, keyword
+ * lane), memory file I/O.
  * What's mocked: constants.js (temp dir).
  *
  * Tests verify:
  *   1. Task search — create task via REST, search finds it
  *   2. Memory file search — write .md file, search finds it
+ *
+ * Search v2 (default since f395723a) answers from an index that follows writes
+ * a few seconds behind: a task edit is synced after a 2s debounce, and a memory
+ * file written straight to disk is picked up by the memory watcher after its own
+ * 2s coalescing. So a hit is awaited, never expected on the very next request.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -27,6 +33,19 @@ let port: number
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
+}
+
+/** Search until a result matching `pick` appears (the index follows writes). */
+async function searchUntil<T>(query: string, pick: (r: T) => boolean): Promise<T> {
+  let found: T | undefined
+  await vi.waitFor(async () => {
+    const res = await fetch(apiUrl(`/api/search?${query}`))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { results: T[] }
+    found = body.results.find(pick)
+    expect(found).toBeDefined()
+  }, { timeout: 20_000, interval: 250 })
+  return found!
 }
 
 // ── Setup / Teardown ──
@@ -82,14 +101,14 @@ describe('Search finds tasks by title', () => {
       body: JSON.stringify({ content: 'Discovered xylophone algorithm for sorting' }),
     })
 
-    const searchRes = await fetch(apiUrl('/api/search?q=xylophone+algorithm'))
-    expect(searchRes.status).toBe(200)
-    const body = (await searchRes.json()) as { results: Array<{ type: string; taskId: string; matchField: string }> }
-
-    const found = body.results.find((r) => r.taskId === task.id)
-    expect(found).toBeDefined()
-    expect(found!.matchField).toBe('note')
-  })
+    const found = await searchUntil<{ type: string; taskId: string; matchField: string; snippet: string }>(
+      'q=xylophone+algorithm', (r) => r.taskId === task.id,
+    )
+    // The index scores the whole task document (matchField is its kind, 'task',
+    // not the field the old BM25 scorer picked), so the note shows in the snippet.
+    expect(found.type).toBe('task')
+    expect(found.snippet).toContain('xylophone')
+  }, 30_000)
 
   it('search returns empty results for non-matching query', async () => {
     const searchRes = await fetch(apiUrl('/api/search?q=nonexistentxyzzy'))
@@ -128,15 +147,12 @@ describe('Memory file search', () => {
     const memFound = memBody.memories.find((m) => m.path.includes('test-session'))
     expect(memFound).toBeDefined()
 
-    // Search using memory type — brute-force search over listed memories
-    const searchRes = await fetch(apiUrl('/api/search?q=thermodynamic+inverter&types=memory'))
-    expect(searchRes.status).toBe(200)
-    const body = (await searchRes.json()) as { results: Array<{ type: string; title: string; snippet: string }> }
-
-    const found = body.results.find((r) => r.type === 'memory')
-    expect(found).toBeDefined()
-    expect(found!.snippet).toContain('thermodynamic')
-  })
+    // Search the memory lane once the watcher has indexed the file
+    const found = await searchUntil<{ type: string; title: string; snippet: string }>(
+      'q=thermodynamic+inverter&types=memory', (r) => r.type === 'memory',
+    )
+    expect(found.snippet).toContain('thermodynamic')
+  }, 30_000)
 
   it('write knowledge article then search finds it', async () => {
     const knowledgeDir = path.join(MEMORY_DIR, 'knowledge')
@@ -146,14 +162,11 @@ describe('Memory file search', () => {
       '# Architecture Decisions\n\nWe chose PostgreSQL over MongoDB for transactional integrity.\nThe event bus uses pub/sub with destination routing.\n',
     )
 
-    const searchRes = await fetch(apiUrl('/api/search?q=PostgreSQL+transactional&types=memory'))
-    expect(searchRes.status).toBe(200)
-    const body = (await searchRes.json()) as { results: Array<{ type: string; title: string }> }
-
-    const found = body.results.find((r) => r.type === 'memory')
-    expect(found).toBeDefined()
-    expect(found!.title).toContain('Architecture')
-  })
+    const found = await searchUntil<{ type: string; title: string }>(
+      'q=PostgreSQL+transactional&types=memory', (r) => r.type === 'memory',
+    )
+    expect(found.title).toContain('Architecture')
+  }, 30_000)
 })
 
 // ── Memory REST API ──

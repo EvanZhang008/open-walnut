@@ -1,9 +1,16 @@
 /**
  * E2E tests for the Notes Page (multi-file notes system).
  *
- * Tests full CRUD lifecycle, wiki-link updates, backlinks, search,
- * folder operations, special characters, and edge cases.
- * Starts a real server on a random port.
+ * Tests full CRUD lifecycle, rename, backlinks, search, folder operations,
+ * special characters, and edge cases. Starts a real server on a random port.
+ *
+ * Two contracts from the notes redesign (09672b47, docs/design/notes-redesign/
+ * IMPL-CONTRACT.md) shape the assertions:
+ *  - every note carries a stable frontmatter `id`, stamped at create time by
+ *    PUT (or by the reconciler for a note written straight to disk), so a note
+ *    reads back with an `id:` block in front of what was written;
+ *  - search, backlinks and the note list answer from the structural index, and
+ *    links key on the target's id, so a rename rewrites no link text.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -15,6 +22,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('notes-page-e2e'));
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
+import { rebuildIndex } from '../../src/core/notes-indexer.js';
+import { parseFrontmatter, stampId } from '../../src/core/parse-frontmatter.js';
 
 const NOTES_DIR = path.join(WALNUT_HOME, 'notes');
 
@@ -66,6 +75,24 @@ async function readDisk(relPath: string): Promise<string> {
   return fs.readFile(path.join(NOTES_DIR, relPath), 'utf-8');
 }
 
+/** A note's text without its frontmatter block. */
+function bodyOf(content: string): string {
+  return parseFrontmatter(content).body;
+}
+
+/**
+ * Bring the structural index in line with what is on disk, as the unit tests
+ * do (tests/web/routes/notes-v2.test.ts). Notes seeded straight to disk reach
+ * the index through the vault watcher in production, but this suite deletes
+ * and recreates the vault dir between tests, which ends an inotify watch on
+ * Linux. A rebuild already running may have walked the vault before this
+ * test's seeds, so join it, then run one of our own.
+ */
+async function syncIndex(): Promise<void> {
+  await rebuildIndex();
+  await rebuildIndex();
+}
+
 /** Check file exists on disk */
 async function existsOnDisk(relPath: string): Promise<boolean> {
   try {
@@ -108,17 +135,23 @@ describe('Note CRUD lifecycle', () => {
     expect(create.status).toBe(200);
     expect(create.body.ok).toBe(true);
     expect(create.body.updatedAt).toBeDefined();
+    // The id is stamped into the frontmatter at create time.
+    const id = create.body.id as string;
+    expect(id).toMatch(/^n_/);
 
     // Read
     const read = await apiGet('/api/notes-v2/content/lifecycle.md');
     expect(read.status).toBe(200);
-    expect(read.body.content).toBe('# Hello World');
+    expect(read.body.content).toBe(stampId('# Hello World', id));
+    expect(read.body.id).toBe(id);
+    expect(read.body.contentHash).toBe(create.body.contentHash);
 
-    // Update
+    // Update with a body that carries no frontmatter: the note keeps its id
     const update = await apiPut('/api/notes-v2/content/lifecycle.md', { content: '# Updated' });
     expect(update.status).toBe(200);
+    expect(update.body.id).toBe(id);
     const readAfter = await apiGet('/api/notes-v2/content/lifecycle.md');
-    expect(readAfter.body.content).toBe('# Updated');
+    expect(readAfter.body.content).toBe(stampId('# Updated', id));
 
     // Delete
     const del = await apiDelete('/api/notes-v2/content/lifecycle.md');
@@ -220,27 +253,38 @@ describe('Folder operations', () => {
 // ═══════════════════════════════════════════════════════════
 
 describe('Move / Rename', () => {
-  it('renames a note and updates wiki links in referencing notes', async () => {
+  it('renames a note: it keeps its id, and links to it still resolve with their text untouched', async () => {
     await seedNote('target.md', '# Target');
     await seedNote('linker.md', 'See [[target]] for details.');
+    await syncIndex();
+    const before = await apiGet('/api/notes-v2/content/target.md');
+    expect(before.body.id).toMatch(/^n_/);
 
     const res = await apiPost('/api/notes-v2/move', { from: 'target.md', to: 'renamed.md' });
     expect(res.status).toBe(200);
 
-    // Source gone, destination exists
+    // Source gone, destination exists with the same identity
     expect(await existsOnDisk('target.md')).toBe(false);
-    expect(await readDisk('renamed.md')).toBe('# Target');
+    expect(bodyOf(await readDisk('renamed.md'))).toBe('# Target');
+    expect((await apiGet('/api/notes-v2/content/renamed.md')).body.id).toBe(before.body.id);
 
-    // Wiki link updated
-    expect(await readDisk('linker.md')).toBe('See [[renamed]] for details.');
+    // No link text is rewritten (links key on the target's id) ...
+    expect(bodyOf(await readDisk('linker.md'))).toBe('See [[target]] for details.');
+    // ... and the link still points at the renamed note.
+    const { body } = await apiGet('/api/notes-v2/backlinks/renamed.md');
+    expect(body.backlinks.map((b: any) => b.path)).toEqual(['linker.md']);
   });
 
   it('preserves wiki link labels during rename', async () => {
     await seedNote('original.md', 'content');
     await seedNote('labeled.md', 'Link to [[original|my custom label]] here.');
+    await syncIndex();
 
-    await apiPost('/api/notes-v2/move', { from: 'original.md', to: 'new-name.md' });
-    expect(await readDisk('labeled.md')).toBe('Link to [[new-name|my custom label]] here.');
+    const res = await apiPost('/api/notes-v2/move', { from: 'original.md', to: 'new-name.md' });
+    expect(res.status).toBe(200);
+    expect(bodyOf(await readDisk('labeled.md'))).toBe('Link to [[original|my custom label]] here.');
+    const { body } = await apiGet('/api/notes-v2/backlinks/new-name.md');
+    expect(body.backlinks.map((b: any) => b.path)).toEqual(['labeled.md']);
   });
 
   it('skips wiki-link update when only folder changes (same basename)', async () => {
@@ -248,7 +292,7 @@ describe('Move / Rename', () => {
     await seedNote('ref.md', 'Link to [[same]].');
 
     await apiPost('/api/notes-v2/move', { from: 'same.md', to: 'subfolder/same.md' });
-    expect(await readDisk('ref.md')).toBe('Link to [[same]].');
+    expect(bodyOf(await readDisk('ref.md'))).toBe('Link to [[same]].');
   });
 
   it('returns 409 when destination already exists', async () => {
@@ -274,7 +318,7 @@ describe('Move / Rename', () => {
     expect(res.status).toBe(200);
 
     // The [[]] should NOT be replaced because oldName is empty
-    expect(await readDisk('ref.md')).toBe('Contains [[]] empty brackets.');
+    expect(bodyOf(await readDisk('ref.md'))).toBe('Contains [[]] empty brackets.');
   });
 });
 
@@ -286,15 +330,18 @@ describe('Search', () => {
   it('finds notes by content (case-insensitive)', async () => {
     await seedNote('recipe.md', '# Chocolate Cake\n\nDelicious.');
     await seedNote('todo.md', '# Tasks\n\nBuy milk.');
+    await syncIndex();
 
     const { body } = await apiGet('/api/notes-v2/search?q=chocolate');
     expect(body.results.length).toBe(1);
-    expect(body.results[0].name).toBe('recipe');
+    expect(body.results[0].path).toBe('recipe.md');
+    expect(body.results[0].title).toBe('Chocolate Cake');
     expect(body.results[0].snippet).toContain('Chocolate');
   });
 
   it('searches across subfolders', async () => {
     await seedNote('deep/nested/note.md', 'findable content here');
+    await syncIndex();
 
     const { body } = await apiGet('/api/notes-v2/search?q=findable');
     expect(body.results.length).toBe(1);
@@ -303,18 +350,21 @@ describe('Search', () => {
 
   it('returns empty for no match', async () => {
     await seedNote('a.md', 'nothing relevant');
+    await syncIndex();
     const { body } = await apiGet('/api/notes-v2/search?q=zzzznonexistent');
     expect(body.results).toEqual([]);
   });
 
-  it('limits results to 50', async () => {
-    // Create 60 notes all containing the word "common"
-    for (let i = 0; i < 60; i++) {
+  it('limits results: 30 by default, `limit` up to 100', async () => {
+    // Create 120 notes all containing the word "common"
+    for (let i = 0; i < 120; i++) {
       await seedNote(`note-${String(i).padStart(3, '0')}.md`, `common content ${i}`);
     }
+    await syncIndex();
 
-    const { body } = await apiGet('/api/notes-v2/search?q=common');
-    expect(body.results.length).toBe(50);
+    expect((await apiGet('/api/notes-v2/search?q=common')).body.results.length).toBe(30);
+    expect((await apiGet('/api/notes-v2/search?q=common&limit=50')).body.results.length).toBe(50);
+    expect((await apiGet('/api/notes-v2/search?q=common&limit=500')).body.results.length).toBe(100);
   });
 });
 
@@ -328,6 +378,7 @@ describe('Backlinks', () => {
     await seedNote('a.md', 'See [[target]] for info.');
     await seedNote('b.md', 'Also [[target|labeled link]].');
     await seedNote('unrelated.md', 'No links here.');
+    await syncIndex();
 
     const { body } = await apiGet('/api/notes-v2/backlinks/target.md');
     expect(body.backlinks.length).toBe(2);
@@ -337,6 +388,7 @@ describe('Backlinks', () => {
 
   it('excludes self-references', async () => {
     await seedNote('self.md', 'I reference [[self]] myself.');
+    await syncIndex();
 
     const { body } = await apiGet('/api/notes-v2/backlinks/self.md');
     expect(body.backlinks).toHaveLength(0);
@@ -345,6 +397,7 @@ describe('Backlinks', () => {
   it('returns snippets with context', async () => {
     await seedNote('target.md', '# Target');
     await seedNote('src.md', 'Before [[target]] after');
+    await syncIndex();
 
     const { body } = await apiGet('/api/notes-v2/backlinks/target.md');
     expect(body.backlinks[0].snippet).toContain('[[target]]');
@@ -354,6 +407,7 @@ describe('Backlinks', () => {
   it('handles notes in subfolders', async () => {
     await seedNote('projects/walnut.md', '# Walnut');
     await seedNote('daily.md', 'Working on [[walnut]] today.');
+    await syncIndex();
 
     const { body } = await apiGet('/api/notes-v2/backlinks/projects/walnut.md');
     expect(body.backlinks.length).toBe(1);
@@ -369,12 +423,15 @@ describe('Note list (for autocomplete)', () => {
   it('returns flat list of all notes', async () => {
     await seedNote('root.md', 'r');
     await seedNote('sub/nested.md', 'n');
+    await syncIndex();
 
     const { body } = await apiGet('/api/notes-v2/list');
     expect(body.notes.length).toBe(2);
 
     const names = body.notes.map((n: any) => n.name).sort();
     expect(names).toEqual(['nested', 'root']);
+    // Indexed notes carry their id (it feeds [[ authoring).
+    for (const n of body.notes) expect(n.id).toMatch(/^n_/);
   });
 });
 
@@ -389,7 +446,8 @@ describe('Special characters in note names', () => {
 
     const read = await apiGet('/api/notes-v2/content/my%20note.md');
     expect(read.status).toBe(200);
-    expect(read.body.content).toBe('spaced');
+    expect(read.body.content).toBe(stampId('spaced', res.body.id));
+    expect(await existsOnDisk('my note.md')).toBe(true);
   });
 
   it('handles unicode characters in note names', async () => {
@@ -398,7 +456,8 @@ describe('Special characters in note names', () => {
 
     const read = await apiGet('/api/notes-v2/content/%E4%B8%AD%E6%96%87%E7%AC%94%E8%AE%B0.md');
     expect(read.status).toBe(200);
-    expect(read.body.content).toBe('unicode');
+    expect(read.body.content).toBe(stampId('unicode', res.body.id));
+    expect(await existsOnDisk('\u4e2d\u6587\u7b14\u8bb0.md')).toBe(true);
   });
 
   it('handles dashes and underscores', async () => {
@@ -422,7 +481,8 @@ describe('Large note handling', () => {
 
     const read = await apiGet('/api/notes-v2/content/large.md');
     expect(read.status).toBe(200);
-    expect(read.body.content.length).toBe(1_000_000);
+    expect(read.body.content).toBe(stampId(content, res.body.id));
+    expect(bodyOf(read.body.content).length).toBe(1_000_000);
   });
 
   it('rejects notes exceeding 2MB', async () => {

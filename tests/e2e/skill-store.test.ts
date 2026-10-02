@@ -51,6 +51,37 @@ async function seedSkill(
   }
 }
 
+/**
+ * The sources this suite seeds and cleans. The list also carries skills it does
+ * not control, by design: the workspace-local `./skills` of the checkout the
+ * test runs from (the repo ships `restore-backup` and `setup-walnut` there) and
+ * the skills built-in plugins ship (`walnut-calendar`). Listing assertions are
+ * about the seeded sources only.
+ */
+const SEEDED_SOURCES = new Set(['walnut', 'claude']);
+
+interface ListedSkill {
+  name: string;
+  dirName: string;
+  source: string;
+  content: string;
+  description: string;
+  enabled: boolean;
+  eligible: boolean;
+  hasReferences: boolean;
+}
+
+/** GET /api/skills, split into the skills this suite seeded and everything else. */
+async function listSkills(): Promise<{ seeded: ListedSkill[]; other: ListedSkill[] }> {
+  const res = await api('/api/skills');
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { skills: ListedSkill[] };
+  return {
+    seeded: body.skills.filter((s) => SEEDED_SOURCES.has(s.source)),
+    other: body.skills.filter((s) => !SEEDED_SOURCES.has(s.source)),
+  };
+}
+
 // ── Setup / Teardown ──
 
 beforeAll(async () => {
@@ -80,11 +111,11 @@ beforeEach(async () => {
 // ── Tests: Listing ──
 
 describe('GET /api/skills', () => {
-  it('returns empty list when no skills exist', async () => {
-    const res = await api('/api/skills');
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.skills).toEqual([]);
+  it('returns no seeded skills when none exist', async () => {
+    const { seeded, other } = await listSkills();
+    expect(seeded).toEqual([]);
+    // Whatever else is listed comes from a source this suite does not seed.
+    for (const skill of other) expect(['workspace', 'plugin']).toContain(skill.source);
   });
 
   it('discovers skills from walnut global dir', async () => {
@@ -94,14 +125,13 @@ description: A test skill
 ---
 # Test Skill`);
 
-    const res = await api('/api/skills');
-    const body = await res.json();
-    expect(body.skills).toHaveLength(1);
-    expect(body.skills[0].name).toBe('Test Skill');
-    expect(body.skills[0].source).toBe('walnut');
-    expect(body.skills[0].dirName).toBe('test-skill');
-    expect(body.skills[0].enabled).toBe(true);
-    expect(body.skills[0].eligible).toBe(true);
+    const { seeded } = await listSkills();
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0].name).toBe('Test Skill');
+    expect(seeded[0].source).toBe('walnut');
+    expect(seeded[0].dirName).toBe('test-skill');
+    expect(seeded[0].enabled).toBe(true);
+    expect(seeded[0].eligible).toBe(true);
   });
 
   it('discovers skills from claude dir', async () => {
@@ -111,10 +141,9 @@ description: From claude dir
 ---
 # Claude`);
 
-    const res = await api('/api/skills');
-    const body = await res.json();
-    expect(body.skills).toHaveLength(1);
-    expect(body.skills[0].source).toBe('claude');
+    const { seeded } = await listSkills();
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0].source).toBe('claude');
   });
 
   it('discovers skills from both sources simultaneously', async () => {
@@ -129,10 +158,9 @@ description: claude skill
 ---
 `);
 
-    const res = await api('/api/skills');
-    const body = await res.json();
-    expect(body.skills).toHaveLength(2);
-    const sources = body.skills.map((s: { source: string }) => s.source).sort();
+    const { seeded } = await listSkills();
+    expect(seeded).toHaveLength(2);
+    const sources = seeded.map((s: { source: string }) => s.source).sort();
     expect(sources).toEqual(['claude', 'walnut']);
   });
 
@@ -142,9 +170,9 @@ description: no name field
 ---
 `);
 
-    const res = await api('/api/skills');
-    const body = await res.json();
-    expect(body.skills[0].name).toBe('unnamed');
+    const { seeded } = await listSkills();
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0].name).toBe('unnamed');
   });
 
   it('includes content in response', async () => {
@@ -156,9 +184,9 @@ description: verify content
 Some body text here.`;
     await seedSkill(GLOBAL_SKILLS_DIR, 'content-test', content);
 
-    const res = await api('/api/skills');
-    const body = await res.json();
-    expect(body.skills[0].content).toBe(content);
+    const { seeded } = await listSkills();
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0].content).toBe(content);
   });
 
   it('detects hasReferences when references dir exists', async () => {
@@ -168,9 +196,9 @@ description: has refs
 ---
 `, { 'data.json': '{"key":"value"}' });
 
-    const res = await api('/api/skills');
-    const body = await res.json();
-    expect(body.skills[0].hasReferences).toBe(true);
+    const { seeded } = await listSkills();
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0].hasReferences).toBe(true);
   });
 });
 
@@ -518,39 +546,35 @@ describe('Edge cases', () => {
     clearSkillsCache();
 
     // Should still list skills (corrupt settings = all enabled)
-    const res = await api('/api/skills');
-    const body = await res.json();
-    expect(body.skills).toHaveLength(1);
-    expect(body.skills[0].enabled).toBe(true);
+    const { seeded } = await listSkills();
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0].enabled).toBe(true);
   });
 
   it('handles skill without frontmatter', async () => {
     await seedSkill(GLOBAL_SKILLS_DIR, 'no-fm', '# Just a heading\nNo frontmatter here.');
 
-    const res = await api('/api/skills');
-    const body = await res.json();
-    expect(body.skills).toHaveLength(1);
-    expect(body.skills[0].name).toBe('no-fm'); // falls back to dirName
-    expect(body.skills[0].description).toBe('');
+    const { seeded } = await listSkills();
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0].name).toBe('no-fm'); // falls back to dirName
+    expect(seeded[0].description).toBe('');
   });
 
   it('handles empty SKILL.md', async () => {
     await seedSkill(GLOBAL_SKILLS_DIR, 'empty', '');
 
-    const res = await api('/api/skills');
-    const body = await res.json();
-    expect(body.skills).toHaveLength(1);
-    expect(body.skills[0].name).toBe('empty');
+    const { seeded } = await listSkills();
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0].name).toBe('empty');
   });
 
   it('handles large skill file', async () => {
     const largeContent = '---\nname: big\ndescription: big skill\n---\n' + 'x'.repeat(100_000);
     await seedSkill(GLOBAL_SKILLS_DIR, 'large', largeContent);
 
-    const res = await api('/api/skills');
-    const body = await res.json();
-    expect(body.skills).toHaveLength(1);
-    expect(body.skills[0].content.length).toBe(largeContent.length);
+    const { seeded } = await listSkills();
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0].content.length).toBe(largeContent.length);
   });
 
   it('higher priority source wins for duplicate dirName', async () => {

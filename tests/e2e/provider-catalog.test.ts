@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startServer, stopServer } from '../../src/web/server.js';
+import { getModelsForProvider } from '../../src/model/providers/model-catalog.js';
 
 let server: Awaited<ReturnType<typeof startServer>>;
 let base: string;
@@ -73,7 +74,11 @@ describe('Provider catalog', () => {
   it('OpenAI catalog should have 5.x models only (no 4o)', async () => {
     const providers = await getProviders();
     const openai = providers.openai;
-    expect(openai.models.length).toBeGreaterThanOrEqual(4);
+    // A fresh home has no config overrides, so this is the code catalog (three
+    // GPT-5 models). The old ">= 4" only held while this test read the author's
+    // own config, which added a model of its own.
+    expect(openai.models.map((m) => m.id)).toEqual(getModelsForProvider('openai').map((m) => m.id));
+    expect(openai.models.length).toBeGreaterThanOrEqual(3);
     for (const m of openai.models) {
       expect(m.id).not.toMatch(/gpt-4o/);
       expect(m.id).toMatch(/gpt-5/);

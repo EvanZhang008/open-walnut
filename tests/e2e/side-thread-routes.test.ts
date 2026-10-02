@@ -106,8 +106,10 @@ describe('side-thread routes', () => {
     expect(await res.json()).toEqual({ ok: true })
   })
 
-  it('warms the standby cache on demand: one tagged send, then already_warm', async () => {
-    const { CACHE_WARMUP_MESSAGE } = await import('../../src/core/sessions/side-thread-warmup.js')
+  // The typing-triggered cache warm-up turn was removed in 0fe2c7d8 (a fork is
+  // born warm now). The route stays for older clients and must stay a no-op:
+  // it answers at once and never sends a turn, with or without a standby.
+  it('the retired standby warm route is a no-op: it answers warmup_retired and sends nothing', async () => {
     const warmParent = '77777777-7777-4777-8777-777777777777'
     await createSessionRecord(warmParent, '', 'proj', '/repo/walnut', {
       outputFile: '/tmp/streams/warm.jsonl',
@@ -121,28 +123,27 @@ describe('side-thread routes', () => {
       sends.push({ sessionId: d.sessionId, message: d.message })
     }, { global: true, interest: [EventNames.SESSION_SEND] })
 
-    // Nothing to warm before the drawer has prewarmed a standby.
-    let res = await post(`/api/sessions/${warmParent}/side-threads/standby/warm`)
-    expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ warmed: false, reason: 'no_standby' })
+    try {
+      let res = await post(`/api/sessions/${warmParent}/side-threads/standby/warm`)
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ warmed: false, reason: 'warmup_retired' })
 
-    // The prewarm route answers before the fork lands (fire-and-forget spawn).
-    await post(`/api/sessions/${warmParent}/side-threads/standby`)
-    let standby: SessionStartEvent | undefined
-    for (let i = 0; i < 100 && !standby; i++) {
-      standby = started.find((s) => s.lane === `side:${warmParent}:standby`)
-      if (!standby) await new Promise((r) => setTimeout(r, 20))
+      // Same answer once the drawer has prewarmed a standby (fire-and-forget spawn).
+      await post(`/api/sessions/${warmParent}/side-threads/standby`)
+      let standby: SessionStartEvent | undefined
+      for (let i = 0; i < 100 && !standby; i++) {
+        standby = started.find((s) => s.lane === `side:${warmParent}:standby`)
+        if (!standby) await new Promise((r) => setTimeout(r, 20))
+      }
+      expect(standby?.preassignedSessionId).toBeTruthy()
+
+      res = await post(`/api/sessions/${warmParent}/side-threads/standby/warm`)
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ warmed: false, reason: 'warmup_retired' })
+      expect(sends).toEqual([])
+    } finally {
+      bus.unsubscribe('warm-send-observer')
     }
-    expect(standby?.preassignedSessionId).toBeTruthy()
-
-    res = await post(`/api/sessions/${warmParent}/side-threads/standby/warm`)
-    expect(await res.json()).toEqual({ warmed: true })
-    expect(sends).toEqual([{ sessionId: standby!.preassignedSessionId, message: CACHE_WARMUP_MESSAGE }])
-
-    res = await post(`/api/sessions/${warmParent}/side-threads/standby/warm`)
-    expect(await res.json()).toEqual({ warmed: true, reason: 'already_warm' })
-    expect(sends).toHaveLength(1)
-    bus.unsubscribe('warm-send-observer')
   })
 
   it('400s an empty question', async () => {

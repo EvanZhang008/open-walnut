@@ -66,10 +66,10 @@ async function waitForInterest(eventName: string): Promise<void> {
   }, { timeout: 10_000, interval: 50 });
 }
 
-async function createWakeRoutine(name: string, wake: unknown): Promise<any> {
+async function createWakeRoutine(name: string, wake: unknown, everyMs = 3_600_000): Promise<any> {
   const { status, json } = await post('/api/routines', {
     name,
-    schedule: { kind: 'every', everyMs: 3_600_000 },
+    schedule: { kind: 'every', everyMs },
     wakeMode: 'next-cycle',
     sessionTarget: 'main',
     payload: { kind: 'systemEvent', text: `Triage: ${name}` },
@@ -122,19 +122,42 @@ describe('routine wake, end to end', () => {
     await fetch(apiUrl(`/api/routines/${created.id}`), { method: 'DELETE' });
   }, 60_000);
 
-  it('skipWhenIdle answers a run with an empty counter as skipped', async () => {
+  it('skipWhenIdle answers a timed run with an empty counter as skipped', async () => {
+    // A short interval so the engine's own clock reaches the slot: only an
+    // unforced (due) run is subject to the idle gate.
     const created = await createWakeRoutine(`E2E wake idle ${Date.now()}`, {
       events: [ITEMS_EVENT], threshold: 5, skipWhenIdle: true,
-    });
+    }, 1_500);
     expect(created.wake.skipWhenIdle).toBe(true);
+
+    await vi.waitFor(async () => {
+      const { json } = await get(`/api/routines/${created.id}`);
+      expect(json.job.state.lastStatus).toBe('skipped');
+    }, { timeout: 20_000, interval: 250 });
+
+    const after = await get(`/api/routines/${created.id}`);
+    expect(after.json.job.state.lastError ?? '').not.toContain('requires');
+    // A skip never reached an executor, so it is not recorded as a fire.
+    expect(after.json.job.state.fireLog).toBeUndefined();
+
+    await fetch(apiUrl(`/api/routines/${created.id}`), { method: 'DELETE' });
+  }, 30_000);
+
+  it('Run now outranks skipWhenIdle: a forced run with an empty counter runs', async () => {
+    // 432deed2: a person pressing Run now must see the routine work, not a
+    // silent "skipped" with no reason on the card.
+    const created = await createWakeRoutine(`E2E wake run-now ${Date.now()}`, {
+      events: [ITEMS_EVENT], threshold: 5, skipWhenIdle: true,
+    });
 
     const { status, json } = await post(`/api/routines/${created.id}/run`);
     expect(status).toBe(200);
     expect(json.result).toMatchObject({ ok: true, ran: true });
 
     const after = await get(`/api/routines/${created.id}`);
-    expect(after.json.job.state.lastStatus).toBe('skipped');
+    expect(after.json.job.state.lastStatus).toBe('ok');
     expect(after.json.job.state.lastError ?? '').not.toContain('requires');
+    // No items were observed, so there is no wake fire to audit.
     expect(after.json.job.state.fireLog).toBeUndefined();
 
     await fetch(apiUrl(`/api/routines/${created.id}`), { method: 'DELETE' });

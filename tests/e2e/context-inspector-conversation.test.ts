@@ -12,12 +12,17 @@
  * The root fix: chat I/O is conversation-scoped end-to-end. A missing
  * conversationId no longer silently falls back to the legacy ghost file — the
  * store layer rejects it, and the routes resolve the agent's ACTIVE conversation
- * at the request boundary. These tests pin that contract:
- *   1. /api/context?conversationId=X reflects exactly X's volume (isolated per conv).
+ * at the request boundary.
+ *
+ * Since every turn runs in a `claude` CLI session (dae90b5d), the Inspector no
+ * longer shows a transcript; per conversation it shows that conversation's lane
+ * session (its recorded launch prompt) and the exact input tokens the lane last
+ * reported. These tests pin that contract:
+ *   1. /api/context?conversationId=X describes exactly X's lane session and token count.
  *   2. /api/context with NO conversationId resolves to the ACTIVE conversation,
  *      never the legacy file (which is never created on a fresh home).
- *   3. The Inspector count agrees with /api/chat/stats for the same conversation
- *      (the two-numbers-for-one-chat bug can't recur).
+ *   3. The Inspector's token count agrees with /api/chat/stats (the header %) for
+ *      the same conversation (the two-numbers-for-one-chat bug can't recur).
  *   4. compact(conversationId=X) compacts only X, leaving a sibling conversation
  *      untouched.
  */
@@ -33,6 +38,10 @@ import { WALNUT_HOME, CHAT_HISTORY_FILE, conversationFile } from '../../src/cons
 import { startServer, stopServer } from '../../src/web/server.js';
 import * as chatHistory from '../../src/core/chat-history.js';
 import { createConversation, getActiveConversationId } from '../../src/core/conversations.js';
+import { createSessionRecord } from '../../src/core/session-tracker.js';
+import { personalAiLaneKey } from '../../src/core/sessions/personal-ai-lane.js';
+import { recordLastTurnTokens } from '../../src/core/token-truth.js';
+import { estimateTokens } from '../../src/core/daily-log.js';
 import type { MessageParam } from '../../src/model/model.js';
 
 let server: HttpServer;
@@ -59,6 +68,37 @@ function pairs(n: number, tag: string): MessageParam[] {
 let convSmall: string;
 let convBig: string;
 
+// Each conversation's lane session, with a launch prompt and a last-turn token
+// count of its own, so any cross-conversation read shows up as a wrong value.
+const SMALL_SID = 'lane-session-small';
+const BIG_SID = 'lane-session-big';
+const SMALL_PROMPT = 'SMALL conversation persona.';
+const BIG_PROMPT = `BIG conversation persona. ${'Standing context line. '.repeat(200)}`;
+const SMALL_LAST_TURN = 1_200;
+const BIG_LAST_TURN = 98_000;
+
+async function seedLane(sid: string, conversationId: string, systemPrompt: string): Promise<void> {
+  await createSessionRecord(sid, '', '', WALNUT_HOME, {
+    title: 'Personal AI chat',
+    lane: personalAiLaneKey('general', conversationId),
+    initialProcessStatus: 'idle',
+    profile: { systemPrompt },
+  } as never);
+}
+
+/** The "Last turn exact input tokens" figure from the Inspector's engine note. */
+function inspectorLastTurnTokens(body: { sections: { roleAndRules: { content: string } } }): number {
+  const m = /Last turn exact input tokens: ~(.+)/.exec(body.sections.roleAndRules.content);
+  expect(m, 'Inspector shows no last-turn token count').not.toBeNull();
+  return Number(m![1].replace(/\D/g, ''));
+}
+
+async function inspect(query: string) {
+  const res = await fetch(apiUrl(`/api/context${query}`));
+  expect(res.status).toBe(200);
+  return res.json();
+}
+
 beforeAll(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
@@ -70,6 +110,11 @@ beforeAll(async () => {
   const big = await createConversation('general', 'Active conversation');
   convBig = big.id;
   await chatHistory.addAIMessages(pairs(25, 'BIG'), { agentId: 'general', conversationId: convBig });
+
+  await seedLane(SMALL_SID, convSmall, SMALL_PROMPT);
+  await seedLane(BIG_SID, convBig, BIG_PROMPT);
+  recordLastTurnTokens(convSmall, SMALL_LAST_TURN);
+  recordLastTurnTokens(convBig, BIG_LAST_TURN);
 
   server = await startServer({ port: 0, dev: true });
   const addr = server.address();
@@ -98,12 +143,20 @@ describe('Context Inspector — conversation scoping (regression)', () => {
   });
 
   it('GET /api/context?conversationId=X reflects exactly that conversation', async () => {
-    const small = await (await fetch(apiUrl(`/api/context?conversationId=${convSmall}`))).json();
-    const big = await (await fetch(apiUrl(`/api/context?conversationId=${convBig}`))).json();
-    expect(small.sections.apiMessages.count).toBe(6);   // 3 pairs
-    expect(big.sections.apiMessages.count).toBe(50);    // 25 pairs
-    // Conversations are isolated — one's volume never bleeds into the other.
-    expect(big.sections.apiMessages.count).not.toBe(small.sections.apiMessages.count);
+    const small = await inspect(`?conversationId=${convSmall}`);
+    const big = await inspect(`?conversationId=${convBig}`);
+
+    const smallRole = small.sections.roleAndRules.content as string;
+    const bigRole = big.sections.roleAndRules.content as string;
+    expect(smallRole).toContain(SMALL_SID);
+    expect(smallRole).toContain(SMALL_PROMPT);
+    expect(bigRole).toContain(BIG_SID);
+    expect(bigRole).toContain('BIG conversation persona.');
+    // Conversations are isolated: one's session never bleeds into the other.
+    expect(smallRole).not.toContain(BIG_SID);
+    expect(bigRole).not.toContain(SMALL_SID);
+    expect(inspectorLastTurnTokens(small)).toBe(SMALL_LAST_TURN);
+    expect(inspectorLastTurnTokens(big)).toBe(BIG_LAST_TURN);
   });
 
   it('GET /api/context with NO conversationId resolves to the ACTIVE conversation', async () => {
@@ -111,26 +164,29 @@ describe('Context Inspector — conversation scoping (regression)', () => {
     const active = await getActiveConversationId('general');
     expect(active).toBe(convBig);
 
-    const res = await fetch(apiUrl('/api/context'));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    // The boundary resolves to the active conversation (50 msgs), NOT a legacy
-    // fallback. Pre-fix this silently read the ghost file instead.
-    expect(body.sections.apiMessages.count).toBe(50);
+    const body = await inspect('');
+    // The boundary resolves to the active conversation, NOT a legacy fallback.
+    // Pre-fix this silently read the ghost file instead.
+    expect(body.sections.roleAndRules.content).toContain(BIG_SID);
+    expect(inspectorLastTurnTokens(body)).toBe(BIG_LAST_TURN);
   });
 
-  it('Inspector message count agrees with /api/chat/stats for the same conversation', async () => {
-    const ctxBody = await (await fetch(apiUrl(`/api/context?conversationId=${convBig}`))).json();
-    const statsBody = await (await fetch(apiUrl(`/api/chat/stats?conversationId=${convBig}`))).json();
-    // The header % (stats) and the Inspector now read the SAME file → same count.
-    // This is the "two numbers for one chat" bug, pinned shut.
-    expect(ctxBody.sections.apiMessages.count).toBe(statsBody.apiMessageCount);
+  it('Inspector token count agrees with /api/chat/stats for the same conversation', async () => {
+    for (const conv of [convSmall, convBig]) {
+      const ctxBody = await inspect(`?conversationId=${conv}`);
+      const statsBody = await (await fetch(apiUrl(`/api/chat/stats?conversationId=${conv}`))).json();
+      // The header % (stats) and the Inspector read the SAME conversation's lane
+      // count. This is the "two numbers for one chat" bug, pinned shut.
+      expect(inspectorLastTurnTokens(ctxBody)).toBe(statsBody.estimatedTotalTokens);
+    }
   });
 
-  it('Inspector token total for the bigger conversation exceeds the smaller one', async () => {
-    const small = await (await fetch(apiUrl(`/api/context?conversationId=${convSmall}`))).json();
-    const big = await (await fetch(apiUrl(`/api/context?conversationId=${convBig}`))).json();
-    expect(big.sections.apiMessages.tokens).toBeGreaterThan(small.sections.apiMessages.tokens);
+  it('Inspector token total is the launch prompt of that conversation\'s own session', async () => {
+    const small = await inspect(`?conversationId=${convSmall}`);
+    const big = await inspect(`?conversationId=${convBig}`);
+    expect(small.totalTokens).toBe(estimateTokens(SMALL_PROMPT));
+    expect(big.totalTokens).toBe(estimateTokens(BIG_PROMPT));
+    expect(big.totalTokens).toBeGreaterThan(small.totalTokens);
   });
 });
 

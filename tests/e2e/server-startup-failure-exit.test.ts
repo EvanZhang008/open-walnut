@@ -2,23 +2,29 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import { createServer, type Server } from 'node:net';
+import { createServer, type Server, type Socket } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
 let child: ChildProcess | null = null;
 let blocker: Server | null = null;
+// The server probes a busy port over HTTP to tell "Walnut is already running"
+// from "another program". The blocker never reads, so the probe's socket stays
+// open after the child exits and close() would wait on it forever.
+const blockerSockets = new Set<Socket>();
 let testHome: string | null = null;
 
 async function closeBlocker(): Promise<void> {
   if (!blocker) return;
   const current = blocker;
   blocker = null;
+  for (const socket of blockerSockets) socket.destroy();
+  blockerSockets.clear();
   await new Promise<void>((resolve) => current.close(() => resolve()));
 }
 
 afterEach(async () => {
-  if (child?.exitCode === null) {
+  if (child && child.exitCode === null && child.signalCode === null) {
     child.kill('SIGKILL');
     await new Promise((resolve) => child?.once('exit', resolve));
   }
@@ -31,7 +37,10 @@ afterEach(async () => {
 describe('server startup failure lifecycle', () => {
   it('exits promptly and releases its data-directory lock after listen fails', async () => {
     testHome = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-startup-failure-'));
-    blocker = createServer();
+    blocker = createServer((socket) => {
+      blockerSockets.add(socket);
+      socket.once('close', () => blockerSockets.delete(socket));
+    });
     await new Promise<void>((resolve, reject) => {
       blocker!.once('error', reject);
       blocker!.listen(0, resolve);
@@ -78,6 +87,7 @@ describe('server startup failure lifecycle', () => {
     expect(result).toEqual({ code: 1, signal: null });
     expect(Date.now() - startedAt).toBeLessThan(15_000);
     expect(stderr).toContain('EADDRINUSE');
+    expect(stderr).toContain('in use by another program');
     expect(fs.existsSync(path.join(testHome, 'server.lock.json'))).toBe(false);
   }, 25_000);
 });
