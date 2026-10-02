@@ -497,7 +497,8 @@ describe('sessionRequestWatchHook — the parent hears about its subtask by stat
     sessions = [
       rec(ASKER, { title: 'Asker', taskId: 'task-asker' }),
       rec(TARGET, { title: 'Target', taskId: 'task-77' }),
-      rec(PARENT, { title: 'Ship the release', taskId: 'task-parent' }),
+      // Mid-turn: an idle parent hears only completions and errors (subtask-notices.ts).
+      rec(PARENT, { title: 'Ship the release', taskId: 'task-parent', process_status: 'running' }),
     ];
     listTasksByIds.mockResolvedValue([child]);
     getTask.mockImplementation(async (id: string) => {

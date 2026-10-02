@@ -6,8 +6,9 @@ import { resolveTaskSessionId } from '@/utils/session-status';
 import '@/styles/subtask-pill.css';
 
 /**
- * "Sub" pill: this task is a subtask (it has a parent_task_id), and the pill
- * leads back to the parent.
+ * "Worker" pill: this task is a subtask (it has a parent_task_id), a worker of
+ * its leader, and the pill leads back to the leader. (It read "Sub" until the
+ * Board made the pair a team: a leader and its workers share one board.)
  *
  * Work a session files is that session's subtask wherever it lands (see
  * caller-placement.ts): beside it, in another project, or from a Personal AI
@@ -20,8 +21,8 @@ import '@/styles/subtask-pill.css';
  */
 export function subtaskPillTitle(parentTitle: string | undefined): string {
   return parentTitle
-    ? `Subtask of "${parentTitle}". Click to go to that task.`
-    : 'Subtask of another task. Click to go to it.';
+    ? `Worker of "${parentTitle}". Click to go to that task.`
+    : 'Worker of another task. Click to go to it.';
 }
 
 export function SubtaskPill({ task, className }: { task: { parent_task_id?: string }; className?: string }) {
@@ -50,7 +51,7 @@ export function SubtaskPill({ task, className }: { task: { parent_task_id?: stri
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') open(e); }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      Sub
+      Worker
     </span>
   );
 }

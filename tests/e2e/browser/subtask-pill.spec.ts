@@ -1,5 +1,5 @@
 /**
- * The "Sub" pill (web/src/components/tasks/SubtaskPill.tsx): a task with a
+ * The "Worker" pill (web/src/components/tasks/SubtaskPill.tsx): a task with a
  * parent_task_id carries it on its pinned card and on its list row, a top-level
  * task never does, and clicking it leads to the parent. Its twin, the
  * "Leader · N" pill (LeaderPill.tsx), sits on the parent and lists every OPEN
@@ -37,7 +37,7 @@ async function createTask(title: string, opts: Record<string, unknown>): Promise
 }
 
 /**
- * Sub and Leader are buttons, so they must look like every other clickable pill
+ * Worker and Leader are buttons, so they must look like every other clickable pill
  * in a title row: the TRIGGER pill's box and type (user report 2026-09-25,
  * Leader drawn a size larger than TRIGGER beside it). Measured against a real
  * `.task-trigger-pill` placed next to the pill in the same row, so the check
@@ -78,7 +78,7 @@ test.afterEach(async () => {
   for (const id of [...litter].reverse()) await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => undefined)
 })
 
-test('a subtask shows Sub on its pinned card and its list row; a top-level task does not', async ({ page, browserName }) => {
+test('a subtask shows Worker on its pinned card and its list row; a top-level task does not', async ({ page, browserName }) => {
   // A cold home load under machine load takes well past the default 30s.
   test.setTimeout(120_000)
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -97,7 +97,7 @@ test('a subtask shows Sub on its pinned card and its list row; a top-level task 
   await expect(card(pinnedChild)).toBeVisible({ timeout: 90_000 })
   const pill = card(pinnedChild).locator('[data-testid="subtask-pill"]')
   await expect(pill).toBeVisible()
-  await expect(pill).toHaveText('Sub')
+  await expect(pill).toHaveText('Worker')
   await expect(pill).toHaveAttribute('data-parent-task-id', parent)
   await expect(card(parent).locator('[data-testid="subtask-pill"]')).toHaveCount(0)
   await expect(card(loose).locator('[data-testid="subtask-pill"]')).toHaveCount(0)
@@ -132,12 +132,12 @@ test('a subtask shows Sub on its pinned card and its list row; a top-level task 
   // load) and carries the same pill.
   const row = page.locator(`.todo-panel-item[data-task-id="${listChild}"]`)
   await expect(row).toBeVisible({ timeout: 15_000 })
-  await expect(row.locator('[data-testid="subtask-pill"]')).toHaveText('Sub')
+  await expect(row.locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
   await row.screenshot({ path: `${SHOT_DIR}/${browserName}-list-row.png` })
 })
 
 
-test('a subtask in another project is a top-level row there, and its Sub pill leads to the parent', async ({ page, browserName }) => {
+test('a subtask in another project is a top-level row there, and its Worker pill leads to the parent', async ({ page, browserName }) => {
   test.setTimeout(120_000)
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const projectA = `Sub pill A ${stamp}`, projectB = `Sub pill B ${stamp}`
@@ -164,10 +164,10 @@ test('a subtask in another project is a top-level row there, and its Sub pill le
 
   // Both carry the pill, and the pill names the parent.
   const farPill = row(far).locator('[data-testid="subtask-pill"]')
-  await expect(farPill).toHaveText('Sub')
+  await expect(farPill).toHaveText('Worker')
   await expect(farPill).toHaveAttribute('data-parent-task-id', parent)
-  await expect(farPill).toHaveAttribute('title', new RegExp(`GitLab token expiry ${stamp}`))
-  await expect(row(near).locator('[data-testid="subtask-pill"]')).toHaveText('Sub')
+  await expect(farPill).toHaveAttribute('title', new RegExp(`^Worker of "GitLab token expiry ${stamp}"`))
+  await expect(row(near).locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
   // The parent leads both, across projects.
   const leaderPill = row(parent).locator('[data-testid="leader-pill"]')
   await expect(leaderPill).toHaveText('Leader · 2')
@@ -306,7 +306,7 @@ test('a parent\'s session header carries the Leader pill, and its list leads to 
   await expect(leader).toHaveText(/^Leader · \d+$/)
   expect(Number(await leader.getAttribute('data-subtask-count'))).toBeGreaterThanOrEqual(2)
   await expectTriggerShape(leader)
-  // It has no parent of its own, so no Sub pill in its header.
+  // It has no parent of its own, so no Worker pill in its header.
   await expect(header.locator('[data-testid="subtask-pill"]')).toHaveCount(0)
 
   await leader.click()
@@ -379,7 +379,7 @@ test('a subtask a Focus task\'s session files is born in Focus, not Satellite', 
     // A tier tab draws flat cards; the All view draws list rows.
     const inList = (id: string) => page.locator(`.todo-focus-card[data-task-id="${id}"], .todo-pinned-card[data-task-id="${id}"], .todo-panel-item[data-task-id="${id}"]`).first()
     await expect(inList(created.task.id)).toBeVisible({ timeout: 30_000 })
-    await expect(inList(created.task.id).locator('[data-testid="subtask-pill"]')).toHaveText('Sub')
+    await expect(inList(created.task.id).locator('[data-testid="subtask-pill"]')).toHaveText('Worker')
     await expect(inList(parent)).toBeVisible()
     await expect(inList(parent).locator('[data-testid="leader-pill"]')).toBeVisible()
     await fs.mkdir(SHOT_DIR, { recursive: true })

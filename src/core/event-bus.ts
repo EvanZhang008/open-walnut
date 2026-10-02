@@ -168,6 +168,10 @@ export const EventNames = {
   // Envelope only — the body stays on disk (see HumanInboxLetterEvent).
   HUMAN_INBOX_LETTER: 'human-inbox:letter',
 
+  // A task's Board (html, a thread, a mark) changed or was deleted.
+  // Envelope only: clients re-read GET /api/v1/tasks/:id/board.
+  BOARD_CHANGED: 'board:changed',
+
   // A producer removed its own feed record (plugin notifications.dismiss).
   NOTIFICATION_REMOVED: 'notification:removed',
 

@@ -7,6 +7,7 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { locateTaskOnHome } from '@/utils/open-session';
 import { PHASE_LABELS, resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
+import { AdoptWorkerFlyout } from './AdoptWorkerFlyout';
 import { doneSubtaskCount, leaderPillTitle, openSubtasksOf, subtaskPlaceLabel } from './subtask-index';
 import '@/styles/subtask-pill.css';
 
@@ -27,12 +28,14 @@ import '@/styles/subtask-pill.css';
  *
  * Overlay rules (web/src/AGENTS.md): placed by useMenuPlacement, portalled to
  * <body>, root stops pointerdown propagation (the rows are dnd-kit draggables),
- * outside-click closer exempts `.leader-subtasks-flyout`.
+ * outside-click closer exempts `.leader-subtasks-flyout`. The list's last row,
+ * "Adopt a task…", swaps it for the AdoptWorkerFlyout on the same pill.
  */
 export function LeaderPill({ task, className }: { task: Task; className?: string }) {
   const navigate = useNavigate();
   const store = useTasksContextSafe();
   const [open, setOpen] = useState(false);
+  const [adoptOpen, setAdoptOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, triggerRef, menuRef, {
@@ -98,7 +101,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
         title={leaderPillTitle(subtasks, done)}
         aria-label={open ? 'Leads subtasks. Hide them' : 'Leads subtasks. List them'}
         aria-haspopup="dialog"
-        aria-expanded={open}
+        aria-expanded={open || adoptOpen}
         data-testid="leader-pill"
         data-subtask-count={subtasks.length}
         onPointerDown={(e) => e.stopPropagation()}
@@ -107,7 +110,13 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
         // the click lands on whatever moved under the pointer (same trap as the
         // TRIGGER pill). Keyboard focus is unaffected.
         onMouseDown={(e) => e.preventDefault()}
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); }}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          // An open picker is this pill's too: a click on the pill closes it.
+          if (adoptOpen) { setAdoptOpen(false); return; }
+          setOpen((v) => !v);
+        }}
       >
         Leader · {subtasks.length}
       </button>
@@ -150,10 +159,28 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                   );
                 })}
               </ul>
+              <div className="leader-adopt-row">
+                <button
+                  type="button"
+                  className="leader-sub-row"
+                  data-testid="leader-adopt"
+                  title={`Make another open task a worker of "${task.title}"`}
+                  onClick={() => { close(false); setAdoptOpen(true); }}
+                >
+                  <span className="leader-sub-title">Adopt a task…</span>
+                </button>
+              </div>
             </div>,
             document.body,
           )
         : null}
+      <AdoptWorkerFlyout
+        open={adoptOpen}
+        anchorRef={triggerRef}
+        align="start"
+        leader={task}
+        onClose={() => setAdoptOpen(false)}
+      />
     </>
   );
 }

@@ -32,6 +32,7 @@ import { SessionWebView, type WebViewRequest } from './SessionWebView';
 import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } from '@/utils/service-link';
 import { SessionDiffView } from './SessionDiffView';
 import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
+import { TaskBoardPane } from '@/components/board/TaskBoardPane';
 import { useSessionLetters } from '@/hooks/useSessionLetters';
 import {
   consumeSessionInboxLink, deepLinkFullscreenReassert, SESSION_INBOX_LINK_EVENT,
@@ -892,6 +893,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     void send(sessionId, message);
     return true;
   }, [send, sessionId]);
+  // The Board tab's "Ask for a board" goes out through the composer's own send
+  // path (optimistic bubble, queueing, retry), like a diff comment.
+  const handleBoardSend = useCallback((text: string) => send(sessionId, text), [send, sessionId]);
   // Chat column in the split: resizable width (% of viewport) + collapse.
   // Fresh storage key (v3): re-baseline everyone at the new default. The middle
   // content pane (file preview / diff) is the priority — chat is a side column.
@@ -1823,6 +1827,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             >
               Files
             </button>
+            {session?.taskId && (
+              <button
+                className={`session-action-chip${activeView === 'board' ? ' session-action-chip-active' : ''}`}
+                onClick={() => toggleView('board')}
+                title="The task's Board: the page its leader keeps, with a thread and a mark per section, beside the chat"
+                data-testid="session-board-chip"
+              >
+                Board
+              </button>
+            )}
             <button
               className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
               onClick={() => toggleView('terminal')}
@@ -2225,6 +2239,18 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                         onNavigate={(to) => navigateToTarget(to, navigate)}
                         onOpenFile={handleLetterFileOpen}
                         barRightSlot={chatBarSlot}
+                      />
+                    )}
+                    {/* Board: the page the task's leader keeps. A task chip on it is
+                        a task reference, so it lands like one (onTaskClick, then the
+                        Locate handler; off Home the pane goes home on its own). */}
+                    {activeView === 'board' && session?.taskId && (
+                      <TaskBoardPane
+                        taskId={session.taskId}
+                        sessionId={sessionId}
+                        barRightSlot={chatBarSlot}
+                        onLocateTask={onTaskClick ?? onLocateTask}
+                        onSendToSession={handleBoardSend}
                       />
                     )}
                   </div>

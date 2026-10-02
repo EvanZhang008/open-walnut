@@ -19,6 +19,7 @@ import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { PluginFieldsSection } from './PluginFieldPicker';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
+import { TeamMenuItems } from './TeamMenuItems';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from './TaskStatusControl';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
 
@@ -505,8 +506,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       if (btnRef.current?.contains(e.target as Node)) return;
       if (menuRef.current?.contains(e.target as Node)) return;
       // The Project picker's option list is a separate portal (see
-      // MoveToProjectSection) — clicks inside it are NOT "outside the menu".
-      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
+      // MoveToProjectSection) — clicks inside it are NOT "outside the menu". Same
+      // for the Adopt a worker picker (TeamMenuItems).
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
       closeMenu();
     };
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenu(); };
@@ -525,8 +527,8 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     //     documented in TaskBatchMenu.tsx.
     const handleScroll = (e: Event) => {
       if (menuRef.current?.contains(e.target as Node)) return;
-      // Scrolling the Project flyout's own list is reading, not page scroll.
-      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
+      // Scrolling the Project (or Adopt) flyout's own list is reading, not page scroll.
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
       if (cursorAnchor) { closeMenu(); return; }
       const r = btnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeMenu();
@@ -662,6 +664,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
               <span>Select…</span>
             </button>
           )}
+
+          {/* Team: adopt a worker (any task can lead), or leave this task's leader */}
+          <TeamMenuItems task={task} afterAction={closeMenu} />
 
           {/* Move actions — hierarchy + order shortcuts (precise alternative to drag) */}
           {((onUnparent && task.parent_task_id) || onMoveUp || onMoveDown) && (

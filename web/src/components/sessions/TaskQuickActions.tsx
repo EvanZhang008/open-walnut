@@ -20,6 +20,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { MoveToProjectSection, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
+import { TeamMenuItems } from '@/components/tasks/TeamMenuItems';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from '@/components/tasks/TaskStatusControl';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
@@ -169,14 +170,14 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     const handleClick = (e: MouseEvent) => {
       if (kebabBtnRef.current?.contains(e.target as Node)) return;
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
-      // The Project picker's list is its own portal (MoveToProjectSection).
-      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
+      // The Project picker's list and the Adopt a worker picker are their own portals.
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
       closeKebab();
     };
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeKebab(); };
     const handleScroll = (e: Event) => {
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
-      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
       // A cursor anchor is a frozen viewport point: once the page scrolls it no
       // longer points at what was right-clicked, so close outright (the button
       // path instead follows its trigger — see the comment above).
@@ -391,6 +392,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
 
           {/* Move to project — same section as the TodoPanel kebab */}
           <MoveToProjectSection current={task.project || ''} onMove={handleMoveToProject} afterAction={closeKebab} />
+
+          {/* Adopt a worker / Leave leader — the same rows as the board's task kebab. */}
+          <TeamMenuItems task={task} afterAction={closeKebab} />
 
           {/* Source badge — combined with external link if available */}
           {(() => {

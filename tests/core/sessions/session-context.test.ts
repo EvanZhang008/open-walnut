@@ -135,7 +135,7 @@ describe('buildSessionContext (identity note)', () => {
     for (const id of ['', await seedTask('marina'), ask.id]) {
       const { systemPrompt } = await buildSessionContext(id)
       expect(systemPrompt).toMatch(/a "subagent" is Claude Code's Agent tool inside this session, never a Walnut task/)
-      expect(systemPrompt).toMatch(/a "subtask" or "task" is a Walnut task/)
+      expect(systemPrompt).toMatch(/a "subtask", "worker" or "task" is a Walnut task/)
     }
   })
 
@@ -190,6 +190,31 @@ describe('buildSessionContext (identity note)', () => {
     expect((await buildSessionContext(parent.id)).systemPrompt).not.toContain('subtask of')
   })
 
+  it('tells a leader its workers are followed on the Board, and names the skill', async () => {
+    // The leader's chat is the noisiest surface Walnut has (2026-10-01: a user
+    // could not follow 40 workers through it). The line appears only while a
+    // subtask is open, right after the task line.
+    const { task: leader } = await addTask({ title: 'Bakery launch', project: 'acme' })
+    expect((await buildSessionContext(leader.id)).systemPrompt).not.toContain('Board')
+    const { task: a } = await addTask({ title: 'Menu page', project: 'acme', parent_task_id: leader.id })
+    await addTask({ title: 'Order form', project: 'acme', parent_task_id: leader.id })
+    const { systemPrompt } = await buildSessionContext(leader.id)
+    expect(systemPrompt).toContain('Your task leads 2 open worker tasks (its subtasks).')
+    expect(systemPrompt).toMatch(/follows that work on your Board \(the Board tab beside this chat\), not here/)
+    expect(systemPrompt).toContain('walnut tools call skill_read \'{"dirName":"walnut-board"}\'')
+    expect(systemPrompt.indexOf('Your task leads')).toBeGreaterThan(systemPrompt.indexOf('Bakery launch'))
+    expect(systemPrompt.indexOf('Your task leads')).toBeLessThan(systemPrompt.indexOf('This session is how that task runs'))
+    // A finished worker no longer counts.
+    const { updateTaskRaw } = await import('../../../src/core/task-manager.js')
+    await updateTaskRaw(a.id, { phase: 'COMPLETE' })
+    expect((await buildSessionContext(leader.id)).systemPrompt).toContain('leads 1 open worker task (its subtasks)')
+  })
+
+  it('pins the three words for a Walnut task: subtask, worker, task', async () => {
+    const { systemPrompt } = await buildSessionContext('')
+    expect(systemPrompt).toMatch(/a "subtask", "worker" or "task" is a Walnut task/)
+  })
+
   it('drops only the parent line when the parent is gone', async () => {
     const { task: parent } = await addTask({ title: 'Short-lived parent', project: 'acme' })
     const { task: child } = await addTask({ title: 'Orphaned child', project: 'acme', parent_task_id: parent.id })
@@ -225,6 +250,8 @@ describe('buildSessionContext (identity note)', () => {
     // 1600 → 1700 (2026-10-01) for what a created task is: a teammate owning one
     // area, one per ask, its follow-ups sent to it. A session decides that at its
     // first create; the user saw five tasks where one was asked for.
-    expect(systemPrompt.length).toBeLessThan(1700)
+    // 1700 → 1720 (2026-10-01) for the third word, "worker": the board calls a
+    // subtask that, and a session hears it from the user.
+    expect(systemPrompt.length).toBeLessThan(1720)
   })
 })

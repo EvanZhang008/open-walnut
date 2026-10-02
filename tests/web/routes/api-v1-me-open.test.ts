@@ -84,6 +84,24 @@ describe('GET /api/v1/me/open', () => {
     expect(body.text).toBe('')
   })
 
+  it('a task with a Board is never "nothing open": one line with version, threads, user messages and marks', async () => {
+    // A compaction summary that forgot the board leaves the user reading a stale page.
+    const leader = await seedSession('Leads with a board')
+    const { setBoardHtml, postBoardMessage, setBoardMark } = await import('../../../src/core/boards/board-store.js')
+    await setBoardHtml(leader.id, '<html><walnut-thread id="a"></walnut-thread></html>', { by: `task:${leader.id}` })
+    await postBoardMessage(leader.id, 'a', { author: 'user', text: 'Why is this red?' })
+    await postBoardMessage(leader.id, 'a', { author: `task:${leader.id}`, text: 'Because.' })
+    await postBoardMessage(leader.id, 'b', { author: 'user', text: 'And this?' })
+    await setBoardMark(leader.id, 'a', { state: 'revisit' })
+    const body = await open(leader.sid)
+    expect(body.subtasks).toEqual([])
+    expect(body.board).toEqual({ version: 1, updatedAt: expect.any(String), threads: 2, userMessages: 2, marks: 1 })
+    expect(body.text).toContain('Your task has a Board (version 1, 2 threads, 2 messages from the user, 1 mark): the user follows your work there. board_get reads it; keep it current (skill walnut-board).')
+    // A task without a board has no such line.
+    const plain = await seedSession('No board')
+    expect((await open(plain.sid)).board).toBeUndefined()
+  })
+
   it('lists unfinished direct subtasks and pending requests both ways, nothing settled', async () => {
     const parent = await seedSession('Ship the marina dashboard')
     const a = await seedSession('Build the page', parent.id)

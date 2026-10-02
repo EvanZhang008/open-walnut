@@ -832,6 +832,52 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 - `GET /api/v1/tasks` additive filters (Wave 1, 2026-08): `project=` (exact,
   case-insensitive; `""` = Inbox), `tag=` (exact member match), `q=`
   (case-insensitive substring on the title). Combinable with `status=`.
+- Adopt (additive, 2026-10-01): `PATCH /api/v1/tasks/:id` also accepts
+  `parent_task_id` (a task id or unique prefix; `""` releases). The task becomes
+  that task's subtask (a Worker pill on the board, a Leader pill on the parent);
+  project and folder do not move. Errors: `404 parent_not_found`, `400` for the
+  task itself or an ambiguous prefix, `409 circular_parent` when the parent is a
+  descendant of the task, and for a SESSION caller (`x-walnut-caller-sid`)
+  `409 subtask_too_deep` when the adopted subtree would sit below level 3 of a
+  top-level task; a human is never limited. When the parent changed, the response
+  adds `placement: { parent_task_id, parent_title?, previous_parent_task_id? }`,
+  and the adopted task's live session is told through a Walnut notification.
+
+### Task board (additive, 2026-10-01): `/tasks/:id/board`
+
+One HTML document per task, written by the task's session or any task in its
+subtree through the `walnut` CLI (`board_get` / `board_set` / `board_edit` /
+`board_post`, skill `walnut-board`), read by the web console's Board tab. Walnut
+keeps the chat threads and the user's marks beside the html. Reads work
+everywhere; writes are primary-only (`501 not_supported_cloud` on a replica).
+A session caller outside the board task's subtree gets `403 not_in_team`.
+
+- `GET /api/v1/tasks/:id/board` → `200 { "board": null | { "html", "version",
+  "updated_at", "updated_by" }, "threads": { [thread]: Message[] },
+  "marks": { [id]: Mark }, "refs": { "id", "title", "phase", "status" }[] }`.
+  `refs` are the tasks the html names in `<walnut-task id="…">`.
+  `Message = { id, author: "user" | "task:<id>", text, ts }`,
+  `Mark = { state?, note?, updated_at }`.
+- `PUT /api/v1/tasks/:id/board { "html", "version"? }` → `200 { "board" }`;
+  a stale `version` → `409 board_version_conflict { version }`; html over 1 MiB
+  → `413 board_too_large`.
+- `POST /api/v1/tasks/:id/board/edits { "edits": [{ "old", "new" }], "version"? }`
+  → `200 { "board" }`. Each `old` must occur exactly once in the current html
+  (`409 board_edit_not_found { index }`, `409 board_edit_not_unique { index,
+  count }`); edits apply in order, all or none; no board → `404 no_board`.
+- `POST /api/v1/tasks/:id/board/threads/:thread { "text" }` → `201 { "message",
+  "delivery" }`. Without a caller sid the author is `user` and the text is
+  delivered to the task's session the way a human `task_send` is (a stopped
+  session is woken, a COMPLETE task reopens); `delivery.state` is `queued`,
+  `deferred` (parked behind a permission prompt) or `stored` (no live session;
+  the session reads it with `board_get`). With a caller sid the author is
+  `task:<callerTaskId>` and the message is stored only.
+- `PUT /api/v1/tasks/:id/board/marks/:mark { "state"?, "note"? }` → `200 { "mark" }`
+  (both empty removes the mark → `"mark": null`).
+- `DELETE /api/v1/tasks/:id/board` → `204` (humans only; `403 human_only`).
+- Live: the console's WebSocket carries `board:changed { taskId, kind: "html" |
+  "thread" | "mark" | "deleted", thread?, mark?, version }` with `taskId` at the
+  top level.
 
 ### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus
 

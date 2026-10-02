@@ -1,4 +1,4 @@
-/* Sub and Leader pills (SubtaskPill.tsx, LeaderPill.tsx): the team link, a
+/* Worker and Leader pills (SubtaskPill.tsx, LeaderPill.tsx): the team link, a
    clickable pair. They are BUTTONS, so they take the shape every clickable pill
    in a title row has, the TRIGGER pill's (.task-trigger-pill in globals.css) and
    the header CRON pill's: 15px tall, 4px corners, a 1px border, 10px bold
@@ -6,7 +6,7 @@
    apart from TRIGGER's blue. The informational pills (due date, start date,
    Imported) keep the soft rounded .todo-item-due-pill look; a clickable pill
    dressed like a date is what made Leader look foreign beside TRIGGER.
-   The capitals are CSS only: the DOM text stays "Sub" / "Leader · N", which is
+   The capitals are CSS only: the DOM text stays "Worker" / "Leader · N", which is
    what a screen reader says and what tests read.
    Every selector pairs two classes: this file is injected BEFORE globals.css
    (the component module loads first), so a single class can lose on order.
@@ -159,3 +159,111 @@
   color: var(--fg-muted);
   font-size: 10px;
 }
+
+/* "Adopt a worker…" (AdoptWorkerFlyout.tsx): the open tasks a leader may take
+   on, filterable. Same shell as the leader's flyout; the height is capped by
+   useMenuPlacement (maxHeight inline) and the list scrolls inside. */
+.adopt-worker-flyout {
+  position: fixed;
+  z-index: 9500;
+  display: flex;
+  flex-direction: column;
+  width: min(380px, calc(100vw - 16px));
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  color: var(--fg);
+  font-size: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.adopt-worker-title {
+  padding: 2px 6px 6px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adopt-worker-filter {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 0 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  outline: none;
+}
+
+.adopt-worker-filter:focus { border-color: var(--accent); }
+
+.adopt-worker-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.adopt-worker-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.adopt-worker-row.is-active,
+.adopt-worker-row:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.adopt-worker-row-title,
+.adopt-worker-row-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adopt-worker-row-meta {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.adopt-worker-empty,
+.adopt-worker-more {
+  padding: 6px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.adopt-worker-error {
+  padding: 4px 6px 6px;
+  color: var(--error, #d93025);
+  font-size: 11px;
+}
+
+/* The Leader flyout's last row: hand another task to this leader. */
+.leader-adopt-row {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+
+.leader-adopt-row .leader-sub-row { color: var(--fg-secondary); }

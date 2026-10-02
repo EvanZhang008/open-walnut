@@ -2448,7 +2448,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     if (id === 'reorder') { next(); return }
     const { status, phase, wait_until: waitUntil, priority, due_date: dueDate, start_date: startDate, end_date: endDateRaw,
       project, title, description, tags,
-      unread } = (req.body ?? {}) as {
+      unread, parent_task_id: parentTaskId } = (req.body ?? {}) as {
       status?: unknown
       phase?: unknown
       wait_until?: unknown
@@ -2461,6 +2461,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       description?: unknown
       tags?: unknown
       unread?: unknown
+      parent_task_id?: unknown
     }
     // Reassignable: clearing start_date cascades an end_date clear (below).
     let endDate = endDateRaw
@@ -2538,10 +2539,22 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 400, 'bad_request', 'unread must be a boolean')
       return
     }
+    // Adopt / release (additive, 2026-10): the leader's task id makes this task
+    // its worker (subtask); "" releases it. Checked against the board below.
+    if (parentTaskId !== undefined && typeof parentTaskId !== 'string') {
+      sendError(res, 400, 'bad_request', 'parent_task_id must be a task id, or "" to release the task from its leader')
+      return
+    }
+    // The task outbox carries no parent link back to the primary, so a replica
+    // would show a leader the primary never hears of.
+    if (CLOUD_MODE && parentTaskId !== undefined) {
+      sendError(res, 501, 'not_supported_cloud', 'Leaders and workers are set on the primary box only')
+      return
+    }
     if (status === undefined && phase === undefined && waitUntil === undefined && priority === undefined && dueDate === undefined
         && startDate === undefined && endDate === undefined && project === undefined && title === undefined
-        && description === undefined && tags === undefined && unread === undefined) {
-      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread)')
+        && description === undefined && tags === undefined && unread === undefined && parentTaskId === undefined) {
+      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread/parent_task_id)')
       return
     }
     if (waitUntil !== undefined && normalizeDateField(waitUntil) && phase === undefined) {
@@ -2580,6 +2593,73 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         }
       }
     }
+    // Adopt or release, judged BEFORE anything is written: the description write
+    // below lands first, so a refusal here must mean nothing changed. updateTask
+    // checks the link again under its write lock (a race is mapped below).
+    type TaskRow = import('../../core/types.js').Task
+    let parentLink: { current: TaskRow; leader?: TaskRow; previous?: string } | undefined
+    if (typeof parentTaskId === 'string') {
+      let current: TaskRow
+      try {
+        current = await tm.getTask(id)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (/No task found matching/i.test(msg)) { sendError(res, 404, 'not_found', `Task not found: ${id}`); return }
+        if (/Ambiguous ID prefix/i.test(msg)) { sendError(res, 400, 'bad_request', msg); return }
+        throw err
+      }
+      const asked = parentTaskId.trim()
+      const previous = current.parent_task_id || undefined
+      if (!asked) {
+        parentLink = { current, previous }
+      } else {
+        let leader: TaskRow
+        try {
+          leader = await tm.getTask(asked)
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          if (/No task found matching/i.test(msg)) {
+            sendError(res, 404, 'parent_not_found', `Parent task not found: ${asked}`)
+            return
+          }
+          if (/Ambiguous ID prefix/i.test(msg)) {
+            sendError(res, 400, 'bad_request', `Ambiguous parent_task_id prefix "${asked}": give more of the id`)
+            return
+          }
+          throw err
+        }
+        if (leader.id === current.id) {
+          sendError(res, 400, 'self_parent', 'A task cannot be its own leader: parent_task_id names the task itself')
+          return
+        }
+        const { hasAncestor, assertAdoptionDepth, SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
+        if (await hasAncestor(leader.id, current.id)) {
+          sendError(res, 409, 'circular_parent',
+            `"${leader.title}" (${leader.id}) is itself a subtask of "${current.title}" (${current.id}), so it cannot lead it`)
+          return
+        }
+        if (leader.id !== previous) {
+          // Only a session is braked (subtask-limits.ts); the human never is.
+          const { resolveCallerPlacement } = await import('../../core/sessions/caller-placement.js')
+          const rawSid = req.headers['x-walnut-caller-sid']
+          const caller = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
+            .catch(() => ({ kind: 'unknown' as const }))
+          if (caller.kind === 'worker' || caller.kind === 'ask') {
+            try {
+              await assertAdoptionDepth(leader.id, current.id, { parentTitle: leader.title, taskTitle: current.title })
+            } catch (err) {
+              if (!(err instanceof SubtaskLimitError)) throw err
+              sendError(res, err.statusCode, err.code, err.message)
+              return
+            }
+          }
+        }
+        parentLink = { current, leader, previous }
+      }
+    }
+    // Re-sending the link a task already has (or releasing one that has none)
+    // writes nothing and tells nobody.
+    const parentChanged = parentLink !== undefined && parentLink.leader?.id !== parentLink.previous
     // A session renaming a task to a long title meets the same brake as a
     // create (task-title-brake.ts); the caller is looked up only for a long one.
     let patchTitle = typeof title === 'string' ? title.trim() : undefined
@@ -2612,6 +2692,8 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         ...(patchTitle !== undefined ? { title: patchTitle } : {}),
         ...(tags !== undefined ? { set_tags: tags as string[] } : {}),
         ...(unread !== undefined ? { unread: unread as boolean } : {}),
+        // '' = release (updateTask's clear); otherwise the resolved full id.
+        ...(parentChanged ? { parent_task_id: parentLink?.leader?.id ?? '' } : {}),
       }
       // description FIRST (not atomic with the main patch — two separate
       // writes). Ordering rationale: updateDescription resolves the same task
@@ -2629,24 +2711,76 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         const result = await tm.updateTask(id, patch, { source: 'api', asyncPush: true })
         updated = result.task
       }
+      // A parent link that was already in place was the only field: nothing to write.
+      if (!updated && parentLink) updated = parentLink.current
       if (!updated) {
         // Unreachable given the "at least one field" validation above, but
         // never let a non-null assertion turn a logic slip into a crash.
         sendError(res, 500, 'internal', 'update produced no task row')
         return
       }
+      // `placement` (additive): the leader link this PATCH changed. '' = released.
+      let placement: {
+        parent_task_id: string; parent_title?: string; previous_parent_task_id?: string; previous_parent_title?: string
+      } | undefined
+      if (parentChanged && parentLink) {
+        const { leader, previous } = parentLink
+        const previousTitle = previous ? (await tm.getTask(previous).catch(() => undefined))?.title : undefined
+        placement = {
+          parent_task_id: leader?.id ?? '',
+          ...(leader ? { parent_title: leader.title } : {}),
+          ...(previous ? { previous_parent_task_id: previous } : {}),
+          ...(previousTitle ? { previous_parent_title: previousTitle } : {}),
+        }
+        // Tell the task's own live session who leads it now. Best effort, off the response path.
+        const rawSid = req.headers['x-walnut-caller-sid']
+        const callerSid = Array.isArray(rawSid) ? rawSid[0] : rawSid
+        const noticeTask = { id: updated.id, title: updated.title, phase: updated.phase }
+        const noticeLeader = leader ? { id: leader.id, title: leader.title } : previous ? { id: previous, title: previousTitle } : undefined
+        if (noticeLeader) {
+          void import('../../core/sessions/adopt-notice.js')
+            .then(({ notifyAdoptedTask }) => notifyAdoptedTask({
+              kind: leader ? 'adopted' : 'released', task: noticeTask, leader: noticeLeader, callerSid,
+            }))
+            .catch((err) => log.web.warn('adopt notice could not be sent', {
+              taskId: noticeTask.id, error: err instanceof Error ? err.message : String(err),
+            }))
+        }
+      }
       log.web.info('task updated via api-v1', {
         taskId: updated.id, fields: Object.keys(req.body ?? {}),
         ...(titleShortenedFrom ? { titleCutFrom: titleShortenedFrom.length } : {}),
+        ...(placement ? { parentTaskId: placement.parent_task_id, previousParentTaskId: placement.previous_parent_task_id } : {}),
       })
       if (titleShortenedFrom && patchTitle !== undefined) {
         const { refineShortTitle } = await import('../../core/sessions/task-title-brake.js')
         void refineShortTitle(updated.id, patchTitle, titleShortenedFrom)
       }
       // `title_shortened_from` (additive): the long title the session sent.
-      res.json({ task: projectTask(updated), ...(titleShortenedFrom ? { title_shortened_from: titleShortenedFrom } : {}) })
+      res.json({
+        task: projectTask(updated),
+        ...(titleShortenedFrom ? { title_shortened_from: titleShortenedFrom } : {}),
+        ...(placement ? { placement } : {}),
+      })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      // The leader link, when it changed between the check above and the write.
+      if (/^Parent task not found/.test(msg)) {
+        sendError(res, 404, 'parent_not_found', msg)
+        return
+      }
+      if (/^Ambiguous parent_task_id prefix/.test(msg)) {
+        sendError(res, 400, 'bad_request', msg)
+        return
+      }
+      if (/cannot be its own parent/.test(msg)) {
+        sendError(res, 400, 'self_parent', msg)
+        return
+      }
+      if (/^Circular reference/.test(msg)) {
+        sendError(res, 409, 'circular_parent', msg)
+        return
+      }
       if (/No task found matching/i.test(msg)) {
         sendError(res, 404, 'not_found', `Task not found: ${id}`)
         return

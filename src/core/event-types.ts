@@ -1196,6 +1196,20 @@ export interface HealthSleepReadyEvent {
   status: 'ready' | 'missing';
 }
 
+/**
+ * A task's Board changed (src/core/boards/board-store.ts). Carries no content:
+ * a listener re-reads GET /api/v1/tasks/:id/board. `version` is the html
+ * version after the change (thread and mark changes leave it as it was; 0 once
+ * the board is deleted). `taskId` is top-level so lightweight WS clients filter on it.
+ */
+export interface BoardChangedEvent {
+  taskId: string;
+  kind: 'html' | 'thread' | 'mark' | 'deleted';
+  thread?: string;
+  mark?: string;
+  version: number;
+}
+
 // ── Master type map: EventName → Payload ──
 
 export interface EventPayloadMap {
@@ -1294,6 +1308,8 @@ export interface EventPayloadMap {
 
   'human-inbox:letter': HumanInboxLetterEvent;
   'human-inbox:answered': HumanInboxAnsweredEvent;
+
+  'board:changed': BoardChangedEvent;
 
   'plugin:lifecycle-changed': PluginLifecycleChangedEvent;
   'plugin:status-items': PluginStatusItemsEvent;

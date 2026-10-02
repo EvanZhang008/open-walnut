@@ -113,6 +113,7 @@ import { sessionControlV1Router } from './routes/session-control-v1.js'
 import { sessionLifecycleV1Router } from './routes/session-lifecycle-v1.js'
 import { taskV1Router } from './routes/task-v1.js'
 import { messagesV1Router } from './routes/messages-v1.js'
+import { boardV1Router, BOARD_BODY_PATH, boardJsonParser, boardPayloadTooLargeHandler } from './routes/board-v1.js'
 import { personalAiV1Router } from './routes/personal-ai-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
 import { asksV1Router } from './routes/asks-v1.js'
@@ -1240,6 +1241,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use(['/api/v1/human-inbox', '/api/human-inbox'], express.json({ limit: '24mb' }))
   app.use(['/api/v1/human-inbox', '/api/human-inbox'], inboxPayloadTooLargeHandler)
   app.use(['/api/v1/stt/draft', '/api/stt/draft'], express.json({ limit: '6mb' }))
+  // Task Board writes carry up to 1 MiB of html; their own cap and a v1-shaped 413.
+  app.use(BOARD_BODY_PATH, boardJsonParser)
+  app.use(BOARD_BODY_PATH, boardPayloadTooLargeHandler)
   app.use(express.json({ limit: '15mb' }))
   // Default API responses to no-store so the browser HTTP cache never
   // revalidates/synthesizes them (see the etag note above — same incident).
@@ -1461,6 +1465,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   {
     const { startWaitUntilWatch } = await import('../core/task-wait-until.js')
     startWaitUntilWatch()
+  }
+
+  // ── Task Boards: a deleted task takes its board with it (primary only).
+  {
+    const { initBoardStore } = await import('../core/boards/board-store.js')
+    initBoardStore()
   }
 
   // ── walnut-trigger seams (both directions, registered once) ──
@@ -1719,6 +1729,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Unified send surface (additive): POST /messages (session_send core) +
   // GET /requests/:id (expect_reply status). Primary-only — 501 on a replica.
   app.use('/api/v1', messagesV1Router)
+  // Task Boards (additive): one html document per task + threads + marks.
+  // Reads work on a replica; writes are primary-only (501).
+  app.use('/api/v1', boardV1Router)
   // Personal AI conversation management (additive, Wave 1): rename/delete/stop/
   // answer — A-class (the replica runs its own Personal AI).
   app.use('/api/v1', personalAiV1Router)
@@ -5421,6 +5434,7 @@ export async function stopServer(): Promise<void> {
   unsubscribeLocalClaude = null
   bus.unsubscribe('host-status-defs')
   bus.unsubscribe('task-wait-until') // WAIT_UNTIL_SUBSCRIBER, core/task-wait-until.ts
+  bus.unsubscribe('board-store') // BOARD_SUBSCRIBER, core/boards/board-store.ts
   if (routineWakeHandle) {
     routineWakeHandle.stop()
     routineWakeHandle = null

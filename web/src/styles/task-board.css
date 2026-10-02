@@ -1,0 +1,120 @@
+/* The session panel's Board tab (components/board/TaskBoardPane.tsx). Same
+   shell as its peers in the split column (.session-inbox-pane): a bar at the
+   shared split height, then the board's own document in a frame filling the
+   rest. The frame draws the board; nothing here reaches inside it. */
+.task-board-pane {
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.task-board-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  min-height: var(--split-bar-h, 43px);
+}
+
+.task-board-bar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  flex-shrink: 0;
+}
+
+.task-board-bar-sub {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-board-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.task-board-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--error, #d93025);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.task-board-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.task-board-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+
+.task-board-loading {
+  padding: 24px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.task-board-empty {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.task-board-empty-card {
+  max-width: 420px;
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  text-align: center;
+}
+
+.task-board-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.task-board-empty-text {
+  margin: 6px 0 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+
+.task-board-empty-error {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--error, #d93025);
+}

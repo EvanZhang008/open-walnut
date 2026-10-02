@@ -86,7 +86,8 @@ let parent: Partial<Task>;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-  sessions = [rec(PARENT_SID, { title: 'Ship the dashboard' })];
+  // Mid-turn by default: every kind reaches a parent whose turn is running.
+  sessions = [rec(PARENT_SID, { title: 'Ship the dashboard', process_status: 'running' })];
   parent = { id: 'parent-1', title: 'Ship the dashboard', phase: 'IN_PROGRESS' };
   getTask.mockReset();
   getSessionByClaudeId.mockReset();
@@ -275,7 +276,7 @@ describe('delivery to the parent', () => {
   });
 
   it('a parent parked on a permission prompt gets the notice enqueued without a dispatch', async () => {
-    sessions = [rec(PARENT_SID, { pendingPermission: { requestId: 'p', toolName: 'Bash', receivedAt: NOW } })];
+    sessions = [rec(PARENT_SID, { process_status: 'running', pendingPermission: { requestId: 'p', toolName: 'Bash', receivedAt: NOW } })];
     await queueSubtaskNotice(notice());
     await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
     expect(sendMessageToSession).not.toHaveBeenCalled();
@@ -305,6 +306,28 @@ describe('delivery to the parent', () => {
       rec('archived', { archived: true, process_status: 'running' }),
     ];
     expect((await resolveParentDestination(parent as Task))?.claudeSessionId).toBe('old-live');
+  });
+
+  it('a parent whose turn is over is woken only for a completion or an error', async () => {
+    // 2026-10-01: a task that had finished its own work was woken, and billed,
+    // every time the daily digest it once filed ended a trigger turn.
+    sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+    for (const kind of ['stopped', 'blocked', 'waiting'] as const) {
+      await queueSubtaskNotice(notice({ kind }));
+      await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    }
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).not.toHaveBeenCalled();
+    // A burst that mixes them carries only what the parent can act on.
+    await queueSubtaskNotice(notice({ child: { id: 'child-a', title: 'A' } }));
+    await queueSubtaskNotice(notice({ child: { id: 'child-b', title: 'B' }, kind: 'completed' }));
+    await queueSubtaskNotice(notice({ child: { id: 'child-c', title: 'C' }, kind: 'error', error: 'boom' }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    const { text } = delivered();
+    expect(text).toContain('(child-b) completed its task');
+    expect(text).toContain('child-c');
+    expect(text).not.toContain('(child-a) stopped');
   });
 
   it('a stopped parent session is never woken for a status notice', async () => {

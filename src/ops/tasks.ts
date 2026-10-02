@@ -454,6 +454,7 @@ function teamSentence(p: Placement | undefined): string {
   const more = total > shown.length ? `; and ${total - shown.length} more (open_items lists them)` : ''
   return `Your task also leads ${total} other open subtask${total === 1 ? '' : 's'}: ${list}${more}. `
     + 'Each owns its area: more work in one of those areas goes to that task with task_send, not to a new task. '
+    + 'The user follows your workers on your Board (skill walnut-board), not in your chat. '
 }
 
 defineOp({
@@ -575,6 +576,29 @@ defineOp({
   tags: { readonly: false, remote: 'allow' },
 })
 
+/** Where PATCH /tasks/:id says a task's leader link moved (additive `placement`; '' = released). */
+interface LeaderPlacement {
+  parent_task_id?: string
+  parent_title?: string
+  previous_parent_task_id?: string
+  previous_parent_title?: string
+}
+
+/** The adopt or release sentence, or '' when the PATCH did not change the leader link. */
+function leaderSentence(task: unknown, id: string, p: LeaderPlacement | undefined): string {
+  if (typeof p?.parent_task_id !== 'string') return ''
+  const named = (title: string | undefined, ref: string) => (title ? `"${title}" (${ref})` : ref)
+  const title = (task as { title?: unknown } | undefined)?.title
+  const self = named(typeof title === 'string' ? title : undefined, id)
+  if (p.parent_task_id) {
+    return `${self} is now a worker of ${named(p.parent_title, p.parent_task_id)}. It keeps its project and folder; `
+      + 'its stops, completions, errors and waits now reach that task.'
+  }
+  const previous = p.previous_parent_task_id ? ` of ${named(p.previous_parent_title, p.previous_parent_task_id)}` : ''
+  return `${self} is no longer a worker${previous}. It keeps its project and folder; `
+    + 'its stops, completions, errors and waits no longer reach that task.'
+}
+
 defineOp({
   name: 'task_update',
   title: 'Update a Walnut task',
@@ -605,6 +629,7 @@ defineOp({
     title: z.string().optional().describe('New title: a few words (under 60 characters from a session, the server cuts a longer one; <= 500)'),
     description: z.string().optional().describe('Replaces the description (write-only)'),
     tags: z.array(z.string()).optional().describe('FULL replacement of the task tags, each key:value (e.g. team:marina, sev:2; a plain word is stored as label:<word>)'),
+    parent_task_id: z.string().optional().describe('Adopt or release: set to your own task id to make an existing task a worker of yours (it keeps its project and folder; its stops, completions, errors and waits then reach you), or "" to release it.'),
   },
   handler: async (args, call) => {
     const { id, ...fields } = args
@@ -616,7 +641,7 @@ defineOp({
       throw new Error('task_update needs at least one field to change besides `id`.')
     }
     const patched = await call('PATCH', `/tasks/${encodeURIComponent(String(id))}`, body) as
-      { task?: unknown; title_shortened_from?: string } | undefined
+      { task?: unknown; title_shortened_from?: string; placement?: LeaderPlacement } | undefined
     const task = patched?.task
     const changed = Object.keys(body).join(', ')
     // A phase write is bookkeeping. It does not start work, and it does not
@@ -626,7 +651,12 @@ defineOp({
     const cut = patched?.title_shortened_from
       ? `Title shortened to "${String((task as Record<string, unknown> | undefined)?.title ?? '')}" (a few words expected). `
       : ''
-    const outcome = `Task fields updated (${changed}). ${cut}No session was started or stopped by this. `
+    // A leader link the server changed is said in place of the field list.
+    const link = leaderSentence(task, taskId(task) || String(id), patched?.placement)
+    const others = Object.keys(body).filter((k) => k !== 'parent_task_id')
+    const fieldsLine = !link ? `Task fields updated (${changed}). `
+      : `${link} ${others.length > 0 ? `Other fields updated (${others.join(', ')}). ` : ''}`
+    const outcome = `${fieldsLine}${cut}No session was started or stopped by this. `
       + 'Execution is unchanged.'
     const next = body.phase === 'NEED_ACTION'
       ? 'Marked ready for the human to look at. Nothing else is required of you.'

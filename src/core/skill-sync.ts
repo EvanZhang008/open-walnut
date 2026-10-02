@@ -64,8 +64,10 @@ export const CODEX_END = `<!-- END ${DISTRIBUTED_MARKER} -->`
  *
  * Deliberately a short explicit list, not "every shipped skill": each entry
  * becomes a directory plus one symlink per engine in the user's HOME.
+ * `walnut-board` is there so a leader can type `/walnut-board` the way the
+ * prompt tells it to, on any host its session runs on.
  */
-export const DISTRIBUTED_SKILL_NAMES = ['walnut', 'walnut-trigger'] as const
+export const DISTRIBUTED_SKILL_NAMES = ['walnut', 'walnut-trigger', 'walnut-board'] as const
 
 export interface SkillSyncEntry {
   /** Skill directory name; becomes the canonical dir and the slash-command name. */

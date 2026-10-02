@@ -16,7 +16,15 @@
  * `blocked` (a permission prompt or question the user must answer), `waiting`
  * (the child parked itself). The notice is a `kind="notification"` envelope
  * (envelope-kit.ts buildSubtaskNotification) delivered through the same path a
- * reply takes: a busy parent gets it mid-turn, an idle or stopped one is woken.
+ * reply takes: a busy parent gets it mid-turn. A parent that is NOT mid-turn
+ * (its turn ended, so its task sits in NEED_ACTION, or its process stopped) is
+ * woken only for what it can act on: a worker that `completed` or hit an
+ * `error`. `stopped`, `blocked` and `waiting` ride only a turn already running:
+ * 2026-10-01, a task that had finished its own work was woken (and billed)
+ * every time the daily digest it had once filed ended a trigger turn, and a
+ * blocked worker needs the user, not its leader. A stopped session is never
+ * woken at all (resolveParentDestination). What it did not hear it reads when
+ * it next runs (open_items, task_get, its Board's live chips).
  *
  * Bounded by construction:
  *  - direct parent only; a grandparent hears through its own child;
@@ -155,16 +163,31 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
   }
 }
 
+/** The edges worth a new turn for a parent whose own turn is over. */
+const WAKES_AN_IDLE_PARENT: ReadonlySet<SubtaskNoticeKind> = new Set<SubtaskNoticeKind>(['completed', 'error']);
+
 /** Deliver one parent's buffered notices as one message. */
 async function flush(parentSid: string): Promise<void> {
   const slot = pending.get(parentSid);
   pending.delete(parentSid);
   if (!slot) return;
-  const notices = coalesce(slot.notices);
+  let notices = coalesce(slot.notices);
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const target = await getSessionByClaudeId(parentSid);
     if (!target || target.archived) return;
+    // Not mid-turn: wake it only for an edge it can act on (see the header).
+    if (target.process_status !== 'running') {
+      const dropped = notices.filter((n) => !WAKES_AN_IDLE_PARENT.has(n.kind));
+      notices = notices.filter((n) => WAKES_AN_IDLE_PARENT.has(n.kind));
+      if (dropped.length > 0) {
+        log.session.info('subtask notice not sent: the parent is not mid-turn', {
+          parentSid, parentTaskId: target.taskId, status: target.process_status,
+          children: dropped.map((n) => ({ id: n.child.id, kind: n.kind })),
+        });
+      }
+      if (notices.length === 0) return;
+    }
     const text = notices.map(buildSubtaskNoticeText).join('\n\n');
     let stableId = notices.length === 1 ? noticeQueueId(notices[0]) : undefined;
     if (stableId) {

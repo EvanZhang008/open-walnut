@@ -10,7 +10,7 @@
  * row background in its own column band) is read from a 2x screenshot, so the
  * resolution is half a CSS pixel.
  *
- * Real density: the header carries the pills a busy task has (Trigger, Sub,
+ * Real density: the header carries the pills a busy task has (Trigger, Worker,
  * Leader · 1), the status badge and the kebab, in both marker states (solid
  * unread dot, hollow read ring), in a session column and in the Ask Walnut slot.
  */
@@ -70,7 +70,7 @@ async function quickStart(page: Page, composer: Locator, prompt: string): Promis
   return out
 }
 
-/** The pills a busy task carries: a parent (Sub), a subtask (Leader · 1), a trigger. */
+/** The pills a busy task carries: a parent (Worker), a subtask (Leader · 1), a trigger. */
 async function dressAsBusyTask(taskId: string): Promise<void> {
   await api('PATCH', `/api/tasks/${taskId}`, { title: 'Focus big instance alignment' })
   const parent = await api<{ task: { id: string } }>('POST', '/api/tasks', { title: `Alignment parent ${Date.now()}`, source: 'local', project: 'Work' })
@@ -198,7 +198,7 @@ test('a session column header: dot or ring, circle, pills, badge and kebab share
   await expect(panel.getByText('Alignment turn finished', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
   await dressAsBusyTask(taskId)
   const header = panel.locator('.session-panel-header-top')
-  for (const pill of ['Trigger', 'Sub', 'Leader']) {
+  for (const pill of ['Trigger', 'Worker', 'Leader']) {
     await expect(header.locator('.session-panel-title-meta').getByText(new RegExp(pill, 'i')).first()).toBeVisible({ timeout: 20_000 })
   }
   await expect(header.locator('.session-panel-unread-dot:not(.session-panel-attention-dot)')).toBeVisible({ timeout: 20_000 })

@@ -53,4 +53,44 @@ describe('walnut skill', () => {
     expect(SKILL).not.toMatch(/wants to talk to, review or steer each part/)
     expect(SKILL).not.toMatch(/One task per unit of work/)
   })
+
+  it('says a leader adopts with task_update, and that worker and subtask are one word', () => {
+    expect(SKILL).toMatch(/task_update\s+\{"id": "<it>", "parent_task_id": "<your id>"\}/)
+    expect(SKILL).toMatch(/`""` releases it/)
+    expect(SKILL).toMatch(/\*\*Worker\*\* pill and its parent a \*\*Leader\*\* pill/)
+  })
+
+  it('points a leader at the Board and the walnut-board skill', () => {
+    const section = SKILL.indexOf('## The Board (a leader\'s standing surface)')
+    expect(section).toBeGreaterThan(SKILL.indexOf('**A subtask is a teammate, not a step.**'))
+    expect(section).toBeLessThan(SKILL.indexOf('## Recording and starting work'))
+    expect(SKILL).toMatch(/board_get.*board_set.*board_edit.*board_post/s)
+    expect(SKILL).toContain('walnut tools call skill_read \'{"dirName":"walnut-board"}\'')
+  })
+})
+
+describe('walnut-board skill', () => {
+  const BOARD = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'data', 'skills', 'walnut-board', 'SKILL.md'), 'utf-8')
+
+  it('names the four ops, the five components and the template', () => {
+    for (const op of ['board_get', 'board_set', 'board_edit', 'board_post']) expect(BOARD).toContain(`\`${op}`)
+    for (const el of ['walnut-task', 'walnut-thread', 'walnut-mark', 'walnut-strip', 'walnut-unread']) {
+      expect(BOARD).toContain(`<${el}`)
+    }
+    expect(BOARD).toMatch(/```html\n<!doctype html>/)
+    expect(BOARD).toMatch(/data-status="decide"/)
+  })
+
+  it('carries the lessons: sections are areas, re-pull live state, a question is three writes, a worker owns its area', () => {
+    expect(BOARD).toMatch(/Sections are areas of work, not buckets/)
+    expect(BOARD).toMatch(/re-pull the live state/i)
+    expect(BOARD).toMatch(/A user's question in a thread is three writes/)
+    expect(BOARD).toMatch(/A worker's area belongs to the worker/)
+    expect(BOARD).toMatch(/a thread at the bottom of the page is useless/i)
+  })
+
+  it('ships with the ops registered', () => {
+    const names = listOps().map((op) => op.name)
+    for (const op of ['board_get', 'board_set', 'board_edit', 'board_post']) expect(names).toContain(op)
+  })
 })

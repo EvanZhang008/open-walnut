@@ -354,6 +354,7 @@ describe('task_create says where the task landed', () => {
     expect(one.outcome).toBe('Filed in project marina, folder "Fixture work" (new, holding your task and this one), '
       + 'as a subtask of your task. Your task also leads 1 other open subtask: "Fix the oven door" (t_oven, IN_PROGRESS). '
       + 'Each owns its area: more work in one of those areas goes to that task with task_send, not to a new task. '
+      + 'The user follows your workers on your Board (skill walnut-board), not in your chat. '
       + 'Placeholder saved. Work was explicitly not started.')
     expect((one.placement as Record<string, unknown>).open_subtasks).toEqual(team.slice(0, 1))
     // Five named at most; the rest counted, with where to read them.

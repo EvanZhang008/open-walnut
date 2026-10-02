@@ -4170,12 +4170,15 @@ export async function updateTask(
       if (parentTask.id === task.id) {
         throw new Error('A task cannot be its own parent.');
       }
-      // Prevent circular references: walk up from parent to ensure task.id is not an ancestor
+      // Prevent circular references: walk up from parent to ensure task.id is not an ancestor.
+      // `seen` ends the walk on a chain that is already a loop (one not through this task).
       let cursor: string | undefined = parentTask.parent_task_id;
-      while (cursor) {
+      const seen = new Set<string>([parentTask.id]);
+      while (cursor && !seen.has(cursor)) {
         if (cursor === task.id) {
           throw new Error('Circular reference: the target parent is a descendant of this task.');
         }
+        seen.add(cursor);
         const ancestor = store.tasks.find((t) => t.id === cursor);
         cursor = ancestor?.parent_task_id;
       }
