@@ -21,7 +21,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { boardV1Router } from '../../../src/web/routes/board-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { addTask } from '../../../src/core/task-manager.js'
-import { getBoard, setBoardHtml } from '../../../src/core/boards/board-store.js'
+import { getBoard, postBoardMessage, setBoardHtml, type BoardMessage } from '../../../src/core/boards/board-store.js'
 
 function createApp() {
   const app = express()
@@ -32,12 +32,14 @@ function createApp() {
 }
 
 let taskId: string
+let synced: BoardMessage
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   taskId = (await addTask({ title: 'Replica board', project: 'acme' })).task.id
   await setBoardHtml(taskId, '<h1>Synced</h1>', { by: 'human' })
+  synced = await postBoardMessage(taskId, 'synced', { author: 'user', text: 'Came with the sync' })
 })
 
 afterAll(async () => {
@@ -49,6 +51,10 @@ describe('board routes on a REPLICA', () => {
     const res = await request(createApp()).get(`/api/v1/tasks/${taskId}/board`)
     expect(res.status).toBe(200)
     expect(res.body.board).toMatchObject({ html: '<h1>Synced</h1>', version: 1 })
+    expect(res.body).toMatchObject({ board_task_id: taskId, board_task_title: 'Replica board', projects: {}, checks: {}, reminders: {} })
+    // The team owner is a read too, so it works on a replica.
+    const owner = await request(createApp()).get(`/api/v1/tasks/${taskId}/board/owner`)
+    expect(owner.body).toEqual({ task_id: taskId, title: 'Replica board', self: true, has_board: true })
   })
 
   it('every write is 501 not_supported_cloud and changes nothing', async () => {
@@ -58,7 +64,13 @@ describe('board routes on a REPLICA', () => {
       request(app).put(base).send({ html: '<p>x</p>' }),
       request(app).post(`${base}/edits`).send({ edits: [{ old: 'Synced', new: 'x' }] }),
       request(app).post(`${base}/threads/t1`).send({ text: 'hello' }),
+      request(app).delete(`${base}/threads/synced/messages/${synced.id}`),
       request(app).put(`${base}/marks/m1`).send({ state: 'reviewed' }),
+      request(app).put(`${base}/projects/p1`).send({ status: 'wip' }),
+      request(app).put(`${base}/checks/c1`).send({ read: true, hash: 'abc' }),
+      request(app).put(`${base}/choices/q1`).send({ option: 'a' }),
+      request(app).put(`${base}/reminders/q1`).send({ at: new Date(Date.now() + 3_600_000).toISOString() }),
+      request(app).put(`${base}/seen/s1`).send({ hash: 'abc' }),
       request(app).delete(base),
     ]
     for (const res of await Promise.all(writes)) {
@@ -67,6 +79,9 @@ describe('board routes on a REPLICA', () => {
     }
     expect(performSessionSendMock).not.toHaveBeenCalled()
     const board = await getBoard(taskId)
-    expect(board).toMatchObject({ html: '<h1>Synced</h1>', version: 1, threads: {}, marks: {} })
+    expect(board).toMatchObject({
+      html: '<h1>Synced</h1>', version: 1, threads: { synced: [synced] }, marks: {},
+      projects: {}, checks: {}, choices: {}, reminders: {}, section_seen: {},
+    })
   })
 })

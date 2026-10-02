@@ -6,12 +6,54 @@
  * (`parent_task_id` chain): the leader and its workers share one board. Every
  * other caller is refused, including a session with no task and an unidentified
  * process (the `external` gateway label), which proves no team membership.
+ *
+ * And which board a team shares (resolveTeamBoardTask): a worker opening the
+ * Board, or calling board_* without naming a task, lands on its leader's.
  */
 
-import { BoardError } from './board-store.js';
+import { BoardError, hasBoard } from './board-store.js';
 
 /** Ancestors walked before giving up; subtasks nest at most a few levels. */
 export const TEAM_WALK_CAP = 32;
+
+export interface TeamBoardOwner {
+  taskId: string;
+  title: string;
+  /** The owner is the task asked about. */
+  self: boolean;
+  hasBoard: boolean;
+}
+
+/**
+ * A team shares ONE board: whose is it for `taskId`? The task itself when it
+ * has a board; else the nearest ancestor (`parent_task_id` chain) that has one;
+ * else the topmost ancestor, the root of its tree (the task itself when it has
+ * no parent), which is where the team's board will be made. A corrupt chain (a
+ * cycle, or deeper than the cap) with no board on it answers the task itself,
+ * so a write never lands on an arbitrary task in the loop. Throws for an
+ * unknown `taskId` (the caller resolved it already).
+ */
+export async function resolveTeamBoardTask(taskId: string): Promise<TeamBoardOwner> {
+  const { getTask } = await import('../task-manager.js');
+  const start = await getTask(taskId);
+  const chain: Array<{ id: string; title: string }> = [start];
+  const seen = new Set([start.id]);
+  let broken = false;
+  let parentId: string | undefined = start.parent_task_id || undefined;
+  while (parentId) {
+    if (seen.has(parentId) || chain.length > TEAM_WALK_CAP) { broken = true; break; }
+    const parent = await getTask(parentId).catch(() => undefined);
+    if (!parent) break;
+    seen.add(parent.id);
+    chain.push(parent);
+    parentId = parent.parent_task_id || undefined;
+  }
+  for (const t of chain) {
+    if (await hasBoard(t.id)) return { taskId: t.id, title: t.title, self: t.id === start.id, hasBoard: true };
+  }
+  const top = broken ? start : chain[chain.length - 1];
+  return { taskId: top.id, title: top.title, self: top.id === start.id, hasBoard: false };
+}
 
 export type BoardCaller =
   | { kind: 'human' }

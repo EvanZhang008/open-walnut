@@ -37,11 +37,63 @@ export interface BoardRef {
   status: string;
 }
 
+export type BoardProjectStatus = 'decide' | 'wip' | 'wait' | 'done';
+
+/** A section of the board: its status lives in Walnut (`board_project_set`), not in the html. */
+export interface BoardProject {
+  title?: string;
+  status?: BoardProjectStatus;
+  tasks?: string[];
+  updated_at: string;
+  updated_by: string;
+}
+
+/** A point on the page as GET reports it: `hash` is the CURRENT one, `read` = the user read this version. */
+export interface BoardCheck {
+  hash: string;
+  read: boolean;
+  read_at?: string;
+  /** Read once, and the point's text changed since. */
+  changed?: boolean;
+}
+
+/** The user's answer to a `<walnut-choice>`. */
+export interface BoardChoice {
+  option: string;
+  label?: string;
+  at: string;
+}
+
+/** A "remind me" on a choice or a thread; `fired_at` once Walnut told the leader. */
+export interface BoardReminder {
+  at: string;
+  set_at: string;
+  set_by: string;
+  note?: string;
+  fired_at?: string;
+  delivered_at?: string;
+  attempts?: number;
+}
+
+/** The text hash of a `[data-project]` section the user last saw (the frame hashes it). */
+export interface BoardSectionSeen {
+  hash: string;
+  at?: string;
+}
+
 export interface BoardPayload {
   board: BoardDoc | null;
   threads: Record<string, BoardMessage[]>;
   marks: Record<string, BoardMark>;
   refs: BoardRef[];
+  projects: Record<string, BoardProject>;
+  checks: Record<string, BoardCheck>;
+  choices: Record<string, BoardChoice>;
+  reminders: Record<string, BoardReminder>;
+  section_seen: Record<string, BoardSectionSeen>;
+  /** The team board's owner (`?team=1`): the task itself, the nearest ancestor with a board, or the root. */
+  board_task_id?: string;
+  board_task_title?: string;
 }
 
 /** What the frame reads for a task chip or a message author. */
@@ -61,6 +113,7 @@ export interface StoreTaskLike {
   title: string;
   phase?: string;
   status?: string;
+  parent_task_id?: string;
 }
 
 // ── The frame document ──

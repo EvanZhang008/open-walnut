@@ -1,6 +1,10 @@
 /**
  * Task Board store: one HTML document per task, plus the small side state the
- * web UI and the task's sessions share (chat threads and a human's marks).
+ * web UI and the task's sessions share: chat threads, the user's marks, the
+ * board projects (one area of this board each, not Walnut projects) and their
+ * status, the user's read ticks on points, the user's answers to choices,
+ * reminders, and the sections the user has seen (writers for these in
+ * board-items.ts; the html readers in board-html.ts).
  *
  * One JSON file per task at `WALNUT_HOME/boards/<taskId>.json`. Every write goes
  * through `updateJsonFile` (cross-process lock, atomic rename), because a board
@@ -8,8 +12,8 @@
  * the human in the browser. A write that fails validation throws inside the
  * locked mutate, so nothing reaches disk.
  *
- * `version` counts html changes only (set / edit); thread posts and marks never
- * bump it, so a writer's optimistic `expectVersion` is not broken by chat.
+ * `version` counts html changes only (set / edit); thread posts, marks and the
+ * other side state never bump it, so a writer's `expectVersion` is not broken by chat.
  *
  * Every change emits BOARD_CHANGED (envelope only) to the web UI.
  */
@@ -23,15 +27,26 @@ import { withFileLock } from '../../utils/file-lock.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { BoardChangedEvent } from '../event-types.js';
+import { BOARD_ITEM_ID_RE, own } from './board-html.js';
+
+export {
+  BOARD_ITEM_ID_RE,
+  checkHashes,
+  choiceSpecs,
+  extractTaskRefs,
+  threadMeta,
+  type BoardChoiceSpec,
+  type BoardThreadMeta,
+} from './board-html.js';
 
 export const BOARD_HTML_MAX_BYTES = 1024 * 1024;
 export const BOARD_MESSAGE_MAX_BYTES = 8 * 1024;
 export const BOARD_NOTE_MAX_BYTES = 4 * 1024;
 export const BOARD_STATE_MAX_CHARS = 64;
-/** Thread and mark ids (they are attribute values the board's author picks). */
-export const BOARD_ITEM_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 /** A task id is a file name here: no separators, no leading dot. */
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/** Thread message ids, as postBoardMessage makes them (`bm-` + 12 hex). */
+const MESSAGE_ID_RE = /^bm-[a-f0-9]{6,32}$/;
 
 export type BoardWriter = 'human' | `task:${string}`;
 export type BoardAuthor = 'user' | `task:${string}`;
@@ -49,6 +64,56 @@ export interface BoardMark {
   updated_at: string;
 }
 
+export const BOARD_PROJECT_STATUSES = ['decide', 'wip', 'wait', 'done'] as const;
+export type BoardProjectStatus = typeof BOARD_PROJECT_STATUSES[number];
+
+/**
+ * A board project: one area of THIS board (one cause, one ticket), not a Walnut
+ * project (a task's `project` field). Owned by Walnut, so its status recolors
+ * every `data-project` element on the page.
+ */
+export interface BoardProject {
+  title?: string;
+  status?: BoardProjectStatus;
+  /** Full task ids, in the order given. */
+  tasks?: string[];
+  updated_at: string;
+  updated_by: BoardWriter;
+}
+
+/** The user's read tick on a `<walnut-check>` point: the hash of the version they read. */
+export interface BoardCheck {
+  hash: string;
+  read_at: string;
+}
+
+/** The user's answer to a `<walnut-choice>`. */
+export interface BoardChoice {
+  option: string;
+  label?: string;
+  at: string;
+}
+
+/** "Remind me later" on a choice or a thread (one per target). The clock is board-reminders.ts. */
+export interface BoardReminder {
+  at: string;
+  set_at: string;
+  set_by: BoardWriter;
+  note?: string;
+  /** When it came due and Walnut acted on it. */
+  fired_at?: string;
+  /** When the message reached the board task's session. */
+  delivered_at?: string;
+  /** Failed deliveries so far (bounded; see board-reminders.ts). */
+  attempts?: number;
+}
+
+/** The user saw a section in this version (the frame hashes the section's text; the server only keeps it). */
+export interface BoardSectionSeen {
+  hash: string;
+  at: string;
+}
+
 export interface BoardFile {
   task_id: string;
   html: string;
@@ -57,6 +122,18 @@ export interface BoardFile {
   updated_by: BoardWriter;
   threads: Record<string, BoardMessage[]>;
   marks: Record<string, BoardMark>;
+  projects: Record<string, BoardProject>;
+  checks: Record<string, BoardCheck>;
+  choices: Record<string, BoardChoice>;
+  reminders: Record<string, BoardReminder>;
+  section_seen: Record<string, BoardSectionSeen>;
+}
+
+/** Fired, or its time has passed: the user sees it as due until they act on that item. */
+export function reminderIsDue(reminder: Pick<BoardReminder, 'at' | 'fired_at'>, nowMs = Date.now()): boolean {
+  if (reminder.fired_at) return true;
+  const at = Date.parse(reminder.at);
+  return Number.isFinite(at) && at <= nowMs;
 }
 
 export interface BoardEdit {
@@ -76,6 +153,17 @@ const DEFAULT_MESSAGES: Record<string, string> = {
   board_edit_not_unique: 'An edit\'s `old` text occurs more than once in the board',
   not_in_team: 'Only the board task\'s own session or its subtasks\' sessions may write this board',
   human_only: 'Only a human may do this',
+  message_not_found: 'No such message in that thread',
+  not_author: 'A session may delete only its own posts',
+  bad_status: 'A project status is one of decide, wip, wait, done (or "" to clear)',
+  bad_task: 'Unknown task',
+  check_not_found: 'No <walnut-check> with that id on the board',
+  check_changed: 'That point changed since it was shown: read it again',
+  choice_not_found: 'No <walnut-choice> with that id on the board',
+  bad_option: 'That option is not one of the choice\'s options',
+  target_not_found: 'No <walnut-choice> or <walnut-thread> with that id on the board',
+  bad_time: '`at` must be an ISO-8601 time in the future, at most 90 days out',
+  too_many: 'This board has too many of these',
 };
 
 /** A store failure that carries the HTTP status and details the route answers with. */
@@ -100,14 +188,31 @@ function boardFile(taskId: string): string {
   return path.join(boardsDir(), `${taskId}.json`);
 }
 
-function checkItemId(id: string, what: 'thread' | 'mark'): void {
+/** The names of every board on disk (the reminder clock's boot scan). */
+export async function listBoardTaskIds(): Promise<string[]> {
+  const names = await fsp.readdir(boardsDir()).catch(() => [] as string[]);
+  return names
+    .filter((n) => n.endsWith('.json'))
+    .map((n) => n.slice(0, -'.json'.length))
+    .filter((id) => TASK_ID_RE.test(id));
+}
+
+/** True when the task has a board file (no parse: the team-owner walk asks this per ancestor). */
+export async function hasBoard(taskId: string): Promise<boolean> {
+  return fsp.stat(boardFile(taskId)).then((s) => s.isFile(), () => false);
+}
+
+export type BoardItemKind = 'thread' | 'mark' | 'project' | 'check' | 'choice' | 'target' | 'section';
+
+/** For the writers in this directory: an item id must follow BOARD_ITEM_ID_RE. */
+export function checkItemId(id: string, what: BoardItemKind): void {
   if (typeof id !== 'string' || !BOARD_ITEM_ID_RE.test(id)) {
     throw new BoardError('bad_id', 400, { [what]: id },
       `Invalid ${what} id (letters, digits and . _ : -, at most 128, starting with a letter or digit)`);
   }
 }
 
-function bytes(s: string): number {
+export function bytes(s: string): number {
   return Buffer.byteLength(s, 'utf-8');
 }
 
@@ -124,6 +229,10 @@ function checkVersion(current: BoardFile | null, expectVersion: number | undefin
   if (version !== expectVersion) throw new BoardError('board_version_conflict', 409, { version });
 }
 
+function map<T>(v: unknown): Record<string, T> {
+  return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, T> : {};
+}
+
 /** A file written by hand or by an older build: missing maps become empty. */
 function normalize(raw: BoardFile | null, taskId: string): BoardFile | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -133,17 +242,23 @@ function normalize(raw: BoardFile | null, taskId: string): BoardFile | null {
     version: Number.isInteger(raw.version) ? raw.version : 1,
     updated_at: raw.updated_at || new Date(0).toISOString(),
     updated_by: raw.updated_by || 'human',
-    threads: raw.threads && typeof raw.threads === 'object' ? raw.threads : {},
-    marks: raw.marks && typeof raw.marks === 'object' ? raw.marks : {},
+    threads: map(raw.threads),
+    marks: map(raw.marks),
+    projects: map(raw.projects),
+    checks: map(raw.checks),
+    choices: map(raw.choices),
+    reminders: map(raw.reminders),
+    section_seen: map(raw.section_seen),
   };
 }
 
-function emitChanged(event: BoardChangedEvent): void {
+/** For the writers in this directory. */
+export function emitChanged(event: BoardChangedEvent): void {
   bus.emit(EventNames.BOARD_CHANGED, event, ['web-ui'], { source: 'board-store' });
 }
 
-/** Locked read-modify-write of one board; `mutate` throwing writes nothing. */
-async function updateBoard(
+/** Locked read-modify-write of one board; `mutate` throwing writes nothing. For the writers in this directory. */
+export async function updateBoard(
   taskId: string,
   mutate: (current: BoardFile | null) => BoardFile,
 ): Promise<BoardFile> {
@@ -152,7 +267,14 @@ async function updateBoard(
   return next as BoardFile;
 }
 
-function requireBoard(current: BoardFile | null): BoardFile {
+/** A copy of `m` without `key`. */
+export function withoutKey<T>(m: Record<string, T>, key: string): Record<string, T> {
+  const out = { ...m };
+  delete out[key];
+  return out;
+}
+
+export function requireBoard(current: BoardFile | null): BoardFile {
   if (!current) throw new BoardError('no_board', 404);
   return current;
 }
@@ -171,13 +293,19 @@ export async function setBoardHtml(
   const next = await updateBoard(taskId, (current) => {
     checkVersion(current, opts.expectVersion);
     return {
+      threads: {},
+      marks: {},
+      projects: {},
+      checks: {},
+      choices: {},
+      reminders: {},
+      section_seen: {},
+      ...current,
       task_id: taskId,
       html,
       version: (current?.version ?? 0) + 1,
       updated_at: new Date().toISOString(),
       updated_by: opts.by,
-      threads: current?.threads ?? {},
-      marks: current?.marks ?? {},
     };
   });
   emitChanged({ taskId, kind: 'html', version: next.version });
@@ -257,7 +385,7 @@ export async function postBoardMessage(
   let message: BoardMessage | undefined;
   const next = await updateBoard(taskId, (raw) => {
     const current = requireBoard(raw);
-    const list = current.threads[thread] ?? [];
+    const list = own(current.threads, thread) ?? [];
     // Never earlier than the message before it, so ts order is append order.
     const now = new Date().toISOString();
     const last = list[list.length - 1]?.ts;
@@ -267,10 +395,48 @@ export async function postBoardMessage(
       text,
       ts: last && last > now ? last : now,
     };
-    return { ...current, threads: { ...current.threads, [thread]: [...list, message] } };
+    // The user posting in a thread answers a reminder that came due on it.
+    const due = input.author === 'user' && own(current.reminders, thread);
+    const reminders = due && reminderIsDue(due) ? withoutKey(current.reminders, thread) : current.reminders;
+    return { ...current, threads: { ...current.threads, [thread]: [...list, message] }, reminders };
   });
   emitChanged({ taskId, kind: 'thread', thread, version: next.version });
   return message!;
+}
+
+/**
+ * Remove one thread message and return it. A human may delete any message; a
+ * session only its own (`author` equal to its `task:<id>`). A thread left empty
+ * is dropped.
+ */
+export async function deleteBoardMessage(
+  taskId: string,
+  thread: string,
+  messageId: string,
+  opts: { by: BoardWriter },
+): Promise<BoardMessage> {
+  checkItemId(thread, 'thread');
+  if (typeof messageId !== 'string' || !MESSAGE_ID_RE.test(messageId)) {
+    throw new BoardError('bad_id', 400, { message: messageId }, 'Invalid message id (bm- and hex digits, as board_get lists them)');
+  }
+  let removed: BoardMessage | undefined;
+  const next = await updateBoard(taskId, (raw) => {
+    const current = requireBoard(raw);
+    const list = current.threads[thread] ?? [];
+    const index = list.findIndex((m) => m.id === messageId);
+    if (index === -1) throw new BoardError('message_not_found', 404, { thread, id: messageId });
+    if (opts.by !== 'human' && list[index].author !== opts.by) {
+      throw new BoardError('not_author', 403, { thread, id: messageId });
+    }
+    removed = list[index];
+    const threads = { ...current.threads };
+    const rest = list.filter((_, i) => i !== index);
+    if (rest.length) threads[thread] = rest;
+    else delete threads[thread];
+    return { ...current, threads };
+  });
+  emitChanged({ taskId, kind: 'thread', thread, version: next.version });
+  return removed!;
 }
 
 /** Replace one mark; a mark with neither a state nor a note is removed (returns null). */
@@ -349,62 +515,4 @@ export function stopBoardStore(): void {
 /** Test seam: where a task's board lives. */
 export function _boardFilePath(taskId: string): string {
   return boardFile(taskId);
-}
-
-// ── Reading the html: the Walnut components a board names ──
-
-/** One start tag's attribute text; quoted values may contain `>`. */
-function startTags(html: string, tag: string): string[] {
-  const re = new RegExp(`<${tag}(?=[\\s/>])((?:[^>"']|"[^"]*"|'[^']*')*)>`, 'gi');
-  const out: string[] = [];
-  for (let m = re.exec(html); m; m = re.exec(html)) out.push(m[1]);
-  return out;
-}
-
-function decodeEntities(s: string): string {
-  return s.replace(/&(amp|lt|gt|quot|apos|#39|#34);/g, (_, e: string) => (
-    { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'", '#34': '"' } as Record<string, string>
-  )[e]);
-}
-
-/**
- * A start tag's attributes, tokenized left to right the way a browser reads
- * them: a quoted value is consumed whole, so `title="see id='x'"` never answers
- * for `id`, and `data-id` is its own name. The first of a duplicate wins.
- */
-function parseAttrs(attrs: string): Map<string, string> {
-  const out = new Map<string, string>();
-  const re = /([^\s"'=<>\/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
-  for (let m = re.exec(attrs); m; m = re.exec(attrs)) {
-    const name = m[1].toLowerCase();
-    if (!out.has(name)) out.set(name, decodeEntities(m[2] ?? m[3] ?? m[4] ?? '').trim());
-  }
-  return out;
-}
-
-/** Task ids named by `<walnut-task id="…">`, in document order, each once. */
-export function extractTaskRefs(html: string): string[] {
-  const seen = new Set<string>();
-  for (const attrs of startTags(html, 'walnut-task')) {
-    const id = parseAttrs(attrs).get('id');
-    if (id) seen.add(id);
-  }
-  return [...seen];
-}
-
-export interface BoardThreadMeta {
-  title?: string;
-  task?: string;
-}
-
-/** The `title` / `task` of the `<walnut-thread id="threadId">` tag, or null when the html has none. */
-export function threadMeta(html: string, threadId: string): BoardThreadMeta | null {
-  for (const attrs of startTags(html, 'walnut-thread')) {
-    const parsed = parseAttrs(attrs);
-    if (parsed.get('id') !== threadId) continue;
-    const title = parsed.get('title');
-    const task = parsed.get('task');
-    return { ...(title ? { title } : {}), ...(task ? { task } : {}) };
-  }
-  return null;
 }

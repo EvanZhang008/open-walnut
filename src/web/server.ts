@@ -1477,10 +1477,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startWaitUntilWatch()
   }
 
-  // ── Task Boards: a deleted task takes its board with it (primary only).
+  // ── Task Boards: a deleted task takes its board with it, and the reminders
+  // clock (src/core/boards/board-reminders.ts) runs; both primary only.
   {
     const { initBoardStore } = await import('../core/boards/board-store.js')
     initBoardStore()
+    const { startBoardReminders } = await import('../core/boards/board-reminders.js')
+    startBoardReminders()
   }
 
   // ── walnut-trigger seams (both directions, registered once) ──
@@ -5472,6 +5475,10 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('host-status-defs')
   bus.unsubscribe('task-wait-until') // WAIT_UNTIL_SUBSCRIBER, core/task-wait-until.ts
   bus.unsubscribe('board-store') // BOARD_SUBSCRIBER, core/boards/board-store.ts
+  try {
+    const { stopBoardReminders } = await import('../core/boards/board-reminders.js')
+    stopBoardReminders() // its subscriber and its timer
+  } catch { /* import failed (partial dist): nothing started to stop */ }
   if (routineWakeHandle) {
     routineWakeHandle.stop()
     routineWakeHandle = null

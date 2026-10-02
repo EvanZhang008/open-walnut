@@ -1211,9 +1211,17 @@ export interface HealthSleepReadyEvent {
  */
 export interface BoardChangedEvent {
   taskId: string;
-  kind: 'html' | 'thread' | 'mark' | 'deleted';
+  kind: 'html' | 'thread' | 'mark' | 'project' | 'check' | 'choice' | 'reminder' | 'seen' | 'deleted';
   thread?: string;
   mark?: string;
+  /** A board project: one area of this board, not a Walnut project. */
+  project?: string;
+  check?: string;
+  choice?: string;
+  /** The reminder's target (a choice or thread id). */
+  reminder?: string;
+  /** The section the user marked seen. */
+  section?: string;
   version: number;
 }
 

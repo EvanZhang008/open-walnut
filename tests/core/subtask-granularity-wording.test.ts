@@ -91,6 +91,34 @@ describe('walnut-board skill', () => {
 
   it('ships with the ops registered', () => {
     const names = listOps().map((op) => op.name)
-    for (const op of ['board_get', 'board_set', 'board_edit', 'board_post']) expect(names).toContain(op)
+    for (const op of ['board_get', 'board_set', 'board_edit', 'board_post', 'board_project_set', 'board_remind']) expect(names).toContain(op)
+  })
+
+  it('round two: projects, points, choices, reminders, and one board per team', () => {
+    for (const op of ['board_project_set', 'board_remind', 'board_post_delete']) expect(BOARD).toContain(`\`${op}`)
+    for (const el of ['walnut-project', 'walnut-check', 'walnut-choice']) expect(BOARD).toContain(`<${el}`)
+    expect(BOARD).toContain('data-project="')
+    expect(BOARD).toContain('data-choice="')
+    // A board project is an area of the board, never a Walnut project.
+    expect(BOARD).toMatch(/A \*\*board project\*\* is one area on this board: one cause or one ticket\. It is NOT a\s+Walnut project/)
+    expect(BOARD).toMatch(/\*\*A team shares one board\*\*: the nearest ancestor that has a board, else the root\s+leader's/)
+    expect(BOARD).not.toMatch(/A worker updating its leader's board passes the leader's id/)
+  })
+
+  it('carries the user\'s board-writing rules', () => {
+    expect(BOARD).toMatch(/Ask the user as little as possible/)
+    expect(BOARD).toMatch(/Never ask the user to resolve or close something whose work is not finished/)
+    expect(BOARD).toMatch(/Every ask and every point explains itself in plain words/)
+    expect(BOARD).toMatch(/Every reference is a link with a plain label/)
+    expect(BOARD).toMatch(/never a bundle\. There is no "all new items" and no "other" project/)
+    expect(BOARD).toMatch(/An overview first/)
+    expect(BOARD).toMatch(/No side-by-side grids unless the content really is a comparison/)
+    expect(BOARD).toMatch(/Every fact, cause, fix and to-do is its own `<walnut-check>` point/)
+    expect(BOARD).toMatch(/Project status lives in Walnut/)
+    expect(BOARD).toMatch(/One message per post: never paste a history as one blob/)
+    expect(BOARD).toMatch(/When the user says "later", set a reminder/)
+    expect(BOARD).toMatch(/Put the user's mark in the overview row or at the bottom of a section/)
+    expect(BOARD).toMatch(/A section you changed shows the user a red dot on its own/)
+    expect(BOARD).not.toMatch(/[\u2013\u2014]/)
   })
 })

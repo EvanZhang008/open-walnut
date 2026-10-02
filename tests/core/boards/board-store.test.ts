@@ -19,6 +19,7 @@ import {
   _boardFilePath,
   applyBoardEdits,
   deleteBoard,
+  deleteBoardMessage,
   editBoardHtml,
   extractTaskRefs,
   getBoard,
@@ -227,6 +228,81 @@ describe('threads', () => {
     expect(await rawFile()).toBeNull()
     await setBoardHtml(T, '<p/>', { by: 'human' })
     expect(await boardError(() => postBoardMessage(T, 't', { author: 'user', text: '   ' }))).toMatchObject({ code: 'bad_request' })
+  })
+})
+
+describe('deleting a post', () => {
+  async function seed() {
+    await setBoardHtml(T, '<p/>', { by: 'human' })
+    return {
+      user: await postBoardMessage(T, 'rc-1', { author: 'user', text: 'Why?' }),
+      leader: await postBoardMessage(T, 'rc-1', { author: 'task:leader-1', text: 'Because.' }),
+      worker: await postBoardMessage(T, 'rc-1', { author: 'task:worker-1', text: 'Fixed.' }),
+    }
+  }
+
+  it('a human deletes any message, the user\'s own or a session\'s, and gets it back', async () => {
+    const m = await seed()
+    expect(await deleteBoardMessage(T, 'rc-1', m.leader.id, { by: 'human' })).toEqual(m.leader)
+    expect(await deleteBoardMessage(T, 'rc-1', m.user.id, { by: 'human' })).toEqual(m.user)
+    expect((await getBoard(T))!.threads['rc-1']).toEqual([m.worker])
+  })
+
+  it('a session deletes its own post', async () => {
+    const m = await seed()
+    expect(await deleteBoardMessage(T, 'rc-1', m.worker.id, { by: 'task:worker-1' })).toEqual(m.worker)
+    expect((await getBoard(T))!.threads['rc-1'].map((x) => x.id)).toEqual([m.user.id, m.leader.id])
+  })
+
+  it('a session deleting someone else\'s post (the user\'s, its leader\'s) is 403 not_author and writes nothing', async () => {
+    const m = await seed()
+    const before = await rawFile()
+    events = []
+    for (const id of [m.user.id, m.leader.id]) {
+      const err = await boardError(() => deleteBoardMessage(T, 'rc-1', id, { by: 'task:worker-1' }))
+      expect(err).toMatchObject({ code: 'not_author', statusCode: 403, details: { thread: 'rc-1', id } })
+      expect(err.message).toBe('A session may delete only its own posts')
+    }
+    expect(await rawFile()).toBe(before)
+    expect(events).toEqual([])
+  })
+
+  it('unknown board, thread or message is 404; a malformed id is 400', async () => {
+    expect(await boardError(() => deleteBoardMessage(T, 'rc-1', 'bm-000000000000', { by: 'human' })))
+      .toMatchObject({ code: 'no_board', statusCode: 404 })
+    const m = await seed()
+    expect(await boardError(() => deleteBoardMessage(T, 'other', m.user.id, { by: 'human' })))
+      .toMatchObject({ code: 'message_not_found', statusCode: 404 })
+    expect(await boardError(() => deleteBoardMessage(T, 'rc-1', 'bm-000000000000', { by: 'human' })))
+      .toMatchObject({ code: 'message_not_found', statusCode: 404 })
+    for (const id of ['', 'bm-', 'bm-XYZ', 'x-0b7d4261eca6', '../bm-0b7d4261eca6', `bm-${'a'.repeat(33)}`]) {
+      expect(await boardError(() => deleteBoardMessage(T, 'rc-1', id, { by: 'human' })), id)
+        .toMatchObject({ code: 'bad_id', statusCode: 400 })
+    }
+    expect(await boardError(() => deleteBoardMessage(T, '-bad', m.user.id, { by: 'human' })))
+      .toMatchObject({ code: 'bad_id', statusCode: 400 })
+    expect((await getBoard(T))!.threads['rc-1']).toHaveLength(3)
+  })
+
+  it('the last message takes its thread key with it; other threads, the html version and marks stay', async () => {
+    await setBoardHtml(T, '<p/>', { by: 'human' })
+    const only = await postBoardMessage(T, 'solo', { author: 'task:leader-1', text: 'placeholder' })
+    await postBoardMessage(T, 'kept', { author: 'user', text: 'stays' })
+    await setBoardMark(T, 'sec-1', { state: 'revisit' })
+    await deleteBoardMessage(T, 'solo', only.id, { by: 'task:leader-1' })
+    const board = (await getBoard(T))!
+    expect(Object.keys(board.threads)).toEqual(['kept'])
+    expect(board.version).toBe(1)
+    expect(board.marks).toHaveProperty('sec-1')
+  })
+
+  it('each delete emits board:changed kind thread', async () => {
+    const m = await seed()
+    events = []
+    await deleteBoardMessage(T, 'rc-1', m.user.id, { by: 'human' })
+    expect(events.map((e) => [e.name, e.destinations, e.data])).toEqual([
+      [EventNames.BOARD_CHANGED, ['web-ui'], { taskId: T, kind: 'thread', thread: 'rc-1', version: 1 }],
+    ])
   })
 })
 

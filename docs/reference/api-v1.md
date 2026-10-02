@@ -848,17 +848,46 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 
 One HTML document per task, written by the task's session or any task in its
 subtree through the `walnut` CLI (`board_get` / `board_set` / `board_edit` /
-`board_post`, skill `walnut-board`), read by the web console's Board tab. Walnut
-keeps the chat threads and the user's marks beside the html. Reads work
+`board_post` / `board_post_delete` / `board_project_set` / `board_remind`, skill
+`walnut-board`), read by the web console's Board tab. Walnut keeps beside the
+html the chat threads, the user's marks, the board's projects, the user's read
+ticks and answers, reminders, and the sections the user has seen. Reads work
 everywhere; writes are primary-only (`501 not_supported_cloud` on a replica).
-A session caller outside the board task's subtree gets `403 not_in_team`.
+A session caller outside the board task's subtree gets `403 not_in_team`. Item
+ids (thread, mark, project, check, choice, reminder target, section) are
+`[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` (`400 bad_id` otherwise).
 
-- `GET /api/v1/tasks/:id/board` → `200 { "board": null | { "html", "version",
-  "updated_at", "updated_by" }, "threads": { [thread]: Message[] },
-  "marks": { [id]: Mark }, "refs": { "id", "title", "phase", "status" }[] }`.
-  `refs` are the tasks the html names in `<walnut-task id="…">`.
+A **board project** is one area of this board (one cause, one ticket); it is
+not a Walnut project (a task's `project` field).
+
+A team shares ONE board: the board owner of a task is the task itself when it
+has a board, else its nearest ancestor (`parent_task_id` chain) that has one,
+else the root of its tree (a broken chain with no board answers the task
+itself). The `board_*` ops default to the caller's team board.
+
+- `GET /api/v1/tasks/:id/board[?team=1]` → `200 { "board_task_id",
+  "board_task_title", "board": null | { "html", "version", "updated_at",
+  "updated_by" }, "threads": { [thread]: Message[] }, "marks": { [id]: Mark },
+  "projects": { [id]: Project }, "checks": { [id]: CheckState }, "choices": {
+  [id]: Choice }, "reminders": { [target]: Reminder }, "section_seen": { [id]:
+  Seen }, "refs": { "ref", "id", "title", "phase", "status" }[] }`. Without
+  `team` the board is `:id`'s own; with `team=1` it is the team board owner's,
+  and `board_task_id` / `board_task_title` name it (write to that id).
+  `refs` are the tasks the html names in `<walnut-task id="…">` plus the tasks
+  the projects hold.
   `Message = { id, author: "user" | "task:<id>", text, ts }`,
-  `Mark = { state?, note?, updated_at }`.
+  `Mark = { state?, note?, updated_at }`,
+  `Project = { title?, status?: "decide" | "wip" | "wait" | "done", tasks?:
+  fullTaskId[], updated_at, updated_by }`,
+  `CheckState = { hash, read, read_at?, changed? }` for EVERY
+  `<walnut-check id>` on the page now (`hash` is the current one; `read` = the
+  user read this exact version; `changed: true` = read once, edited since),
+  `Choice = { option, label?, at }`,
+  `Reminder = { at, set_at, set_by, note?, fired_at?, delivered_at?, attempts? }`
+  (due when `fired_at` is set or `at` has passed),
+  `Seen = { hash, at }`.
+- `GET /api/v1/tasks/:id/board/owner` → `200 { "task_id", "title", "self",
+  "has_board" }`: the team board owner, by the rule above.
 - `PUT /api/v1/tasks/:id/board { "html", "version"? }` → `200 { "board" }`;
   a stale `version` → `409 board_version_conflict { version }`; html over 1 MiB
   → `413 board_too_large`.
@@ -872,13 +901,64 @@ A session caller outside the board task's subtree gets `403 not_in_team`.
   session is woken, a COMPLETE task reopens); `delivery.state` is `queued`,
   `deferred` (parked behind a permission prompt) or `stored` (no live session;
   the session reads it with `board_get`). With a caller sid the author is
-  `task:<callerTaskId>` and the message is stored only.
+  `task:<callerTaskId>` and the message is stored only. The text renders as
+  light markdown on the Board tab.
+- `DELETE /api/v1/tasks/:id/board/threads/:thread/messages/:message` → `200 {
+  "message" }` (the removed one; a thread left empty disappears from `threads`).
+  Without a caller sid (a human) any message may go; a session may delete only
+  a message whose author is its own `task:<id>` (`403 not_author`). Unknown
+  thread or message → `404 message_not_found`; no board → `404 no_board`; a
+  malformed thread or message id → `400 bad_id`. Emits `board:changed` kind
+  `thread`.
 - `PUT /api/v1/tasks/:id/board/marks/:mark { "state"?, "note"? }` → `200 { "mark" }`
   (both empty removes the mark → `"mark": null`).
+- `PUT /api/v1/tasks/:id/board/projects/:project { "title"?, "status"?,
+  "tasks"?, "delete"? }` → `200 { "project" }`. Any team member. A partial
+  update: an absent field keeps its value, `""` (or `null`) clears it; `tasks`
+  is a full replacement whose entries resolve to full task ids (unknown or
+  ambiguous → `400 bad_task { task }`); a bad status → `400 bad_status`; a
+  project left with no title, status and tasks, or `delete: true`, is removed
+  (`"project": null`). Caps: 200 projects, 200 tasks each, a 200-char title
+  (`400 too_many` / `400 bad_request`). Emits `board:changed` kind `project`.
+- `PUT /api/v1/tasks/:id/board/checks/:check { "read": bool, "hash"? }` → `200
+  { "check": null | { "hash", "read_at" }, "hash" }`. Humans only (any caller
+  sid → `403 human_only`). `read: true` needs `hash` equal to the point's
+  CURRENT hash, recomputed from the html under the write lock; otherwise `409
+  check_changed { check, hash }` with the current one. A check id not on the
+  page → `404 check_not_found`. `read: false` removes the tick. The server is the
+  only place a hash is computed (sha1, first 12 hex, of the element's inner html
+  with whitespace runs collapsed), so an edit of the point brings it back unread.
+  At 2000 ticks, ticks on points no longer on the page are dropped first. Emits
+  kind `check`.
+- `PUT /api/v1/tasks/:id/board/choices/:choice { "option" }` → `200 { "choice",
+  "delivery" }`. Humans only. `options="key:Label,key:Label"` on the
+  `<walnut-choice>` element (the format of walnut-mark's `states`); an option
+  not among them → `400 bad_option { options }`; a choice id not on the page →
+  `404 choice_not_found`. A new answer is delivered to the board task's session
+  like a human thread message (`delivery` as for a thread post); the same option
+  again → `delivery: { state: "skipped", reason: "unchanged" }` (no second
+  delivery); `option: ""` clears → `{ "choice": null, "delivery": { state:
+  "skipped", reason: "cleared" } }`. Answering clears a DUE reminder on that
+  choice in the same write. Emits kind `choice`.
+- `PUT /api/v1/tasks/:id/board/reminders/:target { "at": ISO-8601 | null,
+  "note"? }` → `200 { "reminder" }`. Any team member. One reminder per target (a
+  `<walnut-choice>` or `<walnut-thread>` id; otherwise `404 target_not_found`);
+  a new one replaces it; `null` (or `""`) clears, also for a target no longer on
+  the page. `at` must be in the future and at most 90 days out (`400 bad_time`).
+  A server clock (primary only) fires it: sets `fired_at`, emits kind
+  `reminder`, and delivers a message to the board task's session; a failed
+  delivery is retried 5 minutes apart, 3 attempts in all. The user's post in
+  that thread clears a DUE reminder on it in the same write. Emits kind
+  `reminder`.
+- `PUT /api/v1/tasks/:id/board/seen/:section { "hash" }` → `200 { "seen": null |
+  { "hash", "at" } }`. Humans only. The frame hashes the section's text; the
+  server only stores it (`""` forgets it). At most 500 kept; the oldest goes
+  first. Emits kind `seen`.
 - `DELETE /api/v1/tasks/:id/board` → `204` (humans only; `403 human_only`).
 - Live: the console's WebSocket carries `board:changed { taskId, kind: "html" |
-  "thread" | "mark" | "deleted", thread?, mark?, version }` with `taskId` at the
-  top level.
+  "thread" | "mark" | "project" | "check" | "choice" | "reminder" | "seen" |
+  "deleted", thread?, mark?, project?, check?, choice?, reminder?, section?,
+  version }` with `taskId` at the top level.
 
 ### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus
 

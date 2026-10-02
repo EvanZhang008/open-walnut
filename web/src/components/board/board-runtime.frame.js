@@ -1,14 +1,18 @@
 /*
- * Board runtime, part 1 of 2 (the core): runs INSIDE the sandboxed board frame.
- * TaskBoardPane.tsx injects it, followed by board-elements.frame.js, at the top
- * of the frame's <head>. Plain ES2017, no imports: both files are loaded as
- * strings (`?raw`) and never run in the app's own document.
+ * Board runtime, part 1 of 5 (the core): runs INSIDE the sandboxed board frame.
+ * TaskBoardPane.tsx injects it, followed by board-markdown.frame.js (the message
+ * renderer, `kit.richText`), board-elements.frame.js, board-items.frame.js and
+ * board-sections.frame.js, at the top of the frame's <head>. Plain ES2017, no
+ * imports: all five are loaded as strings (`?raw`) and never run in the app's
+ * own document.
  *
  * The frame has an opaque origin (sandbox="allow-scripts", no allow-same-origin),
- * so everything goes through postMessage: the host posts `wn-board:data`
- * (refs, threads, marks, seen, drafts) and acks; the frame posts requests up.
- * This part owns the state, the bridge, links, scroll and the shared helpers,
- * and hands them to the elements as `window.__wnBoardKit`.
+ * so everything goes through postMessage: the host posts `wn-board:data` (refs,
+ * threads, marks, seen, projects, checks, choices, reminders,
+ * section_seen, composing) and acks; the frame posts requests up. This part owns the state,
+ * the bridge, links, scroll, the project statuses and the shared helpers, and
+ * hands them to the other parts as `window.__wnBoardKit` (the last part takes it
+ * off window before any author script runs).
  */
 (function () {
   'use strict';
@@ -23,16 +27,25 @@
   var post = window.parent.postMessage.bind(window.parent);
   if (document.currentScript) document.currentScript.remove();
 
-  var state = { boardTaskId: '', refs: {}, threads: {}, marks: {}, seen: {}, drafts: {} };
-  var flags = { hasData: false, filter: '' };
+  var state = {
+    boardTaskId: '', refs: {}, threads: {}, marks: {}, seen: {},
+    projects: {}, checks: {}, choices: {}, reminders: {}, section_seen: {},
+  };
+  // composing: the thread the host's docked composer replies in ('' = none).
+  var flags = { hasData: false, filter: '', composing: '' };
+  // Other host messages (the docked composer's sending / sent / send-failed), by type.
+  var onHost = {};
   var live = new Set();
   var deferred = new Set();
   var acks = {};
   var counter = { n: 0 };
 
   var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  var URL_RE = /https?:\/\/[^\s<>"']+/g;
   var ACK_TIMEOUT_MS = 30000;
+  // A section's status words, shared by <walnut-strip> and <walnut-project>.
+  var DEFAULT_LABELS = 'decide:Needs you,wip:In progress,wait:Waiting on others,done:Done';
+  // setTimeout's own ceiling is ~24.8 days; a farther reminder is re-armed on the way.
+  var MAX_TIMER_MS = 6 * 3600 * 1000;
 
   function send(msg) { msg.nonce = NONCE; post(msg, '*'); }
   /** A real user gesture, never a synthetic event an author script dispatched. */
@@ -57,22 +70,6 @@
   }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
-
-  /** Escaped text, http(s) URLs as links, newlines as <br>. */
-  function richText(text) {
-    var src = String(text || '');
-    var out = '';
-    var last = 0;
-    var m;
-    URL_RE.lastIndex = 0;
-    while ((m = URL_RE.exec(src))) {
-      var url = m[0].replace(/[.,;:!?)\]}]+$/, '');
-      out += esc(src.slice(last, m.index)) + '<a class="wn-link" href="' + esc(url) + '">' + esc(url) + '</a>';
-      last = m.index + url.length;
-      URL_RE.lastIndex = last;
-    }
-    return (out + esc(src.slice(last))).replace(/\n/g, '<br>');
-  }
 
   function pad(n) { return n < 10 ? '0' + n : String(n); }
   function hhmm(d) { return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
@@ -139,6 +136,13 @@
     state.threads[thread] = list.concat([message]);
   }
 
+  function removeMessage(thread, id) {
+    var list = state.threads[thread];
+    if (!list) return;
+    var rest = list.filter(function (m) { return m.id !== id; });
+    if (rest.length) state.threads[thread] = rest; else delete state.threads[thread];
+  }
+
   /** innerHTML only when it changed: an unchanged re-render keeps focus and selection. */
   function setHtml(el, html) {
     if (el.wnHtml === html) return;
@@ -161,6 +165,41 @@
     return out;
   }
 
+  function choiceAnswered(id) { var c = id ? state.choices[id] : null; return !!(c && c.option); }
+  /**
+   * A section's status for counting and filtering. One that "needs you" only
+   * for choices the user has answered (`data-choice="id"` on it, or every
+   * <walnut-choice> inside) no longer does: it counts as 'answered' until the
+   * leader moves it on.
+   */
+  function sectionStatus(s) {
+    var status = s.getAttribute('data-status') || '';
+    if (status !== 'decide') return status;
+    if (s.hasAttribute('data-choice') && choiceAnswered(s.getAttribute('data-choice'))) return 'answered';
+    var choices = s.querySelectorAll('walnut-choice[id]');
+    if (!choices.length) return status;
+    for (var i = 0; i < choices.length; i++) if (!choiceAnswered(choices[i].getAttribute('id'))) return status;
+    return 'answered';
+  }
+
+  /**
+   * The statuses <walnut-strip> counts: a project ONCE however many elements
+   * carry its `data-project` (a section and an overview row), answered when any
+   * of them is; every other top-level `[data-status]` section as itself.
+   */
+  function countedStatuses() {
+    var out = [];
+    var at = {};
+    topSections().forEach(function (s) {
+      var id = s.getAttribute('data-project') || '';
+      var status = sectionStatus(s);
+      if (!id) { out.push(status); return; }
+      if (!Object.prototype.hasOwnProperty.call(at, id)) { at[id] = out.length; out.push(status); return; }
+      if (status === 'answered') out[at[id]] = 'answered';
+    });
+    return out;
+  }
+
   /** The page's threads, one per id. */
   function threadEls() {
     var seenIds = {};
@@ -173,17 +212,99 @@
     return out;
   }
 
+  function cssId(id) { return window.CSS && CSS.escape ? CSS.escape(id) : String(id).replace(/["\\]/g, '\\$&'); }
+
+  /**
+   * Walnut's project status onto every `[data-project]` element, so the
+   * strip, the filter and the board's own CSS follow it. The author's value is
+   * kept aside and comes back when Walnut has no status for that project.
+   */
+  function applyProjects() {
+    var all = document.querySelectorAll('[data-project]');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      var cat = state.projects[el.getAttribute('data-project') || ''];
+      var status = cat && typeof cat.status === 'string' ? cat.status : '';
+      if (status) {
+        if (!el.hasAttribute('data-wn-author-status')) el.setAttribute('data-wn-author-status', el.getAttribute('data-status') || '');
+        if (el.getAttribute('data-status') !== status) el.setAttribute('data-status', status);
+      } else if (el.hasAttribute('data-wn-author-status')) {
+        var authored = el.getAttribute('data-wn-author-status');
+        el.removeAttribute('data-wn-author-status');
+        if (authored) el.setAttribute('data-status', authored); else el.removeAttribute('data-status');
+      }
+    }
+  }
+
+  /** A project's status: Walnut's, else the author's on its section. */
+  function projectStatus(id) {
+    var cat = state.projects[id];
+    if (cat && cat.status) return String(cat.status);
+    var section = id ? document.querySelector('[data-project="' + cssId(id) + '"]') : null;
+    return section ? section.getAttribute('data-wn-author-status') || section.getAttribute('data-status') || '' : '';
+  }
+
+  // ── Reminders (on a <walnut-choice> or a <walnut-thread>) ──
+
+  function reminderOf(target) {
+    var r = target ? state.reminders[target] : null;
+    return r && typeof r.at === 'string' ? r : null;
+  }
+  /** Due: Walnut already told the leader, or its time has come (board-items-model.ts reminderDue). */
+  function reminderDue(r) {
+    if (!r) return false;
+    if (r.fired_at) return true;
+    var at = Date.parse(r.at);
+    return !isNaN(at) && at <= Date.now();
+  }
+  /** The page's choices and threads, one per id, in document order. */
+  function reminderTargets() {
+    var seenIds = {};
+    var out = [];
+    var all = document.querySelectorAll('walnut-choice[id], walnut-thread[id]');
+    for (var i = 0; i < all.length; i++) {
+      var id = all[i].getAttribute('id') || '';
+      if (id && !seenIds[id]) { seenIds[id] = true; out.push(all[i]); }
+    }
+    return out;
+  }
+  function dueTargets() {
+    return reminderTargets().filter(function (el) { return reminderDue(reminderOf(el.getAttribute('id'))); });
+  }
+  /** One timer for the nearest pending reminder: the page turns it "due" on time, server or not. */
+  var dueTimer = null;
+  function scheduleDue() {
+    clearTimeout(dueTimer);
+    dueTimer = null;
+    var next = Infinity;
+    Object.keys(state.reminders).forEach(function (k) {
+      var r = state.reminders[k];
+      if (!r || r.fired_at) return;
+      var at = Date.parse(r.at);
+      if (!isNaN(at) && at > Date.now() && at < next) next = at;
+    });
+    if (next === Infinity) return;
+    dueTimer = setTimeout(function () { dueTimer = null; renderAll(); scheduleDue(); },
+      Math.min(MAX_TIMER_MS, Math.max(0, next - Date.now()) + 50));
+  }
+
   /** Show only sections of status `f` ('' = all). Only what this hid is unhidden. */
-  function applyFilter(f) {
+  function applyFilter(f, refresh) {
     flags.filter = f;
     topSections().forEach(function (s) {
-      var hide = !!f && s.getAttribute('data-status') !== f;
+      var hide = !!f && sectionStatus(s) !== f;
       if (hide && !s.hidden) { s.hidden = true; s.setAttribute('data-wn-hidden', ''); }
       if (!hide && s.hasAttribute('data-wn-hidden')) { s.hidden = false; s.removeAttribute('data-wn-hidden'); }
-      if (f && !hide && s.tagName === 'DETAILS') s.open = true;
+      // A user's pick opens what it shows; a refresh (new data) leaves open and closed alone.
+      if (f && !hide && !refresh && s.tagName === 'DETAILS') s.open = true;
     });
     renderAll();
   }
+
+  // Page-level passes (board-sections.frame.js: the "updated" dots) that run on
+  // new data and when the page's sections change, before the elements render.
+  var watchers = [];
+  function runWatchers() { watchers.forEach(function (w) { w(); }); }
 
   /** Shared lifecycle: a component connected while the document still parses
    *  sets up at DOMContentLoaded, once its parsed children are in place. */
@@ -202,13 +323,20 @@
     wnRender() {}
   }
 
+  // `richText` (the message renderer) is added by board-markdown.frame.js, `Remind` by board-items.frame.js.
   window.__wnBoardKit = {
-    state: state, flags: flags, live: live, Base: Base,
-    send: send, request: request, trusted: trusted, nextId: nextId, esc: esc, richText: richText, hhmm: hhmm, when: when,
+    state: state, flags: flags, live: live, Base: Base, DEFAULT_LABELS: DEFAULT_LABELS,
+    send: send, request: request, trusted: trusted, nextId: nextId, esc: esc, hhmm: hhmm, when: when,
     parsePairs: parsePairs, whoOf: whoOf, unreadIn: unreadIn, markSeen: markSeen, addMessage: addMessage,
-    renderAll: renderAll, setHtml: setHtml, openAncestors: openAncestors, topSections: topSections,
-    threadEls: threadEls, applyFilter: applyFilter,
+    removeMessage: removeMessage, renderAll: renderAll, setHtml: setHtml, openAncestors: openAncestors, topSections: topSections,
+    threadEls: threadEls, applyFilter: applyFilter, projectStatus: projectStatus, sectionStatus: sectionStatus,
+    countedStatuses: countedStatuses,
+    choiceAnswered: choiceAnswered, cssId: cssId, watchers: watchers, onHost: onHost,
+    reminderOf: reminderOf, reminderDue: reminderDue, reminderTargets: reminderTargets, dueTargets: dueTargets,
+    scheduleDue: scheduleDue,
   };
+
+  function obj(v) { return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; }
 
   // ── Host messages ──
   window.addEventListener('message', function (e) {
@@ -217,18 +345,29 @@
     if (!d || typeof d !== 'object') return;
     if (d.t === 'wn-board:data') {
       state.boardTaskId = String(d.boardTaskId || '');
-      state.refs = d.refs || {};
-      state.threads = d.threads || {};
-      state.marks = d.marks || {};
-      state.seen = d.seen || {};
-      state.drafts = d.drafts || {};
+      state.refs = obj(d.refs);
+      state.threads = obj(d.threads);
+      state.marks = obj(d.marks);
+      state.seen = obj(d.seen);
+      state.projects = obj(d.projects);
+      state.checks = obj(d.checks);
+      state.choices = obj(d.choices);
+      state.reminders = obj(d.reminders);
+      state.section_seen = obj(d.section_seen);
+      flags.composing = typeof d.composing === 'string' ? d.composing : '';
       flags.hasData = true;
-      renderAll();
+      applyProjects();
+      scheduleDue();
+      // A section that changed status under an active filter follows it (applyFilter renders all).
+      runWatchers();
+      if (flags.filter) applyFilter(flags.filter, true); else renderAll();
     } else if (d.t === 'wn-board:ack') {
       var cb = acks[d.reqId];
       if (cb) cb(d);
     } else if (d.t === 'wn-board:scroll' && typeof d.y === 'number') {
       window.scrollTo(0, d.y);
+    } else if (typeof d.t === 'string' && Object.prototype.hasOwnProperty.call(onHost, d.t)) {
+      onHost[d.t](d);
     }
   });
 
@@ -261,11 +400,13 @@
   }, { passive: true });
 
   // ── Recount the strip and the unread total when sections change ──
+  var COMPONENTS = 'walnut-strip, walnut-unread, walnut-task, walnut-thread, walnut-mark, walnut-project, walnut-check, walnut-choice';
   var recountTimer = null;
   function recount() {
     if (recountTimer) return;
     recountTimer = setTimeout(function () {
       recountTimer = null;
+      if (flags.hasData) runWatchers();
       live.forEach(function (el) { if (el.wnRecount) el.wnRender(); });
     }, 120);
   }
@@ -276,7 +417,7 @@
       for (var i = 0; i < records.length; i++) {
         var t = records[i].target;
         // The components' own re-renders are not section changes (and would loop).
-        if (t.nodeType !== 1 || !t.closest('walnut-strip, walnut-unread, walnut-task, walnut-thread, walnut-mark')) {
+        if (t.nodeType !== 1 || !t.closest(COMPONENTS)) {
           recount();
           return;
         }

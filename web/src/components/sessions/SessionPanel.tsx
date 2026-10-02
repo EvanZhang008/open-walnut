@@ -33,6 +33,7 @@ import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } 
 import { SessionDiffView } from './SessionDiffView';
 import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
+import { BoardTaskPeek, useBoardPeek } from '@/components/board/BoardTaskPeek';
 import { useSessionLetters } from '@/hooks/useSessionLetters';
 import {
   consumeSessionInboxLink, deepLinkFullscreenReassert, SESSION_INBOX_LINK_EVENT,
@@ -229,6 +230,14 @@ interface SessionPanelProps {
    */
   embedded?: boolean;
   /**
+   * Rendered inside another panel's chat column (a task opened from a Board,
+   * components/board/BoardTaskPeek.tsx). A nested column has no split and no
+   * fullscreen of its own: the view chips, expand and popout are hidden, a view
+   * request opens the task in its own column, a file opens in a new tab, and
+   * the × means Back (onClose).
+   */
+  inset?: boolean;
+  /**
    * Rendered at the start of the TITLE row, before the phase icon: the one spot
    * the host surface may put its own control (the Ask Walnut slot's ≡ session
    * switcher). The title row, not the chips row: the title ellipsizes to make
@@ -262,7 +271,7 @@ interface SessionPanelProps {
   }) => void;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, headerLeading, focusComposer, locked, onToggleLock, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, inset, headerLeading, focusComposer, locked, onToggleLock, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -910,6 +919,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     autoCollapsed.current = false;
     setChatCollapsed(collapsed);
   }, []);
+  // A task chip on the Board opens that task in the chat column, in place of this
+  // chat (which stays mounted under it). This panel's OWN task decides "back", not
+  // the board's: a worker's Board shows its leader's. Cleared when the Board view closes.
+  const revealChat = useCallback(() => collapseChat(false), [collapseChat]);
+  const boardPeek = useBoardPeek({ ownTaskId: session?.taskId, sessionId, active: activeView === 'board' && !inset, onReveal: revealChat });
+  const closeBoardPeek = useCallback(() => boardPeek.back('close'), [boardPeek.back]);
   // Opening a view decides the chat column's fate: below the split floor the Inbox
   // tab opens on the letter alone (the chat column has a 280px floor, and half a
   // letter is worse than one click on "show chat"); any other view clears a
@@ -934,6 +949,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // explorer's memory is scope-keyed, so the same file stays open and the tree
   // expands to it under the new root (that loss WAS the reported bug).
   const toggleView = useCallback((view: SessionSplitView) => {
+    if (inset) {
+      // A nested column has no split: a view (the kebab's Inbox / Code / Web) opens
+      // with the task in its own column, the Locate path.
+      const taskId = session?.taskId;
+      log.info('session-panel', 'inset view request opens the task', { sessionId, view, taskId: taskId ?? '' });
+      if (!taskId) return;
+      const locate = onLocateTask ?? onTaskClick;
+      if (locate) locate(taskId); else locateTaskOnHome(taskId, navigate, { sessionId });
+      return;
+    }
     const rerooting = view === 'files' && fileViewTarget !== null && activeView === 'files';
     setFileViewTarget(null);
     if (rerooting) return; // stay open, explorer re-roots to the session cwd
@@ -944,7 +969,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     traceInteraction(next ? `view-open:${next}` : `view-close:${view}`, { sessionId });
     setActiveView(next);
     if (next) { enterFullscreen(); applyOpenCollapse(next); } else { exitFullscreen(); collapseChat(false); }
-  }, [enterFullscreen, exitFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat]);
+  }, [enterFullscreen, exitFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat, inset, session?.taskId, sessionId, onLocateTask, onTaskClick, navigate]);
   // Keep-alive for the Code view: once opened, it stays MOUNTED (css-hidden)
   // for the panel's lifetime. Unmounting destroys the iframe, and remounting
   // reboots the whole VS Code workbench (seconds, worse over a tunnel) — the
@@ -978,10 +1003,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // an explicit "Open in Notes" button in the preview toolbar / right-click menu.
   const handleFileOpen = useCallback((path: string, line?: number, term?: string) => {
     traceInteraction('view-open:files-from-path', { sessionId });
+    // A nested column has no Files split: the file opens in a tab of its own (the
+    // preview's own "Open in new tab"), so the Board and this chat stay put.
+    if (inset) { openPopout('file', { path, host: session?.host, line }); return; }
     setFileViewTarget({ path, line, term });
     setActiveView('files');
     enterFullscreen();
-  }, [enterFullscreen]);
+  }, [enterFullscreen, inset, session?.host]);
 
   // A host:port service the session started (a dev server, a report page) opens
   // in the Web split view instead of a browser tab: remote ports come through an
@@ -1004,6 +1032,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // click something inside already handled keeps the browser's own behavior.
   const handleServiceLinkClick = useCallback((e: ReactMouseEvent) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    // An inset panel has no Web split, and a link in a task opened beside the
+    // Board is that task's (its host), never this panel's: both keep the browser's own.
+    if (inset || (e.target as HTMLElement).closest?.('.board-task-peek')) return;
     const anchor = (e.target as HTMLElement).closest?.('a[href]') as HTMLAnchorElement | null;
     if (!anchor || anchor.hasAttribute('data-native-link')) return;
     if (!consoleCanEmbedServices()) return;
@@ -1014,7 +1045,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     if (!url) return;
     e.preventDefault();
     openWebView(url);
-  }, [openWebView, session?.host, session?.hostname]);
+  }, [openWebView, session?.host, session?.hostname, inset]);
 
   // "Engine settings" row in the composer's "+" menu and the popover it opens;
   // ChatInput only renders the generic action row, this hook owns the feature.
@@ -1125,6 +1156,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // arrival idempotent instead of order-critical.
   const claimedInboxLink = useRef<{ sid: string; letterId?: string; at: number } | null>(null);
   useEffect(() => {
+    // An inset panel has no Inbox tab: the link is the session's own column's to claim.
+    if (inset) return;
     const remembered = claimedInboxLink.current?.sid === sessionId
       ? claimedInboxLink.current : null;
     const claimed = consumeSessionInboxLink(sessionId) ?? remembered;
@@ -1145,7 +1178,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     };
     window.addEventListener(SESSION_INBOX_LINK_EVENT, onLink);
     return () => window.removeEventListener(SESSION_INBOX_LINK_EVENT, onLink);
-  }, [sessionId, openInboxTab]);
+  }, [sessionId, openInboxTab, inset]);
 
   // If the user exits fullscreen (ESC / backdrop, or the `fullscreen:yield` that
   // opening another column fires — useFullscreen.tsx) while a split view is open,
@@ -1672,7 +1705,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           view stays guttered at 1400px in this slide-out. */}
       <ThreadToastProvider panelRef={panelRef} composerRef={composerWrapRef}>
       <div
-        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread ? ' session-panel-unread' : ''}`}
+        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread ? ' session-panel-unread' : ''}${inset ? ' session-panel-inset' : ''}`}
         data-session-id={sessionId}
         ref={panelRef}
         // The panel the user last pointed into is "the current session" for
@@ -1813,37 +1846,42 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               sourceTitle={headerTitle}
               onOpenForkDraft={onOpenForkDraft}
             />
-            <button
-              className={`session-action-chip${activeView === 'changed' ? ' session-action-chip-active' : ''}`}
-              onClick={() => toggleView('changed')}
-              title="See the files this session changed — full-screen diff alongside the chat"
-            >
-              Changed
-            </button>
-            <button
-              className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
-              onClick={() => toggleView('files')}
-              title="Browse the session working directory — full-screen alongside the chat"
-            >
-              Files
-            </button>
-            {session?.taskId && (
-              <button
-                className={`session-action-chip${activeView === 'board' ? ' session-action-chip-active' : ''}`}
-                onClick={() => toggleView('board')}
-                title="The task's Board: the page its leader keeps, with a thread and a mark per section, beside the chat"
-                data-testid="session-board-chip"
-              >
-                Board
-              </button>
+            {/* The split views need the whole panel: an inset column has none. */}
+            {!inset && (
+              <>
+                <button
+                  className={`session-action-chip${activeView === 'changed' ? ' session-action-chip-active' : ''}`}
+                  onClick={() => toggleView('changed')}
+                  title="See the files this session changed, in a full-screen diff alongside the chat"
+                >
+                  Changed
+                </button>
+                <button
+                  className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
+                  onClick={() => toggleView('files')}
+                  title="Browse the session working directory, full-screen alongside the chat"
+                >
+                  Files
+                </button>
+                {session?.taskId && (
+                  <button
+                    className={`session-action-chip${activeView === 'board' ? ' session-action-chip-active' : ''}`}
+                    onClick={() => toggleView('board')}
+                    title="The task's Board: the page its leader keeps, with a thread and a mark per section, beside the chat"
+                    data-testid="session-board-chip"
+                  >
+                    Board
+                  </button>
+                )}
+                <button
+                  className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
+                  onClick={() => toggleView('terminal')}
+                  title="Open a terminal in the session working directory, full-screen alongside the chat"
+                >
+                  Terminal
+                </button>
+              </>
             )}
-            <button
-              className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
-              onClick={() => toggleView('terminal')}
-              title="Open a terminal in the session working directory — full-screen alongside the chat"
-            >
-              Terminal
-            </button>
             {activityAge && (
               <time className="session-panel-time" dateTime={session?.lastActiveAt} title={activityTimeTitle}>
                 {activityAge}
@@ -1884,22 +1922,27 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   {locked ? ICON_LOCK : ICON_UNLOCK}
                 </button>
               )}
-              <button
-                className="task-action-btn session-panel-popout"
-                onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
-                title="Open in new tab"
-                aria-label="Open session in new tab"
-              >
-                {ICON_NEW_TAB}
-              </button>
-              <button
-                className="task-action-btn session-panel-expand"
-                onClick={isFullscreen ? exitFullscreen : enterFullscreen}
-                title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
-                aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
-              >
-                {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
-              </button>
+              {/* Inset (a task opened from a Board): no popout or fullscreen of its own. */}
+              {!inset && (
+                <>
+                  <button
+                    className="task-action-btn session-panel-popout"
+                    onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
+                    title="Open in new tab"
+                    aria-label="Open session in new tab"
+                  >
+                    {ICON_NEW_TAB}
+                  </button>
+                  <button
+                    className="task-action-btn session-panel-expand"
+                    onClick={isFullscreen ? exitFullscreen : enterFullscreen}
+                    title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
+                    aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
+                  >
+                    {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
+                  </button>
+                </>
+              )}
               {/* In fullscreen the panel reads as an overlay, so its X dismisses the
                   overlay (same path as Escape / backdrop click) and never destroys
                   the column underneath. Closing the column needs the normal view. */}
@@ -1907,8 +1950,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 <button
                   className="task-action-btn session-panel-close"
                   onClick={isFullscreen ? exitFullscreen : () => closePanel(sessionId)}
-                  title={isFullscreen ? 'Exit full screen' : 'Close session panel'}
-                  aria-label={isFullscreen ? 'Exit full screen' : 'Close session panel'}
+                  title={isFullscreen ? 'Exit full screen' : inset ? "Close this task and go back to the chat you came from" : 'Close session panel'}
+                  aria-label={isFullscreen ? 'Exit full screen' : inset ? 'Close this task' : 'Close session panel'}
                 >
                   {ICON_CLOSE}
                 </button>
@@ -2243,14 +2286,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                         barRightSlot={chatBarSlot}
                       />
                     )}
-                    {/* Board: the page the task's leader keeps. A task chip on it is
-                        a task reference, so it lands like one (onTaskClick, then the
-                        Locate handler; off Home the pane goes home on its own). */}
+                    {/* Board: the page the task's leader keeps. A task chip on it
+                        opens that task in the chat column (BoardTaskPeek below); the
+                        old jump (onTaskClick, then Locate) is the peek's "Open task". */}
                     {activeView === 'board' && session?.taskId && (
                       <TaskBoardPane
                         taskId={session.taskId}
                         sessionId={sessionId}
                         barRightSlot={chatBarSlot}
+                        onOpenTask={boardPeek.open}
                         onLocateTask={onTaskClick ?? onLocateTask}
                         onSendToSession={handleBoardSend}
                       />
@@ -2280,7 +2324,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
           )}
           <div
-            className="session-panel-chat-col"
+            className={`session-panel-chat-col${boardPeek.targetId ? ' is-board-peek' : ''}`}
             onClick={handleServiceLinkClick}
             ref={splitOpen ? chatPanel.panelRef : undefined}
             style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
@@ -2405,6 +2449,40 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             } : undefined}
           />
         </div>
+            {/* A task opened from the Board: a trailing child over the chat above,
+                which keeps its shape and stays mounted (task-board.css). */}
+            {boardPeek.targetId && session?.taskId && (
+              <BoardTaskPeek
+                ownTaskId={session.taskId}
+                targetTaskId={boardPeek.targetId}
+                onBack={boardPeek.back}
+                onJump={onTaskClick ?? onLocateTask}
+                barRightSlot={
+                  <button
+                    type="button"
+                    className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
+                    onClick={() => collapseChat(true)}
+                    title="Hide chat"
+                    aria-label="Hide chat"
+                    aria-expanded
+                  >{ICON_PANEL_RIGHT_FILLED}</button>
+                }
+                renderSession={(peekSessionId, jump) => (
+                  <InsetSessionPanel
+                    key={peekSessionId}
+                    sessionId={peekSessionId}
+                    embedded
+                    inset
+                    onClose={closeBoardPeek}
+                    onLocateTask={jump}
+                    onTaskClick={onTaskClick}
+                    onSessionClick={onSessionClick}
+                    onOpenTaskDetail={onOpenTaskDetail}
+                    onOpenForkDraft={onOpenForkDraft}
+                  />
+                )}
+              />
+            )}
           </div>{/* .session-panel-chat-col */}
         </div>{/* .session-panel-split */}
         {engineSettingsEntry.popover}
@@ -2452,3 +2530,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     </PlanContentContext.Provider>
   );
 });
+
+/** The memoized panel, for the one place a panel renders a panel (a task opened
+ *  beside a Board): inside SessionPanel's body its name is the bare function. */
+function InsetSessionPanel(props: SessionPanelProps) {
+  return <SessionPanel {...props} />;
+}

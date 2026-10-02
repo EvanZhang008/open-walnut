@@ -9,14 +9,18 @@
  *      task chip (the store's phase, updated without a reload), the status strip
  *      (counts, filtering), the unread total, an unknown id, external and `#`
  *      links.
- *   3. The user's thread message: optimistic row, stored with author `user`, never
- *      unread. A leader answer (posted with the leader session's caller id) is
+ *   3. The user's thread message, from the reply box docked under the frame:
+ *      optimistic row, stored with author `user`, never unread. A leader answer (posted with the leader session's caller id) is
  *      unread while its section is filtered out, and read once it has been on
  *      screen; the read state is this browser's (localStorage).
  *   4. An html edit re-renders the frame without a page reload: the new title,
- *      the old thread rows, and an unsent draft all survive.
+ *      the old thread rows, and an unsent draft in the reply box all survive.
  *   5. A mark saves state and note.
- *   6. A chip leads to the task on the home board.
+ *   5a. A message renders light markdown; the user deletes a post with the
+ *      two-step × (armed for 4 s), and it leaves the frame and the store.
+ *   5b. A script on the board cannot post, mark or delete as the user.
+ *   6. A chip opens its task beside the board, whose "Open task" leads to it on
+ *      the home board.
  *   7. Worker pill text; adopt from the kebab and from the Leader pill; leave.
  *
  * The chromium and webkit projects share ONE fixture board, so every task is
@@ -200,24 +204,28 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await frame.locator('a.jump').click()
   expect(await frame.locator('body').evaluate(() => (window as unknown as { __sameDoc?: number }).__sameDoc)).toBe(1)
 
-  // ── 3. The user's message: first row, "You", stored as `user`, never unread ──
+  // ── 3. The user's message, from the reply box docked under the frame: "You", stored as `user`, never unread ──
   const thread = frame.locator('walnut-thread[id="area-a"]')
   await expect(thread.locator('.wn-thread-title')).toHaveText('Area A')
-  await thread.locator('.wn-input').fill('Why is this red?')
-  await thread.locator('.wn-send').click()
+  await thread.locator('.wn-reply').click()
+  const dock = pane.getByTestId('board-reply-dock')
+  const dockInput = dock.locator('.chat-input-textarea')
+  await expect(dock.getByTestId('board-reply-title')).toHaveText(`Reply in Area A about ${workerTitle}`)
+  await dockInput.fill('Why is this red?')
+  await dockInput.press('Enter')
   const firstRow = thread.locator('.wn-msg').first()
   await expect(firstRow.locator('.wn-who')).toHaveText('You')
   await expect(firstRow.locator('.wn-text')).toHaveText('Why is this red?')
   await expect(firstRow).not.toHaveClass(/wn-pending|wn-failed/, { timeout: 15_000 })
-  await expect(thread.locator('.wn-input')).toHaveValue('')
+  await expect(dockInput).toHaveValue('')
   let stored = await getBoard(leader)
   expect(stored.threads['area-a'].map((m) => [m.author, m.text])).toContainEqual(['user', 'Why is this red?'])
   await expect(frame.locator('.wn-unread-n')).toHaveText('No new messages')
-  // Cmd/Ctrl+Enter sends too; an empty composer sends nothing.
-  await thread.locator('.wn-input').fill('Second note')
-  await thread.locator('.wn-input').press('ControlOrMeta+Enter')
-  await expect(thread.locator('.wn-msg').first().locator('.wn-text')).toHaveText('Second note')
-  await thread.locator('.wn-send').click()
+  // The send arrow sends too, as the newest (last) row; an empty box sends nothing.
+  await dockInput.fill('Second note')
+  await dock.locator('.chat-send-btn-icon').click()
+  await expect(thread.locator('.wn-msg').last().locator('.wn-text')).toHaveText('Second note')
+  await dockInput.press('Enter')
   await expect(thread.locator('.wn-msg')).toHaveCount(2)
 
   // ── A leader answer while its section is filtered out: unread until seen ──
@@ -236,7 +244,7 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   // The unread total jumps to it: the filter clears, and 1.5 s on screen reads it.
   await frame.locator('walnut-unread').click()
   await expect(frame.locator('#sec-a')).toBeVisible()
-  const leaderRow = thread.locator('.wn-msg').first()
+  const leaderRow = thread.locator('.wn-msg').last()
   await expect(leaderRow.locator('.wn-who')).toHaveText('Leader')
   await expect(leaderRow.locator('a.wn-link')).toHaveAttribute('href', 'https://example.com/run/1')
   await expect(frame.locator('.wn-unread-n')).toHaveText('No new messages', { timeout: 10_000 })
@@ -244,16 +252,15 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   const seen = await page.evaluate((id) => localStorage.getItem(`walnut-board-seen:${id}`), leader)
   expect(JSON.parse(seen ?? '{}')['area-a']).toBeTruthy()
 
-  // ── 4. An html edit re-renders the frame; rows and an unsent draft survive ──
-  await thread.locator('.wn-input').fill('Draft I have not sent')
-  await page.waitForTimeout(500) // the frame hands its draft to the host after 300 ms
+  // ── 4. An html edit re-renders the frame; rows and an unsent draft in the reply box survive ──
+  await dockInput.fill('Draft I have not sent')
   await api('POST', `/api/v1/tasks/${leader}/board/edits`, {
     edits: [{ old: 'Area A: probe is red', new: 'Area A: probe fixed, waiting on rollout' }],
   })
   await expect(frame.locator('h3.area-a-title')).toHaveText('Area A: probe fixed, waiting on rollout', { timeout: 3_000 })
   expect(await frame.locator('body').evaluate(() => (window as unknown as { __sameDoc?: number }).__sameDoc)).toBeUndefined()
   await expect(thread.locator('.wn-msg .wn-text', { hasText: 'Why is this red?' })).toBeVisible()
-  await expect(thread.locator('.wn-input')).toHaveValue('Draft I have not sent')
+  await expect(dockInput).toHaveValue('Draft I have not sent')
   await expect(frame.locator('.wn-unread-n')).toHaveText('No new messages')
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-3-board.png` })
 
@@ -262,6 +269,9 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await mark.locator('.wn-mark-state[data-state="revisit"]').click()
   await expect(mark.locator('.wn-mark-state[data-state="revisit"]')).toHaveAttribute('aria-pressed', 'true')
   await expect(mark.locator('.wn-saved')).toHaveText(/^Saved \d\d:\d\d$/, { timeout: 10_000 })
+  // The note sits behind "Note" until it has text.
+  await expect(mark.locator('.wn-mark-note')).toBeHidden()
+  await mark.locator('.wn-mark-note-toggle').click()
   await mark.locator('.wn-mark-note').fill('Check the rollout tomorrow')
   await expect.poll(async () => (await getBoard(leader)).marks['area-a'], { timeout: 10_000 })
     .toMatchObject({ state: 'revisit', note: 'Check the rollout tomorrow' })
@@ -269,27 +279,80 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   expect(stored.board?.updated_by).toBe('human')
   await mark.screenshot({ path: `${SHOT_DIR}/${engine}-4-mark.png` })
 
+  // ── 5a. Light markdown in a message; the user deletes it in two clicks ──
+  const mdRes = await fetch(`${API}/api/v1/tasks/${leader}/board/threads/area-a`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': sessionId },
+    body: JSON.stringify({ text: '**bold** `code`\n- item' }),
+  })
+  expect(mdRes.status).toBe(201)
+  const mdId = ((await mdRes.json()) as { message: { id: string } }).message.id
+  const mdRow = thread.locator(`.wn-msg[data-id="${mdId}"]`)
+  await expect(mdRow.locator('.wn-text strong')).toHaveText('bold', { timeout: 15_000 })
+  await expect(mdRow.locator('.wn-text code')).toHaveText('code')
+  await expect(mdRow.locator('.wn-text li')).toHaveText(['item'])
+  await expect(mdRow.locator('.wn-text')).not.toContainText('**')
+  // The first click arms only this row's ×; left alone, it disarms after 4 s.
+  const del = mdRow.locator('.wn-del')
+  await expect(del).toHaveText('×')
+  await expect(del).toHaveAttribute('aria-label', 'Delete this message')
+  await del.click()
+  await expect(del).toHaveText('Delete?')
+  await expect(thread.locator('.wn-del.wn-armed')).toHaveCount(1)
+  // The thread element, not the row: a row is rebuilt whenever its html changes (its
+  // relative time ticks over), and a screenshot of the replaced node fails.
+  await thread.screenshot({ path: `${SHOT_DIR}/${engine}-4b-markdown-armed.png` })
+  await expect(del).toHaveText('×', { timeout: 8_000 })
+  expect((await getBoard(leader)).threads['area-a'].map((m) => m.id)).toContain(mdId)
+  // Armed, the second click deletes: gone from the frame and from the store; the rest stay.
+  await del.click()
+  await expect(del).toHaveText('Delete?')
+  await del.click()
+  await expect(mdRow).toHaveCount(0, { timeout: 15_000 })
+  await expect.poll(async () => (await getBoard(leader)).threads['area-a'].map((m) => m.id), { timeout: 10_000 }).not.toContain(mdId)
+  await expect(thread.locator('.wn-msg .wn-text', { hasText: 'Why is this red?' })).toBeVisible()
+  await expect(thread.locator('.wn-del.wn-armed')).toHaveCount(0)
+
   // ── 5b. A script on the board cannot speak as the user ──
   // The board's html is written by sessions; its scripts run in this frame. A
-  // synthetic click on Send, a lookup of the runtime's kit and a direct message
-  // to the host all stop short of a thread post or a mark.
+  // synthetic click on Reply, a lookup of the runtime's kit and a direct message
+  // to the host all stop short of the reply box, a thread post or a mark.
+  await dock.getByTestId('board-reply-close').click()
+  await expect(dock).toHaveCount(0)
   await frame.locator('body').evaluate(() => {
     const w = window as unknown as { __wnBoardKit?: unknown }
     const thread = document.querySelector('walnut-thread[id="area-a"]')!
-    ;(thread.querySelector('.wn-input') as HTMLTextAreaElement).value = 'forged by a script'
-    ;(thread.querySelector('.wn-send') as HTMLButtonElement).click()
+    ;(thread.querySelector('.wn-reply') as HTMLButtonElement).click()
     ;(document.querySelector('walnut-mark[id="area-a"] .wn-mark-state[data-state="reviewed"]') as HTMLButtonElement).click()
     if (w.__wnBoardKit) throw new Error('the runtime kit is reachable from the page')
+    window.parent.postMessage({ t: 'wn-board:compose', thread: 'area-a', title: 'forged' }, '*')
     window.parent.postMessage({ t: 'wn-board:post', reqId: 'x1', thread: 'area-a', text: 'forged by postMessage' }, '*')
     window.parent.postMessage({ t: 'wn-board:mark', reqId: 'x2', id: 'area-a', state: 'reviewed', note: 'forged' }, '*')
   })
+  // Nor delete a post: two synthetic clicks on its × and a direct delete message do nothing.
+  const victim = (await getBoard(leader)).threads['area-a'][0].id
+  await frame.locator('body').evaluate((_, id) => {
+    const button = () => document.querySelector(`walnut-thread[id="area-a"] .wn-del[data-id="${id}"]`) as HTMLButtonElement | null
+    button()?.click()
+    button()?.click()
+    window.parent.postMessage({ t: 'wn-board:delete', reqId: 'x3', thread: 'area-a', id }, '*')
+  }, victim)
   await page.waitForTimeout(1500)
+  await expect(dock).toHaveCount(0)
   stored = await getBoard(leader)
   expect(JSON.stringify(stored.threads)).not.toContain('forged')
   expect(stored.marks['area-a']).toMatchObject({ state: 'revisit', note: 'Check the rollout tomorrow' })
+  expect(stored.threads['area-a'].map((m) => m.id)).toContain(victim)
+  await expect(thread.locator(`.wn-msg[data-id="${victim}"] .wn-del`)).toHaveText('×')
 
-  // ── 6. A chip leads to its task on the home board ──
+  // ── 6. A chip opens its task beside the board; its "Open task" leads to it on the home board ──
+  // (the peek itself: tests/e2e/browser/task-board-peek.spec.ts)
   await frame.locator(`#sec-a walnut-task[id="${worker}"] .wn-task`).click()
+  const peek = panel.getByTestId('board-task-peek')
+  await expect(peek).toHaveAttribute('data-task-id', worker)
+  await expect(peek.getByTestId('board-peek-title')).toHaveText(workerTitle)
+  await expect(pane).toBeVisible()
+  await peek.getByTestId('board-peek-card').getByRole('button', { name: 'Open task' }).click()
   await expect(page.locator(`.todo-panel-item[data-task-id="${worker}"]`)).toHaveClass(/task-focused/, { timeout: 15_000 })
   // Locating yields the full-screen sheet (as the header's Locate does), which closes the tab.
   await expect(pane).toHaveCount(0)
@@ -386,7 +449,8 @@ test('a board that cannot load says so with Retry, and Retry recovers', async ({
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: '' })
   let mode: 'missing' | 'offline' | 'real' = 'missing'
-  await page.route('**/api/v1/tasks/pw-task-model-switch/board', async (route) => {
+  // By path: the pane reads the team's board (`?team=1`), and a glob would miss the query.
+  await page.route((url) => url.pathname === '/api/v1/tasks/pw-task-model-switch/board', async (route) => {
     if (mode === 'missing') {
       await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: { code: 'not_found', message: 'Task not found: pw-task-model-switch' } }) })
     } else if (mode === 'offline') {

@@ -1,7 +1,11 @@
 /*
- * Board runtime, part 2 of 2 (the elements): the five walnut-* custom elements,
- * built on the core in board-runtime.frame.js (`window.__wnBoardKit`). Same
- * rules: plain ES2017, loaded as a string, runs only inside the board frame.
+ * Board runtime, part 3 of 5 (the elements): <walnut-task>, <walnut-thread>,
+ * <walnut-strip> and <walnut-unread>, built on the core in board-runtime.frame.js (`window.__wnBoardKit`,
+ * with `richText` from board-markdown.frame.js). Same rules: plain ES2017,
+ * loaded as a string, runs only inside the board frame. board-items.frame.js
+ * (part 4) adds the project, check and choice elements and the Remind me
+ * control the thread uses (`kit.Remind`); board-sections.frame.js (part 5)
+ * adds the "updated" dots and takes the kit off window.
  *
  * Every element renders into its own light DOM (no shadow DOM, so the board's
  * CSS can restyle it) and re-renders from the kit's state on every data
@@ -9,16 +13,17 @@
  */
 (function (kit) {
   'use strict';
-  // The kit is ours alone from here on: an author script must not reach `request`.
-  try { delete window.__wnBoardKit; } catch (e) { window.__wnBoardKit = undefined; }
   if (!kit || customElements.get('walnut-task')) return;
   var trusted = kit.trusted;
   var state = kit.state;
   var esc = kit.esc;
 
   var PHASES = { TODO: 'To do', IN_PROGRESS: 'In progress', NEED_ACTION: 'Needs you', WAITING: 'Waiting', COMPLETE: 'Done' };
-  var DEFAULT_STATES = 'revisit:Revisit,reviewed:Reviewed,waiting:Waiting on others';
-  var DEFAULT_LABELS = 'decide:Needs you,wip:In progress,wait:Waiting on others,done:Done';
+  // The first click on a message's × arms it for this long; the second deletes.
+  var DELETE_ARM_MS = 4000;
+  var DEFAULT_LABELS = kit.DEFAULT_LABELS;
+  // A thread scrolled within this of its bottom stays pinned there as messages arrive.
+  var PIN_SLACK_PX = 24;
 
   // ── <walnut-task id compact?>: a live chip; click or Enter goes to the task ──
   class WalnutTask extends kit.Base {
@@ -48,7 +53,7 @@
     }
   }
 
-  // ── <walnut-thread id title? task?>: composer, newest-first messages, unread ──
+  // ── <walnut-thread id title? task?>: a conversation, oldest first, composer below, unread ──
   var io = typeof IntersectionObserver === 'function'
     ? new IntersectionObserver(function (entries) {
       entries.forEach(function (en) {
@@ -60,6 +65,40 @@
       });
     }, { threshold: [0, 0.1, 0.25, 0.5, 0.75, 1] })
     : null;
+  // The message area gets its size late (a <details> opens, a filter lifts, a row grows):
+  // a pinned thread then goes back to its newest message.
+  var ro = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(function (entries) {
+      entries.forEach(function (en) {
+        var thread = en.target.closest ? en.target.closest('walnut-thread') : null;
+        if (thread && thread.wnPinned && thread.wnScroll) thread.wnToBottom();
+      });
+    })
+    : null;
+
+  function atBottom(s) { return s.scrollHeight - s.scrollTop - s.clientHeight <= PIN_SLACK_PX; }
+
+  // The docked composer (TaskBoardPane) reports its sends: pending, then stored or failed.
+  function threadsWithId(id) {
+    return Array.prototype.filter.call(document.querySelectorAll('walnut-thread'), function (t) {
+      return !!id && t.getAttribute('id') === id && !!t.wnLocal;
+    });
+  }
+  kit.onHost['wn-board:sending'] = function (d) {
+    threadsWithId(String(d.thread || '')).forEach(function (t) { t.wnSending(String(d.key || ''), String(d.text || '')); });
+  };
+  kit.onHost['wn-board:sent'] = function (d) {
+    var thread = String(d.thread || '');
+    if (d.message && typeof d.message === 'object' && d.message.id) kit.addMessage(thread, d.message);
+    // Posting answers a due reminder on this thread (the server clears it in the same write).
+    if (kit.reminderDue(kit.reminderOf(thread))) delete state.reminders[thread];
+    threadsWithId(thread).forEach(function (t) { t.wnDropLocal(String(d.key || '')); });
+    kit.renderAll();
+  };
+  kit.onHost['wn-board:send-failed'] = function (d) {
+    threadsWithId(String(d.thread || '')).forEach(function (t) { t.wnFailLocal(String(d.key || ''), String(d.error || 'Not sent')); });
+    kit.renderAll();
+  };
 
   class WalnutThread extends kit.Base {
     static get observedAttributes() { return ['title']; }
@@ -75,71 +114,179 @@
     wnSetup() {
       var self = this;
       this.wnLocal = [];
+      this.wnPinned = true;
       this.classList.add('wn-thread');
+      // Like the app's chat: the conversation, then the composer under it. The
+      // composer is Walnut's own (voice included), docked by the host under the
+      // frame: "Reply…" asks for it, and the host owns the draft.
       this.innerHTML = '<div class="wn-thread-head"><span class="wn-thread-title"></span>'
-        + '<span class="wn-badge" hidden></span><a class="wn-mark-read" href="#" role="button" hidden>Mark read</a></div>'
-        + '<div class="wn-composer"><textarea class="wn-input" rows="2" placeholder="Ask or note here. It goes to the leader."></textarea>'
-        + '<button type="button" class="wn-send">Send</button></div><div class="wn-msgs"></div>';
-      this.wnInput = this.querySelector('.wn-input');
+        + '<span class="wn-badge" hidden></span><span class="wn-thread-tools">'
+        + '<a class="wn-mark-read" href="#" role="button" hidden>Mark read</a></span></div>'
+        + '<div class="wn-scroll-wrap" hidden><div class="wn-scroll"><div class="wn-msgs"></div></div>'
+        + '<button type="button" class="wn-jump" hidden></button></div>'
+        + '<div class="wn-composer"><button type="button" class="wn-reply" aria-pressed="false">Reply…</button></div>';
+      this.wnReply = this.querySelector('.wn-reply');
       this.wnList = this.querySelector('.wn-msgs');
+      this.wnScroll = this.querySelector('.wn-scroll');
+      this.wnWrap = this.querySelector('.wn-scroll-wrap');
+      this.wnJumpBtn = this.querySelector('.wn-jump');
+      // Scrolled up to read: new messages leave the position alone until the user is back at the bottom.
+      this.wnScroll.addEventListener('scroll', function () {
+        self.wnPinned = atBottom(self.wnScroll);
+        self.wnPaintJump();
+        if (self.wnVisible) self.wnArm();
+      }, { passive: true });
+      this.wnJumpBtn.addEventListener('click', function (e) { e.preventDefault(); self.wnReveal(); });
+      if (kit.Remind) {
+        this.wnRemind = new kit.Remind(this);
+        this.querySelector('.wn-thread-tools').appendChild(this.wnRemind.trigger);
+        this.insertBefore(this.wnRemind.panel, this.wnWrap);
+      }
       // Every write to Walnut starts from a trusted event: a synthetic one an
-      // author script dispatched cannot post as the user or move a mark.
-      this.wnInput.addEventListener('keydown', function (e) {
-        if (trusted(e) && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); self.wnSubmit(); }
-      });
-      this.wnInput.addEventListener('input', function (e) {
-        if (!trusted(e)) return;
-        clearTimeout(self.wnDraftTimer);
-        self.wnDraftTimer = setTimeout(function () { self.wnDraft(self.wnInput.value); }, 300);
-      });
-      this.wnInput.addEventListener('focus', function (e) { if (trusted(e)) kit.markSeen(self.wnId); });
-      this.querySelector('.wn-send').addEventListener('click', function (e) { if (trusted(e)) self.wnSubmit(); });
+      // author script dispatched cannot open the reply box, post as the user or move a mark.
+      this.wnReply.addEventListener('click', function (e) { e.preventDefault(); if (trusted(e)) self.wnCompose(); });
+      this.wnReply.addEventListener('focus', function (e) { if (trusted(e)) self.wnCompose(); });
       this.querySelector('.wn-mark-read').addEventListener('click', function (e) { e.preventDefault(); if (trusted(e)) kit.markSeen(self.wnId); });
+      // Delete is two trusted clicks (the sandbox has no allow-modals, so no confirm()).
+      // One listener on the list: the rows are rebuilt on every render.
+      this.wnArmed = '';
+      this.wnDeleting = {};
+      this.wnDeleteErrors = {};
+      this.wnList.addEventListener('click', function (e) {
+        var b = e.target && e.target.closest ? e.target.closest('.wn-del') : null;
+        if (!b || !self.wnList.contains(b)) return;
+        e.preventDefault();
+        if (!trusted(e)) return;
+        var id = b.getAttribute('data-id') || '';
+        if (!id || self.wnDeleting[id]) return;
+        var refocus = document.activeElement === b;
+        if (self.wnArmed === id) self.wnDelete(id); else self.wnArmDelete(id);
+        if (refocus) self.wnFocusDelete(id);
+      });
     }
-    wnAttach() { if (io) io.observe(this); }
-    wnDetach() { if (io) io.unobserve(this); this.wnDisarm(); }
-    /** Visible for 1.5 s with something unread: it has been read. */
+    wnAttach() {
+      if (io) io.observe(this);
+      if (ro) { ro.observe(this.wnScroll); ro.observe(this.wnList); }
+    }
+    wnDetach() {
+      if (io) io.unobserve(this);
+      if (ro) { ro.unobserve(this.wnScroll); ro.unobserve(this.wnList); }
+      this.wnDisarm();
+      this.wnDisarmDelete();
+    }
+    wnToBottom() {
+      this.wnPinned = true;
+      this.wnScroll.scrollTop = this.wnScroll.scrollHeight;
+      this.wnPaintJump();
+    }
+    /** A row inside the message area's view and the window's. */
+    wnInView(row) {
+      var r = row.getBoundingClientRect();
+      var v = this.wnScroll.getBoundingClientRect();
+      return r.top < v.bottom && r.bottom > v.top && r.top < window.innerHeight && r.bottom > 0;
+    }
+    /** Back to the newest message (the unread total and the thread's own way down). */
+    wnReveal() { this.wnToBottom(); }
+    /** The newest unread message: reading up to it is what marks the thread read. */
+    wnNewestUnread() {
+      var all = this.wnList.querySelectorAll('.wn-msg[data-unread]');
+      return all.length ? all[all.length - 1] : null;
+    }
+    /** Scrolled up: a button back to the newest (naming what is unread). */
+    wnPaintJump() {
+      var show = !this.wnPinned && !this.wnWrap.hidden;
+      var n = show ? kit.unreadIn(this.wnId) : 0;
+      var text = n === 0 ? 'Latest ↓' : n === 1 ? '1 new message ↓' : n + ' new messages ↓';
+      if (this.wnJumpBtn.hidden !== !show) this.wnJumpBtn.hidden = !show;
+      if (show && this.wnJumpBtn.textContent !== text) this.wnJumpBtn.textContent = text;
+    }
+    wnArmDelete(id) {
+      var self = this;
+      clearTimeout(this.wnArmTimer);
+      this.wnArmed = id;
+      delete this.wnDeleteErrors[id];
+      this.wnArmTimer = setTimeout(function () {
+        self.wnArmTimer = null;
+        if (self.wnArmed === id) { self.wnArmed = ''; self.wnRender(); }
+      }, DELETE_ARM_MS);
+      this.wnRender();
+    }
+    wnDisarmDelete() { clearTimeout(this.wnArmTimer); this.wnArmTimer = null; this.wnArmed = ''; }
+    /** A rebuilt row takes the focus back, so a keyboard user can confirm with a second Enter. */
+    wnFocusDelete(id) {
+      var all = this.wnList.querySelectorAll('.wn-del');
+      for (var i = 0; i < all.length; i++) if (all[i].getAttribute('data-id') === id) { all[i].focus(); return; }
+    }
+    wnDelete(id) {
+      var self = this;
+      var thread = this.wnId;
+      this.wnDisarmDelete();
+      this.wnDeleting[id] = true;
+      this.wnRender();
+      kit.request({ t: 'wn-board:delete', thread: thread, id: id }, function (ack) {
+        delete self.wnDeleting[id];
+        if (ack.ok) kit.removeMessage(thread, id);
+        else self.wnDeleteErrors[id] = ack.error || 'Not deleted';
+        kit.renderAll();
+      });
+    }
+    /** Visible for 1.5 s with the newest unread message in view: it has been read (as in the chat). */
     wnArm() {
       var self = this;
       if (this.wnTimer || kit.unreadIn(this.wnId) === 0) return;
       this.wnTimer = setTimeout(function () {
         self.wnTimer = null;
-        if (self.wnVisible && !document.hidden) kit.markSeen(self.wnId);
+        if (!self.wnVisible || document.hidden) return;
+        var row = self.wnNewestUnread();
+        // Scrolled up away from it: it waits until the user is back down (the scroll re-arms this).
+        if (!row || self.wnInView(row)) kit.markSeen(self.wnId);
       }, 1500);
     }
     wnDisarm() { clearTimeout(this.wnTimer); this.wnTimer = null; }
-    /** The host keeps the draft, so a re-rendered board gives it back. */
-    wnDraft(text) {
-      clearTimeout(this.wnDraftTimer);
-      kit.send({ t: 'wn-board:draft', thread: this.wnId, text: text });
-    }
-    wnSubmit() {
-      var self = this;
-      var text = this.wnInput.value.trim();
-      if (!text || !this.wnId) return;
-      var local = { key: 'local-' + kit.nextId(), text: text, ts: new Date().toISOString(), status: 'pending' };
-      // A new send retires the rows of earlier failures (their text came back to the composer).
-      this.wnLocal = this.wnLocal.filter(function (l) { return l.status !== 'failed'; }).concat([local]);
-      this.wnInput.value = '';
-      this.wnDraft('');
-      this.wnRender();
-      kit.request({ t: 'wn-board:post', thread: this.wnId, text: text }, function (ack) {
-        if (ack.ok && ack.message) {
-          self.wnLocal = self.wnLocal.filter(function (l) { return l !== local; });
-          kit.addMessage(self.wnId, ack.message);
-        } else {
-          local.status = 'failed';
-          local.error = ack.error || 'Not sent';
-          if (!self.wnInput.value.trim()) { self.wnInput.value = text; self.wnDraft(text); }
-        }
-        kit.renderAll();
+    /** "Reply…": the host docks its composer for this thread (a click and its focus count once). */
+    wnCompose() {
+      var now = Date.now();
+      if (this.wnComposeAt && now - this.wnComposeAt < 400) return;
+      this.wnComposeAt = now;
+      kit.markSeen(this.wnId);
+      kit.send({
+        t: 'wn-board:compose', thread: this.wnId,
+        title: this.getAttribute('data-title') || this.wnId, task: this.getAttribute('task') || '',
       });
+    }
+    /** The docked composer is sending: a pending row, and the thread goes to its newest message. */
+    wnSending(key, text) {
+      // A new send retires the rows of earlier failures (their text is still in the reply box).
+      this.wnLocal = this.wnLocal.filter(function (l) { return l.status !== 'failed'; })
+        .concat([{ key: key, text: text, ts: new Date().toISOString(), status: 'pending' }]);
+      this.wnPinned = true;
+      this.wnRender();
+    }
+    wnDropLocal(key) { this.wnLocal = this.wnLocal.filter(function (l) { return l.key !== key; }); }
+    wnFailLocal(key, error) {
+      this.wnLocal.forEach(function (l) { if (l.key === key) { l.status = 'failed'; l.error = error; } });
+    }
+    /** A stored message's × (armed: "Delete?"), and the error of a delete that failed. */
+    wnDeleteControl(id) {
+      var error = this.wnDeleteErrors[id];
+      var head = error ? '<span class="wn-error">' + esc(error) + '</span>' : '';
+      if (this.wnDeleting[id]) {
+        return head + '<button type="button" class="wn-del wn-deleting" data-id="' + esc(id) + '" disabled>Deleting…</button>';
+      }
+      if (this.wnArmed === id) {
+        return head + '<button type="button" class="wn-del wn-armed" data-id="' + esc(id)
+          + '" aria-label="Click again to delete this message">Delete?</button>';
+      }
+      return head + '<button type="button" class="wn-del" data-id="' + esc(id) + '" aria-label="Delete this message">×</button>';
     }
     wnRow(m, cls, extra) {
       var unread = !cls && m.author !== 'user' && m.ts > (state.seen[this.wnId] || '');
-      return '<div class="wn-msg' + (cls ? ' ' + cls : '') + '" data-ts="' + esc(m.ts) + '" data-author="' + esc(m.author) + '"'
+      var stored = !cls && !!m.id;
+      return '<div class="wn-msg' + (cls ? ' ' + cls : '') + '"' + (stored ? ' data-id="' + esc(m.id) + '"' : '')
+        + ' data-ts="' + esc(m.ts) + '" data-author="' + esc(m.author) + '"'
         + (unread ? ' data-unread=""' : '') + '><div class="wn-msg-meta"><span class="wn-who">' + esc(kit.whoOf(m.author))
-        + '</span><span class="wn-when">' + esc(kit.when(m.ts)) + '</span>' + (extra || '') + '</div><div class="wn-text">'
+        + '</span><span class="wn-when">' + esc(kit.when(m.ts)) + '</span>' + (extra || '')
+        + (stored ? this.wnDeleteControl(m.id) : '') + '</div><div class="wn-text">'
         + kit.richText(m.text) + '</div></div>';
     }
     wnRender() {
@@ -153,103 +300,29 @@
       badge.hidden = n === 0;
       badge.textContent = n ? n + ' new' : '';
       this.querySelector('.wn-mark-read').hidden = n === 0;
-      // A draft the host kept across a re-render of the board html comes back once.
-      if (kit.flags.hasData && !this.wnDraftDone) {
-        this.wnDraftDone = true;
-        var draft = state.drafts && state.drafts[id];
-        if (draft && !this.wnInput.value && document.activeElement !== this.wnInput) this.wnInput.value = draft;
-      }
+      var composing = !!id && kit.flags.composing === id;
+      var replyText = composing ? 'Replying in the box below' : 'Reply…';
+      if (this.wnReply.textContent !== replyText) this.wnReply.textContent = replyText;
+      this.wnReply.setAttribute('aria-pressed', composing ? 'true' : 'false');
+      this.wnReply.classList.toggle('wn-on', composing);
+      // Oldest first, newest last (equal times keep their append order); the rows
+      // still being sent (or that failed) come last, as they are the newest.
       var rows = (state.threads[id] || []).map(function (m, i) { return { ts: m.ts, i: i, html: self.wnRow(m) }; });
-      var base = rows.length;
-      this.wnLocal.forEach(function (l, i) {
+      rows.sort(function (a, b) { return a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.i - b.i; });
+      this.wnLocal.forEach(function (l) {
         var failed = l.status === 'failed';
         rows.push({
-          ts: l.ts, i: base + i,
           html: self.wnRow({ author: 'user', ts: l.ts, text: l.text }, failed ? 'wn-failed' : 'wn-pending',
             failed ? '<span class="wn-error">' + esc(l.error) + '</span>' : ''),
         });
       });
-      // Newest first; equal times keep their append order, reversed.
-      rows.sort(function (a, b) { return a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : b.i - a.i; });
+      var before = this.wnList.wnHtml;
       kit.setHtml(this.wnList, rows.map(function (r) { return r.html; }).join(''));
+      if (this.wnWrap.hidden !== (rows.length === 0)) this.wnWrap.hidden = rows.length === 0;
+      if (this.wnList.wnHtml !== before && this.wnPinned) this.wnToBottom();
+      this.wnPaintJump();
+      if (this.wnRemind) this.wnRemind.render();
       if (n > 0 && this.wnVisible) this.wnArm();
-    }
-  }
-
-  // ── <walnut-mark id states?>: the user's own mark and note, saved in Walnut ──
-  class WalnutMark extends kit.Base {
-    get wnId() { return this.getAttribute('id') || ''; }
-    wnSetup() {
-      var self = this;
-      // Buttons, not a <select>: one click sets a state, and every change comes
-      // from a trusted click or keystroke (a synthetic `change` has no path here).
-      this.wnStates = kit.parsePairs(this.getAttribute('states'), DEFAULT_STATES);
-      this.classList.add('wn-mark');
-      this.innerHTML = '<span class="wn-mark-label">Your mark</span><span class="wn-mark-states" role="group" aria-label="Your mark"></span>'
-        + '<textarea class="wn-mark-note" rows="1" placeholder="Note for the leader" aria-label="Note for the leader"></textarea>'
-        + '<span class="wn-saved" aria-live="polite"></span>';
-      this.wnGroup = this.querySelector('.wn-mark-states');
-      this.wnNote = this.querySelector('.wn-mark-note');
-      this.wnStatus = this.querySelector('.wn-saved');
-      this.wnValue = '';
-      this.wnSaveSeq = 0;
-      this.wnGroup.addEventListener('click', function (e) {
-        var b = e.target.closest ? e.target.closest('.wn-mark-state') : null;
-        if (!b || !self.wnGroup.contains(b) || !trusted(e)) return;
-        e.preventDefault();
-        var v = b.getAttribute('data-state') || '';
-        // Clicking the state already set clears it.
-        self.wnValue = v === self.wnValue ? '' : v;
-        self.wnDirty = true;
-        self.wnPaint();
-        self.wnSave();
-      });
-      this.wnNote.addEventListener('input', function (e) {
-        if (!trusted(e)) return;
-        self.wnDirty = true;
-        clearTimeout(self.wnTimer);
-        self.wnTimer = setTimeout(function () { self.wnSave(); }, 500);
-      });
-      this.wnPaint();
-    }
-    /** The state buttons, the current one pressed; a state the list does not name still shows. */
-    wnPaint() {
-      var list = this.wnStates.slice();
-      var v = this.wnValue;
-      if (v && !list.some(function (o) { return o.key === v; })) list.push({ key: v, label: v });
-      this.wnGroup.innerHTML = list.map(function (o) {
-        var on = o.key === v;
-        return '<button type="button" class="wn-mark-state' + (on ? ' wn-on' : '') + '" data-state="' + esc(o.key)
-          + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + esc(o.label) + '</button>';
-      }).join('');
-    }
-    wnSetStatus(text, failed) {
-      this.wnStatus.textContent = text;
-      this.wnStatus.classList.toggle('wn-failed', !!failed);
-    }
-    wnSave() {
-      var self = this;
-      clearTimeout(this.wnTimer);
-      var mine = ++this.wnSaveSeq;
-      this.wnSaving = true;
-      this.wnSetStatus('Saving…');
-      kit.request({ t: 'wn-board:mark', id: this.wnId, state: this.wnValue, note: this.wnNote.value }, function (ack) {
-        if (mine !== self.wnSaveSeq) return; // a newer save owns the status line
-        self.wnSaving = false;
-        if (!ack.ok) { self.wnSetStatus(ack.error || 'Not saved', true); return; }
-        self.wnDirty = false;
-        if (ack.mark) state.marks[self.wnId] = ack.mark; else delete state.marks[self.wnId];
-        self.wnSetStatus('Saved ' + kit.hhmm(new Date()));
-      });
-    }
-    wnRender() {
-      // What the user is typing (or has not saved yet) wins over what arrives.
-      if (this.wnDirty || this.wnSaving || document.activeElement === this.wnNote) return;
-      var mark = state.marks[this.wnId];
-      var value = mark && mark.state ? mark.state : '';
-      if (value !== this.wnValue) { this.wnValue = value; this.wnPaint(); }
-      var note = mark && mark.note ? mark.note : '';
-      if (this.wnNote.value !== note) this.wnNote.value = note;
     }
   }
 
@@ -268,11 +341,9 @@
     }
     wnRender() {
       var counts = {};
-      var sections = kit.topSections();
-      sections.forEach(function (s) {
-        var k = s.getAttribute('data-status');
-        counts[k] = (counts[k] || 0) + 1;
-      });
+      // A project counts once; an answered choice no longer needs the user (core countedStatuses).
+      var sections = kit.countedStatuses();
+      sections.forEach(function (k) { counts[k] = (counts[k] || 0) + 1; });
       function box(f, n, label) {
         return '<button type="button" class="wn-box" data-f="' + esc(f) + '" aria-pressed="'
           + (kit.flags.filter === f ? 'true' : 'false') + '"><b>' + n + '</b><span>' + esc(label) + '</span></button>';
@@ -293,25 +364,40 @@
       this.addEventListener('click', function (e) { e.preventDefault(); self.wnJump(); });
       this.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); self.wnJump(); } });
     }
+    /** Everything that waits for the user, in page order: unread threads, due reminders, updated sections. */
+    wnTargets() {
+      var list = kit.threadEls().filter(function (t) { return kit.unreadIn(t.getAttribute('id')) > 0; })
+        .concat(kit.dueTargets(), kit.updatedSections ? kit.updatedSections() : []);
+      return list.filter(function (el, i) { return list.indexOf(el) === i; }).sort(function (a, b) {
+        return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+      });
+    }
     wnJump() {
-      var target = kit.threadEls().filter(function (t) { return kit.unreadIn(t.getAttribute('id')) > 0; })[0];
+      var target = this.wnTargets()[0];
       if (!target) return;
-      if (target.closest('[data-wn-hidden]')) kit.applyFilter('');
+      if (target.closest('[data-wn-hidden]') || target.hasAttribute('data-wn-hidden')) kit.applyFilter('');
       kit.openAncestors(target);
+      if (target.tagName === 'DETAILS') target.open = true;
       target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (target.wnReveal) target.wnReveal();
     }
     wnRender() {
       var n = 0;
       kit.threadEls().forEach(function (t) { n += kit.unreadIn(t.getAttribute('id')); });
-      var text = n === 0 ? 'No new messages' : n === 1 ? '1 new message' : n + ' new messages';
-      kit.setHtml(this, '<span class="wn-unread" role="button" tabindex="0" data-count="' + n + '"><span class="wn-unread-n">'
-        + text + '</span></span>');
+      var due = kit.dueTargets().length;
+      var updated = kit.updatedSections ? kit.updatedSections().length : 0;
+      var parts = [];
+      if (n) parts.push(n === 1 ? '1 new message' : n + ' new messages');
+      if (due) parts.push(due === 1 ? '1 reminder due' : due + ' reminders due');
+      if (updated) parts.push(updated === 1 ? '1 updated section' : updated + ' updated sections');
+      var text = parts.length ? parts.join(', ') : 'No new messages';
+      kit.setHtml(this, '<span class="wn-unread" role="button" tabindex="0" data-count="' + (n + due + updated)
+        + '"><span class="wn-unread-n">' + text + '</span></span>');
     }
   }
 
   customElements.define('walnut-task', WalnutTask);
   customElements.define('walnut-thread', WalnutThread);
-  customElements.define('walnut-mark', WalnutMark);
   customElements.define('walnut-strip', WalnutStrip);
   customElements.define('walnut-unread', WalnutUnread);
 })(window.__wnBoardKit);

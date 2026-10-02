@@ -31,6 +31,16 @@
   flex-shrink: 0;
 }
 
+/* "Board · <owner>": the board the team shares names its keeper, and a long name gives way. */
+.task-board-bar-title-shared {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .task-board-bar-sub {
   min-width: 0;
   font-size: 11px;
@@ -117,4 +127,243 @@
   margin-top: 10px;
   font-size: 12px;
   color: var(--error, #d93025);
+}
+
+/* ── A task opened from the Board, in place of the panel's own chat ──
+   (components/board/BoardTaskPeek.tsx). The own chat stays MOUNTED and
+   laid out under the peek: display:none would drop its scroller's offset (and
+   the stream's follow state with it), visibility keeps both and takes it out
+   of focus order and the accessibility tree. */
+.session-panel-chat-col.is-board-peek > :not(.board-task-peek) {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.board-task-peek {
+  position: absolute;
+  inset: 0;
+  /* Above the own chat's composer (z 40) and anything else in the column. */
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+}
+
+/* Same height and corner as the "Chat" bar it replaces, so the full-width bar
+   still reads as one line split by the column divider. */
+.board-task-peek-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  min-height: var(--split-bar-h, 43px);
+}
+
+.board-task-peek-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--accent-text, var(--accent));
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.board-task-peek-back:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+.board-task-peek-back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.board-task-peek-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* The "this is another task" strip: tinted and edged so it never reads as
+   the panel's own header. */
+.board-task-peek-context {
+  flex-shrink: 0;
+  padding: 8px 12px 9px;
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg));
+}
+
+.board-task-peek-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-text, var(--accent));
+}
+
+.board-task-peek-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.board-task-peek-title {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-task-peek-phase {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.board-task-peek-note {
+  margin: 3px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+
+.board-task-peek-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.board-task-peek-body > .session-panel {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+/* The inset panel lives INSIDE the outer split's chat column, so the outer
+   `.session-panel-split.is-changed-open …` descendant rules reach it. Its own
+   split is closed: its chat column is the plain wrapper again. */
+.board-task-peek .session-panel-inset .session-panel-split .session-panel-chat-col {
+  display: contents;
+}
+
+/* Its header is in flow: a nested column has no room for content to scroll
+   under the glass, and the outer split already dropped the history's header
+   padding for every panel inside it. */
+.board-task-peek .session-panel.session-panel-inset:not(.pending-session-panel) > .session-panel-header {
+  position: relative;
+}
+.board-task-peek .session-panel.session-panel-inset:not(.pending-session-panel) > .session-panel-header + .session-action-panel,
+.board-task-peek .session-panel.session-panel-inset:not(.pending-session-panel) > .session-panel-header + .session-error-banner {
+  margin-top: 6px;
+}
+
+.board-task-peek-card-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+}
+
+.board-task-peek-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
+.board-task-peek-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.board-task-peek-card-text {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.board-task-peek-card .btn {
+  margin-top: 12px;
+}
+
+/* The Board's reply box (components/board/BoardReplyDock.tsx): Walnut's own
+   composer docked under the frame, for the thread whose "Reply…" asked for it. */
+.task-board-dock {
+  flex: none;
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary, var(--bg));
+}
+
+.task-board-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.task-board-dock-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-board-dock-title b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.task-board-dock-error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger, #d93025);
+}
+
+.task-board-dock-close {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 16px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.task-board-dock-close:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg);
 }
