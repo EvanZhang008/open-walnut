@@ -158,7 +158,8 @@ describe('daemon dir fallback threads through the connect', () => {
   ].join('\n')
 
   it('a read-only /tmp moves the daemon to ~/.cache: start env, paths, status probes, stop all follow', async () => {
-    const { conn, seen, starts } = setup({ dirProbe: FALLBACK_PROBE, start: { bun: STARTED } })
+    const routes: Routes = { dirProbe: FALLBACK_PROBE, start: { bun: STARTED } }
+    const { conn, seen, starts } = setup(routes)
     await priv(conn).resolveRemoteDir()
     expect(conn.remoteDirChoice).toEqual({ path: '/home/me/.cache/open-walnut', fallback: true, reason: '/tmp is read-only', freeMb: 150 })
     expect(conn.remoteHome).toBe('/home/me')
@@ -170,6 +171,8 @@ describe('daemon dir fallback threads through the connect', () => {
     expect(start).not.toContain('/tmp/open-walnut')
 
     seen.length = 0
+    // The binary's --status is only asked when the file scan cannot answer.
+    routes.liveScan = 'sh: the scan did not run'
     await priv(conn).checkDaemonRunning()
     const statusProbe = seen.find((c) => c.includes('--status'))!
     expect(statusProbe).toContain("env WALNUT_DAEMON_DIR='/home/me/.cache/open-walnut'")

@@ -56,7 +56,7 @@ import { classifyHostConnectError, credentialRetryDelayMs, PROXY_LOGIN_EVIDENCE 
 import { isSshTransportFailure, markedUploadCommand, extractMarkedOutput, runRemoteSh, runSshBounded, shq, userShellPathScript } from './remote-sh.js'
 import {
   PROD_REMOTE_DAEMON_DIR, buildDaemonDirProbeScript, chooseDaemonDir, daemonDirEnv, parseDaemonDirProbe,
-  buildLiveDaemonScanScript, parseLiveDaemonScan, productionDaemonDirs, type DaemonDirChoice,
+  buildLiveDaemonScanScript, liveDaemonScanFoundNone, parseLiveDaemonScan, productionDaemonDirs, type DaemonDirChoice,
 } from './remote-daemon-dir.js'
 import {
   buildBunInstallScript, buildBunProbeScript, installTailForError, isRuntimeStartFailure, nextRuntimeAfterStartFailure,
@@ -2085,8 +2085,9 @@ export class DaemonConnection {
    * DaemonServiceProbeError when no daemon answers and the service probe got
    * no answer either (retryable; nothing is started).
    *
-   * Tries the binary first, then falls back to the old node-based daemon
-   * (in case a previous source-deploy daemon is still running).
+   * The pid/port files are read first (one shell script, no daemon code
+   * executed); the on-disk binary's `--status` is only asked when that scan
+   * gave no readable answer.
    */
   private async checkDaemonRunning(opts: { strict?: boolean } = {}): Promise<number | null> {
     // Record OS takeover BEFORE any decision: a service-managed daemon may be
@@ -2100,59 +2101,41 @@ export class DaemonConnection {
     // A real answer replaces the stand-in a recent stop of our own provides.
     if (!service.undetermined) this._stoppedUnmanaged = null
 
-    // Shell uses `|| true` so sshExec only rejects on real SSH failures (dead
-    // ControlMaster, tunnel, network). A missing daemon just returns empty stdout.
-    // Without this, a dead ControlMaster is indistinguishable from a dead daemon
-    // and triggers a wasteful redeploy on every tunnel hiccup.
-    let binarySshErr: unknown = null
-    try {
-      const remotePath = await this.getRemoteDaemonPath()
-      const result = await this.sshExec(`${this.dirEnvPrefix}${shq(remotePath)} --status 2>/dev/null || true`)
-      if (result) {
-        const status = JSON.parse(result)
-        if (status.running && status.port) {
-          if (await this.shouldUpgradeDaemon(remotePath, service)) {
-            return service.managed ? this.checkDaemonRunning(opts) : null
-          }
-          // The pid files say a daemon runs, not what runs it: the hello says that.
-          log.session.info('DaemonConnection: daemon already running (binary)', {
-            host: this.hostKey, port: status.port, pid: status.pid,
-            serviceManaged: service.managed || undefined,
-          })
-          return status.port
-        }
-      }
-    } catch (err) {
-      if (isServiceDecisionError(err)) throw err
-      binarySshErr = err
-    }
-
-    // Fallback: runtime-agnostic file probe. Whichever runtime started the
-    // daemon (node, bun, binary), it wrote daemon.pid + daemon.port. Reading
-    // those + `kill -0` works without knowing which runtime we used last time
-    // — important when this DaemonConnection was just constructed and
-    // _bunPath isn't populated yet, but a bun-started daemon is still alive
-    // from a previous server run.
+    // Runtime-agnostic file probe. Whichever runtime started the daemon (node,
+    // bun, binary), it wrote daemon.pid + daemon.port. Reading those + `kill -0`
+    // works without knowing which runtime we used last time — important when
+    // this DaemonConnection was just constructed and _bunPath isn't populated
+    // yet, but a bun-started daemon is still alive from a previous server run.
+    //
+    // This goes FIRST, and a clean "none" settles the question, because the
+    // other probe EXECUTES the binary on disk, and source deploys never refresh
+    // that file (see shouldUpgradeDaemon): on a bun host it is whatever the last
+    // binary deploy left, running code this server never chose. 2026-10-02: a
+    // remote held a month-old binary whose `--status` still ran its boot-time
+    // hooks loader, so every reconnect wrote one more daemon-d-*.log there
+    // (3,260 one-line files).
     let fileSshErr: unknown = null
+    let scanSettled = false
     try {
       // BOTH production dirs, the chosen one first: a daemon already alive in
       // the other one is adopted, never duplicated (a second daemon on the same
       // streams dir takes over every CLI of the first). The runtime token comes
       // from the live process's command line (status / diagnostics).
       const dirs = productionDaemonDirs(this._remoteDir, this._remoteHome)
-      const status = parseLiveDaemonScan(await this.sshExec(buildLiveDaemonScanScript(dirs), 5_000), dirs)
+      const output = await this.sshExec(buildLiveDaemonScanScript(dirs), 5_000)
+      const status = parseLiveDaemonScan(output, dirs)
+      scanSettled = status !== null || liveDaemonScanFoundNone(output)
       if (status) {
         if (status.dir !== this._remoteDir) this.adoptLiveDaemonDir(status.dir)
-        // Same staleness check as the binary arm: a source/bun daemon can
-        // be outdated too (it writes daemon.version at startup just like the
-        // binary). Without this, hosts where the binary probe fails would
-        // keep an old source daemon alive forever.
+        // A running daemon can be outdated whatever started it (it writes
+        // daemon.version at startup). Without this, an old daemon would stay
+        // alive forever.
         const remotePath = await this.getRemoteDaemonPath()
         if (await this.shouldUpgradeDaemon(remotePath, service)) {
           return service.managed ? this.checkDaemonRunning(opts) : null
         }
         this._runtime = status.runtime
-        log.session.info('DaemonConnection: daemon already running (source/bun)', {
+        log.session.info('DaemonConnection: daemon already running', {
           host: this.hostKey, port: status.port, pid: status.pid, runtime: this._runtime, dir: status.dir,
           serviceManaged: service.managed || undefined,
         })
@@ -2161,6 +2144,37 @@ export class DaemonConnection {
     } catch (err) {
       if (isServiceDecisionError(err)) throw err
       fileSshErr = err
+    }
+
+    // Fallback for a scan that could not answer (the link failed, an unreadable
+    // reply): ask the binary on disk. Shell uses `|| true` so sshExec only
+    // rejects on real SSH failures (dead ControlMaster, tunnel, network). A
+    // missing daemon just returns empty stdout. Without this, a dead
+    // ControlMaster is indistinguishable from a dead daemon and triggers a
+    // wasteful redeploy on every tunnel hiccup.
+    let binarySshErr: unknown = null
+    if (!scanSettled) {
+      try {
+        const remotePath = await this.getRemoteDaemonPath()
+        const result = await this.sshExec(`${this.dirEnvPrefix}${shq(remotePath)} --status 2>/dev/null || true`)
+        if (result) {
+          const status = JSON.parse(result)
+          if (status.running && status.port) {
+            if (await this.shouldUpgradeDaemon(remotePath, service)) {
+              return service.managed ? this.checkDaemonRunning(opts) : null
+            }
+            // The pid files say a daemon runs, not what runs it: the hello says that.
+            log.session.info('DaemonConnection: daemon already running (status probe)', {
+              host: this.hostKey, port: status.port, pid: status.pid,
+              serviceManaged: service.managed || undefined,
+            })
+            return status.port
+          }
+        }
+      } catch (err) {
+        if (isServiceDecisionError(err)) throw err
+        binarySshErr = err
+      }
     }
 
     // No live daemon AND the OS owns it → this is a service problem, and the

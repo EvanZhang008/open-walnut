@@ -273,6 +273,11 @@ export function buildLiveDaemonScanScript(dirs: string[]): string {
   ].join('\n')
 }
 
+/** True when the scan ran to its end and found no live daemon in any dir. */
+export function liveDaemonScanFoundNone(output: string): boolean {
+  return /^walnut-live none\s*$/m.test(output)
+}
+
 /** The live daemon the scan found, or null (none, or an unreadable reply). */
 export function parseLiveDaemonScan(output: string, dirs: string[]): LiveDaemonScan | null {
   const m = output.match(/^walnut-live dir=(\d+) pid=(\d+) port=(\d+) runtime=(\w+)\s*$/m)
