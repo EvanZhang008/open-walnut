@@ -136,7 +136,8 @@ export class RemoteSessionManager implements SessionManager {
   get lastPreparedOutbound(): string | undefined { return this._lastPreparedOutbound }
   get tailOffset(): number { return this._fileSize }
   get fileSize(): number { return this._fileSize }
-  get host(): string | null { return this.hostKey }
+  /** SessionManager contract: null for a local session (its hostKey is '__local__'). */
+  get host(): string | null { return this.isRemote ? this.hostKey : null }
   get imageCache(): Map<string, string> { return this._imageCache }
   get lastEventAt(): number { return this._lastEventAt }
 
