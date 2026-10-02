@@ -352,6 +352,57 @@ describe('when the model fails', () => {
   })
 })
 
+describe('a pass that meets a closed database', () => {
+  // The timer runs a pass fire-and-forget; a plugin torn down mid-pass closes the database under
+  // it, and the rejection used to escape as an unhandled one (seen under the plugin-loader tests).
+  function labelerOverClosedStore(): { labeler: MailSortLabeler; warnings: string[]; fire: () => void } {
+    const warnings: string[] = []
+    let pending: (() => void) | null = null
+    const closed = () => Promise.reject(Object.assign(new Error('the mail database is closed'), { code: 'db_unavailable' }))
+    const labeler = new MailSortLabeler({
+      store: { aiCandidates: closed, applyAiVerdicts: closed },
+      model: fakeModel(byKind),
+      context: async () => ({ rev: 'r1', groups: [], decides: () => false } as unknown as LabelContext),
+      reclassify: async () => {},
+      onDown: async () => {},
+      timeout: (handler) => { pending = handler; return { dispose: () => { pending = null } } },
+      log: { warn: (message) => warnings.push(message) },
+    })
+    return { labeler, warnings, fire: () => pending?.() }
+  }
+
+  it('resolves and says why, instead of rejecting', async () => {
+    const { labeler, warnings } = labelerOverClosedStore()
+    await expect(labeler.runNow()).resolves.toBeUndefined()
+    expect(warnings).toEqual(['mail labeling pass failed'])
+  })
+
+  it('a timer-fired pass leaves no unhandled rejection, and a torn-down one stays quiet', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const live = labelerOverClosedStore()
+      live.labeler.schedule(1)
+      live.fire()
+      await live.labeler.idle()
+
+      const gone = labelerOverClosedStore()
+      gone.labeler.schedule(1)
+      gone.fire()
+      gone.labeler.dispose()
+      await gone.labeler.idle()
+
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(unhandled).toEqual([])
+      expect(live.warnings).toEqual(['mail labeling pass failed'])
+      expect(gone.warnings).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+})
+
 describe('rules and the model', () => {
   it('a mail a rule decides is never asked about; a Not important rule still takes the model\'s group', async () => {
     const sort = await startEngine(fakeModel(byKind))

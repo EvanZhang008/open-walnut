@@ -272,12 +272,18 @@ export class MailSortLabeler {
     }, delayMs)
   }
 
-  /** Run now; resolves when this run (and any pass queued meanwhile) is done. Tests await it. */
+  /**
+   * Run now; resolves when this run (and any pass queued meanwhile) is done. Tests await it.
+   * Never rejects: the timer calls it fire-and-forget, so a pass that meets a closed database (the
+   * plugin torn down mid-pass) would otherwise be an unhandled rejection. The next schedule retries.
+   */
   runNow(): Promise<void> {
     if (this.running) { this.again = true; return this.running }
     this.running = (async () => {
       try {
         do { this.again = false; await this.pass() } while (this.again && !this.disposed)
+      } catch (error) {
+        if (!this.disposed) this.deps.log?.warn('mail labeling pass failed', { error: String(error).slice(0, 200) })
       } finally { this.running = null }
     })()
     return this.running
