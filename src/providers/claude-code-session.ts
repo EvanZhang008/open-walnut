@@ -45,6 +45,7 @@ import {
   parkStalePending,
   loadQueue,
   getAllSessionsWithPending,
+  getQueue,
 } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
 import { noteTurnUserUuid, pickBatchUuid } from './batch-uuid.js'
@@ -8924,9 +8925,8 @@ export class SessionRunner {
       totalStartMs: Date.now() - startTs,
       handleStartMs,
     })
-    void this.processNext(claudeSessionId).catch((error) => {
-      log.session.warn('Failed to drain messages queued during task start', { sessionId: claudeSessionId, error: String(error) })
-    })
+    // Messages queued during the spawn window are drained by handleStart itself
+    // (drainQueuedAfterSpawn), which the bus start path shares.
     return { claudeSessionId, title }
   }
 
@@ -9918,6 +9918,10 @@ export class SessionRunner {
     }
     session.send(message, cwd, resumeId, mode, resolvedModel, appendSystemPrompt, data.host, sshTarget, isFork, config.session?.permission_prompt, spillFile, config.session?.stream_partial_messages, resolvedEffort, undefined, Object.keys(sendOpts).length > 0 ? sendOpts : undefined)
 
+    // Both start paths (the bus SESSION_START handler and startSession) converge
+    // here, so this is the ONE post-ready drain; see drainQueuedAfterSpawn.
+    session.sessionReady.then((id) => this.drainQueuedAfterSpawn(id), () => {})
+
     // Record directory usage for the frequent-dirs persistent store
     // (fire-and-forget). Lane spawns are excluded: a side thread runs in the
     // parent's cwd, so every drawer prewarm would otherwise inflate that
@@ -9987,6 +9991,36 @@ export class SessionRunner {
     }
 
     return { sessionReady: session.sessionReady, title: sessionTitle }
+  }
+
+  /**
+   * Deliver what was queued while the spawn was still unconfirmed.
+   *
+   * A send that lands while the record reads `awaiting_spawn` makes processNext
+   * return early (it must not cold-resume a CLI that is still booting), and
+   * nothing else re-runs delivery once the spawn is confirmed. A lane minted with
+   * no first message therefore held the phone's first relayed message for 82
+   * minutes, until a daemon reconnect happened to redeliver it (2026-10-02).
+   *
+   * Never delivers twice: markProcessing moves only 'pending' rows, so a send
+   * that raced us to the queue leaves nothing here. The cached-queue pre-check
+   * keeps the common start (nothing queued) free of a queue-file write, and a
+   * batch already in flight is left to its own turn end, as handleSend would.
+   */
+  private async drainQueuedAfterSpawn(sessionId: string): Promise<void> {
+    try {
+      if (this.activeProcessing.has(sessionId)) return
+      const pending = (await getQueue(sessionId)).filter((m) => m.status === 'pending')
+      if (pending.length === 0) return
+      log.session.info('draining messages queued during the spawn window', {
+        sessionId, count: pending.length, messageIds: pending.map((m) => m.id),
+      })
+      await this.processNext(sessionId)
+    } catch (error) {
+      log.session.warn('Failed to drain messages queued during session start', {
+        sessionId, error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   /**

@@ -72,6 +72,17 @@ export const LANE_LATE_ANSWER_MAX_MS = 60 * 60_000;
 const DEATH_PROBE_AFTER_MS = 60_000;
 
 /**
+ * A message still unconfirmed this long after its send, on a lane whose CLI sits
+ * idle with no stream output, is stranded in the queue: the delivery trigger is
+ * re-run instead of waiting out the whole stall window (2026-10-02: a send that
+ * raced the lane's spawn sat queued for 82 minutes). At most
+ * LANE_REDELIVER_MAX_KICKS kicks per turn, so a lane that cannot take the
+ * message never turns into a retry loop.
+ */
+export const LANE_REDELIVER_AFTER_MS = 10_000;
+const LANE_REDELIVER_MAX_KICKS = 2;
+
+/**
  * Cap on events held while the lane id is still unknown. The window is one
  * sqlite read wide, so this only exists so a burst on a busy box can't grow an
  * unbounded array.
@@ -122,6 +133,9 @@ export interface LaneTurnResult {
   /** Present with laneStillRunning: this turn's late answer, or null once the
    *  lane dies, stalls again, or LANE_LATE_ANSWER_MAX_MS passes. */
   lateResult?: Promise<string | null>;
+  /** Set on a 'stalled' failure whose message was queued but never confirmed
+   *  delivered: the turn never began, so the delivery path failed, not the model. */
+  undelivered?: true;
 }
 
 /**
@@ -193,6 +207,11 @@ export async function runLaneTurn(
   let ceilingTimer: ReturnType<typeof setTimeout> | undefined;
   let lateCapTimer: ReturnType<typeof setTimeout> | undefined;
   let probing = false;
+  /** When our send returned (redelivery backstop below). */
+  let sentAt = 0;
+  let redeliverTimer: ReturnType<typeof setTimeout> | undefined;
+  let redeliverKicks = 0;
+  let redelivering = false;
 
   let resolveTurn!: (r: LaneTurnResult) => void;
   const turn = new Promise<LaneTurnResult>((resolve) => { resolveTurn = resolve; });
@@ -204,6 +223,7 @@ export async function runLaneTurn(
     if (tickTimer) clearInterval(tickTimer);
     if (ceilingTimer) clearTimeout(ceilingTimer);
     if (lateCapTimer) clearTimeout(lateCapTimer);
+    if (redeliverTimer) clearTimeout(redeliverTimer);
   };
 
   /**
@@ -226,7 +246,7 @@ export async function runLaneTurn(
     else drainLaneGate({ sessionId, agentId, conversationId, source: opts.source, why, tickMs, windowMs: stallMs });
   };
 
-  const finish = (resultText: string | null, why: string, failure?: LaneTurnFailure, stillRunning = false): void => {
+  const finish = (resultText: string | null, why: string, failure?: LaneTurnFailure, stillRunning = false, undelivered = false): void => {
     if (mode !== 'turn') return;
     let lateResult: Promise<string | null> | undefined;
     if (stillRunning && sessionId) {
@@ -251,6 +271,7 @@ export async function runLaneTurn(
     const result: LaneTurnResult = { sessionId: sessionId ?? '', resultText };
     if (resultText === null && failure) result.failure = failure;
     if (lateResult) { result.laneStillRunning = true; result.lateResult = lateResult; }
+    if (undelivered && resultText === null) result.undelivered = true;
     if (mode === 'turn') cleanup();
     resolveTurn(result);
   };
@@ -330,8 +351,45 @@ export async function runLaneTurn(
     }
   };
 
+  /** Our message is in the queue but its delivery was never confirmed. */
+  const stranded = (): boolean =>
+    mode === 'turn' && sendStarted && !laneCreated && ourMessageId !== null && delivered === null;
+
+  /**
+   * Backstop for a message that reached the queue but not the CLI (see
+   * LANE_REDELIVER_AFTER_MS). It re-sends the queue's own kick (message '': the
+   * queue holds the text), as restart and retry do. The runner's markProcessing
+   * moves only 'pending' rows, so a message already in flight or delivered can
+   * never go out twice.
+   */
+  const redeliverIfStranded = async (): Promise<void> => {
+    if (!stranded() || !sessionId || redelivering || redeliverKicks >= LANE_REDELIVER_MAX_KICKS) return;
+    if (Date.now() - sentAt < LANE_REDELIVER_AFTER_MS) return;
+    const sid = sessionId;
+    // Stream output since our send means a turn is moving: nothing is stuck.
+    if ((lastSessionProgressAt(sid) ?? 0) > sentAt) return;
+    redelivering = true;
+    try {
+      const proc = await readLaneProcess(sid);
+      if (!stranded() || sessionId !== sid) return;
+      // Only a spawned CLI sitting idle is stranded: a running one is in a turn (a
+      // kick would join it), a dead one is the death probe's, and a reservation
+      // still awaiting its spawn is drained by the runner once the spawn lands.
+      if (proc.status !== 'idle' || proc.reason === 'awaiting_spawn') return;
+      redeliverKicks++;
+      log.session.warn('lane turn: message still undelivered on an idle lane, re-triggering delivery', {
+        sessionId: sid, agentId, conversationId, source: opts.source, messageId: ourMessageId,
+        sinceSendMs: Date.now() - sentAt, kick: redeliverKicks,
+      });
+      bus.emit(EventNames.SESSION_SEND, { sessionId: sid, message: '' }, ['session-runner'], { source: 'lane-redeliver' });
+    } finally {
+      redelivering = false;
+    }
+  };
+
   const onTick = async (): Promise<void> => {
     if (mode === 'done' || !sessionId || !clock || probing) return;
+    void redeliverIfStranded();
     const sid = sessionId;
     const stamp = lastSessionProgressAt(sid);
     if (stamp !== undefined) clock.progress(stamp);
@@ -356,11 +414,12 @@ export async function runLaneTurn(
         return;
       }
       const running = proc.status === 'running';
+      const undelivered = delivered === null && !laneCreated;
       log.session.warn('lane turn stalled: no stream progress', {
         sessionId: sid, agentId, conversationId, source: opts.source,
         silentMs, stallMs, processStatus: proc.status, delivered: delivered !== null,
       });
-      finish(null, 'stalled', 'stalled', running && (delivered !== null || laneCreated));
+      finish(null, 'stalled', 'stalled', running && !undelivered, undelivered);
     } finally {
       probing = false;
     }
@@ -473,6 +532,11 @@ export async function runLaneTurn(
           if (deliveredBeforeId.has(id)) confirmDelivery(deliveredBeforeId.get(id));
         }
         deliveredBeforeId.clear();
+        sentAt = Date.now();
+        if (stranded()) {
+          redeliverTimer = setTimeout(() => { void redeliverIfStranded(); }, LANE_REDELIVER_AFTER_MS);
+          redeliverTimer.unref?.();
+        }
         // Advance the high-water mark only now: a send that threw must re-inject.
         if (caught.commit) {
           await caught.commit().catch((err) => log.session.warn('lane turn: recording the catch-up high-water mark failed', {

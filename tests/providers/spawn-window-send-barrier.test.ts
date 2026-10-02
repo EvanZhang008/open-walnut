@@ -66,9 +66,12 @@ vi.mock('../../src/utils/cwd-check.js', () => ({
   checkCwdExists: async () => ({ ok: true }),
 }));
 
-import { ClaudeCodeSession, sessionRunner } from '../../src/providers/claude-code-session.js';
+import { ClaudeCodeSession, SessionRunner, sessionRunner } from '../../src/providers/claude-code-session.js';
 import * as tracker from '../../src/core/session-tracker.js';
 import type { SessionRecord } from '../../src/core/types.js';
+import { bus, EventNames } from '../../src/core/event-bus.js';
+import { deleteMessage, getQueue, sendMessageToSession } from '../../src/core/session-message-queue.js';
+import { log } from '../../src/logging/index.js';
 
 beforeEach(() => {
   calls.length = 0;
@@ -157,6 +160,95 @@ describe('spawn window — awaitSpawn() barrier', () => {
       expect(calls).not.toContain('kill');
     } finally {
       session.detach();
+    }
+  });
+
+  // REGRESSION 2026-10-02: the phone minted a lane with no first message (record
+  // seeded `awaiting_spawn`), and its relayed turn queued a message ~70 ms later.
+  // processNext saw the unconfirmed spawn and returned; the CLI came up 100 ms
+  // after that, but only startSession() drained the queue once ready, never the
+  // bus SESSION_START path, so the message sat queued until a daemon reconnect
+  // 82 minutes later. The drain now lives in handleStart, shared by both paths.
+  /** Bus-start an init-only lane spawn, queue a send while it is unconfirmed, then
+   *  land the spawn. Returns what was delivered and the queued id. */
+  async function sendDuringBusStartedSpawn(sid: string, info: { mock: { calls: unknown[][] } }) {
+    const deliveredIds: string[] = [];
+    bus.subscribe(`test-spawn-window-delivered-${sid}`, (e) => {
+      const d = e.data as { sessionId?: string; messageIds?: string[] };
+      if (d.sessionId === sid) deliveredIds.push(...(d.messageIds ?? []));
+    }, { global: true, interest: [EventNames.SESSION_MESSAGES_DELIVERED] });
+    await tracker.createSessionRecord(sid, '', '', '/tmp', {
+      lane: 'test-spawn-window-lane', initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn',
+    });
+    bus.emit(EventNames.SESSION_START, {
+      taskId: '', message: '', cwd: '/tmp', lane: 'test-spawn-window-lane', preassignedSessionId: sid,
+    }, ['session-runner'], { source: 'test' });
+    await vi.waitFor(() => expect(calls).toContain('start'), { timeout: 5000 });
+
+    // The relayed turn's message arrives while the spawn is still in flight.
+    const queued = await sendMessageToSession(sid, 'hello from the phone', { source: 'test' });
+    await vi.waitFor(() => expect(info.mock.calls.some(([msg, meta]) =>
+      msg === 'processNext: waiting for initial spawn confirmation'
+      && (meta as { sessionId?: string } | undefined)?.sessionId === sid)).toBe(true), { timeout: 5000 });
+    expect(calls).not.toContain('writeMessage');
+    expect((await getQueue(sid)).map((m) => [m.id, m.status])).toEqual([[queued.id, 'pending']]);
+    releaseStart!();
+    return { deliveredIds, queuedId: queued.id };
+  }
+
+  function newRunner(): InstanceType<typeof SessionRunner> {
+    const runner = new SessionRunner('claude');
+    // Skips the local-daemon ensure; the transport itself is the mock above.
+    runner.setTestDaemonUrl('ws://127.0.0.1:1');
+    runner.init();
+    return runner;
+  }
+
+  it('a message queued while a bus-started init-only spawn is unconfirmed is delivered once it lands', async () => {
+    const sid = '44444444-5555-4666-8777-888888888888';
+    const runner = newRunner();
+    const info = vi.spyOn(log.session, 'info');
+    try {
+      const { deliveredIds, queuedId } = await sendDuringBusStartedSpawn(sid, info);
+      // The spawn landed: the queued message goes out over the fresh FIFO, with no
+      // reconnect, no extra spawn, and exactly once.
+      await vi.waitFor(() => expect(deliveredIds).toEqual([queuedId]), { timeout: 3000 });
+      expect(info.mock.calls.some(([msg]) => msg === 'draining messages queued during the spawn window')).toBe(true);
+      expect(calls.filter((c) => c === 'writeMessage')).toHaveLength(1);
+      expect(calls.filter((c) => c === 'start')).toHaveLength(1);
+      expect(calls).not.toContain('stop');
+      await new Promise((r) => setTimeout(r, 200));
+      expect(calls.filter((c) => c === 'writeMessage')).toHaveLength(1);
+      expect(deliveredIds).toEqual([queuedId]);
+    } finally {
+      info.mockRestore();
+      bus.unsubscribe(`test-spawn-window-delivered-${sid}`);
+      runner.destroy();
+    }
+  });
+
+  it('control: without the post-ready drain the same message stays stranded (the incident)', async () => {
+    const sid = '55555555-6666-4777-8888-999999999999';
+    const drain = vi.spyOn(SessionRunner.prototype as never, 'drainQueuedAfterSpawn' as never)
+      .mockImplementation((async () => {}) as never);
+    const runner = newRunner();
+    const info = vi.spyOn(log.session, 'info');
+    let queued: string | undefined;
+    try {
+      const { deliveredIds, queuedId } = await sendDuringBusStartedSpawn(sid, info);
+      queued = queuedId;
+      await vi.waitFor(() => expect(drain).toHaveBeenCalled(), { timeout: 3000 });
+      await new Promise((r) => setTimeout(r, 500));
+      expect(deliveredIds).toEqual([]);
+      expect(calls).not.toContain('writeMessage');
+      expect((await getQueue(sid)).map((m) => [m.id, m.status])).toEqual([[queuedId, 'pending']]);
+    } finally {
+      drain.mockRestore();
+      info.mockRestore();
+      bus.unsubscribe(`test-spawn-window-delivered-${sid}`);
+      runner.destroy();
+      // A pending row would be picked up by a later runner's startup recovery.
+      if (queued) await deleteMessage(sid, queued);
     }
   });
 

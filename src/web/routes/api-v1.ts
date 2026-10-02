@@ -1803,7 +1803,17 @@ async function runApiV1LaneTurn(
         return
       }
       const errMsg = laneFailureMessage(turn.failure)
-      log.web.error('api-v1 lane turn failed', { conversationId, turnId, agentId, sessionId, failure: turn.failure })
+      // A message that never reached the CLI is the delivery path failing (error);
+      // a stall on a turn the CLI did receive is a warning. The session key lets
+      // the lane's next clean turn retire the card. undefined = not known.
+      const delivered = turn.failure === 'stalled' ? !turn.undelivered
+        : turn.failure === 'send-failed' || turn.failure === 'busy' ? false : undefined
+      const failMeta = {
+        conversationId, turnId, agentId, sessionId, failure: turn.failure, delivered,
+        ...(sessionId ? { recoveryKey: `session:${sessionId}` } : {}),
+      }
+      if (delivered === true) log.web.warn('api-v1 lane turn failed', failMeta)
+      else log.web.error('api-v1 lane turn failed', failMeta)
       await persistAndEmitTurnError(agentId, conversationId, errMsg)
       return
     }

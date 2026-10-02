@@ -33,8 +33,8 @@ vi.mock('../../src/core/session-tracker.js', () => ({ getSessionByClaudeId }))
 
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import {
-  runLaneTurn, LANE_TURN_STALL_MS, LANE_TURN_TICK_MS, LANE_LATE_ANSWER_MAX_MS, _outstandingLateLanesForTesting,
-  type LaneTurnResult, type LaneTurnTarget,
+  runLaneTurn, LANE_TURN_STALL_MS, LANE_TURN_TICK_MS, LANE_LATE_ANSWER_MAX_MS, LANE_REDELIVER_AFTER_MS,
+  _outstandingLateLanesForTesting, type LaneTurnResult, type LaneTurnTarget,
 } from '../../src/core/sessions/lane-turn.js'
 import { _resetLaneGatesForTesting } from '../../src/core/sessions/lane-turn-gate.js'
 import { enqueueAgentTurn } from '../../src/web/agent-turn-queue.js'
@@ -252,6 +252,59 @@ describe('a dead CLI', () => {
     delivered('qm-1', 2)
     result('redelivered and answered', 2)
     expect((await turn).resultText).toBe('redelivered and answered')
+  })
+})
+
+describe('a message stranded in the queue (2026-10-02: a send that raced the lane spawn sat queued 82 minutes)', () => {
+  /** Queue kicks sent on the bus (SESSION_SEND with no text: the queue holds it). */
+  let kicks: Array<{ sessionId: string; message: string; source?: string }> = []
+  beforeEach(() => {
+    kicks = []
+    bus.subscribe('test-kicks', (e) => {
+      if (e.name !== EventNames.SESSION_SEND) return
+      const d = e.data as { sessionId: string; message: string }
+      kicks.push({ sessionId: d.sessionId, message: d.message, source: e.source })
+    }, { global: true, interest: [EventNames.SESSION_SEND] })
+  })
+
+  it('an idle lane that never confirmed the delivery is kicked once the backstop window passes', async () => {
+    processStatus = 'idle'
+    statusReason = 'session_started'
+    const turn = runLaneTurn('general', 'conv-a', 'x', { source: 'api-v1', target: reusedLane() })
+    await sends(1)
+    await advance(LANE_REDELIVER_AFTER_MS - 2_000, 1_000)
+    expect(kicks).toEqual([])
+    await advance(3_000, 1_000)
+    expect(kicks).toEqual([{ sessionId: SID, message: '', source: 'lane-redeliver' }])
+    delivered('qm-1', 1)
+    result('answered after the kick', 1)
+    expect((await turn).resultText).toBe('answered after the kick')
+  })
+
+  it('kicks at most twice; the stall then reports a message that was never delivered', async () => {
+    processStatus = 'idle'
+    statusReason = 'session_started'
+    const turn = runLaneTurn('general', 'conv-a', 'x', { source: 'api-v1', target: reusedLane() })
+    await sends(1)
+    await advance(LANE_TURN_STALL_MS + 2 * LANE_TURN_TICK_MS)
+    expect(kicks).toHaveLength(2)
+    expect(await turn).toEqual({ sessionId: SID, resultText: null, failure: 'stalled', undelivered: true })
+  })
+
+  it('never kicks a lane running a turn (the kick would join it), awaiting its spawn, or already delivered', async () => {
+    const turn = runLaneTurn('general', 'conv-a', 'x', { source: 'api-v1', target: reusedLane() })
+    await sends(1)
+    await advance(2 * MIN) // processStatus 'running'
+    processStatus = 'idle'
+    statusReason = 'awaiting_spawn'
+    await advance(2 * MIN)
+    expect(kicks).toEqual([])
+    delivered('qm-1', 1)
+    statusReason = 'session_started'
+    await advance(2 * MIN)
+    expect(kicks).toEqual([])
+    result('ok', 1)
+    expect((await turn).resultText).toBe('ok')
   })
 })
 
