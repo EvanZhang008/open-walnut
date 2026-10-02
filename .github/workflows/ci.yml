@@ -37,6 +37,11 @@ jobs:
           bun-version: latest
       - run: npm ci
       - run: npm run lint
+      # Playwright loads every spec before it runs one: a single bad import fails
+      # the whole browser suite with 0 tests. Listing is that load step alone
+      # (~20s, no browser, no server), so it blocks here.
+      - name: browser specs load
+        run: npx playwright test --list --project=chromium > /dev/null
       - run: npm run build
       - run: npm run test:plugin-packages
 

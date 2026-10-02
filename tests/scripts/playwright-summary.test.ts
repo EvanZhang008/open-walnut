@@ -52,6 +52,15 @@ describe('playwright-summary', () => {
     expect(summarize({ suites: [] })).toBe('**0 tests:** 0 passed, 0 failed, 0 flaky (passed on a retry), 0 skipped\n')
   })
 
+  it('leads with errors outside any test, the shape a spec that fails to load leaves', () => {
+    // As CI saw it on 2026-10-02: one missing export, two specs importing it, 0 tests.
+    const message = "SyntaxError: The requested module './threads-helpers' does not provide an export named 'nextQuestionNumber'"
+    const out = summarize({ suites: [], errors: [{ message, location: null }, { message, location: null }] })
+    expect(out.split('\n').slice(0, 3)).toEqual(['**The suite did not run cleanly:**', '', `- ${message} (×2)`])
+    expect(out).toContain('**0 tests:**')
+    expect(summarize(REPORT)).not.toContain('did not run cleanly')
+  })
+
   it('runs as CI calls it, and --keys prints only the failures', () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pw-summary-')), 'r.json')
     fs.writeFileSync(file, JSON.stringify(REPORT))

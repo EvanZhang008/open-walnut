@@ -393,4 +393,14 @@ describe('ci.yml', () => {
     expect(runs('browser')).toContain('npx playwright test --project=chromium --shard=${{ matrix.shard }}/4')
     expect(runs('browser')).toContain('node scripts/playwright-summary.mjs')
   })
+
+  it('a browser spec that fails to load blocks in Lint & build, before any shard runs', () => {
+    // 2026-10-02: one missing export made every shard run 0 tests, and the report-only
+    // shards stayed green.
+    const steps = doc.jobs.build!.steps
+    const list = steps.findIndex((s) => (s.run ?? '').includes('npx playwright test --list --project=chromium'))
+    expect(list).toBeGreaterThan(steps.findIndex((s) => s.run === 'npm ci'))
+    expect(steps[list]!['continue-on-error']).toBeUndefined()
+    expect(gate.needs).toContain('build')
+  })
 })

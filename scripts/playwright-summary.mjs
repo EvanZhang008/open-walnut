@@ -2,7 +2,8 @@
 /**
  * A Playwright JSON report (`--reporter=json`) as a short markdown summary for a
  * CI step summary: the totals, then each failing and each flaky test by file and
- * title (the same `file :: title` keys a known-failures baseline would hold).
+ * title (the same `file :: title` keys a known-failures baseline would hold),
+ * led by any error outside a test (a spec that failed to load).
  *
  *   node scripts/playwright-summary.mjs <report.json> [--keys]
  *
@@ -34,6 +35,14 @@ export function summarize(report) {
   const lines = [
     `**${tests.length} tests:** ${by('expected').length} passed, ${failed.length} failed, ${flaky.length} flaky (passed on a retry), ${by('skipped').length} skipped`,
   ]
+  // Errors outside any test: a spec that fails to load stops the whole run.
+  // Playwright gives these no location, and one bad import repeats per spec that has it.
+  const errors = new Map()
+  for (const e of report.errors ?? []) {
+    const m = String(e.message ?? e.value ?? e).split('\n')[0].slice(0, 300)
+    errors.set(m, (errors.get(m) ?? 0) + 1)
+  }
+  if (errors.size) lines.unshift('**The suite did not run cleanly:**', '', ...[...errors].map(([m, n]) => `- ${m}${n > 1 ? ` (×${n})` : ''}`), '')
   if (failed.length) lines.push('', '<details><summary>Failed</summary>', '', ...failed.map((k) => `- \`${k}\``), '', '</details>')
   if (flaky.length) lines.push('', '<details><summary>Flaky</summary>', '', ...flaky.map((k) => `- \`${k}\``), '', '</details>')
   return `${lines.join('\n')}\n`
