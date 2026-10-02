@@ -627,6 +627,29 @@ export const SILENT_SYSTEM_SUBTYPES: ReadonlySet<string> = new Set([
   'control_request_progress',  // progress ticks for control reads Walnut itself issued
 ])
 
+/**
+ * Efforts the user picked for a session that no live CLI could take: its spawn
+ * was still on its way (or the session was not running at all).
+ * applySessionEffortChange persists the pick and holds it here, and the
+ * session's next spawn adopts it when it lands (adoptEffortHeldForSpawn).
+ * Before, nothing told the spawning instance, and its first record write put
+ * the launch effort back over the pick (CI 2026-10-02: an Ask Walnut session
+ * set to low read medium a moment later). A landing spawn always consumes the
+ * session's entry.
+ */
+const effortsHeldForSpawn = new Map<string, import('../core/types.js').SessionEffort>()
+
+export function holdEffortForSpawn(sessionId: string, effort: import('../core/types.js').SessionEffort): void {
+  if (effortsHeldForSpawn.size > 1000) effortsHeldForSpawn.clear()
+  effortsHeldForSpawn.set(sessionId, effort)
+}
+
+function takeEffortHeldForSpawn(sessionId: string): import('../core/types.js').SessionEffort | undefined {
+  const effort = effortsHeldForSpawn.get(sessionId)
+  effortsHeldForSpawn.delete(sessionId)
+  return effort
+}
+
 // DUP-DEBUG: per-process counter so each ClaudeCodeSession has a stable id
 // in logs. If logs show two ccsId values for the same claudeSessionId
 // processing the same JSONL line, multiple session instances are alive
@@ -973,6 +996,10 @@ export class ClaudeCodeSession {
   /** REQUESTED reasoning-effort passed to --effort (low/medium/high/xhigh/max). User intent;
    *  preserved for resume. NOT ground truth — see _effectiveEffort. */
   private _effort: import('../core/types.js').SessionEffort | undefined
+  /** The effort this CLI process was spawned with (its --effort, or the intent
+   *  kept for a model that takes none). A pick held for the spawn that differs
+   *  from it is applied live once the spawn lands. */
+  private _spawnEffort: import('../core/types.js').SessionEffort | undefined
   /** TRUE runtime effort last read back from the CLI via get_settings (applied.effort).
    *  Authoritative — reflects env override + model downgrade. Undefined until first read. */
   private _effectiveEffort: import('../core/types.js').SessionEffort | undefined
@@ -2136,6 +2163,7 @@ export class ClaudeCodeSession {
     } else {
       this._effort = undefined
     }
+    this._spawnEffort = this._effort
     if (resumeSessionId) {
       args.push('--resume', resumeSessionId)
       // Rewind: cut the resumed transcript at a message. Only meaningful with a
@@ -2448,6 +2476,9 @@ export class ClaudeCodeSession {
       this.pid = result.pid
       this._outputFile = result.outputFile
       this._turnStartOffset = result.fileSize
+      // Before anything below persists the record: a pick made while this spawn
+      // was on its way is the session's effort now, not the launch value.
+      this.adoptEffortHeldForSpawn(preassignedId ?? (isResume ? resumeSessionId : null))
 
       // Stale-watermark guard on the (re)spawn path: fileSize is the stream
       // file's CURRENT size — a consumed line-end offset can never exceed the
@@ -6900,6 +6931,23 @@ export class ClaudeCodeSession {
     )
     const title = payload && typeof payload.title === 'string' ? payload.title.trim() : ''
     return title || null
+  }
+
+  /** Adopt the effort held for this session's spawn (holdEffortForSpawn): the
+   *  record already carries it, so make the instance agree before it persists,
+   *  and tell the CLI, which was spawned with the launch value. */
+  private adoptEffortHeldForSpawn(sessionId: string | null | undefined): void {
+    const held = sessionId ? takeEffortHeldForSpawn(sessionId) : undefined
+    if (!held || held === this._spawnEffort) return
+    this._effort = held
+    log.session.info('effort picked during the spawn adopted', {
+      sessionId, taskId: this.taskId, spawnEffort: this._spawnEffort, effort: held,
+    })
+    if (!modelSupportsEffort(this._cliModel)) return
+    this.sendFlagSettings(`eff-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`, { effortLevel: held }, 15_000)
+      .catch((err) => log.session.warn('effort picked during the spawn: live apply failed, the record keeps it for the next spawn', {
+        sessionId, effort: held, error: err instanceof Error ? err.message : String(err),
+      }))
   }
 
   /**

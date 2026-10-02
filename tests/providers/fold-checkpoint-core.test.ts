@@ -103,8 +103,13 @@ describe('fold checkpoint', () => {
 
     it('the file was recreated (new inode, same bytes)', () => {
       const bytes = fs.readFileSync(jsonl)
-      fs.unlinkSync(jsonl)
+      // Keep the old inode allocated while the new file is made: ext4 hands a
+      // freed inode number straight back, and a recreate inside the same
+      // millisecond keeps the birth time too, so unlink + write was the SAME
+      // epoch on a Linux runner now and then (CI 2026-10-02).
+      fs.renameSync(jsonl, `${jsonl}.old`)
       fs.writeFileSync(jsonl, bytes)
+      expect(fs.statSync(jsonl).ino).not.toBe(fs.statSync(`${jsonl}.old`).ino)
       expect(ck.load(jsonl)).toBeNull()
     })
 

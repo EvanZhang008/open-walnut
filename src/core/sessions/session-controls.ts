@@ -86,7 +86,7 @@ export async function applySessionEffortChange(
   const effort = rawEffort as SessionEffort;
 
   const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
-  const { sessionRunner } = await import('../../providers/claude-code-session.js');
+  const { sessionRunner, holdEffortForSpawn } = await import('../../providers/claude-code-session.js');
   const { getHostModelCatalog } = await import('../host-model-catalog.js');
 
   const record = await getSessionByClaudeId(sessionId);
@@ -156,6 +156,10 @@ export async function applySessionEffortChange(
       });
     }
   }
+
+  // No CLI took it (still spawning, or not running): the next spawn of this
+  // session adopts it when it lands, so its first record write cannot undo it.
+  if (!applied) holdEffortForSpawn(sessionId, effort);
 
   const overridden = effectiveEffort !== undefined && effectiveEffort !== effort;
   log.session.info('session effort changed', { sessionId, effort, appliedLive: applied, effectiveEffort, overridden });

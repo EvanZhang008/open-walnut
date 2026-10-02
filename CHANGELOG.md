@@ -18,10 +18,15 @@ breaking changes).
   the way a user does, on Linux and macOS, serves it, runs a session against a mock Claude
   Code across a restart, and checks that both an older build and the version on npm today
   update themselves to it. The slow test tier (about 1,000 tests with real daemons and
-  servers) now blocks too, and the e2e and browser suites run on every push.
+  servers) and the e2e tier (real servers with a mock Claude Code) now block too, and the
+  browser suite runs on every push.
 
 ### Fixed
 
+- **An effort you pick right after starting a session is kept.** A reasoning effort chosen
+  while the session's Claude Code was still starting was saved, then replaced by the launch
+  effort a moment later, and that Claude Code ran the launch effort until it ended. The pick
+  now holds, and the starting Claude Code is told.
 - **A session keeps the mode you picked while it was not running.** Switching a session's
   permission mode (to accept edits, say) while its Claude Code process had ended was saved,
   but the next message resumed it in the old mode.
