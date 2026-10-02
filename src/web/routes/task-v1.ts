@@ -210,8 +210,13 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
     const id = paramStr(req.params.id)
     const tm = await import('../../core/task-manager.js')
     try {
-      const result = await tm.completeTask(id)
-      log.web.info('task completed via api-v1', { taskId: result.task.id })
+      // The acting session rides on the phase event, so the notices this
+      // completion causes can skip their own author (a leader completing its
+      // worker is not told what it just did, 2026-10-02).
+      const rawActor = req.headers['x-walnut-caller-sid']
+      const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
+      const result = await tm.completeTask(id, actorSid ? { actorSid } : undefined)
+      log.web.info('task completed via api-v1', { taskId: result.task.id, ...(actorSid ? { actorSid } : {}) })
       // fields (additive): scopes the replica outbox op to what completion
       // actually changes (auto-unpin was removed 2026-08-26 — pins persist).
       bus.emit(EventNames.TASK_COMPLETED, {

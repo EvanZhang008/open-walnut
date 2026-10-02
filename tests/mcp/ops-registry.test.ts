@@ -18,7 +18,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-ops-registry'))
 
 import { BUILTIN_SKILLS_DIR, WALNUT_HOME } from '../../src/constants.js'
-import { listOps, materializeBinding, executeOp } from '../../src/ops/index.js'
+import { getOp, listOps, materializeBinding, executeOp } from '../../src/ops/index.js'
 import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
 import { PHASE_ORDER } from '../../src/core/phase.js'
 
@@ -37,12 +37,17 @@ describe('ops registry — shape contract', () => {
     }
   })
 
-  it('destructive ops never allow the remote (gateway) transport', () => {
+  it('destructive ops never allow the remote (gateway) transport, unless the route bounds the remote caller', () => {
+    // task_merge (2026-10-02): a remote session merges only its own work; the
+    // merge route checks that itself (core/sessions/merge-reach.ts), so the
+    // transport may let it through. Add a name here only with such a check.
+    const boundedByRoute = new Set(['task_merge'])
     for (const op of listOps()) {
-      if (op.tags.destructive) {
+      if (op.tags.destructive && !boundedByRoute.has(op.name)) {
         expect(op.tags.remote, `${op.name} is destructive`).toBe('deny')
       }
     }
+    expect(getOp('task_merge')?.tags.remote).toBe('allow')
   })
 
   it('search ops carry a 30s timeout (embedding cold-start exceeds the 10s default)', () => {

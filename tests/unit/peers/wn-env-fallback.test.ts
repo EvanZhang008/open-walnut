@@ -43,7 +43,7 @@ import {
   handleGatewayCapability,
   type CapabilityRouterDeps,
 } from '../../../src/core/peers/capability-router.js';
-import { PeerThrottle, PEER_SEND_MAX_PER_WINDOW } from '../../../src/core/peers/peer-throttle.js';
+import { PeerThrottle, GATEWAY_WRITE_MAX_PER_WINDOW } from '../../../src/core/peers/peer-throttle.js';
 import { getDaemonSource } from '../../../src/providers/daemon-source.js';
 
 const UID = 501;
@@ -546,7 +546,7 @@ describe('capability-router with an external caller', () => {
     // Fill the caller's OWN bucket (anonymous callers are bucketed per host).
     // Pre-burning is what keeps this case offline: an admitted write would
     // really execute the op against the local API.
-    for (let i = 0; i < PEER_SEND_MAX_PER_WINDOW; i++) {
+    for (let i = 0; i < GATEWAY_WRITE_MAX_PER_WINDOW; i++) {
       expect(throttle.admitWrite(`${EXTERNAL_CALLER_SID}@devbox`).allowed).toBe(true);
       t += 10;
     }
@@ -596,7 +596,7 @@ describe('capability-router with an external caller', () => {
     let t = 7_000_000;
     const throttle = new PeerThrottle(() => t);
     const { deps } = makeDeps({ throttle });
-    for (let i = 0; i < PEER_SEND_MAX_PER_WINDOW; i++) {
+    for (let i = 0; i < GATEWAY_WRITE_MAX_PER_WINDOW; i++) {
       expect(throttle.admitWrite(`${EXTERNAL_CALLER_SID}@devbox`).allowed).toBe(true);
       t += 10;
     }

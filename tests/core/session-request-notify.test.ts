@@ -130,13 +130,14 @@ function backdateDeadline(id: string): void {
 }
 
 /** The phase-edge payload the hook dispatcher hands the handler. */
-function phasePayload(over: { sessionId?: string; taskId?: string; newPhase?: string } = {}): SessionHookContext {
+function phasePayload(over: { sessionId?: string; taskId?: string; newPhase?: string; actorSid?: string } = {}): SessionHookContext {
   return {
     domain: 'task',
     taskId: over.taskId ?? 'task-77',
     sessionId: 'sessionId' in over ? over.sessionId : TARGET,
     oldPhase: 'IN_PROGRESS',
     newPhase: over.newPhase ?? 'NEED_ACTION',
+    ...(over.actorSid ? { actorSid: over.actorSid } : {}),
     eventSource: 'api',
     timestamp: NOW,
     traceId: 'trace-1',
@@ -537,6 +538,28 @@ describe('sessionRequestWatchHook — the parent hears about its subtask by stat
     expect(notices[0].attrs.request).toBe(rq.id);
   });
 
+  it('the parent\'s own session completed the child: no completed notice, its request settled quietly', async () => {
+    // A leader running task_complete on a worker has read the result. Telling it
+    // "completed" (and quoting the summary it just read) only woke it for a
+    // no-op turn, once per worker (2026-10-02: 16 wakes in one run).
+    const rq = await arm({ fromSessionId: PARENT });
+    listTasksByIds.mockResolvedValue([{ ...child, phase: 'COMPLETE' }]);
+    await fire(phasePayload({ newPhase: 'COMPLETE', actorSid: PARENT }));
+
+    expect(notifySpy).not.toHaveBeenCalled();
+    expect(parentNotices()).toHaveLength(0);
+    expect((await getSessionRequest(rq.id))?.status).toBe('notified');
+  });
+
+  it('another session completed the child: the parent still hears completed', async () => {
+    listTasksByIds.mockResolvedValue([{ ...child, phase: 'COMPLETE' }]);
+    await fire(phasePayload({ newPhase: 'COMPLETE', actorSid: 'sess-someone-else' }));
+
+    const [n, ...rest] = parentNotices();
+    expect(rest).toHaveLength(0);
+    expect(n.attrs.outcome).toBe('completed');
+  });
+
   it('another asker holds a request: it gets the fallback, the parent gets the subtask notice, one transcript read', async () => {
     await arm();
     await fire();
@@ -850,6 +873,35 @@ describe('sessionRequestWatchHook — a child that closes its own task', () => {
     const body = parseWalnutMessage(deliveredText())!.body;
     expect(body).toContain('It marked its task COMPLETE WITHOUT an explicit reply');
     expect(body).toContain('Menu page built and linked.');
+  });
+
+  it('settles the asker\'s own request quietly when the asker completed the task itself', async () => {
+    // A leader that calls task_complete on its worker has read the result; the
+    // fallback notice would wake it to read that result again (2026-10-02: 16
+    // such wakes in one run). The row is settled, nothing is delivered.
+    const rq = await arm();
+    complete();
+
+    await fire(phasePayload({ newPhase: 'COMPLETE', actorSid: ASKER }));
+
+    expect(notifySpy).not.toHaveBeenCalled();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect((await getSessionRequest(rq.id))?.status).toBe('notified');
+  });
+
+  it('still tells the OTHER askers when one of them completed the task', async () => {
+    const own = await arm();
+    const other = await arm({ fromSessionId: 'sess-other-asker' });
+    sessions.push(rec('sess-other-asker', { title: 'Other', taskId: 'task-other' }));
+    complete();
+    buildSessionTranscript.mockResolvedValue(transcriptOf('Done.'));
+
+    await fire(phasePayload({ newPhase: 'COMPLETE', actorSid: ASKER }));
+
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(notifySpy.mock.calls[0][0]).toMatchObject({ id: other.id });
+    expect((await getSessionRequest(own.id))?.status).toBe('notified');
+    expect((await getSessionRequest(other.id))?.status).toBe('notified');
   });
 
   it('defers a mid-turn COMPLETE to the turn end, then quotes the turn result', async () => {

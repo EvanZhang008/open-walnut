@@ -1393,7 +1393,7 @@ function emitProjectCreated(name: string, source: TaskSource): void {
  * emits — hook consumers get old/new phase without diffing update payloads.
  * Call AFTER the store write with the pre-mutation phase captured by the caller.
  */
-function emitPhaseChanged(task: Task, oldPhase: TaskPhase, source: string): void {
+function emitPhaseChanged(task: Task, oldPhase: TaskPhase, source: string, actorSid?: string): void {
   if (task.phase === oldPhase) return;
   bus.emit(EventNames.TASK_PHASE_CHANGED, {
     task,
@@ -1401,6 +1401,7 @@ function emitPhaseChanged(task: Task, oldPhase: TaskPhase, source: string): void
     newPhase: task.phase,
     source,
     sessionId: task.session_id,
+    ...(actorSid ? { actorSid } : {}),
   }, ['web-ui'], { source });
 }
 
@@ -3513,7 +3514,12 @@ function guardActiveChildren(store: TaskStore, task: Task): void {
  * Complete a task by partial ID match. Returns the completed task.
  * Throws if no match or ambiguous match.
  */
-export async function completeTask(idPrefix: string): Promise<{ task: Task }> {
+/**
+ * `opts.actorSid`: the session whose API call completes the task, carried on
+ * the phase event so the notices it causes can skip their own author
+ * (session-request-watch: a leader completing its worker already knows).
+ */
+export async function completeTask(idPrefix: string, opts?: { actorSid?: string }): Promise<{ task: Task }> {
   // Lock-internal phase: write local store. Push runs OUTSIDE the lock because
   // autoPushIfConfigured() acquires the same lock when setting sync_error;
   // holding the lock during the await would self-deadlock the whole task system.
@@ -3550,7 +3556,7 @@ export async function completeTask(idPrefix: string): Promise<{ task: Task }> {
     throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
   }
   autoCompleteTaskSessions(task);
-  emitPhaseChanged(task, oldPhase, 'api');
+  emitPhaseChanged(task, oldPhase, 'api', opts?.actorSid);
 
   return { task };
 }
@@ -3957,7 +3963,7 @@ export async function updateTask(
   // auto-unfolder below for the one caller that legitimately needs it,
   // moveFolderToProject — see the comment at that line. `joinGroupId` is internal
   // too: addToGroup's `move` files the moved task into that folder in this write.
-  eventOptions?: { source?: string; extraTargets?: string[]; ifPhase?: TaskPhase; asyncPush?: boolean; keepGroupId?: boolean; joinGroupId?: string },
+  eventOptions?: { source?: string; extraTargets?: string[]; ifPhase?: TaskPhase; asyncPush?: boolean; keepGroupId?: boolean; joinGroupId?: string; actorSid?: string },
 ): Promise<{ task: Task }> {
   // Lock-internal phase: validate + mutate + persist. Returns enough state for
   // the post-lock push. Push runs OUTSIDE the lock because autoPushIfConfigured
@@ -4397,7 +4403,7 @@ export async function updateTask(
       : k);
   const targets = ['web-ui', ...(eventOptions?.extraTargets ?? [])];
   bus.emit(EventNames.TASK_UPDATED, { task, fields: [...new Set(touchedFields)] }, targets, { source: eventOptions?.source ?? 'internal' });
-  emitPhaseChanged(task, oldPhase, eventOptions?.source ?? 'internal');
+  emitPhaseChanged(task, oldPhase, eventOptions?.source ?? 'internal', eventOptions?.actorSid);
 
   // When a task's cwd changes, migrate JSONL history for each linked session so
   // `claude --resume` still finds the conversation under the new cwd-encoded dir.

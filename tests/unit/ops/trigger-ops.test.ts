@@ -29,6 +29,28 @@ describe('trigger_create input', () => {
   })
 })
 
+describe('trigger_create output', () => {
+  it('puts the new trigger id and name at the top level, beside the job', () => {
+    // A caller had to run trigger_list to learn the id it had just created
+    // (2026-10-02): the server answers { job, host }, and the id sat at .job.id only.
+    const op = getOp('trigger_create')!
+    const body = {
+      job: { id: 'rt_1', name: 'PR comments', schedule: { kind: 'every', everyMs: 300_000 } },
+      host: 'devbox', nextCheckAt: null,
+    }
+    const out = op.mapResult!({ body, args: {} }) as Record<string, unknown>
+    expect(out).toMatchObject({ id: 'rt_1', name: 'PR comments', host: 'devbox' })
+    expect((out.job as { id: string }).id).toBe('rt_1')
+    expect(out.outcome).toContain('every 5m')
+    expect(out.next).toContain('trigger_delete \'{"id":"rt_1"}\'')
+  })
+
+  it('omits the top-level id when the server body has no job', () => {
+    const out = getOp('trigger_create')!.mapResult!({ body: {}, args: {} }) as Record<string, unknown>
+    expect('id' in out).toBe(false)
+  })
+})
+
 describe('trigger_list output', () => {
   it('returns each trigger\'s description, and omits the field for one that has none', async () => {
     const op = getOp('trigger_list')!

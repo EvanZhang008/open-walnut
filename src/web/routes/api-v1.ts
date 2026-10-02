@@ -2719,7 +2719,11 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         updated = result.task
       }
       if (Object.keys(patch).length > 0) {
-        const result = await tm.updateTask(id, patch, { source: 'api', asyncPush: true })
+        // The acting session rides on the phase event, so a notice this change
+        // causes can skip its own author (a leader completing its worker).
+        const rawActor = req.headers['x-walnut-caller-sid']
+        const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
+        const result = await tm.updateTask(id, patch, { source: 'api', asyncPush: true, ...(actorSid ? { actorSid } : {}) })
         updated = result.task
       }
       // A parent link that was already in place was the only field: nothing to write.

@@ -108,8 +108,10 @@ defineOp({
     }
     const id = b.job?.id ?? ''
     const every = everyLabel(b.job?.schedule?.everyMs)
+    // The id at the top level too: trigger_pause/resume/delete take it, and a
+    // caller reading `.id` should not have to know the job sits under `.job`.
     return withOutcome(
-      { ...b },
+      { ...(id ? { id } : {}), ...(b.job?.name ? { name: b.job.name } : {}), ...b },
       `Trigger armed on ${b.host ?? 'its host'}: the daemon there runs the check every ${every} and `
       + 'delivers the prompt when it fires. It keeps polling while Walnut restarts.',
       `Tell the user in one line what is watched and how often. Turn it off with `

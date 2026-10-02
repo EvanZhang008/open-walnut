@@ -20,6 +20,7 @@
  * network, no disk, no processes.
  */
 import { describe, it, expect } from 'vitest'
+import { z } from 'zod'
 import { getOp } from '../../../src/ops/index.js'
 import { dispatchHint, withOutcome, REPLY_ARRIVES_HINT } from '../../../src/ops/outcome.js'
 
@@ -587,6 +588,21 @@ describe('reads answer a DERIVED execution state', () => {
     expect(r.outcome).toBe('Task phase: unknown. Execution: unknown.')
   })
 
+  it('repeats id, title and phase at the top level beside the full task', () => {
+    // A leader session read `.id` and `.phase` off the top of task_get and got
+    // nulls (2026-10-02): the task sat under `.task` alone.
+    const r = mapped('task_get', taskBody({ session_ids: [] }), { id: TASK.id })
+    expect(r).toMatchObject({ id: TASK.id, title: TASK.title, phase: 'IN_PROGRESS' })
+    expect(rec(r.task)).toMatchObject({ id: TASK.id, title: TASK.title, phase: 'IN_PROGRESS' })
+  })
+
+  it('the mutating ops carry the same headline', async () => {
+    const r = runner('task_update', async () => ({ task: { id: TASK.id, title: TASK.title, phase: 'NEED_ACTION' } }))
+    const u = await r.speak({ id: TASK.id, phase: 'NEED_ACTION' })
+    expect(u).toMatchObject({ id: TASK.id, title: TASK.title, phase: 'NEED_ACTION' })
+    expect(rec(u.task)).toMatchObject({ id: TASK.id, phase: 'NEED_ACTION' })
+  })
+
   it('refuses a body whose task has no id instead of dressing it up', () => {
     // A truncated 200 must not pass for a real task: without an id the result
     // would carry raw bookkeeping and a next line pointing at a task nobody read.
@@ -957,12 +973,15 @@ describe('task_update writes the board, not the execution', () => {
   })
 })
 
-describe('task_complete does not stop anything', () => {
+describe('task_complete says what completion does', () => {
   // ONE sentence for every body shape. The old three-way text guessed liveness
   // from session bookkeeping ("still alive" from a list of historical ids), which
   // is a claim the completion response cannot make. The state difference now
-  // lives where it is derived: task.execution.
-  const OUTCOME = 'Task marked complete. Execution is unchanged; completion does not stop running work.'
+  // lives where it is derived: task.execution. The sentence names the real
+  // effects (completeTaskSessions stops the task's own live session; its leader
+  // hears unless the leader is the caller): the old one claimed execution was
+  // unchanged, which it never was.
+  const OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped; its leader, if it has one, hears about it unless the leader is you.'
   const NEXT = 'No further action is required.'
 
   const cases: Array<{ label: string; task: Record<string, unknown>; state: string }> = [
@@ -991,6 +1010,62 @@ describe('task_complete does not stop anything', () => {
       expect(r.ref).toBe(`<task-ref id="${TASK.id}" label="${TASK.title}"/>`)
     })
   }
+})
+
+describe('bulk writes: one call, one row per task, failures do not stop the rest', () => {
+  const row = (id: string, phase = 'NEED_ACTION') => ({ task: { id, title: `Task ${id}`, phase } })
+
+  it('task_update_bulk PATCHes each task in order and reports every row', async () => {
+    const r = runner('task_update_bulk', async (_m, path) => {
+      if (path.endsWith('/t2')) throw new Error('Walnut API error (409): subtask_too_deep')
+      return row(path.split('/').pop()!)
+    })
+    const out = await r.speak({ updates: [
+      { id: 't1', phase: 'NEED_ACTION' }, { id: 't2', parent_task_id: 'lead' }, { id: 't3', title: 'Renamed' },
+    ] })
+    expect(r.paths()).toEqual(['PATCH /tasks/t1', 'PATCH /tasks/t2', 'PATCH /tasks/t3'])
+    expect(r.seen[2].body).toEqual({ title: 'Renamed' })
+    expect(out.changed).toBe(2)
+    expect(out.failed).toBe(1)
+    expect(out.rows).toEqual([
+      { id: 't1', ok: true, title: 'Task t1', phase: 'NEED_ACTION' },
+      { id: 't2', ok: false, error: 'Walnut API error (409): subtask_too_deep' },
+      { id: 't3', ok: true, title: 'Task t3', phase: 'NEED_ACTION' },
+    ])
+    expect(out.outcome).toBe('2 of 3 tasks updated. No session was started or stopped by this. 1 failed: t2 (Walnut API error (409): subtask_too_deep).')
+    expect(out.next).toContain('Fix the failed ids and retry only those')
+  })
+
+  it('task_update_bulk refuses a patch with no field, or two patches for one id, before anything is sent', async () => {
+    const r = runner('task_update_bulk', async () => row('t1'))
+    await expect(r.invoke({ updates: [{ id: 't1', phase: 'NEED_ACTION' }, { id: 't2' }] })).rejects.toThrow(/t2 changes no field/)
+    await expect(r.invoke({ updates: [{ id: 't1', phase: 'NEED_ACTION' }, { id: 't1', title: 'Again' }] })).rejects.toThrow(/t1 appears twice/)
+    expect(r.seen).toEqual([])
+  })
+
+  it('task_complete_bulk completes each id once, duplicates folded, and names the refused ones', async () => {
+    const r = runner('task_complete_bulk', async (_m, path) => {
+      if (path.includes('/busy/')) throw new Error('Walnut API error (conflict): 2 subtasks still running (active_children)')
+      return row(path.split('/').slice(-2)[0], 'COMPLETE')
+    })
+    const out = await r.speak({ ids: ['a', 'busy', 'a', ' c '] })
+    expect(r.paths()).toEqual(['POST /tasks/a/complete', 'POST /tasks/busy/complete', 'POST /tasks/c/complete'])
+    expect(out.changed).toBe(2)
+    expect(out.outcome).toContain('2 of 3 tasks marked complete.')
+    expect(out.outcome).toContain('busy (Walnut API error (conflict): 2 subtasks still running (active_children))')
+    expect((out.rows as Array<{ id: string; ok: boolean }>).map((x) => `${x.id}:${x.ok}`)).toEqual(['a:true', 'busy:false', 'c:true'])
+  })
+
+  it('both bulk ops are catalogued as ordinary remote-capable writes capped at 50', () => {
+    for (const name of ['task_update_bulk', 'task_complete_bulk']) {
+      const op = getOp(name)!
+      expect(op.tags).toMatchObject({ readonly: false, remote: 'allow', destructive: false })
+      const schema = z.object(op.input).strict()
+      const many = Array.from({ length: 51 }, (_, i) => `t${i}`)
+      const args = name === 'task_update_bulk' ? { updates: many.map((id) => ({ id, phase: 'NEED_ACTION' })) } : { ids: many }
+      expect(schema.safeParse(args).success, `${name} must cap at 50`).toBe(false)
+    }
+  })
 })
 
 describe('the legacy session_* writes still speak', () => {

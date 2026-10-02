@@ -1889,9 +1889,16 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       return; // mid-turn: its turn end notifies, with the final text
     }
 
-    const pending = await pendingRequestsForTarget({ sessionId, taskId });
+    // The session whose API call made this edge (a leader's task_complete on
+    // its worker) is never told about it: the fallback for a request IT holds
+    // is settled without a notice, and no subtask notice goes to a parent whose
+    // session acted. 2026-10-02: a leader completed 16 workers and was woken 16
+    // times to read the summaries it had just read.
+    const actorSid = isPhaseEdge ? ctx.actorSid?.trim() || undefined : undefined;
+    const allPending = await pendingRequestsForTarget({ sessionId, taskId });
+    const pending = actorSid ? allPending.filter((r) => r.fromSessionId !== actorSid) : allPending;
     const parentTaskId = task?.parent_task_id ?? undefined;
-    if (pending.length === 0 && !parentTaskId) return;
+    if (allPending.length === 0 && !parentTaskId) return;
 
     // Outcome from the target session's live state — eventSource strings are
     // caller tags, not triggers, so the record is the honest signal.
@@ -1899,6 +1906,18 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     if ('error' in payload && !isPhaseEdge) outcome = 'error';
     else if (record?.pendingPermission) outcome = 'awaiting_human';
     else if (record?.process_status === 'error') outcome = 'error';
+
+    if (pending.length < allPending.length) {
+      const { settleNotified } = await import('../session-requests.js');
+      for (const own of allPending) {
+        if (own.fromSessionId !== actorSid) continue;
+        await settleNotified(own.id, outcome).catch(() => null);
+        log.session.info('request settled quietly: the asker made this edge itself', {
+          requestId: own.id, fromSessionId: own.fromSessionId, taskId: task?.id, outcome,
+        });
+      }
+    }
+    if (pending.length === 0 && !parentTaskId) return;
 
     // Whether the parent hears about this edge, decided BEFORE the transcript
     // read (up to LAST_MESSAGE_READ_MS): the parent's own sessions as askers are
@@ -1918,6 +1937,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       const notices = await import('../sessions/subtask-notices.js');
       const answeredLately = await repliedRecently(parentSids, task.id, notices.RECENT_REPLY_MS).catch(() => false);
       const parentHears = !pending.some((r) => parentSids.has(r.fromSessionId))
+        && !(actorSid && parentSids.has(actorSid))
         && !(kind === 'stopped' && answeredLately)
         && await notices.parentCanHear(parentTaskId);
       if (parentHears) subtask = { kind, answeredLately };

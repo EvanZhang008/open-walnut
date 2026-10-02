@@ -244,6 +244,29 @@ async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<ty
   }
 }
 
+/**
+ * The cwd a task has on record for a start that names none: its own, else the
+ * nearest ancestor's, walking the parent chain only while it stays in the task's
+ * project. A task stores a cwd but no host, so a recorded cwd lives on its
+ * project's default host; a parent in another project recorded a path on THAT
+ * project's host, and handing it down would pair it with this project's host
+ * (2026-10-02: a leader on a remote host filed a task into a project whose
+ * default host is the local box, and the first start died on a path that only
+ * exists remotely).
+ */
+export async function recordedCwd(task: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id'>): Promise<string | undefined> {
+  const project = (task.project ?? '').trim().toLowerCase();
+  let current: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id'> | undefined = task;
+  const seen = new Set<string>();
+  while (current && !seen.has(current.id)) {
+    if ((current.project ?? '').trim().toLowerCase() !== project) return undefined;
+    if (current.cwd) return current.cwd;
+    seen.add(current.id);
+    current = current.parent_task_id ? await getTask(current.parent_task_id).catch(() => undefined) : undefined;
+  }
+  return undefined;
+}
+
 async function prepareLaunch(task: Task, params: SessionStartParams) {
   if (params.cwd !== undefined && !params.cwd.startsWith('/')) throw new QuickStartError('cwd must be an absolute path', 400);
   if (params.mode !== undefined && !VALID_SESSION_MODE_IDS.has(params.mode)) {
@@ -255,14 +278,7 @@ async function prepareLaunch(task: Task, params: SessionStartParams) {
     if (!model) throw new QuickStartError(`Invalid model: ${params.model}. Use one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}`, 400);
   }
   const metadata = await getProjectMetadata(task.project || '');
-  let cwd = params.cwd;
-  let current: Task | undefined = task;
-  const seen = new Set<string>();
-  while (!cwd && current && !seen.has(current.id)) {
-    seen.add(current.id);
-    cwd = current.cwd;
-    current = !cwd && current.parent_task_id ? await getTask(current.parent_task_id) : undefined;
-  }
+  let cwd = params.cwd ?? await recordedCwd(task);
   // A worker starting another task of its own project, with no place named and
   // none recorded, runs it where the worker runs: host and cwd as ONE pair, so
   // a path never lands on a machine it does not exist on (caller-placement.ts).

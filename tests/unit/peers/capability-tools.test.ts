@@ -17,7 +17,9 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { handleGatewayCapability, type CapabilityRouterDeps } from '../../../src/core/peers/capability-router.js';
-import { PeerThrottle, PEER_SEND_MAX_PER_WINDOW } from '../../../src/core/peers/peer-throttle.js';
+import {
+  PeerThrottle, PEER_SEND_MAX_PER_WINDOW, GATEWAY_WRITE_MAX_PER_WINDOW, GATEWAY_WRITE_WINDOW_MS,
+} from '../../../src/core/peers/peer-throttle.js';
 
 const CALLER = 'a1b2c3d4-1111-2222-3333-444455556666';
 
@@ -138,12 +140,12 @@ describe('gateway tools.call — policy gates', () => {
     expect(r.error.message).toContain('walnut tools list');
   });
 
-  it('writes consume the shared rate budget; the cap trips with retryAfterMs', async () => {
+  it('writes consume their own rate budget; the cap trips with retryAfterMs and a readable detail', async () => {
     let t = 1_000_000;
     const throttle = new PeerThrottle(() => t);
     const d = deps(throttle);
     // Burn the whole window budget with admitted writes.
-    for (let i = 0; i < PEER_SEND_MAX_PER_WINDOW; i++) {
+    for (let i = 0; i < GATEWAY_WRITE_MAX_PER_WINDOW; i++) {
       expect(throttle.admitWrite(CALLER).allowed).toBe(true);
       t += 10;
     }
@@ -155,12 +157,31 @@ describe('gateway tools.call — policy gates', () => {
     if (r.ok) return;
     expect(r.error.code).toBe('throttled');
     expect(typeof r.error.retryAfterMs).toBe('number');
+    // The shim prints `detail` on stdout: a caller reading only stdout used to
+    // see a bare {"retryAfterMs"} and no sentence (2026-10-02).
+    const detail = r.error.detail as { outcome: string; next: string };
+    expect(detail.outcome).toContain(`${GATEWAY_WRITE_MAX_PER_WINDOW} writes in the last minute`);
+    expect(detail.outcome).toContain('task_create not run');
+    expect(detail.next).toMatch(/Wait \d+s before the next write/);
+    expect(detail.next).toContain('task_update_bulk');
+  });
+
+  it('bookkeeping writes do not spend the peer-send budget, and sends do not spend the write budget', () => {
+    let t = 3_000_000;
+    const throttle = new PeerThrottle(() => t);
+    for (let i = 0; i < GATEWAY_WRITE_MAX_PER_WINDOW; i++) { expect(throttle.admitWrite(CALLER).allowed).toBe(true); t += 10; }
+    expect(throttle.admitWrite(CALLER).allowed).toBe(false);
+    expect(throttle.admit(CALLER, 'target', 'hello').allowed).toBe(true);
+    for (let i = 1; i < PEER_SEND_MAX_PER_WINDOW; i++) { expect(throttle.admit(CALLER, 'target', `m${i}`).allowed).toBe(true); t += 10; }
+    expect(throttle.admit(CALLER, 'target', 'one more').allowed).toBe(false);
+    t += GATEWAY_WRITE_WINDOW_MS;
+    expect(throttle.admitWrite(CALLER).allowed).toBe(true);
   });
 
   it('reads never touch the throttle (readonly op passes policy at full budget burn)', async () => {
     let t = 2_000_000;
     const throttle = new PeerThrottle(() => t);
-    for (let i = 0; i < PEER_SEND_MAX_PER_WINDOW; i++) { throttle.admitWrite(CALLER); t += 10; }
+    for (let i = 0; i < GATEWAY_WRITE_MAX_PER_WINDOW; i++) { throttle.admitWrite(CALLER); t += 10; }
     // walnut_status is readonly → the gate lets it through to EXECUTION, which
     // must surface as `internal` (executor transport error), never `throttled`.
     // Point the executor at a closed local port so the call cannot reach the

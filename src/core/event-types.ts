@@ -45,6 +45,8 @@ export interface TaskPhaseChangedEvent {
   /** 'api' | 'agent' | 'session' | 'sync' | 'bulk' | 'migration' | 'hook:<id>' */
   source: string;
   sessionId?: string;
+  /** The session whose API call made the change (x-walnut-caller-sid), when one did. */
+  actorSid?: string;
 }
 export interface TaskDeletedEvent { id?: string; task: Task }
 /** `project` is the single grouping layer; '' = Inbox. */

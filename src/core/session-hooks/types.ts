@@ -97,6 +97,8 @@ export interface TaskHookContext {
   newPhase?: TaskPhase;
   /** Bus event source ('api' | 'agent' | 'sync' | 'hook:<id>' | …). */
   eventSource?: string;
+  /** The session whose API call made this change, when one did (phase edges). */
+  actorSid?: string;
   timestamp: string;
   traceId: string;
   event?: string;

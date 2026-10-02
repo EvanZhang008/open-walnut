@@ -928,6 +928,70 @@ describe('POST /api/tasks/:id/merge', () => {
       .send({ victim_ids: ['nonexistent-task'] });
     expect(res.status).toBe(404);
   });
+
+  describe('from a session on another host (x-walnut-origin: host:…), only its own work', () => {
+    const SID = '33333333-4444-5555-6666-000000000901';
+    async function leaderWithSession(project = 'marina'): Promise<{ id: string; group_id?: string }> {
+      const { task: leader } = await addTask({ title: 'Triage board', project });
+      await createSessionRecord(SID, leader.id, project, '/repo/marina', { title: 'Triage board', initialProcessStatus: 'running' });
+      return leader;
+    }
+    const merge = (app: ReturnType<typeof createApp>, survivor: string, victims: string[], sid: string | undefined = SID) => {
+      let req = request(app).post(`/api/tasks/${survivor}/merge`).set('x-walnut-origin', 'host:devbox');
+      if (sid) req = req.set('x-walnut-caller-sid', sid);
+      return req.send({ victim_ids: victims });
+    };
+
+    it('merges its own subtasks (the duplicate imports it was handed)', async () => {
+      const leader = await leaderWithSession();
+      const { task: a } = await addTask({ title: 'Ticket 123', project: 'marina', parent_task_id: leader.id });
+      const { task: b } = await addTask({ title: '[ALARM] Ticket 123', project: 'marina', parent_task_id: leader.id });
+      const res = await merge(createApp(), a.id, [b.id]);
+      expect(res.status).toBe(200);
+      expect(res.body.merged).toBe(1);
+    });
+
+    it('merges tasks in its own folder', async () => {
+      const { createFolder, addToGroup } = await import('../../../src/core/task-manager.js');
+      const leader = await leaderWithSession();
+      const folder = await createFolder('Sev2', 'marina');
+      const { task: a } = await addTask({ title: 'Dup A', project: 'marina' });
+      const { task: b } = await addTask({ title: 'Dup B', project: 'marina' });
+      await addToGroup(folder.group_id, [leader.id, a.id, b.id]);
+      const res = await merge(createApp(), a.id, [b.id]);
+      expect(res.status).toBe(200);
+    });
+
+    it('refuses a task outside its reach, naming it, and merges nothing', async () => {
+      const leader = await leaderWithSession();
+      const { task: own } = await addTask({ title: 'Own', project: 'marina', parent_task_id: leader.id });
+      const { task: stranger } = await addTask({ title: 'Someone else\'s task', project: 'marina' });
+      const app = createApp();
+      const res = await merge(app, own.id, [stranger.id]);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('out_of_reach');
+      expect(res.body.error.out_of_reach).toEqual([stranger.id]);
+      expect(res.body.error.message).toContain(stranger.id);
+      const list = await request(app).get('/api/tasks');
+      expect(list.body.tasks.map((t: { id: string }) => t.id).sort()).toEqual([leader.id, own.id, stranger.id].sort());
+    });
+
+    it('a remote caller Walnut cannot place reaches nothing', async () => {
+      const { task: a } = await addTask({ title: 'A' });
+      const { task: b } = await addTask({ title: 'B' });
+      const anonymous = await merge(createApp(), a.id, [b.id], undefined);
+      expect(anonymous.status).toBe(403);
+      const unknownSid = await merge(createApp(), a.id, [b.id], '33333333-4444-5555-6666-000000000999');
+      expect(unknownSid.status).toBe(403);
+    });
+
+    it('the same call from this box is not limited', async () => {
+      const { task: a } = await addTask({ title: 'A' });
+      const { task: b } = await addTask({ title: 'B' });
+      const res = await request(createApp()).post(`/api/tasks/${a.id}/merge`).send({ victim_ids: [b.id] });
+      expect(res.status).toBe(200);
+    });
+  });
 });
 
 describe('Cross-source project change', () => {

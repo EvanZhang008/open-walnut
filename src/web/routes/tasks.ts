@@ -1439,6 +1439,24 @@ tasksRouter.post('/:id/merge', async (req: Request, res: Response, next: NextFun
       res.status(400).json({ error: 'survivor cannot be one of the victims' })
       return
     }
+    // A session on another host merges only its own work (merge-reach.ts);
+    // the human and sessions on this box are not limited.
+    const { requestOrigin } = await import('../middleware/request-origin.js')
+    const { isRemoteHostOrigin } = await import('../../lib/caller-origin.js')
+    if (isRemoteHostOrigin(requestOrigin(req))) {
+      const { resolveCallerPlacement } = await import('../../core/sessions/caller-placement.js')
+      const { mergeOutOfReach } = await import('../../core/sessions/merge-reach.js')
+      const rawSid = req.headers['x-walnut-caller-sid']
+      const caller = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
+      const refusal = await mergeOutOfReach(caller, [survivor, ...victimTasks], (id) => getTask(id).catch(() => undefined))
+      if (refusal) {
+        log.web.warn('merge refused: out of the remote caller reach', {
+          survivorId: survivor.id, victimIds: victimTasks.map((t) => t.id), outOfReach: refusal.ids, callerKind: caller.kind,
+        })
+        res.status(403).json({ error: { code: 'out_of_reach', message: refusal.message, out_of_reach: refusal.ids } })
+        return
+      }
+    }
     let sessionsRelinked = 0
     for (const victim of victimTasks) {
       const result = await mergeTaskInto(survivor.id, victim.id)

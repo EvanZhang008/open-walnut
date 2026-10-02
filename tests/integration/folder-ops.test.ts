@@ -9,7 +9,12 @@
  *  2. folder_move takes the folder, its subfolder and every task in them to the
  *     other project, creates a new project name, and a second call is a no-op.
  *  3. folder_add_tasks files a task of the same project into the folder and
- *     refuses one from another project (the op fails, nothing moves).
+ *     refuses one from another project (the op fails, nothing moves) unless
+ *     move=true.
+ *  4. folder_create makes a top-level or nested folder, the parent deciding the
+ *     project when none is named, and a session caller's own project otherwise;
+ *     folder_move with parent_id re-nests a folder ("" = top level), and
+ *     parent_id and project together are refused.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import type { Server as HttpServer } from 'node:http'
@@ -111,6 +116,64 @@ describe('folder ops', () => {
     const refused = await op('folder_add_tasks', { id: folder, task_ids: [elsewhere] })
     expect(refused.ok).toBe(false)
     expect((await projectOf(elsewhere)).group_id).toBeUndefined()
+  })
+
+  it('folder_create nests under a parent, and folder_move re-parents ("" = top level)', async () => {
+    const top = await okOp('folder_create', { label: 'Sev2 Board', project: 'Marina' })
+    expect(top.id).toMatch(/^g_/)
+    expect(top).toMatchObject({ project: 'Marina', label: 'Sev2 Board' })
+    expect('parent_id' in top).toBe(false)
+    expect(String(top.outcome)).toContain('created at the top level in Marina')
+    expect(String(top.next)).toContain(`folder_add_tasks '{"id":"${top.id}"`)
+
+    // No project named: the parent decides.
+    const sub = await okOp('folder_create', { label: 'Workers', parent_id: top.id })
+    expect(sub).toMatchObject({ project: 'Marina', parent_id: top.id })
+    expect(String(sub.outcome)).toContain(`created under folder ${top.id}`)
+    const rows = (await okOp('folder_list', { project: 'Marina' })).folders as Array<{ id: string; parent_id?: string }>
+    expect(rows.find((r) => r.id === sub.id)?.parent_id).toBe(top.id)
+
+    // A task filed into the subfolder with task_create's group_id, then another by folder_add_tasks.
+    const w1 = await newTask('worker one', 'Marina')
+    const filed = await okOp('folder_add_tasks', { id: String(sub.id), task_ids: [w1] })
+    expect(filed.member_ids).toEqual([w1])
+    // move=true takes a task from another project along.
+    const far = await newTask('far away', 'Tidepool')
+    const pulled = await okOp('folder_add_tasks', { id: String(sub.id), task_ids: [far], move: true })
+    expect((pulled.member_ids as string[]).sort()).toEqual([w1, far].sort())
+    expect(await projectOf(far)).toMatchObject({ project: 'Marina', group_id: sub.id })
+
+    // Re-parent: a second subfolder moves under the first, then back to the top.
+    const other = await okOp('folder_create', { label: 'Reviews', parent_id: top.id })
+    const nested = await okOp('folder_move', { id: String(other.id), parent_id: String(sub.id) })
+    expect(nested.parent_id).toBe(sub.id)
+    expect(String(nested.outcome)).toContain(`now sits under folder ${sub.id}`)
+    const lifted = await okOp('folder_move', { id: String(other.id), parent_id: '' })
+    expect('parent_id' in lifted && lifted.parent_id).toBeFalsy()
+    expect(String(lifted.outcome)).toContain('top-level folder')
+
+    // Both moves in one call, or neither: refused before anything is sent.
+    expect((await op('folder_move', { id: String(other.id), parent_id: String(sub.id), project: 'Marina' })).ok).toBe(false)
+    expect((await op('folder_move', { id: String(other.id) })).ok).toBe(false)
+    // A parent in another project, or a parent that is not a folder: the server refuses.
+    expect((await op('folder_create', { label: 'Lost', project: 'Tidepool', parent_id: top.id })).ok).toBe(false)
+    expect((await op('folder_create', { label: 'Lost', parent_id: 'g_nosuchfolder' })).ok).toBe(false)
+  })
+
+  it('folder_create with no project and no parent lands in the calling session\'s project, else the Inbox', async () => {
+    const { addTask } = await import('../../src/core/task-manager.js')
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    const { task } = await addTask({ title: 'Leader', project: 'Marina' })
+    const sid = '33333333-4444-5555-6666-000000000777'
+    await createSessionRecord(sid, task.id, 'Marina', '/repo/marina', { title: 'Leader', initialProcessStatus: 'running' })
+
+    const mine = await executeOp('folder_create', { label: 'My workers' }, { apiBase: root(), callerSid: sid })
+    expect(mine.ok, mine.ok ? '' : mine.message).toBe(true)
+    expect((mine as { result: Record<string, unknown> }).result.project).toBe('Marina')
+
+    const nobody = await okOp('folder_create', { label: 'Loose' })
+    expect(nobody.project).toBe('')
+    expect(String(nobody.outcome)).toContain('in the Inbox')
   })
 
   it('a folder id that is not a folder fails the op', async () => {

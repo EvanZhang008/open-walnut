@@ -17,6 +17,16 @@ export const PEER_SEND_WINDOW_MS = 60_000; // per-sender rolling window
 export const PEER_SEND_MAX_PER_WINDOW = 10;
 export const PEER_DUP_WINDOW_MS = 300_000; // same (sender, target, sha1(text)) suppressed
 export const PEER_PENDING_CAP = 50; // target queue depth via getQueue()
+/**
+ * Gateway `tools.call` writes (task_update, task_complete, folder_*, board_*):
+ * their own, wider budget. These are bookkeeping, not messages: a leader
+ * renaming or completing its 25 workers is one write per worker, and at the
+ * send cap of 10 that took minutes of backoff (2026-10-02). A send op riding
+ * the gateway is still braked at the send cap by session-send-core's own
+ * throttle, so widening this one does not widen message fan-out.
+ */
+export const GATEWAY_WRITE_WINDOW_MS = 60_000;
+export const GATEWAY_WRITE_MAX_PER_WINDOW = 60;
 
 export type ThrottleDecision =
   | { allowed: true }
@@ -25,6 +35,8 @@ export type ThrottleDecision =
 export class PeerThrottle {
   /** Per-sender timestamps of admitted sends (pruned lazily on read). */
   private sends = new Map<string, number[]>();
+  /** Per-sender timestamps of admitted gateway writes (its own budget). */
+  private writes = new Map<string, number[]>();
   /** dupKey → timestamp of the last admitted identical send. */
   private dups = new Map<string, number>();
 
@@ -66,20 +78,19 @@ export class PeerThrottle {
   /**
    * Window-cap-only admission (no duplicate suppression) — used by gateway
    * `tools.call` writes, where an identical retry after a transient failure
-   * is legitimate and must not be swallowed as a "duplicate". Shares the SAME
-   * per-sender window as peer sends, so a session's total gateway write rate
-   * is one budget.
+   * is legitimate and must not be swallowed as a "duplicate". Its own
+   * per-sender window (GATEWAY_WRITE_MAX_PER_WINDOW), apart from peer sends.
    */
   admitWrite(senderSid: string): ThrottleDecision {
     const t = this.now();
-    const cutoff = t - PEER_SEND_WINDOW_MS;
-    const live = (this.sends.get(senderSid) ?? []).filter((ts) => ts >= cutoff);
-    if (live.length >= PEER_SEND_MAX_PER_WINDOW) {
-      this.sends.set(senderSid, live);
-      return { allowed: false, retryAfterMs: Math.max(1, live[0] + PEER_SEND_WINDOW_MS - t) };
+    const cutoff = t - GATEWAY_WRITE_WINDOW_MS;
+    const live = (this.writes.get(senderSid) ?? []).filter((ts) => ts >= cutoff);
+    if (live.length >= GATEWAY_WRITE_MAX_PER_WINDOW) {
+      this.writes.set(senderSid, live);
+      return { allowed: false, retryAfterMs: Math.max(1, live[0] + GATEWAY_WRITE_WINDOW_MS - t) };
     }
     live.push(t);
-    this.sends.set(senderSid, live);
+    this.writes.set(senderSid, live);
     return { allowed: true };
   }
 

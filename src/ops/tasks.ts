@@ -25,12 +25,27 @@ const TASK_PHASE = z.enum(PHASE_ORDER)
 const REF_INSTRUCTION =
   'Include the `ref` string verbatim in your reply to the user so Walnut renders a clickable task pill.'
 
+/**
+ * The task's id, title and phase at the TOP of a result whose task sits under
+ * `.task`: the three fields a caller reads next (`jq -r .id`), so it never has
+ * to know where the full task lives (a leader session read nulls off the top
+ * of task_get, 2026-10-02).
+ */
+function headline(task: unknown): Record<string, unknown> {
+  const t = (task ?? {}) as { id?: unknown; title?: unknown; phase?: unknown }
+  return {
+    ...(typeof t.id === 'string' ? { id: t.id } : {}),
+    ...(typeof t.title === 'string' ? { title: t.title } : {}),
+    ...(typeof t.phase === 'string' ? { phase: t.phase } : {}),
+  }
+}
+
 /** Attach the ref tag + paste instruction to a task-mutating result. */
 function withRef(task: unknown, extra: Record<string, unknown> = {}): Record<string, unknown> {
   const t = (task ?? {}) as { id?: unknown; title?: unknown }
   const id = typeof t.id === 'string' ? t.id : ''
   const title = typeof t.title === 'string' ? t.title : ''
-  return { ...extra, task, ref: taskRefTag(id, title), instruction: REF_INSTRUCTION }
+  return { ...headline(task), ...extra, task, ref: taskRefTag(id, title), instruction: REF_INSTRUCTION }
 }
 
 /** Task id out of a v1 task body, for the outcome lines. */
@@ -345,7 +360,8 @@ defineOp({
   title: 'Get one Walnut task',
   description:
     'Full detail for one task, including description, note, summary, execution, and ' +
-    'dependency/child/parent decorations that the list view omits. The id accepts a unique prefix.',
+    'dependency/child/parent decorations that the list view omits. The id accepts a unique prefix. ' +
+    'The task is under `task`; its id, title and phase are repeated at the top level.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
   },
@@ -361,7 +377,7 @@ defineOp({
     const execution = view.execution as { state: string }
     const id = taskId(task) || String(args.id ?? '')
     return withOutcome(
-      { ...b, task: view },
+      { ...headline(view), ...b, task: view },
       `Task phase: ${phase}. Execution: ${execution.state}.`,
       execution.state === 'not_started'
         ? dispatchHint(id)
@@ -666,10 +682,16 @@ defineOp({
       : attachment === 'attached'
         ? `Talk to its session: walnut tools call task_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`
         : dispatchHint(taskId(task) || String(id), attachment === 'none')
-    return withOutcome({ ...(patched ?? {}), ...(task && typeof task === 'object' ? { task: taskView(task as Record<string, unknown>) } : {}) }, outcome, next)
+    return withOutcome({
+      ...headline(task), ...(patched ?? {}),
+      ...(task && typeof task === 'object' ? { task: taskView(task as Record<string, unknown>) } : {}),
+    }, outcome, next)
   },
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
+
+/** What completion does to the task's own sessions (completeTaskSessions): a live one is stopped. */
+const COMPLETED_OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped; its leader, if it has one, hears about it unless the leader is you.'
 
 defineOp({
   name: 'task_complete',
@@ -688,7 +710,7 @@ defineOp({
     const task = (body as { task?: unknown } | undefined)?.task
     return withOutcome(
       withRef(task && typeof task === 'object' ? taskView(task as Record<string, unknown>) : task, { completed: true }),
-      'Task marked complete. Execution is unchanged; completion does not stop running work.',
+      COMPLETED_OUTCOME,
       'No further action is required.',
     )
   },
@@ -699,6 +721,109 @@ defineOp({
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
 
+const MAX_BULK_WRITE = 50
+
+/** One row of a bulk write result: the task's headline, or why that id failed. */
+interface BulkRow { id: string; ok: boolean; title?: string; phase?: string; error?: string }
+
+/** Run `one` for every id, in order, never stopping at a failure; one row each. */
+async function bulkRows(ids: string[], one: (id: string) => Promise<unknown>): Promise<BulkRow[]> {
+  const rows: BulkRow[] = []
+  for (const id of ids) {
+    try {
+      const body = await one(id) as { task?: unknown } | undefined
+      const h = headline(body?.task) as { title?: string; phase?: string }
+      rows.push({ id: taskId(body?.task) || id, ok: true, ...(h.title ? { title: h.title } : {}), ...(h.phase ? { phase: h.phase } : {}) })
+    } catch (err) {
+      rows.push({ id, ok: false, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  return rows
+}
+
+/** The bulk result: counts first, then the rows, then one sentence per outcome. */
+function bulkResult(rows: BulkRow[], verb: string, next: string): Record<string, unknown> {
+  const done = rows.filter((r) => r.ok)
+  const failed = rows.filter((r) => !r.ok)
+  const failures = failed.length
+    ? ` ${failed.length} failed: ${failed.slice(0, 5).map((r) => `${r.id} (${r.error})`).join('; ')}${failed.length > 5 ? '; …' : ''}.`
+    : ''
+  return withOutcome(
+    { changed: done.length, failed: failed.length, rows },
+    `${done.length} of ${rows.length} task${rows.length === 1 ? '' : 's'} ${verb}.${failures}`,
+    failed.length ? 'Fix the failed ids and retry only those; the others are done.' : next,
+  )
+}
+
+defineOp({
+  name: 'task_update_bulk',
+  title: 'Update many Walnut tasks in one call',
+  description:
+    'Patch up to 50 tasks in ONE call: the same fields as task_update, one object per task, applied in ' +
+    'order with every server check a single task_update gets (title brake, adoption depth, phase guards). ' +
+    'One failing task does not stop the others: the result lists every row with ok or an error. From a ' +
+    'remote session this costs ONE write of the gateway budget instead of one per task (a bulk rename of ' +
+    '25 workers used to take minutes of backoff).',
+  input: {
+    updates: z.array(z.object({
+      id: z.string().min(1).describe('Task id or a unique id prefix'),
+      phase: TASK_PHASE.optional(),
+      wait_until: z.string().optional(),
+      priority: PRIORITY.optional(),
+      due_date: z.string().optional(),
+      start_date: z.string().optional(),
+      project: z.string().optional(),
+      title: z.string().optional(),
+      description: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+      parent_task_id: z.string().optional(),
+    }).strict()).min(1).max(MAX_BULK_WRITE)
+      .describe(`1 to ${MAX_BULK_WRITE} patches, each { id, ...fields } with at least one field besides id`),
+  },
+  routes: [{ method: 'PATCH', path: '/tasks/:id' }],
+  handler: async (args, call) => {
+    const updates = args.updates as Array<Record<string, unknown>>
+    const bodies = new Map<string, Record<string, unknown>>()
+    for (const u of updates) {
+      const { id, ...fields } = u
+      const body: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(fields)) if (v !== undefined) body[k] = v
+      if (Object.keys(body).length === 0) throw new Error(`task_update_bulk: the patch for ${String(id)} changes no field.`)
+      // Two patches for one id would silently keep the last; say so instead.
+      if (bodies.has(String(id))) throw new Error(`task_update_bulk: ${String(id)} appears twice; send one patch per task.`)
+      bodies.set(String(id), body)
+    }
+    const rows = await bulkRows([...bodies.keys()], (id) => call('PATCH', `/tasks/${encodeURIComponent(id)}`, bodies.get(id)))
+    return bulkResult(rows, 'updated. No session was started or stopped by this',
+      'Nothing else is required; task_get reads any one of them.')
+  },
+  // The timeout covers the whole loop: each PATCH is a store write.
+  timeoutMs: 120_000,
+  tags: { readonly: false, remote: 'allow', destructive: false },
+})
+
+defineOp({
+  name: 'task_complete_bulk',
+  title: 'Complete many Walnut tasks in one call',
+  description:
+    'Mark up to 50 tasks done in ONE call, each with task_complete semantics (a task with running ' +
+    'subtasks is refused and listed as failed; the others still complete). From a remote session this ' +
+    'costs ONE write of the gateway budget instead of one per task.',
+  input: {
+    ids: z.array(z.string().min(1)).min(1).max(MAX_BULK_WRITE)
+      .describe(`1 to ${MAX_BULK_WRITE} task ids (exact, or a unique id prefix)`),
+  },
+  routes: [{ method: 'POST', path: '/tasks/:id/complete' }],
+  handler: async (args, call) => {
+    const ids = [...new Set((args.ids as string[]).map((s) => s.trim()).filter(Boolean))]
+    const rows = await bulkRows(ids, (id) => call('POST', `/tasks/${encodeURIComponent(id)}/complete`))
+    return bulkResult(rows, 'marked complete. Their own live sessions are stopped; a leader hears about each unless the leader is you',
+      'No further action is required.')
+  },
+  timeoutMs: 120_000,
+  tags: { readonly: false, remote: 'allow', destructive: false },
+})
+
 defineOp({
   name: 'task_merge',
   title: 'Merge duplicate Walnut tasks',
@@ -706,15 +831,19 @@ defineOp({
     'Merge duplicate copies of a task into one survivor. Victims\' session links (session_ids, ' +
     'session slots, sessions.task_id) move onto the survivor BEFORE the victim rows are deleted, ' +
     'so no conversation history is lost. ALWAYS use this for duplicate cleanup — a plain ' +
-    'task_delete on a duplicate destroys whichever session links that copy held.',
+    'task_delete on a duplicate destroys whichever session links that copy held. From a session on ' +
+    'another host it reaches only your own work: your subtasks and the tasks in your own folder ' +
+    '(a 403 names the ids out of reach); on the Walnut host it is not limited.',
   input: {
     survivor_id: z.string().min(1).describe('Task id (or unique prefix) that survives the merge'),
     victim_ids: z.array(z.string().min(1)).min(1).describe('Duplicate task ids to merge into the survivor and delete'),
   },
-  routes: [{ method: 'POST', path: '/tasks/:survivor_id/merge' }],
+  // The one merge route is the legacy /api/tasks one; a v1 path 404s (the op
+  // posted there until 2026-10-02 and never worked).
+  routes: [{ method: 'POST', path: '/api/tasks/:survivor_id/merge' }],
   handler: async (args, call) => {
     const { survivor_id, victim_ids } = args
-    const body = await call('POST', `/tasks/${encodeURIComponent(String(survivor_id))}/merge`, {
+    const body = await call('POST', `/api/tasks/${encodeURIComponent(String(survivor_id))}/merge`, {
       victim_ids,
     }) as { task?: unknown; merged?: number; sessions_relinked?: number }
     return withOutcome(
@@ -725,7 +854,9 @@ defineOp({
       `Read the survivor back if you need its merged state: walnut tools call task_get '{"id":"${taskId(body?.task) || String(survivor_id)}"}'`,
     )
   },
-  tags: { readonly: false, remote: 'deny', destructive: true },
+  // remote 'allow' with a server-side reach check (core/sessions/merge-reach.ts):
+  // a remote session merges its own work, not the board.
+  tags: { readonly: false, remote: 'allow', destructive: true },
 })
 
 defineOp({

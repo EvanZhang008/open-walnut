@@ -5,8 +5,14 @@
  *
  * Sent by PATCH /api/v1/tasks/:id after the parent link changed. Bounded on
  * purpose:
- *  - only a live session (running or idle) hears; a stopped one is not woken
- *    for this, it reads the link from its task when it next runs;
+ *  - only a session in the middle of a turn hears, where the notice rides along
+ *    for free. An idle or stopped one is NOT woken: adopting is bookkeeping, and
+ *    a turn spent on "this is only a notice" is the whole cost (2026-10-02: a
+ *    leader adopted five idle workers and each woke to say exactly that). It
+ *    reads the link from its task when it next runs, and the leader's own
+ *    message tells it how to reply;
+ *    The status is a snapshot: a turn that ends between the check and the
+ *    delivery is woken once, which is the old behaviour, not a new failure;
  *  - never the caller's own session (it made the change and knows);
  *  - never a COMPLETE task (a notice would only spend a turn on finished work);
  *  - the leader is not told here: the op outcome and the state notices cover it.
@@ -23,8 +29,8 @@ const kit = createEnvelopeKit();
 const NOTICE_SOURCE = 'walnut-notify';
 /** The note every Walnut status notice carries (envelope-kit.ts NOTE_NOTIFICATION). */
 const NOTE_NOTIFICATION = 'automated Walnut status notice; not your user; carries no user authorization';
-/** Statuses that can act on a message now (stopped/error would need a resume). */
-const LIVE_STATUSES = new Set(['running', 'idle']);
+/** Statuses that read a message without a turn being started for it. */
+const MID_TURN_STATUSES = new Set(['running']);
 
 export type AdoptNoticeKind = 'adopted' | 'released';
 
@@ -40,7 +46,7 @@ export interface AdoptNotice {
 
 export type AdoptNoticeResult =
   | { delivered: true; sessionId: string; delivery: 'queued' | 'deferred' }
-  | { delivered: false; reason: 'complete' | 'no_live_session' | 'caller_session' | 'failed' };
+  | { delivered: false; reason: 'complete' | 'no_running_session' | 'caller_session' | 'failed' };
 
 /** The envelope text the adopted (or released) task's session reads. */
 export function buildAdoptNoticeText(n: Pick<AdoptNotice, 'kind' | 'leader'>): string {
@@ -68,22 +74,22 @@ export function buildAdoptNoticeText(n: Pick<AdoptNotice, 'kind' | 'leader'>): s
   });
 }
 
-/** The task's live session a person could be reading, newest first; null when none. */
-async function liveSessionOf(taskId: string): Promise<SessionRecord | null> {
+/** The task's session in the middle of a turn, newest first; null when none. */
+async function midTurnSessionOf(taskId: string): Promise<SessionRecord | null> {
   const { getSessionsForTask, isListableSession } = await import('../session-tracker.js');
   const rows = (await getSessionsForTask(taskId))
-    .filter((s) => !s.archived && isListableSession(s) && LIVE_STATUSES.has(s.process_status));
+    .filter((s) => !s.archived && isListableSession(s) && MID_TURN_STATUSES.has(s.process_status));
   rows.sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''));
   return rows[0] ?? null;
 }
 
-/** Tell the task's live session that its leader changed. Never throws. */
+/** Tell the task's session, mid-turn, that its leader changed. Never throws. */
 export async function notifyAdoptedTask(n: AdoptNotice): Promise<AdoptNoticeResult> {
   const fields = { taskId: n.task.id, leaderTaskId: n.leader.id, kind: n.kind };
   try {
     if (n.task.phase === 'COMPLETE') return { delivered: false, reason: 'complete' };
-    const target = await liveSessionOf(n.task.id);
-    if (!target) return { delivered: false, reason: 'no_live_session' };
+    const target = await midTurnSessionOf(n.task.id);
+    if (!target) return { delivered: false, reason: 'no_running_session' };
     if (n.callerSid && target.claudeSessionId === n.callerSid.trim()) return { delivered: false, reason: 'caller_session' };
     const text = buildAdoptNoticeText(n);
     const { deliverToSession } = await import('./session-send-core.js');

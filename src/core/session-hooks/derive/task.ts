@@ -49,6 +49,7 @@ export function buildTaskContext(event: BusEvent, traceId: string): TaskHookCont
     taskId: task.id,
     task,
     sessionId: (data.sessionId as string | undefined) ?? task.session_id ?? undefined,
+    ...(typeof data.actorSid === 'string' && data.actorSid ? { actorSid: data.actorSid } : {}),
     eventSource: event.source,
     timestamp: new Date().toISOString(),
     traceId,

@@ -169,8 +169,6 @@ describe('the api passthrough for a caller off this Mac', () => {
       ['DELETE', '/api/v1/tasks/abc123?force=true'],
       ['DELETE', '/api/V1/TASKS/abc123/'],
       ['DELETE', '/api/v1/x/../tasks/abc123'],
-      ['POST', '/api/tasks/abc123/merge'],
-      ['POST', '/api/v1/tasks/abc123/merge'],
       ['POST', '/api/plugin-runtime/any-plugin/ops/task_delete'],
       ['POST', '/api/plugin-runtime/any-plugin/ops/health_sleep'],
     ] as const
@@ -249,22 +247,34 @@ describe('the local-only route set is derived from the registry', () => {
       expect(op.bind || op.routes?.length, `${op.name} declares no route`).toBeTruthy()
     }
     const ops = new Set(localOnlyRoutes().map((r) => r.op))
-    for (const name of ['task_delete', 'task_merge', 'health_status', 'health_sleep', 'health_daily', 'health_series', 'day_review']) {
+    for (const name of ['task_delete', 'health_status', 'health_sleep', 'health_daily', 'health_series', 'day_review']) {
       expect(ops.has(name), name).toBe(true)
     }
+    // task_merge left the set on 2026-10-02: a remote session merges its own
+    // work, checked by the route itself (core/sessions/merge-reach.ts).
+    expect(ops.has('task_merge')).toBe(false)
   })
 
   it('a destructive handler op reaches only the routes it declares (the declaration is honest)', async () => {
-    for (const name of ['task_delete', 'task_merge']) {
-      const op = getOp(name)!
-      const seen: Array<[string, string]> = []
-      const call = async (method: string, path: string) => { seen.push([method, path]); return { task: { id: 'abc123' } } }
-      await op.handler!({ id: 'abc123', force: true, survivor_id: 'abc123', victim_ids: ['def456'] }, call as never)
-      expect(seen.length, name).toBeGreaterThan(0)
-      for (const [method, path] of seen) {
-        expect(selfCallRefusal('api', method, path, HOST), `${name} reached ${method} ${path}, which it does not declare`).not.toBeNull()
-      }
+    const op = getOp('task_delete')!
+    const seen: Array<[string, string]> = []
+    const call = async (method: string, path: string) => { seen.push([method, path]); return { task: { id: 'abc123' } } }
+    await op.handler!({ id: 'abc123', force: true }, call as never)
+    expect(seen.length).toBeGreaterThan(0)
+    for (const [method, path] of seen) {
+      expect(selfCallRefusal('api', method, path, HOST), `task_delete reached ${method} ${path}, which it does not declare`).not.toBeNull()
     }
+  })
+
+  it('task_merge posts to the one merge route there is (the legacy /api/tasks one, not a v1 path)', async () => {
+    // Until 2026-10-02 the handler posted /tasks/:id/merge, which the executor
+    // sent to /api/v1, where no merge route exists: every merge was a 404.
+    const op = getOp('task_merge')!
+    const seen: Array<[string, string]> = []
+    const call = async (method: string, path: string) => { seen.push([method, path]); return { task: { id: 'abc123' }, merged: 1 } }
+    await op.handler!({ survivor_id: 'abc123', victim_ids: ['def456'] }, call as never)
+    expect(seen).toEqual([['POST', '/api/tasks/abc123/merge']])
+    expect(op.routes).toEqual([{ method: 'POST', path: '/api/tasks/:survivor_id/merge' }])
   })
 
   it('a plugin op registered later is covered at once', () => {

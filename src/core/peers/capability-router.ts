@@ -16,7 +16,7 @@
  */
 import type { GatewayError } from '../../providers/gateway-core.js';
 import { EXTERNAL_CALLER_SID, isExternalCallerSid } from '../../providers/gateway-core.js';
-import { PeerThrottle } from './peer-throttle.js';
+import { GATEWAY_WRITE_MAX_PER_WINDOW, PeerThrottle } from './peer-throttle.js';
 
 export type CapabilityOutcome =
   | { ok: true; result: Record<string, unknown> }
@@ -186,11 +186,22 @@ async function handleToolsCall(
     }
     return err('bad_request', `${name} is local-only because it is destructive. Run it from a session on the Walnut host with \`walnut tools call\`.`);
   }
-  // Writes ride the same per-sender rate budget; reads are free.
+  // Writes ride a per-sender rate budget; reads are free.
   if (!op.tags.readonly) {
     const decision = deps.throttle.admitWrite(throttleKey(callerSid, host));
     if (!decision.allowed) {
-      return err('throttled', 'too many gateway writes — slow down', { retryAfterMs: decision.retryAfterMs });
+      // The shim prints `detail` on stdout and the message on stderr, and a
+      // caller reading only stdout saw a bare {"retryAfterMs"} (2026-10-02):
+      // the detail carries the sentence and the way out too.
+      const secs = Math.ceil(decision.retryAfterMs / 1000);
+      return err('throttled', 'too many gateway writes — slow down', {
+        retryAfterMs: decision.retryAfterMs,
+        detail: {
+          outcome: `Refused, nothing changed: this session made ${GATEWAY_WRITE_MAX_PER_WINDOW} writes in the last minute (${name} not run).`,
+          next: `Wait ${secs}s before the next write; do not retry in a loop. Many edits at once: `
+            + 'task_update_bulk or task_complete_bulk take up to 50 tasks in ONE call (one budget slot).',
+        },
+      });
     }
   }
   // callerSid rides along as provenance (never authorization): ops whose

@@ -249,11 +249,11 @@ describe('the depth brake holds for a session, never for the human', () => {
 })
 
 describe('the adopted task\'s session is told', () => {
-  it('its live session hears "adopted"; the leader\'s session hears nothing', async () => {
+  it('its session hears "adopted" mid-turn; the leader\'s session hears nothing', async () => {
     const leader = await task('Quarter close')
     const leaderSid = await sessionFor(leader)
     const worker = await task('Invoice import')
-    const workerSid = await sessionFor(worker, 'idle')
+    const workerSid = await sessionFor(worker, 'running')
     const before = noticeResults.length
 
     const { status } = await patch(worker, { parent_task_id: leader }, leaderSid)
@@ -292,17 +292,20 @@ describe('the adopted task\'s session is told', () => {
     const worker = await task('No session worker')
     const before = noticeResults.length
     expect((await patch(worker, { parent_task_id: leader })).status).toBe(200)
-    expect(await nextNotice(before)).toEqual({ delivered: false, reason: 'no_live_session' })
+    expect(await nextNotice(before)).toEqual({ delivered: false, reason: 'no_running_session' })
     expect(delivered).toEqual([])
   })
 
-  it('a stopped session is not woken for it', async () => {
+  it.each(['idle', 'stopped'] as const)('a %s session is not woken for it', async (status) => {
+    // Adopting is bookkeeping: a turn spent on "this is only a notice" is the
+    // whole cost (2026-10-02: five idle workers each woke to say exactly that).
+    // The session reads the link from its task when it next runs.
     const leader = await task('Sleeping leader')
-    const worker = await task('Stopped worker')
-    await sessionFor(worker, 'stopped')
+    const worker = await task(`${status} worker`)
+    await sessionFor(worker, status)
     const before = noticeResults.length
     expect((await patch(worker, { parent_task_id: leader })).status).toBe(200)
-    expect(await nextNotice(before)).toEqual({ delivered: false, reason: 'no_live_session' })
+    expect(await nextNotice(before)).toEqual({ delivered: false, reason: 'no_running_session' })
     expect(delivered).toEqual([])
   })
 
