@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef, Fragment } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
-import type { Task } from '@open-walnut/core';
+import type { SessionMode, Task } from '@open-walnut/core';
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { launchEngineForHost, normalizeEngine } from '@/utils/engines';
 import type { ImageAttachment } from '@/api/chat';
@@ -1390,6 +1390,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       : d)));
   }, []);
 
+  /** The composer's mode pill: the permission mode the session starts in. A
+   *  user edit (`userTouched`), but NOT `metaTouched`: that latch is the folder's
+   *  model/engine memory, and a mode pick must leave it following the folder. */
+  const handleDraftModeChange = useCallback((draftId: string, mode: SessionMode) => {
+    setDraftColumns(prev => prev.map(d => (d.id === draftId
+      ? { ...d, meta: { ...d.meta, mode }, userTouched: true }
+      : d)));
+  }, []);
+
   /**
    * Start Task ⇄ Ask Walnut tab switch on a draft column.
    *
@@ -1632,6 +1641,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       message: meta.message,
       taskId: meta.realTaskId, // reuse existing task if we have one
       ...(meta.walnutAgent ? { walnutAgent: true } : {}),
+      ...(meta.mode ? { mode: meta.mode } : {}),
     }).then((result) => {
       // Update refs with (possibly new) taskId
       if (pendingQuickStartRef.current) {
@@ -1669,7 +1679,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Quick-start: track pending taskId, auto-open session panel when it starts
   const pendingQuickStartRef = useRef<string | null>(null);
   // Metadata for the pending session panel (cwd, host, etc.)
-  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean; gated?: boolean } | null>(null);
+  const pendingQuickStartMetaRef = useRef<{ id: string; cwd: string; host?: string; hostLabel?: string; realTaskId?: string; message?: string; httpError?: string; walnutAgent?: boolean; gated?: boolean; mode?: SessionMode } | null>(null);
 
   // Fork: pending panel metadata (same pattern as quick-start)
   const pendingForkMetaRef = useRef<{ id: string; cwd: string; host?: string; realTaskId?: string; httpError?: string } | null>(null);
@@ -2339,6 +2349,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Retry must replay the walnut flag: an Ask Walnut launch has cwd '',
         // which the server 400s ("cwd is required") without it — a dead end.
         ...(opts?.walnutAgent ? { walnutAgent: true } : {}),
+        // And the permission mode: a Plan launch retried as the default (Bypass)
+        // would run with full trust the user had just declined.
+        ...(metaSnapshot?.mode ? { mode: metaSnapshot.mode } : {}),
       };
 
       // `pinTier: null` — NOT undefined — is how an explicit "don't pin this"
@@ -2375,6 +2388,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // left by an earlier folder's launch memory must not drop it here.
       const pickedUnder = opts?.walnutAgent ? 'claude' : (normalizeEngine(metaSnapshot?.engine) ?? 'claude');
       const model = pickedUnder === (engine ?? 'claude') ? metaSnapshot?.model : undefined;
+      // The permission mode the composer's pill showed. Only when picked: an
+      // untouched pill reads the launch default, which the server applies to a
+      // launch that names no mode, so the payload stays as it always was.
+      const mode = metaSnapshot?.mode;
 
       const settled = quickStartSession({
         cwd: qsp.cwd,
@@ -2383,6 +2400,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         images,
         taskMeta,
         model,
+        ...(mode ? { mode } : {}),
         engine,
         project,
         projectFromFolder: opts?.projectFromFolder,
@@ -3100,6 +3118,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     onPathChange={handleDraftPathChange}
                     onProjectChange={handleDraftProjectChange}
                     onMetaChange={handleDraftMetaChange}
+                    onModeChange={handleDraftModeChange}
                     // "new" badge on a project the launch will auto-create.
                     isKnownProject={isKnownProjectLoaded}
                     // Back-fills the launch pills from what the user types (R9).

@@ -241,6 +241,14 @@ export const SESSION_MODES: readonly SessionModeEntry[] = [
 /** Ordered mode ids (safest → loosest) — the default toggle cycle order. */
 export const SESSION_MODE_IDS: readonly SessionMode[] = SESSION_MODES.map((m) => m.id);
 
+/**
+ * The mode a session spawns in when the launch names none. Bypass: users should
+ * not be asked to approve every edit, so every restrictive mode is asked for
+ * explicitly. The draft composer's mode pill shows this value before any pick,
+ * so what it reads is what the spawn does.
+ */
+export const DEFAULT_SESSION_MODE: SessionMode = 'bypass';
+
 /** Runtime allowlist for route/relay validation. */
 export const VALID_SESSION_MODE_IDS: ReadonlySet<string> = new Set(SESSION_MODE_IDS);
 

@@ -367,17 +367,23 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   //     anywhere in the bar (user feedback, back when the meta row still existed).
   await expect(bar.locator('.sps-engine-toggle')).toHaveCount(0)
 
-  // 5. The model select moved into the COMPOSER's controls row, leftmost — the
-  //    same place a real session keeps its model pill. Containment through
-  //    `.chat-input-controls` is the point: in the old shape it was in the bar.
+  // 5. The launch controls moved into the COMPOSER's controls row, in a running
+  //    session's order: the permission-mode pill first (2026-10-01: a launch
+  //    could not be seen to be Bypass or Plan until the session was up), the
+  //    model select right after it. Containment through `.chat-input-controls`
+  //    is the point: in the old shape they were in the bar.
+  const modePill = composer.locator('.chat-input-controls .draft-actions-bar .draft-mode-pill')
   const modelSelect = composer.locator('.chat-input-controls .draft-actions-bar .draft-model-select')
+  await expect(modePill).toBeVisible()
   await expect(modelSelect).toBeVisible()
   const actions = await composer.locator('.draft-actions-bar').boundingBox()
+  const mode = await modePill.boundingBox()
   const model = await modelSelect.boundingBox()
   const send = await draftSend(composer).boundingBox()
-  if (!actions || !model || !send) throw new Error('the composer controls row did not render')
-  expect(Math.abs(model.x - actions.x), 'the model select is leftmost in the controls row')
+  if (!actions || !mode || !model || !send) throw new Error('the composer controls row did not render')
+  expect(Math.abs(mode.x - actions.x), 'the mode pill is leftmost in the controls row')
     .toBeLessThan(6)
+  expect(model.x, 'the model select follows the mode pill').toBeGreaterThan(mode.x)
   expect(model.x, 'the model select sits before the send arrow').toBeLessThan(send.x)
   // No "Start ↵" twin of the send arrow (removed 2026-09-29).
   await expect(composer.locator('.draft-start-btn')).toHaveCount(0)

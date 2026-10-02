@@ -32,6 +32,7 @@ import { applySessionSettings, clearSessionSettings } from '@/stores/session-sta
 import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
 import { useSessionUsage, formatModelName, getContextWindowSize, contextBadgeTitle } from '@/hooks/useSessionUsage';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
+import { nextSessionMode } from '@/components/sessions/session-mode-cycle';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineCaps } from '@/utils/engine-capabilities';
 import { ModelPicker, acpModelDisplayName, type ProviderId } from '@/components/sessions/ModelPicker';
@@ -74,8 +75,7 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
   const cycleMode = useCallback(() => {
     if (!session || !sessionId) return;
     const cur = session.mode || 'bypass';
-    const idx = enabledModes.indexOf(cur);
-    const next = enabledModes[(idx + 1) % enabledModes.length]!;
+    const next = nextSessionMode(cur, enabledModes);
     applySessionSettings(sessionId, { mode: next });
     updateSession(sessionId, { mode: next }).catch(() => {
       clearSessionSettings(sessionId, ['mode']);

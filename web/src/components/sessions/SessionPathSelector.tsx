@@ -19,7 +19,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { WorkingDirEntry } from '@/api/sessions';
-import type { TaskPriority } from '@open-walnut/core';
+import type { SessionMode, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { usedEngineIds, type LaunchEngine, type LaunchMemory } from '@/utils/engines';
 import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, liveListingPrefix, HOME_LISTING_DIR, type InputState } from './path-selector/input-model';
@@ -67,6 +67,12 @@ export interface QuickStartTaskMeta {
    *  any other value is an explicitly picked engine (every non-default engine is
    *  ACP-backed and local-only today). */
   engine: LaunchEngine | undefined;
+  /** Permission mode the session spawns in. undefined = the launch default
+   *  (DEFAULT_SESSION_MODE, bypass), which is what the draft's mode pill shows
+   *  until a pick. Not part of a folder's launch memory: the mode is a choice
+   *  about THIS task, so a folder pick never rewrites it and picking one never
+   *  switches that memory off. */
+  mode?: SessionMode;
   /** Task dates (ISO strings), same trio as the Quick Task form — a launch IS a
    *  task create, so it carries the same fields. Optional (unlike the controls
    *  above): they render as DatePicker pills, not controlled inputs. */

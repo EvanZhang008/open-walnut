@@ -71,7 +71,7 @@ import { compactOpenItemsHooks } from './compact-open-items-hook.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
 import {
   SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS,
-  SESSION_MODE_CLI_MAP, VALID_SESSION_MODE_IDS, sessionModeFromCli,
+  SESSION_MODE_CLI_MAP, VALID_SESSION_MODE_IDS, sessionModeFromCli, DEFAULT_SESSION_MODE,
 } from '../core/types.js'
 import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js'
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/workflow-progress.js'
@@ -2123,11 +2123,12 @@ export class ClaudeCodeSession {
     args.push('--allow-dangerously-skip-permissions')
 
     // Requested mode → CLI vocabulary via the one registry (core/types.ts).
-    // No mode = 'bypass': users shouldn't be prompted to approve every edit;
-    // every restrictive mode must be asked for explicitly.
+    // No mode = DEFAULT_SESSION_MODE (bypass): users shouldn't be prompted to
+    // approve every edit; every restrictive mode must be asked for explicitly.
+    // The draft composer's mode pill reads the same constant.
     const requestedMode: SessionMode = mode && VALID_SESSION_MODE_IDS.has(mode)
       ? mode as SessionMode
-      : 'bypass'
+      : DEFAULT_SESSION_MODE
     this._mode = requestedMode
     this._activity = requestedMode === 'plan' ? 'planning' : 'implementing'
     args.push('--permission-mode', SESSION_MODE_CLI_MAP[requestedMode])
@@ -10160,7 +10161,7 @@ export class SessionRunner {
     // SESSION_MODES in core/types.ts and they arrive here for free.
     const sdkMode: SessionMode = (mode && VALID_SESSION_MODE_IDS.has(mode))
       ? mode as SessionMode
-      : 'bypass'
+      : DEFAULT_SESSION_MODE
 
     // Start via session server client
     const result = await this.sdkClient.startSession({

@@ -50,6 +50,9 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
 import { HostGateErrorBar, useRestoreImages, type DraftGateError } from './HostGateErrorBar';
 import { useModelOptions } from './path-selector/MetaFooter';
+import { useEnabledModes } from '@/hooks/useEnabledModes';
+import { nextSessionMode } from './session-mode-cycle';
+import { DEFAULT_SESSION_MODE, SESSION_MODES, SESSION_MODE_LABELS, type SessionMode } from '@open-walnut/core';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import {
   engineEntry,
@@ -230,6 +233,37 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut }: {
   );
 }
 
+/**
+ * DraftModePill — the permission mode the session will START in, in the same
+ * spot and dress as a running session's mode pill (`.mode-toggle-pill`, Plan in
+ * amber, "⇧Tab" hint). Before any pick it reads the launch default (Bypass),
+ * because that is what the spawn does with no mode; a click or Shift+Tab steps
+ * through the enabled cycle (Settings › Sessions). A user who starts a task
+ * could not see, let alone choose, whether it would run with full trust or in
+ * Plan mode until the session was already up (2026-10-01).
+ */
+function DraftModePill({ mode, onCycle, nextMode }: {
+  mode: SessionMode;
+  nextMode: SessionMode;
+  onCycle: () => void;
+}) {
+  const label = (SESSION_MODE_LABELS as Record<string, string>)[mode] ?? mode;
+  const description = SESSION_MODES.find((m) => m.id === mode)?.description;
+  return (
+    <button
+      type="button"
+      className={`mode-toggle-pill draft-mode-pill${mode === 'plan' ? ' plan-active' : ''}`}
+      data-mode={mode}
+      title={`Starts in ${label} mode${description ? ` (${description.toLowerCase()})` : ''}. Click or Shift+Tab to cycle → ${(SESSION_MODE_LABELS as Record<string, string>)[nextMode] ?? nextMode}`}
+      aria-label={`Permission mode: ${label}`}
+      onClick={onCycle}
+    >
+      <span className="mode-toggle-pill-label">{label}</span>
+      <span className="mode-toggle-pill-shortcut">{'⇧'}Tab</span>
+    </button>
+  );
+}
+
 interface Props {
   draft: DraftColumn;
   /** Focus the composer after mount (the column that "+" just opened). */
@@ -255,6 +289,11 @@ interface Props {
    *  value) so rapid clicks fold onto the freshest row instead of a props
    *  snapshot; the owner flips `metaTouched` (the folder launch memory) here. */
   onMetaChange: (draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
+  /** The composer's mode pill picked the permission mode the session starts in.
+   *  Separate from onMetaChange on purpose: a mode pick is not a model/engine
+   *  pick, so the owner must NOT flip `metaTouched` (the folder's remembered
+   *  model keeps following the folder). Omit and the pill never renders. */
+  onModeChange?: (draftId: string, mode: SessionMode) => void;
   /** A task-field edit from More or a decision chip: the owner makes those fields
    *  the user's. Omit (with onReturnFieldToWalnut) to draw no More and no chips. */
   onTaskFieldChange?: (draftId: string, patch: DraftTaskFieldPatch) => void;
@@ -293,7 +332,7 @@ interface Props {
 
 export function DraftSessionPanel({
   draft, autoFocus, onStart, onSaveAsTask, onClose, headerLeading,
-  onPathChange, onProjectChange, onMetaChange, isKnownProject, onAiParse, onWalnutToggle,
+  onPathChange, onProjectChange, onMetaChange, onModeChange, isKnownProject, onAiParse, onWalnutToggle,
   onTaskFieldChange, onReturnFieldToWalnut, hostNotice, intro, gateError, onGateErrorClear, restoreImages,
   onCustomizeWalnut, repairTarget,
 }: Props) {
@@ -354,6 +393,24 @@ export function DraftSessionPanel({
   // mode fork: an Ask Walnut launch has no cwd and would drop the repair.
   const isRepair = draft.intent === 'fix-walnut';
   const showTabs = !isFork && !isRepair && !!onWalnutToggle;
+
+  // The permission mode the launch will carry, and the pill that shows it. The
+  // pill follows the ENGINE that will actually spawn (the model pill's rule):
+  // Walnut's modes are a claude-CLI channel, so an engine whose modes are its
+  // own config options (every ACP engine) gets no pill, exactly as a running
+  // session of that engine draws none. A fork has none either: the fork route
+  // takes no mode, the sibling inherits the source session's.
+  const engineCatalog = useEngineCatalog();
+  const launchEngine = isWalnut ? 'claude' : resolveEngineForHost(draft.meta.engine, draft.host, engineCatalog);
+  const claudeModes = engineEntry(engineCatalog, launchEngine).capabilities.modeControl === 'claude-modes';
+  const showModePill = !!onModeChange && !isFork && claudeModes;
+  const enabledModes = useEnabledModes();
+  const draftMode: SessionMode = draft.meta.mode ?? DEFAULT_SESSION_MODE;
+  const nextDraftMode = nextSessionMode(draftMode, enabledModes);
+  const cycleDraftMode = useCallback(() => {
+    if (!showModePill) return;
+    onModeChange?.(draft.id, nextDraftMode);
+  }, [showModePill, onModeChange, draft.id, nextDraftMode]);
 
   // A bound draft's task EXISTS: the header gets its real kebab (live writes; pin
   // state from the Focus Bar store). A plain draft edits its task fields from the
@@ -806,8 +863,16 @@ export function DraftSessionPanel({
           sessionCommandsStatus={slashCommandsStatus}
           mentionCwd={draft.cwd || undefined}
           mentionHost={draft.host ?? undefined}
+          // Shift+Tab cycles the permission mode, as it does in a running session.
+          onToggleMode={showModePill ? cycleDraftMode : undefined}
           controlsSlot={(
             <div className="session-mode-bar draft-actions-bar">
+              {/* The row reads like a running session's: mode first, then model.
+                  The mode is the one launch choice that changes what the session
+                  MAY do, so it is never hidden behind a menu. */}
+              {showModePill && (
+                <DraftModePill mode={draftMode} nextMode={nextDraftMode} onCycle={cycleDraftMode} />
+              )}
               {/* The model belongs with the message — same place a real session
                   keeps its model pill (the mode bar). Opens the SHARED two-pane
                   provider|models picker, so every composer offers the same

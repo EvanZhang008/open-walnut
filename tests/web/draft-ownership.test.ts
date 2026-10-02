@@ -397,6 +397,20 @@ describe('applyDraftPathPick: the picker footer rebases per field', () => {
     expect(aiOf(out)).toEqual([]);
   });
 
+  it('the permission mode is not launch memory: a folder pick (chip or picker) keeps it', () => {
+    const row = draft({ meta: { ...draft().meta, mode: 'plan' } });
+    // A quick chip hands in a render-time snapshot from before the mode pick…
+    const chip = own.applyDraftPathPick(row, path, { ...draft().meta, model: 'sonnet' }, undefined, none, free);
+    expect(chip.meta.mode).toBe('plan');
+    expect(chip.meta.model).toBe('sonnet');
+    // …and the picker's footer never shows the mode, so its returned meta is
+    // rebased onto the row's: the mode stays whatever the pill says.
+    const opened = row.meta;
+    const picked = own.applyDraftPathPick(row, path, { ...opened, pinTier: 'satellite' }, opened, none, free);
+    expect(picked.meta.mode).toBe('plan');
+    expect(picked.meta.pinTier).toBe('satellite');
+  });
+
   it("the previous folder's project does not follow into a folder that has none", () => {
     const first = own.applyDraftPathPick(draft(), path, draft().meta, undefined, none, free);
     expect(first.project).toBe('acme');

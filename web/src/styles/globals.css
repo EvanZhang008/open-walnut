@@ -22962,7 +22962,19 @@ a.tag-chip:focus-visible,
    after it onto its own line, which once stranded the (since removed) "Start ↵"
    alone under the pills (measured on a 300px column). */
 
-/* Model select, LEFTMOST in the row — the composer's equivalent of a real
+/* Permission-mode pill, FIRST in the row: the same .mode-toggle-pill a running
+   session draws, so the two composers read alike (mode, then model). Sized to
+   the model select next to it; the pill must never grow a capsule here, or the
+   row reads as two different control kinds. */
+.draft-actions-bar .draft-mode-pill {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+}
+.draft-actions-bar .draft-mode-pill .mode-toggle-pill-label {
+  font-size: 10.5px;
+}
+
+/* Model select, right after the mode pill — the composer's equivalent of a real
    session's model pill in its mode bar. Ghost styling (no resting border) so it
    reads as a quiet readout that happens to be clickable, unlike the outlined
    controls in the stack above; it also has to survive being the widest label in

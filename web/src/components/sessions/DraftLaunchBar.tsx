@@ -46,8 +46,8 @@
  *   the real task's kebab; a fork inherits the source task's meta. The folder
  *   picker's footer (SessionPathSelector, MetaFooter) edits the same meta and is
  *   rebased per field on confirm (the snapshot taken when it opened rides along
- *   as onPathChange's 4th argument). The model stays in the composer's controls
- *   row, where a real session's model pill sits.
+ *   as onPathChange's 4th argument). The permission mode and the model stay in
+ *   the composer's controls row, where a real session's mode and model pills sit.
  *
  * The pills keep their original class names AND the `.draft-composer-bar`
  * container marker: that pair is the documented DOM hook the browser specs use to

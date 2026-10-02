@@ -31,7 +31,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { Task } from '@open-walnut/core';
+import type { SessionMode, Task } from '@open-walnut/core';
 import type { ImageAttachment } from '@/api/chat';
 import { fetchAskWalnutLaunch, fetchWorkingDirs, quickStartSession } from '@/api/sessions';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
@@ -521,7 +521,7 @@ export function AskWalnutSlot({
         ...(draftMeta.startDate ? { start_date: draftMeta.startDate } : {}),
         ...(draftMeta.endDate ? { end_date: draftMeta.endDate } : {}),
       },
-      ...(draftMeta.model ? { model: draftMeta.model } : {}),
+      ...(draftMeta.mode ? { mode: draftMeta.mode } : {}),
     };
     return runLaunch({ payload, message });
   }, [draftMeta, runLaunch, agent]);
@@ -546,6 +546,9 @@ export function AskWalnutSlot({
     _draftId: string, updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta,
   ) => {
     setDraftMeta((m) => updater(m));
+  }, []);
+  const handleModeChange = useCallback((_draftId: string, mode: SessionMode) => {
+    setDraftMeta((m) => ({ ...m, mode }));
   }, []);
 
   const noopDraftEdit = useCallback(() => { /* walnut mode renders no folder/project pill */ }, []);
@@ -592,6 +595,7 @@ export function AskWalnutSlot({
               onPathChange={noopDraftEdit}
               onProjectChange={noopDraftEdit}
               onMetaChange={handleMetaChange}
+              onModeChange={handleModeChange}
               isKnownProject={alwaysKnownProject}
             />
           </div>
