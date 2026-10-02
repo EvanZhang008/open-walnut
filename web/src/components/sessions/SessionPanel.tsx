@@ -70,6 +70,7 @@ import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
+import { SessionResourcePill } from './SessionResourcePill';
 import { PanelCountRow, SessionKebabSection } from './SessionKebabSection';
 import { ComposerModelPill } from './ComposerModelPill';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
@@ -1913,6 +1914,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 {activityAge}
               </time>
             )}
+            {/* Heavy only: a session over 1.5 GB or a full core wears its cost here, on the tool row, never beside the title. */}
+            <span className="session-header-item" data-header-id="resources" data-hidden={hid('resources')}>
+              <SessionResourcePill sessionId={sessionId} />
+            </span>
             </div>{/* .session-meta-row-2-chips */}
             <div className="session-panel-window-controls">
               {!loading && session?.taskId && (

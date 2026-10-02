@@ -51,6 +51,7 @@ import { createOfflineHost } from './offline-host-core.js'
 import { createHostRuntime } from './host-runtime-core.js'
 import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
+import { createProcSampler } from './proc-sample-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 
@@ -199,6 +200,7 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_RUNTIME__', createHostRuntime.toString()],
     ['__CREATE_HOST_FIX__', createHostFix.toString()],
     ['__CREATE_FS_LS__', createFsLs.toString()],
+    ['__CREATE_PROC_SAMPLER__', createProcSampler.toString()],
     ['__CREATE_CLAUDE_CHECK__', createClaudeCheck.toString()],
     ['__CREATE_BRIDGE_UPLINK__', createBridgeUplink.toString()],
     ['__CREATE_LOOP_DRIFT_PROBE__', createLoopDriftProbe.toString()],
@@ -335,6 +337,16 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     if (createLs) {
       const ls = createLs({ readdir: async () => [], stat: async () => { throw new Error('unused') } })
       if (typeof ls.list !== 'function') throw new Error('fs.ls core did not build a lister')
+    }
+    // proc.sample smoke: the table parser and the cpu-time reader ride this text,
+    // so a reconstructed copy must still read a macOS row (minutes past 60, a
+    // command path with a space) and attribute a re-parented child by its group.
+    const createSampler = reconstructed['__CREATE_PROC_SAMPLER__'] as typeof createProcSampler | undefined
+    if (createSampler) {
+      const ps = createSampler({})
+      const rows = ps.parsePsTable('  10     1    10  2048  75:01.50 1-02:03:04 /Applications/Some App.app/Contents/MacOS/claude\n  11     1    10   512   0:00.10 00:07 node\n')
+      if (rows.length !== 2 || rows[0].comm !== 'claude' || rows[0].cpuSeconds !== 4501.5 || rows[0].elapsedSeconds !== 93784) throw new Error('proc sampler misread a ps row')
+      if (ps.attribute(rows, [{ sid: 's', pid: 10, kind: 'cli' }]).get(11) !== 0) throw new Error('proc sampler lost a re-parented child')
     }
     // host.fix smoke: the package-manager table and the sudo refusal reader ride
     // this text, so a reconstructed copy must still build apk's argv and read
@@ -2762,6 +2774,9 @@ function dispatchCommand(ws, id, cmd) {
     case 'changes.compute': return cmdChangesCompute(ws, id, cmd);
     case 'changes.file': return cmdChangesFile(ws, id, cmd);
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id, cmd);
+    // 'proc-sample-v1': what each session costs this host. NOT in
+    // BRIDGE_ALLOWED_COMMANDS: it names host processes. Keep in sync with daemon-standalone.ts.
+    case 'proc.sample': return cmdProcSample(ws, id);
     case 'list': return cmdList(ws, id);
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id, cmd);
     case 'sessions.describeExternal': return cmdDescribeExternalSessions(ws, id, cmd);
@@ -8592,6 +8607,33 @@ async function cmdTranscriptRewindProbe(ws, id, cmd) {
   } catch (err) {
     sendError(ws, id, 'transcript.rewindProbe failed: ' + err.message);
   }
+}
+
+// ── proc.sample: what each session costs this host ──
+// PARITY: keep in sync with daemon-standalone.ts cmdProcSample. The attribution
+// (one ps, nearest-root claim, process-group sweep, cpu deltas) is
+// proc-sample-core.ts, injected as text.
+const procSampler = (__CREATE_PROC_SAMPLER__)({
+  execFile: execFile,
+  platform: process.platform,
+  env: process.env,
+  totalmem: function () { return os.totalmem(); },
+  loadavg: function () { return os.loadavg(); },
+  cpuCount: function () { return os.cpus().length; },
+});
+
+async function cmdProcSample(ws, id) {
+  const roots = [];
+  for (const [sid, s] of sessions) {
+    if (s.pid && s.state === 'running') roots.push({ sid: sid, pid: s.pid, kind: 'cli' });
+  }
+  if (acp && acp.workers) {
+    for (const [rid, w] of acp.workers) {
+      if (w.state === 'running' && w.proc && w.proc.pid) roots.push({ sid: rid, pid: w.proc.pid, kind: 'acp' });
+    }
+  }
+  const r = await procSampler.sample(roots);
+  sendOk(ws, id, r);
 }
 
 // ── List all sessions ──

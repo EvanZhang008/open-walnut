@@ -53,3 +53,28 @@ describe('sessionKebabMetaRows', () => {
     expect(sessionKebabMetaRows({ startedAt: session.startedAt }, NOW).map((r) => r.key)).toEqual(['created', 'host'])
   })
 })
+
+describe('sessionKebabMetaRows: Memory and CPU', () => {
+  const resources = { rssBytes: 1.5 * 1024 ** 3, cpuPct: 42.4, procCount: 3, top: [{ pid: 7, comm: 'claude', rssBytes: 1024 ** 3 }, { pid: 8, comm: 'node', rssBytes: 512 * 1024 ** 2 }] }
+
+  it('with a reading, two rows follow Host: the tree total with its process count, and the CPU', () => {
+    const rows = sessionKebabMetaRows({ ...session, resources }, NOW)
+    expect(rows.map((r) => [r.key, r.value])).toEqual([
+      ['created', '1w ago'],
+      ['updated', '2h ago'],
+      ['host', 'Local'],
+      ['memory', '1.5 GB · 3 processes'],
+      ['cpu', '42%'],
+    ])
+    expect(rows[3].title).toBe('claude (7) 1.0 GB\nnode (8) 512 MB')
+  })
+
+  it('no reading (no host reports it yet) adds nothing; a first sample reads CPU as a dash', () => {
+    expect(sessionKebabMetaRows({ ...session, resources: null }, NOW)).toHaveLength(3)
+    expect(sessionKebabMetaRows(session, NOW)).toHaveLength(3)
+    const [, , , , cpu] = sessionKebabMetaRows({ ...session, resources: { ...resources, cpuPct: null } }, NOW)
+    expect(cpu.value).toBe('\u2014')
+    expect(cpu.title).toMatch(/next sample/)
+  })
+})
+

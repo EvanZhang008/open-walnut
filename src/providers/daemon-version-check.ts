@@ -136,6 +136,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/claude-check-core.ts',
   // fs.ls with its per-entry and whole-listing budgets: same rule.
   'src/providers/fs-ls-core.ts',
+  // proc.sample (what each session costs the host): same import-or-inline rule.
+  'src/providers/proc-sample-core.ts',
   // The offline host and the envelope wording it shares with the server: same
   // import-or-inline rule (docs/plan/daemon-first-hosts.md).
   'src/providers/offline-host-core.ts',

@@ -158,6 +158,10 @@ export const EventNames = {
   // One remote host's daemon connect moved (a step, a success, a failure)
   HOST_STATUS: 'host:status',
 
+  // What each session costs one host (CPU, RSS per process tree), one frame per
+  // host per sample (src/core/sessions/session-resources.ts)
+  SESSION_RESOURCES: 'session:resources',
+
   // Mobile client incidents (a freeze/crash line arrived in an uploaded iOS log)
   CLIENT_INCIDENT: 'client:incident',
 

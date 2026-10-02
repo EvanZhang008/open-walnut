@@ -14,6 +14,7 @@ import { prefetchVscodeEmbed } from './vscodeEmbedPrefetch';
 import { inboxChipTitle } from '@/components/inbox/session-letters';
 import type { SessionSplitView } from './sessionSplitView';
 import { sessionKebabMetaRows } from './session-kebab-meta';
+import { useSessionResources, hydrateResources } from '@/stores/session-resources-store';
 import {
   useSessionPanelMode,
   MIN_PANELS,
@@ -145,7 +146,11 @@ export function SessionKebabSection({
   const codeHoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(codeHoverTimer.current), [sessionId]);
   // Computed per render: the menu mounts when opened, so "2m ago" is fresh each time.
-  const metaRows = sessionKebabMetaRows({ startedAt, lastActiveAt, host, hostname });
+  const resources = useSessionResources(sessionId);
+  // The menu mounts when opened: ask the hosts for a fresh reading (one ps, shared
+  // within 1.5s) so the Memory and CPU rows are seconds old, not up to 30s.
+  useEffect(() => { void hydrateResources({ fresh: true }); }, [sessionId]);
+  const metaRows = sessionKebabMetaRows({ startedAt, lastActiveAt, host, hostname, resources });
   const cdPrefix = cwd ? `cd ${cwd} && ` : '';
   const cwdLabel = cwd ? (cwd.split('/').filter(Boolean).pop() || 'CWD') : null;
 

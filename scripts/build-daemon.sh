@@ -101,6 +101,7 @@ SOURCES=(
   src/providers/host-fix-core.ts
   src/providers/claude-check-core.ts
   src/providers/fs-ls-core.ts
+  src/providers/proc-sample-core.ts
   src/providers/offline-host-core.ts
   src/core/peers/envelope-kit.ts
   src/providers/git-diff-core.ts

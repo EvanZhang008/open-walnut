@@ -5173,6 +5173,29 @@ export function getPooledSnapshotConnection(host: string | null | undefined): Da
   return null
 }
 
+/**
+ * Every CONNECTED pooled daemon, grouped by host key ('__local__', an alias).
+ * A host can have more than one: the local daemon usually sits under a
+ * `direct:<wsUrl>` pool key beside a `__local__` one, and during a handover
+ * the old and the new daemon are both connected. Two pool entries reaching the
+ * same daemon (same instance id) count once. Never dials.
+ */
+export function listConnectedDaemonsByHost(): Map<string, DaemonConnection[]> {
+  const out = new Map<string, DaemonConnection[]>()
+  const seen = new Set<string>()
+  for (const conn of connectionPool.values()) {
+    if (!conn.connected || !conn.host) continue
+    const id = conn.daemonInstanceId
+    if (id) {
+      if (seen.has(conn.host + '\u0000' + id)) continue
+      seen.add(conn.host + '\u0000' + id)
+    }
+    const list = out.get(conn.host)
+    if (list) { if (!list.includes(conn)) list.push(conn) } else out.set(conn.host, [conn])
+  }
+  return out
+}
+
 export function getDaemonPoolStatus(): DaemonStatus[] {
   const result: DaemonStatus[] = []
   for (const [host, conn] of connectionPool) {

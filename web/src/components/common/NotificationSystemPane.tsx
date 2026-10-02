@@ -21,6 +21,7 @@ import { useAllHostStatus } from '@/hooks/useHostStatus';
 import { hostProblemOf } from '@open-walnut/host-problem';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { NotificationHostRow } from './NotificationHostRow';
+import { MachineLoadCard } from './MachineLoadCard';
 import { NotificationUpdateCard } from './NotificationUpdateCard';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import '@/styles/attention-banner.css';
@@ -150,6 +151,9 @@ export const NotificationSystemPane = memo(function NotificationSystemPane(
         </div>
         );
       })()}
+
+      {/* What every session costs each machine: this Mac first, then every connected host. */}
+      <MachineLoadCard labels={Object.fromEntries((health.daemons ?? []).map((d) => [d.host, d.label]))} />
 
       {/* Git backup status */}
       <div className={`notification-card ${gitOk ? 'ok' : 'warn'}`}>

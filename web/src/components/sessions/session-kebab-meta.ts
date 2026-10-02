@@ -5,9 +5,10 @@
  */
 import { timeAgo } from '@/utils/time';
 import { hostDisplayLabel } from '@/utils/host-display-label';
+import { formatCpu, formatMemory, formatProcCount } from '@/utils/resource-format';
 
 export interface KebabMetaRow {
-  key: 'created' | 'updated' | 'host';
+  key: 'created' | 'updated' | 'host' | 'memory' | 'cpu';
   label: string;
   /** `2h ago`, `Local`, `clouddev` */
   value: string;
@@ -20,6 +21,8 @@ interface SessionMeta {
   lastActiveAt?: string;
   host?: string;
   hostname?: string;
+  /** The session's last resource reading (session-resources-store), when a host reports it. */
+  resources?: { rssBytes: number; cpuPct: number | null; procCount: number; top: Array<{ pid: number; comm: string; rssBytes: number }> } | null;
 }
 
 const NBSP_RE = /[\u202f\u00a0]/g;
@@ -43,9 +46,14 @@ function timeRow(key: 'created' | 'updated', label: string, iso: string | undefi
 export function sessionKebabMetaRows(session: SessionMeta, now: number = Date.now()): KebabMetaRow[] {
   const local = !session.host || session.host === '__local__' || session.host === 'local';
   const host = hostDisplayLabel(local ? null : session.host);
+  const r = session.resources;
+  // What the session costs its machine: its whole process tree, the top processes on hover.
+  const procs = r ? r.top.slice(0, 5).map((p) => `${p.comm} (${p.pid}) ${formatMemory(p.rssBytes)}`).join('\n') : '';
   return [
     timeRow('created', 'Created', session.startedAt, now),
     timeRow('updated', 'Updated', session.lastActiveAt, now),
     { key: 'host' as const, label: 'Host', value: host, title: (!local && session.hostname) || host },
+    r ? { key: 'memory' as const, label: 'Memory', value: `${formatMemory(r.rssBytes)} · ${formatProcCount(r.procCount)}`, title: procs || 'No processes found' } : null,
+    r ? { key: 'cpu' as const, label: 'CPU', value: formatCpu(r.cpuPct), title: r.cpuPct == null ? 'Measured from the next sample on' : 'Over the last sample; more than 100% is more than one core' } : null,
   ].filter((row): row is KebabMetaRow => row !== null);
 }

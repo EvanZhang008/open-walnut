@@ -364,6 +364,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // old unlabelled stop to a daemon without it; an ephemeral server sends none
   // at all (fail closed).
   'owner-home-v1',
+  // 'proc-sample-v1': `proc.sample` answers what each session costs this host
+  // (RSS and CPU of the CLI, its children and its process group, from ONE `ps`
+  // per sample, proc-sample-core.ts). Both twins implement it (the core is
+  // text-injected into the source twin), so it is NOT sidecar-gated. Not
+  // bridge-reachable: it names host processes. Optional: without it the
+  // Machine readout says the host's daemon needs an upgrade.
+  'proc-sample-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]
