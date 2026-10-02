@@ -3880,6 +3880,19 @@ export class ClaudeCodeSession {
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
         }
       }
+    } else if (this.claudeSessionId) {
+      // Died between turns: the result saw the CLI still up and published 'idle',
+      // and no result follows this death. Publish 'stopped' (and drop the dead
+      // pid) the way the result handler does for a CLI already gone, or the
+      // record keeps describing a live idle process.
+      this._activity = undefined
+      this.emitStatusChanged('NEED_ACTION')
+      const sid = this.claudeSessionId
+      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+        updateSessionRecord(sid, { pid: undefined, pendingPermission: undefined }),
+      ).catch((err) => {
+        log.session.warn('failed to clear PID/pendingPermission after death between turns', { sessionId: sid, error: String(err) })
+      })
     }
     // A meter still running here belongs to a turn that was anchored but never
     // answered (a send whose FIFO write failed, then the process died): end it.
@@ -10619,7 +10632,9 @@ export class SessionRunner {
     lane?: string
     resumeSessionAt?: string
     appendSystemPrompt?: string
+    mode?: SessionMode
   }> {
+    let resolvedMode: SessionMode | undefined
     let resolvedModel: string | undefined
     let resolvedEffort: import('../core/types.js').SessionEffort | undefined
     let resolvedProfile: import('../core/types.js').SessionProfile | undefined
@@ -10629,6 +10644,9 @@ export class SessionRunner {
     try {
       const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
       const record = await getSession(sessionId)
+      // record.mode is the durable mode (a PATCH persists it first; CLI-reported
+      // changes are written back), so a cold --resume must carry it.
+      if (record?.mode) resolvedMode = record.mode
       if (record?.effort) {
         resolvedEffort = record.effort
       }
@@ -10701,7 +10719,7 @@ export class SessionRunner {
     return {
       model: resolvedModel, effort: resolvedEffort, profile: resolvedProfile,
       lane: resolvedLane, resumeSessionAt: resolvedResumeSessionAt,
-      appendSystemPrompt: resolvedAppendSystemPrompt,
+      appendSystemPrompt: resolvedAppendSystemPrompt, mode: resolvedMode,
     }
   }
 
@@ -11146,6 +11164,7 @@ export class SessionRunner {
         lane: resolvedLane,
         resumeSessionAt: resolvedResumeAt,
         appendSystemPrompt: resolvedResumePrompt,
+        mode: recordMode,
       } = await this.resolveResumeArgs(sessionId)
 
       // Rehydrate: if this.sessions lost the entry (e.g. reconciler didn't flag the
@@ -11386,8 +11405,10 @@ export class SessionRunner {
       }
 
       // Resume the session with the combined message (with optional mode/model override).
-      // Fall back to targetSession._mode to prevent mode silently reverting to 'default'.
-      const existingResumeMode = mode ?? targetSession.mode
+      // Fall back to the record's mode, then targetSession._mode, so the mode never
+      // silently reverts to 'default'. The record comes first: a mode PATCHed while
+      // no CLI was live is persisted there but never reached the in-memory session.
+      const existingResumeMode = mode ?? recordMode ?? targetSession.mode
       log.session.info('resuming session via CLI (existing target)', { sessionId, taskId: targetSession.taskId, messageLength: combined.length, host: resumeHost, model: resolvedModel, mode: existingResumeMode })
       // Same death-window bookkeeping as the no-target cold resume above,
       // awaited for the same ordering invariant.

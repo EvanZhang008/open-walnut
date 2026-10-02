@@ -3933,6 +3933,23 @@ describe('handleProcessDeath — init failure vs ordinary shutdown', () => {
     expect(infos).toContain('session process exited (expected teardown)');
   });
 
+  it('a death between turns publishes stopped (the result had published idle)', () => {
+    const session = makeDeadSession('death-between-turns', { initialized: true });
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const s = session as any;
+    // The turn's result saw the CLI alive: idle, result handled, ready for a next turn.
+    s._turnResultEmitted = true;
+    s.resultEmitted = false;
+    s._processStatus = 'idle';
+    const published = vi.spyOn(s, 'emitStatusChanged').mockImplementation(() => {});
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    die(session);
+
+    expect(session.processStatus).toBe('stopped');
+    expect(published).toHaveBeenCalledTimes(1);
+  });
+
   it('never quotes the CLI managed-settings advisory as a death cause', () => {
     // Same noise, but on the genuine init-failure path — the message is a startup
     // advisory the CLI prints while continuing normally, so it explains nothing.

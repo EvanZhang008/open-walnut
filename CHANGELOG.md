@@ -22,6 +22,9 @@ breaking changes).
 
 ### Fixed
 
+- **A session keeps the mode you picked while it was not running.** Switching a session's
+  permission mode (to accept edits, say) while its Claude Code process had ended was saved,
+  but the next message resumed it in the old mode.
 - **On Linux, editing notes no longer stops the server.** Linux watches the notes folder one
   subfolder at a time, and a folder that vanished while it was being read (each note save
   makes and removes a short-lived lock folder) was an error nobody handled, so the server
