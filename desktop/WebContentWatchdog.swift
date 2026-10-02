@@ -206,11 +206,19 @@ final class WebContentWatchdog {
     private func refreshServedBundle() {
         guard let port = portProvider(), let url = URL(string: "http://localhost:\(port)/") else { return }
         var request = URLRequest(url: url)
-        request.timeoutInterval = 3
+        // 15 s, not 3: the server's event loop stalls for 1 to 26 s under load
+        // (a git pull, the health monitor), and a 3 s probe read every such
+        // stall as "server_page_broken status=0" (about 15 false reports in
+        // four days), while the aborted request left a 400 in the server log.
+        request.timeoutInterval = 15
         request.cachePolicy = .reloadIgnoringLocalCacheData
         URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
             guard let self else { return }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            // No HTTP status at all: the server did not answer in time (a stall,
+            // a restart). That is "slow or unreachable", not "up but broken"; a
+            // broken page is a server that ANSWERED without the bundle.
+            guard status != 0 else { return }
             guard status == 200, let data,
                   let html = String(data: data, encoding: .utf8),
                   let id = bundleId(inHTML: html) else {
@@ -261,7 +269,10 @@ final class WebContentWatchdog {
         guard let body = try? JSONSerialization.data(withJSONObject: ["entries": [entry]]) else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 3
+        // Fire-and-forget off the main thread, so a generous timeout costs
+        // nothing; a 3 s one hung up on a stalled server mid-body and surfaced
+        // as `request aborted` 400s on the logging route.
+        request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         URLSession.shared.dataTask(with: request).resume()
