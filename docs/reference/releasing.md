@@ -18,11 +18,12 @@ is installed again. Pre-1.0, a minor bump may carry breaking changes (see CHANGE
 ## Automatic stable releases
 
 Nobody has to cut a stable release. Once a day, jobs `promote-*` of the same workflow
-promote a nightly that users on the nightly channel have run for a day. The schedule checks
-every hour (`37 * * * *` UTC) and a check does nothing until the last stable is 23 hours old
-(`MIN_GAP_HOURS`), because GitHub delays scheduled runs under load and sometimes drops them:
-one daily slot could skip a day without anyone noticing, an hourly check costs an hour at
-most. A run by hand skips the gap.
+promote a nightly that users on the nightly channel have run for a day. They check whenever
+CI finishes on `main` (`workflow_run`) and every hour (`37 * * * *` UTC), and a check does
+nothing until the last stable is 23 hours old (`MIN_GAP_HOURS`). A single daily cron is not
+enough: GitHub delays scheduled runs by hours under load and drops some (this repo's 17:17
+cron ran at 21:48 on 2026-10-01, and five hours of half-hourly checks never ran the next
+morning). A run by hand skips the gap.
 
 1. **Plan** (`scripts/stable-promote.mjs plan`). The candidate is the newest nightly
    published at least 24 hours ago; the registry records each version's commit as
@@ -141,12 +142,11 @@ So the CHANGELOG discipline is the release discipline: write the user-facing ent
 
 ## Nightlies
 
-Job `nightly` of the same workflow checks every 30 minutes (`17,47 * * * *` UTC) and runs by
-hand (`workflow_dispatch`, with a `force` input for a republish). A scheduled check
-publishes only when the `nightly` dist-tag is at least 5.5 hours old
-(`scripts/nightly-version.mjs due`), so nightlies come about every six hours and a dropped
-run costs half an hour (the 06:17 run of 2026-10-02, when the schedule was a plain six-hourly
-cron, never ran at all). It asks for the newest commit
+Job `nightly` of the same workflow checks whenever CI finishes on `main` and every 30
+minutes (`17,47 * * * *` UTC), and runs by hand (`workflow_dispatch`, with a `force` input
+for a republish). A check publishes only when the `nightly` dist-tag is at least 5.5 hours
+old (`scripts/nightly-version.mjs due`), so nightlies come about every six hours while
+`main` moves, whatever GitHub does with the schedule. It asks for the newest commit
 on `main` whose CI run passed (`scripts/ci-gate.mjs last-green main`), and does nothing
 when there is none among the last 30 runs, when that commit is already the `nightly` tag,
 or when it is not a descendant of that tag (GitHub's runs list can show a finished run as

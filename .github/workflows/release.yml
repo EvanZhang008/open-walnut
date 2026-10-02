@@ -2,16 +2,18 @@ name: Release
 
 # Two channels, one workflow (docs/reference/releasing.md):
 #
-#   stable   automatic, once a day (jobs `promote-*`, checked hourly): the newest
-#            nightly that has been out 24 hours, when it carries something new and installs and starts on
-#            fresh Linux and macOS runners, becomes the next patch (pre-1.0; a
+#   stable   automatic, once a day (jobs `promote-*`, checked when CI finishes on
+#            main and hourly): the newest nightly that has been out 24 hours,
+#            when it carries something new and installs and starts on fresh
+#            Linux and macOS runners, becomes the next patch (pre-1.0; a
 #            breaking change makes the next minor). Published as dist-tag `latest`,
 #            tagged `vX.Y.Z`, a GitHub Release with its notes, then a
 #            `release: X.Y.Z` commit on main rolls CHANGELOG and package.json
 #            (scripts/stable-promote.mjs). By hand, a `vX.Y.Z` tag cut with
 #            `npm run release -- patch|minor|major` publishes through job `stable`.
-#   nightly  about every six hours (checked every 30 minutes; and by hand): the
-#            newest commit on main that CI passed, when it is not the last nightly. Published as
+#   nightly  about every six hours (checked when CI finishes on main and every 30
+#            minutes; and by hand): the newest commit on main that CI passed,
+#            when it is not the last nightly. Published as
 #            `X.Y.(Z+1)-nightly.YYYYMMDD.N` under dist-tag `nightly`, then the
 #            `nightly` tag moves to it. Nothing is committed: the version lives in
 #            the registry, not in package.json.
@@ -32,13 +34,19 @@ name: Release
 on:
   push:
     tags: ['v*.*.*']
+  # The checks only ask, and a gap decides: a nightly when the last one is 5.5h old
+  # (scripts/nightly-version.mjs due), a stable when the last one is 23h old
+  # (scripts/stable-promote.mjs plan). They ask whenever CI finishes on main,
+  # which is when there is something new to ship, and on a schedule as a backup.
+  # Schedules alone were not enough: GitHub ran this repo's 17:17 cron at 21:48
+  # (2026-10-01) and none of the next 5 hours of half-hourly ones.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   schedule:
-    # GitHub delays scheduled runs under load and sometimes drops them (the 06:17
-    # nightly of 2026-10-02 never ran). So the schedules only ask, often, and a
-    # gap decides: a nightly when the last is 5.5h old (scripts/nightly-version.mjs
-    # due), a stable when the last is 23h old (scripts/stable-promote.mjs plan).
-    # A dropped run costs one interval, not a day. Off the hour, which GitHub
-    # drops most. The jobs compare github.event.schedule to these strings.
+    # Off the hour, which GitHub drops most. The jobs compare
+    # github.event.schedule to these strings.
     - cron: '17,47 * * * *'   # nightly check, every 30 minutes
     - cron: '37 * * * *'      # stable promotion check, hourly
   workflow_dispatch:
@@ -112,7 +120,7 @@ jobs:
 
   nightly:
     name: Publish nightly from main
-    if: (github.event_name == 'schedule' && github.event.schedule == '17,47 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.channel != 'stable')
+    if: github.event_name == 'workflow_run' || (github.event_name == 'schedule' && github.event.schedule == '17,47 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.channel != 'stable')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -129,8 +137,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # A scheduled run publishes only when the last nightly is old enough; by hand, now.
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "$(node scripts/nightly-version.mjs due)" != "due=true" ]; then
+          # A check (CI finished, or the schedule) publishes only when the last nightly
+          # is old enough; by hand, now.
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ "$(node scripts/nightly-version.mjs due)" != "due=true" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -200,7 +209,7 @@ jobs:
   # ships that a fresh install could not start.
   promote-plan:
     name: Pick the nightly to promote
-    if: (github.event_name == 'schedule' && github.event.schedule == '37 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
+    if: github.event_name == 'workflow_run' || (github.event_name == 'schedule' && github.event.schedule == '37 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.channel == 'stable')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:

@@ -269,8 +269,13 @@ describe('release.yml', () => {
 
   it('runs on release tags, two schedules and by hand, each job on its own', () => {
     expect(doc.on.push).toEqual({ tags: ['v*.*.*'] })
-    // Frequent checks, gated by a gap: a schedule GitHub drops costs one interval.
+    // Checks gated by a gap: whenever CI finishes on main, and on a schedule as a
+    // backup (GitHub ran a 17:17 cron at 21:48 and skipped five hours of others).
+    expect(doc.on.workflow_run).toEqual({ workflows: ['CI'], types: ['completed'], branches: ['main'] })
     expect(doc.on.schedule).toEqual([{ cron: '17,47 * * * *' }, { cron: '37 * * * *' }])
+    expect(doc.jobs.nightly!.if).toContain("github.event_name == 'workflow_run'")
+    expect(doc.jobs['promote-plan']!.if).toContain("github.event_name == 'workflow_run'")
+    expect(doc.jobs.stable!.if).not.toContain('workflow_run')
     const dispatch = doc.on.workflow_dispatch as { inputs: Record<string, { options?: string[]; default?: unknown }> }
     expect(dispatch.inputs.channel).toMatchObject({ options: ['nightly', 'stable'], default: 'nightly' })
     expect(doc.jobs.nightly!.if).toContain("github.event.schedule == '17,47 * * * *'")
@@ -302,12 +307,12 @@ describe('release.yml', () => {
     expect(ci).toBeLessThan(publish)
   })
 
-  it('a scheduled nightly publishes only once the last one is old enough; by hand, at once', () => {
+  it('a nightly check publishes only once the last one is old enough; by hand, at once', () => {
     const pick = doc.jobs.nightly!.steps.find((s) => s.id === 'pick')!.run!
     const due = pick.indexOf('node scripts/nightly-version.mjs due')
     expect(due).toBeGreaterThan(-1)
     expect(due).toBeLessThan(pick.indexOf('node scripts/ci-gate.mjs last-green main'))
-    expect(pick.slice(0, due)).toContain('"${{ github.event_name }}" = "schedule"')
+    expect(pick.slice(0, due)).toContain('"${{ github.event_name }}" != "workflow_dispatch"')
     const plan = doc.jobs['promote-plan']!.steps.find((s) => s.id === 'plan')!.run!
     expect(plan).toContain("github.event_name == 'workflow_dispatch' && '--min-gap-hours 0'")
   })
