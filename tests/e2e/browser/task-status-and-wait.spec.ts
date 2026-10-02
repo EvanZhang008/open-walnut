@@ -381,12 +381,11 @@ test('Waiting tasks are out of the list and the tiers by default; "Show waiting"
 })
 
 test('the footer counts the current view: a tier tab counts its own tier, and "Show completed" reveals a tier\'s done pin in place', async ({ page, browserName }) => {
-  // Every tier tab in the bar, so the view can be switched by clicking; a tab whose
-  // only tasks are hidden counts as empty, so empty tabs must stay too.
+  // Every tier tab on the bar, so the view can be switched by clicking. "Hide empty
+  // tabs" stays at its default (on): a tier whose only tasks are parked is not empty.
   await page.addInitScript(() => {
     localStorage.setItem('walnut-todo-quick-views-visible', 'true')
     localStorage.setItem('walnut-todo-tab-bar-hidden-tabs', '[]')
-    localStorage.setItem('walnut-todo-tab-bar-hide-empty', 'false')
   })
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   // Born pinned (Satellite): one parked there, one parked in Focus, one done in Focus.

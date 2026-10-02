@@ -43,6 +43,8 @@ interface TodoSectionTabsProps {
   onChange: (section: TodoSection) => void;
   /** Per-section badge counts (undefined = no badge). */
   counts: Partial<Record<TodoSection, number>>;
+  /** Per-section count of tasks held but hidden by default (parked): keeps a tab that shows nothing from reading as empty. */
+  heldCounts?: Partial<Record<TodoSection, number>>;
   /** False while the tasks are still loading: every count reads 0 then, and no tab is empty yet. */
   countsReady?: boolean;
   /** User-defined tiers: each gets its own tab between Parked and Recent. */
@@ -54,13 +56,13 @@ interface TodoSectionTabsProps {
   searchDone?: { count: number; shown: boolean; onToggle: () => void };
 }
 
-export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, countsReady = true, customTiers, searchDone }: TodoSectionTabsProps) {
+export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, heldCounts, countsReady = true, customTiers, searchDone }: TodoSectionTabsProps) {
   const [hidden, setHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY, DEFAULT_HIDDEN_TABS);
   const [hideEmpty, setHideEmpty] = useNavigationPreference(TAB_BAR_HIDE_EMPTY_KEY, true);
   const [, setBarShown] = useNavigationPreference(TASK_SHORTCUTS_KEY);
   const [menu, setMenu] = useState<{ x: number; y: number; origin: HTMLElement } | null>(null);
   const tabs = tabBarTabs(customTiers);
-  const shown = visibleTabBarTabs(tabs, { active, counts, hidden, hideEmpty: hideEmpty && countsReady });
+  const shown = visibleTabBarTabs(tabs, { active, counts, held: heldCounts, hidden, hideEmpty: hideEmpty && countsReady });
   const roomy = shown.length <= ROOMY_TAB_LIMIT;
 
   const openMenu = (event: MouseEvent<HTMLElement>, atCursor = false) => {
@@ -82,7 +84,7 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
       onSelect: () => setHidden(hidden.includes(tab.id) ? hidden.filter((id) => id !== tab.id) : [...hidden, tab.id]),
     })),
     { divider: true },
-    { key: 'hide-empty', label: 'Hide empty tabs', toggle: true, keepOpen: true, checked: hideEmpty, title: 'A tier with no tasks leaves the bar; custom tiers always stay', onSelect: () => setHideEmpty(!hideEmpty) },
+    { key: 'hide-empty', label: 'Hide empty tabs', toggle: true, keepOpen: true, checked: hideEmpty, title: 'A tier with no tasks leaves the bar (parked tasks count as tasks); custom tiers always stay', onSelect: () => setHideEmpty(!hideEmpty) },
     { divider: true },
     { key: 'tab-bar', label: 'Show tab bar', toggle: true, checked: true, onSelect: hideBar },
   ];

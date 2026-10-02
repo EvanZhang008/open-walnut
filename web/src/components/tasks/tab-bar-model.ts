@@ -51,18 +51,22 @@ export function tabBarTabs(customTiers: readonly { id: string; label: string }[]
 export interface TabBarChoice {
   active: string;
   counts: Partial<Record<string, number>>;
+  /** Tasks a tab holds but hides by default (parked ones): a tab with only those is not empty. */
+  held?: Partial<Record<string, number>>;
   hidden: readonly string[];
   hideEmpty: boolean;
 }
 
 /** The tabs drawn right now: the ones the user keeps, less the empty ones when that is on. */
-export function visibleTabBarTabs(tabs: readonly TabBarTab[], { active, counts, hidden, hideEmpty }: TabBarChoice): TabBarTab[] {
+export function visibleTabBarTabs(tabs: readonly TabBarTab[], { active, counts, held, hidden, hideEmpty }: TabBarChoice): TabBarTab[] {
   return tabs.filter((tab) => {
     if (tab.id === active) return true;
     if (hidden.includes(tab.id)) return false;
     // All has no count of its own; Pinned is the bar's one fixed stop; a custom tier
     // stays findable while empty.
     if (!hideEmpty || tab.id === 'all' || tab.id === 'pinned' || tab.custom) return true;
-    return (counts[tab.id] ?? 0) > 0;
+    // A tier whose tasks are all parked still has work in it: the tab stays, so the
+    // footer's "N waiting hidden" under it can be reached (2026-10-01).
+    return (counts[tab.id] ?? 0) > 0 || (held?.[tab.id] ?? 0) > 0;
   });
 }

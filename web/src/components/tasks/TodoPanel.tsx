@@ -8045,6 +8045,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }
   sectionCounts.pinned = focusTasksDisplay.length + satelliteTasksDisplay.length + backlogTasksDisplay.length + waitTasksDisplay.length
     + (customTiers ?? []).reduce((sum, def) => sum + (sectionCounts[def.id] ?? 0), 0);
+  // Parked pins a tier holds but hides by default: a tier with only those keeps its tab
+  // under "Hide empty tabs" (the footer's "N waiting hidden" needs the tab to be
+  // reachable). Completed pins do not count; they accumulate forever.
+  const sectionHeldCounts = useMemo((): Partial<Record<TodoSection, number>> => {
+    if (waitingRevealed || isSearchMode) return {};
+    const held: Partial<Record<TodoSection, number>> = {};
+    const parked = tasks.filter((t) => t.phase === 'WAITING' && pinnedTaskIds?.has(t.id) && !(t.group_id && hiddenGroups?.has(t.group_id)));
+    if (parked.length === 0) return held;
+    const tierSets: Array<[TodoSection, Set<string> | undefined]> = [
+      ['focus', focusTaskIds], ['backlog', backlogTaskIds], ['wait', waitTaskIds],
+      ...Object.entries(customTierIds ?? {}),
+    ];
+    for (const t of parked) {
+      const tier = tierSets.find(([, ids]) => ids?.has(t.id))?.[0] ?? 'satellite';
+      held[tier] = (held[tier] ?? 0) + 1;
+    }
+    return held;
+  }, [tasks, waitingRevealed, isSearchMode, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTierIds, hiddenGroups]);
   /**
    * One tier's render model, for the section loop below. A pure LOOKUP over the
    * memos that already exist (three per built-in, one bundle per custom) — no
@@ -8241,6 +8259,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         active={effectiveSection}
         onChange={handleSectionChange}
         counts={sectionCounts}
+        heldCounts={sectionHeldCounts}
         countsReady={!loading}
         customTiers={customTiers}
         searchDone={isSearchMode && searchDoneCount > 0

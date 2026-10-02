@@ -41,6 +41,15 @@ describe('visibleTabBarTabs', () => {
     expect(ids(visibleTabBarTabs(tabs, { active: 'satellite', counts, hidden: [], hideEmpty: false }))).toEqual(ids(tabs))
   })
 
+  it('a tier whose only tasks are parked (held, hidden by default) is not empty', () => {
+    const counts = { pinned: 2, focus: 0, satellite: 2, wait: 0, recent: 0, ct_a: 0 }
+    expect(ids(visibleTabBarTabs(tabs, { active: 'all', counts, held: { focus: 1 }, hidden: [], hideEmpty: true })))
+      .toEqual(['all', 'pinned', 'focus', 'satellite', 'ct_a', 'ct_b'])
+    // A held count never brings back a tab the user took off the bar.
+    expect(ids(visibleTabBarTabs(tabs, { active: 'all', counts, held: { focus: 1 }, hidden: ['focus'], hideEmpty: true })))
+      .toEqual(['all', 'pinned', 'satellite', 'ct_a', 'ct_b'])
+  })
+
   it('always draws the tab the panel is on, hidden or empty', () => {
     expect(ids(visibleTabBarTabs(tabs, { active: 'backlog', counts: { backlog: 0 }, hidden: ['backlog', 'all', 'pinned'], hideEmpty: true })))
       .toEqual(['backlog', 'ct_a', 'ct_b'])
