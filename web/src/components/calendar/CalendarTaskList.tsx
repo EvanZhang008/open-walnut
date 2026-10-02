@@ -114,7 +114,6 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
           tier: p.tier,
           ids: p.tier === 'focus' ? focusBar.focusIds
             : p.tier === 'satellite' ? focusBar.satelliteIds
-            : p.tier === 'backlog' ? focusBar.backlogIds
             : focusBar.waitIds,
         })),
         ...customTiers.map((ct) => ({

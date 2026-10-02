@@ -203,7 +203,7 @@ export function ProjectPlusMenu({ project, onAddSession, onAddTask, onAddSeparat
 // ── "+" — same control on a tier header (R8) ─────────────────────────────────
 
 export function TierPlusButton({ tier, label, onAddSession, onAddTask, onAddSeparator }: {
-  /** Built-in tier name ('focus' | 'satellite' | 'backlog' | 'wait') or a custom
+  /** Built-in tier name ('focus' | 'satellite' | 'wait') or a custom
    *  tier id (`ct_*`) — whatever `meta.pinTier` accepts. */
   tier: string;
   /** Human label for the tooltip ("Focus", "Satellite", a custom tier's name). */

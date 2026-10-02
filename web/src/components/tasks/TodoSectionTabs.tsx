@@ -24,14 +24,13 @@ import { DEFAULT_HIDDEN_TABS, ROOMY_TAB_LIMIT, tabBarTabs, visibleTabBarTabs } f
 export type TodoSection = string;
 
 /** Every view the panel can be on. `tasks` (Projects) is picked from the filter menu, not a tab. */
-export const TODO_SECTIONS: readonly TodoSection[] = ['all', 'pinned', 'focus', 'satellite', 'backlog', 'wait', 'recent', 'tasks'];
+export const TODO_SECTIONS: readonly TodoSection[] = ['all', 'pinned', 'focus', 'satellite', 'wait', 'recent', 'tasks'];
 
 function icon(section: TodoSection): ReactNode {
   switch (section) {
     case 'pinned': return ICONS.ICON_PIN;
     case 'focus': return ICONS.ICON_TIER_FOCUS;
     case 'satellite': return ICONS.ICON_TIER_SATELLITE;
-    case 'backlog': return ICONS.ICON_TIER_BACKLOG;
     case 'wait': return ICONS.ICON_TIER_WAIT;
     case 'recent': return ICONS.ICON_SECTION_RECENT;
     default: return ICONS.ICON_TIER_CUSTOM;

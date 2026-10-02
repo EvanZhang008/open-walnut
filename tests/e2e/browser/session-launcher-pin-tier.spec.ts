@@ -98,7 +98,7 @@ test('launcher defaults to Focus, and a pick lasts exactly one launch', async ({
 
   // Clicking the active tier unpins — and THAT does not persist either.
   await tiers.getByRole('button', { name: 'Focus' }).click()
-  for (const label of ['Focus', 'Satellite', 'Backlog', 'Parked']) {
+  for (const label of ['Focus', 'Satellite', 'Parked']) {
     await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
   }
   await closeLauncher(page)

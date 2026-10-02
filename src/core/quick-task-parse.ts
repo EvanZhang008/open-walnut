@@ -2,7 +2,7 @@ import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
 import { fastModelFor, fastModelRidesCli } from './cheap-model.js';
 import { getJevClient, readChoice, type JevClient } from './decision/jev-client.js';
-import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY } from './types.js';
+import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY, migrateFocusTier } from './types.js';
 import type { Config, CustomTierRecord, LegStatus, QuickTaskParse, QuickTaskParseLegs } from './types.js';
 
 export type { QuickTaskParse } from './types.js';
@@ -45,9 +45,9 @@ function buildPinTierRule(customTiers: CustomTierRecord[]): string {
     ...PIN_TIER_POLICY.map((p) => `  · ${p.tier} — ${p.guidance}`),
     ...customTiers.map((t) => `  · ${t.id} — user-defined tier "${t.label}". Pick it when the note explicitly names this tier (e.g. "icebox" → the tier labeled Icebox).`),
     `  · OMIT the field entirely — ${PIN_TIER_NONE_GUIDANCE}`,
-    '  Urgency signals (urgent/critical/asap/today/紧急/right now) point at focus; a CONCRETE due date inside the next ~7 days points at satellite even with no urgency word; "waiting on"/"blocked by"/等 points at wait; explicit someday/backlog/later wording (someday, backlog, 以后, 有空再) points at backlog. An explicit "pin to X" always wins.',
-    '  Unpinned is still the DEFAULT for things not worth tracking in the pinned working set at all — backlog is for someday work the user DOES want to keep visible.',
-    '  When a signal is AMBIGUOUS, answer with the weaker option: satellite rather than focus, and omission rather than backlog or wait. focus needs stated urgency and wait needs a stated blocker — claiming either without one is the most common mistake, and it is worse than saying nothing, because a surface that gets no tier applies its own default for work that is being started.',
+    '  Urgency signals (urgent/critical/asap/today/紧急/right now) point at focus; a CONCRETE due date inside the next ~7 days points at satellite even with no urgency word; "waiting on"/"blocked by"/等 and explicit someday/later wording (someday, backlog, 以后, 有空再) point at wait. An explicit "pin to X" always wins.',
+    '  Unpinned is still the DEFAULT for things not worth tracking in the pinned working set at all — wait is for set-aside work the user DOES want to keep visible.',
+    '  When a signal is AMBIGUOUS, answer with the weaker option: satellite rather than focus, and omission rather than wait. focus needs stated urgency and wait needs a stated blocker or explicit someday wording — claiming either without one is the most common mistake, and it is worse than saying nothing, because a surface that gets no tier applies its own default for work that is being started.',
   ].join('\n');
 }
 
@@ -495,17 +495,23 @@ export async function parseQuickTask(
     // has to clean up by hand (the calendar's duration-preserving drag already
     // guards `durMs > 0`, so it renders, it's just noise). A range needs width.
     if (endDate && startDate && endDate > startDate) output.end_date = endDate;
-    if (parsed.pinTier === 'focus' || parsed.pinTier === 'satellite' || parsed.pinTier === 'backlog' || parsed.pinTier === 'wait') {
+    if (parsed.pinTier === 'focus' || parsed.pinTier === 'satellite' || parsed.pinTier === 'wait') {
       output.pinTier = parsed.pinTier;
-    } else if (typeof parsed.pinTier === 'string' && opts.customTiers?.length) {
+    } else if (typeof parsed.pinTier === 'string') {
       // Custom tier: accept the registered id, or a label match normalized to
-      // the id (the model sometimes echoes the label the user typed). Unknown
-      // values are dropped (same behavior as before).
+      // the id (the model sometimes echoes the label the user typed). A custom
+      // tier is tried BEFORE a retired built-in name ('backlog' → 'wait'), so a
+      // user who made their own "Backlog" tier can still reach it by label.
+      // Unknown values are dropped (same behavior as before).
       const raw = parsed.pinTier.trim().toLowerCase();
-      const match = opts.customTiers.find(
+      const match = opts.customTiers?.find(
         (t) => t.id.toLowerCase() === raw || t.label.trim().toLowerCase() === raw,
       );
       if (match) output.pinTier = match.id;
+      else {
+        const migrated = migrateFocusTier(raw);
+        if (migrated !== raw) output.pinTier = migrated;
+      }
     }
     if (parsed.priority === 'immediate' || parsed.priority === 'important' || parsed.priority === 'backlog') {
       output.priority = parsed.priority;

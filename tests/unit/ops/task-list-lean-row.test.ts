@@ -28,7 +28,7 @@ const FAT_ROW = {
   status: 'in_progress',
   priority: 'none',
   pinned: 1,
-  focus_tier: 'backlog',
+  focus_tier: 'wait',
   pin_order: 118,
   unread: true,
   created_at: '2026-08-20T00:00:00.000Z',
@@ -99,7 +99,7 @@ describe('task_list lean row', () => {
     expect(row.updated_at).toBe('2026-08-29T18:31:37.148Z')
     // pinned is normalized to a real boolean (the row carries SQLite's 1/0).
     expect(row.pinned).toBe(true)
-    expect(row.focus_tier).toBe('backlog')
+    expect(row.focus_tier).toBe('wait')
     expect(row.pin_order).toBe(118)
   })
 

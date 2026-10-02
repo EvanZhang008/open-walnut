@@ -28,7 +28,7 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
-const TABS = ['All', 'Pinned', 'Focus', 'Satellite', 'Backlog', 'Parked', 'Recent'] as const
+const TABS = ['All', 'Pinned', 'Focus', 'Satellite', 'Parked', 'Recent'] as const
 
 function tab(page: Page, name: (typeof TABS)[number]) {
   return page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
@@ -268,6 +268,6 @@ test.describe('todo panel section tabs', () => {
     await expect(strip).not.toHaveClass(/is-roomy/)
     await expect(tab(page, 'Focus').locator('.todo-section-tab-label')).not.toBeVisible()
     await expect(tab(page, 'Pinned').locator('.todo-section-tab-label')).toBeVisible()
-    expect(JSON.parse(await page.evaluate(() => localStorage.getItem('walnut-todo-tab-bar-hidden-tabs') ?? '[]'))).toEqual(['backlog', 'wait', 'recent'])
+    expect(JSON.parse(await page.evaluate(() => localStorage.getItem('walnut-todo-tab-bar-hidden-tabs') ?? '[]'))).toEqual(['wait', 'recent'])
   })
 })

@@ -44,8 +44,8 @@ const SELF_KNOWLEDGE_PROMPT = `## Walnut operating contract
 
 - Pinned is the active working set. Pinning and focus tier are separate.
 - Focus: today's laser focus. Satellite: the default for a new task, and Satellite is represented by no stored focus tier.
-- Backlog (pinned): expected within about a month. Wait: paused on something else.
-- Unpinned is the real backlog: not due within a month; search brings it back.
+- Parked (tier \`wait\`): set aside for now, someday work or work waiting on something.
+- Unpinned: not due within a month; search brings it back.
 - Create tasks in Satellite and groom the tier later; do not leave new work off the board.`;
 
 export function renderSelfKnowledgeContract(): string {

@@ -187,7 +187,7 @@ defineOp({
     'however many pins there are) in board order, each row carrying focus_tier + pin_order — an absent ' +
     'focus_tier on a pinned row means the Satellite (default) tier. focus_tier filters match pinned rows ' +
     'only: "satellite" matches pinned rows with no ' +
-    'stored tier; focus/backlog/wait/ct_* match exactly. Time windows: time_basis + a window. last_hours/' +
+    'stored tier; focus/wait/ct_* match exactly. Time windows: time_basis + a window. last_hours/' +
     'last_days look BACKWARD from now — for upcoming deadlines use time_basis=due with time_from/' +
     'time_until (bare YYYY-MM-DD accepted; until is exclusive). basis "completed" finds recently ' +
     'finished work. Returns { count, total, truncated, tasks } with slim rows: count = rows returned, ' +
@@ -214,7 +214,7 @@ defineOp({
     tags_any: z.string().optional().describe('Comma list — match tasks carrying ANY of these tags'),
     tags_all: z.string().optional().describe('Comma list — match tasks carrying ALL of these tags'),
     pinned: z.boolean().optional().describe('Filter pinned/unpinned tasks'),
-    focus_tier: z.string().optional().describe('Comma list of pin tiers: focus | satellite | backlog | wait | a custom ct_* id. Only pinned tasks match; satellite = pinned with no stored tier'),
+    focus_tier: z.string().optional().describe('Comma list of pin tiers: focus | satellite | wait (Parked) | a custom ct_* id. Only pinned tasks match; satellite = pinned with no stored tier'),
     working_set: z.boolean().optional().describe('Shortcut: the WHOLE pinned board (all tiers, completed pins included) sorted by pin_order — no default limit, so the board is never silently cut'),
     unread: z.boolean().optional().describe('Tasks with agent output the human has not opened yet'),
     blocked: z.boolean().optional().describe('Tasks blocked/unblocked by incomplete dependencies'),
@@ -416,7 +416,7 @@ interface Placement {
   warning?: string
 }
 
-const TIER_NAMES: Record<string, string> = { focus: 'Focus', satellite: 'Satellite', backlog: 'Backlog', wait: 'Wait' }
+const TIER_NAMES: Record<string, string> = { focus: 'Focus', satellite: 'Satellite', wait: 'Parked' }
 
 /** One sentence naming where the task landed, or '' for a server too old to say. */
 function placementSentence(p: Placement | undefined): string {
@@ -494,7 +494,7 @@ defineOp({
     pinned: z.boolean().optional().describe('Join the pinned board. Default: your task\'s (from inside a task), otherwise true. false keeps the task off the board'),
     // Exact ids only — this rides straight to the server, which validates
     // against the registry. Label tolerance lives in the agent tool.
-    focus_tier: z.string().optional().describe('Pin tier the task is born into (implies pinned): focus | satellite | backlog | wait | a registered ct_* id. Omit for your task\'s tier (from inside a task) or Satellite (elsewhere); unknown tiers are rejected, not silently downgraded'),
+    focus_tier: z.string().optional().describe('Pin tier the task is born into (implies pinned): focus | satellite | wait (Parked) | a registered ct_* id. Omit for your task\'s tier (from inside a task) or Satellite (elsewhere); unknown tiers are rejected, not silently downgraded'),
     record_only: z.boolean().optional().describe('Explicitly save a placeholder WITHOUT starting work. Default false: create and start'),
     ...TASK_START_INPUT,
     start_session: z.boolean().optional().describe('Legacy spelling: false means record_only=true; true starts work (already the default)'),

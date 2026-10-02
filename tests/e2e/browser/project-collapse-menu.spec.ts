@@ -1425,12 +1425,12 @@ function pinnedAreaCard(page: Page, taskId: string): Locator {
 async function pinnedTierOf(taskId: string): Promise<string> {
   const res = await fetch(`${API}/api/focus/tasks`)
   const body = (await res.json()) as {
-    focus_tasks: string[]; satellite_tasks: string[]; backlog_tasks: string[]
+    focus_tasks: string[]; satellite_tasks: string[]
     wait_tasks: string[]; custom_tier_tasks: Record<string, string[]>
   }
   const buckets: Record<string, string[]> = {
     focus: body.focus_tasks, satellite: body.satellite_tasks,
-    backlog: body.backlog_tasks, wait: body.wait_tasks, ...body.custom_tier_tasks,
+    wait: body.wait_tasks, ...body.custom_tier_tasks,
   }
   for (const [tier, ids] of Object.entries(buckets)) if (ids.includes(taskId)) return tier
   return ''

@@ -1,8 +1,10 @@
 import { apiGet, apiPost, apiPut, apiDelete } from './client';
 
-/** Built-in tiers. Custom tiers are ids of the form `ct_<8 chars>`. */
-export type BuiltinTier = 'focus' | 'satellite' | 'backlog' | 'wait';
-export const BUILTIN_TIERS: readonly BuiltinTier[] = ['focus', 'satellite', 'backlog', 'wait'];
+/** Built-in tiers. Custom tiers are ids of the form `ct_<8 chars>`. The
+ *  retired Backlog tier (2026-08 to 2026-10) is 'wait' now: the server folds
+ *  the old name on read and write, so no task object carries it any more. */
+export type BuiltinTier = 'focus' | 'satellite' | 'wait';
+export const BUILTIN_TIERS: readonly BuiltinTier[] = ['focus', 'satellite', 'wait'];
 
 /**
  * A tier is a built-in name or a custom tier id. The `string & {}` arm keeps
@@ -27,7 +29,7 @@ export interface FocusBarData {
   pinned_tasks: string[];
   focus_tasks: string[];
   satellite_tasks: string[];
-  /** Absent on servers older than the built-in Backlog tier (2026-08). */
+  /** Retired tier: always empty from a current server, folded into wait_tasks. */
   backlog_tasks?: string[];
   wait_tasks: string[];
   /** Per custom-tier-id pinned task ids (pin order). Absent on old servers. */

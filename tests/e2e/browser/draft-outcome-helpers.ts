@@ -3,7 +3,7 @@
  * now that the column shows none of it.
  *
  * On 2026-09-15 the draft column lost its task-meta row (the Focus / Satellite /
- * Backlog / Wait segmented control and its More menu: the user found it
+ * Wait segmented control and its More menu: the user found it
  * "complicated for people"). Every new task lands in Focus; a tier "+" seed still
  * lands in its own tier; the background parse may fill dates but never the tier.
  * None of that is readable off the column any more, so the assertions moved to
@@ -26,12 +26,11 @@ export async function pinnedTierOf(page: Page, taskId: string): Promise<string> 
   const res = await page.request.get('/api/focus/tasks')
   if (!res.ok()) return `api-error-${res.status()}`
   const body = (await res.json()) as {
-    focus_tasks?: string[]; satellite_tasks?: string[]; backlog_tasks?: string[]; wait_tasks?: string[]
+    focus_tasks?: string[]; satellite_tasks?: string[]; wait_tasks?: string[]
     custom_tier_tasks?: Record<string, string[]>
   }
   if (body.focus_tasks?.includes(taskId)) return 'focus'
   if (body.satellite_tasks?.includes(taskId)) return 'satellite'
-  if (body.backlog_tasks?.includes(taskId)) return 'backlog'
   if (body.wait_tasks?.includes(taskId)) return 'wait'
   for (const [tier, ids] of Object.entries(body.custom_tier_tasks ?? {})) {
     if (ids.includes(taskId)) return tier

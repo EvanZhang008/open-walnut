@@ -144,3 +144,20 @@ describe('createFakeWalnut storage.updateJson', () => {
     await expect(following).resolves.toEqual({ count: 1 })
   })
 })
+
+describe('createFakeWalnut tasks.fileIntoProject pin tiers', () => {
+  it('accepts the retired backlog tier and files the task in Parked, as the host does', async () => {
+    const fake = createFakeWalnut({
+      pluginId: 'sample',
+      tasks: [{ id: 't1', title: 'someday', phase: 'TODO', status: 'todo', project: 'Work' }] as never,
+    })
+
+    const result = await fake.api.tasks.fileIntoProject('Work', [{ id: 't1', pinTier: 'backlog' }])
+
+    expect(result.filed).toEqual(['t1'])
+    const task = await fake.api.tasks.get('t1')
+    expect(task?.pinned).toBe(true)
+    expect(task?.focusTier).toBe('wait')
+    await expect(fake.api.tasks.fileIntoProject('Work', [{ id: 't1', pinTier: 'icebox' }])).rejects.toThrow(/unknown pin tier/)
+  })
+})

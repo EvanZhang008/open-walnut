@@ -20,7 +20,7 @@ test('6481 tasks remain browsable without duplicate pins or expanded project wal
     source: 'local', created_at: now, updated_at: now,
     description: '', summary: '', note: '', subtasks: [],
     pinned: i >= 3551 && i < 3651,
-    ...(i >= 3551 && i < 3651 ? { focus_tier: ['focus', 'satellite', 'backlog', 'wait'][i % 4] } : {}),
+    ...(i >= 3551 && i < 3651 ? { focus_tier: ['focus', 'satellite', 'wait'][i % 3] } : {}),
   }));
   await page.route('**/api/tasks?*', async route => {
     const url = new URL(route.request().url());
@@ -31,7 +31,6 @@ test('6481 tasks remain browsable without duplicate pins or expanded project wal
     pinned_tasks: tasks.filter(t => t.pinned).map(t => t.id),
     focus_tasks: tasks.filter(t => t.focus_tier === 'focus').map(t => t.id),
     satellite_tasks: tasks.filter(t => t.focus_tier === 'satellite').map(t => t.id),
-    backlog_tasks: tasks.filter(t => t.focus_tier === 'backlog').map(t => t.id),
     wait_tasks: tasks.filter(t => t.focus_tier === 'wait').map(t => t.id),
   } }));
   const loads: number[] = [];

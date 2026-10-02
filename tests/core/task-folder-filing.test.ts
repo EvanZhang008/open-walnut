@@ -306,11 +306,13 @@ describe('filing with pin_tier', () => {
 
   it('unpins with pin_tier null, moves a pin between tiers, and leaves pins alone when the field is absent', async () => {
     const [a, b, c] = await Promise.all(['A', 'B', 'C'].map((title) => localTask(title, 'Import', { pinned: false })))
+    // c is filed with the retired 'backlog' name (a plugin built against an older
+    // Walnut): that is the Parked tier now.
     await fileTasksIntoProject('Robot runs', [{ id: a.id, pin_tier: 'focus' }, { id: b.id, pin_tier: 'focus' }, { id: c.id, pin_tier: 'backlog' }])
     const orderB = (await getTask(b.id)).pin_order
     const result = await fileTasksIntoProject('Robot runs', [
       { id: a.id, pin_tier: null, add_tags: ['aged'] },
-      { id: b.id, pin_tier: 'backlog' },
+      { id: b.id, pin_tier: 'wait' },
       { id: c.id, add_tags: ['kept'] },
     ])
     expect(result.filed.map((one) => one.id)).toEqual([a.id, b.id, c.id])
@@ -319,9 +321,10 @@ describe('filing with pin_tier', () => {
     expect(unpinned.pin_order).toBeUndefined()
     expect(unpinned.focus_tier).toBeUndefined()
     expect(unpinned.tags).toEqual(['label:aged'])
-    expect(await getTask(b.id)).toMatchObject({ pinned: true, focus_tier: 'backlog', pin_order: orderB })
-    expect(await getTask(c.id)).toMatchObject({ pinned: true, focus_tier: 'backlog', tags: ['label:kept'] })
-    // Unpinning an unpinned task, or moving to the tier it has, is nothing to do.
+    expect(await getTask(b.id)).toMatchObject({ pinned: true, focus_tier: 'wait', pin_order: orderB })
+    expect(await getTask(c.id)).toMatchObject({ pinned: true, focus_tier: 'wait', tags: ['label:kept'] })
+    // Unpinning an unpinned task, or moving to the tier it has, is nothing to do
+    // (the retired name counts as the tier it has).
     expect(await fileTasksIntoProject('Robot runs', [{ id: a.id, pin_tier: null }, { id: b.id, pin_tier: 'backlog' }])).toMatchObject({ filed: [] })
     // Satellite is the absence of a tier.
     await fileTasksIntoProject('Robot runs', [{ id: b.id, pin_tier: 'satellite' }])

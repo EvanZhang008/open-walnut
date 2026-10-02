@@ -2198,10 +2198,11 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     }
     // focus_tier (additive, 2026-08): which pin tier the task is BORN into, in
     // the same store write as the pin. Built-ins 'focus' | 'satellite' |
-    // 'backlog' | 'wait', or a registered custom tier id ('ct_*'); '' means
-    // "not specified". addTask (resolveNewTaskTier) owns the value rules — an
-    // unknown tier is a 400, never a silent Satellite fall-through, and
-    // 'satellite' normalizes to pinned-with-no-stored-tier.
+    // 'wait', or a registered custom tier id ('ct_*'); '' means "not
+    // specified". addTask (resolveNewTaskTier) owns the value rules — an
+    // unknown tier is a 400, never a silent Satellite fall-through, 'satellite'
+    // normalizes to pinned-with-no-stored-tier, and the retired 'backlog' lands
+    // in 'wait'.
     // null joins '' as "not specified" so a client can send its whole create
     // shape unconditionally (same tolerance the date fields have).
     if (focusTier !== undefined && focusTier !== null && typeof focusTier !== 'string') {

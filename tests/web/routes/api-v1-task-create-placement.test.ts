@@ -384,8 +384,8 @@ describe('the board tier: a worker\'s new task is born where the caller sits', (
   it('an explicit focus_tier or pinned wins over the caller\'s tier', async () => {
     const { task, sid } = await seedCaller('marina')
     await setFocusTier(task.id, 'focus')
-    const b = await post({ title: 'Parked on purpose', focus_tier: 'backlog' }, sid)
-    expect((await getTask(b.json.task.id)).focus_tier).toBe('backlog')
+    const b = await post({ title: 'Parked on purpose', focus_tier: 'wait' }, sid)
+    expect((await getTask(b.json.task.id)).focus_tier).toBe('wait')
     expect(b.json.placement.tier).toBeUndefined()
     const off = await post({ title: 'Off the board on purpose', pinned: false }, sid)
     expect(Boolean((await getTask(off.json.task.id)).pinned)).toBe(false)

@@ -159,8 +159,8 @@ export function createWatcherTools(ctx: WatcherToolContext, deps: WatcherToolDep
         description: { type: 'string', description: 'What and why, including where it came from. A few lines.' },
         pin: {
           type: 'string',
-          enum: ['focus', 'satellite', 'backlog', 'wait'],
-          description: 'Put it on the pinned board in this tier. Omit to leave it unpinned — the default, and right for most items.',
+          enum: ['focus', 'satellite', 'wait'],
+          description: 'Put it on the pinned board in this tier (wait = Parked). Omit to leave it unpinned — the default, and right for most items.',
         },
       },
       required: ['key', 'title'],

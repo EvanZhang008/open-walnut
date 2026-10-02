@@ -6,7 +6,7 @@
  * whether that "+" EXISTS on the surface the user is looking at, and an adversarial
  * audit found four surfaces where it did not:
  *
- *   GAP-1  single-tier tabs (Satellite / Focus / Backlog / Wait / customs) had NO
+ *   GAP-1  single-tier tabs (Satellite / Focus / Wait / customs) had NO
  *          session "+" at all — the tier sublabels that carry one are gated on the
  *          stacked All view, so the tier tabs were the only region of the panel with
  *          no route to a session.
@@ -144,7 +144,7 @@ test('the Wait tab carries a tier "+" that opens a draft preset to Wait', async 
   // The menu closed behind the choice — it must not sit over the fresh column.
   await expect(page.getByTestId('plus-menu')).toHaveCount(0)
 
-  // The draft column draws NO tier control (the Focus / Satellite / Backlog / Wait
+  // The draft column draws NO tier control (the Focus / Satellite / Wait
   // row was removed 2026-09-15), so the seed is invisible until it commits — and
   // nothing in the column may pretend otherwise.
   await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
@@ -171,7 +171,7 @@ test('every built-in tier tab exposes its own "+" with its own tier', async ({ p
   await loadHome(page)
 
   for (const [section, label] of [
-    ['focus', 'Focus'], ['satellite', 'Satellite'], ['backlog', 'Backlog'], ['wait', 'Parked'],
+    ['focus', 'Focus'], ['satellite', 'Satellite'], ['wait', 'Parked'],
   ] as const) {
     const tab = page.locator('.todo-section-tabs [role="tab"]', { hasText: label }).first()
     await tab.click()

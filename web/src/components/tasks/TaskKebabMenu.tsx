@@ -75,17 +75,14 @@ interface TaskKebabMenuProps {
 const TIER_OPTIONS: { value: FocusTier; label: string; icon: ReactNode }[] = [
   { value: 'focus', label: 'Focus', icon: ICONS.ICON_TIER_FOCUS },
   { value: 'satellite', label: 'Satellite', icon: ICONS.ICON_TIER_SATELLITE },
-  { value: 'backlog', label: 'Backlog', icon: ICONS.ICON_TIER_BACKLOG },
   { value: 'wait', label: 'Parked', icon: ICONS.ICON_TIER_WAIT },
 ];
 
 // Parked (id `wait`) is amber (set aside): the old grey half-circle was
-// indistinguishable from Satellite's grey outline at a glance. Backlog is teal
-// ("stored, cool").
+// indistinguishable from Satellite's grey outline at a glance.
 const TIER_COLORS: Record<FocusTier, string> = {
   focus: 'var(--accent)',
   satellite: 'var(--tier-satellite, #5856d6)',
-  backlog: 'var(--tier-backlog, #30b0c7)',
   wait: 'var(--tier-wait, #ff9f0a)',
 };
 

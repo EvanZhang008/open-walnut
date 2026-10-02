@@ -37,7 +37,7 @@ import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan
 import { getFrequentDirs, compileFromSessions, recordLaunchPrefs, scoreFrequentDir } from '../../core/frequent-dirs.js'
 import { getAskWalnutLaunchPrefs } from '../../core/sessions/ask-walnut-launch.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
-import { VALID_SESSION_MODEL_IDS, VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
+import { VALID_SESSION_MODEL_IDS, VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue, sessionModelsAsCatalog, migrateFocusTier } from '../../core/types.js'
 import { getHostModelCatalog, listHostModelCatalogs } from '../../core/host-model-catalog.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
 import { processAndSaveImages, buildSessionImageContext } from './images.js'
@@ -501,14 +501,16 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       }
     }
     if (taskMeta?.pinTier !== undefined && taskMeta.pinTier !== null) {
-      const validTiers = ['focus', 'satellite', 'backlog', 'wait', ...(await getCustomTiers()).map((t) => t.id)]
+      const validTiers = ['focus', 'satellite', 'wait', ...(await getCustomTiers()).map((t) => t.id)]
       // A ct_*-shaped id that's NOT registered is a STALE remembered pick, not a
       // bad request: the launcher persists the last tier in localStorage (and
       // ui-prefs-sync mirrors it across browsers), so after the user deletes that
       // tier in Settings every quick-start would 400 forever. Let it through —
       // setFocusTier self-heals unknown tiers to Satellite (same contract the
       // client comments rely on). Only reject values that were never tier ids.
-      if (!validTiers.includes(taskMeta.pinTier) && !/^ct_[a-z0-9]+$/.test(taskMeta.pinTier)) {
+      // A retired built-in ('backlog') is read as its successor, so a launcher
+      // that remembered it keeps working (quick-start files it in Parked).
+      if (!validTiers.includes(migrateFocusTier(taskMeta.pinTier)) && !/^ct_[a-z0-9]+$/.test(taskMeta.pinTier)) {
         res.status(400).json({ error: `Invalid taskMeta.pinTier: ${taskMeta.pinTier}. Must be one of: ${validTiers.join(', ')}` })
         return
       }

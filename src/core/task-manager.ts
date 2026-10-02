@@ -6,7 +6,7 @@ import { generateId, isLegacyInboxGroup, isRetiredQuickStartGroup } from '../uti
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES } from './phase.js';
 import {
   COMPLETION_TO_PHASES,
@@ -1006,7 +1006,7 @@ export interface AddTaskInput {
    * a failed second write drops the task out of the tier the user picked
    * without telling anyone.
    *
-   * Accepted: the built-ins 'focus' | 'satellite' | 'backlog' | 'wait', or a
+   * Accepted: the built-ins 'focus' | 'satellite' | 'wait', or a
    * REGISTERED custom tier id ('ct_*'). Anything else — including a ct_* id
    * that no longer exists — throws InvalidFocusTierError; filing the task in
    * Satellite instead would be a confident wrong answer. Matching is exact
@@ -1109,7 +1109,9 @@ export function resolveNewTaskTier(
   input: { pinned?: boolean; focus_tier?: string },
   customTierIds: readonly string[],
 ): { pinned: boolean; focus_tier?: string } {
-  const raw = typeof input.focus_tier === 'string' ? input.focus_tier.trim() : '';
+  // A retired tier name ('backlog') is its successor, not an unknown tier: an
+  // older client or a session prompt that still names it must keep working.
+  const raw = typeof input.focus_tier === 'string' ? migrateFocusTier(input.focus_tier.trim()) : '';
   // No tier named: byte-for-byte the pre-focus_tier behavior, which is what
   // keeps bulk importers and provider sync off the board.
   if (!raw) return { pinned: input.pinned === true };
@@ -3155,7 +3157,16 @@ export function buildTaskQueryWhere(q: NormalizedTaskQuery, excludeSentinels: bo
       // pinned rows stay candidates (a small set) and JS decides. Otherwise
       // exact stored values push down.
       if (!q.focusTiers.includes('satellite')) {
-        conds.push(inList('focus_tier', [...new Set(q.focusTiers)]));
+        // A row written by another door may still store a retired name, so the
+        // pushdown asks for both spellings; focusTierMatches folds them in JS.
+        const spellings = new Set<string>();
+        for (const tier of q.focusTiers) {
+          spellings.add(tier);
+          for (const [retired, successor] of Object.entries(RETIRED_PIN_TIERS)) {
+            if (successor === tier) spellings.add(retired);
+          }
+        }
+        conds.push(inList('focus_tier', [...spellings]));
       }
     }
   }
@@ -5553,8 +5564,8 @@ export interface TaskFilingItem {
   /** Tags to take off (a tag the task does not carry is ignored). Removals apply before
    *  additions, so one item can swap a tag for another. */
   remove_tags?: string[];
-  /** Where the task is pinned: a board tier (focus | satellite | backlog | wait | a custom
-   *  tier id) pins an open task there (one pinned elsewhere moves tier, keeping its place in
+  /** Where the task is pinned: a board tier (focus | satellite | wait | a custom tier id;
+   *  the retired backlog reads as wait) pins an open task there (one pinned elsewhere moves tier, keeping its place in
    *  the pinned order), `null` unpins it, and an omitted field leaves pins alone. A completed
    *  task is never pinned. */
   pin_tier?: string | null;
@@ -5675,11 +5686,13 @@ function fileTasksLocked(
   const seen = new Set<string>();
   // Tiers are checked before any row is written: a tier that does not exist is the
   // caller's mistake, and the whole chunk refuses rather than pinning some of it.
+  // A plugin built against an older Walnut may still file into 'backlog'; that is
+  // the Parked tier now, not a mistake.
   const tiers = new Set(items.map((item) => item?.pin_tier).filter((tier): tier is string => typeof tier === 'string'));
   if (tiers.size) {
     const custom = new Set((handle.prepare('SELECT id FROM custom_tiers').all() as Array<{ id: string }>).map((row) => row.id));
     for (const tier of tiers) {
-      if (tier !== 'satellite' && !BUILTIN_TIER_VALUES.includes(tier) && !custom.has(tier)) {
+      if (tier !== 'satellite' && !BUILTIN_TIER_VALUES.includes(migrateFocusTier(tier)) && !custom.has(tier)) {
         throw new Error(`unknown pin tier "${tier}". Valid tiers: satellite, ${[...BUILTIN_TIER_VALUES, ...custom].join(', ')}`);
       }
     }
@@ -5755,7 +5768,7 @@ function fileTasksLocked(
       } else if (item.pin_at === 'top' || item.pin_at === 'bottom') {
         patch.pin_order = takePinOrder(item.pin_at);
       }
-      const tier = item.pin_tier === 'satellite' ? undefined : item.pin_tier;
+      const tier = item.pin_tier === 'satellite' ? undefined : migrateFocusTier(item.pin_tier);
       if (tier && task.focus_tier !== tier) patch.focus_tier = tier;
       // Satellite is stored as no tier; a leftover one would read as its old tier.
       else if (!tier && task.focus_tier) patch.focus_tier = null as unknown as undefined;
@@ -6708,14 +6721,18 @@ export async function getPinnedTasks(): Promise<Task[]> {
 }
 
 // Focus tiers: focus (current sprint) → satellite (needs doing soon; the
-// default) → backlog (someday, still pinned) → wait (parked/blocked), plus
-// user-defined custom tiers (ct_* ids, managed below).
+// default) → wait (parked: someday, or blocked on something), plus
+// user-defined custom tiers (ct_* ids, managed below). The Backlog tier that
+// sat between satellite and wait was retired in 2026-10 (v13 migration); its
+// name still reads and writes as 'wait' (migrateFocusTier).
 // No cap on tasks per tier — users decide how many tasks per tier.
 
 export interface TierResult {
   pinned_tasks: string[];
   focus_tasks: string[];
   satellite_tasks: string[];
+  /** Always empty since the Backlog tier was retired. Kept on the wire because
+   *  API v1 clients (the phone app) decode the field; new readers ignore it. */
   backlog_tasks: string[];
   wait_tasks: string[];
   /** Per registered custom tier id: pinned task ids in that tier (pin_order). */
@@ -6723,7 +6740,7 @@ export interface TierResult {
 }
 
 // Non-default built-in focus_tier values (satellite = the undefined default).
-const BUILTIN_TIER_VALUES = ['focus', 'backlog', 'wait'];
+const BUILTIN_TIER_VALUES = ['focus', 'wait'];
 
 /** Helper: split pinned tasks into tier arrays (includes pinned_tasks for full state sync).
  *  Completed pins are included — completion no longer unpins (2026-08-26). */
@@ -6736,30 +6753,33 @@ function splitTiers(store: TaskStore): TierResult {
   for (const id of customIds) {
     customTierTasks[id] = pinned.filter((t) => t.focus_tier === id).map((t) => t.id);
   }
+  // Stored values are read through migrateFocusTier so a row another door
+  // wrote with a retired name ('backlog') is counted in its successor's bucket.
+  const tierOf = (t: Task): string | undefined => migrateFocusTier(t.focus_tier);
   return {
     pinned_tasks: pinned.map((t) => t.id),
-    focus_tasks: pinned.filter((t) => t.focus_tier === 'focus').map((t) => t.id),
+    focus_tasks: pinned.filter((t) => tierOf(t) === 'focus').map((t) => t.id),
     // Satellite is the default tier: anything not a non-default built-in and not
     // a REGISTERED custom tier (incl. the retired 'next' value on legacy tasks
     // and stale ids of deleted custom tiers) falls here.
     satellite_tasks: pinned
-      .filter((t) => !(t.focus_tier && (BUILTIN_TIER_VALUES.includes(t.focus_tier) || customIds.has(t.focus_tier))))
+      .filter((t) => { const tier = tierOf(t); return !(tier && (BUILTIN_TIER_VALUES.includes(tier) || customIds.has(tier))); })
       .map((t) => t.id),
-    backlog_tasks: pinned.filter((t) => t.focus_tier === 'backlog').map((t) => t.id),
-    wait_tasks: pinned.filter((t) => t.focus_tier === 'wait').map((t) => t.id),
+    backlog_tasks: [],
+    wait_tasks: pinned.filter((t) => tierOf(t) === 'wait').map((t) => t.id),
     custom_tier_tasks: customTierTasks,
   };
 }
 
 /** Read-only tier snapshot for the GET /api/focus/tasks route — one definition
- *  of the four-bucket split (satellite excludes REGISTERED custom ids only). */
+ *  of the three-bucket split (satellite excludes REGISTERED custom ids only). */
 export async function getTierSplit(): Promise<TierResult> {
   return splitTiers(await readStoreView());
 }
 
 /** Per-tier row counts of the pinned board. */
 export interface BoardTierCount {
-  /** 'focus' | 'satellite' | 'backlog' | 'wait' | a custom `ct_*` id. */
+  /** 'focus' | 'satellite' | 'wait' | a custom `ct_*` id. */
   tier: string;
   label: string;
   total: number;
@@ -6822,7 +6842,9 @@ export async function getBoardCounts(): Promise<BoardCounts> {
 
 const CUSTOM_TIER_MAX = 20;
 const CUSTOM_TIER_LABEL_MAX = 40;
-const BUILTIN_TIER_LABELS = ['focus', 'satellite', 'backlog', 'wait'];
+// 'parked' is the wait tier's display name; 'backlog' is free again now that the
+// built-in tier of that name is gone (a user may want their own).
+const BUILTIN_TIER_LABELS = ['focus', 'satellite', 'wait', 'parked'];
 
 /** Generate a fresh `ct_` + 8 random [a-z0-9] chars id, avoiding collisions.
  *  The id FORMAT is a cross-layer contract — change it and the frontend breaks:
@@ -7023,19 +7045,21 @@ export async function deleteCustomTier(id: string): Promise<{ tiers: CustomTierR
 /**
  * Set the focus tier for a pinned task.
  * 'focus' = current sprint, 'satellite' = needs doing soon (the default),
- * 'backlog' = someday/low-priority, 'wait' = parked; a registered custom tier
- * id (ct_*) is also accepted. Anything else — including stale ids of deleted
- * custom tiers — self-heals to satellite (lenient by design: internal copy
- * paths like session fork pass through stale values and must not throw).
+ * 'wait' = parked (someday, or blocked on something); a registered custom tier
+ * id (ct_*) is also accepted, and a retired built-in name ('backlog') lands in
+ * its successor. Anything else — including stale ids of deleted custom tiers —
+ * self-heals to satellite (lenient by design: internal copy paths like session
+ * fork pass through stale values and must not throw).
  */
-export async function setFocusTier(taskId: string, tier: string): Promise<TierResult> {
+export async function setFocusTier(taskId: string, requestedTier: string): Promise<TierResult> {
   return withWriteLock(async () => {
     const store = await readStore();
     const task = store.tasks.find((t) => t.id === taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     if (!task.pinned) throw new Error(`Task is not pinned: ${task.title}`);
 
-    const isCustom = (store.custom_tiers ?? []).some((t) => t.id === tier);
+    const isCustom = (store.custom_tiers ?? []).some((t) => t.id === requestedTier);
+    const tier = isCustom ? requestedTier : migrateFocusTier(requestedTier);
     if (BUILTIN_TIER_VALUES.includes(tier) || isCustom) {
       task.focus_tier = tier;
     } else {

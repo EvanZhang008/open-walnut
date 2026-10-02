@@ -66,7 +66,7 @@ export interface QuickTaskParse {
   start_date?: string;
   /** End of the working block ("3-5pm" → start+end). Only meaningful with start_date. */
   end_date?: string;
-  pinTier?: string;  // built-in 'focus' | 'satellite' | 'backlog' | 'wait', or a custom tier id ('ct_*')
+  pinTier?: string;  // built-in 'focus' | 'satellite' | 'wait', or a custom tier id ('ct_*')
   priority?: Exclude<TaskPriority, 'none'>;
   /** Target project. Omitted/empty = Inbox. */
   project?: string;
@@ -87,7 +87,7 @@ export interface QuickTaskParse {
 // low-priority or far-off stays OUT of it (no tier) and lives in the task list
 // below. Over-pinning is what made the old Focus tier useless.
 export interface PinTierPolicyEntry {
-  tier: 'focus' | 'satellite' | 'backlog' | 'wait';
+  tier: 'focus' | 'satellite' | 'wait';
   /** Short label shown in pickers. */
   label: string;
   /** One-line "what goes here", shown as the tier's tooltip. */
@@ -106,20 +106,34 @@ export const PIN_TIER_POLICY: readonly PinTierPolicyEntry[] = [
     guidance: 'Needs doing soon — lower priority than Focus, or due within about a week.',
   },
   {
-    tier: 'backlog',
-    label: 'Backlog',
-    guidance: 'Keep on the list but not soon — someday/low-priority work you still want pinned.',
-  },
-  {
     tier: 'wait',
     label: 'Parked',
-    guidance: 'Parked — pinned but set aside for now. A board shelf, not a status: a Waiting task stays in its own section.',
+    guidance: 'Parked — pinned but set aside for now: someday work, or work waiting on something. A board shelf, not a status: a Waiting task stays in its own section.',
   },
 ] as const;
 
 /** The "leave it unpinned" half of the policy — no tier is a real answer. */
 export const PIN_TIER_NONE_GUIDANCE =
   'Not worth tracking in the pinned working set at all — leave it unpinned.';
+
+/**
+ * Built-in tiers that no longer exist, each with the tier that took its place.
+ * `backlog` (2026-08 to 2026-10) was "someday work you still want pinned", which
+ * is what Parked holds now. The value still arrives from stored rows written
+ * before the one-time migration (task-db.ts v13), from a replica or a plugin
+ * pull on an older build, from a phone app that has not updated, and from a
+ * session whose prompt still names it, so every reader and writer folds it
+ * through migrateFocusTier instead of treating it as unknown.
+ */
+export const RETIRED_PIN_TIERS: Readonly<Record<string, 'focus' | 'satellite' | 'wait'>> = {
+  backlog: 'wait',
+};
+
+/** A stored or requested tier with retired names folded onto their successors. */
+export function migrateFocusTier<T extends string | undefined | null>(tier: T): T | 'focus' | 'satellite' | 'wait' {
+  if (typeof tier !== 'string') return tier;
+  return RETIRED_PIN_TIERS[tier] ?? tier;
+}
 
 // ── Session model registry ────────────────────────────────────────────────
 // Single source of truth for the set of selectable Claude Code session models.
@@ -693,7 +707,7 @@ export interface Task {
   end_date?: string;
   pinned?: boolean;
   pin_order?: number;  // lower = higher in list, undefined = not pinned
-  focus_tier?: string;  // undefined = satellite (default); 'focus' | 'backlog' | 'wait' built-ins, or a custom tier id ('ct_*')
+  focus_tier?: string;  // undefined = satellite (default); 'focus' | 'wait' built-ins, or a custom tier id ('ct_*'); the retired 'backlog' reads as 'wait' (migrateFocusTier)
   /**
    * UNREAD marker — the read/unread lifecycle for agent work. The ONE field for
    * this; read it directly (`task.unread`), never re-derive it from `phase`.
@@ -1044,7 +1058,7 @@ export interface Config {
     separators?: Array<{
       /** `sep_<random>` — stable across reorders, so a drag is an update. */
       id: string;
-      /** Tier it belongs to: 'focus' | 'satellite' | 'backlog' | 'wait' | `ct_*`. */
+      /** Tier it belongs to: 'focus' | 'satellite' | 'wait' | `ct_*`. */
       tier: string;
       /** Which tier view mode shows it. The two modes are independent orders,
        *  so a line placed in one is meaningless in the other. */

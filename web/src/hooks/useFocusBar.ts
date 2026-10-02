@@ -11,11 +11,9 @@ export interface UseFocusBarReturn {
   pinnedTasks: Task[];
   focusIds: string[];
   satelliteIds: string[];
-  backlogIds: string[];
   waitIds: string[];
   focusTasks: Task[];
   satelliteTasks: Task[];
-  backlogTasks: Task[];
   waitTasks: Task[];
   /** User-defined tiers (Settings → Focus Tiers), registry order. */
   customTiers: CustomTierDef[];
@@ -143,16 +141,14 @@ export function useFocusBar(): UseFocusBarReturn {
   const focusIds = useStableIds(useMemo(
     () => orderedPinned.filter((t) => t.focus_tier === 'focus').map((t) => t.id), [orderedPinned]));
   // Satellite is the default tier: anything not a non-default built-in
-  // (focus/backlog/wait) and not in a REGISTERED custom tier falls here (incl.
-  // the retired 'next' value and ids of deleted custom tiers on legacy tasks)
+  // (focus/wait) and not in a REGISTERED custom tier falls here (incl. the
+  // retired 'next' value and ids of deleted custom tiers on legacy tasks)
   // — mirrors server splitTiers().
   const isSatellite = useCallback((t: Task) =>
-    !(t.focus_tier && (t.focus_tier === 'focus' || t.focus_tier === 'backlog' || t.focus_tier === 'wait' || customIdSet.has(t.focus_tier))),
+    !(t.focus_tier && (t.focus_tier === 'focus' || t.focus_tier === 'wait' || customIdSet.has(t.focus_tier))),
   [customIdSet]);
   const satelliteIds = useStableIds(useMemo(
     () => orderedPinned.filter(isSatellite).map((t) => t.id), [orderedPinned, isSatellite]));
-  const backlogIds = useStableIds(useMemo(
-    () => orderedPinned.filter((t) => t.focus_tier === 'backlog').map((t) => t.id), [orderedPinned]));
   const waitIds = useStableIds(useMemo(
     () => orderedPinned.filter((t) => t.focus_tier === 'wait').map((t) => t.id), [orderedPinned]));
   const customTierIds = useStableTierMap(useMemo(() => {
@@ -193,10 +189,7 @@ export function useFocusBar(): UseFocusBarReturn {
     // with the built-in split but no custom map must not wipe custom-tier
     // members to satellite — keep each task's existing custom assignment then.
     const hasCustomSplit = data.custom_tier_tasks !== undefined;
-    // Same defense for backlog_tasks (absent on pre-Backlog servers).
-    const hasBacklogSplit = data.backlog_tasks !== undefined;
     const focusSet = new Set(data.focus_tasks ?? []);
-    const backlogSet = new Set(data.backlog_tasks ?? []);
     const waitSet = new Set(data.wait_tasks ?? []);
     // Reverse lookup taskId → custom tier id from the per-tier arrays.
     const customOf = new Map<string, string>();
@@ -207,8 +200,6 @@ export function useFocusBar(): UseFocusBarReturn {
       const cur = tasksRef.current.find((t) => t.id === id)?.focus_tier;
       return cur && customIdSet.has(cur) ? cur : undefined;
     };
-    const currentBacklogOf = (id: string): string | undefined =>
-      tasksRef.current.find((t) => t.id === id)?.focus_tier === 'backlog' ? 'backlog' : undefined;
     const pinnedSet = new Set(data.pinned_tasks);
     const patches: Record<string, Partial<Task>> = {};
     data.pinned_tasks.forEach((id, i) => {
@@ -218,8 +209,7 @@ export function useFocusBar(): UseFocusBarReturn {
         ...(hasTierSplit
           ? {
             focus_tier: focusSet.has(id) ? 'focus' : waitSet.has(id) ? 'wait'
-              : (hasBacklogSplit ? (backlogSet.has(id) ? 'backlog' : undefined) : currentBacklogOf(id))
-              ?? (hasCustomSplit ? customOf.get(id) : currentCustomOf(id)),
+              : (hasCustomSplit ? customOf.get(id) : currentCustomOf(id)),
           }
           : {}),
       };
@@ -378,25 +368,23 @@ export function useFocusBar(): UseFocusBarReturn {
 
   const tierOf = useCallback((taskId: string): FocusTier => {
     if (focusIds.includes(taskId)) return 'focus';
-    if (backlogIds.includes(taskId)) return 'backlog';
     if (waitIds.includes(taskId)) return 'wait';
     for (const [tierId, ids] of Object.entries(customTierIds)) {
       if (ids.includes(taskId)) return tierId;
     }
     return 'satellite';
-  }, [focusIds, backlogIds, waitIds, customTierIds]);
+  }, [focusIds, waitIds, customTierIds]);
 
   // Resolved Task arrays (identity follows `tasks` — consumers needing stability
   // should key on the ID arrays, as FocusBarContext's memo does).
   const focusTasks = useMemo(() => orderedPinned.filter((t) => t.focus_tier === 'focus'), [orderedPinned]);
   const satelliteTasks = useMemo(() => orderedPinned.filter(isSatellite), [orderedPinned, isSatellite]);
-  const backlogTasks = useMemo(() => orderedPinned.filter((t) => t.focus_tier === 'backlog'), [orderedPinned]);
   const waitTasks = useMemo(() => orderedPinned.filter((t) => t.focus_tier === 'wait'), [orderedPinned]);
 
   return {
     pinnedIds, pinnedTasks: orderedPinned,
-    focusIds, satelliteIds, backlogIds, waitIds,
-    focusTasks, satelliteTasks, backlogTasks, waitTasks,
+    focusIds, satelliteIds, waitIds,
+    focusTasks, satelliteTasks, waitTasks,
     customTiers, customTiersLoaded, customTierIds,
     pin, unpin, reorder, setTier,
     addLocalPin, replaceLocalPinId, removeLocalPin, commitPin,

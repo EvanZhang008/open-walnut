@@ -32,6 +32,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
+import { PIN_TIER_POLICY, RETIRED_PIN_TIERS } from '../../core/types.js'
 
 export const taskExtrasV1Router = Router()
 
@@ -399,7 +400,9 @@ taskExtrasV1Router.put('/focus/tiers/:id', async (req: Request, res: Response, n
   }
 })
 
-const BUILTIN_TIERS = ['focus', 'satellite', 'backlog', 'wait']
+// Retired names stay here: an old client deleting 'backlog' gets the same
+// answer a built-in gets, never a 404 "Tier not found".
+const BUILTIN_TIERS: readonly string[] = [...PIN_TIER_POLICY.map((entry) => entry.tier), ...Object.keys(RETIRED_PIN_TIERS)]
 
 // DELETE /api/v1/focus/tiers/:id — delete a custom tier (members → satellite).
 taskExtrasV1Router.delete('/focus/tiers/:id', async (req: Request, res: Response, next: NextFunction) => {

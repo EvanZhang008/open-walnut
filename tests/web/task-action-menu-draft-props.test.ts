@@ -121,8 +121,8 @@ describe('TaskActionMenuItems with the draft props', () => {
       const s = spies();
       const host = await mount({ task: TASK, isPinned: false, pinnedTier, isDone: false, ...s, ...draftProps });
       expect(host.querySelectorAll('.task-kebab-tier-btn.active').length).toBe(0);
-      await click(tierBtn(host, 'Backlog')!);
-      expect(s.onPinWithTier).toHaveBeenCalledWith('backlog');
+      await click(tierBtn(host, 'Parked')!);
+      expect(s.onPinWithTier).toHaveBeenCalledWith('wait');
       await act(async () => { root!.unmount(); });
       root = null;
     }
@@ -419,9 +419,9 @@ describe('draft decision menu controller', () => {
     await render({ chips: chipsFor({ pinTier: 'satellite' }, ['pinTier']) });
     const tier = chipEl('pinTier');
     expect(tier.getAttribute('style')).toMatch(/--i:\s?0/);
-    await render({ chips: chipsFor({ pinTier: 'backlog', priority: 'immediate', dueDate: '2026-09-26' }, ['pinTier', 'priority', 'dueDate']) });
+    await render({ chips: chipsFor({ pinTier: 'wait', priority: 'immediate', dueDate: '2026-09-26' }, ['pinTier', 'priority', 'dueDate']) });
     expect(chipEl('pinTier')).toBe(tier);
-    expect(tier.textContent).toContain('Backlog');
+    expect(tier.textContent).toContain('Parked');
     expect(tier.getAttribute('style')).toMatch(/--i:\s?0/);
     expect(chipEl('priority').getAttribute('style')).toMatch(/--i:\s?0/);
     expect(chipEl('dueDate').getAttribute('style')).toMatch(/--i:\s?1/);

@@ -346,12 +346,28 @@ describe('parseQuickTask', () => {
 
   // Custom tiers: pinTier accepts a registered ct_* id verbatim, normalizes a
   // label match to the id, and the prompt advertises each custom tier.
-  it('accepts the built-in backlog tier verbatim', async () => {
+  it('accepts the built-in wait tier verbatim', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Sort receipts","pinTier":"wait"}',
+    ));
+    const result = await parseQuickTask('sort receipts someday');
+    expect(result.parse).toEqual({ title: 'Sort receipts', pinTier: 'wait' });
+  });
+
+  it('folds the retired backlog tier into wait, unless a custom tier wears that label', async () => {
+    // The model may still echo the 2026-08 tier name from an old prompt or the
+    // user's words; that is Parked now, not a dropped field.
     sendMessageMock.mockResolvedValue(textResult(
       '{"title":"Sort receipts","pinTier":"backlog"}',
     ));
-    const result = await parseQuickTask('sort receipts someday');
-    expect(result.parse).toEqual({ title: 'Sort receipts', pinTier: 'backlog' });
+    expect((await parseQuickTask('sort receipts someday')).parse)
+      .toEqual({ title: 'Sort receipts', pinTier: 'wait' });
+    // A user who made their own "Backlog" tier reaches it by label first.
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Sort receipts","pinTier":"Backlog"}',
+    ));
+    expect((await parseQuickTask('sort receipts someday', { customTiers: [{ id: 'ct_bklg0001', label: 'Backlog' }] })).parse)
+      .toEqual({ title: 'Sort receipts', pinTier: 'ct_bklg0001' });
   });
 
   it('accepts a custom tier id from options.customTiers', async () => {

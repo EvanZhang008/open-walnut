@@ -2,7 +2,7 @@
  * Custom focus tiers — registry CRUD, tier membership, and self-healing.
  *
  * Custom tiers are user-defined pin tiers alongside the built-ins
- * (focus/satellite/backlog/wait). Registry rows live in the custom_tiers table
+ * (focus/satellite/wait). Registry rows live in the custom_tiers table
  * (store.custom_tiers); membership lives on tasks.focus_tier as the tier's
  * ct_* id. Tasks whose focus_tier references a deleted/unknown tier self-heal
  * to satellite (the tier-less default).
@@ -102,9 +102,15 @@ describe('custom tier registry CRUD', () => {
   });
 
   it('rejects labels that collide with built-in tiers', async () => {
-    for (const label of ['focus', 'Satellite', 'Backlog', 'WAIT']) {
+    for (const label of ['focus', 'Satellite', 'WAIT', 'Parked']) {
       await expect(createCustomTier(label)).rejects.toThrow('conflicts with a built-in tier');
     }
+  });
+
+  it('allows "Backlog" again now that the built-in tier of that name is gone', async () => {
+    const { tier } = await createCustomTier('Backlog');
+    expect(tier.id).toMatch(/^ct_[a-z0-9]{8}$/);
+    expect(tier.label).toBe('Backlog');
   });
 
   it('rejects reserved section names and ct_-prefixed labels', async () => {
@@ -149,7 +155,7 @@ describe('custom tier registry CRUD', () => {
 
     await expect(renameCustomTier(tier.id, 'someday')).rejects.toThrow('already exists');
     await expect(renameCustomTier(tier.id, 'wait')).rejects.toThrow('built-in');
-    await expect(renameCustomTier(tier.id, 'Backlog')).rejects.toThrow('built-in');
+    await expect(renameCustomTier(tier.id, 'Parked')).rejects.toThrow('built-in');
     await expect(renameCustomTier(tier.id, '')).rejects.toThrow('empty');
   });
 
@@ -220,15 +226,26 @@ describe('splitTiers custom buckets (via reorderPins TierResult)', () => {
     expect(result.pinned_tasks).toEqual([a, b, sat]);
   });
 
-  it('buckets backlog as a built-in tier, not satellite or custom', async () => {
-    const bl = await makePinnedTask('Backlog task');
+  it('buckets the retired backlog tier as wait, not satellite or custom', async () => {
+    const bl = await makePinnedTask('Someday task');
     const sat = await makePinnedTask('Satellite task');
     await setFocusTier(bl, 'backlog');
 
     const result = await reorderPins([bl, sat]);
-    expect(result.backlog_tasks).toEqual([bl]);
+    expect(result.wait_tasks).toEqual([bl]);
+    expect(result.backlog_tasks).toEqual([]);
     expect(result.satellite_tasks).toEqual([sat]);
     expect(result.custom_tier_tasks).toEqual({});
+  });
+
+  it('a custom tier labelled Backlog is reached by its id, not swallowed by the retired alias', async () => {
+    const { tier } = await createCustomTier('Backlog');
+    const id = await makePinnedTask('Custom backlog task');
+    await setFocusTier(id, tier.id);
+
+    const result = await reorderPins([id]);
+    expect(result.custom_tier_tasks).toEqual({ [tier.id]: [id] });
+    expect(result.wait_tasks).toEqual([]);
   });
 
   it('a stale (unregistered) focus_tier id falls into satellite', async () => {

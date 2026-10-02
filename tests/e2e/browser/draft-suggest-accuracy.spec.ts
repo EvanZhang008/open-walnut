@@ -108,7 +108,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   // each one gets a verdict (the tier is overridden below, the other two kept).
   const DUE = isoDay(3)
   await stubParse(page, {
-    title: 'ship the ledger', project: AI_PROJECT, due_date: DUE, pinTier: 'backlog', priority: 'immediate',
+    title: 'ship the ledger', project: AI_PROJECT, due_date: DUE, pinTier: 'wait', priority: 'immediate',
   })
   await loadHome(page)
   const tierBefore = await tally(page, 'pinTier')
@@ -130,7 +130,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   await expect(draftProjectPill(panel)).toHaveClass(/session-action-chip-ai/)
   await expect(draftCwdPill(panel)).toHaveText(`Folder/Host: ${basenameOf(aiCwd)} · Local✦`)
   // C7: the task decisions are chips, each badged.
-  for (const [field, words] of [['pinTier', 'Backlog'], ['priority', 'Immediate'], ['dueDate', `Due ${dayWords(3)}`]] as const) {
+  for (const [field, words] of [['pinTier', 'Parked'], ['priority', 'Immediate'], ['dueDate', `Due ${dayWords(3)}`]] as const) {
     await expect(draftDecisionChip(panel, field)).toContainText(words)
     await expect(draftDecisionChip(panel, field).locator('.draft-ai-badge')).toHaveCount(1)
   }
@@ -168,7 +168,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   expect(byField.get('project'), 'the project override is the record that matters')
     .toMatchObject({ suggested: AI_PROJECT, chosen: USER_PROJECT })
   expect(byField.get('cwd')).toMatchObject({ suggested: aiCwd, chosen: aiCwd })
-  expect(byField.get('pinTier')).toMatchObject({ suggested: 'backlog', chosen: 'satellite' })
+  expect(byField.get('pinTier')).toMatchObject({ suggested: 'wait', chosen: 'satellite' })
   expect(byField.get('priority')).toMatchObject({ suggested: 'immediate', chosen: 'immediate' })
   expect(byField.get('dueDate')).toMatchObject({ suggested: DUE, chosen: DUE })
   expect([...byField.keys()].sort(), 'every visible decision, and nothing else (no endDate)')
@@ -199,7 +199,7 @@ test('an overridden suggestion is recorded, and Settings shows the diff', async 
   await expect(record.locator('.suggest-accuracy-entry.verdict-kept', { hasText: aiCwd })).toBeVisible()
   await expect(record.locator('.suggest-accuracy-entry.verdict-changed', { hasText: `${AI_PROJECT} to ${USER_PROJECT}` }))
     .toBeVisible()
-  await expect(record.locator('.suggest-accuracy-entry.verdict-changed', { hasText: 'backlog to satellite' })).toBeVisible()
+  await expect(record.locator('.suggest-accuracy-entry.verdict-changed', { hasText: 'wait to satellite' })).toBeVisible()
 
   // Scroll the card fully into frame for the artifact — the assertions above are
   // done, and a screenshot of the section header proves nothing to a human reviewer.

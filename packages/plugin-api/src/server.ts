@@ -138,8 +138,8 @@ export interface TaskService {
    *  has since moved everything out of. Refuses a folder that still holds anything: the
    *  user may have filed their own work there. Not available on a replica. */
   deleteFolder(folderId: string): Promise<void>
-  /** The board's pin groups (the user's custom tiers beside Focus, Satellite, Backlog and
-   *  Wait), in board order. A group's `id` is what `pinTier` takes. */
+  /** The board's pin groups (the user's custom tiers beside Focus, Satellite and Parked),
+   *  in board order. A group's `id` is what `pinTier` takes. */
   pinGroups(): Promise<PinGroup[]>
   /** The pin group with this name, created when the board has none (names are compared
    *  case-insensitively, so a group the user made by that name is reused). The group is the
@@ -170,7 +170,7 @@ export interface TaskFilingInput {
   expectTitle?: string
   /** `fileIntoProject` only: a task already in the project leaves its folder too. */
   topLevel?: boolean
-  /** Where the task is pinned. A tier (`focus`, `satellite`, `backlog`, `wait`, or a pin
+  /** Where the task is pinned. A tier (`focus`, `satellite`, `wait` (Parked), or a pin
    *  group id) pins an open task there: one not pinned yet joins the pinned order at the
    *  bottom (or the top, see `pinAt`), one pinned elsewhere moves tier and keeps its place
    *  in the order. `null` unpins. Omitted, pins are left alone. A completed task is never

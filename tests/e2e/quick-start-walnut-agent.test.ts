@@ -106,10 +106,10 @@ describe('quick-start walnutAgent', () => {
     const res = await quickStart({
       walnutAgent: true,
       message: 'plan my week',
-      taskMeta: { pinTier: 'backlog' },
+      taskMeta: { pinTier: 'wait' },
     })
     expect(res.status).toBe(200)
-    expect(res.task?.focus_tier).toBe('backlog')
+    expect(res.task?.focus_tier).toBe('wait')
   })
 
   it('accepts an ACP engine and answers without a session id (the adapter mints its own)', async () => {

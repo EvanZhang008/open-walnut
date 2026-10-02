@@ -265,7 +265,7 @@ for (const showPriority of [true, false]) {
     await boot(page, {}, DESKTOP, showPriority)
     const panel = await openDraft(page)
     const menu = await openDraftSettings(panel, 'more')
-    await expect(menu.locator('.task-kebab-tier-btn')).toHaveText(['Focus', 'Satellite', 'Backlog', 'Parked'].map((t) => new RegExp(t)))
+    await expect(menu.locator('.task-kebab-tier-btn')).toHaveText(['Focus', 'Satellite', 'Parked'].map((t) => new RegExp(t)))
     await expect(menu.getByRole('button', { name: /Don't pin/ })).toHaveCount(0)
     await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveText(/Focus/)
     await expect(menu.locator('.task-kebab-tier-label')).toHaveText('Pinned')
@@ -332,18 +332,18 @@ test('clicking the lit tier unpins it with no chip, the lit priority accepts, an
   await expect(draftTaskMenu(page)).toHaveCount(0)
   await expect(draftDecisionChip(panel, 'priority')).not.toHaveClass(AI)
 
-  // The parse now wants Backlog: the accepted Satellite is final.
-  mock.set({ pinTier: 'backlog', priority: 'important', due_date: isoDay(3) })
+  // The parse now wants Parked: the accepted Satellite is final.
+  mock.set({ pinTier: 'wait', priority: 'important', due_date: isoDay(3) })
   await typeAndSettle(page, mock, 'fix the flaky login test by friday, soon')
   await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Satellite/)
   await expect(draftDecisionChip(panel, 'priority')).toHaveText(/Immediate/)
 
   // C61: the menu offers the newer AI pick, and taking it gives the field back.
   menu = await openDraftSettings(panel, 'pinTier')
-  const pick = menu.getByRole('button', { name: /Use Walnut's pick: Backlog/ })
+  const pick = menu.getByRole('button', { name: /Use Walnut's pick: Parked/ })
   await expect(pick).toBeVisible()
   await pick.click()
-  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Backlog/)
+  await expect(draftDecisionChip(panel, 'pinTier')).toHaveText(/Parked/)
   await expect(draftDecisionChip(panel, 'pinTier')).toHaveClass(AI)
   mock.set({ pinTier: 'wait', priority: 'important', due_date: isoDay(3) })
   await typeAndSettle(page, mock, 'fix the flaky login test by friday, soon, blocked')

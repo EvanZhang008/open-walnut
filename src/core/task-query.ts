@@ -1,5 +1,5 @@
 import type { Task, TaskPhase, TaskPriority } from './types.js';
-import { PIN_TIER_POLICY, VALID_PRIORITIES } from './types.js';
+import { PIN_TIER_POLICY, VALID_PRIORITIES, migrateFocusTier } from './types.js';
 import { effectiveTags, namesDerivedTag, normalizeTag } from './tag-model.js';
 
 export type TaskCompletion = 'todo' | 'in_progress' | 'complete';
@@ -31,8 +31,9 @@ export interface TaskQuery {
    * Focus tiers to match — pinned rows only (an unpinned task never matches
    * any tier). 'satellite' matches a pinned row with NO stored tier (the
    * default tier is stored as an absent focus_tier). Any other value —
-   * 'focus' | 'backlog' | 'wait' | a custom 'ct_*' id — matches the stored
-   * value exactly. [] matches nothing.
+   * 'focus' | 'wait' | a custom 'ct_*' id — matches the stored value exactly
+   * (a retired name such as 'backlog' is read as its successor first).
+   * [] matches nothing.
    */
   focusTiers?: string[];
   /** Case-insensitive substring on the title. Whitespace-only = no condition. */
@@ -358,19 +359,25 @@ const NON_DEFAULT_BUILTIN_TIERS: readonly string[] =
  * surfaces can't drift. Satellite mirrors splitTiers in task-manager.ts: the
  * default tier is stored as NO value, and any stray value that is neither a
  * non-default built-in nor a registered custom tier falls back to Satellite
- * (e.g. the retired 'next'). Callers must ensure the task is PINNED first —
- * tiers are a property of the pinned board only.
+ * (e.g. the retired 'next'). A retired tier that HAS a successor ('backlog'
+ * → 'wait', RETIRED_PIN_TIERS) is folded on both sides first, so a row written
+ * before the migration and a query still naming the old tier both land on the
+ * successor. Callers must ensure the task is PINNED first — tiers are a
+ * property of the pinned board only.
  */
 export function focusTierMatches(
   storedRaw: string | undefined,
   tiers: readonly string[],
   customTierIds?: ReadonlySet<string>,
 ): boolean {
-  const stored = storedRaw || '';
+  const stored = migrateFocusTier(storedRaw || '');
   const isSatellite = stored === '' || stored === 'satellite'
     || (!NON_DEFAULT_BUILTIN_TIERS.includes(stored)
         && (customTierIds !== undefined ? !customTierIds.has(stored) : !stored.startsWith('ct_')));
-  return tiers.some((tier) => (tier === 'satellite' ? isSatellite : stored === tier));
+  return tiers.some((tier) => {
+    const wanted = migrateFocusTier(tier);
+    return wanted === 'satellite' ? isSatellite : stored === wanted;
+  });
 }
 
 /**

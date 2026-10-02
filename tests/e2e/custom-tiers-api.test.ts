@@ -68,8 +68,8 @@ describe('Custom tiers API', () => {
     expect((await api('POST', '/api/focus/tiers', { label: '' })).status).toBe(400);
     expect((await api('POST', '/api/focus/tiers', { label: 'icebox' })).status).toBe(400);
     expect((await api('POST', '/api/focus/tiers', { label: 'wait' })).status).toBe(400);
-    // Backlog joined the built-ins (2026-08) — its label is banned like the rest.
-    expect((await api('POST', '/api/focus/tiers', { label: 'Backlog' })).status).toBe(400);
+    // Parked is the wait tier's display name, so it is banned like the id.
+    expect((await api('POST', '/api/focus/tiers', { label: 'Parked' })).status).toBe(400);
     expect((await api('POST', '/api/focus/tiers', { label: 'x'.repeat(41) })).status).toBe(400);
   });
 

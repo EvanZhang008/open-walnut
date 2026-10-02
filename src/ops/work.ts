@@ -444,12 +444,12 @@ defineOp({
   name: 'task_focus_tier_set',
   title: 'Set a pinned task focus tier',
   description:
-    'Move a pinned task to Focus, Satellite, Backlog, Wait, or a registered custom tier. A tier is ' +
+    'Move a pinned task to Focus, Satellite, Parked (wait), or a registered custom tier. A tier is ' +
     'how the board is ORDERED for the human: Focus does not dispatch, schedule, or prioritize any ' +
     'session. Satellite is represented internally by no stored focus_tier. The task must already be pinned.',
   input: {
     id: z.string().min(1).describe('Pinned task id or unique prefix'),
-    tier: z.string().min(1).describe('focus, satellite, backlog, wait, or a custom tier id'),
+    tier: z.string().min(1).describe('focus, satellite, wait (Parked), or a custom tier id'),
   },
   handler: async (args, call) => {
     const result = await call(

@@ -49,14 +49,14 @@ export async function showMoreUntil(scope: Locator, target: Locator, maxClicks =
 }
 
 /** A tab on the tab bar, by visible name. Projects is not a tab (it is picked from the filter menu). */
-export function sectionTab(page: Page, name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Parked' | 'Recent') {
+export function sectionTab(page: Page, name: 'All' | 'Focus' | 'Satellite' | 'Parked' | 'Recent') {
   return page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
 }
 
 /** Switch the panel's view (no-op when it's already on it): the tab when the bar shows it, else the filter menu. */
 export async function selectSection(
   page: Page,
-  name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Parked' | 'Recent' | 'Tasks',
+  name: 'All' | 'Focus' | 'Satellite' | 'Parked' | 'Recent' | 'Tasks',
 ): Promise<void> {
   if (name !== 'Tasks') {
     const tab = sectionTab(page, name)

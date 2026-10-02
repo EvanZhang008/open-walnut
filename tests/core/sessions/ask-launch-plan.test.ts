@@ -46,7 +46,7 @@ describe('askLaunchTier', () => {
     expect(ASK_DEFAULT_TIER).toBe('focus')
     expect(askLaunchTier(undefined)).toBe('focus')
     expect(askLaunchTier(null)).toBeNull()
-    expect(askLaunchTier('backlog')).toBe('backlog')
+    expect(askLaunchTier('wait')).toBe('wait')
   })
 })
 

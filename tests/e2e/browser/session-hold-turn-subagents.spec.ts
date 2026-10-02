@@ -47,7 +47,7 @@ test.beforeAll(async ({ request }) => {
   ;({ fixtureRoot } = await discoverBrowserFixture(TEST_PORT))
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
   let index = 0
-  for (const [tier, count] of [['focus', 21], ['satellite', 50], ['wait', 23], ['backlog', 11]] as const) {
+  for (const [tier, count] of [['focus', 21], ['satellite', 50], ['wait', 34]] as const) {
     for (let i = 0; i < count; i++, index++) {
       const response = await request.post('/api/tasks', {
         data: {
@@ -434,7 +434,7 @@ test('red task rows stay current across tiers, reading races, and reconnects', a
   })
   await openHome(page)
   await expect.poll(() => sockets.length).toBe(1)
-  for (const [tier, index] of [['Focus', 6], ['Satellite', 26], ['Parked', 71], ['Backlog', 94]] as const) {
+  for (const [tier, index] of [['Focus', 6], ['Satellite', 26], ['Parked', 71], ['Parked', 94]] as const) {
     const id = densityTaskIds[index]
     const update = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'NEED_ACTION', unread: true } })
     expect(update.ok()).toBe(true)

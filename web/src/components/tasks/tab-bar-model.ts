@@ -21,7 +21,7 @@ export interface TabBarTab {
 }
 
 /** The tabs a bar nobody has customised leaves off: the tiers and Recent. */
-export const DEFAULT_HIDDEN_TABS: readonly string[] = ['focus', 'satellite', 'backlog', 'wait', 'recent'];
+export const DEFAULT_HIDDEN_TABS: readonly string[] = ['focus', 'satellite', 'wait', 'recent'];
 
 /** Up to this many tabs, every tab spells out its name; past it, only the active one does. */
 export const ROOMY_TAB_LIMIT = 3;
@@ -31,7 +31,6 @@ const BUILT_IN: readonly Omit<TabBarTab, 'custom'>[] = [
   { id: 'pinned', label: 'Pinned', title: 'Pinned: every pinned task by tier, without the project list' },
   { id: 'focus', label: 'Focus', title: 'Focus: the current sprint, finish these first' },
   { id: 'satellite', label: 'Satellite', title: 'Satellite: needs doing soon' },
-  { id: 'backlog', label: 'Backlog', title: 'Backlog: someday work you still want pinned' },
   { id: 'wait', label: 'Parked', title: 'Parked: pinned, but set aside for now' },
   { id: 'recent', label: 'Recent', title: 'Recent: tasks touched lately' },
 ];

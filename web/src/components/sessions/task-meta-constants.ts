@@ -28,7 +28,6 @@ export const DEFAULT_META: QuickStartTaskMeta = {
 export const TIER_OPTIONS: { value: FocusTier; label: string }[] = [
   { value: 'focus', label: 'Focus' },
   { value: 'satellite', label: 'Satellite' },
-  { value: 'backlog', label: 'Backlog' },
   // id `wait`, labelled Parked: a board shelf, not the Waiting status.
   { value: 'wait', label: 'Parked' },
 ];
@@ -110,7 +109,6 @@ export function freshLauncherMeta(): QuickStartTaskMeta {
 export const TIER_COLORS: Record<FocusTier, string> = {
   focus: 'var(--accent)',
   satellite: 'var(--tier-satellite, #5856d6)',
-  backlog: 'var(--tier-backlog, #30b0c7)',
   wait: 'var(--tier-wait, #ff9f0a)',
 };
 

@@ -138,7 +138,9 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const tagDisplayDefaults = new Map<string, 'shown' | 'value' | 'hidden'>()
   const tagLinkDefaults = new Map<string, string>()
   const pinGroups: Array<{ id: string; label: string }> = (options.pinGroups ?? []).map((group) => ({ ...group }))
-  const knownTiers = new Set(['focus', 'satellite', 'backlog', 'wait', ...(options.customTiers ?? []), ...pinGroups.map((group) => group.id)])
+  // The retired Backlog tier is still accepted, as the host accepts it, and lands in `wait`.
+  const RETIRED_TIERS: Record<string, string> = { backlog: 'wait' }
+  const knownTiers = new Set(['focus', 'satellite', 'wait', ...Object.keys(RETIRED_TIERS), ...(options.customTiers ?? []), ...pinGroups.map((group) => group.id)])
   let nextGroup = 1
   const registeredItems = new Set<string>()
   const letterWatchers = new Set<(event: LetterAnsweredEvent) => void | Promise<void>>()
@@ -206,7 +208,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
       const unfiling = place.groupId === undefined && item.topLevel === true && task.groupId !== undefined
       const unpinning = item.pinTier === null && !!task.pinned
       const wantTier = typeof item.pinTier === 'string' && task.phase !== 'COMPLETE'
-        ? (item.pinTier === 'satellite' ? undefined : item.pinTier) : undefined
+        ? (item.pinTier === 'satellite' ? undefined : (RETIRED_TIERS[item.pinTier] ?? item.pinTier)) : undefined
       const pinning = typeof item.pinTier === 'string' && task.phase !== 'COMPLETE' && !task.pinned
       const retiering = typeof item.pinTier === 'string' && task.phase !== 'COMPLETE' && (task.focusTier ?? undefined) !== wantTier
       const reorder = !!task.pinned && typeof item.pinTier === 'string' && task.phase !== 'COMPLETE' && item.pinAt !== undefined

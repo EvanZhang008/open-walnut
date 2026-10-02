@@ -23,7 +23,7 @@ function task(id: string, patch: Partial<Task> = {}): Task {
   } as Task;
 }
 
-// Board: focus = {f1 parked, f2 open, f3 done}; satellite = {s1 parked}; backlog = {b1 done};
+// Board: focus = {f1 parked, f2 open, f3 done}; satellite = {s1 parked}; parked (wait) = {b1 done};
 // custom tier ct_x = {c1 parked}; hidden group g = {h1 parked, in focus}; list-only = {l1 parked (beta), l2 done, l3 parked (inbox)}.
 const tasks: Task[] = [
   task('f1', { pinned: true, focus_tier: 'focus', phase: 'WAITING' }),
@@ -31,7 +31,7 @@ const tasks: Task[] = [
   task('f3', { pinned: true, focus_tier: 'focus', status: 'done', phase: 'COMPLETE' }),
   task('h1', { pinned: true, focus_tier: 'focus', phase: 'WAITING', group_id: 'g' }),
   task('s1', { pinned: true, phase: 'WAITING' }),
-  task('b1', { pinned: true, focus_tier: 'backlog', status: 'done', phase: 'COMPLETE' }),
+  task('b1', { pinned: true, focus_tier: 'wait', status: 'done', phase: 'COMPLETE' }),
   task('c1', { pinned: true, focus_tier: 'ct_x', phase: 'WAITING' }),
   task('l1', { project: 'beta', phase: 'WAITING' }),
   task('l2', { status: 'done', phase: 'COMPLETE' }),
@@ -44,8 +44,7 @@ const base: FooterScopeInput = {
   activeProject: '',
   pinnedTaskIds: ids('f1', 'f2', 'f3', 'h1', 's1', 'b1', 'c1'),
   focusTaskIds: ids('f1', 'f2', 'f3', 'h1'),
-  backlogTaskIds: ids('b1'),
-  waitTaskIds: ids(),
+  waitTaskIds: ids('b1'),
   customTierIds: { ct_x: ids('c1') },
   customMemberIds: ids('c1'),
   hiddenGroups: ids('g'),
@@ -71,8 +70,8 @@ describe('footerStatusScope: tier tabs count their own tier', () => {
     expect(counts({ section: 'satellite' })).toEqual({ waiting: 1, completed: 0, wholeBoard: false });
   });
 
-  it('Backlog, a custom tier and the Pinned view', () => {
-    expect(counts({ section: 'backlog' })).toEqual({ waiting: 0, completed: 1, wholeBoard: false });
+  it('Parked, a custom tier and the Pinned view', () => {
+    expect(counts({ section: 'wait' })).toEqual({ waiting: 0, completed: 1, wholeBoard: false });
     expect(counts({ section: 'ct_x' })).toEqual({ waiting: 1, completed: 0, wholeBoard: false });
     expect(counts({ section: 'pinned' })).toEqual({ waiting: 3, completed: 2, wholeBoard: false });
   });

@@ -724,7 +724,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   defaults, unchanged. A worker's new task is also born in the caller's board
   tier (pinned plus its focus tier, or unpinned) unless the body names `pinned`
   or a `focus_tier`; `placement.tier` then says which (`focus`, `satellite`,
-  `backlog`, `wait`, a custom `ct_*` id, or `unpinned`). An ask keeps the old
+  `wait`, a custom `ct_*` id, or `unpinned`). An ask keeps the old
   defaults for project, folder, tier and cwd (its own `Ask …` project is never a
   place for the user's work) and only adds the parent link. `placement` says
   where the task landed, because ProjectedTask carries no folder; `warning`
@@ -765,8 +765,9 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   written in the same store write as the pin — so a client never needs a second
   request to place a new task, and a failed follow-up can never drop it out of
   the tier the user picked. Accepted values: the built-ins `focus` |
-  `satellite` | `backlog` | `wait`, or a registered custom tier id (`ct_*`,
-  from `GET /api/v1/focus/tiers`). `""` or `null` means "not specified" so a
+  `satellite` | `wait`, or a registered custom tier id (`ct_*`,
+  from `GET /api/v1/focus/tiers`); the retired `backlog` (2026-08 to 2026-10)
+  is still accepted and lands in `wait`. `""` or `null` means "not specified" so a
   client can send the shape unconditionally. Three rules to code against:
   a tier IMPLIES `pinned`, so sending only `focus_tier` still lands the task on
   the board; `satellite` normalizes to pinned with NO stored tier (the response
@@ -961,15 +962,18 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
 - Focus bar (pin state lives on the task):
   - `GET /api/v1/focus/tasks` → `TierResult`: `{ "pinned_tasks": [ids],
     "focus_tasks", "satellite_tasks", "backlog_tasks", "wait_tasks",
-    "custom_tier_tasks": { "<ct_id>": [ids] } }`.
+    "custom_tier_tasks": { "<ct_id>": [ids] } }`. `backlog_tasks` is always
+    `[]` since the Backlog tier was retired (2026-10, its rows moved to
+    `wait`); the key stays so an older client keeps decoding.
   - `POST /api/v1/focus/tasks/:id` → `200 { "pinned_tasks" }` (idempotent;
     pinning a completed task → `409 conflict`).
   - `DELETE /api/v1/focus/tasks/:id` → `200 { "pinned_tasks" }` (idempotent).
   - `PUT /api/v1/focus/reorder` body `{ "task_ids" }` → the FULL `TierResult`
     (never a pinned-only payload — clients apply it as a lossless snapshot).
   - `PUT /api/v1/focus/tasks/:id/tier` body `{ "tier" }` → `TierResult`.
-    `tier` ∈ `focus|satellite|backlog|wait` or a registered `ct_*` id;
-    anything else → `400 bad_request`.
+    `tier` ∈ `focus|satellite|wait` or a registered `ct_*` id (the retired
+    `backlog` is accepted and lands in `wait`); anything else →
+    `400 bad_request`.
   - `GET /api/v1/focus/tiers` → `{ "tiers": [ { "id": "ct_…", "label" } ] }`.
 
 ### Sessions (read-only)
@@ -1018,9 +1022,10 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   unfiltered list; an unknown scope word answers `400` too. The `status` filter
   composes with any scope, and `you` is resolved before it, so a status the
   caller itself does not match never erases the caller's own row.
-- `focus_tier` values: `"focus"`, `"backlog"` (built-in since 2026-08),
-  `"wait"`, a custom tier id (`ct_` + 8 alphanumerics — user-defined tiers,
-  added 2026-08), or absent (= Satellite, the default bucket). Clients that
+- `focus_tier` values: `"focus"`, `"wait"`, a custom tier id (`ct_` + 8
+  alphanumerics — user-defined tiers, added 2026-08), or absent (= Satellite,
+  the default bucket). `"backlog"` (built-in 2026-08 to 2026-10) is never
+  served any more: the server reads and writes it as `"wait"`. Clients that
   only understand the built-ins should treat any unrecognized value as
   Satellite.
 - Scope: all live sessions + sessions stopped in the last 14 days, newest

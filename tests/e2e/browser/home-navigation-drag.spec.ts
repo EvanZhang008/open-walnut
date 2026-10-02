@@ -41,8 +41,8 @@ async function drag(page: Page, source: Locator, target: Locator, cancel = false
 test('native reorder, drag cancellation, folded tiers, failure recovery and explicit unpin', async ({ page, baseURL }) => {
   await isolateUiPrefs(page);
   await page.addInitScript(() => {
-    // Backlog was folded earlier. Empty, it is not drawn until a drag needs it as a target.
-    if (localStorage.getItem('walnut-todo-collapsed-sections') === null) localStorage.setItem('walnut-todo-collapsed-sections', '["backlog"]');
+    // Parked was folded earlier. Empty, it is not drawn until a drag needs it as a target.
+    if (localStorage.getItem('walnut-todo-collapsed-sections') === null) localStorage.setItem('walnut-todo-collapsed-sections', '["wait"]');
     if (localStorage.getItem('walnut-todo-tier-run-folds') === null) localStorage.setItem('walnut-todo-tier-run-folds', '[]');
   });
   const ids: string[] = [];
@@ -133,9 +133,9 @@ test('native reorder, drag cancellation, folded tiers, failure recovery and expl
   await page.unroute(`**/api/focus/tasks/${ids[0]}/tier`);
   await drag(page, card(), heading('focus'));
   await expectTier('focus');
-  await drag(page, card(), heading('backlog'));
-  await expectTier('backlog');
-  await expect(heading('backlog').locator('.navigation-heading-open')).toHaveAttribute('aria-expanded', 'true');
+  await drag(page, card(), heading('wait'));
+  await expectTier('wait');
+  await expect(heading('wait').locator('.navigation-heading-open')).toHaveAttribute('aria-expanded', 'true');
   const createdTier = await page.request.post('/api/focus/tiers', { data: { label: `Custom ${test.info().project.name} ${test.info().repeatEachIndex}` } });
   expect(createdTier.ok()).toBe(true);
   const customId = (await createdTier.json()).tier.id;
@@ -149,7 +149,7 @@ test('native reorder, drag cancellation, folded tiers, failure recovery and expl
   await page.reload();
   await expect(heading(customId)).toBeVisible({ timeout: 30_000 });
   await expect(root.locator(`[data-drop-zone="${customId}-drop-zone"]`)).toContainText('Custom navigation task');
-  await expectTier('backlog');
+  await expectTier('wait');
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-drag-final.png` });
   await card().scrollIntoViewIfNeeded();
   const box = (await card().boundingBox())!;

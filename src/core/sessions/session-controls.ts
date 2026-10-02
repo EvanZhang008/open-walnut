@@ -20,6 +20,7 @@ import {
   VALID_SESSION_EFFORT_IDS,
   VALID_SESSION_MODEL_IDS,
   matchSessionModelCatalogEntry,
+  migrateFocusTier,
   modelSupportsEffort,
   modelSupportsMaxEffort,
   modelSupportsXhighEffort,
@@ -458,9 +459,11 @@ export async function createForkSiblingTask(
   let inheritedTier: string | undefined;
   if (sourceTask.pinned && sourceTask.focus_tier) {
     const { getCustomTiers } = await import('../task-manager.js');
-    const known = ['focus', 'backlog', 'wait'].includes(sourceTask.focus_tier)
-      || (await getCustomTiers()).some((t) => t.id === sourceTask.focus_tier);
-    if (known) inheritedTier = sourceTask.focus_tier;
+    // A source row that still stores a retired name is read as its successor.
+    const sourceTier = migrateFocusTier(sourceTask.focus_tier);
+    const known = ['focus', 'wait'].includes(sourceTier)
+      || (await getCustomTiers()).some((t) => t.id === sourceTier);
+    if (known) inheritedTier = sourceTier;
     else {
       log.session.warn('fork: source tier is not registered, filing the fork in Satellite', {
         sourceTaskId: sourceTask.id, tier: sourceTask.focus_tier,

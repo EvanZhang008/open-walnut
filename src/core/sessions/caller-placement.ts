@@ -28,7 +28,7 @@
  *     the parent, and the parent counts it, so work an agent split off stays
  *     visibly attached to the work it came from wherever it lands.
  *   - tier: where on the board the caller sits (pinned, and its focus tier:
- *     Focus, Satellite, Backlog, Wait or a custom tier; or unpinned). A worker's
+ *     Focus, Satellite, Parked or a custom tier; or unpinned). A worker's
  *     new task is born in the SAME tier unless the call names `pinned` or a
  *     `focus_tier`: work split off a Focus task is Focus work, and the user moves
  *     it later if not (user report 2026-09-25: a Focus task's subtask landed in

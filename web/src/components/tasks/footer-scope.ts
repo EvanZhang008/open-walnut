@@ -6,14 +6,13 @@ import { recentActivityTime, type RecentSortMode } from './recent-activity-time'
 export const RECENT_FEED_SIZE = 50;
 
 export interface FooterScopeInput {
-  /** The effective section: a tier id (`focus`, `satellite`, `backlog`, `wait`, `ct_*`), `pinned`, `recent`, `tasks` or `all`. */
+  /** The effective section: a tier id (`focus`, `satellite`, `wait`, `ct_*`), `pinned`, `recent`, `tasks` or `all`. */
   section: string;
   tasks: Task[];
   /** '' = every project, INBOX_TAB = the no-project bucket, else a project name. */
   activeProject: string;
   pinnedTaskIds?: Set<string>;
   focusTaskIds?: Set<string>;
-  backlogTaskIds?: Set<string>;
   waitTaskIds?: Set<string>;
   customTierIds?: Record<string, Set<string>>;
   /** Members of any registered custom tier (satellite = pinned minus every other tier). */
@@ -57,12 +56,11 @@ export function footerStatusScope(input: FooterScopeInput): FooterScope {
   let scope: Task[];
   let wholeBoard = false;
   if (section === 'focus') scope = tasks.filter(inTier(input.focusTaskIds));
-  else if (section === 'backlog') scope = tasks.filter(inTier(input.backlogTaskIds));
   else if (section === 'wait') scope = tasks.filter(inTier(input.waitTaskIds));
   else if (section.startsWith('ct_')) scope = tasks.filter(inTier(input.customTierIds?.[section]));
   else if (section === 'satellite') {
     scope = tasks.filter((t) => inPins(t)
-      && !input.focusTaskIds?.has(t.id) && !input.backlogTaskIds?.has(t.id) && !input.waitTaskIds?.has(t.id)
+      && !input.focusTaskIds?.has(t.id) && !input.waitTaskIds?.has(t.id)
       && !input.customMemberIds.has(t.id));
   } else if (section === 'pinned') scope = tasks.filter(inPins);
   else {

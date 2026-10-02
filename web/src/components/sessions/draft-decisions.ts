@@ -17,6 +17,7 @@
  * Thursday "Due Thu" cannot say whether it means today or next week.
  */
 
+import { migrateFocusTier } from '@open-walnut/core';
 import { formatDateTimeDisplay, parseDateLocal } from '@/components/common/DatePicker';
 import { DEFAULT_META, PRIORITY_OPTIONS, TIER_OPTIONS, tierColor } from './task-meta-constants';
 import type { DraftColumn, DraftOwnedField, DraftTaskField } from './draft-column';
@@ -160,7 +161,9 @@ function tierChip(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionChip 
 }
 
 function tierChipValue(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionChip | null {
-  const tier = draft.meta.pinTier;
+  // A draft that was open across the deploy that retired Backlog still carries
+  // the old name; the server files it in Parked, so the chip says so.
+  const tier = migrateFocusTier(draft.meta.pinTier);
   // Not pinned says nothing (user, 2026-09-25: a "Not pinned" chip is noise;
   // the lit tier's second click is how it got here). Neither does the default
   // tier nobody decided: a fresh draft lands in Focus, and saying so on every

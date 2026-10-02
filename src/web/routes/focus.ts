@@ -3,7 +3,8 @@
  *
  * Pin state lives on each Task object (pinned + pin_order + focus_tier fields).
  * Built-in tiers: focus (current sprint), satellite (needs doing soon; the
- * default), backlog (someday), wait (parked).
+ * default), wait (parked: someday, or blocked on something). The retired
+ * backlog tier reads and writes as wait.
  * Users can add custom tiers (ct_* ids) via the /tiers routes below.
  */
 
@@ -13,11 +14,12 @@ import {
   getCustomTiers, createCustomTier, renameCustomTier, deleteCustomTier,
 } from '../../core/task-manager.js'
 import { bus, EventNames } from '../../core/event-bus.js'
+import { PIN_TIER_POLICY, migrateFocusTier } from '../../core/types.js'
 
 export const focusRouter = Router()
 
 // GET /api/focus/tasks — list pinned task IDs with tier split (built-ins + customs).
-// Single source of the four-bucket split: task-manager's splitTiers via getTierSplit.
+// Single source of the three-bucket split: task-manager's splitTiers via getTierSplit.
 focusRouter.get('/tasks', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     res.json(await getTierSplit())
@@ -87,15 +89,16 @@ focusRouter.put('/reorder', async (req: Request, res: Response, next: NextFuncti
   }
 })
 
-const BUILTIN_TIERS = ['focus', 'satellite', 'backlog', 'wait']
+const BUILTIN_TIERS: readonly string[] = PIN_TIER_POLICY.map((entry) => entry.tier)
 
-// PUT /api/focus/tasks/:id/tier — set tier (built-in or registered custom id)
+// PUT /api/focus/tasks/:id/tier — set tier (built-in or registered custom id).
+// A retired built-in name ('backlog') is accepted and lands in its successor.
 focusRouter.put('/tasks/:id/tier', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const taskId = req.params.id as string
     const { tier } = req.body as { tier: string }
     const customIds = (await getCustomTiers()).map((t) => t.id)
-    if (!BUILTIN_TIERS.includes(tier) && !customIds.includes(tier)) {
+    if (!BUILTIN_TIERS.includes(migrateFocusTier(tier)) && !customIds.includes(tier)) {
       res.status(400).json({ error: `tier must be one of: ${[...BUILTIN_TIERS, ...customIds].join(', ')}` })
       return
     }

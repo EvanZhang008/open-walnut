@@ -47,8 +47,9 @@ export interface WalnutTask {
   sessionIds?: string[]
   /** On the pinned board. */
   pinned?: boolean
-  /** The pinned task's tier: `focus`, `backlog`, `wait` or a custom tier id. Absent on a
-   *  pinned task means Satellite. */
+  /** The pinned task's tier: `focus`, `wait` (Parked) or a custom tier id. Absent on a
+   *  pinned task means Satellite. The retired `backlog` is never served; a plugin may
+   *  still send it and it lands in `wait`. */
   focusTier?: string
   /** The pinned task's place in the pinned order (ascending = top first), across tiers. */
   pinOrder?: number

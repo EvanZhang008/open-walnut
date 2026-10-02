@@ -12,7 +12,7 @@ import { log } from '../../logging/index.js';
 import { addTask, getTask, updateTask, getCustomTiers, ensureFolderProject, resolveProjectForWrite, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
 import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
-import type { Task, SessionEngine } from '../types.js';
+import { migrateFocusTier, type Task, type SessionEngine } from '../types.js';
 import { spillLargePromptToFile } from './quick-start-spill.js';
 import { engineCaps, isAcpEngine, normalizeEngine } from '../agents/engine-registry.js';
 import { resolveDefaultEngine } from '../agents/default-engine.js';
@@ -24,7 +24,7 @@ export interface QuickStartTaskMeta {
   unread?: boolean;
   priority?: 'immediate' | 'important' | 'backlog' | 'none';
   /**
-   * Built-in tier ('focus' | 'satellite' | 'backlog' | 'wait') or a registered
+   * Built-in tier ('focus' | 'satellite' | 'wait') or a registered
    * custom tier id (ct_*).
    *
    * Three-way: a tier name pins into that tier; `null` is an explicit "do NOT
@@ -410,9 +410,12 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // the launch. See the matching note in web/routes/sessions.ts.
     let bornTier: string | undefined;
     if (pinNewTask && taskMeta?.pinTier && taskMeta.pinTier !== 'satellite') {
-      const known = ['focus', 'backlog', 'wait'].includes(taskMeta.pinTier)
-        || (await getCustomTiers()).some((t) => t.id === taskMeta.pinTier);
-      if (known) bornTier = taskMeta.pinTier;
+      // A remembered pick may also be a retired built-in ('backlog'): it lands
+      // in that tier's successor rather than Satellite.
+      const requested = migrateFocusTier(taskMeta.pinTier);
+      const known = ['focus', 'wait'].includes(requested)
+        || (await getCustomTiers()).some((t) => t.id === requested);
+      if (known) bornTier = requested;
       else {
         log.web.warn(`${source}: unknown pinTier on launch, filing in Satellite`, {
           tier: taskMeta.pinTier,

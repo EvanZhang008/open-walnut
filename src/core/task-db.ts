@@ -20,6 +20,7 @@ import { log } from '../logging/index.js';
 import type { Task } from './types.js';
 import { migratePhase } from './phase.js';
 import { normalizeTags, tagsAreNormal } from './tag-model.js';
+import { migrateFocusTier } from './types.js';
 import type { ExtIndexSpec } from './integration-types.js';
 
 /** SQLite file path. Sits next to the legacy tasks.json in the same dir. */
@@ -280,6 +281,11 @@ export function rowToTask(row: Record<string, any>): Task {
   // until now.
   if (typeof task.phase === 'string') task.phase = migratePhase(task.phase) ?? task.phase;
 
+  // Same net for a retired pin tier ('backlog' → 'wait', v13): the row may come
+  // from an older replica's projection or a plugin pull after this database's
+  // own rows were rewritten.
+  if (typeof task.focus_tier === 'string') task.focus_tier = migrateFocusTier(task.focus_tier);
+
   // Every tag is key:value (tag-model.ts). normalizeStoredTags rewrote this database's rows at
   // open; this is the net for a row written by an older build or another door since.
   if (Array.isArray(task.tags) && !tagsAreNormal(task.tags)) {
@@ -318,6 +324,10 @@ export function taskToRow(task: Partial<Task>): Record<string, any> {
     if (col === 'tags' && Array.isArray(val)) {
       // Stored in key:value form whatever the writer sent (tag-model.ts).
       row.tags = JSON.stringify(normalizeTags(val));
+    } else if (col === 'focus_tier' && typeof val === 'string') {
+      // A retired tier name from an older client lands as its successor, so
+      // no row ever stores 'backlog' again after the v13 rewrite.
+      row.focus_tier = migrateFocusTier(val);
     } else if (JSON_COLUMNS.has(col)) {
       row[col] = val === null ? null : JSON.stringify(val);
     } else if (col === 'pinned') {
@@ -548,7 +558,7 @@ const SCHEMA_SQL = `
  * Exported so migration tests can assert "the DB ended up current" without
  * hardcoding a number that every future bump would break.
  */
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 function runOneTimeMigrations(handle: DatabaseType): void {
   const current = handle.pragma('user_version', { simple: true }) as number;
@@ -650,6 +660,11 @@ function runOneTimeMigrations(handle: DatabaseType): void {
     // v11 → v12: the pre-0.5.2 `waiting` record (a TODO parked on a trigger)
     // becomes the WAITING phase; the record itself is retired.
     migrateWaitingRecordsToPhase(handle);
+  }
+
+  if (current < 13) {
+    // v12 → v13: the Backlog pin tier is retired; its rows move to Parked.
+    migrateBacklogTierToWait(handle);
   }
 
   handle.pragma('user_version = ' + SCHEMA_VERSION);
@@ -1357,6 +1372,39 @@ function migrateWaitingRecordsToPhase(handle: DatabaseType): void {
 
   if (summary.dropped > 0) {
     log.task.info('task-db v12: waiting records folded into the WAITING phase', summary);
+  }
+}
+
+// ── v13: the Backlog pin tier → Parked ───────────────────────────────────────
+
+/**
+ * The board keeps three built-in tiers (Focus, Satellite, Parked). Backlog
+ * ("someday work you still want pinned", 2026-08 to 2026-10) is gone, and what
+ * it held is what Parked holds, so every row filed there moves to `wait` with
+ * its pin order kept. `updated_at` is left alone on purpose: nothing about the
+ * task changed, and bumping it would push a board-only field to every sync
+ * plugin and float the row in Recent. The payload copy is rewritten too, in
+ * case a row written before `focus_tier` had a column still carries one there.
+ * Rows arriving after this (an older replica, a plugin pull, a phone that has
+ * not updated) are folded on read and on write by rowToTask / taskToRow.
+ */
+function migrateBacklogTierToWait(handle: DatabaseType): void {
+  const summary = handle.transaction(() => {
+    const column = handle
+      .prepare(`UPDATE tasks SET focus_tier = 'wait' WHERE focus_tier = 'backlog'`)
+      .run().changes;
+    const payload = handle
+      .prepare(
+        `UPDATE tasks SET payload = json_set(payload, '$.focus_tier', 'wait')
+          WHERE payload IS NOT NULL AND json_valid(payload)
+            AND json_extract(payload, '$.focus_tier') = 'backlog'`,
+      )
+      .run().changes;
+    return { migrated: Math.max(column, payload) };
+  })();
+
+  if (summary.migrated > 0) {
+    log.task.info('task-db v13: Backlog tier retired, rows moved to Parked', summary);
   }
 }
 

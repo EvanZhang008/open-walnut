@@ -437,7 +437,8 @@ describe('GET /api/tasks — canonical query params', () => {
     expect(byTier.focus).toMatchObject({ total: 1, active: 1, completed: 0 });
     // The finished pin keeps its default tier, so Satellite holds two rows, one done.
     expect(byTier.satellite).toMatchObject({ total: 2, active: 1, completed: 1 });
-    expect(byTier.backlog.total).toBe(0);
+    expect(byTier.wait.total).toBe(0);
+    expect(byTier.backlog).toBeUndefined();
     // The counts add up to the board, which is what makes them a cross-check.
     expect(board.tiers.reduce((sum, t) => sum + t.total, 0)).toBe(board.pinned_total);
     expect(satellite.id).toBeTruthy();

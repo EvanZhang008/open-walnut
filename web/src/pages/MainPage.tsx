@@ -357,7 +357,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
   const focusTaskIdSet = useMemo(() => new Set(focusBar.focusIds), [focusBar.focusIds]);
-  const backlogTaskIdSet = useMemo(() => new Set(focusBar.backlogIds), [focusBar.backlogIds]);
   const waitTaskIdSet = useMemo(() => new Set(focusBar.waitIds), [focusBar.waitIds]);
   const customTierIdSets = useMemo(() => {
     const map: Record<string, Set<string>> = {};
@@ -2941,7 +2940,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSetTier={focusBar.setTier}
           pinnedTaskIds={pinnedTaskIdSet}
           focusTaskIds={focusTaskIdSet}
-          backlogTaskIds={backlogTaskIdSet}
           waitTaskIds={waitTaskIdSet}
           customTiers={focusBar.customTiers}
           customTiersLoaded={focusBar.customTiersLoaded}

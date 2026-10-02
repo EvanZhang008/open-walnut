@@ -91,7 +91,7 @@ test('a tier picked in the menu is FINAL against later parses, while the AI keep
   await expectUserChip(panel, 'pinTier', 'Focus')
 
   // The parse changes its mind about BOTH tier and priority.
-  mock.set({ pinTier: 'backlog', priority: 'important', due_date: due })
+  mock.set({ pinTier: 'wait', priority: 'important', due_date: due })
   await typeAndSettle(page, mock, 'fix the flaky login test by friday, important')
   await expectUserChip(panel, 'pinTier', 'Focus')
   // C10: ownership is per field, so the priority still follows the text.
@@ -339,7 +339,7 @@ async function aiProjectWithFolder(page: Page): Promise<{ name: string; cwd: str
 
 test('an emptied composer (after the debounce) withdraws AI tier, dates, project and folder, and never the model', async ({ page }) => {
   const project = await aiProjectWithFolder(page)
-  const mock = await boot(page, { project: project.name, pinTier: 'backlog', due_date: isoDay(3) })
+  const mock = await boot(page, { project: project.name, pinTier: 'wait', due_date: isoDay(3) })
   const panel = await openDraft(page)
   const model = await draftModelPill(panel).getAttribute('data-model')
   await typeAndSettle(page, mock, 'tidy the marina backlog by friday')
@@ -442,19 +442,19 @@ test('a custom tier chip truncates a long label and keeps the full name in its t
 
 // ── C67: a tier "+" reusing a just-cleared draft never inherits AI leftovers ──
 
-test('a tier "+" that reuses a just-emptied draft lands on Inbox, no folder, and its own Backlog chip', async ({ page }) => {
+test('a tier "+" that reuses a just-emptied draft lands on Inbox, no folder, and its own Parked chip', async ({ page }) => {
   const project = await aiProjectWithFolder(page)
-  // The Backlog header only mounts while Backlog holds a pinned task.
+  // The Parked header only mounts while Parked holds a pinned task.
   const anchor = await page.request.post('/api/tasks', { data: { title: `decision anchor ${Date.now()}`, source: 'local', project: 'Work' } })
   const anchorId = ((await anchor.json()) as { task: { id: string } }).task.id
-  await pinToTier(page, anchorId, 'backlog')
+  await pinToTier(page, anchorId, 'wait')
   const mock = await boot(page, { project: project.name, pinTier: 'satellite' })
   const panel = await openDraft(page)
   const model = await draftModelPill(panel).getAttribute('data-model')
   await typeAndSettle(page, mock, 'tidy the marina backlog')
   await expect(draftProjectPill(panel)).toHaveText(`Project: ${project.name}✦`)
 
-  const sublabel = page.locator('.todo-pinned-sublabel[data-navigation-id="backlog"]').first()
+  const sublabel = page.locator('.todo-pinned-sublabel[data-navigation-id="wait"]').first()
   await expect(sublabel).toBeVisible({ timeout: 25_000 })
   // Clear, then open from "+" BEFORE the 350ms clear debounce can fire.
   await draftComposer(page).fill('')
@@ -465,7 +465,7 @@ test('a tier "+" that reuses a just-emptied draft lands on Inbox, no folder, and
   const reused = draftPanel(page)
   await expect(draftProjectPill(reused)).toHaveCount(0)
   await expect(draftCwdPill(reused)).toHaveText('Choose folder and host…')
-  await expectUserChip(reused, 'pinTier', 'Backlog')
-  expect(await chipLabel(draftDecisionChip(reused, 'pinTier'))).toBe('Backlog')
+  await expectUserChip(reused, 'pinTier', 'Parked')
+  expect(await chipLabel(draftDecisionChip(reused, 'pinTier'))).toBe('Parked')
   await expect(draftModelPill(reused)).toHaveAttribute('data-model', model ?? '')
 })

@@ -29,7 +29,6 @@ import {
 import {
   ICON_TIER_FOCUS,
   ICON_TIER_SATELLITE,
-  ICON_TIER_BACKLOG,
   ICON_TIER_WAIT,
   ICON_TIER_CUSTOM,
 } from '@/components/common/Icons';
@@ -39,7 +38,6 @@ import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 const BUILTIN_ROWS = [
   { id: 'focus', label: 'Focus', icon: ICON_TIER_FOCUS },
   { id: 'satellite', label: 'Satellite', icon: ICON_TIER_SATELLITE },
-  { id: 'backlog', label: 'Backlog', icon: ICON_TIER_BACKLOG },
   { id: 'wait', label: 'Parked', icon: ICON_TIER_WAIT },
 ] as const;
 

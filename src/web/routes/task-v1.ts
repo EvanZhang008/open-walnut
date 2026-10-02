@@ -42,7 +42,7 @@ import { bus, EventNames } from '../../core/event-bus.js'
 import { CLOUD_MODE } from '../../constants.js'
 import type { Task, TaskPhase } from '../../core/types.js'
 import { isKnownEngine } from '../../core/agents/engine-registry.js'
-import { SESSION_ENGINE_IDS } from '../../core/types.js'
+import { PIN_TIER_POLICY, SESSION_ENGINE_IDS, migrateFocusTier } from '../../core/types.js'
 
 export const taskV1Router = Router()
 
@@ -595,9 +595,11 @@ taskV1Router.put('/focus/reorder', async (req: Request, res: Response, next: Nex
   }
 })
 
-const BUILTIN_TIERS = ['focus', 'satellite', 'backlog', 'wait']
+const BUILTIN_TIERS: readonly string[] = PIN_TIER_POLICY.map((entry) => entry.tier)
 
 // PUT /api/v1/focus/tasks/:id/tier { tier } — move a pinned task between tiers.
+// A retired built-in name ('backlog', still sent by older phone builds) is
+// accepted and lands in its successor.
 taskV1Router.put('/focus/tasks/:id/tier', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const taskId = await resolveTaskIdPrefix(res, paramStr(req.params.id))
@@ -605,7 +607,7 @@ taskV1Router.put('/focus/tasks/:id/tier', async (req: Request, res: Response, ne
     const tier = (req.body ?? {}).tier
     const { getCustomTiers, setFocusTier } = await import('../../core/task-manager.js')
     const customIds = (await getCustomTiers()).map((t) => t.id)
-    if (typeof tier !== 'string' || (!BUILTIN_TIERS.includes(tier) && !customIds.includes(tier))) {
+    if (typeof tier !== 'string' || (!BUILTIN_TIERS.includes(migrateFocusTier(tier)) && !customIds.includes(tier))) {
       sendError(res, 400, 'bad_request', `tier must be one of: ${[...BUILTIN_TIERS, ...customIds].join(', ')}`)
       return
     }

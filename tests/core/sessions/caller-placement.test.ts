@@ -140,7 +140,7 @@ describe('inheritedTier (a worker\'s new task is born in its board tier)', () =>
   it('an explicit pinned or focus_tier wins: nothing is inherited', () => {
     expect(inheritedTier({ pinned: true }, at(true, 'focus'))).toBeUndefined()
     expect(inheritedTier({ pinned: false }, at(true, 'focus'))).toBeUndefined()
-    expect(inheritedTier({ focus_tier: 'backlog' }, at(true, 'focus'))).toBeUndefined()
+    expect(inheritedTier({ focus_tier: 'wait' }, at(true, 'focus'))).toBeUndefined()
   })
 
   it('only a worker: an ask (often parked in Wait), a human, or an unknown caller inherits nothing', () => {

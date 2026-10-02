@@ -76,10 +76,19 @@ describe('resolveNewTaskTier', () => {
   });
 
   it('stores each non-default built-in verbatim', () => {
-    for (const tier of ['focus', 'backlog', 'wait']) {
+    for (const tier of ['focus', 'wait']) {
       expect(resolveNewTaskTier({ pinned: true, focus_tier: tier }, []))
         .toEqual({ pinned: true, focus_tier: tier });
     }
+  });
+
+  it('files the retired backlog tier in Parked, never as an unknown tier', () => {
+    // An older client or a session prompt that still names the 2026-08 Backlog
+    // tier must keep working: its successor is Parked (wait).
+    expect(resolveNewTaskTier({ pinned: true, focus_tier: 'backlog' }, []))
+      .toEqual({ pinned: true, focus_tier: 'wait' });
+    expect(resolveNewTaskTier({ focus_tier: 'backlog' }, []))
+      .toEqual({ pinned: true, focus_tier: 'wait' });
   });
 
   it('normalizes satellite to pinned-with-no-stored-tier', () => {
@@ -152,16 +161,18 @@ describe('addTask({ focus_tier })', () => {
     expect(split.satellite_tasks).toEqual([]);
   });
 
-  it('serves every non-default built-in', async () => {
+  it('serves every non-default built-in, and the retired backlog lands in wait', async () => {
     const focus = await addTask({ title: 'F', pinned: true, focus_tier: 'focus' });
     const backlog = await addTask({ title: 'B', pinned: true, focus_tier: 'backlog' });
     const wait = await addTask({ title: 'W', pinned: true, focus_tier: 'wait' });
 
     const split = await getTierSplit();
     expect(split.focus_tasks).toEqual([focus.task.id]);
-    expect(split.backlog_tasks).toEqual([backlog.task.id]);
-    expect(split.wait_tasks).toEqual([wait.task.id]);
+    // The wire field stays for API v1 clients, always empty.
+    expect(split.backlog_tasks).toEqual([]);
+    expect(split.wait_tasks).toEqual([backlog.task.id, wait.task.id]);
     expect(split.satellite_tasks).toEqual([]);
+    expect((await getTask(backlog.task.id))?.focus_tier).toBe('wait');
   });
 
   it('stores satellite as pinned with NO focus_tier (the reader convention)', async () => {
@@ -255,7 +266,7 @@ describe('addTask({ focus_tier })', () => {
     // failure of that write would silently drop the task out of the picked
     // tier — the bug this replaced. Proven by reading the tier split with no
     // intervening call of any kind.
-    const { task } = await addTask({ title: 'One write', focus_tier: 'backlog' });
-    expect((await getTierSplit()).backlog_tasks).toEqual([task.id]);
+    const { task } = await addTask({ title: 'One write', focus_tier: 'wait' });
+    expect((await getTierSplit()).wait_tasks).toEqual([task.id]);
   });
 });

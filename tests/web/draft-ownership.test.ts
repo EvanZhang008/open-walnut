@@ -172,13 +172,13 @@ describe('applyDraftParse: typing parses only add, the settled text may remove (
 describe('applyDraftParse: owners, visibility and unknown tiers', () => {
   it('a user or seed owner is never written, yet the proposal is recorded', () => {
     for (const owner of ['user', 'seed'] as const) {
-      const d = draft({ fieldOwner: { pinTier: owner }, meta: { ...draft().meta, pinTier: 'backlog' } });
+      const d = draft({ fieldOwner: { pinTier: owner }, meta: { ...draft().meta, pinTier: 'wait' } });
       const out = applyDraftParse(d, { pinTier: 'wait', legs: OK }, noDefaults);
-      expect(out.meta.pinTier).toBe('backlog');
+      expect(out.meta.pinTier).toBe('wait');
       expect(out.aiFields?.has('pinTier')).toBe(false);
       expect(out.aiSuggested?.pinTier).toBe('wait');
       // Nor reverted by a parse that stops proposing.
-      expect(applyDraftParse(out, { legs: OK }, noDefaults).meta.pinTier).toBe('backlog');
+      expect(applyDraftParse(out, { legs: OK }, noDefaults).meta.pinTier).toBe('wait');
     }
   });
 
@@ -276,7 +276,7 @@ describe("applyDraftParse kind 'clear': the text is gone, so are its decisions",
   });
 
   it('owned task fields survive a clear', () => {
-    const d = own.applyDraftTaskFieldEdit(draft(), { pinTier: 'backlog' });
+    const d = own.applyDraftTaskFieldEdit(draft(), { pinTier: 'wait' });
     const out = applyDraftParse(d, {}, noDefaults, { kind: 'clear' });
     expect(out).toBe(d);
   });
@@ -291,10 +291,10 @@ describe('More: an edit owns that field only', () => {
     expect(aiOf(edited)).toEqual(['dueDate']);
     expect(edited.userTouched).toBe(true);
     expect(edited.metaTouched).toBeUndefined();
-    const next = applyDraftParse(edited, { pinTier: 'backlog', due_date: '2026-08-15', legs: OK }, noDefaults);
+    const next = applyDraftParse(edited, { pinTier: 'wait', due_date: '2026-08-15', legs: OK }, noDefaults);
     expect(next.meta.pinTier).toBe('wait');
     expect(next.meta.dueDate).toBe('2026-08-15');
-    expect(next.aiSuggested?.pinTier).toBe('backlog');
+    expect(next.aiSuggested?.pinTier).toBe('wait');
   });
 
   it('clearing is an edit too (owned, empty, no chip value); a start edit drops the end', () => {
@@ -353,9 +353,9 @@ describe('applyDraftPathPick: the picker footer rebases per field', () => {
     const opened = draft().meta;
     // A parse landed while the picker was open: the row now has an AI due.
     const row = applyDraftParse(draft(), { due_date: '2026-08-14', legs: OK }, noDefaults);
-    const returned = { ...opened, pinTier: 'backlog' };
+    const returned = { ...opened, pinTier: 'wait' };
     const out = own.applyDraftPathPick(row, path, returned, opened, none, free);
-    expect(out.meta.pinTier).toBe('backlog');
+    expect(out.meta.pinTier).toBe('wait');
     expect(out.fieldOwner).toEqual({ pinTier: 'user' });
     expect(out.meta.dueDate).toBe('2026-08-14');
     expect(out.aiFields?.has('dueDate')).toBe(true);
@@ -426,18 +426,18 @@ describe('applyDraftPathPick: the picker footer rebases per field', () => {
 describe('applyTierSeed: a tier "+" owns the tier', () => {
   it('writes the tier as a seed (no ✦) and a later parse does not move it', () => {
     const ai = applyDraftParse(draft(), { pinTier: 'satellite' }, noDefaults);
-    const seeded = own.applyTierSeed(ai, 'backlog');
-    expect(seeded.meta.pinTier).toBe('backlog');
+    const seeded = own.applyTierSeed(ai, 'wait');
+    expect(seeded.meta.pinTier).toBe('wait');
     expect(seeded.fieldOwner).toEqual({ pinTier: 'seed' });
     expect(seeded.aiFields?.has('pinTier')).toBe(false);
     expect(seeded.metaTouched).toBeUndefined();
-    expect(applyDraftParse(seeded, { pinTier: 'wait', legs: OK }, noDefaults).meta.pinTier).toBe('backlog');
-    expect(own.applyTierSeed(seeded, 'backlog')).toBe(seeded);
+    expect(applyDraftParse(seeded, { pinTier: 'focus', legs: OK }, noDefaults).meta.pinTier).toBe('wait');
+    expect(own.applyTierSeed(seeded, 'wait')).toBe(seeded);
   });
 
   it('never overrides a tier the user picked', () => {
     const mine = own.applyDraftTaskFieldEdit(draft(), { pinTier: 'wait' });
-    expect(own.applyTierSeed(mine, 'backlog')).toBe(mine);
+    expect(own.applyTierSeed(mine, 'wait')).toBe(mine);
   });
 });
 
@@ -458,12 +458,12 @@ describe('Ask Walnut tab: no AI task value rides an Ask unseen (C58)', () => {
   });
 
   it('a Backlog "+" seed stays inside walnut mode, owner still seed, and after leaving', () => {
-    const seeded = own.applyTierSeed(draft(), 'backlog');
+    const seeded = own.applyTierSeed(draft(), 'wait');
     const inside = own.enterWalnutDraft(seeded);
-    expect(inside.meta.pinTier).toBe('backlog');
+    expect(inside.meta.pinTier).toBe('wait');
     expect(inside.fieldOwner?.pinTier).toBe('seed');
     const back = own.leaveWalnutDraft(inside);
-    expect(back.meta.pinTier).toBe('backlog');
+    expect(back.meta.pinTier).toBe('wait');
     expect(back.fieldOwner?.pinTier).toBe('seed');
   });
 
@@ -489,7 +489,7 @@ describe('Ask Walnut tab: no AI task value rides an Ask unseen (C58)', () => {
   });
 
   it('a tier picked by hand inside walnut mode is kept on leave', () => {
-    const seeded = own.applyTierSeed(draft(), 'backlog');
+    const seeded = own.applyTierSeed(draft(), 'wait');
     const inside = own.applyDraftTaskFieldEdit(own.enterWalnutDraft(seeded), { pinTier: 'focus' });
     const back = own.leaveWalnutDraft(inside);
     expect(back.meta.pinTier).toBe('focus');

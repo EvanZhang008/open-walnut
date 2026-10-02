@@ -119,7 +119,7 @@ describe('POST /api/sessions/quick-start — taskMeta.pinTier=focus', () => {
     expect(task!.focus_tier).toBe('focus');
   });
 
-  it('accepts the built-in backlog tier', async () => {
+  it('files the retired backlog tier (a launcher that remembered it) in Parked', async () => {
     const app = createApp();
     const res = await request(app)
       .post('/api/sessions/quick-start')
@@ -132,7 +132,7 @@ describe('POST /api/sessions/quick-start — taskMeta.pinTier=focus', () => {
     expect(res.status).toBe(200);
     const task = await getTask(res.body.taskId);
     expect(task!.pinned).toBe(true);
-    expect(task!.focus_tier).toBe('backlog');
+    expect(task!.focus_tier).toBe('wait');
   });
 
   it('rejects an invalid pinTier value with 400', async () => {

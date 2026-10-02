@@ -204,10 +204,10 @@ describe('applyDraftParse — AI may only fill what nobody claimed (R9)', () => 
   });
 
   it('APPLIES the pin tier now that a chip shows it, ✦-marked and recorded', () => {
-    const out = applyDraftParse(draft(), { pinTier: 'backlog' }, noDefaults);
-    expect(out.meta.pinTier).toBe('backlog');
+    const out = applyDraftParse(draft(), { pinTier: 'wait' }, noDefaults);
+    expect(out.meta.pinTier).toBe('wait');
     expect(out.aiFields?.has('pinTier')).toBe(true);
-    expect(out.aiSuggested).toEqual({ pinTier: 'backlog' });
+    expect(out.aiSuggested).toEqual({ pinTier: 'wait' });
   });
 
   it('metaTouched (model/engine memory) no longer freezes the task fields', () => {
@@ -298,12 +298,12 @@ describe('suggestDiff — what the AI proposed vs. what the launch carried', () 
   });
 
   it('records the tier as kept, changed or dropped', () => {
-    const d = applyDraftParse(draft(), { pinTier: 'backlog' }, noDefaults);
-    expect(suggestDiff(d)).toEqual([{ field: 'pinTier', suggested: 'backlog', chosen: 'backlog' }]);
-    const changed = { ...d, meta: { ...d.meta, pinTier: 'wait' } };
-    expect(suggestDiff(changed)).toEqual([{ field: 'pinTier', suggested: 'backlog', chosen: 'wait' }]);
+    const d = applyDraftParse(draft(), { pinTier: 'wait' }, noDefaults);
+    expect(suggestDiff(d)).toEqual([{ field: 'pinTier', suggested: 'wait', chosen: 'wait' }]);
+    const changed = { ...d, meta: { ...d.meta, pinTier: 'focus' } };
+    expect(suggestDiff(changed)).toEqual([{ field: 'pinTier', suggested: 'wait', chosen: 'focus' }]);
     const unpinned = { ...d, meta: { ...d.meta, pinTier: undefined } };
-    expect(suggestDiff(unpinned)).toEqual([{ field: 'pinTier', suggested: 'backlog' }]);
+    expect(suggestDiff(unpinned)).toEqual([{ field: 'pinTier', suggested: 'wait' }]);
   });
 
   it('a tier the app cannot resolve counts as the Focus the launch sends', () => {
@@ -500,7 +500,7 @@ describe('restoreMetaAfterWalnut — leaving Ask Walnut undoes only what the mod
   it('reverts the seeded Focus tier to the stash; keeps a tier picked inside walnut mode', () => {
     const prev = { pinTier: 'satellite' as const };
     expect(restoreMetaAfterWalnut({ ...base, pinTier: 'focus' }, prev).pinTier).toBe('satellite');
-    expect(restoreMetaAfterWalnut({ ...base, pinTier: 'backlog' }, prev).pinTier).toBe('backlog');
+    expect(restoreMetaAfterWalnut({ ...base, pinTier: 'wait' }, prev).pinTier).toBe('wait');
   });
 
   it('restores the stashed model when walnut left it on Auto (undefined or the explicit-Auto sentinel)', () => {

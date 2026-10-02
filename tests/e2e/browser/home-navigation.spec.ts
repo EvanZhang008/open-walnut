@@ -336,7 +336,7 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
     const pins = pinning ? ['pw-task-store-sync', 'nav-empty-pin', 'nav-pin-other'] : [];
-    await route.fulfill({ json: { pinned_tasks: pins, focus_tasks: pins, satellite_tasks: [], backlog_tasks: [], wait_tasks: [], custom_tier_tasks: {} } });
+    await route.fulfill({ json: { pinned_tasks: pins, focus_tasks: pins, satellite_tasks: [], wait_tasks: [], custom_tier_tasks: {} } });
   });
   // One custom tier while pinning, none after: other specs leave custom tiers on the shared fixture.
   await page.route('**/api/focus/tiers', async route => {
@@ -349,7 +349,7 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   // Only the built-in tier holding cards is drawn. A custom tier draws even when empty:
   // the user made it on purpose and needs its add row for the first card.
   await expect(heading(page, 'focus')).toBeVisible();
-  for (const tier of ['satellite', 'backlog', 'wait']) await expect(heading(page, tier)).toHaveCount(0);
+  for (const tier of ['satellite', 'wait']) await expect(heading(page, tier)).toHaveCount(0);
   await expect(heading(page, 'nav-custom-someday')).toBeVisible();
 
   // The unread dot sits on the heading text column, left of the circle, so it never meets
@@ -748,7 +748,7 @@ test('the calendar panel keeps an active draft and the homepage URL', async ({ p
 });
 
 test('the tab bar keeps the tabs the user picks, hides empty ones, and turns itself off', async ({ page, baseURL }) => {
-  // One Focus card and one Wait card, no custom tier: Satellite and Backlog are empty. Routed, because
+  // One Focus card and one Wait card, no custom tier: Satellite is empty. Routed, because
   // the shared fixture holds whatever pins and tiers earlier specs left behind.
   const now = new Date().toISOString();
   const task = (id: string, extra: Record<string, unknown> = {}) => ({
@@ -761,7 +761,7 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   });
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
-    await route.fulfill({ json: { pinned_tasks: ['tabs-focus', 'tabs-wait'], focus_tasks: ['tabs-focus'], satellite_tasks: [], backlog_tasks: [], wait_tasks: ['tabs-wait'], custom_tier_tasks: {} } });
+    await route.fulfill({ json: { pinned_tasks: ['tabs-focus', 'tabs-wait'], focus_tasks: ['tabs-focus'], satellite_tasks: [], wait_tasks: ['tabs-wait'], custom_tier_tasks: {} } });
   });
   await page.route('**/api/focus/tiers', async route => {
     if (route.request().method() !== 'GET') return route.continue();
@@ -791,18 +791,20 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   const menu = page.getByRole('menu', { name: 'Tab bar options' });
   const row = (name: string) => menu.getByRole('menuitemcheckbox', { name, exact: true });
   for (const name of ['All', 'Pinned']) await expect(row(name)).toHaveAttribute('aria-checked', 'true');
-  for (const name of ['Focus', 'Satellite', 'Backlog', 'Parked', 'Recent']) await expect(row(name)).toHaveAttribute('aria-checked', 'false');
+  for (const name of ['Focus', 'Satellite', 'Parked', 'Recent']) await expect(row(name)).toHaveAttribute('aria-checked', 'false');
+  // The retired Backlog tier has no switch: its tasks live in Parked now.
+  await expect(row('Backlog')).toHaveCount(0);
   await expect(row('Hide empty tabs')).toHaveAttribute('aria-checked', 'true');
   await expect(row('Show tab bar')).toHaveAttribute('aria-checked', 'true');
   // The switches leave the menu open, so several can be flipped in a row. The tiers put back
   // show once they hold a task; past three tabs only the active one keeps its name.
-  for (const name of ['Focus', 'Satellite', 'Backlog', 'Parked']) await row(name).click();
+  for (const name of ['Focus', 'Satellite', 'Parked']) await row(name).click();
   await expect.poll(names).toEqual(['All', 'Pinned', 'Focus', 'Parked']);
   await expect(bar).not.toHaveClass(/is-roomy/);
   await expect(tab('Pinned').locator('.todo-section-tab-label')).not.toBeVisible();
   await row('Hide empty tabs').click();
   await expect(row('Hide empty tabs')).toHaveAttribute('aria-checked', 'false');
-  await expect.poll(names).toEqual(expect.arrayContaining(['Satellite', 'Backlog']));
+  await expect.poll(names).toEqual(expect.arrayContaining(['Satellite']));
   await row('Satellite').click();
   await expect(row('Satellite')).toHaveAttribute('aria-checked', 'false');
   await expect.poll(names).not.toContain('Satellite');
@@ -864,7 +866,7 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
     await route.fulfill({ json: {
-      pinned_tasks: where ? ['locate-focus', located] : ['locate-focus'], focus_tasks: ['locate-focus'], satellite_tasks: [], backlog_tasks: [],
+      pinned_tasks: where ? ['locate-focus', located] : ['locate-focus'], focus_tasks: ['locate-focus'], satellite_tasks: [],
       wait_tasks: where === 'wait' ? [located] : [], custom_tier_tasks: { ct_locate_later: where === 'ct_locate_later' ? [located] : [] },
     } });
   });
@@ -992,7 +994,7 @@ test('Locate never moves or opens a session column, in an unlocked column or the
   });
   await page.route('**/api/focus/tasks', async route => {
     if (route.request().method() !== 'GET') return route.continue();
-    await route.fulfill({ json: { pinned_tasks: ['pw-task-store-sync'], focus_tasks: ['pw-task-store-sync'], satellite_tasks: [], backlog_tasks: [], wait_tasks: [], custom_tier_tasks: {} } });
+    await route.fulfill({ json: { pinned_tasks: ['pw-task-store-sync'], focus_tasks: ['pw-task-store-sync'], satellite_tasks: [], wait_tasks: [], custom_tier_tasks: {} } });
   });
   // The Ask Walnut slot is one of the two surfaces under test, and it starts hidden until opened.
   await openChatOnLoad(page);
@@ -1136,7 +1138,7 @@ test('a fold keeps the clicked row where it was, and a tier folds only its own p
     const ids = (tier: string) => tiers[tier].map(([id]) => id);
     await route.fulfill({ json: {
       pinned_tasks: [...ids('focus'), ...ids('satellite'), ...ids('wait')], focus_tasks: ids('focus'),
-      satellite_tasks: ids('satellite'), backlog_tasks: [], wait_tasks: ids('wait'), custom_tier_tasks: {},
+      satellite_tasks: ids('satellite'), wait_tasks: ids('wait'), custom_tier_tasks: {},
     } });
   });
   await page.route('**/api/focus/tiers', async route => {
@@ -1324,7 +1326,7 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
     const ids = (tier: string) => tiers()[tier].map(([id]) => id);
     await route.fulfill({ json: {
       pinned_tasks: [...ids('focus'), ...ids('satellite'), ...ids('wait')], focus_tasks: ids('focus'),
-      satellite_tasks: ids('satellite'), backlog_tasks: [], wait_tasks: ids('wait'), custom_tier_tasks: {},
+      satellite_tasks: ids('satellite'), wait_tasks: ids('wait'), custom_tier_tasks: {},
     } });
   });
   await page.route('**/api/focus/tiers', async route => {
@@ -1471,8 +1473,8 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
   await settle();
   expect(await offset(header('Juniper'))).toBe(26);
 
-  // A drag's start draws the empty Backlog tier above Wait. With Wait's heading stuck, the list
-  // still scrolls by exactly that much, so the rows under the pointer stay put.
+  // A drag's start redraws the pinned area (every tier becomes a drop target). With Wait's
+  // heading stuck, the rows under the pointer stay put.
   const press = async (el: ReturnType<typeof card>) => {
     const box = (await el.boundingBox())!;
     await page.mouse.move(box.x + box.width * 0.4, box.y + box.height / 2);
@@ -1485,11 +1487,11 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
   expect((await stack())[1]).toBe('wait');
   const waitBefore = await offset(tier('wait'));
   await press(card('wm3'));
-  await expect(heading(page, 'backlog')).toBeVisible();
+  await expect(page.locator('.todo-pinned-wrapper-dragging')).toHaveCount(1);
   await frames();
   expect(await offset(tier('wait'))).toBe(waitBefore);
   await cancelDrag();
-  await expect(heading(page, 'backlog')).toHaveCount(0);
+  await expect(page.locator('.todo-pinned-wrapper-dragging')).toHaveCount(0);
 
   // In a list drag, a stuck project header takes a drop only where it is now: dnd-kit moves the
   // boxes it measured at the start along with the scroll, which would slide the stuck header's

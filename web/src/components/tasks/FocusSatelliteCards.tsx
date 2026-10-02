@@ -1,5 +1,5 @@
 /**
- * Tier card components and drop zone for Focus / Satellite / Backlog / Parked / custom tiers.
+ * Tier card components and drop zone for Focus / Satellite / Parked / custom tiers.
  * Each tier gets a SortableTierCard with a kebab menu (same as regular task items).
  */
 import { useState, useRef, useCallback, useEffect, memo, type CSSProperties, type ReactNode } from 'react';
