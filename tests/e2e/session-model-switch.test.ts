@@ -588,7 +588,7 @@ describe('PATCH /api/sessions/:id mode — live switch (set_permission_mode, no 
   // set_permission_mode control_request at any live CLI. The old respawn trigger
   // (pendingMode) must never be set — a later send must NOT force --resume.
   // (The live control-loop delivery itself is proven by the real-binary probe +
-  // the gated session-mode-live suite; the mock CLI exits per turn, so here we
+  // the gated session-mode.live suite; the mock CLI exits per turn, so here we
   // assert route semantics: persistence + no pendingMode debris.)
   it('persists record.mode without setting pendingMode; cold resume carries the new mode', async () => {
     const ws = await connectWs()

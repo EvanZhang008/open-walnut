@@ -14,7 +14,7 @@
  *   Layer C: Walnut session record (REST API) — mode field
  *
  * Gated by WALNUT_LIVE_MODE_TEST=1 — skipped in CI, run manually:
- *   WALNUT_LIVE_MODE_TEST=1 npx vitest run tests/e2e/session-mode-live.test.ts --config vitest.e2e.config.ts
+ *   WALNUT_LIVE_MODE_TEST=1 npx vitest run --config vitest.live.config.ts tests/e2e/session-mode.live.test.ts
  *
  * Cost: ~$0.01 per full run (Haiku model, ~200 tokens per call).
  */
@@ -35,7 +35,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 const LIVE = process.env.WALNUT_LIVE_MODE_TEST === '1'
 const describeIf = LIVE ? describe : describe.skip
 
-// ── WS helpers (same pattern as daemon-live.test.ts) ──
+// ── WS helpers (same pattern as daemon.live.test.ts) ──
 
 interface WsEvent {
   type: string

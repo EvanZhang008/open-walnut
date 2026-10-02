@@ -17,7 +17,7 @@
  *   WALNUT_LIVE_IMAP_PORT=993 \
  *   WALNUT_LIVE_IMAP_TLS=tls \
  *   WALNUT_LIVE_IMAP_MAILBOX=INBOX \
- *   npm run test:focus tests/integrations/mail-imap-live.test.ts
+ *   npx vitest run --config vitest.live.config.ts tests/integrations/mail-imap.live.test.ts
  *
  * `PORT` defaults to 993 (143 for `starttls`), `TLS` to `tls`, `MAILBOX` to INBOX. With
  * `WALNUT_LIVE_IMAP_HOST` unset the whole file SKIPS, so it costs a normal run nothing.
@@ -30,7 +30,7 @@
  *   WALNUT_LIVE_SMTP_HOST=smtp.example.com \
  *   WALNUT_LIVE_SMTP_PORT=587 \
  *   WALNUT_LIVE_SMTP_TLS=starttls \
- *   npm run test:focus tests/integrations/mail-imap-live.test.ts
+ *   npx vitest run --config vitest.live.config.ts tests/integrations/mail-imap.live.test.ts
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { ImapPool } from '../../src/integrations/mail-imap/client.js';

@@ -53,6 +53,9 @@
  * the test that tried (2026-09-29: a test's ops reached the live server).
  * Imported here so every config built on vitest.config.ts loads it.
  */
+// Live opt-ins (WALNUT_LIVE_*, WALNUT_TEST_REAL_CLAUDE) count only in the live
+// tier, so one the shell exported never turns this run live (live-tier-only.ts).
+import './live-tier-only.js'
 import './prod-server-guard.js'
 // Sessions on a daemon the test did not start run the mock CLI, never `claude`.
 import './claude-stand-in.js'

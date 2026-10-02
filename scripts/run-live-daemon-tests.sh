@@ -67,16 +67,19 @@ cleanup_remote() {
 }
 
 FAILED=0
+# The live config: it runs the real CLI (vitest.live.config.ts lifts the mock
+# guard) and keeps WALNUT_LIVE_HOST. Every mock tier drops that variable, so
+# these files never reach the host from a normal run.
 for test_file in \
-  tests/e2e/daemon-live.test.ts \
-  tests/e2e/daemon-live-registry-integrity.test.ts \
-  tests/e2e/daemon-live-kill-claude.test.ts \
-  tests/e2e/daemon-live-kill-daemon.test.ts
+  tests/e2e/daemon.live.test.ts \
+  tests/e2e/daemon-registry-integrity.live.test.ts \
+  tests/e2e/daemon-kill-claude.live.test.ts \
+  tests/e2e/daemon-kill-daemon.live.test.ts
 do
   echo ""
   echo "▶ $test_file"
   cleanup_remote
-  if ! npx vitest run --config vitest.e2e.config.ts "$test_file"; then
+  if ! npx vitest run --config vitest.live.config.ts "$test_file"; then
     FAILED=$((FAILED + 1))
   fi
 done

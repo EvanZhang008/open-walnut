@@ -3,7 +3,7 @@
  *
  * No socket and no server here on purpose: this file grades the parts that are hard to observe
  * against a live mailbox and easy to get wrong, and the one live check runs separately in
- * mail-imap-live.test.ts.
+ * mail-imap.live.test.ts.
  *
  * The transport facts pinned below are each a real bug if forgotten:
  *

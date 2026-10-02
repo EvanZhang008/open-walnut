@@ -3,7 +3,7 @@
  *
  * What is graded here is the BASE, not a transport: a fake provider with an in-memory mailbox the
  * test controls is what lets these properties be stated exactly, and the IMAP half is pinned
- * separately (mail-imap.test.ts) plus once against a real account (mail-imap-live.test.ts).
+ * separately (mail-imap.test.ts) plus once against a real account (mail-imap.live.test.ts).
  *
  * Each block below is a rule that has cost somebody a bug report:
  *

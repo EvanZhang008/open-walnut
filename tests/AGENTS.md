@@ -55,6 +55,13 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
   `tests/helpers/daemon-twin.ts`) keeps `claude`. `prod-server-guard.ts` also refuses sockets to
   Anthropic, Bedrock, Vertex and OpenAI and fails the test: mock `sendMessage` or the client. The
   live tier opts out with `WALNUT_TEST_REAL_CLAUDE=1` (`vitest.live.config.ts`).
+- **A test that reaches something real is a `*.live.test.ts` file, and only the live tier runs
+  it.** Every mock tier drops `WALNUT_LIVE_*`, `LIVE` and `WALNUT_TEST_REAL_CLAUDE` from the
+  worker env (`tests/setup/live-tier-only.ts`), so an opt-in a shell profile exports is inert
+  there. 2026-10-02: `WALNUT_LIVE_HOST` sat in a profile, so the live daemon files ran inside
+  every local e2e run; they replaced the dev box's production daemon with the test build and
+  flapped its cloud bridge for an hour. Gate a new live test on its own `WALNUT_LIVE_<NAME>`
+  variable, name the file `*.live.test.ts`, and run it with `--config vitest.live.config.ts`.
 - **Browser tier is serialized machine-wide.** One Chromium per worker (~385 MB), `workers`
   capped at 4, and an exclusive lease on :3457 so a second `npx playwright test` queues instead
   of colliding (specs hardcode that port; `reuseExistingServer` would otherwise let two runs

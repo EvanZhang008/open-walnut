@@ -5,7 +5,7 @@
  * start REAL Claude Code sessions, and verify the full lifecycle.
  *
  * Gated by WALNUT_LIVE_HOST env var — skipped in CI, run manually:
- *   WALNUT_LIVE_HOST=clouddev npx vitest run --config vitest.e2e.config.ts tests/e2e/daemon-live.test.ts
+ *   WALNUT_LIVE_HOST=clouddev npx vitest run --config vitest.live.config.ts tests/e2e/daemon.live.test.ts
  *
  * Prerequisites:
  *   - SSH access to the host (passwordless, BatchMode=yes)

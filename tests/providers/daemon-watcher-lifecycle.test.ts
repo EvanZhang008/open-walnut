@@ -20,7 +20,7 @@
  * These tests verify the invariant at the source level (grep assertions),
  * mirroring the existing daemon-standalone-vs-source-parity.test.ts style.
  * Behavior-level tests of the invariant live in the live E2E suite
- * (tests/e2e/daemon-live-*.test.ts), where we can actually drop the
+ * (tests/e2e/daemon*.live.test.ts), where we can actually drop the
  * WebSocket and assert zero byte loss on the other side.
  */
 import { describe, it, expect } from 'vitest'

@@ -15,7 +15,9 @@ export default defineConfig({
     include: ['tests/**/*.live.test.ts'],
     // Live tests run the real CLI on purpose; every other tier is held to the
     // mock (src/core/test-claude-guard.ts).
-    env: { WALNUT_TEST_REAL_CLAUDE: '1' },
+    // Keyword-only search, as in every other tier: a server on a fresh home would
+    // otherwise download and load the ~600MB embedding model.
+    env: { WALNUT_TEST_REAL_CLAUDE: '1', WALNUT_SEARCH_V2_SEMANTIC: '0' },
     testTimeout: 300_000,
     hookTimeout: 120_000,
     pool: 'forks',
