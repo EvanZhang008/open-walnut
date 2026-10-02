@@ -2585,6 +2585,62 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
 }
 
 
+/** Plan candidates found in one stretch of transcript lines, read in file order. */
+interface PlanFold {
+  /** Content of the LAST Write to a `.claude/plans/` file. */
+  lastWrittenPlan: string | null;
+  /** An ExitPlanMode was met at all, even one whose input carried no plan. */
+  exitSeen: boolean;
+  /** `plan` input of the LAST ExitPlanMode (null when that one had none). */
+  exitPlanContent: string | null;
+}
+
+/**
+ * Fold transcript lines into their plan candidates. The whole-file read and the
+ * over-ceiling tail scan share it, so both apply one rule: the last Write to a
+ * plans/ file wins (richer), else the last ExitPlanMode's `plan` input.
+ * Throws only on a line shape the loop cannot walk; callers turn that into null.
+ */
+function foldPlanLines(lines: Iterable<string>): PlanFold {
+  const fold: PlanFold = { lastWrittenPlan: null, exitSeen: false, exitPlanContent: null };
+  for (const line of lines) {
+    if (!line) continue;
+    let parsed: RawJsonlLine;
+    try {
+      parsed = JSON.parse(line);
+    } catch (err) {
+      log.session.debug('failed to parse JSONL line in plan extraction', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+
+    if (!parsed.message?.content || typeof parsed.message.content === 'string') continue;
+
+    for (const block of parsed.message.content) {
+      if (block.type !== 'tool_use') continue;
+
+      // Capture Write to ~/.claude/plans/
+      if (block.name === 'Write'
+        && typeof block.input?.file_path === 'string'
+        && block.input.file_path.includes('.claude/plans/')
+        && typeof block.input?.content === 'string'
+        && block.input.content) {
+        fold.lastWrittenPlan = block.input.content;
+      }
+
+      // Capture ExitPlanMode
+      if (block.name === 'ExitPlanMode') {
+        fold.exitSeen = true;
+        fold.exitPlanContent = typeof block.input?.plan === 'string' && block.input.plan
+          ? block.input.plan
+          : null;
+      }
+    }
+  }
+  return fold;
+}
+
 /**
  * Extract only the plan content from a session's JSONL file.
  * Scans for Write→~/.claude/plans/ and ExitPlanMode tool_use blocks
@@ -2595,55 +2651,177 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
 export async function extractPlanContent(sessionId: string, cwd?: string, host?: string): Promise<string | null> {
   // DAEMON-UNIFORM: read through readSessionJsonlContent (daemon for both local &
   // remote) — no findLocalJsonlPath + fsp.readFile bypass.
-  const result = await readSessionJsonlContent(sessionId, cwd, host);
+  //
+  // A transcript over the reader's byte ceiling (DaemonFileReader.maxReadBytes)
+  // can never be read whole: the reader refuses it, and readSessionJsonlContent
+  // re-throws that refusal on purpose. Uncaught here it turned GET /plan into a
+  // 500 for every long session (a 63 MB transcript, 2026-10-01). The plan a user
+  // opens is the newest one, which sits near the end, so only this specific
+  // refusal degrades to a bounded scan of the tail; transport failures keep
+  // their existing contract.
+  let result: Awaited<ReturnType<typeof readSessionJsonlContent>>;
+  try {
+    result = await readSessionJsonlContent(sessionId, cwd, host);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('byte ceiling')) throw err;
+    log.session.warn('plan extraction hit the byte ceiling — scanning the transcript tail instead', {
+      sessionId, host: host ?? '__local__', error: msg,
+    });
+    return extractPlanFromTranscriptTail(sessionId, cwd, host);
+  }
   const content = result?.content;
   if (!content) return null;
 
   try {
-    const lines = content.split('\n').filter(Boolean);
-
-    let lastWrittenPlan: string | null = null;
-    let exitPlanContent: string | null = null;
-
-    for (const line of lines) {
-      let parsed: RawJsonlLine;
-      try {
-        parsed = JSON.parse(line);
-      } catch (err) {
-        log.session.debug('failed to parse JSONL line in plan extraction', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        continue;
-      }
-
-      if (!parsed.message?.content || typeof parsed.message.content === 'string') continue;
-
-      for (const block of parsed.message.content) {
-        if (block.type !== 'tool_use') continue;
-
-        // Capture Write to ~/.claude/plans/
-        if (block.name === 'Write'
-          && typeof block.input?.file_path === 'string'
-          && block.input.file_path.includes('.claude/plans/')
-          && typeof block.input?.content === 'string'
-          && block.input.content) {
-          lastWrittenPlan = block.input.content;
-        }
-
-        // Capture ExitPlanMode
-        if (block.name === 'ExitPlanMode') {
-          exitPlanContent = typeof block.input?.plan === 'string' && block.input.plan
-            ? block.input.plan
-            : null;
-        }
-      }
-    }
-
+    const fold = foldPlanLines(content.split('\n').filter(Boolean));
     // Prefer Write content (richer), fall back to ExitPlanMode.input.plan
-    return lastWrittenPlan ?? exitPlanContent;
+    return fold.lastWrittenPlan ?? fold.exitPlanContent;
   } catch (err) {
     log.session.warn('failed to extract plan content', {
       sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/** One step of the over-ceiling plan scan; clamped to the reader's own ceiling. */
+const PLAN_TAIL_WINDOW_BYTES = 4 * 1024 * 1024;
+/** Steps before giving up: 32 MiB of transcript at the default window. */
+const PLAN_TAIL_MAX_WINDOWS = 8;
+/** Wall-clock budget for steps after the first, so a slow tunnel cannot pin the route. */
+const PLAN_TAIL_SCAN_BUDGET_MS = 30_000;
+/** fs.readRange piece size. Matches DaemonFileReader's chunking: one piece is one
+ *  WS frame, and frames over a few MB get killed by some proxies. */
+const PLAN_TAIL_PIECE_BYTES = 1024 * 1024;
+
+/**
+ * Locate a transcript for range reads and stat it. Same order as
+ * readSessionJsonlContent: a path an earlier read found, then the cwd-encoded
+ * path, then fs.find. The find covers a hashed cwd (encoded form over 200 chars)
+ * AND a cwd the CLI stored under its symlink-resolved encoding; the resolved-path
+ * cache is only seeded by a successful whole read, which a file over the ceiling
+ * never completes.
+ */
+async function statTranscriptForRangeRead(
+  reader: import('./daemon-file-reader.js').DaemonFileReader,
+  sessionId: string,
+  cwd: string | undefined,
+  daemonHost: string,
+): Promise<{ path: string; size: number } | null> {
+  const direct = [
+    getResolvedRemotePath(sessionId, daemonHost),
+    cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd) : undefined,
+  ].filter((p): p is string => !!p);
+  for (const p of new Set(direct)) {
+    const st = await reader.stat(p);
+    if (st) return { path: p, size: st.size };
+  }
+  const found = await reader.findSessionPath(sessionId);
+  if (!found) return null;
+  const st = await reader.stat(found);
+  if (!st) return null;
+  setResolvedRemotePath(sessionId, daemonHost, found);
+  return { path: found, size: st.size };
+}
+
+/** Bytes [start, end) of a file, in frame-sized pieces. Null when the file is gone. */
+async function readTranscriptBytes(
+  reader: import('./daemon-file-reader.js').DaemonFileReader,
+  filePath: string,
+  start: number,
+  end: number,
+): Promise<Buffer | null> {
+  const pieces: Buffer[] = [];
+  let offset = start;
+  while (offset < end) {
+    const res = await reader.readRangeBytes(filePath, offset, Math.min(PLAN_TAIL_PIECE_BYTES, end - offset));
+    if (res === null) return null;
+    if (res.buf.length > 0) {
+      pieces.push(res.buf);
+      offset += res.buf.length;
+    }
+    if (res.eof || res.buf.length === 0) break;
+  }
+  return Buffer.concat(pieces);
+}
+
+/**
+ * The newest plan in a transcript too large to read whole, found by stepping
+ * BACKWARD through bounded windows from the end of the file.
+ *
+ * Each window is folded in file order with the same rule as the whole read, and
+ * the scan stops at the first window that yields a plan: a Write to a plans/
+ * file there is the newest Write in the file, so it wins outright; otherwise
+ * the newest ExitPlanMode decides. That ExitPlanMode is final once met, so when
+ * it carried no plan the scan keeps stepping back for a Write only and ignores
+ * older ExitPlanModes, exactly as the whole read would. The one place this can
+ * differ from the whole read: a Write further back than the window holding the
+ * newest ExitPlanMode plan is not looked for, so the newest plan is served
+ * rather than an older written one.
+ *
+ * A line can straddle a window edge, so the leading partial line of each window
+ * is carried as BYTES and prepended to the next (earlier) window; decoding only
+ * whole lines means a window edge can never split a multi-byte character. The
+ * scan is bounded by PLAN_TAIL_MAX_WINDOWS windows and a time budget, then
+ * answers null: "no plan found" beats a request that pins the route.
+ */
+async function extractPlanFromTranscriptTail(
+  sessionId: string,
+  cwd?: string,
+  host?: string,
+): Promise<string | null> {
+  const daemonHost = host ?? '__local__';
+  const startedAt = Date.now();
+  try {
+    const { DaemonFileReader } = await import('./daemon-file-reader.js');
+    const reader = new DaemonFileReader(daemonHost);
+    const target = await statTranscriptForRangeRead(reader, sessionId, cwd, daemonHost);
+    if (!target) return null;
+    const windowBytes = Math.min(PLAN_TAIL_WINDOW_BYTES, DaemonFileReader.maxReadBytes());
+    const floor = Math.max(0, target.size - windowBytes * PLAN_TAIL_MAX_WINDOWS);
+
+    let end = target.size;
+    let carry: Buffer = Buffer.alloc(0);
+    let exitSeen = false;
+    let exitPlan: string | null = null;
+    let plan: string | null = null;
+    while (end > floor && plan === null) {
+      if (end < target.size && Date.now() - startedAt > PLAN_TAIL_SCAN_BUDGET_MS) break;
+      const start = Math.max(floor, end - windowBytes);
+      const bytes = await readTranscriptBytes(reader, target.path, start, end);
+      if (bytes === null) break;
+      const buf = carry.length > 0 ? Buffer.concat([bytes, carry]) : bytes;
+      end = start;
+      let body = buf;
+      if (start > 0) {
+        // Everything before the first newline belongs to a line that began
+        // earlier in the file: carry it into the next window.
+        const nl = buf.indexOf(0x0a);
+        if (nl < 0) { carry = buf; continue; }
+        carry = Buffer.from(buf.subarray(0, nl));
+        body = buf.subarray(nl + 1);
+      }
+      const fold = foldPlanLines(body.toString('utf-8').split('\n'));
+      if (fold.lastWrittenPlan) {
+        plan = fold.lastWrittenPlan;
+      } else {
+        if (!exitSeen && fold.exitSeen) {
+          exitSeen = true;
+          exitPlan = fold.exitPlanContent;
+        }
+        if (exitPlan) plan = exitPlan;
+      }
+    }
+    log.session.info('plan extraction scanned the transcript tail', {
+      sessionId, host: daemonHost, fileSize: target.size,
+      scannedBytes: target.size - end, found: plan !== null,
+    });
+    return plan;
+  } catch (err) {
+    log.session.warn('plan extraction from the transcript tail failed', {
+      sessionId, host: daemonHost,
       error: err instanceof Error ? err.message : String(err),
     });
     return null;
