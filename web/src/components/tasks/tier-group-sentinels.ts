@@ -24,10 +24,12 @@ export const GROUP_SENTINEL_PREFIX = 'group:';
 
 /**
  * The "into this folder" drop target a folder chip carries next to its sortable id
- * (`into:<gid>:<tier>`). It is deliberately NOT in the tier's SortableContext items:
- * while it is the collision target, dnd-kit opens no slot and the list stays at rest,
- * so the one row that lights up is the one the drop goes into. The chip's sortable id
- * keeps meaning "land above this folder" (a slot opens there).
+ * (`into:<gid>:<tier>`), for a FOLDER dragged onto it (nesting) and a card from Recent.
+ * It is deliberately NOT in the tier's SortableContext items: while it is the
+ * collision target, dnd-kit opens no slot and the list stays at rest, so the one row
+ * that lights up is the one the drop goes into. A card dragged on the board never
+ * names it: its slot alone says where it lands (cardLanding), and the id only names
+ * the chip that lights for that slot.
  */
 export const INTO_FOLDER_PREFIX = 'into:';
 
@@ -46,31 +48,6 @@ export function parseIntoFolderId(id: string): { groupId: string; tier: FocusTie
   return lastColon === -1
     ? { groupId: body, tier: '' as FocusTier }
     : { groupId: body.slice(0, lastColon), tier: body.slice(lastColon + 1) as FocusTier };
-}
-
-/**
- * The "into this card's folder" target a pinned card carries (`join:<taskId>:<tier>`):
- * the middle of a card means "put the dragged card with this one" (into its folder,
- * or a new folder of the two). Like `into:`, it is not a sortable item, so while it is
- * the target the list stays at rest and the card alone lights up.
- */
-export const JOIN_CARD_PREFIX = 'join:';
-
-export function joinCardId(taskId: string, tier: FocusTier): string {
-  return `${JOIN_CARD_PREFIX}${taskId}:${tier}`;
-}
-
-export function isJoinCardId(id: string): boolean {
-  return id.startsWith(JOIN_CARD_PREFIX);
-}
-
-/** `{ taskId, tier }` out of `join:<taskId>:<tier>` (task ids and tier keys have no colon). */
-export function parseJoinCardId(id: string): { taskId: string; tier: FocusTier } {
-  const body = id.slice(JOIN_CARD_PREFIX.length);
-  const lastColon = body.lastIndexOf(':');
-  return lastColon === -1
-    ? { taskId: body, tier: '' as FocusTier }
-    : { taskId: body.slice(0, lastColon), tier: body.slice(lastColon + 1) as FocusTier };
 }
 
 /** Is `folder` the folder `groupId` names, or one of its ancestors? */
@@ -200,6 +177,12 @@ export interface SlotRules {
   parentOf?: Map<string, string>;
   /** 'project' ("By project"): a run's loose cards come before its folders. */
   mode: 'project' | 'custom';
+  /** A card pinned on the board when the drag started: its slot files it into the
+   *  folder there (cardLanding). Anything else (a card from Recent) keeps slotFits. */
+  pinnedCard?: (id: string) => boolean;
+  /** The folder a chip's row stands for: the deepest folder of a chain drawn as one
+   *  "A / B" row (compactFolderChains), the chip's own folder otherwise. */
+  leafOf?: (groupId: string) => string;
 }
 
 /**
@@ -266,6 +249,129 @@ export function staysInFolder(arr: string[], index: number, folderOf: (cardId: s
     return !isTierLabelId(id) && folderOf(id) === folder;
   }
   return false;
+}
+
+/** Where a card dropped at a slot ends up: `folder` undefined = loose. */
+export interface CardLanding {
+  fits: boolean;
+  folder?: string;
+}
+
+/**
+ * The folder a CARD dragged on the board lands in at `arr[index]`: the slot itself says
+ * it, so the gap the drag opens is exactly where the drop puts the card and every slot
+ * is a real place (no slot is refused and snapped back, which is what made a card flick
+ * between two places over a folder's rows).
+ *
+ *  - right under a folder's row: into that folder, as its first card (a row drawn for a
+ *    chain "A / B" stands for its deepest folder, `leafOf`);
+ *  - among a folder's cards: into that folder, at that place;
+ *  - after a folder's last row: still in it "By project", where nothing loose follows a
+ *    folder. A custom order puts a card back between two top-level folders there,
+ *    except one of that folder's own cards, which stays its last;
+ *  - under a loose card or a project label: loose, there;
+ *  - above a tier's first project label: nowhere (`fits` false).
+ *
+ * Divider lines are looked through, as in slotFits.
+ */
+export function cardLanding(arr: string[], index: number, rules: SlotRules): CardLanding {
+  const { folderOf, parentOf, mode } = rules;
+  const activeId = arr[index];
+  if (activeId === undefined || isGroupSentinel(activeId) || isTierLabelId(activeId)) return { fits: false };
+  if (arr.findIndex(isTierLabelId) > index) return { fits: false };
+  let prev: string | undefined;
+  for (let i = index - 1; i >= 0; i--) if (!isSeparatorId(arr[i])) { prev = arr[i]; break; }
+  let next: string | undefined;
+  for (let i = index + 1; i < arr.length; i++) if (!isSeparatorId(arr[i])) { next = arr[i]; break; }
+  if (prev === undefined || isTierLabelId(prev)) return { fits: true };
+  if (isGroupSentinel(prev)) {
+    const gid = parseGroupSentinelGid(prev);
+    return { fits: true, folder: rules.leafOf?.(gid) ?? gid };
+  }
+  const above = folderOf(prev);
+  if (!above) return { fits: true };
+  const folderOfRow = (id: string): string | undefined => isGroupSentinel(id)
+    ? parseGroupSentinelGid(id)
+    : isTierLabelId(id) ? undefined : folderOf(id);
+  const within = (id: string | undefined, folder: string) => id !== undefined && folderWithin(folderOfRow(id), folder, parentOf);
+  if (within(next, above) || mode === 'project' || folderOf(activeId) === above) return { fits: true, folder: above };
+  // The end of a folder in a custom order: loose when nothing of the folder's top-level
+  // folder follows. Inside it (a sibling subfolder next), the card cannot leave it there.
+  const top = folderAncestors(above, parentOf ?? new Map())[0] ?? above;
+  return within(next, top) ? { fits: true, folder: above } : { fits: true };
+}
+
+/**
+ * Folder chains a tier draws as ONE row, "A / B": a folder whose rows here are exactly
+ * one subfolder (no card of its own, no second subfolder) and that subfolder's, so two
+ * headings in a row never say the same thing twice. A chain keeps going while its
+ * deepest folder qualifies again. Keyed by the chain's top folder: [top, ..., leaf].
+ * Divider lines are looked through. `ids` is a tier's drawn ids, chips and labels
+ * included.
+ */
+export function folderChains(ids: string[], folderOf: (cardId: string) => string | undefined, parentOf: Map<string, string>): Map<string, string[]> {
+  const chains = new Map<string, string[]>();
+  if (parentOf.size === 0) return chains;
+  const folderOfRow = (id: string): string | undefined => isGroupSentinel(id)
+    ? parseGroupSentinelGid(id)
+    : isTierLabelId(id) || isSeparatorId(id) ? undefined : folderOf(id);
+  const nextRow = (from: number): number => {
+    for (let k = from + 1; k < ids.length; k++) if (!isSeparatorId(ids[k])) return k;
+    return -1;
+  };
+  const absorbed = new Set<string>();
+  for (let i = 0; i < ids.length; i++) {
+    if (!isGroupSentinel(ids[i])) continue;
+    const top = parseGroupSentinelGid(ids[i]);
+    if (absorbed.has(top)) continue;
+    const chain = [top];
+    let at = i;
+    for (;;) {
+      const cur = chain[chain.length - 1];
+      const k = nextRow(at);
+      if (k === -1 || !isGroupSentinel(ids[k])) break;
+      const child = parseGroupSentinelGid(ids[k]);
+      if (parentOf.get(child) !== cur) break;
+      // Every row of cur's subtree after the child's chip must be the child's.
+      let only = true;
+      for (let r = nextRow(k); r !== -1; r = nextRow(r)) {
+        const f = folderOfRow(ids[r]);
+        if (!folderWithin(f, cur, parentOf)) break;
+        if (!folderWithin(f, child, parentOf)) { only = false; break; }
+      }
+      if (!only) break;
+      chain.push(child);
+      at = k;
+    }
+    if (chain.length < 2) continue;
+    chains.set(top, chain);
+    for (const gid of chain.slice(1)) absorbed.add(gid);
+  }
+  return chains;
+}
+
+/** `ids` without the chips a chain row draws for (every folder of a chain but its
+ *  top). Same array back when there is none. */
+export function withoutChainedChips(ids: string[], chains: Map<string, string[]> | undefined): string[] {
+  if (!chains || chains.size === 0) return ids;
+  const absorbed = new Set<string>();
+  for (const chain of chains.values()) for (const gid of chain.slice(1)) absorbed.add(gid);
+  const out = ids.filter((id) => !isGroupSentinel(id) || !absorbed.has(parseGroupSentinelGid(id)));
+  return out.length === ids.length ? ids : out;
+}
+
+/** The parent map a tier DRAWS its folders with: a chained folder stands in its top's
+ *  place (same depth), so the cards under an "A / B" row indent one step, not two. */
+export function chainedParents(parentOf: Map<string, string>, chains: Map<string, string[]> | undefined): Map<string, string> {
+  if (!chains || chains.size === 0) return parentOf;
+  const out = new Map(parentOf);
+  for (const [top, chain] of chains) {
+    const above = parentOf.get(top);
+    for (const gid of chain.slice(1)) {
+      if (above === undefined) out.delete(gid); else out.set(gid, above);
+    }
+  }
+  return out;
 }
 
 /** Strip every sentinel (group chips, separator lines, project labels) — every id

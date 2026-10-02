@@ -9,8 +9,8 @@
  *
  * Every "into a folder" drop is driven with a real pointer drag (dnd-kit): in
  * the main list onto a folder member and onto an empty folder row (a loose card
- * there stays a plain move), and in a pinned tier onto a loose card (a new
- * folder of the two) and onto a folder member. Each checks the lit drop target,
+ * there stays a plain move), and in a pinned tier onto a folder member (and onto
+ * a loose card, a plain reorder there too). Each checks the lit drop target,
  * the server's record, and that no error toast appeared. A same-project drop is
  * still a plain join. Data is unique per run.
  */
@@ -40,12 +40,6 @@ async function createTask(title: string, project: string): Promise<TaskRow> {
 async function serverTask(id: string): Promise<TaskRow> {
   const res = await fetch(`${API}/api/tasks/${id}`)
   return ((await res.json()) as { task: TaskRow }).task
-}
-
-async function folderProject(groupId: string): Promise<string | undefined> {
-  const res = await fetch(`${API}/api/tasks/groups`)
-  const { groups } = (await res.json()) as { groups: Array<{ group_id: string; project?: string }> }
-  return groups.find((g) => g.group_id === groupId)?.project
 }
 
 function bucket(page: Page, project: string): Locator {
@@ -208,8 +202,9 @@ test('a same-project drop onto a folder member is still a plain join', async ({ 
 })
 
 // ── Pinned tiers ── The path behind three of the four refused drops in the
-// report: a card dropped on a LOOSE card's middle band makes a folder of the
-// two, and on a foldered card joins it.
+// report. Since 2026-10-01 a pinned card goes where its gap is: a gap inside a
+// folder files it there (moving it into the folder's project), and a drop on a
+// loose card is a plain reorder (a folder is made with Group, not by a drop).
 
 const TIER_SCOPE = '.todo-pinned-section:not(.todo-pinned-section-recent)'
 
@@ -245,7 +240,7 @@ async function clearFocus(): Promise<void> {
   await Promise.all([...ids].map((id) => fetch(`${API}/api/focus/tasks/${id}`, { method: 'DELETE' })))
 }
 
-test('pinned tier: an Inbox card makes a folder with another project’s card, or joins its folder', async ({ page }) => {
+test('pinned tier: an Inbox card joins another project’s folder at its gap; on a loose card it only reorders', async ({ page }) => {
   test.setTimeout(90_000)
   await clearFocus()
   const s = await seed()
@@ -256,26 +251,25 @@ test('pinned tier: an Inbox card makes a folder with another project’s card, o
   await selectSection(page, 'Focus')
   await expect(tierCard(page, first.id)).toBeVisible({ timeout: 15_000 })
 
-  // Onto a loose card of another project: a new folder of the two, in that project.
-  expect(await dragOnto(page, tierCard(page, first.id), tierCard(page, s.loose.id))).toEqual([s.loose.id])
-  await expect.poll(async () => (await serverTask(first.id)).group_id ?? '', { timeout: 10_000 }).not.toBe('')
-  const made = (await serverTask(first.id)).group_id!
-  expect(await serverTask(first.id)).toMatchObject({ project: s.project })
-  expect((await serverTask(s.loose.id)).group_id).toBe(made)
-  expect(await folderProject(made)).toBe(s.project)
-  // The tier redraws the new folder before the next drag measures anything.
-  await expect(tierCard(page, first.id)).toHaveAttribute('data-group-id', made, { timeout: 10_000 })
-  await expect(tierCard(page, s.loose.id)).toHaveAttribute('data-group-id', made)
-  await expectNoErrorToast(page)
-  await page.locator(TIER_SCOPE).first().screenshot({ path: `${SHOTS}/${test.info().project.name}-4-pinned-new-folder.png` })
-
-  // Onto a foldered card of another project: joins that folder.
-  expect(await dragOnto(page, tierCard(page, second.id), tierCard(page, s.lead.id))).toEqual([s.lead.id])
-  await expect.poll(async () => serverTask(second.id), { timeout: 10_000 })
+  // Onto the folder's card from below: the gap opens at the top of the folder, the
+  // folder's row lights, and the card moves into that project and folder, first.
+  expect(await dragOnto(page, tierCard(page, first.id), tierCard(page, s.lead.id))).toEqual([s.folder])
+  await expect.poll(async () => serverTask(first.id), { timeout: 10_000 })
     .toMatchObject({ project: s.project, group_id: s.folder })
-  await expect(tierCard(page, second.id)).toHaveAttribute('data-group-id', s.folder, { timeout: 10_000 })
+  await expect(tierCard(page, first.id)).toHaveAttribute('data-group-id', s.folder, { timeout: 10_000 })
+  const drawn = () => page.locator(`${TIER_SCOPE} [data-task-id]`).evaluateAll((els, ids) =>
+    els.map((e) => e.getAttribute('data-task-id')).filter((id) => ids.includes(id!)), [first.id, s.lead.id])
+  await expect.poll(drawn, { timeout: 10_000 }).toEqual([first.id, s.lead.id])
   await expectNoErrorToast(page)
-  await page.locator(TIER_SCOPE).first().screenshot({ path: `${SHOTS}/${test.info().project.name}-5-pinned-joined-folder.png` })
+  await page.locator(TIER_SCOPE).first().screenshot({ path: `${SHOTS}/${test.info().project.name}-4-pinned-joined-folder.png` })
+
+  // Onto a loose card of another project: nothing lights and no folder is made.
+  expect(await dragOnto(page, tierCard(page, second.id), tierCard(page, s.loose.id))).toEqual([])
+  await page.waitForTimeout(1000)
+  expect((await serverTask(second.id)).group_id).toBeUndefined()
+  expect((await serverTask(s.loose.id)).group_id).toBeUndefined()
+  await expectNoErrorToast(page)
+  await page.locator(TIER_SCOPE).first().screenshot({ path: `${SHOTS}/${test.info().project.name}-5-pinned-loose-reorder.png` })
 
   await Promise.all([s.loose.id, s.lead.id, first.id, second.id].map((id) => fetch(`${API}/api/focus/tasks/${id}`, { method: 'DELETE' })))
 })

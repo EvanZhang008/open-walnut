@@ -2,7 +2,7 @@
  * Tier card components and drop zone for Focus / Satellite / Parked / custom tiers.
  * Each tier gets a SortableTierCard with a kebab menu (same as regular task items).
  */
-import { useState, useRef, useCallback, useEffect, memo, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useState, useRef, useCallback, useEffect, memo, type CSSProperties, type ReactNode } from 'react';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { resolveTaskSessionId, taskNeedsAction } from '@/utils/session-status';
 import type { Task } from '@open-walnut/core';
@@ -10,7 +10,7 @@ import type { FocusTier } from '@/api/focus';
 import { useSortable } from '@dnd-kit/sortable';
 import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { groupSortableId, intoFolderId, joinCardId } from './tier-group-sentinels';
+import { groupSortableId, intoFolderId } from './tier-group-sentinels';
 import { useFolderContextMenu } from './FolderContextMenu';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
@@ -48,10 +48,17 @@ export { groupSortableId } from './tier-group-sentinels';
  *    node measures as 0x0 at the viewport origin, which is a drop target at (0,0)
  *    rather than a useful rect. See the `disabled` argument below.
  */
-export function GroupChip({ groupId, tier, label, project, showProjectPrefix, count, depth = 0, collapsed, projectCollapsed, inert, isDropTarget, onRename, onDissolve, onHide, onToggleCollapse, onMoveToProject }: {
+export function GroupChip({ groupId, tier, label, path, leafId, project, showProjectPrefix, count, depth = 0, collapsed, projectCollapsed, inert, isDropTarget, onRename, onDissolve, onHide, onToggleCollapse, onMoveToProject }: {
+  /** The folder this row drags as (its sortable id): the top folder of a chain row. */
   groupId: string;
   tier: FocusTier;
+  /** The name drawn in full: the folder's own, or a chain row's deepest folder's. */
   label: string;
+  /** A chain drawn as ONE row ("A / B", folderChains): the folders above `leafId`,
+   *  top first, drawn as a muted path that gives way first when the row is narrow. */
+  path?: Array<{ groupId: string; label: string }>;
+  /** A chain row's deepest folder: what a drop goes into and what "···" acts on. */
+  leafId?: string;
   /** The folder's owning project ('' = Inbox, undefined = not known yet). ONE
    *  prop, two uses: the context menu needs it in every mode so "Move to
    *  project…" can tick (and no-op on) the current one, and `showProjectPrefix`
@@ -102,12 +109,14 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
     // only stops the measurement.
     disabled: { draggable: false, droppable: !!projectCollapsed },
   });
-  // The SAME node is also the "into this folder" target. Two droppables on one
-  // element: the sortable one means "a slot above this folder", this one means "in
-  // it", and pinnedCollision picks between them from where the pointer sits.
+  // The SAME node is also the "into this folder" target (a chain row's deepest
+  // folder). Two droppables on one element: the sortable one means "a slot above this
+  // folder", this one means "in it", and pinnedCollision picks between them from
+  // where the pointer sits, reading the row's rect off its sortable id (`rowId`).
+  const target = leafId ?? groupId;
   const { setNodeRef: setIntoRef } = useDroppable({
-    id: intoFolderId(groupId, tier),
-    data: { type: 'folder-into', groupId, tier },
+    id: intoFolderId(target, tier),
+    data: { type: 'folder-into', groupId: target, tier, rowId: groupSortableId(groupId, tier) },
     disabled: !!projectCollapsed,
   });
   const setNodeRef = useCallback((node: HTMLElement | null) => { setSortableRef(node); setIntoRef(node); }, [setSortableRef, setIntoRef]);
@@ -154,7 +163,7 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
       {...attributes}
       {...listeners}
       onClick={toggleCollapse}
-      onContextMenu={(e) => folderMenu.open(e, { groupId, label, project, collapsed })}
+      onContextMenu={(e) => folderMenu.open(e, { groupId: target, label, project, collapsed })}
     >
       {onToggleCollapse && (
         <button
@@ -177,7 +186,25 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
           {project || 'Inbox'}&nbsp;/
         </span>
       )}
-      <span className="task-group-chip-label">{label}</span>
+      {path && path.length > 0 ? (
+        <span className="task-group-chip-label task-group-chip-path" title={[...path.map((p) => p.label), label].join(' / ')}>
+          {path.map((p) => (
+            <Fragment key={p.groupId}>
+              {/* Each folder of the path keeps its own menu (right-click its name). */}
+              <span
+                className="task-group-chip-crumb"
+                onContextMenu={(e) => { e.stopPropagation(); folderMenu.open(e, { groupId: p.groupId, label: p.label, project, collapsed }); }}
+              >
+                {p.label}
+              </span>
+              <span className="task-group-chip-crumb-sep" aria-hidden="true">/</span>
+            </Fragment>
+          ))}
+          <span className="task-group-chip-leaf">{label}</span>
+        </span>
+      ) : (
+        <span className="task-group-chip-label">{label}</span>
+      )}
       {count !== undefined && count > 0 && (
         <span className="task-group-chip-count" aria-hidden="true">{count}</span>
       )}
@@ -188,7 +215,7 @@ export function GroupChip({ groupId, tier, label, project, showProjectPrefix, co
           aria-haspopup="menu"
           aria-label={`${label} folder menu`}
           title="Folder actions"
-          onClick={(e) => folderMenu.openFrom(e, { groupId, label, project, collapsed })}
+          onClick={(e) => folderMenu.openFrom(e, { groupId: target, label, project, collapsed })}
         >
           ···
         </button>
@@ -284,17 +311,18 @@ interface SortableTierCardProps {
   onSelectToggle?: (taskId: string) => void;
   /** Enter select mode with this task pre-picked (kebab "Select…"). */
   onStartSelect?: (taskId: string) => void;
-  /** True when a drag is hovering this card and dropping would group the two. */
-  isGroupTarget?: boolean;
+  /** Set while this card is dragged: the depth of the folder its gap files it into
+   *  (null = loose), so the gap is indented where the card will land. */
+  landingDepth?: number | null;
 }
 
-export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, onMoveUp, onMoveDown, groupInfo, folderCollapsed, projectCollapsed, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
+export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, onMoveUp, onMoveDown, groupInfo, folderCollapsed, projectCollapsed, selectMode, isSelected, onSelectToggle, onStartSelect, landingDepth }: SortableTierCardProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   const {
     attributes,
     listeners,
-    setNodeRef: setSortableRef,
+    setNodeRef,
     transform,
     transition,
     isDragging,
@@ -313,14 +341,6 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       droppable: !!(folderCollapsed || projectCollapsed),
     },
   });
-  // The same node is also "put it with this card" (joinCardId): the card's middle,
-  // where the pinned collision names it instead of the sortable id.
-  const { setNodeRef: setJoinRef } = useDroppable({
-    id: joinCardId(task.id, tier),
-    data: { type: 'card-join', taskId: task.id, tier },
-    disabled: !!(folderCollapsed || projectCollapsed),
-  });
-  const setNodeRef = useCallback((node: HTMLElement | null) => { setSortableRef(node); setJoinRef(node); }, [setSortableRef, setJoinRef]);
 
   // Editable title state
   const [isEditing, setIsEditing] = useState(false);
@@ -394,11 +414,13 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
     setIsEditing(true);
   }, [onUpdateTitle]);
 
+  const landing = landingDepth !== undefined;
+  const depth = landing ? landingDepth : groupInfo?.depth;
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : undefined,
-    ...(groupInfo?.depth ? { '--folder-depth': groupInfo.depth } as CSSProperties : {}),
+    ...(depth ? { '--folder-depth': depth } as CSSProperties : {}),
   };
 
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
@@ -411,9 +433,11 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
   const unread = !isDone && Boolean(task.unread);
   const cardClass = tier === 'focus' ? 'todo-focus-card' : 'todo-pinned-card';
   // Virtual-group cluster classes — reuse the main list's rail/rounding styling.
-  const groupClass = groupInfo
-    ? ` task-grouped${groupInfo.isLead ? ' task-group-lead' : ''}${groupInfo.isLast ? ' task-group-last' : ''}${folderCollapsed ? ' task-folder-collapsed' : ''}`
-    : '';
+  const groupClass = landing
+    ? (landingDepth === null ? '' : ' task-grouped')
+    : groupInfo
+      ? ` task-grouped${groupInfo.isLead ? ' task-group-lead' : ''}${groupInfo.isLast ? ' task-group-last' : ''}${folderCollapsed ? ' task-folder-collapsed' : ''}`
+      : '';
 
   // NOTE: the group header chip is rendered STANDALONE by TodoPanel's tier loop (keyed
   // `group:<gid>:<tier>`), not here — it must outlive its lead member card so the
@@ -424,7 +448,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       style={style}
       data-task-id={task.id}
       data-group-id={groupInfo?.groupId}
-      className={`${cardClass}${groupClass}${projectCollapsed ? ' tier-project-collapsed' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
+      className={`${cardClass}${groupClass}${projectCollapsed ? ' tier-project-collapsed' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         // Select mode: a click anywhere toggles selection (no navigation/edit).

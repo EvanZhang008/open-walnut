@@ -172,13 +172,13 @@ async function dragCardTo(page: Page, taskId: string, x: number, y: number): Pro
   await page.waitForTimeout(1200)
 }
 
-/** Drag a card ONTO a target row and release on its middle band ('middle' =
- *  join intent) or its top edge ('top' = insert-between intent). The join
- *  decision lives in dnd-kit's STATIC collision space (rects measured at drag
- *  start — the sortable rows sliding aside mid-drag are a transform-only
- *  preview), so aim at the target's rect BEFORE the drag displaces anything
- *  and never chase the live position: chasing a row that yields to the drag
- *  oscillates forever (probed 2026-08-25). */
+/** Drag a card ONTO a target row and release on its middle or its top edge (on a
+ *  folder row, the top band is the gap above the folder). The slot is decided in
+ *  dnd-kit's STATIC collision space (rects measured at drag start — the sortable
+ *  rows sliding aside mid-drag are a transform-only preview), so aim at the
+ *  target's rect BEFORE the drag displaces anything and never chase the live
+ *  position: chasing a row that yields to the drag oscillates forever (probed
+ *  2026-08-25). */
 async function dragCardOnto(page: Page, dragId: string, target: Locator, at: 'middle' | 'top'): Promise<void> {
   const card = page.locator(`${TIER_SCOPE} [data-task-id="${dragId}"]`).first()
   await card.hover()
@@ -580,55 +580,55 @@ test('naming a line turns it into a heading, and the name survives a reload', as
   await expect(page.locator(`${TIER_SCOPE} [data-separator-id="sep_name"] .tier-separator-label`)).toHaveText('Do it now', { timeout: 20_000 })
 })
 
-test('a drop BESIDE a group never falls into it — joining needs the pointer on a card\'s middle', async ({ page }) => {
+test('a drop BESIDE a group never falls into it: above its row, or right after its last card', async ({ page }) => {
   // Round 3 (2026-08-25): "我明明是拉到外面的,然后他还是并到了这个Group里" — the
   // join decision came from closestCenter (the NEAREST card), so releasing next
-  // to a cluster joined it. Joining now requires the pointer to sit in the
-  // target card's MIDDLE band; the edge band is an insert-between gesture.
+  // to a cluster joined it. Since 2026-10-01 the gap the card opens is where it lands:
+  // a gap between two of a folder's cards is inside it, the folder row's top band is
+  // the gap above the folder, and in custom order the gap right after its last card is
+  // outside it (in a project view a loose card cannot sit between folders).
   test.setTimeout(150_000)
   const proj = `SepEdge${Date.now().toString(36)}`
   const m1 = await createTask('edge member one', proj)
   const m2 = await createTask('edge member two', proj)
+  const other = await createTask('edge after the group', proj)
   const loose = await createTask('edge stays loose', proj)
   const gid = await groupTasks([m1.id, m2.id], 'Edge Group')
-  for (const t of [m1, m2, loose]) await pinToFocus(t.id)
-  await reorderOwn([m1.id, m2.id, loose.id])
+  for (const t of [m1, m2, other, loose]) await pinToFocus(t.id)
+  await reorderOwn([m1.id, m2.id, other.id, loose.id])
   await presetTierViewModes(page, { focus: 'custom' })
   await putSeparators([])
 
   await openFocus(page)
-  const m1Card = page.locator(`${TIER_SCOPE} [data-task-id="${m1.id}"]`).first()
-  await expect(m1Card).toBeVisible({ timeout: 20_000 })
-  // Release on the group's TOP EDGE (first member's top 3px): between-rows
-  // intent, one pixel row away from what used to be a silent join.
-  await dragCardOnto(page, loose.id, m1Card, 'top')
+  const chip = page.locator(`${TIER_SCOPE} .task-group-chip[data-group-id="${gid}"]`).first()
+  const otherCard = page.locator(`${TIER_SCOPE} [data-task-id="${other.id}"]`).first()
+  await expect(chip).toBeVisible({ timeout: 20_000 })
+  const order = async () => (await tierRows(page)).map((r) => r.task).filter((id) => [m1.id, m2.id, other.id, loose.id].includes(id!))
+  const groupOf = async (id: string) => ((await fetch(`${API}/api/tasks/${id}`).then((r) => r.json())).task.group_id ?? null)
 
-  // The reorder lands (the card moves above the group)…
-  await expect
-    .poll(async () => {
-      const rows = await tierRows(page)
-      const li = rows.findIndex((r) => r.task === loose.id)
-      const g1 = rows.findIndex((r) => r.task === m1.id)
-      return li !== -1 && g1 !== -1 && li < g1
-    }, { timeout: 20_000, message: 'the edge drop must reorder the card above the group' })
-    .toBe(true)
-  // …and NOTHING joined: the loose card has no group, the group kept exactly two.
-  const looseNow = await fetch(`${API}/api/tasks/${loose.id}`).then((r) => r.json())
-  expect(looseNow.task.group_id ?? null, 'a drop beside the group must not join it').toBeNull()
-  for (const id of [m1.id, m2.id]) {
-    const t = await fetch(`${API}/api/tasks/${id}`).then((r) => r.json())
-    expect(t.task.group_id).toBe(gid)
-  }
+  // Right after the folder's last card: the gap above `other`.
+  await dragCardOnto(page, loose.id, otherCard, 'top')
+  await expect.poll(order, { timeout: 20_000, message: 'the card lands right after the folder' }).toEqual([m1.id, m2.id, loose.id, other.id])
+  expect(await groupOf(loose.id), 'the gap after the folder\'s last card is outside it').toBeNull()
+
+  // The folder row's top band: the gap above the folder.
+  await dragCardOnto(page, loose.id, chip, 'top')
+  await expect.poll(order, { timeout: 20_000, message: 'the top band puts the card above the folder' }).toEqual([loose.id, m1.id, m2.id, other.id])
+  expect(await groupOf(loose.id), 'a drop above the folder must not join it').toBeNull()
+  for (const id of [m1.id, m2.id]) expect(await groupOf(id)).toBe(gid)
   await page.screenshot({ path: `${SHOT_DIR}/11-edge-drop-stays-out.png` })
 })
 
-test('the blue join frame follows the pointer\'s middle-band test — no frame, no join', async ({ page }) => {
+test('the folder row lights while the gap is inside it, goes dark outside it, and no card is framed', async ({ page }) => {
+  // 2026-10-01: "它应该去显示它会被加到哪里，而不是只是高亮这个下面的task". A card
+  // under the pointer no longer lights (and never stops the list): the gap shows where
+  // the card goes, and the folder row it goes into lights.
   test.setTimeout(120_000)
   const proj = `SepFrame${Date.now().toString(36)}`
   const m1 = await createTask('frame member one', proj)
   const m2 = await createTask('frame member two', proj)
   const loose = await createTask('frame prober', proj)
-  await groupTasks([m1.id, m2.id], 'Frame Group')
+  const gid = await groupTasks([m1.id, m2.id], 'Frame Group')
   for (const t of [m1, m2, loose]) await pinToFocus(t.id)
   await reorderOwn([m1.id, m2.id, loose.id])
   await presetTierViewModes(page, { focus: 'custom' })
@@ -636,34 +636,38 @@ test('the blue join frame follows the pointer\'s middle-band test — no frame, 
 
   await openFocus(page)
   const looseCard = page.locator(`${TIER_SCOPE} [data-task-id="${loose.id}"]`).first()
-  const target = page.locator(`${TIER_SCOPE} [data-task-id="${m1.id}"]`).first()
+  const target = page.locator(`${TIER_SCOPE} [data-task-id="${m2.id}"]`).first()
   await expect(looseCard).toBeVisible({ timeout: 20_000 })
-  const tBox = await target.boundingBox()
-  expect(tBox).not.toBeNull()
+  const tBox = (await target.boundingBox())!
+  const lBox = (await looseCard.boundingBox())!
 
   await looseCard.hover()
   const grip = looseCard.locator('.todo-pinned-title')
-  const gBox = await grip.boundingBox()
-  expect(gBox).not.toBeNull()
-  await page.mouse.move(gBox!.x + gBox!.width / 2, gBox!.y + gBox!.height / 2)
+  const gBox = (await grip.boundingBox())!
+  await page.mouse.move(gBox.x + gBox.width / 2, gBox.y + gBox.height / 2)
   await page.mouse.down()
-  await page.mouse.move(gBox!.x + gBox!.width / 2, gBox!.y + gBox!.height / 2 + 12)
+  await page.mouse.move(gBox.x + gBox.width / 2, gBox.y + gBox.height / 2 - 12)
 
-  const lit = page.locator(`${TIER_SCOPE} [data-task-id="${m1.id}"].todo-panel-item-group-target`)
-  // Middle of the member's AT-DRAG-START rect → the join frame lights. The
-  // test lives in dnd-kit's static collision space (the rows sliding aside are
-  // a transform-only preview), so aim at the pre-drag rect and stay there.
-  await page.mouse.move(tBox!.x + tBox!.width / 2, tBox!.y + tBox!.height / 2, { steps: 10 })
-  await expect(lit, 'pointer on the card middle must announce the join').toHaveCount(1, { timeout: 5_000 })
-  await page.screenshot({ path: `${SHOT_DIR}/12-join-frame-middle.png` })
-  // Slide to its top edge → the frame goes out: this release would reorder.
-  await page.mouse.move(tBox!.x + tBox!.width / 2, tBox!.y + 2, { steps: 6 })
-  await expect(lit, 'pointer on the edge band must NOT announce a join').toHaveCount(0, { timeout: 5_000 })
-  // Release here and verify the promise held.
+  const litRow = page.locator(`${TIER_SCOPE} .task-group-chip-drop[data-group-id="${gid}"]`)
+  const framedCards = page.locator(`${TIER_SCOPE} .todo-panel-item-group-target`)
+  // On m2 from below: the gap opens between m1 and m2, inside the folder.
+  await page.mouse.move(tBox.x + tBox.width / 2, tBox.y + tBox.height / 2, { steps: 10 })
+  await expect(litRow, 'a gap inside the folder lights its row').toHaveCount(1, { timeout: 5_000 })
+  await expect(framedCards).toHaveCount(0)
+  await page.screenshot({ path: `${SHOT_DIR}/12-folder-row-lit-for-gap.png` })
+  // Back to its own place, right after the folder's last card: outside the folder.
+  await page.mouse.move(lBox.x + lBox.width / 2, lBox.y + lBox.height / 2, { steps: 6 })
+  await expect(litRow, 'a gap outside the folder leaves its row dark').toHaveCount(0, { timeout: 5_000 })
   await page.mouse.up()
   await page.waitForTimeout(1200)
   const after = await fetch(`${API}/api/tasks/${loose.id}`).then((r) => r.json())
-  expect(after.task.group_id ?? null, 'the unlit frame promised no join').toBeNull()
+  expect(after.task.group_id ?? null, 'the dark row promised no join').toBeNull()
+
+  // And the lit gap keeps its promise: the card lands there, between m1 and m2.
+  await dragCardOnto(page, loose.id, target, 'middle')
+  await expect.poll(async () => (await fetch(`${API}/api/tasks/${loose.id}`).then((r) => r.json())).task.group_id, { timeout: 20_000 }).toBe(gid)
+  await expect.poll(async () => (await tierRows(page)).map((r) => r.task).filter((id) => [m1.id, m2.id, loose.id].includes(id!)), { timeout: 20_000 })
+    .toEqual([m1.id, loose.id, m2.id])
 })
 
 test('a pinned card can be dragged back out of the pinned area', async ({ page }) => {

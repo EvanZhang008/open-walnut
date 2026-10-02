@@ -11712,6 +11712,32 @@ body.walnut-dragging {
   text-overflow: ellipsis;
   max-width: 320px;
 }
+/* A chain drawn as one row, "A / B": the path gives way first (each name down to a
+   few letters and an ellipsis), the deepest folder's name last. */
+.task-group-chip-path {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  max-width: none;
+}
+.task-group-chip-crumb {
+  flex: 0 1000 auto;
+  min-width: 2.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.75;
+}
+.task-group-chip-crumb-sep {
+  flex: none;
+  padding: 0 4px;
+  opacity: 0.55;
+}
+.task-group-chip-leaf {
+  flex: 0 1 auto;
+  min-width: 3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* Hidden-groups strip — compact restore chips shown at the bottom of the Pinned
    section for groups collapsed out of the tiers (the in-Focus way to unhide). */
 .todo-pinned-hidden-strip {
@@ -14919,24 +14945,16 @@ body.walnut-dragging {
   50%      { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 2px var(--accent-subtle); }
 }
 
-/* ===== Drop-intent: GROUP together (left zone / whole pinned card) =====
- * While dragging a task, when the cursor is over the LEFT zone of another task card
- * (or anywhere on a pinned-tier card, which has no subtask concept), the target
- * lights up to signal "drop = group these together". Visually distinct from the
- * nest ring: a thick LEFT accent bar + faint tint reading as "fold into a box",
- * echoing the group cluster's left outline. Uses inset box-shadow (no layout shift)
- * and an explicit accent fill so it's unmistakable against the nest ring. Applies to
- * both the main list (.todo-panel-item) and pinned-tier cards. */
+/* ===== Drop-intent: GROUP together (left zone of a main-list row) =====
+ * While dragging a task, when the cursor is over the LEFT zone of another task row,
+ * the target lights up to signal "drop = group these together". Visually distinct
+ * from the nest ring: a thick LEFT accent bar + faint tint reading as "fold into a
+ * box", echoing the group cluster's left outline. Uses inset box-shadow (no layout
+ * shift) and an explicit accent fill so it's unmistakable against the nest ring.
+ * Pinned-tier cards never light: their gap shows where they land, and the folder
+ * row it is in lights instead (.task-group-chip-drop). */
 .todo-panel-item-group-target .todo-row-pill {
   box-shadow: inset 3px 0 0 0 var(--accent), inset 0 0 0 1.5px var(--group-outline, rgba(0,122,255,0.32));
-  animation: todo-group-pulse 1.1s ease-in-out infinite;
-}
-/* Tier cards reuse the group-target class but have no .todo-row-pill layer —
-   they keep the ring on the card itself. */
-.todo-focus-card.todo-panel-item-group-target,
-.todo-pinned-card.todo-panel-item-group-target {
-  box-shadow: inset 3px 0 0 0 var(--accent), inset 0 0 0 1.5px var(--group-outline, rgba(0,122,255,0.32));
-  border-radius: 6px;
   animation: todo-group-pulse 1.1s ease-in-out infinite;
 }
 @keyframes todo-group-pulse {

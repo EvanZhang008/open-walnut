@@ -190,3 +190,48 @@ describe('tasksShallowEqual and task.wait_until', () => {
     expect(tasksShallowEqual(cleared as Task, a)).toBe(false);
   });
 });
+
+describe('overlayLaterEdits (a refetch that left before a drop)', () => {
+  it('lays the fields written after the request left over its answer, and only those', async () => {
+    const { overlayLaterEdits } = await import('@/hooks/task-list-merge');
+    const moved = task({ id: 'moved', group_id: 'g-old', pin_order: 7 });
+    const other = task({ id: 'other', pin_order: 3 });
+    const edits = new Map([['moved', { at: 200, fields: { group_id: 'g-new', pin_order: 1 } }]]);
+    const out = overlayLaterEdits([moved, other], edits, 100);
+    expect(out.find((t) => t.id === 'moved')).toMatchObject({ group_id: 'g-new', pin_order: 1, title: moved.title });
+    expect(out.find((t) => t.id === 'other')).toBe(other);
+    // Still newer than this answer: the next answer that left before it gets it too.
+    expect(edits.has('moved')).toBe(true);
+  });
+
+  it('adopts an answer that left after the edit as is, and forgets the edit', async () => {
+    const { overlayLaterEdits } = await import('@/hooks/task-list-merge');
+    const fetched = [task({ id: 'moved', group_id: 'g-server' })];
+    const edits = new Map([['moved', { at: 100, fields: { group_id: 'g-local' } }]]);
+    expect(overlayLaterEdits(fetched, edits, 150)).toBe(fetched);
+    expect(edits.size).toBe(0);
+  });
+
+  it('a cleared field stays cleared (an ungroup written after the request left)', async () => {
+    const { overlayLaterEdits } = await import('@/hooks/task-list-merge');
+    const edits = new Map([['m', { at: 200, fields: { group_id: undefined } }]]);
+    const [out] = overlayLaterEdits([task({ id: 'm', group_id: 'g' })], edits, 100);
+    expect(out.group_id).toBeUndefined();
+  });
+});
+
+describe('overlayLaterEdits and an edit still waiting for its write', () => {
+  it('keeps laying a pending edit over answers that left after it, until it is answered', async () => {
+    const { overlayLaterEdits } = await import('@/hooks/task-list-merge');
+    const edits = new Map([['m', { at: 100, fields: { group_id: 'g-new' }, pending: 1 }]]);
+    // Left after the edit but read before its write reached the server.
+    const [out] = overlayLaterEdits([task({ id: 'm', group_id: 'g-old' })], edits, 150);
+    expect(out.group_id).toBe('g-new');
+    expect(edits.has('m')).toBe(true);
+    // Answered: the next answer that left after it is taken as is.
+    edits.get('m')!.pending = 0;
+    const fetched = [task({ id: 'm', group_id: 'g-server' })];
+    expect(overlayLaterEdits(fetched, edits, 200)).toBe(fetched);
+    expect(edits.size).toBe(0);
+  });
+});

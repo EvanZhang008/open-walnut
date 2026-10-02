@@ -155,9 +155,8 @@ import { TierProjectLabelRow } from './TierProjectLabel';
 import {
   groupSortableId, parseGroupSentinelGid, isGroupSentinel, taskIdsOnly, withGroupSentinels,
   pruneOrphanSentinels, intoFolderId, isIntoFolderId, parseIntoFolderId, folderWithin,
-  isJoinCardId, parseJoinCardId,
   isTierLabelId, tierLabelId, tierLabelProject, withProjectLabels, runProjectOf, pruneTierLabels,
-  slotFits, staysInFolder, type SlotRules,
+  slotFits, cardLanding, folderChains, withoutChainedChips, chainedParents, type SlotRules,
 } from './tier-group-sentinels';
 import { inferTierDropProject, resolveMoveMigration, sourceDisplayName } from './task-move-project';
 import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
@@ -226,8 +225,8 @@ interface TodoPanelProps {
   onOpenTriageForTask?: (taskId: string) => void;
   onPinTask?: (taskId: string) => void;
   onUnpinTask?: (taskId: string) => void;
-  onReorderPinned?: (newIds: string[]) => void;
-  onSetTier?: (taskId: string, tier: FocusTier, newPinnedOrder?: string[]) => void;
+  onReorderPinned?: (newIds: string[]) => void | Promise<void>;
+  onSetTier?: (taskId: string, tier: FocusTier, newPinnedOrder?: string[]) => void | Promise<void>;
   onSetDate?: (taskId: string, date: string | null) => void;
   onSetStartDate?: (taskId: string, date: string | null) => void;
   pinnedTaskIds?: Set<string>;
@@ -277,7 +276,7 @@ interface TodoPanelProps {
   /** Create a virtual group from ≥2 task ids (label AI-generated if omitted). */
   onGroupTasks?: (taskIds: string[], label?: string, opts?: { moveInto?: string }) => void;
   /** Add task(s) to an existing group — used when dragging a task onto a grouped one. */
-  onAddToGroup?: (groupId: string, taskIds: string[], opts?: { moveInto?: string }) => void;
+  onAddToGroup?: (groupId: string, taskIds: string[], opts?: { moveInto?: string; after?: PromiseLike<unknown> }) => void;
   /** Remove a single task from its virtual group. */
   onUngroupTask?: (taskId: string) => void;
   /** Remove several tasks from their group(s) in one call (used to dissolve a whole cluster). */
@@ -375,23 +374,38 @@ const sortableSlot = (data: { current?: unknown } | undefined): SortableSlot | u
   (data?.current as { sortable?: SortableSlot } | undefined)?.sortable;
 
 /**
- * Would naming `over` leave the dragged row where the tier keeps it? Same list: dnd-kit's
- * slot, the row takes `over`'s index. Another tier: handlePinnedDragOver's insert, right
- * above `over` (above its folder chips when it leads a folder). Anything that is not a
- * sortable tier row (a drop zone, Recent) is not judged here.
+ * The frame dnd-kit draws when `over` is named: `over`'s list with the dragged row at its
+ * slot. Same list: the row takes `over`'s index. Another tier: handlePinnedDragOver's
+ * insert, right above `over` (a folder chip or line goes above the chips a folder's first
+ * row sits under; a card goes exactly there, which may be inside the folder). null for
+ * anything that is not a tier row (a drop zone, Recent).
  */
-function overFits(activeId: string, over: DroppableContainer, rulesFor: SlotRulesFor): boolean {
+function slotFrame(activeId: string, over: Pick<DroppableContainer, 'id' | 'data'>, rulesFor: SlotRulesFor): { arr: string[]; at: number; tier: string; rules: SlotRules } | null {
   const target = sortableSlot(over.data);
   const rules = target ? rulesFor(target.containerId) : null;
-  if (!target || !rules) return true;
+  if (!target || !rules) return null;
   const from = target.items.indexOf(activeId);
-  if (from !== -1) return slotFits(arrayMove(target.items, from, target.index), target.index, rules);
+  if (from !== -1) return { arr: arrayMove(target.items, from, target.index), at: target.index, tier: target.containerId, rules };
   const arr = [...target.items];
   let at = arr.indexOf(String(over.id));
-  if (at === -1) return true;
-  while (at > 0 && isGroupSentinel(arr[at - 1])) at--;
+  if (at === -1) return null;
+  if (!rules.pinnedCard?.(activeId)) while (at > 0 && isGroupSentinel(arr[at - 1])) at--;
   arr.splice(at, 0, activeId);
-  return slotFits(arr, at, rules);
+  return { arr, at, tier: target.containerId, rules };
+}
+
+/** A card pinned on the board when the drag started (every tier shares the predicate). */
+const isBoardCard = (rulesFor: SlotRulesFor | null, id: string): boolean => !!rulesFor?.('focus')?.pinnedCard?.(id);
+
+/** Would naming `over` leave the dragged row where the tier keeps it? A board card fits
+ *  anywhere its slot can file it (cardLanding); a folder, a line or a card from Recent
+ *  only where the clustering keeps it (slotFits). */
+function overFits(activeId: string, over: DroppableContainer, rulesFor: SlotRulesFor): boolean {
+  const frame = slotFrame(activeId, over, rulesFor);
+  if (!frame) return true;
+  return frame.rules.pinnedCard?.(activeId)
+    ? cardLanding(frame.arr, frame.at, frame.rules).fits
+    : slotFits(frame.arr, frame.at, frame.rules);
 }
 
 function makePinnedCollision(rulesFor: () => SlotRulesFor | null): CollisionDetection {
@@ -411,73 +425,65 @@ function makePinnedCollision(rulesFor: () => SlotRulesFor | null): CollisionDete
           return hit(container);
         }
       }
-      // A folder chip is a POINTER target, like the tier headings: the pointer on the
-      // chip means "into this folder" (its `into:` droppable, which is not a sortable
-      // item, so the list stays at rest and the chip alone lights up), except for a
-      // thin top band, which means "a slot above the folder". Measured rects (the
-      // layout dnd-kit sorts in), not live ones: while the chip is the target nothing
-      // is displaced, so the two agree exactly where it matters. The chip's SORTABLE
-      // rect, same node: dnd-kit re-measures a tier's items when a card crosses into
-      // it, never the `into:` twin, which would keep the layout from before the move.
-      // A folder never takes itself, nor a card its own folder (that row is a reorder
-      // target for it), and a divider line never goes into a folder. A heading stuck
-      // over the rows (the section or tier one) covers them: no row under it is a target.
+      // A folder's row is a POINTER target, like the tier headings, read off its measured
+      // rect (the layout dnd-kit sorts in; the row's SORTABLE rect, which dnd-kit
+      // re-measures when a row crosses into its tier, never the `into:` twin's). Its top
+      // band means "a slot above the folder"; the rest means "into it":
+      //  - for a dragged FOLDER (and a card from Recent), the row's `into:` droppable,
+      //    which is not a sortable item, so the list stays at rest and the row alone
+      //    lights up. A folder never takes itself or one of its subfolders;
+      //  - for a card on the board, the slot right under the row, the folder's first
+      //    place: the gap opens there and the row lights (cardLanding), and the list
+      //    never goes back to rest under a moving card (that made it flick between its
+      //    own place and the slot it was pointed at).
+      // A heading stuck over the rows (the section or tier one) covers them: no row
+      // under it is a target.
       const activeFolder = isGroupSentinel(activeId) ? parseGroupSentinelGid(activeId) : null;
+      const boardCard = isBoardCard(rules, activeId);
+      const find = (id: string | undefined) => (id === undefined ? undefined : args.droppableContainers.find((c) => String(c.id) === id));
       const pointerTargets = !isSeparatorId(activeId) && !under?.closest('.navigation-heading');
       for (const container of pointerTargets ? args.droppableContainers : []) {
         const cid = String(container.id);
         if (!isIntoFolderId(cid)) continue;
         const { groupId, tier } = parseIntoFolderId(cid);
-        if (groupId === (activeFolder ?? rules?.(tier)?.folderOf(activeId))) continue;
-        const rect = args.droppableRects.get(groupSortableId(groupId, tier)) ?? container.rect.current;
+        // (A chain row's target is its deepest folder, which a dragged chain row holds.)
+        if (activeFolder ? folderWithin(groupId, activeFolder, rules?.(tier)?.parentOf) : !boardCard && groupId === rules?.(tier)?.folderOf(activeId)) continue;
+        // The row's sortable id: its own folder's chip, the top folder's for a chain row.
+        const rowId = (container.data.current as { rowId?: string } | undefined)?.rowId ?? groupSortableId(groupId, tier);
+        const rect = args.droppableRects.get(rowId) ?? container.rect.current;
         if (!rect || rect.width <= 0 || rect.height <= 0) continue;
         if (point.x < rect.left || point.x > rect.left + rect.width || point.y < rect.top || point.y > rect.top + rect.height) continue;
-        if (point.y >= rect.top + Math.max(6, rect.height * FOLDER_CHIP_ABOVE_BAND)) return hit(container);
-        // The top band. Coming from above, dnd-kit puts the row BELOW the row it is
-        // over, so the slot above this chip is the row before it (the dragged row
-        // itself when it already sits there: no move).
-        const chip = args.droppableContainers.find((c) => String(c.id) === groupSortableId(groupId, tier));
+        // dnd-kit puts the dragged row where the row it names was: below it when the
+        // dragged row comes from above, above it otherwise (a row from another tier is
+        // inserted above it). So each slot names a different row by direction.
+        const chip = find(rowId);
         const slot = chip ? sortableSlot(chip.data) : undefined;
-        let above = chip;
-        if (chip && slot && slot.items.indexOf(activeId) !== -1 && slot.items.indexOf(activeId) < slot.index) {
-          const prevId = slot.items[slot.index - 1];
-          above = args.droppableContainers.find((c) => String(c.id) === prevId);
+        const at = slot ? slot.items.indexOf(activeId) : -1;
+        const fromAbove = !!slot && at !== -1 && at < slot.index;
+        if (point.y >= rect.top + Math.max(6, rect.height * FOLDER_CHIP_ABOVE_BAND)) {
+          if (!boardCard) return hit(container);
+          // Under the row: the row itself from above, its next row otherwise.
+          let below = fromAbove ? chip : undefined;
+          for (let k = (slot?.index ?? 0) + 1; !below && slot && k < slot.items.length; k++) below = find(slot.items[k]);
+          below ??= chip;
+          if (below && fits(below)) return hit(below);
+          break;
         }
+        // Above the row: the row before it from above (the dragged row itself when it
+        // already sits there: no move), the row itself otherwise.
+        const above = fromAbove && slot ? find(slot.items[slot.index - 1]) : chip;
         if (above && fits(above)) return hit(above);
         break;
       }
-      // A card's middle band is "with this card" (its `join:` target), the edge bands
-      // stay slots. Only where the drop can join: a loose card onto any card, a
-      // folder's card onto a card of ANOTHER folder (never onto a loose card, which
-      // would merge folders); a folder or a divider line never joins a card. The card's
-      // sortable rect, for the reason the chip's is used above.
-      if (!activeFolder && pointerTargets) {
-        for (const container of args.droppableContainers) {
-          const cid = String(container.id);
-          if (!isJoinCardId(cid)) continue;
-          const { taskId, tier } = parseJoinCardId(cid);
-          if (taskId === activeId) continue;
-          const rect = args.droppableRects.get(taskId) ?? container.rect.current;
-          if (!rect || rect.width <= 0 || rect.height <= 0) continue;
-          if (point.x < rect.left || point.x > rect.left + rect.width || point.y < rect.top || point.y > rect.top + rect.height) continue;
-          const band = Math.max(6, rect.height * 0.25);
-          if (point.y < rect.top + band || point.y > rect.top + rect.height - band) break;
-          const folderOf = rules?.(tier)?.folderOf;
-          const own = folderOf?.(activeId);
-          const theirs = folderOf?.(taskId);
-          if (own && (!theirs || theirs === own)) break;
-          return hit(container);
-        }
-      }
     }
-    // The closest row whose slot the drop can honour (slotFits): a slot opens only
-    // where the tier's ordering keeps what lands there, so the preview is the result.
-    // None nearby = the dragged row stays where it is.
+    // The closest row whose slot the drop can honour (overFits): a slot opens only
+    // where the drop keeps what lands there, so the preview is the result. None nearby
+    // = the dragged row stays where it is.
     const ranked = closestCenter({
       ...args,
       droppableContainers: args.droppableContainers.filter((container) => {
         const id = String(container.id);
-        return !id.endsWith('-header-drop-zone') && !isIntoFolderId(id) && !isJoinCardId(id);
+        return !id.endsWith('-header-drop-zone') && !isIntoFolderId(id);
       }),
     });
     // The search stays in the project run the pointer is in (the nearest row's run):
@@ -4263,11 +4269,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     for (const t of tasks) if (t.group_id) map.set(t.id, t.group_id);
     return map;
   }, [tasks]);
+  // Each tier's "A / B" rows (folderChains), published below where they are computed.
+  const tierChainsRef = useRef<Map<string, Map<string, string[]>>>(new Map());
   useLayoutEffect(() => {
     const tiers = new Set<string>(['focus', 'satellite', 'wait', ...(customTiers ?? []).map((d) => d.id)]);
     const folderOf = (id: string) => folderOfTask.get(id);
-    slotRulesRef.current = (tier) => tiers.has(tier) ? { folderOf, parentOf: folderParents, mode: tierViewMode(tier) } : null;
-  }, [customTiers, folderOfTask, folderParents, tierViewMode]);
+    const pinnedCard = (id: string) => pinnedTaskMap.has(id);
+    slotRulesRef.current = (tier) => tiers.has(tier) ? {
+      folderOf, parentOf: folderParents, mode: tierViewMode(tier), pinnedCard,
+      leafOf: (gid) => tierChainsRef.current.get(tier)?.get(gid)?.at(-1) ?? gid,
+    } : null;
+  }, [customTiers, folderOfTask, folderParents, tierViewMode, pinnedTaskMap]);
 
   // ── Separator persistence + move-time anchor maintenance ── Declared up here
   // (not with the rest of the separator UI far below) because the drag handlers
@@ -4407,17 +4419,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return el instanceof Element && !!el.closest('.todo-unpin-zone');
   }, []);
 
-  // ── Join is a POINTER decision, never a proximity one ── dnd-kit's
-  // closestCenter reports the card whose center is NEAREST, which is routinely a
-  // group member when the user is merely dragging PAST the cluster — and a drop
-  // that lands "next to" a group must not fall into it ("他抓到哪就是哪",
-  // reported 2026-08-25). So the pinned collision names a card's `join:` target
-  // only while the pointer is inside the card's measured (at-drag-start) rect, in
-  // its MIDDLE band; the edge bands always read as "insert between rows". The join
-  // target is not a sortable item, so while it is named the list stays at rest: the
-  // card the pointer is on is the card that lights, with nothing sliding under it,
-  // and handlePinnedDragOver lights exactly what dnd-kit names (no lit frame, no
-  // join). A folder chip works the same way through its `into:` target.
+  // ── A board card goes where its gap is ── The gap the dragged card opens is
+  // the drop: a gap between two of a folder's cards is inside that folder and lights
+  // the folder's row (cardLanding), anything else is loose. There is no "join this
+  // card" target any more: one that stopped the list while named made the gap flick
+  // back and forth over a folder's cards (2026-10-01), and lit the card under the
+  // pointer instead of showing where the card would go. A folder row's middle is the
+  // gap at the top of that folder, its top band the gap above it (makePinnedCollision).
 
   // Arm/disarm from the pointer itself rather than from dnd-kit's collisions: the
   // strip is deliberately NOT a droppable, so closestCenter can never award it a
@@ -4514,11 +4522,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         setUnpinZone(rect);
       }
     }
-    // Track the live cursor so dragOver/End can highlight "join group" when hovering
-    // a card (Pin tiers have no subtasks → the whole card is the group zone).
+    // Track the live cursor: the collision reads a folder row's bands from it, and the
+    // drop end reads the tier heading and the unpin strip under it.
     window.addEventListener('pointermove', trackPointer, { passive: true });
     dropIntentRef.current = null;
-    setGroupTargetId(null);
     // Cross-panel drag: announce single-task drags on the bus so out-of-context
     // targets (calendar side panel) can accept the drop. Group sentinels stay
     // in-panel — a multi-task cluster has no calendar semantics.
@@ -4562,23 +4569,26 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Also handles items dragged FROM Recent into a tier zone
   const handlePinnedDragOver = useCallback((event: DragOverEvent) => {
     const { active, over } = event;
-    // The folder the pointer is on lights up for exactly as long as dnd-kit names its
-    // `into:` target (dragOver fires on every change of `over`, and this target is
-    // pointer-decided, so the frame and the drop can never disagree). Nothing else
-    // happens for it: no slot opens, no tier array moves, the drop does the filing.
-    // A card's `join:` target lights that card the same way (the blue frame).
-    const intoId = over && isIntoFolderId(String(over.id)) ? String(over.id) : null;
-    setFolderTargetId((prev) => (prev === intoId ? prev : intoId));
-    const joinTaskId = over && isJoinCardId(String(over.id)) ? parseJoinCardId(String(over.id)).taskId : null;
-    const joinKey = joinTaskId ? `${joinTaskId}:group` : null;
-    if (dropIntentRef.current !== joinKey) {
-      dropIntentRef.current = joinKey;
-      setGroupTargetId((prev) => (prev === joinTaskId ? prev : joinTaskId));
-    }
-    if (!over) return;
     const activeId = active.id as string;
+    // The folder a drop would go into lights up (its row): for a folder or a card from
+    // Recent, for exactly as long as dnd-kit names that row's pointer-decided `into:`
+    // target (nothing else happens for it: no slot opens, no tier array moves, the drop
+    // does the filing); for a card on the board, the folder its slot files it into,
+    // read off the very frame dnd-kit draws next (slotFrame), so the gap and the lit
+    // row always tell the same story. dragOver fires on every change of `over`, which
+    // is every change of that frame.
+    const intoId = over && isIntoFolderId(String(over.id)) ? String(over.id) : null;
+    let lit = intoId;
+    const rulesFor = slotRulesRef.current;
+    if (!lit && over && rulesFor && isBoardCard(rulesFor, activeId)) {
+      const frame = slotFrame(activeId, over, rulesFor);
+      const folder = frame ? cardLanding(frame.arr, frame.at, frame.rules).folder : undefined;
+      lit = frame && folder ? intoFolderId(folder, frame.tier as FocusTier) : null;
+    }
+    setFolderTargetId((prev) => (prev === lit ? prev : lit));
+    if (!over) return;
     const overId = over.id as string;
-    if (intoId || joinTaskId) return;
+    if (intoId) return;
     // A folded destination cannot hold a preview without moving its own header under the pointer.
     if (overId.endsWith('-header-drop-zone')) return;
 
@@ -4700,10 +4710,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Move activeId from current to target tier arrays
     const remove = (arr: string[]) => arr.filter((id) => id !== activeId);
     const addAt = (arr: string[], ovId: string) => {
-      let idx = arr.indexOf(ovId);
+      // Right above `over`, the slot overFits judged (slotFrame): a card above a
+      // folder's first card lands in that folder, as its first card.
+      const idx = arr.indexOf(ovId);
       if (idx === -1) return [...arr, activeId];
-      // Above the chips a folder's first row sits under: the slot overFits judged.
-      while (idx > 0 && isGroupSentinel(arr[idx - 1])) idx--;
       const copy = [...arr];
       copy.splice(idx, 0, activeId);
       return copy;
@@ -4727,7 +4737,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // handlePinnedDragStart.
     window.removeEventListener('pointermove', trackPointer);
     dropIntentRef.current = null;
-    setGroupTargetId((prev) => (prev === null ? prev : null));
     setFolderTargetId((prev) => (prev === null ? prev : null));
     unpinRectRef.current = null;
     setUnpinZone(null);
@@ -4833,12 +4842,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     // ── Released on a folder chip ("into this folder") ── The one drop that is
     // decided by the pointer alone (pinnedCollision), so nothing about slots or tier
-    // arrays applies: a card is filed into the folder (loose or from another folder;
-    // from another project through requestFileIntoFolder's confirm), a folder chip is
-    // nested under it, and a card from Recent or another tier (a folder's cards, for
-    // a folder) also moves to the tier the chip is drawn in, because that is where the
-    // user put it down. Only once the filing went through: a cancelled confirm leaves
-    // everything where it was.
+    // arrays applies: a folder chip is nested under it (its cards move to the tier the
+    // chip is drawn in, because that is where the user put it down), and a card from
+    // Recent is filed into it (from another project through requestFileIntoFolder's
+    // confirm) and pinned there. Only once that went through: a cancelled confirm
+    // leaves everything where it was. A card on the board never gets here: its slot
+    // says which folder it goes into (cardLanding, below).
     if (isIntoFolderId(overId)) {
       if (isSeparatorId(activeId)) return;
       const { groupId: intoGid, tier: intoTier } = parseIntoFolderId(overId);
@@ -4858,31 +4867,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const project = folderMeta?.[intoGid]?.project ?? tasks.find((t) => t.group_id === intoGid)?.project ?? activeTask.project ?? '';
       fileInto(activeId, { groupId: intoGid, project })
         .then((filed) => { if (filed) landInTier(activeId, intoTier); })
-        .catch((err) => { onOperationError?.(err instanceof Error ? err.message : 'Move failed'); });
-      return;
-    }
-
-    // ── Released on a card's middle ("with this card") ── Pointer-decided like the
-    // chip: pinnedCollision names a card's `join:` target only where a drop can join
-    // (a loose card onto any card, a folder's card onto a card of ANOTHER folder; a
-    // member dropped on a loose card never group-merges, that ABSORBED the member's
-    // whole folder, 2026-08-25). Into the card's folder, from another project through
-    // requestFileIntoFolder's confirm, or a new folder of the two when that card is
-    // loose. A card from Recent or another tier also moves to the card's tier.
-    if (isJoinCardId(overId)) {
-      const { taskId: joinId, tier: joinTier } = parseJoinCardId(overId);
-      const activeTask = tasks.find((t) => t.id === activeId);
-      const joinTask = tasks.find((t) => t.id === joinId);
-      const fileInto = requestFileIntoFolderRef.current;
-      if (!activeTask || !joinTask || joinId === activeId || !fileInto) return;
-      const targetGid = joinTask.group_id || null;
-      if (activeTask.group_id && (!targetGid || targetGid === activeTask.group_id)) return;
-      if (targetGid ? !onAddToGroup : !onGroupTasks) return;
-      const request = targetGid
-        ? { groupId: targetGid, project: folderMeta?.[targetGid]?.project ?? joinTask.project ?? '' }
-        : { withTaskId: joinTask.id, project: joinTask.project ?? '' };
-      fileInto(activeId, request)
-        .then((filed) => { if (filed) landInTier(activeId, joinTier); })
         .catch((err) => { onOperationError?.(err instanceof Error ? err.message : 'Move failed'); });
       return;
     }
@@ -4977,8 +4961,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // the tier's end regardless of where the pointer hovers, so its landing position
     // is an artifact and only an explicit over-card carries intent.
     let projectMoveRequested = false;
-    // Set by the drag-out check below: a card reordered among its own folder's rows.
+    // Set by the landing check below: a card reordered among its own folder's rows, and
+    // a card going into another folder (whose project is then the card's).
     let staysInOwnFolder = false;
+    let fileTo: string | undefined;
     const maybeMoveProject = (
       tier: FocusTier,
       tierIds: string[],
@@ -5000,8 +4986,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const activeTask = tasks.find((t) => t.id === activeId);
       if (!activeTask) return;
       // Still in its folder = still in the folder's run, whatever project the card
-      // itself says (a folder's rows are drawn under its first card's label).
-      if (staysInOwnFolder) return;
+      // itself says (a folder's rows are drawn under its first card's label). Into
+      // another folder = into that folder's project, which the filing does.
+      if (staysInOwnFolder || fileTo) return;
       const projectOf = (id: string) => {
         const t = pinnedTaskMap.get(id) ?? tasks.find((x) => x.id === id);
         return t ? (t.project || '') : undefined;
@@ -5160,38 +5147,53 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Check if item came from Recent section
     const isFromRecent = snap.recent?.includes(activeId) ?? false;
 
-    // ── Drag OUT of a group (pinned area) ── The dragged card is a group member and
-    // this drop is NOT a "join group" (those return above), i.e. it landed on a tier
-    // drop-zone, empty space, or a card in a DIFFERENT group (same-group hovers are
-    // exempted in dragOver so they never light the target). Pull it out of its
-    // cluster, then FALL THROUGH to the tier-move / reorder logic so it also lands
-    // where it was dropped. Mirrors the Main list's drag-out.
-    if (onUngroupTask && !isFromRecent) {
-      const activeTask = tasks.find((t) => t.id === activeId);
-      if (activeTask?.group_id) {
-        // Where the slot opened decides, read off the rows the user saw: among its
-        // folder's own cards = still in it (a reorder), anywhere else = out. A drop
-        // zone or another list falls back to the target's folder (a chip sentinel IS
-        // its folder, so releasing a member on its OWN header keeps it).
-        const sortable = (active.data.current as { sortable?: { items?: string[] } } | undefined)?.sortable;
-        const items = sortable?.items ?? [];
-        const from = items.indexOf(activeId);
-        const to = overId === activeId ? from : items.indexOf(overId);
-        const folderOfCard = (id: string) => pinnedTaskMap.get(id)?.group_id || undefined;
-        const stays = from !== -1 && to !== -1
-          ? staysInFolder(arrayMove(items, from, to), to, folderOfCard)
-          : activeTask.group_id === (isGroupSentinel(overId) ? parseGroupSentinelGid(overId) : tasks.find((t) => t.id === overId)?.group_id);
-        staysInOwnFolder = stays;
-        if (!stays) {
-          // Once the handler has run (the tier-move / reorder logic below repositions
-          // the card), unless it also moved the card to another project: that move
-          // takes it out of the folder server-side, and a separate ungroup refetches
-          // the list, which could be answered before the move was written and drew
-          // the card back in its old project for a second or two.
-          queueMicrotask(() => { if (!projectMoveRequested) onUngroupTask(activeId); });
-        }
+    // ── Which folder the card lands in ── Read off the frame the user saw, by the rule
+    // the collision and the lit row used (cardLanding): the landing tier's drawn rows
+    // with the card at its slot. A tier heading or a drop zone means the tier's end,
+    // loose. Then FALL THROUGH to the tier-move / reorder logic, which writes where the
+    // card sits. A card from Recent is only pinned (its slot is an artifact, see
+    // maybeMoveProject); one on its folder's chip went through `into:` above.
+    if (!isFromRecent && pinnedTaskMap.has(activeId)) {
+      const own = pinnedTaskMap.get(activeId)?.group_id || undefined;
+      const landing = ((): string | undefined | null => {
+        if (headerTier || DROP_ZONE_TIERS[overId]) return undefined;
+        const origin = snapTierOf(activeId);
+        const tier = overId === activeId ? finalTierOf(activeId) : (snapTierOf(overId) ?? finalTierOf(activeId));
+        const rules = tier ? slotRulesRef.current?.(tier) : null;
+        if (!tier || !rules) return null;
+        const sortable = active.data.current?.sortable as { containerId?: string; items?: string[] } | undefined;
+        const drawn = sortable?.containerId === tier && sortable.items ? sortable.items : null;
+        let arr = tier === origin && drawn ? [...drawn] : [...finalArr(tier)];
+        const ai = arr.indexOf(activeId);
+        const oi = overId === activeId ? -1 : arr.indexOf(overId);
+        if (ai !== -1 && oi !== -1 && ai !== oi) arr = arrayMove(arr, ai, oi);
+        if (drawn) { const seen = new Set(drawn); arr = arr.filter((id) => id === activeId || seen.has(id)); }
+        const at = arr.indexOf(activeId);
+        return at === -1 ? null : cardLanding(arr, at, rules).folder;
+      })();
+      // null = no frame to read: the card keeps its folder.
+      staysInOwnFolder = !!own && (landing === own || landing === null);
+      if (landing && landing !== own) fileTo = landing;
+      if (own && landing === undefined && onUngroupTask) {
+        // Out of its folder, loose. Once the handler has run (the tier-move / reorder
+        // logic below repositions the card), unless it also moved the card to another
+        // project: that move takes it out of the folder server-side, and a separate
+        // ungroup refetches the list, which could be answered before the move was
+        // written and drew the card back in its old project for a second or two.
+        queueMicrotask(() => { if (!projectMoveRequested) onUngroupTask(activeId); });
       }
     }
+    // A card going into ANOTHER folder is filed there (requestFileIntoFolder: a folder
+    // of another project asks first, and Cancel changes nothing) and its place is
+    // written in the same breath, the same render when nothing asks, so it never shows
+    // first in the folder before it moves to where it was dropped.
+    const commit = (persist: () => unknown) => {
+      const fileInto = requestFileIntoFolderRef.current;
+      if (!fileTo || !fileInto) { persist(); return; }
+      const project = folderMeta?.[fileTo]?.project ?? tasks.find((t) => t.group_id === fileTo)?.project ?? '';
+      fileInto(activeId, { groupId: fileTo, project }, persist)
+        .catch((err) => { onOperationError?.(err instanceof Error ? err.message : 'Move failed'); });
+    };
 
     // Build global pinned order from live tier refs, optionally adjusting the
     // active item's position within a tier to match the final drop target. The tier
@@ -5228,13 +5230,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       } else {
         const origTier: FocusTier = snapTierOf(activeId) ?? 'satellite';
         if (currentTier && origTier !== currentTier) {
-          // Lines live in the tier arrays now — their post-move anchors are read
-          // straight off the final frames (both tiers), not rule-5-walked.
-          syncCustomSepAnchors([
-            { tier: origTier, arr: finalArr(origTier) },
-            { tier: currentTier, arr: finalArr(currentTier) },
-          ], [activeId]);
-          onSetTier?.(activeId, currentTier, buildOrderFromRefs());
+          commit(() => {
+            // Lines live in the tier arrays now — their post-move anchors are read
+            // straight off the final frames (both tiers), not rule-5-walked.
+            syncCustomSepAnchors([
+              { tier: origTier, arr: finalArr(origTier) },
+              { tier: currentTier, arr: finalArr(currentTier) },
+            ], [activeId]);
+            return onSetTier?.(activeId, currentTier, buildOrderFromRefs());
+          });
+        } else if (fileTo) {
+          commit(() => {});
         }
         // dnd-kit had no row to name at the drop (`over` is the dragged card, whose
         // centre follows the pointer). TWO independent questions decide what may be
@@ -5297,8 +5303,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const targetTier = DROP_ZONE_TIERS[overId] ?? snapTierOf(overId) ?? finalTierOf(activeId) ?? 'satellite';
 
     if (origTier !== targetTier || headerTier) {
-      if (origTier !== targetTier) onSetTier?.(activeId, targetTier, buildOrderFromRefs(targetTier));
-      else onReorderPinned?.(buildOrderFromRefs(targetTier));
       // Replicate the tier array buildOrderFromRefs persists (same ai/oi splice) so
       // the landing slot can be read. A tiny duplication on purpose: buildOrderFromRefs
       // flattens every tier and strips sentinels, and inference needs one tier's ids
@@ -5310,13 +5314,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         arr.splice(ai, 1);
         arr.splice(oi, 0, activeId);
       }
-      // Lines in both tiers re-anchor to the final frames (the origin lost a card,
-      // the target gained one at the landing slot). The origin filter covers the
-      // no-hover drop where dragOver never moved the card out of its live array.
-      syncCustomSepAnchors([
-        { tier: origTier, arr: finalArr(origTier).filter((id) => id !== activeId) },
-        { tier: targetTier, arr },
-      ], [activeId]);
+      commit(() => {
+        // Lines in both tiers re-anchor to the final frames (the origin lost a card,
+        // the target gained one at the landing slot). The origin filter covers the
+        // no-hover drop where dragOver never moved the card out of its live array.
+        syncCustomSepAnchors([
+          { tier: origTier, arr: finalArr(origTier).filter((id) => id !== activeId) },
+          { tier: targetTier, arr },
+        ], [activeId]);
+        return origTier !== targetTier
+          ? onSetTier?.(activeId, targetTier, buildOrderFromRefs(targetTier))
+          : onReorderPinned?.(buildOrderFromRefs(targetTier));
+      });
       maybeMoveProject(targetTier, arr);
       return;
     }
@@ -5342,11 +5351,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       tier === origTier ? reorderedTier : (snap.tiers.get(tier) ?? [])
     );
     maybeMoveProject(origTier, reorderedTier);
-    // Anchors from the final frame: a card that pushed a line aside really is on
-    // the other side of it now (the strategy's preview was the truth).
-    syncCustomSepAnchors([{ tier: origTier, arr: reorderedTier }]);
-    onReorderPinned?.(taskIdsOnly(newOrder));
-  }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, folderMeta, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors]);
+    commit(() => {
+      // Anchors from the final frame: a card that pushed a line aside really is on
+      // the other side of it now (the strategy's preview was the truth).
+      syncCustomSepAnchors([{ tier: origTier, arr: reorderedTier }]);
+      return onReorderPinned?.(taskIdsOnly(newOrder));
+    });
+  }, [holdScrollAnchor, pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, folderMeta, onUngroupTask, onUnpinTask, overUnpinZone, pinnedCardIds, tasks, DROP_ZONE_TIERS, tierViewMode, pinnedTaskMap, onOperationError, separators, persistSeparators, sepReanchor, syncCustomSepAnchors]);
 
   // Project chips for ViewDropdown, in the flat config order. Inbox rides along as
   // INBOX_TAB (a sentinel chip) whenever any task has no project — '' is the All chip.
@@ -5956,15 +5967,37 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return map;
   }, [focusIds_arr, satelliteIds_arr, waitIds_arr, customIds_arr, customTiers, tierDisplayTaskIds, pinnedTaskMap]);
   const labelProjects = useFrozenWhile(labelProjectsLive, isPinnedDragActive);
-  // A tier's sortable ids as drawn: cards that pass the filters, plus the chips, lines
-  // and labels that still head something visible.
-  const visibleTierIds = useCallback((arr: string[], tier: string) => pruneTierLabels(
+  // A tier's rows that pass the filters, plus the chips, lines and labels that still
+  // head something visible.
+  const shownTierIds = useCallback((arr: string[], tier: string) => pruneTierLabels(
     pruneOrphanSentinels(
       arr.filter((id) => isGroupSentinel(id) || isSeparatorId(id) || isTierLabelId(id) || tierDisplayTaskIds.has(id)),
       pinnedTaskMap, activeDragPinnedId, folderParents,
     ),
     labelProjects.get(tier),
   ), [tierDisplayTaskIds, pinnedTaskMap, activeDragPinnedId, folderParents, labelProjects]);
+  // Folder chains drawn as one "A / B" row per tier (folderChains), AT REST: frozen for
+  // a pinned drag like the labels, so no heading splits or merges under the pointer
+  // (collapse-on-drag takes a dragged folder's rows out of the arrays mid-gesture).
+  const tierChainsLive = useMemo(() => {
+    const map = new Map<string, Map<string, string[]>>();
+    if (folderParents.size === 0) return map;
+    const folderOf = (id: string) => pinnedTaskMap.get(id)?.group_id || undefined;
+    const add = (tier: string, arr: string[]) => {
+      const chains = folderChains(shownTierIds(arr, tier), folderOf, folderParents);
+      if (chains.size > 0) map.set(tier, chains);
+    };
+    add('focus', focusIds_arr); add('satellite', satelliteIds_arr); add('wait', waitIds_arr);
+    for (const def of customTiers ?? []) add(def.id, customIds_arr[def.id] ?? []);
+    return map;
+  }, [focusIds_arr, satelliteIds_arr, waitIds_arr, customIds_arr, customTiers, shownTierIds, pinnedTaskMap, folderParents]);
+  const tierChains = useFrozenWhile(tierChainsLive, isPinnedDragActive);
+  useLayoutEffect(() => { tierChainsRef.current = tierChains; }, [tierChains]);
+  // A tier's sortable ids as drawn: a chain's row is its top folder's chip alone.
+  const visibleTierIds = useCallback(
+    (arr: string[], tier: string) => withoutChainedChips(shownTierIds(arr, tier), tierChains.get(tier)),
+    [shownTierIds, tierChains],
+  );
   const visibleFocusIds = useMemo(() => visibleTierIds(focusIds_arr, 'focus'), [focusIds_arr, visibleTierIds]);
   const visibleSatelliteIds = useMemo(() => visibleTierIds(satelliteIds_arr, 'satellite'), [satelliteIds_arr, visibleTierIds]);
   const visibleWaitIds = useMemo(() => visibleTierIds(waitIds_arr, 'wait'), [waitIds_arr, visibleTierIds]);
@@ -5976,10 +6009,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     for (const def of customTiers ?? []) {
       const visibleIds = visibleTierIds(customIds_arr[def.id] ?? [], def.id);
       const display = visibleIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task);
-      map[def.id] = { visibleIds, display, groupMeta: buildTierGroupMeta(display, taskGroups, folderParents) };
+      map[def.id] = { visibleIds, display, groupMeta: buildTierGroupMeta(display, taskGroups, chainedParents(folderParents, tierChains.get(def.id))) };
     }
     return map;
-  }, [customTiers, customIds_arr, visibleTierIds, pinnedTaskMap, taskGroups, folderParents]);
+  }, [customTiers, customIds_arr, visibleTierIds, pinnedTaskMap, taskGroups, folderParents, tierChains]);
   // tier id → its visible render ids, for logic that must work for ANY tier
   // (separator placement) instead of naming the three built-ins.
   const tierIdsByTier = useMemo(() => {
@@ -6014,16 +6047,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [pinnedTaskMap, visibleWaitIds],
   );
   const focusGroupMeta = useMemo(
-    () => buildTierGroupMeta(focusTasksDisplay, taskGroups, folderParents),
-    [focusTasksDisplay, taskGroups, folderParents],
+    () => buildTierGroupMeta(focusTasksDisplay, taskGroups, chainedParents(folderParents, tierChains.get('focus'))),
+    [focusTasksDisplay, taskGroups, folderParents, tierChains],
   );
   const satelliteGroupMeta = useMemo(
-    () => buildTierGroupMeta(satelliteTasksDisplay, taskGroups, folderParents),
-    [satelliteTasksDisplay, taskGroups, folderParents],
+    () => buildTierGroupMeta(satelliteTasksDisplay, taskGroups, chainedParents(folderParents, tierChains.get('satellite'))),
+    [satelliteTasksDisplay, taskGroups, folderParents, tierChains],
   );
   const waitGroupMeta = useMemo(
-    () => buildTierGroupMeta(waitTasksDisplay, taskGroups, folderParents),
-    [waitTasksDisplay, taskGroups, folderParents],
+    () => buildTierGroupMeta(waitTasksDisplay, taskGroups, chainedParents(folderParents, tierChains.get('wait'))),
+    [waitTasksDisplay, taskGroups, folderParents, tierChains],
   );
 
   // --- Parent-anchored sort with child grouping ---
@@ -6752,8 +6785,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Cross-project move with a cross-provider gate: when the destination project is
   // claimed by a DIFFERENT provider, the backend migrates the task (old remote twin
   // archived as "[Moved]" + completed) — that is destructive enough to confirm first.
-  // Same-provider (and local→provider folder-only) moves go straight through.
-  const confirmProjectMove = useCallback(async (taskId: string, project: string): Promise<{ ok: boolean; migrates: boolean }> => {
+  // Same-provider (and local→provider folder-only) moves go straight through, and
+  // are answered at once rather than as a promise: a drop that moves a card into
+  // another project's folder then lands in the drop's own render, instead of drawing
+  // the card back where it came from for a frame while the answer resolves.
+  type MoveGate = { ok: boolean; migrates: boolean };
+  const confirmProjectMove = useCallback((taskId: string, project: string): MoveGate | Promise<MoveGate> => {
     const task = tasks.find((t) => t.id === taskId);
     const mig = resolveMoveMigration(task?.source, project, projectRegistry.sourceByName);
     // Fail CLOSED while the registry hasn't loaded: with an empty sourceByName
@@ -6761,18 +6798,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // destructive confirm for provider tasks. Local tasks never migrate, so only
     // provider-sourced ones need the conservative ask.
     const claimUnknown = !projectRegistry.loaded && mig.from !== 'local';
-    if (mig.migrates || claimUnknown) {
-      const fromName = sourceDisplayName(mig.from);
-      const ok = await confirm({
-        title: 'Move across providers?',
-        message: mig.migrates
-          ? `“${task?.title ?? taskId}” moves from ${fromName} to ${sourceDisplayName(mig.to)}. The original ${fromName} task will be archived (renamed “[Moved]” and marked complete). Same-provider subtasks move along with it.`
-          : `“${task?.title ?? taskId}” is a ${fromName} task and “${project || 'Inbox'}” may belong to a different provider (the project list hasn't loaded). If it does, the original ${fromName} task will be archived (renamed “[Moved]” and marked complete).`,
-        confirmLabel: 'Move',
-      });
-      if (!ok) return { ok: false, migrates: mig.migrates };
-    }
-    return { ok: true, migrates: mig.migrates };
+    if (!mig.migrates && !claimUnknown) return { ok: true, migrates: false };
+    const fromName = sourceDisplayName(mig.from);
+    return confirm({
+      title: 'Move across providers?',
+      message: mig.migrates
+        ? `“${task?.title ?? taskId}” moves from ${fromName} to ${sourceDisplayName(mig.to)}. The original ${fromName} task will be archived (renamed “[Moved]” and marked complete). Same-provider subtasks move along with it.`
+        : `“${task?.title ?? taskId}” is a ${fromName} task and “${project || 'Inbox'}” may belong to a different provider (the project list hasn't loaded). If it does, the original ${fromName} task will be archived (renamed “[Moved]” and marked complete).`,
+      confirmLabel: 'Move',
+    }).then((ok) => ({ ok, migrates: mig.migrates }));
   }, [tasks, projectRegistry.sourceByName, projectRegistry.loaded, confirm]);
 
   const requestMoveTask = useCallback(async (
@@ -6801,21 +6835,28 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // A drop into a folder: `into` is the folder, or a loose card to start one
   // with. A folder belongs to one project, so a task from another project moves
   // into it as it joins, behind the same cross-provider confirm as any move.
+  // `place` is the write that puts the card where it was dropped (its pin order). It
+  // runs with the filing, synchronously when nothing asks first, so both land in one
+  // render, and its request goes out FIRST: the filing waits for it, so the list the
+  // filing then refetches already holds that order.
   const requestFileIntoFolder = useCallback(async (
     taskId: string,
     into: { groupId: string; project: string } | { withTaskId: string; project: string },
+    place?: () => unknown,
   ): Promise<boolean> => {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return false;
     const moving = !sameProjectKey(task.project, into.project);
     let migrates = false;
     if (moving) {
-      const gate = await confirmProjectMove(taskId, into.project);
+      const asked = confirmProjectMove(taskId, into.project);
+      const gate = asked instanceof Promise ? await asked : asked;
       if (!gate.ok) return false;
       migrates = gate.migrates;
     }
     const opts = moving ? { moveInto: into.project } : undefined;
-    if ('groupId' in into) onAddToGroup?.(into.groupId, [taskId], opts);
+    const placed = place ? Promise.resolve(place()) : undefined;
+    if ('groupId' in into) onAddToGroup?.(into.groupId, [taskId], { ...opts, after: placed });
     else onGroupTasks?.([into.withTaskId, taskId], undefined, opts);
     if (migrates) projectRegistry.refresh();
     return true;
@@ -7877,25 +7918,42 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       prevProject = proj;
     };
     /** The folder chip for `gid`, drawn by whichever branch meets the folder first. */
-    const chipFor = (gid: string, project: string | undefined, count: number) => (
-      <GroupChip key={groupSortableId(gid, tier)} groupId={gid} tier={tier}
-        label={taskGroups?.[gid] ?? ''}
-        project={project}
-        showProjectPrefix={!showFolders}
-        count={count}
-        depth={folderDepth(gid, folderParents)}
-        collapsed={isFoldedAt(folderFolds, tier, gid)}
-        // The RUN's project decides, not the folder's registry project: this chip is
-        // drawn inside the bucket its members cluster into, and that bucket is what
-        // the label row folds. `prevProject` IS that bucket (enterRun just set it).
-        projectCollapsed={(prevProject !== null ? runHidden(prevProject) : false) || underFold(gid)}
-        inert={foldersInert}
-        isDropTarget={folderTargetId === intoFolderId(gid, tier)}
-        onToggleCollapse={(id) => toggleFolder(tier, id)}
-        onMoveToProject={handleMoveFolderToProject}
-        onRename={handleRenameGroup}
-        onDissolve={handleDissolveGroup} onHide={handleHideGroup} />
-    );
+    // A folder holding only one subfolder here draws with it as ONE row, "A / B"
+    // (folderChains): the row drags as A, takes drops into B, and folds the pair.
+    const chains = tierChains.get(tier);
+    const drawnParents = chainedParents(folderParents, chains);
+    // The dragged card's gap is indented where the card lands: in the folder lit for it
+    // in this tier, or out in the loose column.
+    const into = folderTargetId ? parseIntoFolderId(folderTargetId) : null;
+    const dragLandingDepth = into && into.tier === tier ? folderDepth(into.groupId, drawnParents) : null;
+    const chipFor = (gid: string, project: string | undefined, count: number) => {
+      const chain = chains?.get(gid);
+      const leaf = chain ? chain[chain.length - 1] : gid;
+      return (
+        <GroupChip key={groupSortableId(gid, tier)} groupId={gid} tier={tier}
+          label={taskGroups?.[leaf] ?? ''}
+          path={chain?.slice(0, -1).map((g) => ({ groupId: g, label: taskGroups?.[g] ?? '' }))}
+          leafId={chain ? leaf : undefined}
+          project={project}
+          showProjectPrefix={!showFolders}
+          count={chain ? ids.filter((id) => pinnedTaskMap.get(id)?.group_id === leaf).length : count}
+          depth={folderDepth(gid, drawnParents)}
+          collapsed={chain ? chain.some(folded) : folded(gid)}
+          // The RUN's project decides, not the folder's registry project: this chip is
+          // drawn inside the bucket its members cluster into, and that bucket is what
+          // the label row folds. `prevProject` IS that bucket (enterRun just set it).
+          projectCollapsed={(prevProject !== null ? runHidden(prevProject) : false) || underFold(gid)}
+          inert={foldersInert}
+          isDropTarget={folderTargetId === intoFolderId(leaf, tier)}
+          // A chain folds as one: shut any of it, and the row opens it all again.
+          onToggleCollapse={chain
+            ? () => { const shut = chain.filter(folded); for (const g of shut.length > 0 ? shut : [gid]) toggleFolder(tier, g); }
+            : (id) => toggleFolder(tier, id)}
+          onMoveToProject={handleMoveFolderToProject}
+          onRename={handleRenameGroup}
+          onDissolve={handleDissolveGroup} onHide={handleHideGroup} />
+      );
+    };
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
       if (isSeparatorId(id)) {
@@ -7946,7 +8004,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // dropped into another project's run is drawn in THAT run, where it will land.
       if (!showFolders) enterRun(proj);
       const gi = groupMeta.get(id);
-      if (gi?.isLead) {
+      // A chained folder's row is its chain's top chip (the sentinel branch).
+      if (gi?.isLead && !(chains && [...chains.values()].some((c) => c.indexOf(gi.groupId) > 0))) {
         // Same precedence rule as the sentinel branch; the lead member IS the
         // fallback here, so this never renders an unknown project.
         out.push(chipFor(gi.groupId, folderOwnerProject(folderMeta?.[gi.groupId], task), gi.count));
@@ -7968,7 +8027,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle}
           onMoveUp={i > 0 && pinnedTaskMap.get(ids[i - 1])?.project === task.project && pinnedTaskMap.get(ids[i - 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i - 1]) : undefined}
           onMoveDown={i < ids.length - 1 && pinnedTaskMap.get(ids[i + 1])?.project === task.project && pinnedTaskMap.get(ids[i + 1])?.group_id === task.group_id ? () => movePinnedRow(task.id, ids[i + 1]) : undefined}
-          onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
+          onStartSelect={onStartSelect} landingDepth={task.id === activeDragPinnedId ? dragLandingDepth : undefined} />
       );
     }
     // Project-mode lines whose neighbours are all gone end up here, at the bottom
@@ -7981,7 +8040,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       out.push(runAddRow(tier, lastScope));
     }
     return out;
-  }, [movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, keepWhileParking, waitingWillHide, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, folderTargetId]);
+  }, [movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, keepWhileParking, waitingWillHide, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, folderTargetId, tierChains, activeDragPinnedId]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.

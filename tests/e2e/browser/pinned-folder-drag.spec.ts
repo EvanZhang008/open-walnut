@@ -7,9 +7,19 @@
  * slot short of its preview when moved down, and the project labels stayed put while
  * the rows around them slid, so a slot was drawn under the wrong project.
  *
+ * Reported 2026-10-01: a loose card dragged down over a folder's cards made its gap flick
+ * back and forth, the card under the pointer lit instead of showing where the card would
+ * go, the card then landed first in the folder rather than at the gap, and a chain of
+ * folders holding nothing but the next one drew one heading per level.
+ *
  * The rules pinned here, in the order the board answers them:
- *  - the pointer on a folder row means "into this folder": that row alone lights up
- *    and nothing else moves (its top band keeps meaning "a slot above it");
+ *  - a card's gap is where it lands: a gap between a folder's cards is inside it and
+ *    lights the folder's row, the gap moves only with the pointer, and the drop puts the
+ *    card exactly there;
+ *  - a folder row's middle is the gap at the top of that folder, its top band the gap
+ *    above it;
+ *  - folders that hold only the next folder draw as one "Top / Mid / Leaf" row, which
+ *    files into the deepest folder and folds as one;
  *  - a folder drags with its whole subtree, and dropped on another folder's row it
  *    nests there;
  *  - project labels move with their run, and a slot opened under a label lands in
@@ -100,6 +110,21 @@ const folderOf = async (gid: string) => {
   return groups.find((g) => g.group_id === gid)
 }
 
+/** `loc`'s box once the rows stopped sliding, where a person would aim: a drag start
+ *  re-flows the list (a dragged folder's cards fold away), and WebKit can still be
+ *  mid-slide when the drag has just started. */
+async function settledBox(page: Page, loc: Locator) {
+  await page.waitForTimeout(120)
+  let b = (await loc.boundingBox())!
+  for (let still = 0, k = 0; still < 2 && k < 30; k++) {
+    await page.waitForTimeout(40)
+    const n = (await loc.boundingBox())!
+    still = Math.abs(n.y - b.y) < 0.5 ? still + 1 : 0
+    b = n
+  }
+  return b
+}
+
 /** Press on `from`, glide to the middle of `to` (fy = how far down it), hold, then
  *  `finish` (release, or Escape). Returns what was lit while hovering. */
 async function dragOnto(page: Page, zone: Locator, from: Locator, to: Locator, { fy = 0.6, finish = 'drop' }: { fy?: number; finish?: 'drop' | 'escape' } = {}) {
@@ -110,7 +135,7 @@ async function dragOnto(page: Page, zone: Locator, from: Locator, to: Locator, {
   await page.mouse.down()
   await page.mouse.move(sx + 3, sy + 6)
   await page.mouse.move(sx + 6, sy + 12)
-  const b = (await to.boundingBox())!
+  const b = await settledBox(page, to)
   const tx = b.x + Math.min(70, b.width / 2)
   const ty = b.y + b.height * fy
   for (let i = 1; i <= 14; i++) await page.mouse.move(sx + (tx - sx) * i / 14, sy + (ty - sy) * i / 14)
@@ -127,8 +152,8 @@ async function dragOnto(page: Page, zone: Locator, from: Locator, to: Locator, {
 
 /** Creep from `from` until the dragged item's own placeholder sits between `upper` and
  *  `lower` (null = below `upper`, the end of the tier), the way a person watches the
- *  preview before letting go. */
-async function dragUntilBetween(page: Page, from: Locator, upper: Locator, lower: Locator | null): Promise<{ hit: boolean; labelMoved: boolean }> {
+ *  preview before letting go. `lit` = the folder rows lit at that moment. */
+async function dragUntilBetween(page: Page, from: Locator, upper: Locator, lower: Locator | null): Promise<{ hit: boolean; labelMoved: boolean; lit: Array<string | null>; framed: number }> {
   const a = (await from.boundingBox())!
   const sx = a.x + Math.min(60, a.width / 2)
   let y = a.y + a.height / 2
@@ -139,6 +164,8 @@ async function dragUntilBetween(page: Page, from: Locator, upper: Locator, lower
   y += 8
   let hit = false
   let labelMoved = false
+  let lit: Array<string | null> = []
+  let framed = 0
   for (let i = 0; i < 200 && !hit; i++) {
     y += 5
     await page.mouse.move(sx + 4, y)
@@ -161,11 +188,19 @@ async function dragUntilBetween(page: Page, from: Locator, upper: Locator, lower
       const l2 = lower ? (await lower.boundingBox())! : { y: Infinity }
       hit = p2.y >= u2.y + u2.height - 4 && p2.y + p2.height <= l2.y + 4
       labelMoved = await upper.evaluate((e) => { const t = getComputedStyle(e).transform; return t !== 'none' && t !== 'matrix(1, 0, 0, 1, 0, 0)' })
+      lit = await page.locator('.task-group-chip-drop').evaluateAll((els) => els.map((e) => e.getAttribute('data-group-id')))
+      framed = await page.locator('.todo-panel-item-group-target').count()
     }
   }
   await page.mouse.up()
-  return { hit, labelMoved }
+  return { hit, labelMoved, lit, framed }
 }
+
+/** The rows as drawn right now, top to bottom (transforms included: the preview). */
+const drawnRows = (zone: Locator) => zone.locator('.task-group-chip, [data-task-id], .tier-project-label').evaluateAll((els) => els
+  .filter((e) => (e as HTMLElement).offsetParent !== null)
+  .map((e) => ({ y: e.getBoundingClientRect().top, id: e.classList.contains('tier-project-label') ? `L:${e.getAttribute('data-project')}` : e.classList.contains('task-group-chip') ? `F:${e.getAttribute('data-group-id')}` : e.getAttribute('data-task-id')! }))
+  .sort((a, b) => a.y - b.y).map((r) => r.id))
 
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
@@ -177,56 +212,105 @@ test.afterEach(async () => {
   for (const id of made.tiers.splice(0)) await fetch(`${API}/api/focus/tiers/${id}`, { method: 'DELETE' }).catch(() => {})
 })
 
-test('a card drops into a nested subfolder, or into a folder with no card of its own; only that row lights', async ({ page, browserName }) => {
+test('folders holding only the next folder draw as one "Top / Mid / Leaf" row; a card dropped on it lands first in Leaf', async ({ page, browserName }) => {
   test.setTimeout(180_000)
   const board = await buildBoard(browserName)
   const zone = await openTier(page, board)
   const chip = (gid: string) => zone.locator(`.task-group-chip[data-group-id="${gid}"]`).first()
   const card = (id: string) => zone.locator(`[data-task-id="${id}"]`).first()
-  // Top and Mid hold no card here, yet both are rows the drag can reach.
+  // Top and Mid hold no card here: one row names the whole path, at Top's depth.
   await expect(chip(board.top)).toBeVisible()
-  await expect(chip(board.mid)).toBeVisible()
-  await expect(chip(board.leaf)).toHaveAttribute('data-folder-depth', '2')
+  await expect(zone.locator(`.task-group-chip[data-group-id="${board.mid}"], .task-group-chip[data-group-id="${board.leaf}"]`)).toHaveCount(0)
+  const stamp = board.A.split(' ').at(-1)
+  await expect(chip(board.top).locator('.task-group-chip-path')).toHaveAttribute('title', `Top ${stamp} / Mid ${stamp} / Leaf ${stamp}`)
+  await expect(chip(board.top)).not.toHaveAttribute('data-folder-depth', /.+/)
+  // Leaf's cards sit one step in under that row, like the cards of the top-level Sib.
+  expect((await card(board.leafCards[0]).boundingBox())!.x).toBe((await card(board.sibCard).boundingBox())!.x)
 
-  const into = await dragOnto(page, zone, card(board.loose[0]), chip(board.leaf))
-  expect(into.lit).toEqual([board.leaf])
-  expect(into.moved).toBe(0)
+  // From above: the row's middle is the gap at the top of Leaf, and the row lights.
+  const into = await dragOnto(page, zone, card(board.loose[0]), chip(board.top))
+  expect(into.lit).toEqual([board.top])
+  expect(into.litCards).toEqual([])
   await expect.poll(async () => (await taskOf(board.loose[0])).group_id, { timeout: 15_000 }).toBe(board.leaf)
+  await expect.poll(async () => { const r = await drawnRows(zone); return r[r.indexOf(`F:${board.top}`) + 1] }, { timeout: 15_000 }).toBe(board.loose[0])
 
-  const ancestor = await dragOnto(page, zone, card(board.loose[1]), chip(board.mid))
-  expect(ancestor.lit).toEqual([board.mid])
-  await expect.poll(async () => (await taskOf(board.loose[1])).group_id, { timeout: 15_000 }).toBe(board.mid)
-
-  // A member moves into another folder through that folder's row.
-  const across = await dragOnto(page, zone, card(board.sibCard), chip(board.leaf))
-  expect(across.lit).toEqual([board.leaf])
+  // From below, a member of another folder: the same gap.
+  const across = await dragOnto(page, zone, card(board.sibCard), chip(board.top))
+  expect(across.lit).toEqual([board.top])
   await expect.poll(async () => (await taskOf(board.sibCard)).group_id, { timeout: 15_000 }).toBe(board.leaf)
+  await expect.poll(async () => { const r = await drawnRows(zone); return r[r.indexOf(`F:${board.top}`) + 1] }, { timeout: 15_000 }).toBe(board.sibCard)
+
+  // The row folds and unfolds the whole chain.
+  await chip(board.top).locator('.collapse-chevron').click()
+  await expect(card(board.leafCards[0])).toBeHidden()
+  await chip(board.top).locator('.collapse-chevron').click()
+  await expect(card(board.leafCards[0])).toBeVisible()
 })
 
-test('the top band of a folder row and Escape leave the card where it was; a card\'s middle files it with that card', async ({ page, browserName }) => {
+test('a loose card dragged down over a folder\'s cards: its gap only moves with the pointer, and the folder row lights while the gap is inside', async ({ page, browserName }) => {
+  test.setTimeout(180_000)
+  const board = await buildBoard(browserName)
+  const zone = await openTier(page, board)
+  const card = (id: string) => zone.locator(`[data-task-id="${id}"]`).first()
+  const from = card(board.loose[0])
+  const a = (await from.boundingBox())!
+  const end = (await card(board.sibCard).boundingBox())!
+  const x = a.x + Math.min(60, a.width / 2)
+  const y0 = a.y + a.height / 2
+  await page.mouse.move(x, y0)
+  await page.mouse.down()
+  await page.mouse.move(x + 2, y0 + 4)
+  await page.mouse.move(x + 4, y0 + 8)
+  const samples: Array<{ top: number; lit: string }> = []
+  for (let y = y0 + 8; y <= end.y + end.height / 2; y += 6) {
+    await page.mouse.move(x + 4, y)
+    await page.waitForTimeout(45)
+    samples.push({
+      top: (await from.boundingBox())!.y,
+      lit: (await zone.locator('.task-group-chip-drop').evaluateAll((els) => els.map((e) => e.getAttribute('data-group-id')).join())),
+    })
+  }
+  await page.keyboard.press('Escape')
+  await page.mouse.up()
+  // The reported flicker: the gap jumped back each time the pointer crossed a card.
+  const back = samples.filter((s, i) => i > 0 && s.top < samples[i - 1].top - 3)
+  expect(back, 'the gap never moves back while the pointer moves down').toEqual([])
+  const lits = samples.map((s) => s.lit).filter((l, i, all) => i === 0 || l !== all[i - 1])
+  expect(lits, 'each folder lights once, in order').toEqual(['', board.top, board.sib])
+  await page.waitForTimeout(800)
+  expect((await taskOf(board.loose[0])).group_id).toBeUndefined()
+})
+
+test('the top band of a folder row and Escape keep the card out of it; a gap between a folder\'s cards files it right there', async ({ page, browserName }) => {
   test.setTimeout(180_000)
   const board = await buildBoard(browserName)
   const zone = await openTier(page, board)
   const chip = (gid: string) => zone.locator(`.task-group-chip[data-group-id="${gid}"]`).first()
   const card = (id: string) => zone.locator(`[data-task-id="${id}"]`).first()
 
-  const band = await dragOnto(page, zone, card(board.loose[0]), chip(board.sib), { fy: 0.1 })
+  // From below, the top band of the Top row: the gap above the folder, so Sib's card
+  // leaves its folder and lands right after the loose cards.
+  const band = await dragOnto(page, zone, card(board.sibCard), chip(board.top), { fy: 0.1 })
   expect(band.lit).toEqual([])
-  await page.waitForTimeout(800)
-  expect((await taskOf(board.loose[0])).group_id).toBeUndefined()
+  await expect.poll(async () => (await taskOf(board.sibCard)).group_id ?? null, { timeout: 15_000 }).toBeNull()
+  await expect.poll(async () => { const r = await drawnRows(zone); return r.slice(r.indexOf(board.loose[1]), r.indexOf(`F:${board.top}`) + 1) }, { timeout: 15_000 })
+    .toEqual([board.loose[1], board.sibCard, `F:${board.top}`])
 
-  const cancelled = await dragOnto(page, zone, card(board.loose[1]), chip(board.leaf), { finish: 'escape' })
-  expect(cancelled.lit).toEqual([board.leaf])
+  const cancelled = await dragOnto(page, zone, card(board.loose[1]), chip(board.top), { finish: 'escape' })
+  expect(cancelled.lit).toEqual([board.top])
   await page.waitForTimeout(800)
   expect((await taskOf(board.loose[1])).group_id).toBeUndefined()
   await expect(zone.locator('.task-group-chip-drop')).toHaveCount(0)
 
-  // The middle of a card in a folder is "with this card": that card alone lights,
-  // nothing slides, and the drop files the card into its folder.
-  const withCard = await dragOnto(page, zone, card(board.loose[0]), card(board.sibCard), { fy: 0.5 })
-  expect(withCard.litCards).toEqual([board.sibCard])
-  expect(withCard.moved).toBe(0)
-  await expect.poll(async () => (await taskOf(board.loose[0])).group_id, { timeout: 15_000 }).toBe(board.sib)
+  // A gap between two of Leaf's cards: Leaf's row lights, no card is framed, and the
+  // card lands between those two.
+  const gap = await dragUntilBetween(page, card(board.loose[0]), card(board.leafCards[0]), card(board.leafCards[1]))
+  expect(gap.hit).toBe(true)
+  expect(gap.lit).toEqual([board.top])
+  expect(gap.framed).toBe(0)
+  await expect.poll(async () => (await taskOf(board.loose[0])).group_id, { timeout: 15_000 }).toBe(board.leaf)
+  await expect.poll(async () => { const r = await drawnRows(zone); return r.slice(r.indexOf(board.leafCards[0]), r.indexOf(board.leafCards[1]) + 1) }, { timeout: 15_000 })
+    .toEqual([board.leafCards[0], board.loose[0], board.leafCards[1]])
 })
 
 test('a folder drags with its subtree, and nests when dropped on another folder row', async ({ page, browserName }) => {
@@ -245,16 +329,17 @@ test('a folder drags with its subtree, and nests when dropped on another folder 
     .toEqual([
       `L:${board.A}`, board.loose[0], board.loose[1],
       `F:${board.sib}`, board.sibCard,
-      `F:${board.top}`, `F:${board.mid}`, `F:${board.leaf}`, ...board.leafCards,
+      `F:${board.top}`, ...board.leafCards,
       `L:${board.B}`, board.bCard,
     ])
   expect((await folderOf(board.top))?.project).toBe(board.A)
 
-  // Sib dropped on Leaf's row nests there (Top > Mid > Leaf > Sib).
-  const nest = await dragOnto(page, zone, chip(board.sib), chip(board.leaf))
-  expect(nest.lit).toEqual([board.leaf])
+  // Sib dropped on the "Top / Mid / Leaf" row nests in Leaf (Top > Mid > Leaf > Sib),
+  // one step in under that row.
+  const nest = await dragOnto(page, zone, chip(board.sib), chip(board.top))
+  expect(nest.lit).toEqual([board.top])
   await expect.poll(async () => (await folderOf(board.sib))?.parent_id, { timeout: 15_000 }).toBe(board.leaf)
-  await expect(chip(board.sib)).toHaveAttribute('data-folder-depth', '3')
+  await expect(chip(board.sib)).toHaveAttribute('data-folder-depth', '1')
 })
 
 test('a folder never opens a slot inside another folder: it steps over the whole folder', async ({ page, browserName }) => {
@@ -262,11 +347,7 @@ test('a folder never opens a slot inside another folder: it steps over the whole
   const board = await buildBoard(browserName)
   const zone = await openTier(page, board)
   const chip = (gid: string) => zone.locator(`.task-group-chip[data-group-id="${gid}"]`).first()
-  // The rows as drawn right now, top to bottom (transforms included: the preview).
-  const drawn = () => zone.locator('.task-group-chip, [data-task-id], .tier-project-label').evaluateAll((els) => els
-    .filter((e) => (e as HTMLElement).offsetParent !== null)
-    .map((e) => ({ y: e.getBoundingClientRect().top, id: e.classList.contains('tier-project-label') ? `L:${e.getAttribute('data-project')}` : e.classList.contains('task-group-chip') ? `F:${e.getAttribute('data-group-id')}` : e.getAttribute('data-task-id')! }))
-    .sort((a, b) => a.y - b.y).map((r) => r.id))
+  const drawn = () => drawnRows(zone)
 
   // Sib creeps up through Top > Mid > Leaf until its slot sits right above Top.
   const a = (await chip(board.sib).boundingBox())!
@@ -302,7 +383,7 @@ test('a folder never opens a slot inside another folder: it steps over the whole
   await expect.poll(drawn, { timeout: 15_000 }).toEqual([
     `L:${board.A}`, board.loose[0], board.loose[1],
     `F:${board.sib}`, board.sibCard,
-    `F:${board.top}`, `F:${board.mid}`, `F:${board.leaf}`, ...board.leafCards,
+    `F:${board.top}`, ...board.leafCards,
     `L:${board.B}`, board.bCard,
   ])
 })

@@ -13,8 +13,7 @@ import {
   withGroupSentinels, pruneOrphanSentinels,
   intoFolderId, isIntoFolderId, parseIntoFolderId, folderWithin,
   tierLabelId, isTierLabelId, tierLabelProject, withProjectLabels, runProjectOf, pruneTierLabels,
-  joinCardId, isJoinCardId, parseJoinCardId,
-  slotFits, staysInFolder, type SlotRules,
+  slotFits, staysInFolder, cardLanding, folderChains, withoutChainedChips, chainedParents, type SlotRules,
 } from '@/components/tasks/tier-group-sentinels';
 
 function task(id: string, group_id?: string): Task {
@@ -196,23 +195,6 @@ describe('into-folder target ids', () => {
   it('is never mistaken for a chip sentinel, so it never enters pin order logic', () => {
     expect(isGroupSentinel(intoFolderId('g_abc', 'focus'))).toBe(false);
     expect(isIntoFolderId(groupSortableId('g_abc', 'focus'))).toBe(false);
-  });
-});
-
-describe('join-card target ids', () => {
-  it('round-trips a card and a tier, custom tiers included', () => {
-    for (const tier of ['focus', 'satellite', 'ct_12345678'] as const) {
-      const id = joinCardId('mq9x2k-0007', tier);
-      expect(isJoinCardId(id)).toBe(true);
-      expect(parseJoinCardId(id)).toEqual({ taskId: 'mq9x2k-0007', tier });
-    }
-  });
-
-  it('is never a chip, a folder target or pin order', () => {
-    const id = joinCardId('t1', 'focus');
-    expect(isGroupSentinel(id)).toBe(false);
-    expect(isIntoFolderId(id)).toBe(false);
-    expect(isJoinCardId(intoFolderId('g1', 'focus'))).toBe(false);
   });
 });
 
@@ -409,5 +391,148 @@ describe('staysInFolder: a member\'s drop keeps it in its folder', () => {
     expect(staysInFolder([T, 'sep_x', 't1'], 2, folderOf)).toBe(true);
     expect(staysInFolder([T, 'a1'], 1, folderOf)).toBe(false);
     expect(staysInFolder(['t1', S], 1, folderOf)).toBe(false);
+  });
+});
+
+// 2026-10-01: a card dragged over a folder's rows flicked between its own place and the
+// next legal slot (the middle of each card was a "join" target that put the list back
+// at rest), and a join landed the card first in the folder instead of where it was
+// pointed. Now the slot itself says where the card lands.
+describe('cardLanding: the gap a card drag opens is where it lands', () => {
+  // label A, loose a1 a2, folder T (own card t1) with subfolder M (m1, m2), folder S
+  // (s1), label B, loose b1.
+  const parentOf = new Map([['M', 'T']]);
+  const folders: Record<string, string> = { t1: 'T', m1: 'M', m2: 'M', s1: 'S' };
+  const rules = (mode: SlotRules['mode'] = 'project', extra: Partial<SlotRules> = {}): SlotRules =>
+    ({ folderOf: (id) => folders[id], parentOf, mode, ...extra });
+  const LA = tierLabelId('focus', 'A');
+  const LB = tierLabelId('focus', 'B');
+  const T = groupSortableId('T', 'focus');
+  const M = groupSortableId('M', 'focus');
+  const S = groupSortableId('S', 'focus');
+  const board = [LA, 'a1', 'a2', T, 't1', M, 'm1', 'm2', S, 's1', LB, 'b1'];
+  /** Where `card` lands when moved right before `before` (undefined = the end). */
+  const land = (card: string, before: string | undefined, mode?: SlotRules['mode'], extra?: Partial<SlotRules>) => {
+    const rest = board.filter((id) => id !== card);
+    const at = before === undefined ? rest.length : rest.indexOf(before);
+    rest.splice(at, 0, card);
+    return cardLanding(rest, at, rules(mode, extra));
+  };
+
+  it('every card lands where it already is', () => {
+    for (let i = 0; i < board.length; i++) {
+      if (isTierLabelId(board[i]) || isGroupSentinel(board[i])) continue;
+      expect(cardLanding(board, i, rules()), board[i]).toEqual({ fits: true, folder: folders[board[i]] });
+      expect(cardLanding(board, i, rules('custom')), board[i]).toEqual({ fits: true, folder: folders[board[i]] });
+    }
+  });
+
+  it('a loose card goes into the folder whose rows it is dropped among, at that place', () => {
+    expect(land('a1', 't1')).toEqual({ fits: true, folder: 'T' }); // right under T's row
+    expect(land('a1', M)).toEqual({ fits: true, folder: 'T' }); // after T's own card
+    expect(land('a1', 'm1')).toEqual({ fits: true, folder: 'M' }); // right under M's row
+    expect(land('a1', 'm2')).toEqual({ fits: true, folder: 'M' }); // between M's cards
+    expect(land('a1', 's1')).toEqual({ fits: true, folder: 'S' });
+    expect(land('a1', 't1', 'custom')).toEqual({ fits: true, folder: 'T' });
+  });
+
+  it('after a folder\'s last row: in it By project, loose between top-level folders in a custom order', () => {
+    expect(land('a1', S)).toEqual({ fits: true, folder: 'M' }); // the end of M (and of T)
+    expect(land('a1', LB)).toEqual({ fits: true, folder: 'S' });
+    expect(land('b1', undefined)).toEqual({ fits: true }); // under label B's own row
+    expect(land('a1', S, 'custom')).toEqual({ fits: true });
+    expect(land('a1', LB, 'custom')).toEqual({ fits: true });
+    // A folder's own card at its folder's end stays in it.
+    expect(land('m1', S, 'custom')).toEqual({ fits: true, folder: 'M' });
+    // T's own card after M's rows cannot stay T's (its own cards come first): loose.
+    expect(land('t1', S, 'custom')).toEqual({ fits: true });
+  });
+
+  it('the end of a subfolder with a sibling after it stays in the subfolder, in a custom order too', () => {
+    const p = new Map([['M', 'T'], ['N', 'T']]);
+    const f: Record<string, string> = { m1: 'M', n1: 'N' };
+    const N = groupSortableId('N', 'focus');
+    const arr = [T, M, 'm1', 'x', N, 'n1'];
+    expect(cardLanding(arr, 3, { folderOf: (id) => f[id], parentOf: p, mode: 'custom' })).toEqual({ fits: true, folder: 'M' });
+  });
+
+  it('a folder\'s card moved out to a loose place is loose, and loose cards stay loose', () => {
+    expect(land('m2', 'a2')).toEqual({ fits: true });
+    expect(land('m2', T)).toEqual({ fits: true }); // the last loose card of run A
+    expect(land('a1', 'b1')).toEqual({ fits: true }); // under label B
+    expect(land('a2', 'a1')).toEqual({ fits: true });
+    expect(land('s1', 'b1')).toEqual({ fits: true });
+  });
+
+  it('a member moved into another folder\'s rows goes to that folder', () => {
+    expect(land('m2', 's1')).toEqual({ fits: true, folder: 'S' });
+    expect(land('s1', 'm1')).toEqual({ fits: true, folder: 'M' });
+    expect(land('s1', 't1')).toEqual({ fits: true, folder: 'T' });
+  });
+
+  it('nothing lands above the first project label, and a tier without labels has a top', () => {
+    expect(land('b1', LA)).toEqual({ fits: false });
+    expect(land('a1', 'a2')).toEqual({ fits: true });
+    expect(cardLanding(['a1', 'a2'], 0, rules())).toEqual({ fits: true });
+  });
+
+  it('a chain row stands for its deepest folder', () => {
+    const p = new Map([['B', 'A']]);
+    const arr = ['x', groupSortableId('A', 'focus'), 'b1'];
+    const r: SlotRules = { folderOf: (id) => (id === 'b1' ? 'B' : undefined), parentOf: p, mode: 'project', leafOf: (g) => (g === 'A' ? 'B' : g) };
+    const moved = [groupSortableId('A', 'focus'), 'x', 'b1'];
+    expect(cardLanding(moved, 1, r)).toEqual({ fits: true, folder: 'B' });
+    expect(cardLanding(arr, 0, r)).toEqual({ fits: true });
+  });
+
+  it('looks through divider lines and never answers for a chip or a label', () => {
+    expect(cardLanding([T, 'sep_x', 'a1', 't1'], 2, rules('custom'))).toEqual({ fits: true, folder: 'T' });
+    expect(cardLanding(['a2', 'sep_x', 'a1'], 2, rules('custom'))).toEqual({ fits: true });
+    expect(cardLanding([T, 't1'], 0, rules()).fits).toBe(false);
+    expect(cardLanding([LA, 'a1'], 0, rules()).fits).toBe(false);
+  });
+});
+
+describe('folderChains: a folder holding only one subfolder draws as one "A / B" row', () => {
+  const chip = (g: string) => groupSortableId(g, 'focus');
+
+  it('chains a folder with no card of its own and one subfolder, down a whole chain', () => {
+    const parentOf = new Map([['B', 'A'], ['C', 'B']]);
+    const folders: Record<string, string> = { c1: 'C', c2: 'C' };
+    const ids = ['x', chip('A'), chip('B'), chip('C'), 'c1', 'c2', 'y'];
+    const chains = folderChains(ids, (id) => folders[id], parentOf);
+    expect([...chains]).toEqual([['A', ['A', 'B', 'C']]]);
+    expect(withoutChainedChips(ids, chains)).toEqual(['x', chip('A'), 'c1', 'c2', 'y']);
+  });
+
+  it('stops at a folder with cards of its own or a second subfolder', () => {
+    const parentOf = new Map([['B', 'A'], ['C', 'B'], ['D', 'B']]);
+    const folders: Record<string, string> = { b1: 'B', c1: 'C', d1: 'D' };
+    // A -> B (B holds C and D): one row "A / B", then C and D under it.
+    const ids = [chip('A'), chip('B'), chip('C'), 'c1', chip('D'), 'd1'];
+    expect([...folderChains(ids, (id) => folders[id], parentOf)]).toEqual([['A', ['A', 'B']]]);
+    // B has a card of its own: "A / B", and C stays its own row.
+    const own = [chip('A'), chip('B'), 'b1', chip('C'), 'c1'];
+    expect([...folderChains(own, (id) => folders[id], parentOf)]).toEqual([['A', ['A', 'B']]]);
+  });
+
+  it('never chains a folder that holds a card of its own or two subfolders', () => {
+    const parentOf = new Map([['B', 'A'], ['C', 'A']]);
+    const folders: Record<string, string> = { a1: 'A', b1: 'B', c1: 'C' };
+    expect(folderChains([chip('A'), 'a1', chip('B'), 'b1'], (id) => folders[id], parentOf).size).toBe(0);
+    expect(folderChains([chip('A'), chip('B'), 'b1', chip('C'), 'c1'], (id) => folders[id], parentOf).size).toBe(0);
+    expect(folderChains([chip('A'), 'a1'], (id) => folders[id], new Map()).size).toBe(0);
+  });
+
+  it('keeps the same array when nothing chains, and draws chained folders at their top\'s depth', () => {
+    const ids = ['x', chip('A'), 'a1'];
+    expect(withoutChainedChips(ids, new Map())).toBe(ids);
+    const parentOf = new Map([['A', 'R'], ['B', 'A'], ['C', 'B'], ['D', 'C']]);
+    const drawn = chainedParents(parentOf, new Map([['A', ['A', 'B', 'C']]]));
+    expect(drawn.get('B')).toBe('R');
+    expect(drawn.get('C')).toBe('R');
+    expect(drawn.get('D')).toBe('C');
+    expect(drawn.get('A')).toBe('R');
+    expect(chainedParents(new Map([['B', 'A']]), new Map([['A', ['A', 'B']]])).has('B')).toBe(false);
   });
 });

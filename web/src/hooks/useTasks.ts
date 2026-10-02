@@ -9,7 +9,7 @@ import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import { scrollLog } from '@/utils/scroll-debug';
 import { fetchWithRetry, isRetryableFetchError } from '@/utils/fetch-retry';
-import { tasksShallowEqual, mergeFetchedTasks } from './task-list-merge';
+import { tasksShallowEqual, mergeFetchedTasks, overlayLaterEdits, type LocalEdit } from './task-list-merge';
 import { normalizeTags } from '../../../src/core/tag-model';
 
 /**
@@ -403,8 +403,9 @@ interface UseTasksReturn {
    *  `moveInto` (the first task's project): the others move there first. */
   groupTasks: (taskIds: string[], label?: string, opts?: { moveInto?: string }) => void;
   /** Add task(s) to an existing folder (used by drag-onto-a-foldered-task).
-   *  `moveInto` (the folder's project): tasks from elsewhere move in as they join. */
-  addToGroup: (groupId: string, taskIds: string[], opts?: { moveInto?: string }) => void;
+   *  `moveInto` (the folder's project): tasks from elsewhere move in as they join.
+   *  `after`: the caller's own write (a drop's pin order) that must land first. */
+  addToGroup: (groupId: string, taskIds: string[], opts?: { moveInto?: string; after?: PromiseLike<unknown> }) => void;
   /** Take task(s) out of their folder (they fall back to the project in place). */
   ungroupTasks: (taskIds: string[]) => void;
   /** Rename a folder. */
@@ -468,6 +469,30 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // Server events newer than an in-flight snapshot must survive its eventual merge.
   const retainedAtGen = useRef(new Map<string, number>());
   const retainServerTask = (id: string) => { retainedAtGen.current.set(id, fetchGeneration.current); };
+  // Optimistic fields written after the current list request left (performance.now
+  // clock): its answer was read before them, so the merge lays them back over it. A
+  // refetch that left just before a second drag drop used to land after it and draw
+  // that card back where it came from for a moment, then in the right folder at the
+  // wrong place, then right. A `pending` edit (its write not answered yet) also wins
+  // over a server echo: a drop's tier write is answered, and echoed, before its folder
+  // write goes out, and that echo drew the card outside the folder for a moment.
+  const localEdits = useRef(new Map<string, LocalEdit>());
+  // The list as last rendered, for a write that has to know a row's fields up front.
+  const tasksNow = useRef(tasks);
+  tasksNow.current = tasks;
+  const noteLocalEdits = (patches: Record<string, Partial<Task>>, pending = false) => {
+    const at = performance.now();
+    for (const [id, fields] of Object.entries(patches)) {
+      const prev = localEdits.current.get(id);
+      localEdits.current.set(id, { at, fields: { ...prev?.fields, ...fields }, pending: (prev?.pending ?? 0) + (pending ? 1 : 0) });
+    }
+  };
+  const settleLocalEdits = (ids: readonly string[]) => {
+    for (const id of ids) {
+      const edit = localEdits.current.get(id);
+      if (edit?.pending) edit.pending -= 1;
+    }
+  };
   // True once the first fetch has populated the list — gates the loading spinner so
   // later background re-syncs (WS / post-mutation) don't blank the list into a spinner.
   const hasLoadedRef = useRef(false);
@@ -616,6 +641,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         for (const [id, gen] of retainedAtGen.current) {
           if (gen < generation) retainedAtGen.current.delete(id);
         }
+        const sentAt = listDispatch.current?.generation === generation ? (listDispatch.current.at ?? t0) : t0;
+        const answer = overlayLaterEdits(tasks, localEdits.current, sentAt);
         startTransition(() => {
           // Events may arrive after this transition is queued but before React applies it.
           setTasks((prev) => {
@@ -623,7 +650,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
             for (const [id, gen] of retainedAtGen.current) {
               if (gen >= generation) retain.add(id);
             }
-            return mergeFetchedTasks(prev, tasks, retain);
+            return mergeFetchedTasks(prev, answer, retain);
           });
           setLoading(false);
           setRefreshing(false);
@@ -807,6 +834,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     if (consumeEcho(`update:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-update', { id: task.id.slice(0,12) }); return; }
     if (consumeEcho(`phase:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-phase', { id: task.id.slice(0,12) }); return; }
     retainServerTask(task.id);
+    // An optimistic edit still waiting for its write wins over this echo (localEdits).
+    const held = localEdits.current.get(task.id);
+    const incoming = held?.pending ? { ...task, ...held.fields } : task;
     setTasks((prev) => {
       const idx = prev.findIndex((t) => t.id === task.id);
       if (idx === -1) {
@@ -817,9 +847,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
         // Same guard as task:created: skip empty-title metadata/sync artifacts.
         if (!task.title || task.title.trim() === '') return prev;
         scrollLog('drag-trace-ws-updated-UPSERT', { id: task.id.slice(0,12) });
-        return [task, ...prev];
+        return [incoming, ...prev];
       }
-      const merged = mergeTask(prev[idx], task);
+      const merged = mergeTask(prev[idx], incoming);
       if (tasksShallowEqual(prev[idx], merged)) {
         scrollLog('drag-trace-ws-updated-bail-shallowEqual', { id: task.id.slice(0,12) });
         return prev;
@@ -884,6 +914,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       .then((rows) => {
         const byId = new Map(rows.map((t) => [t.id, t]));
         const asked = new Set(wanted);
+        // The server's rows now: an optimistic edit the server refused must not come back.
+        for (const id of asked) localEdits.current.delete(id);
         setTasks((prev) => {
           const seen = new Set<string>();
           const next: Task[] = [];
@@ -1002,6 +1034,14 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // Also capture the new group order for the subsequent reorder API call.
     // Another project also takes the task out of its folder (the server does the
     // same, and its echo is eaten by the guard above).
+    // Pending until the move is written, like a drop's folder write (localEdits): a list
+    // answer read before it would draw the task back in its old project, and nothing
+    // would correct that, because the move's own echo is eaten by the guard above.
+    const current = tasksNow.current.find((t) => t.id === taskId);
+    const sameProject = (current?.project || '').toLowerCase() === project.toLowerCase();
+    noteLocalEdits({ [taskId]: sameProject ? { project } : { project, group_id: undefined } }, true);
+    let settled = false;
+    const settle = () => { if (!settled) { settled = true; settleLocalEdits([taskId]); } };
     let newGroupOrder: string[] = [];
     setTasks((prev) => {
       const result = prev.map((t) =>
@@ -1027,8 +1067,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     });
 
     withRetry(() => tasksApi.updateTask(taskId, { project }))
-      .then(() => withRetry(() => tasksApi.reorderTasks(project, newGroupOrder)))
-      .catch(onOpError);
+      .then(() => { settle(); return withRetry(() => tasksApi.reorderTasks(project, newGroupOrder)); })
+      .catch((err) => { settle(); onOpError(err); });
   }, [guardEcho, onOpError]);
 
   const reparentTask = useCallback((
@@ -1241,6 +1281,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // persistence; the WS echo of their API call later merges as the correction.
   // Unknown ids are skipped (a patch for a task not yet in the list is a no-op).
   const patchTasksLocal = useCallback((patches: Record<string, Partial<Task>>) => {
+    noteLocalEdits(patches);
     setTasks((prev) => {
       let changed = false;
       const next = prev.map((t) => {
@@ -1271,26 +1312,32 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       .catch((err) => { onOpError(err, taskIds); refetchGroups(); });
   }, [onOpError, refetch, refetchGroups]);
 
-  const addToGroupCb = useCallback((groupId: string, taskIds: string[], opts?: { moveInto?: string }) => {
+  const addToGroupCb = useCallback((groupId: string, taskIds: string[], opts?: { moveInto?: string; after?: PromiseLike<unknown> }) => {
     // Optimistic: flip the dragged tasks' group_id (and, for a move, project)
     // immediately. The backend absorbs any group the dragged task already belonged
     // to, so on success we refetch to pick up those side effects.
     const idSet = new Set(taskIds);
     const moveInto = opts?.moveInto;
-    setTasks((prev) => prev.map((t) => idSet.has(t.id)
-      ? { ...t, group_id: groupId, ...(moveInto !== undefined ? { project: moveInto } : {}) }
-      : t));
-    tasksApi.addTasksToGroup(groupId, taskIds, { move: moveInto !== undefined })
+    const fields: Partial<Task> = { group_id: groupId, ...(moveInto !== undefined ? { project: moveInto } : {}) };
+    noteLocalEdits(Object.fromEntries(taskIds.map((id) => [id, fields])), true);
+    setTasks((prev) => prev.map((t) => idSet.has(t.id) ? { ...t, ...fields } : t));
+    const send = () => tasksApi.addTasksToGroup(groupId, taskIds, { move: moveInto !== undefined })
       .then((g) => {
+        settleLocalEdits(taskIds);
         setTasks((prev) => prev.map((t) => g.member_ids.includes(t.id) ? { ...t, group_id: g.group_id } : t));
         setTaskGroups((prev) => ({ ...prev, [g.group_id]: g.label }));
         refetch(); refetchGroups();
       })
-      .catch((err) => { onOpError(err, taskIds); refetchGroups(); });
+      .catch((err) => { settleLocalEdits(taskIds); onOpError(err, taskIds); refetchGroups(); });
+    // Behind the caller's own write: the refetch after this one then reads both, not
+    // a pin order from before the drop (which drew the card first in its folder).
+    if (opts?.after) void Promise.resolve(opts.after).then(send, send);
+    else void send();
   }, [onOpError, refetch, refetchGroups]);
 
   const ungroupTasksCb = useCallback((taskIds: string[]) => {
     const idSet = new Set(taskIds);
+    noteLocalEdits(Object.fromEntries(taskIds.map((id) => [id, { group_id: undefined }])), true);
     setTasks((prev) => prev.map((t) => idSet.has(t.id) ? { ...t, group_id: undefined } : t));
     // Removing a member can auto-dissolve the whole group (backend prunes groups left
     // with <2 members), which also ungroups the lone survivor — a task NOT in taskIds.
@@ -1298,8 +1345,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     // pick up the survivor's cleared group_id (the WS event may also arrive, but a
     // direct refetch makes the resync deterministic).
     tasksApi.removeTasksFromGroup(taskIds)
-      .then(() => { refetch(); refetchGroups(); })
-      .catch((err) => { onOpError(err, taskIds); refetchGroups(); });
+      .then(() => { settleLocalEdits(taskIds); refetch(); refetchGroups(); })
+      .catch((err) => { settleLocalEdits(taskIds); onOpError(err, taskIds); refetchGroups(); });
   }, [onOpError, refetch, refetchGroups]);
 
   const renameGroupCb = useCallback((groupId: string, label: string) => {

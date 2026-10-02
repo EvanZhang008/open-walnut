@@ -116,3 +116,24 @@ export function mergeFetchedTasks(prev: Task[], fetched: Task[], retain?: Readon
   }
   return next;
 }
+
+/** An optimistic write's fields and when it was made (performance.now clock).
+ *  `pending` counts the writes behind it the server has not answered yet. */
+export interface LocalEdit { at: number; fields: Partial<Task>; pending?: number }
+
+/**
+ * A list answer read when its request left (`sentAt`), with the optimistic fields
+ * written after that, or still waiting for their write, laid back over it: the answer
+ * cannot hold them, and adopting it as is drew a dragged card back where it came from
+ * until the next refetch. Edits the answer holds (written before it left, and
+ * answered) are dropped from `edits`.
+ */
+export function overlayLaterEdits(fetched: Task[], edits: Map<string, LocalEdit>, sentAt: number): Task[] {
+  const later = new Map<string, Partial<Task>>();
+  for (const [id, edit] of edits) {
+    if (edit.at > sentAt || (edit.pending ?? 0) > 0) later.set(id, edit.fields);
+    else edits.delete(id);
+  }
+  if (later.size === 0) return fetched;
+  return fetched.map((t) => { const f = later.get(t.id); return f ? { ...t, ...f } : t; });
+}
