@@ -135,7 +135,7 @@ describe('startServer ordering (static ratchet)', () => {
     expect(lock).toBeGreaterThan(-1)
     for (const later of [
       'await initDirectories()',
-      'installLogErrorNotifications(broadcastEvent)',
+      'installLogErrorNotifications(broadcastEvent',
       'startEventLoopMonitor()',
       'recoverOrphanedUserMessage(',
       'await localDaemon.ensureRunning()',
