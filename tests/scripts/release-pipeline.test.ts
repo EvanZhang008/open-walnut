@@ -375,11 +375,14 @@ describe('release.yml', () => {
     expect(smoke).toContain('/api/system/health')
     // Publishing waits for both smokes; a red one stops it.
     expect(jobs.promote!.needs).toEqual(['promote-plan', 'promote-smoke'])
-    expect(jobs.promote!.if).toBe("needs.promote-plan.outputs.publish == 'true'")
+    // A dry run (dispatch, stable) plans the newest nightly and smoke-tests it, and stops there.
+    expect(jobs.promote!.if).toBe("needs.promote-plan.outputs.publish == 'true' && !inputs.dry_run")
+    expect(runs('promote-plan')).toContain("${{ inputs.dry_run && '--soak-hours 0' || '' }}")
+    expect(jobs['promote-smoke']!.if).not.toContain('dry_run')
     const checkout = jobs.promote!.steps.find((s) => s.uses?.startsWith('actions/checkout'))
     expect(checkout?.with?.ref).toBe('${{ needs.promote-plan.outputs.sha }}')
     const publish = stepIndex('promote', 'npm publish --provenance --access public')
-    const tag = stepIndex('promote', 'git tag -a "v$VERSION"')
+    const tag = stepIndex('promote', 'git tag -f -a "v$VERSION"')
     const roll = stepIndex('promote', 'node scripts/stable-promote.mjs roll')
     expect(publish).toBeGreaterThan(stepIndex('promote', 'npm ci'))
     expect(tag).toBeGreaterThan(publish)

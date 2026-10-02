@@ -48,21 +48,31 @@ morning). A run by hand skips the gap.
    Release.
 4. **Roll main.** A `release: X.Y.Z` commit on `main` moves the released entries from
    Unreleased under `## [X.Y.Z] - date`, keeps the entries written since the candidate, and
-   sets the version in `package.json` and `package-lock.json`. When the push loses a race
-   three times the job warns and stops: the package is out, and the next nightly still
-   builds above it (see Nightlies).
+   sets the version in `package.json` and `package-lock.json`. A push that loses the race
+   to another push on `main` starts again from the new `main`, five times; after that the
+   job fails, because a `main` left unrolled would repeat this release's notes in the next
+   one.
 
 The notes are the Unreleased section as it stood at the candidate. When nobody wrote one,
 they are the `feat` subjects (Added) and the `fix`/`perf` subjects (Fixed), so a
 user-facing CHANGELOG entry is still the better habit. A failed run is the only thing that
-needs a person: GitHub mails it, and nothing was published.
+needs a person: GitHub mails it. When it failed before Publish, nothing was published. When
+it failed after (the tag, the GitHub Release or the roll), fix the cause and re-run the
+failed jobs: each step skips what an earlier attempt finished (a version already on npm, a
+tag already on the candidate, a Release that exists, a `main` that already has the
+section), so a rerun completes the release without publishing anything twice. A rerun is
+the only way back: the next plan sees that version on npm and never returns to it.
+`tests/scripts/release-promote-steps.test.ts` runs these steps against a scratch repository
+with fake `npm`, `curl` and `gh`, a rerun and a racing `main` included.
 
 Tag and commit are pushed with the job's own token, which starts no workflow, so the tag
 cannot publish a second time through job `stable` and the release commit gets no CI run of
 its own (it changes only the version files and CHANGELOG).
 
 To promote now instead of waiting for the schedule: Actions, Release, Run workflow, channel
-`stable` (the same plan and smoke run). To pause automatic releases, disable the Release
+`stable` (the same plan and smoke run). With `dry_run` ticked the plan takes the newest
+nightly without the 24 hour soak and the smoke installs and starts it, but nothing is
+published (`gh workflow run release.yml -f channel=stable -f dry_run=true`). To pause automatic releases, disable the Release
 workflow's schedule or the workflow itself in the Actions tab; nightlies stop with it.
 
 ## What CI proves before anything ships
