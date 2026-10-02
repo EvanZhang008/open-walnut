@@ -383,6 +383,11 @@ export function useMenuPlacement(
     // capture:true — any nested scroller moving the trigger must reposition us.
     window.addEventListener('scroll', onScrollOrResize, true);
     window.addEventListener('resize', onScrollOrResize);
+    // A trigger can also move with no scroll and no resize: its panel slides open
+    // (the task panel's 250ms width transition when a hint brings it back), and a
+    // menu opened mid-slide would stay where the moving trigger was. Follow the
+    // end of any transition; the menu's own transitions are filtered above.
+    document.addEventListener('transitionend', onScrollOrResize, true);
 
     // The menu's own content can grow AFTER mount — an async task fetch filling
     // in rows, a date picker switching months, an "investigate" result line — and
@@ -434,6 +439,7 @@ export function useMenuPlacement(
       mo?.disconnect();
       window.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
+      document.removeEventListener('transitionend', onScrollOrResize, true);
     };
   }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide, edgeOverflow, verticalAnchorRef]);
 

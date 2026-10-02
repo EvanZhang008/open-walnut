@@ -88,9 +88,10 @@ show inline after the open ones, other completed hits that show the query fold i
   **Shrinking back is the user's own move, never a heuristic** (decided 2026-10-01 against an
   idle/"finished" auto-fold; 2026-10-02: "if it already adjusted then keep it 3, the customer can
   reduce it themselves"): close a column, or pick a lower count. What the strip owes them is
-  finding that count: the grow moment raises a `hint` toast ("Panel count is now 4: all 3 were
-  pinned", kind `hint` in `contexts/notifications/types.ts`, ephemeral, 8s) whose "Adjust panels"
-  button opens the picker the user ALREADY HAS beside the strip, the task panel's Display menu
+  finding that count: the grow moment raises a `hint` toast, two short lines ("Panels
+  auto-increased from 3 to 4" / "All 3 were pinned, so the new session needed its own"; kind
+  `hint` in `contexts/notifications/types.ts`, ephemeral, 8s) whose "See your setting" button
+  opens the picker the user ALREADY HAS beside the strip, the task panel's Display menu
   (the sliders button next to New task), on its Session columns row, pulsing
   (`revealViewOption('session-panels')` in `components/tasks/view-dropdown-reveal.ts`: a window
   event the home `DisplayButton` answers (`DisplayMenu.tsx`, row class `dm-row-flash`); it shows

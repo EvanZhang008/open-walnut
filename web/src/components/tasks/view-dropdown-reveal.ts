@@ -3,7 +3,7 @@
  * New task) on one of its options and pulse it, from anywhere in the app.
  *
  * The strip's lock grant uses it: when every panel is pinned and a new session grows the
- * strip by one, the hint toast's "Adjust panels" has to land the user on the panel-count
+ * strip by one, the hint toast's "See your setting" has to land the user on the panel-count
  * picker they already have, two centimetres from the strip, not on a Settings page
  * (2026-10-02: "that's ridiculous, it's too far away"). Same window-event bridge as
  * `main:locate-task`: the ViewDropdown that owns the option answers; one on a surface

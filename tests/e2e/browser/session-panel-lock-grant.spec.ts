@@ -11,7 +11,7 @@
  * going back down is the user's own pick, never a heuristic. Unlocking closes
  * nothing; closing a column shrinks the strip but leaves the count alone.
  *
- * The grant also tells the user, once, with a hint toast whose "Adjust panels" opens
+ * The grant also tells the user, once, with a hint toast whose "See your setting" opens
  * the panel-count picker the user already has: the task panel's Display menu (the
  * sliders button beside New task), with the Session columns row pulsing
  * (web/src/components/tasks/view-dropdown-reveal.ts).
@@ -37,7 +37,7 @@ const lockedButtons = (page: Page) => page.locator('.main-page-session-column .s
 const column = (page: Page, sid: string) =>
   page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)
 const lockedToast = (page: Page) => page.getByText('session panels are locked', { exact: false })
-const hintToast = (page: Page) => page.locator('.notification-toast', { hasText: 'Panel count is now 4' })
+const hintToast = (page: Page) => page.locator('.notification-toast', { hasText: 'Panels auto-increased from 3 to 4' })
 
 /** The task panel's Display menu (the sliders button beside New task) and its Session columns row. */
 const viewTrigger = (page: Page) => page.locator('.todo-panel .todo-panel-toolbar button[aria-label="Display"]')
@@ -76,6 +76,8 @@ async function savedCount(page: Page): Promise<string | undefined> {
  * horizontally (the panel-left placement runs from the task panel's edge across the trigger).
  */
 async function expectMenuUnderTrigger(page: Page): Promise<void> {
+  // The menu slides in from 4px up over 120ms (`tp-pop-in`): measure the resting box.
+  await expect.poll(() => viewMenu(page).evaluate((el) => el.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0)
   const trigger = await viewTrigger(page).boundingBox()
   const menu = await viewMenu(page).boundingBox()
   expect(trigger).not.toBeNull()
@@ -126,10 +128,10 @@ test('three pinned panels: the next session opens a 4th column and the count bec
   await expect(lockedToast(page)).toHaveCount(0)
   // The new column lands leftmost of the real region, the pins keep the right.
   expect((await stripIds(page))[0]).toBe(SERVICE.id)
-  // The strip says what it just did: the count is now 4 because all 3 were pinned.
+  // The strip says what it just did, in two short lines, and why.
   const hint = hintToast(page)
   await expect(hint).toBeVisible()
-  await expect(hint).toContainText('all 3 were pinned')
+  await expect(hint).toContainText('All 3 were pinned')
   await expect.poll(() => savedCount(page), { timeout: 20_000 }).toBe('4')
   // Every picker agrees with the screen: the Display menu shows 4 selected.
   await viewTrigger(page).click()
@@ -145,7 +147,7 @@ test('three pinned panels: the next session opens a 4th column and the count bec
   await expect(column(page, SERVICE.id)).toHaveCount(0)
   await expect(lockedButtons(page)).toHaveCount(3)
   // Not growth: no second hint.
-  await expect(page.locator('.notification-toast', { hasText: 'Panel count is now 5' })).toHaveCount(0)
+  await expect(page.locator('.notification-toast', { hasText: 'from 4 to 5' })).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/02-slot-reused.png`, fullPage: false })
 
   // ── 3. Unlocking closes nothing ──
@@ -175,14 +177,14 @@ test('three pinned panels: the next session opens a 4th column and the count bec
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-back-to-three.png`, fullPage: false })
 })
 
-test('"Adjust panels" on the hint opens the Display menu beside New task on the pulsing Session columns row', async ({ page }) => {
+test('"See your setting" on the hint opens the Display menu beside New task on the pulsing Session columns row', async ({ page }) => {
   await page.setViewportSize({ width: 2400, height: 1000 })
   const hint = await growToFour(page)
   await expect(viewMenu(page)).toHaveCount(0)
 
   // The button is the whole point: the picker is the one the user already has, right
   // next to the strip, not a Settings page (2026-10-02: "that's too far away").
-  await hint.locator('.notification-toast-action', { hasText: 'Adjust panels' }).click()
+  await hint.locator('.notification-toast-action', { hasText: 'See your setting' }).click()
   await expect(viewMenu(page)).toBeVisible({ timeout: 10_000 })
   // Still on the home page (the columns ride in the query string), not on Settings.
   expect(new URL(page.url()).pathname).toBe('/')
@@ -210,14 +212,14 @@ test('"Adjust panels" on the hint opens the Display menu beside New task on the 
   await page.keyboard.press('Escape')
 })
 
-test('"Adjust panels" brings a hidden task panel back and still lands on the row', async ({ page }) => {
+test('"See your setting" brings a hidden task panel back and still lands on the row', async ({ page }) => {
   await page.setViewportSize({ width: 2400, height: 1000 })
   const hint = await growToFour(page)
   // Hide the task panel the way a user does, through its own header control.
   await page.locator('.todo-panel .todo-panel-hide').click()
   await expect(page.locator('.main-page-todo')).toHaveClass(/collapsed/)
 
-  await hint.locator('.notification-toast-action', { hasText: 'Adjust panels' }).click()
+  await hint.locator('.notification-toast-action', { hasText: 'See your setting' }).click()
   await expect(page.locator('.main-page-todo')).not.toHaveClass(/collapsed/)
   // The menu waits for the panel's slide to finish, then opens under the trigger.
   await expect(viewMenu(page)).toBeVisible({ timeout: 10_000 })

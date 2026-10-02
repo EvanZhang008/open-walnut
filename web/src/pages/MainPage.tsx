@@ -91,10 +91,6 @@ import { useAutoAnimate } from '@formkit/auto-animate/react';
 
 const SS_TASK_KEY = 'open-walnut-home-focused-task';
 
-/** "4th panel": the strip never passes MAX_PANELS, so four forms cover it. */
-function ordinal(n: number): string {
-  return n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`;
-}
 const SS_SUPPRESS_DETAIL_KEY = 'open-walnut-home-suppress-detail';
 const SS_SESSION_COLUMNS_KEY = 'open-walnut-home-session-columns';
 const SS_TODO_SCROLL_KEY = 'walnut-home-todo-scroll';
@@ -1533,16 +1529,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (realAfter > realBefore && realAfter > count) {
       // Triage holds one slot of the setting, so the setting is one above the sessions.
       const newCount = Math.min(realAfter + (triageOpenRef.current ? 1 : 0), MAX_PANELS);
-      const wasAuto = panelModeRef.current === 'auto';
+      const before = panelModeRef.current === 'auto' ? `Auto (${maxPanelsRef.current})` : String(maxPanelsRef.current);
       setPanelMode(String(newCount) as SessionPanelMode);
+      // Two short lines (2026-10-02: "keep it simple, auto increased the panels from
+      // x to y, and a button to see your setting").
       notify({
         kind: 'hint',
         severity: 'info',
-        title: `Panel count is now ${newCount}${wasAuto ? ' (was Auto)' : ''}: all ${count} were pinned`,
-        body: `Pinned panels keep their place, so a ${ordinal(realAfter)} panel opened and the count followed. Lower it any time.`,
+        title: `Panels auto-increased from ${before} to ${newCount}`,
+        body: `All ${count} were pinned, so the new session needed its own.`,
         dedupKey: 'session-panels-grant',
         persistent: false,
-        action: { label: 'Adjust panels', kind: 'callback' },
+        action: { label: 'See your setting', kind: 'callback' },
         onAction: () => {
           // The menu lives in the task panel: bring that panel back if it is hidden
           // or covered, and come home if the user wandered off while the toast was up.
