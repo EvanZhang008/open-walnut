@@ -5630,6 +5630,31 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (wantsCompletedArchive) ensureAllTasks?.();
   }, [wantsCompletedArchive, ensureAllTasks]);
 
+  // What the view hides on its own, for the footer bar under the list: the
+  // status hides (waiting, completed) and the quick filters that drop rows
+  // without a chip above the list (the Date select defaults to Now, the legacy
+  // Phase select). Each is a count the user can act on in one click. The
+  // canonical query conditions already have their own chips (TaskFilterChips),
+  // so they are not repeated here. Completed = loaded done rows + the archive
+  // the list has not fetched yet (completedHidden).
+  const completedCount = useMemo(
+    () => tasks.reduce((n, t) => n + (t.status === 'done' ? 1 : 0), 0) + (tasksStore?.completedHidden ?? 0),
+    [tasks, tasksStore?.completedHidden],
+  );
+  const waitingCount = useMemo(
+    () => tasks.reduce((n, t) => n + (t.phase === 'WAITING' ? 1 : 0), 0),
+    [tasks],
+  );
+  const dateHiddenCount = useMemo(() => {
+    if (!dateFilter) return 0;
+    let n = 0;
+    for (const t of tasks) {
+      if (t.status === 'done' || hiddenAsWaiting(t)) continue;
+      if (!matchesDateFilter(t, dateFilter, tasks)) n += 1;
+    }
+    return n;
+  }, [tasks, dateFilter, hiddenAsWaiting]);
+
   const overrideReasonTaskId = filterOverrideId || fadingOverrideId;
 
   // Compute descriptive reason for focus-override badge (e.g. "outside Now filter").
@@ -8883,6 +8908,61 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       </NavigationSection>
       </NavigationSections>
       </div>
+
+      {/* Filter footer: what this view hides on its own, one click to see it.
+          Search ignores every view toggle, so there is nothing to report there.
+          Without this, "Show waiting" lived only inside View options and a parked
+          task simply vanished from Focus with no trace (user, 2026-10-01). */}
+      {!isSearchMode && (waitingCount > 0 || completedCount > 0 || dateHiddenCount > 0 || phaseFilter) && (
+        <div className="todo-filter-footer" data-testid="todo-filter-footer">
+          {waitingCount > 0 && (
+            <button
+              type="button"
+              className={`todo-filter-footer-chip${showWaiting ? ' on' : ''}`}
+              data-testid="todo-filter-footer-waiting"
+              title={showWaiting ? 'Hide waiting tasks again' : 'Show the waiting tasks (parked until something happens)'}
+              onClick={() => { setShowWaiting(!showWaiting); clearFocusOverride(); }}
+            >
+              <span className="todo-filter-footer-icon" aria-hidden="true">{ICONS.ICON_PHASE_WAITING}</span>
+              {waitingCount} waiting {showWaiting ? 'shown' : 'hidden'}
+            </button>
+          )}
+          {completedCount > 0 && (
+            <button
+              type="button"
+              className={`todo-filter-footer-chip${showCompleted ? ' on' : ''}`}
+              data-testid="todo-filter-footer-completed"
+              title={showCompleted ? 'Hide completed tasks again' : 'Show the completed tasks'}
+              onClick={() => { setShowCompleted(!showCompleted); clearFocusOverride(); }}
+            >
+              <span className="todo-filter-footer-icon" aria-hidden="true">{ICONS.ICON_PHASE_COMPLETE}</span>
+              {completedCount} completed {showCompleted ? 'shown' : 'hidden'}
+            </button>
+          )}
+          {dateFilter && dateHiddenCount > 0 && (
+            <button
+              type="button"
+              className="todo-filter-footer-chip"
+              data-testid="todo-filter-footer-date"
+              title={`Date filter "${DATE_LABELS[dateFilter] || dateFilter}" hides ${dateHiddenCount} deferred ${dateHiddenCount === 1 ? 'task' : 'tasks'}: click to show every date`}
+              onClick={() => { setDateFilter(''); persistDateFilter(''); clearFocusOverride(); }}
+            >
+              {dateHiddenCount} deferred hidden · Date: {DATE_LABELS[dateFilter] || dateFilter} ×
+            </button>
+          )}
+          {phaseFilter && (
+            <button
+              type="button"
+              className="todo-filter-footer-chip on"
+              data-testid="todo-filter-footer-phase"
+              title="Only this status is shown: click to show every status"
+              onClick={() => { setPhaseFilter(''); clearFocusOverride(); }}
+            >
+              Phase: {(PHASE_LABELS as Record<string, string>)[phaseFilter] ?? phaseFilter} ×
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Detail pane: the project registry row (inline split-pane). Task detail now
           opens in a full-screen modal hosted by MainPage, not inline here. */}

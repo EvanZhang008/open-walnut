@@ -10465,6 +10465,44 @@ body.walnut-dragging {
   flex: none;
 }
 
+/* Filter footer: the bar under the list that says what the view hides on its own
+   (waiting, completed, the Date quick filter, a legacy Phase pick), each a one-click
+   toggle. Same type and chip shape as the minibar above the list; wraps on a narrow
+   panel instead of clipping. */
+.todo-filter-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  min-height: 26px;
+  padding: 2px 10px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.todo-filter-footer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.todo-filter-footer-chip:hover { background: var(--bg-hover); color: var(--fg); }
+.todo-filter-footer-chip.on { color: var(--accent); background: var(--accent-subtle); }
+.todo-filter-footer-icon { display: inline-flex; }
+.todo-filter-footer-icon svg { width: 12px; height: 12px; }
+
 .todo-section-tab {
   display: flex;
   align-items: center;

@@ -330,27 +330,37 @@ test('Waiting tasks are out of the list and the tiers by default; "Show waiting"
   await expect(anyParked).toHaveCount(0)
   await shot(page.locator('.todo-panel'), 'show-waiting-off', browserName)
 
-  // View options → "Show waiting (N)" reveals it, in its own tier, with the hourglass.
-  await page.getByRole('button', { name: 'View options' }).click()
-  const showWaiting = page.locator('.vd-footer').getByTestId('vd-show-waiting')
-  await expect(showWaiting).toContainText('Show waiting (')
-  await showWaiting.locator('input').check()
-  await page.keyboard.press('Escape')
-  // (The Focus tier draws rows, Satellite draws cards: match on the task id alone.)
+  // The footer under the list says what the view hides; one click reveals it,
+  // in its own tier, with the hourglass. (The Focus tier draws rows, Satellite
+  // draws cards: match on the task id alone.)
+  const footer = page.getByTestId('todo-filter-footer')
+  const waitingChip = footer.getByTestId('todo-filter-footer-waiting')
+  await expect(waitingChip).toHaveText(/^\d+ waiting hidden$/)
+  await expect(footer.getByTestId('todo-filter-footer-completed')).toHaveText(/^\d+ completed hidden$/)
+  await shot(footer, 'filter-footer', browserName)
+  await waitingChip.click()
+  await expect(waitingChip).toHaveText(/^\d+ waiting shown$/)
+  await expect(waitingChip).toHaveClass(/\bon\b/)
   await expect(anyParked).toHaveCount(1, { timeout: 15_000 })
   await expect(anyParked).toBeVisible()
   await expect(anyParked.getByTitle('Waiting: click to complete')).toBeVisible()
   await shot(page.locator('.todo-panel'), 'show-waiting-on', browserName)
+  // View options carries the same switch (now on); unchecking it hides them again.
   await page.getByRole('button', { name: 'View options' }).click()
-  await page.locator('.vd-footer').getByTestId('vd-show-waiting').locator('input').uncheck()
+  const showWaiting = page.locator('.vd-footer').getByTestId('vd-show-waiting')
+  await expect(showWaiting.locator('input')).toBeChecked()
+  await showWaiting.locator('input').uncheck()
   await page.keyboard.press('Escape')
   await expect(anyParked).toHaveCount(0)
+  await expect(waitingChip).toHaveText(/^\d+ waiting hidden$/)
 
   // Search always finds it (search ignores every view toggle).
   await page.locator('.todo-search-input').fill(`Hidewait ${stamp}`)
   await expect(page.locator(`.todo-panel-item[data-task-id="${parked.id}"]`)).toBeVisible({ timeout: 15_000 })
+  await expect(footer).toHaveCount(0)
   await page.locator('.todo-search-input').fill('')
   await expect(anyParked).toHaveCount(0)
+  await expect(footer).toBeVisible()
 
   // Parking a visible card from its menu: it holds for the grace, fades, then leaves.
   await plainCard.getByRole('button', { name: 'More actions' }).click()
