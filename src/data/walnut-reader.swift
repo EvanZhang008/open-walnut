@@ -7,37 +7,39 @@
 //                                          exit 4: read failed for another reason
 //   walnut-reader probe <absolute-path>  → exit code only, no bytes (permission check)
 //
-// ── Why this exists as its own binary, and why it must stay this small ──
+// ── Where it runs: inside Walnut.app first ──
 //
-// This is the ONLY part of Walnut that ever holds Full Disk Access, and every
-// present and future feature needing a TCC-protected file goes through it, so the
-// user grants FDA exactly once, ever.
+// The SAME file is compiled into Walnut.app (desktop/build.sh, with -D WALNUT_APP),
+// where `Walnut --reader-bridge read|probe <path>` runs walnutReaderMain. That is
+// the preferred route, for the reason the calendar bridge exists: Full Disk Access
+// then belongs to Walnut itself, the name the user knows and one certificate-signed
+// identity that survives every rebuild, and it is the SAME grant that stops the
+// "would like to access data from other apps" popups in agent sessions (those run
+// under `Walnut --session-host`). One row in System Settings, one grant, every
+// feature. The standalone helper below remains for installs with no Walnut.app
+// (src/core/protected-reader.ts picks the route).
+//
+// An earlier version of this comment argued the opposite: that FDA should go to
+// this tiny program rather than to the app that runs agent sessions. The user
+// decided otherwise, deliberately: sessions already run as Walnut, so Walnut is
+// the one program the user is choosing to trust, and a second, differently named
+// grant for the same machine only reads as Walnut asking twice.
 //
 // FDA is unlike every other permission Walnut uses. There is no API to request it
 // and no dialog: a process either has it or gets a bare "Operation not permitted".
 // The only way to grant it is for a human to open System Settings, Privacy &
 // Security, Full Disk Access, press PLUS (which requires Touch ID), and add the
-// binary. That is true no matter what you add — an app bundle, a terminal, or this
-// helper — so the number of clicks is identical in every design. The only real
-// choices are WHAT gets that power and WHETHER the grant survives updates.
-//
-// What gets the power: this file, ~100 lines that open one path read-only. The
-// alternatives were worse. Granting Walnut.app means granting it to the process
-// that runs agent sessions. Granting it to the user's terminal (the responsible
-// process for anyone who starts the server from a shell, which is every user who
-// installed from npm and uses the browser) means every command they ever run
-// inherits full disk access.
+// program. Nothing here can ever put a dialog on screen.
 //
 // Whether the grant survives updates: an ad-hoc signed binary's TCC identity
 // includes its content hash, so ANY change makes macOS treat it as a different
 // program and the grant stops applying — silently, with the stale row still shown
 // as enabled in System Settings (recovering needs MINUS then PLUS on the same
-// path; toggling does nothing). Two defences, and this file is the second one:
-// src/core/helper-build.ts signs with a certificate when the machine has one, and
-// THIS program is deliberately so simple that it never needs to change. All the
-// logic that does change (SQL, schema, folding, UI) lives in TypeScript and
-// operates on bytes this program handed over. So a contributor with no
-// certificate still keeps their grant, because there is no new version to grant.
+// path; toggling does nothing). src/core/helper-build.ts signs the helper with a
+// certificate when the machine has one, and this program is deliberately so
+// simple that it almost never needs to change: all the logic that does change
+// (SQL, schema, folding, UI) lives in TypeScript and operates on bytes this
+// program handed over.
 //
 // Keep it that way. Do not add a feature here. If a caller needs something parsed,
 // parse it in TypeScript.
@@ -61,25 +63,29 @@
 // how the user happened to start the server. That would make the grant target
 // depend on the launcher, so the same machine would work when launched one way and
 // silently fail the other. Re-exec with responsibility DISCLAIMED so this binary
-// is its own TCC subject and the grant always belongs to it. Same mechanism as
-// walnut-activity, minus the signal forwarding: this process is short-lived, so
-// the wrapper just waits and mirrors the child's exit status.
+// is its own TCC subject and the grant always belongs to it (inside Walnut.app,
+// that subject is Walnut). Same mechanism as walnut-activity, minus the signal
+// forwarding: this process is short-lived, so the wrapper just waits and mirrors
+// the child's exit status.
+//
+// Everything at file scope is `private`: in the app build this file shares a
+// module with desktop/*.swift, and only walnutReaderMain is meant to be seen.
 
 import Foundation
 
-let HELPER_VERSION = "v1"
+private let HELPER_VERSION = "v1"
 
-let EXIT_BAD_INPUT: Int32 = 2
-let EXIT_NO_PERMISSION: Int32 = 3
-let EXIT_READ_FAILED: Int32 = 4
+private let EXIT_BAD_INPUT: Int32 = 2
+private let EXIT_NO_PERMISSION: Int32 = 3
+private let EXIT_READ_FAILED: Int32 = 4
 
 /// Bytes per write to stdout. Large enough to be cheap on a multi-megabyte
 /// database, small enough that memory stays flat on any input size.
-let CHUNK = 1 << 20
+private let CHUNK = 1 << 20
 
 // ── responsibility ──────────────────────────────────────────────────────────
 
-func reexecDisclaimedIfNeeded() {
+private func reexecDisclaimedIfNeeded() {
     guard ProcessInfo.processInfo.environment["WALNUT_READER_DISCLAIMED"] != "1" else { return }
     typealias DisclaimFn = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>?, Int32) -> Int32
     let RTLD_DEFAULT = UnsafeMutableRawPointer(bitPattern: -2)
@@ -119,7 +125,7 @@ func reexecDisclaimedIfNeeded() {
 
 /// Resolve and vet the path. Returns nil after printing why, so a caller never
 /// has to guess whether an empty stdout meant "empty file" or "rejected input".
-func resolvedRegularFile(_ raw: String) -> String? {
+private func resolvedRegularFile(_ raw: String) -> String? {
     guard raw.hasPrefix("/") else {
         FileHandle.standardError.write(Data("walnut-reader: path must be absolute\n".utf8))
         return nil
@@ -155,7 +161,7 @@ func resolvedRegularFile(_ raw: String) -> String? {
 /// Open read-only and stream to stdout. `probeOnly` opens and closes without
 /// emitting anything, which is how the caller asks "do I have permission yet"
 /// without moving megabytes.
-func emit(_ path: String, probeOnly: Bool) -> Never {
+private func emit(_ path: String, probeOnly: Bool) -> Never {
     let fd = open(path, O_RDONLY)
     if fd < 0 {
         let err = errno
@@ -194,16 +200,29 @@ func emit(_ path: String, probeOnly: Bool) -> Never {
 
 // ── main ────────────────────────────────────────────────────────────────────
 
-reexecDisclaimedIfNeeded()
+/// One request, then exit. `args` is argv-shaped: args[0] is the program, args[1]
+/// the subcommand. Walnut.app passes its own argv with `--reader-bridge` removed.
+func walnutReaderMain(_ args: [String]) -> Never {
+    reexecDisclaimedIfNeeded()
+    if args.count == 2, args[1] == "--version" {
+        print(HELPER_VERSION)
+        exit(0)
+    }
+    guard args.count == 3, args[1] == "read" || args[1] == "probe" else {
+        FileHandle.standardError.write(Data("usage: walnut-reader read|probe <absolute-path>\n".utf8))
+        exit(EXIT_BAD_INPUT)
+    }
+    guard let path = resolvedRegularFile(args[2]) else { exit(EXIT_BAD_INPUT) }
+    emit(path, probeOnly: args[1] == "probe")
+}
 
-let args = Array(CommandLine.arguments.dropFirst())
-if args.first == "--version" {
-    print(HELPER_VERSION)
-    exit(0)
+// The helper's entry point. `@main` rather than a bare call because Swift rejects a
+// top-level expression in a non-main file even inside an INACTIVE #if, and in the
+// app build this file is not main.swift. Needs -parse-as-library when compiled on
+// its own (READER_SPEC.parseAsLibrary in src/core/protected-reader.ts).
+#if !WALNUT_APP
+@main
+struct WalnutReaderHelper {
+    static func main() { walnutReaderMain(CommandLine.arguments) }
 }
-guard args.count == 2, args[0] == "read" || args[0] == "probe" else {
-    FileHandle.standardError.write(Data("usage: walnut-reader read|probe <absolute-path>\n".utf8))
-    exit(EXIT_BAD_INPUT)
-}
-guard let path = resolvedRegularFile(args[1]) else { exit(EXIT_BAD_INPUT) }
-emit(path, probeOnly: args[0] == "probe")
+#endif

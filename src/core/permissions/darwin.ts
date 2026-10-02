@@ -21,7 +21,8 @@ import { promisify } from 'node:util';
 import { CLOUD_MODE } from '../../constants.js';
 import { calendarAuthStatus, calendarGrantApp, calendarHelperFallback } from '../calendar/sources/eventkit.js';
 import { log } from '../../logging/index.js';
-import type { Config } from '../types.js';
+import { fullDiskAccessRows, probeFullDiskAccess } from './darwin-fda.js';
+import { onFullDiskAccessUsesChanged } from './fda-uses.js';
 import type { LauncherInfo, PermissionsReport, PermissionStatus } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -30,7 +31,6 @@ const PROBE_TIMEOUT_MS = 10_000;
 /** deep links into System Settings (verified on macOS 15). */
 const SETTINGS_URL = {
   calendars: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars',
-  fullDisk: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
 };
 
 // ── launcher detection ───────────────────────────────────────────────────────
@@ -110,98 +110,7 @@ export function warmLauncherDetection(): void {
 
 // ── individual probes ────────────────────────────────────────────────────────
 
-/**
- * Full Disk Access — ONE row, ONE grant, for every feature that needs it.
- *
- * It is deliberately measured against the shared `walnut-reader` helper rather
- * than against this server process, and that choice is the whole design:
- *
- *   - The helper re-execs with parent responsibility disclaimed, so it is its
- *     OWN TCC subject. The grant therefore belongs to the helper and survives a
- *     different launcher, a redeploy, and (because it is certificate-signed) a
- *     rebuild. Grant it once, ever.
- *   - Probing the server process instead produced a row nobody could act on.
- *     TCC judges whoever is actually reading, and on a scripted install that is
- *     `/opt/homebrew/bin/node` running out of a staged temp directory with
- *     ppid 1, while the row told the user to add `/Applications/Walnut.app` —
- *     a different program with a different identity. The row stayed red no
- *     matter how many times they granted, and reading next to the helper's row
- *     it looked like Walnut was asking for the same permission twice.
- *
- * What that older row was for is not free, so state it plainly: giving the node
- * process FDA is what stops the repeated "node would like to access data from
- * other apps" popups in agent sessions. A helper cannot do that job, because
- * there it is node itself doing the reading. Handing a whole Node runtime
- * full-disk access is a much bigger hammer than one read-only helper, so it is
- * not something to ask for by default. If it comes back, it belongs behind an
- * explicit opt-in and must name the REAL launcher, never a hardcoded app path.
- *
- * Only probed when some feature actually needs it. With none enabled the row
- * reports not-applicable and the UI hides it: nobody should be asked for the
- * most powerful permission macOS has for a feature they never turned on, and
- * probing would also pay a first-run swiftc compile for nothing.
- */
-interface FdaConsumer {
-  /** Shown in the row's `why` so the user knows what the grant buys. */
-  readonly reason: string;
-  readonly enabled: (config: Config) => boolean;
-}
-
-/** Every feature that reads through the shared helper. Adding one is a line
- *  here; it must NOT grow a second permission row. */
-const FDA_CONSUMERS: readonly FdaConsumer[] = [
-  {
-    reason:
-      'read Apple Screen Time, including the numbers your iPhone syncs to this Mac, and keep '
-      + 'them permanently (Apple deletes its own copy after a few weeks)',
-    enabled: (config) => config.time?.screentime?.enabled === true,
-  },
-];
-
-async function probeFullDiskAccess(): Promise<{
-  state: 'granted' | 'denied' | 'not-applicable' | 'unknown';
-  target: string;
-  stale: boolean;
-  reasons: string[];
-}> {
-  const unknown = { state: 'unknown' as const, target: 'walnut-reader', stale: false, reasons: [] };
-  let reasons: string[];
-  try {
-    const { getConfig } = await import('../config-manager.js');
-    const config = await getConfig();
-    reasons = FDA_CONSUMERS.filter((c) => c.enabled(config)).map((c) => c.reason);
-  } catch {
-    return unknown; // an unreadable config tells us nothing about the grant
-  }
-  if (reasons.length === 0) {
-    return { state: 'not-applicable', target: 'walnut-reader', stale: false, reasons };
-  }
-  try {
-    const { probeScreenTimeAccess } = await import('../time-tracking/screentime-reader.js');
-    const result = await probeScreenTimeAccess();
-    if (!('kind' in result)) return { state: 'granted', target: result.helperPath, stale: false, reasons };
-    if (result.kind === 'denied') {
-      return {
-        state: 'denied',
-        target: result.helperPath,
-        stale: result.denied === 'stale_grant',
-        reasons,
-      };
-    }
-    // no_store means Screen Time itself has never written a database here, and
-    // unavailable means the helper cannot exist on this box. Neither is a grant
-    // problem, so neither may send the user to System Settings.
-    if (result.kind === 'no_store') {
-      return { state: 'granted', target: result.helperPath, stale: false, reasons };
-    }
-    return { ...unknown, reasons };
-  } catch (err) {
-    log.web.warn('full disk access probe inconclusive', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return { ...unknown, reasons };
-  }
-}
+// Full Disk Access lives in ./darwin-fda.ts: one row, one grant, for every feature.
 
 /**
  * The identity agent sessions run under, if any.
@@ -241,6 +150,8 @@ const NOT_APPLICABLE: PermissionsReport = {
 
 let reportCache: { report: PermissionsReport; at: number } | null = null;
 const REPORT_TTL_MS = 30_000;
+// A plugin starting or stopping a Full Disk Access use changes what the row says.
+onFullDiskAccessUsesChanged(() => { reportCache = null; });
 
 /**
  * Full permission report, cached 30s (Settings polls at 2s while the fix
@@ -267,11 +178,6 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
   // Walnut.app itself when it answers calendar requests; null means the helper does
   // and asks for itself. Resolved by the status probe above, so this is a lookup.
   const calApp = await calendarGrantApp();
-
-  // ONE binding for the path the session row names: the row's grantTarget and
-  // the copy control inside its paste step have to be the same string, and
-  // writing the fallback twice already produced an empty copy chip once.
-  const sessionTarget = session.app ?? 'Walnut.app';
 
   const permissions: PermissionStatus[] = [
     {
@@ -316,93 +222,7 @@ export async function getPermissionsReport(force = false): Promise<PermissionsRe
               'No entry? Click "Request access" below to re-trigger the prompt.',
             ],
     },
-    {
-      id: 'full-disk-access',
-      label: 'Full Disk Access',
-      state: fda.state,
-      fixKind: 'settings-only',
-      // Built from the features actually switched on, so the row can never ask
-      // for this permission "in general" — it always says what it is for. The
-      // empty case is reachable (state is then not-applicable and the UI hides
-      // the row), and an empty join would leave "Lets Walnut ." in the API.
-      why:
-        (fda.reasons.length > 0
-          ? `Lets Walnut ${fda.reasons.join('; and ')}. `
-          : 'Needed only by features that are currently switched off. ')
-        + 'Only the walnut-reader helper gets this access, it is read-only, and you grant it once: '
-        + 'the helper is its own signed identity, so redeploys and updates keep working.',
-      grantTarget: fda.target,
-      // walnut-reader re-execs with responsibility disclaimed, so this grant is
-      // the helper's own and survives a different launcher.
-      launcherIndependent: true,
-      settingsUrl: SETTINGS_URL.fullDisk,
-      ...(fda.stale ? { staleGrant: true } : {}),
-      steps: fda.stale
-        ? [
-            // The row is already there with its toggle on, so "add it" would read
-            // as nonsense and toggling it does nothing: tccd has to re-read the
-            // helper, which only happens on a fresh add.
-            'The helper is already listed, but macOS no longer recognizes it (Walnut rebuilt it).',
-            { text: 'Open System Settings → Privacy & Security → Full Disk Access.', open: true },
-            'Select the walnut-reader row and click the − button to remove it.',
-            { text: 'Click +, press ⌘⇧G, then paste the same path back:', copy: fda.target },
-            'Turning the toggle off and on does NOT work — it has to be removed and re-added.',
-          ]
-        : [
-            { text: 'Open System Settings → Privacy & Security → Full Disk Access.', open: true },
-            'Click + (authenticate if asked).',
-            { text: 'Press ⌘⇧G, then paste:', copy: fda.target },
-            'Select it and make sure its toggle is ON.',
-            // Not a permission step, but it is the other half of "why is it still
-            // empty", and this list is the only place the user is looking.
-            'For your iPhone: Settings → Screen Time → Share Across Devices, so its numbers reach this Mac.',
-          ],
-    },
-    {
-      id: 'session-full-disk-access',
-      label: 'Session file access',
-      // Never 'granted' and never 'denied': see `unverifiable`. Proving it would
-      // mean reading a protected file as this identity, which is the very access
-      // the user is deciding about.
-      state: session.app ? 'unknown' : 'not-applicable',
-      unverifiable: true,
-      // Sessions work without it; it removes popups. Everything the UI says
-      // about this row has to keep agreeing with that.
-      optional: true,
-      fixKind: 'settings-only',
-      // One short sentence, like every other row: this is a list the user scans.
-      // It names Claude Code because that is what they see doing the reading, and
-      // it leads with "Optional" so a scan never reads it as something broken.
-      why:
-        'Optional. Stops the repeated "wants to access data from other apps" popups '
-        + 'while Claude Code reads files in a session.',
-      grantTarget: sessionTarget,
-      // The app makes ITSELF the responsible process before starting the daemon,
-      // so this grant does not depend on whether a terminal or the Mac app
-      // started Walnut.
-      launcherIndependent: true,
-      settingsUrl: SETTINGS_URL.fullDisk,
-      // Everything that is not an action: the user has opened the dialog, so
-      // this is where they will read. Ends with what to expect, because a grant
-      // that appears to do nothing is what makes people grant it twice.
-      context:
-        'Claude Code runs inside Walnut, so macOS asks Walnut for access, and granting it '
-        + 'once replaces a popup per file. Skipping it costs nothing: work in your own '
-        + 'project folders never needed it. macOS lists this separately from the reader '
-        + 'helper above because it grants access per program, not per app you think of as '
-        + 'one. Sessions already running keep the identity they started with, so the switch '
-        + 'applies after the session daemon next restarts.',
-      // Each step owns its action: step 1 IS the link that opens the pane, and
-      // step 3 IS the copy control for the path it tells you to paste. Nothing
-      // here points at a button somewhere else in the dialog.
-      steps: [
-        { text: 'Open System Settings → Privacy & Security → Full Disk Access.', open: true },
-        'Click + (authenticate if asked).',
-        { text: 'Press ⌘⇧G, then paste:', copy: sessionTarget },
-        // The honest completion signal, because there is nothing to turn green.
-        'Turn its toggle on. The popups stop — that is how you know.',
-      ],
-    },
+    ...fullDiskAccessRows(fda, session.app),
   ];
 
   const report: PermissionsReport = {

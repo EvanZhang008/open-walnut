@@ -267,7 +267,8 @@ describe('the Full Disk Access path', () => {
       shortcutsDir: '/tmp/walnut-rhythm-test-shortcuts', onChange: () => undefined,
     })
     await bridge.pollMirror(1_000, true)
-    expect(bridge.mirror).toMatchObject({ phase: 'unavailable', needsAccess: true, processPath: process.execPath })
+    // A host without `walnut.macos` reads in the server process, so that is the program to name.
+    expect(bridge.mirror).toMatchObject({ phase: 'unavailable', needsAccess: true, grantTarget: process.execPath })
     // The refusal backs off for ten minutes: a plain poll a minute later reads nothing.
     await bridge.pollMirror(61_000, true)
     expect(reads).toBe(1)
@@ -279,5 +280,41 @@ describe('the Full Disk Access path', () => {
     // The button opens exactly the Full Disk Access pane and nothing else.
     await bridge.openPrivacySettings()
     expect(calls).toEqual(['open x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'])
+  })
+})
+
+describe('reading through Walnut\'s Full Disk Access', () => {
+  it('holds the declaration only while the mirror is wanted, and names Walnut on a refusal', async () => {
+    let held = 0
+    let released = 0
+    let refuse = false
+    const bridge = new MacosBridge({
+      enabled: true, log: createFakeWalnut({ pluginId: 'rhythm-fixture', pluginName: 'Rhythm' }).api.log,
+      run: async () => ({ ok: true, code: 0, stdout: '', stderr: '' }),
+      readFocus: async () => refuse
+        ? { ok: false, reason: 'permission', message: 'refused' }
+        : { ok: true, focus: { active: false } },
+      useAccess: () => { held++; return { dispose: () => { released++ } } },
+      grantTarget: async () => '/Applications/Walnut.app',
+      shortcutsDir: '/tmp/walnut-rhythm-test-shortcuts', onChange: () => undefined,
+    })
+
+    await bridge.pollMirror(1_000, true)
+    await bridge.pollMirror(30_000, true)
+    expect([held, released]).toEqual([1, 0]) // declared once, kept across polls
+
+    refuse = true
+    await bridge.pollMirror(60_000, true, true)
+    expect(bridge.mirror).toMatchObject({ needsAccess: true, grantTarget: '/Applications/Walnut.app' })
+
+    // "Follow macOS Focus" switched off: Settings must stop listing Rhythm's reason.
+    await bridge.pollMirror(61_000, false)
+    expect([held, released]).toEqual([1, 1])
+
+    // Back on, then the plugin stops: released again, exactly once.
+    await bridge.pollMirror(62_000, true, true)
+    bridge.dispose()
+    bridge.dispose()
+    expect([held, released]).toEqual([2, 2])
   })
 })

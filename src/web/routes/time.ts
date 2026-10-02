@@ -548,6 +548,8 @@ export interface ScreenTimeResponse {
   access: ScreenTimeAccess;
   /** The exact path the user must add in System Settings, when that is the fix. */
   helperPath?: string;
+  /** Which program that path is: Walnut itself ('app') or the walnut-reader helper. */
+  grantTo?: 'app' | 'helper';
   devices: ScreenTimeDeviceFold[];
   /** This Mac's own Apple rows: always sent when includeThisMac, else omitted. */
   localDevices?: ScreenTimeDeviceFold[];
@@ -568,8 +570,10 @@ export interface ScreenTimeResponse {
   degraded?: boolean;
 }
 
-/** Cached probe: { at, access, helperPath }. Absent until the first probe. */
-let accessCache: { at: number; access: ScreenTimeAccess; helperPath?: string } | null = null;
+interface AccessAnswer { access: ScreenTimeAccess; helperPath?: string; grantTo?: 'app' | 'helper' }
+
+/** Cached probe: { at, access, helperPath, grantTo }. Absent until the first probe. */
+let accessCache: ({ at: number } & AccessAnswer) | null = null;
 
 /**
  * Forget the cached permission answer. Called from stopTimeTracking(), because a
@@ -587,19 +591,20 @@ export function resetScreenTimeAccessCache(): void {
  *  than asserting 'off' — which reads as "you turned it off". */
 let lastKnownScreenTime = { enabled: false, includeThisMac: false };
 
-async function screenTimeAccess(enabled: boolean): Promise<{ access: ScreenTimeAccess; helperPath?: string }> {
+async function screenTimeAccess(enabled: boolean): Promise<AccessAnswer> {
   if (!enabled) return { access: 'off' };
   if (accessCache && Date.now() - accessCache.at < ACCESS_TTL_MS) {
-    return { access: accessCache.access, ...(accessCache.helperPath ? { helperPath: accessCache.helperPath } : {}) };
+    const { at: _at, ...cached } = accessCache;
+    return cached;
   }
   const { probeScreenTimeAccess } = await import('../../core/time-tracking/screentime-reader.js');
   const result = await probeScreenTimeAccess();
-  const mapped: { access: ScreenTimeAccess; helperPath?: string } = !('kind' in result)
-    ? { access: 'ok', helperPath: result.helperPath }
+  const mapped: AccessAnswer = !('kind' in result)
+    ? { access: 'ok', helperPath: result.helperPath, grantTo: result.grantTo }
     : result.kind === 'denied'
-      ? { access: result.denied, helperPath: result.helperPath }
+      ? { access: result.denied, helperPath: result.helperPath, grantTo: result.grantTo }
       : result.kind === 'no_store'
-        ? { access: 'no_store', helperPath: result.helperPath }
+        ? { access: 'no_store', helperPath: result.helperPath, grantTo: result.grantTo }
         : result.kind === 'unavailable'
           ? { access: 'unavailable' }
           : { access: 'unknown' };
@@ -684,6 +689,7 @@ async function buildScreenTime(date: string, refresh: boolean): Promise<ScreenTi
     includeThisMac,
     access: access.access,
     ...(access.helperPath ? { helperPath: access.helperPath } : {}),
+    ...(access.grantTo ? { grantTo: access.grantTo } : {}),
     devices: fold.devices,
     ...(includeThisMac ? { localDevices: fold.localDevices } : {}),
     totalMs: fold.totalMs,
@@ -752,7 +758,12 @@ timeRouter.post('/screentime/toggle', async (req: Request, res: Response) => {
       snapshot.stopScreenTimeSnapshots();
     }
     const access = await screenTimeAccess(next.enabled);
-    res.json({ ...next, access: access.access, ...(access.helperPath ? { helperPath: access.helperPath } : {}) });
+    res.json({
+      ...next,
+      access: access.access,
+      ...(access.helperPath ? { helperPath: access.helperPath } : {}),
+      ...(access.grantTo ? { grantTo: access.grantTo } : {}),
+    });
   } catch (err) {
     log.web.warn('screen time toggle failed', { error: err instanceof Error ? err.message : String(err) });
     res.status(500).json({ error: 'toggle_failed', message: 'could not persist the Screen Time setting' });

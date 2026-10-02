@@ -2,14 +2,18 @@
  * Shared build pipeline for the native macOS helpers in src/data/*.swift.
  *
  * Walnut ships four tiny Swift programs because some macOS capabilities are only
- * reachable from native code, and because a capability that needs a TCC
- * permission should hold that permission ALONE rather than handing it to the
- * process that runs agent sessions:
+ * reachable from native code:
  *
  *   walnut-calendar  EventKit           needs Calendars       (promptable)
  *   walnut-activity  Apple Events       needs Automation      (promptable)
  *   walnut-extract   PDFKit + Vision    needs nothing
  *   walnut-reader    plain file read    needs Full Disk Access (NOT promptable)
+ *
+ * Calendar and the reader are also compiled into Walnut.app (`--calendar-bridge`,
+ * `--reader-bridge`), and that route wins whenever the app knows the flag: the
+ * permission then belongs to Walnut, the name the user knows, which is also the
+ * identity agent sessions run under. The helpers here serve installs with no
+ * Walnut.app. See docs/reference/macos-session-identity.md.
  *
  * They are compiled ON THE USER'S MACHINE at first use (swiftc), cached under
  * WALNUT_HOME/cache, and signed here if a certificate identity exists. This file

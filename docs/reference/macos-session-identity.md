@@ -53,11 +53,12 @@ sessions keep working if you skip it, deny it, or revoke it later. Note that thi
 grant covers the app as a whole, so it does not separate the UI from the sessions.
 
 You do not have to find that path yourself. Walnut's **Settings → macOS Access**
-has an optional *Session file access* row: **Set up…** explains what the grant
-buys, opens the right pane, and copies the path to your clipboard, so the whole
-setup is a paste. The row keeps saying "Can't be checked" afterwards, because
-macOS offers no way to read this grant back; the observable signal is that the
-popups stop.
+has a *Full Disk Access* row: **Set up…** explains what the grant buys, opens the
+right pane, and copies the path to your clipboard, so the whole setup is a paste.
+With no feature that reads protected files switched on, the row is optional and
+keeps saying "Can't be checked" afterwards, because macOS offers no way to read
+this grant back; the observable signal is that the popups stop. With one switched
+on (see below), the row checks the grant through that feature's own file.
 
 ## Calendar follows the same rule
 
@@ -72,6 +73,29 @@ installs with no Walnut.app. While Walnut has not been granted yet, a helper you
 granted earlier keeps the calendar full, and Settings says so.
 
 Moving to Walnut costs one more Calendars prompt, naming Walnut. It is the last one.
+
+## So does every other protected read
+
+Files macOS keeps behind Full Disk Access (the Screen Time store, the Focus state
+in `~/Library/DoNotDisturb/DB/`) are read by `Walnut --reader-bridge read|probe
+<path>`, the same small read-only program as the `walnut-reader` helper compiled
+into the app. So the grant that stops the session popups is also the one these
+features use, and System Settings → Full Disk Access lists **Walnut**, once.
+Plugins read the same way (`walnut.macos.readProtectedFile`, after saying why with
+`walnut.macos.useFullDiskAccess`), and the Settings row names every reason the
+grant is used for.
+
+Full Disk Access never shows a dialog: a read without it fails with "Operation not
+permitted" and nothing appears on screen. The `walnut-reader` helper remains for
+installs with no Walnut.app. While Walnut has no Full Disk Access yet, a helper you
+granted earlier keeps reading, and Settings shows the row as working through it.
+
+One store is walled beyond this grant on macOS 26: the Screen Time database
+refuses even a process that holds Full Disk Access (an MDM security agent with the
+grant is denied the same directory). The row therefore judges the grant by every
+protected file in use together: while another one reads fine (the Focus state, for
+example), a Screen Time refusal does not send you to add a program that is already
+added.
 
 ## Scope, precisely
 

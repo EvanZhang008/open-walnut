@@ -8,7 +8,7 @@
  * and they run OUTSIDE the runtime's state queue: a 10 second `shortcuts run` must not
  * hold up a status read.
  */
-import type { PluginLogger } from '@open-walnut/plugin-api/server'
+import type { Disposable, PluginLogger } from '@open-walnut/plugin-api/server'
 import type { Runner } from './exec'
 import type { MacosFocusRead } from './macos-focus'
 import {
@@ -29,8 +29,9 @@ export interface MirrorView {
   error?: string
   /** The read was refused by macOS privacy (Full Disk Access), not broken. */
   needsAccess?: boolean
-  /** The program macOS has to allow: the one running the Walnut server. */
-  processPath?: string
+  /** What to add in System Settings, Full Disk Access: Walnut itself on a host that
+   *  reads through it (`walnut.macos`), else the program running the server. */
+  grantTarget?: string
   checkedAt: number
 }
 
@@ -68,6 +69,12 @@ export interface MacosBridgeDeps {
   log: PluginLogger
   run: Runner
   readFocus: () => Promise<MacosFocusRead>
+  /** Says why Rhythm reads behind Full Disk Access, for as long as the mirror is on, so
+   *  Walnut's Settings row names it (`walnut.macos.useFullDiskAccess`). Absent on a host
+   *  that predates `walnut.macos`. */
+  useAccess?: () => Disposable
+  /** What the person adds in System Settings for those reads. */
+  grantTarget?: () => Promise<string | null>
   shortcutsDir: string
   onChange: () => void
   /** The install watch's sleep: the plugin passes one on `walnut.timers` so it stops on
@@ -90,6 +97,7 @@ export class MacosBridge {
   private watchGeneration = 0
   private watch: Promise<void> = Promise.resolve()
   private disposed = false
+  private access: Disposable | null = null
 
   constructor(private readonly deps: MacosBridgeDeps) {}
 
@@ -103,9 +111,11 @@ export class MacosBridge {
   /** `force` skips the poll interval and the refusal backoff (the App's Check again). */
   async pollMirror(now: number, wanted: boolean, force = false): Promise<void> {
     if (!this.deps.enabled || !wanted) {
+      this.releaseAccess()
       if (this.mirror.phase !== 'off') this.mirror = { phase: 'off', checkedAt: now }
       return
     }
+    if (!this.access && this.deps.useAccess && !this.disposed) this.access = this.deps.useAccess()
     const wait = this.mirror.phase === 'unavailable' ? MIRROR_BACKOFF_MS : MIRROR_POLL_MS
     if (!force && this.mirror.phase !== 'off' && now - this.mirror.checkedAt < wait) return
     const read = await this.deps.readFocus().catch((error: unknown): MacosFocusRead => ({
@@ -116,7 +126,7 @@ export class MacosBridge {
       this.mirror = {
         phase: 'unavailable',
         error: read.message,
-        ...(read.reason === 'permission' ? { needsAccess: true, processPath: process.execPath } : {}),
+        ...(read.reason === 'permission' ? { needsAccess: true, grantTarget: await this.grantTargetFor() } : {}),
         checkedAt: now,
       }
       return
@@ -192,6 +202,17 @@ export class MacosBridge {
     this.disposed = true
     this.watchGeneration++
     this.shortcuts = { ...this.shortcuts, watching: false }
+    this.releaseAccess()
+  }
+
+  private releaseAccess(): void {
+    this.access?.dispose()
+    this.access = null
+  }
+
+  private async grantTargetFor(): Promise<string> {
+    if (!this.deps.grantTarget) return process.execPath
+    return (await this.deps.grantTarget().catch(() => null)) ?? 'Walnut'
   }
 
   /**

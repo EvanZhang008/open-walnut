@@ -91,3 +91,54 @@ describe('activate', () => {
     expect(fake.notices).toEqual([])
   })
 })
+
+describe('the Focus mirror reads through walnut.macos', () => {
+  const ASSERTIONS = JSON.stringify({
+    data: [{ storeAssertionRecords: [{ assertionStartDateTimestamp: 1, assertionDetails: { assertionDetailsModeIdentifier: 'com.apple.donotdisturb.mode.default' } }] }],
+  })
+
+  /** Activate on a pretend Mac whose protected reads are faked: nothing under the real
+   *  ~/Library is read, and no `status` refresh runs (that would list real Shortcuts). */
+  async function withMirror(refuse: boolean, body: (fake: ReturnType<typeof createFakeWalnut>) => Promise<void>) {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    const fake = createFakeWalnut({
+      pluginId: 'walnut-rhythm',
+      config: { ...SAFE_CONFIG, mirror_macos_focus: true },
+      readProtectedFile: (file) => {
+        if (refuse) throw Object.assign(new Error('refused'), { code: 'EPERM' })
+        if (file.endsWith('Assertions.json')) return ASSERTIONS
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+      },
+      fullDiskAccessTarget: '/Applications/Walnut.app',
+    })
+    try {
+      await activate(fake.api)
+      await body(fake)
+    } finally {
+      await deactivate()
+      Object.defineProperty(process, 'platform', realPlatform)
+    }
+    // The plugin stopped, so Settings no longer lists its reason.
+    expect(fake.fullDiskAccessUses).toEqual([])
+  }
+
+  it('declares why and reads the Focus files through Walnut', async () => {
+    await withMirror(false, async (fake) => {
+      expect(fake.fullDiskAccessUses).toEqual([{
+        reason: "mirror your Mac's Focus into Walnut's quiet mode",
+        probe: expect.stringMatching(/\/Library\/DoNotDisturb\/DB\/Assertions\.json$/),
+      }])
+      expect(fake.protectedReads[0]).toMatch(/\/Library\/DoNotDisturb\/DB\/Assertions\.json$/)
+      const state = await op(fake, 'status')() as { macos: { mirror: { phase: string; focusName?: string } } }
+      expect(state.macos.mirror).toMatchObject({ phase: 'active', focusName: 'Do Not Disturb' })
+    })
+  })
+
+  it('a refused read names Walnut, not the server\'s node', async () => {
+    await withMirror(true, async (fake) => {
+      const state = await op(fake, 'status')() as { macos: { mirror: Record<string, unknown> } }
+      expect(state.macos.mirror).toMatchObject({ phase: 'unavailable', needsAccess: true, grantTarget: '/Applications/Walnut.app' })
+    })
+  })
+})

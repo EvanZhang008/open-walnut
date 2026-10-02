@@ -7,12 +7,13 @@
  * owned by the host, so disable and reload take all of it away, the quiet hold and the
  * sidebar ring included.
  */
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Disposable, WalnutServerApi } from '@open-walnut/plugin-api/server'
 import { runProcess } from './server/exec'
 import { MacosBridge } from './server/macos-bridge'
-import { readMacosFocus } from './server/macos-focus'
+import { focusDbDir, readMacosFocus } from './server/macos-focus'
 import { registerOps } from './server/ops'
 import { spanFromOutside, spansFromBanked } from './server/presence'
 import { buildPublicState, stateFingerprint } from './server/public-state'
@@ -38,11 +39,32 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
   }
 
   let emitState: () => void = () => undefined
+  // The Focus files sit behind Full Disk Access. Read through Walnut's one grant for it,
+  // so the person adds Walnut once instead of whichever program runs the server (often a
+  // bare `node`, a second row next to Walnut's). A host older than `walnut.macos` reads
+  // them directly, as Rhythm always did.
+  const protectedReads = typeof walnut.macos?.readProtectedFile === 'function' ? walnut.macos : null
+  const focusDir = focusDbDir()
   const macos = new MacosBridge({
     enabled: process.platform === 'darwin',
     log: walnut.log.child('macos'),
     run: runProcess,
-    readFocus: () => readMacosFocus(),
+    readFocus: () => protectedReads
+      ? readMacosFocus(focusDir, (file) => protectedReads.readProtectedFile(file).catch((error: unknown) => {
+          // No reader on this host (a test server's temporary data dir): read it directly.
+          if ((error as { code?: string }).code === 'ENOTSUP') return fsp.readFile(file, 'utf8')
+          throw error
+        }))
+      : readMacosFocus(focusDir),
+    ...(protectedReads
+      ? {
+          useAccess: () => protectedReads.useFullDiskAccess({
+            reason: "mirror your Mac's Focus into Walnut's quiet mode",
+            probe: path.join(focusDir, 'Assertions.json'),
+          }),
+          grantTarget: () => protectedReads.fullDiskAccessTarget(),
+        }
+      : {}),
     shortcutsDir: path.join(walnut.storage.dataDir, 'shortcuts'),
     onChange: () => { emitState() },
     // Host-owned, so the install watch's sleep ends with the plugin (see deactivate).

@@ -224,6 +224,8 @@ export interface DayScreenTime {
   access: ScreenTimeAccess
   /** The exact path to add in System Settings, when a grant is the fix. */
   helperPath?: string
+  /** Which program that is: Walnut itself ('app') or Walnut's reader helper. */
+  grantTo?: 'app' | 'helper'
   devices: ScreenTimeDevice[]
   /** This Mac's Apple rows. Sent only when includeThisMac. */
   localDevices?: ScreenTimeDevice[]
@@ -244,6 +246,7 @@ export interface ScreenTimeToggle {
   includeThisMac: boolean
   access: ScreenTimeAccess
   helperPath?: string
+  grantTo?: 'app' | 'helper'
 }
 
 export interface ScreenTimeRefresh {

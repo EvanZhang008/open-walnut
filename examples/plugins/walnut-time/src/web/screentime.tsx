@@ -142,6 +142,9 @@ function ScreenTimeAccessCard({ day, busy, onRetry, onOpenSettings }: {
 }) {
   const stale = day.access === 'stale_grant'
   const grantable = day.access === 'needs_grant' || stale
+  // Walnut reads through itself when the Mac app can, so the one row to add is Walnut.
+  const walnut = day.grantTo === 'app'
+  const rowName = walnut ? 'Walnut' : 'walnut-reader'
   return (
     <section className="wt-st-grant" data-testid="time-app-screentime-grant" data-access={day.access}>
       {day.access === 'unavailable' && (
@@ -164,25 +167,32 @@ function ScreenTimeAccessCard({ day, busy, onRetry, onOpenSettings }: {
       )}
       {grantable && (
         <>
-          <h3>{stale ? 'Re-add the reader to Full Disk Access' : 'One permission left'}</h3>
+          <h3>{stale ? `Re-add ${walnut ? 'Walnut' : 'the reader'} to Full Disk Access` : 'One permission left'}</h3>
           {stale
             ? (
               <p>
-                Walnut rebuilt its reader, and macOS treats a rebuilt program as a new one. The old
-                entry is still listed with its switch on, which is why nothing looks wrong. It has
-                to be removed and added again: <strong>turning the switch off and on does not
-                work.</strong>
+                {walnut ? 'Walnut was rebuilt' : 'Walnut rebuilt its reader'}, and macOS treats a
+                rebuilt program as a new one. The old entry is still listed with its switch on,
+                which is why nothing looks wrong. It has to be removed and added again:{' '}
+                <strong>turning the switch off and on does not work.</strong>
               </p>
             )
-            : (
-              <p>
-                Apple keeps Screen Time behind Full Disk Access, and macOS never asks for it. Add
-                Walnut's reader by hand, once. It is a small program that can only read one file.
-              </p>
-            )}
+            : walnut
+              ? (
+                <p>
+                  Apple keeps Screen Time behind Full Disk Access, and macOS never asks for it. Add
+                  Walnut by hand, once; the same grant also stops the file popups in sessions.
+                </p>
+              )
+              : (
+                <p>
+                  Apple keeps Screen Time behind Full Disk Access, and macOS never asks for it. Add
+                  Walnut's reader by hand, once. It is a small program that can only read one file.
+                </p>
+              )}
           <ol className="wt-st-steps">
             <li>Press the button below: it opens the right pane and copies the path for you.</li>
-            {stale && <li>Select the <code>walnut-reader</code> row and click −.</li>}
+            {stale && <li>Select the <code>{rowName}</code> row and click −.</li>}
             <li>Click + and authenticate.</li>
             <li>Press Cmd+Shift+G, then Cmd+V, and open it.</li>
             <li>Leave the switch on.</li>

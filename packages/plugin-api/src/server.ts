@@ -1174,6 +1174,39 @@ export interface UnsafeServerHost {
   readonly host: unknown
 }
 
+export interface FullDiskAccessUse {
+  /** Completes "Lets Walnut …" in Settings, e.g. "mirror your Mac's Focus into quiet mode". */
+  reason: string
+  /** One absolute path the plugin reads, which lets that row check the grant. */
+  probe?: string
+}
+
+/**
+ * The Mac's privacy walls, through Walnut's own grants. Mac only: on another platform, on a
+ * replica, or on a test server with a temporary data dir, reads reject with `ENOTSUP`.
+ */
+export interface MacosService {
+  /**
+   * Say why this plugin reads files macOS keeps behind Full Disk Access, for as long as it
+   * does. Settings, macOS Access, Full Disk Access names every reason Walnut's one grant is
+   * used for, and `readProtectedFile` refuses a plugin that has not said. Released on dispose
+   * or when the plugin stops.
+   */
+  useFullDiskAccess(use: FullDiskAccessUse): Disposable
+  /**
+   * Read a file macOS keeps behind Full Disk Access (for example `~/Library/DoNotDisturb/DB/`),
+   * through Walnut's one grant for it, so the person grants Walnut once instead of whichever
+   * program runs the server. Like `fs.readFile(path, 'utf8')`: a refused read rejects with
+   * code `EPERM`, a missing file (or one that is not a regular file) with `ENOENT`, a file
+   * over `maxBytes` (default 1 MB, at most 16 MB) with `EFBIG`, and a plugin with no live
+   * `useFullDiskAccess` with `EACCES`. Absolute paths only; read-only by construction.
+   */
+  readProtectedFile(path: string, options?: { maxBytes?: number }): Promise<string>
+  /** What the person adds in System Settings, Full Disk Access, for those reads (usually
+   *  `/Applications/Walnut.app`), or null when there is nothing to add on this host. */
+  fullDiskAccessTarget(): Promise<string | null>
+}
+
 export interface WalnutServerApi {
   readonly pluginId: string
   readonly pluginName: string
@@ -1191,6 +1224,7 @@ export interface WalnutServerApi {
   readonly log: PluginLogger
   readonly tasks: TaskService
   readonly hosts: HostService
+  readonly macos: MacosService
   readonly sessionImports: SessionImportsService
   readonly tags: TagService
   readonly config: ConfigService

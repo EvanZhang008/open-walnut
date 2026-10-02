@@ -44,7 +44,8 @@
  *
  * 1. NEVER WRITE, and not by being careful: sqlite never sees the real path. The
  *    protected files are copied out byte-for-byte through walnut-reader (which
- *    can only write to stdout) and every query runs against that private copy.
+ *    can only write to stdout; src/core/protected-reader.ts runs it inside
+ *    Walnut.app when it can) and every query runs against that private copy.
  *    The copy must include `-wal` and `-shm`: this database is in WAL mode with a
  *    multi-megabyte write-ahead log, so the main file alone is hours stale.
  *    Reading the original with `immutable=1` would be the other way to guarantee
@@ -59,16 +60,23 @@
  * ── Full Disk Access, and the failure mode that needs its own message ──
  *
  * The store is TCC-protected (its file mode is world-readable; the wall is
- * entirely TCC), so walnut-reader needs Full Disk Access. FDA cannot be
- * requested programmatically and never prompts, so a missing grant looks exactly
- * like nothing happening.
+ * entirely TCC), so the reader needs Full Disk Access: Walnut itself when
+ * Walnut.app knows `--reader-bridge`, else the walnut-reader helper. FDA cannot
+ * be requested programmatically and never prompts, so a missing grant looks
+ * exactly like nothing happening.
+ *
+ * Observed 2026-10-02 on macOS 26: the store's directory refuses even a process
+ * that HOLDS Full Disk Access (tccd answered "allowed" for Walnut, and an MDM
+ * security agent with the grant logged a sandbox deny on the same directory). So a
+ * denial here is not proof of a missing grant; the Permission Doctor judges the
+ * grant by every protected file in use (src/core/permissions/darwin-fda.ts).
  *
  * Worse, there are TWO distinct denied states with DIFFERENT fixes, and System
  * Settings makes them look identical:
  *
- *   never granted   the helper is not in the Full Disk Access list. Fix: press
+ *   never granted   the reader is not in the Full Disk Access list. Fix: press
  *                   PLUS and add it.
- *   grant is stale  the helper IS in the list and its toggle still shows ON, but
+ *   grant is stale  the reader IS in the list and its toggle still shows ON, but
  *                   the row describes an older build. An ad-hoc signed binary's
  *                   TCC identity includes its content hash, so rebuilding it
  *                   creates a program macOS has never seen. Fix: select the row,
@@ -76,58 +84,59 @@
  *                   Toggling it off and on does NOT work, and nobody guesses
  *                   this, so the UI has to say it.
  *
- * The TCC database cannot be read to tell these apart, so we record a marker the
- * first time a read succeeds on this machine. Ever-succeeded plus denied-now
- * means stale; never-succeeded means never granted. (A certificate-signed helper
- * never reaches the stale state at all, because its identity carries no hash —
- * see src/core/helper-build.ts.)
+ * The TCC database cannot be read to tell these apart, so protected-reader.ts
+ * records a marker the first time a read succeeds through a route. Ever-succeeded
+ * plus denied-now means stale; never-succeeded means never granted. (A
+ * certificate-signed program never reaches the stale state at all, because its
+ * identity carries no hash — see src/core/helper-build.ts.)
  */
 
 import { spawn } from 'node:child_process';
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { WALNUT_HOME } from '../../constants.js';
-import { ensureHelper, helperFailure, type HelperUnavailable } from '../helper-build.js';
+import type { HelperUnavailable } from '../helper-build.js';
+import {
+  EXIT_NO_PERMISSION,
+  readerRoute,
+  readerStandIn,
+  readerUnavailable,
+  routeEverSucceeded,
+  runProtectedReader,
+  type ReaderRoute,
+} from '../protected-reader.js';
 import { log } from '../../logging/index.js';
-
-/** Bumped only if walnut-reader.swift changes, which it is designed never to do. */
-const READER_VERSION = 'v1';
-/** Version-free on purpose: this is what a signed TCC grant is remembered
- *  against, so it must not move when the version does. */
-const READER_IDENTIFIER = 'dev.openwalnut.reader';
-
-const READER_SPEC = {
-  name: 'walnut-reader',
-  version: READER_VERSION,
-  identifier: READER_IDENTIFIER,
-} as const;
-
-/** walnut-reader's exit codes (src/data/walnut-reader.swift). */
-const EXIT_NO_PERMISSION = 3;
 
 /** The three files a WAL-mode SQLite database needs to be read consistently. */
 const DB_SUFFIXES = ['', '-wal', '-shm'] as const;
 
-/** Copying more than this from one file is a sign we are pointed at the wrong
- *  thing; the real store is a few megabytes. Bounds memory and disk both ways. */
-const MAX_COPY_BYTES = 256 * 1024 * 1024;
-
-/** Budget for one snapshot: three copies plus a handful of aggregate queries. */
+/** Budget for one query against the private copy. */
 const SNAPSHOT_TIMEOUT_MS = 60_000;
 
 export type ScreenTimeDenied =
-  /** Helper is not in the Full Disk Access list yet. */
+  /** The reader is not in the Full Disk Access list yet. */
   | 'needs_grant'
-  /** Helper is in the list but the entry describes an older build (remove + re-add). */
+  /** The reader is in the list but the entry describes an older build (remove + re-add). */
   | 'stale_grant';
 
+/**
+ * `helperPath` is what the user adds in System Settings → Full Disk Access: the
+ * Walnut.app bundle when Walnut reads, else the helper binary. `grantTo` says which,
+ * so the guidance can name it.
+ */
 export type ScreenTimeFailure =
   | { kind: 'unavailable'; reason: HelperUnavailable }
-  | { kind: 'denied'; denied: ScreenTimeDenied; helperPath: string }
-  | { kind: 'no_store'; helperPath: string }
+  | { kind: 'denied'; denied: ScreenTimeDenied; helperPath: string; grantTo: ReaderRoute['kind'] }
+  | { kind: 'no_store'; helperPath: string; grantTo: ReaderRoute['kind'] }
   | { kind: 'error'; message: string };
+
+export interface ScreenTimeAccessOk {
+  ok: true;
+  helperPath: string;
+  grantTo: ReaderRoute['kind'];
+  /** Set while Walnut is refused and an older walnut-reader grant is answering. */
+  standIn?: string;
+}
 
 /** One device's one day, exactly as Apple counted it. */
 export interface ScreenTimeDay {
@@ -237,62 +246,42 @@ export function resetScreenTimeStoreDir(): void {
   storeDirPromise = null;
 }
 
-/** Marker file: this machine has completed at least one successful read. Lets a
- *  later denial be reported as "stale grant" instead of "never granted". */
-function grantMarkerPath(): string {
-  return path.join(WALNUT_HOME, 'cache', 'screentime-grant-ok');
-}
-
-async function everSucceeded(): Promise<boolean> {
-  try {
-    await fsp.access(grantMarkerPath());
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function markSucceeded(): Promise<void> {
-  try {
-    await fsp.mkdir(path.dirname(grantMarkerPath()), { recursive: true });
-    await fsp.writeFile(grantMarkerPath(), new Date().toISOString());
-  } catch {
-    // A missing marker only degrades a message; never fail a good read for it.
-  }
-}
-
-/** Absolute path of the FDA helper, compiling it if needed. */
+/** What to add in System Settings for Screen Time (resolving the route may
+ *  compile the helper once). Null when this host cannot read it at all. */
 export async function screenTimeHelperPath(): Promise<string | null> {
-  return ensureHelper(READER_SPEC, 'walnut-reader.swift');
+  return (await readerRoute())?.grantTarget ?? null;
 }
 
 /**
  * Can we read the store right now? Cheap: opens and closes, moves no bytes.
  * This is what the settings UI calls to decide which guidance to show.
+ *
+ * `preferCurrent` asks the current route even while a stand-in answers (the
+ * Permission Doctor, which must see a fresh grant on its next poll).
  */
-export async function probeScreenTimeAccess(): Promise<{ ok: true; helperPath: string } | ScreenTimeFailure> {
-  const helperPath = await screenTimeHelperPath();
-  if (!helperPath) {
-    return { kind: 'unavailable', reason: helperFailure(READER_SPEC.name) ?? 'not_macos' };
-  }
+export async function probeScreenTimeAccess(
+  opts: { preferCurrent?: boolean } = {},
+): Promise<ScreenTimeAccessOk | ScreenTimeFailure> {
   const store = await screenTimeStorePath();
-  const probe = await runReader(helperPath, ['probe', store], null);
+  const probe = await runProtectedReader('probe', store, opts);
+  const route = probe.route;
+  if (!route) return { kind: 'unavailable', reason: readerUnavailable() };
+  const target = { helperPath: route.grantTarget, grantTo: route.kind };
   if (probe.code === 0) {
-    await markSucceeded();
-    return { ok: true, helperPath };
+    const standIn = probe.viaStandIn ? readerStandIn() : null;
+    return { ok: true, ...target, ...(standIn ? { standIn } : {}) };
   }
   if (probe.code === EXIT_NO_PERMISSION) {
     return {
       kind: 'denied',
-      denied: (await everSucceeded()) ? 'stale_grant' : 'needs_grant',
-      helperPath,
+      denied: (await routeEverSucceeded(route.kind)) ? 'stale_grant' : 'needs_grant',
+      ...target,
     };
   }
   // Anything else on a path we did not choose ourselves means the store is not
   // there: Screen Time was never enabled, or this macOS keeps it elsewhere.
-  return { kind: 'no_store', helperPath };
+  return { kind: 'no_store', ...target };
 }
-
 /**
  * Read the store and return the aggregated per-device days it holds.
  *
@@ -302,14 +291,13 @@ export async function probeScreenTimeAccess(): Promise<{ ok: true; helperPath: s
 export async function readScreenTime(sinceDate: string): Promise<ScreenTimeSnapshot | ScreenTimeFailure> {
   const access = await probeScreenTimeAccess();
   if (!('ok' in access)) return access;
-  const { helperPath } = access;
 
   const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-st-'));
   try {
     const store = await screenTimeStorePath();
     const copy = path.join(work, 'store.sqlite');
     for (const suffix of DB_SUFFIXES) {
-      const copied = await copyViaReader(helperPath, `${store}${suffix}`, `${copy}${suffix}`);
+      const copied = await copyProtected(`${store}${suffix}`, `${copy}${suffix}`);
       // Only the main database is required. A checkpointed store legitimately has
       // no -wal/-shm, and treating that as failure would break the common case.
       if (!copied && suffix === '') {
@@ -318,7 +306,7 @@ export async function readScreenTime(sinceDate: string): Promise<ScreenTimeSnaps
     }
     const rows = await queryCopy(copy, sinceDate);
     if ('kind' in rows) return rows;
-    rows.localDeviceIds = await localDeviceIds(helperPath, work);
+    rows.localDeviceIds = await localDeviceIds(work);
     return rows;
   } catch (err) {
     return { kind: 'error', message: err instanceof Error ? err.message : String(err) };
@@ -338,11 +326,11 @@ export async function readScreenTime(sinceDate: string): Promise<ScreenTimeSnaps
  * one row too many is recoverable by looking at it; silently dropping the data the
  * user turned this on for is not.
  */
-async function localDeviceIds(helperPath: string, work: string): Promise<string[]> {
+async function localDeviceIds(work: string): Promise<string[]> {
   const src = await screenTimeLocalStorePath();
   const copy = path.join(work, 'local.sqlite');
   for (const suffix of DB_SUFFIXES) {
-    const copied = await copyViaReader(helperPath, `${src}${suffix}`, `${copy}${suffix}`);
+    const copied = await copyProtected(`${src}${suffix}`, `${copy}${suffix}`);
     if (!copied && suffix === '') return [];
   }
   const rows = await sqlJson(copy, 'SELECT ZIDENTIFIER AS deviceId FROM ZCOREDEVICE;');
@@ -350,61 +338,11 @@ async function localDeviceIds(helperPath: string, work: string): Promise<string[
   return rows.map((r) => str(r.deviceId)).filter(Boolean);
 }
 
-/** Stream one protected file to a private path. Returns false when absent. */
-async function copyViaReader(helperPath: string, src: string, dst: string): Promise<boolean> {
-  const out = fs.createWriteStream(dst);
-  try {
-    const result = await runReader(helperPath, ['read', src], out);
-    if (result.code === 0) return true;
-    await fsp.rm(dst, { force: true }).catch(() => {});
-    return false;
-  } finally {
-    out.close();
-  }
-}
-
-interface ReaderResult { code: number | null; stderr: string; bytes: number }
-
-/** Spawn walnut-reader, optionally piping stdout into a file. Never throws. */
-function runReader(
-  helperPath: string,
-  args: string[],
-  out: fs.WriteStream | null,
-): Promise<ReaderResult> {
-  return new Promise((resolve) => {
-    const child = spawn(helperPath, args, { stdio: ['ignore', out ? 'pipe' : 'ignore', 'pipe'] });
-    let stderr = '';
-    let bytes = 0;
-    let settled = false;
-    const done = (code: number | null): void => {
-      if (settled) return;
-      settled = true;
-      resolve({ code, stderr, bytes });
-    };
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      stderr += ' (timed out)';
-      done(null);
-    }, SNAPSHOT_TIMEOUT_MS);
-    child.stderr?.on('data', (d) => { stderr += String(d).slice(0, 500); });
-    if (out && child.stdout) {
-      child.stdout.on('data', (chunk: Buffer) => {
-        bytes += chunk.length;
-        if (bytes > MAX_COPY_BYTES) {
-          child.kill('SIGKILL');
-          stderr += ' (exceeded the copy cap)';
-        }
-      });
-      child.stdout.pipe(out);
-    }
-    child.on('error', (err) => { clearTimeout(timer); stderr += err.message; done(null); });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      // Wait for the file stream to flush, or the query would open a short file.
-      if (out) out.once('close', () => done(code)).end();
-      else done(code);
-    });
-  });
+/** Stream one protected file to a private path (removed on failure). Returns
+ *  false when absent or unreadable. */
+async function copyProtected(src: string, dst: string): Promise<boolean> {
+  const result = await runProtectedReader('read', src, { dst });
+  return result.code === 0;
 }
 
 /**

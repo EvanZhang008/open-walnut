@@ -10,6 +10,7 @@
  * without a terminal.
  */
 import { test, expect } from './shortcut-test-fixture'
+import { fullDiskAccessRows, type FdaProbe } from '../../../src/core/permissions/fda-rows'
 
 /**
  * Evidence for a human reviewer, off by default: `PW_SHOTS=1` saves what the
@@ -205,4 +206,109 @@ test('a user can set up session file access from Settings, without a terminal', 
   // over the page behind it and nothing in it can be judged.
   await expect(dialog).toHaveCSS('opacity', '1')
   await shot(dialog, 'reader-dialog')
+})
+
+// ── When Walnut itself reads: one row ──────────────────────────────────────
+//
+// With a Walnut.app that knows `--reader-bridge`, protected reads run inside Walnut,
+// the same program sessions run under, so the server folds the two rows into one.
+// The rows here are built by the server's own row builder, so this spec renders
+// exactly what the server sends for each probe result.
+
+const WALNUT = '/Applications/Walnut.app'
+const HELPER = '/Users/example/.open-walnut/cache/walnut-reader-v1'
+
+function walnutReport(probe: Partial<FdaProbe>) {
+  const fda: FdaProbe = {
+    state: 'unknown', target: WALNUT, walnutReads: true, stale: false,
+    reasons: [], screenTime: false, standIn: null, ...probe,
+  }
+  return { ...REPORT, probedAt: Date.now(), permissions: fullDiskAccessRows(fda, WALNUT) }
+}
+
+/** Stub the report and the opener (it must never open System Settings for real),
+ *  then reach Settings → macOS Access by clicking, like a user. */
+async function openMacosAccess(page: import('@playwright/test').Page, report: unknown): Promise<{ opened: () => string | null }> {
+  await page.route(
+    (url) => url.pathname === '/api/permissions',
+    async (route) => {
+      if (route.request().method() !== 'GET') return route.continue()
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(report) })
+    },
+  )
+  let opened: string | null = null
+  await page.route((url) => url.pathname.endsWith('/open-settings'), async (route) => {
+    opened = new URL(route.request().url()).pathname
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, copiedPath: WALNUT }) })
+  })
+  const crashes: string[] = []
+  page.on('pageerror', (e) => crashes.push(`pageerror: ${e.message}`))
+  await page.goto('/')
+  await page.waitForLoadState('domcontentloaded')
+  await expect(page.locator('.sidebar'), `page crashed: ${JSON.stringify(crashes.slice(0, 5))}`).toBeVisible({ timeout: 60_000 })
+  if (await page.locator('.sidebar.collapsed').count()) {
+    await page.locator('.sidebar-collapse-btn').click()
+    await expect(page.locator('.sidebar.collapsed')).toHaveCount(0)
+  }
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId('settings-nav-permissions').click()
+  await expect(page.locator('#permissions')).toBeVisible()
+  return { opened: () => opened }
+}
+
+test('with Walnut reading, Full Disk Access is one row: Walnut', async ({ page }) => {
+  const { opened } = await openMacosAccess(page, walnutReport({}))
+  const section = page.locator('#permissions')
+
+  // One row for the one grant: the session row folded into it.
+  const rows = section.locator('.permission-row', { hasText: 'Full Disk Access' })
+  await expect(rows).toHaveCount(1)
+  await expect(section.locator('.permission-row', { hasText: 'Session file access' })).toHaveCount(0)
+  const row = rows.first()
+  // Nothing reads protected files yet, so it is the optional session step.
+  await expect(row).toContainText('Optional.')
+  await expect(row).toContainText('Claude Code')
+  await expect(row.locator('.permission-row-state')).toHaveText("Can't be checked")
+  await shot(section, 'walnut-one-row')
+
+  await row.getByRole('button', { name: 'Set up...' }).click()
+  const dialog = page.locator('.app-modal-overlay[role="dialog"]')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.locator('.permission-steps li')).toHaveCount(4)
+  const copyStep = dialog.locator('.permission-steps li', { hasText: 'then paste' })
+  await expect(copyStep.locator('.permission-copy code')).toHaveText(WALNUT)
+  // The why no longer talks about a separate reader helper: there is none here.
+  const why = dialog.locator('.permission-why')
+  await why.locator('summary').click()
+  await expect(why.locator('.permission-why-body')).toContainText('so macOS lists Walnut once')
+  await expect(why.locator('.permission-why-body')).not.toContainText('reader helper above')
+  await expect(dialog).toHaveCSS('opacity', '1')
+  await shot(dialog, 'walnut-one-row-dialog')
+
+  await dialog.locator('.permission-steps .permission-step-link').click()
+  await expect.poll(opened).toBe('/api/permissions/full-disk-access/open-settings')
+})
+
+test('while the older reader helper still reads, the row says so and asks for Walnut', async ({ page }) => {
+  await openMacosAccess(page, walnutReport({
+    state: 'denied',
+    reasons: ['read Apple Screen Time, including the numbers your iPhone syncs to this Mac, and keep them permanently (Apple deletes its own copy after a few weeks)'],
+    screenTime: true,
+    standIn: HELPER,
+  }))
+  const section = page.locator('#permissions')
+  const row = section.locator('.permission-row', { hasText: 'Full Disk Access' })
+  await expect(row).toHaveCount(1)
+  // Data still flows, so the tag must not read as broken.
+  await expect(row.locator('.permission-row-state')).toHaveText('Working (older copy)')
+
+  await row.getByRole('button', { name: 'Open System Settings...' }).click()
+  const dialog = page.locator('.app-modal-overlay[role="dialog"]')
+  await expect(dialog).toContainText('granting Walnut retires it')
+  await expect(dialog).toContainText('turns green once granted')
+  await expect(dialog.locator('.permission-steps li', { hasText: 'then paste' }).locator('.permission-copy code')).toHaveText(WALNUT)
+  await expect(dialog.locator('.permission-steps li', { hasText: 'Share Across Devices' })).toHaveCount(1)
+  await expect(dialog).toHaveCSS('opacity', '1')
+  await shot(dialog, 'walnut-stand-in-dialog')
 })

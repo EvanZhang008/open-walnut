@@ -13,6 +13,7 @@ import type {
   StatusItemState,
   ServiceChange,
   HostInfo,
+  FullDiskAccessUse,
   HostRunInput,
   HostRunResult,
   TaskFilingInput,
@@ -69,6 +70,12 @@ export interface FakeWalnutOptions {
   hosts?: HostInfo[]
   /** Answers `hosts.run`. Without one, a run throws: a test must never reach a real host. */
   runOnHost?: (alias: string, input: HostRunInput) => HostRunResult | Promise<HostRunResult>
+  /** Answers `macos.readProtectedFile` (after the plugin's `useFullDiskAccess`). Without one, a
+   *  read rejects with ENOTSUP, as on a host that cannot read protected files. Throw an error
+   *  with `code: 'EPERM'` to stand in for a refused read. */
+  readProtectedFile?: (path: string) => string | Promise<string>
+  /** What `macos.fullDiskAccessTarget()` answers. Default null. */
+  fullDiskAccessTarget?: string | null
   /** What `sessionImports.autoCompleteAfterDays()` answers. Default 7, the host's default. */
   importAutoCompleteAfterDays?: number
   /** Pin groups that exist before activate (`tasks.pinGroups`); their ids are tiers a
@@ -105,6 +112,10 @@ export interface FakeWalnutResult {
   statusItems: Map<string, StatusItemState>
   /** Every `hosts.run` call, in order. */
   hostRuns: Array<{ alias: string; input: HostRunInput }>
+  /** The plugin's live `macos.useFullDiskAccess` declarations. */
+  fullDiskAccessUses: FullDiskAccessUse[]
+  /** Every path `macos.readProtectedFile` was asked for, in order. */
+  protectedReads: string[]
   /** Stand in for Walnut's importer finishing a run: fires every `sessionImports.onRun` handler. */
   importRun(): Promise<void>
   /** Projects the plugin extended the importer's lifecycle to (`sessionImports.extendTo`), live ones only. */
@@ -132,6 +143,8 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const statusItems = new Map<string, StatusItemState>()
   const hostList: HostInfo[] = [{ alias: '__local__', local: true, enabled: true }, ...(options.hosts ?? []).map((host) => structuredClone(host))]
   const hostRuns: Array<{ alias: string; input: HostRunInput }> = []
+  const fullDiskAccessUses: FullDiskAccessUse[] = []
+  const protectedReads: string[] = []
   const importWatchers = new Set<() => void | Promise<void>>()
   const importRun = async () => { for (const handler of [...importWatchers]) await handler() }
   const importLifecycleProjects: string[] = []
@@ -452,6 +465,28 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
         return await options.runOnHost(alias, input)
       },
     },
+    macos: {
+      useFullDiskAccess(use) {
+        if (!use?.reason?.trim()) throw new Error('macos.useFullDiskAccess needs a reason (it is shown in Settings).')
+        const entry = structuredClone(use)
+        fullDiskAccessUses.push(entry)
+        return disposable(() => {
+          const at = fullDiskAccessUses.indexOf(entry)
+          if (at >= 0) fullDiskAccessUses.splice(at, 1)
+        })
+      },
+      async readProtectedFile(path) {
+        protectedReads.push(path)
+        if (fullDiskAccessUses.length === 0) {
+          throw Object.assign(new Error('Call walnut.macos.useFullDiskAccess({ reason }) before reading protected files.'), { code: 'EACCES' })
+        }
+        if (!options.readProtectedFile) {
+          throw Object.assign(new Error('Walnut cannot read protected files on this host'), { code: 'ENOTSUP' })
+        }
+        return await options.readProtectedFile(path)
+      },
+      async fullDiskAccessTarget() { return options.fullDiskAccessTarget ?? null },
+    },
     sessionImports: {
       tag: FAKE_IMPORT_TAG,
       projectFor: fakeImportProject,
@@ -685,5 +720,5 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     ...options.overrides,
   }
 
-  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, importRun, importLifecycleProjects, tagDisplayDefaults, tagLinkDefaults, pinGroups }
+  return { api, notices, errors, emitted, registeredOps, services, letters, answerLetter, statusItems, hostRuns, fullDiskAccessUses, protectedReads, importRun, importLifecycleProjects, tagDisplayDefaults, tagLinkDefaults, pinGroups }
 }

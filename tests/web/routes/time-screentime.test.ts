@@ -206,7 +206,7 @@ describe('GET /api/time/screentime', () => {
   it('passes a stale grant through as its own state, not as a plain denial', async () => {
     await writeConfig('time:\n  screentime:\n    enabled: true\n');
     reader.probe.mockResolvedValue({
-      kind: 'denied', denied: 'stale_grant', helperPath: reader.helperPath,
+      kind: 'denied', denied: 'stale_grant', helperPath: reader.helperPath, grantTo: 'helper',
     });
 
     const res = await request(app()).get(`/api/time/screentime?date=${TODAY}`).expect(200);
@@ -215,6 +215,18 @@ describe('GET /api/time/screentime', () => {
     // The path has to reach the client: the fix is pasting THIS path back into
     // System Settings, and no other string will do.
     expect(res.body.helperPath).toBe(reader.helperPath);
+    expect(res.body.grantTo).toBe('helper');
+  });
+
+  it('says when the program to grant is Walnut itself, so the card can name it', async () => {
+    await writeConfig('time:\n  screentime:\n    enabled: true\n');
+    reader.probe.mockResolvedValue({
+      kind: 'denied', denied: 'needs_grant', helperPath: '/Applications/Walnut.app', grantTo: 'app',
+    });
+
+    const res = await request(app()).get(`/api/time/screentime?date=${TODAY}`).expect(200);
+
+    expect(res.body).toMatchObject({ access: 'needs_grant', helperPath: '/Applications/Walnut.app', grantTo: 'app' });
   });
 
   it('distinguishes never-granted from stale, and a missing store from both', async () => {

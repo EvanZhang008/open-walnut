@@ -38,6 +38,7 @@ import type { HumanInboxAnsweredEvent } from '../event-types.js'
 import { getConfig, updatePluginConfig } from '../config-manager.js'
 import { getVersion } from '../version.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { createPluginMacos } from './plugin-macos.js'
 import { getDb } from '../task-db.js'
 import type { AgentDefinition, Task, TaskPhase, TaskPriority } from '../types.js'
 import type { SlimTask } from '../task-manager.js'
@@ -718,6 +719,8 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return runOnPluginHost(alias, input)
       },
     },
+
+    macos: createPluginMacos({ pluginId, own, assertLive }),
 
     sessionImports: {
       tag: EXTERNAL_SESSION_IMPORT_TAG,

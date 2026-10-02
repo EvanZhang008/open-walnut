@@ -160,7 +160,7 @@ export function status(runtime: RhythmRuntime, args: Record<string, unknown>): P
 
 export async function privacyOpen(runtime: RhythmRuntime): Promise<{ message: string }> {
   await runtime.macos.openPrivacySettings()
-  return { message: 'System Settings is open at Full Disk Access. Turn on the Walnut server there, then click Check again.' }
+  return { message: 'System Settings is open at Full Disk Access. Turn on Walnut there, then click Check again.' }
 }
 
 export async function shortcutsInstall(runtime: RhythmRuntime): Promise<{ message: string; steps: unknown[]; state: RhythmPublicState }> {

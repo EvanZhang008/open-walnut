@@ -26,13 +26,19 @@ function mirrorText(mirror: RhythmPublicState['macos']['mirror']): { text: strin
     case 'unavailable':
       if (mirror.needsAccess) {
         return {
-          text: `macOS keeps the Focus state private. Give the Walnut server Full Disk Access (${mirror.processPath ?? 'its node program'}), then click Check again. Or turn off "Follow macOS Focus" below.`,
+          text: `macOS keeps the Focus state private. Give ${grantName(mirror.grantTarget)} Full Disk Access, then click Check again. Or turn off "Follow macOS Focus" below.`,
           tone: 'warn',
         }
       }
       return { text: mirror.error ?? 'macOS did not allow reading the Focus state.', tone: 'warn' }
     default: return { text: 'Checking…', tone: undefined }
   }
+}
+
+/** "Walnut (/Applications/Walnut.app)" for the app, the bare path for anything else. */
+function grantName(target: string | undefined): string {
+  if (!target || target === 'Walnut') return 'Walnut'
+  return /\/Walnut\.app\/?$/.test(target) ? `Walnut (${target})` : target
 }
 
 function shortcutsText(shortcuts: RhythmPublicState['macos']['shortcuts']): { text: string; tone: Tone } {

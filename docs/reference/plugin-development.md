@@ -163,6 +163,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 |---|---|
 | `walnut.tasks` | Read, query, create, update, complete, and delete tasks; file, tag, pin and date tasks into a project or a folder in batches; list, create and delete folders; list and ensure pin groups. |
 | `walnut.hosts` | List the hosts in Settings, Hosts, and run a short script on one (over ssh for a remote host). |
+| `walnut.macos` | Read a file macOS keeps behind Full Disk Access through Walnut's one grant for it, after saying why. Mac only. |
 | `walnut.sessionImports` | The importer of outside sessions: the tag and project it files them under, a callback when an import run ends, its idle window, and a way to keep its lifecycle on tasks you file elsewhere. |
 | `walnut.tags` | Say how your plugin's tags show on tasks: a tag or a `<namespace>:*` can default to hidden (searchable and filterable still, just no pill). |
 | `walnut.config` | Read and patch only `plugins.<id>`, and subscribe to changes. |
@@ -198,6 +199,12 @@ A pin group is one of the user's custom tiers beside Focus, Satellite, Backlog a
 #### Hosts
 
 `walnut.hosts.list()` returns this machine (`__local__`) and every host in Settings, Hosts, with its hostname, user and port. `walnut.hosts.run(alias, { script, args })` runs a POSIX `sh` script on one: over ssh for a remote host (key auth only, it never prompts), directly for this machine. Arguments arrive as `$1`, `$2`, … exactly as passed, so a plugin never quotes anything for a remote shell. The run is bounded: `timeoutMs` (default 60 s, at most 10 minutes) and `maxOutputBytes` (default 8 MB) end it with `timedOut` or `truncated` rather than letting it hang or fill memory. A failure to connect is a nonzero `code` with ssh's words in `stderr`; a host Walnut does not know throws. Keep the work on the host and print a small answer: a script that reads a local database and prints one JSON line costs one connection, where copying the database over costs every byte of it.
+
+#### Files behind Full Disk Access (Mac)
+
+Some files on a Mac sit behind Full Disk Access (`~/Library/DoNotDisturb/DB/` is one). Reading them with `fs.readFile` makes macOS judge the program running the server, which on many installs is a bare `node`, so the person would have to grant `node` a second Full Disk Access row next to Walnut's. Read them through `walnut.macos` instead, and Walnut's one grant covers your plugin too.
+
+First say why, for as long as your feature needs it: `walnut.macos.useFullDiskAccess({ reason, probe })`. `reason` finishes the sentence "Lets Walnut …" in Settings, macOS Access, Full Disk Access, so that row names every use of the grant; `probe` is one absolute path you read, which lets the row check the grant. Dispose the returned handle when the feature is switched off. Then `walnut.macos.readProtectedFile(path, { maxBytes })` behaves like `fs.readFile(path, 'utf8')`: a refused read rejects with code `EPERM`, a missing file with `ENOENT`, a file over `maxBytes` (default 1 MB, at most 16 MB) with `EFBIG`, and a read with no live declaration with `EACCES`. Off macOS, on a replica, and on a test server with a temporary data dir it rejects with `ENOTSUP`. `walnut.macos.fullDiskAccessTarget()` names what the person adds in System Settings (usually `/Applications/Walnut.app`), for the words of your own guidance. Full Disk Access never shows a dialog, so a refused read is a state to explain, not an error to retry.
 
 #### Outside sessions
 

@@ -1893,6 +1893,9 @@ runSessionHostIfRequested()
 // `Walnut --calendar-bridge <subcommand> …` answers one calendar request, for the
 // same reason and under the same rule: see desktop/CalendarBridge.swift.
 runCalendarBridgeIfRequested()
+// `Walnut --reader-bridge read|probe <path>` reads one Full Disk Access file, so
+// that grant is Walnut's too: see desktop/ReaderBridge.swift.
+runReaderBridgeIfRequested()
 
 let app = NSApplication.shared
 let delegate = AppDelegate()

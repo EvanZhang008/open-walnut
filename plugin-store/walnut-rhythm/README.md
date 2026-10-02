@@ -69,7 +69,7 @@ Ops are named `walnut_rhythm_<name>`. The everyday ones can be called from any W
 
 ## macOS Focus
 
-**Following the Mac's Focus.** With `mirror_macos_focus` on, Rhythm reads two files every 30 seconds: `~/Library/DoNotDisturb/DB/Assertions.json` (a Focus is on while `data[0].storeAssertionRecords` is not empty) and `~/Library/DoNotDisturb/DB/ModeConfigurations.json` (for the Focus's name). While one is on, Walnut quiet mode shows "macOS Focus: <name>" and stand-up reminders wait. Only these two files are read, never a folder scan. Some macOS versions only allow that read with Full Disk Access; when it is refused, the App says so and Rhythm checks again every 10 minutes. A Focus turned on by a schedule may not appear in that file.
+**Following the Mac's Focus.** With `mirror_macos_focus` on, Rhythm reads two files every 30 seconds: `~/Library/DoNotDisturb/DB/Assertions.json` (a Focus is on while `data[0].storeAssertionRecords` is not empty) and `~/Library/DoNotDisturb/DB/ModeConfigurations.json` (for the Focus's name). While one is on, Walnut quiet mode shows "macOS Focus: <name>" and stand-up reminders wait. Only these two files are read, never a folder scan. Those files sit behind Full Disk Access, so Rhythm reads them through Walnut's one grant for it (`walnut.macos.readProtectedFile`): the program to allow is Walnut, the same row in System Settings that stops the file popups in sessions, never the `node` running the server. When it is refused, the App says so and Rhythm checks again every 10 minutes. A Focus turned on by a schedule may not appear in that file.
 
 Rhythm owns one quiet hold. When a focus block and a macOS Focus overlap, the hold names both and lasts until both are over. Rhythm never removes a quiet hold you set yourself.
 
