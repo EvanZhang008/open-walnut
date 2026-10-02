@@ -37,6 +37,12 @@ describe('resolvePane', () => {
     expect(resolvePane(`#${hostRowId('buildbox')}`, [])).toMatchObject({ paneId: owner, targetId: 'rh-host-buildbox' })
   })
 
+  it('opens the owning pane for a ROW link and flags it as a row', () => {
+    // The strip's "Adjust panels" toast links here: General, scrolled to and
+    // flashing the Session panels control rather than the top of the pane.
+    expect(resolvePane('#session-panels', [])).toEqual({ paneId: 'general', targetId: 'settings-session-panels', known: true, row: true })
+  })
+
   it('still sends an unknown hash to the default pane', () => {
     vi.spyOn(log, 'warn').mockImplementation(() => {})
     expect(resolvePane('#rh-hostx', [])).toEqual({ paneId: 'general', targetId: null, known: false })

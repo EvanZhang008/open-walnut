@@ -446,6 +446,20 @@
   100% { background-color: transparent; }
 }
 
+/* A row reached by deep link from another page (the strip's "Adjust panels"):
+   the person has not seen this pane yet, so pulse twice and ring the row. */
+.settings-anchor-flash-strong {
+  animation: settings-anchor-flash-strong 3000ms ease-out;
+  border-radius: 8px;
+}
+
+@keyframes settings-anchor-flash-strong {
+  0%, 20% { background-color: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: 0 0 0 2px var(--accent); }
+  40% { background-color: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: 0 0 0 2px transparent; }
+  60% { background-color: color-mix(in srgb, var(--accent) 24%, transparent); box-shadow: 0 0 0 2px var(--accent); }
+  100% { background-color: transparent; box-shadow: 0 0 0 2px transparent; }
+}
+
 /* ── Pane-level states: config error, plugin off, section crash ── */
 .settings-container .settings-pane-state-centered {
   margin-top: 12vh;

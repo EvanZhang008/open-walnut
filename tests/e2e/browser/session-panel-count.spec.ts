@@ -552,6 +552,9 @@ test('the session kebab exposes the panel count and applies it immediately', asy
   const menu = await openSessionKebab(page)
   const row = panelsRow(menu)
   await expect(row).toBeVisible()
+  // FIRST row of the menu, above Task detail: the strip's own control, found before
+  // any task or session action (it used to sit between the view toggles, unseen).
+  await expect(menu.locator(':scope > *').first()).toHaveClass(/task-kebab-tier/)
   // Same options as Settings, plus Auto — one control, one vocabulary.
   await expect(row.locator('.task-kebab-tier-btn')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
   // It reflects the CURRENT value, so the menu is a readout as well as a control.

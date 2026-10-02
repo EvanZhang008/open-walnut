@@ -69,7 +69,7 @@ import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
-import { SessionKebabSection } from './SessionKebabSection';
+import { PanelCountRow, SessionKebabSection } from './SessionKebabSection';
 import { ComposerModelPill } from './ComposerModelPill';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
@@ -2021,6 +2021,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   // cursor: the header is the session's object, so its actions
                   // belong to the gesture people already try there.
                   contextMenuScope=".session-panel-header"
+                  // The strip's own control leads the menu (PanelCountRow explains).
+                  leadingSection={(close) => <PanelCountRow onAfterAction={close} />}
                   extraSection={(close) => (
                     <SessionKebabSection
                       sessionId={sessionId}

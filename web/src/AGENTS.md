@@ -82,6 +82,15 @@ show inline after the open ones, other completed hits that show the query fold i
   change (count, resize) trims all the way. Restores go through `fitRestoredColumns`, not a
   positional `slice`, which cut the rightmost pin. Spec:
   `tests/e2e/browser/session-panel-lock-grant.spec.ts`.
+  **Shrinking back is the user's own move, never a heuristic** (decided 2026-10-01 against an
+  idle/"finished" auto-fold): close a column, or pick the count. What the strip owes them is
+  finding that count: the grow moment raises a `hint` toast ("Opened a 4th panel: all 3 are
+  pinned", kind `hint` in `contexts/notifications/types.ts`, ephemeral, 8s) whose "Adjust
+  panels" button deep-links to `/settings#session-panels`, a ROW target (`ROW_TARGETS` in
+  `components/settings/settings-routing.ts`) that opens General, lands the row a third down and
+  pulses it (`settings-anchor-flash-strong`); and the Panels 1-5/Auto row is the FIRST row of
+  the session kebab (`leadingSection` of `TaskQuickActions`, above Task detail), not a line
+  between the view toggles.
 - **One browser, one task store.** `TasksContext` (`useTasks`) is the only in-browser truth for
   a task row. A surface that shows a task reads it from there (`useStoreTask(id)`) and writes
   through the store's optimistic mutators (`update` / `setPhase` / `moveTask`), so the board

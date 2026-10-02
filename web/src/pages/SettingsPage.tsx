@@ -120,7 +120,9 @@ interface AnchorRequest {
   id: string
   /** `start`: under the compact header; `third`: a Find a setting row hit, a third down. */
   mode: 'start' | 'third'
-  flash: boolean
+  /** `strong`: a deep link from another page, where the person has not seen the
+   *  pane yet, so the row pulses longer than a Find a setting hit flashes. */
+  flash: boolean | 'strong'
 }
 
 /**
@@ -170,7 +172,7 @@ function holdAnchor(scroller: HTMLElement, req: AnchorRequest): () => void {
       foundAt = now
       lastMoveAt = now
       correct()
-      if (req.flash) flashRow(el)
+      if (req.flash) flashRow(el, req.flash === 'strong')
       raf = requestAnimationFrame(frame)
       return
     }
@@ -193,12 +195,13 @@ function holdAnchor(scroller: HTMLElement, req: AnchorRequest): () => void {
   return stop
 }
 
-function flashRow(el: HTMLElement) {
+function flashRow(el: HTMLElement, strong = false) {
   const row = el.closest<HTMLElement>('.settings-row') ?? el
-  row.classList.remove('settings-anchor-flash')
+  const cls = strong ? 'settings-anchor-flash-strong' : 'settings-anchor-flash'
+  row.classList.remove('settings-anchor-flash', 'settings-anchor-flash-strong')
   void row.offsetWidth
-  row.classList.add('settings-anchor-flash')
-  window.setTimeout(() => row.classList.remove('settings-anchor-flash'), 1300)
+  row.classList.add(cls)
+  window.setTimeout(() => row.classList.remove(cls), strong ? 3100 : 1300)
 }
 
 type PaneView =
@@ -285,7 +288,7 @@ export function SettingsPage() {
   const leadSectionId = view.kind === 'core' || view.kind === 'plugin' ? view.paneId : null
   return (
     <SettingsPaneProvider paneId={view.paneId} leadSectionId={leadSectionId} metaFor={model.metaFor}>
-      <SettingsPageLayout model={model} view={view} targetId={resolved.known ? resolved.targetId : null} hash={hash} />
+      <SettingsPageLayout model={model} view={view} targetId={resolved.known ? resolved.targetId : null} rowTarget={!!resolved.row} hash={hash} />
     </SettingsPaneProvider>
   )
 }
@@ -294,10 +297,13 @@ interface LayoutProps {
   model: SettingsNavModel
   view: PaneView
   targetId: string | null
+  /** `targetId` is one row reached by deep link (ROW_TARGETS): land it a third
+   *  down and flash it, as a Find a setting hit does. */
+  rowTarget: boolean
   hash: string
 }
 
-function SettingsPageLayout({ model, view, targetId, hash }: LayoutProps) {
+function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutProps) {
   const { config, loading, error, saveSection, reload } = useSettingsConfig()
   const pluginUi = usePluginUi()
   const navigate = useNavigate()
@@ -404,8 +410,10 @@ function SettingsPageLayout({ model, view, targetId, hash }: LayoutProps) {
   // A deep link to a folded section (or a lead) holds it in view while the pane settles.
   useEffect(() => {
     if (!scroller || !paneReady || !targetId) return
-    return holdAnchor(scroller, { id: targetId, mode: 'start', flash: false })
-  }, [scroller, paneReady, targetId, hash])
+    return holdAnchor(scroller, rowTarget
+      ? { id: targetId, mode: 'third', flash: 'strong' }
+      : { id: targetId, mode: 'start', flash: false })
+  }, [scroller, paneReady, targetId, rowTarget, hash])
 
   // After a nav open: focus the pane title (Enter in Find a setting) and scroll to a row hit.
   useEffect(() => {

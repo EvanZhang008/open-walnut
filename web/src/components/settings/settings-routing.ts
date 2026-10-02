@@ -45,6 +45,19 @@ export interface ResolvedPane {
   targetId: string | null
   /** False when the hash named nothing known (the General fallback). */
   known: boolean
+  /** The target is ONE ROW (a deep link from elsewhere in the app), not a section:
+   *  the page lands it a third down and flashes it so the eye finds the control. */
+  row?: boolean
+}
+
+/**
+ * Hashes that name one ROW rather than a pane or section: `#<key>` opens the
+ * owning pane and highlights that control. For links from the place a setting
+ * takes effect (the session strip pointing at its panel count), where "open
+ * General" alone would leave the person hunting.
+ */
+export const ROW_TARGETS: Readonly<Record<string, { paneId: string; elementId: string }>> = {
+  'session-panels': { paneId: 'general', elementId: 'settings-session-panels' },
 }
 
 function decodeHash(hash: string): string {
@@ -70,6 +83,8 @@ export function resolvePane(
   if (!id) return { paneId: DEFAULT_PANE_ID, targetId: null, known: true }
   const owner = NAV_OWNER[id]
   if (owner) return { paneId: owner, targetId: owner === id ? null : id, known: true }
+  const row = ROW_TARGETS[id]
+  if (row) return { paneId: row.paneId, targetId: row.elementId, known: true, row: true }
   // One host's row inside Remote Hosts (`#rh-host-<alias>`, host-settings-nav.ts):
   // open the pane that section renders under and scroll to that row.
   if (id.startsWith(HOST_ROW_PREFIX)) {

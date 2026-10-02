@@ -71,6 +71,7 @@ import {
   trimUnlockedToMax,
   panelBudget,
   fitRestoredColumns,
+  realColumnCount,
   addSessionColumn,
   forceAddSessionColumn,
   removeSessionColumn,
@@ -87,6 +88,11 @@ import { deriveRepairTarget, type WalnutRepairTarget } from './repair-target';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 
 const SS_TASK_KEY = 'open-walnut-home-focused-task';
+
+/** "4th panel": the strip never passes MAX_PANELS, so four forms cover it. */
+function ordinal(n: number): string {
+  return n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`;
+}
 const SS_SUPPRESS_DETAIL_KEY = 'open-walnut-home-suppress-detail';
 const SS_SESSION_COLUMNS_KEY = 'open-walnut-home-session-columns';
 const SS_TODO_SCROLL_KEY = 'walnut-home-todo-scroll';
@@ -1508,7 +1514,24 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       sessionOpenersRef.current.set(sessionId, active);
     }
     setSessionColumns(next);
-  }, [showOperationError]);
+    // The strip just grew past the user's count (every panel was pinned, so the
+    // open took the lock grant): say so, and put the setting one click away. The
+    // one-in-one-out reuse of that slot is not growth and stays quiet.
+    const count = triageOpenRef.current ? maxPanelsRef.current - 1 : maxPanelsRef.current;
+    const realBefore = realColumnCount(current);
+    const realAfter = realColumnCount(next);
+    if (realAfter > realBefore && realAfter > count) {
+      notify({
+        kind: 'hint',
+        severity: 'info',
+        title: `Opened a ${ordinal(realAfter)} panel: all ${count} are pinned`,
+        body: `Pinned panels keep their place, so the strip grew by one. Close any panel to go back to ${count}, or change the count.`,
+        dedupKey: 'session-panels-grant',
+        persistent: false,
+        action: { label: 'Adjust panels', kind: 'navigate', to: '/settings#session-panels' },
+      });
+    }
+  }, [showOperationError, notify]);
 
   const handleToggleSession = openSessionOrToast;
 

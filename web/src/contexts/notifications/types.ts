@@ -15,7 +15,12 @@ export type NotificationKind =
   | 'letter'
   /** A plugin's timed prompt (stand-up, focus block over): long toast, chime,
    *  up to three `actions`. Silenced by quiet mode like everything but asks. */
-  | 'reminder';
+  | 'reminder'
+  /** The UI explaining something it just did on its own (the session strip grew a
+   *  column because every panel was pinned) and pointing at the setting behind it.
+   *  Answers the human's own click, so ephemeral like `sort`, but long enough to
+   *  read a sentence and press the button; never in the feed. */
+  | 'hint';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
 /** One option an ACP provider offered for a permission request. */
@@ -144,6 +149,8 @@ export const TOAST_DURATION_MS: Record<NotificationKind, number> = {
   // A reminder waits for the human: two minutes, and one of its buttons (or the
   // ×) takes it down earlier. A 10s toast would vanish before they looked up.
   reminder: 120_000,
+  // A sentence plus a button: the 3s of a sort hint is too short to act on.
+  hint: 8000,
 };
 
 /**
@@ -164,6 +171,7 @@ export const IS_PERSISTENT: Record<NotificationKind, boolean> = {
   hook: true,
   letter: true,
   reminder: true,
+  hint: false,
 };
 
 /**
@@ -193,5 +201,7 @@ export function SHOULD_TOAST(n: { kind: NotificationKind; severity: Notification
     // The point of a reminder is to interrupt (quiet mode aside, which the
     // provider applies on top of this policy).
     case 'reminder': return true;
+    // Ephemeral with no feed copy: the toast is its only surface.
+    case 'hint': return true;
   }
 }

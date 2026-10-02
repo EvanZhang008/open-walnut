@@ -71,13 +71,18 @@ test('three pinned panels: the next session opens a 4th column, the slot is shar
     await expect(lockedButtons(page)).toHaveCount(n, { timeout: 10_000 })
   }
 
-  // ── 1. Open a session: a 4th column, no toast, no pin evicted ──
+  // ── 1. Open a session: a 4th column, no refusal, no pin evicted ──
   await openViaFinder(page, SERVICE.query, SERVICE.id)
   await expect(homeColumns(page)).toHaveCount(4)
   await expect(lockedButtons(page)).toHaveCount(3)
   await expect(lockedToast(page)).toHaveCount(0)
   // The new column lands leftmost of the real region, the pins keep the right.
   expect((await stripIds(page))[0]).toBe(SERVICE.id)
+  // The strip says what it just did and puts the setting one click away: the
+  // hint toast names the cause ("all 3 are pinned") and carries "Adjust panels".
+  const hint = page.locator('.notification-toast', { hasText: 'Opened a 4th panel' })
+  await expect(hint).toBeVisible()
+  await expect(hint).toContainText('all 3 are pinned')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/01-fourth-column.png`, fullPage: false })
 
   // ── 2. The free slot is shared: the next open replaces it, strip stays at 4 ──
@@ -104,6 +109,40 @@ test('three pinned panels: the next session opens a 4th column, the slot is shar
   expect(after[0]).toBe(SERVICE.id)
   expect(after.filter((id) => before.includes(id))).toHaveLength(2)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03-back-to-three.png`, fullPage: false })
+})
+
+test('"Adjust panels" on the hint lands on Settings with the panel count highlighted', async ({ page }) => {
+  await page.setViewportSize({ width: 2400, height: 1000 })
+  await setPanelMode(page, '3')
+  await seedColumns(page, SIDS)
+  await loadHome(page)
+  await expect(homeColumns(page)).toHaveCount(3, { timeout: 25_000 })
+  for (let n = 1; n <= 3; n++) {
+    await lockLeftmostPanel(page)
+    await expect(lockedButtons(page)).toHaveCount(n, { timeout: 10_000 })
+  }
+  await openViaFinder(page, SERVICE.query, SERVICE.id)
+  const hint = page.locator('.notification-toast', { hasText: 'Opened a 4th panel' })
+  await expect(hint).toBeVisible()
+
+  // The button is the whole point: no hunting through Settings for the row.
+  await hint.locator('.notification-toast-action', { hasText: 'Adjust panels' }).click()
+  await expect(page).toHaveURL(/\/settings#session-panels$/)
+  const picker = page.locator('#settings-session-panels')
+  await expect(picker).toBeVisible({ timeout: 20_000 })
+  await expect(picker).toBeInViewport()
+  // The row pulses so the eye lands on it (the deep-link flash, 3s).
+  const row = page.getByTestId('settings-session-panels-row')
+  await expect(row).toHaveClass(/settings-anchor-flash-strong/, { timeout: 5_000 })
+  await expect(picker.locator('.settings-segment[aria-checked="true"]')).toHaveText(['3'])
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/05-settings-highlight.png`, fullPage: false })
+
+  // Picking 4 here is the "keep it" path; the strip then holds 4 by the setting, not the grant.
+  await picker.locator('.settings-segment').filter({ hasText: /^4$/ }).click()
+  await expect.poll(async () => (await (await page.request.get('/api/config')).json())?.config?.ui?.session_panels, { timeout: 20_000 }).toBe('4')
+  await page.locator('.sidebar a[href="/"]').first().click()
+  await expect(homeColumns(page)).toHaveCount(4, { timeout: 20_000 })
+  await expect(lockedButtons(page)).toHaveCount(3)
 })
 
 test('a granted 4th column survives a reload with its three pins', async ({ page }) => {

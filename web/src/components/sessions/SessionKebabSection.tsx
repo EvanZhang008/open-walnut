@@ -36,8 +36,14 @@ const PANEL_CHOICES: SessionPanelMode[] = [
  * would be meaningless), hence the "all sessions" hint in the title: switching it
  * from any session's menu changes the layout everywhere. Kept as its own component
  * so the hook's config fetch only runs when a menu is actually open.
+ *
+ * Rendered as the kebab's `leadingSection`, the FIRST row of the menu, above the
+ * task rows: everything else in the menu is about this task or this session, the
+ * panel count is about the strip itself, and it is the control people could not
+ * find when it sat between the view toggles (2026-10-01). Being first also keeps
+ * it far from Restart / Terminate at the bottom.
  */
-function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void }) {
+export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void }) {
   const { mode, setMode } = useSessionPanelMode();
   return (
     <div className="task-kebab-tier">
@@ -213,10 +219,6 @@ export function SessionKebabSection({
         <span className="task-kebab-icon">💬</span>
         <span>Msgs{msgCount && msgCount > 0 ? ` (${msgCount})` : ''}</span>
       </button>
-
-      {/* Layout control — grouped with the other view toggles above, deliberately far
-          from Restart/Terminate so a mis-click near the destructive items can't land here. */}
-      <PanelCountRow onAfterAction={onAfterAction} />
 
       <div className="task-kebab-divider" />
 

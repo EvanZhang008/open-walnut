@@ -66,6 +66,12 @@ interface TaskQuickActionsProps {
    * session so those actions stay reachable.
    */
   extraSection?: (close: () => void) => ReactNode;
+  /**
+   * Content at the very TOP of the kebab, above the task rows and its own divider:
+   * the controls of the surface itself (the session strip's panel count), which a
+   * person reaches for constantly and should find before any task or session action.
+   */
+  leadingSection?: (close: () => void) => ReactNode;
   /** Open the task's full-screen detail modal (same one the home task panel opens). */
   onOpenTaskDetail?: (taskId: string) => void;
   /**
@@ -78,7 +84,7 @@ interface TaskQuickActionsProps {
   contextMenuScope?: string;
 }
 
-export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', extraSection, onOpenTaskDetail, contextMenuScope }: TaskQuickActionsProps) {
+export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', extraSection, leadingSection, onOpenTaskDetail, contextMenuScope }: TaskQuickActionsProps) {
   const integrations = useIntegrations();
   const [task, setTask] = useState<Task | null>(externalTask ?? null);
   // Writes go through the shared task store when it carries this row: the
@@ -351,6 +357,13 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
           className="task-kebab-menu"
           style={menuPlacementStyle(kebabPos)}
         >
+          {/* The surface's own controls first (the panel count), then the task. */}
+          {leadingSection && (
+            <>
+              {leadingSection(closeKebab)}
+              {(task || extraSection) && <div className="task-kebab-divider" />}
+            </>
+          )}
           {task && (<>
           {/* Task detail — opens the same full-screen modal as the home task panel */}
           {onOpenTaskDetail && (

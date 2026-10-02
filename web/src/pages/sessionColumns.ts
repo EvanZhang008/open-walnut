@@ -28,6 +28,11 @@ function realColumns(cols: SessionSlot[]): SessionSlot[] {
   return cols.filter(c => !isPlaceholderColumnId(c.id));
 }
 
+/** How many columns count against the budget right now. */
+export function realColumnCount(cols: SessionSlot[]): number {
+  return realColumns(cols).length;
+}
+
 /**
  * The column budget the strip gets right now.
  *
