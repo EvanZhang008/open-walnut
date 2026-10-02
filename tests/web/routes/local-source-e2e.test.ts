@@ -195,9 +195,10 @@ describe('Local source task — full E2E lifecycle', () => {
       .send({ add_tags: ['tag-a', 'tag-b', 'tag-c'] });
 
     expect(res.status).toBe(200);
-    expect(res.body.task.tags).toContain('tag-a');
-    expect(res.body.task.tags).toContain('tag-b');
-    expect(res.body.task.tags).toContain('tag-c');
+    // A plain word is stored as a label (every tag is key:value).
+    expect(res.body.task.tags).toContain('label:tag-a');
+    expect(res.body.task.tags).toContain('label:tag-b');
+    expect(res.body.task.tags).toContain('label:tag-c');
   });
 
   it('removes a tag via remove_tags', async () => {
@@ -206,7 +207,7 @@ describe('Local source task — full E2E lifecycle', () => {
       .send({ remove_tags: ['tag-c'] });
 
     expect(res.status).toBe(200);
-    expect(res.body.task.tags).not.toContain('tag-c');
+    expect(res.body.task.tags).not.toContain('label:tag-c');
     expect(res.body.task.tags).toHaveLength(2);
   });
 
@@ -216,7 +217,7 @@ describe('Local source task — full E2E lifecycle', () => {
       .send({ set_tags: ['only-tag'] });
 
     expect(res.status).toBe(200);
-    expect(res.body.task.tags).toEqual(['only-tag']);
+    expect(res.body.task.tags).toEqual(['label:only-tag']);
   });
 
   // ─── FILTER BY SOURCE ─────────────────────────────────────

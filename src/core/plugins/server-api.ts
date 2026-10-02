@@ -747,7 +747,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     },
 
     tags: {
-      setDefaultDisplay(pattern: string, display: 'shown' | 'hidden') {
+      setDefaultDisplay(pattern: string, display: 'shown' | 'value' | 'hidden') {
         assertLive('tags.setDefaultDisplay')
         return own(toDisposable(setPluginTagDisplay(pluginId, pattern, display, options.pluginName)))
       },

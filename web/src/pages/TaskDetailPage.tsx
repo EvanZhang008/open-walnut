@@ -12,6 +12,7 @@ import { PriorityBadge } from '@/components/common/PriorityBadge';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { TagEditor } from '@/components/tasks/TagEditor';
+import { dateTags } from '../../../src/core/tag-model';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useEvent } from '@/hooks/useWebSocket';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
@@ -821,6 +822,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           <span className="tdv2-k">Tags</span>
           <TagEditor
             tags={task.tags ?? []}
+            derived={dateTags(task)}
             onAdd={async (tag) => {
               if (sharedStore) { sharedStore.update(task.id, { add_tags: [tag] }); return; }
               mergeDetail(await addTag(task.id, tag));

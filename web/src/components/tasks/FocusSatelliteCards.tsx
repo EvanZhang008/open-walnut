@@ -493,7 +493,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         {task.title}
       </span>
       {/* The task's own tags, as on a list row. */}
-      <TaskTagPills tags={task.tags} />
+      <TaskTagPills task={task} />
       <SubtaskPill task={task} />
       <LeaderPill task={task} />
       <CronPill sessionId={resolveTaskSessionId(task)} />

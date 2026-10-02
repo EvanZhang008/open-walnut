@@ -254,6 +254,29 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Tags in the session header (task-tags-key-value.spec.ts): a ticket run's
+        // tags, one of them a plain word an older build stored bare (`oncall`), which
+        // the database open rewrites as `label:oncall`.
+        id: 'pw-task-tags',
+        title: 'Tagged ticket run fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        tags: ['tkt:V2391099522', 'tkt-id:4a1b6c2e-90d3-4f1e-8a77-5c3d2b1a0f99', 'sev:2', 'oncall'],
+        session_ids: ['pw-tags-session'],
+        active_session_ids: [],
+        session_id: 'pw-tags-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Bare task ids in session output (bare-task-id-pills.spec.ts): this
         // task's session names the two tasks below by id only, the way a model
         // does, and each id must render as a clickable task pill.
@@ -2535,6 +2558,19 @@ await fs.writeFile(
         messageCount: 1,
         cwd: vscodeFixtureRoot,
         title: 'Editor fixture session',
+      },
+      {
+        claudeSessionId: 'pw-tags-session',
+        taskId: 'pw-task-tags',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 20_000).toISOString(),
+        messageCount: 1,
+        cwd: process.cwd(),
+        title: 'Tagged ticket run fixture session',
       },
       {
         claudeSessionId: 'pw-service-session',

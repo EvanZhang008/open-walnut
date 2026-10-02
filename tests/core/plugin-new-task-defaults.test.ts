@@ -134,7 +134,7 @@ describe('a task created in a project the plugin claims gets the plugin defaults
     expect(stored?.due_date).toBe('2026-10-01');
     expect(stored?.start_date).toBe('2026-09-20');
     expect(stored?.end_date).toBe('2026-09-21');
-    expect(stored?.tags).toEqual(['triage']);
+    expect(stored?.tags).toEqual(['label:triage']);
 
     const fromDefaults = webUiUpdates.filter((u) => u.source === 'plugin-defaults');
     expect(fromDefaults).toHaveLength(1);
@@ -196,8 +196,8 @@ describe('an explicit value always wins over a default', () => {
     const bare = await addTask({ title: 'No tags', project: PROJECT });
     const tagged = await addTask({ title: 'Has tags', project: PROJECT, tags: ['mine'] });
 
-    expect((await getTask(bare.task.id))?.tags).toEqual(['from-plugin']);
-    expect((await getTask(tagged.task.id))?.tags).toEqual(['mine']);
+    expect((await getTask(bare.task.id))?.tags).toEqual(['label:from-plugin']);
+    expect((await getTask(tagged.task.id))?.tags).toEqual(['label:mine']);
   });
 });
 

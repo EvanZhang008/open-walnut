@@ -86,7 +86,7 @@ describe('replica-side reads keep working', () => {
 
     const tags = await request(app).get('/api/v1/tasks/meta/tags')
     expect(tags.status).toBe(200)
-    expect(tags.body.tags.some((t: { tag: string }) => t.tag === 'mobile')).toBe(true)
+    expect(tags.body.tags.some((t: { tag: string }) => t.tag === 'label:mobile')).toBe(true)
 
     expect((await request(app).get('/api/v1/tasks/groups')).status).toBe(200)
     expect((await request(app).get('/api/v1/projects')).status).toBe(200)

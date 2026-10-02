@@ -52,6 +52,8 @@ import { tierLabelOf } from '@/components/sessions/task-meta-constants';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { ImportedPill } from '@/components/tasks/ImportedPill';
 import { TaskTagPills } from '@/components/tasks/TaskTagPills';
+import { TagEditor } from '@/components/tasks/TagEditor';
+import { dateTags } from '../../../../src/core/tag-model';
 import { SubtaskPill } from './SubtaskPill';
 import { LeaderPill } from './LeaderPill';
 import { countSubtasksByParent, resolveParentRef, withSubtaskContext } from './task-tree-index';
@@ -67,6 +69,7 @@ import {
   taskReferenceMatchField,
 } from './search-results';
 import { arrangeSearchResults, taskMatchesLiterally } from './search-relevance';
+import { taskMatchesDateTag } from './date-tag-search';
 import '@/styles/todo-search.css';
 import '@/styles/todo-empty-board.css';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
@@ -1400,7 +1403,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <CronPill sessionId={resolveTaskSessionId(task)} />
           <TriggerPill taskId={task.id} />
           <ImportedPill task={task} />
-          <TaskTagPills tags={task.tags} />
+          <TaskTagPills task={task} />
           <SubtaskPill task={task} />
           <LeaderPill task={task} />
           {/* Info pills + kebab — same line as title, no second row */}
@@ -2121,6 +2124,12 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
     await apiUpdateTask(task.id, { start_date: date ?? '' });
   };
 
+  // Tags edit in place, the same way: through the store when it has the row.
+  const handleTags = (change: { add_tags?: string[]; remove_tags?: string[] }) => {
+    if (store?.tasks.some((t) => t.id === task.id)) { store.update(task.id, change); return; }
+    void apiUpdateTask(task.id, change).catch(() => { /* the row keeps its tags; the pane re-reads on the next event */ });
+  };
+
   // Child tasks — tasks whose parent_task_id matches this task (handles prefix parent IDs)
   const childTasks = useMemo(() => {
     if (!allTasks) return [];
@@ -2247,7 +2256,13 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
             </span>
           )}
           <PluginFieldPills task={task} />
-          <TaskTagPills tags={task.tags} max={8} />
+          <TagEditor
+            tags={task.tags ?? []}
+            derived={dateTags(task)}
+            placeholder="+ Tag"
+            onAdd={(tag) => handleTags({ add_tags: [tag] })}
+            onRemove={(tag) => handleTags({ remove_tags: [tag] })}
+          />
         </div>
         <div className="todo-detail-dates text-xs text-muted">
           {/* The id is a reference, so it rides the metadata line rather than
@@ -5728,7 +5743,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const lowerQuery = deferredSearchQuery.trim().toLowerCase();
     // Keep the urgent pass on small metadata fields; descriptions and summaries can
     // contain enough text to block an input frame across a large task collection.
-    const metadataMatches = eligibleTasks.filter((t) => taskMatchesLiterally(t, lowerQuery));
+    // `created:…` / `updated:…` name the task's own dates, which are never stored as tags.
+    const metadataMatches = eligibleTasks.filter((t) => taskMatchesLiterally(t, lowerQuery) || taskMatchesDateTag(t, lowerQuery));
 
     if (!searchResults) {
       const metadataTaskIds = new Set(metadataMatches.map((task) => task.id));
@@ -5796,7 +5812,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const lowerQuery = deferredSearchQuery.trim().toLowerCase();
     const openIds = new Set(searchOpenMatches.map((task) => task.id));
     const evidenced = new Set(searchResults?.filter((result) => result.showsQuery).map((result) => result.taskId));
-    const isLiteral = (task: Task) => taskMatchesLiterally(task, lowerQuery);
+    const isLiteral = (task: Task) => taskMatchesLiterally(task, lowerQuery) || taskMatchesDateTag(task, lowerQuery);
     return arrangeSearchResults(searchMatches, {
       isOpen: (task) => openIds.has(task.id),
       isLiteral,

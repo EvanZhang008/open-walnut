@@ -1,6 +1,6 @@
 /**
  * A task's own tags on the Homepage: pills on the row and on a pinned card (two, then
- * "+N") and in the detail pane. An id tag like `ticket:V1234567890` reads whole when
+ * "+N") and in the detail pane (its tag editor). An id tag like `ticket:V1234567890` reads whole when
  * the row has room, machine tags ("walnut:…") and hidden namespaces never show as a
  * tag, the pills never starve the title or push the row's controls out, and a tag
  * added elsewhere appears live.
@@ -200,12 +200,18 @@ test('tags show as pills on the row and in the detail pane, and follow live edit
   await api(`/api/tasks/${plain}`, 'PATCH', { add_tags: ['ticket:D100000002'] })
   await expect(row(page, plain).locator('[data-testid="task-tag-pills"] .tag-chip')).toHaveText('ticket:D100000002', { timeout: 10_000 })
 
-  // The detail pane lists every tag, not only the row's first.
+  // The detail pane lists every tag, not only the row's first (a plain word is stored as
+  // a label and reads as its word).
   await row(page, many).getByRole('button', { name: 'More actions' }).click()
   await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
   const detail = page.locator('.todo-detail-pane').filter({ hasText: `Three tags ${stamp}` })
   await expect(detail).toBeVisible()
-  await expect(detail.locator('.todo-detail-badges [data-testid="task-tag-pills"] .tag-chip'))
-    .toHaveText(['oncall', 'ticket:P100000001', 'marina'])
+  const detailChips = detail.locator('.todo-detail-badges [data-testid="tag-editor"] .tag-chip')
+  await expect(detailChips).toHaveCount(3)
+  expect(await detailChips.evaluateAll((els) => els.map((el) => el.getAttribute('data-tag'))))
+    .toEqual(['label:oncall', 'ticket:P100000001', 'label:marina'])
+  expect(await detailChips.evaluateAll((els) => els.map((el) =>
+    [...el.querySelectorAll('.tag-chip-prefix, .tag-chip-value')].map((part) => part.textContent).join(''))))
+    .toEqual(['oncall', 'ticket:P100000001', 'marina'])
   await detail.locator('.todo-detail-meta').screenshot({ path: `${SHOT_DIR}/${browserName}-detail.png` })
 })

@@ -48,8 +48,9 @@ describe('GET /api/v1/tasks/meta/tags', () => {
     const res = await request(createApp()).get('/api/v1/tasks/meta/tags')
     expect(res.status).toBe(200)
     const byTag = Object.fromEntries(res.body.tags.map((t: { tag: string; count: number }) => [t.tag, t.count]))
-    expect(byTag.shared).toBe(2)
-    expect(byTag.deep).toBe(1)
+    // Plain words are stored (and counted) as the labels they are.
+    expect(byTag['label:shared']).toBe(2)
+    expect(byTag['label:deep']).toBe(1)
   })
 })
 

@@ -210,7 +210,7 @@ defineOp({
     priorities: z.string().optional().describe('Comma list of immediate | important | backlog | none'),
     source: z.string().optional().describe('Task source (exact), e.g. "local"'),
     sprint: z.string().optional().describe('Sprint name (exact)'),
-    tag: z.string().optional().describe('Exact tag match (single)'),
+    tag: z.string().optional().describe('Exact tag match (single). Tags are key:value (a plain word means label:<word>); created:YYYY-MM-DD / updated:YYYY-MM-DD match the task\'s own dates'),
     tags_any: z.string().optional().describe('Comma list — match tasks carrying ANY of these tags'),
     tags_all: z.string().optional().describe('Comma list — match tasks carrying ALL of these tags'),
     pinned: z.boolean().optional().describe('Filter pinned/unpinned tasks'),
@@ -604,7 +604,7 @@ defineOp({
     project: z.string().optional().describe('Project name; "" = Inbox'),
     title: z.string().optional().describe('New title: a few words (under 60 characters from a session, the server cuts a longer one; <= 500)'),
     description: z.string().optional().describe('Replaces the description (write-only)'),
-    tags: z.array(z.string()).optional().describe('FULL replacement of the task tags'),
+    tags: z.array(z.string()).optional().describe('FULL replacement of the task tags, each key:value (e.g. team:marina, sev:2; a plain word is stored as label:<word>)'),
   },
   handler: async (args, call) => {
     const { id, ...fields } = args
@@ -732,11 +732,13 @@ defineOp({
   name: 'tag_display_list',
   title: 'List which tags a task shows',
   description:
-    'The rules deciding which tags appear as pills on a task (rows, cards, table, detail badges). ' +
-    'A rule names one tag (`urgent`) or a namespace (`ticket-id:*`, every tag starting `ticket-id:`) ' +
-    'and says shown or hidden; source is builtin (walnut:* machine tags never show), user, or plugin ' +
-    '(with pluginId). The user\'s rule beats a plugin\'s; an exact tag beats its namespace; a tag no rule ' +
-    'names shows. Display only: hidden tags are still searched, filtered (task_list tag) and editable.',
+    'The rules deciding how tags appear as pills on a task (rows, cards, table, detail badges, session header). ' +
+    'Every tag is key:value. A rule names one tag (`label:urgent`) or a key (`ticket-id:*`, every tag starting ' +
+    '`ticket-id:`) and says shown (whole tag), value (only the text after the key) or hidden; source is builtin ' +
+    '(walnut:* machine tags never show), user, plugin (with pluginId), or default (Walnut\'s: labels read as their ' +
+    'value, created:/updated: dates hidden). The user\'s rule beats a plugin\'s, a plugin\'s beats Walnut\'s default; ' +
+    'an exact tag beats its key; a tag no rule names shows whole. Display only: hidden tags are still searched, ' +
+    'filtered (task_list tag) and editable.',
   input: {},
   bind: { method: 'GET', path: TAG_DISPLAY_PATH },
   tags: { readonly: true, remote: 'allow' },
@@ -744,14 +746,15 @@ defineOp({
 
 defineOp({
   name: 'tag_display_set',
-  title: 'Show or hide a tag on tasks',
+  title: 'Show, shorten or hide a tag on tasks',
   description:
-    'Set the user\'s rule for one tag or a namespace (`<namespace>:*`): shown or hidden on task pills. ' +
-    'display null removes the user\'s rule, so a plugin default (or shown) applies again. walnut:* is ' +
-    'fixed. Returns every rule now in force. Display only: nothing is removed from any task.',
+    'Set the user\'s rule for one tag or a key (`<key>:*`): shown (whole tag), value (only the text after ' +
+    'the key, e.g. a ticket id without `ticket:`) or hidden on task pills. display null removes the user\'s ' +
+    'rule, so a plugin default (or Walnut\'s) applies again. walnut:* is fixed. Returns every rule now in ' +
+    'force. Display only: nothing is removed from any task.',
   input: {
-    pattern: z.string().min(1).describe('One tag (e.g. "urgent") or a namespace as "<namespace>:*" (e.g. "ticket-id:*")'),
-    display: z.enum(['shown', 'hidden']).nullable().describe('shown | hidden, or null to remove your rule'),
+    pattern: z.string().min(1).describe('One tag (e.g. "label:urgent") or a key as "<key>:*" (e.g. "ticket-id:*")'),
+    display: z.enum(['shown', 'value', 'hidden']).nullable().describe('shown | value | hidden, or null to remove your rule'),
   },
   bind: { method: 'PUT', path: TAG_DISPLAY_PATH },
   tags: { readonly: false, remote: 'deny' },

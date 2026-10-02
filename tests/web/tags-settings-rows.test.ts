@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildTagRows } from '../../web/src/components/settings/sections/TagsSection';
 import type { TagDisplayRule } from '../../web/src/stores/tag-display-store';
+import { DEFAULT_TAG_DISPLAY_RULES } from '../../src/core/tag-display-rules';
 
 const counts = [
   { tag: 'ticket:V1', count: 3 },
@@ -38,6 +39,15 @@ describe('buildTagRows', () => {
     expect(rows.find((row) => row.pattern === 'marina:*')).toMatchObject({ tags: 1, uses: 1 });
     // A namespace rule still folds its tags into the namespace row.
     expect(rows.find((row) => row.pattern === 'ticket-id:*')).toMatchObject({ namespace: true, tags: 1 });
+  });
+
+  it('gives every label a row of its own, and a label: row that counts them and sets them all', () => {
+    const rows = buildTagRows([{ tag: 'label:oncall', count: 3 }, { tag: 'label:bug', count: 2 }], [...DEFAULT_TAG_DISPLAY_RULES]);
+    expect(rows.find((row) => row.pattern === 'label:*')).toMatchObject({ label: 'label:', namespace: true, tags: 2, uses: 5 });
+    expect(rows.find((row) => row.pattern === 'label:oncall')).toMatchObject({ namespace: false, tags: 1, uses: 3 });
+    // Walnut's own date keys are listed (so they can be shown), though no task stores them.
+    expect(rows.find((row) => row.pattern === 'created:*')).toMatchObject({ namespace: true, tags: 0 });
+    expect(rows.find((row) => row.pattern === 'updated:*')).toMatchObject({ namespace: true, tags: 0 });
   });
 
   it('keeps a row for an exact rule whose tag no task carries any more', () => {

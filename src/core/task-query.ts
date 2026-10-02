@@ -1,5 +1,6 @@
 import type { Task, TaskPhase, TaskPriority } from './types.js';
 import { PIN_TIER_POLICY, VALID_PRIORITIES } from './types.js';
+import { effectiveTags, namesDerivedTag, normalizeTag } from './tag-model.js';
 
 export type TaskCompletion = 'todo' | 'in_progress' | 'complete';
 export type TimeBasis = 'created' | 'updated' | 'created_or_updated' | 'due' | 'completed';
@@ -316,8 +317,10 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
     priorities: raw.priorities?.slice(),
     sources: raw.sources?.slice(),
     sprints: raw.sprints?.slice(),
-    tagsAny: raw.tagsAny?.slice(),
-    tagsAll: raw.tagsAll?.slice(),
+    // In stored form (tag-model.ts): `oncall` from an older link or agent means `label:oncall`.
+    // An entry with no text stays as it is, so it still matches nothing.
+    tagsAny: raw.tagsAny?.map((tag) => normalizeTag(tag, { derived: true }) ?? tag),
+    tagsAll: raw.tagsAll?.map((tag) => normalizeTag(tag, { derived: true }) ?? tag),
     // Trimmed so '  focus  ' can't silently match nothing — validation above
     // already rejected entries that trim to ''.
     focusTiers: raw.focusTiers?.map((tier) => tier.trim()),
@@ -418,7 +421,8 @@ export function matchesTaskQuery(task: Task, query: NormalizedTaskQuery, ctx: Ta
   if (!matchesArray(task.source, query.sources)) return false;
   if (!matchesArray(task.sprint, query.sprints)) return false;
 
-  const tags = task.tags ?? [];
+  // A filter naming `created:` / `updated:` matches the task's own dates (never stored).
+  const tags = namesDerivedTag(query.tagsAny) || namesDerivedTag(query.tagsAll) ? effectiveTags(task) : task.tags ?? [];
   if (query.tagsAny !== undefined && !query.tagsAny.some((tag) => tags.includes(tag))) return false;
   if (query.tagsAll !== undefined && !query.tagsAll.every((tag) => tags.includes(tag))) return false;
 

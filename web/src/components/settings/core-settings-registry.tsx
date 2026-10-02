@@ -138,12 +138,12 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     keywords: ['focus tiers', 'tier', 'pinned'],
     render: () => <FocusTiersSection />,
   },
-  // Tags: which tags show on tasks. Folded under Tasks with Focus Tiers (`#tags` still works).
+  // Tags: how tags show on tasks. Folded under Tasks with Focus Tiers (`#tags` still works).
   {
     owner: 'walnut', id: 'tags', label: 'Tags', title: 'Tags', group: 'configure', navHidden: true,
     icon: 'checklist', tint: '#AF52DE',
-    description: 'Which tags show on tasks.',
-    keywords: ['tags', 'tag', 'hide tag', 'show tag', 'namespace', 'pill'],
+    description: 'How tags show on tasks.',
+    keywords: ['tags', 'tag', 'hide tag', 'show tag', 'tag value', 'key', 'namespace', 'pill'],
     render: () => <TagsSection />,
   },
   {

@@ -318,7 +318,7 @@ describe('createServerPluginApi', () => {
     await api.tasks.update(first.id, { removeTags: ['walnut:external-sessions'] })
     expect((await api.tasks.get(first.id))?.tags).toEqual(['ticket:P123'])
     await api.tasks.update(first.id, { tags: ['only'], addTags: ['ignored'] })
-    expect((await api.tasks.get(first.id))?.tags).toEqual(['only'])
+    expect((await api.tasks.get(first.id))?.tags).toEqual(['label:only'])
 
     // A folder never follows a task into another project.
     await api.tasks.update(first.id, { project: 'Elsewhere' })
@@ -370,7 +370,7 @@ describe('createServerPluginApi', () => {
     expect(result.filed).toHaveLength(203)
     expect(frames.map((ids) => ids.length)).toEqual([200, 3])
     const sample = await api.tasks.get(made[0]!.id)
-    expect(sample).toMatchObject({ project: 'Root Target', tags: ['moved'] })
+    expect(sample).toMatchObject({ project: 'Root Target', tags: ['label:moved'] })
     expect(sample?.groupId).toBeUndefined()
     expect(await tm.getProjectRecord('Root Target')).toMatchObject({ source: 'local' })
     await expect(api.tasks.fileIntoProject(' ', [{ id: made[0]!.id }])).rejects.toThrow(/cannot be empty/)

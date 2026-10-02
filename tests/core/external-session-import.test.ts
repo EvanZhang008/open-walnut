@@ -751,7 +751,7 @@ describe('adoptImportedTask — a message into the session ends the imported typ
     const emit = vi.spyOn(bus, 'emit');
     expect(await adoptImportedTask(task.id, 'test')).toBe(false);
     expect(await adoptImportedTask('no-such-task', 'test')).toBe(false);
-    expect((await getTask(task.id)).tags).toEqual(['mine']);
+    expect((await getTask(task.id)).tags).toEqual(['label:mine']);
     expect(emit).not.toHaveBeenCalled();
   });
 });
@@ -985,7 +985,7 @@ describe('adoptImportedTask — edge cases', () => {
     const emit = vi.spyOn(bus, 'emit');
     expect(await adoptImportedTask(task.id, 'test')).toBe(true);
     const after = await getTask(task.id);
-    expect(after.tags).toEqual(['mine']);
+    expect(after.tags).toEqual(['label:mine']);
     expect(after.phase).toBe('COMPLETE');
     expect(emit.mock.calls.filter(([event]) => event === EventNames.TASK_COMPLETED)).toHaveLength(0);
   });

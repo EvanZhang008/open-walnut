@@ -6,6 +6,7 @@ import { SessionSupervisionBar, useSessionSupervision } from './SessionSupervisi
 import { CronPill } from './CronPill';
 import { TriggerPill } from '@/components/routines/TriggerPill';
 import { SubtaskPill } from '@/components/tasks/SubtaskPill';
+import { TaskTagPills } from '@/components/tasks/TaskTagPills';
 import { LeaderPill } from '@/components/tasks/LeaderPill';
 import { CronJobsCard } from './CronJobsCard';
 import { stopSupervisedSession } from '@/stores/session-supervision-store';
@@ -1938,6 +1939,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   />
                 : <span className="session-panel-title text-muted">Untitled session</span>
               }
+              {/* The task's tags, as on its board row (the same rules: a ticket reads as its
+                  id, a hidden key stays off). Beside the title, so the title and the tags
+                  share the row and the tags give way first. */}
+              {!loading && sessionTask && <TaskTagPills task={sessionTask} className="session-panel-tag-pills" />}
             </div>
             {/* The one question control up here: the mode pill (Tree Mode /
                 Conversation Mode). Counts and the list live in the sidebar. */}

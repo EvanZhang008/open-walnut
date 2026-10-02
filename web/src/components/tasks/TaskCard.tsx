@@ -4,6 +4,7 @@ import type { Task } from '@open-walnut/core';
 import { PriorityBadge } from '../common/PriorityBadge';
 import { TagChip } from './TagChip';
 import { useShownTags } from './TaskTagPills';
+import { useTagDisplay } from '@/stores/tag-display-store';
 import { ImportedPill } from './ImportedPill';
 import { TaskSessionPill } from './SessionPill';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
@@ -103,7 +104,8 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
   const confirm = useConfirm();
   const showPriority = useShowPriority();
   // Only the tags the display rules show (machine "walnut:…" tags and hidden ones stay off).
-  const userTags = useShownTags(task.tags);
+  const userTags = useShownTags(task.tags, task);
+  const { compiled: tagDisplay } = useTagDisplay();
 
   const className = [
     'task-card',
@@ -202,7 +204,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
           {userTags.length > 0 && (
             <span className="task-card-tags">
               {userTags.slice(0, 2).map(tag => (
-                <TagChip key={tag} tag={tag} inline />
+                <TagChip key={tag} tag={tag} inline valueOnly={tagDisplay.valueOnly(tag)} />
               ))}
               {userTags.length > 2 && (
                 <span className="tag-chip tag-chip-overflow">+{userTags.length - 2}</span>

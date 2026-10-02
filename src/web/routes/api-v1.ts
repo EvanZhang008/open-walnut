@@ -2048,8 +2048,12 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
       tasks = tasks.filter((t) => (t.project ?? '').toLowerCase() === p)
     }
     if (typeof req.query.tag === 'string' && req.query.tag) {
-      const tag = req.query.tag
-      tasks = tasks.filter((t) => Array.isArray(t.tags) && t.tags.includes(tag))
+      // In stored form (`oncall` is `label:oncall`); a `created:` / `updated:` day matches the
+      // task's own dates.
+      const { effectiveTags, isDerivedTag, normalizeTag } = await import('../../core/tag-model.js')
+      const tag = normalizeTag(req.query.tag, { derived: true }) ?? req.query.tag
+      const derived = isDerivedTag(tag)
+      tasks = tasks.filter((t) => (derived ? effectiveTags(t) : t.tags ?? []).includes(tag))
     }
     if (typeof req.query.q === 'string' && req.query.q.trim()) {
       const q = req.query.q.trim().toLowerCase()

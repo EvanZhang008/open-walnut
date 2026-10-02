@@ -1,8 +1,13 @@
 /**
- * Which tags a task shows (src/core/tag-display-rules.ts), for every surface that draws tag
+ * How a task's tags show (src/core/tag-display-rules.ts), for every surface that draws tag
  * pills. ONE copy per page: the rules are read once, kept in memory and in localStorage (so a
  * reload never flashes a hidden tag before the read answers), and read again when the server
  * says they changed (`task:tag-display-changed`) or the socket reconnects.
+ *
+ * A change heard while a read is in flight reads AGAIN once it lands: that read may have
+ * started before the change. (A plugin reload takes its defaults back and sets them again; the
+ * one read the first notice started answered between the two, with no plugin rules, and the
+ * second notice was folded into it, so every open window showed the plugin's hidden ids.)
  */
 
 import { useSyncExternalStore } from 'react';
@@ -11,6 +16,7 @@ import { wsClient } from '@/api/ws';
 import { log } from '@/utils/log';
 import {
   BUILTIN_TAG_DISPLAY_RULES,
+  DEFAULT_TAG_DISPLAY_RULES,
   compileTagDisplay,
   type CompiledTagDisplay,
   type TagDisplay,
@@ -37,14 +43,16 @@ function readStored(): readonly TagDisplayRule[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null') as unknown;
     if (Array.isArray(parsed)) return parsed as TagDisplayRule[];
-  } catch { /* storage unavailable or malformed: Walnut's own rule only */ }
-  return BUILTIN_TAG_DISPLAY_RULES;
+  } catch { /* storage unavailable or malformed: Walnut's own rules only */ }
+  return [...BUILTIN_TAG_DISPLAY_RULES, ...DEFAULT_TAG_DISPLAY_RULES];
 }
 
 let snapshot: Snapshot = snapshotOf(readStored(), false);
 const listeners = new Set<() => void>();
 let wired = false;
 let inflight: Promise<void> | null = null;
+// A change was announced while a read was in flight: read once more when it lands.
+let stale = false;
 // Bumped by every write, so a read that started before it cannot put the old rules back.
 let generation = 0;
 
@@ -55,7 +63,11 @@ function publish(rules: readonly TagDisplayRule[], loaded: boolean): void {
 }
 
 export function loadTagDisplay(): Promise<void> {
-  if (inflight) return inflight;
+  if (inflight) {
+    stale = true;
+    return inflight;
+  }
+  stale = false;
   const started = generation;
   inflight = apiGet<{ rules: TagDisplayRule[] }>(PATH)
     .then((res) => {
@@ -65,7 +77,10 @@ export function loadTagDisplay(): Promise<void> {
       // Keep the last known rules: a hidden tag must not reappear because one read failed.
       log.warn('tag-display', 'could not read the tag display rules', { error: err instanceof Error ? err.message : String(err) });
     })
-    .finally(() => { inflight = null; });
+    .finally(() => {
+      inflight = null;
+      if (stale) void loadTagDisplay();
+    });
   return inflight;
 }
 
@@ -111,7 +126,8 @@ export async function setTagDisplay(pattern: string, display: TagDisplay | null)
 
 /** Test seam: forget the page's copy. */
 export function _resetTagDisplayStoreForTesting(): void {
-  snapshot = snapshotOf(BUILTIN_TAG_DISPLAY_RULES, false);
+  snapshot = snapshotOf([...BUILTIN_TAG_DISPLAY_RULES, ...DEFAULT_TAG_DISPLAY_RULES], false);
   generation = 0;
   inflight = null;
+  stale = false;
 }

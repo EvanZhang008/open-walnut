@@ -19,6 +19,7 @@ import { TASKS_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
 import type { Task } from './types.js';
 import { migratePhase } from './phase.js';
+import { normalizeTags, tagsAreNormal } from './tag-model.js';
 import type { ExtIndexSpec } from './integration-types.js';
 
 /** SQLite file path. Sits next to the legacy tasks.json in the same dir. */
@@ -150,6 +151,7 @@ export function getDb(): DatabaseType | null {
     handle.exec(SCHEMA_SQL);
     runOneTimeMigrations(handle);
     backfillNullTimestamps(handle);
+    normalizeStoredTags(handle);
 
     // Truncate the WAL on open. Without this the WAL grows unboundedly
     // between process restarts — observed at 80MB in prod. Returns
@@ -278,6 +280,14 @@ export function rowToTask(row: Record<string, any>): Task {
   // until now.
   if (typeof task.phase === 'string') task.phase = migratePhase(task.phase) ?? task.phase;
 
+  // Every tag is key:value (tag-model.ts). normalizeStoredTags rewrote this database's rows at
+  // open; this is the net for a row written by an older build or another door since.
+  if (Array.isArray(task.tags) && !tagsAreNormal(task.tags)) {
+    const tags = normalizeTags(task.tags);
+    if (tags.length) task.tags = tags;
+    else delete task.tags;
+  }
+
   return task as Task;
 }
 
@@ -305,7 +315,10 @@ export function taskToRow(task: Partial<Task>): Record<string, any> {
     if (!(col in task)) continue;
     const val = (task as Record<string, any>)[col];
     if (val === undefined) continue;
-    if (JSON_COLUMNS.has(col)) {
+    if (col === 'tags' && Array.isArray(val)) {
+      // Stored in key:value form whatever the writer sent (tag-model.ts).
+      row.tags = JSON.stringify(normalizeTags(val));
+    } else if (JSON_COLUMNS.has(col)) {
       row[col] = val === null ? null : JSON.stringify(val);
     } else if (col === 'pinned') {
       row.pinned = val ? 1 : 0;
@@ -1505,6 +1518,41 @@ function backfillNullTimestamps(handle: DatabaseType): void {
   if (summary.rows > 0) {
     log.task.info('task-db: backfilled NULL timestamps (LWW threshold repair)', summary);
   }
+}
+
+/**
+ * Every tag is key:value (tag-model.ts): a plain word is stored as `label:<word>`. Rewrites the
+ * rows an older build left otherwise, on every open, like the timestamp repair above: a schema
+ * bump would lock the last-known-good build a failed deploy rolls back to out of this database.
+ * The candidate scan is one SQL pass that touches no row already in form; `updated_at` is left
+ * alone (nobody edited the task), and each rewrite is logged.
+ */
+export function normalizeStoredTags(handle: DatabaseType): void {
+  const summary = handle.transaction(() => {
+    const rows = handle
+      .prepare(
+        `SELECT id, tags FROM tasks
+          WHERE tags IS NOT NULL AND json_valid(tags) AND json_type(tags) = 'array'
+            AND EXISTS (SELECT 1 FROM json_each(tasks.tags)
+                         WHERE json_each.type != 'text' OR instr(json_each.value, ':') < 2
+                            OR json_each.value != trim(json_each.value) OR instr(json_each.value, '  ') > 0
+                            OR substr(json_each.value, 1, instr(json_each.value, ':') - 1) GLOB '*[^a-z0-9._-]*'
+                            OR substr(json_each.value, 1, instr(json_each.value, ':') - 1) IN ('created', 'updated'))`,
+      )
+      .all() as Array<{ id: string; tags: string }>;
+    const upd = handle.prepare(`UPDATE tasks SET tags = @tags WHERE id = @id`);
+    let rewritten = 0;
+    for (const row of rows) {
+      const before = JSON.parse(row.tags) as unknown[];
+      if (tagsAreNormal(before)) continue;
+      const after = normalizeTags(before);
+      upd.run({ id: row.id, tags: after.length ? JSON.stringify(after) : null });
+      rewritten++;
+      log.task.info('task-db: tags rewritten as key:value', { id: row.id, before, after });
+    }
+    return { candidates: rows.length, rewritten };
+  })();
+  if (summary.rewritten > 0) log.task.info('task-db: stored tags normalized', summary);
 }
 
 // ── Dynamic ext-index management ───────────────────────────────────────────

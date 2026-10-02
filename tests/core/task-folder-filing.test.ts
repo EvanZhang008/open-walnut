@@ -318,9 +318,9 @@ describe('filing with pin_tier', () => {
     expect(unpinned.pinned).toBeFalsy()
     expect(unpinned.pin_order).toBeUndefined()
     expect(unpinned.focus_tier).toBeUndefined()
-    expect(unpinned.tags).toEqual(['aged'])
+    expect(unpinned.tags).toEqual(['label:aged'])
     expect(await getTask(b.id)).toMatchObject({ pinned: true, focus_tier: 'backlog', pin_order: orderB })
-    expect(await getTask(c.id)).toMatchObject({ pinned: true, focus_tier: 'backlog', tags: ['kept'] })
+    expect(await getTask(c.id)).toMatchObject({ pinned: true, focus_tier: 'backlog', tags: ['label:kept'] })
     // Unpinning an unpinned task, or moving to the tier it has, is nothing to do.
     expect(await fileTasksIntoProject('Robot runs', [{ id: a.id, pin_tier: null }, { id: b.id, pin_tier: 'backlog' }])).toMatchObject({ filed: [] })
     // Satellite is the absence of a tier.

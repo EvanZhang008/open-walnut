@@ -1342,10 +1342,11 @@ export interface Config {
      *  this only decides whether the UI draws it. */
     show_priority?: boolean;
   };
-  /** Which tags a task shows (core/tag-display-rules.ts): a tag (`urgent`) or a namespace
-   *  (`ticket-id:*`) to `shown` or `hidden`. Display only: a hidden tag is still searched,
-   *  filtered and listed in the tag editor. Overrides a plugin's default for the same tags. */
-  tag_display?: Record<string, 'shown' | 'hidden'>;
+  /** How a task's tags show (core/tag-display-rules.ts): a tag (`label:urgent`) or a key
+   *  (`ticket-id:*`) to `shown` (whole), `value` (the text after the key) or `hidden`. Display
+   *  only: a hidden tag is still searched, filtered and listed in the tag editor. Overrides a
+   *  plugin's default and Walnut's for the same tags. */
+  tag_display?: Record<string, 'shown' | 'value' | 'hidden'>;
   /** Audio capture configuration (system audio recording) */
   audio?: {
     /** Bundle IDs of apps to exclude from recording (e.g. 'com.spotify.client') */

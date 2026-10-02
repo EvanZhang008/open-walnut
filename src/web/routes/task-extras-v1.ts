@@ -79,7 +79,7 @@ taskExtrasV1Router.get('/tasks/meta/tags', async (_req: Request, res: Response, 
 })
 
 // GET /api/v1/tasks/meta/tag-display — which tags a task shows (core/tag-display-rules.ts):
-// Walnut's own rule, the user's, and plugin defaults. Clients compile them once and filter
+// Walnut's own rule, the user's, plugin defaults and Walnut's defaults. Clients compile them once and filter
 // the pills they draw; `task:tag-display-changed` says when to read them again.
 taskExtrasV1Router.get('/tasks/meta/tag-display', async (_req: Request, res: Response, next: NextFunction) => {
   try {
@@ -90,8 +90,8 @@ taskExtrasV1Router.get('/tasks/meta/tag-display', async (_req: Request, res: Res
   }
 })
 
-// PUT /api/v1/tasks/meta/tag-display { pattern, display: 'shown' | 'hidden' | null } — the
-// user's rule for one tag or `<namespace>:*` (null removes it). Answers the rules in force.
+// PUT /api/v1/tasks/meta/tag-display { pattern, display: 'shown' | 'value' | 'hidden' | null }:
+// the user's rule for one tag or `<key>:*` (null removes it). Answers the rules in force.
 // Primary only: the rules live in the primary's config.yaml.
 taskExtrasV1Router.put('/tasks/meta/tag-display', async (req: Request, res: Response, next: NextFunction) => {
   try {

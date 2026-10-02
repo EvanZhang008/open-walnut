@@ -148,13 +148,24 @@ describe('field composition', () => {
   });
 
   it('implements tagsAny, tagsAll, and their AND interaction with case-sensitive matching', () => {
-    const fixture = task({ tags: ['red', 'Blue', 'shared'] });
+    // Stored tags are key:value; a filter's plain word means the label (src/core/tag-model.ts).
+    const fixture = task({ tags: ['label:red', 'label:Blue', 'label:shared'] });
     expect(matchesTaskQuery(fixture, query({ tagsAny: ['missing', 'red'] }))).toBe(true);
     expect(matchesTaskQuery(fixture, query({ tagsAny: ['RED'] }))).toBe(false);
     expect(matchesTaskQuery(fixture, query({ tagsAll: ['red', 'shared'] }))).toBe(true);
     expect(matchesTaskQuery(fixture, query({ tagsAll: ['red', 'missing'] }))).toBe(false);
     expect(matchesTaskQuery(fixture, query({ tagsAny: ['Blue'], tagsAll: ['red', 'shared'] }))).toBe(true);
     expect(matchesTaskQuery(fixture, query({ tagsAny: ['missing'], tagsAll: ['red', 'shared'] }))).toBe(false);
+    expect(matchesTaskQuery(fixture, query({ tagsAll: ['label:red', 'shared'] }))).toBe(true);
+  });
+
+  it('matches created:/updated: against the task\'s own dates, never a stored tag', () => {
+    const at = '2026-03-04T12:00:00.000Z';
+    const day = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
+    const fixture = task({ tags: ['sev:2'], created_at: at, updated_at: at });
+    expect(matchesTaskQuery(fixture, query({ tagsAny: [`created:${day}`] }))).toBe(true);
+    expect(matchesTaskQuery(fixture, query({ tagsAll: [`updated:${day}`, 'sev:2'] }))).toBe(true);
+    expect(matchesTaskQuery(fixture, query({ tagsAny: ['created:1999-01-01'] }))).toBe(false);
   });
 
   it('matches explicit false against absent booleans while undefined does not filter', () => {

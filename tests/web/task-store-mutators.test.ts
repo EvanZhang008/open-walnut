@@ -161,8 +161,16 @@ describe('task phase event ownership', () => {
 
 describe('applyTagInstructions', () => {
   it('unions add_tags onto the existing tags, keeping order and deduping', () => {
-    expect(applyTagInstructions({ tags: ['a', 'b'] }, { add_tags: ['b', 'c'] }))
-      .toEqual({ tags: ['a', 'b', 'c'] })
+    expect(applyTagInstructions({ tags: ['k:a', 'k:b'] }, { add_tags: ['k:b', 'k:c'] }))
+      .toEqual({ tags: ['k:a', 'k:b', 'k:c'] })
+  })
+
+  // Mirrors the server's tag model (src/core/tag-model.ts): a plain word is the label it is stored as.
+  it('adds and removes a plain word as its label, the way the server stores it', () => {
+    expect(applyTagInstructions({ tags: ['label:a'] }, { add_tags: ['a', 'B'] }))
+      .toEqual({ tags: ['label:a', 'label:B'] })
+    expect(applyTagInstructions({ tags: ['label:a', 'sev:2'] }, { remove_tags: ['a'] }))
+      .toEqual({ tags: ['sev:2'] })
   })
 
   it('filters remove_tags out', () => {
@@ -176,8 +184,8 @@ describe('applyTagInstructions', () => {
   })
 
   it('set_tags replaces everything', () => {
-    expect(applyTagInstructions({ tags: ['a', 'b'] }, { set_tags: ['z', 'z', 'y'] }))
-      .toEqual({ tags: ['z', 'y'] })
+    expect(applyTagInstructions({ tags: ['k:a', 'k:b'] }, { set_tags: ['k:z', 'k:z', 'k:y'] }))
+      .toEqual({ tags: ['k:z', 'k:y'] })
   })
 
   it('touches nothing when the update carries no tag instruction', () => {
@@ -199,7 +207,7 @@ describe('applyTagInstructions', () => {
 
   it('keeps the plain tags of a mixed set_tags and drops the sprint one', () => {
     expect(applyTagInstructions({ tags: ['a'] }, { set_tags: ['keep', 'sprint:S1'] }))
-      .toEqual({ tags: ['keep'], sprint: 'S1' })
+      .toEqual({ tags: ['label:keep'], sprint: 'S1' })
   })
 })
 
@@ -237,15 +245,16 @@ describe('applyPluginFieldPatch', () => {
 })
 
 describe('update() with tag instructions', () => {
-  it('applies the resulting tags locally and still sends the instruction', () => {
-    const store = mount([task({ tags: ['a'] })])
+  it('applies the resulting tags locally (in stored form) and still sends the instruction', () => {
+    const store = mount([task({ tags: ['label:a'] })])
     store.update('task-1', { add_tags: ['b'] })
-    expect(rows()[0].tags).toEqual(['a', 'b'])
+    expect(rows()[0].tags).toEqual(['label:a', 'label:b'])
     expect(api.updateTask).toHaveBeenCalledWith('task-1', { add_tags: ['b'] })
   })
 
   it('bumps updated_at (a tag change is content, unlike the read marker)', () => {
-    const store = mount([task({ tags: ['a'] })])
+    // Removing the plain word removes the label it is stored as.
+    const store = mount([task({ tags: ['label:a'] })])
     store.update('task-1', { remove_tags: ['a'] })
     expect(rows()[0].updated_at).not.toBe('2026-09-01T00:00:00.000Z')
     expect(rows()[0].tags).toBeUndefined()

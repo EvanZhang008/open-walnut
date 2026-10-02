@@ -35,8 +35,9 @@ import type { MailMessageDto } from './contract.js'
 import type { MailEvents } from './events.js'
 import type { MailStore } from './store.js'
 
-/** Every task made from a message carries this, so the board can filter for them. */
-export const MAIL_TASK_TAG = 'mail'
+/** Every task made from a message carries this, so the board can filter for them (a label:
+ *  every tag is key:value, see core/tag-model.ts). */
+export const MAIL_TASK_TAG = 'label:mail'
 
 /** The subject, trimmed to this. A title is a row in a list. */
 export const TASK_TITLE_CHARS = 120

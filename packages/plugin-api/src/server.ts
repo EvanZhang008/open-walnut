@@ -260,22 +260,26 @@ export interface SessionImportsService {
   extendTo(project: string): Disposable
 }
 
-export type TagDisplay = 'shown' | 'hidden'
+/** shown: the pill reads the whole tag; value: only the text after its key (a ticket id without
+ *  `ticket:`), the whole tag in its tooltip; hidden: no pill. */
+export type TagDisplay = 'shown' | 'value' | 'hidden'
 
 export interface TagDisplayRule {
-  /** One tag, or `<namespace>:*` for every tag starting `<namespace>:`. */
+  /** One tag, or `<key>:*` for every tag starting `<key>:`. */
   pattern: string
   display: TagDisplay
-  source: 'builtin' | 'user' | 'plugin'
+  source: 'builtin' | 'default' | 'user' | 'plugin'
   pluginId?: string
   pluginName?: string
 }
 
-/** Which tags a task shows as pills. Every tag stays an ordinary tag (searched, filtered,
- *  editable); showing is display only. */
+/** How a task's tags show as pills. Every tag is key:value (Walnut stores a plain word as
+ *  `label:<word>`) and stays an ordinary tag (searched, filtered, editable); showing is display
+ *  only. */
 export interface TagService {
-  /** How your own tags show by default, for one tag or `<namespace>:*`. The user's rule for
-   *  the same tags wins; `walnut:*` is Walnut's own. Released when your plugin stops. */
+  /** How your own tags show by default, for one tag or `<key>:*`. The user's rule for the same
+   *  tags wins; `walnut:*` is Walnut's own. An older Walnut knows only shown and hidden and throws
+   *  on value: catch it and set shown instead. Released when your plugin stops. */
   setDefaultDisplay(pattern: string, display: TagDisplay): Disposable
   /** Every rule in force: Walnut's, the user's, and plugin defaults. */
   displayRules(): Promise<TagDisplayRule[]>

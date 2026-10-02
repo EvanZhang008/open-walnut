@@ -207,7 +207,9 @@ The importer also completes an imported task nobody wrote to once its session ha
 
 #### Tag display
 
-Every tag is an ordinary tag (searched, filtered, edited), and whether it shows as a pill on a task is a separate, display-only rule. `walnut.tags.setDefaultDisplay(pattern, display)` sets your plugin's default for an exact tag or a whole namespace (`ticket-id:*`), so a tag that exists to be searched for (a ticket's UUID) or to mark what your plugin did (a pin marker) never clutters the board. The user's own rule for a pattern (Settings, Tasks, Tags) wins over yours, Walnut's machine tags (`walnut:*`) never show, and two plugins disagreeing on one pattern hide it. The default lives while your plugin does; `displayRules()` lists every rule in force.
+Every tag is a key:value pair (`ticket:V1234567890`, `sev:2`): Walnut stores whatever a plugin writes in that form, so a plain word becomes the label `label:<word>`, and a plugin that syncs tags with an outside service must send them back the way the service spells them (match `label:<word>` to the remote `<word>`). `created:` and `updated:` are the task's own dates, worked out by Walnut and never stored.
+
+Every tag is an ordinary tag (searched, filtered, edited), and how it shows as a pill on a task is a separate, display-only rule. `walnut.tags.setDefaultDisplay(pattern, display)` sets your plugin's default for an exact tag or a whole key (`ticket-id:*`): `'shown'` draws the whole tag, `'value'` only the text after the key (a ticket pill reading `V1234567890`), `'hidden'` no pill, so a tag that exists to be searched for (a ticket's UUID) or to mark what your plugin did (a pin marker) never clutters the board. The user's own rule for a pattern (Settings, Tasks, Tags) wins over yours, yours wins over Walnut's defaults (labels read as their value, the two date keys hidden), Walnut's machine tags (`walnut:*`) never show, and two plugins disagreeing on one pattern take the quieter display (hidden, then value). An older Walnut throws on `'value'`: catch it and fall back to `'shown'`. The default lives while your plugin does; `displayRules()` lists every rule in force.
 
 #### Letters
 

@@ -225,7 +225,7 @@ describe('PATCH /api/v1/tasks/:id', () => {
     expect(res.status).toBe(200)
     const { task: updated } = await res.json() as { task: Record<string, unknown> }
     expect(updated.start_date).toBe('2030-03-01')
-    expect(updated.tags).toEqual(['deep', 'work'])
+    expect(updated.tags).toEqual(['label:deep', 'label:work'])
 
     const cleared = await patchTask(task.id, { start_date: '', tags: [] })
     expect(cleared.status).toBe(200)

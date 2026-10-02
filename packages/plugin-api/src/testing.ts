@@ -110,7 +110,7 @@ export interface FakeWalnutResult {
   /** Projects the plugin extended the importer's lifecycle to (`sessionImports.extendTo`), live ones only. */
   importLifecycleProjects: string[]
   /** The plugin's live tag display defaults (`tags.setDefaultDisplay`), by pattern. */
-  tagDisplayDefaults: Map<string, 'shown' | 'hidden'>
+  tagDisplayDefaults: Map<string, 'shown' | 'value' | 'hidden'>
   /** The board's pin groups, seeded ones and those the plugin ensured, in order. */
   pinGroups: Array<{ id: string; label: string }>
 }
@@ -133,7 +133,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
   const importWatchers = new Set<() => void | Promise<void>>()
   const importRun = async () => { for (const handler of [...importWatchers]) await handler() }
   const importLifecycleProjects: string[] = []
-  const tagDisplayDefaults = new Map<string, 'shown' | 'hidden'>()
+  const tagDisplayDefaults = new Map<string, 'shown' | 'value' | 'hidden'>()
   const pinGroups: Array<{ id: string; label: string }> = (options.pinGroups ?? []).map((group) => ({ ...group }))
   const knownTiers = new Set(['focus', 'satellite', 'backlog', 'wait', ...(options.customTiers ?? []), ...pinGroups.map((group) => group.id)])
   let nextGroup = 1
@@ -466,7 +466,7 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     },
     tags: {
       setDefaultDisplay(pattern, display) {
-        if (display !== 'shown' && display !== 'hidden') throw new Error('display must be "shown" or "hidden".')
+        if (display !== 'shown' && display !== 'value' && display !== 'hidden') throw new Error('display must be "shown", "value" or "hidden".')
         if (!pattern?.trim() || pattern.startsWith('walnut:')) throw new Error(`Not a tag rule: "${pattern}"`)
         tagDisplayDefaults.set(pattern, display)
         return disposable(() => { if (tagDisplayDefaults.get(pattern) === display) tagDisplayDefaults.delete(pattern) })

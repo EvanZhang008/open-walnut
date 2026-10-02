@@ -26,6 +26,7 @@ import { runMigrationIfNeeded } from './task-db-migration.js';
 import { migrateProjectMemoryDirs } from './memory-dir-migration.js';
 import { folderProjectFor, trimDir } from './sessions/folder-project.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
+import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
 import { recordRemoteLink, findLiveClaimants } from './task-remote-links.js';
 import {
   clearProjectTombstone,
@@ -2665,7 +2666,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(input.start_date ? { start_date: input.start_date } : {}),
       ...(input.end_date ? { end_date: input.end_date } : {}),
       ...(parentTask ? { parent_task_id: parentTask.id } : {}),
-      ...(input.tags?.length ? { tags: [...new Set(input.tags)] } : {}),
+      ...(input.tags?.length && normalizeTags(input.tags).length ? { tags: normalizeTags(input.tags) } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
       ...(input.group_id ? { group_id: input.group_id } : {}),
       ...(input.sprint ? { sprint: input.sprint } : {}),
@@ -3174,17 +3175,20 @@ export function buildTaskQueryWhere(q: NormalizedTaskQuery, excludeSentinels: bo
   // Tags: json_each over the JSON array column. `json_type != 'array'` is an
   // escape hatch — a scalar tags value means JS-side `String.includes` runs
   // instead, which json_each can't reproduce, so keep the row as a candidate.
+  // A derived date tag (`created:2026-10-01`) is never stored, so SQL cannot see it: a term
+  // naming one stays out of the pushdown and JS decides (matchesTaskQuery reads the dates).
   const tagExists = (tag: string): string =>
     `EXISTS (SELECT 1 FROM json_each(tasks.tags) WHERE json_each.value = ${bind(tag)})`;
   const tagGuard = (inner: string): string =>
     `(tags IS NOT NULL AND json_valid(tags) AND (json_type(tags) != 'array' OR ${inner}))`;
   if (q.tagsAny) {
     if (q.tagsAny.length === 0) conds.push('0');
-    else conds.push(tagGuard(`(${q.tagsAny.map(tagExists).join(' OR ')})`));
+    else if (!namesDerivedTag(q.tagsAny)) conds.push(tagGuard(`(${q.tagsAny.map(tagExists).join(' OR ')})`));
   }
   // `tagsAll: []` matches everything (`[].every` is true) — emit no condition.
-  if (q.tagsAll && q.tagsAll.length > 0) {
-    conds.push(tagGuard(q.tagsAll.map(tagExists).join(' AND ')));
+  const storedAll = q.tagsAll?.filter((tag) => !isDerivedTag(tag)) ?? [];
+  if (storedAll.length > 0) {
+    conds.push(tagGuard(storedAll.map(tagExists).join(' AND ')));
   }
 
   if (q.time) {
@@ -4241,10 +4245,12 @@ export async function updateTask(
     updates.remove_tags = normalRemove.length > 0 ? normalRemove : undefined;
   }
 
-  // Tag mutations
+  // Tag mutations. Every tag is key:value (tag-model.ts): a plain word from an older client, an
+  // agent or a plugin is the label it is stored as, so adding or removing `oncall` means
+  // `label:oncall`.
   if (updates.set_tags !== undefined) {
     // Replace all
-    const deduped = [...new Set(updates.set_tags)];
+    const deduped = normalizeTags(updates.set_tags);
     if (deduped.length > 0) {
       task.tags = deduped;
     } else {
@@ -4252,12 +4258,12 @@ export async function updateTask(
     }
   } else {
     if (updates.add_tags?.length) {
-      const existing = new Set(task.tags ?? []);
-      for (const tag of updates.add_tags) existing.add(tag);
+      const existing = new Set(normalizeTags(task.tags));
+      for (const tag of normalizeTags(updates.add_tags)) existing.add(tag);
       task.tags = [...existing];
     }
     if (updates.remove_tags?.length) {
-      const toRemove = new Set(updates.remove_tags);
+      const toRemove = new Set([...updates.remove_tags, ...normalizeTags(updates.remove_tags)]);
       const remaining = (task.tags ?? []).filter(t => !toRemove.has(t));
       if (remaining.length > 0) {
         task.tags = remaining;
@@ -5714,8 +5720,9 @@ function fileTasksLocked(
     }
     const moving = !sameProject(task.project, place.project);
     const unfiling = !place.groupId && item.top_level === true && !!task.group_id;
-    const removes = new Set((item.remove_tags ?? []).filter((tag) => typeof tag === 'string' && (task.tags ?? []).includes(tag)));
-    const adds = (item.add_tags ?? []).filter((tag) => typeof tag === 'string' && tag.trim() && (removes.has(tag) || !(task.tags ?? []).includes(tag)));
+    // Tags in stored form (tag-model.ts), so a plain word names the label it is stored as.
+    const removes = new Set(normalizeTags(item.remove_tags).filter((tag) => (task.tags ?? []).includes(tag)));
+    const adds = normalizeTags(item.add_tags).filter((tag) => removes.has(tag) || !(task.tags ?? []).includes(tag));
     for (const tag of adds) removes.delete(tag);
     const asked = typeof item.title === 'string' ? item.title.trim() : '';
     const title = asked && asked !== task.title

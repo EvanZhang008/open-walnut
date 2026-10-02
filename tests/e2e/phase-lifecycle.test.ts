@@ -359,9 +359,11 @@ describe('Active children guard E2E', () => {
 
     const res = await fetch(apiUrl(`/api/tasks/${parent.id}/toggle-complete`), { method: 'POST' });
     expect(res.status).toBe(409);
-    const body = await res.json() as { error: string; active_children: number };
+    const body = await res.json() as { error: string; active_children: Array<{ id: string }>; active_count: number };
     expect(body.error).toContain('child task');
-    expect(body.active_children).toBe(1);
+    // The open subtasks by id (since 2026-10-01; the count moved to active_count).
+    expect(body.active_count).toBe(1);
+    expect(body.active_children).toHaveLength(1);
   });
 
   it('blocks completing parent with active child via POST /complete', async () => {
@@ -455,57 +457,58 @@ describe('Tags CRUD E2E', () => {
     const res = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Tags test: create', tags: ['frontend', 'urgent'] }),
+      body: JSON.stringify({ title: 'Tags test: create', tags: ['area:frontend', 'urgent'] }),
     });
     expect(res.status).toBe(201);
     const { task } = await res.json() as { task: TaskResponse };
-    expect(task.tags).toEqual(['frontend', 'urgent']);
+    // Every tag is key:value: a plain word is stored as a label.
+    expect(task.tags).toEqual(['area:frontend', 'label:urgent']);
 
     // Verify persisted
     const fetched = await getTask(task.id);
-    expect(fetched.tags).toEqual(['frontend', 'urgent']);
+    expect(fetched.tags).toEqual(['area:frontend', 'label:urgent']);
   });
 
   it('creates a task with tags deduped', async () => {
     const res = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Tags test: dedup create', tags: ['a', 'b', 'a'] }),
+      body: JSON.stringify({ title: 'Tags test: dedup create', tags: ['team:a', 'team:b', 'team:a', 'Team:b'] }),
     });
     expect(res.status).toBe(201);
     const { task } = await res.json() as { task: TaskResponse };
-    expect(task.tags).toEqual(['a', 'b']);
+    expect(task.tags).toEqual(['team:a', 'team:b']);
   });
 
   it('add_tags appends tags idempotently', async () => {
     const task = await createTask('Tags test: add');
 
     // Add tags to a task that has none
-    const updated = await updateTask(task.id, { add_tags: ['backend', 'api'] });
-    expect(updated.tags).toEqual(['backend', 'api']);
+    const updated = await updateTask(task.id, { add_tags: ['layer:backend', 'layer:api'] });
+    expect(updated.tags).toEqual(['layer:backend', 'layer:api']);
 
-    // Add again — idempotent, no duplicates
-    const updated2 = await updateTask(task.id, { add_tags: ['api', 'v2'] });
-    expect(updated2.tags).toContain('backend');
-    expect(updated2.tags).toContain('api');
-    expect(updated2.tags).toContain('v2');
-    expect(updated2.tags?.filter(t => t === 'api')).toHaveLength(1); // no duplicate
+    // Add again — idempotent, no duplicates (a plain word is the label it is stored as)
+    const updated2 = await updateTask(task.id, { add_tags: ['layer:api', 'v2'] });
+    expect(updated2.tags).toContain('layer:backend');
+    expect(updated2.tags).toContain('layer:api');
+    expect(updated2.tags).toContain('label:v2');
+    expect(updated2.tags?.filter(t => t === 'layer:api')).toHaveLength(1); // no duplicate
   });
 
   it('remove_tags removes specified tags', async () => {
     const res = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Tags test: remove', tags: ['a', 'b', 'c'] }),
+      body: JSON.stringify({ title: 'Tags test: remove', tags: ['k:a', 'k:b', 'c'] }),
     });
     const { task } = await res.json() as { task: TaskResponse };
 
     // Remove one tag
-    const updated = await updateTask(task.id, { remove_tags: ['b'] });
-    expect(updated.tags).toEqual(['a', 'c']);
+    const updated = await updateTask(task.id, { remove_tags: ['k:b'] });
+    expect(updated.tags).toEqual(['k:a', 'label:c']);
 
-    // Remove all remaining
-    const updated2 = await updateTask(task.id, { remove_tags: ['a', 'c'] });
+    // Remove all remaining (the plain word names its label)
+    const updated2 = await updateTask(task.id, { remove_tags: ['k:a', 'c'] });
     expect(updated2.tags).toBeUndefined(); // empty array → field deleted
   });
 
@@ -513,13 +516,13 @@ describe('Tags CRUD E2E', () => {
     const res = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Tags test: set', tags: ['old1', 'old2'] }),
+      body: JSON.stringify({ title: 'Tags test: set', tags: ['v:old1', 'v:old2'] }),
     });
     const { task } = await res.json() as { task: TaskResponse };
 
     // Replace all tags
-    const updated = await updateTask(task.id, { set_tags: ['new1', 'new2', 'new3'] });
-    expect(updated.tags).toEqual(['new1', 'new2', 'new3']);
+    const updated = await updateTask(task.id, { set_tags: ['v:new1', 'v:new2', 'v:new3'] });
+    expect(updated.tags).toEqual(['v:new1', 'v:new2', 'v:new3']);
 
     // Set to empty → deletes field
     const updated2 = await updateTask(task.id, { set_tags: [] });
@@ -545,11 +548,11 @@ describe('Tags CRUD E2E', () => {
       const task = await createTask('Tags test: WS');
 
       const eventPromise = waitForWsEvent(ws, 'task:updated');
-      await updateTask(task.id, { add_tags: ['ws-tag'] });
+      await updateTask(task.id, { add_tags: ['ws:tag'] });
 
       const event = await eventPromise;
       const eventTask = (event.data as { task: TaskResponse }).task;
-      expect(eventTask.tags).toEqual(['ws-tag']);
+      expect(eventTask.tags).toEqual(['ws:tag']);
     } finally {
       ws.close();
       await delay(50);
@@ -592,8 +595,8 @@ describe('Tags CRUD E2E', () => {
     const { tags } = await res.json() as { tags: Array<{ tag: string; count: number }> };
     expect(Array.isArray(tags)).toBe(true);
 
-    // At minimum, 'frontend' should exist from the first tags test
-    const frontendTag = tags.find(t => t.tag === 'frontend');
+    // At minimum, 'area:frontend' should exist from the first tags test
+    const frontendTag = tags.find(t => t.tag === 'area:frontend');
     expect(frontendTag).toBeDefined();
     expect(frontendTag!.count).toBeGreaterThanOrEqual(1);
   });

@@ -805,7 +805,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
     same as `POST /tasks`.
   - Additive fields (Wave 1, 2026-08): `start_date` (ISO date/datetime or `""`
     to clear — same gate as `due_date`) and `tags` (array of strings — a FULL
-    replace of the task's tags; `[]` clears them).
+    replace of the task's tags; `[]` clears them; stored as key:value, see Task extras).
   - Waiting (additive, 2026-09): `phase: "WAITING"` parks the task until
     something happens; it stays in its board tier. A message into its session
     (a trigger fire, a human, a peer) moves it to `IN_PROGRESS`, and that turn
@@ -1763,20 +1763,33 @@ passthrough). The natural-language draft endpoint is deliberately NOT in v1
 
 - `GET /api/v1/tasks/meta/tags` → `200 { "tags": [ { tag, count } ] }` —
   autocomplete catalog. Class A.
-- Tag display (additive, 2026-09): every tag is an ordinary tag (searched, filtered,
-  edited); whether it shows as a pill is a separate, display-only rule, per exact tag or
-  per namespace (`ticket-id:*` covers every tag whose text before its first colon is
-  `ticket-id`). Walnut's machine tags (`walnut:*`) never show, the user's rule wins over a
-  plugin's default, and two plugins disagreeing hide the tag. Clients compile the rule list
-  once and filter the pills they draw, and read it again on open; the web console also hears
-  `task:tag-display-changed` on its socket (not on the v1 SSE feed).
+- Tag form (2026-10): every tag is a key:value pair (`ticket:V1234567890`, `sev:2`,
+  `team:marina`); the key is lowercase letters, digits, `.`, `_`, `-`. Every write stores
+  tags in that form, so a plain word sent by an older client is stored as the label
+  `label:<word>`, and a filter (`tag`, `tags_any`, `tags_all`, `add_tags`, `remove_tags`)
+  naming a plain word means that label. Two keys are Walnut's own and never stored:
+  `created:<YYYY-MM-DD>` and `updated:<YYYY-MM-DD>`, the task's own dates in the server's
+  local time. A filter naming one matches those dates; a write naming one stores the text
+  as a label instead.
+- Tag display (additive, 2026-09; `value` 2026-10): every tag is an ordinary tag
+  (searched, filtered, edited); how it shows as a pill is a separate, display-only rule,
+  per exact tag or per key (`ticket-id:*` covers every tag whose key is `ticket-id`).
+  `shown` draws the whole tag, `value` only the text after the key (a ticket's id), and
+  `hidden` no pill. Walnut's machine tags (`walnut:*`) never show; the user's rule wins over
+  a plugin's default, and a plugin's over Walnut's defaults (labels read as their value,
+  `created:` and `updated:` hidden); two plugins disagreeing take the quieter display
+  (hidden, then value). Clients compile the rule list once and filter the pills they draw,
+  and read it again on open; the web console also hears `task:tag-display-changed` on its
+  socket (not on the v1 SSE feed). A client that knows only `shown` and `hidden` should
+  draw `value` as `shown`.
   - `GET /api/v1/tasks/meta/tag-display` → `200 { "rules": [ { pattern, display:
-    'shown'|'hidden', source: 'builtin'|'user'|'plugin', pluginId?, pluginName? } ] }`.
-    Reads work on both boxes.
-  - `PUT /api/v1/tasks/meta/tag-display` body `{ "pattern", "display": 'shown' | 'hidden' |
-    null }` sets (or, with `null`, removes) the user's rule for one tag or `<namespace>:*`
-    and answers `{ rules }`. A machine-tag pattern or a malformed one → `400 bad_request`.
-    **`501 not_supported_cloud` on a REPLICA**: the rules live in the primary's config.
+    'shown'|'value'|'hidden', source: 'builtin'|'user'|'plugin'|'default', pluginId?,
+    pluginName? } ] }`. Reads work on both boxes.
+  - `PUT /api/v1/tasks/meta/tag-display` body `{ "pattern", "display": 'shown' | 'value' |
+    'hidden' | null }` sets (or, with `null`, removes) the user's rule for one tag or
+    `<key>:*` and answers `{ rules }`. A machine-tag pattern or a malformed one →
+    `400 bad_request`. **`501 not_supported_cloud` on a REPLICA**: the rules live in the
+    primary's config.
 - Virtual task groups — **all writes answer `501 not_supported_cloud` on a
   REPLICA** (`group_id` and the group registry are not in the outbox update
   whitelist, so replica-local writes would silently revert; an honest error

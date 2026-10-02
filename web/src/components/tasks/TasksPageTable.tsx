@@ -24,6 +24,7 @@ import {
 import { TasksColumnsMenu } from './TasksColumnsMenu';
 import { TagChip } from './TagChip';
 import { useShownTags } from './TaskTagPills';
+import { useTagDisplay } from '@/stores/tag-display-store';
 import { PHASE_LABELS, taskNeedsAction } from '@/utils/session-status';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { visibleInterval } from '@/utils/page-visibility';
@@ -297,13 +298,14 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
  * not a branch of `row()`, because the colour subscribes to live session status.
  */
 /** The tags the display rules show (hidden ones stay in the tag editor only). */
-function TagsCell({ colId, tags }: { colId: string; tags?: string[] }) {
-  const shown = useShownTags(tags);
+function TagsCell({ colId, task }: { colId: string; task: Task }) {
+  const shown = useShownTags(task.tags, task);
+  const { compiled } = useTagDisplay();
   return (
     <span data-col={colId} className="tp-cell-tags" title={shown.join(', ')}>
       {shown.length === 0
         ? <span className="tp-cell-empty">–</span>
-        : shown.map((tag) => <TagChip key={tag} tag={tag} inline />)}
+        : shown.map((tag) => <TagChip key={tag} tag={tag} inline valueOnly={compiled.valueOnly(tag)} />)}
     </span>
   );
 }
@@ -595,7 +597,7 @@ export function TasksPageTable({
           </span>
         );
       case 'tags':
-        return <TagsCell key={col.id} colId={col.id} tags={t.tags} />;
+        return <TagsCell key={col.id} colId={col.id} task={t} />;
       case 'created':
       case 'updated':
       case 'completed': {

@@ -12212,6 +12212,11 @@ body.walnut-dragging {
 .todo-pinned-card > .task-tag-pills {
   max-width: 45%;
 }
+/* Session header: beside the title, which keeps the larger share (both shrink, the tags
+   faster, like a board row). */
+.session-panel-title-area > .session-panel-tag-pills {
+  max-width: 40%;
+}
 
 /* Deferred-start pill — future start_date; blue tint to read as "scheduled",
    not "late" */
@@ -21227,6 +21232,39 @@ td.usage-share-col {
 .tag-editor-input:focus {
   border-bottom-color: var(--accent);
 }
+.tag-editor-input-invalid,
+.tag-editor-input-invalid:focus {
+  border-bottom-color: var(--error);
+}
+/* Why the typed text is not a tag yet ("A tag is key:value, …"). */
+.tag-editor-problem {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--error);
+}
+/* "3 hidden": the tags the display rules keep off the pills, and the task's own dates. */
+.tag-editor-hidden-toggle {
+  border: none;
+  background: none;
+  padding: 1px 4px;
+  font-size: 10px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.tag-editor-hidden-toggle:hover {
+  color: var(--fg);
+  background: var(--accent-subtle);
+}
+/* A tag reads the same in the editor as on the pills ("sev:2", no gap after the key). */
+.tag-editor .tag-chip {
+  gap: 0;
+}
+/* The Homepage detail pane edits tags in its badge row: one line of chips, no box. */
+.todo-detail-badges .tag-editor {
+  flex: 1 1 160px;
+  min-width: 0;
+}
 
 .tag-autocomplete {
   position: absolute;
@@ -21241,6 +21279,13 @@ td.usage-share-col {
   z-index: 100;
   padding: 4px 0;
   margin-top: 2px;
+}
+
+/* Portalled to <body> and placed by useMenuPlacement (top/right/maxHeight inline). */
+.tag-autocomplete-portal {
+  left: auto;
+  margin-top: 0;
+  overflow-y: auto;
 }
 
 .tag-autocomplete-item {

@@ -10,6 +10,7 @@ import { log } from '@/utils/log';
 import { scrollLog } from '@/utils/scroll-debug';
 import { fetchWithRetry, isRetryableFetchError } from '@/utils/fetch-retry';
 import { tasksShallowEqual, mergeFetchedTasks } from './task-list-merge';
+import { normalizeTags } from '../../../src/core/tag-model';
 
 /**
  * Optimistic default status for a newly-linked session (before the first
@@ -220,15 +221,16 @@ export function applyTagInstructions(
   const replaced = splitSprintTags(updates.set_tags, setSprint);
   const removed = splitSprintTags(updates.remove_tags, () => { sprint = undefined; sprintTouched = true; });
 
+  // In stored form, as the server writes them (src/core/tag-model.ts): `oncall` is `label:oncall`.
   let tags = task.tags;
   let tagsTouched = false;
   if (replaced !== undefined) {
-    tags = [...new Set(replaced)];
+    tags = normalizeTags(replaced);
     tagsTouched = true;
   } else {
-    if (added?.length) { tags = [...new Set([...(tags ?? []), ...added])]; tagsTouched = true; }
+    if (added?.length) { tags = [...new Set([...normalizeTags(tags), ...normalizeTags(added)])]; tagsTouched = true; }
     if (removed?.length) {
-      const drop = new Set(removed);
+      const drop = new Set([...removed, ...normalizeTags(removed)]);
       tags = (tags ?? []).filter((t) => !drop.has(t));
       tagsTouched = true;
     }

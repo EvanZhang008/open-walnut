@@ -1,7 +1,7 @@
 /**
  * The tag display rules (tag-display-rules.ts) as the server holds them: the user's rules in
- * config.yaml (`tag_display`, a map of pattern to shown/hidden), and plugin defaults in memory
- * for as long as the plugin that set them is running.
+ * config.yaml (`tag_display`, a map of pattern to shown/value/hidden), and plugin defaults in
+ * memory for as long as the plugin that set them is running.
  *
  * A change is announced as `task:tag-display-changed` (never CONFIG_CHANGED, which also reloads
  * every plugin's settings and rechecks the heartbeat: a plugin declaring its defaults at start
@@ -12,7 +12,9 @@ import { bus, EventNames } from './event-bus.js'
 import { getConfig, updateConfig } from './config-manager.js'
 import {
   BUILTIN_TAG_DISPLAY_RULES,
+  DEFAULT_TAG_DISPLAY_RULES,
   isMachineTagPattern,
+  isTagDisplay,
   normalizeTagPattern,
   type TagDisplay,
   type TagDisplayRule,
@@ -31,14 +33,14 @@ function announce(source: string): void {
 /** A pattern in stored form, or an error a caller can show. */
 export function checkTagPattern(raw: unknown): string {
   const pattern = normalizeTagPattern(raw)
-  if (!pattern) throw new Error('A tag rule names one tag, or a namespace as "<namespace>:*".')
+  if (!pattern) throw new Error('A tag rule names one tag, or a key as "<key>:*".')
   if (isMachineTagPattern(pattern)) throw new Error('walnut: tags are Walnut\'s own types (they have pills of their own) and never show as tags.')
   return pattern
 }
 
 function checkDisplay(raw: unknown): TagDisplay {
-  if (raw === 'shown' || raw === 'hidden') return raw
-  throw new Error('display must be "shown" or "hidden".')
+  if (isTagDisplay(raw)) return raw
+  throw new Error('display must be "shown", "value" or "hidden".')
 }
 
 /** A plugin's default for a pattern; the returned function takes it back. The user's own rule
@@ -71,13 +73,13 @@ function userRules(raw: unknown): TagDisplayRule[] {
   const rules: TagDisplayRule[] = []
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     const pattern = normalizeTagPattern(key)
-    if (!pattern || isMachineTagPattern(pattern) || (value !== 'shown' && value !== 'hidden')) continue
+    if (!pattern || isMachineTagPattern(pattern) || !isTagDisplay(value)) continue
     rules.push({ pattern, display: value, source: 'user' })
   }
   return rules
 }
 
-/** Every rule in force: Walnut's own, the user's, then plugin defaults. */
+/** Every rule in force: Walnut's own, the user's, plugin defaults, then Walnut's defaults. */
 export async function listTagDisplayRules(): Promise<TagDisplayRule[]> {
   const config = await getConfig()
   const plugins: TagDisplayRule[] = []
@@ -85,13 +87,13 @@ export async function listTagDisplayRules(): Promise<TagDisplayRule[]> {
     const pluginName = pluginNames.get(pluginId)
     for (const [pattern, { display }] of rules) plugins.push({ pattern, display, source: 'plugin', pluginId, ...(pluginName ? { pluginName } : {}) })
   }
-  return [...BUILTIN_TAG_DISPLAY_RULES, ...userRules(config.tag_display), ...plugins]
+  return [...BUILTIN_TAG_DISPLAY_RULES, ...userRules(config.tag_display), ...plugins, ...DEFAULT_TAG_DISPLAY_RULES]
 }
 
 // The only writer of `tag_display`: its read-modify-write is serialized here.
 let userQueue: Promise<unknown> = Promise.resolve()
 
-/** Set the user's rule for a pattern (`null` removes it, so a plugin default or the plain
+/** Set the user's rule for a pattern (`null` removes it, so a plugin default or Walnut's
  *  default applies again). Answers the rules now in force. */
 export function setUserTagDisplay(rawPattern: unknown, rawDisplay: unknown): Promise<TagDisplayRule[]> {
   const pattern = checkTagPattern(rawPattern)

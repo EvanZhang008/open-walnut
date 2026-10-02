@@ -449,7 +449,7 @@ describe('task-db: rowToTask / taskToRow round trip', () => {
       phase: 'TODO',
       priority: 'high',
       source: 'local',
-      tags: ['alpha', 'beta'],
+      tags: ['team:alpha', 'sev:2'],
       depends_on: ['dep-1', 'dep-2'],
       ext: { 'ms-todo': { list_id: 'abc' } },
       session_ids: ['s1', 's2'],
@@ -472,7 +472,7 @@ describe('task-db: rowToTask / taskToRow round trip', () => {
     const task = rowToTask(fetched);
     expect(task.id).toBe('round-1');
     expect(task.title).toBe('Round trip');
-    expect(task.tags).toEqual(['alpha', 'beta']);
+    expect(task.tags).toEqual(['team:alpha', 'sev:2']);
     expect(task.depends_on).toEqual(['dep-1', 'dep-2']);
     expect(task.ext).toEqual({ 'ms-todo': { list_id: 'abc' } });
     expect(task.session_ids).toEqual(['s1', 's2']);
@@ -491,21 +491,69 @@ describe('task-db: rowToTask / taskToRow round trip', () => {
     });
     expect(added.id).toBeTruthy();
 
+    // Every tag is key:value: a plain word is stored as a label.
     const fetched = await getTask(added.id);
     expect(fetched.title).toBe('CRUD task');
-    expect(fetched.tags).toEqual(['x', 'y']);
+    expect(fetched.tags).toEqual(['label:x', 'label:y']);
 
     const { changed } = await updateTaskRaw(added.id, { title: 'Renamed', summary: 'hello' });
     expect(changed).toBe(true);
     const afterUpdate = await getTask(added.id);
     expect(afterUpdate.title).toBe('Renamed');
     expect(afterUpdate.summary).toBe('hello');
-    expect(afterUpdate.tags).toEqual(['x', 'y']); // unchanged
+    expect(afterUpdate.tags).toEqual(['label:x', 'label:y']); // unchanged
 
     const { deleted } = await deleteTasksBulk([added.id]);
     expect(deleted).toHaveLength(1);
     const remaining = await listTasks();
     expect(remaining.find((t) => t.id === added.id)).toBeUndefined();
+  });
+});
+
+// ── Tags are key:value (tag-model.ts) ─────────────────────────────────────
+describe('task-db: stored tags are key:value', () => {
+  /** A row an older build wrote: tags exactly as given, straight into SQLite. */
+  function writeRawRow(id: string, tags: unknown, updatedAt = '2026-01-02T00:00:00.000Z'): void {
+    getDb()!.prepare(
+      `INSERT INTO tasks (id, title, project, status, phase, priority, source, created_at, updated_at, tags, session_ids)
+       VALUES (@id, 'old row', 'Local', 'todo', 'TODO', 'none', 'local', '2026-01-01T00:00:00.000Z', @updatedAt, @tags, '[]')`,
+    ).run({ id, updatedAt, tags: typeof tags === 'string' ? tags : JSON.stringify(tags) });
+  }
+  const storedTags = (id: string): unknown => {
+    const row = getDb()!.prepare('SELECT tags FROM tasks WHERE id = ?').get(id) as { tags: string | null };
+    return row.tags === null ? null : JSON.parse(row.tags);
+  };
+
+  it('rewrites an older build\'s plain words as labels when the database opens, leaving updated_at alone', () => {
+    getDb();
+    writeRawRow('old-1', ['oncall', 'sev:2', 'Team:Marina', 'oncall']);
+    writeRawRow('old-2', ['created:2026-01-01', '  ']);
+    writeRawRow('ok-1', ['sev:2', 'ticket:V1']);
+    writeRawRow('scalar-1', '"oncall"');
+    closeDb();
+
+    getDb();
+    expect(storedTags('old-1')).toEqual(['label:oncall', 'sev:2', 'team:Marina']);
+    expect(storedTags('old-2')).toEqual(['label:created:2026-01-01']);
+    expect(storedTags('ok-1')).toEqual(['sev:2', 'ticket:V1']);
+    // A scalar is not an array: left as it is (rowToTask and the JS filter handle it).
+    expect(storedTags('scalar-1')).toBe('oncall');
+    const updated = getDb()!.prepare('SELECT updated_at FROM tasks WHERE id = ?').get('old-1') as { updated_at: string };
+    expect(updated.updated_at).toBe('2026-01-02T00:00:00.000Z');
+
+    // Idempotent: a second open changes nothing.
+    closeDb();
+    getDb();
+    expect(storedTags('old-1')).toEqual(['label:oncall', 'sev:2', 'team:Marina']);
+  });
+
+  it('reads a row written since in any form as key:value, and writes key:value whatever it is given', () => {
+    getDb();
+    writeRawRow('late-1', ['bug', 'Sev:3']);
+    const task = rowToTask(getDb()!.prepare('SELECT * FROM tasks WHERE id = ?').get('late-1') as Record<string, unknown>);
+    expect(task.tags).toEqual(['label:bug', 'sev:3']);
+    expect(JSON.parse(taskToRow({ tags: ['ux', 'label:ux', 'k:v'] }).tags)).toEqual(['label:ux', 'k:v']);
+    expect(taskToRow({ tags: null as unknown as string[] }).tags).toBeNull();
   });
 });
 
@@ -905,7 +953,7 @@ describe('task-db migration: correctness', () => {
     expect(titles).toEqual(['Task 0', 'Task 1', 'Task 2', 'Task 3', 'Task 4']);
 
     const task0 = rowToTask(rows.find((r) => r.id === 't-0')!);
-    expect(task0.tags).toEqual(['alpha']);
+    expect(task0.tags).toEqual(['label:alpha']);
     expect(task0.description).toBe('desc-0');
     // The old category is dropped entirely; the project carries the grouping.
     expect(task0.project).toBe('Walnut');

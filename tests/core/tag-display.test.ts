@@ -75,7 +75,10 @@ describe('user rules', () => {
     const rules = await setUserTagDisplay(' severity:* ', 'shown');
     expect(mocks.state.stored.tag_display).toEqual({ 'severity:*': 'shown' });
     const kinds = rules.map((rule) => `${rule.source}:${rule.pattern}:${rule.display}`);
-    expect(kinds).toEqual(['builtin:walnut:*:hidden', 'user:severity:*:shown', 'plugin:severity:*:hidden']);
+    expect(kinds).toEqual([
+      'builtin:walnut:*:hidden', 'user:severity:*:shown', 'plugin:severity:*:hidden',
+      'default:label:*:value', 'default:created:*:hidden', 'default:updated:*:hidden',
+    ]);
     expect(announced).toEqual(['plugin/ticket-runs', 'user']);
 
     await setUserTagDisplay('severity:*', 'shown');
@@ -88,10 +91,19 @@ describe('user rules', () => {
   });
 
   it('keeps only well-formed stored rules and writes them back one at a time', async () => {
-    mocks.state.stored = { tag_display: { 'walnut:*': 'shown', 'a:b:*': 'hidden', urgent: 'hidden', later: 'nope' } };
-    expect((await listTagDisplayRules()).filter((rule) => rule.source === 'user')).toEqual([{ pattern: 'urgent', display: 'hidden', source: 'user' }]);
-    await Promise.all([setUserTagDisplay('one', 'hidden'), setUserTagDisplay('two', 'hidden')]);
-    expect(mocks.state.stored.tag_display).toEqual({ urgent: 'hidden', one: 'hidden', two: 'hidden' });
+    mocks.state.stored = { tag_display: { 'walnut:*': 'shown', 'a:b:*': 'hidden', 'label:urgent': 'hidden', later: 'nope' } };
+    expect((await listTagDisplayRules()).filter((rule) => rule.source === 'user')).toEqual([{ pattern: 'label:urgent', display: 'hidden', source: 'user' }]);
+    await Promise.all([setUserTagDisplay('label:one', 'hidden'), setUserTagDisplay('two', 'value')]);
+    // A plain word names the label it is stored as.
+    expect(mocks.state.stored.tag_display).toEqual({ 'label:urgent': 'hidden', 'label:one': 'hidden', 'label:two': 'value' });
     expect(() => setUserTagDisplay('walnut:*', 'shown')).toThrow(/never show as tags/);
+  });
+
+  it('takes value as a display, for the user and for a plugin', async () => {
+    setPluginTagDisplay('ticket-runs', 'ticket:*', 'value');
+    expect(await listTagDisplayRules()).toContainEqual(expect.objectContaining({ pattern: 'ticket:*', display: 'value', source: 'plugin' }));
+    await setUserTagDisplay('ticket:*', 'shown');
+    expect(mocks.state.stored.tag_display).toEqual({ 'ticket:*': 'shown' });
+    expect(() => setUserTagDisplay('ticket:*', 'maybe')).toThrow(/"shown", "value" or "hidden"/);
   });
 });
