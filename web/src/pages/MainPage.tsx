@@ -58,7 +58,7 @@ import { useContextInspector } from '@/hooks/useContextInspector';
 import { useShowPriorityState } from '@/hooks/useShowPriority';
 import { useQuickParseEnabled } from '@/hooks/useQuickParse';
 import { useUrlSync } from '@/hooks/useUrlSync';
-import { useSessionPanelMode } from '@/hooks/useSessionPanelMode';
+import { MAX_PANELS, useSessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { FocusDock } from '@/components/dock/FocusDock';
 import { AttentionBannerMount } from '@/components/common/AttentionBannerMount';
@@ -69,6 +69,8 @@ import { useSystemHealth } from '@/hooks/useSystemHealth';
 import {
   type SessionSlot,
   trimUnlockedToMax,
+  panelBudget,
+  fitRestoredColumns,
   addSessionColumn,
   forceAddSessionColumn,
   removeSessionColumn,
@@ -610,19 +612,34 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // The RISING edge is still skipped: with placeholders outside the budget the
   // trim would be a no-op there anyway, but skipping keeps a simultaneous
   // real-overflow race from evicting on the exact commit the user pressed "+".
-  const trimGuardRef = useRef({ placeholders: placeholderCount, max: effectiveMaxPanels });
+  //
+  // The FALLING edge (a placeholder became real, or a draft closed) is an open at
+  // most, so like addSessionColumn it evicts AT MOST ONE column: the trim floor is
+  // the real-column count of the previous commit. A strip can sit over budget
+  // since an unlock (unlocking closes nothing), and a Start from a draft there must
+  // cost one panel for the one it adds, never two. A capacity change (count,
+  // resize, config settling) still trims all the way to the budget.
+  const trimGuardRef = useRef({ placeholders: placeholderCount, max: effectiveMaxPanels, loaded: panelModeLoaded });
+  const prevRealCountRef = useRef(sessionColumns.length - placeholderCount);
   useEffect(() => {
     const prev = trimGuardRef.current;
-    trimGuardRef.current = { placeholders: placeholderCount, max: effectiveMaxPanels };
+    trimGuardRef.current = { placeholders: placeholderCount, max: effectiveMaxPanels, loaded: panelModeLoaded };
     if (!panelModeLoaded) return;
     // A placeholder appeared and nothing else changed → license granted, hands off.
     // (A simultaneous max change still trims: that's a real capacity shrink.)
     if (placeholderCount > prev.placeholders && effectiveMaxPanels === prev.max) return;
+    const licenseExpiry = placeholderCount < prev.placeholders && effectiveMaxPanels === prev.max && prev.loaded;
+    const floor = licenseExpiry ? prevRealCountRef.current : 0;
     setSessionColumns(prev2 => {
       const max = triageOpenRef.current ? effectiveMaxPanels - 1 : effectiveMaxPanels;
-      return trimUnlockedToMax(prev2, max);
+      // panelBudget, not the bare max: pins that fill the budget keep their one
+      // free column through a count change or a window resize too.
+      return trimUnlockedToMax(prev2, Math.max(panelBudget(prev2, max), floor));
     });
   }, [effectiveMaxPanels, panelModeLoaded, placeholderCount]);
+  // After the trim effect (declaration order), every commit: the count it reads
+  // next time is the one from BEFORE the commit that fires it.
+  useEffect(() => { prevRealCountRef.current = sessionColumns.length - placeholderCount; });
 
   // Session finder — search existing sessions by title/task/cwd/host and open
   // one as a column. Toggled by ⌘⇧O.
@@ -806,8 +823,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         const lockedById = new Map(saved.map(s => [s.id, s.locked]));
         // Same rationale as the visibility restore below: don't truncate a deep
         // link against the pre-config default panel count.
-        const ids = panelModeLoadedRef.current ? p.sessionIds.slice(0, maxPanelsRef.current) : p.sessionIds;
-        setSessionColumns(ids.map(id => ({ id, locked: lockedById.get(id) ?? false })));
+        const cols = p.sessionIds.map(id => ({ id, locked: lockedById.get(id) ?? false }));
+        setSessionColumns(panelModeLoadedRef.current ? fitRestoredColumns(cols, maxPanelsRef.current) : cols);
       }
       if (p.project !== null) setActiveProject(p.project);
       urlSync.clearPending();
@@ -846,7 +863,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // effect. Restoring un-truncated is safe: that effect trims as soon as the
       // config settles, whereas truncating early loses a column permanently.
       if (restored.length > 0) {
-        setSessionColumns(panelModeLoadedRef.current ? restored.slice(0, maxPanelsRef.current) : restored);
+        setSessionColumns(panelModeLoadedRef.current ? fitRestoredColumns(restored, maxPanelsRef.current) : restored);
       }
     }
     // visible/tasks/focusedTask/sessionColumns are intentional — this effect only fires
@@ -1465,7 +1482,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const current = sessionColumnsRef.current;
     const next = addSessionColumn(current, sessionId, triageOpenRef.current, maxPanelsRef.current);
     if (next === current && !current.some(c => c.id === sessionId)) {
-      showOperationError('All session panels are locked. Unlock one to open a new session.');
+      // Pins below the ceiling grow the strip instead (panelBudget), so a refusal
+      // is either the hard ceiling or a 1-panel strip whose slot triage holds.
+      const pins = current.filter(c => c.locked).length;
+      showOperationError(pins >= MAX_PANELS
+        ? `All ${MAX_PANELS} session panels are locked. Unlock or close one to open another session.`
+        : 'No session slot is free. Close the triage panel or raise the panel count.');
       return;
     }
     // A fullscreen panel would cover the column this opens (useFullscreen explains).
@@ -1636,7 +1658,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setTriagePanelOpen(true);
     setTriageTaskId(taskId);
     // Triage consumes one slot — evict unlocked slots first, keep locked.
-    setSessionColumns(prev => trimUnlockedToMax(prev, maxPanelsRef.current - 1));
+    setSessionColumns(prev => trimUnlockedToMax(prev, panelBudget(prev, maxPanelsRef.current - 1)));
   }, []);
 
   const handleCloseTriage = useCallback(() => {

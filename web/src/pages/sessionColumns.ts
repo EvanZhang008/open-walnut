@@ -16,10 +16,36 @@
 // the user just crossed.
 
 import { isDraftColumnId, isPlaceholderColumnId } from '@/utils/column-ids';
+import { MAX_PANELS } from '@/hooks/session-panel-limits';
 
 export interface SessionSlot {
   id: string;
   locked: boolean;
+}
+
+/** Real (budget-counting) columns: everything but the free-riding placeholders. */
+function realColumns(cols: SessionSlot[]): SessionSlot[] {
+  return cols.filter(c => !isPlaceholderColumnId(c.id));
+}
+
+/**
+ * The column budget the strip gets right now.
+ *
+ * `max` (the user's panel count) unless the pins alone fill it: then the budget is
+ * the pins plus ONE free slot, never past MAX_PANELS. A pin means "keep this panel",
+ * not "stop opening sessions" — with every budgeted slot locked, a pill click used
+ * to answer with a toast and nothing else, so the strip grows by one for the next
+ * session instead. The grant is derived from the pins, never stored: unlock or close
+ * one and the budget is back to `max` on its own, so there is nothing to "reduce".
+ * The free slot is shared, not cumulative — the next open reuses it (one in, one
+ * out) rather than growing the strip again.
+ */
+export function panelBudget(cols: SessionSlot[], max: number): number {
+  const locked = realColumns(cols).filter(c => c.locked).length;
+  // Pins only: a budget of 0 with nothing pinned (triage holding the one slot of
+  // a 1-panel strip) stays 0, it is not a strip the pins filled.
+  if (locked === 0 || locked < max) return max;
+  return Math.min(Math.max(max, locked + 1), MAX_PANELS);
 }
 
 /** Slots the trim may never evict: user-pinned, or a placeholder mid-flight
@@ -92,7 +118,7 @@ function insertLeftmost(id: string, unlocked: SessionSlot[], locked: SessionSlot
  */
 export function trimUnlockedToMax(cols: SessionSlot[], max: number): SessionSlot[] {
   // The budget applies to REAL columns only — placeholders ride for free.
-  const real = cols.filter(c => !isPlaceholderColumnId(c.id));
+  const real = realColumns(cols);
   if (real.length <= max) return cols;
   let toDrop = real.length - Math.max(max, real.filter(c => c.locked).length);
   if (toDrop <= 0) return cols;
@@ -106,12 +132,20 @@ export function trimUnlockedToMax(cols: SessionSlot[], max: number): SessionSlot
 }
 
 /**
- * Returns `cols` unchanged (reference-equal) iff all slots are locked and `id`
- * is new — callers use `next === prev` to detect this rejection path and show
- * a toast. Any other case yields a new array.
+ * Returns `cols` unchanged (reference-equal) iff `id` is new and the pins leave no
+ * slot even after the lock grant (MAX_PANELS columns locked) — callers use
+ * `next === prev` to detect this rejection path and show a toast. Any other case
+ * yields a new array.
+ *
+ * An open evicts AT MOST ONE real column. The trim target is the budget or the
+ * strip's current size, whichever is larger: a strip can legitimately sit above
+ * the budget (the lock grant was used, then a pin was released — unlocking never
+ * closes anything), and the first click after that must not make two panels
+ * vanish to catch up. It shrinks when the user closes a column, which is also
+ * the one answer to "how do I get back to N": close one.
  */
 export function addSessionColumn(cols: SessionSlot[], id: string, triageOpen: boolean, maxColumns: number): SessionSlot[] {
-  const max = triageOpen ? maxColumns - 1 : maxColumns;
+  const max = panelBudget(cols, triageOpen ? maxColumns - 1 : maxColumns);
   const existing = cols.find(c => c.id === id);
   if (existing) {
     const filtered = cols.filter(c => c.id !== id);
@@ -126,8 +160,19 @@ export function addSessionColumn(cols: SessionSlot[], id: string, triageOpen: bo
       : insertLeftmost(id, unlocked, locked);  // unlocked: leftmost of its region
   }
   const { unlocked, locked } = splitByLock(cols);
-  if (locked.length >= max) return cols; // fully locked — caller shows toast
-  return trimUnlockedToMax(insertLeftmost(id, unlocked, locked), max);
+  if (locked.length >= max) return cols; // every slot pinned, no grant left — caller shows toast
+  const target = Math.max(max, realColumns(cols).length);
+  return trimUnlockedToMax(insertLeftmost(id, unlocked, locked), target);
+}
+
+/**
+ * Fit a RESTORED strip (sessionStorage, a deep link) to the budget. Replaces the
+ * old `slice(0, max)`: a positional cut ignored locks, so with the pins on the
+ * right it kept the free column and dropped the user's anchor. Same budget rule as
+ * the live strip — a lock-granted free column survives a reload with its pins.
+ */
+export function fitRestoredColumns(cols: SessionSlot[], max: number): SessionSlot[] {
+  return trimUnlockedToMax(cols, panelBudget(cols, max));
 }
 
 /**

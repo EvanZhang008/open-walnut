@@ -4,11 +4,14 @@ import {
   forceAddSessionColumn,
   toggleLockSlot,
   trimUnlockedToMax,
+  panelBudget,
+  fitRestoredColumns,
   removeSessionColumn,
   replaceSessionColumn,
   splitByLock,
   type SessionSlot,
 } from '../../web/src/pages/sessionColumns';
+import { MAX_PANELS } from '../../web/src/hooks/useSessionPanelMode';
 
 const slot = (id: string, locked = false): SessionSlot => ({ id, locked });
 
@@ -253,8 +256,10 @@ describe('sessionColumns: addSessionColumn', () => {
     ]);
   });
 
-  it('returns same reference (rejection signal) when all slots locked', () => {
-    const cols = [slot('a', true), slot('b', true)];
+  it('returns same reference (rejection signal) only when MAX_PANELS slots are locked', () => {
+    // Below the hard ceiling a fully pinned strip GROWS instead (see the lock
+    // grant block); the toast is reserved for the ceiling itself.
+    const cols = Array.from({ length: MAX_PANELS }, (_, i) => slot(`L${i}`, true));
     const next = addSessionColumn(cols, 'new', false, 2);
     expect(next).toBe(cols); // reference equality = reject signal for caller toast
   });
@@ -319,11 +324,145 @@ describe('sessionColumns: addSessionColumn', () => {
     expect(next.map(s => s.id)).toEqual(['b']);
   });
 
-  it('rejects new id when triage + 1 locked fills the slots', () => {
-    // maxColumns=2, triage open → effective max=1; already 1 locked → reject
+  it('triage + 1 locked filling the slots still opens the new id (lock grant)', () => {
+    // maxColumns=2, triage open → effective max=1; the one slot is pinned, so the
+    // strip grows by one beside the triage column instead of refusing.
     const cols = [slot('L', true)];
     const next = addSessionColumn(cols, 'new', true, 2);
-    expect(next).toBe(cols);
+    expect(next.map(s => s.id)).toEqual(['new', 'L']);
+  });
+});
+
+// ── The lock grant: pins never block opening a session ─────────────────────────
+//
+// With 3 panels and all 3 locked, a pill click used to answer with a toast ("All
+// session panels are locked") and nothing else. The budget now follows the pins:
+// pins that fill the user's count get ONE free slot on top (never past
+// MAX_PANELS). Derived, not stored — unlocking or closing takes it away again, so
+// there is no "reduce back" step to teach: close a column and the strip is at N.
+
+describe('sessionColumns: panelBudget', () => {
+  it('is the plain max while a slot is free', () => {
+    expect(panelBudget([slot('a', true), slot('b')], 3)).toBe(3);
+    expect(panelBudget([], 3)).toBe(3);
+  });
+
+  it('grants ONE free slot when the pins fill the max', () => {
+    expect(panelBudget([slot('a', true), slot('b', true), slot('c', true)], 3)).toBe(4);
+  });
+
+  it('follows pins that already exceed the max (count was lowered under them)', () => {
+    // setting 2, 3 pins: the strip holds the 3 pins plus one free slot
+    expect(panelBudget([slot('a', true), slot('b', true), slot('c', true)], 2)).toBe(4);
+  });
+
+  it('never grants past MAX_PANELS', () => {
+    const pins = Array.from({ length: MAX_PANELS }, (_, i) => slot(`L${i}`, true));
+    expect(panelBudget(pins, 3)).toBe(MAX_PANELS);
+    expect(panelBudget(pins, MAX_PANELS)).toBe(MAX_PANELS);
+  });
+
+  it('a placeholder is not a pin and not a column', () => {
+    // 2 pins + a draft at max 2: the draft rides free, the grant is for the pins
+    expect(panelBudget([slot('draft:1-1'), slot('a', true), slot('b', true)], 2)).toBe(3);
+    expect(panelBudget([slot('draft:1-1'), slot('a', true)], 2)).toBe(2);
+  });
+
+  it('grants nothing without a pin, even to a budget of zero', () => {
+    // count 1 with triage open leaves 0 slots; an unpinned column is not a pin
+    // that filled the budget, so triage still takes the slot and an open is refused.
+    expect(panelBudget([slot('a')], 0)).toBe(0);
+    expect(panelBudget([], 0)).toBe(0);
+    expect(trimUnlockedToMax([slot('a')], panelBudget([slot('a')], 0))).toEqual([]);
+    const cols = [slot('a')];
+    expect(addSessionColumn(cols, 'new', true, 1)).toBe(cols);
+  });
+});
+
+describe('sessionColumns: addSessionColumn with every slot pinned', () => {
+  const pinned3 = () => [slot('A', true), slot('B', true), slot('C', true)];
+
+  it('opens a 4th column instead of refusing, evicting nothing', () => {
+    const next = addSessionColumn(pinned3(), 'D', false, 3);
+    expect(next.map(s => s.id)).toEqual(['D', 'A', 'B', 'C']);
+    expect(next.filter(s => s.locked)).toHaveLength(3);
+  });
+
+  it('the free slot is SHARED: the next open reuses it, one in one out', () => {
+    const cols = [slot('D'), ...pinned3()];
+    const next = addSessionColumn(cols, 'E', false, 3);
+    expect(next.map(s => s.id)).toEqual(['E', 'A', 'B', 'C']);
+  });
+
+  it('closing a pin ends the grant: the next open evicts back to max', () => {
+    // [D A* B* C*] → close B* → [D A* C*] (3 = max) → open E evicts D
+    const cols = removeSessionColumn([slot('D'), ...pinned3()], 'B');
+    expect(cols.map(s => s.id)).toEqual(['D', 'A', 'C']);
+    const next = addSessionColumn(cols, 'E', false, 3);
+    expect(next.map(s => s.id)).toEqual(['E', 'A', 'C']);
+  });
+
+  it('closing the free column leaves the pins; the next open is granted again', () => {
+    const cols = removeSessionColumn([slot('D'), ...pinned3()], 'D');
+    const next = addSessionColumn(cols, 'E', false, 3);
+    expect(next.map(s => s.id)).toEqual(['E', 'A', 'B', 'C']);
+  });
+
+  it('unlocking never closes anything, and the first open after it evicts ONE, not two', () => {
+    // [D A* B* C*] unlock A → [D A B* C*]: 4 columns over a budget of 3. The
+    // strip is NOT trimmed here (nothing fires on a lock toggle), and the next
+    // open must not make two panels vanish to catch up — one in, one out.
+    const afterUnlock = toggleLockSlot([slot('D'), ...pinned3()], 'A');
+    expect(afterUnlock.map(s => s.id)).toEqual(['D', 'A', 'B', 'C']);
+    expect(panelBudget(afterUnlock, 3)).toBe(3);
+    const next = addSessionColumn(afterUnlock, 'E', false, 3);
+    expect(next.map(s => s.id)).toEqual(['E', 'D', 'B', 'C']);
+  });
+
+  it('a strip over budget shrinks when the user closes a column, then stays at max', () => {
+    // [E D B* C*] (over by one after an unlock) → close D → [E B* C*] → open F evicts E
+    const cols = removeSessionColumn([slot('E'), slot('D'), slot('B', true), slot('C', true)], 'D');
+    const next = addSessionColumn(cols, 'F', false, 3);
+    expect(next.map(s => s.id)).toEqual(['F', 'B', 'C']);
+  });
+
+  it('a draft beside the pins stays free; the granted column is for the session', () => {
+    const next = addSessionColumn([slot('draft:1-1'), ...pinned3()], 'D', false, 3);
+    expect(next.map(s => s.id)).toEqual(['draft:1-1', 'D', 'A', 'B', 'C']);
+  });
+
+  it('at MAX_PANELS pins the grant is gone and the open is refused', () => {
+    const pins = Array.from({ length: MAX_PANELS }, (_, i) => slot(`L${i}`, true));
+    expect(addSessionColumn(pins, 'new', false, MAX_PANELS)).toBe(pins);
+  });
+
+  it('existing-id moves are untouched by the grant', () => {
+    const cols = pinned3();
+    const next = addSessionColumn(cols, 'C', false, 3);
+    expect(next.map(s => s.id)).toEqual(['C', 'A', 'B']);
+  });
+});
+
+describe('sessionColumns: fitRestoredColumns', () => {
+  it('keeps a lock-granted free column with its pins across a reload', () => {
+    const saved = [slot('D'), slot('A', true), slot('B', true), slot('C', true)];
+    expect(fitRestoredColumns(saved, 3)).toBe(saved);
+  });
+
+  it('trims a strip left over budget by an unlock, evicting from the right', () => {
+    const saved = [slot('D'), slot('A'), slot('B', true), slot('C', true)];
+    expect(fitRestoredColumns(saved, 3).map(s => s.id)).toEqual(['D', 'B', 'C']);
+  });
+
+  it('never cuts a pin the way the old positional slice did', () => {
+    // slice(0, 2) on [u1 u2 L] kept u1 u2 and dropped the user's anchor
+    const saved = [slot('u1'), slot('u2'), slot('L', true)];
+    expect(fitRestoredColumns(saved, 2).map(s => s.id)).toEqual(['u1', 'L']);
+  });
+
+  it('is a plain truncation for an unlocked deep link', () => {
+    const saved = [slot('a'), slot('b'), slot('c')];
+    expect(fitRestoredColumns(saved, 2).map(s => s.id)).toEqual(['a', 'b']);
   });
 });
 

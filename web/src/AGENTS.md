@@ -70,6 +70,18 @@ show inline after the open ones, other completed hits that show the query fold i
   or `.draft-session-panel` on `/` to `.main-page-session-column` (`REAL_PANEL` / `DRAFT_PANEL`
   in `tests/e2e/browser/draft-helpers.ts`), or pin it by `data-session-id`: the slot's panel
   sits earlier in the DOM, so an unscoped `.first()` grabs it instead of the column under test.
+- **The column budget follows the pins** (`panelBudget` in `pages/sessionColumns.ts`). The
+  panel count (`ui.session_panels`, 1-5 or Auto) is the budget, except when the locked columns
+  alone fill it: then the strip holds the pins plus ONE free slot (never past `MAX_PANELS`), so a
+  pill click with every panel locked opens a column instead of the old "All session panels are
+  locked" toast (now only at 5 pins). The grant is derived, never stored: the free slot is
+  shared (the next open reuses it, one in, one out), unlocking closes nothing, and closing any
+  column puts the strip back under the count. An open evicts AT MOST ONE column, in
+  `addSessionColumn` and in the trim effect's placeholder falling edge (a Start from a draft),
+  so a strip left over budget by an unlock never loses two panels on one click; only a capacity
+  change (count, resize) trims all the way. Restores go through `fitRestoredColumns`, not a
+  positional `slice`, which cut the rightmost pin. Spec:
+  `tests/e2e/browser/session-panel-lock-grant.spec.ts`.
 - **One browser, one task store.** `TasksContext` (`useTasks`) is the only in-browser truth for
   a task row. A surface that shows a task reads it from there (`useStoreTask(id)`) and writes
   through the store's optimistic mutators (`update` / `setPhase` / `moveTask`), so the board

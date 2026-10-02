@@ -12,14 +12,9 @@ import { useEvent } from '@/hooks/useWebSocket';
  */
 export type SessionPanelMode = 'auto' | `${number}`;
 
-export const MIN_PANELS = 1;
-/**
- * Most panels the picker offers. Not arbitrary: the session strip maxes out at 70%
- * of the viewport, so on a 2560px screen 5 columns is ~360px each — about the floor
- * for a usable session panel (composer + header + code blocks). Narrower than that
- * is unreadable, and each column is a live CLI session's worth of DOM and streaming.
- */
-export const MAX_PANELS = 5;
+// Range lives in a dependency-free module (the column queue reads it too).
+export { MIN_PANELS, MAX_PANELS } from './session-panel-limits';
+import { MIN_PANELS, MAX_PANELS } from './session-panel-limits';
 
 // Min width (px) of the chat+sessions container to allow N session panels in auto mode.
 // Mac 14" content-row ≈ 1305px — too cramped for 2 sessions alongside chat.
