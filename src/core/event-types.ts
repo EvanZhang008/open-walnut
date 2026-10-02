@@ -439,6 +439,11 @@ export interface SessionBatchFailedEvent {
 export interface SessionMessageQueuedEvent {
   sessionId: string;
   messageId: string;
+  message?: string;
+  source?: string;
+  /** Queue row's enqueue time (server clock): the bubble's time floor for
+   *  history matching, see web optimistic-dedup.ts. */
+  enqueuedAt?: string;
 }
 
 /** ACP dialect: ≈ session/request_permission (request side). Previously emitted

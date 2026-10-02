@@ -319,6 +319,7 @@ export async function sendMessageToSession(
     messageId: msg.id,
     message,
     source,
+    enqueuedAt: msg.enqueuedAt,
   }, ['main-ai'], { source });
 
   return msg;

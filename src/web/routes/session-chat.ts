@@ -366,8 +366,13 @@ export function registerSessionChatRpc(): void {
     // i.e. the image preamble, if any, plus the user's own words. Emitter and
     // matcher must agree on one basis; this is it.
     const displayedByHistory = stripReferenceCards(outputMode.displayText)
+    // `enqueuedAt` is the bubble's time floor (optimistic-dedup.ts): its history
+    // row can only be written after this instant, so the client matches it by
+    // time when the row lands under an index watermark that already moved on.
+    // The server clock, not the browser's: the console may run on another device.
     return {
       messageId: msg.id,
+      enqueuedAt: msg.enqueuedAt,
       ...(displayedByHistory !== data.message ? { dedupText: displayedByHistory } : {}),
     }
   })

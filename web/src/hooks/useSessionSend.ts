@@ -318,14 +318,14 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         ...(await buildImageRefsPayload(images)),
         ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       };
-      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string }>('session:send', rpcPayload);
+      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
         // Adopt dedupText when the server augmented the text (image refs) — the
         // bubble keeps rendering the user's original, but dedups against what was
         // actually enqueued. See OptimisticMessage.dedupText.
         setOptimisticMsgs((prev) => prev.map((m) =>
           m.queueId === tempId
-            ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}) }
+            ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
             : m
         ));
       }
@@ -376,11 +376,11 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         ...(await buildImageRefsPayload(images)),
         ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       };
-      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string }>('session:send', rpcPayload);
+      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
         setOptimisticMsgs((prev) => prev.map((m) =>
           m.queueId === tempId
-            ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}) }
+            ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
             : m
         ));
       }
@@ -426,7 +426,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     // land the message at the top level while the chip still promised a thread.
     // Harmless when the server re-drains the original row (it already carries it).
     buildImageRefsPayload(failedMsg.images)
-      .then((imagePayload) => wsClient.sendRpc<{ messageId: string; dedupText?: string }>(
+      .then((imagePayload) => wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string }>(
         'session:send',
         {
           sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload,
@@ -437,7 +437,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         if (res?.messageId) {
           setOptimisticMsgs((prev) => prev.map((m) =>
             m.queueId === queueId
-              ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}) }
+              ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}), ...(res.enqueuedAt ? { timestamp: res.enqueuedAt } : {}) }
               : m
           ));
         }
@@ -502,7 +502,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   // Handle messages queued externally (e.g. by the agent via send_to_session)
   // These arrive via bus event after the server has already enqueued the message,
   // so we go straight to 'received' (shows "Queued" badge immediately).
-  const addExternalQueued = useCallback((msg: { queueId: string; text: string }) => {
+  const addExternalQueued = useCallback((msg: { queueId: string; text: string; enqueuedAt?: string }) => {
     setOptimisticMsgs(prev => {
       // Dedup: skip if this queueId already exists (guard against double-delivery)
       if (prev.some(m => m.queueId === msg.queueId)) return prev;
@@ -510,7 +510,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         queueId: msg.queueId,
         text: msg.text,
         role: 'user' as const,
-        timestamp: new Date().toISOString(),
+        timestamp: msg.enqueuedAt ?? new Date().toISOString(),
         status: 'received' as const,
       }];
     });

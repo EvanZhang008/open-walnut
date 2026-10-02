@@ -166,11 +166,19 @@ export class ScriptedServer {
 // ── Canonical-row builders (neutral fixture content only — public repo) ──────
 
 let rowSeq = 0;
-export function resetRowSeq(): void { rowSeq = 0; }
+let labTick = 0;
+export function resetRowSeq(): void { rowSeq = 0; labTick = 0; }
+
+/** ONE monotonic clock for rows and bubbles. A send is stamped after every row
+ *  that exists when it is made, and the echo row written for it after that, as
+ *  on a real host; the dedup's time floor (optimistic-dedup.ts) rests on that
+ *  order, so a lab that stamped bubbles on a separate scale made an ancient row
+ *  look newer than a live send. */
+export function labClockNow(): string { return new Date(1700000000000 + (++labTick) * 1000).toISOString(); }
 
 export function userRow(text: string, opts?: { walnutMessageId?: string }): SessionHistoryMessage {
   return {
-    role: 'user', text, timestamp: new Date(1700000000000 + rowSeq * 1000).toISOString(),
+    role: 'user', text, timestamp: labClockNow(),
     msgId: `u_${++rowSeq}`,
     ...(opts?.walnutMessageId ? { walnutMessageId: opts.walnutMessageId } : {}),
   };
@@ -182,7 +190,7 @@ export function assistantRow(text: string, opts?: {
   thinking?: string;
 }): SessionHistoryMessage {
   return {
-    role: 'assistant', text, timestamp: new Date(1700000000000 + rowSeq * 1000).toISOString(),
+    role: 'assistant', text, timestamp: labClockNow(),
     msgId: opts?.msgId ?? `m_${++rowSeq}`,
     ...(opts?.tools ? { tools: opts.tools } : {}),
     ...(opts?.thinking ? { thinking: opts.thinking } : {}),

@@ -198,7 +198,7 @@ interface SessionChatHistoryProps {
   onBatchFailed?: (messageIds: string[], error: string) => void;
   onEditQueued?: (queueId: string, newText: string) => void;
   onDeleteQueued?: (queueId: string) => void;
-  onAgentQueued?: (msg: { queueId: string; text: string }) => void;
+  onAgentQueued?: (msg: { queueId: string; text: string; enqueuedAt?: string }) => void;
   onRetryFailed?: (queueId: string) => void;
   onDismissFailed?: (queueId: string) => void;
   onTaskClick?: (taskId: string) => void;
@@ -875,10 +875,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // request): history hides those lines on purpose, so minting a "You" bubble for one
   // would paint a raw machine prompt into the timeline that nothing later removes.
   useEvent('session:message-queued', (data) => {
-    const d = data as { sessionId?: string; messageId?: string; message?: string; source?: string };
+    const d = data as { sessionId?: string; messageId?: string; message?: string; source?: string; enqueuedAt?: string };
     const plumbing = d.source === 'ui' || (d.source ?? '').startsWith('side-thread-');
     if (d.sessionId === sessionId && !plumbing && d.messageId && d.message) {
-      onAgentQueued?.({ queueId: d.messageId, text: d.message });
+      onAgentQueued?.({ queueId: d.messageId, text: d.message, ...(d.enqueuedAt ? { enqueuedAt: d.enqueuedAt } : {}) });
     }
   });
 

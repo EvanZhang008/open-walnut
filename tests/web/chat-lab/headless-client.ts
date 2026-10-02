@@ -37,7 +37,7 @@ import { dedupeOptimisticMessages } from '../../../web/src/components/sessions/o
 import { computeHistoryAnchor, collectUnsettledIds } from '../../../web/src/hooks/history-anchor';
 import { planDeltaMerge } from '../../../web/src/hooks/history-merge';
 import type { SessionHistoryMessage } from '../../../web/src/types/session';
-import type { ScriptedServer } from './scripted-server';
+import { labClockNow, type ScriptedServer } from './scripted-server';
 
 interface OptimisticBubble {
   queueId: string;
@@ -116,7 +116,7 @@ export class HeadlessChatClient {
     const queueId = `qm-lab-${++this.bubbleSeq}`;
     this.optimistic.push({
       queueId, text, status: 'delivered', role: 'user',
-      timestamp: new Date(1700000000000 + this.bubbleSeq).toISOString(),
+      timestamp: labClockNow(),
     });
     return queueId;
   }
