@@ -82,7 +82,7 @@ Both channels publish only a commit whose `CI OK` passed (see below), and `CI OK
 | Job | What it proves |
 |---|---|
 | Lint & build | `tsc`, the full build, the plugin packages |
-| Test (quick), Test (frontend) | ~300 pure-logic files and the web suites; quick is judged against its recorded baseline |
+| Test (quick, three shards), Test (frontend) | ~1,500 pure-logic files and the web suites; quick is judged against its recorded baseline, and every file of each shard must report |
 | Test (slow) | ~1,000 tests that start real daemons, servers, git and the local embedder; must pass (`--retry=2` absorbs a runner hiccup, three failures in a row is a failure) |
 | Test (e2e, four shards) | ~130 files of real servers and daemons with a mock CLI; judged against `tests/setup/known-failures-e2e.json`, and each shard uploads its failures as `known-failures-e2e-<shard>` |
 | Fresh machine (Linux, macOS) | the README's two install routes on a machine without Bun or Claude Code |

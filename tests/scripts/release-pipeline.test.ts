@@ -427,6 +427,12 @@ describe('ci.yml', () => {
     expect(doc.jobs.rehearsal!.steps.some((s) => s['continue-on-error'])).toBe(false)
   })
 
+  it('the quick tier blocks in three serial legs that cover it once', () => {
+    const legs = (doc.jobs.test!.strategy!.matrix.include as Array<{ tier: string; cmd: string }>).filter((l) => l.tier.startsWith('quick'))
+    expect(legs.map((l) => l.cmd)).toEqual([1, 2, 3].map((i) => `npm run test:baseline -- --maxWorkers=1 --shard=${i}/3`))
+    expect(doc.jobs.test!.steps.some((s) => s['continue-on-error'])).toBe(false)
+  })
+
   it('the slow and e2e tiers block, with retries for runner flakes', () => {
     expect(runs('test-heavy')).toContain('npm run test:slow -- --maxWorkers=1 --retry=2')
     expect(doc.jobs['test-heavy']!.steps.some((s) => s['continue-on-error'])).toBe(false)

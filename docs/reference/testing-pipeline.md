@@ -4,7 +4,7 @@ Five layers, chosen so the one you run most often is the one that costs least. R
 
 | Layer | Command | Scope | Time | When |
 |---|---|---|---|---|
-| **L1 quick** | `npm run test:quick` | 311 fast test files | ~3 min (1 worker, machine-wide default) | every code change |
+| **L1 quick** | `npm run test:quick` | ~1,500 fast test files | ~3 min (1 worker, machine-wide default) | every code change |
 | **L2 focus** | `npm run test:focus <path>` | whatever you name | 0.3–30 s | while working on one module |
 | **L3 pre-commit** | `npm run test:pre-commit` | the tiers your diff can break | 1–6 min | before a larger commit |
 | **L4 CI** | GitHub Actions, automatic | everything + lint + build | ~6 min wall-clock, free | every push and PR |
@@ -54,7 +54,7 @@ npm run test:focus -- -t 'reorder'                   # one test by name
 
 `.github/workflows/ci.yml`: a `build` gate (type-check + build), then two jobs of test tiers as **parallel matrices** — each leg gets its own runner, so wall-clock is the slowest single tier rather than the sum. Locally the tiers are forced sequential because they share one machine; on CI parallel is free.
 
-Every vitest tier now blocks: `quick` and `frontend` (the `test` job), `slow` (`test-heavy`) and `e2e` (`test-e2e`, four shards). The browser suite is the one informational job, and it stays a **separate job**, not one matrix with `continue-on-error: ${{ matrix.blocking == false }}`. Job-level `continue-on-error` has murky interaction with `needs.<job>.result` — a tolerated failure can still surface as `success` downstream — and the single check branch protection depends on must not rest on ambiguous semantics.
+Every vitest tier now blocks: `quick` (three shards) and `frontend` (the `test` job), `slow` (`test-heavy`) and `e2e` (`test-e2e`, four shards). Quick runs serial and took 25 minutes in one leg, the longest blocking job, so it runs as `--shard=1/3`..`3/3`. The browser suite is the one informational job, and it stays a **separate job**, not one matrix with `continue-on-error: ${{ matrix.blocking == false }}`. Job-level `continue-on-error` has murky interaction with `needs.<job>.result` — a tolerated failure can still surface as `success` downstream — and the single check branch protection depends on must not rest on ambiguous semantics.
 
 All CI jobs force CPU-only QMD on Linux so test workers do not launch doomed Vulkan builds. The quick, slow and e2e jobs run with one worker because four workers oversubscribed the 4-core runner and produced changing, unrelated timeout failures across successive runs. The slow and e2e jobs also name a daemon directory of their own (`WALNUT_DAEMON_DIR`); the harness gives every worker a subdirectory of it (`tests/setup/runtime-dir-choice.ts`), because one shared directory let a test file's server adopt the daemon another file had started, with that file's home. The lightweight frontend tier remains parallel.
 
@@ -75,12 +75,12 @@ WALNUT_BASELINE_CONFIG=vitest.e2e.config.ts WALNUT_BASELINE_FILE=tests/setup/kno
   WALNUT_BASELINE_MIN_FILES=120 node scripts/test-baseline.mjs check --maxWorkers=1
 ```
 
-`tests/setup/known-failures.json` (quick) and `tests/setup/known-failures-e2e.json` (e2e) are committed, so a PR that adds entries is visibly making things worse. The e2e gate runs per shard: each leg judges only the files it ran (a baseline entry from another shard is neither new nor "fixed" there), and uploads its own failures as the `known-failures-e2e-<shard>` artifact (`WALNUT_BASELINE_RUN_OUT`), so a new e2e baseline is the union of the four artifacts of one run, with no second run of the tier. The slow tier has no baseline: it blocks on any failure.
+`tests/setup/known-failures.json` (quick) and `tests/setup/known-failures-e2e.json` (e2e) are committed, so a PR that adds entries is visibly making things worse. Both gates run per shard on CI: each leg judges only the files it ran (a baseline entry from another shard is neither new nor "fixed" there), and uploads its own failures as the `known-failures-e2e-<shard>` artifact (`WALNUT_BASELINE_RUN_OUT`), so a new e2e baseline is the union of the four artifacts of one run, with no second run of the tier. The slow tier has no baseline: it blocks on any failure.
 
 Two properties make this gate trustworthy rather than decorative:
 
 - **Collection failures count.** A file that dies at import time reports `status: "failed"` with an *empty* `assertionResults` array, so harvesting only assertion results made the most likely regression of a refactor — a broken import — produce zero new keys and pass. The gate now synthesizes a `<file failed to load or collect>` key for those.
-- **A truncated run is never a pass.** If fewer than 290 files ran (real count: 306), the gate refuses to render a verdict, so a config that matches nothing can't read as green.
+- **A truncated run is never a pass.** Before the run the gate asks `vitest list` for the tier's files and cuts the run's `--shard` slice the way vitest does (sha1 of the root-relative path, `ceil(total / n)` per slice); every file of that slice must be in the report, and the ones that are not are named. `WALNUT_BASELINE_MIN_FILES` is a floor on the whole tier's listed files (default 1400; quick listed 1529 on 2026-10-02), for an include glob that broke. The fixed floor this replaced had gone stale (290 against 1529 files), so most of the tier could have vanished unnoticed. `tests/scripts/test-baseline-shard-cut.test.ts` checks the cut against the real vitest.
 
 ## How you learn CI failed, and how it gets fixed
 
@@ -105,7 +105,7 @@ Do not raise the local budget to "speed things up" — run L1, or L2 on the file
 
 | Tier | Files | Time | Notes |
 |---|---|---|---|
-| quick | 311 | ~3 min @1w | the every-change layer |
+| quick | ~1,500 | ~25 min @1w on CI, as three legs | the every-change layer |
 | slow | 26 | 311 s | real daemons/CLIs/servers |
 | focus | any | — | `vitest.focus.config.ts` — runs whatever you name, incl. slow/e2e files |
 | unit | 224 | — | `tests/{core,providers,agent,utils,logging,hooks,unit}` |

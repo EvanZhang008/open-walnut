@@ -22,6 +22,7 @@
  * visibly making things worse, which is much harder to miss than a red X.
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -35,9 +36,58 @@ if (!['record', 'check'].includes(mode)) {
   process.exit(2);
 }
 
-const reportFile = path.join(process.env.TMPDIR ?? '/tmp', `walnut-baseline-${process.pid}.json`);
+const TMP = process.env.TMPDIR ?? '/tmp';
+const reportFile = path.join(TMP, `walnut-baseline-${process.pid}.json`);
+/** One key per test file, the same for a reported file and a listed one. */
+const fileKey = (abs) => abs.replace(/^.*?(tests\/.*)$/, '$1');
 
-console.log(`Running ${CONFIG} …`);
+/**
+ * The files this run must report, so a file that silently never ran fails the
+ * gate instead of passing it. `vitest list` names the config's files (the
+ * caller's filters apply; it ignores --shard), and a --shard i/n run gets the
+ * slice vitest's BaseSequencer.shard cuts: files ordered by the sha1 of their
+ * root-relative path, in ceil(total / n) slices.
+ */
+function expectedFiles() {
+  const out = path.join(TMP, `walnut-baseline-list-${process.pid}.json`);
+  const listed = spawnSync('npx', ['vitest', 'list', '--config', CONFIG, '--filesOnly', `--json=${out}`, ...vitestArgs], {
+    stdio: ['ignore', 'ignore', 'inherit'],
+    env: process.env,
+  });
+  if (!fs.existsSync(out)) {
+    console.error(`vitest could not list ${CONFIG} (exited ${listed.status}): a tier that cannot be listed cannot be judged.`);
+    process.exit(1);
+  }
+  const all = JSON.parse(fs.readFileSync(out, 'utf-8')).map((e) => e.file);
+  fs.rmSync(out, { force: true });
+  const shardArg = vitestArgs.map((a, i) => (a.startsWith('--shard=') ? a.slice(8) : a === '--shard' ? vitestArgs[i + 1] : null)).find(Boolean);
+  if (!shardArg) return { total: all.length, files: all.map(fileKey) };
+  const [index, count] = shardArg.split('/').map(Number);
+  const size = Math.ceil(all.length / count);
+  const sha1 = (file) => createHash('sha1').update(`/${path.relative(process.cwd(), file).split(path.sep).join('/')}`).digest('hex');
+  const files = all
+    .map((file) => ({ file, hash: sha1(file) }))
+    .sort((a, b) => (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0))
+    .slice(size * (index - 1), size * index)
+    .map(({ file }) => fileKey(file));
+  return { total: all.length, files };
+}
+
+const expected = expectedFiles();
+// The floor is for the whole tier (before any --shard): an include glob that
+// broke matches far fewer files and every run would still report all of them.
+// Measured 2026-10-02: the quick tier lists 1529 files.
+const MIN_FILES = Number(process.env.WALNUT_BASELINE_MIN_FILES ?? 1400);
+if (expected.total < MIN_FILES) {
+  console.error(
+    `\n${CONFIG} lists only ${expected.total} test file(s), expected at least ${MIN_FILES}.\n` +
+      'Refusing to report a verdict: a tier that lost its files must never look like a pass.\n' +
+      'Lower WALNUT_BASELINE_MIN_FILES if the tier legitimately shrank.',
+  );
+  process.exit(1);
+}
+
+console.log(`Running ${CONFIG}: ${expected.files.length} of its ${expected.total} test files …`);
 const run = spawnSync(
   'npx',
   [
@@ -71,7 +121,7 @@ const firstLine = (msgs) => {
 };
 const report = JSON.parse(fs.readFileSync(reportFile, 'utf-8'));
 for (const file of report.testResults ?? []) {
-  const rel = file.name.replace(/^.*?(tests\/.*)$/, '$1');
+  const rel = fileKey(file.name);
   const asserts = file.assertionResults ?? [];
   for (const a of asserts) {
     if (a.status !== 'failed') continue;
@@ -94,26 +144,32 @@ for (const file of report.testResults ?? []) {
     reasons.set(key, firstLine(file.message));
   }
 }
-const filesInRun = new Set((report.testResults ?? []).map((file) => file.name.replace(/^.*?(tests\/.*)$/, '$1')));
-const filesRun = (report.testResults ?? []).length;
+const filesInRun = new Set((report.testResults ?? []).map((file) => fileKey(file.name)));
 const testsRun = report.numTotalTests ?? 0;
 fs.rmSync(reportFile, { force: true });
 
-// A config that matches nothing, a collection error, or a crashed worker pool all
-// produce a valid-but-empty report — which would otherwise read as "no new
-// failures" and pass the gate while testing NOTHING. Refuse that outcome.
-// 290 against an actual 306 (2026-07-25): tight enough that losing even ~5% of
-// the tier trips it, loose enough to survive normal churn. A floor far below the
-// real count (the first version used 200) would let a hundred files silently
-// vanish from collection and still call it a pass.
-const MIN_FILES = Number(process.env.WALNUT_BASELINE_MIN_FILES ?? 290);
-if (filesRun < MIN_FILES) {
+// A collection error or a crashed worker pool can produce a valid report that
+// is missing files, which would otherwise read as "no new failures" and pass
+// while those files tested NOTHING. Every file this run covers must be in it.
+// (A fixed floor did this job until it went stale: 290 against 1529 files on
+// 2026-10-02, so four fifths of the tier could have vanished unnoticed.)
+const expectedSet = new Set(expected.files);
+const outside = [...filesInRun].filter((f) => !expectedSet.has(f));
+// When this copy of vitest's shard cut disagrees with vitest (an upgrade
+// changed it), the names are unknown and only the count can be checked.
+const missing = outside.length ? [] : expected.files.filter((f) => !filesInRun.has(f));
+const missingCount = outside.length ? Math.max(0, expected.files.length - filesInRun.size) : missing.length;
+if (outside.length) {
+  console.warn(`\n${outside.length} reported file(s) are outside the computed --shard slice; checking the count only.`);
+}
+if (missingCount) {
   console.error(
-    `\nOnly ${filesRun} test file(s) ran (${testsRun} tests) — expected at least ${MIN_FILES}.\n` +
+    `\n${missingCount} of the ${expected.files.length} test file(s) this run covers never reported (${testsRun} tests ran).\n` +
       'Refusing to report a verdict: an empty or truncated run must never look like a pass.\n' +
-      `vitest exited ${run.status}. Check for a collection error above, or lower ` +
-      'WALNUT_BASELINE_MIN_FILES if the tier legitimately shrank.',
+      `vitest exited ${run.status}. Check for a crashed worker or a collection error above.`,
   );
+  missing.slice(0, 20).forEach((f) => console.error(`    ${f}`));
+  if (missing.length > 20) console.error(`    … and ${missing.length - 20} more`);
   process.exit(1);
 }
 

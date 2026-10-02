@@ -68,9 +68,15 @@ jobs:
           # Several nominally-fast files initialize servers and a CPU embedder.
           # Four workers oversubscribe the 4-core runner and have produced
           # different unrelated timeout failures across successive runs, so
-          # keep this gate serial for deterministic signal.
-          - tier: quick
-            cmd: npm run test:baseline -- --maxWorkers=1
+          # each leg stays serial for deterministic signal. Serial, the whole
+          # tier took 25 minutes and was the longest blocking job, so it runs
+          # in three legs; each must report every file of its slice.
+          - tier: quick 1/3
+            cmd: npm run test:baseline -- --maxWorkers=1 --shard=1/3
+          - tier: quick 2/3
+            cmd: npm run test:baseline -- --maxWorkers=1 --shard=2/3
+          - tier: quick 3/3
+            cmd: npm run test:baseline -- --maxWorkers=1 --shard=3/3
           # 158 tests, ~10s, baseline ZERO. Plain pass/fail is correct here.
           - tier: frontend
             cmd: npm run test:frontend:ci
@@ -150,7 +156,8 @@ jobs:
         env:
           WALNUT_BASELINE_CONFIG: vitest.e2e.config.ts
           WALNUT_BASELINE_FILE: tests/setup/known-failures-e2e.json
-          WALNUT_BASELINE_MIN_FILES: '25'
+          # The whole tier (133 files on 2026-10-02), not this leg's share.
+          WALNUT_BASELINE_MIN_FILES: '120'
           WALNUT_BASELINE_RUN_OUT: ${{ runner.temp }}/known-failures-e2e-${{ matrix.shard }}.json
           # Never let a test process resolve the production daemon default.
           WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-e2e
