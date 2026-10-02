@@ -322,6 +322,12 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  *                       carries FULL history (works, just bigger).
  * @param opts.chunkBytes override the chunk size (tests / tuning only). The
  *                       value is declared to the hub, so resume math agrees.
+ * @param opts.allowNonFastForward the ref may move to a commit that does not
+ *                       contain oldValue. Only history compaction does this
+ *                       (it rewrites the chain on purpose); the hub refuses a
+ *                       non-fast-forward swap without it, because the sync
+ *                       fallback once used this channel to replace a commit the
+ *                       other box had just pushed.
  */
 export async function pushViaBundle(opts: {
   repoDir?: string
@@ -330,6 +336,7 @@ export async function pushViaBundle(opts: {
   oldValue?: string
   basis?: string
   chunkBytes?: number
+  allowNonFastForward?: boolean
 }): Promise<BundlePushResult> {
   const repoDir = opts.repoDir ?? WALNUT_HOME
   const chunkBytes = opts.chunkBytes && opts.chunkBytes > 0 ? opts.chunkBytes : BUNDLE_CHUNK_BYTES
@@ -537,6 +544,7 @@ export async function pushViaBundle(opts: {
         ref,
         oldValue: opts.oldValue ?? '',
         newValue,
+        ...(opts.allowNonFastForward ? { force: true } : {}),
       })),
       'application/json', 600_000,
     )

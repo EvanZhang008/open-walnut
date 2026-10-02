@@ -585,7 +585,7 @@ gitBundlePushRouter.post('/bundle/chunk', async (req: Request, res: Response) =>
 gitBundlePushRouter.post('/bundle/finish', async (req: Request, res: Response) => {
   await sweepStaleSessions()
   const body = await readBody(req, 64 * 1024)
-  let parsed: { uploadId?: string; sha256?: string; ref?: string; oldValue?: string; newValue?: string }
+  let parsed: { uploadId?: string; sha256?: string; ref?: string; oldValue?: string; newValue?: string; force?: boolean }
   try {
     parsed = JSON.parse((body ?? Buffer.alloc(0)).toString('utf-8'))
   } catch {
@@ -593,6 +593,7 @@ gitBundlePushRouter.post('/bundle/finish', async (req: Request, res: Response) =
     return
   }
   const { uploadId, sha256, ref, oldValue, newValue } = parsed
+  const force = parsed.force === true
   if (!uploadId || !UPLOAD_ID_RE.test(uploadId) || !sha256 || !SHA256_RE.test(sha256)
       || !ref || !ALLOWED_REF_RE.test(ref) || !newValue || !OID_RE.test(newValue)
       || (oldValue !== undefined && oldValue !== '' && !OID_RE.test(oldValue))) {
@@ -637,7 +638,22 @@ gitBundlePushRouter.post('/bundle/finish', async (req: Request, res: Response) =
         res.status(422).json({ ok: false, error: `bundle tip ${fetched} does not match declared newValue` })
         return
       }
-      // 4. Compare-and-swap on the real branch — force-with-lease semantics.
+      // 4a. A swap must be a fast-forward unless the client said otherwise.
+      //     The CAS below only proves the hub still holds what the client saw;
+      //     it does not prove the client's tip CONTAINS it. The sync fallback
+      //     once swapped a diverged tip in and dropped the other box's commit
+      //     (2026-10-01, three times). Compaction rewrites history on purpose
+      //     and declares `force`.
+      if (oldValue && !force) {
+        const ff = await gitHub(['merge-base', '--is-ancestor', oldValue, newValue], 30_000)
+          .then(() => true, () => false)
+        if (!ff) {
+          log.web.warn('bundle-push: non-fast-forward refused', { uploadId, ref, oldValue, newValue })
+          res.status(409).json({ ok: false, code: 'non_fast_forward', error: 'ref update is not a fast-forward — pull first, or declare force for a history rewrite' })
+          return
+        }
+      }
+      // 4b. Compare-and-swap on the real branch — force-with-lease semantics.
       //    `update-ref <ref> <new> <old>` fails atomically if <ref> != <old>.
       const casArgs = oldValue
         ? ['update-ref', ref, newValue, oldValue]

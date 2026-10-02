@@ -330,6 +330,8 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
               oldValue: remoteHeadBeforeRewrite ?? '',
               // No basis: the rewritten chain shares no ancestry with what
               // the hub has, so the bundle must be self-contained.
+              // A rewrite is the one legitimate non-fast-forward swap.
+              allowNonFastForward: true,
             })
           : { ok: false as const, bytes: 0, chunks: 0, error: 'no origin url' };
         if (!bundled.ok) {

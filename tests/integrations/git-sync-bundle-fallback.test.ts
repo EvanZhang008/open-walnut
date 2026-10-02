@@ -144,6 +144,75 @@ describe('sync push-failure streak → bundle fallback', () => {
   }, 60_000);
 });
 
+describe('the bundle channel never swaps a diverged tip in (2026-10-01 data loss)', () => {
+  // The CAS only proves the hub still holds what the client saw; it does not
+  // prove the client's tip CONTAINS it. The sync fallback used that to replace
+  // a commit the other box had just pushed, three times in one day.
+  let otherBox: string;
+  let hubTipFromOtherBox: string;
+
+  beforeAll(async () => {
+    // Another box commits straight into the hub (file://, so receivepack=false
+    // on HTTP does not matter), and this box commits WITHOUT pulling.
+    otherBox = path.join(tmpRoot, 'other-box');
+    await git(['clone', '-q', hubRepo, otherBox], tmpRoot);
+    await git(['config', 'user.email', 'o@o'], otherBox);
+    await git(['config', 'user.name', 'o'], otherBox);
+    await fs.writeFile(path.join(otherBox, 'from-other-box.md'), 'the other box was here\n');
+    await git(['add', '-A'], otherBox);
+    await git(['commit', '-q', '-m', 'other box auto-save'], otherBox);
+    await git(['push', '-q', hubRepo, 'main'], otherBox);
+    hubTipFromOtherBox = await git(['-C', hubRepo, 'rev-parse', 'main'], tmpRoot);
+
+    await fs.writeFile(path.join(WALNUT_HOME, 'local-only.md'), 'this box, no pull\n');
+    await git(['add', '-A'], WALNUT_HOME);
+    await git(['commit', '-q', '-m', 'local auto-save'], WALNUT_HOME);
+    // The client believes the hub is where the other box left it (a fetch
+    // happened, the merge was deferred): exactly the incident's state.
+    await git(['fetch', '-q', 'origin', 'main'], WALNUT_HOME);
+  }, 30_000);
+
+  it('the hub refuses a non-fast-forward swap with 409 and keeps the other box\'s commit', async () => {
+    const { pushViaBundle } = await import('../../src/integrations/git-bundle-client.js');
+    const result = await pushViaBundle({
+      repoDir: WALNUT_HOME, branch: 'main',
+      remoteUrl: `http://walnut:${deviceToken}@127.0.0.1:${port}/git/data`,
+      oldValue: hubTipFromOtherBox, basis: hubTipFromOtherBox,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/409/);
+    expect(result.error).toMatch(/non_fast_forward/);
+    expect(await git(['-C', hubRepo, 'rev-parse', 'main'], tmpRoot)).toBe(hubTipFromOtherBox);
+  }, 60_000);
+
+  it('the client sees the divergence locally (no network) and keeps it out of the push-failure streak', async () => {
+    // syncInner consults this before counting a failed push: diverged means
+    // "git protected the hub", not "the push channel is dead", so the bundle
+    // fallback is never armed by it.
+    const { localContainsRemoteTipForTest } = await import('../../src/integrations/git-sync.js');
+    expect(await localContainsRemoteTipForTest('main')).toBe(false);
+    // After the merge the next tick would do, the same check passes again.
+    await git(['merge', '-q', '--no-edit', 'origin/main'], WALNUT_HOME);
+    expect(await localContainsRemoteTipForTest('main')).toBe(true);
+    // Put the divergence back for the rewrite case below.
+    await git(['reset', '-q', '--hard', 'HEAD~1'], WALNUT_HOME);
+    expect(await localContainsRemoteTipForTest('main')).toBe(false);
+  }, 30_000);
+
+  it('a declared history rewrite (compaction) may still move the ref', async () => {
+    const localTip = await git(['rev-parse', 'main'], WALNUT_HOME);
+    const hubTip = await git(['-C', hubRepo, 'rev-parse', 'main'], tmpRoot);
+    const { pushViaBundle } = await import('../../src/integrations/git-bundle-client.js');
+    const result = await pushViaBundle({
+      repoDir: WALNUT_HOME, branch: 'main',
+      remoteUrl: `http://walnut:${deviceToken}@127.0.0.1:${port}/git/data`,
+      oldValue: hubTip, allowNonFastForward: true,
+    });
+    expect(result.ok).toBe(true);
+    expect(await git(['-C', hubRepo, 'rev-parse', 'main'], tmpRoot)).toBe(localTip);
+  }, 60_000);
+});
+
 describe('compaction force-push → bundle fallback (the weekly production scenario)', () => {
   it('delivers the rewritten history via bundle when the push channel is dead', async () => {
     // A dedicated repo with enough compactable history (≥50 commits, >10% cut).

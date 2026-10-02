@@ -1315,7 +1315,11 @@ export function setDiskPullOnly(v: boolean, detail?: Record<string, unknown>): v
   if (diskPullOnly === v) return;
   diskPullOnly = v;
   if (v) {
-    log.git.error(
+    // warn, not error: the disk watermark's own card ('Data Disk Critically
+    // Full', keyed 'disk') already says writes and sync are paused and retires
+    // when space is freed. An error here minted a second, keyless card for the
+    // same condition that never retired.
+    log.git.warn(
       'git-sync entering DISK pull-only mode — data disk critically full. '
       + 'Auto-commits and pushes are paused until space is freed; pulls continue.',
       detail ?? {},
@@ -1352,9 +1356,32 @@ export function noteNetworkSuccess(): void {
 export const PUSH_FAILURES_FOR_BUNDLE = 3;
 let pushFailureStreak = 0;
 
+/**
+ * Whether HEAD contains the tracking ref `origin/<branch>` — i.e. a push would
+ * be a fast-forward. False when the branches diverged (or the ref is unknown):
+ * then a push rejection is git protecting the hub's commit, not a dead link.
+ * Local only: no network, one `merge-base` on refs we already have.
+ */
+async function localContainsRemoteTip(branch: string): Promise<boolean> {
+  const remoteTip = await gitSafeAsync(`rev-parse --verify --quiet origin/${branch}`);
+  if (!remoteTip) return true; // no tracking ref yet: nothing to diverge from
+  const r = await gitSafeAsync(`merge-base --is-ancestor ${remoteTip.trim()} HEAD`);
+  return r !== null;
+}
+/** Test seam for the fast-forward check above. */
+export const localContainsRemoteTipForTest = localContainsRemoteTip;
+
 async function tryBundlePushFallback(branch: string): Promise<boolean> {
   const remoteUrl = await gitSafeAsync('remote get-url origin');
   if (!remoteUrl) return false;
+  // The bundle channel ends in a compare-and-swap on the hub's ref: it swaps
+  // whatever the hub has for HEAD, so it must only ever carry a fast-forward.
+  // (The hub refuses a non-fast-forward swap too since 2026-10-02; this check
+  // keeps an older hub safe and spares the upload.)
+  if (!(await localContainsRemoteTip(branch))) {
+    log.git.warn('bundle push fallback refused — local branch diverged from origin (a swap would drop the hub\'s commits)', { branch });
+    return false;
+  }
   const remoteTip = await gitSafeAsync(`rev-parse origin/${branch}`);
   try {
     const { pushViaBundle } = await import('./git-bundle-client.js');
@@ -1989,18 +2016,29 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
       const pushResult = await gitSafeAsync(`push origin ${branch}`, { timeout: NETWORK_TIMEOUT });
       if (pushResult === null) {
         pushed = 0; // push failed
-        // Endpoint-security TLS filters kill large sustained pushes mid-stream
-        // (T65) — a push that keeps failing while commits pile up locally is
-        // that signature, and retrying it every 30s just re-packs the same
-        // doomed pack. After a few consecutive failures, deliver the delta
-        // through the chunked bundle channel instead (small requests, one
-        // connection each — the filters never see a long stream).
-        pushFailureStreak++;
-        if (pushFailureStreak >= PUSH_FAILURES_FOR_BUNDLE) {
-          const delivered = await tryBundlePushFallback(branch);
-          if (delivered) {
-            pushed = 1;
-            pushFailureStreak = 0;
+        // A push the hub REJECTED because the branches diverged (the pull above
+        // deferred or failed, so origin holds a commit HEAD does not) is not a
+        // transport failure: it must not feed the streak below, because the
+        // bundle channel's ref update would then replace the hub's commit with
+        // ours (2026-10-01: three times, each dropping one cloud auto-save and
+        // triggering a reset on the other box). The next tick's pull merges
+        // and the push goes through.
+        if (!(await localContainsRemoteTip(branch))) {
+          log.git.warn('git-sync: push rejected — local branch diverged from origin; waiting for the next pull', { branch });
+        } else {
+          // Endpoint-security TLS filters kill large sustained pushes mid-stream
+          // (T65) — a push that keeps failing while commits pile up locally is
+          // that signature, and retrying it every 30s just re-packs the same
+          // doomed pack. After a few consecutive failures, deliver the delta
+          // through the chunked bundle channel instead (small requests, one
+          // connection each — the filters never see a long stream).
+          pushFailureStreak++;
+          if (pushFailureStreak >= PUSH_FAILURES_FOR_BUNDLE) {
+            const delivered = await tryBundlePushFallback(branch);
+            if (delivered) {
+              pushed = 1;
+              pushFailureStreak = 0;
+            }
           }
         }
       } else {
@@ -2100,6 +2138,26 @@ async function contentClockMs(ref: string, file: string): Promise<number | null>
  * If the merge fails for a NON-conflict reason (unrelated histories, etc.)
  * we abort and fall back to the legacy `pull -X theirs`, logging loudly.
  */
+/**
+ * git's refusal when the working tree changed under a merge or rebase:
+ * "Your local changes to the following files would be overwritten by merge"
+ * / "cannot rebase: You have unstaged changes". A clock problem (the tree was
+ * clean at commit time, a store moved during the fetch), never a content one.
+ */
+export function isDirtyTreeRefusal(gitError: string): boolean {
+  return /would be overwritten by (?:merge|checkout)|you have unstaged changes|cannot rebase/i.test(gitError);
+}
+
+/** The file list git prints after a dirty-tree refusal (one indented path per line). */
+export function dirtyFilesInRefusal(gitError: string): string[] {
+  const files: string[] = [];
+  for (const line of gitError.split('\n')) {
+    const m = /^\s+(\S.*)$/.exec(line);
+    if (m && !/^(?:Please|Aborting|error:|hint:)/.test(m[1])) files.push(m[1].trim());
+  }
+  return files;
+}
+
 async function lwwMerge(branch: string, remoteBefore: string | null = null): Promise<{ merged: boolean; conflicts: number }> {
   const remoteRef = `origin/${branch}`;
 
@@ -2218,13 +2276,27 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
   const unmerged = await gitSafeAsync('diff --name-only --diff-filter=U');
   const files = (unmerged ?? '').split('\n').map((f) => f.trim()).filter(Boolean);
   if (files.length === 0) {
-    // Merge failed but not from content conflicts (unrelated histories,
-    // dirty tree, lock…). Fall back to legacy behavior — but LOUDLY: this
-    // path silently prefers remote and should be investigated.
     await gitSafeAsync('merge --abort');
+    if (isDirtyTreeRefusal(mergeError)) {
+      // A store was rewritten between this cycle's commit and the merge: the
+      // fetch in between can take up to PULL_TIMEOUT, and notifications.json
+      // changes every time a card lands or recovers. Nothing is wrong with
+      // either history; `pull -X theirs` refuses for the same reason, and
+      // remote-wins would be the wrong answer anyway. The next tick commits
+      // the change and merges normally (2026-10-01: three of these, each
+      // followed by a push rejection that the bundle fallback then forced).
+      log.git.warn('git-sync: a store changed while the pull was in flight — merge deferred to the next tick', {
+        branch, localHead, remoteHead, files: dirtyFilesInRefusal(mergeError),
+      });
+      return { merged: false, conflicts: 0 };
+    }
+    // Merge failed but not from content conflicts (unrelated histories, lock…).
+    // Fall back to legacy behavior — but LOUDLY: this path silently prefers
+    // remote and should be investigated. Keyed 'git' so the next clean tick
+    // retires the card.
     log.git.error(
       'git-sync merge failed with a NON-conflict error — falling back to `pull -X theirs` (REMOTE WINS unconditionally). Investigate!',
-      { branch, localHead, remoteHead, error: mergeError.slice(0, 400) },
+      { branch, localHead, remoteHead, error: mergeError.slice(0, 400), recoveryKey: 'git' },
     );
     const fallback = await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: PULL_TIMEOUT });
     return { merged: fallback !== null, conflicts: fallback !== null ? 1 : 0 };
