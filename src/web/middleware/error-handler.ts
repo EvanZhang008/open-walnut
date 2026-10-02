@@ -25,9 +25,10 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
   // Same normalization as the request logger, and for the same reason: this
   // log.error becomes a notification card, and the bridge fingerprints the
   // MESSAGE — so a raw originalUrl (query string, entity ids) mints a new card per
-  // request for one broken route. `message` stays in the meta, which is outside the
-  // bridge's dedup allowlist, so two different root causes on one endpoint still
-  // fold into one card that shows the LATEST cause (one condition = one row).
+  // request for one broken route. The exception text stays in the meta (see
+  // `detail` below), outside the bridge's dedup allowlist, so two different root
+  // causes on one endpoint still fold into one card that shows the LATEST cause
+  // (one condition = one row).
   //
   // 5xx only gets a key: a 4xx here (a route throwing a 400/404) is a client
   // problem, and there is no "this endpoint recovered" to signal.
@@ -37,13 +38,31 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
   // logger when the response finishes. With `status` on only one of them the two
   // hashed differently and one broken route produced two cards side by side. The
   // message already states the status, so nothing is lost from the log file.
-  log.web.error(routeLogMessage(req.method, req.originalUrl, status), {
+  //
+  // Only a 5xx is logged at error (= becomes a card). A thrown 4xx used to take
+  // the same level, which contradicted the request logger's rule for the same
+  // status and minted the live feed's `POST /api/browser-logs → 400 ×11`: every
+  // one was the body parser's `request aborted` (a client that hung up while the
+  // event loop was stalled), a condition with nothing for the user to act on.
+  // An aborted body goes further down to debug: the client is gone, and the
+  // request logger never saw the request (the parser runs before it).
+  //
+  // The exception text rides as `detail`: `message` would overwrite the line's
+  // own message in the log file (the writer spreads meta over it), and `error`
+  // is in the bridge's dedup allowlist, which would split one broken endpoint
+  // into a card per distinct exception text.
+  const aborted = (err as { type?: string }).type === 'request.aborted'
+  const meta = {
     reqId: req.reqId,
-    message,
+    detail: message,
     url: req.originalUrl,
-    stack: status >= 500 ? err.stack : undefined,
-    ...(status >= 500 ? { recoveryKey: routeRecoveryKey(req.method, req.originalUrl) } : {}),
-  })
+    ...(aborted ? { type: 'request.aborted' } : {}),
+    ...(status >= 500 ? { stack: err.stack, recoveryKey: routeRecoveryKey(req.method, req.originalUrl) } : {}),
+  }
+  const line = routeLogMessage(req.method, req.originalUrl, status)
+  if (status >= 500) log.web.error(line, meta)
+  else if (aborted) log.web.debug(line, meta)
+  else log.web.warn(line, meta)
 
   res.status(status).json({
     error: message,

@@ -75,6 +75,16 @@ function isQuietPath(path: string): boolean {
   return QUIET_PREFIXES.some((p) => path.startsWith(p))
 }
 
+/**
+ * A 5xx that reports a DEPENDENCY, not this endpoint: 502 (upstream answered
+ * badly), 503 (a host, the primary or a service is unavailable), 504 (upstream
+ * timed out), 507 (the disk-full write guard). See the request-record comment.
+ */
+const DEPENDENCY_STATUSES = new Set([501, 502, 503, 504, 507])
+export function isDependencyStatus(status: number): boolean {
+  return DEPENDENCY_STATUSES.has(status)
+}
+
 // ── Route recovery (an endpoint that fails and then works again) ───────────────
 //
 // A 5xx log becomes an error card keyed `route:<METHOD> <path>`; the card is
@@ -237,7 +247,19 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     // the response as a failure it expected and already reported to the user
     // (handled-failure.ts: a plugin Update refused by the user's own remote answers
     // 502 with the row saying why; that is not an endpoint incident either).
-    if (status >= 500 && status !== 501 && !isHandledFailure(res)) {
+    //
+    // ── 502 / 503 / 504 / 507 ARE ANSWERS ABOUT A DEPENDENCY ────────────────
+    // Nothing in this codebase reaches those statuses by accident: every one is
+    // a route saying, on purpose, that something it depends on is not available
+    // (a host's daemon link, the primary behind the bridge, a plugin's upstream
+    // service, the data disk at its watermark). The dependency's own producer
+    // reports that outage once, with a cause the Errors pane can group and a
+    // recovery signal that retires it. The route card said it a second time,
+    // keyed to the URL, so a `GET /api/v1/human-inbox/<id> → 503` from two days
+    // ago sat red after the host had long reconnected. One outage, one card:
+    // these log at warn like a 4xx, and like a 501 they count as the endpoint
+    // answering. A 500 (or any other 5xx) is still the endpoint's own failure.
+    if (status >= 500 && !isDependencyStatus(status) && !isHandledFailure(res)) {
       // ── ERROR-LINE IDENTITY (the nine-cards bug) ────────────────────────────
       // log.error routes into the notification center, and the bridge's dedup
       // fingerprint is the MESSAGE. `${url}` carries the query string and
@@ -260,15 +282,16 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
       })
       routeHealth.observe(key, true)
     } else {
-      // 4xx and the designed 501 both land on warn: visible when reading the log,
-      // invisible to the notification sink (which only receives error level).
+      // 4xx, the designed 501 and the dependency statuses all land on warn:
+      // visible when reading the log, invisible to the notification sink (which
+      // only receives error level).
       if (status >= 400) log.web.warn(line, meta)
       else if (isQuietPath(req.path)) log.web.debug(line, meta)
       else log.web.info(line, meta)
-      // Recovery edge: this endpoint answered. A 4xx (or a designed 501) counts as
-      // recovered — the condition the card described was "this endpoint is
-      // throwing", and a 404, a 400 or a not_supported_cloud means the route is
-      // reachable and reasoning about its input again.
+      // Recovery edge: this endpoint answered. A 4xx (or a designed 501, or a
+      // dependency status) counts as recovered — the condition the card described
+      // was "this endpoint is throwing", and a 404, a 400, a 503 or a
+      // not_supported_cloud means the route is reachable and reasoning again.
       // isFailing() first so a healthy box never allocates: the tracker only
       // holds routes that have actually failed (see routeHealth above).
       //

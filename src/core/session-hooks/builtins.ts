@@ -759,7 +759,10 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
       }
     }
     if (!anyLabelPresent) {
-      log.session.error('turn-complete-summary: self-report UNPARSEABLE — no note section labels found; prompt/format regression?', {
+      // warn: the task note is simply left as it was. A card with "Ask AI to
+      // fix" for a model that answered off-format once gives the user nothing
+      // to do; the line stays in the log for spotting a prompt regression.
+      log.session.warn('turn-complete-summary: self-report UNPARSEABLE — no note section labels found; prompt/format regression?', {
         sessionId: p.sessionId, taskId: p.taskId,
         reportHead: selfReport.slice(0, 300),
       });
@@ -769,7 +772,10 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
       let persistedNote = '';
       for (let attempt = 0; attempt < 3 && assembled; attempt++) {
         if (noteShrinkRejected(existingNote, assembled.note)) {
-          log.session.error('turn-complete-summary: note persist REJECTED — new note dropped too much content (shrink guard)', {
+          // warn: this is the guard WORKING (the existing note is kept), not a
+          // failure the user can act on. As an error it opened a card per
+          // guarded turn (one session reached count 8).
+          log.session.warn('turn-complete-summary: note persist REJECTED — new note dropped too much content (shrink guard)', {
             sessionId: p.sessionId, taskId: p.taskId,
             oldLen: existingNote.length, newLen: assembled.note.length,
           });

@@ -142,9 +142,10 @@ describe('5xx → one stable, keyed error record', () => {
       expect(errorLogs).toEqual([]);
       expect(warn).toHaveBeenCalledTimes(2);
       expect(String(warn.mock.calls[0][0])).toContain('→ 502');
-      // Any other header value, or none, keeps the incident path.
-      fire('POST', '/api/plugin-runtime/acme-tracker/linked/update', 502, 40, { [HANDLED_FAILURE_HEADER]: 'yes' });
-      fire('POST', '/api/plugin-runtime/acme-tracker/linked/update', 502);
+      // Any other header value, or none, keeps the incident path (on a status that is
+      // Walnut's own fault; 502/503/504 are dependency statuses and warn regardless).
+      fire('POST', '/api/plugin-runtime/acme-tracker/linked/update', 500, 40, { [HANDLED_FAILURE_HEADER]: 'yes' });
+      fire('POST', '/api/plugin-runtime/acme-tracker/linked/update', 500);
       expect(errorLogs).toHaveLength(2);
     } finally {
       warn.mockRestore();
@@ -163,13 +164,39 @@ describe('5xx → one stable, keyed error record', () => {
     expect(recoveries).toEqual([['route:GET /api/search-memory-v1']]);
   });
 
-  it('every OTHER 5xx still becomes a keyed card', () => {
-    for (const status of [500, 502, 503, 504]) {
+  it('a 500 (and any other non-dependency 5xx) still becomes a keyed card', () => {
+    for (const status of [500, 505, 508]) {
       fire('GET', '/api/config', status);
     }
-    expect(errorLogs).toHaveLength(4);
+    expect(errorLogs).toHaveLength(3);
     expect(new Set(errorLogs.map((l) => l.meta?.recoveryKey)))
       .toEqual(new Set(['route:GET /api/config']));
+  });
+
+  it('502/503/504/507 report a DEPENDENCY, not the endpoint: warn, never a card', () => {
+    // Every one of these statuses is set on purpose by a route saying what it
+    // depends on is unavailable (a host link, the primary, a plugin upstream,
+    // the disk guard). The dependency's own card says it once; the live feed
+    // held `GET /api/v1/human-inbox/<id> → 503` red two days after the host
+    // had reconnected, plus six `→ 507` cards for one full disk.
+    const warn = vi.spyOn(log.web, 'warn').mockImplementation(() => {});
+    try {
+      fire('GET', '/api/v1/human-inbox/lt-mumtlrw4-9c39f4', 503);
+      fire('POST', '/api/plugins/mail/messages/x%3Ay/read', 502);
+      fire('POST', '/api/plugin-sources/acme-plugins/update', 504);
+      fire('POST', '/api/stt/save', 507);
+      expect(errorLogs).toEqual([]);
+      expect(warn).toHaveBeenCalledTimes(4);
+      expect(String(warn.mock.calls[0][0])).toContain('→ 503');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a dependency status counts as the endpoint answering: it recovers a route that HAD failed', () => {
+    fire('GET', '/api/sessions/abcdef0123456789abcdef0123456789/plan', 500);
+    fire('GET', '/api/sessions/abcdef0123456789abcdef0123456789/plan', 503);
+    expect(recoveries).toEqual([['route:GET /api/sessions/:id/plan']]);
   });
 
   it('4xx NEVER creates an error record at all', () => {
@@ -222,7 +249,9 @@ describe('errorHandler + requestLogger converge on one card', () => {
     fireThrown('PUT', '/api/tasks/1784686852150/phase', new Error('phase not allowed'));
     expect(errorLogs[0].message).toBe('PUT /api/tasks/:id/phase → 500');
     expect(errorLogs[0].meta?.recoveryKey).toBe('route:PUT /api/tasks/:id/phase');
-    expect(errorLogs[0].meta?.message).toBe('phase not allowed');
+    // `detail`, not `message` (which the log writer would spread over the line's
+    // own message) and not `error` (in the bridge's dedup allowlist).
+    expect(errorLogs[0].meta?.detail).toBe('phase not allowed');
     expect(errorLogs[0].meta?.url).toBe('/api/tasks/1784686852150/phase');
   });
 
@@ -235,12 +264,41 @@ describe('errorHandler + requestLogger converge on one card', () => {
       .toBe(dedupFingerprintForTest(errorLogs[0] as never));
   });
 
-  it('a thrown 4xx gets NO key (a client problem has no endpoint recovery)', () => {
-    const err = Object.assign(new Error('bad request'), { status: 400 });
-    fireThrown('POST', '/api/tasks', err);
-    expect(errorLogs[0].meta?.recoveryKey).toBeUndefined();
-    // …and no stack either: a 400 is not a server defect worth a stack dump.
-    expect(errorLogs[0].meta?.stack).toBeUndefined();
+  it('a thrown 4xx is a client problem: warn, no key, no stack, never a card', () => {
+    // The live feed's `POST /api/browser-logs → 400 ×11` came from here: the
+    // body parser threw a 400 and this handler logged it at error.
+    const warn = vi.spyOn(log.web, 'warn').mockImplementation(() => {});
+    try {
+      const err = Object.assign(new Error('bad request'), { status: 400 });
+      fireThrown('POST', '/api/tasks', err);
+      expect(errorLogs).toEqual([]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toBe('POST /api/tasks → 400');
+      const meta = warn.mock.calls[0][1] as Record<string, unknown>;
+      expect(meta.recoveryKey).toBeUndefined();
+      expect(meta.stack).toBeUndefined();
+      expect(meta.detail).toBe('bad request');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a client that hung up mid-body (request aborted) is not even a warning', () => {
+    // raw-body's createError(400, 'request aborted', { type: 'request.aborted' }):
+    // the client is gone, nobody is owed an answer.
+    const warn = vi.spyOn(log.web, 'warn').mockImplementation(() => {});
+    const debug = vi.spyOn(log.web, 'debug').mockImplementation(() => {});
+    try {
+      const err = Object.assign(new Error('request aborted'), { status: 400, type: 'request.aborted' });
+      fireThrown('POST', '/api/browser-logs', err);
+      expect(errorLogs).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+      expect(debug).toHaveBeenCalledTimes(1);
+      expect((debug.mock.calls[0][1] as Record<string, unknown>).type).toBe('request.aborted');
+    } finally {
+      warn.mockRestore();
+      debug.mockRestore();
+    }
   });
 });
 

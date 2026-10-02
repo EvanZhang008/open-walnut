@@ -61,7 +61,14 @@ const CONNECTIVITY_RE = new RegExp(
     // The failure-cache shape only — bare "connection to X failed" is generic
     // English any plugin's HTTP error could produce about a database.
     'connection to \\S+ failed \\d+s ago',
-    'connection (?:lost|closed|refused|reset|timed out)',
+    // Both spellings: the WebSocket connect path says "connection timeout",
+    // the socket layer says "timed out" (2026-09-29: seven start-failure cards
+    // for one frozen daemon, none grouped, none retired).
+    'connection (?:lost|closed|refused|reset|timed out|timeout)',
+    // The remote daemon-dir probe (daemon-connection resolveRemoteDir): an ssh
+    // that never came back, with the host named in the same sentence.
+    'daemon dir check on \\S+ (?:did not finish|answered without)',
+    'getaddrinfo E(?:NOTFOUND|AI_AGAIN)',
     'no route to host',
     'host unreachable',
     'ssh tunnel',
@@ -86,6 +93,7 @@ const TEXT_HOST_RES: RegExp[] = [
   // alone would capture "the" out of prose like "not connected to the daemon"
   // and mint a junk `host:the` group whose recovery signal never arrives.
   /DaemonConnection not connected to ([\w.-]+)/i,
+  /daemon dir check on ([\w.-]+) (?:did not finish|answered without)/i,
 ];
 
 /**

@@ -98,6 +98,22 @@ describe('causeKeyForError — host connectivity signatures', () => {
       .toBeUndefined();
   });
 
+  it('groups the start-failure wordings the live feed held ungrouped (2026-09-29)', () => {
+    // The WebSocket connect path says "timeout", the socket layer "timed out";
+    // seven transport-start cards for one frozen daemon shared no group.
+    expect(causeKeyForError({ text: 'transport start failed\nWebSocket connection timeout.', host: 'clouddev' }))
+      .toBe('host:clouddev');
+    // The remote daemon-dir probe names the host in its own sentence.
+    expect(causeKeyForError({
+      text: 'daemon dir check on clouddev did not finish ( [0m [0m); Walnut will not guess where the daemon lives, and retries the connect',
+    })).toBe('host:clouddev');
+    expect(causeKeyForError({ text: 'daemon dir check on devbox-2 answered without its result lines' }))
+      .toBe('host:devbox-2');
+    // A DNS failure out of the ssh ProxyCommand, with the host from the hint.
+    expect(causeKeyForError({ text: 'getaddrinfo ENOTFOUND proxy.example.invalid', host: 'clouddev' }))
+      .toBe('host:clouddev');
+  });
+
   it('accepts dotted and hyphenated aliases as one token', () => {
     expect(causeKeyForError({ text: 'DaemonConnection not connected to build-host.internal' }))
       .toBe('host:build-host.internal');

@@ -192,8 +192,12 @@ export async function pollDiskWatermarkOnce(
 
   if (level !== prev) {
     if (level === 'critical') {
+      // skipNotify: the notify() call below is this condition's card (keyed
+      // 'disk', retired by onRecovered). Without it the bridge minted a second
+      // card from this line with no key, which sat red long after the disk had
+      // recovered (the live feed held one at count 4 for five days).
       log.web.error('disk-watermark CRITICAL — data disk nearly full; write routes answer 507, git-sync pull-only', {
-        usedPct, availBytes, dir,
+        usedPct, availBytes, dir, skipNotify: true,
       });
       notify?.(
         'Data Disk Critically Full',

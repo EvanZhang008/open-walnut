@@ -50,12 +50,22 @@ describe('isIdSegment', () => {
     expect(isIdSegment('0123456789abcde')).toBe(false);
   });
 
-  it('does not collapse a mixed id-ish slug that carries route meaning', () => {
-    // Walnut short ids like ms4utt4g-1bc6 are NOT hex-only and NOT numeric, so
-    // they stay. This is a deliberate difference from the metrics heuristic in
-    // request-logger.ts: a metric label may over-collapse (cardinality is the
-    // only concern there), a user-visible card title may not.
-    expect(isIdSegment('ms4utt4g-1bc6')).toBe(false);
+  it('collapses the entity ids Walnut mints itself (one card per ROUTE, not per entity)', () => {
+    // Keeping these as route words put `PATCH /api/tasks/mu0s3x7c-cbd8 → 507`
+    // and `GET /api/v1/human-inbox/lt-mumtlrw4-9c39f4 → 503` in the live feed
+    // as one card per entity, each keyed to a URL nobody requests twice.
+    expect(isIdSegment('ms4utt4g-1bc6')).toBe(true);   // generateId(): base36 ms + 4 hex
+    expect(isIdSegment('mu0s3x7c-cbd8')).toBe(true);
+    expect(isIdSegment('lt-mumtlrw4-9c39f4')).toBe(true); // human-inbox item
+    // A percent-encoded segment is an escaped entity key (a mail message id).
+    expect(isIdSegment('mail-outlook%3A15f7f5bb83ef')).toBe(true);
+    expect(isIdSegment('inbox%3AAAQkAGY2NDA5OWUwLTM3ZWEtNGNj%3D')).toBe(true);
+  });
+
+  it('still leaves hyphenated route words with digits alone', () => {
+    for (const word of ['notes-v2', 'search-memory-v1', 'check-test', 'plugin-runtime', 'start-quick', 'oauth2-callback']) {
+      expect(isIdSegment(word), word).toBe(false);
+    }
   });
 });
 

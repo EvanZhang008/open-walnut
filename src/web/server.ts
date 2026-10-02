@@ -392,6 +392,15 @@ export async function publishRecovery(keys: string[]): Promise<number> {
  */
 const sessionErrorTracker = createRecoveryTransitionTracker()
 
+/**
+ * Fires publishRecovery(['git']) on the failing→healthy edge of the auto-commit
+ * health poll. Module-level (not inside startGitAutoCommit) so the log bridge
+ * can mark 'git' failing when git-sync logs a keyed error outside the health
+ * counters (a merge that fell back to remote-wins): the next clean tick then
+ * retires that card instead of leaving it red for good.
+ */
+const gitRecoveryTracker = createRecoveryTransitionTracker()
+
 /** The condition id for a session's error family. */
 function sessionRecoveryKey(sessionId: string): string {
   return `session:${sessionId}`
@@ -1010,6 +1019,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // recoverSessionErrors only publishes for a key this tracker saw fail.
       onConditionRaised: (key) => {
         if (key.startsWith('session:') || key.startsWith('task:')) sessionErrorTracker.observe(key, true)
+        else if (key === 'git') gitRecoveryTracker.observe(key, true)
       },
     })
 
@@ -3911,8 +3921,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
     }
 
-    // session:started — no further processing needed
-    if (event.name === 'session:started') return
+    // session:started — the task's transport came up, which is the recovery for
+    // a 'transport start failed' card (keyed `task:<id>`, since the session it
+    // was starting never existed). Seven such cards sat red for a week after
+    // every one of their starts had succeeded on retry within minutes. The
+    // session key is deliberately NOT passed: a start proves nothing about the
+    // previous session's runtime errors.
+    if (event.name === 'session:started') {
+      const startedTaskId = (event.data as { taskId?: string }).taskId
+      if (startedTaskId) recoverSessionErrors(undefined, startedTaskId)
+      return
+    }
 
     // Persist session:result to chat history
     if (event.name === 'session:result') {
@@ -4601,8 +4620,8 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
   const health: GitAutoCommitHealth = { protected: false, consecutiveFailures: 0 }
   let notifiedForEpisode = false // only send one feed notification per failure episode
   let lockContentionCount = 0
-  /** Fires publishRecovery(['git']) on the failing→healthy edge only. */
-  const gitRecoveryTracker = createRecoveryTransitionTracker()
+  // A fresh poll loop has observed nothing (tests start several servers in one process).
+  gitRecoveryTracker.reset()
 
   const emitStatus = () => {
     broadcastEvent('git-sync:status', health)
