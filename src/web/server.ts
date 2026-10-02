@@ -3025,8 +3025,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // lock-free pre-check, so a quiet day costs three file reads.
         notificationReconcileTimer = setInterval(() => {
           expireStaleErrorNotifications().catch(() => {})
+          pruneHistoryCache().catch(() => {})
         }, 24 * 60 * 60 * 1000)
         notificationReconcileTimer.unref?.()
+        // The parsed-history disk cache had no eviction and reached 1.8 GB on a
+        // disk at its write-pause watermark; bound it at boot and daily.
+        const { pruneHistoryCache } = await import('../core/history-disk-cache.js')
+        pruneHistoryCache().catch(() => {})
       })
       .catch(err => log.web.warn('startup: pendingPermission heal failed', {
         error: err instanceof Error ? err.message : String(err),

@@ -189,3 +189,71 @@ export async function readHistoryCache(sessionId: string): Promise<{ messages: S
   }
   return null;
 }
+
+/** An entry nobody read or wrote for this long is dead weight: its JSONL is the truth. */
+export const HISTORY_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+/** Total bytes the cache dir may hold; oldest entries go first past this. */
+export const HISTORY_CACHE_MAX_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * Bound the cache directory. It had no eviction at all: one file per session
+ * ever opened, forever. On 2026-10-02 the live dir held 4,299 files and 1.8 GB
+ * (1.6 GB of it untouched for over a week) on a disk at 97%, which is the disk
+ * watermark's "writes paused" condition — a cache helping to cause the outage
+ * it exists to soften. Two rules, age then size, both on the file's own mtime
+ * (a read does not touch it; a re-parse rewrites it, which is the refresh):
+ * drop entries older than `maxAgeMs`, then the oldest until the total fits
+ * `maxBytes`. Async throughout; never throws (a failed prune is a debug line).
+ */
+export async function pruneHistoryCache(opts: {
+  maxAgeMs?: number;
+  maxBytes?: number;
+  now?: number;
+} = {}): Promise<{ removed: number; freedBytes: number; remainingBytes: number }> {
+  const maxAgeMs = opts.maxAgeMs ?? HISTORY_CACHE_MAX_AGE_MS;
+  const maxBytes = opts.maxBytes ?? HISTORY_CACHE_MAX_BYTES;
+  const now = opts.now ?? Date.now();
+  let removed = 0;
+  let freedBytes = 0;
+  let remainingBytes = 0;
+  try {
+    const names = await fsp.readdir(HISTORY_CACHE_DIR);
+    const entries: Array<{ file: string; mtimeMs: number; size: number }> = [];
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const file = path.join(HISTORY_CACHE_DIR, name);
+      try {
+        const st = await fsp.stat(file);
+        if (st.isFile()) entries.push({ file, mtimeMs: st.mtimeMs, size: st.size });
+      } catch { /* vanished between readdir and stat */ }
+    }
+    // A write still coalescing is live whatever its file's age says.
+    const live = new Set([...pendingWrites.keys()].map(cachePath));
+    const victims = new Set<string>();
+    for (const e of entries) {
+      if (!live.has(e.file) && now - e.mtimeMs > maxAgeMs) victims.add(e.file);
+    }
+    let total = entries.filter((e) => !victims.has(e.file)).reduce((n, e) => n + e.size, 0);
+    for (const e of [...entries].sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+      if (total <= maxBytes) break;
+      if (victims.has(e.file) || live.has(e.file)) continue;
+      victims.add(e.file);
+      total -= e.size;
+    }
+    for (const e of entries) {
+      if (!victims.has(e.file)) continue;
+      try {
+        await fsp.unlink(e.file);
+        removed++;
+        freedBytes += e.size;
+      } catch { /* already gone */ }
+    }
+    remainingBytes = total;
+    if (removed > 0) {
+      log.session.info('history disk cache pruned', { removed, freedBytes, remainingBytes, maxAgeMs, maxBytes });
+    }
+  } catch (err) {
+    log.session.debug('history disk cache prune skipped', { error: err instanceof Error ? err.message : String(err) });
+  }
+  return { removed, freedBytes, remainingBytes };
+}
