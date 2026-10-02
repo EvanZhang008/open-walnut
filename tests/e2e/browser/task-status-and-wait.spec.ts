@@ -380,6 +380,80 @@ test('Waiting tasks are out of the list and the tiers by default; "Show waiting"
   await expect(plainCard).toBeVisible({ timeout: 15_000 })
 })
 
+test('the footer counts the current view: a tier tab counts its own tier, and "Show completed" reveals a tier\'s done pin in place', async ({ page, browserName }) => {
+  // Every tier tab in the bar, so the view can be switched by clicking; a tab whose
+  // only tasks are hidden counts as empty, so empty tabs must stay too.
+  await page.addInitScript(() => {
+    localStorage.setItem('walnut-todo-quick-views-visible', 'true')
+    localStorage.setItem('walnut-todo-tab-bar-hidden-tabs', '[]')
+    localStorage.setItem('walnut-todo-tab-bar-hide-empty', 'false')
+  })
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  // Born pinned (Satellite): one parked there, one parked in Focus, one done in Focus.
+  const parkedSat = await createTask(`Scopewait ${stamp} satellite`)
+  const parkedFocus = await createTask(`Scopewait ${stamp} focus`)
+  const doneFocus = await createTask(`Scopewait ${stamp} done`)
+  await api('PUT', `/api/focus/tasks/${parkedFocus.id}/tier`, { tier: 'focus' })
+  await api('PUT', `/api/focus/tasks/${doneFocus.id}/tier`, { tier: 'focus' })
+  await api('PATCH', `/api/tasks/${parkedSat.id}`, { phase: 'WAITING' })
+  await api('PATCH', `/api/tasks/${parkedFocus.id}`, { phase: 'WAITING' })
+  await api('PATCH', `/api/tasks/${doneFocus.id}`, { phase: 'COMPLETE' })
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+
+  const tab = (name: string) => page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
+  const footer = page.getByTestId('todo-filter-footer')
+  const waitingChip = footer.getByTestId('todo-filter-footer-waiting')
+  const completedChip = footer.getByTestId('todo-filter-footer-completed')
+  const countOf = async (chip: Locator): Promise<number> => {
+    await expect(chip).toBeVisible({ timeout: 15_000 })
+    return Number((await chip.textContent())!.trim().split(' ')[0])
+  }
+  // The board shares the fixture with other specs, so the assertions are relative:
+  // All counts both parked tasks, the tiers count only their own.
+  const allWaiting = await countOf(waitingChip)
+  expect(allWaiting).toBeGreaterThanOrEqual(2)
+
+  await tab('Focus').click()
+  await expect(tab('Focus')).toHaveAttribute('aria-selected', 'true')
+  const focusWaiting = await countOf(waitingChip)
+  expect(focusWaiting).toBeGreaterThanOrEqual(1)
+  expect(focusWaiting).toBeLessThanOrEqual(allWaiting - 1)
+  await shot(page.locator('.todo-panel'), 'footer-scope-focus', browserName)
+  // Reveal: the Focus pin appears, the Satellite pin does not (it is not in this view).
+  await waitingChip.click()
+  await expect(page.locator(`[data-task-id="${parkedFocus.id}"]`)).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator(`[data-task-id="${parkedSat.id}"]`)).toHaveCount(0)
+  await waitingChip.click()
+  await expect(page.locator(`[data-task-id="${parkedFocus.id}"]`)).toHaveCount(0)
+  // The done Focus pin: counted here, and "Show completed" draws it in the tier itself.
+  const doneCard = page.locator(`[data-task-id="${doneFocus.id}"]`)
+  await expect(doneCard).toHaveCount(0)
+  expect(await countOf(completedChip)).toBeGreaterThanOrEqual(1)
+  await completedChip.click()
+  await expect(completedChip).toHaveText(/^\d+ completed shown$/)
+  await expect(doneCard).toBeVisible({ timeout: 15_000 })
+  await shot(page.locator('.todo-panel'), 'footer-scope-focus-completed', browserName)
+  await completedChip.click()
+  await expect(doneCard).toHaveCount(0)
+
+  await tab('Satellite').click()
+  await expect(tab('Satellite')).toHaveAttribute('aria-selected', 'true')
+  const satWaiting = await countOf(waitingChip)
+  expect(satWaiting).toBeGreaterThanOrEqual(1)
+  expect(satWaiting).toBeLessThanOrEqual(allWaiting - 1)
+  expect(focusWaiting + satWaiting).toBeLessThanOrEqual(allWaiting)
+  await waitingChip.click()
+  await expect(page.locator(`[data-task-id="${parkedSat.id}"]`)).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator(`[data-task-id="${parkedFocus.id}"]`)).toHaveCount(0)
+  await waitingChip.click()
+
+  // Back on All the whole board is counted again.
+  await tab('All').click()
+  await expect(tab('All')).toHaveAttribute('aria-selected', 'true')
+  expect(await countOf(waitingChip)).toBe(allWaiting)
+})
+
 test('the Projects view minibar has a Waiting toggle with the hidden count', async ({ page, browserName }) => {
   // The minibar lives on the Projects view of the tab bar (off by default in this fixture).
   await page.addInitScript(() => localStorage.setItem('walnut-todo-quick-views-visible', 'true'))

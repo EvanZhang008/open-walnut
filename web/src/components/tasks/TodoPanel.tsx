@@ -24,6 +24,7 @@ import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NavigationHeading, NavigationSection, NavigationSections } from './NavigationSections';
 import { recentActivityTime, recentActivityTitle, type RecentSortMode } from './recent-activity-time';
+import { footerStatusScope } from './footer-scope';
 import type { ContextMenuItem } from '@/components/common/ContextMenu';
 import { TAB_BAR_HIDDEN_TABS_KEY, TASK_SHORTCUTS_KEY, useNavigationList, useNavigationPreference } from '@/hooks/useNavigationPreference';
 import { useSessionPanelsViewGroup } from './session-panels-view-group';
@@ -3992,6 +3993,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // A Waiting pin keeps its tier but is not DRAWN there by default either (the
   // same rule as the list: hiddenAsWaiting, plus the parking grace so a card set
   // to Waiting from its menu fades out instead of popping).
+  // "Show completed" reveals a tier's done pins in the tier itself, so the
+  // footer's per-view completed count on a tier tab has something to show.
   const pinnedTasksLive = useMemo(() => {
     if (pinnedIdsWithGrace.size === 0) return [];
     const taskMap = new Map(tasks.map((t) => [t.id, t]));
@@ -3999,11 +4002,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       .map((id) => taskMap.get(id))
       .filter((t): t is Task => !!t
         && (isSearchMode
+          || showCompleted
           || (t.status !== 'done' && t.phase !== 'COMPLETE')
           || keepWhileCompleting(t))
         && (isSearchMode || !hiddenAsWaiting(t) || keepWhileParking(t))
         && !(t.group_id && hiddenGroups?.has(t.group_id)));
-  }, [tasks, pinnedIdsWithGrace, hiddenGroups, keepWhileCompleting, hiddenAsWaiting, keepWhileParking, recentTick, isSearchMode]);
+  }, [tasks, pinnedIdsWithGrace, hiddenGroups, showCompleted, keepWhileCompleting, hiddenAsWaiting, keepWhileParking, recentTick, isSearchMode]);
   const pinnedTasks = useFrozenWhile(pinnedTasksLive, isPinnedDragActive);
 
   // Hidden groups that HAVE pinned members — these were collapsed out of the tiers
@@ -5659,25 +5663,27 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // without a chip above the list (the Date select defaults to Now, the legacy
   // Phase select). Each is a count the user can act on in one click. The
   // canonical query conditions already have their own chips (TaskFilterChips),
-  // so they are not repeated here. Completed = loaded done rows + the archive
-  // the list has not fetched yet (completedHidden).
-  const completedCount = useMemo(
-    () => tasks.reduce((n, t) => n + (t.status === 'done' ? 1 : 0), 0) + (tasksStore?.completedHidden ?? 0),
-    [tasks, tasksStore?.completedHidden],
-  );
-  const waitingCount = useMemo(
-    () => tasks.reduce((n, t) => n + (t.phase === 'WAITING' ? 1 : 0), 0),
-    [tasks],
-  );
+  // so they are not repeated here. Counted over what THIS view draws (a tier
+  // tab counts its tier, Recent its feed, the list its project tab; see
+  // footerStatusScope), never the whole board. Completed = the scope's loaded
+  // done rows, plus the archive the list has not fetched yet (completedHidden)
+  // when the scope is the whole board.
+  const footerScope = useMemo(() => footerStatusScope({
+    section: effectiveSection, tasks, activeProject,
+    pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTierIds, customMemberIds, hiddenGroups,
+    showCompleted, waitingRevealed, recentSortMode,
+  }), [effectiveSection, tasks, activeProject, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTierIds, customMemberIds, hiddenGroups, showCompleted, waitingRevealed, recentSortMode]);
+  const completedCount = footerScope.completed + (footerScope.wholeBoard ? (tasksStore?.completedHidden ?? 0) : 0);
+  const waitingCount = footerScope.waiting;
   const dateHiddenCount = useMemo(() => {
     if (!dateFilter) return 0;
     let n = 0;
-    for (const t of tasks) {
+    for (const t of footerScope.scope) {
       if (t.status === 'done' || hiddenAsWaiting(t)) continue;
       if (!matchesDateFilter(t, dateFilter, tasks)) n += 1;
     }
     return n;
-  }, [tasks, dateFilter, hiddenAsWaiting]);
+  }, [footerScope.scope, tasks, dateFilter, hiddenAsWaiting]);
 
   const overrideReasonTaskId = filterOverrideId || fadingOverrideId;
 
