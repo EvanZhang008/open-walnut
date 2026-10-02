@@ -338,8 +338,9 @@ describe('sessionColumns: addSessionColumn', () => {
 // With 3 panels and all 3 locked, a pill click used to answer with a toast ("All
 // session panels are locked") and nothing else. The budget now follows the pins:
 // pins that fill the user's count get ONE free slot on top (never past
-// MAX_PANELS). Derived, not stored — unlocking or closing takes it away again, so
-// there is no "reduce back" step to teach: close a column and the strip is at N.
+// MAX_PANELS). Only an OPEN reads it; the page then writes the new width into the
+// setting, so every picker shows what is on screen and lowering it is the user's
+// own pick (restores and count changes fit the setting, see fitRestoredColumns).
 
 describe('sessionColumns: panelBudget', () => {
   it('is the plain max while a slot is free', () => {
@@ -444,9 +445,12 @@ describe('sessionColumns: addSessionColumn with every slot pinned', () => {
 });
 
 describe('sessionColumns: fitRestoredColumns', () => {
-  it('keeps a lock-granted free column with its pins across a reload', () => {
+  it('fits the count, not the grant: a free column saved over a count the pins fill goes, the pins stay', () => {
+    // A grant writes the count at once, so this strip only exists when that write
+    // never landed or another tab lowered the count; the setting wins.
     const saved = [slot('D'), slot('A', true), slot('B', true), slot('C', true)];
-    expect(fitRestoredColumns(saved, 3)).toBe(saved);
+    expect(fitRestoredColumns(saved, 3).map(s => s.id)).toEqual(['A', 'B', 'C']);
+    expect(fitRestoredColumns(saved, 4)).toBe(saved);
   });
 
   it('trims a strip left over budget by an unlock, evicting from the right', () => {

@@ -70,24 +70,28 @@ show inline after the open ones, other completed hits that show the query fold i
   or `.draft-session-panel` on `/` to `.main-page-session-column` (`REAL_PANEL` / `DRAFT_PANEL`
   in `tests/e2e/browser/draft-helpers.ts`), or pin it by `data-session-id`: the slot's panel
   sits earlier in the DOM, so an unscoped `.first()` grabs it instead of the column under test.
-- **The column budget follows the pins** (`panelBudget` in `pages/sessionColumns.ts`). The
-  panel count (`ui.session_panels`, 1-5 or Auto) is the budget, except when the locked columns
-  alone fill it: then the strip holds the pins plus ONE free slot (never past `MAX_PANELS`), so a
-  pill click with every panel locked opens a column instead of the old "All session panels are
-  locked" toast (now only at 5 pins). The grant is derived, never stored: the free slot is
-  shared (the next open reuses it, one in, one out), unlocking closes nothing, and closing any
-  column puts the strip back under the count. An open evicts AT MOST ONE column, in
-  `addSessionColumn` and in the trim effect's placeholder falling edge (a Start from a draft),
-  so a strip left over budget by an unlock never loses two panels on one click; only a capacity
-  change (count, resize) trims all the way. Restores go through `fitRestoredColumns`, not a
-  positional `slice`, which cut the rightmost pin. Spec:
+- **Pins never block an open, and the count follows the strip** (`panelBudget` in
+  `pages/sessionColumns.ts`, read ONLY by `addSessionColumn`). The panel count
+  (`ui.session_panels`, 1-5 or Auto) is the budget, except when the locked columns alone fill it:
+  then an open gets the pins plus ONE free slot (never past `MAX_PANELS`), so a pill click with
+  every panel locked opens a column instead of the old "All session panels are locked" toast (now
+  only at 5 pins). The moment an open uses that grant, `openSessionOrToast` (MainPage) WRITES the
+  new width into the setting (`setMode`, Auto becomes the number): a strip of 3 under a picker
+  still saying "2" was "very confusing" (2026-10-02), so every picker shows what is on screen and
+  the strip is back to "size = setting". Nothing else reads the grant: the trim effect, the triage
+  open and `fitRestoredColumns` fit the bare count (pins are never cut; a free column saved over
+  the count goes), so the only wider-than-count strip is the one an unlock leaves (unlocking closes
+  nothing). An open evicts AT MOST ONE column, in `addSessionColumn` and in the trim effect's
+  placeholder falling edge (a Start from a draft), so that strip never loses two panels on one
+  click; a capacity change (count, resize) trims all the way. Spec:
   `tests/e2e/browser/session-panel-lock-grant.spec.ts`.
   **Shrinking back is the user's own move, never a heuristic** (decided 2026-10-01 against an
-  idle/"finished" auto-fold): close a column, or pick the count. What the strip owes them is
-  finding that count: the grow moment raises a `hint` toast ("Opened a 4th panel: all 3 are
-  pinned", kind `hint` in `contexts/notifications/types.ts`, ephemeral, 8s) whose "Adjust
-  panels" button opens the picker the user ALREADY HAS beside the strip, the task panel's view
-  menu (the sliders button next to New task), on its Session panels row, pulsing
+  idle/"finished" auto-fold; 2026-10-02: "if it already adjusted then keep it 3, the customer can
+  reduce it themselves"): close a column, or pick a lower count. What the strip owes them is
+  finding that count: the grow moment raises a `hint` toast ("Panel count is now 4: all 3 were
+  pinned", kind `hint` in `contexts/notifications/types.ts`, ephemeral, 8s) whose "Adjust panels"
+  button opens the picker the user ALREADY HAS beside the strip, the task panel's view menu (the
+  sliders button next to New task), on its Session panels row, pulsing
   (`revealViewOption('session-panels')` in `components/tasks/view-dropdown-reveal.ts`: a window
   event the `ViewDropdown` that renders the option answers; it shows a hidden task panel first and
   waits for the trigger to hold still, `whenSettled`, before placing the menu, because the panel

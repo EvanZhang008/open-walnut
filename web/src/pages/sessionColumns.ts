@@ -34,16 +34,19 @@ export function realColumnCount(cols: SessionSlot[]): number {
 }
 
 /**
- * The column budget the strip gets right now.
+ * The column budget an OPEN gets right now.
  *
  * `max` (the user's panel count) unless the pins alone fill it: then the budget is
  * the pins plus ONE free slot, never past MAX_PANELS. A pin means "keep this panel",
  * not "stop opening sessions" — with every budgeted slot locked, a pill click used
  * to answer with a toast and nothing else, so the strip grows by one for the next
- * session instead. The grant is derived from the pins, never stored: unlock or close
- * one and the budget is back to `max` on its own, so there is nothing to "reduce".
- * The free slot is shared, not cumulative — the next open reuses it (one in, one
- * out) rather than growing the strip again.
+ * session instead. Only `addSessionColumn` reads this: when an open uses the grant,
+ * the caller (MainPage) writes the new width into the panel-count setting at once,
+ * so every picker shows the number of panels on screen and the strip is back to
+ * "size = setting" (2026-10-02: a strip of 3 under a picker saying "2" was confusing).
+ * Going back down is the user's own pick; restores and count changes fit the setting,
+ * never this grant. The free slot is shared, not cumulative — under a count the pins
+ * fill, the next open reuses it (one in, one out) rather than growing again.
  */
 export function panelBudget(cols: SessionSlot[], max: number): number {
   const locked = realColumns(cols).filter(c => c.locked).length;
@@ -171,13 +174,14 @@ export function addSessionColumn(cols: SessionSlot[], id: string, triageOpen: bo
 }
 
 /**
- * Fit a RESTORED strip (sessionStorage, a deep link) to the budget. Replaces the
- * old `slice(0, max)`: a positional cut ignored locks, so with the pins on the
- * right it kept the free column and dropped the user's anchor. Same budget rule as
- * the live strip — a lock-granted free column survives a reload with its pins.
+ * Fit a RESTORED strip (sessionStorage, a deep link) to the panel count. Replaces the
+ * old `slice(0, max)`: a positional cut ignored locks, so with the pins on the right
+ * it kept the free column and dropped the user's anchor. Pins are never cut; a free
+ * column saved over the count (the count was lowered in another tab, or the write
+ * that should have followed a grant never landed) is what goes.
  */
 export function fitRestoredColumns(cols: SessionSlot[], max: number): SessionSlot[] {
-  return trimUnlockedToMax(cols, panelBudget(cols, max));
+  return trimUnlockedToMax(cols, max);
 }
 
 /**

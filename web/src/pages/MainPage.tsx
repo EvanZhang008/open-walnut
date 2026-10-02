@@ -59,7 +59,7 @@ import { useContextInspector } from '@/hooks/useContextInspector';
 import { useShowPriorityState } from '@/hooks/useShowPriority';
 import { useQuickParseEnabled } from '@/hooks/useQuickParse';
 import { useUrlSync } from '@/hooks/useUrlSync';
-import { MAX_PANELS, useSessionPanelMode } from '@/hooks/useSessionPanelMode';
+import { MAX_PANELS, useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { FocusDock } from '@/components/dock/FocusDock';
 import { AttentionBannerMount } from '@/components/common/AttentionBannerMount';
@@ -70,7 +70,6 @@ import { useSystemHealth } from '@/hooks/useSystemHealth';
 import {
   type SessionSlot,
   trimUnlockedToMax,
-  panelBudget,
   fitRestoredColumns,
   realColumnCount,
   addSessionColumn,
@@ -585,9 +584,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, []);
 
   // Session panel mode (1 / 2 / auto) — controls how many sessions shown side by side
-  const { effectiveMaxPanels, loaded: panelModeLoaded } = useSessionPanelMode(sessionAreaWidth);
+  const { mode: panelMode, setMode: setPanelMode, effectiveMaxPanels, loaded: panelModeLoaded } = useSessionPanelMode(sessionAreaWidth);
   const maxPanelsRef = useRef(effectiveMaxPanels);
   maxPanelsRef.current = effectiveMaxPanels;
+  const panelModeRef = useRef(panelMode);
+  panelModeRef.current = panelMode;
   const panelModeLoadedRef = useRef(panelModeLoaded);
   panelModeLoadedRef.current = panelModeLoaded;
 
@@ -637,10 +638,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const licenseExpiry = placeholderCount < prev.placeholders && effectiveMaxPanels === prev.max && prev.loaded;
     const floor = licenseExpiry ? prevRealCountRef.current : 0;
     setSessionColumns(prev2 => {
+      // The bare count: the strip is the setting (a grant writes the setting at
+      // once, see openSessionOrToast), and a lowered count takes the free column
+      // even when every other panel is pinned. Pins themselves are never cut.
       const max = triageOpenRef.current ? effectiveMaxPanels - 1 : effectiveMaxPanels;
-      // panelBudget, not the bare max: pins that fill the budget keep their one
-      // free column through a count change or a window resize too.
-      return trimUnlockedToMax(prev2, Math.max(panelBudget(prev2, max), floor));
+      return trimUnlockedToMax(prev2, Math.max(max, floor));
     });
   }, [effectiveMaxPanels, panelModeLoaded, placeholderCount]);
   // After the trim effect (declaration order), every commit: the count it reads
@@ -1515,19 +1517,27 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
     setSessionColumns(next);
     // The strip just grew past the user's count (every panel was pinned, so the
-    // open took the lock grant): say so, and put the count picker one click away,
-    // the one in the task panel's view menu beside New task, right next to the
-    // strip it governs (not Settings: 2026-10-02, "that's too far away"). The
-    // one-in-one-out reuse of that slot is not growth and stays quiet.
+    // open took the lock grant). The count FOLLOWS: the setting becomes the new
+    // width, so every picker (kebab, view menu, Settings) shows the number of
+    // panels on screen, and going back down is the user's own pick (2026-10-02:
+    // a strip of 3 under a picker saying "2" was "very confusing"; "if it already
+    // adjusted then keep it 3, the customer can reduce it themselves"). Say so,
+    // with the picker one click away: the task panel's view menu beside New task,
+    // right next to the strip it governs (not Settings: "that's too far away").
+    // The one-in-one-out reuse of that slot is not growth and stays quiet.
     const count = triageOpenRef.current ? maxPanelsRef.current - 1 : maxPanelsRef.current;
     const realBefore = realColumnCount(current);
     const realAfter = realColumnCount(next);
     if (realAfter > realBefore && realAfter > count) {
+      // Triage holds one slot of the setting, so the setting is one above the sessions.
+      const newCount = Math.min(realAfter + (triageOpenRef.current ? 1 : 0), MAX_PANELS);
+      const wasAuto = panelModeRef.current === 'auto';
+      setPanelMode(String(newCount) as SessionPanelMode);
       notify({
         kind: 'hint',
         severity: 'info',
-        title: `Opened a ${ordinal(realAfter)} panel: all ${count} are pinned`,
-        body: `Pinned panels keep their place, so the strip grew by one. Close any panel to go back to ${count}, or change the count.`,
+        title: `Panel count is now ${newCount}${wasAuto ? ' (was Auto)' : ''}: all ${count} were pinned`,
+        body: `Pinned panels keep their place, so a ${ordinal(realAfter)} panel opened and the count followed. Lower it any time.`,
         dedupKey: 'session-panels-grant',
         persistent: false,
         action: { label: 'Adjust panels', kind: 'callback' },
@@ -1541,7 +1551,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         },
       });
     }
-  }, [showOperationError, notify, navigateRef]);
+  }, [showOperationError, notify, navigateRef, setPanelMode]);
 
   const handleToggleSession = openSessionOrToast;
 
@@ -1701,7 +1711,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setTriagePanelOpen(true);
     setTriageTaskId(taskId);
     // Triage consumes one slot — evict unlocked slots first, keep locked.
-    setSessionColumns(prev => trimUnlockedToMax(prev, panelBudget(prev, maxPanelsRef.current - 1)));
+    setSessionColumns(prev => trimUnlockedToMax(prev, maxPanelsRef.current - 1));
   }, []);
 
   const handleCloseTriage = useCallback(() => {
