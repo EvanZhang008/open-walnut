@@ -16,7 +16,7 @@
  * permission approve, model-catalog route), plus the custom engine's
  * unconfigured-adapter error path.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi, onTestFinished } from 'vitest'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -411,7 +411,12 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
   it('keeps ACP status and journal streaming alive across a daemon WS flap', async () => {
     const statusesBefore = eventsFor(sessionId, EventNames.SESSION_STATUS_CHANGED).length
     const resultsBefore = eventsFor(sessionId, EventNames.SESSION_RESULT).length
-    await sendMessageToSession(sessionId, 'lifecycle-slow reconnect stream', {
+    // The turn holds after its first chunk until this file exists, so the flap
+    // lands mid-turn however slow the machine is.
+    const gate = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-acp-gate-')), 'release')
+    // A failed assertion must not leave the agent holding the turn for the next test.
+    onTestFinished(() => { fs.writeFileSync(gate, '') })
+    await sendMessageToSession(sessionId, `lifecycle-gate ${gate} slow reconnect stream`, {
       source: 'ui',
       taskId,
     })
@@ -435,12 +440,17 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
 
     await waitFor(() => !conn.connected, 5_000, 'daemon connection drop')
     await waitFor(() => conn.connected, 10_000, 'daemon connection reconnect')
-    const afterReconnect = await waitForAsync(async () => {
-      const record = (await getSessionsForTask(taskId))
-        .find((candidate) => candidate.claudeSessionId === sessionId)
-      return record?.status_reason === 'daemon_reconnected' ? record : false
-    }, 10_000, 'ACP reconnect status')
-    expect(afterReconnect.process_status).not.toBe('stopped')
+    // The turn is still held, so the reconnect finds it running and leaves the
+    // record as it is (daemon-connection writes daemon_reconnected only when
+    // the status changed). The old check waited for that write, which happened
+    // only when the turn ended inside the outage: a race CI won and a loaded
+    // machine lost. What must hold is that nothing marked the session stopped.
+    const afterReconnect = (await getSessionsForTask(taskId))
+      .find((candidate) => candidate.claudeSessionId === sessionId)
+    expect(afterReconnect?.process_status).toBe('running')
+    // The rest of the turn is produced only now, so it can only arrive through
+    // the journal the reconnect re-subscribed.
+    fs.writeFileSync(gate, '')
     await waitFor(
       () => textFor(sessionId).includes('still working...'),
       10_000,

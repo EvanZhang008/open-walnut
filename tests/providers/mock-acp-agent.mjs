@@ -9,6 +9,8 @@
  *     turn (reply text reflects the chosen option id)
  *   - "status-slow-tool"→ emits a tool call while a real child process runs
  *   - "slow"            → streams 3 chunks with 150ms gaps (interrupt window)
+ *   - "lifecycle-gate <file>" → holds the turn after its first chunk until
+ *     <file> exists, so a test can act mid-turn however slow the machine is
  *   - "error"           → responds to session/prompt with a JSON-RPC error
  *   - "self-report-test"→ streams a deterministic labeled private report
  *   - anything else     → streams 2 message chunks then end_turn
@@ -375,10 +377,14 @@ async function handlePrompt(id, params) {
     : text.includes('mobile FIFO')
       ? [`hello from mock-acp (you said: ${text})`]
       : ['hello from mock-acp ', `(you said: ${text})`];
-  for (const p of parts) {
+  const gate = /lifecycle-gate (\S+)/.exec(text)?.[1];
+  for (const [i, p] of parts.entries()) {
     if (cancelled) { reply(id, { stopReason: 'cancelled' }); return; }
     chunk(sessionId, p);
     await sleep(gaps);
+    if (gate && i === 0) {
+      while (!fs.existsSync(gate) && !cancelled) await sleep(20);
+    }
   }
   reply(id, { stopReason: cancelled ? 'cancelled' : 'end_turn' });
 }
