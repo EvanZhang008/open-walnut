@@ -3,7 +3,9 @@
  *
  * What's real: Express server, WebSocket connections, event bus, session-tracker
  * persistence, task-manager linking, REST endpoints.
- * What's mocked: constants.js (temp dir), Claude CLI (mock-claude.mjs).
+ * What's mocked: constants.js (temp dir), the session daemon (the in-process
+ *   MockDaemon, which spawns mock-claude.mjs). Nothing here needs the daemon as
+ *   a separate process.
  *
  * Tests verify the full pipeline:
  *   WS RPC session:start → SessionRunner → spawn mock CLI → JSON parse →
@@ -16,7 +18,6 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
-import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
@@ -26,20 +27,19 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 // Mock CLI (mock-claude.mjs) is spawned by the MockDaemon, not directly by the
 // session runner: in the unified-daemon architecture all local sessions go
 // through a daemon, so a bare setCliCommand() no longer reaches the spawn.
-// We run a standalone MockDaemon subprocess and pin the session runner to it via
-// setTestDaemonUrl — the daemon itself spawns mock-claude.mjs.
-const MOCK_DAEMON_SCRIPT = path.resolve(import.meta.dirname, '../helpers/mock-daemon-process.mjs')
+// We run an in-process MockDaemon and pin the session runner to it via
+// setTestDaemonUrl; the daemon itself spawns mock-claude.mjs.
 
 // ── Helpers ──
 
 let server: HttpServer
 let port: number
-let daemonProc: ChildProcess | null = null
-let daemonPort: number
+let daemon: MockDaemon | undefined
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
@@ -126,25 +126,10 @@ async function pollUntil(check: () => Promise<boolean>, intervalMs = 100, timeou
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 
-  // Start a standalone MockDaemon subprocess (survives outside vitest's module
-  // system). It prints PORT=<n> on stdout, then handles the daemon WebSocket
-  // protocol and spawns mock-claude.mjs for each session.
-  daemonPort = await new Promise<number>((resolve, reject) => {
-    daemonProc = spawn(process.execPath, [MOCK_DAEMON_SCRIPT], { stdio: ['pipe', 'pipe', 'inherit'] })
-    let buf = ''
-    daemonProc.stdout!.on('data', (chunk: Buffer) => {
-      buf += chunk.toString()
-      const m = buf.match(/PORT=(\d+)/)
-      if (m) resolve(parseInt(m[1], 10))
-    })
-    daemonProc.on('error', reject)
-    daemonProc.on('exit', (code) => { if (!buf.includes('PORT=')) reject(new Error(`MockDaemon exited with code ${code}`)) })
-    setTimeout(() => reject(new Error('MockDaemon startup timeout')), 10000)
-  })
-
-  // Pin the session runner to the MockDaemon — local sessions route here via
+  // Pin the session runner to the MockDaemon: local sessions route here via
   // createSessionManager's directWsUrl (preferred over the real localDaemon).
-  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemonPort}`)
+  daemon = await createMockDaemon()
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
 
   // Seed a task for session tests
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
@@ -198,10 +183,8 @@ beforeAll(async () => {
 afterAll(async () => {
   sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
-  if (daemonProc) {
-    daemonProc.kill('SIGTERM')
-    daemonProc = null
-  }
+  await daemon?.stop()
+  daemon = undefined
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 

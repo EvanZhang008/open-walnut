@@ -3,7 +3,14 @@
  *
  * What's real: Express server, event bus, session-tracker, session-history
  * parsing, REST endpoints.
- * What's mocked: constants.js (temp dir), Claude CLI (mock-claude.mjs).
+ * What's mocked: constants.js (temp dir), the session daemon (MockDaemon, which
+ *   spawns mock-claude.mjs).
+ *
+ * History is read through the server's own local daemon, which expands
+ * `~/.claude/projects/...` with its home. WALNUT_HOME_OVERRIDE points that home
+ * at the temp WALNUT_HOME, whose .claude is the mocked CLAUDE_HOME the fixtures
+ * are seeded into; without it the daemon looked in the real home and found
+ * nothing (CI), or read the developer's own transcripts.
  *
  * Tests verify:
  *   1. Plan extraction from a completed plan session (Write + ExitPlanMode)
@@ -24,6 +31,7 @@ import { WALNUT_HOME, CLAUDE_HOME, SESSIONS_FILE } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { encodeProjectPath } from '../../src/core/session-history.js'
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 const CWD = '/Users/test/project'
@@ -32,6 +40,8 @@ const CWD = '/Users/test/project'
 
 let server: HttpServer
 let port: number
+let daemon: MockDaemon
+let savedHomeOverride: string | undefined
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
@@ -143,7 +153,13 @@ function msg(id: string, role: 'user' | 'assistant', text: string, extras?: { to
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 
+  savedHomeOverride = process.env.WALNUT_HOME_OVERRIDE
+  process.env.WALNUT_HOME_OVERRIDE = WALNUT_HOME
+  // The daemon spawns `claude` by name, so setCliCommand alone cannot reach the
+  // spawn: route sessions through a MockDaemon that runs the mock CLI.
+  daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
 
   // Seed tasks
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
@@ -235,7 +251,11 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
+  await daemon?.stop()
+  if (savedHomeOverride === undefined) delete process.env.WALNUT_HOME_OVERRIDE
+  else process.env.WALNUT_HOME_OVERRIDE = savedHomeOverride
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 

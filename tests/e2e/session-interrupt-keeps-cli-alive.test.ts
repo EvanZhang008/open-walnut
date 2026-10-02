@@ -148,9 +148,13 @@ async function expectFollowUpAnswered(ws: WebSocket, sid: string, text: string):
   expect(daemonCmds(sid, 'start')).toBe(2)
 }
 
+const savedDisableSearch = process.env.WALNUT_DISABLE_SEARCH
 const TASKS = ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012']
 
 beforeAll(async () => {
+  // Search indexing is unrelated here, and stopServer waits for any embedding in
+  // flight: on a loaded machine that alone overran the 20s afterAll.
+  process.env.WALNUT_DISABLE_SEARCH = '1'
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
@@ -180,6 +184,8 @@ afterAll(async () => {
   await stopServer()
   await daemon.stop()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
+  if (savedDisableSearch === undefined) delete process.env.WALNUT_DISABLE_SEARCH
+  else process.env.WALNUT_DISABLE_SEARCH = savedDisableSearch
 }, 20000)
 
 describe('turn stop keeps the CLI process alive', () => {

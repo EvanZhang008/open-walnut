@@ -33,6 +33,8 @@ interface DaemonSession {
   pollTimer: ReturnType<typeof setInterval> | null
   offset: number
   exitCode: number | null
+  /** Resolves once the CLI has exited and its `exit` event went out. */
+  exited?: Promise<void>
 }
 
 /** Types of send fault that can be injected per-session. */
@@ -392,16 +394,25 @@ export class MockDaemon {
     const proc = spawn(process.execPath, [this._cliCommand, ...cliArgs], {
       stdio: [pipeFd, outputFd, stderrFd],
       cwd,
-      env: { ...process.env, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' },
+      // This daemon lives in the test worker, so a CLI that outlives the worker
+      // is a leak: let the mock exit with its parent (see mock-claude.mjs).
+      env: { ...process.env, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', MOCK_CLAUDE_EXIT_WITH_PARENT: '1' },
     })
 
     const pid = proc.pid ?? 0
+    let markExited!: () => void
+    const exited = new Promise<void>((resolve) => { markExited = resolve })
+    // Generation guard, as in daemon-standalone's proc 'exit' handler: once a
+    // cold --resume replaced this sid, the old process's death belongs to no one
+    // and must not end the replacement.
+    const ownsSid = () => this.sessions.get(session.sid) === session
     // A spawn that fails (ENOENT) must end this session, never the whole test process.
     proc.on('error', (err) => {
       session.exitCode = 1
       if (session.pollTimer) clearInterval(session.pollTimer)
       session.pollTimer = null
-      this.sendEvent(ws, 'exit', { sid: session.sid, code: 1, error: err.message })
+      if (ownsSid()) this.sendEvent(ws, 'exit', { sid: session.sid, code: 1, error: err.message })
+      markExited()
     })
 
     // Close file descriptors (process has them now)
@@ -418,6 +429,7 @@ export class MockDaemon {
       pollTimer: null,
       offset: startOffset,
       exitCode: null,
+      exited,
     }
 
     proc.on('exit', (code) => {
@@ -427,10 +439,13 @@ export class MockDaemon {
       // written by mock-claude before it exited, causing a race where the test
       // receives 'exit' before the JSONL events.
       setTimeout(() => {
-        this.pollJsonl(ws, session.sid, session)
         if (session.pollTimer) clearInterval(session.pollTimer)
         session.pollTimer = null
-        this.sendEvent(ws, 'exit', { sid: session.sid, code: session.exitCode! })
+        if (ownsSid()) {
+          this.pollJsonl(ws, session.sid, session)
+          this.sendEvent(ws, 'exit', { sid: session.sid, code: session.exitCode! })
+        }
+        markExited()
       }, 100) // 100ms delay ensures JSONL file is fully flushed to disk
     })
 
@@ -646,13 +661,26 @@ export class MockDaemon {
     try { session.proc.kill('SIGINT') } catch { /* already dead */ }
 
     // Fallback SIGTERM after 2s
-    setTimeout(() => {
+    const sigterm = setTimeout(() => {
       if (session.exitCode === null && session.proc) {
         try { session.proc.kill('SIGTERM') } catch { /* ignore */ }
       }
     }, 2000)
 
-    this.sendOk(ws, id, { stopped: true })
+    // Confirm only once the process is gone, like the real daemon
+    // (stopSessionProcess replies after the group exits). A stop confirmed while
+    // the CLI still read its FIFO let the next send land in the dying process,
+    // so a follow-up after a Stop was never answered.
+    let replied = false
+    const giveUp = setTimeout(() => {
+      replied = true
+      this.sendError(ws, id, 'stop: process did not exit after SIGTERM')
+    }, 7000)
+    void session.exited?.then(() => {
+      clearTimeout(sigterm)
+      clearTimeout(giveUp)
+      if (!replied) this.sendOk(ws, id, { stopped: true })
+    })
   }
 
   private cmdStatus(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {

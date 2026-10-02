@@ -6,13 +6,14 @@
  *   RC2: session:status-changed WS event carries correct status data
  *
  * What's real: Express server, WebSocket, event bus, session-tracker, task-manager.
- * What's mocked: constants.js (temp dir), Claude CLI (mock-claude.mjs).
+ * What's mocked: constants.js (temp dir), the session daemon (the in-process
+ *   MockDaemon, which spawns mock-claude.mjs). Nothing here needs the daemon as
+ *   a separate process.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
-import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
@@ -21,14 +22,13 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-
-const MOCK_DAEMON_SCRIPT = path.resolve(import.meta.dirname, '../helpers/mock-daemon-process.mjs')
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 // ── Helpers ──
 
 let server: HttpServer
 let port: number
-let daemonProc: ChildProcess | null = null
+let daemon: MockDaemon
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
@@ -79,6 +79,20 @@ function collectWsEvents(ws: WebSocket, eventNames: string[]): WsEvent[] {
   return events
 }
 
+/** Wait until the collected events (from index `from`) hold a status-changed
+ *  event for `sessionId` with the given process_status. */
+async function waitForStatus(
+  events: WsEvent[], sessionId: string, status: string, from = 0, timeoutMs = 15000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (events.slice(from).some(e =>
+      (e.data as { sessionId?: string })?.sessionId === sessionId && e.data?.process_status === status)) return
+    await delay(50)
+  }
+  throw new Error(`no ${status} status event for ${sessionId} within ${timeoutMs}ms`)
+}
+
 function sendWsRpc(ws: WebSocket, method: string, payload: unknown): Promise<WsEvent> {
   return new Promise((resolve, reject) => {
     const id = `rpc-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -105,24 +119,8 @@ function delay(ms: number): Promise<void> {
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 
-  const daemonPort = await new Promise<number>((resolve, reject) => {
-    daemonProc = spawn(process.execPath, [MOCK_DAEMON_SCRIPT], { stdio: ['pipe', 'pipe', 'inherit'] })
-    let output = ''
-    const timer = setTimeout(() => reject(new Error('MockDaemon startup timeout')), 10_000)
-    daemonProc.stdout!.on('data', (chunk: Buffer) => {
-      output += chunk.toString()
-      const match = output.match(/PORT=(\d+)/)
-      if (match) {
-        clearTimeout(timer)
-        resolve(Number(match[1]))
-      }
-    })
-    daemonProc.on('error', reject)
-    daemonProc.on('exit', (code) => {
-      if (!output.includes('PORT=')) reject(new Error(`MockDaemon exited with code ${code}`))
-    })
-  })
-  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemonPort}`)
+  daemon = await createMockDaemon()
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
 
   // Seed tasks
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
@@ -160,8 +158,7 @@ beforeAll(async () => {
 afterAll(async () => {
   sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
-  daemonProc?.kill('SIGTERM')
-  daemonProc = null
+  await daemon?.stop()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -185,18 +182,14 @@ describe('Session resume status changes', () => {
     const sessionId = (firstResult.data as { sessionId: string }).sessionId
     expect(sessionId).toBeTruthy()
 
-    // Wait for status events to settle
-    await delay(500)
-
-    // Should have status-changed events from the first session: in_progress → agent_complete
+    // This mock CLI exits after each turn, exercising the cold-resume fallback.
+    // The turn ends `idle` (a live CLI would stay up); the exit then surfaces as
+    // `stopped` once the server sees the process gone, which is not instant.
+    await waitForStatus(statusEvents, sessionId, 'stopped')
     const firstRunEvents = statusEvents.filter(
       e => (e.data as { sessionId?: string })?.sessionId === sessionId,
     )
-    expect(firstRunEvents.length).toBeGreaterThanOrEqual(1)
-
-    // This mock CLI exits after each turn, exercising the cold-resume fallback.
-    const lastFirstStatus = firstRunEvents[firstRunEvents.length - 1]
-    expect(lastFirstStatus.data?.process_status).toBe('stopped')
+    expect(firstRunEvents[firstRunEvents.length - 1].data?.process_status).toBe('stopped')
 
     // 2. Verify DB record shows stopped (poll — async persist may lag)
     let sessData1: { session: { process_status: string } } | null = null
@@ -223,17 +216,19 @@ describe('Session resume status changes', () => {
     const secondResult = await resumeResultPromise
     expect((secondResult.data as { result: string }).result).toContain('follow-up after resume')
 
-    await delay(500)
-
-    // 4. Verify new status events were emitted during resume
+    // 4. Verify new status events were emitted during resume: the resumed
+    // process must publish running and then return to stopped.
+    await waitForStatus(statusEvents, sessionId, 'stopped', statusCountBefore)
     const newStatusEvents = statusEvents.slice(statusCountBefore).filter(
       e => (e.data as { sessionId?: string })?.sessionId === sessionId,
     )
-    // The resumed process must publish running and then return to stopped.
     const runningEvents = newStatusEvents.filter(e => e.data?.process_status === 'running')
     const stoppedEvents = newStatusEvents.filter(e => e.data?.process_status === 'stopped')
     expect(runningEvents.length).toBeGreaterThanOrEqual(1)
     expect(stoppedEvents.length).toBeGreaterThanOrEqual(1)
+    const firstRunning = newStatusEvents.findIndex(e => e.data?.process_status === 'running')
+    const lastStopped = newStatusEvents.map(e => e.data?.process_status).lastIndexOf('stopped')
+    expect(lastStopped).toBeGreaterThan(firstRunning)
 
     // At least one in_progress event should carry process_status: 'running'
     // (the first may have 'stopped' from handleSend before the new process starts)
@@ -255,38 +250,42 @@ describe('Session resume status changes', () => {
     })
     const firstResult = await firstResultPromise
     const sessionId = (firstResult.data as { sessionId: string }).sessionId
-    await delay(200)
 
-    // Confirm DB shows stopped after first run
-    const res1 = await fetch(apiUrl(`/api/sessions/${sessionId}`))
-    const data1 = (await res1.json()) as { session: { process_status: string } }
-    expect(data1.session.process_status).toBe('stopped')
+    const dbStatus = async (): Promise<string> => {
+      const res = await fetch(apiUrl(`/api/sessions/${sessionId}`))
+      const data = (await res.json()) as { session: { process_status: string } }
+      return data.session.process_status
+    }
+    const pollDbStatus = async (want: string, until: () => boolean = () => false): Promise<boolean> => {
+      const deadline = Date.now() + 15000
+      while (Date.now() < deadline && !until()) {
+        if (await dbStatus() === want) return true
+        await delay(50)
+      }
+      return false
+    }
+
+    // Confirm DB shows stopped after first run (the mock exits after its turn)
+    expect(await pollDbStatus('stopped')).toBe(true)
 
     // Resume with a slow message to have time to check mid-flight
-    const resumeResultPromise = waitForWsEvent(ws, 'session:result')
+    let resumed = false
+    const resumeResultPromise = waitForWsEvent(ws, 'session:result').then((r) => { resumed = true; return r })
 
-    // Use slow:500 to give us time to query DB mid-flight
+    // slow:500 holds the resumed turn open for 500ms after its init line
     await sendWsRpc(ws, 'session:send', {
       sessionId,
       message: 'slow:500 mid-flight check',
     })
 
-    // Wait a bit for the session to start (process spawned, init event processed)
-    await delay(300)
-
-    // Check DB mid-flight — should be running/in_progress
-    const res2 = await fetch(apiUrl(`/api/sessions/${sessionId}`))
-    const data2 = (await res2.json()) as { session: { process_status: string } }
-    expect(data2.session.process_status).toBe('running')
+    // Mid-flight the record must read running, observed before the turn's result
+    expect(await pollDbStatus('running', () => resumed)).toBe(true)
 
     // Wait for completion
     await resumeResultPromise
-    await delay(500)
 
     // After completion the short-lived mock process is stopped again.
-    const res3 = await fetch(apiUrl(`/api/sessions/${sessionId}`))
-    const data3 = (await res3.json()) as { session: { process_status: string } }
-    expect(data3.session.process_status).toBe('stopped')
+    expect(await pollDbStatus('stopped')).toBe(true)
 
     ws.close()
     await delay(50)

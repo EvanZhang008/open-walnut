@@ -8,6 +8,10 @@
  *
  * No internal state assertions (no process_status, no fromOffset, no bus events).
  * The ONLY thing we check: "I sent a message, did I get a valid response?"
+ *
+ * The daemon is the in-process MockDaemon: it lives outside the server, so it
+ * survives every stopServer()/startServer() here, and nothing needs it as a
+ * separate process.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import fs from 'node:fs/promises'
@@ -22,15 +26,15 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
-const MOCK_DAEMON_SCRIPT = path.resolve(import.meta.dirname, '../helpers/mock-daemon-process.mjs')
 
 let server: HttpServer
 let port: number
-let daemonProc: ChildProcess | null = null
+let daemon: MockDaemon
 let daemonPort: number
+let originalPath: string | undefined
 
 // ── Minimal WS helpers (user-facing API only) ──
 
@@ -120,19 +124,19 @@ beforeAll(async () => {
     '  category: Inbox', 'hosts:', '  mock-remote:', '    hostname: localhost', '    user: testuser',
   ].join('\n') + '\n')
 
-  // Start MockDaemon (survives server restarts — simulates real clouddev daemon)
-  daemonPort = await new Promise<number>((resolve, reject) => {
-    daemonProc = spawn(process.execPath, [MOCK_DAEMON_SCRIPT], { stdio: ['pipe', 'pipe', 'inherit'] })
-    let buf = ''
-    daemonProc.stdout!.on('data', (chunk: Buffer) => {
-      buf += chunk.toString()
-      const m = buf.match(/PORT=(\d+)/)
-      if (m) resolve(parseInt(m[1], 10))
-    })
-    daemonProc.on('error', reject)
-    daemonProc.on('exit', (code) => { if (!buf.includes('PORT=')) reject(new Error(`daemon exit ${code}`)) })
-    setTimeout(() => reject(new Error('daemon timeout')), 10000)
-  })
+  // Sessions reach the host through the MockDaemon's URL, but side paths (the
+  // remote cwd pre-flight, history reads) still dial the host over ssh. Answer
+  // those with an instant refusal instead of a real ssh to localhost.
+  const sshBin = path.join(WALNUT_HOME, 'bin')
+  await fs.mkdir(sshBin, { recursive: true })
+  await fs.writeFile(path.join(sshBin, 'ssh'),
+    '#!/bin/sh\necho "ssh: connect to host localhost port 22: Connection refused" >&2\nexit 255\n', { mode: 0o755 })
+  originalPath = process.env.PATH
+  process.env.PATH = `${sshBin}${path.delimiter}${process.env.PATH}`
+
+  // Start MockDaemon (survives server restarts, like a real remote host's daemon)
+  daemon = await createMockDaemon()
+  daemonPort = daemon.port
 
   sessionRunner.setCliCommand(MOCK_CLI)
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemonPort}`)
@@ -145,7 +149,8 @@ beforeAll(async () => {
 afterAll(async () => {
   sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
-  if (daemonProc) { daemonProc.kill('SIGTERM'); daemonProc = null }
+  await daemon?.stop()
+  if (originalPath !== undefined) process.env.PATH = originalPath
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 

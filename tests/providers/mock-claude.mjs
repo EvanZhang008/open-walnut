@@ -142,6 +142,21 @@ const queuedUserLines = [];
 // consolidates it into an `assistant` message before its interrupted marker.
 let streamedPartial = null;
 
+// Orphan guard (opt-in: MOCK_CLAUDE_EXIT_WITH_PARENT=1, set by the in-process
+// MockDaemon, whose process is the test worker itself). The FIFO stdin is our own
+// O_RDWR fd, so it never reaches EOF, and a mode that stays alive between turns
+// outlived every test whose teardown never stopped it (a timed-out afterAll left
+// dozens behind). Exit once the spawner is gone. Opt-in because a real daemon's
+// CLI must survive that daemon's death (restart adoption).
+if (process.env.MOCK_CLAUDE_EXIT_WITH_PARENT === '1') {
+  const spawnedBy = process.ppid;
+  const parentCheck = setInterval(() => {
+    if (process.ppid !== spawnedBy) process.exit(0);
+    try { process.kill(spawnedBy, 0); } catch { process.exit(0); }
+  }, 2000);
+  parentCheck.unref?.();
+}
+
 // When --input-format stream-json is used, read the message from stdin (FIFO pipe).
 // The real CLI reads JSON lines like: {"type":"user","message":{"role":"user","content":"..."}}
 // The FIFO is opened O_RDWR so it won't EOF — we read available data with a short timeout.

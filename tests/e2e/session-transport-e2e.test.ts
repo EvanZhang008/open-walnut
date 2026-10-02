@@ -6,16 +6,22 @@
  * and task-manager.
  *
  * What's real: Express server, WebSocket, event bus, session-tracker persistence,
- *   task-manager linking, SessionIO (LocalIO / RemoteIO).
- * What's mocked: constants.js (temp dir), Claude CLI (mock-claude.mjs),
- *   SSH binary (mock-ssh.mjs via PATH override).
+ *   task-manager linking, RemoteSessionManager (the one transport since every
+ *   session, local or remote, runs through a daemon).
+ * What's mocked: constants.js (temp dir), the session daemon (MockDaemon, which
+ *   spawns mock-claude.mjs), SSH binary (mock-ssh.mjs via PATH override, so host
+ *   probes such as the remote cwd pre-flight never reach a real ssh).
+ *
+ * The daemon spawns `claude` by name, so setCliCommand alone cannot reach the
+ * spawn: without the MockDaemon these tests ran the REAL CLI where one is
+ * installed and failed where none is (CI).
  *
  * Tests verify:
- *   1. Local session lifecycle via SessionIO (LocalIO)
- *   2. SSH session lifecycle via SessionIO (RemoteIO)
+ *   1. Local session lifecycle (host __local__)
+ *   2. Remote host session lifecycle (record carries the host)
  *   3. FIFO-based message delivery (follow-up via session:send)
- *   4. Streaming events flow through SessionIO
- *   5. Session output file is renamed to session ID (rename lifecycle)
+ *   4. Streaming events flow through the daemon stream
+ *   5. Session stream file is named after the pre-assigned session id
  *   6. Follow-up message delivery (session:send → queue → resume)
  *   7. Session history retrieval via REST API
  *   8. Multiple concurrent sessions stream independently
@@ -24,7 +30,6 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
-import fsSync from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import type { Server as HttpServer } from 'node:http'
@@ -34,9 +39,10 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 // Isolate all file I/O to a temp directory
 vi.mock('../../src/constants.js', () => createMockConstants())
 
-import { WALNUT_HOME } from '../../src/constants.js'
+import { WALNUT_HOME, CLAUDE_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 const MOCK_SSH_SCRIPT = path.resolve(import.meta.dirname, '../providers/mock-ssh.mjs')
@@ -45,8 +51,11 @@ const MOCK_SSH_SCRIPT = path.resolve(import.meta.dirname, '../providers/mock-ssh
 
 let server: HttpServer
 let port: number
+let daemon: MockDaemon
 let mockSshBinDir: string
+let remoteCwd: string
 let originalPath: string | undefined
+const savedEnv: Record<string, string | undefined> = {}
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
@@ -142,9 +151,21 @@ beforeAll(async () => {
   )
   originalPath = process.env.PATH
   process.env.PATH = `${mockSshBinDir}:${process.env.PATH}`
+  // The remote host's working directory (the MockDaemon runs on this machine).
+  remoteCwd = path.join(mockSshBinDir, 'remote-cwd')
+  await fs.mkdir(remoteCwd, { recursive: true })
 
-  // 2. Wire mock CLI into session runner
+  // 2. Route every session (local and host) through a MockDaemon running the mock CLI.
+  // History is read from the CLI transcript under ~/.claude/projects through the
+  // server's own local daemon. Point that daemon's `~` at the temp home (whose
+  // .claude is the mocked CLAUDE_HOME) and let the mock CLI write its transcript
+  // there, so nothing reads or writes the real home.
+  for (const key of ['WALNUT_HOME_OVERRIDE', 'MOCK_CLAUDE_TRANSCRIPT_DIR']) savedEnv[key] = process.env[key]
+  process.env.WALNUT_HOME_OVERRIDE = WALNUT_HOME
+  process.env.MOCK_CLAUDE_TRANSCRIPT_DIR = path.join(CLAUDE_HOME, 'projects')
+  daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
 
   // 3. Seed tasks and config
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
@@ -355,7 +376,13 @@ afterAll(async () => {
   if (originalPath !== undefined) {
     process.env.PATH = originalPath
   }
+  sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
+  await daemon?.stop()
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
   if (mockSshBinDir) {
     await fs.rm(mockSshBinDir, { recursive: true, force: true }).catch(() => {})
@@ -450,7 +477,7 @@ describe('SSH session via SessionIO', () => {
       message: 'ssh transport e2e test',
       project: 'TransportTest',
       host: 'test-remote',
-      cwd: '/tmp/test-transport',
+      cwd: remoteCwd,
     })
     expect((rpcRes as Record<string, unknown>).ok).toBe(true)
 
@@ -465,7 +492,9 @@ describe('SSH session via SessionIO', () => {
     expect(rd.taskId).toBe('transport-ssh-001')
     expect(rd.isError).toBe(false)
     expect(rd.sessionId).toBeTruthy()
-    expect(rd.result).toContain('Remote session completed successfully')
+    // The mock CLI echoes the prompt and the directory it ran in.
+    expect(rd.result).toContain('ssh transport e2e test')
+    expect(rd.result).toContain(`[cwd:${await fs.realpath(remoteCwd)}]`)
 
     // Verify persistence with host field
     await delay(500)
@@ -488,47 +517,27 @@ describe('SSH session via SessionIO', () => {
     await delay(50)
   })
 
-  it('SSH stderr confirms correct SSH invocation', async () => {
-    // Check the stderr from the SSH session created above
-    await delay(200)
+  // The SSH command line (`cd <cwd> && CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
+  // claude ...`) was removed in 08182ce3: a host session is a `start` command to
+  // the host's daemon, which spawns claude in the requested cwd itself (and
+  // deliberately leaves background tasks enabled). That command is the contract.
+  it('host start reaches the daemon with the requested cwd and the claude argv', async () => {
     const sessRes = await fetch(apiUrl('/api/sessions/task/transport-ssh-001'))
     const sessBody = (await sessRes.json()) as {
-      sessions: Array<{
-        claudeSessionId: string
-        host?: string
-        outputFile?: string
-      }>
+      sessions: Array<{ claudeSessionId: string; host?: string }>
     }
-
     const sshSession = sessBody.sessions.find((s) => s.host === 'test-remote')
     expect(sshSession).toBeDefined()
 
-    // Read the .err file written by mock-ssh.mjs
-    const outputFile = sshSession!.outputFile!
-    let stderrContent: string
-    try {
-      stderrContent = fsSync.readFileSync(outputFile + '.err', 'utf-8')
-    } catch {
-      // May have been renamed
-      const dir = path.dirname(outputFile)
-      stderrContent = fsSync.readFileSync(
-        path.join(dir, `${sshSession!.claudeSessionId}.jsonl.err`),
-        'utf-8',
-      )
-    }
-
-    // Verify SSH was invoked with correct args
-    expect(stderrContent).toContain('SSH_ARGS:')
-    expect(stderrContent).toContain('HOST_ARG:testuser@localhost')
-    expect(stderrContent).toContain('REMOTE_CMD:')
-
-    // Remote command includes cd, env var, and claude
-    const remoteCmdMatch = stderrContent.match(/REMOTE_CMD:(.+)/)
-    expect(remoteCmdMatch).toBeTruthy()
-    const remoteCmd = remoteCmdMatch![1]
-    expect(remoteCmd).toContain("cd '/tmp/test-transport'")
-    expect(remoteCmd).toContain('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1')
-    expect(remoteCmd).toContain('claude')
+    const start = daemon.getCommandHistoryFor('start')
+      .find((c) => c.payload.sid === sshSession!.claudeSessionId)
+    expect(start).toBeDefined()
+    expect(start!.payload.cwd).toBe(remoteCwd)
+    const argv = start!.payload.args as string[]
+    expect(argv[0]).toBe('claude')
+    expect(argv).toContain('-p')
+    expect(argv[argv.indexOf('--session-id') + 1]).toBe(sshSession!.claudeSessionId)
+    expect(start!.payload.resume).toBe(false)
   })
 })
 
@@ -576,8 +585,10 @@ describe('Streaming events via SessionIO', () => {
     expect(sessBody.sessions.length).toBeGreaterThanOrEqual(1)
     const session = sessBody.sessions[0]
 
-    // Read the JSONL output file to verify all event types were captured
-    const outputContent = await fs.readFile(session.outputFile!, 'utf-8')
+    // The record names the daemon stream; read that stream on the (mock) host
+    // to verify all event types were captured.
+    expect(session.outputFile).toBe(`remote://__local__/${session.claudeSessionId}`)
+    const outputContent = await fs.readFile(daemon.streamFilePath(session.claudeSessionId), 'utf-8')
     const jsonlLines = outputContent.trim().split('\n').filter(Boolean)
 
     // Parse each line and collect types
@@ -624,8 +635,12 @@ describe('Streaming events via SessionIO', () => {
 //  4. Output file rename lifecycle
 // ═══════════════════════════════════════════════════════════════════
 
+// Since bacfc958 a fresh start pre-assigns the CLI session id (`--session-id`),
+// so the stream is named after the session id from the spawn on: there is no
+// temp id left to rename. The contract kept here is the one the rename served,
+// a stream file found by the session id whose init line carries that id.
 describe('Output file rename lifecycle', () => {
-  it('output file is renamed from temp ID to session ID', async () => {
+  it('output file is named after the session ID from the start', async () => {
     const ws = await connectWs()
     const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
 
@@ -652,18 +667,25 @@ describe('Output file rename lifecycle', () => {
 
     expect(sessBody.sessions.length).toBeGreaterThanOrEqual(1)
     const session = sessBody.sessions[0]
+    expect(session.claudeSessionId).toBe(rd.sessionId)
 
-    // Output file should be named after the session ID, not the temp ID
-    expect(session.outputFile).toBeTruthy()
-    expect(session.outputFile).toContain(session.claudeSessionId)
-    expect(session.outputFile!.endsWith('.jsonl')).toBe(true)
+    // The record points at the daemon stream named after the session id
+    expect(session.outputFile).toBe(`remote://__local__/${session.claudeSessionId}`)
 
-    // The file should actually exist on disk
-    const exists = await fs.access(session.outputFile!).then(() => true).catch(() => false)
+    // The daemon was asked to start under the final id, so nothing was renamed
+    const start = daemon.getCommandHistoryFor('start')
+      .find((c) => c.payload.sid === session.claudeSessionId)
+    expect(start).toBeDefined()
+    expect(daemon.getCommandHistoryFor('rename')
+      .filter((c) => c.payload.newSid === session.claudeSessionId)).toHaveLength(0)
+
+    // The stream file exists on the host under that id
+    const streamFile = daemon.streamFilePath(session.claudeSessionId)
+    const exists = await fs.access(streamFile).then(() => true).catch(() => false)
     expect(exists).toBe(true)
 
     // Verify the file contains valid JSONL with the session ID
-    const content = await fs.readFile(session.outputFile!, 'utf-8')
+    const content = await fs.readFile(streamFile, 'utf-8')
     const lines = content.trim().split('\n').filter(Boolean)
     expect(lines.length).toBeGreaterThan(0)
 
@@ -687,6 +709,10 @@ describe('Output file rename lifecycle', () => {
 //  5. Follow-up message delivery via session:send → queue → resume
 // ═══════════════════════════════════════════════════════════════════
 
+// `snapshot-clean-turn:<text>` makes the mock CLI behave like the real one
+// across turns: it answers <text>, stays alive reading its FIFO, and appends
+// each turn to its transcript (MOCK_CLAUDE_TRANSCRIPT_DIR), which is where
+// history reads user messages from.
 describe('Follow-up message delivery', () => {
   let firstSessionId: string
 
@@ -696,7 +722,7 @@ describe('Follow-up message delivery', () => {
 
     await sendWsRpc(ws, 'session:start', {
       taskId: 'transport-followup-001',
-      message: 'first message for follow-up test',
+      message: 'snapshot-clean-turn:first message for follow-up test',
       project: 'TransportTest',
     })
 
@@ -710,6 +736,7 @@ describe('Follow-up message delivery', () => {
 
     expect(rd.taskId).toBe('transport-followup-001')
     expect(rd.isError).toBe(false)
+    expect(rd.result).toContain('first message for follow-up test')
     firstSessionId = rd.sessionId
     expect(firstSessionId).toBeTruthy()
 
@@ -720,15 +747,16 @@ describe('Follow-up message delivery', () => {
   it('send follow-up message via session:send and get response', async () => {
     const ws = await connectWs()
 
-    // Send a follow-up message — server will enqueue and spawn --resume
+    // Send a follow-up message: queued, then written to the live CLI's FIFO
     const sendRpcRes = await sendWsRpc(ws, 'session:send', {
       sessionId: firstSessionId,
-      message: 'follow-up question via transport',
+      message: 'snapshot-clean-turn:follow-up question via transport',
     })
 
-    // RPC should return a messageId
-    const sendData = sendRpcRes as Record<string, unknown>
-    expect(sendData.messageId).toBeTruthy()
+    // RPC should return a messageId (the result rides in the response payload)
+    expect(sendRpcRes.ok).toBe(true)
+    const sendData = sendRpcRes.payload as Record<string, unknown> | undefined
+    expect(sendData?.messageId).toBeTruthy()
 
     // Wait for the resumed session to produce a result
     const resultEvent = await waitForWsEvent(ws, 'session:result', 20000)
@@ -765,8 +793,11 @@ describe('Follow-up message delivery', () => {
     // Check there are both user and assistant messages
     const userMessages = historyBody.messages.filter((m) => m.role === 'user')
     const assistantMessages = historyBody.messages.filter((m) => m.role === 'assistant')
-    expect(userMessages.length).toBeGreaterThanOrEqual(1)
-    expect(assistantMessages.length).toBeGreaterThanOrEqual(1)
+    expect(userMessages.length).toBeGreaterThanOrEqual(2)
+    expect(assistantMessages.length).toBeGreaterThanOrEqual(2)
+    const answers = assistantMessages.map((m) => m.text ?? '').join('\n')
+    expect(answers).toContain('first message for follow-up test')
+    expect(answers).toContain('follow-up question via transport')
   })
 })
 
@@ -906,9 +937,10 @@ describe('Session streaming events via WebSocket', () => {
     const toolUseEvents = streamEvents.filter((e) => e.name === 'session:tool-use')
     expect(toolUseEvents.length).toBeGreaterThanOrEqual(1)
 
-    // Tool use event should contain the tool name
-    const firstToolUse = toolUseEvents[0].data as { tool?: string; name?: string }
-    expect(firstToolUse.tool || firstToolUse.name).toBeTruthy()
+    // Tool use event should contain the tool name (SessionToolUseEvent.toolName)
+    const firstToolUse = toolUseEvents[0].data as { toolName?: string; toolUseId?: string }
+    expect(firstToolUse.toolName).toBe('Read')
+    expect(firstToolUse.toolUseId).toBe('toolu_mock_001')
 
     // Should have received a result event
     const resultEvents = streamEvents.filter((e) => e.name === 'session:result')
@@ -924,10 +956,12 @@ describe('Session streaming events via WebSocket', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe('Session error handling', () => {
-  it('session with error message produces isError result and server stays healthy', async () => {
+  // A CLI that dies with a failure code before any result line ends the turn as
+  // `session:error` (the exit path in claude-code-session.ts), not as a result.
+  it('session with error message produces a session error and server stays healthy', async () => {
     const ws = await connectWs()
 
-    const resultPromise = waitForWsEvent(ws, 'session:result', 20000)
+    const errorPromise = waitForWsEvent(ws, 'session:error', 20000)
 
     // Send 'error' message — mock CLI exits with code 1
     await sendWsRpc(ws, 'session:start', {
@@ -936,16 +970,24 @@ describe('Session error handling', () => {
       project: 'TransportTest',
     })
 
-    const resultEvent = await resultPromise
-    const rd = resultEvent.data as {
-      sessionId: string
+    const errorEvent = await errorPromise
+    const ed = errorEvent.data as {
+      sessionId?: string
       taskId: string
-      isError: boolean
-      result?: string
+      error: string
     }
 
-    expect(rd.taskId).toBe('transport-error-001')
-    expect(rd.isError).toBe(true)
+    expect(ed.taskId).toBe('transport-error-001')
+    expect(ed.sessionId).toBeTruthy()
+    expect(ed.error).toContain('exited with code 1')
+
+    // The record carries the error state
+    await pollUntil(async () => {
+      const res = await fetch(apiUrl(`/api/sessions/${ed.sessionId}`))
+      if (res.status !== 200) return false
+      const body = (await res.json()) as { session?: { process_status?: string } }
+      return body.session?.process_status === 'error'
+    })
 
     // Server should still be healthy after error session
     const healthRes = await fetch(apiUrl('/api/tasks'))
@@ -1026,8 +1068,9 @@ describe('Session record enrichment', () => {
     expect(sessBody.sessions.length).toBeGreaterThanOrEqual(1)
     const session = sessBody.sessions[0]
 
-    // Session should have a model from the mock CLI
-    expect(session.model).toBeTruthy()
+    // The model comes from the mock CLI's init line: proof the mock, not an
+    // installed claude, served the session.
+    expect(session.model).toBe('mock-model')
 
     // Session should have process_status
     expect(session.process_status).toBeTruthy()

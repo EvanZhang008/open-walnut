@@ -12,6 +12,11 @@
  * still exercising the full route→engine→reader→grouping→HTTP path live.
  *
  * What's mocked: constants.js (temp dir).
+ *
+ * The engine runs in the server's local daemon (`changes.compute`), which reads
+ * transcripts under its own `~/.claude`. WALNUT_HOME_OVERRIDE points that home at
+ * the temp WALNUT_HOME, whose .claude is the mocked CLAUDE_HOME the JSONL is
+ * staged into; without it the daemon looked in the real home and found nothing.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -31,9 +36,22 @@ let server: HttpServer
 let port: number
 let repoDir: string
 let editedFile: string
+let savedHomeOverride: string | undefined
 const SID = 'changed-e2e-sid'
 
 function apiUrl(p: string): string { return `http://localhost:${port}${p}` }
+
+interface ListedFile { filePath: string; relPath: string; status: string; oldRelPath?: string }
+
+/** One file's before/after. Since 00e7f23e the list may be light (`light:true`:
+ *  the daemon computes it host-side and ships names only); content always comes
+ *  from /changes/file, whichever path served the list. */
+async function fileChange(sid: string, filePath: string): Promise<{ before: string; after: string; status: string }> {
+  const res = await fetch(apiUrl(`/api/sessions/${sid}/changes/file?path=${encodeURIComponent(filePath)}`))
+  expect(res.status).toBe(200)
+  const body = await res.json() as { file: { before: string; after: string; status: string } }
+  return body.file
+}
 
 /** Stage a canonical session JSONL recording an Edit, at Claude Code's path. */
 async function stageJsonl(cwd: string, file: string) {
@@ -62,6 +80,9 @@ beforeAll(async () => {
   await fs.mkdir(path.dirname(editedFile), { recursive: true })
   await fs.writeFile(editedFile, 'export const NEW_LINE = true;\n')
 
+  // Must be set before startServer spawns the local daemon.
+  savedHomeOverride = process.env.WALNUT_HOME_OVERRIDE
+  process.env.WALNUT_HOME_OVERRIDE = WALNUT_HOME
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
   port = typeof addr === 'object' && addr ? addr.port : 0
@@ -72,6 +93,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await stopServer()
+  if (savedHomeOverride === undefined) delete process.env.WALNUT_HOME_OVERRIDE
+  else process.env.WALNUT_HOME_OVERRIDE = savedHomeOverride
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
   await fs.rm(repoDir, { recursive: true, force: true }).catch(() => {})
 })
@@ -82,13 +105,15 @@ describe('Session Changed view — GET /changes (live server)', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as {
       fileCount: number
-      groups: Array<{ kind: string; label: string; files: Array<{ relPath: string; before: string; after: string; status: string }> }>
+      groups: Array<{ kind: string; label: string; files: ListedFile[] }>
     }
     expect(body.fileCount).toBe(1)
     const group = body.groups[0]
     expect(group.kind).toBe('cwd')
-    const change = group.files[0]
-    expect(change.relPath).toBe(path.join('src', 'feature.ts'))
+    const listed = group.files[0]
+    expect(listed.relPath).toBe(path.join('src', 'feature.ts'))
+    expect(listed.status).toBe('modified')
+    const change = await fileChange(SID, listed.filePath)
     expect(change.after).toBe('export const NEW_LINE = true;\n')
     // Edit was OLD_LINE → NEW_LINE; reversed `before` restores OLD_LINE.
     expect(change.before).toBe('export const OLD_LINE = true;\n')
@@ -100,8 +125,10 @@ describe('Session Changed view — GET /changes (live server)', () => {
     await fetch(apiUrl(`/api/sessions/${SID}/changes`))
     await fs.writeFile(editedFile, 'export const NEW_LINE = false;\n')
     const res = await fetch(apiUrl(`/api/sessions/${SID}/changes?refresh=1`))
-    const body = await res.json() as { groups: Array<{ files: Array<{ after: string }> }> }
-    expect(body.groups[0].files[0].after).toBe('export const NEW_LINE = false;\n')
+    expect(res.status).toBe(200)
+    const body = await res.json() as { groups: Array<{ files: ListedFile[] }> }
+    const change = await fileChange(SID, body.groups[0].files[0].filePath)
+    expect(change.after).toBe('export const NEW_LINE = false;\n')
   })
 
   it('404 for an unknown session', async () => {
@@ -143,7 +170,7 @@ describe('Session Changed view — GET /changes (live server)', () => {
 
     const res = await fetch(apiUrl(`/api/sessions/${bashSid}/changes`))
     expect(res.status).toBe(200)
-    const body = await res.json() as { groups: Array<{ files: Array<{ relPath: string; status: string; oldRelPath?: string; before: string; after: string }> }> }
+    const body = await res.json() as { groups: Array<{ files: ListedFile[] }> }
     const files = body.groups.flatMap(g => g.files)
     const renamed = files.find(f => f.relPath === 'renamed.md')
     expect(renamed).toBeDefined()
@@ -153,8 +180,9 @@ describe('Session Changed view — GET /changes (live server)', () => {
     const deleted = files.find(f => f.relPath === 'trash.txt')
     expect(deleted).toBeDefined()
     expect(deleted!.status).toBe('deleted')
-    expect(deleted!.after).toBe('')
-    expect(deleted!.before).toBe('delete me\n') // recovered from git HEAD
+    const deletedChange = await fileChange(bashSid, deleted!.filePath)
+    expect(deletedChange.after).toBe('')
+    expect(deletedChange.before).toBe('delete me\n') // recovered from git HEAD
 
     await fs.rm(repo, { recursive: true, force: true }).catch(() => {})
   })

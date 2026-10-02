@@ -3,7 +3,10 @@
  *
  * What's real: Express server, WebSocket connections, event bus, session-tracker
  * persistence, REST endpoints, session mode storage.
- * What's mocked: constants.js (temp dir), Claude CLI (mock-claude.mjs).
+ * What's mocked: constants.js (temp dir), the session daemon (MockDaemon, which
+ *   spawns mock-claude.mjs). The daemon spawns `claude` by name, so setCliCommand
+ *   alone cannot reach the spawn: without the MockDaemon these tests ran the real
+ *   CLI where one is installed and timed out where none is (CI).
  *
  * Tests verify:
  *   1. Plan mode session stores mode='plan' in SessionRecord
@@ -24,6 +27,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { WALNUT_HOME, CLAUDE_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -31,6 +35,7 @@ const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs
 
 let server: HttpServer
 let port: number
+let daemon: MockDaemon
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
@@ -105,7 +110,9 @@ async function pollUntil(check: () => Promise<boolean>, intervalMs = 100, timeou
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
 
+  daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
+  sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
 
   // Seed a task for plan mode tests
   const tasksDir = path.join(WALNUT_HOME, 'tasks')
@@ -141,7 +148,9 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  sessionRunner.setTestDaemonUrl(undefined)
   await stopServer()
+  await daemon?.stop()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
@@ -253,10 +262,9 @@ describe('Plan mode session lifecycle', () => {
     }
     expect(rd.taskId).toBe('plan-task-001')
     expect(rd.isError).toBe(false)
-    // Execution session runs in bypass mode. (No system prompt is injected:
-    // buildSessionContext is a no-op as of 2026-06-18 and this path passes no
-    // explicit appendSystemPrompt.)
-    expect(rd.result).not.toContain('[has-system-prompt]')
+    // Execution session runs in bypass mode and, like every session since
+    // 0a49aad2, carries buildSessionContext's short identity note.
+    expect(rd.result).toContain('[has-system-prompt]')
     expect(rd.result).toContain('[permission-mode:bypassPermissions]')
     // The session ID should be different from the plan session (new clean context)
     expect(rd.sessionId).not.toBe(planSessionId)

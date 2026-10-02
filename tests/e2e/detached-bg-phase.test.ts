@@ -19,7 +19,7 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
-import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js';
+import { addTask, getTask, linkSessionSlot, updateTaskRaw } from '../../src/core/task-manager.js';
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { ClaudeCodeSession, sessionRunner } from '../../src/providers/claude-code-session.js';
 import { getSnapshotStatusMode, setSnapshotModeForTests, markSnapshotCovered, _resetSnapshotGateForTests } from '../../src/core/session-snapshot-gate.js';
@@ -299,16 +299,25 @@ describe('an armed ScheduleWakeup gates the NEED_ACTION flip', () => {
   it.each(['missing', 'stopped'] as const)('background flags cannot resurrect a %s live instance', async (state) => {
     const sid = `sess-background-${state}`;
     const taskId = await makeTaskWithSession(sid);
+    await linkSessionSlot(taskId, sid, 'exec');
+    expect((await getTask(taskId)).exec_session_id).toBe(sid);
     if (state === 'missing') sessions.delete(sid);
     else sessions.get(sid)!.setProcessStatusFromReconciler('stopped');
 
     bus.emit(EventNames.SESSION_RESULT, {
       sessionId: sid, taskId, result: 'old background result', detachedBgActive: true,
     }, ['*'], { source: 'session-runner' });
+    // The record is written as stopped (the flag does not keep a dead instance
+    // running) and the stopped-session release frees the transient exec slot.
+    // The primary session_id is the task's durable link to its conversation and
+    // survives a stopped session by design (clearSessionSlot in task-manager.ts,
+    // pinned by tests/core/task-manager.test.ts); only an error or a force path
+    // drops it.
     await vi.waitFor(async () => {
       expect((await getSessionByClaudeId(sid))?.process_status).toBe('stopped');
-      expect((await getTask(taskId)).session_id).toBeFalsy();
+      expect((await getTask(taskId)).exec_session_id).toBeFalsy();
     }, { timeout: 5000 });
+    expect((await getTask(taskId)).session_id).toBe(sid);
   });
 
   it('a rejected terminal write cannot clear a snapshot-owned running session slot', async () => {
