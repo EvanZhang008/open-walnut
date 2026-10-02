@@ -38,6 +38,16 @@
  * Tests that manage their own runtime dir (the daemon suites, which set
  * WALNUT_DAEMON_DIR to a per-file tmp path) are left untouched.
  *
+ * One runtime dir per worker, always (2026-10-02)
+ * -----------------------------------------------
+ * A dir the caller chose (CI sets one per job) used to be kept as is, so every
+ * worker of the run shared it, and with it the local daemon's port file. The
+ * next file's server then ADOPTED the daemon the previous file's server had
+ * spawned, still alive for a moment after its worker exited, and that daemon
+ * expanded `~` with the previous file's WALNUT_HOME_OVERRIDE: history, plans
+ * and Changed read another test's home and found nothing (6 e2e failures that
+ * only CI saw). Such a dir now holds one subdir per worker instead.
+ *
  * The production SERVER gets the same treatment: prod-server-guard refuses any
  * connection to :3456 or to a socket in the production runtime dir, and fails
  * the test that tried (2026-09-29: a test's ops reached the live server).
@@ -49,34 +59,17 @@ import './claude-stand-in.js'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
+import { RUNTIME_DIR_PREFIX, workerRuntimeDir } from './runtime-dir-choice.js'
 
-/** The production runtime dir — the default when WALNUT_DAEMON_DIR is unset. */
-const PROD_RUNTIME_DIR = '/tmp/open-walnut' // safe: comparison only
-
-/** Marks a dir this harness created, so a worker can tell it apart from a
- *  deliberate per-test choice (the daemon suites set their own path). */
-const HARNESS_PREFIX = 'open-walnut-test-runtime-'
-
+// A worker INHERITS the runner's dir: global-setup.ts's (named for the RUNNER's
+// pid) or one the caller chose. Kept as is, every worker would share it, the
+// daemon's `WALNUT_DAEMON_DIR + '-streams'` sibling and port file included, so
+// each worker moves to a dir of its own (runtime-dir-choice.ts).
 const current = process.env.WALNUT_DAEMON_DIR
+const ours = `${RUNTIME_DIR_PREFIX}${process.pid}`
+const testRuntime = workerRuntimeDir(current, process.pid, os.tmpdir())
 
-const pointsAtProduction =
-  !current ||
-  current === PROD_RUNTIME_DIR ||
-  current.startsWith(PROD_RUNTIME_DIR + path.sep)
-
-// A worker INHERITS whatever global-setup.ts put in the runner's env. That value
-// carries the RUNNER's pid, so every worker would share one runtime dir — and the
-// daemon's `WALNUT_DAEMON_DIR + '-streams'` SIBLING would be shared too, putting
-// concurrent workers back to interleaving each other's streams. Re-isolate any
-// harness-created dir that isn't already ours.
-const ours = `${HARNESS_PREFIX}${process.pid}`
-const inheritedFromRunner =
-  !!current &&
-  path.basename(current).startsWith(HARNESS_PREFIX) &&
-  path.basename(current) !== ours
-
-if (pointsAtProduction || inheritedFromRunner) {
-  const testRuntime = path.join(os.tmpdir(), ours)
+if (testRuntime) {
   fs.mkdirSync(testRuntime, { recursive: true })
   process.env.WALNUT_DAEMON_DIR = testRuntime
   // The dir is this worker's alone (pid-named), so it goes when the worker goes.

@@ -94,6 +94,7 @@ for (const file of report.testResults ?? []) {
     reasons.set(key, firstLine(file.message));
   }
 }
+const filesInRun = new Set((report.testResults ?? []).map((file) => file.name.replace(/^.*?(tests\/.*)$/, '$1')));
 const filesRun = (report.testResults ?? []).length;
 const testsRun = report.numTotalTests ?? 0;
 fs.rmSync(reportFile, { force: true });
@@ -116,20 +117,30 @@ if (filesRun < MIN_FILES) {
   process.exit(1);
 }
 
-if (mode === 'record') {
+/** This run's failures in the baseline format. The reasons ride along (check mode
+ *  reads only `failures`): a recorded CI baseline is the one place a Linux-only
+ *  failure's cause can be read from a Mac. */
+function writeRun(file) {
   const sorted = [...failures].sort();
-  // The reasons ride along (check mode reads only `failures`): a recorded CI
-  // baseline is the one place a Linux-only failure's cause can be read from a Mac.
   const why = Object.fromEntries(sorted.map((k) => [k, reasons.get(k) ?? '']));
   fs.writeFileSync(
-    BASELINE,
+    file,
     `${JSON.stringify({ config: CONFIG, count: sorted.length, failures: sorted, reasons: why }, null, 2)}\n`,
   );
+  return { sorted, why };
+}
+
+if (mode === 'record') {
+  const { sorted, why } = writeRun(BASELINE);
   for (const k of sorted.slice(0, 300)) console.log(`  ✗ ${k}\n      ${why[k] || '(no message)'}`);
   console.log(`\nRecorded ${sorted.length} known failures → ${BASELINE}`);
   console.log('Commit this file. Shrinking it over time is the goal.');
   process.exit(0);
 }
+
+// A gate that judges a run can still keep it: CI uploads this file, so a new
+// baseline can be read off any run without running the tier twice.
+if (process.env.WALNUT_BASELINE_RUN_OUT) writeRun(process.env.WALNUT_BASELINE_RUN_OUT);
 
 if (!fs.existsSync(BASELINE)) {
   console.error(`\nNo baseline at ${BASELINE}. Create one with:\n  node scripts/test-baseline.mjs record`);
@@ -138,7 +149,10 @@ if (!fs.existsSync(BASELINE)) {
 
 const known = new Set(JSON.parse(fs.readFileSync(BASELINE, 'utf-8')).failures ?? []);
 const regressions = [...failures].filter((f) => !known.has(f)).sort();
-const fixed = [...known].filter((f) => !failures.has(f)).sort();
+// Only entries whose file ran here can have been fixed: a --shard run sees a
+// quarter of the tier, and the rest of the baseline is simply not in it.
+const fileOf = (key) => key.slice(0, key.indexOf(' :: '));
+const fixed = [...known].filter((f) => filesInRun.has(fileOf(f)) && !failures.has(f)).sort();
 
 console.log(`\n${'─'.repeat(60)}`);
 console.log(`failing now: ${failures.size}   known baseline: ${known.size}`);

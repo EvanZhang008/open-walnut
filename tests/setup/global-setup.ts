@@ -28,6 +28,8 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { acquireTestSlot, releaseTestSlot } from './test-gate';
 import { sweepStaleTmpDirs } from './stale-tmp';
+// Shared with runtime-dir-isolation.ts (workers): one name, one sweep rule.
+import { PROD_RUNTIME_DIR, RUNTIME_DIR_PREFIX, isCallerChosenRuntime } from './runtime-dir-choice';
 import { stripGitRedirectEnv } from './git-env-isolation';
 
 /**
@@ -105,9 +107,6 @@ export async function setup(): Promise<void> {
   process.env.NODE_ENV = 'test';
 }
 
-/** Production runtime dir — the default when WALNUT_DAEMON_DIR is unset. */
-const PROD_RUNTIME_DIR = '/tmp/open-walnut'; // safe: comparison only
-
 /**
  * Point WALNUT_DAEMON_DIR at a throwaway dir unless the caller already chose a
  * non-production one. Tests that need their own per-file runtime dir (the daemon
@@ -145,8 +144,6 @@ function isolateSpawnJournal(): void {
   process.env.WALNUT_SPAWN_JOURNAL = path.join(os.tmpdir(), `${RUNTIME_DIR_PREFIX}${process.pid}`, 'spawn-journal.jsonl');
 }
 
-/** Shared with tests/setup/runtime-dir-isolation.ts (workers) — one name, one sweep rule. */
-const RUNTIME_DIR_PREFIX = 'open-walnut-test-runtime-';
 const MOCK_HOME_NAME = /^[a-z][a-z0-9-]*-\d{13}-[a-z0-9]{6,}$/;
 
 /**
@@ -169,6 +166,12 @@ function sweepRuntimeDirs(): void {
     // live owns a mock home older than an hour.
     { prefix: '', name: MOCK_HOME_NAME, pidFrom: 'age', orphanAgeMs: 60 * 60_000 },
   ]);
+  // A dir the caller chose (CI's per-job one) holds one subdir per worker
+  // (runtime-dir-choice.ts); reclaim the dead ones there too.
+  const chosen = process.env.WALNUT_DAEMON_DIR;
+  if (isCallerChosenRuntime(chosen)) {
+    removed.push(...sweepStaleTmpDirs([{ prefix: RUNTIME_DIR_PREFIX, pidFrom: 'name' }], chosen));
+  }
   if (removed.length > 0) {
     console.log(`[runtime-dir] reclaimed ${removed.length} runtime dir(s) left by dead test processes`);
   }
