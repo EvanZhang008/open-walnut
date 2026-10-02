@@ -104,11 +104,19 @@ show inline after the open ones, other completed hits that show the query fold i
   kebab (`leadingSection` of `TaskQuickActions`, above Task detail), not a line between the view
   toggles.
 - **The home task panel has ONE filter concept and two toolbar buttons** (2026-10-02, the new-user
-  redesign: "what is pinned, focus, satellite? filter is filter"). **Filter** (funnel, count badge,
-  `components/tasks/FilterMenu.tsx`) is a one-page popover of dimension rows (Status, Project, Date,
-  Source; Priority, Blocked, Tags, Sprint, Time window under `More filters`) plus a `Search filters`
-  box; what it sets shows as chips in the filter row under the toolbar (`FilterBar.tsx`, one chip per
-  dimension, `Clear`, the hit count), the one place that says "a filter is on". There is ONE Status
+  redesign: "what is pinned, focus, satellite? filter is filter"; the same day: "so ugly, process is
+  super long, better a small search thing, only show few most used"). **Filter** (funnel, count badge,
+  `components/tasks/FilterMenu.tsx`) is a SMALL two-page menu, 272px, one search box on top: page one
+  (`FilterHome.tsx`) is the few picks the user makes most (`Most used`, ranked by `RecentEntry.uses`,
+  `filter-home-model.ts`) and one row per property with its value at the right (Status, Project,
+  Date, Source; Priority, Blocked, Tags, Sprint, Time window folded behind `More filters` unless set);
+  a property row opens page two (`FilterValuesPage.tsx`), that property's values as a checklist
+  (`FilterValueList.tsx`, shared with the chip menus: a plain click TOGGLES a multi-select row, a
+  single-select pick closes the menu). Typing searches every value on page one and filters the rows
+  on page two. Never bring the wall back: a first page is a handful of 28px rows, not every value of
+  every property. What it sets shows as chips in the filter row under the toolbar (`FilterBar.tsx`,
+  one chip per dimension; the count and `Clear` in the row's tail at the top right), the one place
+  that says "a filter is on". There is ONE Status
   (To Do, In Progress, Need Action, Waiting, Complete; the default is the three open ones), never a
   Status AND a Phase. **Display** (sliders, `DisplayMenu.tsx`) holds how the list is laid out: the
   View rows (All, Pinned, the rest behind `More views`, same list and order as the tab bar), Show tab

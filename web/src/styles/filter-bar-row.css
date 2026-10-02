@@ -36,16 +36,21 @@
   align-items: center;
   gap: 4px;
 }
-.fb-row-lead { display: inline-flex; align-items: center; height: 24px; color: var(--fg-secondary); font-size: 12px; }
+.fb-row-lead { display: inline-flex; align-items: center; height: 24px; color: var(--tp-muted); font-size: 12px; }
+/* A chip: `Status: To Do` in a hairline box, the name muted, the value in --fg,
+   a divider before its x. 24px tall, 6px corners, no fill, so a row of chips
+   reads as quiet labels and never as a second row of buttons. */
 .fb-chip {
   display: inline-flex;
   align-items: stretch;
   height: 24px;
   max-width: 100%;
-  border-radius: 12px;
-  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
   color: var(--fg);
   font-size: 12px;
+  box-sizing: border-box;
   animation: fb-chip-in 80ms ease-out;
 }
 @keyframes fb-chip-in { from { opacity: 0; } to { opacity: 1; } }
@@ -62,8 +67,8 @@
   font-family: inherit;
   cursor: pointer;
 }
-.fb-chip-body { gap: 4px; min-width: 0; padding: 0 4px 0 9px; border-radius: 12px 0 0 12px; }
-.fb-chip-dim { flex: none; color: var(--fg-secondary); }
+.fb-chip-body { gap: 3px; min-width: 0; padding: 0 5px 0 8px; border-radius: 5px 0 0 5px; }
+.fb-chip-dim { flex: none; color: var(--tp-muted); }
 .fb-chip-val {
   min-width: 0;
   max-width: 180px;
@@ -72,56 +77,60 @@
   text-overflow: ellipsis;
   font-weight: 500;
 }
-.fb-chip-val.is-missing { font-style: italic; color: var(--fg-muted); font-weight: 400; }
-.fb-chip-caret { display: inline-flex; flex: none; color: var(--fg-secondary); }
-/* Hover is one shade darker over the whole chip (F19); an open chip menu keeps
-   that shade plus an accent edge, so hover never looks like "opened". */
-.fb-chip:hover,
-.fb-chip:has(.fb-chip-body[aria-expanded='true']) { background: var(--border); }
-.fb-chip:has(.fb-chip-body[aria-expanded='true']) { box-shadow: inset 0 0 0 1px var(--accent); }
+.fb-chip-val.is-missing { font-style: italic; color: var(--tp-muted); font-weight: 400; }
+.fb-chip-caret { display: inline-flex; flex: none; color: var(--fg-muted); }
+.fb-chip-caret svg { width: 10px; height: 10px; }
+/* Hover fills the chip one shade (F19); an open chip menu keeps that shade plus
+   an accent edge, so hover never looks like "opened". */
+.fb-chip-body:hover { background: var(--bg-hover); }
+.fb-chip:has(.fb-chip-body[aria-expanded='true']) { border-color: var(--accent); }
 .fb-chip-x {
   justify-content: center;
   width: 22px;
   padding: 0;
-  border-radius: 0 12px 12px 0;
-  color: var(--fg-secondary);
+  border-left: 1px solid var(--border);
+  border-radius: 0 5px 5px 0;
+  color: var(--fg-muted);
 }
-.fb-chip-x svg { width: 12px; height: 12px; }
-.fb-chip-x:hover { background: var(--border-strong); color: var(--fg); }
+.fb-chip-x svg { width: 11px; height: 11px; }
+.fb-chip-x:hover { background: var(--bg-hover); color: var(--fg); }
 .fb-chip-plus {
   align-items: center;
-  padding: 0 9px;
+  padding: 0 8px;
   border: none;
-  color: var(--fg);
+  color: var(--fg-secondary);
   font-family: inherit;
   cursor: pointer;
 }
-.fb-chip-plus:hover { background: var(--border); }
-.fb-view-item { gap: 4px; height: 24px; padding: 0 9px; border-radius: 12px; border: 1px dashed var(--border); }
+.fb-chip-plus:hover { background: var(--bg-hover); color: var(--fg); }
+.fb-view-item { gap: 4px; height: 24px; padding: 0 8px; border-radius: 6px; border: 1px dashed var(--border-strong); color: var(--fg-secondary); }
 .fb-view-item:hover { background: var(--bg-hover); }
 .fb-toggle {
   gap: 4px;
   height: 24px;
-  padding: 0 9px;
-  border-radius: 12px;
-  background: var(--bg-hover);
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--fg-secondary);
 }
-.fb-toggle[aria-pressed='true'] { background: var(--accent-subtle); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent-text); }
+.fb-toggle[aria-pressed='true'] { background: var(--accent-subtle); border-color: var(--accent); color: var(--accent-text); }
+.fb-toggle .fb-check { width: 12px; height: 12px; }
+/* The tail: count, then Clear, at the top right, outside the chip box. */
+.fb-row-tail { flex: none; display: inline-flex; align-items: center; gap: 2px; height: 24px; margin-left: auto; }
 .fb-clear { height: 24px; }
-/* Clear ends the last chip line at its right edge; on a full line it wraps, still right-aligned. */
-.fb-clear { margin-left: auto; }
 /* Inline children, so innerText is just the visible words (no flex-item breaks). */
 .fb-count {
   flex: none;
   display: inline-block;
   height: 24px;
   line-height: 24px;
-  margin-left: auto;
-  color: var(--fg-secondary);
+  padding: 0 4px;
+  color: var(--tp-muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.fb-row-empty { display: inline-flex; align-items: center; height: 24px; color: var(--tp-muted); font-size: 12px; }
 .fb-chip-body:focus-visible,
 .fb-chip-x:focus-visible,
 .fb-chip-plus:focus-visible,

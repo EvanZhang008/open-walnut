@@ -7,7 +7,7 @@ import { expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 import { openHome } from './home-navigation-helpers'
-import { addFilter, filterChip, filterDimRow, filterValue, openFilterMenu } from './filter-bar-helpers'
+import { addFilter, filterChip, filterValue, openFilterPage } from './filter-bar-helpers'
 
 export const SHOTS = '/tmp/filterbar/shots'
 export const QUICK_VIEWS_KEY = 'walnut-todo-quick-views-visible'
@@ -87,11 +87,9 @@ export async function selectTab(page: Page, name: string): Promise<void> {
 /** Filter to exactly these projects (first one replaces, the rest are added). */
 export async function filterProjects(page: Page, projects: readonly string[]): Promise<void> {
   for (const [i, p] of projects.entries()) {
-    // The values arrive with the board: wait until the row offers this one
-    // (directly or behind `N more`) before the helper decides which path to take.
-    await openFilterMenu(page)
-    const more = filterDimRow(page, 'project').locator('.fb-val', { hasText: /^\s*\d+ more\s*$/ })
-    await expect(filterValue(page, 'project', p).or(more).first()).toBeVisible({ timeout: 20_000 })
+    // The values arrive with the board: wait until the Project page offers this one.
+    await openFilterPage(page, 'project')
+    await expect(filterValue(page, 'project', p)).toBeVisible({ timeout: 20_000 })
     await addFilter(page, 'project', p, { add: i > 0 })
   }
   await expect(filterChip(page, 'project')).toHaveCount(1)

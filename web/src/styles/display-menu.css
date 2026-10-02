@@ -11,27 +11,28 @@
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  padding: 6px 0;
+  padding: 4px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  font-size: 12px;
+  font-size: 13px;
 }
 
-.dm-section { display: flex; flex-direction: column; padding: 2px 6px; }
+.dm-section { display: flex; flex-direction: column; padding: 2px 0; }
 .dm-section + .dm-section { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; }
 .dm-heading {
-  /* One heading style with the Sort / Group labels (F31): sentence case. */
+  /* Small, muted, sentence case: the same voice as the Filter menu's group titles. */
   padding: 4px 8px 2px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--tp-muted);
 }
 
 /* View rows (and the flyout's rows): a check slot, then the name. */
 .dm-view, .dm-flyout-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-height: 28px;
   padding: 0 8px;
   border: none;
@@ -43,16 +44,13 @@
   cursor: pointer;
 }
 .dm-view:hover, .dm-flyout-item:hover { background: var(--bg-hover); }
-/* Selected: the tint plus the check icon; the words keep --fg, since --accent-text on
-   the tint reads at about 3.3:1 in the dark theme (C36 wants 4.5:1 in both). */
-.dm-view[aria-pressed='true'], .dm-flyout-item[aria-checked='true'] {
-  background: var(--accent-subtle);
-  color: var(--fg);
-}
-.dm-check { color: var(--accent-text); }
-.dm-check { display: inline-flex; width: 12px; flex-shrink: 0; justify-content: center; }
+/* Selected: the accent check alone; no tinted band, so one list never reads as two. */
+.dm-view[aria-pressed='true'], .dm-flyout-item[aria-checked='true'] { color: var(--fg); }
+.dm-check { display: inline-flex; width: 14px; flex-shrink: 0; justify-content: center; color: var(--accent-text); }
+.dm-check svg { width: 12px; height: 12px; }
 .dm-view-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dm-more-chevron { display: inline-flex; color: var(--fg-muted); }
+.dm-more-chevron svg { width: 12px; height: 12px; }
 .dm-more-views[aria-expanded='true'] { background: var(--bg-hover); }
 
 /* Setting rows: name on the left, its control on the right. */
@@ -60,22 +58,21 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  min-height: 30px;
+  gap: 12px;
+  min-height: 32px;
   padding: 2px 8px;
   box-sizing: border-box;
 }
-.dm-row .tp-seg-btn { line-height: 16px; }
-.dm-row-label { color: var(--fg-secondary); white-space: nowrap; }
+.dm-row-label { color: var(--fg); white-space: nowrap; }
 /* Each segment sizes to its own word (the base .tp-seg-btn splits the width equally,
    which clipped "By project" and "Auto (2)"); the label never shrinks. */
 .dm-row-label { flex-shrink: 0; }
 .dm-seg { flex: none; width: auto; }
-.dm-seg-btn { flex: none; min-width: 22px; padding: 4px 6px; font-variant-numeric: tabular-nums; }
+.dm-seg-btn { flex: none; min-width: 24px; padding: 0 8px; font-variant-numeric: tabular-nums; }
 /* The view-specific slot: room for its tallest form (one row: Collapse all, Tier
    layout or Recent order), so a view switch never moves a row or resizes the box. */
-.dm-context { --dm-row-h: 30px; min-height: var(--dm-row-h); }
-.dm-row-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-secondary); font-size: 11px; }
+.dm-context { --dm-row-h: 32px; min-height: var(--dm-row-h); }
+.dm-row-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tp-muted); font-size: 12px; }
 
 /* Show tab bar: the whole row is the switch; the track mirrors .tp-switch. */
 .dm-switch-row {
@@ -91,10 +88,10 @@
 .dm-switch-row:hover, .dm-action:hover { background: var(--bg-hover); }
 .dm-switch-track {
   position: relative;
-  width: 28px;
-  height: 16px;
+  width: 30px;
+  height: 18px;
   flex-shrink: 0;
-  border-radius: 8px;
+  border-radius: 9px;
   /* Off track >= 3:1 against the menu in both themes (F28). */
   background: var(--fg-muted);
   transition: background-color 120ms ease-out;
@@ -104,10 +101,11 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
-  background: var(--bg-elevated);
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   transition: transform 120ms ease-out;
 }
 .dm-switch-row[aria-checked='true'] .dm-switch-track { background: var(--accent); }
@@ -126,7 +124,7 @@
 }
 
 /* Sort: the "own order" note and the inline confirm (never a browser confirm). */
-.dm-note { height: 18px; padding: 0 8px; font-size: 11px; line-height: 18px; color: var(--fg-secondary); text-align: right; }
+.dm-note { height: 18px; padding: 0 8px; font-size: 11px; line-height: 18px; color: var(--tp-muted); text-align: right; }
 .dm-confirm {
   display: flex;
   flex-wrap: wrap;
@@ -163,7 +161,7 @@
   box-sizing: border-box;
   overflow-y: auto;
   overscroll-behavior: contain;
-  font-size: 12px;
+  font-size: 13px;
 }
 /* Tier views above, Recent and Projects below (F12). */
 .dm-flyout-sep { flex: none; height: 1px; margin: 4px 2px; background: var(--border); }

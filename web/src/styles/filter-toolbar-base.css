@@ -38,13 +38,18 @@
   flex-shrink: 0;
 }
 .tp-btn:hover { background: var(--bg-hover); color: var(--fg); }
+/* Open: a quiet pressed look (filled grey, hairline), never a solid accent block. */
 .tp-btn[aria-expanded='true'],
 .tp-btn[aria-pressed='true'],
 .tp-btn:active {
-  /* Pressed colors copied from .vd-seg-btn.vd-active. */
-  background: var(--accent);
-  color: white;
+  background: var(--bg-hover);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
+/* Something is set: the icon takes the accent so the state reads even without the badge. */
+.tp-btn.is-active { color: var(--accent-text); }
+.tp-btn.is-active:hover,
+.tp-btn.is-active[aria-expanded='true'] { color: var(--accent-text); }
 .tp-btn svg { flex-shrink: 0; }
 .tp-btn-label { display: inline; }
 
@@ -58,85 +63,95 @@
 .tp-badge {
   position: static;
   flex: none;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: 7px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
   background: var(--accent);
   color: white;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
-  line-height: 14px;
+  line-height: 16px;
   text-align: center;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
   box-sizing: border-box;
 }
 
-/* Popover shell (Filter, Display, flyouts, chip menus). */
+/* Muted words that still read at 4.5:1 on the surface they sit on (--fg-muted alone is 3.6:1 on
+   white, and no theme token sits between it and --fg-secondary): property summaries, group titles,
+   counts, the property name on a chip. Icons keep --fg-muted. Plain hex, not color-mix: a mixed
+   colour computes to `color(srgb ...)`, which the contrast checks cannot read. */
+.tp-pop,
+.fb-row,
+.fb-toolbar-scope { --tp-muted: #6E6E73; }
+:root[data-theme='dark'] :is(.tp-pop, .fb-row, .fb-toolbar-scope) { --tp-muted: #A1A1A6; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) :is(.tp-pop, .fb-row, .fb-toolbar-scope) { --tp-muted: #A1A1A6; }
+}
+
+/* Popover shell (Filter, Display, chip menus): a soft two-layer shadow, 10px corners. */
 .tp-pop {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.08);
   color: var(--fg);
   animation: tp-pop-in 120ms ease-out;
+}
+:root[data-theme='dark'] .tp-pop { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .tp-pop { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04); }
 }
 @keyframes tp-pop-in {
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Value chip inside a popover row. */
-.tp-val {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  background: var(--bg-hover);
-  color: var(--fg);
-  font-size: 12px;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 80ms ease-out, border-color 80ms ease-out;
-}
-.tp-val:hover { background: var(--bg-tertiary, var(--bg-hover)); }
-.tp-val[aria-pressed='true'] {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
-  color: var(--accent-text);
-}
-.tp-val[aria-disabled='true'] { cursor: default; }
-
-/* Segmented control (Display: Sort, Group, Session columns). */
+/* Segmented control (Display: Sort, Group, Session columns; Time basis): a
+   recessed track, the chosen segment lifted as a white pill. */
 .tp-seg {
   display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
+  gap: 2px;
+  padding: 2px;
+  border: none;
+  border-radius: 7px;
+  background: var(--bg-tertiary, var(--bg-hover));
+  box-sizing: border-box;
 }
 .tp-seg-btn {
   flex: 1;
   min-width: 0;
-  padding: 4px 8px;
+  height: 22px;
+  padding: 0 8px;
   border: none;
-  border-right: 1px solid var(--border);
-  background: var(--bg-secondary);
+  border-radius: 5px;
+  background: transparent;
   color: var(--fg-secondary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
+  font-family: inherit;
+  line-height: 22px;
   white-space: nowrap;
   cursor: pointer;
+  transition: background-color 80ms ease-out, color 80ms ease-out;
 }
-.tp-seg-btn:last-child { border-right: none; }
-.tp-seg-btn:hover { background: var(--bg-hover); }
-/* Same pressed values as .vd-seg-btn.vd-active. */
+.tp-seg-btn:hover { color: var(--fg); }
 .tp-seg-btn[aria-pressed='true'],
-.tp-seg-btn[aria-checked='true'] { background: var(--accent); color: white; }
+.tp-seg-btn[aria-checked='true'] {
+  background: var(--bg-elevated);
+  color: var(--fg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px var(--border);
+}
+/* Dark: the elevated surface IS the menu, so the track and the pill get their own greys. */
+:root[data-theme='dark'] .tp-seg { background: rgba(255, 255, 255, 0.08); }
+:root[data-theme='dark'] .tp-seg-btn[aria-pressed='true'],
+:root[data-theme='dark'] .tp-seg-btn[aria-checked='true'] { background: rgba(255, 255, 255, 0.16); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .tp-seg { background: rgba(255, 255, 255, 0.08); }
+  :root:not([data-theme]) .tp-seg-btn[aria-pressed='true'],
+  :root:not([data-theme]) .tp-seg-btn[aria-checked='true'] { background: rgba(255, 255, 255, 0.16); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4); }
+}
 
 /* Custom switch (never a native checkbox). */
 .tp-switch[role='switch'] {
@@ -168,7 +183,6 @@
 
 /* One focus ring for every new control, both themes. */
 .tp-btn:focus-visible,
-.tp-val:focus-visible,
 .tp-seg-btn:focus-visible,
 .tp-switch:focus-visible {
   outline: 2px solid var(--accent);
@@ -185,5 +199,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .tp-pop { animation-duration: 0ms; }
-  .tp-val, .tp-switch[role='switch'], .tp-switch[role='switch']::after { transition-duration: 0ms; }
+  .tp-seg-btn, .tp-switch[role='switch'], .tp-switch[role='switch']::after { transition-duration: 0ms; }
 }

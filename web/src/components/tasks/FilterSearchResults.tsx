@@ -9,7 +9,8 @@ import { ICON_CHECK } from '../common/Icons';
 import { pickValue } from './filter-bar-model';
 import type { FilterSearchHit } from './filter-bar-search';
 import type { FilterBarController, FilterState } from './filter-bar-types';
-import { PAIR_DIMS, useFilterWriter, type FilterWriter } from './FilterValuesFlyout';
+import { dimIcon } from './filter-dim-icons';
+import { clickMode, useFilterWriter, type FilterWriter } from './FilterValueList';
 
 export const SEARCH_LIST_ID = 'fb-search-results';
 
@@ -17,10 +18,10 @@ export function searchHitId(index: number): string {
   return `fb-search-hit-${index}`;
 }
 
-/** Enter on a hit: add it (Project and Source replace, 6.2); a selected hit is left alone. */
+/** Enter on a hit: add it; a selected hit is left alone. */
 export function addFromSearch(state: FilterState, hit: FilterSearchHit): FilterState {
   if (hit.selected) return state;
-  return pickValue(state, hit.dim, hit.value, PAIR_DIMS.includes(hit.dim) ? 'replace' : 'add');
+  return pickValue(state, hit.dim, hit.value, 'add');
 }
 
 export interface FilterSearchResultsProps {
@@ -60,12 +61,14 @@ export function FilterSearchResults({
           data-filter-value={h.valueLabel}
           className={`fb-hit${i === activeIndex ? ' is-active' : ''}${h.selected ? ' is-selected' : ''}`}
           onPointerMove={() => { if (i !== activeIndex) onActiveIndexChange(i); }}
-          onClick={() => w.write((s) => pickValue(s, h.dim, h.value, 'replace'), 'search')}
+          onClick={() => w.write((s) => pickValue(s, h.dim, h.value, clickMode(h.dim)), 'search')}
         >
-          <span className="fb-check" aria-hidden="true">{h.selected ? ICON_CHECK : null}</span>
-          <span className="fb-hit-dim">{h.dimLabel}</span>
+          <span className="fb-item-icon" aria-hidden="true">{dimIcon(h.dim)}</span>
+          {/* `Blocked  Blocked` would say it twice: the values name the property themselves. */}
+          {h.dim !== 'blocked' && <span className="fb-hit-dim">{h.dimLabel}</span>}
           <span className="fb-hit-value">{h.valueLabel}</span>
           {alreadyOnIndex === i && h.selected && <span className="fb-hit-note">Already on</span>}
+          <span className="fb-item-check" aria-hidden="true">{h.selected ? ICON_CHECK : null}</span>
         </div>
       ))}
       {hint && (

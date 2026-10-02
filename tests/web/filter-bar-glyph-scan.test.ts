@@ -12,8 +12,9 @@ import { join } from 'node:path';
 
 const ROOT = join(__dirname, '../../web/src');
 const FILES = [
-  'components/tasks/FilterMenu.tsx', 'components/tasks/FilterBar.tsx', 'components/tasks/FilterDimRows.tsx',
-  'components/tasks/FilterSearchResults.tsx', 'components/tasks/FilterValuesFlyout.tsx',
+  'components/tasks/FilterMenu.tsx', 'components/tasks/FilterBar.tsx', 'components/tasks/FilterHome.tsx',
+  'components/tasks/FilterValuesPage.tsx', 'components/tasks/FilterValueList.tsx', 'components/tasks/FilterTimeControls.tsx',
+  'components/tasks/FilterSearchResults.tsx', 'components/tasks/filter-dim-icons.tsx', 'components/tasks/filter-home-model.ts',
   'components/tasks/FilterChipMenu.tsx', 'components/tasks/FilterOverflowMenu.tsx',
   'components/tasks/DisplayMenu.tsx', 'components/tasks/DisplayViewsFlyout.tsx', 'components/tasks/DisplaySortRows.tsx',
   'components/tasks/TodoSectionTabs.tsx', 'components/tasks/TodoFilterFooter.tsx',

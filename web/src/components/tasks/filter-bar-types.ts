@@ -120,10 +120,12 @@ export interface FilterChip {
 
 export type FacetCounts = Partial<Record<FilterDim, Record<string, number>>>;
 
-/** One Recent entry; stored as ids, drawn through the registry. */
+/** One remembered pick; stored as ids, drawn through the registry. */
 export interface RecentEntry {
   dim: FilterDim;
   value: string | string[];
+  /** How many times the user made this pick (absent = once). Ranks `Most used`. */
+  uses?: number;
 }
 
 export type FilterOrigin =

@@ -18,7 +18,7 @@
  */
 
 import { expect, type Locator, type Page } from '@playwright/test'
-import { addFilter, chooseDisplayOption, closeDisplayMenu, closeFilterMenu, filterChip, filterValue, openFilterMenu, removeFilterChip } from './filter-bar-helpers'
+import { addFilter, chooseDisplayOption, closeDisplayMenu, closeFilterMenu, filterChip, filterValue, openFilterPage, removeFilterChip } from './filter-bar-helpers'
 
 /**
  * Open a Projects-list project the way a user does, with a click on its name, unless
@@ -106,10 +106,10 @@ export async function selectProject(page: Page, project: string): Promise<void> 
     if ((await filterChip(page, 'project').count()) > 0) await removeFilterChip(page, 'project')
     return
   }
-  await openFilterMenu(page)
+  await openFilterPage(page, 'project')
   const value = filterValue(page, 'project', project)
   if ((await value.count()) > 0 && (await value.getAttribute('aria-pressed')) === 'true') {
-    const pressed = page.locator('.fb-menu [data-filter-dim="project"] .fb-val[aria-pressed="true"]')
+    const pressed = page.locator('.fb-menu .fb-page[data-filter-dim="project"] .fb-opt-body[aria-pressed="true"]')
     // Already the only project: a second click would remove it.
     if ((await pressed.count()) === 1) {
       await closeFilterMenu(page)

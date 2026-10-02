@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { isolateUiPrefs, openListProject } from './todo-panel-helpers';
 import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
-import { closeFilterMenu, displayButton, filterChip, openFilterMenu, removeFilterChip } from './filter-bar-helpers';
+import { addFilter, closeFilterMenu, displayButton, filterChip, removeFilterChip } from './filter-bar-helpers';
 
 const SHOTS = '/tmp/walnut-home-navigation';
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
@@ -200,8 +200,7 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   expect(await page.locator('.dm-menu').evaluate(el => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
   await closeViewMenu(page);
   // A date condition is a chip in the filter row with a badge on Filter; Display carries no dot.
-  await openFilterMenu(page);
-  await page.locator('.fb-menu [data-filter-dim="date"] [data-date-value=""]').click();
+  await addFilter(page, 'date', 'Any date');
   await expect(filterChip(page, 'date')).toBeVisible();
   await expect(page.getByTestId('filter-badge')).toHaveText('1');
   await expect(displayButton(page).locator('.vd-dot')).toHaveCount(0);

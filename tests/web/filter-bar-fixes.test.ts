@@ -38,7 +38,7 @@ describe('Filter search words (F27)', () => {
     expect(hits).toContain('Date  Starting within 7 days');
   });
   it('view words get the open-Display hint instead of "no filter matches"', () => {
-    for (const [q, view] of [['focus', 'Focus'], ['tier', 'Focus'], ['pin', 'Pinned'], ['parked', 'Parked'], ['backl', 'Backlog']] as const) {
+    for (const [q, view] of [['focus', 'Focus'], ['tier', 'Focus'], ['pin', 'Pinned'], ['parked', 'Parked']] as const) {
       const r = searchFilterDims(q, S0, lists);
       expect(r.viewHint, q).toBe(view);
     }

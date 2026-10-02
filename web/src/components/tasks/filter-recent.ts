@@ -109,8 +109,8 @@ function entryValid(entry: RecentEntry, lists: FilterLists): boolean {
   return !isValueMissing(entry.dim, entry.value, lists);
 }
 
-/** Drop entries whose value no longer exists, dedupe, then keep the newest 4. */
-export function validRecent(entries: readonly RecentEntry[], lists: FilterLists): RecentEntry[] {
+/** Drop entries whose value no longer exists, dedupe, then keep the newest `limit` (4). */
+export function validRecent(entries: readonly RecentEntry[], lists: FilterLists, limit = RECENT_LIMIT): RecentEntry[] {
   const seen = new Set<string>();
   const out: RecentEntry[] = [];
   for (const entry of entries) {
@@ -119,7 +119,7 @@ export function validRecent(entries: readonly RecentEntry[], lists: FilterLists)
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(entry);
-    if (out.length >= RECENT_LIMIT) break;
+    if (out.length >= limit) break;
   }
   return out;
 }

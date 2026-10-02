@@ -1,25 +1,33 @@
 /**
- * The home task panel's Filter button, popover and filter row on Mia's
+ * The home task panel's Filter button, menu and filter row on Mia's
  * first-week board (spec 2.1, 6.1 to 6.4): Home 3 + Garden 2 open, one Garden
- * task complete, two pins. Also the two themes and the view item. The dense
- * board lives in filter-bar-dense.spec.ts. Every test answers the board reads
- * for its own page (filter-bar-fixtures.ts `stubBoard`); nothing is written to
- * the fixture server, and isolateUiPrefs keeps the filter keys per context.
+ * task complete, two pins. The menu has two pages: page one lists the
+ * properties with their values, page two one property's values as a
+ * checklist. Also the two themes and the view item. The dense board lives in
+ * filter-bar-dense.spec.ts, page navigation and keys in filter-bar-pages.spec.ts.
+ * Every test answers the board reads for its own page (filter-bar-fixtures.ts
+ * `stubBoard`); nothing is written to the fixture server, and isolateUiPrefs
+ * keeps the filter keys per context.
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator } from '@playwright/test'
 import {
-  addFilter, closeFilterMenu, expandMoreFilters, filterButton, filterChip, filterDimRow, filterMenu, filterRow,
-  filterValue, openDisplayMenu, openFilterMenu, removeFilterChip, setStatus, valuesFlyout,
+  addFilter, closeFilterMenu, expandMoreFilters, filterButton, filterChip, filterDimRow, filterMenu, filterPage, filterRow,
+  filterSearch, filterValue, openDisplayMenu, openFilterMenu, openFilterPage, removeFilterChip, setStatus,
 } from './filter-bar-helpers'
 import {
   MIA, MIA_PINS, SHOTS, badge, box, clipAround, contrastOf, focusedLabel, listIds, openHome, ownerSeeds, row, settled, stubBoard,
 } from './filter-bar-fixtures'
 
-// Dense boards and many popover round trips: a busy machine needs more than 30s.
-test.describe.configure({ timeout: 90_000 })
+// Dense boards and many menu round trips: a busy machine needs more than 30s.
+test.describe.configure({ timeout: 120_000 })
 
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
+
+const OPEN_STATUS = [['To Do', 'true'], ['In Progress', 'true'], ['Need Action', 'true'], ['Waiting', 'false'], ['Complete', 'false']] as const
+const shownDims = (l: Locator) => l.locator('.fb-group[data-section="properties"] > .fb-prop')
+  .evaluateAll((els) => els.map((e) => e.getAttribute('data-filter-dim')))
+const summary = (page: Parameters<typeof filterDimRow>[0], dim: Parameters<typeof filterDimRow>[1]) => filterDimRow(page, dim).locator('.fb-prop-summary')
 
 test.describe('Mia: first week', () => {
   test.beforeEach(async ({ page }) => {
@@ -28,33 +36,50 @@ test.describe('Mia: first week', () => {
     await expect(row(page, 'fb-mia-h2')).toBeVisible({ timeout: 20_000 })
   })
 
-  test('S1 + S3 + C3 + C5 + C55: one click narrows to Garden; the row sits above the popover', async ({ page }) => {
-    // C3: default state has no row, no badge, and the open statuses + Available now pressed.
+  test('S1 + S3 + C3 + C5 + C55: one click narrows to Garden; the row sits above the menu', async ({ page }) => {
+    // C3: default state has no row, no badge; page one reads every default.
     await expect(filterRow(page)).toHaveCount(0)
     await expect(badge(page)).toHaveCount(0)
     await expect(filterButton(page)).toHaveAttribute('title', 'Filter tasks')
     await openFilterMenu(page)
-    await expect(page.locator('.fb-menu .fb-search-input')).toBeFocused()
-    for (const [label, on] of [['To Do', 'true'], ['In Progress', 'true'], ['Need Action', 'true'], ['Waiting', 'false'], ['Complete', 'false']]) {
-      await expect(filterValue(page, 'status', label)).toHaveAttribute('aria-pressed', on)
+    await expect(filterSearch(page)).toBeFocused()
+    await expect(filterMenu(page)).toHaveAttribute('data-page', 'home')
+    await expect(filterSearch(page)).toHaveAttribute('placeholder', 'Search filters')
+    // One source, so no Source row (C34).
+    expect(await shownDims(filterMenu(page))).toEqual(['status', 'project', 'date'])
+    for (const [dim, text] of [['status', 'Open'], ['project', 'Any'], ['date', 'Available now']] as const) {
+      await expect(summary(page, dim)).toHaveText(text)
+      await expect(summary(page, dim)).toHaveClass(/is-default/)
     }
-    await expect(filterValue(page, 'date', 'Available now')).toHaveAttribute('aria-pressed', 'true')
-    // C55: the row is there with its placeholder; the popover hangs under it, right edges aligned.
+    await expect(filterMenu(page).locator('.fb-menu-foot')).toHaveCount(0)
+    // C55: the row is there with its placeholder; the menu hangs under it, right edges aligned.
     await expect(filterRow(page)).toContainText('No filters yet')
     await settled(filterMenu(page))
     const rowBefore = await box(filterRow(page))
     const menu = await box(filterMenu(page))
     const btn = await box(filterButton(page))
     expect(menu.y).toBeGreaterThanOrEqual(rowBefore.y + rowBefore.height - 1)
-    // Right edges align when the popover fits left of the button's right edge; else it is clamped in.
-    if (btn.x + btn.width - menu.width >= 8) expect(Math.abs(menu.x + menu.width - (btn.x + btn.width))).toBeLessThanOrEqual(2)
-    else expect(menu.x).toBeGreaterThanOrEqual(0)
-    // C5: one click on Garden, same poll: chip, badge, list, popover still open.
+    // Right edges align when the menu fits on the panel left of the button's right edge;
+    // else its left edge is clamped to the panel's left edge (F11).
+    const panelLeft = await page.locator('.todo-panel').first().evaluate((el) => el.getBoundingClientRect().left)
+    const btnRight = btn.x + btn.width
+    if (btnRight - menu.width >= panelLeft) expect(Math.abs(menu.x + menu.width - btnRight)).toBeLessThanOrEqual(2)
+    else expect(Math.abs(menu.x - Math.max(panelLeft, 8))).toBeLessThanOrEqual(2)
+    // C3 on page two: the three open statuses ticked, Available now picked.
+    await openFilterPage(page, 'status')
+    for (const [label, on] of OPEN_STATUS) await expect(filterValue(page, 'status', label)).toHaveAttribute('aria-pressed', on)
+    await openFilterPage(page, 'date')
+    await expect(filterValue(page, 'date', 'Available now')).toHaveAttribute('aria-pressed', 'true')
+    // C5: one click on Garden, same poll: chip, badge, list, menu still open on its page.
+    await openFilterPage(page, 'project')
+    const pageBox = await box(filterMenu(page))
+    expect(Math.abs(pageBox.x - menu.x)).toBeLessThanOrEqual(1)
+    expect(Math.abs(pageBox.y - menu.y)).toBeLessThanOrEqual(1)
     await filterValue(page, 'project', 'Garden').click()
     await expect(filterChip(page, 'project')).toContainText('Garden')
     await expect(badge(page)).toHaveText('1')
     await expect(filterValue(page, 'project', 'Garden')).toHaveAttribute('aria-pressed', 'true')
-    await expect(filterMenu(page)).toBeVisible()
+    await expect(filterMenu(page)).toHaveAttribute('data-page', 'project')
     await expect(row(page, 'fb-mia-g2')).toBeVisible()
     expect((await listIds(page)).every((id) => id?.startsWith('fb-mia-g'))).toBe(true)
     await expect(page.locator('.todo-panel [data-task-id^="fb-mia-h"]')).toHaveCount(0)
@@ -65,7 +90,13 @@ test.describe('Mia: first week', () => {
     const chipBox = await box(filterChip(page, 'project'))
     const menuNow = await box(filterMenu(page))
     expect(chipBox.y + chipBox.height).toBeLessThanOrEqual(menuNow.y + 1)
-    await expect(filterMenu(page).locator('.fb-menu-summary')).toHaveText('Project: Garden')
+    // Page one says what is set in its rows (no summary line any more); the footer counts and clears.
+    await filterMenu(page).getByRole('button', { name: 'Back to all filters' }).click()
+    await expect(summary(page, 'project')).toHaveText('Garden')
+    await expect(summary(page, 'project')).not.toHaveClass(/is-default/)
+    await expect(filterMenu(page).locator('.fb-menu-summary')).toHaveCount(0)
+    await expect(filterMenu(page).locator('.fb-menu-foot .fb-menu-count')).toHaveText('2 tasks')
+    await expect(filterMenu(page).locator('.fb-menu-foot').getByRole('button', { name: 'Clear filters' })).toBeVisible()
     await expect(filterButton(page)).toHaveAttribute('title', 'Filter tasks (1 active)')
     await page.screenshot({ path: `${SHOTS}/filter-menu-light.png`, clip: await clipAround(page) })
     // Escape closes; the row stays.
@@ -127,7 +158,7 @@ test.describe('Mia: removing and clearing', () => {
     expect(await focusedLabel(page)).toBe('Filter')
   })
 
-  test('C7: Clear puts every dimension back, keeps Sort, and the row goes', async ({ page }) => {
+  test('C7: Clear puts every property back, keeps Sort, and the row goes', async ({ page }) => {
     const sortBefore = await page.evaluate(() => localStorage.getItem('walnut-todo-sortBy'))
     await addFilter(page, 'project', 'Garden')
     await setStatus(page, ['To Do', 'Waiting'])
@@ -138,83 +169,99 @@ test.describe('Mia: removing and clearing', () => {
     expect(await focusedLabel(page)).toBe('Filter')
     expect(await page.evaluate(() => localStorage.getItem('walnut-todo-sortBy'))).toBe(sortBefore)
     await openFilterMenu(page)
-    for (const [label, on] of [['To Do', 'true'], ['In Progress', 'true'], ['Need Action', 'true'], ['Waiting', 'false'], ['Complete', 'false']]) {
-      await expect(filterValue(page, 'status', label)).toHaveAttribute('aria-pressed', on)
+    for (const [dim, text] of [['status', 'Open'], ['project', 'Any'], ['date', 'Available now']] as const) {
+      await expect(summary(page, dim)).toHaveText(text)
+      await expect(summary(page, dim)).toHaveClass(/is-default/)
     }
+    await expect(filterMenu(page).locator('.fb-menu-foot')).toHaveCount(0)
+    await openFilterPage(page, 'status')
+    for (const [label, on] of OPEN_STATUS) await expect(filterValue(page, 'status', label)).toHaveAttribute('aria-pressed', on)
+    await openFilterPage(page, 'date')
     await expect(filterValue(page, 'date', 'Available now')).toHaveAttribute('aria-pressed', 'true')
+    await openFilterPage(page, 'project')
     await expect(filterValue(page, 'project', 'Garden')).toHaveAttribute('aria-pressed', 'false')
   })
 
-  test('C11 + C12 + C13 + C13b + C50: last status stays on; no native checkbox; plain first-layer words with titles', async ({ page }) => {
+  test('C11 + C12 + C13 + C13b + C50: last status stays on; no native checkbox; plain words with titles on both pages', async ({ page }) => {
     await setStatus(page, ['Complete'], { keepOpen: true })
     const complete = filterValue(page, 'status', 'Complete')
     await expect(complete).toHaveAttribute('aria-disabled', 'true')
     await expect(complete).toHaveAttribute('title', 'At least one status stays on')
+    await expect(filterPage(page, 'status').getByRole('button', { name: 'Only Complete' })).toHaveCount(0)
     await complete.click({ force: true })
     await expect(complete).toHaveAttribute('aria-pressed', 'true')
     await expect(filterChip(page, 'status')).toContainText('Complete')
     expect(await page.locator('.fb-menu input[type="checkbox"], .fb-menu select').count()).toBe(0)
-    const first = page.locator('.fb-menu .fb-dims > .fb-dim')
-    const text = (await first.allInnerTexts()).join(' ')
-    expect(text).not.toMatch(/\b(Focus|Satellite|Backlog|Parked)\b/)
-    const titles = await first.locator('.fb-val[data-filter-value]').evaluateAll((els) => els.map((e) => e.getAttribute('title') ?? ''))
-    expect(titles.length).toBeGreaterThan(5)
+    // C50: the status words, in order, each with a title that names no tier.
+    await expect(filterPage(page, 'status').locator('.fb-opt-label')).toHaveText(['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'])
+    const titles = await filterPage(page, 'status').locator('.fb-opt-body').evaluateAll((els) => els.map((e) => e.getAttribute('title') ?? ''))
+    expect(titles).toHaveLength(5)
     for (const t of titles) { expect(t).not.toBe(''); expect(t).not.toMatch(/tier|focus|satellite|backlog|parked/i) }
-    const words = await filterDimRow(page, 'status').locator('.fb-val-text').allInnerTexts()
-    expect(words).toEqual(['To Do', 'In Progress', 'Need Action', 'Waiting', 'Complete'])
-    const open = await box(page.locator('.fb-menu .fb-open-label'))
-    const todo = await box(filterValue(page, 'status', 'To Do'))
-    expect(open.y + open.height).toBeLessThanOrEqual(todo.y + 1)
+    // C13: page one names no tier either, in its words or its titles, and reads the set status.
+    await openFilterMenu(page)
+    await expandMoreFilters(page)
+    expect(await filterMenu(page).locator('.fb-home').innerText()).not.toMatch(/\b(Focus|Satellite|Backlog|Parked)\b/)
+    const homeTitles = await filterMenu(page).locator('.fb-home [title]').evaluateAll((els) => els.map((e) => e.getAttribute('title') ?? ''))
+    expect(homeTitles.length).toBeGreaterThan(3)
+    for (const t of homeTitles) expect(t).not.toMatch(/tier|focus|satellite|backlog|parked/i)
+    await expect(summary(page, 'status')).toHaveText('Complete')
+    expect(await page.locator('.fb-menu input[type="checkbox"], .fb-menu select').count()).toBe(0)
     await closeFilterMenu(page)
   })
 })
 
-test.describe('Mia: popover layout and words', () => {
+test.describe('Mia: menu layout and words', () => {
   test.beforeEach(async ({ page }) => {
     await stubBoard(page, MIA, MIA_PINS)
     await openHome(page)
     await expect(row(page, 'fb-mia-h2')).toBeVisible({ timeout: 20_000 })
   })
 
-  test('C47: clicking at the coordinates measured at open never moves a value; Recent waits for the next open', async ({ page }) => {
+  test('C47: clicking at the coordinates measured when a page opens never moves a row; Most used waits for the next open', async ({ page }) => {
     await openFilterMenu(page)
-    await settled(filterMenu(page))
-    await expect(page.locator('.fb-menu [data-filter-dim="recent"]')).toHaveCount(0)
-    const vals = page.locator('.fb-menu [data-filter-dim="status"] .fb-val, .fb-menu [data-filter-dim="project"] .fb-val')
-    const before = await vals.evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width] }))
-    const at = async (l: Locator) => { const b = await box(l); return { x: b.x + b.width / 2, y: b.y + b.height / 2 } }
-    const targets = [
-      await at(filterValue(page, 'status', 'Waiting')),
-      await at(filterValue(page, 'status', 'Complete')),
-      await at(filterValue(page, 'project', 'Home')),
-      await at(filterValue(page, 'project', 'Garden')),
-    ]
-    await page.mouse.click(targets[0].x, targets[0].y)
-    await page.mouse.click(targets[1].x, targets[1].y)
-    await page.keyboard.down('ControlOrMeta')
-    await page.mouse.click(targets[2].x, targets[2].y)
-    await page.mouse.click(targets[3].x, targets[3].y)
-    await page.keyboard.up('ControlOrMeta')
-    for (const [dim, v] of [['status', 'Waiting'], ['status', 'Complete'], ['project', 'Home'], ['project', 'Garden']] as const) {
-      await expect(filterValue(page, dim, v)).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.locator('.fb-menu [data-section="most-used"]')).toHaveCount(0)
+    const rects = (l: Locator) => l.evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width] }))
+    const same = (a: number[][], b: number[][]) => {
+      expect(a.length).toBe(b.length)
+      a.forEach((p, i) => p.forEach((n, k) => expect(Math.abs(n - b[i][k])).toBeLessThanOrEqual(1)))
     }
-    const after = await vals.evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width] }))
-    expect(after.length).toBe(before.length)
-    after.forEach((a, i) => a.forEach((n, k) => expect(Math.abs(n - before[i][k])).toBeLessThanOrEqual(1)))
-    await expect(page.locator('.fb-menu [data-filter-dim="recent"]')).toHaveCount(0)
+    const at = async (l: Locator) => { const b = await box(l); return { x: b.x + b.width / 2, y: b.y + b.height / 2 } }
+    // Status: plain clicks toggle; the first chip and the footer arrive without moving a row.
+    await openFilterPage(page, 'status')
+    await settled(filterMenu(page))
+    const statusRows = filterPage(page, 'status').locator('.fb-opt-body')
+    const s0 = await rects(statusRows)
+    const st = [await at(filterValue(page, 'status', 'Waiting')), await at(filterValue(page, 'status', 'Complete'))]
+    for (const t of st) await page.mouse.click(t.x, t.y)
+    for (const v of ['Waiting', 'Complete']) await expect(filterValue(page, 'status', v)).toHaveAttribute('aria-pressed', 'true')
+    same(await rects(statusRows), s0)
+    // Project: two plain clicks add two values (no modifier, no add square).
+    await openFilterPage(page, 'project')
+    await settled(filterMenu(page))
+    const projRows = filterPage(page, 'project').locator('.fb-opt-body')
+    const p0 = await rects(projRows)
+    const pt = [await at(filterValue(page, 'project', 'Home')), await at(filterValue(page, 'project', 'Garden'))]
+    for (const t of pt) await page.mouse.click(t.x, t.y)
+    for (const v of ['Home', 'Garden']) await expect(filterValue(page, 'project', v)).toHaveAttribute('aria-pressed', 'true')
+    same(await rects(projRows), p0)
     await expect(filterChip(page, 'project')).toContainText('Home, Garden')
+    // The first page keeps what it listed at open: Most used shows on the next open.
+    await openFilterMenu(page)
+    await expect(page.locator('.fb-menu [data-section="most-used"]')).toHaveCount(0)
     await closeFilterMenu(page)
     await openFilterMenu(page)
-    await expect(page.locator('.fb-menu [data-filter-dim="recent"]')).toBeVisible()
+    await expect(page.locator('.fb-menu [data-section="most-used"]')).toBeVisible()
   })
 
-  test('C29 + C42 + F14: More filters grows the box below its toggle and folds it back; Mia stays small; no motion under reduced motion', async ({ page }) => {
+  test('C29 + C42 + F14: More filters grows the box below its toggle and folds back; a set folded property is promoted; no motion under reduced motion', async ({ page }) => {
     await openFilterMenu(page)
-    await settled(filterMenu(page))
     const h0 = (await box(filterMenu(page))).height
     expect(h0).toBeLessThan(300)
-    // Folded, the box ends right under the toggle: no blank space for rows it does not draw (F14).
     const toggle = filterMenu(page).getByRole('button', { name: /^More filters/ })
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(toggle).toHaveAttribute('aria-controls', 'fb-more-body')
+    await expect(toggle.locator('.fb-prop-summary')).toHaveText('Blocked, Time window')
+    // Folded, the box ends right under the toggle: no blank space for rows it does not draw (F14).
     const t0 = await box(toggle)
     const m0 = await box(filterMenu(page))
     expect(m0.y + m0.height - (t0.y + t0.height)).toBeLessThan(16)
@@ -225,83 +272,127 @@ test.describe('Mia: popover layout and words', () => {
     expect(Math.abs((await box(toggle)).y - t0.y)).toBeLessThanOrEqual(1)
     await toggle.click()
     await expect(filterDimRow(page, 'time')).toBeHidden()
-    expect((await box(filterMenu(page))).height).toBe(h0)
+    expect(Math.abs((await box(filterMenu(page))).height - h0)).toBeLessThanOrEqual(1)
+    // The fold state persists across opens.
     await expandMoreFilters(page)
+    await closeFilterMenu(page)
+    await openFilterMenu(page)
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    // Not blocked: a single-select pick closes the menu.
+    await openFilterPage(page, 'blocked')
     await filterValue(page, 'blocked', 'Not blocked').click()
-    await expect(filterMenu(page).getByRole('button', { name: /^More filters/ })).toHaveText('More filters (1 set)')
-    await filterMenu(page).getByRole('button', { name: /^More filters/ }).click()
-    // The first chip brought the footer in: the box grew for it, so the folded toggle
-    // still sits fully inside the box, not behind a scrollbar.
+    await expect(filterMenu(page)).toHaveCount(0)
+    await expect(filterButton(page)).toBeFocused()
+    // Next open, Blocked is set, so it sits with the first rows and leaves the fold.
+    await openFilterMenu(page)
+    expect(await shownDims(filterMenu(page))).toEqual(['status', 'project', 'date', 'blocked'])
+    await expect(filterMenu(page).locator('#fb-more-body .fb-prop[data-filter-dim="blocked"]')).toHaveCount(0)
+    await expect(summary(page, 'blocked')).toHaveText('Not blocked')
+    await expect(summary(page, 'blocked')).not.toHaveClass(/is-default/)
+    await expect(toggle.locator('.fb-prop-summary')).toHaveText('Time window')
+    // Folded again with the footer in: the toggle sits fully inside the box, not behind a scrollbar.
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await expect(filterMenu(page).locator('.fb-menu-foot')).toBeVisible()
     await expect.poll(async () => {
       const [m, t] = [await box(filterMenu(page)), await box(toggle)]
       return t.y + t.height <= m.y + m.height + 0.5 && t.y >= m.y
     }).toBe(true)
     await closeFilterMenu(page)
-    await openFilterMenu(page)
-    await expect(filterMenu(page).getByRole('button', { name: /^More filters/ })).toHaveAttribute('aria-expanded', 'true')
-    await closeFilterMenu(page)
+    // C42: reduced motion stops every animation and transition the menu and the row own.
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await openFilterMenu(page)
-    const motion = await page.evaluate(() => {
+    const motion = () => page.evaluate(() => {
       const d = (sel: string, prop: 'animationDuration' | 'transitionDuration') => {
         const el = document.querySelector(sel)
-        return el ? getComputedStyle(el)[prop] : 'missing'
+        return el ? getComputedStyle(el)[prop].replace(/(, 0s)+$/, '') : 'missing'
       }
-      return [d('.fb-menu', 'animationDuration'), d('.fb-chip', 'animationDuration'), d('.fb-row', 'transitionDuration')]
+      return [
+        d('.fb-menu', 'animationDuration'), d('.fb-chip', 'animationDuration'), d('.fb-row', 'transitionDuration'),
+        d('.fb-more-chevron', 'transitionDuration'), d('.fb-check-box', 'transitionDuration'),
+      ]
     })
-    expect(motion).toEqual(['0s', '0s', '0s'])
+    expect((await motion()).slice(0, 4)).toEqual(['0s', '0s', '0s', '0s'])
+    await openFilterPage(page, 'status')
+    expect((await motion())[4]).toBe('0s')
   })
 
-  test('C39 + C60: Date first layer, More dates, and value-only Blocked and Time chips', async ({ page }) => {
-    await openFilterMenu(page)
-    const dateVals = filterDimRow(page, 'date').locator('.fb-val')
-    await expect(dateVals).toHaveText(['Available now', 'Any date', 'More dates'])
+  test('C39 + C60: Date lists all five values in one page; single-select picks close; value-only Blocked and Time chips', async ({ page }) => {
+    await openFilterPage(page, 'date')
+    const rows = filterPage(page, 'date').locator('.fb-opt-body')
+    await expect(rows.locator('.fb-opt-label')).toHaveText(['Available now', 'Any date', 'Overdue', 'Starting within 7 days', 'No dates'])
+    expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-date-value')))).toEqual(['now', '', 'overdue', 'this-week', 'no-date'])
     await expect(filterValue(page, 'date', 'Available now')).toHaveAttribute('title', 'Hide tasks that start later. Tasks with no start date stay.')
     await expect(filterValue(page, 'date', 'Any date')).toHaveAttribute('title', 'Show every task, including ones that start later.')
-    await filterDimRow(page, 'date').getByRole('button', { name: 'More dates' }).click()
-    const fly = valuesFlyout(page)
-    await expect(fly.locator('[data-date-value]')).toHaveText(['Overdue', 'Starting within 7 days', 'No dates'])
-    await expect(fly.locator('[data-date-value="this-week"]')).toHaveAttribute('title', 'Hide only tasks that start more than 7 days from now.')
-    await page.keyboard.press('Escape')
-    await expect(fly).toHaveCount(0)
-    await expect(filterMenu(page)).toBeVisible()
+    await expect(filterValue(page, 'date', 'this-week')).toHaveAttribute('title', 'Hide only tasks that start more than 7 days from now.')
+    // Single-select: a bare tick slot, no square and no Only.
+    await expect(filterPage(page, 'date').locator('.fb-check-box, .fb-only')).toHaveCount(0)
+    await expect(filterValue(page, 'date', 'Available now').locator('.fb-check svg')).toHaveCount(1)
+    // A pick closes the menu and hands focus back to Filter.
     await filterValue(page, 'date', 'Any date').click()
+    await expect(filterMenu(page)).toHaveCount(0)
+    await expect(filterButton(page)).toBeFocused()
     await expect(filterChip(page, 'date')).toContainText('Date: Any date')
-    await expandMoreFilters(page)
+    await openFilterPage(page, 'blocked')
     await filterValue(page, 'blocked', 'Not blocked').click()
+    await expect(filterMenu(page)).toHaveCount(0)
+    // A Time window preset keeps its page open (the basis may come next).
+    await openFilterPage(page, 'time')
     await filterValue(page, 'time', '24h').click()
+    await expect(filterValue(page, 'time', '24h')).toHaveAttribute('aria-pressed', 'true')
+    await expect(filterMenu(page)).toHaveAttribute('data-page', 'time')
     await closeFilterMenu(page)
     await expect(filterChip(page, 'blocked').locator('.fb-chip-body')).toHaveText('Not blocked')
     await expect(filterChip(page, 'time').locator('.fb-chip-body')).toHaveText('Updated in 24h')
     await removeFilterChip(page, 'date')
     await openFilterMenu(page)
+    await expect(summary(page, 'date')).toHaveText('Available now')
+    await openFilterPage(page, 'date')
     await expect(filterValue(page, 'date', 'Available now')).toHaveAttribute('aria-pressed', 'true')
   })
 })
 
 test.describe('Themes, narrow panels and the view item', () => {
-  test('C36 + C17: selected and unselected text clears 4.5:1 in both themes', async ({ page }) => {
+  test('C36 + C17: selected and unselected text clears 4.5:1 in both themes, on both pages and in the row', async ({ page }) => {
     await stubBoard(page, MIA, MIA_PINS)
     await openHome(page)
     await expect(row(page, 'fb-mia-h2')).toBeVisible({ timeout: 20_000 })
-    await addFilter(page, 'project', 'Garden', { keepOpen: true })
-    for (const theme of ['light', 'dark']) {
-      await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
-      for (const sel of [
-        '.fb-menu .fb-val[data-filter-value="Garden"] .fb-val-text',
-        '.fb-menu .fb-val[data-filter-value="Home"] .fb-val-text',
-        '.fb-menu [data-filter-dim="status"] .fb-val[data-filter-value="To Do"] .fb-val-text',
-        '.fb-row [data-chip-dim="project"] .fb-chip-val',
-        '.fb-row [data-chip-dim="project"] .fb-chip-dim',
-      ]) expect(await contrastOf(page, sel), `${theme} ${sel}`).toBeGreaterThanOrEqual(4.5)
-      await expect(filterDimRow(page, 'project').getByRole('checkbox', { name: 'Add Garden' }).locator('svg')).toHaveCount(1)
-      const name = theme === 'dark' ? (test.info().project.name === 'webkit' ? 'webkit-filter-dark' : 'filter-menu-dark') : null
-      if (name) await page.screenshot({ path: `${SHOTS}/${name}.png`, clip: await clipAround(page) })
+    const measure = async (sels: string[]) => {
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme)
+        for (const sel of sels) expect.soft(await contrastOf(page, sel), `${theme} ${sel}`).toBeGreaterThanOrEqual(4.5)
+      }
     }
+    await addFilter(page, 'project', 'Garden', { keepOpen: true })
+    await page.mouse.move(1, 1)
+    await measure([
+      '.fb-menu .fb-opt-body[data-filter-value="Garden"] .fb-opt-label',
+      '.fb-menu .fb-opt-body[data-filter-value="Home"] .fb-opt-label',
+      '.fb-menu .fb-page-title',
+      '.fb-row [data-chip-dim="project"] .fb-chip-val',
+      '.fb-row [data-chip-dim="project"] .fb-chip-dim',
+    ])
+    // The ticked square draws its tick; the unticked one draws none.
+    await expect(filterValue(page, 'project', 'Garden').locator('.fb-check-box svg')).toHaveCount(1)
+    await expect(filterValue(page, 'project', 'Home').locator('.fb-check-box svg')).toHaveCount(0)
+    const name = test.info().project.name === 'webkit' ? 'webkit-filter-dark' : 'filter-menu-dark'
+    await page.screenshot({ path: `${SHOTS}/${name}.png`, clip: await clipAround(page) })
+    // Page one: property names, a set value and the footer.
+    await openFilterMenu(page)
+    await page.mouse.move(1, 1)
+    await measure([
+      '.fb-menu .fb-prop[data-filter-dim="status"] .fb-item-text',
+      '.fb-menu .fb-prop[data-filter-dim="project"] .fb-prop-summary',
+      '.fb-menu .fb-menu-foot .fb-text-btn',
+    ])
+    // The next open has a Most used row: its value reads too.
+    await closeFilterMenu(page)
+    await openFilterMenu(page)
+    await page.mouse.move(1, 1)
+    await measure(['.fb-menu .fb-quick[data-recent-dim="project"] .fb-quick-val'])
   })
 
-  test('C35 + C66 + F01 + F02: a narrow panel keeps dimension names and the unit, shows three filters, folds the rest behind +N', async ({ page }) => {
+  test('C35 + C66 + F01 + F02: a narrow panel keeps property names and the unit, shows three filters, folds the rest behind +N', async ({ page }) => {
     await stubBoard(page, ownerSeeds())
     await openHome(page)
     await expect(row(page, 'fb-own-1')).toBeAttached({ timeout: 30_000 })

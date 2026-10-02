@@ -123,10 +123,10 @@ describe('Recent (4.7, G35)', () => {
     expect(applyRecentEntry({ ...S0, tagsAny: ['a'] }, { dim: 'tags', value: 'label:urgent' }).tagsAny).toEqual(['a', 'label:urgent']);
     expect(applyRecentEntry(S0, { dim: 'date', value: 'overdue' }).date).toBe('overdue');
   });
-  it('pushRecent keeps newest first, deduped; readRecent shape-checks', () => {
+  it('pushRecent keeps newest first, deduped (a repeat counts a use); readRecent shape-checks', () => {
     pushRecent([{ dim: 'project', value: 'Walnut' }]);
     pushRecent([{ dim: 'source', value: 'ms-todo' }, { dim: 'project', value: 'Walnut' }]);
-    expect(readRecent()).toEqual([{ dim: 'project', value: 'Walnut' }, { dim: 'source', value: 'ms-todo' }]);
+    expect(readRecent()).toEqual([{ dim: 'project', value: 'Walnut', uses: 2 }, { dim: 'source', value: 'ms-todo' }]);
     ls.setItem(LS_FILTER_RECENT_KEY, JSON.stringify([{ dim: 'nope', value: 'x' }, { dim: 'project', value: 4 }, { dim: 'project', value: 'Garden' }]));
     expect(readRecent()).toEqual([{ dim: 'project', value: 'Garden' }]);
     ls.setItem(LS_FILTER_RECENT_KEY, 'garbage');

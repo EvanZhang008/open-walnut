@@ -1,15 +1,16 @@
 /**
  * E2E: the Filter bar fix round (nitpicks F04, F05, F06, F09, F11 to F13, F22,
- * F26, F36). One selected signal on Status values, Collapse all only where it
- * folds something, one number for a search, focus kept inside open popovers,
- * popovers on the task panel and flyouts beside their parent, a date picked in
- * More dates selected at once, and the active view always named.
+ * F26, F34, F36), on the two-page Filter menu. One selected signal on Status
+ * values, Collapse all only where it folds something, one number for a
+ * search, focus kept inside open menus, menus on the task panel and page two
+ * replacing page one in place, a date pick selected at once, a menu as tall
+ * as its content, and the active view always named.
  * Stubbed boards (filter-bar-fixtures.ts); prefs isolated per test.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
-  closeFilterMenu, displayMenu, filterDimRow, filterMenu, filterRow, filterValue, moreViewsRow,
-  openDisplayMenu, openFilterMenu, settled, valuesFlyout, viewsFlyout,
+  closeFilterMenu, displayMenu, filterChip, filterDimRow, filterMenu, filterPage, filterRow, filterValue, moreViewsRow,
+  openDisplayMenu, openFilterMenu, openFilterPage, settled, viewsFlyout,
 } from './filter-bar-helpers'
 import { MIA, MIA_PINS, box, openHome, ownerSeeds, row, stubBoard } from './filter-bar-fixtures'
 
@@ -21,30 +22,40 @@ const activeLabel = (page: Page) => page.evaluate(() => {
   return el?.getAttribute('aria-label') || el?.getAttribute('placeholder') || el?.innerText?.trim() || ''
 })
 const insideOf = (page: Page, sel: string) => page.evaluate((s) => !!document.activeElement?.closest(s), sel)
+const labelX = async (l: Locator) => (await box(l.locator('.fb-opt-label'))).x
 
-test('F04: Status values carry one selected signal; unselected Complete draws no tick', async ({ page }) => {
+test('F04 + F15: Status rows carry one selected signal; single-select rows keep the tick slot, so names line up', async ({ page }) => {
   await stubBoard(page, MIA, MIA_PINS)
   await openHome(page)
-  await openFilterMenu(page)
-  const status = filterDimRow(page, 'status')
-  // No phase icons in the values: Need Action's and Complete's own ticks read as selection.
-  await expect(status.locator('.fb-val-icon')).toHaveCount(0)
+  await openFilterPage(page, 'status')
+  const status = filterPage(page, 'status')
+  // No phase icons in the rows: the square is the one selected signal.
+  await expect(status.locator('.fb-val-icon, .fb-item-icon')).toHaveCount(0)
   const complete = filterValue(page, 'status', 'Complete')
   await expect(complete).toHaveAttribute('aria-pressed', 'false')
   await expect(complete.locator('svg')).toHaveCount(0)
+  await expect(complete.locator('.fb-check.fb-check-box')).toHaveCount(1)
   const todo = filterValue(page, 'status', 'To Do')
   await expect(todo).toHaveAttribute('aria-pressed', 'true')
   await expect(todo.locator('.fb-check svg')).toHaveCount(1)
-  // Width stays the same when the tick appears (C47).
+  await expect(todo.locator('svg')).toHaveCount(1)
+  // Width and the label's place stay the same when the tick appears (C47).
   const w0 = (await box(complete)).width
+  const x0 = await labelX(complete)
   await complete.click()
   await expect(complete).toHaveAttribute('aria-pressed', 'true')
   expect(Math.abs((await box(complete)).width - w0)).toBeLessThanOrEqual(1)
-  // Unselected single-select values have no empty slot (F15): symmetric padding.
-  const pad = await filterValue(page, 'date', 'Any date').evaluate((el) => {
-    const cs = getComputedStyle(el); return [cs.paddingLeft, cs.paddingRight]
-  })
+  expect(Math.abs((await labelX(complete)) - x0)).toBeLessThanOrEqual(1)
+  // Date rows are single-select: a bare tick slot the same width as the square, symmetric padding.
+  await openFilterPage(page, 'date')
+  const anyDate = filterValue(page, 'date', 'Any date')
+  await expect(anyDate.locator('.fb-check')).toHaveCount(1)
+  await expect(anyDate.locator('.fb-check-box')).toHaveCount(0)
+  await expect(anyDate.locator('svg')).toHaveCount(0)
+  const pad = await anyDate.evaluate((el) => { const cs = getComputedStyle(el); return [cs.paddingLeft, cs.paddingRight] })
   expect(pad[0]).toBe(pad[1])
+  expect(Math.abs((await labelX(anyDate)) - x0)).toBeLessThanOrEqual(1)
+  expect(Math.abs((await labelX(filterValue(page, 'date', 'Available now'))) - x0)).toBeLessThanOrEqual(1)
 })
 
 test('F05: Collapse all projects only where the view draws project groups', async ({ page }) => {
@@ -111,7 +122,7 @@ test('F06 + C56: a search has one number for its rows: count = All badge = drawn
   expect(await agree()).toBe(11)
 })
 
-test('F09: Tab and Shift+Tab stay inside an open Filter or Display popover', async ({ page }) => {
+test('F09 + F38: Tab and Shift+Tab stay inside an open Filter menu (both pages) or Display menu; one Tab stop per value', async ({ page }) => {
   await stubBoard(page, MIA, MIA_PINS)
   await openHome(page)
   await openFilterMenu(page)
@@ -121,6 +132,15 @@ test('F09: Tab and Shift+Tab stay inside an open Filter or Display popover', asy
   }
   await page.keyboard.press('Shift+Tab')
   expect(await insideOf(page, '.fb-menu')).toBe(true)
+  // Page two traps Tab too.
+  await openFilterPage(page, 'project')
+  for (let i = 0; i < 10; i++) {
+    await page.keyboard.press('Tab')
+    expect(await insideOf(page, '.fb-menu'), `page two, Tab ${i + 1}: ${await activeLabel(page)}`).toBe(true)
+  }
+  // F38: Only is for the pointer; the row itself is the one Tab stop per value.
+  await expect(filterPage(page, 'project').locator('.fb-only').first()).toHaveAttribute('tabindex', '-1')
+  await expect(filterPage(page, 'project').locator('[role="checkbox"], .fb-val-add')).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(filterMenu(page)).toHaveCount(0)
   await openDisplayMenu(page)
@@ -128,13 +148,9 @@ test('F09: Tab and Shift+Tab stay inside an open Filter or Display popover', asy
     await page.keyboard.press('Tab')
     expect(await insideOf(page, '.dm-menu'), `Tab ${i + 1}: ${await activeLabel(page)}`).toBe(true)
   }
-  // One Tab stop per Project value (F38): the add square is for the pointer.
-  await page.keyboard.press('Escape')
-  await openFilterMenu(page)
-  await expect(filterDimRow(page, 'project').locator('.fb-val-add').first()).toHaveAttribute('tabindex', '-1')
 })
 
-test('F10 + F11 + F12 + F13: the search keeps room; popovers stay on the panel; flyouts sit beside their parent and never cover it', async ({ page }) => {
+test('F10 + F11 + F12 + F13: the search keeps room; menus stay on the panel; page two opens in place; the views flyout sits beside Display', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   await stubBoard(page, ownerSeeds(), [], { tabBar: true })
   await openHome(page)
@@ -145,16 +161,16 @@ test('F10 + F11 + F12 + F13: the search keeps room; popovers stay on the panel; 
   await openFilterMenu(page)
   const fm = await box(filterMenu(page))
   expect(fm.x).toBeGreaterThanOrEqual(left - 1)
-  // `22 more` opens to the right of the popover, level with its chip.
-  const more = filterDimRow(page, 'project').getByRole('button', { name: /^\d+ more$/ })
-  const mb = await box(more)
-  await more.click()
-  await settled(valuesFlyout(page))
-  const fly = await box(valuesFlyout(page))
-  expect(fly.x).toBeGreaterThanOrEqual(fm.x + fm.width)
-  expect(Math.abs(fly.y - mb.y)).toBeLessThanOrEqual(2)
+  // A property's values replace page one in the same box: same place, same width, nothing beside it.
+  await openFilterPage(page, 'project')
+  await settled(filterMenu(page))
+  const fp = await box(filterMenu(page))
+  expect(Math.abs(fp.x - fm.x)).toBeLessThanOrEqual(1)
+  expect(Math.abs(fp.y - fm.y)).toBeLessThanOrEqual(1)
+  expect(Math.abs(fp.width - fm.width)).toBeLessThanOrEqual(1)
+  await expect(page.locator('.fb-values-flyout')).toHaveCount(0)
   await page.keyboard.press('Escape')
-  await page.keyboard.press('Escape')
+  await expect(filterMenu(page)).toHaveCount(0)
   await openDisplayMenu(page)
   const dm = await box(displayMenu(page))
   expect(dm.x).toBeGreaterThanOrEqual(left - 1)
@@ -172,13 +188,16 @@ test('F10 + F11 + F12 + F13: the search keeps room; popovers stay on the panel; 
   expect(kinds.indexOf('|')).toBe(kinds.indexOf('recent') - 1)
 })
 
-test('F22 + F36: a date from More dates is selected at once; the Projects view is named in the row', async ({ page }) => {
+test('F22 + F36: a date pick is selected at once and closes the menu; the Projects view is named in the row', async ({ page }) => {
   await stubBoard(page, MIA, MIA_PINS, { tabBar: true })
   await openHome(page)
-  await openFilterMenu(page)
-  await filterDimRow(page, 'date').getByRole('button', { name: 'More dates' }).click()
-  await valuesFlyout(page).locator('[data-filter-value="Overdue"]').click()
+  await openFilterPage(page, 'date')
+  await filterValue(page, 'date', 'Overdue').click()
+  await expect(filterMenu(page)).toHaveCount(0)
+  await expect(filterChip(page, 'date')).toContainText('Date: Overdue')
+  await openFilterPage(page, 'date')
   await expect(filterValue(page, 'date', 'Overdue')).toHaveAttribute('aria-pressed', 'true')
+  await expect(filterValue(page, 'date', 'Available now')).toHaveAttribute('aria-pressed', 'false')
   await closeFilterMenu(page)
   await expect(filterMenu(page)).toHaveCount(0)
   await openDisplayMenu(page)
@@ -189,7 +208,7 @@ test('F22 + F36: a date from More dates is selected at once; the Projects view i
   await expect(filterRow(page).locator('.fb-view-item')).toHaveText(/View:\s*Projects/)
 })
 
-test('F34: a popover opened while tasks load grows to its loaded height, and the board makes no empty verdict', async ({ page }) => {
+test('F34: a menu opened while tasks load grows to its loaded content, has no measured height, and the board makes no empty verdict', async ({ page }) => {
   await stubBoard(page, ownerSeeds())
   // Later routes win: hold the task list back for 4s.
   await page.route('**/api/tasks?*', async (r) => {
@@ -199,12 +218,29 @@ test('F34: a popover opened while tasks load grows to its loaded height, and the
   })
   await openHome(page)
   await openFilterMenu(page)
-  await expect(filterDimRow(page, 'project')).toContainText('Loading projects')
+  await expect(filterDimRow(page, 'project').locator('.fb-prop-summary')).toHaveText('Loading')
   await expect(page.getByTestId('todo-pinned-empty')).toHaveCount(0)
   const loadingH = (await box(filterMenu(page))).height
-  await expect(filterDimRow(page, 'project').locator('.fb-val[data-filter-value]').first()).toBeVisible({ timeout: 20_000 })
+  await expect(filterDimRow(page, 'project').locator('.fb-prop-summary')).toHaveText('Any', { timeout: 20_000 })
+  // The page is listed again once the tasks arrive: two sources bring the Source row.
+  await expect(filterDimRow(page, 'source')).toBeVisible()
   await expect.poll(async () => (await box(filterMenu(page))).height).toBeGreaterThan(loadingH)
-  // The measured height is the drawn height: no stale cap from the loading frame.
-  const [styleH, drawn] = await filterMenu(page).evaluate((el) => [parseFloat((el as HTMLElement).style.height), (el as HTMLElement).offsetHeight])
-  expect(Math.abs(styleH - drawn)).toBeLessThanOrEqual(1)
+  // No fixed height from any frame: the box is its content, under a cap.
+  const shape = await filterMenu(page).evaluate((el) => ({
+    height: (el as HTMLElement).style.height,
+    max: parseFloat((el as HTMLElement).style.maxHeight),
+    measuring: el.hasAttribute('data-measuring'),
+    fits: el.scrollHeight <= el.clientHeight + 1,
+  }))
+  expect(shape).toMatchObject({ height: '', measuring: false, fits: true })
+  expect(shape.max).toBeLessThanOrEqual(460)
+  // Thirty projects reach the cap: the box stops there and its body scrolls.
+  await openFilterPage(page, 'project')
+  await settled(filterMenu(page))
+  const capped = await filterMenu(page).evaluate((el) => {
+    const body = el.querySelector('.fb-menu-body') as HTMLElement
+    return { h: (el as HTMLElement).offsetHeight, max: parseFloat((el as HTMLElement).style.maxHeight), scrolls: body.scrollHeight > body.clientHeight + 1 }
+  })
+  expect(capped.h).toBeLessThanOrEqual(capped.max + 1)
+  expect(capped.scrolls).toBe(true)
 })

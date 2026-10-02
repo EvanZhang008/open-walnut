@@ -25,8 +25,8 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView, selectSection } from './todo-panel-helpers'
 import {
-  addFilter, closeFilterMenu, expandMoreFilters, filterChip, filterMenu, filterRow, filterValue,
-  openFilterMenu, removeFilterChip, setStatus,
+  addFilter, closeFilterMenu, expandMoreFilters, filterChip, filterDimRow, filterMenu, filterRow, filterValue,
+  openFilterMenu, openFilterPage, removeFilterChip, setStatus,
 } from './filter-bar-helpers'
 
 const SHOTS = '/tmp/task-query-filters'
@@ -171,15 +171,16 @@ async function openHomePanel(page: Page): Promise<void> {
   await expect(filterRow(page)).toHaveCount(0)
 }
 
-/** Time window through the popover: basis segment, then the preset value. */
+/** Time window through the menu: the Time page's basis segment, then the preset value (a single-select pick closes the menu). */
 async function setHomeTime(page: Page, basis: 'created' | 'updated' | 'created_or_updated', preset: string): Promise<void> {
-  await openFilterMenu(page)
-  await expandMoreFilters(page)
-  await filterMenu(page).locator(`[data-filter-dim="time"] [data-time-basis="${basis}"]`).click()
+  const pane = await openFilterPage(page, 'time')
+  await pane.locator(`[data-time-basis="${basis}"]`).click()
   const v = filterValue(page, 'time', preset)
   if ((await v.getAttribute('aria-pressed')) !== 'true') await v.click()
   await expect(v).toHaveAttribute('aria-pressed', 'true')
+  // The row holds two lines while the menu is open, so a third chip may sit behind +N until it closes.
   await closeFilterMenu(page)
+  await expect(filterChip(page, 'time')).toBeVisible()
 }
 
 test('Status Complete + last 6 hours resolves to the single matching task, drawn once', async ({ page }) => {
@@ -205,8 +206,9 @@ test('Status Complete + last 6 hours resolves to the single matching task, drawn
   await expect(filterChip(page, 'status')).toContainText('Complete')
   await expect(filterChip(page, 'time')).toContainText('Updated in 6h')
 
-  // The home Filter has no Pinned dimension (G2): the Pinned view answers it.
+  // The home Filter has no Pinned property (G2): the Pinned view answers it.
   await openFilterMenu(page)
+  await expandMoreFilters(page)
   await expect(filterMenu(page).locator('[data-filter-dim="pinned"]')).toHaveCount(0)
   await closeFilterMenu(page)
   await filterRow(page).getByRole('button', { name: 'Clear all filters' }).click()
@@ -313,19 +315,23 @@ test('/tasks reached through the UI matches the homepage hit set', async ({ page
   await closeTasksPanel(page)
 })
 
-test('the popover footer spells out the active filters and each chip x removes one', async ({ page }) => {
+test('the menu spells out the active filters on its property rows and each chip x removes one', async ({ page }) => {
   await openHomePanel(page)
   await addFilter(page, 'project', 'Meadow', { keepOpen: true })
-  await expandMoreFilters(page)
+  await openFilterPage(page, 'time')
   await filterValue(page, 'time', '24h').click()
-  const summary = filterMenu(page).locator('.fb-menu-summary')
-  await expect(summary).toHaveText('Project: Meadow, Updated in 24h')
-  // The row stays live under the open popover: its x removes exactly one condition.
+  await openFilterMenu(page)
+  const summaryOf = (dim: 'project' | 'time') => filterDimRow(page, dim).locator('.fb-prop-summary')
+  await expect(summaryOf('project')).toHaveText('Meadow')
+  // A set property leaves the fold: Time window sits among the first rows now.
+  await expect(summaryOf('time')).toHaveText('Updated in 24h')
+  await expect(filterMenu(page).locator('.fb-menu-foot')).toContainText('Clear filters')
+  // The row stays live under the open menu: its x removes exactly one condition.
   await filterChip(page, 'project').locator('.fb-chip-x').click()
   await expect(filterChip(page, 'project')).toHaveCount(0)
-  await expect(summary).toHaveText('Updated in 24h')
+  await expect(summaryOf('project')).toHaveText('Any')
   await filterChip(page, 'time').locator('.fb-chip-x').click()
-  await expect(summary).toHaveCount(0)
+  await expect(filterMenu(page).locator('.fb-menu-foot')).toHaveCount(0)
   await expect(filterRow(page)).toContainText('No filters')
   await page.screenshot({ path: `${SHOTS}/05-summary-chips.png`, fullPage: true })
   await closeFilterMenu(page)
@@ -344,7 +350,7 @@ test('popover search finds options across dimensions and Enter adds them', async
   // First Escape clears the search (back to the rows), second closes.
   await page.keyboard.press('Escape')
   await expect(search).toHaveValue('')
-  await expect(filterMenu(page).locator('[data-filter-dim="status"]')).toBeVisible()
+  await expect(filterDimRow(page, 'status')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(filterMenu(page)).toHaveCount(0)
 
@@ -385,8 +391,8 @@ test('a tag filters on both surfaces and its chip removes it', async ({ page }) 
     await hit.click()
     await expect(filterChip(page, 'tags')).toBeVisible()
     await filterMenu(page).getByRole('textbox', { name: 'Search filters' }).fill('')
-    await expandMoreFilters(page)
-    await expect(filterMenu(page).locator('.fb-menu-summary')).toContainText('Tags:')
+    // A set Tags leaves the fold and names its value on page one.
+    await expect(filterDimRow(page, 'tags').locator('.fb-prop-summary')).not.toHaveText('Any')
     await filterMenu(page).screenshot({ path: `${SHOTS}/07a-tags-popover.png` })
     await closeFilterMenu(page)
 

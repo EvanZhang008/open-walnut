@@ -18,7 +18,7 @@ import type { FilterBarController, FilterChip, FilterDim } from './filter-bar-ty
 import { FilterChipMenu } from './FilterChipMenu';
 import { filterCountText } from './FilterMenu';
 import { FilterChipView, FilterOverflowMenu, type RemoveHow } from './FilterOverflowMenu';
-import { useFilterWriter } from './FilterValuesFlyout';
+import { useFilterWriter } from './FilterValueList';
 
 export const ROW_COLLAPSE_MS = 120;
 /** One chip line (24px chip + 4px gap) in the row. */
@@ -29,7 +29,7 @@ export interface FilterBarProps {
   controller: FilterBarController;
 }
 
-/** Number of wrapped lines among a flex-wrap box's children (centers clustered), Clear included: a line is a line. */
+/** Number of wrapped lines among a flex-wrap box's children (centers clustered). */
 export function countLines(box: HTMLElement): number {
   const centers = Array.from(box.children)
     .map((el) => (el as HTMLElement).offsetTop + (el as HTMLElement).offsetHeight / 2)
@@ -296,27 +296,28 @@ export function FilterBar({ controller: c }: FilterBarProps) {
         {chips.length === 0 && !c.search.active && !c.viewItem && (
           <span className="fb-row-empty">{linger ? 'No filters' : 'No filters yet'}</span>
         )}
-        {/* Clear ends the LAST chip line at its right edge (margin-left auto): a narrow
-            panel wraps chips, and Clear never sits alone at the left of a line. The count
-            stays outside the box, so its width ("Loading completed" to "6 tasks") never
-            re-wraps the chips (C47). */}
+      </div>
+      {/* The tail sits outside the chip box at the top right: the count, then Clear. Its
+          width ("Loading completed" to "6 tasks", Clear coming and going) never re-wraps
+          the chips (C47), and Clear never sits alone on a line of its own. */}
+      <span className="fb-row-tail">
+        <span
+          className="fb-count"
+          data-testid="filter-count"
+          aria-live="polite"
+          aria-label={c.count !== null && !c.archiveLoading ? countText : undefined}
+        >
+          {c.archiveLoading || c.count === null ? countText : (
+            <>
+              <span className="fb-count-num">{c.count}</span>
+              <span className="fb-count-word">{c.count === 1 ? ' task' : ' tasks'}</span>
+            </>
+          )}
+        </span>
         {chips.length > 0 && (
           <button type="button" className="fb-text-btn fb-clear" tabIndex={0} aria-label="Clear all filters" onClick={clear}>
             Clear
           </button>
-        )}
-      </div>
-      <span
-        className="fb-count"
-        data-testid="filter-count"
-        aria-live="polite"
-        aria-label={c.count !== null && !c.archiveLoading ? countText : undefined}
-      >
-        {c.archiveLoading || c.count === null ? countText : (
-          <>
-            <span className="fb-count-num">{c.count}</span>
-            <span className="fb-count-word">{c.count === 1 ? ' task' : ' tasks'}</span>
-          </>
         )}
       </span>
       {overflowOpen && showPlus && (

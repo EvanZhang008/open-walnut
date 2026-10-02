@@ -141,12 +141,12 @@ export function readPersistedFilters(): FilterState | null {
 
 function parseRecentEntry(raw: unknown): RecentEntry | null {
   if (!raw || typeof raw !== 'object') return null;
-  const r = raw as { dim?: unknown; value?: unknown };
+  const r = raw as { dim?: unknown; value?: unknown; uses?: unknown };
   if (!FILTER_DIMS.includes(r.dim as FilterDim)) return null;
-  if (typeof r.value === 'string') return { dim: r.dim as FilterDim, value: r.value };
-  if (Array.isArray(r.value) && r.value.every((v) => typeof v === 'string')) {
-    return { dim: r.dim as FilterDim, value: [...r.value] };
-  }
+  const uses = typeof r.uses === 'number' && Number.isFinite(r.uses) && r.uses > 1 ? Math.floor(r.uses) : undefined;
+  const entry = (value: string | string[]): RecentEntry => (uses ? { dim: r.dim as FilterDim, value, uses } : { dim: r.dim as FilterDim, value });
+  if (typeof r.value === 'string') return entry(r.value);
+  if (Array.isArray(r.value) && r.value.every((v) => typeof v === 'string')) return entry([...r.value]);
   return null;
 }
 
@@ -163,17 +163,24 @@ export function readRecent(): RecentEntry[] {
   }
 }
 
-/** Record new entries (given oldest first), newest first, deduped, capped. */
+/**
+ * Record new picks (given oldest first): newest first, deduped, capped. A pick
+ * made before keeps its place at the top and counts one more use, which is
+ * what ranks the menu's `Most used` rows.
+ */
 export function pushRecent(entries: readonly RecentEntry[]): RecentEntry[] {
   const current = readRecent();
   if (!entries.length) return current;
+  const uses = new Map(current.map((e) => [recentKey(e), e.uses ?? 1]));
   const seen = new Set<string>();
   const next: RecentEntry[] = [];
   for (const entry of [...entries].reverse().concat(current)) {
     const key = recentKey(entry);
     if (seen.has(key)) continue;
     seen.add(key);
-    next.push(entry);
+    const fresh = entries.some((e) => recentKey(e) === key);
+    const n = fresh ? (uses.get(key) ?? 0) + 1 : (entry.uses ?? 1);
+    next.push(n > 1 ? { dim: entry.dim, value: entry.value, uses: n } : { dim: entry.dim, value: entry.value });
     if (next.length >= RECENT_STORE_LIMIT) break;
   }
   setItem(LS_FILTER_RECENT_KEY, JSON.stringify(next));

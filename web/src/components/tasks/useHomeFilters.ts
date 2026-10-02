@@ -34,7 +34,7 @@ import { FILTER_DIMS, type FilterDim } from './filter-bar-types';
 import { buildFilterEvalContext, hiddenByText, showValueFor, type FilterEvalContext, type HiddenReason } from './filter-predicate';
 import { projectLabel } from './filter-bar-model';
 import { computeFacetCounts } from './filter-facets';
-import { createdToastId, pushRecent, readPersistedFilters, readRecent, writePersistedFilters } from './filter-bar-persist';
+import { RECENT_STORE_LIMIT, createdToastId, pushRecent, readPersistedFilters, readRecent, writePersistedFilters } from './filter-bar-persist';
 import { recentEntriesFor, validRecent } from './filter-recent';
 
 const DEFAULT_LEGACY: LegacyFilterFields = {
@@ -244,7 +244,8 @@ export function useHomeFilters(opts: HomeFiltersOptions) {
     () => (menuOpen || chipMenuOpen ? computeFacetCounts(tasks, evalCtx) : {}),
     [menuOpen, chipMenuOpen, tasks, evalCtx],
   );
-  const recent = useMemo(() => validRecent(recentRaw, lists), [recentRaw, lists]);
+  // Every stored pick that still exists: the menu ranks them by use and caps the rows itself.
+  const recent = useMemo(() => validRecent(recentRaw, lists, RECENT_STORE_LIMIT), [recentRaw, lists]);
 
   return useMemo(() => ({
     /** Legacy fields (D5), written only through apply. */
