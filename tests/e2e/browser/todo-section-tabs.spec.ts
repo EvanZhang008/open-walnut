@@ -28,7 +28,7 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
-const TABS = ['All', 'Focus', 'Satellite', 'Backlog', 'Parked', 'Recent'] as const
+const TABS = ['All', 'Pinned', 'Focus', 'Satellite', 'Backlog', 'Parked', 'Recent'] as const
 
 function tab(page: Page, name: (typeof TABS)[number]) {
   return page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
@@ -37,27 +37,26 @@ function tab(page: Page, name: (typeof TABS)[number]) {
 /** Seed pinned tasks across all three tiers so every tier tab has real content. */
 async function seedPinnedTasks(page: Page, project = 'Work') {
   const stamp = Date.now()
-  const created: string[] = []
-  for (const [tier, n] of [['focus', 3], ['satellite', 2], ['wait', 2]] as const) {
-    for (let i = 0; i < n; i++) {
-      const res = await page.request.post('/api/tasks', {
-        data: { title: `tabs probe ${tier} ${i} ${stamp}`, source: 'local', project },
-      })
-      if (!res.ok()) throw new Error(`seed create failed: ${res.status()} ${await res.text()}`)
-      const body = await res.json() as { task?: { id?: string } }
-      const id = body.task?.id
-      if (!id) throw new Error('seed create returned no task id')
-      created.push(id)
-      // Pin, then move to the target tier — two endpoints (pin defaults to focus).
-      const pin = await page.request.post(`/api/focus/tasks/${id}`)
-      if (!pin.ok()) throw new Error(`seed pin failed: ${pin.status()} ${await pin.text()}`)
-      if (tier !== 'focus') {
-        const move = await page.request.put(`/api/focus/tasks/${id}/tier`, { data: { tier } })
-        if (!move.ok()) throw new Error(`seed tier move failed: ${move.status()} ${await move.text()}`)
-      }
-    }
-  }
-  return created
+  const seeds = ([['focus', 3], ['satellite', 2], ['wait', 2]] as const)
+    .flatMap(([tier, n]) => Array.from({ length: n }, (_, i) => ({ tier, i })))
+  // One create → pin → place chain per task, all tasks at once: 21 calls in a row ran past
+  // the test budget on a loaded machine.
+  return Promise.all(seeds.map(async ({ tier, i }) => {
+    const res = await page.request.post('/api/tasks', {
+      data: { title: `tabs probe ${tier} ${i} ${stamp}`, source: 'local', project },
+    })
+    if (!res.ok()) throw new Error(`seed create failed: ${res.status()} ${await res.text()}`)
+    const body = await res.json() as { task?: { id?: string } }
+    const id = body.task?.id
+    if (!id) throw new Error('seed create returned no task id')
+    // Pin, then place in the target tier — two endpoints (a bare pin carries no tier and
+    // reads as Satellite, so Focus is set explicitly too).
+    const pin = await page.request.post(`/api/focus/tasks/${id}`)
+    if (!pin.ok()) throw new Error(`seed pin failed: ${pin.status()} ${await pin.text()}`)
+    const move = await page.request.put(`/api/focus/tasks/${id}/tier`, { data: { tier } })
+    if (!move.ok()) throw new Error(`seed tier move failed: ${move.status()} ${await move.text()}`)
+    return id
+  }))
 }
 
 test.describe('todo panel section tabs', () => {
@@ -79,8 +78,8 @@ test.describe('todo panel section tabs', () => {
     }).click()
     await page.keyboard.press('Escape')
 
-    // 1. all six tabs present (the shortcut fixture keeps empty tabs on the bar); All is its
-    // word alone, and neither Projects nor the Scratchpad is a tab any more.
+    // 1. all seven tabs present (the shortcut fixture keeps every tab on the bar, empty or
+    // not); All is its word alone, and neither Projects nor the Scratchpad is a tab any more.
     for (const name of TABS) {
       await expect(tab(page, name)).toBeVisible()
     }
@@ -205,5 +204,70 @@ test.describe('todo panel section tabs', () => {
     await expect(page.locator('.todo-section-tabs [role="tab"][aria-selected="true"]')).toHaveCount(0)
     await expect(page.locator('.todo-panel-list')).toHaveCount(1)
     await expect(page.locator('.todo-pinned-wrapper-solo')).toHaveCount(0)
+  })
+
+  test('a bar nobody customised is All and Pinned by name, and the Pinned tab stacks the tiers without the project list', async ({ page }) => {
+    // Undo the fixture's "every tab" seed: this test is about the untouched default.
+    await page.addInitScript(() => localStorage.removeItem('walnut-todo-tab-bar-hidden-tabs'))
+    await page.goto('/')
+    await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 20_000 })
+    await seedPinnedTasks(page)
+    await page.reload()
+    const strip = page.locator('.todo-section-tabs')
+    await expect(strip).toBeVisible({ timeout: 20_000 })
+    await page.getByRole('button', { name: 'View options' }).click()
+    await page.locator('.vd-rail-btn[data-rail-section="projects"]').click()
+    await page.locator('.vd-cat').filter({ has: page.locator('.vd-cat-name').filter({ hasText: /^All$/ }) }).click()
+    await page.keyboard.press('Escape')
+
+    // Two built-in tabs, both spelled out: a short bar names every tab, so it says what it is.
+    await expect(page.locator('.todo-section-tabs [role="tab"]:not(.todo-section-tab-custom)')).toHaveCount(2)
+    await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true')
+    await expect(strip).toHaveClass(/is-roomy/)
+    await expect(tab(page, 'Pinned').locator('.todo-section-tab-label')).toBeVisible()
+    await expect(tab(page, 'Pinned').locator('.todo-section-tab-icon svg')).toBeVisible()
+    const pinnedCount = Number(await tab(page, 'Pinned').locator('.todo-section-tab-count').textContent())
+    expect(pinnedCount).toBeGreaterThanOrEqual(7)
+    await expect(page.locator('.todo-section-tab-focus, .todo-section-tab-satellite, .todo-section-tab-wait, .todo-section-tab-recent')).toHaveCount(0)
+
+    // The Pinned view: the Pinned heading over tier headings and drop zones for the tiers that
+    // hold a task (the All view's stack, so the view is named with the tab bar off too), no
+    // Projects heading, no list, and the first card is not under a stuck heading.
+    await tab(page, 'Pinned').click()
+    await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.home-navigation-scroll')).toHaveClass(/is-stacked/)
+    await expect(page.locator('[data-drop-zone="focus-drop-zone"]')).toHaveCount(1)
+    await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
+    await expect(page.locator('.todo-pinned-subgroup-heading .navigation-heading[data-navigation-id="focus"]')).toBeVisible()
+    await expect(page.locator('.todo-pinned-header')).toHaveCount(1)
+    await expect(page.locator('.todo-tasks-header')).toHaveCount(0)
+    const firstCard = page.locator('.todo-pinned-section [data-task-id]').first()
+    const cardBox = (await firstCard.boundingBox())!
+    expect(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('[data-task-id]'), { x: cardBox.x + 60, y: cardBox.y + cardBox.height / 2 })).toBe(true)
+    await expect(page.locator('.todo-panel-list')).toHaveCount(0)
+    await expect(page.locator('.todo-pinned-wrapper-solo')).toHaveCount(0)
+
+    // The view survives a reload, and the View menu offers it by name.
+    await page.reload()
+    await expect(tab(page, 'Pinned')).toHaveAttribute('aria-selected', 'true', { timeout: 20_000 })
+    await page.getByRole('button', { name: 'View options' }).click()
+    await page.locator('.vd-panel [data-rail-section="view"]').click()
+    await expect(page.locator('.vd-panel [data-view-option="pinned"]')).toHaveAttribute('aria-pressed', 'true')
+    await page.keyboard.press('Escape')
+
+    // The tiers wait in the bar's menu: two more and the bar is crowded, so only the active
+    // tab keeps its name.
+    const barMenu = page.getByRole('button', { name: 'Tab bar options' })
+    await barMenu.click()
+    await page.locator('.wn-context-menu').getByRole('menuitemcheckbox', { name: 'Focus', exact: true }).click()
+    await expect(tab(page, 'Focus')).toBeVisible()
+    await expect(strip).toHaveClass(/is-roomy/)
+    await page.locator('.wn-context-menu').getByRole('menuitemcheckbox', { name: 'Satellite', exact: true }).click()
+    await page.keyboard.press('Escape')
+    await expect(tab(page, 'Satellite')).toBeVisible()
+    await expect(strip).not.toHaveClass(/is-roomy/)
+    await expect(tab(page, 'Focus').locator('.todo-section-tab-label')).not.toBeVisible()
+    await expect(tab(page, 'Pinned').locator('.todo-section-tab-label')).toBeVisible()
+    expect(JSON.parse(await page.evaluate(() => localStorage.getItem('walnut-todo-tab-bar-hidden-tabs') ?? '[]'))).toEqual(['backlog', 'wait', 'recent'])
   })
 })

@@ -157,6 +157,7 @@ import {
 } from './tier-group-sentinels';
 import { inferTierDropProject, resolveMoveMigration, sourceDisplayName } from './task-move-project';
 import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
+import { DEFAULT_HIDDEN_TABS } from './tab-bar-model';
 import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, type ListBatchState } from './list-batch';
 import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useSessionStatusEpoch, useTaskCircle } from '@/hooks/useSessionStatus';
@@ -2523,6 +2524,7 @@ const NO_SEPARATORS: TierSeparator[] = [];
 function TierNavigationGroup({ def, isAll, folded, collapsed, onToggle, visibleIds, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode }: {
   /** `id` + `label` of the tier — the four built-ins pass a synthetic def. */
   def: CustomTierDef;
+  /** In a stacked view (All or Pinned): the tier draws its heading and takes header drops. */
   isAll: boolean;
   /** Chevron-folded in the stacked view (content hidden). */
   folded: boolean;
@@ -3186,7 +3188,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // collapse flag (a tab you just picked must never show up already folded).
   const [activeSection, setActiveSection] = useState<TodoSection>(readSection);
   const [quickViews, setQuickViews] = useNavigationPreference(TASK_SHORTCUTS_KEY);
-  const [tabBarHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY);
+  const [tabBarHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY, DEFAULT_HIDDEN_TABS);
   // Read by the locate effect, whose deps deliberately leave out view state.
   const tabBarRef = useRef({ shown: quickViews, hidden: tabBarHidden });
   tabBarRef.current = { shown: quickViews, hidden: tabBarHidden };
@@ -3358,7 +3360,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // condition returns the user to the tier they were on.
   const isTierSection = (s: TodoSection) =>
     s === 'focus' || s === 'satellite' || s === 'backlog' || s === 'wait' || s.startsWith('ct_');
-  const effectiveSection: TodoSection = pinnedQueryActive && isTierSection(rawSection) ? 'tasks' : rawSection;
+  const effectiveSection: TodoSection = pinnedQueryActive && (isTierSection(rawSection) || rawSection === 'pinned') ? 'tasks' : rawSection;
   activeSectionRef.current = effectiveSection;
   // Drop the ephemeral override when the query is cleared, so the next search
   // starts from the All default again.
@@ -3366,18 +3368,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!isSearchMode && searchSection !== null) setSearchSection(null);
   }, [isSearchMode, searchSection]);
   const isAll = effectiveSection === 'all';
-  /** True when `section` should be mounted: either we're in the stacked view or it IS the active tab. */
+  // The Pinned view is the All view's tier stack without the project list: the tiers
+  // keep their headings, folds and cross-tier drag, so everything that is "stacked"
+  // behaviour keys off this, and only the list itself keys off `isAll`.
+  const isPinnedView = effectiveSection === 'pinned';
+  const isStacked = isAll || isPinnedView;
+  /** True when `section` should be mounted: either we're in a stacked view that holds it or it IS the active tab. */
   const showSection = useCallback(
-    (section: TodoSection) => (isAll && section !== 'recent') || effectiveSection === section,
-    [isAll, effectiveSection],
+    (section: TodoSection) => (isAll && section !== 'recent')
+      || (isPinnedView && (section === 'focus' || section === 'satellite' || section === 'backlog' || section === 'wait' || section.startsWith('ct_')))
+      || effectiveSection === section,
+    [isAll, isPinnedView, effectiveSection],
   );
-  /** Within the active view, is this region folded? Only the stacked view honors
+  /** Within the active view, is this region folded? Only a stacked view honors
    *  chevrons — and a live search ignores them entirely (a hit hidden inside a
    *  folded region would read as "search found nothing"). The persisted collapse
    *  state is untouched; clearing the query folds things back. */
   const isFolded = useCallback(
-    (id: string) => isAll && !isSearchMode && collapsedSections.has(id),
-    [isAll, isSearchMode, collapsedSections],
+    (id: string) => isStacked && !isSearchMode && collapsedSections.has(id),
+    [isStacked, isSearchMode, collapsedSections],
   );
   /** Chevron direction — must track the CONTENT (isFolded), not the raw collapsed
    *  set, or a search's force-expand would show open regions with "collapsed" arrows. */
@@ -3659,9 +3668,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         // Asked from outside the panel (a session panel's Locate): with the tab bar showing
         // the task's tier, go straight to that tab; without it, All, which shows every tier.
         const bar = tabBarRef.current;
-        const target = bar.shown && !bar.hidden.includes(tierKey) ? tierKey : 'all';
+        const target = bar.shown && !bar.hidden.includes(tierKey) ? tierKey : cur === 'pinned' ? 'pinned' : 'all';
         if (cur !== target) handleSectionChange(target);
-      } else if (cur !== 'all' && cur !== 'tasks' && cur !== tierKey) handleSectionChange('all');
+      } else if (cur !== 'all' && cur !== 'pinned' && cur !== 'tasks' && cur !== tierKey) handleSectionChange('all');
     } else if (isUserLocate && !pinnedOnly && activeSectionRef.current !== 'all' && (focusScope === 'locate' || activeSectionRef.current !== 'tasks')) {
       // A task in no tier only shows in the list, and All is the view with the list in it
       // (Projects is a filter menu view, not a tab the user can see they are on).
@@ -8012,6 +8021,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   for (const def of customTiers ?? []) {
     sectionCounts[def.id] = customTierRender[def.id]?.display.length ?? 0;
   }
+  sectionCounts.pinned = focusTasksDisplay.length + satelliteTasksDisplay.length + backlogTasksDisplay.length + waitTasksDisplay.length
+    + (customTiers ?? []).reduce((sum, def) => sum + (sectionCounts[def.id] ?? 0), 0);
   /**
    * One tier's render model, for the section loop below. A pure LOOKUP over the
    * memos that already exist (three per built-in, one bundle per custom) — no
@@ -8038,13 +8049,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
     }
   };
-  // The All view draws a built-in tier only once it holds a task (and no Pinned heading
-  // when nothing is drawn), so a first visit is not a wall of empty headings. A custom
-  // tier always draws: the user just made it and needs its add row. Every tier mounts
-  // while a pinned card is dragged, so an empty one can still take the drop; a
-  // single-tier view always draws its tier.
+  // A stacked view draws a built-in tier only once it holds a task, so a first visit is
+  // not a wall of empty headings; with nothing drawn the Pinned heading stays over one
+  // line that says so (2026-10-01: the section must be there to be learned, the tiers
+  // under it need not). A custom tier always draws: the user just made it and needs its
+  // add row. Every tier mounts while a pinned card is dragged, so an empty one can still
+  // take the drop; a single-tier view always draws its tier.
   const tierHiddenWhenEmpty = (tier: FocusTier, model: { display: unknown[] }) =>
-    isAll && !isPinnedDragActive && isBuiltinTier(tier) && model.display.length === 0;
+    isStacked && !isPinnedDragActive && isBuiltinTier(tier) && model.display.length === 0;
   const anyTierDrawn = allTierKeys.some((tier) => {
     const model = tierSectionModel(tier);
     return !!model && !tierHiddenWhenEmpty(tier, model);
@@ -8077,7 +8089,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const tierSectionActive = isTierSection(effectiveSection) && !isSearchMode;
   const viewGroups: ViewOptionGroup[] = [
     { label: 'Show', options: [
-      { id: 'all', label: 'All tasks' }, { id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' },
+      { id: 'all', label: 'All tasks' }, { id: 'pinned', label: 'Pinned' }, { id: 'focus', label: 'Focus' }, { id: 'satellite', label: 'Satellite' },
       { id: 'backlog', label: 'Backlog' }, { id: 'wait', label: 'Parked' }, ...(customTiers ?? []),
       { id: 'recent', label: 'Recent' }, { id: 'tasks', label: 'Projects' },
     ].map((view) => ({ key: view.id, label: view.label, active: effectiveSection === view.id, onSelect: () => handleSectionChange(view.id as TodoSection) })) },
@@ -8275,7 +8287,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         </div>
       )}
 
-      <div className={`home-navigation-scroll${isAll ? ' is-stacked' : ''}${unpinZone ? ' is-unpin-dragging' : ''}`}>
+      <div className={`home-navigation-scroll${isStacked ? ' is-stacked' : ''}${unpinZone ? ' is-unpin-dragging' : ''}`}>
       <NavigationSections storageKey="walnut-todo-navigation-order">
         <NavigationSection key="pinned" navId="pinned">
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin.
@@ -8285,28 +8297,31 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         <DndContext sensors={pinnedSensors} collisionDetection={pinnedCollision} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div
             ref={pinnedWrapperRef}
-            className={`todo-pinned-wrapper${isAll ? '' : ' todo-pinned-wrapper-solo'}${activeDragPinnedId ? ' todo-pinned-wrapper-dragging' : ''}`}
+            className={`todo-pinned-wrapper${isStacked ? '' : ' todo-pinned-wrapper-solo'}${activeDragPinnedId ? ' todo-pinned-wrapper-dragging' : ''}`}
             // Single-section view: this region IS the panel — take all the height.
             // Stacked view: NO forced share. The All view is one scroller now
             // (home-navigation-scroll), so every region is its natural height and
             // the sections scroll past each other; handing out flex ratios here is
             // what used to give each tier its own little scrollbox.
-            style={!isAll ? { flex: '1 1 auto' } : undefined}
+            style={!isStacked ? { flex: '1 1 auto' } : undefined}
           >
           {/* PINNED section — Focus + Satellite + Backlog + Parked sub-groups. In a single-tier
               view the "Pinned" wrapper header is dropped (the tab already names the
               tier) and only that tier's subgroup renders. A pinned query condition
               routes every pin through the list, so the tier area steps aside. */}
-          {anyTierVisible && !pinnedQueryActive && anyTierDrawn && (
-            <div className={`todo-pinned-section${isAll ? '' : ' todo-pinned-section-solo'}`}>
-              {isAll && (
+          {anyTierVisible && !pinnedQueryActive && (anyTierDrawn || (isStacked && !isSearchMode)) && (
+            <div className={`todo-pinned-section${isStacked ? '' : ' todo-pinned-section-solo'}`}>
+              {isStacked && (
               <NavigationHeading id="pinned" label="Pinned" className="todo-pinned-header" collapsed={isFolded('pinned')} onClick={() => toggleSection('pinned')}
                 actions={[
                   { key: 'collapse', label: isFolded('pinned') ? 'Expand Pinned' : 'Collapse Pinned', onSelect: () => toggleSection('pinned') },
-                  { key: 'collapse-all', label: allTiersFolded ? 'Expand all tiers' : 'Collapse all tiers', onSelect: () => setAllTiersFolded(!allTiersFolded) },
+                  ...(anyTierDrawn ? [{ key: 'collapse-all', label: allTiersFolded ? 'Expand all tiers' : 'Collapse all tiers', onSelect: () => setAllTiersFolded(!allTiersFolded) }] : []),
                 ]} />
               )}
-              {!isFolded('pinned') && (
+              {!isFolded('pinned') && !anyTierDrawn && (
+                <p className="todo-pinned-empty" data-testid="todo-pinned-empty">Nothing pinned yet. Pin a task from its menu to keep it here.</p>
+              )}
+              {!isFolded('pinned') && anyTierDrawn && (
                 <NavigationSections storageKey="walnut-todo-tier-order">
                   {allTierKeys.map((tier) => {
                     if (!showSection(tier)) return null;
@@ -8317,7 +8332,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       <NavigationSection key={tier} navId={tier}>
                         <TierNavigationGroup
                           def={model.def}
-                          isAll={isAll}
+                          isAll={isStacked}
                           folded={isFolded(tier)}
                           collapsed={chevronCollapsed(tier)}
                           onToggle={toggleSection}

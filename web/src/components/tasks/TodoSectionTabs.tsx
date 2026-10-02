@@ -6,15 +6,17 @@ import {
   TAB_BAR_HIDDEN_TABS_KEY, TAB_BAR_HIDE_EMPTY_KEY, TASK_SHORTCUTS_KEY,
   useNavigationList, useNavigationPreference,
 } from '@/hooks/useNavigationPreference';
-import { tabBarTabs, visibleTabBarTabs } from './tab-bar-model';
+import { DEFAULT_HIDDEN_TABS, ROOMY_TAB_LIMIT, tabBarTabs, visibleTabBarTabs } from './tab-bar-model';
 
 /**
  * The todo panel's tab bar: one tab per view, the picked view owns the panel below.
  *
  * `all` is a real tab because cross-tier drag (Recent to Focus, Focus to Parked) needs the
- * source and target regions mounted at the same time; a single tier's tab is for working
- * inside it. Width is the constraint (the panel is often ~420px), so a tier tab is its
- * icon + count and only the ACTIVE tab spells out its name; All is the word itself.
+ * source and target regions mounted at the same time; `pinned` is every tier without the
+ * project list; a single tier's tab is for working inside it. Width is the constraint (the
+ * panel is often ~420px), so with more than a few tabs a tier tab is its icon + count and
+ * only the ACTIVE tab spells out its name; a short bar (the default All + Pinned) names
+ * every tab, so it reads as what it is. All is the word itself.
  * Which tabs show is the user's call, from the bar's own menu (see tab-bar-model.ts).
  */
 
@@ -22,10 +24,11 @@ import { tabBarTabs, visibleTabBarTabs } from './tab-bar-model';
 export type TodoSection = string;
 
 /** Every view the panel can be on. `tasks` (Projects) is picked from the filter menu, not a tab. */
-export const TODO_SECTIONS: readonly TodoSection[] = ['all', 'focus', 'satellite', 'backlog', 'wait', 'recent', 'tasks'];
+export const TODO_SECTIONS: readonly TodoSection[] = ['all', 'pinned', 'focus', 'satellite', 'backlog', 'wait', 'recent', 'tasks'];
 
 function icon(section: TodoSection): ReactNode {
   switch (section) {
+    case 'pinned': return ICONS.ICON_PIN;
     case 'focus': return ICONS.ICON_TIER_FOCUS;
     case 'satellite': return ICONS.ICON_TIER_SATELLITE;
     case 'backlog': return ICONS.ICON_TIER_BACKLOG;
@@ -52,12 +55,13 @@ interface TodoSectionTabsProps {
 }
 
 export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange, counts, countsReady = true, customTiers, searchDone }: TodoSectionTabsProps) {
-  const [hidden, setHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY);
+  const [hidden, setHidden] = useNavigationList(TAB_BAR_HIDDEN_TABS_KEY, DEFAULT_HIDDEN_TABS);
   const [hideEmpty, setHideEmpty] = useNavigationPreference(TAB_BAR_HIDE_EMPTY_KEY, true);
   const [, setBarShown] = useNavigationPreference(TASK_SHORTCUTS_KEY);
   const [menu, setMenu] = useState<{ x: number; y: number; origin: HTMLElement } | null>(null);
   const tabs = tabBarTabs(customTiers);
   const shown = visibleTabBarTabs(tabs, { active, counts, hidden, hideEmpty: hideEmpty && countsReady });
+  const roomy = shown.length <= ROOMY_TAB_LIMIT;
 
   const openMenu = (event: MouseEvent<HTMLElement>, atCursor = false) => {
     event.preventDefault(); event.stopPropagation();
@@ -84,7 +88,7 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
   ];
 
   return (
-    <div className="todo-section-tabs" onContextMenu={(event) => openMenu(event, true)}>
+    <div className={`todo-section-tabs${roomy ? ' is-roomy' : ''}`} onContextMenu={(event) => openMenu(event, true)}>
       <div className="todo-section-tabs-list" role="tablist" aria-label="Todo panel sections">
         {shown.map(({ id, label, title }) => {
           const isActive = id === active;
@@ -101,7 +105,8 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
             >
               {id !== 'all' && <span className="todo-section-tab-icon" aria-hidden="true">{icon(id)}</span>}
               {/* The label is always in the DOM (screen readers, and it's what makes
-                  the active pill readable); CSS collapses it on inactive tier tabs. */}
+                  the active pill readable); CSS collapses it on inactive tier tabs
+                  once the bar is crowded (`is-roomy` keeps every name). */}
               <span className="todo-section-tab-label">{label}</span>
               {count != null && count > 0 && (
                 <span className="todo-section-tab-count">{count > 99 ? '99+' : count}</span>

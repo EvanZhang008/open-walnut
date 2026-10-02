@@ -464,13 +464,17 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   await expect(navigation(page)).not.toHaveAttribute('inert', '');
   await expect(hide).toBeVisible();
 
-  // With nothing pinned, the Pinned heading goes too and the list opens on Projects.
+  // With nothing pinned, the Pinned heading stays (a first visit learns the section exists)
+  // over one line saying so, with no tier headings under it, and Projects follows.
   pinning = false;
   await page.reload();
   await expect(projects).toBeVisible({ timeout: 30_000 });
   await expect(navigation(page).locator('.todo-group-project-header')).toHaveCount(2, { timeout: 30_000 });
-  await expect(heading(page, 'pinned')).toHaveCount(0);
-  expect(await navigation(page).locator('.navigation-heading').first().getAttribute('data-navigation-id')).toBe('tasks');
+  await expect(heading(page, 'pinned')).toBeVisible();
+  await expect(navigation(page).getByTestId('todo-pinned-empty')).toHaveText(/Nothing pinned yet/);
+  await expect(navigation(page).locator('.todo-pinned-subgroup-heading')).toHaveCount(0);
+  expect(await navigation(page).locator('.navigation-heading').evaluateAll(els => els.map(el => el.getAttribute('data-navigation-id'))))
+    .toEqual(['pinned', 'tasks']);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-empty-tiers.png`, clip: { x: 0, y: 0, width: 640, height: 480 } });
   expect(errors).toEqual([]);
 });
@@ -773,20 +777,29 @@ test('the tab bar keeps the tabs the user picks, hides empty ones, and turns its
   const tab = (name: string) => tabs.filter({ has: page.locator('.todo-section-tab-label', { hasText: new RegExp(`^${name}$`) }) });
   const names = () => tabs.evaluateAll(els => els.map(el => el.querySelector('.todo-section-tab-label')?.textContent ?? ''));
 
-  // Out of the box: All is the word alone, Projects and Notes are gone, and the empty tiers hide.
+  // Out of the box: All and Pinned, both spelled out (a short bar names every tab); All is the
+  // word alone; the tiers wait in the bar's menu, and Projects and Notes are gone for good.
   await expect(tab('All')).toHaveCount(1);
   await expect(tab('All').locator('.todo-section-tab-icon')).toHaveCount(0);
-  await expect.poll(names).toEqual(expect.arrayContaining(['All', 'Focus', 'Parked']));
-  for (const gone of ['Satellite', 'Backlog', 'Tasks', 'Notes', 'Projects', 'Scratchpad']) expect(await names()).not.toContain(gone);
+  await expect.poll(names).toEqual(['All', 'Pinned']);
+  await expect(bar).toHaveClass(/is-roomy/);
+  await expect(tab('Pinned').locator('.todo-section-tab-label')).toBeVisible();
+  for (const gone of ['Focus', 'Satellite', 'Backlog', 'Parked', 'Recent', 'Tasks', 'Notes', 'Projects', 'Scratchpad']) expect(await names()).not.toContain(gone);
 
   // The bar's own menu: a switch per tab, "Hide empty tabs", and the bar itself.
   await bar.getByRole('button', { name: 'Tab bar options' }).click();
   const menu = page.getByRole('menu', { name: 'Tab bar options' });
   const row = (name: string) => menu.getByRole('menuitemcheckbox', { name, exact: true });
-  for (const name of ['All', 'Focus', 'Satellite', 'Backlog', 'Parked', 'Recent']) await expect(row(name)).toHaveAttribute('aria-checked', 'true');
+  for (const name of ['All', 'Pinned']) await expect(row(name)).toHaveAttribute('aria-checked', 'true');
+  for (const name of ['Focus', 'Satellite', 'Backlog', 'Parked', 'Recent']) await expect(row(name)).toHaveAttribute('aria-checked', 'false');
   await expect(row('Hide empty tabs')).toHaveAttribute('aria-checked', 'true');
   await expect(row('Show tab bar')).toHaveAttribute('aria-checked', 'true');
-  // The switches leave the menu open, so several can be flipped in a row.
+  // The switches leave the menu open, so several can be flipped in a row. The tiers put back
+  // show once they hold a task; past three tabs only the active one keeps its name.
+  for (const name of ['Focus', 'Satellite', 'Backlog', 'Parked']) await row(name).click();
+  await expect.poll(names).toEqual(['All', 'Pinned', 'Focus', 'Parked']);
+  await expect(bar).not.toHaveClass(/is-roomy/);
+  await expect(tab('Pinned').locator('.todo-section-tab-label')).not.toBeVisible();
   await row('Hide empty tabs').click();
   await expect(row('Hide empty tabs')).toHaveAttribute('aria-checked', 'false');
   await expect.poll(names).toEqual(expect.arrayContaining(['Satellite', 'Backlog']));
@@ -859,6 +872,8 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
     if (route.request().method() !== 'GET') return route.continue();
     await route.fulfill({ json: { tiers: [{ id: 'ct_locate_later', label: 'Later' }] } });
   });
+  // Every tab on the bar: this test is about where Locate lands, not the bar's default.
+  await page.addInitScript(() => localStorage.setItem('walnut-todo-tab-bar-hidden-tabs', '[]'));
   await boot(page, baseURL!);
   await expect(navigation(page).locator('[data-task-id="locate-focus"]')).toBeVisible({ timeout: 30_000 });
   await expect.poll(() => sessionColumnOrder(page)).toEqual(seededColumns);
@@ -903,6 +918,11 @@ test('Locate from a session panel opens the task tier tab when the tab bar shows
   await page.keyboard.press('Escape');
   await locate.click();
   await landedOn('All');
+
+  // The Pinned view shows every tier, so a locate from there stays on it.
+  await tab('Pinned').click();
+  await locate.click();
+  await landedOn('Pinned');
 
   // Without the bar, All, even from a single tier picked in the filter menu.
   await bar.getByRole('button', { name: 'Tab bar options' }).click();
@@ -1518,6 +1538,9 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
     return project?.getAttribute('data-project') ?? project?.querySelector('.todo-group-project-name')?.textContent ?? 'none';
   });
   await chooseViewOption(page, 'satellite');
+  // The view switch is a transition: wait for the single tier to own the panel before
+  // scrolling, or the scroll lands on the stacked view's first tier list.
+  await expect(navigation(page).locator('.todo-pinned-wrapper-solo')).toBeVisible();
   await scrollWithin(card('sm10'), '.todo-pinned-list-scroll', 250);
   expect(await within(navigation(page).locator('.tier-project-label[data-project="Meadowlark"]'), '.todo-pinned-list-scroll')).toBe(0);
   expect(await topOfList('.todo-pinned-list-scroll')).toBe('Meadowlark');

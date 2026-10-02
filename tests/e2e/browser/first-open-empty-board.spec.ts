@@ -191,6 +191,12 @@ test('a new install opens on an empty board with one New task draft and no chat'
   await expect(page.getByRole('button', { name: /new project/i })).toHaveCount(0)
   await expect(page.locator('.todo-new-project-btn')).toHaveCount(0)
   await expect(page.getByText('No tasks found')).toHaveCount(0)
+  // The Pinned section is there to be learned, with nothing pinned and no tier under it;
+  // the tab bar is a choice, not a default.
+  await expect(navigation(page).locator('.navigation-heading[data-navigation-id="pinned"]')).toBeVisible()
+  await expect(navigation(page).getByTestId('todo-pinned-empty')).toHaveText(/Nothing pinned yet/)
+  await expect(navigation(page).locator('.todo-pinned-subgroup-heading')).toHaveCount(0)
+  await expect(page.locator('.todo-section-tabs')).toHaveCount(0)
   await shot(page, 'first-screen')
 
   // A reload is a new page load: the draft does not survive it, the page opens

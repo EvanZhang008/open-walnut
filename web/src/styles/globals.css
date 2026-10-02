@@ -10547,9 +10547,22 @@ body.walnut-dragging {
   transition: max-width 0.18s ease, opacity 0.15s ease;
 }
 
-.todo-section-tab.is-active .todo-section-tab-label {
+.todo-section-tab.is-active .todo-section-tab-label,
+/* A short bar (All + Pinned by default) has room to name every tab, and a bar of two
+   bare icons would not say what it is. */
+.todo-section-tabs.is-roomy .todo-section-tab-label {
   max-width: 88px;
   opacity: 1;
+}
+
+/* The All view's Pinned section with nothing pinned: the heading stays (a first visit
+   learns the section exists) and this one line stands in for the tier groups, which
+   wait for their first task. */
+.todo-pinned-empty {
+  margin: 2px 0 6px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
 }
 
 .todo-section-tab-count {

@@ -45,15 +45,19 @@ export function useNavigationPreference(key: string, fallback = false) {
   return [value, set] as const;
 }
 
-/** A stored list of ids (JSON array). Parsed once per change, so the array is stable between renders. */
-export function useNavigationList(key: string) {
+const NO_IDS: readonly string[] = [];
+
+/** A stored list of ids (JSON array). Parsed once per change, so the array is stable between renders.
+ *  `fallback` is the list while nothing is stored; a stored list, even an empty one, replaces it. */
+export function useNavigationList(key: string, fallback: readonly string[] = NO_IDS) {
   const [raw, write] = useStoredValue(key);
   const value = useMemo(() => {
+    if (raw === null) return fallback;
     try {
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
-    } catch { return []; }
-  }, [raw]);
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : fallback;
+    } catch { return fallback; }
+  }, [raw, fallback]);
   const set = useCallback((next: string[]) => write(JSON.stringify(next)), [write]);
   return [value, set] as const;
 }
