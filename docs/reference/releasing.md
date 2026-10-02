@@ -84,14 +84,13 @@ Both channels publish only a commit whose `CI OK` passed (see below), and `CI OK
 | Lint & build | `tsc`, the full build, the plugin packages |
 | Test (quick), Test (frontend) | ~300 pure-logic files and the web suites; quick is judged against its recorded baseline |
 | Test (slow) | ~1,000 tests that start real daemons, servers, git and the local embedder; must pass (`--retry=2` absorbs a runner hiccup, three failures in a row is a failure) |
+| Test (e2e, four shards) | ~130 files of real servers and daemons with a mock CLI; judged against `tests/setup/known-failures-e2e.json`, and each shard uploads its failures as `known-failures-e2e-<shard>` |
 | Fresh machine (Linux, macOS) | the README's two install routes on a machine without Bun or Claude Code |
 | Remote host | Walnut provisions a clean Linux dev box over real ssh and starts a session there |
 | Release rehearsal (Linux, macOS) | the package this commit would publish, end to end (next section) |
 
-Two more suites run on every push and report without blocking until they have a recorded
-baseline: the e2e tier (real servers with a mock CLI; each run uploads its failures as the
-`known-failures-e2e` artifact, the baseline that will let new failures block) and the
-Playwright browser suite (eight shards, summary per shard in the run page).
+One more suite runs on every push and reports without blocking: the Playwright browser
+suite (eight shards, summary per shard in the run page).
 
 ### The release rehearsal
 

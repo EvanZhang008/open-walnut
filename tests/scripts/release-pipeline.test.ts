@@ -406,10 +406,9 @@ describe('ci.yml', () => {
   const runs = (job: string) => doc.jobs[job]!.steps.map((s) => s.run ?? '').join('\n')
   const gate = doc.jobs['ci-ok']!
 
-  it('CI OK, the check both channels publish by, waits on the rehearsal and the slow tier', () => {
-    expect(gate.needs).toEqual(expect.arrayContaining(['build', 'test', 'test-heavy', 'onboarding', 'remote-host', 'rehearsal']))
-    // Informational jobs stay out of the gate.
-    expect(gate.needs).not.toContain('test-report')
+  it('CI OK, the check both channels publish by, waits on the rehearsal, the slow tier and e2e', () => {
+    expect(gate.needs).toEqual(expect.arrayContaining(['build', 'test', 'test-heavy', 'test-e2e', 'onboarding', 'remote-host', 'rehearsal']))
+    // The informational browser suite stays out of the gate.
     expect(gate.needs).not.toContain('browser')
     const check = gate.steps.map((s) => s.run ?? '').join('\n')
     for (const job of gate.needs as string[]) expect(check, job).toContain(`needs.${job}.result`)
@@ -428,11 +427,22 @@ describe('ci.yml', () => {
     expect(doc.jobs.rehearsal!.steps.some((s) => s['continue-on-error'])).toBe(false)
   })
 
-  it('the slow tier blocks, with retries for runner flakes; e2e records its baseline', () => {
+  it('the slow and e2e tiers block, with retries for runner flakes', () => {
     expect(runs('test-heavy')).toContain('npm run test:slow -- --maxWorkers=1 --retry=2')
     expect(doc.jobs['test-heavy']!.steps.some((s) => s['continue-on-error'])).toBe(false)
-    expect(text).toContain('node scripts/test-baseline.mjs record --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/4')
-    expect(text).toContain('name: known-failures-${{ matrix.tier }}-${{ matrix.shard }}')
+    // e2e: four shards, each judged against the committed baseline, never tolerated.
+    expect(doc.jobs['test-e2e']!.strategy!.matrix.shard).toEqual([1, 2, 3, 4])
+    expect(runs('test-e2e')).toContain('node scripts/test-baseline.mjs check --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/4')
+    expect(doc.jobs['test-e2e']!.steps.some((s) => s['continue-on-error'])).toBe(false)
+    const e2e = doc.jobs['test-e2e']!.steps.find((s) => s.run?.includes('test-baseline.mjs')) as { env?: Record<string, string> }
+    expect(e2e.env).toMatchObject({
+      WALNUT_BASELINE_CONFIG: 'vitest.e2e.config.ts',
+      WALNUT_BASELINE_FILE: 'tests/setup/known-failures-e2e.json',
+    })
+    expect(fs.existsSync(path.resolve(__dirname, '../../tests/setup/known-failures-e2e.json'))).toBe(true)
+    // Each leg keeps its own run, so the next baseline can be read off CI.
+    expect(e2e.env!.WALNUT_BASELINE_RUN_OUT).toContain('known-failures-e2e-${{ matrix.shard }}.json')
+    expect(text).toContain('name: known-failures-e2e-${{ matrix.shard }}')
   })
 
   it('the browser suite runs in shards and reports through the tested summary script', () => {

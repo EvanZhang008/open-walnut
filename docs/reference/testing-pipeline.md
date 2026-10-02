@@ -54,24 +54,28 @@ npm run test:focus -- -t 'reorder'                   # one test by name
 
 `.github/workflows/ci.yml`: a `build` gate (type-check + build), then two jobs of test tiers as **parallel matrices** — each leg gets its own runner, so wall-clock is the slowest single tier rather than the sum. Locally the tiers are forced sequential because they share one machine; on CI parallel is free.
 
-Blocking tiers (`quick`, `frontend`) and report-only ones (`slow`, `e2e`) are **separate jobs**, not one matrix with `continue-on-error: ${{ matrix.blocking == false }}`. Job-level `continue-on-error` has murky interaction with `needs.<job>.result` — a tolerated failure can still surface as `success` downstream — and the single check branch protection depends on must not rest on ambiguous semantics.
+Every vitest tier now blocks: `quick` and `frontend` (the `test` job), `slow` (`test-heavy`) and `e2e` (`test-e2e`, four shards). The browser suite is the one informational job, and it stays a **separate job**, not one matrix with `continue-on-error: ${{ matrix.blocking == false }}`. Job-level `continue-on-error` has murky interaction with `needs.<job>.result` — a tolerated failure can still surface as `success` downstream — and the single check branch protection depends on must not rest on ambiguous semantics.
 
-All CI jobs force CPU-only QMD on Linux so test workers do not launch doomed Vulkan builds. The quick gate and report-only jobs run with one worker because four workers oversubscribed the 4-core runner and produced changing, unrelated timeout failures across successive runs. Report-only jobs also use an isolated daemon directory and tolerate failure on the test step itself, so known failures appear as warnings while checkout, dependency, and build failures still turn the job red. The lightweight frontend tier remains parallel.
+All CI jobs force CPU-only QMD on Linux so test workers do not launch doomed Vulkan builds. The quick, slow and e2e jobs run with one worker because four workers oversubscribed the 4-core runner and produced changing, unrelated timeout failures across successive runs. The slow and e2e jobs also name a daemon directory of their own (`WALNUT_DAEMON_DIR`); the harness gives every worker a subdirectory of it (`tests/setup/runtime-dir-choice.ts`), because one shared directory let a test file's server adopt the daemon another file had started, with that file's home. The lightweight frontend tier remains parallel.
 
 Branch protection should require the **`CI OK`** job, not individual matrix legs — leg names change whenever the matrix does, which silently orphans a required-check rule.
 
-### Why some tiers are report-only
+### Baseline gates
 
 The quick tier currently has **one known failure on the committed tree**. A tier with a non-zero baseline cannot be a raw pass/fail gate: it would paint `main` permanently red, and an always-red check teaches everyone to ignore it.
 
-So the quick tier goes through a **baseline gate** instead:
+So the quick and e2e tiers go through a **baseline gate** instead:
 
 ```bash
 npm run test:baseline          # fails ONLY on failures absent from the baseline
 npm run test:baseline:record   # re-snapshot (do this when you fix some)
+
+# the e2e tier, as CI judges it
+WALNUT_BASELINE_CONFIG=vitest.e2e.config.ts WALNUT_BASELINE_FILE=tests/setup/known-failures-e2e.json \
+  WALNUT_BASELINE_MIN_FILES=120 node scripts/test-baseline.mjs check --maxWorkers=1
 ```
 
-`tests/setup/known-failures.json` is committed, so a PR that adds entries is visibly making things worse. The slow and e2e tiers stay report-only until they get the same treatment. **Move a tier into the blocking `test` job once its baseline reaches zero.**
+`tests/setup/known-failures.json` (quick) and `tests/setup/known-failures-e2e.json` (e2e) are committed, so a PR that adds entries is visibly making things worse. The e2e gate runs per shard: each leg judges only the files it ran (a baseline entry from another shard is neither new nor "fixed" there), and uploads its own failures as the `known-failures-e2e-<shard>` artifact (`WALNUT_BASELINE_RUN_OUT`), so a new e2e baseline is the union of the four artifacts of one run, with no second run of the tier. The slow tier has no baseline: it blocks on any failure.
 
 Two properties make this gate trustworthy rather than decorative:
 
