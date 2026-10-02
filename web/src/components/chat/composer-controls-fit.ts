@@ -43,6 +43,29 @@ export interface ControlFitResult {
  */
 export const ASSUMED_CONTROL_WIDTH = 64;
 
+/**
+ * Margin kept free when deciding whether a control's DETAIL (the model pill's
+ * context percentage) still fits on a condensed row. A detail that fits only to
+ * the last fraction of a pixel is not worth showing: the row wraps as its
+ * containment fallback, so a hairline of rounding would put the pill on a
+ * second line instead of clipping it.
+ */
+export const DETAIL_FIT_SLACK = 2;
+
+/**
+ * Whether a detail of `detailWidth` px fits on a row that measures
+ * `rowWithoutDetail` px with every control in its short form. Stateless on
+ * purpose, like pickVisibleControls: the answer depends on natural widths and
+ * the available room, never on whether the detail is currently shown. The bar
+ * keeps those widths apart (the pill minus its detail while the detail is on
+ * the row, the pill alone while it is not; the same number either way), so a
+ * resize can only ever move the answer in one direction.
+ */
+export function detailFits(rowWithoutDetail: number, detailWidth: number, availableWidth: number): boolean {
+  if (detailWidth <= 0) return true;
+  return rowWithoutDetail + detailWidth + DETAIL_FIT_SLACK <= availableWidth;
+}
+
 export function pickVisibleControls(
   controls: ControlFitInput[],
   availableWidth: number,

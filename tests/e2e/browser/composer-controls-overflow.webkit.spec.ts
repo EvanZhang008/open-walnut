@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
-  CTRL_SESSION, CTRL_FILLER, mockControlsSession, openControlsSession,
+  CTRL_SESSION, CTRL_FILLER, COLUMN_NAME_ONLY, mockControlsSession, openControlsSession, clampColumn,
   overflowBtn, controlOf, rowState, expectSingleRow, shootComposer,
   type SettingsWrites,
 } from './composer-controls-overflow-helpers';
@@ -26,19 +26,30 @@ test('WebKit wide composer leaves full model and Bypass inline while the add men
   await shootComposer(panel, 'wide-add-menu', 420);
 });
 
-test('WebKit narrow composer shows Bypass and the real percentage, then switches Rich to MD in the add menu', async ({ page }) => {
+test('WebKit narrow composer shows Bypass and the short model name with the real percentage, then switches Rich to MD in the add menu', async ({ page }) => {
   const writes: SettingsWrites = { body: [] };
   await mockControlsSession(page, CTRL_SESSION, writes);
   await mockControlsSession(page, CTRL_FILLER);
   const panel = await openControlsSession(page, { narrow: true });
   expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
   await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeHidden();
-  await expect(controlOf(panel, 'model').locator('.session-detail-context-pct')).toContainText('45%');
-  expect(await controlOf(panel, 'model').locator('button').evaluate((el) => getComputedStyle(el).fontSize)).toBe('0px');
-  expect(await controlOf(panel, 'model').locator('.session-detail-context-pct').evaluate((el) => getComputedStyle(el).fontSize)).toBe('11px');
+  const model = controlOf(panel, 'model').locator('button');
+  await expect(model.locator('.composer-model-pill-short')).toHaveText('Fable');
+  await expect(model.locator('.session-detail-context-pct')).toContainText('45%');
+  await expect(model).toHaveText(/^Fable\s*45%$/);
+  expect(await model.evaluate((el) => getComputedStyle(el).fontSize)).toBe('11px');
   await expect(overflowBtn(panel)).toHaveCount(0);
   await expectSingleRow(panel);
   await shootComposer(panel, 'narrow');
+  // Tighter still: the name stays, the percentage goes, and the row is still one line.
+  await clampColumn(page, COLUMN_NAME_ONLY);
+  await expect(model.locator('.session-detail-context-pct')).toHaveCount(0);
+  await expect(model).toHaveText(/^Fable$/);
+  expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
+  await expectSingleRow(panel);
+  await shootComposer(panel, 'tight');
+  await clampColumn(page, null);
+  await expect(model.locator('.session-detail-context-pct')).toContainText('45%');
   await panel.locator('.session-panel-input .chat-plus-btn').click();
   const output = panel.locator('.session-panel-input [data-add-control="output"]');
   await expect(output).toContainText('Rich');

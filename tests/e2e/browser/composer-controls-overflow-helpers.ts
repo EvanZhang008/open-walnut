@@ -46,19 +46,54 @@ export async function mockControlsSession(page: Page, id: string, writes?: Setti
   });
 }
 
-/** Open `id` as the only column (wide) or beside a filler column (narrow). */
-export async function openControlsSession(page: Page, opts: { narrow: boolean }): Promise<Locator> {
-  const ids = opts.narrow ? [CTRL_SESSION, CTRL_FILLER] : [CTRL_SESSION];
+/** A third column, for a row too tight to hold the model pill's percentage. */
+export const CTRL_FILLER_2 = 'pw-composer-controls-filler-2';
+
+/** Viewport at which two columns condense the controls row (1100 no longer
+ *  does: the home page gives the columns more room than it did on 2026-09-26). */
+export const NARROW_WIDTH = 900;
+
+/** Open `id` as the only column (wide) or beside filler columns (narrow); the
+ *  narrow layout takes an explicit viewport width and column list. */
+export async function openControlsSession(
+  page: Page,
+  opts: { narrow: boolean; width?: number; columns?: string[] },
+): Promise<Locator> {
+  const ids = opts.columns ?? (opts.narrow ? [CTRL_SESSION, CTRL_FILLER] : [CTRL_SESSION]);
   await page.addInitScript((list) => {
     sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify(list.map((id: string) => ({ id, locked: false }))));
   }, ids);
-  await page.setViewportSize({ width: opts.narrow ? 1100 : 1600, height: 800 });
+  await page.setViewportSize({ width: opts.width ?? (opts.narrow ? NARROW_WIDTH : 1600), height: 800 });
   await page.goto('/');
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${CTRL_SESSION}"]`);
   await expect(panel).toBeVisible({ timeout: 20_000 });
   await expect(panel.locator('.session-history')).toContainText('Answer 5.', { timeout: 20_000 });
   await expect(barOf(panel)).toBeVisible();
   return panel;
+}
+
+/**
+ * Column widths that put the controls row in each of its three shapes. The row
+ * gets the column's width minus 140px (the mic/send cluster and padding), the
+ * condensed pills measure Bypass 56 + gap 4 + "Fable" 37 = 97, and " 45%" adds
+ * 28 plus the 2px fit margin: 260px leaves 120px (name only), 220px leaves
+ * 80px (the model moves into the "..." menu). The home page's own column count
+ * is a server setting the fixture does not change, so the tight shapes are
+ * reached by clamping the column instead of opening a third one.
+ */
+export const COLUMN_NAME_ONLY = 260;
+export const COLUMN_MODEL_IN_MENU = 220;
+
+/** Clamp every session column to `px`, or lift the clamp with null. */
+export async function clampColumn(page: Page, px: number | null): Promise<void> {
+  await page.evaluate((width) => {
+    const id = 'pw-column-clamp';
+    let style = document.getElementById(id) as HTMLStyleElement | null;
+    if (!style) { style = document.createElement('style'); style.id = id; document.head.appendChild(style); }
+    style.textContent = width == null ? '' : `.main-page-session-column {
+      width: ${width}px !important; max-width: ${width}px !important; min-width: 0 !important; flex: 0 0 ${width}px !important;
+    }`;
+  }, px);
 }
 
 export const barOf = (panel: Locator) => panel.locator('.composer-controls-bar').last();

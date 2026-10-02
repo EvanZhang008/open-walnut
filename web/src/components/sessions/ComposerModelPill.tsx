@@ -15,13 +15,15 @@
  *    sent: picks are reported to the caller and the picker closes. The picker
  *    runs in its draft shape (an "Auto" row, no live get_settings pull).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ModelPicker, acpModelDisplayName } from './ModelPicker';
 import { SessionSpeedReadout } from './SessionSpeedReadout';
 import { modelSupportsEffort, SESSION_EFFORTS } from '@open-walnut/core';
 import type { SessionEffort } from '@open-walnut/core';
 import { setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
 import { useSessionUsage, formatModelName, getContextWindowSize, contextBadgeTitle } from '@/hooks/useSessionUsage';
+import { shortModelName } from '@/utils/model-name';
+import { useComposerRowFit } from '@/components/chat/ComposerControlsBar';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
 import { refreshSessionControls } from '@/hooks/useSessionControls';
 import { useNotifications } from '@/contexts/notifications';
@@ -221,6 +223,23 @@ export function ComposerModelPill({
 
   const extraTitle = title ? ` ${title}` : '';
 
+  // In a condensed controls row the pill is one family word ("Opus"), followed
+  // by the percentage only while the row has room for it; the effort badge
+  // waits for a wider column. The row decides (ComposerControlsBar measures the
+  // short form and the detail apart); the pill only renders what it is told.
+  const fit = useComposerRowFit();
+  const renderLabel = (label: string, detail: ReactNode) => fit.condensed ? (
+    <>
+      <span className="composer-model-pill-short">{shortModelName(label)}</span>
+      {fit.showDetail && detail}
+    </>
+  ) : (
+    <>
+      {label}
+      {detail}
+    </>
+  );
+
   // EVERY engine opens the SAME two-pane picker (provider rail | models) — an
   // ACP session just opens it on the ACP pane, with the others greyed.
   const pill = engineUi.isAcp ? (
@@ -234,9 +253,11 @@ export function ComposerModelPill({
       {/* 3 tiers: the provider's own name (minus its provider prefix — a pill
           reading "Amazon Bedrock/Claude…" is all provider, no model), else
           prettify the id, else the engine. */}
-      {acpModelDisplayName(pending ? pending.model : session?.acpModel, pending ? undefined : session?.acpModelName) ?? engineUi.displayName}
-      {contextPercent != null && (
-        <span className="session-detail-context-pct"> {contextPercent}%</span>
+      {renderLabel(
+        acpModelDisplayName(pending ? pending.model : session?.acpModel, pending ? undefined : session?.acpModelName) ?? engineUi.displayName,
+        contextPercent != null && (
+          <span className="session-detail-context-pct" data-condensed-detail> {contextPercent}%</span>
+        ),
       )}
     </button>
   ) : (
@@ -251,21 +272,24 @@ export function ComposerModelPill({
       title={`${rawModel || (autoResolved ? `Auto — CLI default resolves to ${autoResolved} on this host` : 'Model not reported yet (Auto)')} — click to switch model / effort${extraTitle}`}
       onClick={(e) => { pillRef.current = e.currentTarget; setPickerOpen((v) => !v); }}
     >
-      {displayModel || (autoResolved ? `Auto (${autoResolved})` : 'Auto')}
-      {contextPercent != null && (
-        <span
-          className="session-detail-context-pct"
-          style={{
-            color: contextPercent > 80 ? 'var(--danger, #ff3b30)'
-              : contextPercent > 50 ? 'var(--warning, #ff9500)'
-              : 'var(--fg-muted)',
-          }}
-          title={contextBadgeTitle(badgeUsage, contextPercent)}
-        >
-          {' '}{contextPercent}%
-        </span>
+      {renderLabel(
+        displayModel || (autoResolved ? `Auto (${autoResolved})` : 'Auto'),
+        contextPercent != null && (
+          <span
+            className="session-detail-context-pct"
+            data-condensed-detail
+            style={{
+              color: contextPercent > 80 ? 'var(--danger, #ff3b30)'
+                : contextPercent > 50 ? 'var(--warning, #ff9500)'
+                : 'var(--fg-muted)',
+            }}
+            title={contextBadgeTitle(badgeUsage, contextPercent)}
+          >
+            {' '}{contextPercent}%
+          </span>
+        ),
       )}
-      {modelSupportsEffort(rawModel) && (() => {
+      {!fit.condensed && modelSupportsEffort(rawModel) && (() => {
         // Badge shows the CLI's TRUE effort (effectiveEffort, read back via
         // get_settings) — falling back to the requested level. When the CLI
         // overrode the request (env / downgrade), flag it.

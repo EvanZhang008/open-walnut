@@ -1,6 +1,7 @@
 import { test, expect, type Locator } from '@playwright/test';
 import {
-  CTRL_SESSION, CTRL_FILLER, mockControlsSession, openControlsSession,
+  CTRL_SESSION, CTRL_FILLER, NARROW_WIDTH, COLUMN_NAME_ONLY, COLUMN_MODEL_IN_MENU,
+  mockControlsSession, openControlsSession, clampColumn,
   overflowBtn, controlOf, rowState, expectSingleRow, shootComposer,
   type SettingsWrites,
 } from './composer-controls-overflow-helpers';
@@ -35,7 +36,7 @@ test('wide composer keeps only full model and mode inline; add menu holds reply 
   await shootComposer(panel, 'wide-add-menu', 420);
 });
 
-test('narrow composer shows Bypass without shortcut and model context percentage without an overflow button', async ({ page }) => {
+test('narrow composer shows Bypass without shortcut and the short model name with its percentage', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   await mockControlsSession(page, CTRL_FILLER);
   const panel = await openControlsSession(page, { narrow: true });
@@ -43,13 +44,63 @@ test('narrow composer shows Bypass without shortcut and model context percentage
   await expect.poll(() => rowState(panel).then((state) => state.visible)).toEqual(['mode', 'model']);
   await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-label')).toHaveText('Bypass');
   await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeHidden();
+  // The family word, the percentage, nothing else: not the version, not the
+  // 1M suffix, not the effort badge, and never the percentage alone.
   const model = controlOf(panel, 'model').locator('button');
-  expect(await model.evaluate((el) => getComputedStyle(el).fontSize)).toBe('0px');
-  expect(await model.locator('.session-detail-context-pct').evaluate((el) => getComputedStyle(el).fontSize)).toBe('11px');
+  await expect(model.locator('.composer-model-pill-short')).toHaveText('Fable');
+  await expect(model).toHaveText(/^Fable\s*45%$/);
+  expect(await model.evaluate((el) => getComputedStyle(el).fontSize)).toBe('11px');
   await expect(model).toHaveAttribute('title', /fable-5-1/);
   await expect(overflowBtn(panel)).toHaveCount(0);
   await expectSingleRow(panel);
   await shootComposer(panel, 'narrow');
+});
+
+test('a tighter column keeps the model name and drops the percentage, which comes back with the room', async ({ page }) => {
+  await mockControlsSession(page, CTRL_SESSION);
+  await mockControlsSession(page, CTRL_FILLER);
+  const panel = await openControlsSession(page, { narrow: true });
+  const model = controlOf(panel, 'model').locator('button');
+  const pct = model.locator('.session-detail-context-pct');
+  await expect(pct).toContainText('45%');
+  // Room for "Bypass" and "Fable", not for the percentage too.
+  await clampColumn(page, COLUMN_NAME_ONLY);
+  await expect(pct).toHaveCount(0);
+  await expect(model.locator('.composer-model-pill-short')).toHaveText('Fable');
+  await expect(model).toHaveText(/^Fable$/);
+  expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
+  await expect(overflowBtn(panel)).toHaveCount(0);
+  await expectSingleRow(panel);
+  await shootComposer(panel, 'tight');
+  // Both pills are still the real controls.
+  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-label')).toHaveText('Bypass');
+  await model.click();
+  await expect(page.locator('.model-picker').first()).toBeVisible({ timeout: 10_000 });
+  await page.keyboard.press('Escape');
+  // Back and forth three times: the percentage follows the room, the name never leaves.
+  for (let i = 0; i < 3; i++) {
+    await clampColumn(page, null);
+    await expect(pct).toContainText('45%');
+    await expect(model.locator('.composer-model-pill-short')).toHaveText('Fable');
+    await expectSingleRow(panel);
+    await clampColumn(page, COLUMN_NAME_ONLY);
+    await expect(pct).toHaveCount(0);
+    await expect(model.locator('.composer-model-pill-short')).toHaveText('Fable');
+    await expectSingleRow(panel);
+  }
+  // Tighter still: the model leaves for the "..." menu, whose row repeats the short name.
+  await clampColumn(page, COLUMN_MODEL_IN_MENU);
+  await expect(overflowBtn(panel)).toBeVisible();
+  expect((await rowState(panel)).visible).toEqual(['mode']);
+  await overflowBtn(panel).click();
+  await expect(page.getByTestId('composer-overflow-item-model')).toContainText('Fable');
+  await page.keyboard.press('Escape');
+  // Wide again: the full pill, with version, percentage and effort.
+  await clampColumn(page, null);
+  await page.setViewportSize({ width: 2200, height: 800 });
+  await expect(model.locator('.composer-model-pill-short')).toHaveCount(0);
+  await expect(model).toHaveText(/^Fable 5\.1 45% · High$/);
+  await expect(controlOf(panel, 'mode').locator('.mode-toggle-pill-shortcut')).toBeVisible();
 });
 
 test('reply style in add menu updates the session twice and keeps the menu label in sync', async ({ page }) => {
@@ -104,8 +155,8 @@ test('model picker stays anchored and repeated resize restores full model withou
   await expect.poll(() => controlOf(panel, 'model').locator('button').innerText()).toContain('Fable');
   expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
   await expect(overflowBtn(panel)).toHaveCount(0);
-  await page.setViewportSize({ width: 1100, height: 800 });
-  await expect.poll(() => controlOf(panel, 'model').locator('button').evaluate((el) => getComputedStyle(el).fontSize)).toBe('0px');
+  await page.setViewportSize({ width: NARROW_WIDTH, height: 800 });
+  await expect(controlOf(panel, 'model').locator('.composer-model-pill-short')).toHaveText('Fable');
   await expect(controlOf(panel, 'model').locator('.session-detail-context-pct')).toContainText('45%');
   expect((await rowState(panel)).visible).toEqual(['mode', 'model']);
   await expectSingleRow(panel);

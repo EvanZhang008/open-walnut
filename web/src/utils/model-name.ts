@@ -33,3 +33,25 @@ export function formatModelName(model: string | undefined): string {
   if (majorMatch) return `${family} ${majorMatch[1]}${suffix}`;
   return `${family}${suffix}`;
 }
+
+const CLAUDE_FAMILY_RE = /\b(opus|sonnet|haiku|fable)\b/i;
+
+/**
+ * The one word that tells models apart, for a pill with no room for the full
+ * display name: "Fable 5.1 1M" → "Fable", "GPT-5.6 Sol" → "Sol",
+ * "Auto (Opus 5 1M)" → "Auto", "Claude Sonnet 4.6 (US)" → "Sonnet".
+ * Takes a DISPLAY name (formatModelName / acpModelDisplayName output), so one
+ * rule serves every engine. A name with no family word and no trailing word
+ * ("GPT-5.6", a custom proxy id) comes back whole; the pill clips it.
+ */
+export function shortModelName(display: string | undefined): string {
+  if (!display) return '';
+  const name = display.replace(/\s+·.*$/, '').trim();
+  if (/^auto\b/i.test(name)) return 'Auto';
+  const family = CLAUDE_FAMILY_RE.exec(name);
+  if (family) return family[1].charAt(0).toUpperCase() + family[1].slice(1).toLowerCase();
+  const words = name.split(/\s+/);
+  const last = words[words.length - 1]!;
+  if (words.length > 1 && /^[A-Za-z]+$/.test(last)) return last;
+  return name;
+}

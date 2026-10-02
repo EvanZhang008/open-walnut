@@ -61,19 +61,21 @@
   display: none;
 }
 
+/* Condensed row: the pill is the model's short name plus, while the row has room
+   for it, the context percentage (ComposerControlsBar decides; the pill renders
+   what it is told). The name clips on its own, so a long custom model id cannot
+   push the percentage out of the pill's box. */
 .composer-controls-bar.is-condensed [data-control-id='model'] .composer-model-pill {
-  max-width: 50px;
   padding-inline: 4px;
 }
 
-.composer-controls-bar.is-condensed:has([data-control-id='model'] .session-detail-context-pct)
-  [data-control-id='model'] .composer-model-pill {
-  font-size: 0;
-}
-
-.composer-controls-bar.is-condensed:has([data-control-id='model'] .session-detail-context-pct)
-  [data-control-id='model'] .session-detail-context-pct {
-  font-size: 11px;
+.composer-model-pill-short {
+  display: inline-block;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 .session-panel-input .chat-plus-menu {

@@ -9,7 +9,7 @@
  * are the last to leave).
  */
 import { describe, it, expect } from 'vitest';
-import { pickVisibleControls, ASSUMED_CONTROL_WIDTH, type ControlFitInput } from '../../web/src/components/chat/composer-controls-fit';
+import { pickVisibleControls, detailFits, ASSUMED_CONTROL_WIDTH, DETAIL_FIT_SLACK, type ControlFitInput } from '../../web/src/components/chat/composer-controls-fit';
 
 const OPTS = { gap: 4, overflowButtonWidth: 22 };
 
@@ -109,5 +109,40 @@ describe('pickVisibleControls', () => {
     const r = pickVisibleControls(pinned, 130, OPTS);
     expect(r.visible).toEqual(['output', 'btw']);
     expect(r.overflow).toEqual(['mode', 'model', 'note']);
+  });
+});
+
+describe('detailFits', () => {
+  // A condensed row of "Bypass" (53) and "Fable" (43) with one gap = 100; the
+  // percentage " 45%" measures 28.
+  const ROW = 100;
+  const PCT = 28;
+
+  it('keeps the percentage while the row has room for it', () => {
+    expect(detailFits(ROW, PCT, 160)).toBe(true);
+    expect(detailFits(ROW, PCT, ROW + PCT + DETAIL_FIT_SLACK)).toBe(true);
+  });
+
+  it('drops the percentage, never the model name, when the room runs out', () => {
+    expect(detailFits(ROW, PCT, ROW + PCT)).toBe(false);
+    expect(detailFits(ROW, PCT, 110)).toBe(false);
+  });
+
+  it('flips once as the room grows, so the percentage cannot blink at a boundary', () => {
+    // The bar re-decides on every resize from the same two natural widths; the
+    // only thing that may change the answer is the room, and then only in one
+    // direction.
+    let previous = false;
+    for (let available = 100; available <= 160; available += 0.25) {
+      const now = detailFits(ROW, PCT, available);
+      expect(now || !previous, `available ${available}`).toBe(true);
+      previous = now;
+    }
+    expect(detailFits(ROW, PCT, ROW + PCT + DETAIL_FIT_SLACK - 0.01)).toBe(false);
+    expect(detailFits(ROW, PCT, ROW + PCT + DETAIL_FIT_SLACK)).toBe(true);
+  });
+
+  it('is true when there is no detail to fit', () => {
+    expect(detailFits(ROW, 0, 90)).toBe(true);
   });
 });
