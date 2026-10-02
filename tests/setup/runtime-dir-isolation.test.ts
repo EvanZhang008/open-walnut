@@ -32,6 +32,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
+import fs from 'node:fs'
 
 const PROD_RUNTIME_DIR = '/tmp/open-walnut' // safe: comparison only
 
@@ -70,5 +71,26 @@ describe('test runtime-dir isolation', () => {
       sibling.includes(String(process.pid)),
       `${sibling} is not per-process — concurrent workers would share one streams dir`,
     ).toBe(true)
+  })
+})
+
+describe('wiring: every config that runs real servers loads it', () => {
+  it('the e2e tier loads runtime-dir-isolation first, so its servers run keyword-only search', () => {
+    // A config that declares its own setupFiles REPLACES the base list. The e2e
+    // tier did, without this file: its servers ran the real semantic lane, and
+    // on CI an embedding-model load outlived the worker's stop grace and took
+    // the test process down (2026-10-02).
+    const repoRoot = path.resolve(import.meta.dirname, '..', '..')
+    const configs = fs.readdirSync(repoRoot).filter((f) => /^vitest(\..+)?\.config\.ts$/.test(f))
+    const runsServers = configs.filter((rel) => {
+      const src = fs.readFileSync(path.join(repoRoot, rel), 'utf-8')
+      return /include:\s*\[[^\]]*tests\/(e2e|\*\*)\//.test(src) && !/include:\s*\[[^\]]*\.live\.test/.test(src)
+    })
+    expect(runsServers).toEqual(expect.arrayContaining(['vitest.config.ts', 'vitest.e2e.config.ts']))
+    for (const rel of runsServers) {
+      const src = fs.readFileSync(path.join(repoRoot, rel), 'utf-8')
+      const files = src.match(/setupFiles:\s*\[([^\]]*)\]/)?.[1] ?? ''
+      expect(files.trim().startsWith("'tests/setup/runtime-dir-isolation.ts'"), `${rel} must load tests/setup/runtime-dir-isolation.ts first`).toBe(true)
+    }
   })
 })
