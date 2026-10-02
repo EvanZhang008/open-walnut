@@ -68,6 +68,9 @@ process.env.WALNUT_CLOUD_SETUP_FAKE = '1'
 process.argv.push('--_ephemeral-child')
 // The server's question-naming AI stub answers for these sessions (tests only).
 process.env.WALNUT_THREAD_AI_STUB = THREAD_AI_STUB_PREFIX
+// The mock CLI answers like a model here: the user's words echoed, none of the
+// spawn-flag suffixes the provider tests read (`[permission-mode:…] [cwd:…]`).
+process.env.MOCK_CLAUDE_PLAIN_ECHO = '1'
 
 /** Local `YYYY-MM-DD` N days from now — for fixtures that must stay in the future. */
 function futureDay(days: number): string {

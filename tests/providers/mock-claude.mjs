@@ -352,9 +352,38 @@ function stripBanners(text) {
   }
   return body;
 }
+// The rest of what Walnut wraps around the user's words, which a real model reads
+// and never repeats: the output-mode instruction and standing reminder lines
+// (`[Rich output mode …]`), the reference-card block, the thread-switch lines
+// (`(Back to …)`), and the `> quote` block a question's send opens with. Peeled
+// off the echo so a fixture reply reads like a model's, not like a dump of the
+// prompt (2026-10-01: a demo card showed the reminder and the quote).
+function stripInputDecorations(text, hadQuestion) {
+  const lines = text.split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (t === '---walnut-refs---') {
+      while (i < lines.length && lines[i].trim() !== '---/walnut-refs---') i++;
+      continue;
+    }
+    if (t.startsWith('[Rich output mode')) continue;
+    if (/^\(Back to (the main conversation|the earlier (thread|question) about)/.test(t)) continue;
+    out.push(lines[i]);
+  }
+  let body = out.join('\n').trim();
+  // A question's opening: the file it is about (`About \`path\`:`), then the quote.
+  if (hadQuestion) body = body.replace(/^About `[^`\n]+`:\s*\n+/, '').replace(/^(?:>.*\n?)+\s*/, '');
+  // Never strip a message down to nothing: someone quoting the literal text.
+  return body.trim() === '' ? text : body.trim();
+}
+// `MOCK_CLAUDE_PLAIN_ECHO=1` (the browser fixture) drops the spawn-flag suffixes
+// (`[permission-mode:…] [cwd:…] …`), which only the provider and e2e node tests
+// read; a UI test or a demo then sees a reply shaped like a model's.
+const plainEcho = process.env.MOCK_CLAUDE_PLAIN_ECHO === '1';
 function computeMessageParts() {
   slowDelayMs = 0;
-  const bare = stripBanners(message);
+  const bare = stripInputDecorations(stripBanners(message), questionSeq !== null);
   effectiveMessage = bare;
   const slowMatch = bare.match(/^slow:(\d+)\s+(.*)/);
   if (slowMatch) {
@@ -382,7 +411,8 @@ function computeMessageParts() {
   const effortPart = effortFlag ? ` [effort:${effortFlag}]` : '';
   const bypassCapabilityPart = dangerouslySkipPermissions ? ' [dangerously-skip-permissions:true]' : '';
   const tagPart = questionSeq ? `[Q${questionSeq}]\n` : '';
-  resultText = `${tagPart}Hello! I processed your message: ${effectiveMessage}${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
+  const flags = plainEcho ? '' : `${permPart}${cwdPart}${sysPart}${modelPart}${effortPart}${bypassCapabilityPart}`;
+  resultText = `${tagPart}Hello! I processed your message: ${effectiveMessage}${flags}`;
 }
 computeMessageParts();
 

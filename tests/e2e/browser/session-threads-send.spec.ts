@@ -136,10 +136,13 @@ test.describe('Question stack: asking and sending', () => {
     const map = panel.locator('.thread-map')
     await expect(map.locator('.thread-map-row[data-kind="pending"], .thread-map-mark[data-kind="pending"]')).toHaveCount(0, { timeout: 15_000 })
     await expect((await mapEntry(panel)).entry).toHaveAttribute('data-current', 'true')
-    await expect(history).toContainText('processed your message: > rewrites the index in place', { timeout: 60_000 })
+    // The mock answers like a model: the words asked, never the quote or the
+    // orientation line it was sent with (the record below holds the quote).
+    await expect(history).toContainText('processed your message: what does phase two cost', { timeout: 60_000 })
     await shot(page, 'c3-answer-on-page')
     const rec = await readRecord(request, SEND_SESSION)
     expect(rec.threadAnchors ?? []).toHaveLength(1)
+    expect((rec.threadAnchors ?? [])[0].quote?.exact).toContain(PHRASE)
     const head = (rec.threadAnchors ?? [])[0].msgId
     expect((rec.threadMeta ?? []).some((m) => m.headId === head && m.status === 'open')).toBe(true)
     const writes = patches.filter((b) => 'thread_anchors' in b || 'thread_meta' in b)
@@ -232,7 +235,8 @@ test.describe('Question stack: asking and sending', () => {
     await expectDepth(panel, 0)
     // Root after a dive: the main-conversation line leads.
     await send(panel, 'root after the dive')
-    await expect(history).toContainText('processed your message: (Back to the main conversation)', { timeout: 60_000 })
+    await expect(history).toContainText('(Back to the main conversation)')
+    await expect(history).toContainText('processed your message: root after the dive', { timeout: 60_000 })
     // At once back on the question: the newest turn is root's (only the
     // optimistic row says so yet), so the follow-up names its question.
     await askedRows(panel).first().click()
@@ -241,7 +245,7 @@ test.describe('Question stack: asking and sending', () => {
     await expect(history).toContainText('(Back to the earlier question about “', { timeout: 60_000 })
     await expect(history).toContainText('follow up check one')
     // The newest turn is now this page: no line.
-    await expect(history).toContainText('processed your message: (Back to the earlier question', { timeout: 60_000 })
+    await expect(history).toContainText('processed your message: follow up check one', { timeout: 60_000 })
     await send(panel, 'follow up check two')
     await expect(history).toContainText('processed your message: follow up check two', { timeout: 60_000 })
     await page.keyboard.press('Escape')
@@ -403,8 +407,7 @@ test.describe('Question stack: asking and sending', () => {
     for (let i = 0; i < 3; i++) {
       await askedRows(panel).nth(i).click()
       await expectDepth(panel, 1)
-      // A prefix: a drag selection in WebKit can end a letter short of the phrase.
-      await expect(history).toContainText(`processed your message: > ${phrases[i].slice(0, 20)}`, { timeout: 60_000 })
+      await expect(history).toContainText(`processed your message: queued question ${i + 1}`, { timeout: 60_000 })
       await expect(history).not.toContainText('processed your message: root turn')
       for (let j = 0; j < 3; j++) if (j !== i) await expect(history).not.toContainText(`queued question ${j + 1}`)
       await page.keyboard.press('Escape')
