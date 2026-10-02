@@ -76,6 +76,15 @@ let state: DiskWatermarkState = {
 /** One warn per outage for statfs failures — a broken statfs must not spam. */
 let statfsFailureLogged = false;
 
+/**
+ * Whether a poll has read the disk yet. The level starts at 'ok' by assumption,
+ * not by measurement, so a first poll that measures 'ok' is a transition too:
+ * the "filling up" / "critically full" cards left by the previous process (the
+ * user freed space while the server was down, or the fix landed with a deploy)
+ * have no other signal, and a steady 'ok' never crosses the edge below.
+ */
+let measured = false;
+
 interface StatfsLike {
   bsize: number | bigint;
   blocks: number | bigint;
@@ -96,6 +105,7 @@ export function _setStatfsForTest(fn: StatfsFn | null): void {
 export function resetDiskWatermarkForTest(): void {
   state = { level: 'ok', usedPct: 0, availBytes: Number.MAX_SAFE_INTEGER, path: WALNUT_HOME, checkedAt: null };
   statfsFailureLogged = false;
+  measured = false;
   setDiskPullOnly(false, { reason: 'test-reset' });
 }
 
@@ -189,8 +199,14 @@ export async function pollDiskWatermarkOnce(
   const prev = state.level;
   const level = nextLevel(usedPct, availBytes, prev);
   state = { level, usedPct, availBytes, path: dir, checkedAt: new Date().toISOString() };
+  const firstMeasurement = !measured;
+  measured = true;
 
-  if (level !== prev) {
+  if (level === prev && firstMeasurement && level === 'ok') {
+    // Measured healthy on the first look: whatever disk cards the previous
+    // process left behind describe a condition that is over.
+    onRecovered?.();
+  } else if (level !== prev) {
     if (level === 'critical') {
       // skipNotify: the notify() call below is this condition's card (keyed
       // 'disk', retired by onRecovered). Without it the bridge minted a second

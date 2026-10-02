@@ -35,8 +35,10 @@ import {
 } from '../../../src/core/notifications/store.js';
 import {
   expireOrphanedPermissionNotifications, expireStaleErrorNotifications,
+  unresolvedErrorRecoveryKeys,
   KEYLESS_ERROR_DEBRIS_MS, RESOLVED_ERROR_RETENTION_MS,
 } from '../../../src/core/notifications/permission-expiry.js';
+import { addTask, completeTask, _resetForTesting as _resetTasksForTesting } from '../../../src/core/task-manager.js';
 import {
   createSessionRecord, updateSessionRecord, _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js';
@@ -52,6 +54,7 @@ const PP = {
 beforeEach(async () => {
   closeDb();
   _resetSessionTrackerForTesting();
+  _resetTasksForTesting();
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
 });
@@ -277,6 +280,37 @@ describe('expireStaleErrorNotifications', () => {
     expect(out.deadSession).toBe(0);
     expect(await resolvedOfKey('error:plugin')).toBeUndefined();
     expect(await resolvedOfKey('error:route')).toBeUndefined();
+  });
+
+  it('TASK KEYS: a start failure for a task that is gone or complete is expired; an open task keeps its card', async () => {
+    // 'Couldn't start a session' is keyed `task:<id>` (the session never existed)
+    // and recovers on that task's next start. Seven such cards sat red for a week:
+    // some tasks had long since completed, so no start would ever come.
+    const open = (await addTask({ title: 'still open' })).task;
+    const done = (await addTask({ title: 'finished' })).task;
+    await completeTask(done.id);
+    await seedError('error:start-open', { recoveryKey: `task:${open.id}` });
+    await seedError('error:start-done', { recoveryKey: `task:${done.id}` });
+    await seedError('error:start-gone', { recoveryKey: 'task:zzzzzzzz-0000' });
+    const out = await expireStaleErrorNotifications();
+    expect(out.deadSession).toBe(2);
+    expect(await resolvedOfKey('error:start-open')).toBeUndefined();
+    expect(await resolvedOfKey('error:start-done')).toBe('expired');
+    expect(await resolvedOfKey('error:start-gone')).toBe('expired');
+  });
+
+  it('SEEDING: unresolvedErrorRecoveryKeys lists each live key once, routes in today\'s normalization', async () => {
+    // A card written under an older id rule carries `route:PATCH /api/tasks/<id>`;
+    // today's request logger can only ever publish `route:PATCH /api/tasks/:id`.
+    await seedError('error:old-route', { recoveryKey: 'route:PATCH /api/tasks/mu0s3x7c-cbd8' });
+    await seedError('error:new-route', { recoveryKey: 'route:PATCH /api/tasks/:id' });
+    await seedError('error:sess', { recoveryKey: 'session:s-1' });
+    await seedError('error:git', { recoveryKey: 'git' });
+    await seedError('error:keyless');
+    await seedError('error:settled', { recoveryKey: 'session:s-2' });
+    await recoverNotifications(['session:s-2']);
+    const keys = (await unresolvedErrorRecoveryKeys()).sort();
+    expect(keys).toEqual(['git', 'route:PATCH /api/tasks/:id', 'session:s-1']);
   });
 
   it('does not overwrite a card the real success point already RECOVERED', async () => {

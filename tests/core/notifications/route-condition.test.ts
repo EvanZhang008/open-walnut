@@ -14,7 +14,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  isIdSegment, normalizeRoutePath, routeRecoveryKey, routeLogMessage,
+  isIdSegment, normalizeRoutePath, routeRecoveryKey, routeLogMessage, canonicalRecoveryKey,
 } from '../../../src/core/notifications/route-condition.js';
 
 describe('isIdSegment', () => {
@@ -148,5 +148,24 @@ describe('routeRecoveryKey', () => {
   it('separates GET from PUT on the same path (independently fixable)', () => {
     expect(routeRecoveryKey('GET', '/api/ui-prefs'))
       .not.toBe(routeRecoveryKey('PUT', '/api/ui-prefs'));
+  });
+});
+
+describe('canonicalRecoveryKey', () => {
+  it('rewrites a stored route key into the current id rules', () => {
+    // Keys the live feed held from before Walnut ids, inbox ids and percent-
+    // encoded mail ids were collapsed; each is a route today's logger can reach.
+    expect(canonicalRecoveryKey('route:PATCH /api/tasks/mu0s3x7c-cbd8')).toBe('route:PATCH /api/tasks/:id');
+    expect(canonicalRecoveryKey('route:GET /api/v1/human-inbox/lt-mumtlrw4-9c39f4')).toBe('route:GET /api/v1/human-inbox/:id');
+    expect(canonicalRecoveryKey('route:POST /api/plugins/mail/messages/mail-outlook%3A15f7/inbox%3AAAQk%3D/read'))
+      .toBe('route:POST /api/plugins/mail/messages/:id/:id/read');
+  });
+
+  it('is a fixed point on a canonical key and leaves other keys alone', () => {
+    expect(canonicalRecoveryKey('route:PUT /api/tasks/:id/phase')).toBe('route:PUT /api/tasks/:id/phase');
+    expect(canonicalRecoveryKey('session:abc')).toBe('session:abc');
+    expect(canonicalRecoveryKey('git')).toBe('git');
+    expect(canonicalRecoveryKey('route:')).toBe('route:');
+    expect(canonicalRecoveryKey('route:GET')).toBe('route:GET');
   });
 });

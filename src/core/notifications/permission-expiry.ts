@@ -35,6 +35,8 @@ import {
   type NotificationRecord,
 } from './store.js';
 import { getSessionByClaudeId } from '../session-tracker.js';
+import { getTask } from '../task-manager.js';
+import { canonicalRecoveryKey } from './route-condition.js';
 import { log } from '../../logging/index.js';
 
 /** The request id a permission record is about; legacy rows only have dedupKey. */
@@ -132,6 +134,41 @@ function sessionIdOfErrorKey(record: NotificationRecord): string | null {
   return record.recoveryKey.slice('session:'.length) || null;
 }
 
+/** The task id a start-failure record belongs to, from its `task:<id>` key. */
+function taskIdOfErrorKey(record: NotificationRecord): string | null {
+  if (!record.recoveryKey?.startsWith('task:')) return null;
+  return record.recoveryKey.slice('task:'.length) || null;
+}
+
+/**
+ * The recovery keys of every unresolved error card, in today's normalization,
+ * for seeding the in-process recovery trackers at boot.
+ *
+ * Every tracker (routes, sessions and tasks, git) keeps "failing" in memory
+ * only, and fires on the failing-to-healthy EDGE, so a restart emptied it and
+ * every card published before the restart lost its recovery signal: the first
+ * healthy response, clean turn or quiet git tick found nothing failing and
+ * published nothing. The store is the durable memory of what is failing; this
+ * hands it back to the trackers. Run after the expiry sweep so a card it just
+ * settled is not re-armed.
+ */
+export async function unresolvedErrorRecoveryKeys(): Promise<string[]> {
+  try {
+    const { feed } = await listNotifications();
+    const keys = new Set<string>();
+    for (const record of feed) {
+      if (record.kind !== 'operation-error' || record.resolved || !record.recoveryKey) continue;
+      keys.add(canonicalRecoveryKey(record.recoveryKey));
+    }
+    return [...keys];
+  } catch (err) {
+    log.notif.warn('reading unresolved error keys for tracker seeding failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+}
+
 /**
  * Startup reconcile: settle the error notifications whose lifecycle is over.
  *
@@ -183,11 +220,27 @@ export async function expireStaleErrorNotifications(
       }
       if (dead) deadKeys.add(record.recoveryKey!);
     }
+    // A start failure is keyed by its TASK (the session it was starting never
+    // existed) and recovers when that task next starts. A task that is gone or
+    // complete will never start again, so its card waits for nothing.
+    const checkedTasks = new Map<string, boolean>(); // task id → is gone
+    for (const record of feed) {
+      if (record.kind !== 'operation-error' || record.resolved) continue;
+      const taskId = taskIdOfErrorKey(record);
+      if (!taskId) continue;
+      let gone = checkedTasks.get(taskId);
+      if (gone === undefined) {
+        const task = await getTask(taskId).catch(() => null);
+        gone = !task || task.phase === 'COMPLETE';
+        checkedTasks.set(taskId, gone);
+      }
+      if (gone) deadKeys.add(record.recoveryKey!);
+    }
     if (deadKeys.size > 0) {
       const { expired } = await expireErrorNotifications([...deadKeys]);
       deadSession = expired.length;
       for (const rec of expired) {
-        log.notif.info('expired error notification for a dead session', {
+        log.notif.info('expired error notification for a dead session or finished task', {
           dedupKey: rec.dedupKey, recoveryKey: rec.recoveryKey ?? null,
         });
       }

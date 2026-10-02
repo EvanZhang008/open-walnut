@@ -17,6 +17,7 @@ import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
+import { canonicalRecoveryKey } from './route-condition.js';
 
 /** notifications.json lives next to incidents.json / sessions.json under WALNUT_HOME. */
 const NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
@@ -637,8 +638,11 @@ export async function recoverNotifications(
   // A key matches a record's CONDITION (recoveryKey) or its ROOT CAUSE
   // (causeKey): `host:<alias>` recovering must retire every card that outage
   // produced, whatever condition each one was filed under.
+  // A route key is compared in today's normalization too: a card written under
+  // an older id rule would otherwise wait for a signal nothing can send.
   const matches = (rec: NotificationRecord): boolean =>
-    (!!rec.recoveryKey && keys.has(rec.recoveryKey)) || (!!rec.causeKey && keys.has(rec.causeKey));
+    (!!rec.recoveryKey && (keys.has(rec.recoveryKey) || keys.has(canonicalRecoveryKey(rec.recoveryKey))))
+    || (!!rec.causeKey && keys.has(rec.causeKey));
   // Lock-free pre-check, same reasoning as expireErrorNotifications: the
   // host-connected recovery path fires on EVERY daemon (re)connect — including
   // boots on a healthy box with nothing to retire. A plain read costs no

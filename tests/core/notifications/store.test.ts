@@ -427,6 +427,16 @@ describe('recoverNotifications', () => {
     });
   }
 
+  it('reaches a route card written under an OLDER id rule through the current normalization', async () => {
+    // The request logger can only publish `route:PATCH /api/tasks/:id` now; a card
+    // from before Walnut ids were collapsed carries the entity in its key and would
+    // otherwise wait for a signal nothing can send.
+    await seedError('error:old', 'route:PATCH /api/tasks/mu0s3x7c-cbd8');
+    await seedError('error:other', 'route:PATCH /api/tasks/:id/phase'); // a different route
+    const { recovered } = await recoverNotifications(['route:PATCH /api/tasks/:id']);
+    expect(recovered.map(r => r.dedupKey)).toEqual(['error:old']);
+  });
+
   it('stamps only the matching unresolved operation-errors', async () => {
     await seedError('error:a1', 'plugin:plugin-a');
     await seedError('error:a2', 'plugin:plugin-a');

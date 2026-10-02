@@ -734,6 +734,41 @@ export async function activate(walnut) {
     expect(JSON.parse(await fsp.readFile(path.join(tmpDir, 'plugin-data', 'unified-plugin', 'loaded.json'), 'utf8'))).toEqual({ active: true });
   });
 
+  it('a clean load of a plugin with no sync loop retires its error cards; a sync plugin\'s wait for the tick', async () => {
+    // The live feed held "Virtual Teammate needs a newer Walnut" for a day after the
+    // newer Walnut had loaded it fine: with no sync() there was no later success point.
+    const { upsertNotification, listNotifications } = await import('../../src/core/notifications/store.js');
+    const card = (pluginId: string) => upsertNotification({
+      kind: 'operation-error', severity: 'error', title: `${pluginId} failed to load`,
+      dedupKey: `logerr:plugin/${pluginId}:x`, recoveryKey: `plugin:${pluginId}`,
+    });
+    await card('unified-plugin');
+    await card('sync-plugin');
+
+    await writeCountingUnifiedPlugin(path.join(tmpDir, 'plugins', 'unified-plugin'), 'unified-plugin');
+    const syncDir = path.join(tmpDir, 'plugins', 'sync-plugin');
+    await writeManifest(syncDir, {
+      id: 'sync-plugin', name: 'Sync Plugin', apiVersion: 1, engines: { walnut: '>=0.0.0' }, server: 'dist/server.mjs',
+    });
+    await fsp.mkdir(path.join(syncDir, 'dist'), { recursive: true });
+    await fsp.writeFile(path.join(syncDir, 'dist', 'server.mjs'), `
+export async function activate(walnut) {
+  walnut.registry.sync(${NOOP_SYNC_SOURCE});
+}
+`);
+    const registry = new IntegrationRegistry();
+    await load(registry);
+    expect(registry.get('unified-plugin')?.hasSync).toBe(false);
+    expect(registry.get('sync-plugin')?.hasSync).toBe(true);
+    // The recovery is fire-and-forget off the load path.
+    await vi.waitFor(async () => {
+      const { feed } = await listNotifications();
+      expect(feed.find(n => n.dedupKey === 'logerr:plugin/unified-plugin:x')?.resolved).toBe('recovered');
+    });
+    const { feed } = await listNotifications();
+    expect(feed.find(n => n.dedupKey === 'logerr:plugin/sync-plugin:x')?.resolved).toBeUndefined();
+  });
+
   it('fails a unified Plugin whose module evaluation exceeds the code deadline', async () => {
     const pluginDir = path.join(tmpDir, 'plugins', 'module-timeout');
     await writeManifest(pluginDir, {

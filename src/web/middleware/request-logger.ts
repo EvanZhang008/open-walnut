@@ -119,6 +119,19 @@ export function setRouteRecoveryPublisher(publish: RecoveryPublisher | null): vo
  */
 const routeHealth = createRecoveryTransitionTracker()
 
+/**
+ * Mark routes failing WITHOUT a request: the unresolved `route:` cards in the
+ * store at boot. The memory above is in-process, so a restart emptied it, and
+ * every card published before the restart lost its recovery signal for good: the
+ * first healthy response found nothing failing and published nothing. On a box
+ * that redeploys several times a day that was most of the Errors rail. Called
+ * by server.ts after setRouteRecoveryPublisher (which resets); keys are stored
+ * as given, so the caller passes them in today's normalization.
+ */
+export function seedFailingRoutes(keys: string[]): void {
+  for (const key of keys) if (key.startsWith('route:')) routeHealth.observe(key, true)
+}
+
 /** Tests: inspect/clear the failing-route memory without a server. */
 export function _resetRouteHealthForTest(): void {
   routeHealth.reset()

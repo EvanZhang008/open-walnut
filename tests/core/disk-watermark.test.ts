@@ -147,6 +147,33 @@ describe('pollDiskWatermarkOnce side effects', () => {
     expect(notify.mock.calls.map((c) => c[2])).toEqual(['disk:critical']);
   });
 
+  it('a FIRST measurement that reads ok is a recovery: the previous process\'s disk cards retire', async () => {
+    // The level starts at 'ok' by assumption, so freeing space while the server
+    // was down (or a restart after the fix) never crossed the edge: the cards sat.
+    const notify = vi.fn();
+    const recovered = vi.fn();
+    stubUsedPct(50);
+    await pollDiskWatermarkOnce(notify, undefined, recovered);
+    expect(recovered).toHaveBeenCalledTimes(1);
+    // Steady healthy polls afterwards stay silent; a later real edge fires again.
+    await pollDiskWatermarkOnce(notify, undefined, recovered);
+    await pollDiskWatermarkOnce(notify, undefined, recovered);
+    expect(recovered).toHaveBeenCalledTimes(1);
+    stubUsedPct(95);
+    await pollDiskWatermarkOnce(notify, undefined, recovered);
+    stubUsedPct(50);
+    await pollDiskWatermarkOnce(notify, undefined, recovered);
+    expect(recovered).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls.map((c) => c[2])).toEqual(['disk:critical']);
+  });
+
+  it('a first measurement that reads warn or critical is NOT a recovery', async () => {
+    const recovered = vi.fn();
+    stubUsedPct(95);
+    await pollDiskWatermarkOnce(vi.fn(), undefined, recovered);
+    expect(recovered).not.toHaveBeenCalled();
+  });
+
   it('fail-open: statfs errors keep the previous state and never block writes', async () => {
     stubUsedPct(50);
     await pollDiskWatermarkOnce();

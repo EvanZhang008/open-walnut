@@ -19,7 +19,7 @@ import type { Request, Response } from 'express';
 import { EventEmitter } from 'node:events';
 
 import {
-  requestLogger, setRouteRecoveryPublisher, _resetRouteHealthForTest,
+  requestLogger, setRouteRecoveryPublisher, _resetRouteHealthForTest, seedFailingRoutes,
 } from '../../src/web/middleware/request-logger.js';
 import { HANDLED_FAILURE_HEADER } from '../../src/web/middleware/handled-failure.js';
 import { errorHandler } from '../../src/web/middleware/error-handler.js';
@@ -319,6 +319,18 @@ describe('recovery edge on a healthy response', () => {
   it('HOT PATH: a route that never failed never publishes anything', () => {
     for (let i = 0; i < 500; i++) fire('GET', `/api/tasks/${i}`, 200);
     expect(recoveries).toEqual([]);
+  });
+
+  it('SEEDED after a restart: a card from the previous process retires on the first healthy response', () => {
+    // The memory is in-process. Without the seed, the 500 that made the card
+    // happened in a process that is gone, so this 200 would find nothing failing
+    // and publish nothing: the card outlived every deploy that way.
+    seedFailingRoutes(['route:GET /api/sessions/:id/plan', 'session:abc', 'git']);
+    fire('GET', '/api/sessions/aaaaaaaaaaaaaaaa/plan', 200);
+    expect(recoveries).toEqual([['route:GET /api/sessions/:id/plan']]);
+    // Once. And the non-route keys were not taken into the route memory.
+    fire('GET', '/api/sessions/aaaaaaaaaaaaaaaa/plan', 200);
+    expect(recoveries).toHaveLength(1);
   });
 
   it('a 4xx counts as recovered — the endpoint is reachable and reasoning again', () => {

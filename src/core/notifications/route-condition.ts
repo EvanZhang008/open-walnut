@@ -83,6 +83,25 @@ export function routeRecoveryKey(method: string, url: string): string {
 }
 
 /**
+ * A stored recovery key in TODAY's normalization. The id rules above grow (a
+ * Walnut task id, an inbox id, a percent-encoded mail id each joined later), and
+ * a card written under the older rules carries a key no current response can
+ * produce (`route:PATCH /api/tasks/mu0s3x7c-cbd8` vs `route:PATCH /api/tasks/:id`),
+ * so it could never retire. Matching through this function lets the current
+ * signal reach it. Non-route keys and malformed ones come back unchanged;
+ * `:id` is not an id segment, so a canonical key is a fixed point.
+ */
+export function canonicalRecoveryKey(key: string): string {
+  if (!key.startsWith('route:')) return key;
+  const space = key.indexOf(' ', 'route:'.length);
+  if (space < 0) return key;
+  const method = key.slice('route:'.length, space);
+  const path = key.slice(space + 1);
+  if (!method || !path) return key;
+  return routeRecoveryKey(method, path);
+}
+
+/**
  * The log MESSAGE for a request outcome, with NO latency and NO query string.
  *
  * The bridge fingerprints the message, so anything varying per occurrence in

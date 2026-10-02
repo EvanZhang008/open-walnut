@@ -18,7 +18,7 @@ import { sessionStreamBuffer } from './session-stream-buffer.js'
 import { isStaticAssetPath } from './static-asset-path.js'
 import { refreshStaticMirror, bundleIdInHtml } from './static-mirror.js'
 import { notFoundHandler, errorHandler } from './middleware/error-handler.js'
-import { requestLogger, setRouteRecoveryPublisher } from './middleware/request-logger.js'
+import { requestLogger, setRouteRecoveryPublisher, seedFailingRoutes } from './middleware/request-logger.js'
 import { tasksRouter } from './routes/tasks.js'
 import { dashboardRouter } from './routes/dashboard.js'
 import { sessionsRouter } from './routes/sessions.js'
@@ -3006,7 +3006,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         if (healed > 0) log.web.info('startup: healed stale pendingPermission rows', { healed })
       })
       .then(() => import('../core/notifications/permission-expiry.js'))
-      .then(async ({ expireOrphanedPermissionNotifications, expireStaleErrorNotifications }) => {
+      .then(async ({ expireOrphanedPermissionNotifications, expireStaleErrorNotifications, unresolvedErrorRecoveryKeys }) => {
         const expired = await expireOrphanedPermissionNotifications()
         if (expired > 0) log.web.info('startup: expired orphaned permission notifications', { expired })
         // -- …and the ERROR half of the same lifecycle problem --
@@ -3018,6 +3018,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         const errors = await expireStaleErrorNotifications()
         if (errors.deadSession > 0 || errors.keylessDebris > 0 || errors.prunedResolved > 0) {
           log.web.info('startup: expired unresolvable error notifications', errors)
+        }
+        // The cards that survive are conditions this process has not seen fail,
+        // and every tracker fires only on a failing→healthy edge: hand them the
+        // store's memory, or the first healthy signal after a restart retires
+        // nothing (the rail outlived every deploy that way).
+        const seeded = await unresolvedErrorRecoveryKeys()
+        if (seeded.length > 0) {
+          seedFailingRoutes(seeded)
+          for (const key of seeded) {
+            if (key.startsWith('session:') || key.startsWith('task:')) sessionErrorTracker.observe(key, true)
+            else if (key === 'git') gitRecoveryTracker.observe(key, true)
+          }
+          log.web.info('startup: re-armed recovery for unresolved error cards', { count: seeded.length })
         }
         // The same reconcile, daily: a long-lived server (the cloud replica
         // runs for weeks) would otherwise never age out settled receipts or

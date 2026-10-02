@@ -1988,6 +1988,18 @@ async function loadPlugin(
     hasSkills,
     registeredSkillDirs: listOwnedSkillDirRecords().filter(r => r.owner === pluginId).length,
   });
+  // A plugin with no sync loop has no later success point: its `plugin:<id>`
+  // cards (a load that failed on an older Walnut, a runtime error it logged)
+  // could only ever retire on the next clean load, which is now. A sync plugin
+  // is left to its tick, where a load proves nothing about the account.
+  if (!initialHasSync) {
+    void import('./notifications/store.js')
+      .then(({ recoverNotifications }) => recoverNotifications([`plugin:${pluginId}`]))
+      .then(({ recovered }) => {
+        for (const record of recovered) bus.emit('notification:updated', record, ['web-ui'], { source: `plugin/${pluginId}` });
+      })
+      .catch(() => {});
+  }
     },
   });
 
