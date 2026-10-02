@@ -1,22 +1,30 @@
 /**
  * A task chip on a leader's Board opens that task in the RIGHT column of the
- * split, in place of the leader's chat (web/src/components/board/BoardTaskPeek.tsx,
+ * split, in place of the leader's chat, as a TAB in the column's bar
+ * (web/src/components/board/BoardTaskPeek.tsx, PeekTabBar.tsx, usePeekTabs.ts,
  * SessionPanel `inset`), as a user meets it on Home:
  *
- *   a. a worker WITH a session: its chat in the right column, under a header that
- *      names it as another task (title, live phase, "goes to this task"); the
- *      leader's chat hidden but mounted; the board frame not reloaded or scrolled;
- *   b. Back returns the leader's chat with its unsent draft and scroll;
+ *   a. a worker WITH a session: a tab beside "Chat", its chat on the right under a
+ *      header that names it as another task (title, live phase, "goes to this
+ *      task"); the leader's chat hidden but mounted; the board frame not reloaded
+ *      or scrolled;
+ *   b. the Chat tab returns the leader's chat with its unsent draft and scroll,
+ *      and the worker's tab stays;
  *   c. a worker with NO session, and an id the store does not know: a card with
- *      "Open task"; one chip after another switches the peek;
- *   d. the panel's own chip (the leader's, on the leader's panel) clears the peek;
- *      Escape and the inset × go back too;
- *   e. Files clears the peek, and the Board comes back on the leader's chat;
- *      a collapsed chat column opens again for a chip;
- *   f. a message typed in the peek goes to the WORKER's session, not the leader's;
+ *      "Open task"; each chip adds a tab, a chip with a tab switches to it;
+ *   d. the tabs switch by click, by the arrow keys, from the right-click menu and
+ *      from the list button (the same menu, listing every tab); × closes one;
+ *   e. the panel's own chip and Escape show the Chat tab; the inset's × closes
+ *      its tab and the next one takes the column;
+ *   f. sticky: Files keeps the tab on screen, the Board shows the same one, and
+ *      leaving full screen and coming back does too; a chip opens a hidden chat
+ *      column again;
+ *   g. a message typed in a tab goes to the WORKER's session, not the leader's;
  *   and "Open task" still does the old jump to the task on Home.
- *   g. on a WORKER's panel the Board is its leader's: there the leader's chip opens
- *      the leader in the peek, and the worker's own chip goes back to its chat.
+ *   h. on a WORKER's panel the Board is its leader's: there the leader's chip opens
+ *      the leader in a tab, and the worker's own chip goes back to its chat.
+ *   i. full screen with no Board: a task clicked in the chat opens as a tab the
+ *      same way, and the tabs come back after a reload.
  *
  * The chromium and webkit projects share ONE fixture board, so every task is
  * named `${engine}-peek-…` with a stamp and nothing counts across the board.
@@ -94,6 +102,29 @@ async function quickStart(page: Page, composer: Locator, prompt: string): Promis
   return out
 }
 
+/** The chat column's tab bar (PeekTabBar.tsx) inside one panel's own chat column. */
+function columnTabs(col: Locator) {
+  const bar = col.locator(':scope > .peek-tab-bar')
+  const tab = (id: string) => bar.locator(`.peek-tab[data-task-id="${id}"]`)
+  return {
+    bar,
+    tab,
+    button: (id: string) => tab(id).getByRole('tab'),
+    chat: bar.getByRole('tab', { name: 'Chat', exact: true }),
+    ids: () => bar.locator('.peek-tab').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.taskId ?? '')),
+  }
+}
+
+/** Menus never overflow the viewport (web/src/AGENTS.md, menus and overlays). */
+async function expectInViewport(el: Locator): Promise<void> {
+  const box = (await el.boundingBox())!
+  const vp = el.page().viewportSize()!
+  expect(box.x).toBeGreaterThanOrEqual(0)
+  expect(box.y).toBeGreaterThanOrEqual(0)
+  expect(box.x + box.width).toBeLessThanOrEqual(vp.width)
+  expect(box.y + box.height).toBeLessThanOrEqual(vp.height)
+}
+
 /** A board tall enough to scroll, its chips in the middle. */
 function boardHtml(engine: string, stamp: string, ids: { leader: string; withSession: string; noSession: string }): string {
   return `<!doctype html>
@@ -119,7 +150,7 @@ function boardHtml(engine: string, stamp: string, ids: { leader: string; withSes
 </body></html>`
 }
 
-test('a Board chip opens its task in place of the chat, and Back returns the chat unchanged', async ({ page }) => {
+test('a Board chip opens its task as a tab in place of the chat; the tabs switch, close and stay', async ({ page }) => {
   test.setTimeout(360_000)
   const engine = test.info().project.name
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -160,12 +191,16 @@ test('a Board chip opens its task in place of the chat, and Back returns the cha
   const leaderBody = ownCol.locator(':scope > .session-panel-body')
   const leaderHistory = leaderBody.locator('.session-history').first()
   const chatBar = ownCol.locator(':scope > .session-chat-bar')
+  const tabs = columnTabs(ownCol)
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
   const frame = page.frameLocator('.task-board-frame')
   const chip = (id: string) => frame.locator(`#team walnut-task[id="${id}"] .wn-task`)
   await expect(chip(worker).locator('.wn-title')).toHaveText(workerTitle, { timeout: 15_000 })
   await expect(chip(docs).locator('.wn-title')).toHaveText(docsTitle)
+  // No tab yet: the plain Chat bar.
+  await expect(chatBar.locator('.session-chat-bar-title')).toHaveText('Chat')
+  await expect(tabs.bar).toHaveCount(0)
   await frame.locator('body').evaluate(() => {
     (window as unknown as { __sameDoc?: number }).__sameDoc = 1
     document.getElementById('team')!.scrollIntoView({ block: 'center' })
@@ -199,14 +234,18 @@ test('a Board chip opens its task in place of the chat, and Back returns the cha
   }).toBe(true)
   expect(leaderScroll).toBeGreaterThan(0)
 
-  // ── a. The worker's chip: its chat on the right, named as another task ──
+  // ── a. The worker's chip: a tab, its chat on the right, named as another task ──
   await chip(worker).click()
   const peek = panel.getByTestId('board-task-peek')
   await expect(peek).toBeVisible()
   await expect(peek).toHaveAttribute('data-task-id', worker)
-  await expect(peek.getByTestId('board-peek-back')).toHaveText('← Back to chat')
-  await expect(peek.getByRole('button', { name: 'Back to the chat you came from' })).toBeVisible()
-  await expect(peek.getByTestId('board-peek-context')).toContainText('Another task, opened from this Board')
+  await expect.poll(tabs.ids).toEqual(['', worker])
+  await expect(tabs.button(worker)).toHaveAttribute('aria-selected', 'true')
+  await expect(tabs.chat).toHaveAttribute('aria-selected', 'false')
+  await expect(tabs.tab(worker).getByTestId('peek-tab-title')).toHaveText(workerTitle)
+  await expect(chatBar.locator('.session-chat-bar-title')).toHaveCount(0) // the tabs replace the "Chat" title
+  await expect(chatBar.getByRole('button', { name: 'Hide chat' })).toBeVisible()
+  await expect(peek.getByTestId('board-peek-context')).toContainText('Another task')
   await expect(peek.getByTestId('board-peek-title')).toHaveText(workerTitle)
   // Live: the header follows the store's row, whatever phase the worker's turn left it in.
   await expect.poll(async () => {
@@ -223,45 +262,48 @@ test('a Board chip opens its task in place of the chat, and Back returns the cha
   await expect(inset.locator('.chat-input-textarea')).toBeVisible()
   await expect(inset.locator('.session-action-chip', { hasText: /^(Changed|Files|Board|Terminal)$/ })).toHaveCount(0)
   await expect(inset.locator('.session-panel-expand, .session-panel-popout, .session-panel-lock')).toHaveCount(0)
-  await expect(inset.getByRole('button', { name: 'Close this task' })).toBeVisible()
-  // The peek's bar sits where the Chat bar was, at the same height as the board's bar.
-  const peekBar = (await peek.locator('.board-task-peek-bar').boundingBox())!
+  await expect(inset.getByRole('button', { name: 'Close this tab' })).toBeVisible()
+  // The tab bar sits where the Chat bar was, at the same height as the board's bar.
+  const tabBox = (await tabs.bar.boundingBox())!
   const boardBar = (await pane.locator('.task-board-bar').boundingBox())!
-  expect(Math.abs(peekBar.y - boardBar.y)).toBeLessThanOrEqual(1)
-  expect(Math.abs(peekBar.height - boardBar.height)).toBeLessThanOrEqual(1)
-  // The inset's own layout: header in flow, history below it, composer at the bottom of the column.
+  expect(Math.abs(tabBox.y - boardBar.y)).toBeLessThanOrEqual(1)
+  expect(Math.abs(tabBox.height - boardBar.height)).toBeLessThanOrEqual(1)
+  // The inset's own layout: header below the tabs, history below it, composer at the bottom of the column.
   const insetHeader = (await inset.locator(':scope > .session-panel-header').boundingBox())!
   const insetComposer = (await inset.locator('.session-panel-input').boundingBox())!
   const colBox = (await ownCol.boundingBox())!
-  expect(insetHeader.y).toBeGreaterThanOrEqual(peekBar.y + peekBar.height)
+  expect(insetHeader.y).toBeGreaterThanOrEqual(tabBox.y + tabBox.height)
   expect(insetComposer.y + insetComposer.height).toBeLessThanOrEqual(colBox.y + colBox.height + 1)
   expect(insetComposer.y + insetComposer.height).toBeGreaterThan(colBox.y + colBox.height - 40)
   // The leader's chat: hidden, still mounted, untouched.
   await expect(leaderBody).toHaveCount(1)
   await expect(leaderBody).toBeHidden()
   await expect(leaderComposer).toBeHidden()
-  await expect(chatBar).toBeHidden()
   await expect(leaderBody.getByText('Board leader ready', { exact: true }).first()).toBeAttached()
   // The board did not reload or move.
   await expect(pane).toBeVisible()
   expect(await frameState()).toEqual({ sameDoc: 1, y: boardY })
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-1-peek-open.png` })
 
-  // ── b. Back: the leader's chat, its draft and scroll as they were ──
-  await peek.getByTestId('board-peek-back').click()
+  // ── b. The Chat tab: the leader's chat, its draft and scroll as they were; the worker's tab stays ──
+  await tabs.chat.click()
   await expect(peek).toHaveCount(0)
   await expect(leaderComposer).toBeVisible()
   await expect(leaderComposer).toHaveValue(leaderDraft)
-  await expect(chatBar).toBeVisible()
+  await expect(tabs.chat).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(tabs.ids).toEqual(['', worker])
   expect(await leaderHistory.evaluate((el) => el.scrollTop)).toBe(leaderScroll)
   expect(await frameState()).toEqual({ sameDoc: 1, y: boardY })
-  await page.screenshot({ path: `${SHOT_DIR}/${engine}-2-after-back.png` })
+  await page.screenshot({ path: `${SHOT_DIR}/${engine}-2-chat-tab.png` })
 
-  // ── c. No session: a card; another chip switches the peek; an unknown id ──
+  // ── c. A chip with a tab switches to it; no session: a card; an unknown id ──
   await chip(worker).click()
   await expect(inset).toBeVisible()
+  await expect.poll(tabs.ids).toEqual(['', worker])
   await chip(docs).click()
   await expect(peek).toHaveAttribute('data-task-id', docs)
+  await expect.poll(tabs.ids).toEqual(['', worker, docs])
+  await expect(tabs.button(docs)).toHaveAttribute('aria-selected', 'true')
   await expect(inset).toHaveCount(0)
   await expect(peek.getByTestId('board-peek-title')).toHaveText(docsTitle)
   await expect(peek.getByTestId('board-peek-phase')).toHaveText('To do')
@@ -274,45 +316,103 @@ test('a Board chip opens its task in place of the chat, and Back returns the cha
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-3-no-session-card.png` })
   await frame.locator('walnut-task[id="nosuchtask0000"] .wn-task').click()
   await expect(peek).toHaveAttribute('data-task-id', 'nosuchtask0000')
+  await expect.poll(tabs.ids).toEqual(['', worker, docs, 'nosuchtask0000'])
+  await expect(tabs.tab('nosuchtask0000').getByTestId('peek-tab-title')).toHaveText('nosuchtask0000')
   await expect(card).toHaveAttribute('data-known', 'false')
   await expect(card).toContainText('No task on this page has the id nosuchtask0000.')
   await expect(card.getByRole('button', { name: 'Open task' })).toBeVisible()
   await expect(peek.getByTestId('board-peek-phase')).toHaveCount(0)
 
-  // ── d. The panel's own chip (here the leader's), Escape and the inset's × all go back ──
+  // ── d. Switching: a click, the arrow keys, the right-click menu, the list button; × closes ──
+  await tabs.button(worker).click()
+  await expect(peek).toHaveAttribute('data-task-id', worker)
+  await expect(inset.getByText('Probe worker ready', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
+  await tabs.button(worker).focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(tabs.button(docs)).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(peek).toHaveAttribute('data-task-id', docs)
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  await expect(tabs.chat).toBeFocused()
+  const menu = page.getByTestId('peek-tab-menu')
+  const menuLabels = menu.locator('.wn-context-menu-label')
+  const everyTab = ['Chat', workerTitle, docsTitle, 'nosuchtask0000']
+  await tabs.tab(worker).click({ button: 'right' })
+  await expect(menu).toBeVisible()
+  await expect(menuLabels).toHaveText([...everyTab, 'Close tab', 'Close other tabs', 'Close all tabs'])
+  await expect(menu.getByRole('menuitemradio', { name: docsTitle })).toHaveAttribute('aria-checked', 'true')
+  await expectInViewport(menu)
+  await page.screenshot({ path: `${SHOT_DIR}/${engine}-4-tab-menu.png` })
+  await menu.getByRole('menuitemradio', { name: workerTitle }).click()
+  await expect(menu).toHaveCount(0)
+  await expect(peek).toHaveAttribute('data-task-id', worker)
+  await tabs.bar.getByTestId('peek-tab-list').click()
+  await expect(menu).toBeVisible()
+  await expect(menuLabels).toHaveText([...everyTab, 'Close tab', 'Close other tabs', 'Close all tabs'])
+  await expectInViewport(menu)
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await expect(peek).toHaveAttribute('data-task-id', worker) // Esc closed the menu, nothing else
+  await expect(pane).toBeVisible()
+  await tabs.tab('nosuchtask0000').hover()
+  await tabs.tab('nosuchtask0000').getByTestId('peek-tab-close').click()
+  await expect.poll(tabs.ids).toEqual(['', worker, docs])
+  await expect(peek).toHaveAttribute('data-task-id', worker)
+
+  // ── e. The panel's own chip and Escape show the Chat tab; the inset's × closes its tab ──
   await chip(leader).click()
   await expect(peek).toHaveCount(0)
+  await expect(tabs.chat).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(tabs.ids).toEqual(['', worker, docs])
   await expect(leaderComposer).toHaveValue(leaderDraft)
-  await chip(worker).click()
+  await tabs.button(worker).click()
   await expect(inset).toBeVisible()
-  await peek.getByTestId('board-peek-back').focus()
+  await inset.getByTestId('session-panel-locate').focus()
   await page.keyboard.press('Escape')
   await expect(peek).toHaveCount(0)
+  await expect(tabs.chat).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(tabs.ids).toEqual(['', worker, docs])
   await expect(pane).toBeVisible() // one Esc, one layer: the split stays open
-  await chip(worker).click()
-  await inset.getByRole('button', { name: 'Close this task' }).click()
-  await expect(peek).toHaveCount(0)
+  await tabs.button(worker).click()
+  await inset.getByRole('button', { name: 'Close this tab' }).click()
+  await expect.poll(tabs.ids).toEqual(['', docs])
+  await expect(peek).toHaveAttribute('data-task-id', docs) // the next tab to the right
   await expect(pane).toBeVisible()
   expect(await frameState()).toEqual({ sameDoc: 1, y: boardY })
 
-  // ── e. Files clears the peek; back on the Board, the leader's chat ──
+  // ── f. Sticky: Files keeps the tab, the Board shows it, and so does a new full screen ──
   await chip(worker).click()
   await expect(inset).toBeVisible()
-  await panel.locator(':scope > .session-panel-header .session-action-chip', { hasText: /^Files$/ }).click()
+  await expect.poll(tabs.ids).toEqual(['', docs, worker])
+  const header = panel.locator(':scope > .session-panel-header')
+  await header.locator('.session-action-chip', { hasText: /^Files$/ }).click()
   await expect(pane).toHaveCount(0)
-  await expect(peek).toHaveCount(0)
+  await expect(peek).toHaveAttribute('data-task-id', worker)
+  await expect(inset).toBeVisible()
+  await expect(tabs.button(worker)).toHaveAttribute('aria-selected', 'true')
   await panel.getByTestId('session-board-chip').click()
   await expect(chip(worker).locator('.wn-title')).toHaveText(workerTitle, { timeout: 15_000 })
+  await expect(peek).toHaveAttribute('data-task-id', worker)
+  await header.getByRole('button', { name: 'Exit full screen' }).click()
+  await expect(pane).toHaveCount(0)
   await expect(peek).toHaveCount(0)
+  await expect(tabs.bar).toHaveCount(0)
+  await expect(leaderComposer).toBeVisible()
   await expect(leaderComposer).toHaveValue(leaderDraft)
+  await panel.getByTestId('session-board-chip').click()
+  await expect(chip(worker).locator('.wn-title')).toHaveText(workerTitle, { timeout: 15_000 })
+  await expect(peek).toHaveAttribute('data-task-id', worker)
+  await expect.poll(tabs.ids).toEqual(['', docs, worker])
   // A chip opens the chat column again when it was hidden.
   await chatBar.getByRole('button', { name: 'Hide chat' }).click()
   await expect(ownCol).toBeHidden()
-  await chip(worker).click()
+  await chip(docs).click()
   await expect(ownCol).toBeVisible()
-  await expect(inset).toBeVisible()
+  await expect(peek).toHaveAttribute('data-task-id', docs)
 
-  // ── f. A message typed in the peek goes to the worker's session ──
+  // ── g. A message typed in a tab goes to the worker's session ──
+  await tabs.button(worker).click()
   const insetComposer2 = inset.locator('.chat-input-textarea')
   await insetComposer2.fill('snapshot-clean-turn:Probe worker heard the peek')
   await insetComposer2.press('Enter')
@@ -323,7 +423,7 @@ test('a Board chip opens its task in place of the chat, and Back returns the cha
   await expect.poll(() => historyText(workerSid), { timeout: 30_000 }).toContain('"text":"Probe worker heard the peek"')
   expect(await historyText(leaderSid)).toContain('Board leader ready')
   expect(await historyText(leaderSid)).not.toContain('Probe worker heard the peek')
-  await peek.getByTestId('board-peek-back').click()
+  await tabs.chat.click()
   await expect(leaderComposer).toHaveValue(leaderDraft)
   await expect(leaderBody.getByText('Probe worker heard the peek')).toHaveCount(0)
 
@@ -374,10 +474,14 @@ test('on a worker\'s panel the Board is the leader\'s: the leader\'s chip opens 
   const chip = (id: string) => frame.locator(`#team walnut-task[id="${id}"] .wn-task`)
   await expect(chip(leader).locator('.wn-title')).toHaveText(leaderTitle)
 
-  // The leader's chip is another task here: it opens the leader's chat in the peek.
+  // The leader's chip is another task here: it opens the leader's chat in a tab.
   await chip(leader).click()
   const peek = panel.getByTestId('board-task-peek')
   await expect(peek).toHaveAttribute('data-task-id', leader)
+  const ownCol = panel.locator(':scope > .session-panel-split > .session-panel-chat-col')
+  const tabs = columnTabs(ownCol)
+  await expect.poll(tabs.ids).toEqual(['', leader])
+  await expect(tabs.button(leader)).toHaveAttribute('aria-selected', 'true')
   await expect(peek.getByTestId('board-peek-title')).toHaveText(leaderTitle)
   await expect(peek.getByTestId('board-peek-note')).toHaveText('Messages you send here go to this task, not to the chat you came from.')
   const inset = peek.locator(`.session-panel.session-panel-inset[data-session-id="${leaderSid}"]`)
@@ -385,11 +489,111 @@ test('on a worker\'s panel the Board is the leader\'s: the leader\'s chip opens 
   const ownBody = panel.locator(':scope > .session-panel-split > .session-panel-chat-col > .session-panel-body')
   await expect(ownBody).toBeHidden()
 
-  // The worker's own chip: back to the worker's own chat.
+  // The worker's own chip: back to the worker's own chat, the leader's tab kept.
   await chip(worker).click()
   await expect(peek).toHaveCount(0)
   await expect(ownBody).toBeVisible()
   await expect(ownBody.getByText('Team worker ready', { exact: true }).first()).toBeVisible()
+  await expect(tabs.chat).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(tabs.ids).toEqual(['', leader])
+
+  expect(pageErrors).toEqual([])
+})
+
+test('in full screen a task clicked in the chat opens as a tab, and the tabs come back after a reload', async ({ page }) => {
+  test.setTimeout(300_000)
+  const engine = test.info().project.name
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const pageErrors: string[] = []
+  page.on('pageerror', (e) => pageErrors.push(e.message))
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: '' })
+  await openHome(page)
+
+  // ── The leader through the draft column, a worker with its own session by API ──
+  const cwd = `${fixtureRoot}/projects/walnut`
+  await openDraftOnCwd(page, cwd)
+  const { taskId: leader, sessionId: leaderSid } = await quickStart(page, draftComposer(page), 'snapshot-clean-turn:Chat leader ready')
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${leaderSid}"]`)
+  await expect(panel.getByText('Chat leader ready', { exact: true }).first()).toBeVisible({ timeout: 60_000 })
+  const leaderTitle = `${engine}-peek-chat-leader ${stamp}`
+  await api('PATCH', `/api/tasks/${leader}`, { title: leaderTitle })
+  const { task: leaderTask } = await api<{ task: { project?: string } }>('GET', `/api/tasks/${leader}`)
+  const workerTitle = `${engine}-peek-chat-worker ${stamp}`
+  const worker = await createTask(workerTitle, { project: leaderTask.project ?? '', pinned: false, parent_task_id: leader })
+  const { sessionId: workerSid } = await api<{ sessionId: string }>('POST', '/api/sessions/quick-start', {
+    cwd, message: 'snapshot-clean-turn:Chat worker ready', taskId: worker,
+  })
+  await expect.poll(() => historyText(workerSid), { timeout: 60_000 }).toContain('Chat worker ready')
+
+  // The leader names the worker in its reply: the chat renders the id as a task pill.
+  const ownCol = panel.locator(':scope > .session-panel-split > .session-panel-chat-col')
+  const leaderComposer = ownCol.locator(':scope > .session-panel-input .chat-input-textarea')
+  const leaderBody = ownCol.locator(':scope > .session-panel-body')
+  await leaderComposer.fill(`snapshot-clean-turn:The probe is ${worker}, ask it first.`)
+  await leaderComposer.press('Enter')
+  const pill = leaderBody.locator(`a.task-link[data-task-id="${worker}"]`).last()
+  await expect(pill).toBeVisible({ timeout: 60_000 })
+  const tabs = columnTabs(ownCol)
+
+  // ── Full screen, no split view: the pill opens the worker as a tab, as on the Board ──
+  const header = panel.locator(':scope > .session-panel-header')
+  await header.getByRole('button', { name: 'Expand session to full screen' }).click()
+  await expect(header.getByRole('button', { name: 'Exit full screen' })).toBeVisible()
+  await expect(tabs.bar).toHaveCount(0) // no tab yet, no bar
+  await pill.click()
+  const peek = panel.getByTestId('board-task-peek')
+  await expect(peek).toHaveAttribute('data-task-id', worker)
+  await expect.poll(tabs.ids).toEqual(['', worker])
+  await expect(tabs.button(worker)).toHaveAttribute('aria-selected', 'true')
+  const inset = peek.locator(`.session-panel.session-panel-inset[data-session-id="${workerSid}"]`)
+  await expect(inset.getByText('Chat worker ready', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
+  await expect(leaderBody).toBeHidden()
+  await expect(page.getByTestId('task-board-pane')).toHaveCount(0)
+  // The tabs sit under the panel's header, the task under the tabs, its composer at the bottom.
+  const headBox = (await header.boundingBox())!
+  const tabBox = (await tabs.bar.boundingBox())!
+  const peekBox = (await peek.boundingBox())!
+  const panelBox = (await panel.boundingBox())!
+  expect(tabBox.y).toBeGreaterThanOrEqual(headBox.y + headBox.height - 1)
+  expect(Math.abs(peekBox.y - (tabBox.y + tabBox.height))).toBeLessThanOrEqual(1)
+  expect(Math.abs(tabBox.width - panelBox.width)).toBeLessThanOrEqual(2)
+  const insetComposer = (await inset.locator('.session-panel-input').boundingBox())!
+  expect(insetComposer.y + insetComposer.height).toBeLessThanOrEqual(panelBox.y + panelBox.height + 1)
+  expect(insetComposer.y + insetComposer.height).toBeGreaterThan(panelBox.y + panelBox.height - 40)
+  await page.screenshot({ path: `${SHOT_DIR}/${engine}-5-fullscreen-chat-tab.png` })
+  // The Chat tab is the leader's own chat; the tab stays.
+  await tabs.chat.click()
+  await expect(peek).toHaveCount(0)
+  await expect(leaderBody).toBeVisible()
+  await expect(pill).toBeVisible()
+  await tabs.button(worker).click()
+  await expect(inset).toBeVisible()
+  // Out of full screen the column is a plain chat again, and its pills keep their old jump target.
+  await header.getByRole('button', { name: 'Exit full screen' }).click()
+  await expect(peek).toHaveCount(0)
+  await expect(tabs.bar).toHaveCount(0)
+  await expect(leaderBody).toBeVisible()
+
+  // ── A reload: the leader again from the list, full screen: the same tab on screen ──
+  await openHome(page)
+  await page.locator('.todo-search-input').fill(leaderTitle)
+  const row = page.locator(`.todo-panel-item[data-task-id="${leader}"]`)
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  if (!(await panel.isVisible())) await row.locator('.todo-item-title').click()
+  await expect(panel).toBeVisible({ timeout: 20_000 })
+  await header.getByRole('button', { name: 'Expand session to full screen' }).click()
+  await expect(peek).toHaveAttribute('data-task-id', worker)
+  await expect.poll(tabs.ids).toEqual(['', worker])
+  await expect(inset.getByText('Chat worker ready', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
+  // Close all tabs: the bar goes with them.
+  await tabs.chat.click({ button: 'right' })
+  const menu = page.getByTestId('peek-tab-menu')
+  await expect(menu.locator('.wn-context-menu-label')).toHaveText(['Chat', workerTitle, 'Close all tabs'])
+  await menu.getByRole('menuitem', { name: 'Close all tabs' }).click()
+  await expect(tabs.bar).toHaveCount(0)
+  await expect(peek).toHaveCount(0)
+  await expect(leaderBody).toBeVisible()
 
   expect(pageErrors).toEqual([])
 })

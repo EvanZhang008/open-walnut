@@ -253,6 +253,12 @@ export function ContextMenu({
       const row = back.current;
       if (row?.isConnected) row.focus({ preventScroll: true });
     };
+    // The menu is the top layer, so its Escape is consumed BEFORE anything else hears it: the full
+    // screen's Esc (a `document` listener, which runs before this `window` one) and every other
+    // handler gated on `escapeWasConsumedByOthers` skip a key someone took. Without it one Esc closed
+    // the menu AND left the full screen under it (2026-10-02, the chat column's tab list).
+    // preventDefault only: `onKey` above still closes the menu and puts focus back.
+    const claimEscape = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.isComposing) e.preventDefault(); };
     let scrollArmed = false;
     const arm = requestAnimationFrame(() => { scrollArmed = true; });
     const onScroll = (e: Event) => {
@@ -271,12 +277,14 @@ export function ContextMenu({
       if (anchor?.isConnected && scrolled instanceof Node && !scrolled.contains(anchor)) return;
       close();
     };
+    window.addEventListener('keydown', claimEscape, true);
     window.addEventListener('keydown', onKey);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', close);
     window.addEventListener('blur', close);
     return () => {
       cancelAnimationFrame(arm);
+      window.removeEventListener('keydown', claimEscape, true);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', close);

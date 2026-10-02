@@ -33,7 +33,9 @@ import { classifyServiceHref, consoleCanEmbedServices, primeKnownServiceHosts } 
 import { SessionDiffView } from './SessionDiffView';
 import { SessionInboxPane } from '@/components/inbox/SessionInboxPane';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
-import { BoardTaskPeek, useBoardPeek } from '@/components/board/BoardTaskPeek';
+import { BoardTaskPeek } from '@/components/board/BoardTaskPeek';
+import { PeekTabBar } from '@/components/board/PeekTabBar';
+import { usePeekTabs } from '@/components/board/usePeekTabs';
 import { useSessionLetters } from '@/hooks/useSessionLetters';
 import {
   consumeSessionInboxLink, deepLinkFullscreenReassert, SESSION_INBOX_LINK_EVENT,
@@ -932,12 +934,22 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     autoCollapsed.current = false;
     setChatCollapsed(collapsed);
   }, []);
-  // A task chip on the Board opens that task in the chat column, in place of this
-  // chat (which stays mounted under it). This panel's OWN task decides "back", not
-  // the board's: a worker's Board shows its leader's. Cleared when the Board view closes.
+  // A task chip on the Board, or a task clicked in the chat while the panel is full
+  // screen, opens that task in the chat column as a tab, in place of this chat (which
+  // stays mounted under it). This panel's OWN task is the "Chat" tab, not the board's:
+  // a worker's Board shows its leader's. The tabs are remembered per task: leaving the
+  // full screen hides them, coming back shows the same tab.
   const revealChat = useCallback(() => collapseChat(false), [collapseChat]);
-  const boardPeek = useBoardPeek({ ownTaskId: session?.taskId, sessionId, active: activeView === 'board' && !inset, onReveal: revealChat });
-  const closeBoardPeek = useCallback(() => boardPeek.back('close'), [boardPeek.back]);
+  const peek = usePeekTabs({ ownTaskId: session?.taskId, sessionId, enabled: !inset && isFullscreen, onReveal: revealChat });
+  const peekShownId = session?.taskId ? peek.shownId : null;
+  const { open: peekOpen, close: peekClose, active: peekActive } = peek;
+  const closeShownPeek = useCallback(() => { if (peekActive) peekClose(peekActive, 'close'); }, [peekActive, peekClose]);
+  // Stable (the hook's callbacks are), so the memoized chat history does not re-render for it.
+  const openPeekFromChat = useCallback((taskId: string) => peekOpen(taskId, 'chat'), [peekOpen]);
+  // A task clicked in the chat: full screen keeps it here, as a tab; a column opens its own.
+  const chatTaskClick = !inset && isFullscreen && session?.taskId ? openPeekFromChat : onTaskClick;
+  // Full screen with no split view has no chat bar of its own: the tabs bring one.
+  const peekBarAlone = !inset && isFullscreen && !splitOpen && peek.tabs.length > 0;
   // Opening a view decides the chat column's fate: below the split floor the Inbox
   // tab opens on the letter alone (the chat column has a 280px floor, and half a
   // letter is worse than one click on "show chat"); any other view clears a
@@ -1990,8 +2002,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   className="task-action-btn session-panel-close"
                   data-header-id="close"
                   onClick={isFullscreen ? exitFullscreen : () => closePanel(sessionId)}
-                  title={isFullscreen ? 'Exit full screen' : inset ? "Close this task and go back to the chat you came from" : 'Close session panel'}
-                  aria-label={isFullscreen ? 'Exit full screen' : inset ? 'Close this task' : 'Close session panel'}
+                  title={isFullscreen ? 'Exit full screen' : inset ? 'Close this tab (the task keeps running)' : 'Close session panel'}
+                  aria-label={isFullscreen ? 'Exit full screen' : inset ? 'Close this tab' : 'Close session panel'}
                 >
                   {ICON_CLOSE}
                 </button>
@@ -2346,7 +2358,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                         taskId={session.taskId}
                         sessionId={sessionId}
                         barRightSlot={chatBarSlot}
-                        onOpenTask={boardPeek.open}
+                        onOpenTask={peek.open}
                         onLocateTask={onTaskClick ?? onLocateTask}
                         onSendToSession={handleBoardSend}
                       />
@@ -2376,7 +2388,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
           )}
           <div
-            className={`session-panel-chat-col${boardPeek.targetId ? ' is-board-peek' : ''}`}
+            className={`session-panel-chat-col${peekShownId ? ' is-board-peek' : ''}${peekBarAlone ? ' has-peek-bar' : ''}`}
             onClick={handleServiceLinkClick}
             ref={splitOpen ? chatPanel.panelRef : undefined}
             style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
@@ -2384,9 +2396,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             {/* The chat's own segment of the full-width bar: the left view's
                 toolbar + this strip read as ONE bar split by the column divider,
                 with the two layout toggles at the bar's two corners. */}
-            {splitOpen && !chatCollapsed && (
-              <div className="session-chat-bar">
-                <span className="session-chat-bar-title">Chat</span>
+            {splitOpen && !chatCollapsed && (() => {
+              const hideChat = (
                 <button
                   type="button"
                   className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
@@ -2395,8 +2406,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   aria-label="Hide chat"
                   aria-expanded
                 >{ICON_PANEL_RIGHT_FILLED}</button>
-              </div>
-            )}
+              );
+              return !inset && isFullscreen && peek.tabs.length > 0 ? <PeekTabBar peek={peek} rightSlot={hideChat} /> : (
+                <div className="session-chat-bar">
+                  <span className="session-chat-bar-title">Chat</span>
+                  {hideChat}
+                </div>
+              );
+            })()}
+            {peekBarAlone && <PeekTabBar peek={peek} />}
         <div className="session-panel-body" ref={bodyRef}>
           <SessionSupervisionBar sid={sessionId} snapshot={supervisionSnapshot} onRetryStop={handleTerminate} archived={session?.archived} />
           <CronJobsCard sid={sessionId} snapshot={supervisionSnapshot} open={cronDetailOpen} onClose={() => setCronDetailOpen(false)} archived={session?.archived} />
@@ -2417,7 +2435,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onAgentQueued={addExternalQueued}
             onRetryFailed={handleRetry}
             onDismissFailed={dismissFailed}
-            onTaskClick={onTaskClick}
+            onTaskClick={chatTaskClick}
             onSessionClick={onSessionClick}
             onFileOpen={handleFileOpen}
             onStreamingChange={setIsStreaming}
@@ -2501,33 +2519,25 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             } : undefined}
           />
         </div>
-            {/* A task opened from the Board: a trailing child over the chat above,
-                which keeps its shape and stays mounted (task-board.css). */}
-            {boardPeek.targetId && session?.taskId && (
+            {/* The active tab's task (a Board chip, or a task clicked in the chat in full
+                screen): a trailing child over the chat above, below the tab bar, which
+                keeps its shape and stays mounted (task-board.css). */}
+            {peekShownId && session?.taskId && (
               <BoardTaskPeek
+                key={peekShownId}
                 ownTaskId={session.taskId}
-                targetTaskId={boardPeek.targetId}
-                onBack={boardPeek.back}
+                targetTaskId={peekShownId}
+                onEscape={() => peek.activate(null, 'escape')}
                 onJump={onTaskClick ?? onLocateTask}
-                barRightSlot={
-                  <button
-                    type="button"
-                    className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
-                    onClick={() => collapseChat(true)}
-                    title="Hide chat"
-                    aria-label="Hide chat"
-                    aria-expanded
-                  >{ICON_PANEL_RIGHT_FILLED}</button>
-                }
                 renderSession={(peekSessionId, jump) => (
                   <InsetSessionPanel
                     key={peekSessionId}
                     sessionId={peekSessionId}
                     embedded
                     inset
-                    onClose={closeBoardPeek}
+                    onClose={closeShownPeek}
                     onLocateTask={jump}
-                    onTaskClick={onTaskClick}
+                    onTaskClick={openPeekFromChat}
                     onSessionClick={onSessionClick}
                     onOpenTaskDetail={onOpenTaskDetail}
                     onOpenForkDraft={onOpenForkDraft}
