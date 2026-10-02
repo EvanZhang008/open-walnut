@@ -28,6 +28,8 @@ import { copyDataSnapshot, ephemeralChildEnv, pauseSnapshotCronJobs, stripSnapsh
 
 /** Auto-shutdown after 10 minutes of no HTTP requests. */
 const EPHEMERAL_IDLE_TTL_MS = 10 * 60 * 1000
+/** How long a SIGTERMed server may spend in stopServer() before it exits anyway. */
+export const SHUTDOWN_BAIL_MS = 7_000
 
 /** How often to check for idle timeout (milliseconds). */
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000
@@ -152,8 +154,18 @@ export async function runWeb(options: {
   const shutdown = async () => {
     if (shuttingDown) return // a second signal must not race a teardown in flight
     shuttingDown = true
-    // Safety timeout: force-exit if stopServer hangs (e.g. audio save stuck)
-    const bail = setTimeout(() => process.exit(1), 4000)
+    // Safety timeout: force-exit if stopServer hangs (e.g. audio save stuck).
+    // Longer than the 5s a plugin may take to deactivate (plugin-manager.ts
+    // deactivationTimeoutMs), or one slow plugin ends the teardown here before
+    // the import and the stores get their turn (2026-10-01: exit 1 at exactly
+    // 4s, nothing after the plugins logged); shorter than the deploy's 8s
+    // SIGKILL grace (scripts/dev-prod.sh STOP_GRACE_SECS). The trace names the
+    // bail, so a code=1 exit is not mistaken for a crash.
+    const bail = setTimeout(() => {
+      const msg = `[${new Date().toISOString()}] SERVER EXIT: shutdown bail after ${SHUTDOWN_BAIL_MS}ms pid=${process.pid}`
+      try { fs.appendFileSync('/tmp/open-walnut-exit.log', msg + '\n') } catch { /* best-effort */ }
+      process.exit(1)
+    }, SHUTDOWN_BAIL_MS)
     try {
       await stopServer()
     } catch {
