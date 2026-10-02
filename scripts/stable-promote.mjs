@@ -33,6 +33,12 @@ import { releaseNotes } from './release-notes.mjs'
 
 export const PACKAGE = 'open-walnut'
 export const SOAK_HOURS = 24
+/**
+ * One stable a day. The schedule checks every hour (GitHub drops scheduled runs
+ * under load, so one daily slot could silently skip a day); this gap is what
+ * keeps that to one release a day. A run by hand passes 0.
+ */
+export const MIN_GAP_HOURS = 23
 
 /** The newest nightly published at least `soakHours` before `now`, with the commit it was built from. */
 export function soakedNightly(packument, now, soakHours = SOAK_HOURS) {
@@ -91,9 +97,11 @@ export function generatedNotes(commits) {
 }
 
 /** Everything the plan needs, gathered by the caller (the CLI asks git, npm and GitHub). */
-export function planRelease({ packument, now, soakHours = SOAK_HOURS, lastStableSha, isAncestor, commitsSince, changelogAt, ciVerdict }) {
+export function planRelease({ packument, now, soakHours = SOAK_HOURS, minGapHours = MIN_GAP_HOURS, lastStableSha, isAncestor, commitsSince, changelogAt, ciVerdict }) {
   const latest = packument['dist-tags']?.latest
   if (!latest) return { publish: false, reason: 'npm has no latest release to promote from' }
+  const sinceLatest = (now.getTime() - Date.parse(packument.time?.[latest] ?? '')) / 3_600_000
+  if (sinceLatest < minGapHours) return { publish: false, reason: `${latest} came out ${Math.floor(sinceLatest)}h ago; the next stable waits ${minGapHours}h` }
   const candidate = soakedNightly(packument, now, soakHours)
   if (!candidate) return { publish: false, reason: `no nightly has been out ${soakHours}h yet` }
   if (!lastStableSha) return { publish: false, reason: `cannot find the commit of ${latest}` }
@@ -183,6 +191,7 @@ async function main() {
       packument,
       now: arg('now') ? new Date(arg('now')) : new Date(),
       soakHours: arg('soak-hours') ? Number(arg('soak-hours')) : SOAK_HOURS,
+      minGapHours: arg('min-gap-hours') !== undefined ? Number(arg('min-gap-hours')) : MIN_GAP_HOURS,
       lastStableSha,
       isAncestor: (a, b) => { try { git(root, ['merge-base', '--is-ancestor', a, b]); return true } catch { return false } },
       commitsSince: (a, b) => git(root, ['log', '--no-merges', '--format=%s%x1f%b%x1e', `${a}..${b}`])

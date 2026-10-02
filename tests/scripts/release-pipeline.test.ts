@@ -20,7 +20,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import { nextVersion, rollChangelog, setManifestVersion } from '../../scripts/release.mjs'
-import { newerBase, nightlyVersion } from '../../scripts/nightly-version.mjs'
+import { NIGHTLY_GAP_HOURS, newerBase, nightlyDue, nightlyVersion } from '../../scripts/nightly-version.mjs'
 import { pickLastGreen, releaseGateRev, verdictOf } from '../../scripts/ci-gate.mjs'
 import { releaseNotes } from '../../scripts/release-notes.mjs'
 import { compareVersions } from '../../src/core/self-update/version-compare.js'
@@ -152,6 +152,29 @@ describe('nightlyVersion', () => {
   })
 })
 
+describe('nightlyDue', () => {
+  const at = (iso: string) => new Date(iso)
+  const pack = (published: string | null) => published
+    ? { 'dist-tags': { nightly: '0.6.1-nightly.20261002.9' }, time: { '0.6.1-nightly.20261002.9': published } }
+    : { 'dist-tags': {}, time: {} }
+
+  it('is due once the nightly dist-tag is the gap old, and not before', () => {
+    expect(NIGHTLY_GAP_HOURS).toBe(5.5)
+    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T11:47:00Z')).due).toBe(false)
+    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T12:17:00Z')).due).toBe(true)
+    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T11:47:00Z')).reason).toContain('5.5h')
+  })
+
+  it('a half-hourly check after a dropped run still publishes within half an hour', () => {
+    // Published 06:20; the 12:17 check is dropped; 12:47 publishes.
+    expect(nightlyDue(pack('2026-10-02T06:20:00Z'), at('2026-10-02T12:47:00Z')).due).toBe(true)
+  })
+
+  it('is due when npm has no nightly at all', () => {
+    expect(nightlyDue(pack(null), at('2026-10-02T12:00:00Z'))).toMatchObject({ due: true, reason: 'no nightly on npm yet' })
+  })
+})
+
 describe('releaseNotes', () => {
   it('is the body of the version\'s section, up to the next one', () => {
     const rolled = rollChangelog(CHANGELOG, '0.5.2', '2026-10-01')
@@ -246,12 +269,13 @@ describe('release.yml', () => {
 
   it('runs on release tags, two schedules and by hand, each job on its own', () => {
     expect(doc.on.push).toEqual({ tags: ['v*.*.*'] })
-    expect(doc.on.schedule).toEqual([{ cron: '17 */6 * * *' }, { cron: '7 19 * * *' }])
+    // Frequent checks, gated by a gap: a schedule GitHub drops costs one interval.
+    expect(doc.on.schedule).toEqual([{ cron: '17,47 * * * *' }, { cron: '37 * * * *' }])
     const dispatch = doc.on.workflow_dispatch as { inputs: Record<string, { options?: string[]; default?: unknown }> }
     expect(dispatch.inputs.channel).toMatchObject({ options: ['nightly', 'stable'], default: 'nightly' })
-    expect(doc.jobs.nightly!.if).toContain("github.event.schedule == '17 */6 * * *'")
+    expect(doc.jobs.nightly!.if).toContain("github.event.schedule == '17,47 * * * *'")
     expect(doc.jobs.nightly!.if).toContain("inputs.channel != 'stable'")
-    expect(doc.jobs['promote-plan']!.if).toContain("github.event.schedule == '7 19 * * *'")
+    expect(doc.jobs['promote-plan']!.if).toContain("github.event.schedule == '37 * * * *'")
     expect(doc.jobs['promote-plan']!.if).toContain("inputs.channel == 'stable'")
     // Every schedule a job compares against is one the workflow has.
     const crons = (doc.on.schedule as Array<{ cron: string }>).map((s) => s.cron)
@@ -276,6 +300,16 @@ describe('release.yml', () => {
     const publish = stepIndex('stable', 'npm publish')
     expect(ci).toBeGreaterThan(-1)
     expect(ci).toBeLessThan(publish)
+  })
+
+  it('a scheduled nightly publishes only once the last one is old enough; by hand, at once', () => {
+    const pick = doc.jobs.nightly!.steps.find((s) => s.id === 'pick')!.run!
+    const due = pick.indexOf('node scripts/nightly-version.mjs due')
+    expect(due).toBeGreaterThan(-1)
+    expect(due).toBeLessThan(pick.indexOf('node scripts/ci-gate.mjs last-green main'))
+    expect(pick.slice(0, due)).toContain('"${{ github.event_name }}" = "schedule"')
+    const plan = doc.jobs['promote-plan']!.steps.find((s) => s.id === 'plan')!.run!
+    expect(plan).toContain("github.event_name == 'workflow_dispatch' && '--min-gap-hours 0'")
   })
 
   it('the nightly publishes the newest commit CI passed, without rerunning the tests', () => {
@@ -307,7 +341,7 @@ describe('release.yml', () => {
     const c = (doc as unknown as { concurrency: { group: string; 'cancel-in-progress': boolean } }).concurrency
     expect(c['cancel-in-progress']).toBe(false)
     expect(c.group).toContain("&& 'stable' || 'nightly'")
-    expect(c.group).toContain("github.event.schedule == '7 19 * * *'")
+    expect(c.group).toContain("github.event.schedule == '37 * * * *'")
     expect(c.group).toContain("inputs.channel == 'stable'")
     expect(c.group).toContain("startsWith(github.ref, 'refs/tags/')")
   })
@@ -319,7 +353,7 @@ describe('release.yml', () => {
 
   it('the daily stable installs the soaked nightly on fresh Linux and macOS before publishing it', () => {
     const jobs = doc.jobs as Record<string, { needs?: string | string[]; if?: string; strategy?: { matrix: { os: string[] } }; steps: Array<{ run?: string; name?: string; uses?: string; with?: Record<string, string>; env?: Record<string, string> }> }>
-    expect(runs('promote-plan')).toContain('node scripts/stable-promote.mjs plan --notes "$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"')
+    expect(runs('promote-plan')).toMatch(/node scripts\/stable-promote\.mjs plan --notes "\$RUNNER_TEMP\/notes\.md" .*>> "\$GITHUB_OUTPUT"/)
     expect(jobs['promote-smoke']!.needs).toBe('promote-plan')
     expect(jobs['promote-smoke']!.if).toBe("needs.promote-plan.outputs.publish == 'true'")
     expect(jobs['promote-smoke']!.strategy!.matrix.os).toEqual(['ubuntu-latest', 'macos-latest'])
@@ -389,8 +423,12 @@ describe('ci.yml', () => {
   })
 
   it('the browser suite runs in shards and reports through the tested summary script', () => {
-    expect(doc.jobs.browser!.strategy!.matrix.shard).toEqual([1, 2, 3, 4])
-    expect(runs('browser')).toContain('npx playwright test --project=chromium --shard=${{ matrix.shard }}/4')
+    expect(doc.jobs.browser!.strategy!.matrix.shard).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(runs('browser')).toContain('npx playwright test --project=chromium --shard=${{ matrix.shard }}/8')
+    // The run ends itself before the job timeout, so its report is always uploaded.
+    const globalMs = Number(/--global-timeout=(\d+)/.exec(runs('browser'))?.[1])
+    expect(globalMs).toBeGreaterThan(0)
+    expect(globalMs).toBeLessThan(((doc.jobs.browser as unknown as { 'timeout-minutes': number })['timeout-minutes'] - 10) * 60_000)
     expect(runs('browser')).toContain('node scripts/playwright-summary.mjs')
   })
 

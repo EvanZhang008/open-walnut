@@ -7,8 +7,8 @@ an install finds out and updates.
 
 | Channel | npm dist-tag | What it is | How it is cut |
 |---|---|---|---|
-| stable | `latest` | A tagged release `vX.Y.Z` with a CHANGELOG section | Automatic, daily: the newest nightly that has been out 24 hours. By hand: `npm run release -- patch\|minor\|major` |
-| nightly | `nightly` | The newest commit on `main` that CI passed | GitHub Actions, every six hours, when that commit is not the last nightly already |
+| stable | `latest` | A tagged release `vX.Y.Z` with a CHANGELOG section | Automatic, once a day: the newest nightly that has been out 24 hours. By hand: `npm run release -- patch\|minor\|major` |
+| nightly | `nightly` | The newest commit on `main` that CI passed | GitHub Actions, about every six hours, when that commit is not the last nightly already |
 
 `npm install -g open-walnut` gives the stable channel. `npm install -g open-walnut@nightly`
 switches an install to nightly; the installed version (`X.Y.Z-nightly.YYYYMMDD.N`) is how
@@ -17,8 +17,12 @@ is installed again. Pre-1.0, a minor bump may carry breaking changes (see CHANGE
 
 ## Automatic stable releases
 
-Nobody has to cut a stable release. Every day at 19:07 UTC, jobs `promote-*` of the same
-workflow promote a nightly that users on the nightly channel have run for a day:
+Nobody has to cut a stable release. Once a day, jobs `promote-*` of the same workflow
+promote a nightly that users on the nightly channel have run for a day. The schedule checks
+every hour (`37 * * * *` UTC) and a check does nothing until the last stable is 23 hours old
+(`MIN_GAP_HOURS`), because GitHub delays scheduled runs under load and sometimes drops them:
+one daily slot could skip a day without anyone noticing, an hourly check costs an hour at
+most. A run by hand skips the gap.
 
 1. **Plan** (`scripts/stable-promote.mjs plan`). The candidate is the newest nightly
    published at least 24 hours ago; the registry records each version's commit as
@@ -76,7 +80,7 @@ Both channels publish only a commit whose `CI OK` passed (see below), and `CI OK
 Two more suites run on every push and report without blocking until they have a recorded
 baseline: the e2e tier (real servers with a mock CLI; each run uploads its failures as the
 `known-failures-e2e` artifact, the baseline that will let new failures block) and the
-Playwright browser suite (four shards, summary per shard in the run page).
+Playwright browser suite (eight shards, summary per shard in the run page).
 
 ### The release rehearsal
 
@@ -137,8 +141,12 @@ So the CHANGELOG discipline is the release discipline: write the user-facing ent
 
 ## Nightlies
 
-Job `nightly` of the same workflow runs every six hours (`17 */6 * * *` UTC) and by hand
-(`workflow_dispatch`, with a `force` input for a republish). It asks for the newest commit
+Job `nightly` of the same workflow checks every 30 minutes (`17,47 * * * *` UTC) and runs by
+hand (`workflow_dispatch`, with a `force` input for a republish). A scheduled check
+publishes only when the `nightly` dist-tag is at least 5.5 hours old
+(`scripts/nightly-version.mjs due`), so nightlies come about every six hours and a dropped
+run costs half an hour (the 06:17 run of 2026-10-02, when the schedule was a plain six-hourly
+cron, never ran at all). It asks for the newest commit
 on `main` whose CI run passed (`scripts/ci-gate.mjs last-green main`), and does nothing
 when there is none among the last 30 runs, when that commit is already the `nightly` tag,
 or when it is not a descendant of that tag (GitHub's runs list can show a finished run as

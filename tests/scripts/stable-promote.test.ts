@@ -1,12 +1,12 @@
 /**
- * scripts/stable-promote.mjs: which soaked nightly the daily job promotes, as
+ * scripts/stable-promote.mjs: which soaked nightly the hourly check promotes, once a day, as
  * which version, with which notes, and how main's CHANGELOG is rolled afterwards.
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { allowedScripts, bumpFor, generatedNotes, planRelease, rollReleased, soakedNightly } from '../../scripts/stable-promote.mjs'
+import { MIN_GAP_HOURS, allowedScripts, bumpFor, generatedNotes, planRelease, rollReleased, soakedNightly } from '../../scripts/stable-promote.mjs'
 import { releaseNotes } from '../../scripts/release-notes.mjs'
 import { INSTALL_SCRIPT_PACKAGES } from '../../src/core/self-update/install-kind.js'
 
@@ -148,6 +148,16 @@ describe('planRelease', () => {
     expect(ciVerdict).not.toHaveBeenCalled()
     expect(skip({ ciVerdict: () => 'red' })).toBe('CI on cand is red')
     expect(skip({ ciVerdict: () => 'none' })).toBe('CI on cand is none')
+  })
+
+  it('one stable a day: the hourly check waits 23h after the last one, a run by hand does not', () => {
+    expect(MIN_GAP_HOURS).toBe(23)
+    const fresh = packument('0.6.0', [['0.6.0', 'stable0', 22], ['0.6.1-nightly.20261004.8', 'cand', 59]])
+    const plan = planRelease(deps({ packument: fresh }))
+    expect(plan).toMatchObject({ publish: false, reason: '0.6.0 came out 22h ago; the next stable waits 23h' })
+    expect(planRelease(deps({ packument: fresh, minGapHours: 0 }))).toMatchObject({ publish: true, sha: 'cand' })
+    const dayOld = packument('0.6.0', [['0.6.0', 'stable0', 23.5], ['0.6.1-nightly.20261004.8', 'cand', 59]])
+    expect(planRelease(deps({ packument: dayOld }))).toMatchObject({ publish: true, sha: 'cand' })
   })
 })
 
