@@ -172,6 +172,9 @@ struct RootView: View {
             if phase == .active {
                 LifecycleHub.shared.resumeAll()
                 Task { await connection.refreshStatus() }
+                // The tag rules are read before any task is opened, so a first open
+                // draws its pills already decided instead of the raw tags for a moment.
+                Task { await TagDisplayStore.shared.refreshIfStale() }
                 // "The app is on screen" — only read by the server in
                 // `when-inactive` mode, where it's what keeps a letter quiet
                 // while the user is already looking at Walnut.

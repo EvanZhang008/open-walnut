@@ -143,6 +143,10 @@ extension DemoServer {
         if match2(r, "GET", s, "tasks", "groups") {
             return .encoded(["groups": withState { $0.wireFolders }])
         }
+        // Walnut's own rules only (no plugin runs in the demo): labels read as their word.
+        if match2(r, "GET", s, "tasks", "meta", "tag-display") {
+            return .encoded(TagDisplayState.walnutOnly)
+        }
         if match2(r, "POST", s, "tasks", "quick-parse") {
             return .encoded(Self.quickParse(r.string("text") ?? "", clock: clockNow))
         }

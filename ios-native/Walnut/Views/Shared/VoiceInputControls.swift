@@ -414,7 +414,9 @@ struct VoiceNoticeRows: View {
 }
 
 /// Views left to right, starting a new line when the next one does not fit the
-/// width offered. Each line's views are centred on one another.
+/// width offered. Each line's views are centred on one another, and a view wider
+/// than the whole line is offered the line's width (it wraps or truncates there)
+/// instead of running past the edge.
 struct WrappingRow: Layout {
     var spacing: CGFloat = 8
     var lineSpacing: CGFloat = 2
@@ -431,7 +433,7 @@ struct WrappingRow: Layout {
         for line in Self.lines(fitting: bounds.width, subviews, spacing: spacing) {
             var x = bounds.minX
             for index in line.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
+                let size = Self.size(of: subviews[index], fitting: bounds.width)
                 subviews[index].place(
                     at: CGPoint(x: x, y: y + (line.height - size.height) / 2),
                     anchor: .topLeading, proposal: ProposedViewSize(size)
@@ -466,7 +468,14 @@ struct WrappingRow: Layout {
     }
 
     private static func lines(fitting maxWidth: CGFloat, _ subviews: Subviews, spacing: CGFloat) -> [Line] {
-        lines(fitting: maxWidth, sizes: subviews.map { $0.sizeThatFits(.unspecified) }, spacing: spacing)
+        lines(fitting: maxWidth, sizes: subviews.map { size(of: $0, fitting: maxWidth) }, spacing: spacing)
+    }
+
+    /// The view's own size, or the size it takes at the line's width when its own is wider.
+    private static func size(of subview: LayoutSubview, fitting maxWidth: CGFloat) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        guard maxWidth.isFinite, ideal.width > maxWidth else { return ideal }
+        return subview.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
     }
 }
 

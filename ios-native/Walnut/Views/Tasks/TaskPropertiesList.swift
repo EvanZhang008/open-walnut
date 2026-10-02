@@ -237,13 +237,23 @@ struct TaskPropertiesList: View {
     }
 
     /// Read-only on purpose: nothing in the app writes tags, so a chevron here
-    /// would promise an editor that does not exist.
+    /// would promise an editor that does not exist. The pills follow the server's
+    /// display rules (`TaskTagPills`), and a linked one opens its page.
+    ///
+    /// Label above the pills, never beside them: several pills wrap, and a wrapped
+    /// block squeezed into the value half of a row reads as two half-columns.
     private func tagsRow(_ tags: [String]) -> some View {
-        TaskPropertyRowLabel(
-            label: "Tags",
-            value: tags.joined(separator: ", "),
-            affordance: .readOnly
-        )
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Tags")
+                .font(.body)
+                .foregroundStyle(.primary)
+            TaskTagPills(tags: tags)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(minHeight: 44)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("task.prop.tags")
     }
 }
