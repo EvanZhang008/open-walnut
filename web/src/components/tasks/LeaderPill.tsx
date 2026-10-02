@@ -104,6 +104,9 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
         aria-expanded={open || adoptOpen}
         data-testid="leader-pill"
         data-subtask-count={subtasks.length}
+        // A narrow session header shows this letter instead of the words (CSS only;
+        // the text stays for readers and tests); the count rides in the hover text.
+        data-short="L"
         onPointerDown={(e) => e.stopPropagation()}
         // WebKit never focuses a button on click, so the mousedown would focus the
         // row around the pill, which scrolls itself into view before mouseup and
@@ -118,7 +121,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
           setOpen((v) => !v);
         }}
       >
-        Leader · {subtasks.length}
+        <span className="task-pill-long">Leader · {subtasks.length}</span>
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(

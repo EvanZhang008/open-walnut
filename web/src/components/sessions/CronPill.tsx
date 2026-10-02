@@ -22,8 +22,9 @@ export function CronPill({ sessionId, onClick, expanded }: CronPillProps) {
         aria-label="Cron job armed"
         data-cron-presence="active"
         data-cron-source="cron"
+        data-short="C"
       >
-        CRON
+        <span className="task-pill-long">CRON</span>
       </span>
     );
   }
@@ -37,9 +38,11 @@ export function CronPill({ sessionId, onClick, expanded }: CronPillProps) {
       aria-expanded={!!expanded}
       data-cron-presence="active"
       data-cron-source="cron"
+      // A narrow session header shows this letter instead of the word (CSS only).
+      data-short="C"
       onClick={(event) => { event.stopPropagation(); onClick(); }}
     >
-      CRON
+      <span className="task-pill-long">CRON</span>
     </button>
   );
 }

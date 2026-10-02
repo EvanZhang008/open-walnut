@@ -35,7 +35,7 @@ export function ProcessStatusBadge({ processStatus, size = 'md', errorMessage, p
         title={waitingBadgeTitle(pendingPermission!)}
       >
         <span className={dotClass} style={{ background: WAITING_COLOR }} />
-        Waiting
+        <span className="session-badge-label">Waiting</span>
       </span>
     );
   }
@@ -50,10 +50,12 @@ export function ProcessStatusBadge({ processStatus, size = 'md', errorMessage, p
       }}
       title={display === 'error' && errorMessage ? errorMessage : PROCESS_LABELS[display]}
     >
-      {display === 'running' && (
-        <span className={dotClass} style={{ background: psColor }} />
-      )}
-      {PROCESS_LABELS[display]}
+      {display === 'running'
+        ? <span className={dotClass} style={{ background: psColor }} />
+        // Shown only when a narrow session header folds the badge to its dot
+        // (session-header-fit.css); the running dot above already is one.
+        : size === 'sm' && <span className="session-panel-badge-dot-compact" style={{ background: psColor }} aria-hidden="true" />}
+      <span className="session-badge-label">{PROCESS_LABELS[display]}</span>
     </span>
   );
 }

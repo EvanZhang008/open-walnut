@@ -102,6 +102,9 @@ import { ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
 import { WaitingComposerLine, WAIT_UNTIL_ICON } from '@/components/tasks/TaskStatusControl';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
+import { useTitleMetaFit, useToolRowFit } from './useSessionHeaderFit';
+import { HiddenPillRows, HiddenWindowRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
+import '@/styles/session-header-fit.css';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -352,6 +355,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // panel: composer").
   const panelRef = useRef<HTMLDivElement>(null);
   const glassHeaderRef = useHeightVar(panelRef, '--sp-header-h');
+  // A narrow column keeps both header rows on one line: the tool row's items
+  // leave by priority (window buttons into the kebab, view chips into a "..."
+  // menu), the title row's pills fold to a dot and to letters. Hidden items stay
+  // mounted under data-hidden="true"; the menus proxy to them.
+  const toolRowRef = useRef<HTMLDivElement>(null);
+  const titleMetaRef = useRef<HTMLDivElement>(null);
+  const toolFit = useToolRowFit(toolRowRef);
+  const metaFit = useTitleMetaFit(titleMetaRef);
+  const hid = (id: string) => (toolFit.hidden.has(id) ? 'true' : 'false');
 
   const handleControlCommand = useCallback((command: string) => {
     if (command === 'model') {
@@ -1734,7 +1746,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               next to the title. Open-in-VS-Code lives in the kebab only. */}
           {/* ROW 1 — tool chips + time on the left, window controls pinned right.
               Session id / SSH host / Open-in-VS-Code all live in the ⋮ kebab. */}
-          <div className="session-meta-row-2">
+          <div className="session-meta-row-2" ref={toolRowRef}>
             <div className="session-meta-row-2-chips">
             {/* Plan & Execute \u2014 shown whenever a plan actually exists (regardless
                 of mode), or there's something executable. */}
@@ -1744,6 +1756,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   className={`session-action-chip${planPopoverOpen ? ' session-action-chip-active' : ''}`}
                   onClick={() => setPlanPopoverOpen(o => !o)}
                   title="Plan & Execute"
+                  data-header-id="plan"
+                  data-hidden={hid('plan')}
                 >
                   Plan {planPopoverOpen ? '\u25B4' : '\u25BE'}
                 </button>
@@ -1840,12 +1854,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 )}
               </>
             )}
-            <SessionForkButton
-              sessionId={sessionId}
-              session={session}
-              sourceTitle={headerTitle}
-              onOpenForkDraft={onOpenForkDraft}
-            />
+            <span className="session-header-item" data-header-id="fork" data-hidden={hid('fork')}>
+              <SessionForkButton
+                sessionId={sessionId}
+                session={session}
+                sourceTitle={headerTitle}
+                onOpenForkDraft={onOpenForkDraft}
+              />
+            </span>
             {/* The split views need the whole panel: an inset column has none. */}
             {!inset && (
               <>
@@ -1853,6 +1869,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   className={`session-action-chip${activeView === 'changed' ? ' session-action-chip-active' : ''}`}
                   onClick={() => toggleView('changed')}
                   title="See the files this session changed, in a full-screen diff alongside the chat"
+                  data-header-id="changed"
+                  data-hidden={hid('changed')}
                 >
                   Changed
                 </button>
@@ -1860,6 +1878,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
                   onClick={() => toggleView('files')}
                   title="Browse the session working directory, full-screen alongside the chat"
+                  data-header-id="files"
+                  data-hidden={hid('files')}
                 >
                   Files
                 </button>
@@ -1869,6 +1889,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                     onClick={() => toggleView('board')}
                     title="The task's Board: the page its leader keeps, with a thread and a mark per section, beside the chat"
                     data-testid="session-board-chip"
+                    data-header-id="board"
+                    data-hidden={hid('board')}
                   >
                     Board
                   </button>
@@ -1877,13 +1899,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
                   onClick={() => toggleView('terminal')}
                   title="Open a terminal in the session working directory, full-screen alongside the chat"
+                  data-header-id="terminal"
+                  data-hidden={hid('terminal')}
                 >
                   Terminal
                 </button>
               </>
             )}
+            {/* The chips the row had no room for, as a menu; renders nothing while all fit. */}
+            <SessionHeaderMoreMenu rowRef={toolRowRef} ids={toolFit.inMore} />
             {activityAge && (
-              <time className="session-panel-time" dateTime={session?.lastActiveAt} title={activityTimeTitle}>
+              <time className="session-panel-time" dateTime={session?.lastActiveAt} title={activityTimeTitle} data-header-id="time" data-hidden={hid('time')}>
                 {activityAge}
               </time>
             )}
@@ -1893,6 +1919,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 <button
                   className="task-action-btn session-panel-locate"
                   data-testid="session-panel-locate"
+                  data-header-id="locate"
+                  data-hidden={hid('locate')}
                   onClick={() => {
                     const locate = onLocateTask ?? onTaskClick;
                     // A panel no page gave a handler to lives off Home (an ask drawer, Notes, a plugin
@@ -1914,6 +1942,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               {!embedded && onToggleLock && (
                 <button
                   className={`task-action-btn session-panel-lock${locked ? ' is-locked' : ''}`}
+                  data-header-id="lock"
+                  data-hidden={hid('lock')}
                   onClick={() => onToggleLock(sessionId)}
                   title={locked ? 'Unlock — panel will rejoin the rotation' : 'Pin to right — panel stays when new sessions open'}
                   aria-label={locked ? 'Unlock session panel' : 'Lock session panel to the right'}
@@ -1927,6 +1957,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 <>
                   <button
                     className="task-action-btn session-panel-popout"
+                    data-header-id="popout"
+                    data-hidden={hid('popout')}
                     onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
                     title="Open in new tab"
                     aria-label="Open session in new tab"
@@ -1935,6 +1967,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   </button>
                   <button
                     className="task-action-btn session-panel-expand"
+                    data-header-id="expand"
+                    data-hidden={hid('expand')}
                     onClick={isFullscreen ? exitFullscreen : enterFullscreen}
                     title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
                     aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
@@ -1949,6 +1983,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               {(onClose || isFullscreen) && (
                 <button
                   className="task-action-btn session-panel-close"
+                  data-header-id="close"
                   onClick={isFullscreen ? exitFullscreen : () => closePanel(sessionId)}
                   title={isFullscreen ? 'Exit full screen' : inset ? "Close this task and go back to the chat you came from" : 'Close session panel'}
                   aria-label={isFullscreen ? 'Exit full screen' : inset ? 'Close this task' : 'Close session panel'}
@@ -2012,10 +2047,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 />
               </div>
             )}
-            <div className="session-panel-title-meta">
+            <div
+              className="session-panel-title-meta"
+              ref={titleMetaRef}
+              data-fit={metaFit.level}
+              data-hidden-pills={metaFit.hidden.size ? [...metaFit.hidden].join(' ') : undefined}
+            >
               {!loading && session?.provider === 'embedded' && (
                 <span
                   className="session-panel-badge"
+                  data-header-pill="embedded"
                   style={{
                     color: 'var(--accent)',
                     background: 'color-mix(in srgb, var(--accent) 10%, transparent)',
@@ -2023,7 +2064,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                     fontWeight: 600,
                   }}
                 >
-                  {ICON_ROBOT} Embedded
+                  {ICON_ROBOT}<span className="task-pill-long"> Embedded</span>
                 </span>
               )}
               {!loading && (
@@ -2065,7 +2106,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   // belong to the gesture people already try there.
                   contextMenuScope=".session-panel-header"
                   // The strip's own control leads the menu (PanelCountRow explains).
-                  leadingSection={(close) => <PanelCountRow onAfterAction={close} />}
+                  leadingSection={(close) => (
+                    <>
+                      <HiddenWindowRows rowRef={toolRowRef} ids={toolFit.inKebab} onAfterAction={close} />
+                      <HiddenPillRows metaRef={titleMetaRef} kinds={[...metaFit.hidden]} pin={metaFit.pin} onAfterAction={close} />
+                      <PanelCountRow onAfterAction={close} />
+                    </>
+                  )}
                   extraSection={(close) => (
                     <SessionKebabSection
                       sessionId={sessionId}

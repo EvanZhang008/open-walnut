@@ -45,13 +45,17 @@ export function SubtaskPill({ task, className }: { task: { parent_task_id?: stri
       tabIndex={0}
       className={`task-team-pill todo-item-subtask-pill${className ? ` ${className}` : ''}`}
       title={subtaskPillTitle(parent?.title)}
+      aria-label="Worker"
       data-testid="subtask-pill"
       data-parent-task-id={parent?.id ?? parentId}
+      // A narrow session header shows this letter instead of the word (CSS only;
+      // the text stays for readers and tests).
+      data-short="W"
       onClick={open}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') open(e); }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      Worker
+      <span className="task-pill-long">Worker</span>
     </span>
   );
 }

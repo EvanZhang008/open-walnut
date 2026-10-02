@@ -28,7 +28,9 @@ async function openHomepageSession(page: Page) {
   await task.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
-  await expect(panel.getByRole('button', { name: 'Locate task', exact: true })).toBeVisible()
+  // The kebab is the one header control every width keeps; in a narrow column the
+  // Locate button moves into it (session-header-narrow.spec.ts).
+  await expect(panel.locator('.session-panel-title-meta .task-kebab-btn')).toBeVisible()
   return panel
 }
 

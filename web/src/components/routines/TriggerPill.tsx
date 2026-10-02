@@ -344,6 +344,9 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
         data-trigger-count={triggers.length}
         data-paused={allOff ? 'true' : undefined}
         data-off={allOff ? offWord(triggers).toLowerCase() : undefined}
+        // A narrow session header shows this letter instead of the words (CSS, the
+        // text stays for readers and tests); the count rides in the hover text.
+        data-short="T"
         onPointerDown={(e) => e.stopPropagation()}
         // WebKit never focuses a button on click, so the mousedown would focus the
         // row around the pill instead; the row then scrolls itself into view between
@@ -353,7 +356,7 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); }}
       >
-        {triggerPillLabel(triggers)}
+        <span className="task-pill-long">{triggerPillLabel(triggers)}</span>
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(

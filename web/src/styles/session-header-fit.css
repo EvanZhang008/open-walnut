@@ -1,0 +1,67 @@
+/* A narrow session header keeps each of its two rows on one line
+   (web/src/components/sessions/useSessionHeaderFit.ts decides what gives way;
+   this file only draws the decision). Hidden items stay mounted so the "..."
+   menu and the kebab can proxy to them. The rows keep `flex-wrap: wrap` as the
+   containment for the one frame before the first measurement: nowrap would let
+   that frame draw chips over the window buttons. */
+
+.session-meta-row-2 [data-header-id][data-hidden="true"] { display: none !important; }
+
+/* A wrapper around a component that rendered nothing (Fork without a task, the
+   heavy pill on a quiet session) must not take a gap. */
+.session-header-item { display: inline-flex; align-items: center; flex-shrink: 0; }
+.session-header-item:empty { display: none; }
+
+/* Two classes each: this file is bundled before globals.css (the component
+   imports it), so a single class would lose to .session-action-chip / .task-kebab-menu. */
+.session-action-chip.session-header-more-btn { padding: 1px 5px; letter-spacing: 0.06em; }
+.task-kebab-menu.session-header-more-menu { min-width: 150px; }
+.task-kebab-item .session-header-more-name { flex: 1 1 auto; }
+.task-kebab-item .session-header-more-value { color: var(--fg-muted); font-size: 11px; }
+.task-kebab-item:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Title row: the status badge folds to its dot (levels dot and letters) ── */
+
+.session-panel-badge-dot-compact {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.session-panel-title-meta:is([data-fit="dot"], [data-fit="letters"]) > .session-panel-badge:not([data-header-pill="embedded"]) {
+  padding: 2px 5px;
+}
+/* Hidden to the eye, kept for readers: the status word is the badge's only text. */
+.session-panel-title-meta:is([data-fit="dot"], [data-fit="letters"]) > .session-panel-badge:not([data-header-pill="embedded"]) .session-badge-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.session-panel-title-meta:is([data-fit="dot"], [data-fit="letters"]) > .session-panel-badge .session-panel-badge-dot-compact {
+  display: inline-block;
+}
+
+/* ── Title row: every pill reads as one letter (level letters) ──
+   The text node stays (readers and tests read "Worker"); the letter is drawn
+   from `data-short`, so the count in "Leader · 13" goes and the hover text keeps it. */
+
+.session-panel-title-meta[data-fit="letters"] > [data-short] > .task-pill-long { display: none; }
+.session-panel-title-meta[data-fit="letters"] > [data-short]::after { content: attr(data-short); }
+.session-panel-title-meta[data-fit="letters"] > .session-panel-badge[data-header-pill="embedded"] {
+  padding: 2px 4px;
+}
+.session-panel-title-meta[data-fit="letters"] > .session-panel-badge[data-header-pill="embedded"] .task-pill-long { display: none; }
+
+/* ── Title row: pills whose letters still did not fit ── */
+
+.session-panel-title-meta[data-hidden-pills~="embedded"] > .session-panel-badge[data-header-pill="embedded"],
+.session-panel-title-meta[data-hidden-pills~="cron"] > .session-cron-pill,
+.session-panel-title-meta[data-hidden-pills~="trigger"] > .task-trigger-pill,
+.session-panel-title-meta[data-hidden-pills~="worker"] > .todo-item-subtask-pill,
+.session-panel-title-meta[data-hidden-pills~="leader"] > .todo-item-leader-pill {
+  display: none;
+}
