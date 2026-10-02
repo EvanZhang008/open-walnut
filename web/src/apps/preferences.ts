@@ -169,12 +169,19 @@ export function effectiveAppPlacement(
   return preferences.placement[app.key] ?? app.placement
 }
 
+/**
+ * Choosing the Sidebar means the row SHOWS there: an App the user had unpinned is pinned
+ * again, or "Move to sidebar" would move it nowhere. A hidden App stays hidden; the
+ * placement is where its Show will put it back.
+ */
 export function setAppPlacement(
   preferences: AppPreferences,
   key: string,
   placement: AppPlacement,
 ): AppPreferences {
-  return { ...preferences, placement: { ...preferences.placement, [key]: placement } }
+  const moved = { ...preferences, placement: { ...preferences.placement, [key]: placement } }
+  if (placement !== 'sidebar' || preferences.hidden.includes(key) || !preferences.unpinned.includes(key)) return moved
+  return { ...moved, unpinned: without(preferences.unpinned, key) }
 }
 
 function mergedOrder(

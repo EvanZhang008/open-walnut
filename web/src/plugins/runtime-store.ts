@@ -18,7 +18,8 @@ export interface WebPluginRuntimeSnapshot {
   plugins: Array<{ id: string; state: string }>
   tombstones: Array<{ id: string; reason: string }>
   modules: PluginWebModuleDescriptor[]
-  errors: Array<{ id: string; error: string }>
+  /** `cause`: the plain reason, when `error` wraps it in loader wording (a skipped build). */
+  errors: Array<{ id: string; error: string; cause?: string }>
   version: number
 }
 

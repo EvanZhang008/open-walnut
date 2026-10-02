@@ -1263,7 +1263,7 @@ export async function handleSessionControlRelay(
         break;
       }
       case 'server.plugin-runtime': {
-        const [{ registry }, { getPluginLifecycleRecords }, { listPluginWebModules }] = await Promise.all([
+        const [{ registry }, { getPluginLifecycleRecords, isPluginCatalogueLoading }, { listPluginWebModules }] = await Promise.all([
           import('../integration-registry.js'),
           import('../integration-loader.js'),
           import('../plugins/plugin-web-module.js'),
@@ -1275,6 +1275,8 @@ export async function handleSessionControlRelay(
           ),
           plugins: getPluginLifecycleRecords(registry),
           tombstones: registry.getTombstones(),
+          // A replica's windows must not unload a plugin over the primary's half-walked list.
+          ...(isPluginCatalogueLoading(registry) ? { loading: true } : {}),
         } as unknown as Record<string, unknown>;
         break;
       }

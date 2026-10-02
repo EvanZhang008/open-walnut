@@ -70,7 +70,9 @@ export function Sidebar({
   useLocalClaudeRecheck(health, healthLoading);
   // overrideLinks: a rail row is an <a> only because SPA routing needs one:
   // "Open Link in New Tab" is not what right-clicking an app icon is for.
-  const appMenu = useContextMenu<RegisteredApp>({ overrideLinks: true });
+  // ignorePressSelection: WebKit (the Mac app) selects the word under a right-press, and that
+  // selection used to hand the gesture to the native menu, so this one never opened on a label.
+  const appMenu = useContextMenu<RegisteredApp>({ overrideLinks: true, ignorePressSelection: true });
   const audio = useAudioCapture();
   const { notify, attentionCount, quiet } = useNotifications();
   const quietNow = effectiveQuiet(quiet).active;

@@ -59,9 +59,11 @@ let operationTail: Promise<void> = Promise.resolve()
  */
 const REFRESH_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 8_000]
 let firstRefreshSettled = false
-/** Two budgets, because one bad plugin spending the ladder must not disarm the runtime's retry. */
+/** Separate budgets, because one bad plugin spending the ladder must not disarm the runtime's retry. */
 let runtimeRetries = 0
 let moduleRetries = 0
+/** Answers that said `loading`: the server is still walking its plugins, so ask again shortly. */
+let catalogueRetries = 0
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 
 function cancelRefreshRetry(): void {
@@ -75,11 +77,12 @@ function cancelRefreshRetry(): void {
  * `refreshWebPlugins` appends to `operationTail`, and a refresh that awaited its own retry would
  * be waiting on a promise queued behind itself.
  */
-function scheduleRefreshRetry(kind: 'runtime' | 'module'): void {
-  const used = kind === 'runtime' ? runtimeRetries : moduleRetries
+function scheduleRefreshRetry(kind: 'runtime' | 'module' | 'catalogue'): void {
+  const used = kind === 'runtime' ? runtimeRetries : kind === 'module' ? moduleRetries : catalogueRetries
   const delay = REFRESH_BACKOFF_MS[used] ?? REFRESH_BACKOFF_MS[REFRESH_BACKOFF_MS.length - 1]!
   if (kind === 'runtime') runtimeRetries += 1
-  else moduleRetries += 1
+  else if (kind === 'module') moduleRetries += 1
+  else catalogueRetries += 1
   cancelRefreshRetry()
   retryTimer = setTimeout(() => {
     retryTimer = null
@@ -104,25 +107,37 @@ async function refreshNow(): Promise<void> {
   let modules: PluginWebModuleDescriptor[] = previous.modules
   let runtimeFailed = false
   let moduleRetryWanted = false
+  let catalogueLoading = false
   try {
     const response = await apiGet<PluginRuntimeResponse>('/api/plugin-runtime', undefined, { timeoutMs: 15_000 })
-    plugins = response.plugins ?? []
+    catalogueLoading = response.loading === true
+    const listedPlugins = response.plugins ?? []
+    const listed = new Set(listedPlugins.map((entry) => entry.id))
+    // A list read while the server is still walking its plugins lacks every plugin it has not
+    // reached yet. Such a plugin keeps what this window last knew about it (its state, so a
+    // plugin-gated App stays put), and the next answer decides.
+    plugins = catalogueLoading
+      ? [...listedPlugins, ...previous.plugins.filter((entry) => !listed.has(entry.id))]
+      : listedPlugins
     tombstones = response.tombstones ?? []
     modules = response.modules ?? []
     const moduleErrors = response.moduleErrors ?? []
     errors.push(...moduleErrors)
     const offered = new Set(modules.map((descriptor) => descriptor.id))
-    const states = new Map(plugins.map((entry) => [entry.id, entry.state]))
+    const states = new Map(listedPlugins.map((entry) => [entry.id, entry.state]))
     const failedToBuild = new Set(moduleErrors.map((entry) => entry.id))
 
     for (const pluginId of managedPluginIds()) {
       if (offered.has(pluginId)) continue
       const state = states.get(pluginId) ?? ''
-      // Keep the running UI only while the omission is explained: a reload in flight, or a build
-      // that failed. An active plugin offering no module and reporting no error dropped its web
-      // entry on purpose, so keeping the old one would pin a UI the plugin no longer ships.
+      // Keep the running UI only while the omission is explained: a reload in flight, a build
+      // that failed, or a boot that has not reached the plugin yet. An active plugin offering no
+      // module and reporting no error dropped its web entry on purpose, so keeping the old one
+      // would pin a UI the plugin no longer ships.
       if (RELOADING_STATES.has(state)) continue
       if (state === 'active' && failedToBuild.has(pluginId)) continue
+      // `discovered` is the walk's own step between registering a plugin and activating it.
+      if (catalogueLoading && (!listed.has(pluginId) || state === 'discovered')) continue
       await unload(pluginId, errors)
     }
 
@@ -141,25 +156,30 @@ async function refreshNow(): Promise<void> {
     errors.push({ id: 'runtime', error: error instanceof Error ? error.message : String(error) })
     log.warn('plugins', 'failed to refresh native Web Plugins', { error: errors[errors.length - 1]!.error })
   } finally {
-    // The runtime answer landing ends the initial unready window, whatever the modules did with it.
-    if (!runtimeFailed) firstRefreshSettled = true
+    // A whole runtime answer ends the initial unready window, whatever the modules did with it.
+    // A partial one (`loading`) does not: "this plugin is not installed" is not known yet.
+    if (!runtimeFailed && !catalogueLoading) firstRefreshSettled = true
     // Each budget resets only on its own success, or a failure would never run out of tries.
     if (!runtimeFailed) runtimeRetries = 0
     if (!moduleRetryWanted) moduleRetries = 0
+    if (!catalogueLoading) catalogueRetries = 0
     const runtimeRetrying = runtimeFailed && runtimeRetries < REFRESH_BACKOFF_MS.length
     const moduleRetrying = moduleRetryWanted && moduleRetries < REFRESH_BACKOFF_MS.length
-    const retrying = runtimeRetrying || moduleRetrying
+    // The server also announces the end of its walk (`plugin:runtime-changed`); this retry is for
+    // a window whose socket missed that event.
+    const catalogueRetrying = catalogueLoading && catalogueRetries < REFRESH_BACKOFF_MS.length
+    const retrying = runtimeRetrying || moduleRetrying || catalogueRetrying
     if (!retrying) cancelRefreshRetry()
     // `ready` never goes back to false once it has been true: consumers evict on an empty list.
     publish({
-      ready: firstRefreshSettled || !retrying,
+      ready: previous.ready || firstRefreshSettled || !retrying,
       loading: retrying && !firstRefreshSettled,
       plugins,
       tombstones,
       modules,
       errors,
     })
-    if (retrying) scheduleRefreshRetry(runtimeRetrying ? 'runtime' : 'module')
+    if (retrying) scheduleRefreshRetry(runtimeRetrying ? 'runtime' : catalogueRetrying ? 'catalogue' : 'module')
   }
 }
 
@@ -250,5 +270,6 @@ export async function disposeWebPluginsForTesting(): Promise<void> {
   firstRefreshSettled = false
   runtimeRetries = 0
   moduleRetries = 0
+  catalogueRetries = 0
   resetWebPluginRuntime()
 }

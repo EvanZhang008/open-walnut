@@ -6,7 +6,8 @@ import { WebPluginContext, disposable } from './disposable'
 import { pluginUiRegistry } from './registry'
 import type { Disposable, PluginWebModuleDescriptor, WalnutWebApiHost } from './types'
 
-export type RefreshError = { id: string; error: string }
+/** `cause`: the plain reason, when `error` wraps it in loader wording (a skipped build). */
+export type RefreshError = { id: string; error: string; cause?: string }
 
 export interface WebPluginModule {
   activate?: (api: WalnutWebApiHost) => void | Disposable | Promise<void | Disposable>
@@ -54,6 +55,8 @@ const loaded = new Map<string, LoadedPlugin>()
 const pendingWork = new Map<string, PendingWork>()
 /** A build that failed to start. Retrying the same hash just repeats it, so wait for a new one. */
 const skippedBuild = new Map<string, string>()
+/** Why the skipped build failed: every later refresh repeats it, so the cause is not lost after one. */
+const skippedCause = new Map<string, string>()
 const owners = new Map<string, number>()
 let ownerSequence = 0
 let activationTimeoutMs = 10_000
@@ -365,6 +368,7 @@ export async function unload(pluginId: string, errors: RefreshError[]): Promise<
   if (pending) pending.restore = null
   if (pending?.settled) pendingWork.delete(pluginId)
   skippedBuild.delete(pluginId)
+  skippedCause.delete(pluginId)
   sweepUnownedRows(pluginId)
 }
 
@@ -374,7 +378,10 @@ export async function swapPlugin(
   errors: RefreshError[],
 ): Promise<boolean> {
   // A different hash is a new build, and a new build deserves its own attempt.
-  if (skippedBuild.get(descriptor.id) !== descriptor.hash) skippedBuild.delete(descriptor.id)
+  if (skippedBuild.get(descriptor.id) !== descriptor.hash) {
+    skippedBuild.delete(descriptor.id)
+    skippedCause.delete(descriptor.id)
+  }
 
   const pending = pendingWork.get(descriptor.id)
   if (pending) {
@@ -392,19 +399,26 @@ export async function swapPlugin(
 
   if (loadedHash(descriptor.id) === descriptor.hash) return false
   if (skippedBuild.get(descriptor.id) === descriptor.hash) {
-    record(errors, descriptor.id, new Error(
-      `Web Plugin "${descriptor.id}" build ${descriptor.hash} failed to start, so it is skipped until a new build arrives`,
-    ))
+    const cause = skippedCause.get(descriptor.id)
+    errors.push({
+      id: descriptor.id,
+      error: `Web Plugin "${descriptor.id}" build ${descriptor.hash} failed to start${cause ? ` (${cause})` : ''}, so it is skipped until a new build arrives`,
+      ...(cause ? { cause } : {}),
+    })
     return false
   }
 
   const candidate = await preflight(descriptor)
   if (!candidate.ok) {
-    if (!candidate.transient) skippedBuild.set(descriptor.id, descriptor.hash)
+    const cause = record(errors, descriptor.id, candidate.error)
+    if (!candidate.transient) {
+      skippedBuild.set(descriptor.id, descriptor.hash)
+      skippedCause.set(descriptor.id, cause)
+    }
     log.error('plugins', 'native Web Plugin module preflight failed, keeping the running build', {
       pluginId: descriptor.id,
       hash: descriptor.hash,
-      error: record(errors, descriptor.id, candidate.error),
+      error: cause,
     })
     return candidate.transient
   }
@@ -425,11 +439,10 @@ export async function swapPlugin(
     loaded.set(descriptor.id, started.plugin)
     return false
   }
-  log.error('plugins', 'native Web Plugin activation failed', {
-    pluginId: descriptor.id,
-    error: record(errors, descriptor.id, started.error),
-  })
+  const cause = record(errors, descriptor.id, started.error)
+  log.error('plugins', 'native Web Plugin activation failed', { pluginId: descriptor.id, error: cause })
   skippedBuild.set(descriptor.id, descriptor.hash)
+  skippedCause.set(descriptor.id, cause)
   if (started.blocked) {
     // Restoring on top of a candidate that is still running would double-open it, so the previous
     // build rides along on the pending record and goes back in as soon as this one stops.
@@ -448,6 +461,7 @@ export async function resetGenerationsForTesting(): Promise<void> {
   owners.clear()
   pendingWork.clear()
   skippedBuild.clear()
+  skippedCause.clear()
   moduleImporter = browserImporter
   activationTimeoutMs = 10_000
   cleanupBudgetMs = DEFAULT_CLEANUP_BUDGET_MS

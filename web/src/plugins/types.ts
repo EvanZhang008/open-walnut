@@ -46,6 +46,8 @@ export interface PluginRuntimeResponse {
   tombstones: Array<{ id: string; reason: string }>
   modules: PluginWebModuleDescriptor[]
   moduleErrors: Array<{ id: string; error: string }>
+  /** The server is still walking its plugins at boot: a plugin missing from `plugins` may just not be reached yet. */
+  loading?: boolean
 }
 
 export interface PluginEvent<T = unknown> {

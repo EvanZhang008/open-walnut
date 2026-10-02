@@ -398,7 +398,8 @@ describe('a teardown that never finishes stays contained', () => {
 
       expect(unhandled).not.toHaveBeenCalled()
       expect(errorMessages()).toEqual([
-        'Web Plugin "sample" build hash-one failed to start, so it is skipped until a new build arrives',
+        // The cause rides along, so the plugin row can still say why after later refreshes.
+        'Web Plugin "sample" build hash-one failed to start (Web Plugin "sample" activation timed out after 10ms), so it is skipped until a new build arrives',
       ])
     } finally {
       process.off('unhandledRejection', unhandled)
@@ -515,7 +516,12 @@ describe('a teardown that never finishes stays contained', () => {
     expect(pageKeys()).toEqual(['sample:page'])
     expect(runningHash('sample')).toBe('hash-one')
     expect(errorMessages()).toEqual([
-      'Web Plugin "sample" build hash-two failed to start, so it is skipped until a new build arrives',
+      // The cause rides along, so the plugin row can still say why after later refreshes.
+      'Web Plugin "sample" build hash-two failed to start (Web Plugin "sample" activation timed out after 10ms), so it is skipped until a new build arrives',
+    ])
+    // And on its own, so the row can lead with it instead of the build hash.
+    expect(getWebPluginRuntimeSnapshot().errors.map((entry) => entry.cause)).toEqual([
+      'Web Plugin "sample" activation timed out after 10ms',
     ])
   })
 

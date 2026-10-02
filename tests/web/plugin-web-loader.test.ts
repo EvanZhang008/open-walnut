@@ -441,3 +441,130 @@ describe('the first refresh retries before it gives up', () => {
     expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(2)
   })
 })
+
+/**
+ * A server answers HTTP while it is still walking its plugins at boot, so a window that
+ * reconnects to a fresh deploy reads a list that lacks every plugin not reached yet. Taking
+ * that list as the truth unloaded those plugins' Apps in every open window and nothing put
+ * them back (2026-10-01: the Slack App gone from an open window after a deploy).
+ */
+describe('a list read while the server is still loading its plugins', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function partial(listed: Array<{ id: string; state: string }>): PluginRuntimeResponse {
+    return { plugins: listed, tombstones: [], modules: [], moduleErrors: [], loading: true }
+  }
+
+  it('keeps a running plugin it has not reached yet, and the next whole answer decides', async () => {
+    vi.useFakeTimers()
+    const cleanup = vi.fn()
+    setWebPluginImporterForTesting(async () => ({
+      activate(api: WalnutWebApiHost) {
+        api.ui.app({ id: 'main', title: 'Sample', component: Component })
+        return { dispose: cleanup }
+      },
+    }))
+    vi.mocked(apiGet).mockResolvedValue(response('hash-one'))
+    await refreshWebPlugins()
+    expect(appRegistry.getSnapshot().apps.map((entry) => entry.key)).toEqual(['sample:main'])
+
+    // The restart: an earlier plugin is mid-walk and `sample` is not in the list at all.
+    vi.mocked(apiGet).mockResolvedValueOnce(partial([{ id: 'local', state: 'active' }]))
+    await refreshWebPlugins()
+
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(appRegistry.getSnapshot().apps.map((entry) => entry.key)).toEqual(['sample:main'])
+    const during = getWebPluginRuntimeSnapshot()
+    // What the window knew about `sample` survives, so a plugin-gated App stays put.
+    expect(during.plugins).toEqual([{ id: 'local', state: 'active' }, { id: 'sample', state: 'active' }])
+    expect(during).toMatchObject({ ready: true, loading: false })
+
+    // Its own retry reads the whole list (the server's `loaded` event would too).
+    await vi.advanceTimersByTimeAsync(500)
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(3)
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(getWebPluginRuntimeSnapshot().plugins).toEqual([{ id: 'sample', state: 'active' }])
+
+    // A whole answer without the plugin still removes it: the guard is for partial lists only.
+    vi.mocked(apiGet).mockResolvedValue(response(null))
+    await refreshWebPlugins()
+    expect(cleanup).toHaveBeenCalledOnce()
+    expect(appRegistry.getSnapshot().apps).toEqual([])
+  })
+
+  it('keeps a plugin the walk has registered but not started yet', async () => {
+    const cleanup = vi.fn()
+    setWebPluginImporterForTesting(async () => ({
+      activate(api: WalnutWebApiHost) {
+        api.ui.app({ id: 'main', title: 'Sample', component: Component })
+        return { dispose: cleanup }
+      },
+    }))
+    vi.mocked(apiGet).mockResolvedValue(response('hash-one'))
+    await refreshWebPlugins()
+
+    vi.mocked(apiGet).mockResolvedValue(partial([{ id: 'sample', state: 'discovered' }]))
+    await refreshWebPlugins()
+
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(appRegistry.getSnapshot().apps.map((entry) => entry.key)).toEqual(['sample:main'])
+  })
+
+  it('still unloads a plugin the partial list names as off', async () => {
+    const cleanup = vi.fn()
+    setWebPluginImporterForTesting(async () => ({
+      activate(api: WalnutWebApiHost) {
+        api.ui.app({ id: 'main', title: 'Sample', component: Component })
+        return { dispose: cleanup }
+      },
+    }))
+    vi.mocked(apiGet).mockResolvedValue(response('hash-one'))
+    await refreshWebPlugins()
+
+    vi.mocked(apiGet).mockResolvedValue(partial([{ id: 'sample', state: 'disabled' }]))
+    await refreshWebPlugins()
+
+    expect(cleanup).toHaveBeenCalledOnce()
+    expect(appRegistry.getSnapshot().apps).toEqual([])
+  })
+
+  it('holds a first answer that is partial as not ready, then settles on the whole one', async () => {
+    vi.useFakeTimers()
+    setWebPluginImporterForTesting(async () => ({
+      activate(api: WalnutWebApiHost) {
+        api.ui.app({ id: 'main', title: 'Sample', component: Component })
+      },
+    }))
+    vi.mocked(apiGet)
+      .mockResolvedValueOnce(partial([]))
+      .mockResolvedValue(response('hash-one'))
+
+    await refreshWebPlugins()
+    // "Nothing is installed" is not known yet, so nothing may act on it.
+    expect(getWebPluginRuntimeSnapshot()).toMatchObject({ ready: false, loading: true })
+
+    await vi.advanceTimersByTimeAsync(500)
+    expect(getWebPluginRuntimeSnapshot()).toMatchObject({ ready: true, loading: false })
+    expect(appRegistry.getSnapshot().apps.map((entry) => entry.key)).toEqual(['sample:main'])
+  })
+
+  it('stops asking after the ladder when the server never finishes, and stays ready', async () => {
+    vi.useFakeTimers()
+    vi.mocked(apiGet).mockResolvedValue(partial([]))
+
+    await refreshWebPlugins()
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(6)
+    expect(getWebPluginRuntimeSnapshot()).toMatchObject({ ready: true, loading: false })
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(vi.mocked(apiGet)).toHaveBeenCalledTimes(6)
+
+    // A later failure must not take `ready` back: consumers evict on an unready runtime.
+    vi.mocked(apiGet).mockRejectedValue(new Error('FAILED after 15000ms'))
+    await refreshWebPlugins()
+    expect(getWebPluginRuntimeSnapshot().ready).toBe(true)
+  })
+})

@@ -260,6 +260,8 @@ export function disposeLoadedPlugins(registry: IntegrationRegistry): Promise<voi
     pluginManifests.delete(registry);
     pluginGenerations.delete(registry);
     pendingRecoveries.delete(registry);
+    // The next server in this process loads from scratch, and its first list is partial again.
+    settledCatalogues.delete(registry);
     // Every plugin op and service is registered through context.own(), so a clean dispose
     // already withdrew them. A dispose that threw partway did not, and a survivor would
     // answer with a handler whose plugin is gone.
@@ -2180,8 +2182,28 @@ async function loadPluginsUnlocked(registry: IntegrationRegistry, additive = fal
   });
 }
 
+/**
+ * Registries whose full plugin load has finished, well or badly. Until then the lifecycle list
+ * is a PARTIAL answer: the server already serves HTTP while pass 3 walks the plugins, so a list
+ * read mid-walk lacks every plugin not reached yet. A window that took that list as the truth
+ * unloaded those plugins' UI and kept it unloaded (2026-10-01: the Slack App vanished from an
+ * open window after a deploy, with no control left to bring it back).
+ */
+const settledCatalogues = new WeakSet<IntegrationRegistry>();
+
+/** True until the registry's full load has finished: a lifecycle list read now may be partial. */
+export function isPluginCatalogueLoading(registry: IntegrationRegistry): boolean {
+  return !settledCatalogues.has(registry);
+}
+
 export function loadPlugins(registry: IntegrationRegistry): Promise<void> {
-  return runPluginOperation(registry, () => loadPluginsUnlocked(registry));
+  return runPluginOperation(registry, async () => {
+    try {
+      await loadPluginsUnlocked(registry);
+    } finally {
+      settledCatalogues.add(registry);
+    }
+  });
 }
 
 /** Discover and activate only Plugins not already owned by this registry. */

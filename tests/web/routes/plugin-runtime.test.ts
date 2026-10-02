@@ -81,6 +81,31 @@ describe('plugin runtime routes', () => {
     expect(response.body.modules).toEqual([])
   })
 
+  it('marks the list as partial while the server is still walking its plugins', async () => {
+    // A window must not unload a plugin the boot has not reached yet; this flag is how it knows.
+    let loading = true
+    const { app } = setup({ catalogueLoading: () => loading })
+
+    const during = await request(app).get('/api/plugin-runtime').expect(200)
+    expect(during.body.loading).toBe(true)
+
+    loading = false
+    const after = await request(app).get('/api/plugin-runtime').expect(200)
+    // A whole list carries no flag at all, so older windows read exactly what they always did.
+    expect(after.body).not.toHaveProperty('loading')
+
+    const { app: noFlag } = setup()
+    expect((await request(noFlag).get('/api/plugin-runtime').expect(200)).body).not.toHaveProperty('loading')
+  })
+
+  it('relays the primary saying its list is still partial', async () => {
+    const listPrimaryModules = vi.fn(async () => ({
+      plugins: [record()], tombstones: [], modules: [], errors: [], loading: true,
+    }))
+    const { app } = setup({ cloudMode: true, listPrimaryModules })
+    expect((await request(app).get('/api/plugin-runtime').expect(200)).body.loading).toBe(true)
+  })
+
   it('lists and serves active native Web modules with content caching headers', async () => {
     const { app, registry } = setup()
     const source = 'export default function activate() { return "ready" }\n'

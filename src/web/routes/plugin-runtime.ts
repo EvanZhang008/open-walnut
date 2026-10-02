@@ -79,6 +79,12 @@ export {
 export interface PluginRuntimeRouterDeps {
   registry: IntegrationRegistry
   list(): PluginLifecycleRecord[]
+  /**
+   * True while the server is still walking its plugins at boot, so `list()` may lack some of
+   * them. Sent as `loading: true`; a window must not unload a plugin over a list like that.
+   * Absent means the list is complete.
+   */
+  catalogueLoading?(): boolean
   discover?(pluginId: string): Promise<DiscoveredPluginRecord>
   reload(pluginId: string): Promise<PluginLifecycleRecord>
   reloadMany?(pluginIds: string[]): Promise<{ reloaded: string[]; skipped: string[] }>
@@ -214,6 +220,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
             plugins: localPlugins,
             tombstones: deps.registry.getTombstones(),
             ...await listPluginWebModules(deps.registry, localPlugins),
+            loading: deps.catalogueLoading?.() === true,
           }
       const modules = catalogue.modules.map((module) => ({
         ...module,
@@ -224,6 +231,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         tombstones: catalogue.tombstones,
         modules,
         moduleErrors: catalogue.errors,
+        ...(catalogue.loading === true ? { loading: true } : {}),
       })
     } catch (error) {
       if (error instanceof PluginRuntimeRelayError) {

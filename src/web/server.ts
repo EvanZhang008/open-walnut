@@ -78,7 +78,7 @@ import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, type ConnectionWatch } from '../core/plugin-sync-health.js'
@@ -1633,6 +1633,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     linked: linkedCheckoutOps,
     cache: pluginUpdateCache,
     list: () => getPluginLifecycleRecords(registry),
+    catalogueLoading: () => isPluginCatalogueLoading(registry),
     discover: async (pluginId) => {
       // pluginSoftReload is loadNewPlugins, which is ADDITIVE: an id that is already
       // registered keeps the module it was loaded from. Answering only `active` therefore
@@ -4479,6 +4480,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   } catch (err) {
     log.web.error('failed to load integration plugins', { error: err instanceof Error ? err.message : String(err) })
   }
+  // Every window that connected while the walk ran read a partial list (marked `loading`).
+  // This is what tells them the list is whole now, instead of waiting on their own retry.
+  bus.emit('plugin:runtime-changed', { action: 'loaded' }, ['web-ui'], { source: 'plugin-loader' })
 
   // -- Run plugin data migrations (move legacy task fields to ext) --
   try {

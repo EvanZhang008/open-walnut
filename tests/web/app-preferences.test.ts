@@ -135,18 +135,41 @@ describe('App preferences', () => {
     expect(filedAway.discoverable.map((item) => item.key)).toContain('plugin-a:main')
   })
 
+  it('makes Move to sidebar show an unpinned App there, and leaves a hidden one hidden', () => {
+    const withSettingsApp = [...apps, app('plugin-time:main', 500, false, 'settings')]
+    // Unpinned in the Sidebar's menu, then filed in Settings: it lives in Settings only.
+    let preferences = setAppDisposition(createAppPreferences(), 'plugin-time:main', 'unpinned')
+    preferences = setAppPlacement(preferences, 'plugin-time:main', 'settings')
+    expect(resolveApps(withSettingsApp, preferences).settings.map((item) => item.key)).toContain('plugin-time:main')
+
+    // "Move to sidebar" has to put it IN the Sidebar, not in neither surface.
+    const back = setAppPlacement(preferences, 'plugin-time:main', 'sidebar')
+    expect(back.unpinned).not.toContain('plugin-time:main')
+    expect(resolveApps(withSettingsApp, back).sidebar.map((item) => item.key)).toContain('plugin-time:main')
+
+    // Hidden stays hidden: the placement only says where Show will put it.
+    const hidden = setAppDisposition(createAppPreferences(), 'plugin-a:main', 'hidden')
+    const placed = setAppPlacement(hidden, 'plugin-a:main', 'sidebar')
+    expect(placed.hidden).toEqual(['plugin-a:main'])
+    expect(resolveApps(withSettingsApp, placed).sidebar.map((item) => item.key)).not.toContain('plugin-a:main')
+  })
+
   it('returns an overridden App to the Sidebar pin rules, and Restore defaults undoes the move', () => {
     const moved = setAppPlacement(createAppPreferences(), 'plugin-a:main', 'settings')
     // Unpinned only concerns the Sidebar, so the settings row survives it...
     const unpinnedInSettings = setAppDisposition(moved, 'plugin-a:main', 'unpinned')
     expect(resolveApps(apps, unpinnedInSettings).settings.map((item) => item.key)).toEqual(['plugin-a:main'])
 
-    // ...and once it is back on the Sidebar the same unpinned flag bites again.
+    // ...and moving it back to the Sidebar SHOWS it there. The flag used to survive the move,
+    // which put the App in neither surface while its row read "In sidebar" (2026-10-01).
     const backToSidebar = setAppPlacement(unpinnedInSettings, 'plugin-a:main', 'sidebar')
     const resolved = resolveApps(apps, backToSidebar)
     expect(resolved.settings).toEqual([])
-    expect(resolved.sidebar.map((item) => item.key)).not.toContain('plugin-a:main')
-    expect(resolved.discoverable.map((item) => item.key)).toContain('plugin-a:main')
+    expect(resolved.sidebar.map((item) => item.key)).toContain('plugin-a:main')
+    // Unpinning it on the Sidebar afterwards still works as before.
+    const unpinnedAgain = resolveApps(apps, setAppDisposition(backToSidebar, 'plugin-a:main', 'unpinned'))
+    expect(unpinnedAgain.sidebar.map((item) => item.key)).not.toContain('plugin-a:main')
+    expect(unpinnedAgain.discoverable.map((item) => item.key)).toContain('plugin-a:main')
 
     // Restore defaults drops overrides along with everything else.
     expect(createAppPreferences().placement).toEqual({})

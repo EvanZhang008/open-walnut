@@ -83,6 +83,8 @@ export interface PrimaryPluginRuntimeCatalogue {
   tombstones: PluginTombstone[]
   modules: PluginWebModuleInfo[]
   errors: Array<{ id: string; error: string }>
+  /** The primary is still walking its plugins at boot, so `plugins` may be partial. */
+  loading?: boolean
 }
 
 export interface PluginOpInfo {
@@ -351,7 +353,7 @@ export async function listPrimaryPluginWebModules(): Promise<PrimaryPluginRuntim
     ? outcome.result.tombstones.map(parseTombstone).filter((item): item is PluginTombstone => !!item)
     : []
   maybePrunePluginWebModuleCache(modules)
-  return { plugins, tombstones, modules, errors }
+  return { plugins, tombstones, modules, errors, ...(outcome.result.loading === true ? { loading: true } : {}) }
 }
 
 export async function readPrimaryPluginWebModule(
