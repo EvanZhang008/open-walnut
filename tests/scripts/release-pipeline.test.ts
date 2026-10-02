@@ -287,6 +287,11 @@ describe('release.yml', () => {
     for (const [, m] of text.matchAll(/github\.event\.schedule == '([^']+)'/g)) expect(crons).toContain(m)
   })
 
+  it('the release jobs push without the repo\'s git hooks', () => {
+    // 2026-10-02: the pre-push hook type-checked for 50s before the nightly tag moved.
+    expect((doc as unknown as { env: Record<string, string> }).env.HUSKY).toBe('0')
+  })
+
   it('publishes through OIDC with provenance and never a stored token', () => {
     expect(doc.permissions['id-token']).toBe('write')
     expect(doc.permissions.actions).toBe('read')

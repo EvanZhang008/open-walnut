@@ -73,6 +73,12 @@ permissions:
   id-token: write
   actions: read
 
+env:
+  # `npm ci` runs `prepare`, which wires the repo's git hooks, and the jobs push
+  # (the nightly tag, the release commit and tag): the pre-push hook then
+  # type-checked for 50s before a tag moved. Those hooks are for people.
+  HUSKY: '0'
+
 jobs:
   stable:
     name: Publish stable (${{ github.ref_name }})
