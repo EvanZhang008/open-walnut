@@ -23,9 +23,14 @@ interface NotesBubbleMenuProps {
    * Notes surfaces leave it unset — their menu is unchanged.
    */
   onAsk?: (text: string) => void;
+  /** `Ask here`: the selection becomes a question answered beside it (the Files
+   *  tab's comment card). With it, the plain Ask reads `Quote in chat`. The
+   *  range comes from the editor's own state: the DOM selection is not to be
+   *  trusted from a menu button (ProseMirror may have collapsed it already). */
+  onAskHere?: (range: Range) => void;
 }
 
-export function NotesBubbleMenu({ editor, onAsk }: NotesBubbleMenuProps) {
+export function NotesBubbleMenu({ editor, onAsk, onAskHere }: NotesBubbleMenuProps) {
   const prompt = usePrompt();
   // Only show for a non-empty text selection that is NOT inside a table cell or
   // code block (those have their own editing model / no inline marks).
@@ -99,21 +104,42 @@ export function NotesBubbleMenu({ editor, onAsk }: NotesBubbleMenuProps) {
         title="Heading 3"
       >H3</button>
 
+      {(onAsk || onAskHere) && <span className="notes-bubble-sep" />}
+      {onAskHere && (
+        <button
+          type="button"
+          className="notes-bubble-btn notes-bubble-ask"
+          data-testid="bubble-ask-here"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const { from, to } = editor.state.selection;
+            if (from === to) return;
+            const start = editor.view.domAtPos(from);
+            const end = editor.view.domAtPos(to);
+            const range = editor.view.dom.ownerDocument.createRange();
+            range.setStart(start.node, start.offset);
+            range.setEnd(end.node, end.offset);
+            onAskHere(range);
+            // The question's card takes the keyboard; the editor keeps the caret
+            // at the end of the passage and the menu goes with the selection.
+            editor.commands.setTextSelection(to);
+          }}
+          title="A question about this passage, answered beside it"
+        >Ask here</button>
+      )}
       {onAsk && (
-        <>
-          <span className="notes-bubble-sep" />
-          <button
-            type="button"
-            className="notes-bubble-btn notes-bubble-ask"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              const { from, to } = editor.state.selection;
-              const text = editor.state.doc.textBetween(from, to, '\n').trim();
-              if (text) onAsk(text);
-            }}
-            title="Ask the session about this selection"
-          >Ask</button>
-        </>
+        <button
+          type="button"
+          className="notes-bubble-btn notes-bubble-ask"
+          data-testid="bubble-ask-quote"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const { from, to } = editor.state.selection;
+            const text = editor.state.doc.textBetween(from, to, '\n').trim();
+            if (text) onAsk(text);
+          }}
+          title={onAskHere ? 'Quote this passage in the chat' : 'Ask the session about this selection'}
+        >{onAskHere ? 'Quote in chat' : 'Ask'}</button>
       )}
     </BubbleMenu>
   );

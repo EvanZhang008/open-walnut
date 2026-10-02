@@ -12,6 +12,7 @@ import {
   ROOT_THREAD_KEY, THREAD_HUES, buildThreadTree, composeAnchoredText, hueForAnchor,
   pathToRoot, quoteBlockOf, siblingsOf, threadKeyOf, withPendingUserRows,
   composeOrientedText, findSamePassageThread, normalizePassage, BACK_TO_MAIN_LINE,
+  FILE_ABOUT_LINE_RE, fileAboutLineOf, fileOfParent, fileParentOf, shortenFileAboutLine,
 } from '@/utils/thread-tree';
 import type { SessionThreadAnchor } from '@/types/session';
 import type { ThreadTreeMessage } from '@/utils/thread-tree';
@@ -471,5 +472,79 @@ describe('findSamePassageThread (plan A)', () => {
   it('normalizePassage folds width and whitespace', () => {
     // Full-width A and B (test data as escapes).
     expect(normalizePassage('\uFF21\uFF22  c\n')).toBe('AB c');
+  });
+});
+
+describe('buildThreadTree: a question about a FILE passage', () => {
+  const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3')];
+  const fileAnchor = anchor('u2', 'file:/repo/docs/cache.md', { quote: { exact: 'late flush' }, line: 12 });
+
+  it('hangs off root at depth 1 and carries the file place, with no reply row to precede it', () => {
+    const tree = buildThreadTree(messages, [fileAnchor]);
+    expect(tree.threads).toHaveLength(2);
+    const node = tree.byKey.get(threadKeyOf(fileAnchor))!;
+    expect(node.depth).toBe(1);
+    expect(node.parentKey).toBe(ROOT_THREAD_KEY);
+    expect(node.file).toEqual({ path: '/repo/docs/cache.md', line: 12 });
+    expect(node.turnIds).toEqual(['u2']);
+    expect(tree.byRow.get('r2')?.key).toBe(node.key);
+  });
+
+  it('a follow-up copying the anchor joins the file question', () => {
+    const tree = buildThreadTree(messages, [fileAnchor, anchor('u3', fileAnchor.parent, { quote: { exact: 'late flush' } })]);
+    expect(tree.threads).toHaveLength(2);
+    expect(tree.byKey.get(threadKeyOf(fileAnchor))!.turnIds).toEqual(['u2', 'u3']);
+  });
+
+  it('two files with the same passage text are two questions', () => {
+    const other = anchor('u3', 'file:/repo/docs/other.md', { quote: { exact: 'late flush' } });
+    const tree = buildThreadTree(messages, [fileAnchor, other]);
+    expect(tree.threads).toHaveLength(3);
+    expect(tree.byKey.get(threadKeyOf(other))!.file).toEqual({ path: '/repo/docs/other.md' });
+  });
+
+  it('fileOfParent reads the path back; a reply msgId is not a file', () => {
+    expect(fileOfParent('file:/a/b.md')).toBe('/a/b.md');
+    expect(fileParentOf('/a/b.md')).toBe('file:/a/b.md');
+    expect(fileOfParent('r1')).toBeNull();
+    expect(fileOfParent('file:')).toBeNull();
+    expect(fileOfParent(undefined)).toBeNull();
+  });
+});
+
+describe('composeAnchoredText: a file passage', () => {
+  it('names the file (and line) ahead of the quote on a fresh selection', () => {
+    const text = composeAnchoredText('Why?', {
+      parent: 'file:/repo/docs/cache.md', quote: { exact: 'late flush' }, line: 12, source: 'selection', label: 'late flush',
+    }, ROOT_THREAD_KEY);
+    expect(text).toBe('About `/repo/docs/cache.md:12`:\n\n> late flush\n\nWhy?');
+    expect(FILE_ABOUT_LINE_RE.test(text.split('\n')[0])).toBe(true);
+  });
+
+  it('no line: the path alone', () => {
+    expect(fileAboutLineOf('/repo/docs/cache.md')).toBe('About `/repo/docs/cache.md`:');
+  });
+
+  it('a return to the file question from elsewhere leads with the thread line, then the file', () => {
+    const a = { parent: 'file:/repo/docs/cache.md', quote: { exact: 'late flush' }, source: 'manual' as const, label: 'Late flush' };
+    const text = composeAnchoredText('More?', a, 'some-other-key');
+    expect(text.split('\n\n')).toEqual(['(Back to the earlier thread about “Late flush”)', 'About `/repo/docs/cache.md`:', '> late flush', 'More?']);
+  });
+});
+
+describe('shortenFileAboutLine', () => {
+  const cwd = '/home/u/repo';
+  it('shows the path relative to the session cwd', () => {
+    expect(shortenFileAboutLine('About `/home/u/repo/docs/a.md:12`:\n\n> q\n\nwhy?', cwd))
+      .toBe('About `docs/a.md:12`:\n\n> q\n\nwhy?');
+  });
+  it('skips an orientation line ahead of it', () => {
+    expect(shortenFileAboutLine('(Back to the main conversation)\n\nAbout `/home/u/repo/a.md`:\n\n> q', cwd))
+      .toBe('(Back to the main conversation)\n\nAbout `a.md`:\n\n> q');
+  });
+  it('leaves a path outside the cwd, a line that is not the opening, and text with no cwd', () => {
+    expect(shortenFileAboutLine('About `/etc/hosts`:\n\n> q', cwd)).toBe('About `/etc/hosts`:\n\n> q');
+    expect(shortenFileAboutLine('hello\n\nAbout `/home/u/repo/a.md`:', cwd)).toBe('hello\n\nAbout `/home/u/repo/a.md`:');
+    expect(shortenFileAboutLine('About `/home/u/repo/a.md`:', undefined)).toBe('About `/home/u/repo/a.md`:');
   });
 });

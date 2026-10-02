@@ -27,6 +27,7 @@ import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { SessionOutboundCard } from './SessionOutboundCard';
 import { splitLeadingBanners } from './injected-banner';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
+import { shortenFileAboutLine } from '@/utils/thread-tree';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
 import { SearchAnswerCard } from './SearchAnswerCard';
@@ -1066,7 +1067,12 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
     const banners = split.banners.filter((b) => !QUESTION_BANNER_RE.test(b.name));
     return banners.length === split.banners.length ? split : { ...split, banners };
   }, [isUser, text]);
-  const bodyText = bannerSplit ? bannerSplit.body : text;
+  // A question about a FILE passage opens with ``About `<absolute path>`:``; the
+  // bubble shows that path relative to the session's cwd.
+  const bodyText = useMemo(() => {
+    const body = bannerSplit ? bannerSplit.body : text;
+    return isUser && body ? shortenFileAboutLine(body, sessionCwd) : body;
+  }, [bannerSplit, text, isUser, sessionCwd]);
 
   // …and its ANSWER is a JSON object, usually with the model's own reasoning
   // above it ("Looking at the seed results, I can see strong matches for …" plus

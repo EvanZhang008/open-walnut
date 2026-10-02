@@ -1494,6 +1494,85 @@ const STALE_QUESTION_PERMISSION = {
 // content the spec rewrites on disk, plus a dir it creates a new file inside —
 // Refresh must surface both without a page reload.
 await fs.writeFile(path.join(vscodeFixtureRoot, 'refresh-target.txt'), 'ORIGINAL_CONTENT\n')
+// Questions about a file passage (session-file-questions.spec.ts): a design
+// note the WYSIWYG preview renders, and an HTML report the iframe preview
+// renders. Both dense enough that a card must find its passage among many.
+const FILE_QUESTION_MD = `# Cache design
+
+The page cache keeps the newest copy of every page a worker has written. A
+reader asks the index for a page's slot and trusts the version number it finds
+there, so the order in which workers flush decides what a reader sees.
+
+## Flush order
+
+Workers flush in the order the index lists them. The oldest dirty page goes
+first unless a newer one holds the same slot; in that case the newer page wins
+the slot and the older one is dropped without a write. A late flush can hide an
+earlier update to the same slot, which is why the ledger keeps both versions
+until the next compaction.
+
+- Batches are capped at 64 pages.
+- Transient errors are retried three times before the batch fails.
+- A failed batch leaves its pages dirty; nothing is lost, only delayed.
+
+## Reader rules
+
+| Rule | Effect |
+| --- | --- |
+| Skip older copies | A copy whose version is older than the index is ignored. |
+| Trust the checksum | Every page carries its own checksum; a mismatch rereads. |
+| Warm from snapshot | The cache is warmed from the last snapshot on start. |
+
+## Compaction
+
+Orphaned ledger rows stay until the next compaction. Compaction runs when the
+ledger holds more than ten thousand rows or once an hour, whichever comes
+first, and it never runs while a flush is in progress.
+
+\`\`\`go
+func (c *Cache) Flush(ctx context.Context) error {
+    for _, p := range c.index.Dirty() {
+        if newer := c.index.Newer(p.Slot, p.Version); newer != nil {
+            continue // the newer page wins the slot
+        }
+        if err := c.write(ctx, p); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+\`\`\`
+
+## Open questions
+
+Whether a reader should wait for an in-flight flush of the slot it asks for is
+still undecided; today it reads the previous version and moves on.
+`
+await fs.writeFile(path.join(vscodeFixtureRoot, 'cache-design.md'), FILE_QUESTION_MD)
+const FILE_QUESTION_HTML = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Cache report</title>
+<style>body{font:15px/1.6 system-ui,sans-serif;max-width:720px;margin:32px auto;padding:0 20px;color:#222}
+h1,h2{line-height:1.25}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 10px}</style></head>
+<body>
+<h1>Cache report, week 39</h1>
+<p>The cache served <strong>412 million</strong> reads this week. Misses fell to 2.1 percent after the
+snapshot warm-up landed, down from 3.4 percent the week before.</p>
+<h2>Flush latency</h2>
+<p>Median flush latency stayed at 14 ms. The p99 rose to 180 ms on Thursday when a compaction
+overlapped a large batch; the compaction guard that prevents the overlap shipped on Friday.</p>
+<table><tr><th>Day</th><th>p50</th><th>p99</th></tr>
+<tr><td>Mon</td><td>14 ms</td><td>61 ms</td></tr>
+<tr><td>Thu</td><td>15 ms</td><td>180 ms</td></tr>
+<tr><td>Fri</td><td>14 ms</td><td>58 ms</td></tr></table>
+<h2>Reader errors</h2>
+<p>Checksum mismatches: 37, all recovered by a reread. No reader saw a stale version this week,
+which confirms that skipping copies older than the index is enough on its own.</p>
+<h2>Next week</h2>
+<ul><li>Lower the batch cap to 48 pages and watch the p99.</li>
+<li>Decide whether a reader waits for an in-flight flush of its slot.</li></ul>
+</body></html>
+`
+await fs.writeFile(path.join(vscodeFixtureRoot, 'cache-report.html'), FILE_QUESTION_HTML)
 // In-file search + reference-lookup fixtures (file-search-and-references.spec.ts):
 // a definition in one file, calls in another, so cmd+click has something to find.
 await fs.writeFile(

@@ -29,9 +29,10 @@ import { QuotePinPopover } from './QuotePinPopover';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
 import { EMPTY_DERIVED, useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import {
-  ROOT_THREAD_KEY, buildThreadTree, hueForAnchor, threadKeyOf,
-  withPendingUserRows, type ThreadRowInfo, type ThreadTreeMessage,
+  ROOT_THREAD_KEY, buildThreadTree, fileOfParent, hueForAnchor, threadKeyOf,
+  withPendingUserRows, type ThreadFilePlace, type ThreadRowInfo, type ThreadTreeMessage,
 } from '@/utils/thread-tree';
+import { createPortal } from 'react-dom';
 import { ThreadStackFrame, ThreadMarkTipLayer } from './ThreadStackFrame';
 import { ThreadQuoteHead } from './ThreadQuoteHead';
 import { ThreadAskedFromList } from './ThreadAskedFromList';
@@ -1245,6 +1246,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     ? threadsApi.currentThreadKey : null;
   useEffect(() => { setCardOpen(false); }, [sessionId, threadsApi.viewMode]);
   const closeCard = useCallback(() => setCardOpen(false), []);
+  // Published: the Files tab measures the passage of a FILE question's card.
+  const publishOpenCardKey = threadsApi.publishOpenCardKey;
+  useEffect(() => { publishOpenCardKey(cardKey); }, [cardKey, publishOpenCardKey]);
+  /** A question about a passage of a FILE (the Files tab), or null. */
+  const filePlaceOf = useCallback((key: string): ThreadFilePlace | null => {
+    const pend = stack.pending?.pageKey === key ? stack.pending : undefined;
+    if (pend) {
+      const path = fileOfParent(pend.parentMsgId);
+      return path ? { path, ...(pend.line ? { line: pend.line } : {}) } : null;
+    }
+    return threadTree.byKey.get(key)?.file ?? null;
+  }, [stack.pending, threadTree]);
 
   /** Ask on a passage (the pill): the stack pushes a pending page in this frame,
    *  or the question already about this passage. Nothing is written yet. */
@@ -1499,9 +1512,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const anchor = rowId ? anchorByRowId.get(rowId) : undefined;
     const parent = node?.parent ?? anchor?.parent;
     if (!parent) return;
+    const filePath = fileOfParent(parent);
+    if (filePath) { onFileOpen?.(filePath, node?.file?.line ?? anchor?.line); return; }
     const quote = node ? node.quote : anchor?.quote;
     jumpToPlace(parent, quote, `thread-origin:${threadKey}`);
-  }, [threadTree, anchorByRowId, jumpToPlace]);
+  }, [threadTree, anchorByRowId, jumpToPlace, onFileOpen]);
 
   /**
    * Gutter-bar click for ONE row wrapper: only a press on the wrapper's own box
@@ -2844,6 +2859,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (threadsApi.viewMode !== 'linear') { stack.pushTo(key, via); return; }
     if (key !== stack.currentKey) stack.pushTo(key, via);
     setCardOpen(true);
+    // A FILE question's card lives in the Files tab beside its passage: open
+    // that file there when it is not the one on show; the timeline stays put.
+    const place = filePlaceOf(key);
+    if (place) {
+      if (threadsApi.fileCardHost?.path !== place.path) onFileOpen?.(place.path, place.line);
+      log.info('threads', 'file question card opened', { sessionId, key, path: place.path, via });
+      return;
+    }
     const passage = passageOf(key);
     const el = containerRef.current;
     if (!passage || !el) return;
@@ -2852,7 +2875,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const r = range?.getBoundingClientRect();
     const onScreen = !!r && (r.width || r.height) && r.top >= box.top && r.bottom <= box.bottom - 40;
     if (!onScreen) jumpToPlace(passage.msgId, passage.quote, `card:${via}`, { armBack: false });
-  }, [threadsApi.viewMode, stack, passageOf, quotePaint, jumpToPlace]);
+  }, [threadsApi.viewMode, threadsApi.fileCardHost?.path, stack, passageOf, filePlaceOf, onFileOpen, quotePaint, jumpToPlace, sessionId]);
+
+  // The Files tab (a mark in a file, Ask here on a selection) and the sidebar
+  // ask for a card through the threads api; the timeline owns it. Once per request.
+  const cardRequest = threadsApi.cardRequest;
+  const cardRequestSeenRef = useRef(0);
+  useEffect(() => {
+    if (!cardRequest || cardRequest.seq === cardRequestSeenRef.current) return;
+    cardRequestSeenRef.current = cardRequest.seq;
+    if (cardRequest.key === null) { setCardOpen(false); return; }
+    openCard(cardRequest.key, cardRequest.via);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per request
+  }, [cardRequest?.seq]);
 
   const activateMapRow = useCallback((row: TreeRow) => {
     switch (row.kind) {
@@ -3063,8 +3098,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const cardLayerRef = useRef<HTMLDivElement | null>(null);
   const cardNode = cardKey ? threadTree.byKey.get(cardKey) : undefined;
   const cardPending = cardKey && stack.pending?.pageKey === cardKey ? stack.pending : undefined;
+  const cardFile = cardKey ? filePlaceOf(cardKey) : null;
+  const cardFileHost = cardFile && threadsApi.fileCardHost?.path === cardFile.path ? threadsApi.fileCardHost : null;
   const cardPlace = useThreadCardPlace({
-    key: cardKey,
+    key: cardFile ? null : cardKey,
     containerRef,
     layerRef: cardLayerRef,
     locate: () => {
@@ -3087,7 +3124,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A click outside the card (and outside the controls that open one) closes it.
   useEffect(() => {
     if (!cardKey) return;
-    const exempt = '.thread-card, .thread-map, .thread-drawer, .thread-menu, .thread-confirm, .quote-pin-pill, .thread-turn-label, .thread-mode-pill, .session-panel-header';
+    const exempt = '.thread-card, .thread-map, .thread-drawer, .thread-menu, .thread-confirm, .quote-pin-pill, .thread-turn-label, .thread-mode-pill, .session-panel-header, .fv-thread-layer, .session-diff-ask-pill';
     const onDown = (e: PointerEvent) => {
       const t = e.target as Element | null;
       if (!t || t.closest(exempt)) return;
@@ -3146,6 +3183,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /** A queued question waits for the one being answered (spec 5.4). */
   const answeringTitle = titleOfKey(liveStreamKey);
   const pageQuote = pagePending?.quote ?? pageNode?.quote;
+  const pageFile = currentKey !== ROOT_THREAD_KEY ? filePlaceOf(currentKey) : null;
   const pageHue = pageNode?.hue ?? (pagePending ? hueForAnchor(threadTree, {
     parent: pagePending.parentMsgId, ...(pagePending.quote ? { quote: pagePending.quote } : {}), source: 'selection', label: '',
   }) : 0);
@@ -3272,7 +3310,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         <ThreadMarkTipLayer store={markTips} />
         {/* The comment card's layer: zero height at the top of the content, so a
             card placed from a passage's content coordinates scrolls with it. */}
-        {cardKey && (
+        {cardKey && !cardFile && (
           <div ref={cardLayerRef} className="thread-card-layer">
             {cardPlace && (
               <ThreadCommentCard
@@ -3294,6 +3332,28 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               </ThreadCommentCard>
             )}
           </div>
+        )}
+        {/* A FILE question's card: the same card, drawn into the box the Files
+            tab lends beside the passage (null until that file is on show). */}
+        {cardKey && cardFile && cardFileHost?.place && createPortal(
+          <ThreadCommentCard
+            threadKey={cardKey}
+            draft={!!cardPending && !cardNode}
+            number={questionNumber.get(cardKey)}
+            title={cardPending && !cardNode ? cardPending.title : cardTitle?.title ?? ''}
+            naming={cardTitle?.naming}
+            status={cardStatus}
+            unread={threadsApi.unreadKeys.has(cardKey)}
+            answering={threadDerived.answering.has(cardKey)}
+            canAsk={threadsApi.canAsk}
+            menu={cardMenu}
+            onSend={sendFromCard}
+            onClose={closeCard}
+            style={cardFileHost.place}
+          >
+            {cardBody}
+          </ThreadCommentCard>,
+          cardFileHost.el,
         )}
         {/* Quote pins: the pill offered on a text selection, and the popover a
             click on a painted passage opens. Both portal to <body>; they live here
@@ -3415,9 +3475,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             {...(pageQuote ? { quote: pageQuote } : {})}
             hue={pageHue}
             level={pageNode?.depth ?? stack.depth}
-            parentTitle={titleOfKey(parentOfPage)}
+            // A file question's passage is in that file: name it, and open it.
+            parentTitle={pageFile ? pageFile.path.split('/').pop() || pageFile.path : titleOfKey(parentOfPage)}
             samePassage={stack.samePassageKey === currentKey}
-            onPop={() => stack.back('quote-head')}
+            onPop={() => { if (pageFile) onFileOpen?.(pageFile.path, pageFile.line); else stack.back('quote-head'); }}
           />
         )}
         {!onQuestionPage && launchHead.map((m) => (

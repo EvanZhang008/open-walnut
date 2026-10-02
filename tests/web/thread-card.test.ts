@@ -55,6 +55,12 @@ describe('questionBodyOf', () => {
     const banner = '[Question Q2]\nThis message is question 2. Begin your reply with the line "[Q2]".\n[/Question Q2]';
     expect(questionBodyOf(`${banner}\n\n> the flush order\n\nWhy?`)).toBe('Why?');
   });
+  it('drops the file line a file question leads with, with the quote after it', () => {
+    expect(questionBodyOf('About `/repo/docs/cache.md:12`:\n\n> late flush\n\nWhy keep both?')).toBe('Why keep both?');
+    expect(questionBodyOf('(Back to the earlier thread about “x”)\n\nAbout `/repo/docs/cache.md`:\n\n> late flush\n\nMore?')).toBe('More?');
+    // A question that merely starts with "About" keeps its words.
+    expect(questionBodyOf('About that: why?')).toBe('About that: why?');
+  });
   it('keeps a plain question, and a question that is only a quote', () => {
     expect(questionBodyOf('Why that order?')).toBe('Why that order?');
     expect(questionBodyOf('> only a quote')).toBe('> only a quote');

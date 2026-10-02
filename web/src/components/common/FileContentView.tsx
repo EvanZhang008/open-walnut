@@ -54,6 +54,8 @@ import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { FileSourceEditor, type FileSourceEditorHandle } from '@/components/common/FileSourceEditor';
 import { FileMarkdownEditor } from '@/components/common/FileMarkdownEditor';
 import { SelectionAskPill, selectionClientRect } from '@/components/common/SelectionAskPill';
+import { FileThreadLayer, type FileThreadLayerHandle, type FileThreadSurface } from '@/components/common/FileThreadLayer';
+import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import { FileSearchBar } from '@/components/common/FileSearchBar';
 import {
   DomSearchController, applyHighlights, collectTextMatches,
@@ -875,6 +877,13 @@ export function FileContentView({
   const editingSource = canEdit && (showSource || !isRenderable);
   const editing = editingWysiwyg || editingSource;
   const showPreview = isRenderable && !showSource && !editingWysiwyg;
+  /** Which text surface is on show, for the question layer (marks, Ask here). */
+  const threadSurface: FileThreadSurface = loading ? 'none'
+    : showPreview && isHtml ? 'html'
+      : editingWysiwyg ? 'wysiwyg'
+        : editingSource ? 'source'
+          : showPreview && isMarkdown ? 'preview'
+            : data?.content ? 'pre' : 'none';
 
   // Prism-highlighted rows for the read-only <pre> fallback ONLY (non-editable
   // text, e.g. truncated reads). Editable files render an editor instead — and
@@ -1278,6 +1287,21 @@ export function FileContentView({
     onSelectCode?.(filePath, undefined, text);
     setFullscreen(false); // same reason as commitSelection: uncover the composer
   }, [onSelectCode, filePath]);
+
+  // "Ask here": the selection becomes a QUESTION about this passage of the file,
+  // answered in a comment card beside it (FileThreadLayer; the card is the
+  // session timeline's). Offered only inside a session panel (a threads api that
+  // can record anchors); the file stays on screen, so fullscreen stays too.
+  const threadsApi = useSessionThreadsApi();
+  const canAskHere = threadsApi.canAsk && !!sessionId;
+  const threadLayerRef = useRef<FileThreadLayerHandle>(null);
+  const askHereFromSelection = useCallback(() => {
+    threadLayerRef.current?.askSelection({ inFrame: !!selection?.inHtml, ...(selection?.line ? { line: selection.line } : {}) });
+    setSelection(null);
+  }, [selection]);
+  const askHereFromBubble = useCallback((range: Range) => {
+    threadLayerRef.current?.askSelection({ inFrame: false, range });
+  }, []);
 
   // HTML preview: the rendered page lives in a same-origin IFRAME, so the
   // outer mouseup handler never sees selections made inside it. Listen inside
@@ -2346,6 +2370,7 @@ export function FileContentView({
             onDocChange={handleDocChange}
             onSave={() => { void handleSave(); }}
             onAskSelection={onSelectCode ? handleAskSelection : undefined}
+            onAskHere={canAskHere ? askHereFromBubble : undefined}
           />
         ) : (
           <FileSourceEditor
@@ -2396,10 +2421,22 @@ export function FileContentView({
           />
         </div>
       )}
+      {canAskHere && !loading && data && !data.error && !data.binary && !raw && (
+        <FileThreadLayer
+          ref={threadLayerRef}
+          filePath={filePath}
+          sessionId={sessionId!}
+          rootRef={contentRef}
+          frameRef={htmlFrameRef}
+          surface={threadSurface}
+          surfaceNonce={`${filePath}:${baseHash ?? ''}:${seedNonce}:${reloadToken}:${threadSurface}:${data.content?.length ?? 0}`}
+        />
+      )}
       {selection && (
         <SelectionAskPill
           anchor={selection}
           onCommit={commitSelection}
+          onAskHere={canAskHere ? askHereFromSelection : undefined}
           onDismiss={() => setSelection(null)}
           resolveRect={resolveSelectionRect}
           listenTo={selection.inHtml ? htmlFrameRef.current?.contentDocument : undefined}

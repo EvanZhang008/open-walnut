@@ -18,7 +18,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, type MutableRefObject,
 import type { SessionPinnedQuote } from '@/types/session';
 import type { ThreadStackApi } from '@/contexts/SessionThreadsContext';
 import type { ThreadPendingPage, ThreadToastApi } from '@/components/sessions/thread-ui-contract';
-import type { ThreadTree } from '@/utils/thread-tree';
+import { fileOfParent, type ThreadTree } from '@/utils/thread-tree';
 import { isPendingKey, landingCorrection, landingTarget, needsFallbackJump, type PageLanding } from '@/utils/thread-stack-state';
 import { flashRange } from '@/utils/pin-highlights';
 import { log } from '@/utils/log';
@@ -154,7 +154,8 @@ export function useThreadLanding(args: UseThreadLandingArgs): void {
     if (!passage) return;
     const row = rowOf(el, passage.msgId);
     const via = `stack-pop:${to || 'root'}`;
-    if (!row) { a.jumpToPlace(passage.msgId, passage.quote, via, { armBack: false }); return; }
+    // A FILE question's passage is in the Files tab, not in any row: nothing to land on.
+    if (!row) { if (!fileOfParent(passage.msgId)) a.jumpToPlace(passage.msgId, passage.quote, via, { armBack: false }); return; }
     let range = a.locatePassage(passage);
     let top = rangeTop(el, range);
     if (top === undefined && passage.quote) {

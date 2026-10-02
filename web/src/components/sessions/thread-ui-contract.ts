@@ -44,9 +44,11 @@ export interface ThreadPendingPage {
   pageKey: string;
   /** Thread key of the page it was asked from. */
   parentKey: string;
-  /** msgId of the reply the passage is in. */
+  /** msgId of the reply the passage is in, or `file:<path>` for a file passage. */
   parentMsgId: string;
   quote?: SessionPinnedQuote;
+  /** File passages: the line the passage starts on, when the view knew it. */
+  line?: number;
   /** Fallback title shown with `Naming…`. */
   title: string;
 }

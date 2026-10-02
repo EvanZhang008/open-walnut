@@ -262,6 +262,31 @@ show inline after the open ones, other completed hits that show the query fold i
   Ratchets: `tests/web/thread-tree.test.ts`, `tests/web/thread-stack-state.test.ts`,
   `tests/web/thread-map.test.ts`, `tests/e2e/browser/session-threads*.spec.ts`,
   `tests/e2e/browser/session-thread-map.spec.ts`.
+  **A passage of a FILE in the Files tab is asked about the same way (2026-10-01).** The anchor's
+  parent is `file:<absolute path>` (`FILE_PARENT_PREFIX`, `fileParentOf` / `fileOfParent` in
+  `utils/thread-tree.ts`; the server takes a `file:` parent up to 1024 chars and an optional
+  1-based `line`), the node hangs off root at depth 1 with `node.file = {path, line}`, and the
+  send opens with ``About `path[:line]`:`` ahead of the quote (`fileAboutLineOf`;
+  `questionBodyOf` drops that line too). Two entry points, both in `FileThreadLayer`
+  (`components/common/FileThreadLayer.tsx`, mounted by `FileContentView` over the file view
+  whenever the panel can ask): the selection pill's second action (`SelectionAskPill` with
+  `onAskHere`: `Ask here` / `Quote in chat`; the WYSIWYG bubble menu has the same pair), and an
+  inline `Ask` on the block under the pointer (`askableBlockOf`, `blockQuoteOf`: the whole
+  paragraph, item, heading, cell or code block). The card is STILL the timeline's: the layer lends
+  a host (`FileCardHost {path, el, place}` through `threadsApi.setFileCardHost`), asks with
+  `threadsApi.requestCard(key | null, via)`, and `SessionChatHistory` portals its one
+  `ThreadCommentCard` into that host when the open question is about the file on show, or calls
+  `onFileOpen(path, line)` to open the Files tab first (a sidebar row, a turn label, the quote
+  head's back arrow in Tree Mode). The host box does not scroll, so `placeFileCard`
+  (`utils/file-thread.ts`) works in host coordinates and re-measures on scroll, resize and
+  mutation; a passage scrolled off keeps its card docked at the edge. Marks on asked passages use
+  the neutral style; in the HTML preview they are painted into the IFRAME's own document and
+  highlight registry (its own `<style>`, its own `pointerdown` closer, since the top document's
+  outside-click never sees a press inside the frame). The mock CLI answers these like a model
+  (`stripInputDecorations` in `tests/providers/mock-claude.mjs`: no `> quote`, no `(Back to …)`,
+  no reminder lines, and with `MOCK_CLAUDE_PLAIN_ECHO=1` from the browser fixture no spawn-flag
+  suffixes), so an e2e that needs proof of WHAT was sent reads the record's anchor, not the echo.
+  Ratchets: `tests/web/file-thread.test.ts`, `tests/e2e/browser/session-file-questions.spec.ts`.
 - **Side question vs Ask: two features, pick by context.** A side question (`SideQuestionDrawer`,
   the btw fork) runs in an ISOLATED context: a one-off aside whose answer must not enter the main
   conversation, so the main session never sees it. Ask (select a passage, then Ask) is a

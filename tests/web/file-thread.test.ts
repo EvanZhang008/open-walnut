@@ -1,0 +1,94 @@
+/**
+ * Questions about a file passage: the pure helpers behind FileThreadLayer.
+ */
+import { describe, it, expect } from 'vitest';
+import { buildThreadTree, threadKeyOf, type ThreadTreeMessage } from '@/utils/thread-tree';
+import type { SessionThreadAnchor } from '@/types/session';
+import { CARD_GAP, CARD_WIDTH } from '@/utils/thread-card';
+import { FILE_CARD_MIN_HEIGHT, fileQuestionMarks, placeFileCard, rectInHost, toHostRect } from '@/utils/file-thread';
+
+const user = (msgId: string, text = `q ${msgId}`): ThreadTreeMessage => ({ role: 'user', msgId, text });
+const reply = (msgId: string, text = `a ${msgId}`): ThreadTreeMessage => ({ role: 'assistant', msgId, text });
+const anchor = (msgId: string, parent: string, extra: Partial<SessionThreadAnchor> = {}): SessionThreadAnchor =>
+  ({ msgId, parent, source: 'selection', at: '2026-10-01T10:00:00Z', ...extra });
+
+describe('fileQuestionMarks', () => {
+  const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3'), user('u4'), reply('r4')];
+  const inFile = anchor('u2', 'file:/d/cache.md', { quote: { exact: 'late flush' } });
+  const otherFile = anchor('u3', 'file:/d/other.md', { quote: { exact: 'late flush' } });
+  const inReply = anchor('u4', 'r1', { quote: { exact: 'a u1' } });
+  const tree = buildThreadTree(messages, [inFile, otherFile, inReply]);
+
+  it('lists only the questions about THIS file, neutral, with their titles', () => {
+    const marks = fileQuestionMarks(tree, new Set(), new Map(), '/d/cache.md');
+    expect(marks.map((m) => m.key)).toEqual([threadKeyOf(inFile)]);
+    expect(marks[0]).toMatchObject({ parentMsgId: 'file:/d/cache.md', quote: { exact: 'late flush' }, neutral: true, resolved: false, headId: 'u2' });
+  });
+  it('skips a hidden question and a file with none', () => {
+    expect(fileQuestionMarks(tree, new Set([threadKeyOf(inFile)]), new Map(), '/d/cache.md')).toEqual([]);
+    expect(fileQuestionMarks(tree, new Set(), new Map(), '/d/none.md')).toEqual([]);
+  });
+});
+
+describe('placeFileCard', () => {
+  const host = { width: 900, height: 700 };
+  it('sits below the passage, right edges aligned, at the preferred width, with room to grow', () => {
+    const place = placeFileCard({ top: 100, bottom: 120, left: 40, right: 600 }, host);
+    expect(place.top).toBe(120 + CARD_GAP);
+    expect(place.left).toBe(600 - CARD_WIDTH);
+    expect(place.width).toBe(CARD_WIDTH);
+    expect(place.maxHeight).toBe(Math.round(host.height * 0.6));
+  });
+  it('a passage scrolled above the box docks the card at the top; one below docks it at the bottom', () => {
+    expect(placeFileCard({ top: -300, bottom: -280, left: 40, right: 600 }, host).top).toBe(CARD_GAP);
+    const low = placeFileCard({ top: 1200, bottom: 1220, left: 40, right: 600 }, host);
+    expect(low.top).toBe(host.height - FILE_CARD_MIN_HEIGHT - CARD_GAP);
+    expect(low.maxHeight).toBe(FILE_CARD_MIN_HEIGHT);
+  });
+  it('never leaves the box sideways, and a narrow box gets a card as wide as it allows', () => {
+    const right = placeFileCard({ top: 0, bottom: 10, left: 800, right: 1200 }, host);
+    expect(right.left + right.width).toBeLessThanOrEqual(host.width - CARD_GAP);
+    const left = placeFileCard({ top: 0, bottom: 10, left: 0, right: 100 }, host);
+    expect(left.left).toBe(CARD_GAP);
+    const narrow = placeFileCard({ top: 0, bottom: 10, left: 0, right: 300 }, { width: 320, height: 700 });
+    expect(narrow.width).toBe(320 - 2 * CARD_GAP);
+    expect(narrow.left).toBe(CARD_GAP);
+  });
+  it('a short box: the card takes what is left below the passage, never less than it can show', () => {
+    const place = placeFileCard({ top: 100, bottom: 120, left: 0, right: 600 }, { width: 900, height: 300 });
+    expect(place.top).toBe(300 - FILE_CARD_MIN_HEIGHT - CARD_GAP);
+    expect(place.maxHeight).toBe(FILE_CARD_MIN_HEIGHT);
+  });
+});
+
+describe('toHostRect / rectInHost', () => {
+  // No DOM here: a rect is read for left/top/right/bottom only.
+  const rect = (left: number, top: number, width: number, height: number) =>
+    ({ left, top, right: left + width, bottom: top + height, width, height }) as DOMRect;
+  const host = rect(100, 50, 800, 600);
+  it('translates a top-document rect into host coordinates', () => {
+    expect(toHostRect(rect(150, 90, 200, 20), host)).toEqual({ top: 40, bottom: 60, left: 50, right: 250 });
+  });
+  it('adds the frame offset for a rect measured inside an iframe', () => {
+    const frame = rect(120, 100, 700, 500);
+    expect(toHostRect(rect(10, 20, 100, 10), host, frame)).toEqual({ top: 70, bottom: 80, left: 30, right: 130 });
+  });
+  it('tells a rect on screen from one scrolled past an edge (with a margin)', () => {
+    const box = { width: 800, height: 600 };
+    expect(rectInHost({ top: 10, bottom: 30, left: 0, right: 100 }, box)).toBe(true);
+    expect(rectInHost({ top: -40, bottom: -20, left: 0, right: 100 }, box)).toBe(false);
+    expect(rectInHost({ top: 590, bottom: 610, left: 0, right: 100 }, box, 24)).toBe(false);
+    expect(rectInHost({ top: 590, bottom: 610, left: 0, right: 100 }, box)).toBe(true);
+  });
+});
+
+describe('fileQuestionMarks with a draft', () => {
+  it('marks the draft passage of this file ahead of the questions, and not a draft about another file', () => {
+    const tree = buildThreadTree([user('u1'), reply('r1')], []);
+    const draft = { pageKey: 'pending:file:/r/a.md:x', parentMsgId: 'file:/r/a.md', quote: { exact: 'a passage' }, title: 'New question' };
+    const marks = fileQuestionMarks(tree, new Set(), new Map(), '/r/a.md', draft);
+    expect(marks.map((m) => [m.key, m.quote.exact, m.resolved])).toEqual([['pending:file:/r/a.md:x', 'a passage', false]]);
+    expect(fileQuestionMarks(tree, new Set(), new Map(), '/r/b.md', draft)).toEqual([]);
+    expect(fileQuestionMarks(tree, new Set(), new Map(), '/r/a.md', { ...draft, quote: undefined })).toEqual([]);
+  });
+});

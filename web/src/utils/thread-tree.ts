@@ -47,12 +47,32 @@ export function threadKeyOf(anchor: { parent: string; quote?: SessionPinnedQuote
   return `${anchor.parent}${THREAD_KEY_SEP}${anchor.quote?.exact ?? ''}`;
 }
 
+/** A question about a passage of a FILE (the Files tab) hangs off no reply: its
+ *  anchor's `parent` is `file:<absolute path>`. Such a question is top level. */
+export const FILE_PARENT_PREFIX = 'file:';
+export function fileParentOf(path: string): string {
+  return `${FILE_PARENT_PREFIX}${path}`;
+}
+/** The file path a `parent` names, or null for a reply's msgId. */
+export function fileOfParent(parent: string | undefined): string | null {
+  return parent && parent.startsWith(FILE_PARENT_PREFIX) && parent.length > FILE_PARENT_PREFIX.length
+    ? parent.slice(FILE_PARENT_PREFIX.length) : null;
+}
+
+/** Where a file question's passage is: the file and, when known, its first line. */
+export interface ThreadFilePlace {
+  path: string;
+  line?: number;
+}
+
 export interface ThreadNode {
   key: string;
   /** msgId of the reply this thread hangs off ('' for the root thread). */
   parent: string;
   /** The anchored passage, when the thread is about part of a reply. */
   quote?: SessionPinnedQuote;
+  /** Set when the passage is in a file open in the Files tab, not in a reply. */
+  file?: ThreadFilePlace;
   /** Key of the thread containing `parent`. undefined for root. */
   parentKey?: string;
   /** 0 = root, 1 = a question about a top-level reply, 2+ = nested. */
@@ -220,22 +240,25 @@ function computeThreadTree(
   for (const turn of turns) {
     let node = root;
     const anchor = turn.headId ? anchorFor.get(turn.headId) : undefined;
-    const parentIndex = anchor ? indexOf.get(anchor.parent) : undefined;
+    const filePath = anchor ? fileOfParent(anchor.parent) : null;
+    const parentIndex = anchor && !filePath ? indexOf.get(anchor.parent) : undefined;
     // The reply a question is about always PRECEDES the question. Requiring that
     // both bounds the work (no cycles are representable) and makes a nonsense
-    // anchor behave like a dangling one instead of building a loop.
-    if (anchor && parentIndex !== undefined && parentIndex < turn.start) {
+    // anchor behave like a dangling one instead of building a loop. A file
+    // question has no reply to precede it: it hangs off root.
+    if (anchor && (filePath !== null || (parentIndex !== undefined && parentIndex < turn.start))) {
       const key = threadKeyOf(anchor);
       const existing = byKey.get(key);
       if (existing) {
         node = existing;
       } else {
-        const parentNode = byKey.get(keyOfRow.get(anchor.parent) ?? ROOT_THREAD_KEY) ?? root;
+        const parentNode = filePath !== null ? root : (byKey.get(keyOfRow.get(anchor.parent) ?? ROOT_THREAD_KEY) ?? root);
         const topIndex = parentNode.depth === 0 ? topCount++ : parentNode.topIndex;
         node = {
           key,
           parent: anchor.parent,
           ...(anchor.quote ? { quote: anchor.quote } : {}),
+          ...(filePath !== null ? { file: { path: filePath, ...(anchor.line ? { line: anchor.line } : {}) } } : {}),
           parentKey: parentNode.key,
           depth: parentNode.depth + 1,
           hue: THREAD_HUES[((topIndex % THREAD_HUES.length) + THREAD_HUES.length) % THREAD_HUES.length],
@@ -355,9 +378,40 @@ export function siblingsOf(tree: ThreadTree, key: string): ThreadNode[] {
 export interface ComposerThreadAnchor {
   parent: string;
   quote?: SessionPinnedQuote;
+  /** File anchors: the passage's first line, when the view knew it. */
+  line?: number;
   source: SessionThreadAnchor['source'];
   /** What the chip and the back-reference line call this thread. */
   label: string;
+}
+
+/** The line a file question's send opens with, so the model knows WHICH file the
+ *  quoted passage is from: `About \`<path>:<line>\`:`. The card strips it. */
+export function fileAboutLineOf(path: string, line?: number): string {
+  return `About \`${line ? `${path}:${line}` : path}\`:`;
+}
+export const FILE_ABOUT_LINE_RE = /^About `[^`\n]+`:\s*$/;
+
+/**
+ * The About line as a bubble shows it: the path relative to the session's cwd
+ * when it is inside it (the model is sent the absolute path; a reader of the
+ * conversation wants the short one). Only the leading About line (after the
+ * banner the row renderer already peeled, and an orientation line) is touched.
+ */
+export function shortenFileAboutLine(text: string, cwd: string | undefined): string {
+  if (!cwd || !text.includes('About `')) return text;
+  const root = cwd.endsWith('/') ? cwd : `${cwd}/`;
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length && i < 4; i++) {
+    const l = lines[i];
+    if (!l.trim() || l.startsWith('(Back to ')) continue;
+    if (!FILE_ABOUT_LINE_RE.test(l)) return text;
+    const inner = l.slice('About `'.length, l.lastIndexOf('`'));
+    if (!inner.startsWith(root)) return text;
+    lines[i] = `About \`${inner.slice(root.length)}\`:`;
+    return lines.join('\n');
+  }
+  return text;
 }
 
 /**
@@ -403,10 +457,13 @@ export function composeAnchoredText(
   latestKey: string,
 ): string {
   const parts: string[] = [];
+  const filePath = fileOfParent(anchor.parent);
   if (anchor.source === 'selection') {
+    if (filePath !== null) parts.push(fileAboutLineOf(filePath, anchor.line));
     if (anchor.quote) parts.push(quoteBlockOf(anchor.quote));
   } else if (threadKeyOf(anchor) !== latestKey) {
     parts.push(`(Back to the earlier thread about “${anchor.label}”)`);
+    if (filePath !== null) parts.push(fileAboutLineOf(filePath, anchor.line));
     if (anchor.quote) parts.push(quoteBlockOf(anchor.quote));
   }
   parts.push(text);

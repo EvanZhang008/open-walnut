@@ -16,7 +16,7 @@ import type {
   ThreadPendingPage, ThreadToastApi,
 } from '@/components/sessions/thread-ui-contract';
 import { usePanelKeyRouter } from '@/hooks/usePanelKeyRouter';
-import { ROOT_THREAD_KEY, findSamePassageThread, type ThreadTree } from '@/utils/thread-tree';
+import { ROOT_THREAD_KEY, fileOfParent, findSamePassageThread, type ThreadTree } from '@/utils/thread-tree';
 import { fallbackTitle } from '@/utils/thread-meta';
 import {
   DRAFT_ROW_LABEL, composerDraftKey, escapeDecision, isPendingKey, pendingPageKey, planNavigation,
@@ -273,7 +273,7 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
 
   /** Ask on a passage (spec 5.4): the question already about this exact passage,
    *  or a pending page on top of the page the passage is on. Nothing is written. */
-  const ask = useCallback((target: { msgId: string; quote: SessionPinnedQuote }, opts?: { focusComposer?: boolean }) => {
+  const ask = useCallback((target: { msgId: string; quote: SessionPinnedQuote; line?: number }, opts?: { focusComposer?: boolean }) => {
     const a = argsRef.current;
     const focus = opts?.focusComposer !== false;
     const same = findSamePassageThread(a.tree, a.anchors, a.hiddenKeys, { parent: target.msgId, quote: target.quote });
@@ -284,16 +284,18 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     }
     // A passage in an answer that is still streaming (or not refetched yet) is
     // not in the tree: it is on the page on screen, so the question goes on top
-    // of THAT page, never under Main (C4).
+    // of THAT page, never under Main (C4). A passage of a FILE hangs off root.
     const s = stateRef.current;
+    const isFile = fileOfParent(target.msgId) !== null;
     const onScreen = s.pending ? s.pending.parentKey : (s.path[s.path.length - 1] ?? ROOT_THREAD_KEY);
-    const known = a.tree.byRow.get(target.msgId)?.key;
+    const known = isFile ? ROOT_THREAD_KEY : a.tree.byRow.get(target.msgId)?.key;
     const parentKey = known ?? onScreen;
     const pending: ThreadPendingPage = {
       pageKey: pendingPageKey(target.msgId, target.quote.exact),
       parentKey,
       parentMsgId: target.msgId,
       quote: target.quote,
+      ...(isFile && target.line ? { line: target.line } : {}),
       title: fallbackTitle(target.quote.exact),
     };
     const base = known !== undefined ? stackPathOf(a.tree, parentKey) : (s.pending ? s.path.slice(0, -1) : s.path);

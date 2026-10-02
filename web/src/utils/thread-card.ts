@@ -8,8 +8,7 @@ import type { SessionPinnedQuote } from '@/types/session';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import { displayTitleOf, metaOf } from '@/utils/thread-meta';
 import type { ThreadNode, ThreadTree } from '@/utils/thread-tree';
-import { ROOT_THREAD_KEY } from '@/utils/thread-tree';
-import { BACK_TO_MAIN_LINE } from '@/utils/thread-tree';
+import { BACK_TO_MAIN_LINE, FILE_ABOUT_LINE_RE, ROOT_THREAD_KEY } from '@/utils/thread-tree';
 
 /** The rows the tree reads (`SessionHistoryMessage` fits). */
 export interface CardRowLike {
@@ -56,6 +55,10 @@ export function cardTurnsOf<M extends CardRowLike>(messages: readonly M[], node:
  * composed in front of it (the card already sits beside that passage) and
  * without the orientation line. The banner is stripped by the row renderer.
  */
+/** Both orientation lines a send can open with (thread-tree.ts: the anchored
+ *  "thread" form and the page's "question" form). */
+const BACK_TO_LINE_RE = /^\(Back to the earlier (?:thread|question) about /;
+
 export function questionBodyOf(text: string): string {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   let i = 0;
@@ -66,7 +69,12 @@ export function questionBodyOf(text: string): string {
     const close = lines.findIndex((l, k) => k > i && /^\[\/Question Q\d{1,5}\]\s*$/.test(l));
     if (close > i) { i = close + 1; skipBlank(); }
   }
-  if (i < lines.length && (lines[i].startsWith('(Back to the earlier thread about') || lines[i] === BACK_TO_MAIN_LINE)) {
+  if (i < lines.length && (BACK_TO_LINE_RE.test(lines[i]) || lines[i] === BACK_TO_MAIN_LINE)) {
+    i++;
+    skipBlank();
+  }
+  // A file question names its file ahead of the quote (the card sits in that file).
+  if (i < lines.length && FILE_ABOUT_LINE_RE.test(lines[i])) {
     i++;
     skipBlank();
   }

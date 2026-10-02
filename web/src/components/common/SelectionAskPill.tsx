@@ -23,7 +23,7 @@
  *  - Flips to the other side (arrow direction follows) when its own side has
  *    no viewport room, instead of covering the selected line at an edge.
  */
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 
 /** Bounding rect of the current non-collapsed selection in `doc`, or null. */
@@ -42,7 +42,11 @@ interface SelectionAskPillProps {
    * the top (dragged upward) → pill sits ABOVE. Identity change re-places.
    */
   anchor: { x: number; y: number };
+  /** `Quote in chat`: the selection goes to the composer as a quoted reference. */
   onCommit: () => void;
+  /** `Ask here`: the selection becomes a question whose card opens beside it
+   *  (the Files tab). With it the pill has two actions; without, one. */
+  onAskHere?: () => void;
   /** Called when the tracked selection disappears (pill should unmount). */
   onDismiss: () => void;
   /**
@@ -61,8 +65,8 @@ interface SelectionAskPillProps {
 
 const GAP = 8;
 
-export function SelectionAskPill({ anchor, onCommit, onDismiss, resolveRect, listenTo }: SelectionAskPillProps) {
-  const btnRef = useRef<HTMLButtonElement>(null);
+export function SelectionAskPill({ anchor, onCommit, onAskHere, onDismiss, resolveRect, listenTo }: SelectionAskPillProps) {
+  const btnRef = useRef<HTMLElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; below: boolean } | null>(null);
 
   // Preferred side, decided ONCE per selection from where the mouse was
@@ -119,22 +123,41 @@ export function SelectionAskPill({ anchor, onCommit, onDismiss, resolveRect, lis
     // anchor in deps: a NEW selection reuses the mounted pill — re-place on it.
   }, [place, listenTo, anchor.x, anchor.y]);
 
+  // First paint is hidden at the raw anchor so offsetWidth/Height are
+  // measurable; place() then sets the real coords in the same layout pass.
+  const style = pos
+    ? { left: pos.left, top: pos.top }
+    : { left: anchor.x, top: anchor.y, visibility: 'hidden' as const };
+  // preventDefault keeps the text selection alive; stopPropagation on
+  // mouseup is CRITICAL — otherwise the mouseup bubbles (through the React
+  // tree, portal or not) to the container's own mouseup handler, which
+  // recomputes the now-collapsing selection and unmounts THIS pill before
+  // click fires (so onCommit never runs).
+  const keepSelection = {
+    onMouseDown: (e: ReactMouseEvent) => { e.preventDefault(); },
+    onMouseUp: (e: ReactMouseEvent) => { e.stopPropagation(); },
+  };
+  if (onAskHere) {
+    return createPortal(
+      <div
+        ref={btnRef as RefObject<HTMLDivElement>}
+        className={`session-diff-ask-pill has-two${pos?.below ? ' below' : ''}`}
+        style={style}
+        {...keepSelection}
+        data-testid="file-ask-pill"
+      >
+        <button type="button" onClick={onAskHere} data-testid="file-ask-here" title="A question about this passage, answered beside it">Ask here</button>
+        <button type="button" onClick={onCommit} data-testid="file-ask-quote" title="Quote this passage in the chat">Quote in chat</button>
+      </div>,
+      document.body,
+    );
+  }
   return createPortal(
     <button
-      ref={btnRef}
+      ref={btnRef as RefObject<HTMLButtonElement>}
       className={`session-diff-ask-pill${pos?.below ? ' below' : ''}`}
-      // First paint is hidden at the raw anchor so offsetWidth/Height are
-      // measurable; place() then sets the real coords in the same layout pass.
-      style={pos
-        ? { left: pos.left, top: pos.top }
-        : { left: anchor.x, top: anchor.y, visibility: 'hidden' }}
-      // preventDefault keeps the text selection alive; stopPropagation on
-      // mouseup is CRITICAL — otherwise the mouseup bubbles (through the React
-      // tree, portal or not) to the container's own mouseup handler, which
-      // recomputes the now-collapsing selection and unmounts THIS pill before
-      // click fires (so onCommit never runs).
-      onMouseDown={(e) => { e.preventDefault(); }}
-      onMouseUp={(e) => { e.stopPropagation(); }}
+      style={style}
+      {...keepSelection}
       onClick={onCommit}
     >
       Ask about this

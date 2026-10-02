@@ -3,7 +3,7 @@ import { updateSession } from '@/api/sessions';
 import type { ImageAttachment } from '@/api/chat';
 import type { SessionPinnedMessage, SessionThreadAnchor, SessionThreadMeta, SessionThreadMetaPatch } from '@/types/session';
 import {
-  EMPTY_DERIVED, type SessionThreadsApi, type ThreadDerived,
+  EMPTY_DERIVED, type FileCardHost, type SessionThreadsApi, type ThreadCardPlace, type ThreadCardRequest, type ThreadDerived,
 } from '@/contexts/SessionThreadsContext';
 import type { ThreadMetaStore, ThreadToastApi } from '@/components/sessions/thread-ui-contract';
 import { keepCommandFirst } from '@/components/chat/leading-command';
@@ -256,6 +256,12 @@ export interface PanelThreads {
   draftKey: string;
 }
 
+function samePlace(a: ThreadCardPlace | null, b: ThreadCardPlace | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.top === b.top && a.left === b.left && a.width === b.width && a.maxHeight === b.maxHeight;
+}
+
 export const ASK_PLACEHOLDER = 'Ask about this passage…';
 export const FOLLOW_UP_PLACEHOLDER = 'Follow up on this question…';
 
@@ -360,6 +366,9 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     const node = pending ? undefined : r.tree.byKey.get(key);
     const parent = pending?.parentMsgId ?? node?.parent;
     const quote = pending ? pending.quote : node?.quote;
+    // A file question's line rides every turn's anchor, so the tree keeps it
+    // when the head row is the one history has not caught up with.
+    const line = pending ? pending.line : node?.file?.line;
     const userUuid = newUserUuid();
     if (!userUuid || !parent) {
       log.warn('threads', 'sending without a question anchor', { sessionId, hasUuid: !!userUuid });
@@ -367,7 +376,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     }
     const at = new Date().toISOString();
     const anchor: SessionThreadAnchor = {
-      msgId: userUuid, parent, ...(quote ? { quote } : {}), source: pending ? 'selection' : 'manual', at,
+      msgId: userUuid, parent, ...(quote ? { quote } : {}), ...(line ? { line } : {}), source: pending ? 'selection' : 'manual', at,
     };
     let text: string;
     const metaEntries: SessionThreadMetaPatch[] = [];
@@ -377,7 +386,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     if (pending) {
       const seq = nextQuestionSeq(r.tree, r.meta.index, r.meta.list);
       text = keepCommandFirst(message, (t) => withQuestionBanner(
-        composeAnchoredText(t, { parent, ...(quote ? { quote } : {}), source: 'selection', label: pending.title }, latestKey), seq,
+        composeAnchoredText(t, { parent, ...(quote ? { quote } : {}), ...(line ? { line } : {}), source: 'selection', label: pending.title }, latestKey), seq,
       ));
       metaEntries.push({ headId: userUuid, status: 'open', titleState: 'pending', question: message.slice(0, 400), seq });
     } else {
@@ -424,6 +433,23 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   /** The comment card's composer: the same send the panel's composer makes. */
   const sendToTarget = useCallback((text: string) => sendAnchored(text, undefined, false), [sendAnchored]);
 
+  // The comment card as a shared surface (SessionThreadsContext): the timeline
+  // owns and draws it; the Files tab asks for it and lends it a host box.
+  const [openCardKey, publishOpenCardKey] = useState<string | null>(null);
+  const [cardRequest, setCardRequest] = useState<ThreadCardRequest | null>(null);
+  const requestCard = useCallback((key: string | null, via: string) => {
+    setCardRequest((prev) => ({ key, via, seq: (prev?.seq ?? 0) + 1 }));
+  }, []);
+  const [fileCardHost, setFileCardHostState] = useState<FileCardHost | null>(null);
+  const setFileCardHost = useCallback((host: FileCardHost | null) => {
+    setFileCardHostState((prev) => {
+      if (prev === host) return prev;
+      if (prev && host && prev.el === host.el && prev.path === host.path && samePlace(prev.place, host.place)) return prev;
+      return host;
+    });
+  }, []);
+  useEffect(() => { publishOpenCardKey(null); setCardRequest(null); setFileCardHostState(null); }, [sessionId]);
+
   const unreadKeys = useMemo(
     () => unreadKeysOf(tree, derived.answeredAt, stack.lastViewedAt, stack.api.currentKey),
     [tree, derived.answeredAt, stack.lastViewedAt, stack.api.currentKey],
@@ -453,10 +479,16 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     headJump,
     requestHeadJump,
     sendToTarget,
+    openCardKey,
+    publishOpenCardKey,
+    cardRequest,
+    requestCard,
+    fileCardHost,
+    setFileCardHost,
     canAsk: args.canAsk,
   }), [store.anchors, store.add, store.remove, tree, viewMode, setViewMode, stack.enabled, stack.api, meta.index,
     hiddenKeys, actions, derived, unreadKeys, stack.drawer.open, stack.drawer.reveal, retry, pinJump, requestPinJump,
-    headJump, requestHeadJump, sendToTarget, args.canAsk]);
+    headJump, requestHeadJump, sendToTarget, openCardKey, cardRequest, requestCard, fileCardHost, setFileCardHost, args.canAsk]);
 
   // The drawer and its toggle need a real question; a draft-only session keeps
   // its draft row on the page it was asked from (SessionChatHistory).

@@ -80,6 +80,8 @@ interface NotesEditorProps {
    * unset. Requires enableBlockTools.
    */
   onAskSelection?: (text: string) => void;
+  /** The bubble menu's `Ask here` (a question answered beside the passage). */
+  onAskHere?: (range: Range) => void;
   /** Frequency-ranked vault tags for #tag autocomplete (from GET /tags; empty = manual typing). */
   tagSuggestions?: TagSuggestion[];
   /**
@@ -172,7 +174,7 @@ function isUrl(text: string): boolean {
   }
 }
 
-export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady }: NotesEditorProps) {
+export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -647,7 +649,7 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         className={`notes-editor ${className ?? ''}`}
       />
       {/* Selection format toolbar (opt-in per surface). */}
-      {editor && enableBlockTools && <NotesBubbleMenu editor={editor} onAsk={onAskSelection} />}
+      {editor && enableBlockTools && <NotesBubbleMenu editor={editor} onAsk={onAskSelection} onAskHere={onAskHere} />}
       {editor && slashState.phase !== 'closed' && (
         <SlashCommandPortal
           editor={editor}

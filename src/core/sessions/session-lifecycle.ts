@@ -391,6 +391,9 @@ const MAX_THREAD_ANCHORS = 500;
 /** msgId / parent are transcript uuids (36 chars) — 128 leaves room for any id
  *  shape the history projection mints without inviting blobs. */
 const MAX_THREAD_ANCHOR_ID_CHARS = 128;
+/** A file anchor's parent is `file:<absolute path>`: a path, not an id. */
+export const FILE_ANCHOR_PARENT_PREFIX = 'file:';
+const MAX_THREAD_ANCHOR_FILE_PARENT_CHARS = FILE_ANCHOR_PARENT_PREFIX.length + 1024;
 const THREAD_ANCHOR_SOURCES = new Set(['selection', 'sticky', 'manual']);
 
 /**
@@ -418,11 +421,18 @@ export function normalizeThreadAnchors(value: unknown): import('../types.js').Se
     const entry = raw as Record<string, unknown>;
     for (const key of ['msgId', 'parent'] as const) {
       const id = entry[key];
-      if (typeof id !== 'string' || !id.trim() || id.length > MAX_THREAD_ANCHOR_ID_CHARS) {
+      const max = key === 'parent' && typeof id === 'string' && id.startsWith(FILE_ANCHOR_PARENT_PREFIX)
+        ? MAX_THREAD_ANCHOR_FILE_PARENT_CHARS : MAX_THREAD_ANCHOR_ID_CHARS;
+      if (typeof id !== 'string' || !id.trim() || id.length > max) {
         throw new SessionControlError(
-          `thread_anchors[].${key} must be a non-empty string (max ${MAX_THREAD_ANCHOR_ID_CHARS} chars)`, 400,
+          `thread_anchors[].${key} must be a non-empty string (max ${max} chars)`, 400,
         );
       }
+    }
+    // A file anchor may carry the passage's starting line (1-based).
+    const line = entry.line === undefined || entry.line === null ? undefined : entry.line;
+    if (line !== undefined && (typeof line !== 'number' || !Number.isInteger(line) || line < 1 || line > 10_000_000)) {
+      throw new SessionControlError('thread_anchors[].line must be a positive integer', 400);
     }
     if (typeof entry.source !== 'string' || !THREAD_ANCHOR_SOURCES.has(entry.source)) {
       throw new SessionControlError(
@@ -443,6 +453,7 @@ export function normalizeThreadAnchors(value: unknown): import('../types.js').Se
       msgId: entry.msgId as string,
       parent: entry.parent as string,
       ...(quote ? { quote } : {}),
+      ...(line !== undefined ? { line } : {}),
       source: entry.source as import('../types.js').SessionThreadAnchor['source'],
       at,
     });

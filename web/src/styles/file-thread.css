@@ -1,0 +1,62 @@
+/* Questions about a passage of the file on show (FileThreadLayer).
+   The layer is a box over the whole file view; the comment card the timeline
+   draws into it (thread-card.css) and the inline Ask are its only children that
+   take the pointer. Same containing-block trick as the history flyout: the view
+   is a plain block until something positioned needs it. */
+.file-content-view:has(> .fv-thread-layer) {
+  position: relative;
+}
+
+.fv-thread-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  overflow: hidden;
+  pointer-events: none;
+}
+.fv-thread-layer > * {
+  pointer-events: auto;
+}
+.fv-thread-layer > .thread-card {
+  position: absolute;
+}
+/* The inline Ask: a small pill at the right edge of the block under the pointer. */
+.fv-ask-block {
+  position: absolute;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated, var(--bg));
+  color: var(--fg-muted);
+  font: 500 11px/18px var(--font-ui, system-ui, sans-serif);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  opacity: 0.92;
+}
+.fv-ask-block:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+  opacity: 1;
+}
+/* The pill's second action, when the selection can become a question in place. */
+.session-diff-ask-pill.has-two {
+  display: inline-flex;
+  padding: 0;
+}
+.session-diff-ask-pill.has-two > button {
+  all: unset;
+  display: inline-block;
+  padding: 5px 10px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.session-diff-ask-pill.has-two > button:first-child { border-radius: 6px 0 0 6px; }
+.session-diff-ask-pill.has-two > button:last-child { border-radius: 0 6px 6px 0; }
+.session-diff-ask-pill.has-two > button + button {
+  border-left: 1px solid rgba(255, 255, 255, 0.25);
+}
+.session-diff-ask-pill.has-two > button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}

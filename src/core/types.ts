@@ -1996,10 +1996,13 @@ export interface SessionPinnedQuote {
 export interface SessionThreadAnchor {
   /** The USER message's transcript uuid (pre-assigned at send). */
   msgId: string;
-  /** msgId of the reply this question hangs off. */
+  /** msgId of the reply this question hangs off; or `file:<absolute path>` for a
+   *  question about a passage of a file open in the Files tab (no reply row). */
   parent: string;
   /** The passage inside `parent` the question is about. Absent = the whole reply. */
   quote?: SessionPinnedQuote;
+  /** File anchors: the 1-based line the passage starts on, when the view knew it. */
+  line?: number;
   /** How the anchor was created: a fresh text selection, the composer's sticky
    *  carry-over of the previous anchor, or a rail/manual pick. */
   source: 'selection' | 'sticky' | 'manual';

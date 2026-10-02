@@ -38,7 +38,7 @@ export interface ThreadStackApi {
   back: (via: ThreadNavVia) => void;
   /** Ask on a passage: a pending page, or the question already about it.
    *  `focusComposer: false` leaves focus where it is (the comment card takes it). */
-  ask: (target: { msgId: string; quote: SessionPinnedQuote }, opts?: { focusComposer?: boolean }) => void;
+  ask: (target: { msgId: string; quote: SessionPinnedQuote; line?: number }, opts?: { focusComposer?: boolean }) => void;
   /** Where each page was left (page key), shared with the timeline's landing. */
   landings: Map<string, PageLanding>;
   /** The timeline records the page it is leaving (scrollTop + passage top)
@@ -67,6 +67,34 @@ export interface ThreadDerived {
   lastQuestion: ReadonlyMap<string, string>;
   /** Keys whose answer is streaming right now. */
   answering: ReadonlySet<string>;
+}
+
+/** Where a comment card sits inside its host box (left/top relative to the host). */
+export interface ThreadCardPlace {
+  top: number;
+  left: number;
+  width: number;
+  maxHeight: number;
+}
+
+/**
+ * The Files tab lends the comment card a place beside a FILE passage: the file
+ * view registers the box the card draws into and keeps `place` measured; the
+ * timeline (which owns the card: its turns, live blocks and composer) portals
+ * the card there while the open question is about `path`.
+ */
+export interface FileCardHost {
+  path: string;
+  el: HTMLElement;
+  place: ThreadCardPlace | null;
+}
+
+/** "Open (or close, key null) a question's card": what the Files tab, a mark in
+ *  a file and the sidebar ask of the timeline, which owns the card. */
+export interface ThreadCardRequest {
+  key: string | null;
+  via: string;
+  seq: number;
 }
 
 /**
@@ -122,6 +150,14 @@ export interface SessionThreadsApi {
   /** Send into the composer's target (the comment card's composer): the same
    *  anchored path the panel's composer takes. False when nothing was sent. */
   sendToTarget: (text: string) => Promise<boolean>;
+  /** The comment card open in Conversation Mode (its question's key, a pending
+   *  page key for a draft), published by the timeline; null when closed. */
+  openCardKey: string | null;
+  publishOpenCardKey: (key: string | null) => void;
+  cardRequest: ThreadCardRequest | null;
+  requestCard: (key: string | null, via: string) => void;
+  fileCardHost: FileCardHost | null;
+  setFileCardHost: (host: FileCardHost | null) => void;
   /**
    * Is a real store behind this api? FALSE for the stub, and the gate for every
    * Ask affordance: a timeline mounted without a session record to PATCH (the
@@ -180,6 +216,12 @@ const EMPTY: SessionThreadsApi = {
   headJump: null,
   requestHeadJump: NOOP,
   sendToTarget: async () => false,
+  openCardKey: null,
+  publishOpenCardKey: NOOP,
+  cardRequest: null,
+  requestCard: NOOP,
+  fileCardHost: null,
+  setFileCardHost: NOOP,
   canAsk: false,
 };
 
