@@ -118,10 +118,14 @@ if (filesRun < MIN_FILES) {
 
 if (mode === 'record') {
   const sorted = [...failures].sort();
+  // The reasons ride along (check mode reads only `failures`): a recorded CI
+  // baseline is the one place a Linux-only failure's cause can be read from a Mac.
+  const why = Object.fromEntries(sorted.map((k) => [k, reasons.get(k) ?? '']));
   fs.writeFileSync(
     BASELINE,
-    `${JSON.stringify({ config: CONFIG, count: sorted.length, failures: sorted }, null, 2)}\n`,
+    `${JSON.stringify({ config: CONFIG, count: sorted.length, failures: sorted, reasons: why }, null, 2)}\n`,
   );
+  for (const k of sorted.slice(0, 300)) console.log(`  ✗ ${k}\n      ${why[k] || '(no message)'}`);
   console.log(`\nRecorded ${sorted.length} known failures → ${BASELINE}`);
   console.log('Commit this file. Shrinking it over time is the goal.');
   process.exit(0);

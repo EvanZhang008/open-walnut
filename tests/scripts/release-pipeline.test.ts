@@ -428,8 +428,8 @@ describe('ci.yml', () => {
   it('the slow tier blocks, with retries for runner flakes; e2e records its baseline', () => {
     expect(runs('test-heavy')).toContain('npm run test:slow -- --maxWorkers=1 --retry=2')
     expect(doc.jobs['test-heavy']!.steps.some((s) => s['continue-on-error'])).toBe(false)
-    expect(text).toContain('node scripts/test-baseline.mjs record --maxWorkers=1 --retry=2')
-    expect(text).toContain('name: known-failures-${{ matrix.tier }}')
+    expect(text).toContain('node scripts/test-baseline.mjs record --maxWorkers=1 --retry=2 --shard=${{ matrix.shard }}/4')
+    expect(text).toContain('name: known-failures-${{ matrix.tier }}-${{ matrix.shard }}')
   })
 
   it('the browser suite runs in shards and reports through the tested summary script', () => {
